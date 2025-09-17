@@ -103,7 +103,6 @@ class IRSwapMDP(MarketDataProvider):
                 fixings_series = pd.Series(fixings_dict)
                 fixings_series.index.name = curve_name
                 fixings_series.name = "Fixing"
-                fixings_series = fixings_series.loc[~fixings_series.index.duplicated(keep="first"), :]
                 out_csv = today_dir / "fixings.csv"
                 try:
                     fixings_series.to_csv(out_csv)
@@ -116,9 +115,10 @@ class IRSwapMDP(MarketDataProvider):
             irswap_index: ql.SwapIndex = QUANTLIB_CURVE_DEFINITIONS[curve_name]["ReferenceRate"](ql_curve_handle)
             fixings_dict = fetch_fixings(as_of_date=timestamp).to_dict()
             for d, f in fixings_dict.items():
-                if d == curve_name or d == "Fixing":
+                try:
+                    irswap_index.addFixing(fixingDate=datetime_to_ql_date(d), fixing=f, forceOverwrite=True)
+                except: 
                     continue
-                irswap_index.addFixing(fixingDate=datetime_to_ql_date(d), fixing=f, forceOverwrite=True)
 
             return QLIRSwapCurve(ql_curve_id=curve_name, ql_curve_handle=ql_curve_handle, ql_curve_index=irswap_index, meta_data={"timestamp": ts})
 
