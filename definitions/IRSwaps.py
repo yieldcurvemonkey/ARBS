@@ -1,0 +1,19 @@
+CURVE_DEFINITIONS = {
+    "USD-SOFR-1D": {
+        "UseCase": "Fixed_Float_OIS",
+        "SingleorMultiCurrency": "Single Currency",
+        "ReferenceRate": "USD-SOFR-OIS Compound/USD-SOFR-COMPOUND",
+        "NotionalCurrency": "USD",
+        "ReferenceRateTermValue": 1,
+        "ReferenceRateTermUnit": "DAYS",
+        "NotionalSchedule": "Constant",
+        "DeliveryType": "PHYS",
+        "DayCounter": "ACT/360",
+        "Calendar": "US Government Bond",
+        "BusinessConvention": "Modified Following",
+        "Frequency": "Annual",
+        "PaymentLag": 2,
+        "SettlementDays": 2,
+        "SDR_UPIs": ["QZXQ4R16245X", "QZPB5VSBGRCD"],
+    },
+}
