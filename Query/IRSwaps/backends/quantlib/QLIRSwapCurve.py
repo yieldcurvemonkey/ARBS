@@ -1,12 +1,12 @@
 import datetime
 from dataclasses import dataclass
-from typing import Union
+from typing import Union, Any
 
 import QuantLib as ql
 
-import Query.IRSwaps.backends.quantlib.pricer as ql_irswaps_pricer
+import Query.IRSwaps.backends.quantlib.ql_pricer as ql_irswaps_pricer
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
-from Query.IRSwaps.backends.quantlib.curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
+from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_pydate
 
 
@@ -15,11 +15,13 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
     _ql_curve_id: str
     _ql_curve_handle: ql.YieldTermStructureHandle
     _ql_curve_index: ql.SwapIndex
+    _meta_data: Any
 
-    def __init__(self, ql_curve_id: str, ql_curve_handle: ql.YieldTermStructureHandle, ql_curve_index: ql.SwapIndex):
+    def __init__(self, ql_curve_id: str, ql_curve_handle: ql.YieldTermStructureHandle, ql_curve_index: ql.SwapIndex, meta_data: Any):
         self._ql_curve_id = ql_curve_id
         self._ql_curve_handle = ql_curve_handle
         self._ql_curve_index = ql_curve_index
+        self._meta_data = meta_data 
 
     def id(self):
         return self._ql_curve_id
@@ -39,6 +41,9 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
 
     def index(self) -> ql.SwapIndex:
         return self._ql_curve_index
+
+    def meta(self):
+        return self._meta_data    
 
     def effective_date(self, irswap: ql.VanillaSwap):
         return ql_date_to_pydate(irswap.startDate())
