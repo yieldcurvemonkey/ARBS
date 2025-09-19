@@ -21,7 +21,7 @@ def rl_usd_sofr_mt_curve(
 ) -> Tuple[datetime.datetime, rl.Curve]:
     if cache is not None:
         return snap, rl.from_json(
-            cache.get_rl_usd_sofr_mt_(
+            cache.get_rl_usd_sofr_mt(
                 curve_id=curve_id,
                 snap=snap,
                 sofr_fixings=sofr_fixings,

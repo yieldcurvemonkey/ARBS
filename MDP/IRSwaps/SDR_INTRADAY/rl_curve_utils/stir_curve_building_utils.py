@@ -198,7 +198,7 @@ def fetch_historical_usd_stir_curve_instruments_snapshot_barchart(
 
     # ---------- data fetch (bulk, with connection reuse & throttling) ----------
     # Keep concurrency modest to avoid POP handshake churn.
-    max_conc = min(len(usd_stir_barchart_symbol), 12)
+    max_conc = min(len(usd_stir_barchart_symbol), 36)
 
     # Ask BarchartFetcher to keep sockets alive behind the scenes.
     df = bcf.barchart_timeseries_api(
@@ -208,7 +208,7 @@ def fetch_historical_usd_stir_curve_instruments_snapshot_barchart(
         interval=1,
         one_df=True,
         max_concurrent_tasks=max_conc,
-        max_keepalive_connections=max(6, max_conc),
+        max_keepalive_connections=max(36, max_conc),
     )
 
     # ---------- postprocess ----------
