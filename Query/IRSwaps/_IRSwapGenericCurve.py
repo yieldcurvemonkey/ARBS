@@ -40,3 +40,15 @@ class _IRSwapGenericCurve(Protocol):
         notional: Optional[float] = None,
         bpv: Optional[float] = None,
     ) -> Any: ...
+
+    def build_stirf(
+        self,
+        fwd: Optional[str] = None,
+        tenor: Optional[str] = None,
+        effective_date: Optional[datetime.date] = None,
+        maturity_date: Optional[datetime.date] = None,
+        fixed_rate: Optional[float] = -0.00,
+        notional: Optional[float] = None,
+        bpv: Optional[float] = None,
+        is_ser: Optional[bool] = False,
+    ) -> Any: ...

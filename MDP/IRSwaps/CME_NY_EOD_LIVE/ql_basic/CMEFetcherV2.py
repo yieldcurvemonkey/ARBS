@@ -9,9 +9,9 @@ import pytz
 import QuantLib as ql
 import tqdm.asyncio
 
-from MDP.IRSwaps.CME_NY_EOD_LIVE.backends.quantlib.BaseFetcher import BaseFetcher
-from MDP.IRSwaps.CME_NY_EOD_LIVE.backends.quantlib.CMEFetcher import CMEFetcher
-from MDP.IRSwaps.CME_NY_EOD_LIVE.backends.quantlib.ErisFuturesFetcher import ErisFuturesFetcher
+from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
+from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.CMEFetcher import CMEFetcher
+from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.ErisFuturesFetcher import ErisFuturesFetcher
 from Query.IRSwaps.backends.quantlib.ql_curve_building_utils import build_ql_discount_curve, build_ql_zero_curve
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_datetime
 

@@ -1,20 +1,85 @@
 import datetime
+from pathlib import Path
+from typing import Any, Literal, Optional, Union
+
+import pandas as pd
 import pytz
 
-from typing import Any, Optional, Union, Literal
-from pathlib import Path
-
+from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.FixingsFetcher import FixingsFetcher
 from MDP.MarketDataProvider import MarketDataProvider
-
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 
-# data sources here
+
+def _fetch_fixings(as_of_date: datetime.date | Literal["live"], curve_name: str, force_refresh: Optional[bool] = False) -> pd.Series:
+    if as_of_date == "live":
+        as_of_date = datetime.date.today()
+
+    # TODO refactor
+    fixings_cache = Path(rf"C:\Users\chris\clee\ARBS\MDP\IRSwaps\fixings_cache\{curve_name}_fixings")
+    # fixings_cache = Path.home() / f".arbs_cache/{curve_name}_fixings"
+    fixings_cache.mkdir(parents=True, exist_ok=True)
+
+    tday = datetime.date.today()
+    tday_str = tday.strftime("%Y-%m-%d")
+    today_dir = fixings_cache / tday_str
+    today_dir.mkdir(parents=True, exist_ok=True)
+
+    if force_refresh:
+        for p in today_dir.glob("*.csv"):
+            try:
+                p.unlink()
+            except Exception as e:
+                print(f"[cache] Could not delete cache file during force_refresh: {p} ({e})")
+
+    cached_csvs = sorted(today_dir.glob("*.csv"))
+    if cached_csvs and not force_refresh:
+        dfs = [pd.read_csv(p) for p in cached_csvs]
+        df = pd.concat(dfs)
+        df = df.set_index(curve_name)
+        df.index = pd.to_datetime(df.index, errors="coerce")
+        df = df.loc[~df.index.duplicated(keep="first"), :]
+        return df["Fixing"]
+
+    for p in fixings_cache.rglob("*.csv"):
+        if today_dir not in p.parents:
+            try:
+                p.unlink()
+            except Exception as e:
+                print(f"[cache] Could not delete stale file: {p} ({e})")
+
+    for d in sorted(fixings_cache.rglob("*"), reverse=True):
+        if d.is_dir() and d != today_dir:
+            try:
+                next(d.iterdir())
+            except StopIteration:
+                try:
+                    d.rmdir()
+                except Exception:
+                    pass
+
+    fixings_dict = FixingsFetcher().get_fixings(curve=curve_name)
+    fixings_series = pd.Series(fixings_dict)
+    fixings_series.index.name = curve_name
+    fixings_series.name = "Fixing"
+
+    out_csv = today_dir / "fixings.csv"
+    try:
+        fixings_series.to_csv(out_csv)
+    except Exception as e:
+        print(f"[cache] Failed to write cache file {out_csv}: {e}")
+
+    return fixings_series
 
 
 class IRSwapMDP(MarketDataProvider):
 
-    def __init__(self, source: str, **kwargs: Any):
+    def __init__(self, source: str, force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
         super().__init__(source, **kwargs)
+        self.force_refresh_fixings = force_refresh_fixings
+
+        if "SDR_INTRADAY-RL" in source.upper() or "SDR_INTRADAY_RL" in source.upper():
+            from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
+            self._rl_curve_cache = _RLCurveCache(cache_name="SDR_INTRADAY-RL_CURVE_CACHE")
 
     def get_data(self, request: dict) -> Optional[_IRSwapGenericCurve]:
         curve_name = request.get("curve_name")
@@ -26,13 +91,10 @@ class IRSwapMDP(MarketDataProvider):
         return self._get_curve(curve_name, timestamp)
 
     def _get_curve(self, curve_name: str, timestamp: Union[datetime.datetime, datetime.date, Literal["live"]]) -> Optional[_IRSwapGenericCurve]:
-        if self.source.upper() == "CME_NY_EOD_LIVE":
+        if self.source.upper() in ["CME_NY_EOD_LIVE-QL_BASIC", "CME_NY_EOD_LIVE_QL_BASIC"]:
             import QuantLib as ql
-            import pandas as pd
 
-            from MDP.IRSwaps.CME_NY_EOD_LIVE.backends.quantlib.CMEFetcherV2 import CMEFetcherV2
-            from MDP.IRSwaps.CME_NY_EOD_LIVE.backends.quantlib.FixingsFetcher import FixingsFetcher
-
+            from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.CMEFetcherV2 import CMEFetcherV2
             from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
             from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
             from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
@@ -59,68 +121,35 @@ class IRSwapMDP(MarketDataProvider):
                 )
             )
 
-            # TODO refactor
-            def fetch_fixings(as_of_date: datetime.date) -> pd.Series:
-                if as_of_date == "live":
-                    as_of_date = datetime.date.today()
-
-                fixings_cache = Path(rf"C:\Users\chris\clee\ARBS\MDP\IRSwaps\CME_NY_EOD_LIVE\backends\quantlib\{curve_name}_fixings")
-                # fixings_cache =  Path.home() / f".arbs_cache/{curve_name}_fixings"
-                fixings_cache.mkdir(parents=True, exist_ok=True)
-
-                tday = datetime.date.today()
-                tday_str = tday.strftime("%Y-%m-%d")
-                today_dir = fixings_cache / tday_str
-                today_dir.mkdir(parents=True, exist_ok=True)
-
-                cached_csvs = sorted(today_dir.glob("*.csv"))
-                if cached_csvs:
-                    dfs = [pd.read_csv(p) for p in cached_csvs]
-                    df = pd.concat(dfs)
-                    df = df.set_index(curve_name)
-                    df.index = pd.to_datetime(df.index, errors="coerce")
-                    df = df.loc[~df.index.duplicated(keep="first"), :]
-                    return df["Fixing"]
-
-                for p in fixings_cache.rglob("*.csv"):
-                    if today_dir not in p.parents:
-                        try:
-                            p.unlink()
-                        except Exception as e:
-                            print(f"[cache] Could not delete stale file: {p} ({e})")
-
-                for d in sorted(fixings_cache.rglob("*"), reverse=True):
-                    if d.is_dir() and d != today_dir:
-                        try:
-                            next(d.iterdir())
-                        except StopIteration:
-                            try:
-                                d.rmdir()
-                            except Exception:
-                                pass
-
-                fixings_dict = FixingsFetcher().get_fixings(curve=curve_name)
-                fixings_series = pd.Series(fixings_dict)
-                fixings_series.index.name = curve_name
-                fixings_series.name = "Fixing"
-                out_csv = today_dir / "fixings.csv"
-                try:
-                    fixings_series.to_csv(out_csv)
-                except Exception as e:
-                    print(f"[cache] Failed to write cache file {out_csv}: {e}")
-
-                return fixings_series
-
             ql_curve_handle = ql.YieldTermStructureHandle(ql_curve)
             irswap_index: ql.SwapIndex = QUANTLIB_CURVE_DEFINITIONS[curve_name]["ReferenceRate"](ql_curve_handle)
-            fixings_dict = fetch_fixings(as_of_date=timestamp).to_dict()
+            fixings_dict = _fetch_fixings(as_of_date=timestamp, curve_name=curve_name, force_refresh=self.force_refresh_fixings).to_dict()
             for d, f in fixings_dict.items():
                 try:
                     irswap_index.addFixing(fixingDate=datetime_to_ql_date(d), fixing=f, forceOverwrite=True)
-                except: 
+                except:
                     continue
 
             return QLIRSwapCurve(ql_curve_id=curve_name, ql_curve_handle=ql_curve_handle, ql_curve_index=irswap_index, meta_data={"timestamp": ts})
 
+        elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q12", "SDR_INTRADAY_RL_USD_SOFR_MT_Q12"]:
+            assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
+
+            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mt_q12.rl_usd_sofr_mt_q12 import rl_usd_sofr_mt_curve
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            sofr_fixings = _fetch_fixings(
+                as_of_date=datetime.date.today() if type(timestamp) == str else timestamp.date(), curve_name=curve_name, force_refresh=self.force_refresh_fixings
+            )
+            curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
+            ts, rl_curve_handle = rl_usd_sofr_mt_curve(
+                curve_id=curve_id,
+                snap=timestamp,
+                sofr_fixings=sofr_fixings,
+                cache=self._rl_curve_cache if timestamp != "live" else None,
+                force_refresh=False,
+            )
+            return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
+
         else:
-            raise NotImplementedError(f"Data source '{self.source}' is not supported for IR Swaps.")
+            raise NotImplementedError(f"Curve Build '{self.source}' does not exist")

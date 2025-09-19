@@ -17,7 +17,7 @@ from pandas.errors import DtypeWarning
 from pandas.tseries.offsets import BDay
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
-from MDP.IRSwaps.CME_NY_EOD_LIVE.backends.quantlib.BaseFetcher import BaseFetcher
+from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
 from Query.IRSwaps.backends.quantlib.ql_curve_building_utils import build_ql_discount_curve, build_ql_zero_curve
 
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)

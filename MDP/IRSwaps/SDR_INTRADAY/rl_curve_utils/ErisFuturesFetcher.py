@@ -1,15 +1,16 @@
 import asyncio
 import calendar
 import datetime
+import logging
 import ssl
 import warnings
-
 from io import BytesIO
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 import pandas as pd
 import pytz
+import rateslib as rl
 import QuantLib as ql
 import tqdm
 import tqdm.asyncio
@@ -18,9 +19,11 @@ from pandas.errors import DtypeWarning
 from pandas.tseries.holiday import USFederalHolidayCalendar
 from pandas.tseries.offsets import CustomBusinessDay
 
-from MDP.IRSwaps.CME_NY_EOD_LIVE.backends.quantlib.BaseFetcher import BaseFetcher
-from Query.IRSwaps.backends.quantlib.ql_curve_building_utils import build_ql_discount_curve
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_pydate
+from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
+    get_fomc_meetings_list,
+    get_short_end_curve_tickers,
+)
 
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -43,6 +46,49 @@ def datetime_today_utc():
 def get_bdates_between(start_date: datetime.date, end_date: datetime.date, calendar: ql.Calendar) -> List[datetime.date]:
     bdates = calendar.businessDayList(datetime_to_ql_date(start_date), datetime_to_ql_date(end_date))
     return sorted([ql_date_to_pydate(bd) for bd in bdates])
+
+
+class BaseFetcher:
+    def __init__(
+        self,
+        global_timeout: int = 10,
+        proxies: Optional[Dict[str, str]] = None,
+        debug_verbose: bool = False,
+        info_verbose: bool = False,
+        warning_verbose: bool = False,
+        error_verbose: bool = False,
+    ):
+        self._global_timeout = global_timeout
+        self._proxies = proxies if proxies else {"http": None, "https": None}
+        self._httpx_proxies = {
+            "http://": httpx.AsyncHTTPTransport(proxy=self._proxies["http"]),
+            "https://": httpx.AsyncHTTPTransport(proxy=self._proxies["https"]),
+        }
+
+        self._debug_verbose = debug_verbose
+        self._info_verbose = info_verbose
+        self._error_verbose = error_verbose
+        self._warning_verbose = warning_verbose
+        self._setup_logger()
+
+    def _setup_logger(self):
+        self._logger = logging.getLogger(self.__class__.__name__)
+
+        if not self._logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+            self._logger.addHandler(handler)
+
+        if self._debug_verbose:
+            self._logger.setLevel(logging.DEBUG)
+        elif self._info_verbose:
+            self._logger.setLevel(logging.INFO)
+        elif self._error_verbose:
+            self._logger.setLevel(logging.ERROR)
+        elif self._warning_verbose:
+            self._logger.setLevel(logging.WARNING)
+        else:
+            self._logger.disabled = True
 
 
 class ErisFuturesFetcher(BaseFetcher):
@@ -237,130 +283,66 @@ class ErisFuturesFetcher(BaseFetcher):
 
             return dict(results)
 
-    def fetch_historical_eod_discount_curves(
-        self,
-        start_date: Optional[datetime.date] = None,
-        end_date: Optional[datetime.date] = None,
-        bdates: Optional[List[datetime.date]] = None,
-        ql_dc=ql.Actual360(),
-        ql_cal=ql.UnitedStates(ql.UnitedStates.GovernmentBond),
-        show_tqdm: Optional[bool] = True,
-        interpolation_algo: Optional[
-            List[
-                Literal[
-                    "log_linear",
-                    "mono_log_cubic",
-                    "natural_cubic",
-                    "kruger_log",
-                    "natural_log_cubic",
-                    "log_mixed_linear",
-                    "log_parabolic_cubic",
-                    "mono_log_parabolic_cubic",
-                ]
-            ]
-        ] = "log_linear",
-        enable_extrapolation: Optional[bool] = False,
-        append_intraday: Optional[bool] = False,
-        max_concurrent_tasks: Optional[int] = 64,
-        max_keepalive_connections: Optional[int] = 5,
-    ) -> Dict[datetime.date, ql.DiscountCurve]:
-        assert (start_date and end_date) or bdates, "Must Pass in 'start_date' and 'end_date' or 'bdates'"
-
-        if end_date:
-            if end_date == datetime_today_utc().date():
-                append_intraday = True
-
-        if not bdates:
-            bdates = get_bdates_between(start_date=start_date, end_date=end_date, calendar=ql_cal)
-
-        async def build_tasks(
-            client: httpx.AsyncClient,
-            dates: List[datetime.date],
-        ):
-            tasks = []
-            semaphore = asyncio.Semaphore(max_concurrent_tasks)
-            for date in dates:
-                task = asyncio.create_task(
-                    self._fetch_and_read_eris_ftp_file(semaphore=semaphore, client=client, date=date, workbook_type="EOD_DiscountFactors_SOFR")
-                )
-                tasks.append(task)
-
-            if show_tqdm:
-                return await tqdm.asyncio.tqdm.gather(*tasks, desc="FETCHING ERIS HISTORICAL DISC CURVES...")
-            return await asyncio.gather(*tasks)
-
-        async def run_fetch_all(
-            dates: List[datetime.date],
-        ):
-            limits = httpx.Limits(
-                max_connections=max_concurrent_tasks,
-                max_keepalive_connections=max_keepalive_connections,
-            )
-            async with httpx.AsyncClient(limits=limits, verify=False, http2=True) as client:
-                all_data = await build_tasks(
-                    client=client,
-                    dates=dates,
-                )
-                return all_data
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DtypeWarning)
-            results: List[Tuple[str, pd.DataFrame]] = asyncio.run(
-                run_fetch_all(
-                    dates=bdates,
-                )
-            )
-            if results is None or len(results) == 0:
-                return {}
-
-            dict_df: Dict[datetime.date, pd.DataFrame] = dict(results)
-            dict_ql_discount_curves: Dict[datetime.date, ql.DiscountCurve] = {}
-            for dt, discount_curve_df in dict_df.items():
-                if dt is None or discount_curve_df is None:
-                    continue
-                discount_curve_df["Date"] = pd.to_datetime(discount_curve_df["Date"], errors="coerce")
-                discount_curve_df["DiscountFactor"] = pd.to_numeric(discount_curve_df["DiscountFactor"], errors="coerce")
-                ql_curve = build_ql_discount_curve(
-                    datetime_series=discount_curve_df["Date"],
-                    discount_factor_series=discount_curve_df["DiscountFactor"],
-                    ql_dc=ql_dc,
-                    ql_cal=ql_cal,
-                    interpolation_algo=f"df_{interpolation_algo}",
-                )
-                if enable_extrapolation:
-                    ql_curve.enableExtrapolation()
-                dict_ql_discount_curves[dt] = ql_curve
-
-            if append_intraday:
-                dict_ql_discount_curves[datetime_today_utc()] = self.fetch_intraday_discount_curve(
-                    ql_dc=ql_dc, ql_cal=ql_cal, show_tqdm=show_tqdm, interpolation_algo=interpolation_algo
-                )
-
-            return dict_ql_discount_curves
-
     def fetch_intraday_discount_curve(
         self,
+        curve_id: str,
+        n_sfr_contracts: int,
+        n_ser_contracts: int,
+        n_plus_fomc_years: int,
         return_df: Optional[bool] = False,
-        ql_dc=ql.Actual360(),
-        ql_cal=ql.UnitedStates(ql.UnitedStates.GovernmentBond),
         show_tqdm: Optional[bool] = True,
-        interpolation_algo: Optional[
-            List[
-                Literal[
-                    "log_linear",
-                    "mono_log_cubic",
-                    "natural_cubic",
-                    "kruger_log",
-                    "natural_log_cubic",
-                    "log_mixed_linear",
-                    "log_parabolic_cubic",
-                    "mono_log_parabolic_cubic",
-                ]
-            ]
-        ] = "log_linear",
-        enable_extrapolation: Optional[bool] = False,
-        return_intraday_timestamp: Optional[bool] = False,
-    ) -> ql.DiscountCurve | pd.DataFrame | Tuple[ql.DiscountCurve, datetime.date]:
+        return_intraday_timestamp: Optional[bool] = True,
+        extend_to_50y: Optional[bool] = False,
+    ) -> rl.Curve | pd.DataFrame | Tuple[rl.Curve, datetime.datetime]:
+
+        def ql_date_to_datetime(ql_date: ql.Date) -> datetime.datetime:
+            return datetime.datetime(ql_date.year(), ql_date.month(), ql_date.dayOfMonth())
+
+        def datetime_to_ql_date(dt: datetime.datetime) -> ql.Date:
+            ql_month = {
+                1: ql.January,
+                2: ql.February,
+                3: ql.March,
+                4: ql.April,
+                5: ql.May,
+                6: ql.June,
+                7: ql.July,
+                8: ql.August,
+                9: ql.September,
+                10: ql.October,
+                11: ql.November,
+                12: ql.December,
+            }[dt.month]
+            return ql.Date(dt.day, ql_month, dt.year)
+
+        def next_n_month_end_datetimes(
+            cal: ql.Calendar,
+            start_dt: datetime.date,
+            n: int,
+            *,
+            include_start=False,
+            convention=ql.ModifiedFollowing,
+        ) -> list[datetime.datetime]:
+            start_ql = ql.Date(start_dt.day, start_dt.month, start_dt.year)
+            out = []
+            y, m = start_dt.year, start_dt.month
+            k = 0
+            while len(out) < n:
+                mm = m + k
+                yy = y + (mm - 1) // 12
+                mm = ((mm - 1) % 12) + 1
+                probe = ql.Date(15, mm, yy)
+                eom_raw = ql.Date.endOfMonth(probe)
+                eom_adj = cal.adjust(eom_raw, convention)
+                if include_start:
+                    accept = eom_adj >= start_ql
+                else:
+                    accept = eom_adj > start_ql
+                if accept:
+                    out.append(ql_date_to_datetime(eom_adj))
+                k += 1
+            return out
+
         async def build_tasks(
             client: httpx.AsyncClient,
         ):
@@ -395,15 +377,56 @@ class ErisFuturesFetcher(BaseFetcher):
             if return_df:
                 return discount_curve_df
 
-            ql_discount_curve = build_ql_discount_curve(
-                datetime_series=discount_curve_df["Date"],
-                discount_factor_series=discount_curve_df["DiscountFactor"],
-                ql_dc=ql_dc,
-                ql_cal=ql_cal,
-                interpolation_algo=f"df_{interpolation_algo}",
+            tday = datetime.date.today()
+            fomc_curve_nodes = get_fomc_meetings_list(as_of=tday, n_plus_years=n_plus_fomc_years)
+            sfr_tickers = get_short_end_curve_tickers(
+                as_of=tday,
+                first_n_sr1=0,
+                first_n_sr3=n_sfr_contracts,
+                use_globex=False,
             )
-            if enable_extrapolation:
-                ql_discount_curve.enableExtrapolation()
+            imm_nodes = [rl.get_imm(code=sfr.replace("SFR", "")) for sfr in sfr_tickers]
+            me_nodes = next_n_month_end_datetimes(cal=ql.UnitedStates(ql.UnitedStates.GovernmentBond), start_dt=tday, n=n_ser_contracts)
+            st_nodes = list({*fomc_curve_nodes, *[d for d in imm_nodes if (d.year, d.month) not in {(d.year, d.month) for d in fomc_curve_nodes}]}) + me_nodes
+            st_nodes.sort()
+
+            mt_nodes = []
+            for tenor in ["5Y", "10Y", "30Y"]:
+                mt_nodes.append(
+                    ql_date_to_datetime(
+                        ql.NullCalendar().advance(
+                            ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(
+                                datetime_to_ql_date(datetime.datetime(tday.year, tday.month, tday.day)),
+                                ql.Period("2D"),
+                                ql.ModifiedFollowing,
+                            ),
+                            ql.Period(tenor),
+                        )
+                    )
+                )
+
+            tail = max(mt_nodes) + datetime.timedelta(days=360 * 20)
+            discount_curve_df = discount_curve_df[discount_curve_df["Date"].isin(st_nodes + mt_nodes)]
+            rl_discount_curve = rl.Curve(
+                nodes=dict(zip(discount_curve_df["Date"], discount_curve_df["DiscountFactor"])),
+                id=curve_id,
+                convention="act360",
+                calendar="nyc",
+                modifier="MF",
+                interpolation="log_linear",
+                t=[
+                    st_nodes[-1],
+                    st_nodes[-1],
+                    st_nodes[-1],
+                    st_nodes[-1],  # FOMC far date (duplicated to anchor)
+                    mt_nodes[0],  # 5y
+                    mt_nodes[1],  # 10y
+                    tail,
+                    tail,
+                    tail,
+                    tail,  # emulate extrapolation
+                ],
+            )
 
             if return_intraday_timestamp:
                 intraday_ts = datetime.datetime.fromisoformat(
@@ -411,6 +434,6 @@ class ErisFuturesFetcher(BaseFetcher):
                 )
                 intraday_ts = intraday_ts.astimezone(pytz.timezone("America/New_York"))
 
-                return ql_discount_curve, intraday_ts
+                return rl_discount_curve, intraday_ts
 
-            return ql_discount_curve
+            return rl_discount_curve

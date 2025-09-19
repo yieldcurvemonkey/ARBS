@@ -8,8 +8,8 @@ import pandas as pd
 import QuantLib as ql
 import requests
 
-from MDP.IRSwaps.CME_NY_EOD_LIVE.backends.quantlib.BaseFetcher import BaseFetcher
-from MDP.IRSwaps.CME_NY_EOD_LIVE.backends.quantlib.FredFetcher import FredFetcher
+from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
+from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.FredFetcher import FredFetcher
 from Query.IRSwaps.backends.quantlib.utils import most_recent_business_day_ql
 
 warnings.simplefilter(action="ignore", category=FutureWarning)

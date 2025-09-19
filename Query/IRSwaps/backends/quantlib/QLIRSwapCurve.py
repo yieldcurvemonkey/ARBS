@@ -97,3 +97,6 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
             notional=notional,
             bpv=bpv,
         )
+
+    def build_stirf(self, fwd = None, tenor = None, effective_date = None, maturity_date = None, fixed_rate = -0, notional = None, bpv = None, is_ser = False):
+        raise NotImplementedError("'build_stirf' not implemented for QuantLib backend")

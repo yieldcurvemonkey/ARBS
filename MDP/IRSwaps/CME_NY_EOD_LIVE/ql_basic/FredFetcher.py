@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 
 import httpx
 
-from MDP.IRSwaps.CME_NY_EOD_LIVE.backends.quantlib.BaseFetcher import BaseFetcher
+from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
 
 if sys.version_info[0] >= 3:
     import urllib.error as url_error
