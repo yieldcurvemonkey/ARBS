@@ -163,3 +163,29 @@ class _RLCurveCache(ZODBCacheMixin):
         mapping[key] = result_json
         self.zodb_commit()
         return result_json
+
+    def get_gsquant_rl_basic(
+        self,
+        *,
+        curve_id: str,
+        as_of: datetime.date,
+        force_refresh: bool = False,
+    ):
+        from MDP.IRSwaps.GSQUANT.rl_basic.build import build_rl_basic_gsquant_curve
+
+        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
+        mapping = getattr(self, self._cache_attr)
+
+        key = f"{as_of}-GSQUANT-rl_basic_{curve_id}"
+
+        if not force_refresh and key in mapping:
+            return key, mapping[key]["result"], mapping[key]["pricing_location"]
+
+        _, curve, pricing_location = build_rl_basic_gsquant_curve(curve=curve_id, as_of=as_of)
+        result_json = curve.to_json()
+        mapping[key] = {
+            "result": result_json,
+            "pricing_location": pricing_location,
+        }
+        self.zodb_commit()
+        return key, result_json, pricing_location

@@ -6,6 +6,8 @@ from gs_quant.data import Dataset
 from gs_quant.session import GsSession
 
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
+from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
+
 
 # fmt: off
 GSQUANT_CURVE_MAP = {
@@ -193,8 +195,6 @@ def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
     df["terminationDate"] = pd.to_datetime(df["terminationDate"], errors="coerce")
     df["rate"] = df["rate"] * 100
 
-    # print(df)
-
     def make_swap(row):
         return rl.IRS(
             effective=row["effectiveDate"],
@@ -247,4 +247,4 @@ def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
         weights=[1] * len(df["instruments"]),
     )
 
-    return rl_curve
+    return curve_id, rl_curve, df["pricingLocation"].iloc[-1]

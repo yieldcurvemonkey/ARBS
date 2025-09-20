@@ -86,6 +86,11 @@ class IRSwapMDP(MarketDataProvider):
 
             self._rl_curve_cache = _RLCurveCache(cache_name="SDR_INTRADAY-RL_CURVE_CACHE")
 
+        if "GSQUANT-RL" in source.upper() or "GSQUANT_RL" in source.upper():
+            from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
+
+            self._rl_curve_cache = _RLCurveCache(cache_name="GSQUANT-RL_CURVE_CACHE")
+
     def get_data(self, request: dict) -> Optional[_IRSwapGenericCurve]:
         curve_name = request.get("curve_name")
         timestamp = request.get("timestamp")
@@ -221,9 +226,28 @@ class IRSwapMDP(MarketDataProvider):
                 snap=timestamp,
                 sofr_fixings=sofr_fixings,
                 cache=self._rl_curve_cache if timestamp != "live" else None,
-                force_refresh=True,
+                force_refresh=False,
             )
             return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
+
+        if "GSQUANT-RL" in self.source.upper() or "GSQUANT_RL" in self.source.upper():
+            assert type(timestamp) == datetime.date, "GSQUANT ONLY HAS EOD - 'timestamp' must be type 'datetime.date'"
+
+            from rateslib import from_json
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            curve_id, rl_curve_serialized, pricing_location = self._rl_curve_cache.get_gsquant_rl_basic(curve_id=curve_name, as_of=timestamp, force_refresh=False)
+            rl_curve_handle = from_json(rl_curve_serialized)
+
+            fixings = _fetch_fixings(as_of_date=timestamp, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            fixings: pd.Series = fixings[fixings.index.date < timestamp] * 100
+
+            return RLIRSwapCurve(
+                rl_curve_id=curve_name,
+                rl_curve_handle=rl_curve_handle,
+                fixings=fixings,
+                meta_data={"timestamp": timestamp, "id": curve_id, "pricing_location": pricing_location},
+            )
 
         else:
             raise NotImplementedError(f"Curve Build '{self.source}' does not exist")
