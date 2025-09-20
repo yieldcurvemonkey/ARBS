@@ -141,7 +141,7 @@ def fetch_historical_usd_stir_curve_instruments_snapshot_barchart(
             "proxies": None,  # dict | None
             "host": None,  # str | None
             "chosen_at": 0.0,  # epoch seconds
-            "ttl": 600.0,  # reuse same POP for 10 minutes
+            "ttl": 60,  # reuse same POP for 1 minutes
             "fetcher": None,  # BarchartFetcher bound to proxies
         }
     _S = fetch_historical_usd_stir_curve_instruments_snapshot_barchart._state  # type: ignore[attr-defined]
@@ -207,8 +207,8 @@ def fetch_historical_usd_stir_curve_instruments_snapshot_barchart(
         end_date=snap + datetime.timedelta(minutes=1),
         interval=1,
         one_df=True,
-        max_concurrent_tasks=max_conc,
-        max_keepalive_connections=max(36, max_conc),
+        max_concurrent_tasks=max_conc + 3,
+        max_keepalive_connections=max(36, max_conc) + 3,
     )
 
     # ---------- postprocess ----------

@@ -107,7 +107,7 @@ class _RLCurveCache(ZODBCacheMixin):
         n_plus_fomc_years: int,
         force_refresh: bool = False,
     ):
-        from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.rl_usd_curve_stir_builder import rl_usd_sofr_stir_builder 
+        from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.rl_usd_curve_stir_builder import rl_usd_sofr_stir_builder
 
         self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
         mapping = getattr(self, self._cache_attr)
@@ -126,6 +126,40 @@ class _RLCurveCache(ZODBCacheMixin):
             n_plus_fomc_years=n_plus_fomc_years,
         ).rl_pricing_curve.to_json()
 
+        mapping[key] = result_json
+        self.zodb_commit()
+        return result_json
+
+    def get_rl_usd_ois_stir(
+        self,
+        *,
+        curve_id: str,
+        snap: Union[datetime.datetime, datetime.date, List[Union[datetime.datetime, datetime.date]]],
+        sofr_fixings: pd.Series,
+        n_ser: int,
+        n_sfr: int,
+        n_plus_fomc_years: int,
+        force_refresh: bool = False,
+    ):
+        from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.rl_usd_curve_stir_builder import rl_usd_ois_stir_builder
+
+        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
+        mapping = getattr(self, self._cache_attr)
+
+        key = _make_key(curve_id, snap, sofr_fixings, n_ser, n_sfr, n_plus_fomc_years)
+
+        if not force_refresh and key in mapping:
+            return mapping[key]
+
+        _, curve = rl_usd_ois_stir_builder(
+            curve_id=curve_id,
+            snap=snap,
+            sofr_fixings=sofr_fixings,
+            n_ser_contracts=n_ser,
+            n_sfr_contracts=n_sfr,
+            n_plus_fomc_years=n_plus_fomc_years,
+        )
+        result_json = curve.to_json()
         mapping[key] = result_json
         self.zodb_commit()
         return result_json
