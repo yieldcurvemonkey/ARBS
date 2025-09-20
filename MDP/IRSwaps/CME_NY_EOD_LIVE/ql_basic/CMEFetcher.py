@@ -113,7 +113,7 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
         curve_report_filename = "CME_Curve_Report_EOD" if use_eod_report else "CME_Curve_Report"
         if auto_check_archives:
             archival_date = most_recent_bday - relativedelta(months=1)
-            is_in_archive = curve_date < archival_date
+            is_in_archive = pd.Timestamp(curve_date) < pd.Timestamp(archival_date)
         else:
             is_in_archive = check_archives_mannual
 
@@ -261,9 +261,15 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
         show_tqdm: Optional[bool] = False,
         max_connections: Optional[int] = 64,
         max_keepalive_connections: Optional[int] = 5,
+        ignore_cache: Optional[bool] = False,
     ) -> Dict[datetime.date, pd.DataFrame]:
         self._ensure_cache()
         dates = bdates or pd.date_range(start_date, end_date, freq="B").to_pydatetime().tolist()
+
+        if ignore_cache:
+            cached_part, to_fetch = {}, dates
+        else:
+            cached_part, to_fetch = self._partition_cached_dates(dates)
 
         cached_part, to_fetch = self._partition_cached_dates(dates)
         results = dict(cached_part)
@@ -346,6 +352,7 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
         show_tqdm: Optional[bool] = False,
         max_connections: Optional[int] = 64,
         max_keepalive_connections: Optional[int] = 5,
+        ignore_cache: Optional[bool] = False,
     ) -> Dict[datetime.date, ql.DiscountCurve | ql.ZeroCurve]:
         assert (start_date and end_date) or bdates, "Must Pass in 'start_date' and 'end_date' or 'bdates'"
 
@@ -356,6 +363,7 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
             show_tqdm=show_tqdm,
             max_connections=max_connections,
             max_keepalive_connections=max_keepalive_connections,
+            ignore_cache=ignore_cache,
         )
 
         ql_curves_dict: Dict[datetime.date, ql.DiscountCurve | ql.ZeroCurve] = {}

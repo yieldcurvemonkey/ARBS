@@ -24,7 +24,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         self._meta_data = meta_data
 
     def id(self):
-        return self._ql_curve_id
+        return self._rl_curve_id
 
     def reference_date(self) -> datetime:
         return next(iter(self._rl_curve_handle.nodes.nodes.keys()))
@@ -62,7 +62,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return float(irswap.cashflows(curves=self._rl_curve_handle)["Notional"].iloc[-1])
 
     def fair_rate(self, irswap: rl.IRS):
-        return irswap.rate(curves=self._rl_curve_handle).real
+        return irswap.rate(curves=self._rl_curve_handle).real / 100
 
     def npv(self, irswap: rl.IRS):
         return irswap.npv(curves=self._rl_curve_handle).real
@@ -90,7 +90,8 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
     def carry_and_roll_bps_running(self, irswap: rl.IRS, horizon: str):
         raise NotImplementedError("rateslib not implemented")
 
-    def build_irswap(self, fwd, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None):
+    def build_irswap(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None):
+
         if bpv and not notional:
             unit_delta = rl.IRS(
                 effective=fwd or effective_date,
@@ -101,8 +102,19 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             ).analytic_delta(self._rl_curve_handle)
             notional = bpv / unit_delta
 
+        if not bpv and not notional:
+            notional = 1
+
+        if fwd:
+            if fwd == "0D":
+                rl_effective = self.calendar_advance(self.reference_date(), f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]}b")
+            else:
+                rl_effective = self.calendar_advance(self.reference_date(), fwd)
+        else:
+            rl_effective = effective_date
+
         return rl.IRS(
-            effective=fwd or effective_date,
+            effective=rl_effective,
             termination=tenor or maturity_date,
             fixed_rate=fixed_rate,
             curves=self._rl_curve_handle,
@@ -120,6 +132,9 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                 notional=1,
             ).analytic_delta(self._rl_curve_handle)
             notional = bpv / unit_delta
+
+        if not bpv and not notional:
+            notional = 1_000_000
 
         return rl.STIRFuture(
             effective=fwd or effective_date,

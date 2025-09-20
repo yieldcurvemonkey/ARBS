@@ -111,9 +111,9 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
         else:
             if tenor and "x" in tenor:
                 fwd, tenor = tenor.split("x")
-                fwd, tenor = ql.Period(fwd), ql.Period(tenor)
+                fwd, tenor = fwd, tenor
             elif tenor:
-                fwd, tenor = ql.Period("0D"), ql.Period(tenor) if tenor else None
+                fwd, tenor = "0D", tenor if tenor else None
             elif effective_date and maturity_date:
                 fwd, tenor = None, None
             else:

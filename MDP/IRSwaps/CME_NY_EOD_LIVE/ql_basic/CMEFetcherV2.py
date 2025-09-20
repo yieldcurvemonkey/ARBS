@@ -114,6 +114,7 @@ class CMEFetcherV2(BaseFetcher):
         show_tqdm: Optional[bool] = False,
         max_connections: Optional[int] = 64,
         max_keepalive_connections: Optional[int] = 5,
+        ignore_cache: Optional[bool] = False,
     ) -> Dict[datetime.date, ql.YieldTermStructure]:
         assert (start_date and end_date) or bdates, "Must Pass in 'start_date' and 'end_date' or 'bdates'"
 
@@ -159,6 +160,7 @@ class CMEFetcherV2(BaseFetcher):
                 show_tqdm=show_tqdm,
                 max_connections=max_connections,
                 max_keepalive_connections=max_keepalive_connections,
+                ignore_cache=ignore_cache,
             )
 
             curve_iter = (

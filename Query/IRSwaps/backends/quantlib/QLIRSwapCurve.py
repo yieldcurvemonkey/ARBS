@@ -84,13 +84,13 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
     def carry_and_roll_bps_running(self, irswap: ql.VanillaSwap, horizon: str):
         return ql_irswaps_pricer.calc_carry_and_roll_bps_running(swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon))
 
-    def build_irswap(self, fwd, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None):
+    def build_irswap(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None):
         return ql_irswaps_pricer.build_ql_irswap(
             curve=self._ql_curve_id,
             curve_handle=self._ql_curve_handle,
             swap_index=self._ql_curve_index,
-            fwd=ql.Period(fwd),
-            tenor=ql.Period(tenor),
+            fwd=fwd,
+            tenor=tenor,
             effective_date=effective_date,
             maturity_date=maturity_date,
             fixed_rate=fixed_rate,

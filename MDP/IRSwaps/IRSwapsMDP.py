@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
 import pandas as pd
-import pytz
 
 from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.FixingsFetcher import FixingsFetcher
 from MDP.MarketDataProvider import MarketDataProvider
@@ -75,7 +74,7 @@ def _fetch_fixings(as_of_date: datetime.date | Literal["live"], curve_name: str,
     return fixings_series
 
 
-class IRSwapMDP(MarketDataProvider):
+class IRSwapsMDP(MarketDataProvider):
 
     def __init__(self, source: str, force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
         super().__init__(source, **kwargs)
@@ -92,15 +91,22 @@ class IRSwapMDP(MarketDataProvider):
             self._rl_curve_cache = _RLCurveCache(cache_name="GSQUANT-RL_CURVE_CACHE")
 
     def get_data(self, request: dict) -> Optional[_IRSwapGenericCurve]:
-        curve_name = request.get("curve_name")
-        timestamp = request.get("timestamp")
+        curve_name = request.pop("curve_name")
+        timestamp = request.pop("timestamp")
 
         if not curve_name or not timestamp:
             raise ValueError("Request must contain 'curve_name' and 'timestamp'.")
 
-        return self._get_curve(curve_name, timestamp)
+        return self._get_curve(curve_name, timestamp, kwargs=request)
 
-    def _get_curve(self, curve_name: str, timestamp: Union[datetime.datetime, datetime.date, Literal["live"]]) -> Optional[_IRSwapGenericCurve]:
+    def _get_curve(self, curve_name: str, timestamp: Union[datetime.datetime, datetime.date, Literal["live"]], kwargs={}) -> Optional[_IRSwapGenericCurve]:
+        from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
+        from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
+
+        assert not QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"].isHoliday(
+            datetime_to_ql_date(timestamp)
+        ), f"{timestamp} is a holiday in the {QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"]}!"
+
         if self.source.upper() in ["CME_NY_EOD_LIVE-QL_BASIC", "CME_NY_EOD_LIVE_QL_BASIC"]:
             import QuantLib as ql
 
@@ -109,15 +115,11 @@ class IRSwapMDP(MarketDataProvider):
             from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
             from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
 
+            assert type(timestamp) == datetime.date, "CME_NY_EOD ONLY HAS EOD - 'timestamp' must be type 'datetime.date' or Literal['live']"
             assert curve_name in QUANTLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."
             ql_curve_def = QUANTLIB_CURVE_DEFINITIONS[curve_name]
 
             cmef = CMEFetcherV2(**self.config)
-
-            if type(timestamp) == datetime.datetime:
-                to_fetch = timestamp.date()
-            else:
-                to_fetch = timestamp
 
             ts, ql_curve = next(
                 iter(
@@ -126,17 +128,19 @@ class IRSwapMDP(MarketDataProvider):
                         type="Df",
                         ql_day_count=ql_curve_def["DayCounter"],
                         ql_calendar=ql_curve_def["Calendar"],
-                        bdates=[to_fetch],
+                        bdates=[timestamp],
+                        show_tqdm=False,
+                        **kwargs,
                     ).items()
                 )
             )
 
             ql_curve_handle = ql.YieldTermStructureHandle(ql_curve)
             irswap_index: ql.SwapIndex = QUANTLIB_CURVE_DEFINITIONS[curve_name]["ReferenceRate"](ql_curve_handle)
-            fixings_series = _fetch_fixings(
-                as_of_date=datetime.date.today() if type(timestamp) == str else timestamp.date(), curve_name=curve_name, force_refresh=self.force_refresh_fixings
-            ).sort_index()
-            fixings_series: pd.Series = fixings_series[fixings_series.index.date < datetime.date.today() if type(timestamp) == str else timestamp.date()]
+
+            ref = datetime.date.today() if type(timestamp) == str else timestamp
+            fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            fixings_series: pd.Series = fixings_series[fixings_series.index.date < ref]
             fixings_dict = fixings_series.to_dict()
             for d, f in fixings_dict.items():
                 try:
