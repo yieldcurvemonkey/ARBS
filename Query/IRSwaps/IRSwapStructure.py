@@ -138,6 +138,8 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
         constrained_notional: Optional[float] = None,
         constrained_bpv: Optional[float] = None,
     ) -> List[_IRSwapGenericObject]:
+        current_curve: _IRSwapGenericCurve = self.common_kwargs["curve"]
+
         n = len(leg_specs)
         rw = np.array(risk_weights or ([1.0, -1.0] + [0.0] * (n - 2))[:n], dtype=float)
 
@@ -145,7 +147,7 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
             raise ValueError("Must specify constrained_leg_index and exactly one of constrained_notional/bpv")
 
         unit_swaps = [self._leg(**spec, notional=1.0) for spec in leg_specs]
-        bpvs = np.array([s.fixedLegBPS() for s in unit_swaps], dtype=float)
+        bpvs = np.array([current_curve.pv01(s) for s in unit_swaps], dtype=float)
 
         contribution_is_bpv = False
         if constrained_notional is not None:

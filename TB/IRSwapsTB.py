@@ -1,14 +1,11 @@
-# core/TimeseriesBuilding/IRSwapsTB.py
-
 import datetime
-import logging
 from dataclasses import dataclass
-from functools import partial
 from typing import Dict, Iterable, List, Optional, Tuple, Union
 
-import pandas as pd
 import tqdm
+import pandas as pd
 from joblib import Parallel, delayed
+import logging
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
@@ -17,21 +14,19 @@ from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapQueryWrapper
 from Query.IRSwaps.IRSwapStructure import IRSwapStructureFunctionMap
 from Query.IRSwaps.IRSwapValue import IRSwapValueFunctionMap
 
+
 DateLike = Union[datetime.date, datetime.datetime]
 _LOGGER_NAME = "IRSwapsTB"
 
 
 def _query_to_key(q: IRSwapQuery) -> tuple:
-    """
-    Stable, hashable identity for a single query (copied from your prior usage).
-    """
     tenor = str(q.tenor) if q.tenor is not None else None
     eff = q.effective_date.isoformat() if q.effective_date else None
     mat = q.maturity_date.isoformat() if q.maturity_date else None
     val = tuple(q.value) if isinstance(q.value, list) else q.value
     struct = q.structure.name
     kwargs = tuple(sorted(q.structure_kwargs.items()))
-    return (tenor, eff, mat, val, struct, kwargs, q.name, q.risk_weight)
+    return (tenor, eff, mat, val, struct, kwargs, q.curve, q.name, q.risk_weight)
 
 
 def _flatten_queries(queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper]) -> List[IRSwapQuery]:
@@ -47,13 +42,9 @@ def _flatten_queries(queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQuery
 
 
 def _group_queries_by_curve(queries: Iterable[IRSwapQuery]) -> Dict[str, List[IRSwapQuery]]:
-    """
-    We let each IRSwapQuery carry which curve it belongs to (IRSwapsTB is backend agnostic).
-    If your IRSwapQuery doesn’t carry a curve id, you can infer it externally and attach before calling.
-    """
     buckets: Dict[str, List[IRSwapQuery]] = {}
     for q in queries:
-        curve_name = q.curve  # expect IRSwapQuery has this; if not, add where you construct queries
+        curve_name = q.curve  
         if not curve_name:
             raise ValueError("Each IRSwapQuery must specify .curve_name for IRSwapsTB.")
         buckets.setdefault(curve_name, []).append(q)
@@ -73,12 +64,8 @@ def _build_row_for_query(
     ref_dt: DateLike,
     date_col: str,
 ) -> Tuple[DateLike, str, float]:
-    """
-    Evaluate one query on one curve. This stays fully generic using your FunctionMaps.
-    """
-    # package & weights (structure) – works with either QL or RL curve implementations
     ss_map = IRSwapStructureFunctionMap(curve=curve)  # generic mapping over structures (outright/curve/fly/spread)
-    is_for_ts = True  # signal lighter path where allowed
+    is_for_ts = True
     pkg, rw = ss_map.apply(
         tenor=q.tenor,
         effective_date=q.effective_date,
@@ -89,10 +76,9 @@ def _build_row_for_query(
         **q.structure_kwargs,
     )  # :contentReference[oaicite:0]{index=0}
 
-    # value mapping – RATE / NPV / PV01 / DV01 / carry/roll, etc.
     val_map = IRSwapValueFunctionMap(package=pkg, risk_weights=rw, curve=curve)
-    value = val_map.apply(q.value)  # returns a scalar for the requested IRSwapValue(s)
-    return ref_dt, q.col_name(curve.id()), float(value)  # col_name can optionally use curve context  :contentReference[oaicite:1]{index=1}
+    value = val_map.apply(q.value)
+    return ref_dt, q.col_name(curve.id()), float(value)  # :contentReference[oaicite:1]{index=1}
 
 
 def _worker_for_date(
@@ -129,13 +115,6 @@ def _worker_for_date(
 
 
 class IRSwapsTB(ZODBCacheMixin):
-    """
-    Thin timeseries builder that is:
-      • backend-agnostic (only uses IRSwapMDP + generic curve protocol),
-      • multiprocessing across dates,
-      • ZODB-cached at (date, curve, query_key) granularity.
-    """
-
     _CACHE_ATTR = "_irswaps_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS..."
 
@@ -159,7 +138,20 @@ class IRSwapsTB(ZODBCacheMixin):
 
         stem = cache_stem or f"IRSwapsTB_{mdp.source}"
         self._cache_path = self.default_cache_path(stem=stem)
+
+        # open a simple mapping cache: key=(iso_date, curve_name, query_key) -> (date, col, val)
         self.zodb_open_cache(cache_attr=self._CACHE_ATTR, path=self._cache_path)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def close(self):
+        if hasattr(self, self._CACHE_ATTR):
+            self._logger.debug(f"Closing ZODB connection for cache: {self._CACHE_ATTR}")
+            self.close_zodb()
 
     def get_timeseries(
         self,
@@ -167,12 +159,11 @@ class IRSwapsTB(ZODBCacheMixin):
         end: DateLike,
         queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper],
         *,
-        n_jobs: int = 4,
-        use_bdays: bool = True,
+        n_jobs: Optional[int] = 1,
+        use_bdays: Optional[bool] = True,
         tz: Optional[str] = None,
-        ignore_cache: bool = False,
+        ignore_cache: Optional[bool] = False,
     ) -> pd.DataFrame:
-
         start_d = start.date() if isinstance(start, datetime.datetime) else start
         end_d = end.date() if isinstance(end, datetime.datetime) else end
 
@@ -181,11 +172,9 @@ class IRSwapsTB(ZODBCacheMixin):
         else:
             dates = list(pd.date_range(start_d, end_d).date)
 
-        # flatten & bucket queries by curve so each worker can fetch each curve once
         flat = _flatten_queries(queries)
         by_curve = _group_queries_by_curve(flat)
 
-        # prepare work: only run tasks that aren't already cached
         to_compute: Dict[datetime.date, Dict[str, List[IRSwapQuery]]] = {}
         cached_rows: List[Tuple[DateLike, str, float]] = []
         for d in dates:
@@ -200,7 +189,6 @@ class IRSwapsTB(ZODBCacheMixin):
             if missing_for_date:
                 to_compute[d] = missing_for_date
 
-        # parallel compute per-date (multiprocessing / loky)
         results: List[List[Tuple[DateLike, str, float]]] = []
         if to_compute:
             mdp_cfg = _MDPConfig(self.mdp.source, getattr(self.mdp, "force_refresh_fixings", False), dict(self.mdp.config))
@@ -210,10 +198,9 @@ class IRSwapsTB(ZODBCacheMixin):
             try:
                 results = Parallel(n_jobs=n_jobs, backend="loky")(delayed(_worker_for_date)(mdp_cfg, d, curve_qs, self._date_col) for d, curve_qs in tasks_iter)
             except Exception as e:
-                self._logger.exception("Parallel execution failed in IRSwapsTB.get_timeseries.", exc_info=e)  # <-- NEW
+                self._logger.exception("Parallel execution failed in IRSwapsTB.get_timeseries.", exc_info=e)
                 results = []
 
-        # persist newly computed rows
         new_rows = [r for chunk in results for r in chunk]
         if new_rows:
             try:
@@ -222,7 +209,7 @@ class IRSwapsTB(ZODBCacheMixin):
                         d, col, val = row
                         curve_name = self._extract_curve_from_col(col, by_curve.keys())  # best-effort (optional)
                         if not curve_name:
-                            self._logger.debug(f"Could not infer curve from column name '{col}'. Skipping cache write.")  # <-- NEW
+                            self._logger.debug(f"Could not infer curve from column name '{col}'. Skipping cache write.")
                             continue
                         for q in by_curve.get(curve_name, []):
                             if q.col_name(curve_name) == col:
@@ -230,14 +217,13 @@ class IRSwapsTB(ZODBCacheMixin):
                                 getattr(self, self._CACHE_ATTR)[key] = row
                                 break
             except Exception as e:
-                self._logger.exception("Failed while writing results to ZODB cache.", exc_info=e)  # <-- NEW
+                self._logger.exception("Failed while writing results to ZODB cache.", exc_info=e)
 
         all_rows = cached_rows + new_rows
         if not all_rows:
-            self._logger.error("IRSwapsTB.get_timeseries produced no rows (both cache and compute empty).")  # <-- NEW
+            self._logger.error("IRSwapsTB.get_timeseries produced no rows (both cache and compute empty).")
             return pd.DataFrame([], index=pd.DatetimeIndex([], name=self._date_col))
 
-        # assemble DataFrame
         rows_df = pd.DataFrame(all_rows, columns=[self._date_col, "col", "val"]).drop_duplicates(subset=[self._date_col, "col"], keep="last")
         df = rows_df.pivot(index=self._date_col, columns="col", values="val").sort_index()
         df.columns.name = None
@@ -246,7 +232,7 @@ class IRSwapsTB(ZODBCacheMixin):
             try:
                 df.index = pd.DatetimeIndex(pd.to_datetime(df.index)).tz_localize("UTC").tz_convert(tz)
             except Exception as e:
-                self._logger.error(f"Timezone conversion to '{tz}' failed.", exc_info=e)  # <-- NEW
+                self._logger.error(f"Timezone conversion to '{tz}' failed.", exc_info=e)
 
         return df
 
@@ -255,7 +241,6 @@ class IRSwapsTB(ZODBCacheMixin):
 
     @staticmethod
     def _extract_curve_from_col(col: str, curve_names: Iterable[str]) -> Optional[str]:
-        # Optional: if your IRSwapQuery.col_name embeds curve id; adjust logic as needed.
         for c in curve_names:
             if c in col:
                 return c
