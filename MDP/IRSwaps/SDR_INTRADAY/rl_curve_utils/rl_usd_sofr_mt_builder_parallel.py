@@ -176,7 +176,7 @@ def _calculate_daily_sdr_vwap_timeseries(day_sdr_df: pd.DataFrame, as_of_day: da
 
 def _build_one_mt_curve_worker(
     *,
-    curve_id: str,
+    base_curve_id: str,
     snap_iso: str,
     sofr_fixings: pd.Series,
     n_ser_contracts: int,
@@ -191,6 +191,7 @@ def _build_one_mt_curve_worker(
     day_stir_df = _STIR_DAY_DF
 
     snap = pd.to_datetime(snap_iso)
+    curve_id = f"{snap}-{base_curve_id}"
     snap = snap.tz_convert(NY) if snap.tzinfo is not None else NY.localize(snap)
 
     # 1) Select STIR snapshot from pre-fetched daily timeseries
@@ -297,7 +298,7 @@ def _build_one_mt_curve_worker(
 
 def rl_usd_sofr_mt_builder_parallel(
     *,
-    curve_id: str,
+    base_curve_id: str,
     snaps: List[datetime.datetime],
     sofr_fixings: pd.Series,
     n_ser_contracts: int,
@@ -486,7 +487,7 @@ def rl_usd_sofr_mt_builder_parallel(
             futures = [
                 ex.submit(
                     _build_one_mt_curve_worker,
-                    curve_id=curve_id,
+                    base_curve_id=base_curve_id,
                     snap_iso=s.isoformat(),
                     sofr_fixings=sofr_fixings,
                     n_ser_contracts=n_ser_contracts,
@@ -496,7 +497,7 @@ def rl_usd_sofr_mt_builder_parallel(
                 )
                 for s in day_snaps
             ]
-            for fut in tqdm(as_completed(futures), total=len(futures), desc=f"Calibrating {curve_id} curves for {day}"):
+            for fut in tqdm(as_completed(futures), total=len(futures), desc=f"Calibrating {base_curve_id} curves for {day}"):
                 snap, result = fut.result()
                 out[snap] = result
 

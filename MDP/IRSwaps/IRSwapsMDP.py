@@ -317,30 +317,57 @@ class IRSwapsMDP(MarketDataProvider):
             return out
 
         if self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q12", "SDR_INTRADAY_RL_USD_SOFR_MT_Q12"]:
-            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mt_q12.rl_usd_sofr_mt_q12 import rl_usd_sofr_mt_curve
+            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mt_q12.rl_usd_sofr_mt_q12 import rl_usd_sofr_mt_curve_bulk, rl_usd_sofr_mt_curve
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
-            force_refresh = bool(request.get("force_refresh", False))
-            with self._rl_curve_cache.batched():  # single commit after all builds
-                for t in timestamps:
-                    ref_date = datetime.date.today() if t == "live" else t.date()
-                    sofr_fixings = _fetch_fixings(as_of_date=ref_date, curve_name="USD-SOFR-1D", force_refresh=self.force_refresh_fixings).sort_index()
-                    sofr_fixings = sofr_fixings[sofr_fixings.index.date < ref_date] * 100.0
+            max_ref_date = max(t.date() if isinstance(t, (datetime.date, datetime.datetime)) else datetime.date.today() for t in timestamps)
+            full_fixings_series = _fetch_fixings(as_of_date=max_ref_date, curve_name="USD-SOFR-1D", force_refresh=self.force_refresh_fixings).sort_index()
 
-                    curve_id = f"{t}-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
-                    ts_out, rl_curve = rl_usd_sofr_mt_curve(
-                        curve_id=curve_id,
-                        snap=t,  # datetime or "live"
-                        sofr_fixings=sofr_fixings,
-                        cache=self._rl_curve_cache if t != "live" else None,  # don't write "live" into cache
-                        force_refresh=force_refresh,
-                    )
-                    out[ts_out] = RLIRSwapCurve(
-                        rl_curve_id="USD-SOFR-1D",
-                        rl_curve_handle=rl_curve,
-                        fixings=sofr_fixings,
-                        meta_data={"timestamp": ts_out, "id": curve_id},
-                    )
+            datetime_snaps = [t for t in timestamps if isinstance(t, datetime.datetime)]
+            live_snap_requested = "live" in timestamps
+
+            if not datetime_snaps:
+                return {}
+
+            built_curves = rl_usd_sofr_mt_curve_bulk(
+                base_curve_id="SDR_INTRADAY-RL_USD_SOFR_MT_Q12",
+                snaps=datetime_snaps,
+                sofr_fixings=full_fixings_series,
+                cache=self._rl_curve_cache,
+                max_workers=request.get("max_workers", 1),
+                force_refresh=bool(request.get("force_refresh", False)),
+            )
+
+            for ts, rl_curve in built_curves.items():
+                if rl_curve is None:
+                    continue
+                ref_date = ts.date()
+                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date] * 100.0
+                curve_id_for_snap = f"{ts}-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
+                out[ts] = RLIRSwapCurve(
+                    rl_curve_id=curve_name,
+                    rl_curve_handle=rl_curve,
+                    fixings=fixings_for_curve,
+                    meta_data={"timestamp": ts, "id": curve_id_for_snap},
+                )
+
+            if live_snap_requested:
+                ref_date = datetime.date.today()
+                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date] * 100.0
+                curve_id = "live-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
+                ts_out, rl_curve = rl_usd_sofr_mt_curve(
+                    curve_id=curve_id,
+                    snap="live",
+                    sofr_fixings=fixings_for_curve,
+                    cache=None,
+                    force_refresh=True,
+                )
+                out["live"] = RLIRSwapCurve(
+                    rl_curve_id="USD-SOFR-1D",
+                    rl_curve_handle=rl_curve,
+                    fixings=fixings_for_curve,
+                    meta_data={"timestamp": ts_out, "id": curve_id},
+                )
 
             return out
 
