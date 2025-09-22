@@ -1,77 +1,11 @@
 import datetime
-from pathlib import Path
-from typing import Any, Literal, Optional, Union, Dict
+from typing import Any, Dict, Literal, Optional, Union
 
 import pandas as pd
 
-from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.FixingsFetcher import FixingsFetcher
+from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
-
-
-def _fetch_fixings(as_of_date: datetime.date | Literal["live"], curve_name: str, force_refresh: Optional[bool] = False) -> pd.Series:
-    if as_of_date == "live":
-        as_of_date = datetime.date.today()
-
-    # TODO refactor
-    fixings_cache = Path(rf"C:\Users\chris\clee\ARBS\MDP\IRSwaps\fixings_cache\{curve_name}_fixings")
-    # fixings_cache = Path.home() / f".arbs_cache/{curve_name}_fixings"
-    fixings_cache.mkdir(parents=True, exist_ok=True)
-
-    tday = datetime.date.today()
-    tday_str = tday.strftime("%Y-%m-%d")
-    today_dir = fixings_cache / tday_str
-    today_dir.mkdir(parents=True, exist_ok=True)
-
-    if force_refresh:
-        for p in today_dir.glob("*.csv"):
-            try:
-                p.unlink()
-            except Exception as e:
-                print(f"[cache] Could not delete cache file during force_refresh: {p} ({e})")
-
-    cached_csvs = sorted(today_dir.glob("*.csv"))
-    if cached_csvs and not force_refresh:
-        dfs = [pd.read_csv(p) for p in cached_csvs]
-        df = pd.concat(dfs)
-        df = df.set_index(curve_name)
-        df.index = pd.to_datetime(df.index, errors="coerce")
-        df = df.loc[~df.index.duplicated(keep="first"), :]
-        return df["Fixing"]
-
-    for p in fixings_cache.rglob("*.csv"):
-        if today_dir not in p.parents:
-            try:
-                p.unlink()
-            except Exception as e:
-                print(f"[cache] Could not delete stale file: {p} ({e})")
-
-    for d in sorted(fixings_cache.rglob("*"), reverse=True):
-        if d.is_dir() and d != today_dir:
-            try:
-                next(d.iterdir())
-            except StopIteration:
-                try:
-                    d.rmdir()
-                except Exception:
-                    pass
-
-    try:
-        fixings_dict = FixingsFetcher().get_fixings(curve=curve_name)
-    except:
-        fixings_dict = FixingsFetcher(fred_api_key="e06f51338bf093283ce1331c2826b3db").get_fixings(curve=curve_name, use_fred=True)
-
-    fixings_series = pd.Series(fixings_dict)
-    fixings_series.index.name = curve_name
-    fixings_series.name = "Fixing"
-
-    out_csv = today_dir / "fixings.csv"
-    try:
-        fixings_series.to_csv(out_csv)
-    except Exception as e:
-        print(f"[cache] Failed to write cache file {out_csv}: {e}")
-
-    return fixings_series
 
 
 class IRSwapsMDP(MarketDataProvider):
