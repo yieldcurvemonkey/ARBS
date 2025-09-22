@@ -117,9 +117,11 @@ def _calculate_daily_sdr_vwap_timeseries(day_sdr_df: pd.DataFrame, as_of_day: da
         .set_index("Execution Timestamp")
         .sort_index()
     )
+    intraday_df.index = intraday_df.index.tz_convert(NY)
 
-    if intraday_df.index.tz is None:
-        intraday_df.index = intraday_df.index.tz_localize("UTC")
+    # sod_ny = NY.localize(datetime.datetime(as_of_day.year, as_of_day.month, as_of_day.day, 0, 0))
+    # eod_ny = NY.localize(datetime.datetime(as_of_day.year, as_of_day.month, as_of_day.day, 23, 59))
+    # minute_grid = pd.date_range(start=sod_ny, end=eod_ny, freq="T", tz=NY)
 
     medium_term_tenors = ["5Y", "10Y", "30Y"]
     vwap_series_dict = {}
@@ -143,13 +145,33 @@ def _calculate_daily_sdr_vwap_timeseries(day_sdr_df: pd.DataFrame, as_of_day: da
         minute_vwap = minute_vwap.reindex(idx)
 
         minute_ffill = minute_vwap.ffill()
+        sod = minute_ffill.index[-1].normalize() + pd.Timedelta(hours=0, minutes=1)
         eod = minute_ffill.index[-1].normalize() + pd.Timedelta(hours=23, minutes=59)
-        target_idx = pd.date_range(start=minute_ffill.index[0], end=eod, freq="T", tz=minute_ffill.index.tz)
-        minute_ffill_eod = minute_ffill.reindex(target_idx).ffill()
-        minute_ffill_eod.index = minute_ffill_eod.index.tz_convert(NY)
+        target_idx = pd.date_range(start=sod, end=eod, freq="T", tz=minute_ffill.index.tz)
+        minute_ffill_eod = minute_ffill.reindex(target_idx).ffill().bfill()
         vwap_series_dict[f"{tenor}_VWAP"] = minute_ffill_eod["Fixed rate-Leg 1"]
 
+        # sub = intraday_df[intraday_df["Expiration Date"].dt.date == maturity_datetime.date()].copy()
+        # if sub.empty:
+        #     # still output a series (NaNs); you can ffill at consumption-time if desired
+        #     vwap_series_dict[f"{tenor}_VWAP"] = pd.Series(index=minute_grid, dtype=float)
+        #     continue
+
+        # # minute aggregation (sum of weights and weighted price *within* each minute)
+        # sub["w"] = sub["Notional amount-Leg 1"].replace(r"[^\d.]", "", regex=True).astype(float)
+        # sub["wx"] = sub["w"] * sub["Fixed rate-Leg 1"]
+        # per_min = sub.resample("T").agg({"wx": "sum", "w": "sum"}).reindex(minute_grid).ffill().bfill()
+
+        # # ---- CAUSAL VWAP: expanding sums up to each minute ----
+        # cwx = per_min["wx"].cumsum()
+        # cw = per_min["w"].cumsum()
+
+        # # avoid divide-by-zero; where cw==0 keep NaN (will be ffilled by consumer)
+        # vwap_causal = cwx.where(cw == 0, cwx / cw)
+        # vwap_series_dict[f"{tenor}_VWAP"] = vwap_causal
+
     return pd.DataFrame(*[vwap_series_dict])
+    # return pd.DataFrame(vwap_series_dict)
 
 
 def _build_one_mt_curve_worker(
@@ -169,6 +191,7 @@ def _build_one_mt_curve_worker(
     day_stir_df = _STIR_DAY_DF
 
     snap = pd.to_datetime(snap_iso)
+    snap = snap.tz_convert(NY) if snap.tzinfo is not None else NY.localize(snap)
 
     # 1) Select STIR snapshot from pre-fetched daily timeseries
     stir_df_snap = day_stir_df[day_stir_df.index <= snap].tail(1)
@@ -197,9 +220,13 @@ def _build_one_mt_curve_worker(
     for tenor in ["5Y", "10Y", "30Y"]:
         maturity_dt = _ql_date_to_datetime(ql.NullCalendar().advance(datetime_to_ql_date(spot_dt), ql.Period(tenor)))
         vwap_col = f"{tenor}_VWAP"
+
         rate_at_snap = 0.0
         if vwap_col in day_sdr_vwap_df.columns:
-            rate_at_snap = day_sdr_vwap_df.loc[snap][vwap_col]
+            val = day_sdr_vwap_df[vwap_col].loc[:snap].ffill().iloc[-1]
+            rate_at_snap = float(val) if pd.notna(val) else 0.0
+
+        assert rate_at_snap != 0.0, "should not be zero!"
 
         rl_irss[tenor] = rl.IRS(
             effective=spot_dt,
@@ -299,8 +326,10 @@ def rl_usd_sofr_mt_builder_parallel(
     stir_by_day: Dict[datetime.date, pd.DataFrame] = {}
 
     for day in tqdm(by_day.keys(), desc="Prefetching and preparing daily data"):
-        start_ts = NY.localize(datetime.datetime.combine(day, datetime.time.min))
-        end_ts = NY.localize(datetime.datetime.combine(day, datetime.time.max))
+        # start_ts = NY.localize(datetime.datetime.combine(day, datetime.time.min))
+        # end_ts = NY.localize(datetime.datetime.combine(day, datetime.time.max))
+        start_ts = NY.localize(datetime.datetime(day.year, day.month, day.day, 0, 0))
+        end_ts = NY.localize(datetime.datetime(day.year, day.month, day.day, 23, 59))
 
         sdr_df = sdr_builder.grab_sdr_trades(start_timestamp=start_ts, end_timestamp=end_ts, agency="CFTC", asset_class="RATES")
         sdr_vwap_by_day[day] = _calculate_daily_sdr_vwap_timeseries(sdr_df, day)
