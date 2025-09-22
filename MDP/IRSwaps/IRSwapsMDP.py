@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 import pandas as pd
 
@@ -224,6 +224,7 @@ class IRSwapsMDP(MarketDataProvider):
             assert type(timestamp) == datetime.date, "GSQUANT ONLY HAS EOD - 'timestamp' must be type 'datetime.date'"
 
             from rateslib import from_json
+
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             curve_id, rl_curve_serialized, pricing_location = self._rl_curve_cache.get_gsquant_rl_basic(curve_id=curve_name, as_of=timestamp, force_refresh=False)
@@ -241,3 +242,137 @@ class IRSwapsMDP(MarketDataProvider):
 
         else:
             raise NotImplementedError(f"Curve Build '{self.source}' does not exist")
+
+    def bulk_get_data(self, request: dict) -> Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve]:
+        if not isinstance(request, dict):
+            raise ValueError("request must be a dict")
+
+        curve_name: str = request.pop("curve_name", None)
+        timestamps_in: Iterable[Union[datetime.date, datetime.datetime, Literal["live"]]] = request.pop("timestamps", None)
+
+        if not curve_name or timestamps_in is None:
+            raise ValueError("Request must contain 'curve_name' and 'timestamps'.")
+
+        seen: set = set()
+        timestamps: List[Union[datetime.date, datetime.datetime, Literal["live"]]] = []
+        for t in timestamps_in:
+            key = ("live",) if t == "live" else ("dt", t) if isinstance(t, datetime.datetime) else ("d", t)
+            if key not in seen:
+                seen.add(key)
+                timestamps.append(t)
+
+        out: Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve] = {}
+
+        if self.source.upper() in ["CME_NY_EOD_LIVE-QL_BASIC", "CME_NY_EOD_LIVE_QL_BASIC"]:
+            import QuantLib as ql
+
+            from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.CMEFetcherV2 import CMEFetcherV2
+            from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
+            from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
+            from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
+
+            def _to_date(x):
+                if x == "live":
+                    return datetime.date.today()
+                if isinstance(x, datetime.datetime):
+                    return x.date()
+                return x  # already date
+
+            bdates: List[datetime.date] = [_to_date(t) for t in timestamps]
+
+            ql_curve_def = QUANTLIB_CURVE_DEFINITIONS[curve_name]
+            cmef = CMEFetcherV2(**self.config)
+
+            built = cmef.build_ql_eod_curves(
+                curve=curve_name,
+                type="Df",
+                ql_day_count=ql_curve_def["DayCounter"],
+                ql_calendar=ql_curve_def["Calendar"],
+                bdates=bdates,
+                show_tqdm=False,
+                **request,
+            )
+
+            for ref_date, ql_curve in built.items():
+                if ql_curve is None:
+                    continue
+                ql_curve_handle = ql.YieldTermStructureHandle(ql_curve)
+                irswap_index = ql_curve_def["ReferenceRate"](ql_curve_handle)
+
+                fixings_series = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+                fixings_series = fixings_series[fixings_series.index.date < ref_date]
+                for d, f in fixings_series.to_dict().items():
+                    try:
+                        irswap_index.addFixing(fixingDate=datetime_to_ql_date(d), fixing=f, forceOverwrite=True)
+                    except Exception:
+                        pass
+
+                out[ref_date] = QLIRSwapCurve(
+                    ql_curve_id=curve_name,
+                    ql_curve_handle=ql_curve_handle,
+                    ql_curve_index=irswap_index,
+                    meta_data={"timestamp": ref_date},
+                )
+
+            return out
+
+        if self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q12", "SDR_INTRADAY_RL_USD_SOFR_MT_Q12"]:
+            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mt_q12.rl_usd_sofr_mt_q12 import rl_usd_sofr_mt_curve_bulk, rl_usd_sofr_mt_curve
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            max_ref_date = max(t.date() if isinstance(t, (datetime.date, datetime.datetime)) else datetime.date.today() for t in timestamps)
+            full_fixings_series = _fetch_fixings(as_of_date=max_ref_date, curve_name="USD-SOFR-1D", force_refresh=self.force_refresh_fixings).sort_index()
+
+            datetime_snaps = [t for t in timestamps if isinstance(t, datetime.datetime)]
+            live_snap_requested = "live" in timestamps
+
+            if not datetime_snaps:
+                return {}
+
+            built_curves = rl_usd_sofr_mt_curve_bulk(
+                base_curve_id="SDR_INTRADAY-RL_USD_SOFR_MT_Q12",
+                snaps=datetime_snaps,
+                sofr_fixings=full_fixings_series,
+                cache=self._rl_curve_cache,
+                max_workers=request.get("max_workers", 1),
+                force_refresh=bool(request.get("force_refresh", False)),
+            )
+
+            for ts, rl_curve in built_curves.items():
+                if rl_curve is None:
+                    continue
+                ref_date = ts.date()
+                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date] * 100.0
+                curve_id_for_snap = f"{ts}-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
+                out[ts] = RLIRSwapCurve(
+                    rl_curve_id=curve_name,
+                    rl_curve_handle=rl_curve,
+                    fixings=fixings_for_curve,
+                    meta_data={"timestamp": ts, "id": curve_id_for_snap},
+                )
+
+            if live_snap_requested:
+                ref_date = datetime.date.today()
+                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date] * 100.0
+                curve_id = "live-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
+                ts_out, rl_curve = rl_usd_sofr_mt_curve(
+                    curve_id=curve_id,
+                    snap="live",
+                    sofr_fixings=fixings_for_curve,
+                    cache=None,
+                    force_refresh=True,
+                )
+                out["live"] = RLIRSwapCurve(
+                    rl_curve_id="USD-SOFR-1D",
+                    rl_curve_handle=rl_curve,
+                    fixings=fixings_for_curve,
+                    meta_data={"timestamp": ts_out, "id": curve_id},
+                )
+
+            return out
+
+        # ------- default / not implemented -------
+        # Fallback: do one-by-one via existing get_data (still avoids concurrent callers hitting cache separately)
+        for t in timestamps:
+            out[t] = self.get_data({"curve_name": curve_name, "timestamp": t, **request})
+        return out

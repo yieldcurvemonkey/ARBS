@@ -226,9 +226,9 @@ def rl_usd_sofr_mt_builder(
                 .set_index("Execution Timestamp")
                 .sort_index()
             )
-
-            if intraday_df.index.tz is None:
-                intraday_df.index = intraday_df.index.tz_localize("UTC")
+            intraday_df.index = intraday_df.index.tz_convert(snap_dt.tzinfo)
+            intraday_df = intraday_df[intraday_df.index <= snap_dt]
+            intraday_df.index = intraday_df.index.tz_convert(NY_tz)
 
             rl_irs: Dict[str, rl.IRS] = {}
             for tenor in medium_term_tenors:
@@ -251,10 +251,8 @@ def rl_usd_sofr_mt_builder(
                 minute_vwap = minute_vwap.reindex(idx)
 
                 minute_ffill = minute_vwap.ffill()
-                eod = minute_ffill.index[-1].normalize() + pd.Timedelta(hours=23, minutes=59)
-                target_idx = pd.date_range(start=minute_ffill.index[0], end=eod, freq="T", tz=minute_ffill.index.tz)
+                target_idx = pd.date_range(start=minute_ffill.index[0], end=snap_dt, freq="T", tz=minute_ffill.index.tz)
                 minute_ffill_eod = minute_ffill.reindex(target_idx).ffill()
-                minute_ffill_eod.index = minute_ffill_eod.index.tz_convert(snap_dt.tzinfo)
 
                 rl_irs[tenor] = rl.IRS(
                     effective=spot_datetime,
