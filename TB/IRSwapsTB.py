@@ -44,7 +44,7 @@ def _flatten_queries(queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQuery
 def _group_queries_by_curve(queries: Iterable[IRSwapQuery]) -> Dict[str, List[IRSwapQuery]]:
     buckets: Dict[str, List[IRSwapQuery]] = {}
     for q in queries:
-        curve_name = q.curve  
+        curve_name = q.curve
         if not curve_name:
             raise ValueError("Each IRSwapQuery must specify .curve_name for IRSwapsTB.")
         buckets.setdefault(curve_name, []).append(q)
@@ -245,3 +245,17 @@ class IRSwapsTB(ZODBCacheMixin):
             if c in col:
                 return c
         return None
+
+    def resolve_object(self, q: IRSwapQuery, as_of: DateLike):
+        curve = self.mdp.get_data({"curve_name": q.curve, "timestamp": as_of})
+        ss_map = IRSwapStructureFunctionMap(curve=curve)  # generic mapping over structures (outright/curve/fly/spread)
+        is_for_ts = True
+        return ss_map.apply(
+            tenor=q.tenor,
+            effective_date=q.effective_date,
+            maturity_date=q.maturity_date,
+            value=q.value,
+            structure=q.structure,
+            is_for_timeseries=is_for_ts,
+            **q.structure_kwargs,
+        )  # :contentReference[oaicite:0]{index=0}

@@ -290,6 +290,8 @@ def rl_usd_ois_stir_builder(
         s=[_safe_fixed_rate(v) for _, v in _stirf_items] + [0] * len(rl_fomc_turn_flies),
         id=curve_id,
         weights=rl_stirf_weights + rl_fomc_turn_flies_weights,
+        func_tol=1e-5,
+        conv_tol=1e-5,
     )
 
     # return curve_timestamp, rl_sofr_curve
@@ -320,8 +322,8 @@ def rl_usd_ois_stir_builder(
         instruments=[v for _, v in _stirf_items] + [v for _, v in sorted(rl_fomc_turn_flies.items(), key=lambda kv: kv[0])],
         s=rl_stirf_serff_skew_s + [0] * len(rl_fomc_turn_flies),
         id=curve_id,
-        func_tol=1e-8,
-        conv_tol=1e-8,
+        func_tol=1e-5,
+        conv_tol=1e-5,
         weights=rl_stirf_serff_skew_w + rl_fomc_turn_flies_weights,
     )
 

@@ -91,10 +91,17 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         raise NotImplementedError("rateslib not implemented")
 
     def build_irswap(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None):
+        if fwd:
+            if fwd == "0D":
+                rl_effective = self.calendar_advance(self.reference_date(), f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]}b")
+            else:
+                rl_effective = self.calendar_advance(self.reference_date(), fwd)
+        else:
+            rl_effective = effective_date
 
         if bpv and not notional:
             unit_delta = rl.IRS(
-                effective=fwd or effective_date,
+                effective=rl_effective,
                 termination=tenor or maturity_date,
                 spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
                 curves=self._rl_curve_handle,
@@ -104,14 +111,6 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
 
         if not bpv and not notional:
             notional = 1
-
-        if fwd:
-            if fwd == "0D":
-                rl_effective = self.calendar_advance(self.reference_date(), f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]}b")
-            else:
-                rl_effective = self.calendar_advance(self.reference_date(), fwd)
-        else:
-            rl_effective = effective_date
 
         return rl.IRS(
             effective=rl_effective,
