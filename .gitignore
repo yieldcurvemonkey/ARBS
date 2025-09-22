@@ -209,3 +209,6 @@ __marimo__/
 # caching
 /dump
 dump/
+
+# repo mix/ai stuff
+repomix-output.xml
