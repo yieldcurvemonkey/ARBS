@@ -105,7 +105,7 @@ class IRSwapsMDP(MarketDataProvider):
                 force_refresh=kwargs.get("force_refresh", False),
             )
             return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
-        
+
         elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q16", "SDR_INTRADAY_RL_USD_SOFR_MT_Q16"]:
             assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
             assert curve_name == "USD-SOFR-1D", "SOFR!"
@@ -125,7 +125,7 @@ class IRSwapsMDP(MarketDataProvider):
                 force_refresh=kwargs.get("force_refresh", False),
             )
             return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
-        
+
         elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_MISC", "SDR_INTRADAY_RL_USD_SOFR_MT_MISC"]:
             assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
             assert curve_name == "USD-SOFR-1D", "SOFR!"
@@ -259,13 +259,48 @@ class IRSwapsMDP(MarketDataProvider):
                 cache=self._rl_curve_cache if timestamp != "live" else None,
                 force_refresh=kwargs.get("force_refresh", False),
             )
+            return RLIRSwapCurve(rl_curve_id="USD-FEDFUNDS", rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
+
+        elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_STIR_Q12X12", "SDR_INTRADAY_RL_USD_SOFR_STIR_Q12X12"]:
+            assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
+            assert curve_name == "USD-SOFR", "SOFR!"
+
+            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_stir_q12x12.rl_usd_sofr_stir_q12x12 import rl_usd_sofr_stir_curve
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
+            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+
+            # for when we need to build curve before 8am est sofr fixings
+            FIXINGS_TOL = 1
+            if not sofr_fixings.empty:
+                from pandas.tseries.holiday import USFederalHolidayCalendar
+                from pandas.tseries.offsets import CustomBusinessDay
+
+                cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+                target_dt = (pd.Timestamp(ref) - (cbd * FIXINGS_TOL)).normalize()
+                idx_norm = sofr_fixings.index.normalize()
+                if target_dt not in idx_norm:
+                    last_val = sofr_fixings.iloc[-1]
+                    sofr_fixings.loc[target_dt] = float(last_val)
+                    sofr_fixings = sofr_fixings.sort_index()
+
+            curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_STIR_Q12x12"
+            ts, rl_curve_handle = rl_usd_sofr_stir_curve(
+                curve_id=curve_id,
+                snap=timestamp,
+                sofr_fixings=sofr_fixings,
+                cache=self._rl_curve_cache if timestamp != "live" else None,
+                force_refresh=kwargs.get("force_refresh", False),
+            )
             return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
-        
+
         elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_STIR_MISC", "SDR_INTRADAY_RL_USD_SOFR_STIR_MISC"]:
             assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
             assert curve_name == "USD-SOFR-1D", "SOFR!"
 
-            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_stir_misc.rl_usd_sofr_stir_misc import rl_usd_sofr_stir_curve 
+            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_stir_misc.rl_usd_sofr_stir_misc import rl_usd_sofr_stir_curve
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
@@ -296,7 +331,42 @@ class IRSwapsMDP(MarketDataProvider):
             )
             return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
 
-        if "GSQUANT-RL" in self.source.upper() or "GSQUANT_RL" in self.source.upper():
+        elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MTV2_Q12X11", "SDR_INTRADAY_RL_USD_SOFR_MTV2_Q12X11"]:
+            assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
+            assert curve_name == "USD-SOFR-1D", "SOFR!"
+
+            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mtv2_q12x11.rl_usd_sofr_mtv2_q12x11 import rl_usd_sofr_mt_curve
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
+            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+
+            # for when we need to build curve before 8am est sofr fixings
+            FIXINGS_TOL = 1
+            if not sofr_fixings.empty:
+                from pandas.tseries.holiday import USFederalHolidayCalendar
+                from pandas.tseries.offsets import CustomBusinessDay
+
+                cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+                target_dt = (pd.Timestamp(ref) - (cbd * FIXINGS_TOL)).normalize()
+                idx_norm = sofr_fixings.index.normalize()
+                if target_dt not in idx_norm:
+                    last_val = sofr_fixings.iloc[-1]
+                    sofr_fixings.loc[target_dt] = float(last_val)
+                    sofr_fixings = sofr_fixings.sort_index()
+
+            curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_MTV2_Q12x11"
+            ts, rl_curve_handle = rl_usd_sofr_mt_curve(
+                curve_id=curve_id,
+                snap=timestamp,
+                sofr_fixings=sofr_fixings,
+                cache=self._rl_curve_cache if timestamp != "live" else None,
+                force_refresh=kwargs.get("force_refresh", False),
+            )
+            return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
+
+        elif "GSQUANT-RL" in self.source.upper() or "GSQUANT_RL" in self.source.upper():
             assert type(timestamp) == datetime.date, "GSQUANT ONLY HAS EOD - 'timestamp' must be type 'datetime.date'"
 
             from rateslib import from_json
@@ -392,7 +462,7 @@ class IRSwapsMDP(MarketDataProvider):
 
             return out
 
-        if self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q12", "SDR_INTRADAY_RL_USD_SOFR_MT_Q12"]:
+        elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q12", "SDR_INTRADAY_RL_USD_SOFR_MT_Q12"]:
             from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mt_q12.rl_usd_sofr_mt_q12 import rl_usd_sofr_mt_curve_bulk, rl_usd_sofr_mt_curve
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
@@ -431,6 +501,61 @@ class IRSwapsMDP(MarketDataProvider):
                 ref_date = datetime.date.today()
                 fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date] * 100.0
                 curve_id = "live-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
+                ts_out, rl_curve = rl_usd_sofr_mt_curve(
+                    curve_id=curve_id,
+                    snap="live",
+                    sofr_fixings=fixings_for_curve,
+                    cache=None,
+                    force_refresh=True,
+                )
+                out["live"] = RLIRSwapCurve(
+                    rl_curve_id="USD-SOFR-1D",
+                    rl_curve_handle=rl_curve,
+                    fixings=fixings_for_curve,
+                    meta_data={"timestamp": ts_out, "id": curve_id},
+                )
+
+            return out
+
+        elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MTV2_Q12", "SDR_INTRADAY_RL_USD_SOFR_MTV2_Q12"]:
+            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mtv2_q12x11.rl_usd_sofr_mtv2_q12x11 import rl_usd_sofr_mt_curve_bulk, rl_usd_sofr_mt_curve
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            max_ref_date = max(t.date() if isinstance(t, (datetime.date, datetime.datetime)) else datetime.date.today() for t in timestamps)
+            full_fixings_series = _fetch_fixings(as_of_date=max_ref_date, curve_name="USD-SOFR-1D", force_refresh=self.force_refresh_fixings).sort_index()
+
+            datetime_snaps = [t for t in timestamps if isinstance(t, datetime.datetime)]
+            live_snap_requested = "live" in timestamps
+
+            if not datetime_snaps:
+                return {}
+
+            built_curves = rl_usd_sofr_mt_curve_bulk(
+                base_curve_id="SDR_INTRADAY-RL_USD_SOFR_MTV2_Q12X11",
+                snaps=datetime_snaps,
+                sofr_fixings=full_fixings_series,
+                cache=self._rl_curve_cache,
+                max_workers=request.get("max_workers", 1),
+                force_refresh=bool(request.get("force_refresh", False)),
+            )
+
+            for ts, rl_curve in built_curves.items():
+                if rl_curve is None:
+                    continue
+                ref_date = ts.date()
+                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date] * 100.0
+                curve_id_for_snap = f"{ts}-SDR_INTRADAY-RL_USD_SOFR_MTV2_Q12X11"
+                out[ts] = RLIRSwapCurve(
+                    rl_curve_id=curve_name,
+                    rl_curve_handle=rl_curve,
+                    fixings=fixings_for_curve,
+                    meta_data={"timestamp": ts, "id": curve_id_for_snap},
+                )
+
+            if live_snap_requested:
+                ref_date = datetime.date.today()
+                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date] * 100.0
+                curve_id = "live-SDR_INTRADAY-RL_USD_SOFR_MTV2_Q12X11"
                 ts_out, rl_curve = rl_usd_sofr_mt_curve(
                     curve_id=curve_id,
                     snap="live",

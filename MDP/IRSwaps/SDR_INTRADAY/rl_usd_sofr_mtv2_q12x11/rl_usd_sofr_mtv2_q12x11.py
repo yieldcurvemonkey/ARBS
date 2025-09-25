@@ -1,6 +1,6 @@
 import datetime
 import pandas as pd
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple, List, Dict
 
 import rateslib as rl
 
@@ -8,9 +8,12 @@ from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.rl_usd_sofr_mt_builder import rl_us
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.rl_usd_sofr_mt_builder_parallel import rl_usd_sofr_mt_builder_parallel
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache, _make_key
 
-_N_SER_CONTRACTS = 0
+_N_SER_CONTRACTS = 11
 _N_SFR_CONTRACTS = 12
 _N_PLUS_FOMC_YRS = 3
+_MT_TENORS = ["5Y", "7Y", "10Y", "20Y", "30Y"]
+_MT_TENOR_MAX = f"{max([int(t[:-1]) for t in _MT_TENORS])}Y"
+_EXTRAPOLATION_YRS = 30
 
 
 def rl_usd_sofr_mt_curve(
@@ -20,6 +23,13 @@ def rl_usd_sofr_mt_curve(
     cache: _RLCurveCache,
     force_refresh: Optional[bool] = False,
 ) -> Tuple[datetime.datetime, rl.Curve]:
+    # print("_N_SER_CONTRACTS: ", _N_SER_CONTRACTS)
+    # print("_N_SFR_CONTRACTS: ", _N_SFR_CONTRACTS)
+    # print("_N_PLUS_FOMC_YRS: ", _N_PLUS_FOMC_YRS)
+    # print("_MT_TENORS: ", _MT_TENORS)
+    # print("_MT_TENOR_MAX: ", _MT_TENOR_MAX)
+    # print("_EXTRAPOLATION_YRS: ", _EXTRAPOLATION_YRS)
+
     if cache is not None:
         return snap, rl.from_json(
             cache.get_rl_usd_sofr_mt(
@@ -29,6 +39,9 @@ def rl_usd_sofr_mt_curve(
                 n_ser=_N_SER_CONTRACTS,
                 n_sfr=_N_SFR_CONTRACTS,
                 n_plus_fomc_years=_N_PLUS_FOMC_YRS,
+                medium_term_tenors=_MT_TENORS,
+                max_tenor=_MT_TENOR_MAX,
+                extrapolation_yrs=_EXTRAPOLATION_YRS,
                 force_refresh=force_refresh,
             )
         )
@@ -40,6 +53,9 @@ def rl_usd_sofr_mt_curve(
         n_ser_contracts=_N_SER_CONTRACTS,
         n_sfr_contracts=_N_SFR_CONTRACTS,
         n_plus_fomc_years=_N_PLUS_FOMC_YRS,
+        medium_term_tenors=_MT_TENORS,
+        max_tenor=_MT_TENOR_MAX,
+        extrapolation_yrs=_EXTRAPOLATION_YRS,
     )
     return rlcurveobj.timestamp, rlcurveobj.rl_pricing_curve
 
@@ -69,7 +85,7 @@ def rl_usd_sofr_mt_curve_bulk(
     mapping = getattr(cache, cache._cache_attr)
 
     for snap in snaps:
-        key = _make_key(f"{snap}-SDR_INTRADAY-RL_USD_SOFR_MT_Q12", snap, _N_SER_CONTRACTS, _N_SFR_CONTRACTS, _N_PLUS_FOMC_YRS)
+        key = _make_key(f"{snap}-SDR_INTRADAY-RL_USD_SOFR_MTV2_Q12X11", snap, sofr_fixings, _N_SER_CONTRACTS, _N_SFR_CONTRACTS, _N_PLUS_FOMC_YRS)
         if not force_refresh and key in mapping:
             cached_curves[snap] = rl.from_json(mapping[key])
         else:
@@ -89,7 +105,7 @@ def rl_usd_sofr_mt_curve_bulk(
 
         with cache.batched():
             for snap, curve in newly_built_curves.items():
-                key = _make_key(f"{snap}-SDR_INTRADAY-RL_USD_SOFR_MT_Q12", snap, sofr_fixings, _N_SER_CONTRACTS, _N_SFR_CONTRACTS, _N_PLUS_FOMC_YRS)
+                key = _make_key(f"{snap}-SDR_INTRADAY-RL_USD_SOFR_MTV2_Q12X11", snap, sofr_fixings, _N_SER_CONTRACTS, _N_SFR_CONTRACTS, _N_PLUS_FOMC_YRS)
                 mapping[key] = curve.to_json()
 
         cached_curves.update(newly_built_curves)
