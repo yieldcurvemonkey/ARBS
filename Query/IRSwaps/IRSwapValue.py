@@ -41,7 +41,6 @@ def calc_spread_rate(
     package: List[_IRSwapGenericObject],
     risk_weights: List[float],
 ) -> float:
-
     risk_weights = _swap_structure_sign_mapper[_swap_structure_legs_mapper[len(package)][0]](risk_weights)
     return sum([risk_weights[i] * abs(curve.fair_rate(sw)) for i, sw in enumerate(package)])
 
