@@ -7,8 +7,8 @@ import rateslib as rl
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.rl_usd_curve_stir_builder import rl_usd_sofr_stir_builder
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
 
-_N_SER_CONTRACTS = 11
-_N_SFR_CONTRACTS = 18
+_N_SER_CONTRACTS = 10
+_N_SFR_CONTRACTS = 16
 _N_PLUS_FOMC_YRS = 5
 
 
