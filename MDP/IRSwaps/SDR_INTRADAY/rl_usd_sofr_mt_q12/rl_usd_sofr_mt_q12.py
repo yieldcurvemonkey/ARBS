@@ -54,7 +54,7 @@ def rl_usd_sofr_mt_curve_bulk(
 ) -> Dict[datetime.datetime, rl.Curve]:
     if cache is None:
         return rl_usd_sofr_mt_builder_parallel(
-            curve_id=curve_id,
+            curve_id=base_curve_id,
             snaps=snaps,
             sofr_fixings=sofr_fixings,
             n_ser_contracts=_N_SER_CONTRACTS,

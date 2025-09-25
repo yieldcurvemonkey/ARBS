@@ -29,6 +29,9 @@ def rl_usd_sofr_mt_builder(
     n_sfr_contracts: int,
     n_plus_fomc_years: int,
     live_side: Literal["bid", "mid", "ask"] = "mid",
+    medium_term_tenors: List[str] = ["5Y", "10Y", "30Y"],
+    max_tenor: Optional[str] = "30Y",
+    extrapolation_yrs: Optional[int] = 20,
     use_globex: Optional[bool] = False,
     schwab_app_key: Optional[str] = None,
     schwab_app_secret: Optional[str] = None,
@@ -141,9 +144,10 @@ def rl_usd_sofr_mt_builder(
         return curve_timestamp, rl_stirfs, serff_basis
 
     def _fetch_medium_term_market_data(
-        curve_id_local: str, snap_local: Union[datetime.datetime, datetime.date, List[Union[datetime.datetime, datetime.date]]]
+        curve_id_local: str,
+        snap_local: Union[datetime.datetime, datetime.date, List[Union[datetime.datetime, datetime.date]]],
+        medium_term_tenors: List[str] = ["5Y", "10Y", "30Y"],
     ) -> Tuple[Union[datetime.datetime, datetime.date], Dict[str, rl.IRS]]:
-        medium_term_tenors = ["5Y", "10Y", "30Y"]
         NY_tz = pytz.timezone("America/New_York")
 
         if type(snap_local) == datetime.date:
@@ -271,7 +275,7 @@ def rl_usd_sofr_mt_builder(
         side=live_side,
         include_serff=False,
     )
-    _, rl_irss = _fetch_medium_term_market_data(curve_id_local=curve_id, snap_local=snap)
+    _, rl_irss = _fetch_medium_term_market_data(curve_id_local=curve_id, snap_local=snap, medium_term_tenors=medium_term_tenors)
 
     fomc_curve_nodes = get_fomc_meetings_list(as_of=snap, n_plus_years=n_plus_fomc_years)
     sfr_tickers = get_short_end_curve_tickers(
@@ -297,7 +301,8 @@ def rl_usd_sofr_mt_builder(
     rl_irss_weights = [1] * len(rl_irss)
     rl_fomc_turn_flies_weights = [1e-9] * len(rl_fomc_turn_flies)
 
-    tail = max(rl_irss["30Y"].leg1.cashflows()["Payment"]) + datetime.timedelta(days=360 * 20)
+    # TODO use nyc cal
+    tail = max(rl_irss[max_tenor].leg1.cashflows()["Payment"]) + datetime.timedelta(days=365 * extrapolation_yrs)
 
     rl_sofr_pricing_curve = rl.Curve(
         nodes=dict(zip(curve_nodes, [1] * len(curve_nodes))),
@@ -306,18 +311,7 @@ def rl_usd_sofr_mt_builder(
         calendar="nyc",
         modifier="MF",
         interpolation="log_linear",
-        t=[
-            st_nodes[-1],
-            st_nodes[-1],
-            st_nodes[-1],
-            st_nodes[-1],  # FOMC far date (duplicated to anchor)
-            mt_nodes[0],  # 5y
-            mt_nodes[1],  # 10y
-            tail,
-            tail,
-            tail,
-            tail,  # emulate extrapolation
-        ],
+        t=[st_nodes[-1], st_nodes[-1], st_nodes[-1], st_nodes[-1]] + mt_nodes[:-1] + [tail, tail, tail, tail],
     )
     rl_sofr_pricing_curve_solver = rl.Solver(
         curves=[rl_sofr_pricing_curve],

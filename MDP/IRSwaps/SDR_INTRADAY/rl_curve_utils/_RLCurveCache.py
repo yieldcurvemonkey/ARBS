@@ -71,6 +71,9 @@ class _RLCurveCache(ZODBCacheMixin):
         n_ser: int,
         n_sfr: int,
         n_plus_fomc_years: int,
+        medium_term_tenors,
+        max_tenor,
+        extrapolation_yrs,
         force_refresh: bool = False,
     ):
         from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.rl_usd_sofr_mt_builder import rl_usd_sofr_mt_builder
@@ -90,6 +93,9 @@ class _RLCurveCache(ZODBCacheMixin):
             n_ser_contracts=n_ser,
             n_sfr_contracts=n_sfr,
             n_plus_fomc_years=n_plus_fomc_years,
+            medium_term_tenors=medium_term_tenors,
+            max_tenor=max_tenor,
+            extrapolation_yrs=extrapolation_yrs,
         ).rl_pricing_curve.to_json()
 
         mapping[key] = result_json
