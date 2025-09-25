@@ -65,22 +65,22 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
     def _to_dt(self, d: Union[datetime.date, ql.Date, ql.Period, str], ref_date: Union[datetime.date, ql.Date]):
 
         if isinstance(d, ql.Period) or isinstance(d, str):
+            if isinstance(d, str) and d.upper().startswith("IMM_"):
+                if str(d.split("IMM_")[-1]).isnumeric():
+                    offset = int(d.split("IMM_")[-1]) - 1
+                    if isinstance(ref_date, ql.Date):
+                        ref_date = ql_date_to_pydate(d)
+                    imm = ref_date + datetime.timedelta(days=1)
+                    for _ in range(offset + 1):
+                        imm = next_imm(imm)
+                    return imm
+                return get_imm(code=d.split("IMM_")[-1])
+
             current_curve: _IRSwapGenericCurve = self.common_kwargs["curve"]
             d = current_curve.calendar_advance(ref_date, d)
 
         if isinstance(d, ql.Date):
             return ql_date_to_pydate(d)
-
-        if isinstance(d, str) and d.upper().startswith("IMM_"):
-            if str(d.split("IMM_")[-1]).isnumeric():
-                offset = int(d.split("IMM_")[-1]) - 1
-                if isinstance(ref_date, ql.Date):
-                    ref_date = ql_date_to_pydate(d)
-                imm = ref_date + datetime.timedelta(days=1)
-                for _ in range(offset + 1):
-                    imm = next_imm(imm)
-                return imm
-            return get_imm(code=d.split("IMM_")[-1])
 
         return d
 

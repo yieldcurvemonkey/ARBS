@@ -133,7 +133,17 @@ class ZODBCacheMixin:
         if force and cache_attr in self._z_conns:
             conn, handle = self._z_conns.pop(cache_attr)
             handle.release_conn(conn)
-            self._release_db(handle.storage._file_name)  # type: ignore[attr‑defined]
+
+            storage = handle.storage
+            db_path = None
+            if isinstance(storage, FileStorage):
+                db_path = storage._file_name
+            elif isinstance(storage, DemoStorage) and hasattr(storage, "_base"):
+                db_path = getattr(storage._base, "_file_name", None)
+
+            if db_path:
+                self._release_db(db_path)
+
             delattr(self, cache_attr)
 
         if cache_attr in self._z_conns:
