@@ -115,8 +115,7 @@ def _fetch_fixings(as_of_date: datetime.date | Literal["live"], curve_name: str,
         except Exception as e:
             print(f"[cache] Failed to write cache file {out_csv}: {e}")
     else:
-        print(f"[cache] Skipping cache write: expected fixing {expected_dt.date()} not yet published for {curve_name}.")
-
+        # print(f"[cache] Skipping cache write: expected fixing {expected_dt.date()} not yet published for {curve_name}.")
         # Optional: if a valid recent cache exists, prefer returning that over the live (incomplete) pull.
         # (Comment out if you always want the freshest pull, even if incomplete.)
         cached_fallback = _read_cached_if_valid(fixings_cache, curve_name, expected_dt)

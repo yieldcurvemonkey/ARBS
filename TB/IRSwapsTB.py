@@ -1,8 +1,9 @@
 import datetime
 import logging
-from collections import defaultdict
 from dataclasses import dataclass
-from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union, DefaultDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict
 
 import pandas as pd
 from tqdm import tqdm
@@ -56,7 +57,6 @@ def _build_row_for_query(
     ref_dt: DateLike,
     date_col: str,
 ) -> Tuple[DateLike, str, float]:
-
     ss_map = IRSwapStructureFunctionMap(curve=curve)  # structure → package
     pkg, rw = ss_map.apply(
         tenor=q.tenor,
@@ -81,7 +81,6 @@ class _MDPConfig:
 
 
 class IRSwapsTB(ZODBCacheMixin):
-
     _CACHE_ATTR = "_irswaps_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS."
 
@@ -131,27 +130,28 @@ class IRSwapsTB(ZODBCacheMixin):
         queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper],
         *,
         n_jobs: Optional[int] = 1,
-        use_bdays: Optional[bool] = True,
-        tz: Optional[str] = None,
         ignore_cache: Optional[bool] = False,
+        freq: Optional[str] = None,
+        timestamps: Optional[List[datetime.datetime]] = None,
     ) -> pd.DataFrame:
-
-        start_d = start.date() if isinstance(start, datetime.datetime) else start
-        end_d = end.date() if isinstance(end, datetime.datetime) else end
-
-        dates: List[datetime.date]
-        if use_bdays:
-            dates = pd.bdate_range(start_d, end_d).date.tolist()
+        if timestamps is not None and len(timestamps) > 0:
+            ref_points = sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
         else:
-            dates = list(pd.date_range(start_d, end_d).date)
+            is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
+            if is_intraday:
+                assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
+                eff_freq = freq or "1T"  # default to 1-minute resolution
+                rng = pd.date_range(start=start, end=end, freq=eff_freq, tz=start.tzinfo)
+                ref_points = rng.to_pydatetime().tolist()
+            else:
+                ref_points = pd.bdate_range(start, end).date.tolist()
 
         flat = _flatten_queries(queries)
         by_curve = _group_queries_by_curve(flat)
 
-        # Determine what we already have in the TB cache
-        to_fetch: DefaultDict[str, set[datetime.date]] = defaultdict(set)
+        to_fetch: DefaultDict[str, set] = defaultdict(set)
         cached_rows: List[Tuple[DateLike, str, float]] = []
-        for d in dates:
+        for d in ref_points:
             for curve_name, qs in by_curve.items():
                 for q in qs:
                     k = self._cache_key(d, curve_name, q)
@@ -161,31 +161,56 @@ class IRSwapsTB(ZODBCacheMixin):
                         to_fetch[curve_name].add(d)
 
         new_rows_with_q: List[Tuple[Tuple[DateLike, str, float], IRSwapQuery, str, datetime.date]] = []
-
-        for curve_name, missing_dates in to_fetch.items():
-            if not missing_dates:
+        for curve_name, missing_points in to_fetch.items():
+            if not missing_points:
                 continue
 
             built_map: Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve] = self.mdp.bulk_get_data(
                 {
                     "curve_name": curve_name,
-                    "timestamps": sorted(missing_dates),
+                    "timestamps": sorted(missing_points),
+                    "ignore_cache": ignore_cache,
+                    "n_jobs": n_jobs,
                 }
             )
+
             qs = by_curve[curve_name]
-            total_tasks = len(missing_dates) * len(qs)
+            total_tasks = len(missing_points) * len(qs)
             pbar_disable = not self._show_tqdm
-            with tqdm(total=total_tasks, disable=pbar_disable, desc=f"Pricing {curve_name}", leave=False) as pbar:
-                for d in sorted(missing_dates):
+            with tqdm(total=total_tasks, disable=pbar_disable, desc=f"PRICING {curve_name} IRSWAPS...", leave=True) as pbar:
+                tasks: List[Tuple[datetime.datetime | datetime.date, IRSwapQuery, _IRSwapGenericCurve]] = []
+                for d in sorted(missing_points):
                     curve = built_map.get(d)
                     if curve is None:
                         self._logger.warning(f"No curve returned for curve='{curve_name}' on date='{d}'.")
                         pbar.update(len(qs))
                         continue
                     for q in qs:
-                        row = _build_row_for_query(curve, q, d, self._date_col)
-                        new_rows_with_q.append((row, q, curve_name, d))
-                        pbar.update(1)
+                        tasks.append((d, q, curve))
+
+                if tasks:
+                    if (n_jobs or 1) > 1:
+                        max_workers = int(n_jobs) if n_jobs and n_jobs > 1 else None
+                        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                            fut_map = {ex.submit(_build_row_for_query, curve, q, d, self._date_col): (q, d) for (d, q, curve) in tasks}
+                            for fut in as_completed(fut_map):
+                                q, d = fut_map[fut]
+                                try:
+                                    row = fut.result()
+                                    new_rows_with_q.append((row, q, curve_name, d))
+                                except Exception as e:
+                                    self._logger.exception(f"Pricing failed for curve='{curve_name}', date='{d}', query='{q}'. Error: {e}")
+                                finally:
+                                    pbar.update(1)
+                    else:
+                        for d, q, curve in tasks:
+                            try:
+                                row = _build_row_for_query(curve, q, d, self._date_col)
+                                new_rows_with_q.append((row, q, curve_name, d))
+                            except Exception as e:
+                                self._logger.exception(f"Pricing failed for curve='{curve_name}', date='{d}', query='{q}'. Error: {e}")
+                            finally:
+                                pbar.update(1)
 
         with self.batched():
             mapping = getattr(self, self._CACHE_ATTR)
@@ -201,9 +226,6 @@ class IRSwapsTB(ZODBCacheMixin):
         out = out.reset_index()
         out.index.name = None
         out.columns.name = None
+        out = out.set_index(self._date_col)
 
-        if tz:
-            if pd.api.types.is_datetime64_any_dtype(out[self._date_col]):
-                out[self._date_col] = pd.to_datetime(out[self._date_col], utc=True).dt.tz_convert(tz)
-
-        return out.set_index(self._date_col)
+        return out

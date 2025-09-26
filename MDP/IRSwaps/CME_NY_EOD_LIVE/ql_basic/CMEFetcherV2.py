@@ -140,7 +140,11 @@ class CMEFetcherV2(BaseFetcher):
         enable_intraday = False
         if bdates:
             today = chi_now.date()
-            if any(d == today and chi_now < CME_EOD_REPORT_RELEASE for d in bdates if isinstance(d, datetime.datetime)):
+            if any(d.date() == today and chi_now < CME_EOD_REPORT_RELEASE for d in bdates if isinstance(d, datetime.datetime)):
+                enable_intraday = True
+                end_date = chi_now
+
+            if any(d == today and chi_now < CME_EOD_REPORT_RELEASE for d in bdates if isinstance(d, datetime.date)):
                 enable_intraday = True
                 end_date = chi_now
 

@@ -395,6 +395,8 @@ class IRSwapsMDP(MarketDataProvider):
 
         curve_name: str = request.pop("curve_name", None)
         timestamps_in: Iterable[Union[datetime.date, datetime.datetime, Literal["live"]]] = request.pop("timestamps", None)
+        ignore_cache = bool(request.pop("ignore_cache", False))
+        n_jobs = int(request.pop("n_jobs", 1)) 
 
         if not curve_name or timestamps_in is None:
             raise ValueError("Request must contain 'curve_name' and 'timestamps'.")
@@ -402,6 +404,8 @@ class IRSwapsMDP(MarketDataProvider):
         seen: set = set()
         timestamps: List[Union[datetime.date, datetime.datetime, Literal["live"]]] = []
         for t in timestamps_in:
+            if t == datetime.date.today():
+                t = "live"
             key = ("live",) if t == "live" else ("dt", t) if isinstance(t, datetime.datetime) else ("d", t)
             if key not in seen:
                 seen.add(key)
@@ -436,12 +440,15 @@ class IRSwapsMDP(MarketDataProvider):
                 ql_calendar=ql_curve_def["Calendar"],
                 bdates=bdates,
                 show_tqdm=True,
+                ignore_cache=ignore_cache,
                 **request,
             )
 
             for ref_date, ql_curve in built.items():
+                ts = ref_date 
                 if type(ref_date) == datetime.datetime or type(ref_date) == pd.Timestamp:
-                    ref_date = ref_date.date() 
+                    ref_date = ref_date.date()
+
                 if ql_curve is None:
                     continue
                 ql_curve_handle = ql.YieldTermStructureHandle(ql_curve)
@@ -459,7 +466,7 @@ class IRSwapsMDP(MarketDataProvider):
                     ql_curve_id=curve_name,
                     ql_curve_handle=ql_curve_handle,
                     ql_curve_index=irswap_index,
-                    meta_data={"timestamp": ref_date},
+                    meta_data={"timestamp": ts},
                 )
 
             return out
@@ -482,8 +489,8 @@ class IRSwapsMDP(MarketDataProvider):
                 snaps=datetime_snaps,
                 sofr_fixings=full_fixings_series,
                 cache=self._rl_curve_cache,
-                max_workers=request.get("max_workers", 1),
-                force_refresh=bool(request.get("force_refresh", False)),
+                max_workers=n_jobs,
+                force_refresh=ignore_cache,
             )
 
             for ts, rl_curve in built_curves.items():
@@ -553,8 +560,8 @@ class IRSwapsMDP(MarketDataProvider):
                 snaps=datetime_snaps,
                 sofr_fixings=sofr_fixings,
                 cache=self._rl_curve_cache,
-                max_workers=request.get("max_workers", 1),
-                force_refresh=bool(request.get("force_refresh", False)),
+                max_workers=n_jobs,
+                force_refresh=ignore_cache
             )
 
             for ts, rl_curve in built_curves.items():
