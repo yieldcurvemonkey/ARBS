@@ -71,9 +71,9 @@ class _RLCurveCache(ZODBCacheMixin):
         n_ser: int,
         n_sfr: int,
         n_plus_fomc_years: int,
-        medium_term_tenors,
-        max_tenor,
-        extrapolation_yrs,
+        medium_term_tenors=["5Y", "10Y", "30Y"],
+        max_tenor="30Y",
+        extrapolation_yrs=20,
         force_refresh: bool = False,
     ):
         from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.rl_usd_sofr_mt_builder import rl_usd_sofr_mt_builder

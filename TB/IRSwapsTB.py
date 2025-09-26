@@ -1,11 +1,10 @@
 import datetime
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple, Union
-
-import tqdm
-import pandas as pd
-from joblib import Parallel, delayed
 import logging
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, Optional, Tuple, Union, DefaultDict
+from collections import defaultdict
+
+import pandas as pd
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
@@ -14,10 +13,16 @@ from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapQueryWrapper
 from Query.IRSwaps.IRSwapStructure import IRSwapStructureFunctionMap
 from Query.IRSwaps.IRSwapValue import IRSwapValueFunctionMap
 
-
+# -----------------------------------------------------------------------------
+# Types & module‑level constants
+# -----------------------------------------------------------------------------
 DateLike = Union[datetime.date, datetime.datetime]
 _LOGGER_NAME = "IRSwapsTB"
 
+
+# -----------------------------------------------------------------------------
+# Helpers (unchanged semantics)
+# -----------------------------------------------------------------------------
 
 def _query_to_key(q: IRSwapQuery) -> tuple:
     tenor = str(q.tenor) if q.tenor is not None else None
@@ -46,16 +51,9 @@ def _group_queries_by_curve(queries: Iterable[IRSwapQuery]) -> Dict[str, List[IR
     for q in queries:
         curve_name = q.curve
         if not curve_name:
-            raise ValueError("Each IRSwapQuery must specify .curve_name for IRSwapsTB.")
+            raise ValueError("Each IRSwapQuery must specify .curve for IRSwapsTB.")
         buckets.setdefault(curve_name, []).append(q)
     return buckets
-
-
-@dataclass
-class _MDPConfig:
-    source: str
-    force_refresh_fixings: bool
-    config: dict
 
 
 def _build_row_for_query(
@@ -64,59 +62,48 @@ def _build_row_for_query(
     ref_dt: DateLike,
     date_col: str,
 ) -> Tuple[DateLike, str, float]:
-    ss_map = IRSwapStructureFunctionMap(curve=curve)  # generic mapping over structures (outright/curve/fly/spread)
-    is_for_ts = True
+    """Evaluate a single query on a provided curve at a reference timestamp.
+
+    Returns (date_or_datetime, column_name, value).
+    """
+    ss_map = IRSwapStructureFunctionMap(curve=curve)  # structure → package
     pkg, rw = ss_map.apply(
         tenor=q.tenor,
         effective_date=q.effective_date,
         maturity_date=q.maturity_date,
         value=q.value,
         structure=q.structure,
-        is_for_timeseries=is_for_ts,
+        is_for_timeseries=True,
         **q.structure_kwargs,
-    )  # :contentReference[oaicite:0]{index=0}
+    )
 
     val_map = IRSwapValueFunctionMap(package=pkg, risk_weights=rw, curve=curve)
     value = val_map.apply(q.value)
-    return ref_dt, q.col_name(curve.id()), float(value)  # :contentReference[oaicite:1]{index=1}
+    return ref_dt, q.col_name(curve.id()), float(value)
 
 
-def _worker_for_date(
-    mdp_cfg: _MDPConfig,
-    ref_dt: DateLike,
-    queries_by_curve: Dict[str, List[IRSwapQuery]],
-    date_col: str,
-) -> List[Tuple[DateLike, str, float]]:
-    logger = logging.getLogger(_LOGGER_NAME)
-    mdp = IRSwapsMDP(mdp_cfg.source, force_refresh_fixings=mdp_cfg.force_refresh_fixings, **mdp_cfg.config)
+# -----------------------------------------------------------------------------
+# Main TB class
+# -----------------------------------------------------------------------------
 
-    rows: List[Tuple[DateLike, str, float]] = []
-    for curve_name, qs in queries_by_curve.items():
-        try:
-            curve = mdp.get_data({"curve_name": curve_name, "timestamp": ref_dt})
-            if curve is None:
-                logger.warning(f"No curve returned for curve='{curve_name}' on date='{ref_dt}'.")
-                continue
-            for q in qs:
-                try:
-                    rows.append(_build_row_for_query(curve, q, ref_dt, date_col))
-                except Exception as e:
-                    logger.exception(
-                        f"Failed evaluating query for curve='{curve_name}' on date='{ref_dt}'. " f"Query={q}",
-                        exc_info=e,
-                    )
-        except Exception as e:
-            logger.exception(
-                f"Worker failed for curve='{curve_name}' on date='{ref_dt}'.",
-                exc_info=e,
-            )
-
-    return rows
+@dataclass
+class _MDPConfig:
+    source: str
+    force_refresh_fixings: bool
+    config: dict
 
 
 class IRSwapsTB(ZODBCacheMixin):
+    """Timeseries builder for IR Swaps using an MDP (market data provider).
+
+    This refactor **delegates all curve building** to `IRSwapsMDP.bulk_get_data`
+    to avoid per‑timestamp calls that led to excessive contention and ZODB cache
+    write conflicts when pricing in parallel. We keep ZODB writes **only** in the
+    parent process and commit them via `self.batched()` to remain concurrency‑safe.
+    """
+
     _CACHE_ATTR = "_irswaps_tb_cache"
-    _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS..."
+    _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS."
 
     def __init__(
         self,
@@ -139,9 +126,12 @@ class IRSwapsTB(ZODBCacheMixin):
         stem = cache_stem or f"IRSwapsTB_{mdp.source}"
         self._cache_path = self.default_cache_path(stem=stem)
 
-        # open a simple mapping cache: key=(iso_date, curve_name, query_key) -> (date, col, val)
+        # mapping cache: key=(iso_date, curve_name, query_key) -> (date, col, val)
         self.zodb_open_cache(cache_attr=self._CACHE_ATTR, path=self._cache_path)
 
+    # ------------------------------------------------------------------
+    # ZODB lifecycle
+    # ------------------------------------------------------------------
     def __enter__(self):
         return self
 
@@ -153,6 +143,16 @@ class IRSwapsTB(ZODBCacheMixin):
             self._logger.debug(f"Closing ZODB connection for cache: {self._CACHE_ATTR}")
             self.close_zodb()
 
+    # ------------------------------------------------------------------
+    # Cache helpers
+    # ------------------------------------------------------------------
+    def _cache_key(self, d: datetime.date | datetime.datetime, curve_name: str, q: IRSwapQuery) -> tuple:
+        iso = d.isoformat() if not isinstance(d, datetime.datetime) else d.replace(tzinfo=None).isoformat()
+        return (iso, curve_name, _query_to_key(q))
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
     def get_timeseries(
         self,
         start: DateLike,
@@ -164,98 +164,83 @@ class IRSwapsTB(ZODBCacheMixin):
         tz: Optional[str] = None,
         ignore_cache: Optional[bool] = False,
     ) -> pd.DataFrame:
+        """Build a wide DataFrame of requested series.
+
+        Concurrency model:
+          • Curves are fetched *per curve* using `mdp.bulk_get_data` (single‑threaded here).
+            Any parallelism for curve construction happens **inside** the MDP, where
+            caches are properly guarded.
+          • Pricing of queries is CPU‑light compared to curve builds; to keep things
+            cache‑safe we do it in the parent process without ZODB access in workers.
+        """
         start_d = start.date() if isinstance(start, datetime.datetime) else start
         end_d = end.date() if isinstance(end, datetime.datetime) else end
 
+        dates: List[datetime.date]
         if use_bdays:
-            dates: List[datetime.date] = pd.bdate_range(start_d, end_d).date.tolist()
+            dates = pd.bdate_range(start_d, end_d).date.tolist()
         else:
             dates = list(pd.date_range(start_d, end_d).date)
 
         flat = _flatten_queries(queries)
         by_curve = _group_queries_by_curve(flat)
 
-        to_compute: Dict[datetime.date, Dict[str, List[IRSwapQuery]]] = {}
+        # Determine what we already have in the TB cache
+        to_fetch: DefaultDict[str, set[datetime.date]] = defaultdict(set)
         cached_rows: List[Tuple[DateLike, str, float]] = []
         for d in dates:
-            missing_for_date: Dict[str, List[IRSwapQuery]] = {}
             for curve_name, qs in by_curve.items():
                 for q in qs:
-                    key = self._cache_key(d, curve_name, q)
-                    if (key in getattr(self, self._CACHE_ATTR)) and not ignore_cache:
-                        cached_rows.append(getattr(self, self._CACHE_ATTR)[key])
+                    k = self._cache_key(d, curve_name, q)
+                    if (k in getattr(self, self._CACHE_ATTR)) and not ignore_cache:
+                        cached_rows.append(getattr(self, self._CACHE_ATTR)[k])
                     else:
-                        missing_for_date.setdefault(curve_name, []).append(q)
-            if missing_for_date:
-                to_compute[d] = missing_for_date
+                        to_fetch[curve_name].add(d)
 
-        results: List[List[Tuple[DateLike, str, float]]] = []
-        if to_compute:
-            mdp_cfg = _MDPConfig(self.mdp.source, getattr(self.mdp, "force_refresh_fixings", False), dict(self.mdp.config))
-            tasks = list(to_compute.items())
-            tasks_iter = tqdm.tqdm(tasks, desc=self._DEFAULT_PRICING_MESSAGE) if self._show_tqdm else tasks
+        new_rows_with_q: List[Tuple[Tuple[DateLike, str, float], IRSwapQuery, str, datetime.date]] = []
 
-            try:
-                results = Parallel(n_jobs=n_jobs, backend="loky")(delayed(_worker_for_date)(mdp_cfg, d, curve_qs, self._date_col) for d, curve_qs in tasks_iter)
-            except Exception as e:
-                self._logger.exception("Parallel execution failed in IRSwapsTB.get_timeseries.", exc_info=e)
-                results = []
+        # Fetch missing curves curve‑by‑curve using bulk_get_data (safe for caches)
+        for curve_name, missing_dates in to_fetch.items():
+            if not missing_dates:
+                continue
 
-        new_rows = [r for chunk in results for r in chunk]
-        if new_rows:
-            try:
-                with self.batched():
-                    for row in new_rows:
-                        d, col, val = row
-                        curve_name = self._extract_curve_from_col(col, by_curve.keys())  # best-effort (optional)
-                        if not curve_name:
-                            self._logger.debug(f"Could not infer curve from column name '{col}'. Skipping cache write.")
-                            continue
-                        for q in by_curve.get(curve_name, []):
-                            if q.col_name(curve_name) == col:
-                                key = self._cache_key(d, curve_name, q)
-                                getattr(self, self._CACHE_ATTR)[key] = row
-                                break
-            except Exception as e:
-                self._logger.exception("Failed while writing results to ZODB cache.", exc_info=e)
+            # Delegate curve construction to MDP (which handles its own caching/parallelism)
+            built_map: Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve] = self.mdp.bulk_get_data(
+                {
+                    "curve_name": curve_name,
+                    "timestamps": sorted(missing_dates),
+                }
+            )
 
-        all_rows = cached_rows + new_rows
+            # Price queries against each built curve. No cache writes here.
+            qs = by_curve[curve_name]
+            for d in sorted(missing_dates):
+                curve = built_map.get(d)
+                if curve is None:
+                    self._logger.warning(f"No curve returned for curve='{curve_name}' on date='{d}'.")
+                    continue
+                for q in qs:
+                    row = _build_row_for_query(curve, q, d, self._date_col)
+                    new_rows_with_q.append((row, q, curve_name, d))
+
+        # Persist newly computed rows in one atomic ZODB transaction
+        with self.batched():
+            mapping = getattr(self, self._CACHE_ATTR)
+            for (row, q, curve_name, d) in new_rows_with_q:
+                mapping[self._cache_key(d, curve_name, q)] = row
+
+        # Combine cached + new and pivot to a wide frame
+        all_rows = cached_rows + [r for (r, _q, _cn, _d) in new_rows_with_q]
         if not all_rows:
-            self._logger.error("IRSwapsTB.get_timeseries produced no rows (both cache and compute empty).")
-            return pd.DataFrame([], index=pd.DatetimeIndex([], name=self._date_col))
+            return pd.DataFrame(columns=[self._date_col])
 
-        rows_df = pd.DataFrame(all_rows, columns=[self._date_col, "col", "val"]).drop_duplicates(subset=[self._date_col, "col"], keep="last")
-        df = rows_df.pivot(index=self._date_col, columns="col", values="val").sort_index()
-        df.columns.name = None
+        df = pd.DataFrame(all_rows, columns=[self._date_col, "_col", "_val"])
+        out = df.pivot_table(index=self._date_col, columns="_col", values="_val", aggfunc="last").sort_index()
+        out = out.reset_index()
 
         if tz:
-            try:
-                df.index = pd.DatetimeIndex(pd.to_datetime(df.index)).tz_localize("UTC").tz_convert(tz)
-            except Exception as e:
-                self._logger.error(f"Timezone conversion to '{tz}' failed.", exc_info=e)
+            # If index contains datetimes, localize; dates are left as‑is
+            if pd.api.types.is_datetime64_any_dtype(out[self._date_col]):
+                out[self._date_col] = pd.to_datetime(out[self._date_col], utc=True).dt.tz_convert(tz)
 
-        return df
-
-    def _cache_key(self, d: datetime.date, curve_name: str, q: IRSwapQuery) -> Tuple[str, str, tuple]:
-        return (datetime.datetime.combine(d, datetime.time()).isoformat(timespec="seconds"), curve_name, _query_to_key(q))
-
-    @staticmethod
-    def _extract_curve_from_col(col: str, curve_names: Iterable[str]) -> Optional[str]:
-        for c in curve_names:
-            if c in col:
-                return c
-        return None
-
-    def resolve_object(self, q: IRSwapQuery, as_of: DateLike):
-        curve = self.mdp.get_data({"curve_name": q.curve, "timestamp": as_of})
-        ss_map = IRSwapStructureFunctionMap(curve=curve)  # generic mapping over structures (outright/curve/fly/spread)
-        is_for_ts = True
-        return ss_map.apply(
-            tenor=q.tenor,
-            effective_date=q.effective_date,
-            maturity_date=q.maturity_date,
-            value=q.value,
-            structure=q.structure,
-            is_for_timeseries=is_for_ts,
-            **q.structure_kwargs,
-        )  # :contentReference[oaicite:0]{index=0}
+        return out
