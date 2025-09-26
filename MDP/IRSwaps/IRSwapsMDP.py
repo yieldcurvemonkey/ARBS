@@ -435,11 +435,13 @@ class IRSwapsMDP(MarketDataProvider):
                 ql_day_count=ql_curve_def["DayCounter"],
                 ql_calendar=ql_curve_def["Calendar"],
                 bdates=bdates,
-                show_tqdm=False,
+                show_tqdm=True,
                 **request,
             )
 
             for ref_date, ql_curve in built.items():
+                if type(ref_date) == datetime.datetime or type(ref_date) == pd.Timestamp:
+                    ref_date = ref_date.date() 
                 if ql_curve is None:
                     continue
                 ql_curve_handle = ql.YieldTermStructureHandle(ql_curve)
