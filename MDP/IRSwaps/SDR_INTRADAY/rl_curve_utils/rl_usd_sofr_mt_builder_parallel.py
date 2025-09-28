@@ -300,11 +300,9 @@ def rl_usd_sofr_mt_builder_parallel(
 ) -> Dict[datetime.datetime, rl.Curve]:
     """Main parallel builder that fetches and prepares data before dispatching jobs."""
     import warnings
-
     warnings.filterwarnings("ignore", category=UserWarning)
 
     norm_snaps = sorted([pd.to_datetime(s).tz_localize(NY) if s.tzinfo is None else pd.to_datetime(s).astimezone(NY) for s in snaps])
-
     by_day = {}
     for s in norm_snaps:
         by_day.setdefault(s.date(), []).append(s)

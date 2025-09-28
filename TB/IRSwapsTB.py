@@ -1,9 +1,12 @@
 import datetime
+import hashlib
+import json
 import logging
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple, Union, DefaultDict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from enum import Enum
+from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 
 import pandas as pd
 from tqdm import tqdm
@@ -17,6 +20,52 @@ from Query.IRSwaps.IRSwapValue import IRSwapValueFunctionMap
 
 DateLike = Union[datetime.date, datetime.datetime]
 _LOGGER_NAME = "IRSwapsTB"
+
+
+def _to_utc_naive(dt: DateLike) -> datetime.datetime:
+    """Return a timezone-naive UTC datetime for both date and datetime inputs."""
+    if isinstance(dt, datetime.date) and not isinstance(dt, datetime.datetime):
+        dt = datetime.datetime(dt.year, dt.month, dt.day)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return dt  # naive UTC
+
+
+def _dt_to_epoch_ns(dt: DateLike) -> int:
+    """UTC-normalized epoch nanoseconds (stable for keying)."""
+    dtu = _to_utc_naive(dt)
+    return int(dtu.timestamp() * 1_000_000_000)
+
+
+def _canonicalize_value(v):
+    """Make any value JSON-serializable & stable."""
+    if isinstance(v, (datetime.date, datetime.datetime)):
+        return _to_utc_naive(v).isoformat()
+    if isinstance(v, Enum):  # IRSwapValue is an Enum
+        return v.name
+    if isinstance(v, (list, tuple)):
+        return [_canonicalize_value(x) for x in v]
+    if isinstance(v, dict):
+        # sort keys to ensure determinism
+        return {k: _canonicalize_value(v[k]) for k in sorted(v.keys())}
+    return v  # numbers/strings/None
+
+
+def _query_fingerprint(q: "IRSwapQuery") -> str:
+    """Stable hash of the query using canonical JSON."""
+    payload = {
+        "tenor": str(q.tenor) if q.tenor is not None else None,
+        "effective_date": _canonicalize_value(q.effective_date),
+        "maturity_date": _canonicalize_value(q.maturity_date),
+        "structure": q.structure.name if getattr(q, "structure", None) else None,
+        "value": ([_canonicalize_value(v) for v in q.value] if isinstance(q.value, list) else _canonicalize_value(q.value)),
+        "structure_kwargs": _canonicalize_value(q.structure_kwargs or {}),
+        "name": q.name,
+        "risk_weight": q.risk_weight,
+        # Note: we purposely DO NOT include q.curve here; it's a separate axis in the key
+    }
+    s = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 
 def _query_to_key(q: IRSwapQuery) -> tuple:
@@ -81,8 +130,9 @@ class _MDPConfig:
 
 
 class IRSwapsTB(ZODBCacheMixin):
-    _CACHE_ATTR = "_irswaps_tb_cache"
+    _CACHE_ATTR_BASE = "_irswaps_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS."
+    _CACHE_VERSION = "v2"
 
     def __init__(
         self,
@@ -102,11 +152,14 @@ class IRSwapsTB(ZODBCacheMixin):
         self._show_tqdm = show_tqdm
         self._logger = logger or logging.getLogger(_LOGGER_NAME)
 
-        stem = cache_stem or f"IRSwapsTB_{mdp.source}"
+        # stem = cache_stem or f"IRSwapsTB_{mdp.source}"
+        # self._cache_path = self.default_cache_path(stem=stem)
+        stem = cache_stem or f"IRSwapsTB_{self._CACHE_VERSION}_{mdp.source}"
         self._cache_path = self.default_cache_path(stem=stem)
+        self._cache_attr = f"{self._CACHE_ATTR_BASE}_{self._CACHE_VERSION}"
 
         # mapping cache: key=(iso_date, curve_name, query_key) -> (date, col, val)
-        self.zodb_open_cache(cache_attr=self._CACHE_ATTR, path=self._cache_path)
+        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._cache_path)
 
     def __enter__(self):
         return self
@@ -119,9 +172,10 @@ class IRSwapsTB(ZODBCacheMixin):
             self._logger.debug(f"Closing ZODB connection for cache: {self._CACHE_ATTR}")
             self.close_zodb()
 
-    def _cache_key(self, d: datetime.date | datetime.datetime, curve_name: str, q: IRSwapQuery) -> tuple:
-        iso = d.isoformat() if not isinstance(d, datetime.datetime) else d.replace(tzinfo=None).isoformat()
-        return (iso, curve_name, _query_to_key(q))
+    def _cache_key(self, d: DateLike, curve_name: str, q: IRSwapQuery) -> str:
+        ns = _dt_to_epoch_ns(d)
+        qh = _query_fingerprint(q)
+        return f"{self._CACHE_VERSION}|{curve_name}|{ns}|{qh}"
 
     def get_timeseries(
         self,
@@ -151,12 +205,15 @@ class IRSwapsTB(ZODBCacheMixin):
 
         to_fetch: DefaultDict[str, set] = defaultdict(set)
         cached_rows: List[Tuple[DateLike, str, float]] = []
+
+        cache_map = getattr(self, self._cache_attr)
+
         for d in ref_points:
             for curve_name, qs in by_curve.items():
                 for q in qs:
                     k = self._cache_key(d, curve_name, q)
-                    if (k in getattr(self, self._CACHE_ATTR)) and not ignore_cache:
-                        cached_rows.append(getattr(self, self._CACHE_ATTR)[k])
+                    if (k in cache_map) and not ignore_cache:
+                        cached_rows.append(cache_map[k])
                     else:
                         to_fetch[curve_name].add(d)
 
@@ -213,7 +270,7 @@ class IRSwapsTB(ZODBCacheMixin):
                                 pbar.update(1)
 
         with self.batched():
-            mapping = getattr(self, self._CACHE_ATTR)
+            mapping = getattr(self, self._cache_attr)
             for row, q, curve_name, d in new_rows_with_q:
                 mapping[self._cache_key(d, curve_name, q)] = row
 

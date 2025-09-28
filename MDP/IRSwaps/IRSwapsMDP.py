@@ -396,7 +396,7 @@ class IRSwapsMDP(MarketDataProvider):
         curve_name: str = request.pop("curve_name", None)
         timestamps_in: Iterable[Union[datetime.date, datetime.datetime, Literal["live"]]] = request.pop("timestamps", None)
         ignore_cache = bool(request.pop("ignore_cache", False))
-        n_jobs = int(request.pop("n_jobs", 1)) 
+        n_jobs = int(request.pop("n_jobs", 1))
 
         if not curve_name or timestamps_in is None:
             raise ValueError("Request must contain 'curve_name' and 'timestamps'.")
@@ -445,7 +445,7 @@ class IRSwapsMDP(MarketDataProvider):
             )
 
             for ref_date, ql_curve in built.items():
-                ts = ref_date 
+                ts = ref_date
                 if type(ref_date) == datetime.datetime or type(ref_date) == pd.Timestamp:
                     ref_date = ref_date.date()
 
@@ -561,7 +561,7 @@ class IRSwapsMDP(MarketDataProvider):
                 sofr_fixings=sofr_fixings,
                 cache=self._rl_curve_cache,
                 max_workers=n_jobs,
-                force_refresh=ignore_cache
+                force_refresh=ignore_cache,
             )
 
             for ts, rl_curve in built_curves.items():
