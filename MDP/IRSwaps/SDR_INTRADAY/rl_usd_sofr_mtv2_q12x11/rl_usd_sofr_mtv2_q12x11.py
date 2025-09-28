@@ -76,6 +76,9 @@ def rl_usd_sofr_mt_curve_bulk(
             n_ser_contracts=_N_SER_CONTRACTS,
             n_sfr_contracts=_N_SFR_CONTRACTS,
             n_plus_fomc_years=_N_PLUS_FOMC_YRS,
+            medium_term_tenors=_MT_TENORS,
+            max_tenor=_MT_TENOR_MAX,
+            extrapolation_yrs=_EXTRAPOLATION_YRS,
             max_workers=max_workers,
         )
 
@@ -99,6 +102,9 @@ def rl_usd_sofr_mt_curve_bulk(
             n_ser_contracts=_N_SER_CONTRACTS,
             n_sfr_contracts=_N_SFR_CONTRACTS,
             n_plus_fomc_years=_N_PLUS_FOMC_YRS,
+            medium_term_tenors=_MT_TENORS,
+            max_tenor=_MT_TENOR_MAX,
+            extrapolation_yrs=_EXTRAPOLATION_YRS,
             max_workers=max_workers,
             use_globex=False,
         )

@@ -94,7 +94,7 @@ def _init_worker_env_and_data(sdr_vwap_df: pd.DataFrame, stir_df: pd.DataFrame, 
     _STIR_DAY_DF = stir_df
 
 
-def _calculate_daily_sdr_vwap_timeseries(day_sdr_df: pd.DataFrame, as_of_day: datetime.date) -> pd.DataFrame:
+def _calculate_daily_sdr_vwap_timeseries(day_sdr_df: pd.DataFrame, as_of_day: datetime.date, medium_term_tenors) -> pd.DataFrame:
     spot_datetime = ql_date_to_datetime(
         ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(
             datetime_to_ql_date(datetime.datetime(as_of_day.year, as_of_day.month, as_of_day.day)), ql.Period("2D"), ql.ModifiedFollowing
@@ -123,7 +123,6 @@ def _calculate_daily_sdr_vwap_timeseries(day_sdr_df: pd.DataFrame, as_of_day: da
     # eod_ny = NY.localize(datetime.datetime(as_of_day.year, as_of_day.month, as_of_day.day, 23, 59))
     # minute_grid = pd.date_range(start=sod_ny, end=eod_ny, freq="T", tz=NY)
 
-    medium_term_tenors = ["5Y", "10Y", "30Y"]
     vwap_series_dict = {}
     for tenor in medium_term_tenors:
         maturity_datetime = ql_date_to_datetime(
@@ -183,6 +182,9 @@ def _build_one_mt_curve_worker(
     n_sfr_contracts: int,
     n_plus_fomc_years: int,
     use_globex: bool,
+    medium_term_tenors=["5Y", "10Y", "30Y"],
+    max_tenor="30Y",
+    extrapolation_yrs=20,
 ) -> Tuple[datetime.datetime, rl.Curve]:
     """Worker function that builds one curve using pre-fetched daily data."""
     global _SDR_VWAP_DF, _STIR_DAY_DF
@@ -194,10 +196,7 @@ def _build_one_mt_curve_worker(
     curve_id = f"{snap}-{base_curve_id}"
     snap = snap.tz_convert(NY) if snap.tzinfo is not None else NY.localize(snap)
 
-    # 1) Select STIR snapshot from pre-fetched daily timeseries
     stir_df_snap = day_stir_df[day_stir_df.index <= snap].tail(1)
-    print(stir_df_snap)
-    print("eheheheh")
     if stir_df_snap.empty:
         raise ValueError(f"No STIR data available for snapshot {snap}")
 
@@ -218,7 +217,7 @@ def _build_one_mt_curve_worker(
     )
 
     rl_irss: Dict[str, rl.IRS] = {}
-    for tenor in ["5Y", "10Y", "30Y"]:
+    for tenor in medium_term_tenors:
         maturity_dt = _ql_date_to_datetime(ql.NullCalendar().advance(datetime_to_ql_date(spot_dt), ql.Period(tenor)))
         vwap_col = f"{tenor}_VWAP"
 
@@ -261,7 +260,7 @@ def _build_one_mt_curve_worker(
     rl_irss_weights = [1] * len(rl_irss)
     rl_fomc_turn_flies_weights = [1e-9] * len(rl_fomc_turn_flies)
 
-    tail = max(rl_irss["30Y"].leg1.cashflows()["Payment"]) + datetime.timedelta(days=360 * 20)
+    tail = max(rl_irss[max_tenor].leg1.cashflows()["Payment"]) + datetime.timedelta(days=365 * extrapolation_yrs)
 
     rl_sofr_pricing_curve = rl.Curve(
         nodes=dict(zip(curve_nodes, [1] * len(curve_nodes))),
@@ -270,18 +269,7 @@ def _build_one_mt_curve_worker(
         calendar="nyc",
         modifier="MF",
         interpolation="log_linear",
-        t=[
-            st_nodes[-1],
-            st_nodes[-1],
-            st_nodes[-1],
-            st_nodes[-1],  # FOMC far date (duplicated to anchor)
-            mt_nodes[0],  # 5y
-            mt_nodes[1],  # 10y
-            tail,
-            tail,
-            tail,
-            tail,  # emulate extrapolation
-        ],
+        t=[st_nodes[-1], st_nodes[-1], st_nodes[-1], st_nodes[-1]] + mt_nodes[:-1] + [tail, tail, tail, tail] 
     )
     rl_sofr_pricing_curve_solver = rl.Solver(
         curves=[rl_sofr_pricing_curve],
@@ -306,14 +294,15 @@ def rl_usd_sofr_mt_builder_parallel(
     n_plus_fomc_years: int,
     max_workers: int,
     use_globex: Optional[bool] = False,
+    medium_term_tenors=["5Y", "10Y", "30Y"],
+    max_tenor="30Y",
+    extrapolation_yrs=20,
 ) -> Dict[datetime.datetime, rl.Curve]:
     """Main parallel builder that fetches and prepares data before dispatching jobs."""
     import warnings
-
     warnings.filterwarnings("ignore", category=UserWarning)
 
     norm_snaps = sorted([pd.to_datetime(s).tz_localize(NY) if s.tzinfo is None else pd.to_datetime(s).astimezone(NY) for s in snaps])
-
     by_day = {}
     for s in norm_snaps:
         by_day.setdefault(s.date(), []).append(s)
@@ -333,7 +322,7 @@ def rl_usd_sofr_mt_builder_parallel(
         end_ts = NY.localize(datetime.datetime(day.year, day.month, day.day, 23, 59))
 
         sdr_df = sdr_builder.grab_sdr_trades(start_timestamp=start_ts, end_timestamp=end_ts, agency="CFTC", asset_class="RATES")
-        sdr_vwap_by_day[day] = _calculate_daily_sdr_vwap_timeseries(sdr_df, day)
+        sdr_vwap_by_day[day] = _calculate_daily_sdr_vwap_timeseries(sdr_df, day, medium_term_tenors)
 
         tickers = get_short_end_curve_tickers(as_of=day, first_n_sr1=n_ser_contracts, first_n_sr3=n_sfr_contracts, use_globex=use_globex)
         barchart_tickers = [
@@ -493,6 +482,9 @@ def rl_usd_sofr_mt_builder_parallel(
                     n_ser_contracts=n_ser_contracts,
                     n_sfr_contracts=n_sfr_contracts,
                     n_plus_fomc_years=n_plus_fomc_years,
+                    medium_term_tenors=medium_term_tenors,
+                    max_tenor=max_tenor,
+                    extrapolation_yrs=extrapolation_yrs,
                     use_globex=bool(use_globex),
                 )
                 for s in day_snaps

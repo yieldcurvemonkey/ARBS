@@ -274,6 +274,9 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
         cached_part, to_fetch = self._partition_cached_dates(dates)
         results = dict(cached_part)
 
+        if all([d.day == 1 and d.month == 1 for d in to_fetch]):
+            to_fetch = []
+
         if to_fetch:
             limits = httpx.Limits(
                 max_connections=max_connections,

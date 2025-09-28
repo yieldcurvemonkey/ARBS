@@ -69,7 +69,7 @@ def rl_usd_sofr_mt_curve_bulk(
     mapping = getattr(cache, cache._cache_attr)
 
     for snap in snaps:
-        key = _make_key(f"{snap}-SDR_INTRADAY-RL_USD_SOFR_MT_Q12", snap, _N_SER_CONTRACTS, _N_SFR_CONTRACTS, _N_PLUS_FOMC_YRS)
+        key = _make_key(f"{snap}-SDR_INTRADAY-RL_USD_SOFR_MT_Q12", snap, sofr_fixings, _N_SER_CONTRACTS, _N_SFR_CONTRACTS, _N_PLUS_FOMC_YRS)
         if not force_refresh and key in mapping:
             cached_curves[snap] = rl.from_json(mapping[key])
         else:
