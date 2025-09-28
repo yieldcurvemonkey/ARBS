@@ -4,11 +4,12 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 import pandas as pd
 
 from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
+from Query.Base._GenericPricable import _GenericPricable
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 
 
-class IRSwapsMDP(MarketDataProvider):
+class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
     def __init__(self, source: str, force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
         super().__init__(source, **kwargs)
