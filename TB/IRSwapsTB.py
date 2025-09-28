@@ -4,8 +4,6 @@ import json
 import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from enum import Enum
 from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -17,42 +15,12 @@ from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapQueryWrapper
 from Query.IRSwaps.IRSwapStructure import IRSwapStructureFunctionMap
 from Query.IRSwaps.IRSwapValue import IRSwapValueFunctionMap
+from TB.utils import DateLike, _canonicalize_value, _dt_to_epoch_ns
 
-DateLike = Union[datetime.date, datetime.datetime]
 _LOGGER_NAME = "IRSwapsTB"
 
 
-def _to_utc_naive(dt: DateLike) -> datetime.datetime:
-    """Return a timezone-naive UTC datetime for both date and datetime inputs."""
-    if isinstance(dt, datetime.date) and not isinstance(dt, datetime.datetime):
-        dt = datetime.datetime(dt.year, dt.month, dt.day)
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
-    return dt  # naive UTC
-
-
-def _dt_to_epoch_ns(dt: DateLike) -> int:
-    """UTC-normalized epoch nanoseconds (stable for keying)."""
-    dtu = _to_utc_naive(dt)
-    return int(dtu.timestamp() * 1_000_000_000)
-
-
-def _canonicalize_value(v):
-    """Make any value JSON-serializable & stable."""
-    if isinstance(v, (datetime.date, datetime.datetime)):
-        return _to_utc_naive(v).isoformat()
-    if isinstance(v, Enum):  # IRSwapValue is an Enum
-        return v.name
-    if isinstance(v, (list, tuple)):
-        return [_canonicalize_value(x) for x in v]
-    if isinstance(v, dict):
-        # sort keys to ensure determinism
-        return {k: _canonicalize_value(v[k]) for k in sorted(v.keys())}
-    return v  # numbers/strings/None
-
-
 def _query_fingerprint(q: "IRSwapQuery") -> str:
-    """Stable hash of the query using canonical JSON."""
     payload = {
         "tenor": str(q.tenor) if q.tenor is not None else None,
         "effective_date": _canonicalize_value(q.effective_date),
@@ -66,16 +34,6 @@ def _query_fingerprint(q: "IRSwapQuery") -> str:
     }
     s = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(s.encode("utf-8")).hexdigest()
-
-
-def _query_to_key(q: IRSwapQuery) -> tuple:
-    tenor = str(q.tenor) if q.tenor is not None else None
-    eff = q.effective_date.isoformat() if q.effective_date else None
-    mat = q.maturity_date.isoformat() if q.maturity_date else None
-    val = tuple(q.value) if isinstance(q.value, list) else q.value
-    struct = q.structure.name
-    kwargs = tuple(sorted(q.structure_kwargs.items()))
-    return (tenor, eff, mat, val, struct, kwargs, q.curve, q.name, q.risk_weight)
 
 
 def _flatten_queries(queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper]) -> List[IRSwapQuery]:
@@ -120,13 +78,6 @@ def _build_row_for_query(
     val_map = IRSwapValueFunctionMap(package=pkg, risk_weights=rw, curve=curve)
     value = val_map.apply(q.value)
     return ref_dt, q.col_name(curve.id()), float(value)
-
-
-@dataclass
-class _MDPConfig:
-    source: str
-    force_refresh_fixings: bool
-    config: dict
 
 
 class IRSwapsTB(ZODBCacheMixin):
