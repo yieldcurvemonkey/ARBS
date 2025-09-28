@@ -1,11 +1,13 @@
 import datetime
+from abc import ABC
 from typing import Any, Optional, Protocol, runtime_checkable
 
+from Query.Base._GenericPricable import _GenericPricable
+from Query.Base._GenericPricer import _GenericPricer
 from Query.IRSwaps._IRSwapGenericObject import _IRSwapGenericObject
 
 
-@runtime_checkable
-class _IRSwapGenericCurve(Protocol):
+class _IRSwapGenericCurve(_GenericPricer[_GenericPricable], ABC):
 
     def id(self) -> str: ...
     def reference_date(self) -> datetime.date: ...

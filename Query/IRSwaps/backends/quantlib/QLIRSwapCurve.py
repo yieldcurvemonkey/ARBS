@@ -1,6 +1,6 @@
 import datetime
 from dataclasses import dataclass
-from typing import Union, Any
+from typing import Union, Any, Optional
 
 import QuantLib as ql
 
@@ -21,7 +21,7 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
         self._ql_curve_id = ql_curve_id
         self._ql_curve_handle = ql_curve_handle
         self._ql_curve_index = ql_curve_index
-        self._meta_data = meta_data 
+        self._meta_data = meta_data
 
     def id(self):
         return self._ql_curve_id
@@ -43,7 +43,7 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
         return self._ql_curve_index
 
     def meta(self):
-        return self._meta_data    
+        return self._meta_data
 
     def effective_date(self, irswap: ql.VanillaSwap):
         return ql_date_to_pydate(irswap.startDate())
@@ -98,5 +98,16 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
             bpv=bpv,
         )
 
-    def build_stirf(self, fwd = None, tenor = None, effective_date = None, maturity_date = None, fixed_rate = -0, notional = None, bpv = None, is_ser = False):
+    def build_pricable(self, /, **kwargs: Any) -> ql.VanillaSwap:
+        fwd: Optional[str] = kwargs.get("fwd")
+        tenor: Optional[str] = kwargs.get("tenor")
+        eff: Optional[datetime.date] = kwargs.get("effective_date")
+        mat: Optional[datetime.date] = kwargs.get("maturity_date")
+        k: float = float(kwargs.get("fixed_rate", -0.00))
+        notional = kwargs.get("notional")
+        bpv = kwargs.get("bpv")
+
+        return self.build_irswap(fwd=fwd, tenor=tenor, effective_date=eff, maturity_date=mat, fixed_rate=k, notional=notional, bpv=bpv)
+
+    def build_stirf(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None, is_ser=False):
         raise NotImplementedError("'build_stirf' not implemented for QuantLib backend")

@@ -121,6 +121,17 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             notional=notional,
         )
 
+    def build_pricable(self, /, **kwargs: Any) -> rl.IRS:
+        fwd: Optional[str] = kwargs.get("fwd")
+        tenor: Optional[str] = kwargs.get("tenor")
+        eff: Optional[datetime.date] = kwargs.get("effective_date")
+        mat: Optional[datetime.date] = kwargs.get("maturity_date")
+        k: float = float(kwargs.get("fixed_rate", -0.00))
+        notional = kwargs.get("notional")
+        bpv = kwargs.get("bpv")
+
+        return self.build_irswap(fwd=fwd, tenor=tenor, effective_date=eff, maturity_date=mat, fixed_rate=k, notional=notional, bpv=bpv)
+
     def build_stirf(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None, is_ser: Optional[bool] = False):
         if bpv and not notional:
             unit_delta = rl.IRS(
