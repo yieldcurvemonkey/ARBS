@@ -18,11 +18,7 @@ class MarketDataProvider(ABC, Generic[_GP]):
         self.config = kwargs
 
     @abstractmethod
-    def get_pricer(self, request: Any) -> _GenericPricer[_GP]:
-        """
-        Build and return a pricer configured by `request`.
-        """
-        ...
+    def get_pricer(self, request: Any) -> _GP: ...
 
     # --- Backward-compat alias (can be removed later) ---
     def get_data(self, request: Any) -> _GenericPricer[_GP]:

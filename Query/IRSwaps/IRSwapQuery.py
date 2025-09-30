@@ -1,178 +1,259 @@
-import datetime
+# Query/IRSwaps/IRSwapQuery.py
+from __future__ import annotations
 
+import datetime
 from dataclasses import dataclass, field, replace
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from Query.Base.BaseQuery import BaseQuery
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 from Query.IRSwaps.IRSwapValue import IRSwapValue
 
-_structure_kwargs_formatters: Dict[IRSwapStructure, Callable[[Optional[Dict]], str]] = {
-    IRSwapStructure.OUTRIGHT: lambda kw: _format_struct_kwargs(IRSwapStructure.OUTRIGHT, kw),
-    IRSwapStructure.CURVE: lambda kw: _format_struct_kwargs(IRSwapStructure.CURVE, kw),
-    IRSwapStructure.FLY: lambda kw: _format_struct_kwargs(IRSwapStructure.FLY, kw),
-}
 
-
-def _format_struct_kwargs(ss: IRSwapStructure, kw: Dict):
-    def _format_notional(value, dec_places=1, base=1_000_000, tag="mm"):
-        if not value:
+def _format_struct_kwargs(ss: IRSwapStructure, kw: Dict[str, Any]) -> str:
+    def _format_size(value: Any, *, base: float, tag: str, dec_places: int = 1) -> Optional[str]:
+        if value is None:
             return None
         try:
             num = float(value)
         except (TypeError, ValueError):
             return None
         short = num / base
-        if short.is_integer():
+        if float(short).is_integer():
             return f"{int(short)}{tag}"
-        else:
-            return f"{short:.{dec_places}f}{tag}"
+        return f"{short:.{dec_places}f}{tag}"
 
     try:
         if ss == IRSwapStructure.OUTRIGHT:
-            if "bpv" in kw:
-                is_rec = "REC" if kw["bpv"] > 0 else "PAY"
-                size = kw["bpv"]
-                base, tag = 1000, "k/bp"
-            elif "notional" in kw:
-                is_rec = "REC" if kw["notional"] > 0 else "PAY"
-                size = kw["notional"]
-                base, tag = 1_000_000, "mm"
+            side = None
+            size_str = None
 
-            if "fixed_rate" in kw and size and is_rec:
-                return f"{is_rec} {_format_notional(size, base=base, tag=tag)} @ {kw["fixed_rate"] * 100:.3f}%"
-            elif size and is_rec:
-                return f"{is_rec} {_format_notional(size, base=base, tag=tag)}"
+            if "bpv" in kw and kw["bpv"] is not None:
+                side = "REC" if float(kw["bpv"]) > 0 else "PAY"
+                size_str = _format_size(kw["bpv"], base=1_000.0, tag="k/bp", dec_places=1)
+            elif "notional" in kw and kw["notional"] is not None:
+                side = "REC" if float(kw["notional"]) > 0 else "PAY"
+                size_str = _format_size(kw["notional"], base=1_000_000.0, tag="mm", dec_places=1)
 
-            raise ValueError(f"IRSwapStructure.OUTRIGHT kwargs incorrectly passed")
+            rate_str = None
+            if "fixed_rate" in kw and kw["fixed_rate"] is not None:
+                try:
+                    rate_str = f"@ {float(kw['fixed_rate']) * 100.0:.3f}%"
+                except Exception:
+                    rate_str = f"@ {kw['fixed_rate']}"
 
-        # TODO format bpv and notional for structures
-        tenor_delimiter = "x"
+            if side and size_str and rate_str:
+                return f"{side} {size_str} {rate_str}"
+            if side and size_str:
+                return f"{side} {size_str}"
+            return ""  # outright but no size/rate formatting fields
+
+        # CURVE/FLY: prefer concise tenor strings, support fwdxTenor like "3x10Y"
+        tenor_delim = "x"
+
         if ss == IRSwapStructure.CURVE:
-            if tenor_delimiter in kw["front_tenor"] and tenor_delimiter in kw["back_tenor"]:
-                front_fwd, front_tenor = kw["front_tenor"].split(tenor_delimiter)
-                back_fwd, back_tenor = kw["back_tenor"].split(tenor_delimiter)
-                assert front_fwd == back_fwd, "MUST BE IN SAME FWD DIM"
-                return f"{front_fwd}x{front_tenor}-{back_tenor}"
-
-            return f"{kw["front_tenor"]}-{kw["back_tenor"]}"
+            ft = kw.get("front_tenor")
+            bt = kw.get("back_tenor")
+            if ft is None or bt is None:
+                return ""
+            if tenor_delim in str(ft) and tenor_delim in str(bt):
+                f_fwd, f_tenor = str(ft).split(tenor_delim)
+                b_fwd, b_tenor = str(bt).split(tenor_delim)
+                if f_fwd == b_fwd:
+                    return f"{f_fwd}x{f_tenor}-{b_tenor}"
+            return f"{ft}-{bt}"
 
         if ss == IRSwapStructure.FLY:
-            if tenor_delimiter in kw["front_tenor"] and tenor_delimiter in kw["back_tenor"]:
-                front_fwd, front_tenor = kw["front_tenor"].split(tenor_delimiter)
-                belly_fwd, belly_tenor = kw["belly_tenor"].split("x")
-                back_fwd, back_tenor = kw["back_tenor"].split(tenor_delimiter)
-                assert front_fwd == belly_fwd == back_fwd, "MUST BE IN SAME FWD DIM"
-                return f"{front_fwd}x{front_tenor}-{belly_tenor}-{back_tenor}"
+            lt = kw.get("front_tenor")
+            ct = kw.get("belly_tenor")
+            rt = kw.get("back_tenor")
+            if lt is None or ct is None or rt is None:
+                return ""
+            if tenor_delim in str(lt) and tenor_delim in str(ct) and tenor_delim in str(rt):
+                l_fwd, l_tenor = str(lt).split(tenor_delim)
+                c_fwd, c_tenor = str(ct).split(tenor_delim)
+                r_fwd, r_tenor = str(rt).split(tenor_delim)
+                if l_fwd == c_fwd == r_fwd:
+                    return f"{l_fwd}x{l_tenor}-{c_tenor}-{r_tenor}"
+            return f"{lt}-{ct}-{rt}"
 
-            return f"{kw["front_tenor"]}-{kw["belly_tenor"]}-{kw["back_tenor"]}"
-
-    except Exception as e:
+    except Exception:
         return ""
 
+    return ""
 
-@dataclass
+
+_structure_kwargs_formatters: Dict[IRSwapStructure, Callable[[Dict[str, Any]], str]] = {
+    IRSwapStructure.OUTRIGHT: lambda kw: _format_struct_kwargs(IRSwapStructure.OUTRIGHT, kw),
+    IRSwapStructure.CURVE: lambda kw: _format_struct_kwargs(IRSwapStructure.CURVE, kw),
+    IRSwapStructure.FLY: lambda kw: _format_struct_kwargs(IRSwapStructure.FLY, kw),
+}
+
+
+# -------------------------------- IRSwapQuery --------------------------------
+
+
+@dataclass(frozen=True)
 class IRSwapQuery(BaseQuery):
+    """
+    IRS-specific Query entry point.
+
+    User-facing args:
+      - structure: outright/curve/fly
+      - value:     report label helper (RATE, NPV, PV01, DV01, NOTIONAL, etc.)
+      - tenor OR (effective_date & maturity_date) OR is_mms=True
+      - curve:     the curve name (used to build market_request for the MDP)
+      - structure_kwargs: product params (bpv / notional / pay_fixed / fixed_rate / leg tenors, etc.)
+      - risk_weight: scalar for convenience when combining queries arithmetically
+
+    This subclass auto-fills BaseQuery fields:
+      product="IRS"
+      structure_id = structure
+      structure_kwargs = normalized union of user kwargs + tenor/dates flags
+      market_request = {'curve_name': curve, ...}
+      value_id / value_ids derived from `value` if you use those downstream
+    """
+
+    # ---- IRS-specific, user-facing fields ----
+    structure: IRSwapStructure = IRSwapStructure.OUTRIGHT
+    value: Union[IRSwapValue, List[IRSwapValue]] = IRSwapValue.RATE
+
     tenor: Optional[str] = None
     effective_date: Optional[datetime.date] = None
     maturity_date: Optional[datetime.date] = None
+    is_mms: bool = False
 
-    is_mms: Optional[bool] = False
+    curve: Optional[str] = None  # becomes market_request['curve_name']
 
-    # trade_date: Optional[datetime] = None
-    curve: Optional[str] = None
-    # curve_handle: Optional[datetime] = None
-
-    value: Union[IRSwapValue, List[IRSwapValue]] = IRSwapValue.RATE
-    structure: IRSwapStructure = IRSwapStructure.OUTRIGHT
-    structure_kwargs: Optional[Dict] = field(default_factory=dict)
-
-    name: Optional[str] = None
+    structure_kwargs: Dict[str, Any] = field(default_factory=dict)
     risk_weight: Optional[float] = None
-
     _curve_name: Optional[str] = None
 
+    product: str = field(init=False, default="IRS")
+    structure_id: Any = field(init=False, default=None)
+
+    # ---- initialization: normalize and populate BaseQuery fields ----
     def __post_init__(self):
+        object.__setattr__(self, "product", "IRS")
+        object.__setattr__(self, "structure_id", self.structure)
+
+        # Basic validation by structure
         if self.structure == IRSwapStructure.OUTRIGHT:
             assert (
                 self.tenor or (self.effective_date and self.maturity_date) or self.is_mms
-            ), "IRSwapQuery OUTRIGHT requires either tenor OR (effective_date AND maturity_date) OR Matched-Maturity (is_mss)"
+            ), "OUTRIGHT requires tenor OR (effective_date & maturity_date) OR is_mms=True"
         elif self.structure == IRSwapStructure.CURVE:
             assert ("front_tenor" in self.structure_kwargs and "back_tenor" in self.structure_kwargs) or (
                 "front_effective_date" in self.structure_kwargs
-                and "back_effective_date" in self.structure_kwargs
                 and "front_maturity_date" in self.structure_kwargs
+                and "back_effective_date" in self.structure_kwargs
                 and "back_maturity_date" in self.structure_kwargs
-            ), "IRSwapQuery CURVE requires either both leg tenors OR both leg (effective_date AND maturity_date)s"
+            ), "CURVE requires both leg tenors OR both leg (effective_date & maturity_date)"
+        elif self.structure == IRSwapStructure.FLY:
+            assert ("front_tenor" in self.structure_kwargs and "belly_tenor" in self.structure_kwargs and "back_tenor" in self.structure_kwargs) or (
+                "front_effective_date" in self.structure_kwargs
+                and "front_maturity_date" in self.structure_kwargs
+                and "belly_effective_date" in self.structure_kwargs
+                and "belly_maturity_date" in self.structure_kwargs
+                and "back_effective_date" in self.structure_kwargs
+                and "back_maturity_date" in self.structure_kwargs
+            ), "FLY requires all three leg tenors OR (effective_date & maturity_date) for each leg"
 
-        # if self.trade_date:
-        #     assert self.tenor, "'tenor' expected for 'trade_date'"
-        #     assert self.curve and self.curve_handle, "'curve' and 'curve_handle' expected for 'trade_date'"
-        #     assert self.structure == IRSwapStructure.OUTRIGHT, "'trade_date' supports only 'OUTRIGHT's"
-        #     pkg, _ = IRSwapStructureFunctionMap(curve=self.curve, curve_handle=self.curve_handle).apply(
-        #         structure=self.structure, tenor=self.tenor, **self.structure_kwargs
-        #     )
-        #     pkg: ql.FixedVsFloatingSwap = pkg[0]
+        # Build normalized structure kwargs (merge tenor/dates/is_mms flags)
+        skw: Dict[str, Any] = dict(self.structure_kwargs or {})
+        if self.tenor is not None and "tenor" not in skw:
+            skw["tenor"] = self.tenor
+        if self.effective_date is not None and "effective_date" not in skw:
+            skw["effective_date"] = self.effective_date
+        if self.maturity_date is not None and "maturity_date" not in skw:
+            skw["maturity_date"] = self.maturity_date
+        if self.is_mms and "is_mms" not in skw:
+            skw["is_mms"] = True
 
-        #     self.tenor = None
-        #     self.trade_date = None
-        #     self.curve = None
-        #     self.curve_handle = None
+        # Auto-populate BaseQuery fields (frozen dataclass -> use object.__setattr__)
+        object.__setattr__(self, "product", "IRS")
+        object.__setattr__(self, "structure_id", self.structure)
+        object.__setattr__(self, "structure_kwargs", skw)
 
-        #     self.effective_date = ql_date_to_datetime(pkg.startDate())
-        #     self.maturity_date = ql_date_to_datetime(pkg.maturityDate())
-        #     if "fixed_rate" not in self.structure_kwargs:
-        #         self.structure_kwargs = self.structure_kwargs | {"fixed_rate": pkg.fairRate() * 100}
+        # Build default market_request from curve if not supplied at construction
+        mr = dict(self.market_request or {})
+        if self.curve is not None and "curve_name" not in mr:
+            mr["curve_name"] = self.curve
+        object.__setattr__(self, "market_request", mr)
+
+        # Keep BaseQuery's value_id/value_ids in sync (optional, for downstream)
+        if isinstance(self.value, list):
+            object.__setattr__(self, "value_id", None)
+            object.__setattr__(self, "value_ids", tuple(self.value))
+        else:
+            object.__setattr__(self, "value_id", self.value)
+            object.__setattr__(self, "value_ids", tuple())
+
+    # ---- BaseQuery abstract hooks adapted to IRS ----
 
     def return_query(self) -> List["IRSwapQuery"]:
+        """Expand a list-valued `value` into separate queries; otherwise, return [self]."""
         if isinstance(self.value, list):
             out: List[IRSwapQuery] = []
             for v in self.value:
-                out.append(
-                    IRSwapQuery(
-                        tenor=self.tenor,
-                        effective_date=self.effective_date,
-                        maturity_date=self.maturity_date,
-                        value=v,
-                        structure=self.structure,
-                        structure_kwargs=self.structure_kwargs,
-                        name=self.name,
-                        risk_weight=self.risk_weight,
-                    )
+                # Rebuild a new query so __post_init__ syncs BaseQuery fields
+                q = IRSwapQuery(
+                    structure=self.structure,
+                    value=v,
+                    tenor=self.tenor,
+                    effective_date=self.effective_date,
+                    maturity_date=self.maturity_date,
+                    is_mms=self.is_mms,
+                    curve=self.curve,
+                    structure_kwargs=self.structure_kwargs,
+                    risk_weight=self.risk_weight,
+                    name=self.name,  # inherited from BaseQuery
+                    tags=self.tags,  # inherited from BaseQuery
+                    meta=self.meta,  # inherited from BaseQuery
+                    market_request=self.market_request,
+                    mdp_time_key=self.mdp_time_key,
                 )
+                out.append(q)
             return out
         return [self]
 
-    def col_name(self, curve_name: Optional[str] = None) -> str:
-        if curve_name:
-            self._curve_name = curve_name
+    def col_name(self, cube_name: Optional[str] = None) -> str:
+        """Human-friendly label for dataframes/plots."""
+        if cube_name:
+            object.__setattr__(self, "_curve_name", cube_name)
 
-        if self._curve_name is None:
-            self._curve_name = self.curve
-
+        curve_label = self._curve_name if self._curve_name is not None else self.curve
         if self.tenor:
             swap_name = str(self.tenor)
         elif self.effective_date and self.maturity_date:
-            swap_name = f"{self.effective_date.date()}/{self.maturity_date.date()}"
+            swap_name = f"{self.effective_date}/{self.maturity_date}"
         elif self.is_mms and self.maturity_date:
-            swap_name = f"MMS {self.maturity_date.date()}"
+            swap_name = f"MMS {self.maturity_date}"
         else:
             swap_name = None
 
-        fmt = _structure_kwargs_formatters[self.structure](self.structure_kwargs)
+        fmt = _structure_kwargs_formatters[self.structure](self.structure_kwargs or {})
+
+        prefix = f"{curve_label} " if curve_label else ""
+        suffix = f"{self.structure.name} {self.value.name if isinstance(self.value, IRSwapValue) else 'MULTI'}"
 
         if self.name:
             return self.name
-        prefix = f"{curve_name} " if curve_name else f"{self._curve_name} " if self._curve_name else ""
+        if fmt and swap_name:
+            return f"{prefix}{swap_name} {fmt} {suffix}"
         if fmt:
-            return f"{prefix}{swap_name} {fmt} {self.structure.name} {self.value.name}" if swap_name else f"{prefix} {fmt} {self.structure.name} {self.value.name}"
-        return f"{prefix}{swap_name} {self.structure.name} {self.value.name}" if swap_name else f"{prefix} {self.structure.name} {self.value.name}"
+            return f"{prefix}{fmt} {suffix}"
+        if swap_name:
+            return f"{prefix}{swap_name} {suffix}"
+        return f"{prefix}{suffix}"
 
-    def eval_expression(self, curve_name: Optional[str] = None, ignore_risk_weight: bool = False) -> str:
-        col = self.col_name(curve_name=curve_name)
-        if self.risk_weight is not None and not ignore_risk_weight:
+    def eval_expression(self, cube_name: Optional[str] = None, ignore_risk_weight: bool = False) -> str:
+        col = self.col_name(cube_name=cube_name)
+        if (self.risk_weight is not None) and (not ignore_risk_weight):
             return f"{self.risk_weight} * `{col}`"
         return f"`{col}`"
+
+    # ---- arithmetic sugar (keeps IRSwapQuery type) ----
 
     def __pos__(self) -> "IRSwapQuery":
         assert not isinstance(self.value, list)
@@ -184,41 +265,37 @@ class IRSwapQuery(BaseQuery):
         return replace(self, risk_weight=new_weight)
 
     def __add__(self, other: object) -> List["IRSwapQuery"]:
-        # self + other
         if isinstance(other, IRSwapQuery):
             return [self * 1, other * 1]
         if isinstance(other, list) and all(isinstance(q, IRSwapQuery) for q in other):
             return [self * 1] + [q * 1 for q in other]
-        return NotImplemented
+        return NotImplemented  # type: ignore[return-value]
 
     def __radd__(self, other: object) -> List["IRSwapQuery"]:
-        # other + self
         if isinstance(other, IRSwapQuery):
             return [other * 1, self * 1]
         if isinstance(other, list) and all(isinstance(q, IRSwapQuery) for q in other):
             return [q * 1 for q in other] + [self * 1]
-        return NotImplemented
+        return NotImplemented  # type: ignore[return-value]
 
     def __sub__(self, other: object) -> List["IRSwapQuery"]:
-        # self - other
         if isinstance(other, IRSwapQuery):
             return [self * 1, other * -1]
         if isinstance(other, list) and all(isinstance(q, IRSwapQuery) for q in other):
             return [self * 1] + [q * -1 for q in other]
-        return NotImplemented
+        return NotImplemented  # type: ignore[return-value]
 
     def __rsub__(self, other: object) -> List["IRSwapQuery"]:
-        # other - self
         if isinstance(other, IRSwapQuery):
             return [other * 1, self * -1]
         if isinstance(other, list) and all(isinstance(q, IRSwapQuery) for q in other):
             return [q * 1 for q in other] + [self * -1]
-        return NotImplemented
+        return NotImplemented  # type: ignore[return-value]
 
     def __mul__(self, scalar: object) -> "IRSwapQuery":
         if not isinstance(scalar, (int, float)):
-            return NotImplemented
-        new_weight = (self.risk_weight or 1.0) * scalar
+            return NotImplemented  # type: ignore[return-value]
+        new_weight = (self.risk_weight or 1.0) * float(scalar)
         return replace(self, risk_weight=new_weight)
 
     def __rmul__(self, scalar: object) -> "IRSwapQuery":
@@ -226,11 +303,11 @@ class IRSwapQuery(BaseQuery):
 
     def __truediv__(self, scalar: object) -> "IRSwapQuery":
         if not isinstance(scalar, (int, float)):
-            return NotImplemented
-        return self * (1.0 / scalar)
+            return NotImplemented  # type: ignore[return-value]
+        return self * (1.0 / float(scalar))
 
     def __rtruediv__(self, scalar: object) -> List["IRSwapQuery"]:
-        return NotImplemented
+        return NotImplemented  # type: ignore[return-value]
 
 
 @dataclass

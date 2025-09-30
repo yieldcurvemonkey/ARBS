@@ -117,6 +117,7 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
             elif effective_date and maturity_date:
                 fwd, tenor = None, None
             else:
+                print(effective_date, maturity_date)
                 raise ValueError("Need to define tenor or dates")
 
         sw = current_curve.build_irswap(

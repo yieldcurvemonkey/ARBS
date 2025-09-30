@@ -289,10 +289,10 @@ class ErisFuturesFetcher(BaseFetcher):
         n_sfr_contracts: int,
         n_ser_contracts: int,
         n_plus_fomc_years: int,
+        medium_term_tenors: List[str] = ["5Y", "10Y", "30Y"],
         return_df: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
         return_intraday_timestamp: Optional[bool] = True,
-        extend_to_50y: Optional[bool] = False,
     ) -> rl.Curve | pd.DataFrame | Tuple[rl.Curve, datetime.datetime]:
 
         def ql_date_to_datetime(ql_date: ql.Date) -> datetime.datetime:
@@ -391,7 +391,7 @@ class ErisFuturesFetcher(BaseFetcher):
             st_nodes.sort()
 
             mt_nodes = []
-            for tenor in ["5Y", "10Y", "30Y"]:
+            for tenor in medium_term_tenors:
                 mt_nodes.append(
                     ql_date_to_datetime(
                         ql.NullCalendar().advance(
@@ -414,18 +414,7 @@ class ErisFuturesFetcher(BaseFetcher):
                 calendar="nyc",
                 modifier="MF",
                 interpolation="log_linear",
-                t=[
-                    st_nodes[-1],
-                    st_nodes[-1],
-                    st_nodes[-1],
-                    st_nodes[-1],  # FOMC far date (duplicated to anchor)
-                    mt_nodes[0],  # 5y
-                    mt_nodes[1],  # 10y
-                    tail,
-                    tail,
-                    tail,
-                    tail,  # emulate extrapolation
-                ],
+                t=[st_nodes[-1], st_nodes[-1], st_nodes[-1], st_nodes[-1]] + mt_nodes[:-1] + [tail, tail, tail, tail],
             )
 
             if return_intraday_timestamp:

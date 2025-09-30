@@ -67,22 +67,24 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
         return ql_irswaps_pricer.calc_pv01(swap=irswap, curve_handle=self._ql_curve_handle)
 
     def dv01(self, irswap: ql.VanillaSwap):
-        return ql_irswaps_pricer.calc_dv01(swap=irswap, curve_handle=self._ql_curve_handle)
+        return ql_irswaps_pricer.calc_dv01(swap=irswap, curve_handle=self._ql_curve_handle, curve=self._ql_curve_id)
 
     def gamma(self, irswap: ql.VanillaSwap):
         return ql_irswaps_pricer.calc_gamma(swap=irswap, curve_handle=self._ql_curve_handle, curve=self._ql_curve_id)
 
     def dollar_carry(self, irswap: ql.VanillaSwap, horizon: str):
-        return ql_irswaps_pricer.calc_dollar_carry(swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon))
+        return ql_irswaps_pricer.calc_dollar_carry(swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon), curve=self._ql_curve_id)
 
     def carry_bps_running(self, irswap: ql.VanillaSwap, horizon: str):
-        return ql_irswaps_pricer.calc_carry_bps_running(swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon))
+        return ql_irswaps_pricer.calc_carry_bps_running(swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon), curve=self._ql_curve_id)
 
     def roll_bps_running(self, irswap: ql.VanillaSwap, horizon: str):
-        return ql_irswaps_pricer.calc_roll_bps_running(swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon))
+        return ql_irswaps_pricer.calc_roll_bps_running(swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon), curve=self._ql_curve_id)
 
     def carry_and_roll_bps_running(self, irswap: ql.VanillaSwap, horizon: str):
-        return ql_irswaps_pricer.calc_carry_and_roll_bps_running(swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon))
+        return ql_irswaps_pricer.calc_carry_and_roll_bps_running(
+            swap=irswap, curve_handle=self._ql_curve_handle, horizon=ql.Period(horizon), curve=self._ql_curve_id
+        )
 
     def build_irswap(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None):
         return ql_irswaps_pricer.build_ql_irswap(

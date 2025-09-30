@@ -25,6 +25,12 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             self._rl_curve_cache = _RLCurveCache(cache_name="GSQUANT-RL_CURVE_CACHE")
 
+    def get_pricer(self, request: dict) -> _IRSwapGenericCurve:
+        curve = self.get_data(request)  # reuse the existing logic
+        if curve is None:
+            raise RuntimeError(f"IRSwapsMDP could not build a curve for request: {request}")
+        return curve
+
     def get_data(self, request: dict) -> Optional[_IRSwapGenericCurve]:
         curve_name = request.pop("curve_name")
         timestamp = request.pop("timestamp")
