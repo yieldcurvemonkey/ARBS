@@ -2,7 +2,7 @@
 from __future__ import annotations
 import datetime
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Callable
 
 from Query.Base._GenericPricable import _GenericPricable
 from Query.Base.BaseQuery import BaseQuery
@@ -25,6 +25,17 @@ class QueryPortfolio:
 
     def add(self, pos: ResolvedQueryPosition) -> None:
         self.positions.append(pos)
+
+    def pop_matching(self, predicate: Callable[[ResolvedQueryPosition], bool]) -> List[ResolvedQueryPosition]:
+        removed, kept = [], []
+        for p in self.positions:
+            try:
+                match = bool(predicate(p))
+            except Exception:
+                match = False
+            (removed if match else kept).append(p)
+        self.positions = kept
+        return removed
 
     def trade_count_between(self, start: datetime.datetime, end: datetime.datetime) -> int:
         return sum(1 for p in self.positions if start <= p.opened <= end)

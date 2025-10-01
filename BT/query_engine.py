@@ -1,4 +1,3 @@
-# BT/query_engine.py
 from __future__ import annotations
 
 import datetime
@@ -7,17 +6,15 @@ from typing import Any, Callable, Dict, Optional
 
 import tqdm
 
+import Query.IRSwaps.adapter  # noqa: F401
+
 from BT.data_handler import TimeGrid
 from BT.execution_engine import ExecutionEngine
-from BT.query_order import QueryOrder
+from BT.query_order import QueryOrder, UnwindOrder
 from BT.query_portfolio import QueryPortfolio, ResolvedQueryPosition
 from BT.query_strategy import QueryStrategy
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base.BaseQuery import BaseQuery
-
-# fmt: off
-import Query.IRSwaps.adapter  # noqa: F401
-# fmt: on
 
 # Optional risk function: receives portfolio + a pricer getter for current time
 RiskFn = Callable[[QueryPortfolio, Callable[[BaseQuery], Any]], Dict[str, float]]
@@ -34,7 +31,10 @@ class QueryDrivenBacktest:
 
     portfolio: QueryPortfolio = field(default_factory=QueryPortfolio)
     _cache: Dict[str, Any] = field(default_factory=dict)
+
     mtm_history: Dict[datetime.datetime, float] = field(default_factory=dict)
+    realized_pnl: float = 0.0
+    realized_pnl_history: Dict[datetime.datetime, float] = field(default_factory=dict)
 
     _now: Optional[datetime.datetime] = None  # current clock
 
@@ -85,8 +85,26 @@ class QueryDrivenBacktest:
         value_id = pos.source_query.default_mtm_value_id()
         return float(vmap.apply(value=value_id))
 
+    # -------- unwinds (realize P&L) --------
+    def _handle_unwind(self, order: UnwindOrder, now: datetime.datetime) -> None:
+        to_close = self.portfolio.pop_matching(order.selector)
+        if not to_close:
+            # carry forward realized so far
+            self.realized_pnl_history[now] = self.realized_pnl
+            return
+
+        pnl = 0.0
+        for pos in to_close:
+            pnl += self._position_value(pos, now)
+
+        fee = float((order.meta or {}).get("fee", 0.0))
+        self.realized_pnl += pnl - fee
+        self.realized_pnl_history[now] = self.realized_pnl
+
+    # -------- P&L / MTM --------
     def mark_to_market(self, now: datetime.datetime) -> float:
-        total = 0.0
+        # total = realized + current open marks
+        total = float(self.realized_pnl)
         for p in self.portfolio.iter_positions():
             total += self._position_value(p, now)
         self.mtm_history[now] = total
@@ -109,11 +127,14 @@ class QueryDrivenBacktest:
             # 1) Evaluate strategy -> QueryOrders
             new_orders: list[QueryOrder] = self.strategy.evaluate(now, self)
 
-            # 2) Resolve & book each Query (freeze package at trade time)
-            fills = self.exec_engine.execute(new_orders)
-            self.portfolio.orders_log.extend(new_orders)
-            self.portfolio.trades_log.extend(fills)
+            # split: adds vs unwinds
+            add_orders = [o for o in new_orders if isinstance(o, QueryOrder)]
+            unwind_orders = [o for o in new_orders if isinstance(o, UnwindOrder)]
 
+            # 2a) add new queries (freeze package at trade time, as before)
+            fills = self.exec_engine.execute(add_orders)
+            self.portfolio.orders_log.extend(add_orders)
+            self.portfolio.trades_log.extend(fills)
             for o in fills:
                 q = o.query
                 pricer_or_curve = self._pricer_for_query(q, now)
@@ -128,5 +149,9 @@ class QueryDrivenBacktest:
                     )
                 )
 
-            # 3) MTM with current pricers
+            # 2b) process unwinds (realize P&L and remove positions)
+            for u in unwind_orders:
+                self._handle_unwind(u, now)
+
+            # 3) MTM (includes realized so far)
             self.mark_to_market(now)
