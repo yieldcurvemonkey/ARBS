@@ -98,7 +98,7 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
     def _rolldown_bps_running(self, **kwargs: Any) -> float:
         assert "horizon" in kwargs, 'Expecting an "horizon" with type str | ql.Period in args e.g. `ql.Period("1M")`'
         curve: _IRSwapGenericCurve = kwargs["curve"]
-        return sum(kwargs["risk_weights"][i] * curve.roll_bps_running(s) for i, s in enumerate(kwargs["package"]))
+        return sum(kwargs["risk_weights"][i] * curve.roll_bps_running(s, kwargs["horizon"]) for i, s in enumerate(kwargs["package"]))
 
     def _carry_and_roll_bps_running(self, **kwargs: Any) -> float:
         assert "horizon" in kwargs, 'Expecting an "horizon" with type str | ql.Period in args e.g. `ql.Period("1M")`'

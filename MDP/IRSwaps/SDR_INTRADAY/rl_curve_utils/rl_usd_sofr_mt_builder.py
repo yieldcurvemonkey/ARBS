@@ -157,7 +157,7 @@ def rl_usd_sofr_mt_builder(
             from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.ErisFuturesFetcher import ErisFuturesFetcher
 
             live_eris_rlcurve, ts = ErisFuturesFetcher().fetch_intraday_discount_curve(
-                curve_id=curve_id_local, n_sfr_contracts=n_sfr_contracts, n_ser_contracts=0, n_plus_fomc_years=n_plus_fomc_years
+                curve_id=curve_id_local, n_sfr_contracts=n_sfr_contracts, n_ser_contracts=0, medium_term_tenors=medium_term_tenors, n_plus_fomc_years=n_plus_fomc_years
             )
             rl_irs: Dict[str, rl.IRS] = {}
 

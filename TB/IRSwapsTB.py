@@ -9,13 +9,18 @@ from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 import pandas as pd
 from tqdm import tqdm
 
+import QuantLib as ql
+
+# fmt: off
+import Query.IRSwaps.adapter  # noqa: F401
+# fmt: on
+
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapQueryWrapper
-from Query.IRSwaps.IRSwapStructure import IRSwapStructureFunctionMap
-from Query.IRSwaps.IRSwapValue import IRSwapValueFunctionMap
 from TB.utils import DateLike, _canonicalize_value, _dt_to_epoch_ns
+from utils.ql_utils import datetime_to_ql_date
 
 _LOGGER_NAME = "IRSwapsTB"
 
@@ -64,19 +69,9 @@ def _build_row_for_query(
     ref_dt: DateLike,
     date_col: str,
 ) -> Tuple[DateLike, str, float]:
-    ss_map = IRSwapStructureFunctionMap(curve=curve)  # structure → package
-    pkg, rw = ss_map.apply(
-        tenor=q.tenor,
-        effective_date=q.effective_date,
-        maturity_date=q.maturity_date,
-        value=q.value,
-        structure=q.structure,
-        is_for_timeseries=True,
-        **q.structure_kwargs,
-    )
-
-    val_map = IRSwapValueFunctionMap(package=pkg, risk_weights=rw, curve=curve)
-    value = val_map.apply(q.value)
+    pkg, rw = q.resolve_package(pricer_or_curve=curve, is_for_timeseries=True)
+    val_map = q.build_value_map(pricer_or_curve=curve, package=pkg, risk_weights=rw)
+    value = val_map.apply(value=q.value)
     return ref_dt, q.col_name(curve.id()), float(value)
 
 
@@ -161,6 +156,10 @@ class IRSwapsTB(ZODBCacheMixin):
 
         for d in ref_points:
             for curve_name, qs in by_curve.items():
+                if curve_name == "USD-SOFR-1D":
+                    if not ql.UnitedStates(ql.UnitedStates.GovernmentBond).isBusinessDay(datetime_to_ql_date(d)):
+                        break
+
                 for q in qs:
                     k = self._cache_key(d, curve_name, q)
                     if (k in cache_map) and not ignore_cache:

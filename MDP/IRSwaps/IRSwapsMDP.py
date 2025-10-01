@@ -4,11 +4,12 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 import pandas as pd
 
 from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
+from Query.Base._GenericPricable import _GenericPricable
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 
 
-class IRSwapsMDP(MarketDataProvider):
+class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
     def __init__(self, source: str, force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
         super().__init__(source, **kwargs)
@@ -23,6 +24,12 @@ class IRSwapsMDP(MarketDataProvider):
             from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
 
             self._rl_curve_cache = _RLCurveCache(cache_name="GSQUANT-RL_CURVE_CACHE")
+
+    def get_pricer(self, request: dict) -> _IRSwapGenericCurve:
+        curve = self.get_data(request)  # reuse the existing logic
+        if curve is None:
+            raise RuntimeError(f"IRSwapsMDP could not build a curve for request: {request}")
+        return curve
 
     def get_data(self, request: dict) -> Optional[_IRSwapGenericCurve]:
         curve_name = request.pop("curve_name")
