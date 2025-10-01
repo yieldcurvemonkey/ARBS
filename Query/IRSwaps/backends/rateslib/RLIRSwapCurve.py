@@ -65,6 +65,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return irswap.rate(curves=self._rl_curve_handle).real / 100
 
     def npv(self, irswap: rl.IRS):
+        # might need to create a new rl.IRS with fixed_rate set at curve rate 
         return irswap.npv(curves=self._rl_curve_handle).real
 
     def pv01(self, irswap: rl.IRS):
