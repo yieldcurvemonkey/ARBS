@@ -50,10 +50,10 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return self._meta_data
 
     def effective_date(self, irswap: rl.IRS):
-        return min(irswap.leg1.cashflows()["Payment"])
+        return min(irswap.leg1.cashflows()["Acc Start"])
 
     def maturity_date(self, irswap: rl.IRS):
-        return max(irswap.leg1.cashflows()["Payment"])
+        return max(irswap.leg1.cashflows()["Acc End"])
 
     def fixed_rate(self, irswap: rl.IRS):
         return float(irswap.fixed_rate)
@@ -65,8 +65,18 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return irswap.rate(curves=self._rl_curve_handle).real / 100
 
     def npv(self, irswap: rl.IRS):
-        # might need to create a new rl.IRS with fixed_rate set at curve rate 
-        return irswap.npv(curves=self._rl_curve_handle).real
+        return (
+            rl.IRS(
+                effective=self.effective_date(irswap),
+                termination=self.maturity_date(irswap),
+                fixed_rate=self.fair_rate(irswap) * 100,
+                curves=self._rl_curve_handle,
+                spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
+                notional=self.notional(irswap),
+            )
+            .npv(curves=self._rl_curve_handle)
+            .real
+        )
 
     def pv01(self, irswap: rl.IRS):
         return irswap.analytic_delta(curve=self._rl_curve_handle).real
@@ -86,7 +96,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         raise NotImplementedError("rateslib not implemented")
 
     def roll_bps_running(self, irswap: rl.IRS, horizon: str):
-        return float(irswap.rate(curves=self._rl_curve_handle.roll(horizon)))
+        return (self.fair_rate(irswap) * 100 - float(irswap.rate(curves=self._rl_curve_handle.roll(horizon)))) * 100 
 
     def carry_and_roll_bps_running(self, irswap: rl.IRS, horizon: str):
         raise NotImplementedError("rateslib not implemented")
