@@ -62,6 +62,8 @@ class ZODBCacheMixin:
 
     _SLUG_RX = re.compile(r"[^\w.\-]")
 
+    CACHE_ROOT: Path | None = None
+
     def __init__(
         self: T,
         *,
