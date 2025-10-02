@@ -24,7 +24,7 @@ A modular research codebase for building yield curves, pricing interest rate der
 
 ### 1) Environment
 
-- Python ≥ 3.10
+- Python=3.13
 - Core libraries used in the repo (install as needed):
   - `QuantLib`, `pandas`, `numpy`
   - `rateslib` (for RL backends)
