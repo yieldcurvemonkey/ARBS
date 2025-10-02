@@ -39,6 +39,8 @@ Some data builders (e.g., CME/fixings/SDR) may require credentials or local file
 
 ### 2) First run (Query-driven backtest)
 
+#### See also [this](https://github.com/yieldcurvemonkey/ARBS/blob/main/month_end_irswaps_backtest.ipynb) notebook
+
 ```py
 import datetime as dt
 from BT.data_handler import TimeGrid
