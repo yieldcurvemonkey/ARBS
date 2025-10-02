@@ -103,14 +103,12 @@ def _fetch_fixings(
     as_of_date: datetime.date | Literal["live"],
     curve_name: str,
     force_refresh: Optional[bool] = False,
-    *,
-    base_cache_dir: Optional[str | Path] = None,
 ) -> pd.Series:
 
     if as_of_date == "live":
         as_of_date = datetime.date.today()
 
-    fixings_cache = _resolve_fixings_cache_dir(curve_name, base_cache_dir=base_cache_dir)
+    fixings_cache = _resolve_fixings_cache_dir(curve_name)
 
     tday = datetime.date.today()
     today_dir = fixings_cache / tday.strftime("%Y-%m-%d")

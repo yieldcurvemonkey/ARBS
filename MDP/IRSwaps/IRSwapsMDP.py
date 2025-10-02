@@ -380,7 +380,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
-            curve_id, rl_curve_serialized, pricing_location = self._rl_curve_cache.get_gsquant_rl_basic(curve_id=curve_name, as_of=timestamp, force_refresh=False)
+            curve_id, rl_curve_serialized, pricing_location = self._rl_curve_cache.get_gsquant_rl_basic(
+                curve_id=curve_name, as_of=timestamp, force_refresh=kwargs.get("force_refresh", False)
+            )
             rl_curve_handle = from_json(rl_curve_serialized)
 
             fixings = _fetch_fixings(as_of_date=timestamp, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
