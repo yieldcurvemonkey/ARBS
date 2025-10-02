@@ -11,6 +11,7 @@ zc.lockfile==3.0.post1
 zope.interface==7.2
 aiohttp==3.12.15
 httpx==0.28.1
+h2==4.2.0
 httpx-socks==0.10.1
 requests==2.32.4
 ujson==5.10.0
