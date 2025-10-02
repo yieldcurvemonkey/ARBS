@@ -2,10 +2,11 @@ import contextlib
 import functools
 import os
 import re
+import tempfile
 import threading
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Dict, Generator, MutableMapping, Tuple, TypeVar, List
+from typing import Any, Callable, Dict, Generator, List, MutableMapping, Tuple, TypeVar
 
 import transaction
 from BTrees.OOBTree import OOBTree  # type: ignore
@@ -91,16 +92,27 @@ class ZODBCacheMixin:
         return ZODBCacheMixin._SLUG_RX.sub(repl, text)
 
     @staticmethod
+    def _user_cache_root() -> Path:
+        try:
+            from platformdirs import user_cache_dir
+
+            return Path(user_cache_dir(appname="ARBS", appauthor=False)) / "zodb"
+        except Exception:
+            if os.name == "nt":
+                return Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "ARBS" / "zodb"
+            return Path.home() / ".cache" / "arbs" / "zodb"
+
+    @staticmethod
     def default_cache_path(stem: str, ext: str = ".fs") -> str:
         safe = ZODBCacheMixin._slug(stem)
-
-        base = os.environ.get("ZODB_CACHE_DIR")
-        root = Path(base) if base else Path(__file__).resolve().parent
-
+        root = Path(ZODBCacheMixin.CACHE_ROOT) if ZODBCacheMixin.CACHE_ROOT else ZODBCacheMixin._user_cache_root()
         dump_dir = root / "dump"
-        dump_dir.mkdir(parents=True, exist_ok=True)
-
-        return str(dump_dir / f"{safe}{ext}")
+        try:
+            dump_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            dump_dir = Path(tempfile.gettempdir()) / "arbs_zodb_dump"
+            dump_dir.mkdir(parents=True, exist_ok=True)
+        return str((dump_dir / f"{safe}{ext}").resolve())
 
     @classmethod
     def _acquire_db(cls, path: str) -> _DBHandle:
