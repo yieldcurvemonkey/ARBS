@@ -1,6 +1,7 @@
 from pathlib import Path
 import datetime
 from typing import Optional, Literal
+import os
 
 import pandas as pd
 from pandas.tseries.holiday import USFederalHolidayCalendar
@@ -68,16 +69,51 @@ def _cleanup_old_cache_dirs(root: Path, keep_last: int = _KEEP_LAST_N_DATED_DIRS
                 pass
 
 
-def _fetch_fixings(as_of_date: datetime.date | Literal["live"], curve_name: str, force_refresh: Optional[bool] = False) -> pd.Series:
+try:
+    from platformdirs import user_cache_dir as _user_cache_dir
+except Exception:
+    _user_cache_dir = None
+
+
+def _resolve_fixings_cache_dir(curve_name: str, base_cache_dir: Optional[str | Path] = None) -> Path:
+    """
+    Resolve an OS-appropriate, user-agnostic cache directory with sensible fallbacks.
+
+    Priority:
+      1) base_cache_dir argument (if provided)
+      2) $ARBS_CACHE_DIR environment variable
+      3) platformdirs.user_cache_dir("ARBS/MDP/IRSwaps")
+      4) ~/.cache/arbs/MDP/IRSwaps  (cross-platform fallback)
+    """
+    if base_cache_dir:
+        base = Path(base_cache_dir)
+    elif os.getenv("ARBS_CACHE_DIR"):
+        base = Path(os.getenv("ARBS_CACHE_DIR"))
+    elif _user_cache_dir:
+        base = Path(_user_cache_dir(appname="ARBS/MDP/IRSwaps"))
+    else:
+        base = Path.home() / ".cache" / "arbs" / "MDP" / "IRSwaps"
+
+    fixings_cache = base / "fixings_cache" / f"{curve_name}_fixings"
+    fixings_cache.mkdir(parents=True, exist_ok=True)
+    return fixings_cache
+
+
+def _fetch_fixings(
+    as_of_date: datetime.date | Literal["live"],
+    curve_name: str,
+    force_refresh: Optional[bool] = False,
+    *,
+    base_cache_dir: Optional[str | Path] = None,
+) -> pd.Series:
+
     if as_of_date == "live":
         as_of_date = datetime.date.today()
 
-    fixings_cache = Path(rf"C:\Users\chris\clee\ARBS\MDP\IRSwaps\fixings_cache\{curve_name}_fixings")
-    fixings_cache.mkdir(parents=True, exist_ok=True)
+    fixings_cache = _resolve_fixings_cache_dir(curve_name, base_cache_dir=base_cache_dir)
 
     tday = datetime.date.today()
-    tday_str = tday.strftime("%Y-%m-%d")
-    today_dir = fixings_cache / tday_str
+    today_dir = fixings_cache / tday.strftime("%Y-%m-%d")
     today_dir.mkdir(parents=True, exist_ok=True)
 
     expected_dt = _last_usbd_before(as_of_date)
