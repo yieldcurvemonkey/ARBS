@@ -32,10 +32,7 @@ A modular research codebase for building yield curves, pricing interest rate der
   - `tqdm`
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # (Windows: .venv\Scripts\activate)
-pip install -U pip
-pip install QuantLib rateslib pandas numpy zodb BTrees persistent transaction zc.lockfile tqdm
+pip install -r requirements.txt 
 ```
 
 Some data builders (e.g., CME/fixings/SDR) may require credentials or local files. See MDP/IRSwaps/* modules

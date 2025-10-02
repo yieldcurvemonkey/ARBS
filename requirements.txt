@@ -1,0 +1,26 @@
+# Core numerical & data stack
+numpy
+pandas
+pyarrow
+
+# Curve/pricer backends
+QuantLib          # If wheels for Py3.13 are unavailable on your OS, consider conda-forge
+rateslib
+
+# Persistence / caching (ZODB stack)
+ZODB
+BTrees
+persistent
+transaction
+zc.lockfile
+
+# Networking / async IO
+aiohttp
+httpx
+httpx-socks
+requests
+ujson
+
+# Utilities & plotting
+tqdm
+matplotlib
