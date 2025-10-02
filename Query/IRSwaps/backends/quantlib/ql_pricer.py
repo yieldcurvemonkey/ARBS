@@ -35,8 +35,8 @@ def build_ql_irswap(
         return bool(nom > 0.0)
 
     def _make_swap(nominal: float) -> ql.VanillaSwap | ql.OvernightIndexedSwap:
-        period_tenor = fwd and tenor
-        mm_tenor = effective_date and maturity_date
+        period_tenor = fwd is not None and tenor is not None
+        mm_tenor = effective_date is not None and maturity_date is not None
         assert period_tenor or mm_tenor, "Must specify either tenor (fwd+tenor) or dates (effective+termination)"
 
         is_ois = "ois" in str(QUANTLIB_CURVE_DEFINITIONS[curve]["UseCase"]).lower()
@@ -100,7 +100,6 @@ def build_ql_irswap(
                     terminationDate=term,
                     fixedRate=fixed_rate / 100.0,
                     overnightIndex=swap_index or QUANTLIB_CURVE_DEFINITIONS[curve]["ReferenceRate"](curve_handle),
-                    settlementDays=QUANTLIB_CURVE_DEFINITIONS[curve]["SettlementDays"],
                     calendar=QUANTLIB_CURVE_DEFINITIONS[curve]["Calendar"],
                     paymentCalendar=QUANTLIB_CURVE_DEFINITIONS[curve]["Calendar"],
                     fixedLegDayCount=QUANTLIB_CURVE_DEFINITIONS[curve]["DayCounter"],
@@ -109,9 +108,6 @@ def build_ql_irswap(
                     paymentLag=QUANTLIB_CURVE_DEFINITIONS[curve]["PaymentLag"],
                     nominal=abs(nominal),
                     receiveFixed=receive_fixed_flag,
-                    fixedLegTerminationDateConvention=ql.Unadjusted,
-                    overnightLegTerminationDateConvention=ql.Unadjusted,
-                    terminationDateConvention=ql.Unadjusted,
                     endOfMonth=False,  # has to be dynamic e.g. true for short swap, false for longer dated swaps
                 )
             else:

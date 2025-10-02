@@ -96,7 +96,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         raise NotImplementedError("rateslib not implemented")
 
     def roll_bps_running(self, irswap: rl.IRS, horizon: str):
-        return (self.fair_rate(irswap) * 100 - float(irswap.rate(curves=self._rl_curve_handle.roll(horizon)))) * 100 
+        return (self.fair_rate(irswap) * 100 - float(irswap.rate(curves=self._rl_curve_handle.roll(horizon)))) * 100
 
     def carry_and_roll_bps_running(self, irswap: rl.IRS, horizon: str):
         raise NotImplementedError("rateslib not implemented")
@@ -109,6 +109,10 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                 rl_effective = self.calendar_advance(self.reference_date(), fwd)
         else:
             rl_effective = effective_date
+
+        rl_effective = rl.dt(rl_effective.year, rl_effective.month, rl_effective.day)
+        if type(maturity_date) == datetime.date:
+            maturity_date = rl.dt(maturity_date.year, maturity_date.month, maturity_date.day)
 
         if bpv and not notional:
             unit_delta = rl.IRS(
