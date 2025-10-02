@@ -93,9 +93,14 @@ class ZODBCacheMixin:
     @staticmethod
     def default_cache_path(stem: str, ext: str = ".fs") -> str:
         safe = ZODBCacheMixin._slug(stem)
-        root = Path(os.getenv("ZODB_CACHE_DIR", Path(__file__).resolve().parent))
-        root.mkdir(parents=True, exist_ok=True)
-        return str(root / "dump" / f"{safe}{ext}")
+
+        base = os.environ.get("ZODB_CACHE_DIR")
+        root = Path(base) if base else Path(__file__).resolve().parent
+
+        dump_dir = root / "dump"
+        dump_dir.mkdir(parents=True, exist_ok=True)
+
+        return str(dump_dir / f"{safe}{ext}")
 
     @classmethod
     def _acquire_db(cls, path: str) -> _DBHandle:
