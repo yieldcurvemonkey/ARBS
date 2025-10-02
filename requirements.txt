@@ -24,3 +24,5 @@ ujson
 # Utilities & plotting
 tqdm
 matplotlib
+plotly
+nest_asyncio
