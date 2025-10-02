@@ -1,19 +1,55 @@
+# ------------------------------------------------------------------------------
+# PIP OPTIONS (keeps ZODB stack on wheels so C extensions are present)
+# ------------------------------------------------------------------------------
+--only-binary=persistent,BTrees,zope.interface,ZODB,zodbpickle
+
+# ------------------------------------------------------------------------------
+# CORE NUMERICAL / DATA STACK
+# ------------------------------------------------------------------------------
 numpy
 pandas
 pyarrow
+
+# ------------------------------------------------------------------------------
+# PRICING LIBRARIES
+# ------------------------------------------------------------------------------
 QuantLib
 rateslib
-ZODB
-BTrees
-persistent
-transaction
-zc.lockfile
-zope.interface
+
+# ------------------------------------------------------------------------------
+# ZODB PERSISTENCE STACK
+# (Pin known wheel versions for Windows + Python 3.13; use generic on others)
+# ------------------------------------------------------------------------------
+# Windows + Python 3.13 (ensure compiled wheels)
+persistent==6.2 ; python_version >= "3.13" and platform_system == "Windows"
+BTrees==6.1 ; python_version >= "3.13" and platform_system == "Windows"
+zope.interface==8.0.1 ; python_version >= "3.13" and platform_system == "Windows"
+ZODB==6.1 ; python_version >= "3.13" and platform_system == "Windows"
+zodbpickle==4.1 ; python_version >= "3.13" and platform_system == "Windows"
+
+# Other platforms / versions (un-pinned; install wheels when available)
+persistent ; python_version < "3.13" or platform_system != "Windows"
+BTrees ; python_version < "3.13" or platform_system != "Windows"
+zope.interface ; python_version < "3.13" or platform_system != "Windows"
+ZODB ; python_version < "3.13" or platform_system != "Windows"
+zodbpickle ; python_version < "3.13" or platform_system != "Windows"
+
+# Transaction & file locking (pure Python)
+transaction>=4,<5
+zc.lockfile>=3,<4
+
+# ------------------------------------------------------------------------------
+# NETWORKING / ASYNC
+# ------------------------------------------------------------------------------
 aiohttp
 httpx
 httpx-socks
 requests
 ujson
+
+# ------------------------------------------------------------------------------
+# DEV & VISUALIZATION
+# ------------------------------------------------------------------------------
 tqdm
 matplotlib
 plotly
