@@ -303,7 +303,7 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
                 return parts[0]
             if len(parts) == 2:
                 return f"{parts[0]}x{parts[1]}"
-            raise ValueError(f"Unexpected leg format: {s!r}")
+            return s
 
         front_tenor = _normalize_leg(front_tenor)
         belly_tenor = _normalize_leg(belly_tenor)
