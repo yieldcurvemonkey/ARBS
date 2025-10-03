@@ -9,6 +9,8 @@ from Query.Base.BaseQuery import BaseQuery
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 from Query.IRSwaps.IRSwapValue import IRSwapValue
 
+from utils.misc import human_format
+
 
 def _format_struct_kwargs(ss: IRSwapStructure, kw: Dict[str, Any]) -> str:
     def _format_size(value: Any, *, base: float, tag: str, dec_places: int = 1) -> Optional[str]:
@@ -236,16 +238,22 @@ class IRSwapQuery(BaseQuery):
 
         prefix = f"{curve_label} " if curve_label else ""
         suffix = f"{self.structure.name} {self.value.name if isinstance(self.value, IRSwapValue) else 'MULTI'}"
+        to_return = f"{prefix}{suffix}"
 
         if self.name:
-            return self.name
+            to_return = self.name
         if fmt and swap_name:
-            return f"{prefix}{swap_name} {fmt} {suffix}"
+            to_return = f"{prefix}{swap_name} {fmt} {suffix}"
         if fmt:
-            return f"{prefix}{fmt} {suffix}"
+            to_return = f"{prefix}{fmt} {suffix}"
         if swap_name:
-            return f"{prefix}{swap_name} {suffix}"
-        return f"{prefix}{suffix}"
+            to_return = f"{prefix}{swap_name} {suffix}"
+        if "bpv" in self.structure_kwargs and self.structure_kwargs["bpv"] > 1:
+            human_format_risk = human_format(abs(self.structure_kwargs["bpv"]))
+            verb = f"Paid {human_format_risk}" if self.structure_kwargs["bpv"] < 0 else f"Rec {human_format_risk}"
+            to_return = f"{verb} {prefix}{suffix}"
+
+        return to_return
 
     def eval_expression(self, cube_name: Optional[str] = None, ignore_risk_weight: bool = False) -> str:
         col = self.col_name(cube_name=cube_name)
