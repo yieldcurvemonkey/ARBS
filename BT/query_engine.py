@@ -78,7 +78,7 @@ class QueryDrivenBacktest:
         pricer_or_curve: _GenericPricer = self._pricer_for_query(pos.source_query, now)
 
         old_package: List[_GenericPricable] = pos.package
-        resolved_package = [pricer_or_curve.resolve_pricable(p) for p in old_package]
+        resolved_package = [pricer_or_curve.resolve_pricable(p, rw) for p, rw in list(zip(pos.package, pos.weights))]
 
         vmap = pos.source_query.build_value_map(
             pricer_or_curve=pricer_or_curve,

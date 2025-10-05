@@ -111,12 +111,14 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
 
         return self.build_irswap(fwd=fwd, tenor=tenor, effective_date=eff, maturity_date=mat, fixed_rate=k, notional=notional, bpv=bpv)
 
-    def resolve_pricable(self, irswap: ql.VanillaSwap):
+    def resolve_pricable(self, irswap: ql.VanillaSwap, risk_weight: Optional[float] = None):
+        notional = abs(self.notional(irswap))
+        direction = risk_weight or self.pv01(irswap) * -1
         return self.build_irswap(
             effective_date=self.effective_date(irswap),
             maturity_date=self.maturity_date(irswap),
             fixed_rate=self.fixed_rate(irswap) * 100,
-            notional=self.notional(irswap),
+            notional=notional * -1 if direction < 0 else notional,
         )
 
     def build_stirf(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None, is_ser=False):

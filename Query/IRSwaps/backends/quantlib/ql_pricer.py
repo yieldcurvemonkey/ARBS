@@ -26,6 +26,12 @@ def build_ql_irswap(
     if bpv is not None:
         bpv = -bpv
 
+    if notional is not None:
+        if notional < 0:
+            r_p = "p"
+        else:
+            r_p = "r"
+
     def _normalize_side(rp: Optional[str], nom: float) -> bool:
         # True -> receive fixed, False -> pay fixed
         if rp is None:
