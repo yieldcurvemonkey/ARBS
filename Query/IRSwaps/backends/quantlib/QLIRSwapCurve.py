@@ -1,6 +1,6 @@
 import datetime
 from dataclasses import dataclass
-from typing import Union, Any, Optional
+from typing import Union, Any, Optional, Union
 
 import QuantLib as ql
 
@@ -13,14 +13,27 @@ from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_t
 @dataclass
 class QLIRSwapCurve(_IRSwapGenericCurve):
     _ql_curve_id: str
-    _ql_curve_handle: ql.YieldTermStructureHandle
+    _ql_curve_handle: ql.RelinkableYieldTermStructureHandle
     _ql_curve_index: ql.SwapIndex
     _meta_data: Any
 
-    def __init__(self, ql_curve_id: str, ql_curve_handle: ql.YieldTermStructureHandle, ql_curve_index: ql.SwapIndex, meta_data: Any):
+    def __init__(
+        self,
+        ql_curve_id: str,
+        ql_curve_handle: Union[ql.YieldTermStructureHandle, ql.YieldTermStructure],
+        ql_curve_index: Optional[ql.SwapIndex] = None,
+        meta_data: Optional[Any] = {},
+    ):
         self._ql_curve_id = ql_curve_id
-        self._ql_curve_handle = ql_curve_handle
-        self._ql_curve_index = ql_curve_index
+        if isinstance(ql_curve_handle, ql.YieldTermStructureHandle):
+            base_link = ql_curve_handle.currentLink()
+        else:
+            base_link = ql_curve_handle
+        rel = ql.RelinkableYieldTermStructureHandle()
+        rel.linkTo(base_link)
+        self._ql_curve_handle = rel
+
+        self._ql_curve_index = ql_curve_index if ql_curve_index is not None else QUANTLIB_CURVE_DEFINITIONS[ql_curve_id]["ReferenceRate"](self._ql_curve_handle)
         self._meta_data = meta_data
 
     def id(self):
@@ -36,7 +49,7 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
         ql_cal = self.calendar()
         return ql_cal.advance(datetime_to_ql_date(dt1), ql.Period(dt2) if type(dt2) == str else dt2, QUANTLIB_CURVE_DEFINITIONS[self._ql_curve_id])
 
-    def handle(self) -> ql.YieldTermStructureHandle:
+    def handle(self) -> ql.RelinkableYieldTermStructureHandle:
         return self._ql_curve_handle
 
     def index(self) -> ql.SwapIndex:

@@ -213,3 +213,6 @@ dump/
 # repo mix/ai stuff
 repomix-output.xml
 *.xml
+
+temp.py
+temp.ipynb

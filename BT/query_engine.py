@@ -76,6 +76,8 @@ class QueryDrivenBacktest:
     def _position_value(self, pos: ResolvedQueryPosition, now: datetime.datetime) -> float:
         pricer_or_curve = self._pricer_for_query(pos.source_query, now)
 
+        # rebuild package here, need to be product and backend agnostic
+
         vmap = pos.source_query.build_value_map(
             pricer_or_curve=pricer_or_curve,
             package=pos.package,
