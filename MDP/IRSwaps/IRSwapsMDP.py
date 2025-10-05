@@ -609,3 +609,21 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         for t in timestamps:
             out[t] = self.get_data({"curve_name": curve_name, "timestamp": t, **request})
         return out
+
+
+def _normalize_leg(s: str) -> str:
+    import re
+
+    # grab tenor tokens like 3M, 6m, 1Y, 2y (case-insensitive)
+    parts = re.findall(r"\d+\s*[dwmy]", s, flags=re.I)
+    parts = [p.upper().replace(" ", "") for p in parts]
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return f"{parts[0]}x{parts[1]}"
+    raise ValueError(f"Unexpected leg format: {s!r}")
+
+
+def _format_fly_str(s: str) -> tuple[str]:
+    w1, b, w2 = s.split("/")
+    return _normalize_leg(w1), _normalize_leg(b), _normalize_leg(w2)

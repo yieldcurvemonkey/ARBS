@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import tqdm
 
 import Query.IRSwaps.adapter  # noqa: F401
-
 from BT.data_handler import TimeGrid
 from BT.execution_engine import ExecutionEngine
 from BT.query_order import QueryOrder, UnwindOrder
 from BT.query_portfolio import QueryPortfolio, ResolvedQueryPosition
 from BT.query_strategy import QueryStrategy
 from MDP.MarketDataProvider import MarketDataProvider
+from Query.Base._GenericPricable import _GenericPricable
+from Query.Base._GenericPricer import _GenericPricer
 from Query.Base.BaseQuery import BaseQuery
 
 # Optional risk function: receives portfolio + a pricer getter for current time
@@ -74,11 +75,14 @@ class QueryDrivenBacktest:
 
     # -------- P&L / MTM --------
     def _position_value(self, pos: ResolvedQueryPosition, now: datetime.datetime) -> float:
-        pricer_or_curve = self._pricer_for_query(pos.source_query, now)
+        pricer_or_curve: _GenericPricer = self._pricer_for_query(pos.source_query, now)
+
+        old_package: List[_GenericPricable] = pos.package
+        resolved_package = [pricer_or_curve.resolve_pricable(p) for p in old_package]
 
         vmap = pos.source_query.build_value_map(
             pricer_or_curve=pricer_or_curve,
-            package=pos.package,
+            package=resolved_package,
             risk_weights=pos.weights,
         )
 

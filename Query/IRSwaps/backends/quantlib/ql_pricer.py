@@ -22,6 +22,10 @@ def build_ql_irswap(
     r_p: Optional[Literal["rec", "r", "pay", "p"]] = None,
 ) -> ql.VanillaSwap | ql.OvernightIndexedSwap:
 
+    # idk what conventions are: pos risk -> long duration/rec fixed
+    if bpv is not None:
+        bpv = -bpv
+
     def _normalize_side(rp: Optional[str], nom: float) -> bool:
         # True -> receive fixed, False -> pay fixed
         if rp is None:
