@@ -34,7 +34,9 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
 
     def calendar_advance(self, dt1: Union[datetime.date, ql.Date], dt2: Union[ql.Period, str]):
         ql_cal = self.calendar()
-        return ql_cal.advance(datetime_to_ql_date(dt1), ql.Period(dt2) if type(dt2) == str else dt2, QUANTLIB_CURVE_DEFINITIONS[self._ql_curve_id])
+        return ql_cal.advance(
+            datetime_to_ql_date(dt1), ql.Period(dt2) if type(dt2) == str else dt2, QUANTLIB_CURVE_DEFINITIONS[self._ql_curve_id]["BusinessConvention"]
+        )
 
     def handle(self) -> ql.YieldTermStructureHandle:
         return self._ql_curve_handle
