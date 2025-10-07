@@ -20,6 +20,7 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
     _maturity_date: datetime.date
     _cpn: float
 
+    _notional: float
     _clean_price: float
     _ytm: float
 
@@ -32,11 +33,12 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
         issue_date: Union[datetime.datetime, datetime.date],
         maturity_date: Union[datetime.datetime, datetime.date],
         cpn: float,
+        notional: Optional[float] = None,
         clean_price: Optional[float] = None,
         ytm: Optional[float] = None,
         meta_data: Optional[Any] = None,
     ):
-        assert clean_price is None or ytm is None, "must pass in `clean_price` or `ytm` to price bond"
+        assert clean_price is None or ytm is None, "must pass in clean_price or ytm to price bond"
         self._ql_frb_id = ql_frb_id
 
         self._reference_date = reference_date
@@ -44,6 +46,7 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
         self._maturity_date = maturity_date
         self._cpn = cpn
 
+        self._notional = notional
         self._clean_price = clean_price
         self._ytm = ytm
 
@@ -172,7 +175,7 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
         )
         return ql_frb.accruedAmount()
 
-    def bpv(self, notional: Optional[float] = 1_000_000):
+    def bpv(self, notional=1_000_000):
         ql.Settings.instance().evaluationDate = ql.Date(self._reference_date.day, self._reference_date.month, self._reference_date.year)
         return np.copysign(
             ql.BondFunctions.basisPointValue(
@@ -187,11 +190,13 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
             notional,
         )
 
-    def pv01(self, notional: Optional[float] = 1_000_000):
+    def pv01(self, notional=None):
         ql.Settings.instance().evaluationDate = ql.Date(self._reference_date.day, self._reference_date.month, self._reference_date.year)
         return np.copysign(
             ql.BondFunctions.basisPointValue(
-                self.build_fixed_rate_bond(issue_date=self.issue_date(), maturity_date=self.maturity_date(), coupon=self.coupon(), notional=notional),
+                self.build_fixed_rate_bond(
+                    issue_date=self.issue_date(), maturity_date=self.maturity_date(), coupon=self.coupon(), notional=notional or self._notional
+                ),
                 ql.InterestRate(
                     self.ytm() / 100,
                     QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["DayCounter"],
@@ -199,7 +204,7 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
                     QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["Frequency"],
                 ),
             ),
-            notional,
+            notional or self._notional,
         )
 
     def mod_duration(self):
@@ -215,10 +220,10 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
             ql.Duration.Modified,
         )
 
-    def convexity(self, notional: Optional[float] = 1_000_000):
+    def convexity(self):
         ql.Settings.instance().evaluationDate = ql.Date(self._reference_date.day, self._reference_date.month, self._reference_date.year)
         return ql.BondFunctions.convexity(
-            self.build_fixed_rate_bond(issue_date=self.issue_date(), maturity_date=self.maturity_date(), coupon=self.coupon(), notional=notional),
+            self.build_fixed_rate_bond(issue_date=self.issue_date(), maturity_date=self.maturity_date(), coupon=self.coupon(), notional=self._notional),
             ql.InterestRate(
                 self.ytm() / 100,
                 QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["DayCounter"],
@@ -237,12 +242,21 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
         raise NotImplementedError()
 
     def build_pricable(self, /, **kwargs):
-        raise NotImplementedError()
+        return self.build_fixed_rate_bond(
+            issue_date=kwargs.get("issue_date"),
+            maturity_date=kwargs.get("maturity_date"),
+            coupon=kwargs.get("coupon") or kwargs.get("cpn"),
+            notional=kwargs.get("notional"),
+            bpv=kwargs.get("bpv") or kwargs.get("risk"),
+        )
 
-    def build_fixed_rate_bond(self, issue_date=None, maturity_date=None, coupon=None, notional=None):
+    def build_fixed_rate_bond(self, issue_date=None, maturity_date=None, coupon=None, notional=None, bpv=None):
+        if notional is None and bpv is not None:
+            notional = bpv / self.bpv(notional=1)
+
         ql_sch = ql.Schedule(
-            datetime_to_ql_date(issue_date) if type(issue_date) == datetime.date else issue_date,
-            datetime_to_ql_date(maturity_date) if type(maturity_date) == datetime.date else maturity_date,
+            datetime_to_ql_date(issue_date),
+            datetime_to_ql_date(maturity_date),
             QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["FrequencyPeriod"],
             QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["Calendar"],
             QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["BusinessConvention"],

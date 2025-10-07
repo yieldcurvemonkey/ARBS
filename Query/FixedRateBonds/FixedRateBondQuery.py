@@ -1,0 +1,86 @@
+from dataclasses import dataclass, field, replace
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+from Query.Base.BaseQuery import BaseQuery
+from Query.FixedRateBonds.FixedRateBondStructure import FixedRateBondStructure
+from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
+
+
+@dataclass(frozen=True)
+class FixedRateBondQuery(BaseQuery):
+    structure: FixedRateBondStructure = FixedRateBondStructure.OUTRIGHT
+    value: Union[FixedRateBondValue, List[FixedRateBondValue]] = FixedRateBondValue.YTM
+
+    cusip: Optional[str] = None
+    curve: Optional[str] = None  # Maps to the MDP source
+
+    structure_kwargs: Dict[str, Any] = field(default_factory=dict)
+    risk_weight: Optional[float] = None
+
+    product: str = field(init=False, default="FixedRateBond")
+    structure_id: Any = field(init=False, default=None)
+
+    def __post_init__(self):
+        skw = dict(self.structure_kwargs or {})
+        if self.cusip is not None and "cusip" not in skw:
+            skw["cusip"] = self.cusip
+
+        object.__setattr__(self, "product", "FixedRateBond")
+        object.__setattr__(self, "structure_id", self.structure)
+        object.__setattr__(self, "structure_kwargs", skw)
+
+        mr = dict(self.market_request or {})
+        if self.curve is not None and "curve_name" not in mr:
+            mr["curve_name"] = self.curve
+        object.__setattr__(self, "market_request", mr)
+
+        if isinstance(self.value, list):
+            object.__setattr__(self, "value_id", None)
+            object.__setattr__(self, "value_ids", tuple(self.value))
+        else:
+            object.__setattr__(self, "value_id", self.value)
+            object.__setattr__(self, "value_ids", tuple())
+
+    def return_query(self) -> List["FixedRateBondQuery"]:
+        if isinstance(self.value, list):
+            return [replace(self, value=v) for v in self.value]
+        return [self]
+
+    def col_name(self, cube_name: Optional[str] = None) -> str:
+        curve_label = cube_name or self.curve or ""
+        struct_name = self.structure.name
+        val_name = self.value.name if isinstance(self.value, FixedRateBondValue) else "MULTI"
+
+        cusip_str = self.structure_kwargs.get("cusip", "")
+        if self.structure == FixedRateBondStructure.CURVE:
+            cusip_str = f"{self.structure_kwargs.get('front_cusip')}v{self.structure_kwargs.get('back_cusip')}"
+        elif self.structure == FixedRateBondStructure.FLY:
+            cusip_str = f"{self.structure_kwargs.get('front_cusip')}v{self.structure_kwargs.get('belly_cusip')}v{self.structure_kwargs.get('back_cusip')}"
+
+        return f"{curve_label} {cusip_str} {struct_name} {val_name}".strip()
+
+    def eval_expression(self, cube_name: Optional[str] = None, ignore_risk_weight: bool = False) -> str:
+        col = self.col_name(cube_name=cube_name)
+        if self.risk_weight is not None and not ignore_risk_weight:
+            return f"{self.risk_weight} * `{col}`"
+        return f"`{col}`"
+
+    # --- Arithmetic ---
+    def __pos__(self) -> "FixedRateBondQuery":
+        return self
+
+    def __neg__(self) -> "FixedRateBondQuery":
+        return replace(self, risk_weight=-(self.risk_weight or 1.0))
+
+    def __mul__(self, scalar: object) -> "FixedRateBondQuery":
+        if not isinstance(scalar, (int, float)):
+            return NotImplemented
+        return replace(self, risk_weight=(self.risk_weight or 1.0) * float(scalar))
+
+    def __rmul__(self, scalar: object) -> "FixedRateBondQuery":
+        return self.__mul__(scalar)
+
+    def __truediv__(self, scalar: object) -> "FixedRateBondQuery":
+        if not isinstance(scalar, (int, float)):
+            return NotImplemented
+        return self * (1.0 / float(scalar))

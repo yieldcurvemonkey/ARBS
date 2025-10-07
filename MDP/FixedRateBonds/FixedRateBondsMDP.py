@@ -1,13 +1,13 @@
 import datetime
+import re
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 import pandas as pd
 
-from Query.Base._GenericPricable import _GenericPricable
-from MDP.MarketDataProvider import MarketDataProvider
-from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
-
 from Caching.ZODBCacheMixin import ZODBCacheMixin
+from MDP.MarketDataProvider import MarketDataProvider
+from Query.Base._GenericPricable import _GenericPricable
+from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 
 
 class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
@@ -60,41 +60,91 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
         )
 
     def get_pricer(self, request: dict) -> _FixedRateBondGenericPricer:
-        curve = self.get_data(request)  # reuse the existing logic
-        if curve is None:
-            raise RuntimeError(f"FixedRateBondsMDP could not build a curve for request: {request}")
-        return curve
+        pricers = self.get_data(request)  # reuse the existing logic
+        if pricers is None:
+            raise RuntimeError(f"FixedRateBondsMDP could not build a pricer(s) for request: {request}")
+        return pricers
 
     def get_data(self, request: dict) -> Optional[_FixedRateBondGenericPricer]:
-        curve_name = request.pop("curve_name")
+        cusips = request.pop("cusips")
         timestamp = request.pop("timestamp")
 
-        if not curve_name or not timestamp:
+        if not cusips or not timestamp:
             raise ValueError("Request must contain 'curve_name' and 'timestamp'.")
 
-        return self._get_curve(curve_name, timestamp, kwargs=request)
+        return self._get_multi_pricers(cusips=cusips, timestamp=timestamp, kwargs=request)
 
-    def _get_pricer(
+    def _get_multi_pricers(
+        self, cusips: Union[str, List[str]], timestamp: Union[datetime.datetime, datetime.date, Literal["live"]], kwargs: Optional[Dict[str, Any]] = {}
+    ) -> Optional[Dict[str, _FixedRateBondGenericPricer]]:
+        clean_cusips = []
+        for c in cusips:
+            if "x" in c and "Ox" not in c:
+                clean_cusips.extend(c.split("x"))
+            elif "/" in c:
+                clean_cusips.extend(c.split("/"))
+            else:
+                clean_cusips.append(c)
+
+        pricers = {}
+        for c in clean_cusips:
+            pricers[c] = self._get_single_pricer(cusip=c, timestamp=timestamp, kwargs=kwargs)
+        return pricers
+
+    def _get_single_pricer(
         self, cusip: str, timestamp: Union[datetime.datetime, datetime.date, Literal["live"]], kwargs: Optional[Dict[str, Any]] = {}
     ) -> Optional[_FixedRateBondGenericPricer]:
 
         if self.source.upper() in ["USTS_PUBLICDOTCOM_WSJ_LIVE-QL"]:
             from MDP.FixedRateBonds.PUBLICDOTCOM.PublicDotcomDataFetcher import PublicDotcomDataFetcher
-            from MDP.FixedRateBonds.WSJ.WSJFetcher import WSJFetcher, get_isin_from_cusip
             from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
+            from MDP.FixedRateBonds.WSJ.WSJFetcher import WSJFetcher, get_isin_from_cusip
             from Query.FixedRateBonds.backends.quantlib.QLFixedRateBondPricer import QLFixedRateBondPricer
 
-            ref_df = update_reference_data(source="fiscaldata")
+            ref_df = update_reference_data(source="fiscaldata", force_refresh=kwargs.get("force_refresh", False))
+            as_of_ref = datetime.date.today() if timestamp == "live" else timestamp
+            ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)]
+            ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+
+            original_cusip_alias = cusip
+            match_ct = re.match(r"^CT(\d+)$", cusip, re.IGNORECASE)
+            match_o = re.match(r"^(O{1,3})(\d+)$", cusip, re.IGNORECASE)
+            match_ox = re.match(r"^Ox(\d+?)(\d+)$", cusip, re.IGNORECASE)
+            rank, tenor = None, None
+            if match_ct:
+                rank = 0
+                tenor = int(match_ct.group(1))
+            elif match_o:
+                rank = len(match_o.group(1))
+                tenor = int(match_o.group(2))
+            elif match_ox:
+                rank = int(match_ox.group(1))
+                tenor = int(match_ox.group(2))
+
+            if rank is not None and tenor is not None:
+                oi_str = f"{tenor}-Year"
+                target_bond = ref_df[(ref_df["oi"] == oi_str) & (ref_df["rank"] == rank)]
+
+                if not target_bond.empty:
+                    cusip = target_bond.iloc[0]["cusip"]
+                else:
+                    raise KeyError(f"Could not resolve constant maturity alias '{original_cusip_alias}'")
+
             ref_df = ref_df[ref_df["cusip"] == cusip]
 
             if timestamp == "live":
                 wsj_key = get_isin_from_cusip(cusip, "US")[2:]
                 live_ytm_quote = WSJFetcher().wsj_timeseries_api(wsj_ticker_keys=[wsj_key], append_most_recent_last=True)[wsj_key]
+                meta_data = ref_df.iloc[0].to_dict()
+                meta_data["timestamp"] = live_ytm_quote.iloc[0, 0]
                 return QLFixedRateBondPricer(
                     ql_frb_id="USTS",
                     reference_date=live_ytm_quote.iloc[0, 0].date(),
+                    issue_date=meta_data["issue_date"],
+                    maturity_date=meta_data["maturity_date"],
+                    cpn=meta_data["cpn"],
                     ytm=live_ytm_quote.iloc[0, 1],
-                    meta_data=ref_df.iloc[0].to_dict(),
+                    meta_data=meta_data,
                 )
 
             if type(timestamp) == datetime.date:

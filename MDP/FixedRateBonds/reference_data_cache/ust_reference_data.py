@@ -143,7 +143,7 @@ def _fetch_fiscaldata(
     if df.empty:
         return pd.DataFrame()
 
-    df = df.sort_values(["cusip", "issue_date"]).drop_duplicates(subset=["cusip"], keep="last")
+    df = df.sort_values(["cusip", "issue_date"]).drop_duplicates(subset=["cusip"], keep="first")
     if fetch_as_of != "all":
         df = df[df["maturity_date"] > process_as_of].copy()
         df["rank"] = df.groupby("original_security_term")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
