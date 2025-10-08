@@ -12,7 +12,7 @@ from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.FixingsFetcher import FixingsFetcher
 
 _PUBLISH_CAL = USFederalHolidayCalendar()
 _CBD = CustomBusinessDay(calendar=_PUBLISH_CAL)
-_KEEP_LAST_N_DATED_DIRS = 10  # retain recent caches for fallback
+_KEEP_LAST_N_DATED_DIRS = 3  # retain recent caches for fallback
 
 
 def _last_usbd_before(d: datetime.date) -> pd.Timestamp:

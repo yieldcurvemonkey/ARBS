@@ -2,7 +2,7 @@ import asyncio
 import logging
 import warnings
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Literal
 
 import httpx
 import pandas as pd
@@ -109,6 +109,7 @@ class PublicDotcomDataFetcher(DataFetcherBase):
         max_retries: Optional[int] = 3,
         backoff_factor: Optional[int] = 1,
         uid: Optional[str | int] = None,
+        span: Optional[Literal["MAX", "1Y", "6M", "3M", "1M"]] = "MAX"
     ):
         cols_to_return = ["Date", "Price", "YTM"]  # YTW is same as YTM for cash USTs
         retries = 0
@@ -118,7 +119,6 @@ class PublicDotcomDataFetcher(DataFetcherBase):
 
             while retries < max_retries:
                 try:
-                    span = "MAX"
                     data_headers = {
                         "authority": "prod-api.154310543964.hellopublic.com",
                         "method": "GET",
@@ -191,37 +191,6 @@ class PublicDotcomDataFetcher(DataFetcherBase):
         async with semaphore:
             return await self._fetch_cusip_timeseries_public_dotcom(*args, **kwargs)
 
-    async def _build_fetch_tasks_cusip_timeseries_public_dotcome(
-        self,
-        client: httpx.AsyncClient,
-        cusips: List[str],
-        start_date: datetime,
-        end_date: datetime,
-        uid: Optional[str | int] = None,
-        max_concurrent_tasks: int = 64,
-        refresh_jwt: Optional[bool] = False,
-    ):
-        if refresh_jwt or not self._public_dotcom_jwt:
-            self._public_dotcom_jwt = self._fetch_public_dotcome_jwt()
-            if not self._public_dotcom_jwt:
-                raise ValueError("Public.com JWT Request Failed")
-
-        semaphore = asyncio.Semaphore(max_concurrent_tasks)
-        tasks = [
-            self._fetch_cusip_timeseries_public_dotcome_with_semaphore(
-                semaphore=semaphore,
-                client=client,
-                cusip=cusip,
-                start_date=start_date,
-                end_date=end_date,
-                uid=uid,
-                jwt_str=self._public_dotcom_jwt,
-                max_retries=1,
-            )
-            for cusip in cusips
-        ]
-        return tasks
-
     def public_dotcom_timeseries_api(
         self,
         cusips: List[str],
@@ -241,6 +210,7 @@ class PublicDotcomDataFetcher(DataFetcherBase):
             start_date: datetime,
             end_date: datetime,
             jwt_str: str,
+            span: str,
         ):
             semaphore = asyncio.Semaphore(max_concurrent_tasks)
             tasks = [
@@ -252,12 +222,13 @@ class PublicDotcomDataFetcher(DataFetcherBase):
                     end_date=end_date,
                     jwt_str=jwt_str,
                     max_retries=1,
+                    span=span,
                 )
                 for cusip in cusips
             ]
             return await asyncio.gather(*tasks)
 
-        async def run_fetch_all(cusips: List[str], start_date: datetime, end_date: datetime, jwt_str: str):
+        async def run_fetch_all(cusips: List[str], start_date: datetime, end_date: datetime, jwt_str: str, span: str):
             async with httpx.AsyncClient(proxy=self._proxies["https"]) as client:
                 all_data = await build_tasks(
                     client=client,
@@ -265,6 +236,7 @@ class PublicDotcomDataFetcher(DataFetcherBase):
                     start_date=start_date,
                     end_date=end_date,
                     jwt_str=jwt_str,
+                    span=span,
                 )
                 return all_data
 
@@ -274,6 +246,7 @@ class PublicDotcomDataFetcher(DataFetcherBase):
                 start_date=start_date,
                 end_date=end_date,
                 jwt_str=self._public_dotcom_jwt,
+                span="MAX",
             )
         )
         return dict(dfs)
