@@ -57,6 +57,11 @@ class FixedRateBondQuery(BaseQuery):
         elif self.structure == FixedRateBondStructure.FLY and self.structure_kwargs.get("front_cusip") is not None:
             cusip_str = f"{self.structure_kwargs.get('front_cusip')}v{self.structure_kwargs.get('belly_cusip')}v{self.structure_kwargs.get('back_cusip')}"
 
+        if cusip_str.count("/") == 1:
+            struct_name = FixedRateBondStructure.CURVE.name
+        elif cusip_str.count("/") == 2:
+            struct_name = FixedRateBondStructure.FLY.name
+
         if curve_label.strip() == cusip_str.strip():
             return f"{cusip_str} {struct_name} {val_name}".strip()
 
