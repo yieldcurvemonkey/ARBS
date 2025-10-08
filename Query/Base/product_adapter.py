@@ -34,6 +34,14 @@ class ProductAdapter(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def edit_query(self, *, q: Any, pricer_or_curve: Any):
+        """
+        Optionally normalize/expand the query before building the structure.
+        Default: no-op.
+        """
+        return q
+
 
 # ---------------- Registry ----------------
 

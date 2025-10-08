@@ -191,6 +191,10 @@ class IRSwapQuery(BaseQuery):
             object.__setattr__(self, "value_id", self.value)
             object.__setattr__(self, "value_ids", tuple())
 
+        if self.tenor is not None and type(self.tenor) == str:
+            if "ct" in self.tenor or "9128" in self.tenor:
+                skw["is_mms"] = True
+
     # ---- BaseQuery abstract hooks adapted to IRS ----
 
     def return_query(self) -> List["IRSwapQuery"]:

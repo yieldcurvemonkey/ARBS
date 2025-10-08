@@ -60,11 +60,20 @@ class BaseQuery(ABC):
             # "live" or concrete value: leave as-is
         return req
 
+    def _edited(self, pricer_or_curve: Any) -> "BaseQuery":
+        """
+        Run this query through the product adapter's edit pass.
+        Adapters that don't override edit_query will noop.
+        """
+        adapter_cls = get_adapter(self.product)
+        adapter = adapter_cls()
+        return adapter.edit_query(q=self, pricer_or_curve=pricer_or_curve)
+
     def resolve_package(
         self,
         *,
         pricer_or_curve: Any,
-        **hints: Any, 
+        **hints: Any,
     ) -> Tuple[List[_GenericPricable], List[float]]:
         """
         Resolve this query into a concrete package of priceables + weights using the product adapter.
