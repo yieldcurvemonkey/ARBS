@@ -97,6 +97,9 @@ def _inject_mms_leg(skw: Dict[str, Any], leg_prefix: str, token: str, as_of: dat
     Replace <leg_prefix>_tenor with explicit effective/maturity dates for a matched-maturity swap.
       - effective_date = '2D' (SOFR spot)
       - maturity_date = UST maturity from token (alias/CUSIP)
+    
+    TODO
+     - support forwards e.g. Z25x0832/7 -> TYZ5 invoice swap leg rate
     """
     _, mat = _resolve_cusip_or_alias(token, as_of)
     skw.pop(f"{leg_prefix}_tenor", None)
