@@ -18,7 +18,10 @@ _ALIAS_PATTERNS = (
     re.compile(r"^CT(\d+)$", re.IGNORECASE),  # on-the-run N-year
     re.compile(r"^(O{1,3})(\d+)$", re.IGNORECASE),  # O, OO, OOO + tenor
     re.compile(r"^Ox(\d+?)(\d+)$", re.IGNORECASE),  # rank x tenor
-    re.compile(r"^\d{2}\d{2}(?:/\d{1,2})?$", re.IGNORECASE),  # MMYY[/OI]
+    re.compile(
+        r"^(?P<mm>0[1-9]|1[0-2])(?P<yy>\d{2})(?:-(?P<oi>\d{1,2}))?$",
+        re.IGNORECASE,
+    ),  # MMYY[-OI]
 )
 _CUSIP_RE = re.compile(r"^[0-9A-Z]{9}$", re.IGNORECASE)
 
@@ -38,7 +41,7 @@ def _resolve_cusip_or_alias(
     """
     Return (cusip, maturity_date) for:
       - CUSIP (9-char): verify & read its maturity
-      - Alias: CTN / O... / Ox.. / MMYY[/OI]
+      - Alias: CTN / O... / Ox.. / MMYY[-OI]
     """
     ref = update_reference_data(source="fiscaldata", force_refresh=False)
     # Keep currently outstanding around 'as_of'
@@ -77,7 +80,7 @@ def _resolve_cusip_or_alias(
         r = hit.iloc[0]
         return r["cusip"], r["maturity_date"]
 
-    # MMYY[/OI] family -> use your existing helper
+    # MMYY[-OI] alias
     resolved = _alias_to_cusip(tok, ref)
     if not resolved:
         raise KeyError(f"Alias '{tok}' did not resolve to a CUSIP")
@@ -97,7 +100,7 @@ def _inject_mms_leg(skw: Dict[str, Any], leg_prefix: str, token: str, as_of: dat
     Replace <leg_prefix>_tenor with explicit effective/maturity dates for a matched-maturity swap.
       - effective_date = '2D' (SOFR spot)
       - maturity_date = UST maturity from token (alias/CUSIP)
-    
+
     TODO
      - support forwards e.g. Z25x0832/7 -> TYZ5 invoice swap leg rate
     """
