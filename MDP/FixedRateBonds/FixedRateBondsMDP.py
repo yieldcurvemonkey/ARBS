@@ -59,18 +59,18 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             meta_data=args.get("meta_data") or {},
         )
 
-    def get_pricer(self, request: dict) -> _FixedRateBondGenericPricer:
+    def get_pricer(self, request: dict) -> Dict[str, _FixedRateBondGenericPricer]:
         pricers = self.get_data(request)  # reuse the existing logic
         if pricers is None:
             raise RuntimeError(f"FixedRateBondsMDP could not build a pricer(s) for request: {request}")
         return pricers
 
-    def get_data(self, request: dict) -> Optional[_FixedRateBondGenericPricer]:
+    def get_data(self, request: dict) -> Optional[Dict[str, _FixedRateBondGenericPricer]]:
         cusips = request.pop("cusips")
         timestamp = request.pop("timestamp")
 
         if not cusips or not timestamp:
-            raise ValueError("Request must contain 'curve_name' and 'timestamp'.")
+            raise ValueError("Request must contain 'cusips' and 'timestamp'.")
 
         return self._get_multi_pricers(cusips=cusips, timestamp=timestamp, kwargs=request)
 
@@ -159,18 +159,57 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                     return self._build_pricer_from_args(cached, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
 
                 ts_df = PublicDotcomDataFetcher().public_dotcom_timeseries_api(cusips=[cusip], refresh_jwt=True)[cusip]
-                ts_df = ts_df[ts_df["Date"].dt.date == timestamp]
                 if ts_df.empty:
                     raise KeyError(f"No Public.com timeseries for {cusip} on {timestamp}")
 
+                ts_df = ts_df.dropna(subset=["YTM"]).sort_values("Date").copy()
+                ts_df["asof_date"] = ts_df["Date"].dt.date
+
+                day_rows = ts_df[ts_df["asof_date"] == timestamp]
+                interpolated = False
+                interp_bounds = None
+
+                if not day_rows.empty:
+                    ytm_on_day = float(day_rows.sort_values("Date")["YTM"].iloc[-1])
+                else:
+                    before = ts_df[ts_df["asof_date"] < timestamp].tail(1)
+                    after = ts_df[ts_df["asof_date"] > timestamp].head(1)
+
+                    if not before.empty and not after.empty:
+                        d0 = before["asof_date"].iloc[0]
+                        y0 = float(before["YTM"].iloc[0])
+                        d1 = after["asof_date"].iloc[0]
+                        y1 = float(after["YTM"].iloc[0])
+
+                        total_days = (d1 - d0).days
+                        w = ((timestamp - d0).days / total_days) if total_days > 0 else 0.0
+                        ytm_on_day = y0 + (y1 - y0) * w
+
+                        interpolated = True
+                        interp_bounds = (d0.isoformat(), d1.isoformat())
+                    elif not before.empty or not after.empty:
+                        near = before if not before.empty else after
+                        ytm_on_day = float(near["YTM"].iloc[0])
+                        interpolated = True
+                        b = near["asof_date"].iloc[0].isoformat()
+                        interp_bounds = (b, None) if not after.empty else (None, b)
+                    else:
+                        raise KeyError(f"No Public.com timeseries neighbors to interpolate {cusip} on {timestamp}")
+
                 args = {
                     "ql_frb_id": "USTS",
-                    "reference_date": timestamp.isoformat(),
-                    "ytm": float(ts_df["YTM"].iloc[0]),
+                    "reference_date": timestamp.isoformat(),   # mark as the requested date
+                    "ytm": float(ytm_on_day),
                     "meta_data": self._pyify_meta(ref_df.iloc[0].to_dict()),
-                    "schema": 1,  # simple versioning for future-proofing
+                    "schema": 1,
                 }
 
+                if interpolated:
+                    md = args["meta_data"]
+                    md["ytm_interpolated"] = True
+                    md["ytm_interp_method"] = "linear" if interp_bounds and all(interp_bounds) else "nearest"
+                    md["ytm_interp_bounds"] = interp_bounds
+                    
                 cache[cache_key] = args
                 self.zodb_commit()
 

@@ -49,13 +49,16 @@ class FixedRateBondQuery(BaseQuery):
     def col_name(self, cube_name: Optional[str] = None) -> str:
         curve_label = cube_name or self.curve or ""
         struct_name = self.structure.name
-        val_name = self.value.name if isinstance(self.value, FixedRateBondValue) else "MULTI"
+        val_name = self.value.name
 
         cusip_str = self.structure_kwargs.get("cusip", "")
-        if self.structure == FixedRateBondStructure.CURVE:
+        if self.structure == FixedRateBondStructure.CURVE and self.structure_kwargs.get("front_cusip") is not None:
             cusip_str = f"{self.structure_kwargs.get('front_cusip')}v{self.structure_kwargs.get('back_cusip')}"
-        elif self.structure == FixedRateBondStructure.FLY:
+        elif self.structure == FixedRateBondStructure.FLY and self.structure_kwargs.get("front_cusip") is not None:
             cusip_str = f"{self.structure_kwargs.get('front_cusip')}v{self.structure_kwargs.get('belly_cusip')}v{self.structure_kwargs.get('back_cusip')}"
+
+        if curve_label.strip() == cusip_str.strip():
+            return f"{cusip_str} {struct_name} {val_name}".strip()
 
         return f"{curve_label} {cusip_str} {struct_name} {val_name}".strip()
 

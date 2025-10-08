@@ -105,11 +105,11 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
             * 100
         )
 
-    def dirty_price(self):
+    def dirty_price(self, notional=None):
         ql_eval_date = ql.Date(self._reference_date.day, self._reference_date.month, self._reference_date.year)
         ql.Settings.instance().evaluationDate = ql_eval_date
 
-        ql_frb = self.build_fixed_rate_bond(issue_date=self.issue_date(), maturity_date=self.maturity_date(), coupon=self.coupon())
+        ql_frb = self.build_fixed_rate_bond(issue_date=self.issue_date(), maturity_date=self.maturity_date(), coupon=self.coupon(), notional=notional)
         ql_frb.setPricingEngine(
             ql.DiscountingBondEngine(
                 ql.YieldTermStructureHandle(
@@ -137,11 +137,11 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
             QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["Frequency"],
         )
 
-    def npv(self):
+    def npv(self, notional=None):
         ql_eval_date = ql.Date(self._reference_date.day, self._reference_date.month, self._reference_date.year)
         ql.Settings.instance().evaluationDate = ql_eval_date
 
-        ql_frb = self.build_fixed_rate_bond(issue_date=self.issue_date(), maturity_date=self.maturity_date(), coupon=self.coupon())
+        ql_frb = self.build_fixed_rate_bond(issue_date=self.issue_date(), maturity_date=self.maturity_date(), coupon=self.coupon(), notional=notional)
         ql_frb.setPricingEngine(
             ql.DiscountingBondEngine(
                 ql.YieldTermStructureHandle(
@@ -154,7 +154,7 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
                 )
             )
         )
-        return ql_frb.dirtyPrice()
+        return ql_frb.NPV()
 
     def accured(self):
         ql_eval_date = ql.Date(self._reference_date.day, self._reference_date.month, self._reference_date.year)

@@ -97,7 +97,7 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
     def _build_curve(
         self, front_notional: Optional[float] = None, back_notional: Optional[float] = None, bpv: Optional[float] = None, risk_weights: List[float] = [1.0, 1.0], **_
     ) -> Tuple[List[_FixedRateBondGenericPricable], List[float]]:
-        pricers: Dict[str, _FixedRateBondGenericPricable] = self.common_kwargs["pricer"] 
+        pricers: Dict[str, _FixedRateBondGenericPricable] = self.common_kwargs["pricer"]
         cusips = list(pricers.keys())
         assert len(cusips) == 2, "its a CURVE!"
 
@@ -139,20 +139,58 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
         )
 
     def _build_fly(
-        self, front_cusip: str, belly_cusip: str, back_cusip: str, bpv: float, risk_weights: List[float] = [1.0, -2.0, 1.0], **_
+        self,
+        front_notional: Optional[float] = None,
+        belly_notional: Optional[float] = None,
+        back_notional: Optional[float] = None,
+        bpv: Optional[float] = None,
+        risk_weights: List[float] = [1.0, 2.0, 1.0],
+        **_,
     ) -> Tuple[List[_FixedRateBondGenericPricable], List[float]]:
+        pricers: Dict[str, _FixedRateBondGenericPricable] = self.common_kwargs["pricer"]
+        cusips = list(pricers.keys())
+        assert len(cusips) == 3, "its a FLY!"
 
-        raise NotImplementedError()
-        # leg0 = {"cusip": front_cusip}
-        # leg1 = {"cusip": belly_cusip}
-        # leg2 = {"cusip": back_cusip}
+        if front_notional is not None:
+            idx, cn, cp = 0, front_notional, None
+        elif belly_notional is not None:
+            idx, cn, cp = 1, belly_notional, None
+        elif back_notional is not None:
+            idx, cn, cp = 2, back_notional, None
+        else:
+            idx, cn, cp = 1, None, bpv
 
-        # return (
-        #     self._build_spreadable(
-        #         [leg0, leg1, leg2],
-        #         risk_weights=risk_weights,
-        #         constrained_leg_index=1,  # Constrain the belly leg
-        #         constrained_bpv=bpv,
-        #     ),
-        #     risk_weights,
-        # )
+        risk_weights[idx] = np.copysign(risk_weights[idx], cn if cn is not None else cp)
+        for i in range(3):
+            if i != idx:
+                risk_weights[i] = np.copysign(risk_weights[i], -risk_weights[idx])
+
+        leg0 = {
+            "cusip": cusips[0],
+            "issue_date": pricers[cusips[0]].issue_date(),
+            "maturity_date": pricers[cusips[0]].maturity_date(),
+            "cpn": pricers[cusips[0]].coupon(),
+        }
+        leg1 = {
+            "cusip": cusips[1],
+            "issue_date": pricers[cusips[1]].issue_date(),
+            "maturity_date": pricers[cusips[1]].maturity_date(),
+            "cpn": pricers[cusips[1]].coupon(),
+        }
+        leg2 = {
+            "cusip": cusips[2],
+            "issue_date": pricers[cusips[2]].issue_date(),
+            "maturity_date": pricers[cusips[2]].maturity_date(),
+            "cpn": pricers[cusips[2]].coupon(),
+        }
+
+        return (
+            self._build_spreadable(
+                leg_specs=[leg0, leg1, leg2],
+                risk_weights=risk_weights,
+                constrained_leg_index=idx,
+                constrained_notional=cn,
+                constrained_bpv=cp,
+            ),
+            risk_weights,
+        )
