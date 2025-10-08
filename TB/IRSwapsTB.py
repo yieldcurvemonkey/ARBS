@@ -114,13 +114,17 @@ def _build_row_for_query(
             q_eff = replace(q, structure=structure, structure_kwargs=skw)
         except TypeError:
             q_eff = replace(q, structure=structure, structure_id=structure, structure_kwargs=skw)
+
+        col_name = q_eff.col_name(curve.id())
+        q_eff = q_eff._edited(curve)
     else:
         q_eff = q
+        col_name = q_eff.col_name(curve.id())
 
     pkg, rw = q_eff.resolve_package(pricer_or_curve=curve, is_for_timeseries=True)
     val_map = q_eff.build_value_map(pricer_or_curve=curve, package=pkg, risk_weights=rw)
     value = val_map.apply(value=q_eff.value)
-    return ref_dt, q_eff.col_name(curve.id()), float(value)
+    return ref_dt, col_name, float(value)
 
 
 class IRSwapsTB(ZODBCacheMixin):

@@ -191,6 +191,10 @@ class IRSwapQuery(BaseQuery):
             object.__setattr__(self, "value_id", self.value)
             object.__setattr__(self, "value_ids", tuple())
 
+        if self.tenor is not None and type(self.tenor) == str:
+            if "ct" in self.tenor or "9128" in self.tenor:
+                skw["is_mms"] = True
+
     # ---- BaseQuery abstract hooks adapted to IRS ----
 
     def return_query(self) -> List["IRSwapQuery"]:
@@ -249,6 +253,7 @@ class IRSwapQuery(BaseQuery):
         if swap_name:
             to_return = f"{prefix}{swap_name} {suffix}"
         if "bpv" in self.structure_kwargs and self.structure_kwargs["bpv"] > 1:
+            print(self.structure_kwargs["bpv"])
             human_format_risk = human_format(abs(self.structure_kwargs["bpv"]))
             verb = f"Paid {human_format_risk}" if self.structure_kwargs["bpv"] < 0 else f"Rec {human_format_risk}"
             to_return = f"{verb} {prefix}{suffix}"

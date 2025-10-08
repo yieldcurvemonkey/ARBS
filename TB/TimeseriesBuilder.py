@@ -37,7 +37,7 @@ class TimeseriesBuilder:
         self._date_col = date_col
         self._routers: Dict[str, object] = {
             "IRS": irswaps_tb,
-            "FixedRateBond": fixedratebonds_tb,
+            "FRB": fixedratebonds_tb,
         }
 
     def register_router(self, product: str, tb_obj: object) -> None:
@@ -82,7 +82,7 @@ class TimeseriesBuilder:
                     freq=freq,
                     timestamps=timestamps,
                 )
-            elif product == "FixedRateBond":
+            elif product == "FRB":
                 frb_qs: List[FixedRateBondQuery] = [q for q in qs if isinstance(q, FixedRateBondQuery)]
                 if len(frb_qs) != len(qs):
                     raise TypeError("Mixed/non-FRB queries encountered in FixedRateBond bucket")

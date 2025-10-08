@@ -17,7 +17,7 @@ class FixedRateBondQuery(BaseQuery):
     structure_kwargs: Dict[str, Any] = field(default_factory=dict)
     risk_weight: Optional[float] = None
 
-    product: str = field(init=False, default="FixedRateBond")
+    product: str = field(init=False, default="FRB")
     structure_id: Any = field(init=False, default=None)
 
     def __post_init__(self):
@@ -25,7 +25,7 @@ class FixedRateBondQuery(BaseQuery):
         if self.cusip is not None and "cusip" not in skw:
             skw["cusip"] = self.cusip
 
-        object.__setattr__(self, "product", "FixedRateBond")
+        object.__setattr__(self, "product", "FRB")
         object.__setattr__(self, "structure_id", self.structure)
         object.__setattr__(self, "structure_kwargs", skw)
 

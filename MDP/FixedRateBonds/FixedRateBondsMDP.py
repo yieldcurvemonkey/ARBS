@@ -3,6 +3,7 @@ import re
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 import pandas as pd
+import QuantLib as ql
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
@@ -10,56 +11,88 @@ from Query.Base._GenericPricable import _GenericPricable
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 
 
-def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> str:
-    m = re.match(r"^(?P<mm>\d{2})(?P<yy>\d{2})(?:/(?P<oi>\d{1,2}))?$", alias)
+def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> Optional[str]:
+    if not isinstance(alias, str):
+        return None
+
+    # Backward-compat: normalize legacy '/' to '-'
+    alias = alias.strip().replace("/", "-")
+
+    m = re.match(r"^(?P<mm>\d{2})(?P<yy>\d{2})(?:-(?P<oi>\d{1,2}))?$", alias)
     if not m:
-        return None  # not an alias we handle
+        return None
 
     mm = int(m.group("mm"))
     yy = int(m.group("yy"))
     if not (1 <= mm <= 12):
         raise ValueError(f"Invalid alias month in '{alias}'")
 
-    # year roll: 80–99 -> 1900s, else 2000s (tweak if you expect 1980s frequently)
+    # 80–99 -> 1900s, else 2000s (tweak if you expect many 1980s bonds)
     year = 1900 + yy if yy >= 80 else 2000 + yy
-
-    # Build masks (convert to Timestamp to use .dt)
-    mats = pd.to_datetime(ref_table["maturity_date"])
-    mask_year = mats.dt.year.eq(year)
-
     prev_month = 12 if mm == 1 else (mm - 1)
+
+    # Parse maturity dates
+    mats = pd.to_datetime(ref_table["maturity_date"], errors="coerce")
+    if mats.isna().all():
+        raise ValueError("All maturity_date values failed to parse as dates")
+
+    # Helper: true EOM test via QuantLib
+    def _is_eom(ts: pd.Timestamp) -> bool:
+        d = ts.date()
+        qd = ql.Date(d.day, d.month, d.year)
+        return qd == ql.UnitedStates(ql.UnitedStates.GovernmentBond).endOfMonth(qd)
+
+    is_eom = mats.map(_is_eom)
+    mask_year = mats.dt.year.eq(year)
     mask_target_month = mats.dt.month.eq(mm)
-    mask_prev_eom = mats.dt.month.eq(prev_month) & mats.dt.day.ge(28)
+    mask_prev_eom = mats.dt.month.eq(prev_month) & is_eom
 
     fam_mask = mask_year & (mask_target_month | mask_prev_eom)
-    fam = ref_table[fam_mask].copy()
+    fam = ref_table.loc[fam_mask].copy()
 
     if fam.empty:
         raise KeyError(f"Alias '{alias}' did not resolve to any CUSIP in reference data")
 
     oi_num = m.group("oi")
     if oi_num:
-        oi_str = f"{int(oi_num)}-Year"
-        fam = fam[fam["oi"].astype(str).str.casefold() == oi_str.casefold()]
-        if fam.empty:
-            raise KeyError(f"Alias '{alias}' with oi '{oi_str}' found no matches")
-    else:
-        # No oi specified; if more than one OI present, assert that oi is required
-        oi_set = sorted({str(x) for x in fam["oi"].unique()})
-        if len(oi_set) > 1:
-            raise AssertionError(
-                f"Ambiguous alias '{alias}'. Multiple original-issue buckets found: {', '.join(oi_set)}. " f"Use an oi-aware alias like 'MMYY/10' (e.g., '1130/10')."
-            )
+        want = str(int(oi_num))
 
-    # At this point we should have a unique row per CUSIP
-    fam = fam.sort_values(["maturity_date", "issue_date"])
-    unique_cusips = fam["cusip"].unique()
+        def _norm_oi_cell(x) -> str:
+            if pd.isna(x):
+                return ""
+            s = str(x)
+            mnum = re.search(r"(\d+)", s)
+            return mnum.group(1) if mnum else s.strip()
+
+        fam = fam[fam["oi"].map(_norm_oi_cell).str.casefold() == want.casefold()]
+        if fam.empty:
+            raise KeyError(f"Alias '{alias}' with oi '{want}' found no matches")
+    else:
+        # Require disambiguation if multiple OI buckets exist
+        if "oi" in fam.columns:
+
+            def _oi_num_set(col: pd.Series):
+                out = set()
+                for v in col.dropna().astype(str):
+                    mnum = re.search(r"(\d+)", v)
+                    out.add(mnum.group(1) if mnum else v.strip())
+                return sorted(out)
+
+            oi_set = _oi_num_set(fam["oi"])
+            if len(oi_set) > 1:
+                raise AssertionError(
+                    f"Ambiguous alias '{alias}'. Multiple original-issue buckets found: {', '.join(oi_set)}. "
+                    f"Use an oi-aware alias like 'MMYY-10' (e.g., '{alias}-{oi_set[0]}')."
+                )
+
+    sort_cols = [c for c in ["maturity_date", "issue_date"] if c in fam.columns]
+    if sort_cols:
+        fam = fam.sort_values(sort_cols)
+    unique_cusips = fam["cusip"].astype(str).unique()
+
     if len(unique_cusips) != 1:
-        # Extremely unlikely for USTs (reopenings share the same CUSIP), but guard anyway
-        raise AssertionError(
-            f"Alias '{alias}' still maps to multiple CUSIPs: {', '.join(unique_cusips)}. "
-            f"Please specify oi explicitly (e.g., '{alias}/{fam['oi'].iloc[0].split('-')[0]}')."
-        )
+        raise AssertionError(f"Alias '{alias}' maps to multiple CUSIPs: {', '.join(unique_cusips)}. " f"Please specify oi explicitly (e.g., '{alias}-30').")
+
     return unique_cusips[0]
 
 
