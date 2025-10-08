@@ -81,11 +81,7 @@ def _build_row_for_query(
             return f"{m.group(1)}x{m.group(2)}"
         return t
 
-    q_mms: IRSwapQuery = q._edited(curve)
-    if q_mms.is_mms:
-        col_name = q.col_name(curve.id())
-        q_eff = q_mms
-    elif q.tenor is not None:
+    if q.tenor is not None:
         structure = getattr(q, "structure", None)
         txt = (getattr(q, "tenor", "") or "") or (getattr(q, "node", "") or "") or (getattr(q, "label", "") or "")
         skw = dict(getattr(q, "structure_kwargs", {}) or {})
@@ -120,6 +116,7 @@ def _build_row_for_query(
             q_eff = replace(q, structure=structure, structure_id=structure, structure_kwargs=skw)
 
         col_name = q_eff.col_name(curve.id())
+        q_eff = q_eff._edited(curve)
     else:
         q_eff = q
         col_name = q_eff.col_name(curve.id())

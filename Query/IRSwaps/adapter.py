@@ -105,7 +105,7 @@ def _inject_mms_leg(skw: Dict[str, Any], leg_prefix: str, token: str, as_of: dat
         skw[f"effective_date"] = pricer_or_curve.calendar_advance(as_of, "2D")
         skw[f"maturity_date"] = mat
     else:
-        skw[f"{leg_prefix}_effective_date"] = "2D"
+        skw[f"{leg_prefix}_effective_date"] = pricer_or_curve.calendar_advance(as_of, "2D")
         skw[f"{leg_prefix}_maturity_date"] = mat
 
 
@@ -126,6 +126,8 @@ class IRSProductAdapter(ProductAdapter):
     def edit_query(self, *, q: IRSwapQuery, pricer_or_curve: _IRSwapGenericCurve):
         if q.curve not in ["USD-SOFR-1D", "USD-FEDFUNDS", "USD-OIS"]:
             return q
+        if q.tenor is None:
+            return q
 
         mr = dict(q.market_request or {})
         ts = mr.get(q.mdp_time_key)
@@ -139,46 +141,40 @@ class IRSProductAdapter(ProductAdapter):
         skw = dict(q.structure_kwargs or {})
 
         if q.structure == IRSwapStructure.OUTRIGHT:
-            # Case A: tenor looks like alias/CUSIP -> convert to MMS
-            if q.tenor and _looks_like_alias_or_cusip(q.tenor):
-                _inject_mms_leg(skw, "", q.tenor, as_of, pricer_or_curve)  # "" -> keys: effective_date, maturity_date
-                # Mark as matched maturity; drop tenor fields at the query-level
+            # Outright MMS if tenor is an alias/CUSIP token
+            if isinstance(q.tenor, str) and _looks_like_alias_or_cusip(q.tenor):
+                _inject_mms_leg(skw, "", q.tenor, as_of, pricer_or_curve)
                 return replace(q, tenor=None, effective_date=None, maturity_date=None, is_mms=True, structure_kwargs=skw)
 
-            # Case B: caller explicitly asked for MMS via skw["mms"] / q.is_mms and provided a token
+            # Explicit MMS via skw["mms"] / q.is_mms
             token = skw.get("mms") or skw.get("mms_token")
             if q.is_mms and token:
                 _inject_mms_leg(skw, "", str(token), as_of, pricer_or_curve)
                 return replace(q, tenor=None, effective_date=None, maturity_date=None, is_mms=True, structure_kwargs=skw)
 
-            # else: leave as-is (standard tenor or explicit dates)
+            return q  # plain outright
 
-        elif q.structure == IRSwapStructure.CURVE:
-            front_ten = skw.get("front_tenor")
-            back_ten = skw.get("back_tenor")
-
-            if isinstance(front_ten, str) and _looks_like_alias_or_cusip(front_ten):
-                _inject_mms_leg(skw, "front", front_ten, as_of, pricer_or_curve)
-            if isinstance(back_ten, str) and _looks_like_alias_or_cusip(back_ten):
-                _inject_mms_leg(skw, "back", back_ten, as_of, pricer_or_curve)
-
+        if q.structure == IRSwapStructure.CURVE:
+            ft = skw.get("front_tenor")
+            bt = skw.get("back_tenor")
+            if isinstance(ft, str) and _looks_like_alias_or_cusip(ft):
+                _inject_mms_leg(skw, "front", ft, as_of, pricer_or_curve)
+            if isinstance(bt, str) and _looks_like_alias_or_cusip(bt):
+                _inject_mms_leg(skw, "back", bt, as_of, pricer_or_curve)
             return replace(q, structure_kwargs=skw)
 
-        elif q.structure == IRSwapStructure.FLY:
+        if q.structure == IRSwapStructure.FLY:
             ft = skw.get("front_tenor")
             bt = skw.get("belly_tenor")
             kt = skw.get("back_tenor")
-
             if isinstance(ft, str) and _looks_like_alias_or_cusip(ft):
                 _inject_mms_leg(skw, "front", ft, as_of, pricer_or_curve)
             if isinstance(bt, str) and _looks_like_alias_or_cusip(bt):
                 _inject_mms_leg(skw, "belly", bt, as_of, pricer_or_curve)
             if isinstance(kt, str) and _looks_like_alias_or_cusip(kt):
                 _inject_mms_leg(skw, "back", kt, as_of, pricer_or_curve)
-
             return replace(q, structure_kwargs=skw)
 
-        # Default: unchanged
         return q
 
 

@@ -18,7 +18,9 @@ class FRBProductAdapter(ProductAdapter):
         risk_weights: List[float],
     ) -> Any:
         return FixedRateBondValueFunctionMap(pricer=pricer_or_curve, package=package, risk_weights=risk_weights)
-
+    
+    def edit_query(self, *, q, pricer_or_curve):
+        NotImplementedError()
 
 # Register on import
-register_product("FixedRateBond", FRBProductAdapter)
+register_product("FRB", FRBProductAdapter)

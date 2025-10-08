@@ -253,6 +253,7 @@ class IRSwapQuery(BaseQuery):
         if swap_name:
             to_return = f"{prefix}{swap_name} {suffix}"
         if "bpv" in self.structure_kwargs and self.structure_kwargs["bpv"] > 1:
+            print(self.structure_kwargs["bpv"])
             human_format_risk = human_format(abs(self.structure_kwargs["bpv"]))
             verb = f"Paid {human_format_risk}" if self.structure_kwargs["bpv"] < 0 else f"Rec {human_format_risk}"
             to_return = f"{verb} {prefix}{suffix}"
