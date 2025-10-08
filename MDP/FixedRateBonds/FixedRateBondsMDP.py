@@ -10,6 +10,59 @@ from Query.Base._GenericPricable import _GenericPricable
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 
 
+def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> str:
+    m = re.match(r"^(?P<mm>\d{2})(?P<yy>\d{2})(?:/(?P<oi>\d{1,2}))?$", alias)
+    if not m:
+        return None  # not an alias we handle
+
+    mm = int(m.group("mm"))
+    yy = int(m.group("yy"))
+    if not (1 <= mm <= 12):
+        raise ValueError(f"Invalid alias month in '{alias}'")
+
+    # year roll: 80–99 -> 1900s, else 2000s (tweak if you expect 1980s frequently)
+    year = 1900 + yy if yy >= 80 else 2000 + yy
+
+    # Build masks (convert to Timestamp to use .dt)
+    mats = pd.to_datetime(ref_table["maturity_date"])
+    mask_year = mats.dt.year.eq(year)
+
+    prev_month = 12 if mm == 1 else (mm - 1)
+    mask_target_month = mats.dt.month.eq(mm)
+    mask_prev_eom = mats.dt.month.eq(prev_month) & mats.dt.day.ge(28)
+
+    fam_mask = mask_year & (mask_target_month | mask_prev_eom)
+    fam = ref_table[fam_mask].copy()
+
+    if fam.empty:
+        raise KeyError(f"Alias '{alias}' did not resolve to any CUSIP in reference data")
+
+    oi_num = m.group("oi")
+    if oi_num:
+        oi_str = f"{int(oi_num)}-Year"
+        fam = fam[fam["oi"].astype(str).str.casefold() == oi_str.casefold()]
+        if fam.empty:
+            raise KeyError(f"Alias '{alias}' with oi '{oi_str}' found no matches")
+    else:
+        # No oi specified; if more than one OI present, assert that oi is required
+        oi_set = sorted({str(x) for x in fam["oi"].unique()})
+        if len(oi_set) > 1:
+            raise AssertionError(
+                f"Ambiguous alias '{alias}'. Multiple original-issue buckets found: {', '.join(oi_set)}. " f"Use an oi-aware alias like 'MMYY/10' (e.g., '1130/10')."
+            )
+
+    # At this point we should have a unique row per CUSIP
+    fam = fam.sort_values(["maturity_date", "issue_date"])
+    unique_cusips = fam["cusip"].unique()
+    if len(unique_cusips) != 1:
+        # Extremely unlikely for USTs (reopenings share the same CUSIP), but guard anyway
+        raise AssertionError(
+            f"Alias '{alias}' still maps to multiple CUSIPs: {', '.join(unique_cusips)}. "
+            f"Please specify oi explicitly (e.g., '{alias}/{fam['oi'].iloc[0].split('-')[0]}')."
+        )
+    return unique_cusips[0]
+
+
 class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
 
     _FRB_PRICER_CACHE = "_frb_pricer_cache"
@@ -81,7 +134,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
         for c in cusips:
             if "x" in c and "Ox" not in c:
                 clean_cusips.extend(c.split("x"))
-            elif "/" in c:
+            elif "/" in c and not re.match(r"^\d{2}\d{2}/\d{1,2}$", c):
                 clean_cusips.extend(c.split("/"))
             else:
                 clean_cusips.append(c)
@@ -124,11 +177,21 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             if rank is not None and tenor is not None:
                 oi_str = f"{tenor}-Year"
                 target_bond = ref_df[(ref_df["oi"] == oi_str) & (ref_df["rank"] == rank)]
-
                 if not target_bond.empty:
                     cusip = target_bond.iloc[0]["cusip"]
                 else:
                     raise KeyError(f"Could not resolve constant maturity alias '{original_cusip_alias}'")
+            else:
+                try:
+                    resolved = _alias_to_cusip(original_cusip_alias, ref_df)
+                    if resolved:
+                        cusip = resolved
+                except AssertionError as e:
+                    # Surface explicit "oi required" assertions
+                    raise
+                except Exception:
+                    # Not an alias we handle (fall through to treat input as CUSIP)
+                    pass
 
             ref_df = ref_df[ref_df["cusip"] == cusip]
 
@@ -198,7 +261,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
 
                 args = {
                     "ql_frb_id": "USTS",
-                    "reference_date": timestamp.isoformat(),   # mark as the requested date
+                    "reference_date": timestamp.isoformat(),  # mark as the requested date
                     "ytm": float(ytm_on_day),
                     "meta_data": self._pyify_meta(ref_df.iloc[0].to_dict()),
                     "schema": 1,
@@ -209,7 +272,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                     md["ytm_interpolated"] = True
                     md["ytm_interp_method"] = "linear" if interp_bounds and all(interp_bounds) else "nearest"
                     md["ytm_interp_bounds"] = interp_bounds
-                    
+
                 cache[cache_key] = args
                 self.zodb_commit()
 
