@@ -228,7 +228,9 @@ class FixedRateBondsTB(ZODBCacheMixin):
                         self._logger.warning(f"No pricer returned for CUSIP='{q.cusip}' on date='{d}'.")
                         pbar.update(1)
                         continue
-                    tasks.append((d, q, pricer_map))
+
+                    indy_cusips = str(q.cusip).split("/")
+                    tasks.append((d, q, dict((k, pricer_map[k]) for k in indy_cusips)))
 
                 if not tasks:
                     continue
