@@ -9,6 +9,7 @@ import httpx
 import numpy as np
 import pandas as pd
 import tqdm
+import tqdm.asyncio
 import ujson as json
 import requests
 from requests.models import PreparedRequest

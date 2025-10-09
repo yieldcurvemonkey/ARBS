@@ -67,17 +67,26 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
     def calendar(self) -> ql.Calendar:
         return QUANTLIB_FRB_DEFINITIONS[self.id()]["Calendar"]
 
-    def calendar_advance(self, dt1: Union[datetime.date, ql.Date], dt2: Union[ql.Period, str]):
-        ql_cal = self.calendar()
-        return ql_cal.advance(datetime_to_ql_date(dt1), ql.Period(dt2) if type(dt2) == str else dt2, QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["BusinessConvention"])
+    def calendar_advance(self, dt1: Union[datetime.date, ql.Date], dt2: Union[int, ql.Period, str]):
+        cal = self.calendar()
+        d1 = datetime_to_ql_date(dt1)
+        bdc = QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["BusinessConvention"]
+        if isinstance(dt2, int):
+            return cal.advance(d1, int(dt2), ql.Days, bdc)  # settlement *days*
+        elif isinstance(dt2, ql.Period):
+            return cal.advance(d1, dt2, bdc)
+        elif isinstance(dt2, str):
+            return cal.advance(d1, ql.Period(dt2), bdc)
+        else:
+            raise TypeError("dt2 must be int days, ql.Period, or period string")
 
     def meta(self):
         return self._meta_data
 
     def build_schedule(self) -> ql.Schedule:
         return ql.Schedule(
-            datetime_to_ql_date(self._issue_date()),
-            datetime_to_ql_date(self._maturity_date()),
+            datetime_to_ql_date(self.issue_date()),
+            datetime_to_ql_date(self.maturity_date()),
             QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["FrequencyPeriod"],
             QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["Calendar"],
             QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["BusinessConvention"],
@@ -95,12 +104,12 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
         if self._ytm is not None:
             return self._ytm
         return (
-            ql.BondFunctions.bondYield(
-                self.build_fixed_rate_bond(issue_date=self.issue_date(), maturity_date=self.maturity_date(), coupon=self.coupon()),
-                self._clean_price,
+            self.build_fixed_rate_bond(issue_date=self.issue_date(), maturity_date=self.maturity_date(), coupon=self.coupon()).bondYield(
+                ql.BondPrice(self._clean_price, ql.BondPrice.Clean),
                 QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["DayCounter"],
                 QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["Compounded"],
                 QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["Frequency"],
+                self.calendar_advance(self._reference_date, QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["SettlementDays"]),
             )
             * 100
         )

@@ -229,9 +229,9 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
         self,
         dates: List[datetime],
         show_tqdm: Optional[bool] = False,
-        max_concurrent_tasks: Optional[int] = 5,
-        max_connections: Optional[int] = 20,
-        max_keepalive_connections: Optional[int] = 10,
+        max_concurrent_tasks: Optional[int] = 1,
+        max_connections: Optional[int] = 1,
+        max_keepalive_connections: Optional[int] = 1,
         refresh_cache: Optional[bool] = False,
     ):
 
