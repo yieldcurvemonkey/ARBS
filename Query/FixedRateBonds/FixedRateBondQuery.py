@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -64,12 +65,12 @@ class FixedRateBondQuery(BaseQuery):
             struct_name = FixedRateBondStructure.FLY.name
 
         if curve_label.strip() == cusip_str.strip():
-            return f"{cusip_str} {struct_name} {val_name}".strip()
+            return re.sub(r'\s\s+', " ", f"{cusip_str} {struct_name} {val_name}".strip())
 
         if rws not in ["1/-1", "0.5/-0.5", "0.50/-0.50", "-1/2/-1", "-0.50/1.00/-0.50", "-0.5/1/-0.5"]:
-            return f"{curve_label} {cusip_str} {rws} {struct_name} {val_name}".strip()
+            return re.sub(r'\s\s+', " ", f"{curve_label} {cusip_str} {rws} {struct_name} {val_name}".strip())
 
-        return f"{curve_label} {cusip_str} {struct_name} {val_name}".strip()
+        return re.sub(r'\s\s+', " ", f"{curve_label} {cusip_str} {struct_name} {val_name}".strip())
 
     def eval_expression(self, cube_name: Optional[str] = None, ignore_risk_weight: bool = False) -> str:
         col = self.col_name(cube_name=cube_name)

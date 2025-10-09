@@ -6,7 +6,10 @@ import pandas as pd
 
 from Query.Base.BaseQuery import BaseQuery
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
+from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+from Query.IRSwaps.IRSwapValue import IRSwapValue
+
 from TB.utils import DateLike
 
 # Avoid hard import cycles for optional type checking
@@ -63,6 +66,7 @@ class TimeseriesBuilder:
             by_product[q.product].append(q)
 
         per_product_frames: List[Tuple[str, pd.DataFrame]] = []
+        irswap_spread_queries: List[IRSwapQuery] = []
 
         for product, qs in by_product.items():
             tb = self._routers.get(product)
@@ -70,9 +74,19 @@ class TimeseriesBuilder:
                 raise KeyError(f"No timeseries router registered for product '{product}'")
 
             if product == "IRS":
-                irs_qs: List[IRSwapQuery] = [q for q in qs if isinstance(q, IRSwapQuery)]
-                if len(irs_qs) != len(qs):
-                    raise TypeError("Mixed/non-IRS queries encountered in IRS bucket")
+                irs_qs_unfiltered: List[IRSwapQuery] = [q for q in qs if isinstance(q, IRSwapQuery)]
+
+                irs_qs = []
+                for q in irs_qs_unfiltered:
+                    if q.value in [IRSwapValue.MMSS, IRSwapValue.SPREADOVER]:
+                        irswap_spread_queries.append(q)
+                    elif q.value in [IRSwapValue.ASW]:
+                        raise NotImplementedError()
+                    else:
+                        irs_qs.append(q)
+
+                # if len(irs_qs) != len(qs):
+                #     raise TypeError("Mixed/non-IRS queries encountered in IRS bucket")
                 df = tb.get_timeseries(  # type: ignore[attr-defined]
                     start,
                     end,
@@ -115,6 +129,72 @@ class TimeseriesBuilder:
 
             df = pd.concat({product: df}, axis=1)
             per_product_frames.append((product, df))
+
+        if irswap_spread_queries:
+            irss_frb_qs = []
+            irrs_irs_qs = []
+            for q in irswap_spread_queries:
+                if q.value == IRSwapValue.MMSS:
+                    irss_frb_qs.append(FixedRateBondQuery(cusip=q.tenor, value=FixedRateBondValue.YTM))
+                    irrs_irs_qs.append(IRSwapQuery(curve=q.curve, tenor=q.tenor, value=IRSwapValue.RATE))
+                elif q.value == IRSwapValue.SPREADOVER:
+                    if "ct" in str(q.tenor).lower():
+                        irss_frb_qs.append(FixedRateBondQuery(cusip=q.tenor, value=FixedRateBondValue.YTM))
+                        irrs_irs_qs.append(IRSwapQuery(curve=q.curve, tenor=f"{str(q.tenor)[2:]}Y", value=IRSwapValue.RATE))
+                    elif "y" in str(q.tenor).lower():
+                        irss_frb_qs.append(FixedRateBondQuery(cusip=f"CT{str(q.tenor)[:-1]}", value=FixedRateBondValue.YTM))
+                        irrs_irs_qs.append(IRSwapQuery(curve=q.curve, tenor=q.tenor, value=IRSwapValue.RATE))
+                    else:
+                        raise NotImplementedError()
+                else:
+                    raise NotImplementedError()
+
+            irs_df = self._routers["IRS"].get_timeseries(  # type: ignore[attr-defined]
+                start,
+                end,
+                irrs_irs_qs,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                freq=freq,
+                timestamps=timestamps,
+            )
+            cash_df = self._routers["FRB"].get_timeseries(  # type: ignore[attr-defined]
+                start,
+                end,
+                irss_frb_qs,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                freq=freq,
+                timestamps=timestamps,
+            )
+
+            spread_cols: Dict[str, pd.Series] = {}
+            for q_spread, q_frb, q_irs in zip(irswap_spread_queries, irss_frb_qs, irrs_irs_qs):
+                try:
+                    irs_col = q_irs.col_name()
+                except Exception:
+                    irs_col = f"{getattr(q_irs, 'curve', 'IRS')}.{getattr(q_irs, 'tenor', '')}.{IRSwapValue.RATE.name}"
+
+                try:
+                    frb_col = q_frb.col_name()
+                except Exception:
+                    frb_col = f"{getattr(q_frb, 'cusip', 'CUSIP')}.{FixedRateBondValue.YTM.name}"
+
+                try:
+                    spread_name = q_spread.col_name()
+                except Exception:
+                    vname = q_spread.value.name if getattr(q_spread, "value", None) else "SPREAD"
+                    spread_name = f"{getattr(q_spread, 'curve', 'IRS')}.{getattr(q_spread, 'tenor', '')}.{vname}"
+
+                idx = irs_df.index.union(cash_df.index)
+                a = irs_df[irs_col].reindex(idx) if irs_col in irs_df.columns else pd.Series(index=idx, dtype="float64")
+                b = cash_df[frb_col].reindex(idx) if frb_col in cash_df.columns else pd.Series(index=idx, dtype="float64")
+                spread_cols[spread_name] = (a - b) * 100.0
+
+            if spread_cols:
+                spread_df = pd.DataFrame(spread_cols).sort_index()
+                spread_df.index.name = self._date_col
+                per_product_frames.append(("SWAPSPREADS", pd.concat({"SWAPSPREADS": spread_df}, axis=1)))
 
         if not per_product_frames:
             return pd.DataFrame().set_index(pd.Index([], name=self._date_col))

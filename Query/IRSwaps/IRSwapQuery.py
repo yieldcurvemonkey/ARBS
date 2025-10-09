@@ -1,14 +1,11 @@
-# Query/IRSwaps/IRSwapQuery.py
-from __future__ import annotations
-
 import datetime
+import re
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from Query.Base.BaseQuery import BaseQuery
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 from Query.IRSwaps.IRSwapValue import IRSwapValue
-
 from utils.misc import human_format
 
 
@@ -261,15 +258,14 @@ class IRSwapQuery(BaseQuery):
             to_return = f"{prefix}{swap_name} {suffix}"
             if rws not in ["1/-1", "0.5/-0.5", "0.50/-0.50", "-1/2/-1", "-0.50/1.00/-0.50", "-0.5/1/-0.5", ""]:
                 to_return = f"{prefix}{swap_name} {rws} {suffix}"
-        
+
         if "bpv" in self.structure_kwargs and self.structure_kwargs["bpv"] > 1:
             print(self.structure_kwargs["bpv"])
             human_format_risk = human_format(abs(self.structure_kwargs["bpv"]))
             verb = f"Paid {human_format_risk}" if self.structure_kwargs["bpv"] < 0 else f"Rec {human_format_risk}"
             to_return = f"{verb} {prefix}{suffix}"
 
-
-        return to_return
+        return re.sub(r'\s\s+', " ", to_return)
 
     def eval_expression(self, cube_name: Optional[str] = None, ignore_risk_weight: bool = False) -> str:
         col = self.col_name(cube_name=cube_name)
