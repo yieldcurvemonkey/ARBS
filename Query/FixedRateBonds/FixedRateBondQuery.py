@@ -50,6 +50,7 @@ class FixedRateBondQuery(BaseQuery):
         curve_label = cube_name or self.curve or ""
         struct_name = self.structure.name
         val_name = self.value.name
+        rws = "/".join([str(rw) for rw in self.structure_kwargs.get("risk_weights", [])])
 
         cusip_str = self.structure_kwargs.get("cusip", "")
         if self.structure == FixedRateBondStructure.CURVE and self.structure_kwargs.get("front_cusip") is not None:
@@ -64,6 +65,9 @@ class FixedRateBondQuery(BaseQuery):
 
         if curve_label.strip() == cusip_str.strip():
             return f"{cusip_str} {struct_name} {val_name}".strip()
+
+        if rws not in ["1/-1", "0.5/-0.5", "0.50/-0.50", "-1/2/-1", "-0.50/1.00/-0.50", "-0.5/1/-0.5"]:
+            return f"{curve_label} {cusip_str} {rws} {struct_name} {val_name}".strip()
 
         return f"{curve_label} {cusip_str} {struct_name} {val_name}".strip()
 

@@ -413,7 +413,7 @@ class WSJFetcher(BaseFetcher):
         async with semaphore:
             return await self._fetch_ust_intraday_timeseries(*args, **kwargs)
 
-    def ust_intraday_timeseries(self, wsj_ticker_keys: Dict[str, str]):
+    def ust_intraday_timeseries(self, wsj_ticker_keys: Dict[str, str], show_tqdm: Optional[bool] = False):
         async def build_tasks(
             client: httpx.AsyncClient,
             wsj_ticker_keys: List[str],
@@ -429,7 +429,9 @@ class WSJFetcher(BaseFetcher):
                 for wsj_ticker_key in wsj_ticker_keys
             ]
 
-            return await tqdm.asyncio.tqdm.gather(*tasks, desc="FETCHING DATA FROM WSJ...")
+            if show_tqdm:
+                return await tqdm.asyncio.tqdm.gather(*tasks, desc="FETCHING DATA FROM WSJ...")
+            return await asyncio.gather(*tasks)
 
         async def run_fetch_all(
             wsj_ticker_keys: List[str],

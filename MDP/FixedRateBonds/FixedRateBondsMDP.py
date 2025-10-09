@@ -4,12 +4,23 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 import pandas as pd
 import pytz
+import threading
+import contextlib
+
 import QuantLib as ql
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base._GenericPricable import _GenericPricable
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
+
+
+@contextlib.contextmanager
+def _closer(obj):
+    try:
+        yield obj
+    finally:
+        getattr(obj, "close_zodb", lambda: None)()
 
 
 def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> Optional[str]:
@@ -105,7 +116,13 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
         MarketDataProvider.__init__(self, source, **kwargs)
         ZODBCacheMixin.__init__(self)
 
+        self._open_count = 0
+        self._open_lock = threading.RLock()
+        self._cache_ready = False
+
     def _ensure_pricer_cache(self) -> None:
+        if self._cache_ready and hasattr(self, self._FRB_PRICER_CACHE):
+            return
         cache_path = ZODBCacheMixin.default_cache_path("FixedRateBondPricer_Cache")
         self.zodb_open_cache(
             cache_attr=self._FRB_PRICER_CACHE,
@@ -113,6 +130,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             encode=None,
             decode=None,
         )
+        self._cache_ready = True
 
     @staticmethod
     def _py_scalar(v):
@@ -367,7 +385,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
 
             ref_df = ref_df[ref_df["cusip"] == cusip]
 
-            if timestamp == "live":
+            if timestamp == "live" or timestamp == datetime.date.today():
                 wsj_key = get_isin_from_cusip(cusip, "US")[2:]
                 live_ytm_quote = WSJFetcher().wsj_timeseries_api(wsj_ticker_keys=[wsj_key], append_most_recent_last=True)[wsj_key]
                 meta_data = ref_df.iloc[0].to_dict()
@@ -438,7 +456,9 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                     return cached
                 return self._build_pricer_from_args(cached, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
 
-            fi_map = FedInvestDataFetcher().runner(dates=[timestamp_dt], refresh_cache=kwargs.get("force_refresh", False))
+            with _closer(FedInvestDataFetcher()) as fi:
+                fi_map = fi.runner(dates=[timestamp_dt], refresh_cache=kwargs.get("force_refresh", False))
+
             fi_df = fi_map.get(timestamp_dt)
             if fi_df is None or fi_df.empty:
                 raise KeyError(f"No FedInvest snapshot for {timestamp} (key: {timestamp_dt})")
@@ -463,3 +483,37 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             self.zodb_commit()
 
             return self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
+
+    def __open__(self):
+        with self._open_lock:
+            if self._open_count == 0:
+                self._ensure_pricer_cache()
+            self._open_count += 1
+        return self
+
+    def __close__(self, *, commit: bool = True):
+        with self._open_lock:
+            if self._open_count <= 0:
+                return
+            self._open_count -= 1
+            if self._open_count == 0:
+                try:
+                    if commit:
+                        self.zodb_commit()
+                finally:
+                    try:
+                        self.close_zodb()
+                    finally:
+                        self._cache_ready = False
+
+    def __enter__(self):
+        return self.__open__()
+
+    def __exit__(self, exc_type, exc, tb):
+        self.__close__(commit=(exc_type is None))
+
+    async def __aenter__(self):
+        return self.__open__()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.__close__(commit=(exc_type is None))

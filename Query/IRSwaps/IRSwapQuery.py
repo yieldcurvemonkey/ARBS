@@ -238,11 +238,18 @@ class IRSwapQuery(BaseQuery):
         else:
             swap_name = None
 
-        fmt = _structure_kwargs_formatters[self.structure](self.structure_kwargs or {})
+        structure = self.structure
+        if swap_name.count("/") == 1:
+            structure = IRSwapStructure.CURVE
+        elif swap_name.count("/") == 2:
+            structure = IRSwapStructure.FLY
+
+        fmt = _structure_kwargs_formatters[structure](self.structure_kwargs or {})
 
         prefix = f"{curve_label} " if curve_label else ""
-        suffix = f"{self.structure.name} {self.value.name if isinstance(self.value, IRSwapValue) else 'MULTI'}"
+        suffix = f"{structure.name} {self.value.name if isinstance(self.value, IRSwapValue) else 'MULTI'}"
         to_return = f"{prefix}{suffix}"
+        rws = "/".join([str(rw) for rw in self.structure_kwargs.get("risk_weights", [])])
 
         if self.name:
             to_return = self.name
@@ -252,11 +259,15 @@ class IRSwapQuery(BaseQuery):
             to_return = f"{prefix}{fmt} {suffix}"
         if swap_name:
             to_return = f"{prefix}{swap_name} {suffix}"
+            if rws not in ["1/-1", "0.5/-0.5", "0.50/-0.50", "-1/2/-1", "-0.50/1.00/-0.50", "-0.5/1/-0.5", ""]:
+                to_return = f"{prefix}{swap_name} {rws} {suffix}"
+        
         if "bpv" in self.structure_kwargs and self.structure_kwargs["bpv"] > 1:
             print(self.structure_kwargs["bpv"])
             human_format_risk = human_format(abs(self.structure_kwargs["bpv"]))
             verb = f"Paid {human_format_risk}" if self.structure_kwargs["bpv"] < 0 else f"Rec {human_format_risk}"
             to_return = f"{verb} {prefix}{suffix}"
+
 
         return to_return
 

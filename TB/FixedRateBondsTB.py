@@ -6,7 +6,8 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 from dataclasses import replace
-
+import copy
+import numpy as np
 import pandas as pd
 import QuantLib as ql
 from tqdm import tqdm
@@ -51,6 +52,25 @@ def _flatten_queries(queries: List[FixedRateBondQuery | List[FixedRateBondQuery]
     return flat
 
 
+def _clone_risk_weights(rws):
+    if rws is None:
+        return None
+    # Preserve type-specific semantics
+    if isinstance(rws, np.ndarray):
+        return rws.copy()  # new buffer
+    if isinstance(rws, (pd.Series, pd.DataFrame)):
+        return rws.copy(deep=True)  # deep pandas copy
+    if isinstance(rws, (list, tuple, set, dict)):
+        return copy.deepcopy(rws)  # nested containers
+    # Generic fallback: try .copy(), else deepcopy
+    if hasattr(rws, "copy") and callable(rws.copy):
+        try:
+            return rws.copy()
+        except Exception:
+            pass
+    return copy.deepcopy(rws)
+
+
 def _build_row_for_query(
     pricer_for_cusip: Dict[str, _FixedRateBondGenericPricer],
     q: FixedRateBondQuery,
@@ -71,16 +91,19 @@ def _build_row_for_query(
     skw.setdefault("cusip", q.cusip)
     skw.setdefault("bpv", 1)
 
+    user_passed_rws = _clone_risk_weights(skw.get("risk_weights", None))
+    user_passed_col_name = q.col_name()
+
     try:
         q_eff = replace(q, structure=structure, structure_kwargs=skw)
     except TypeError:
         q_eff = replace(q, structure=structure, structure_id=structure, structure_kwargs=skw)
 
     pkg, rw = q_eff.resolve_package(pricer_or_curve=pricer_for_cusip, is_for_timeseries=True)
-    vmap = q_eff.build_value_map(pricer_or_curve=pricer_for_cusip, package=pkg, risk_weights=rw)
+
+    vmap = q_eff.build_value_map(pricer_or_curve=pricer_for_cusip, package=pkg, risk_weights=user_passed_rws if user_passed_rws is not None else rw)
     value = vmap.apply(value=q_eff.value)
-    col_name = q.col_name(getattr(q_eff, "cusip", "CUSIP"))
-    return ref_dt, col_name, float(value)
+    return ref_dt, user_passed_col_name, float(value)
 
 
 class FixedRateBondsTB(ZODBCacheMixin):

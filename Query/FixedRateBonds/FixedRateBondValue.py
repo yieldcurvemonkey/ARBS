@@ -18,12 +18,16 @@ class FixedRateBondValue(Enum):
     CONVEXITY = auto()
 
 
+# _frb_structure_sign_mapper = {
+#     FixedRateBondStructure.OUTRIGHT: lambda rws: [abs(rws[0])],
+#     FixedRateBondStructure.CURVE: lambda rws: [-1 * abs(rws[0]), abs(rws[1])],
+#     FixedRateBondStructure.FLY: lambda rws: [-1 * abs(rws[0]), abs(rws[1]), -1 * abs(rws[2])],
+# }
 _frb_structure_sign_mapper = {
-    FixedRateBondStructure.OUTRIGHT: lambda rws: [abs(rws[0])],
-    FixedRateBondStructure.CURVE: lambda rws: [-1 * abs(rws[0]), abs(rws[1])],
-    FixedRateBondStructure.FLY: lambda rws: [-1 * abs(rws[0]), abs(rws[1]), -1 * abs(rws[2])],
+    FixedRateBondStructure.OUTRIGHT: lambda rws: rws,
+    FixedRateBondStructure.CURVE: lambda rws: rws,
+    FixedRateBondStructure.FLY: lambda rws: rws,
 }
-
 _frb_structure_legs_mapper = {
     1: (FixedRateBondStructure.OUTRIGHT, 1),
     2: (FixedRateBondStructure.CURVE, 100),

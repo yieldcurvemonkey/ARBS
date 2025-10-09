@@ -23,10 +23,15 @@ class IRSwapValue(Enum):
     # ASW = auto()
 
 
+# _swap_structure_sign_mapper = {
+#     IRSwapStructure.OUTRIGHT: lambda rws: [abs(rws[0])],
+#     IRSwapStructure.CURVE: lambda rws: [-1 * abs(rws[0]), abs(rws[1])],
+#     IRSwapStructure.FLY: lambda rws: [-1 * abs(rws[0]), abs(rws[1]), -1 * abs(rws[2])],
+# }
 _swap_structure_sign_mapper = {
-    IRSwapStructure.OUTRIGHT: lambda rws: [abs(rws[0])],
-    IRSwapStructure.CURVE: lambda rws: [-1 * abs(rws[0]), abs(rws[1])],
-    IRSwapStructure.FLY: lambda rws: [-1 * abs(rws[0]), abs(rws[1]), -1 * abs(rws[2])],
+    IRSwapStructure.OUTRIGHT: lambda rws: rws,
+    IRSwapStructure.CURVE: lambda rws: rws,
+    IRSwapStructure.FLY: lambda rws: rws,
 }
 
 _swap_structure_legs_mapper = {

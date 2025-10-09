@@ -4,6 +4,7 @@ import warnings
 from datetime import datetime
 from typing import Dict, List, Optional
 
+import threading
 import httpx
 import pandas as pd
 import tqdm
@@ -85,7 +86,13 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
         )
         ZODBCacheMixin.__init__(self)
 
+        self._open_count = 0
+        self._open_lock = threading.RLock()
+        self._cache_ready = False
+
     def _ensure_cache(self):
+        if self._cache_ready and hasattr(self, self._FEDINVEST_CACHE):
+            return
         cache_path = ZODBCacheMixin.default_cache_path("FedInvest_Prices_Cache")
         self.zodb_open_cache(
             cache_attr=self._FEDINVEST_CACHE,
@@ -93,6 +100,47 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
             encode=None,
             decode=None,
         )
+        self._cache_ready = True
+
+    def __open__(self):
+        with self._open_lock:
+            if self._open_count == 0:
+                self._ensure_cache()
+            self._open_count += 1
+        return self  # enables `with fetcher as f:` or `with fetcher.__open__() as f:`
+
+    def __close__(self, *, commit: bool = True):
+        with self._open_lock:
+            if self._open_count <= 0:
+                return
+            self._open_count -= 1
+            if self._open_count == 0:
+                try:
+                    if commit:
+                        self.zodb_commit()
+                finally:
+                    try:
+                        self.close_zodb()
+                    finally:
+                        self._cache_ready = False
+
+    def __enter__(self):
+        return self.__open__()
+
+    def __exit__(self, exc_type, exc, tb):
+        self.__close__(commit=(exc_type is None))
+
+    async def __aenter__(self):
+        return self.__open__()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.__close__(commit=(exc_type is None))
+
+    def __del__(self):
+        try:
+            self.__close__(commit=False)
+        except Exception:
+            pass
 
     async def _fetch_cusip_prices_fedinvest(
         self,

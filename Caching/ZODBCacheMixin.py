@@ -24,7 +24,7 @@ T = TypeVar("T", bound="ZODBCacheMixin")
 
 
 class _DBHandle:
-    __slots__ = ("db", "storage", "refcnt", "_conns", "_lock")
+    __slots__ = ("db", "storage", "refcnt", "_conns", "_lock", "_pool_cap")
 
     def __init__(self, db: DB, storage: FileStorage):
         self.db: DB = db
@@ -32,6 +32,7 @@ class _DBHandle:
         self.refcnt: int = 0
         self._conns: List[Connection] = []  # type: ignore
         self._lock = threading.Lock()
+        self._pool_cap = max(1, int(getattr(db, "pool_size", 7)))
 
     def get_conn(self) -> Connection:
         with self._lock:
@@ -41,7 +42,10 @@ class _DBHandle:
 
     def release_conn(self, conn: Connection) -> None:
         with self._lock:
-            self._conns.append(conn)
+            if len(self._conns) >= self._pool_cap:
+                conn.close()
+            else:
+                self._conns.append(conn)
 
     def incref(self) -> None:  # noqa: D401
         """Increment reference count."""
@@ -122,7 +126,8 @@ class ZODBCacheMixin:
             handle = cls._DB_REGISTRY.get(path)
             if handle is None:
                 storage = cls._open_filestorage(path)
-                handle = _DBHandle(DB(storage), storage)
+                db = DB(storage, pool_size=32)
+                handle = _DBHandle(db, storage)
                 cls._DB_REGISTRY[path] = handle
             handle.incref()
             return handle
