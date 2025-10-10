@@ -19,8 +19,9 @@ class IRSwapValue(Enum):
     CARRY_AND_ROLL_BPS_RUNNING = auto()
 
     # TODO
-    # MMSS = auto()
-    # ASW = auto()
+    SPREADOVER = auto()
+    MMSS = auto()
+    ASW = auto()
 
 
 # _swap_structure_sign_mapper = {

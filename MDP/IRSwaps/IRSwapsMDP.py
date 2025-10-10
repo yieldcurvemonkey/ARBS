@@ -11,7 +11,7 @@ from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 
 class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
-    def __init__(self, source: str, force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
+    def __init__(self, source: str = "CME_NY_EOD_LIVE-ql_basic", force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
         super().__init__(source, **kwargs)
         self.force_refresh_fixings = force_refresh_fixings
 

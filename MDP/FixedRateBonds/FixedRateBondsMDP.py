@@ -112,7 +112,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
 
     _FRB_PRICER_CACHE = "_frb_pricer_cache"
 
-    def __init__(self, source: str, **kwargs: Any):
+    def __init__(self, source: str = "USTS_FEDINVEST_WSJ_LIVE-QL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
         ZODBCacheMixin.__init__(self)
 

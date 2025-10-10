@@ -219,6 +219,7 @@ class FixedRateBondsTB(ZODBCacheMixin):
                     )
                 except Exception as e:
                     self._logger.exception(f"Pricer fetch failed for date={d}'. Error: {e}")
+                    continue
 
                 qs = qs_per_date[d]
                 tasks: List[Tuple[datetime.datetime | datetime.date, FixedRateBondQuery, Dict[str, object]]] = []
@@ -229,7 +230,10 @@ class FixedRateBondsTB(ZODBCacheMixin):
                         pbar.update(1)
                         continue
 
-                    indy_cusips = str(q.cusip).split("/")
+                    indy_cusips = [k.strip() for k in str(q.cusip).split("/") if k.strip()]
+                    missing = [k for k in indy_cusips if k not in pricer_map]
+                    if missing:
+                        pricer_map = pricer_map | self.mdp.get_pricer({"cusips": missing, "timestamp": d, "ignore_cache": ignore_cache})
                     tasks.append((d, q, dict((k, pricer_map[k]) for k in indy_cusips)))
 
                 if not tasks:
