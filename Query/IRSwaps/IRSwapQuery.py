@@ -236,7 +236,7 @@ class IRSwapQuery(BaseQuery):
             swap_name = None
 
         structure = self.structure
-        if swap_name.count("/") == 1:
+        if swap_name.count("/") == 1 and swap_name.count("-") == 0:
             structure = IRSwapStructure.CURVE
         elif swap_name.count("/") == 2:
             structure = IRSwapStructure.FLY
