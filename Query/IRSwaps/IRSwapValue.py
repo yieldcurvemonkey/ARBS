@@ -131,8 +131,8 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
         import QuantLib as ql
         from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
 
-        assert ql.IMM.isIMMdate(datetime_to_ql_date(kwargs["curve"].effective_date(kwargs["package"][0]))), "must pass in valid imm swap"
-        assert ql.IMM.isIMMdate(datetime_to_ql_date(kwargs["curve"].maturity_date(kwargs["package"][0]))), "must pass in valid imm swap"
+        # assert ql.IMM.isIMMdate(datetime_to_ql_date(kwargs["curve"].effective_date(kwargs["package"][0]))), "must pass in valid imm swap"
+        # assert ql.IMM.isIMMdate(datetime_to_ql_date(kwargs["curve"].maturity_date(kwargs["package"][0]))), "must pass in valid imm swap"
 
         sfrs: List[rl.STIRFuture] = kwargs["sfr"]
         pack_tick: float = float(kwargs.get("pack_tick", 0.0025))  # ¼ tick

@@ -218,12 +218,11 @@ def make_secondary_axis_plot_v2(*, ylabel_left=None, ylabel_right=None, title=No
         # remember for legend
         if target is ax_left:
             state["left_lines"].append(line)
-            # color left ticks/label to the first left line
             if state["left_color"] is None:
                 state["left_color"] = line.get_color()
                 ax_left.tick_params(axis="y", labelcolor=state["left_color"])
-                if ylabel_left:
-                    ax_left.yaxis.label.set_color(state["left_color"])
+                ax_left.set_ylabel(ylabel_left or label, color=state["left_color"])
+
         else:
             state["right_lines"].append(line)
             # Label/tick color for this particular right axis

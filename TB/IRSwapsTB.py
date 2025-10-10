@@ -25,6 +25,7 @@ from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 from Query.IRSwaps.IRSwapValue import IRSwapValue
 from TB.utils import DateLike, _canonicalize_value, _dt_to_epoch_ns
 from utils.ql_utils import datetime_to_ql_date
+from BT.misc import ql_cal_date_range
 
 _LOGGER_NAME = "IRSwapsTB"
 
@@ -371,7 +372,7 @@ class IRSwapsTB(ZODBCacheMixin):
                 return "PACKS"
             if _BUNDLE_PAT.match(label.upper()):
                 return "BUNDLES"
-            return "OUTRIGHT"  # default
+            return "OUTRIGHT"
 
         def _col_name(label: str) -> str:
             return f"{curve} {label} {_structure_tag(label)} CVX_ADJ"
@@ -383,12 +384,13 @@ class IRSwapsTB(ZODBCacheMixin):
             return sym.replace(leg_prefix, "")
 
         def _imm_code_from_date_rank(d: datetime.date, n: int) -> str:
-            syms = [
-                s for s in get_short_end_curve_tickers(as_of=d, first_n_sr1=0, first_n_sr3=n, use_globex=use_globex) if ("/SR3" in s if use_globex else "SFR" in s)
-            ]
-            if len(syms) < n:
-                raise ValueError(f"Rank {n} not available as of {d}")
-            return syms[n - 1].replace(leg_prefix, "")
+            # robust, per-date rank→IMM resolution from your roll helper
+            front = _front_imm_code(d)
+            imm_dt = rl.get_imm(code=front)
+            for _ in range(max(0, n - 1)):
+                imm_dt = rl.next_imm(imm_dt)
+            letter = {3: "H", 6: "M", 9: "U", 12: "Z"}[imm_dt.month]
+            return f"{letter}{imm_dt.year % 100:02d}"
 
         def _span_ranks(label: str) -> Optional[list[int]]:
             sp = _pack_span(label)
@@ -397,29 +399,66 @@ class IRSwapsTB(ZODBCacheMixin):
             a, b = sp
             return list(range(a, b + 1))
 
+        def _ranks_for_label(label: str) -> Optional[list[int]]:
+            r = _cm_rank(label)
+            if r:
+                return [r]
+            sp = _span_ranks(label)
+            if sp:
+                return sp
+            return None  # IMM handled separately
+
         if not items:
             return pd.DataFrame()
 
         start_ts = pd.to_datetime(start).normalize()
         end_ts = pd.to_datetime(end).normalize()
-        eval_index = pd.date_range(start_ts, end_ts, freq="B")
+        eval_index = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), start_ts, end_ts)
+
+        pd.date_range(start_ts, end_ts, freq="B")
+        today_date = datetime.date.today()
 
         out_frames_cached: list[pd.DataFrame] = []
         need_fetch_labels: list[str] = []
-        partial_missing_dates: dict[str, set[pd.Timestamp]] = {}  # label -> missing dates
-        pre_cached_rows: dict[str, list[dict]] = {}  # label -> cached row dicts
+        # only **pre-today** missing dates go here; today-only gaps won’t trigger a fetch
+        partial_missing_dates: dict[str, set[pd.Timestamp]] = {}
+        pre_cached_rows: dict[str, list[dict]] = {}
 
+        # ---------- FIRST PASS: probe cache using the exact same query fingerprint ----------
         for raw_label in items:
             label = raw_label.strip().upper()
             colname = _col_name(label)
 
-            def _query_for_date(d: datetime.date):
+            rows: list[dict] = []
+            missing_all: set[pd.Timestamp] = set()
+            missing_pre_today: set[pd.Timestamp] = set()
+
+            for dts in eval_index:
+                ts = dts.to_pydatetime()
+                if ignore_cache:
+                    # user explicitly wants recompute → mark as missing (we’ll still minimize tickers below)
+                    if dts.date() < today_date:
+                        missing_pre_today.add(dts)
+                    else:
+                        missing_all.add(dts)
+                    continue
+
+                # build the SAME query you’ll compute later
                 if _is_imm(label):
                     eff = rl.get_imm(code=label)
+                    mat = rl.next_imm(eff)
                 else:
-                    eff = rl.get_imm(code=_imm_code_from_date_rank(d, 1))
-                mat = rl.next_imm(eff)
-                return IRSwapQuery(
+                    ranks = _ranks_for_label(label)
+                    if not ranks:
+                        missing_all.add(dts)
+                        if dts.date() < today_date:
+                            missing_pre_today.add(dts)
+                        continue
+                    codes = [_imm_code_from_date_rank(ts.date(), r) for r in ranks]
+                    eff = rl.get_imm(code=codes[0])
+                    mat = rl.next_imm(rl.get_imm(code=codes[-1]))
+
+                q = IRSwapQuery(
                     curve=curve,
                     effective_date=eff.date(),
                     maturity_date=mat.date(),
@@ -428,95 +467,119 @@ class IRSwapsTB(ZODBCacheMixin):
                     value=IRSwapValue.CVX_ADJ,
                 )
 
-            rows = []
-            missing = set()
-            for dts in eval_index:
-                ts = dts.to_pydatetime()
-                if _is_today(ts) or ignore_cache:
-                    missing.add(dts)
-                    continue
-                q = _query_for_date(ts.date())
                 key = self._cache_key(ts, curve, q)
                 rec = mapping.get(key)
+
                 if rec is None:
-                    missing.add(dts)
-                else:
-                    # Support both dict-style and tuple-style cache entries
-                    if isinstance(rec, dict):
-                        # value stored under q.col_name(curve)
-                        val_keys = [k for k in rec.keys() if k != _date_col]
-                        if not val_keys:
-                            missing.add(dts)
-                            continue
-                        val = float(rec[val_keys[0]])
-                        dt_val = pd.Timestamp(rec[_date_col])
-                    else:
-                        # tuple: (date, col, val)
+                    # treat today as non-fetchable; only pre-today drives a fetch
+                    missing_all.add(dts)
+                    if dts.date() < today_date:
+                        missing_pre_today.add(dts)
+                    continue
+
+                # ---- dict-shaped or tuple-shaped cache row ----
+                if isinstance(rec, dict):
+                    date_keys = {_date_col, _date_col.lower(), _date_col.upper(), "Date", "date", "DATE"}
+                    dk = next((k for k in date_keys if k in rec), None)
+                    if dk is None:
+                        missing_all.add(dts)
+                        if dts.date() < today_date:
+                            missing_pre_today.add(dts)
+                        continue
+                    dt_val = pd.Timestamp(rec[dk])
+
+                    cand = [k for k in rec.keys() if k != dk]
+                    if not cand:
+                        missing_all.add(dts)
+                        if dts.date() < today_date:
+                            missing_pre_today.add(dts)
+                        continue
+                    cvx_keys = [k for k in cand if "CVX" in k.upper()]
+                    vk = cvx_keys[0] if cvx_keys else cand[0]
+
+                    try:
+                        val = float(rec[vk])
+                    except Exception:
                         try:
-                            dt_val, _orig_col, val = rec
-                            val = float(val)
-                            dt_val = pd.Timestamp(dt_val)
+                            val = float(getattr(rec[vk], "item", lambda: rec[vk])())
                         except Exception:
-                            missing.add(dts)
+                            missing_all.add(dts)
+                            if dts.date() < today_date:
+                                missing_pre_today.add(dts)
                             continue
+
                     rows.append({_date_col: dt_val, colname: val})
 
-            if rows and not missing:
-                # Fully cached → done for this label
+                else:
+                    # tuple: (date, col, val)
+                    try:
+                        dt_val, _orig_col, val = rec
+                        dt_val = pd.Timestamp(dt_val)
+                        val = float(val)
+                    except Exception:
+                        missing_all.add(dts)
+                        if dts.date() < today_date:
+                            missing_pre_today.add(dts)
+                        continue
+                    rows.append({_date_col: dt_val, colname: val})
+
+            # decide if we must fetch for this label
+            if rows and not missing_pre_today:
+                # fully cached (or only “today” gaps) → no fetch needed
                 df_cached = pd.DataFrame(rows).sort_values(_date_col, kind="mergesort").set_index(_date_col)[[colname]]
                 out_frames_cached.append(df_cached)
             else:
-                # Partially cached or empty: keep cached rows to merge later; compute the missing dates only
-                need_fetch_labels.append(label)
+                # partially/wholly missing *before today* → needs compute
                 if rows:
                     pre_cached_rows[label] = rows
-                if missing:
-                    partial_missing_dates[label] = missing
+                if missing_pre_today:
+                    partial_missing_dates[label] = missing_pre_today
+                    need_fetch_labels.append(label)
+                else:
+                    # only “today” missing → treat as done; keep cached rows only
+                    if rows:
+                        df_cached = pd.DataFrame(rows).sort_values(_date_col, kind="mergesort").set_index(_date_col)[[colname]]
+                        out_frames_cached.append(df_cached)
+                    # no rows and no pre-today missing ⇒ nothing to do for this label
 
-        # If everything was satisfied by cache, return w/o fetching
+        # nothing left to compute → avoid *any* barchart call
         if not need_fetch_labels:
             if not out_frames_cached:
                 return pd.DataFrame()
             return pd.concat(out_frames_cached, axis=1).sort_index(kind="mergesort")
 
-        # ---------- SECOND PASS: compute the remaining labels (minimal fetch) ----------
-        explicit_imms: set[str] = {lab for lab in need_fetch_labels if _is_imm(lab)}
-        max_rank = 1
-        for lab in need_fetch_labels:
-            if _is_imm(lab):
+        # ---------- Build the MINIMAL set of tickers & DATE WINDOW needed ----------
+        needed_tickers: set[str] = set()
+        needed_dates: list[pd.Timestamp] = []
+        for label in need_fetch_labels:
+            miss = partial_missing_dates.get(label, set())
+            if not miss:
                 continue
-            r = _cm_rank(lab)
-            if r:
-                max_rank = max(max_rank, r)
-            sr = _span_ranks(lab)
-            if sr:
-                max_rank = max(max_rank, max(sr))
+            needed_dates.extend(sorted(miss))
+            if _is_imm(label):
+                needed_tickers.add(f"{leg_prefix}{label}")
+            else:
+                ranks = _ranks_for_label(label) or []
+                for dts in miss:
+                    d = dts.date()
+                    for r in ranks:
+                        code = _imm_code_from_date_rank(d, r)
+                        needed_tickers.add(f"{leg_prefix}{code}")
 
-        front_start = _front_imm_code(start_ts.date())
-        front_end = _front_imm_code(end_ts.date())
-        codes_to_fetch: list[str] = []
-        d = rl.get_imm(code=front_start)
-        last_d = rl.get_imm(code=front_end)
-        for _ in range(max_rank - 1):
-            last_d = rl.next_imm(last_d)
-        while d <= last_d:
-            letter = {3: "H", 6: "M", 9: "U", 12: "Z"}[d.month]
-            codes_to_fetch.append(f"{letter}{d.year%100:02d}")
-            d = rl.next_imm(d)
+        if not needed_tickers:
+            # everything either cached or today-only; no price fetch
+            if not out_frames_cached:
+                return pd.DataFrame()
+            return pd.concat(out_frames_cached, axis=1).sort_index(kind="mergesort")
 
-        codes_to_fetch = sorted({*codes_to_fetch, *explicit_imms})
-        tickers = [f"{leg_prefix}{c}" for c in codes_to_fetch]
-
-        if not tickers:
-            if out_frames_cached:
-                return pd.concat(out_frames_cached, axis=1).sort_index(kind="mergesort")
-            return pd.DataFrame()
+        fetch_start = min(needed_dates).to_pydatetime()
+        fetch_end = max(needed_dates).to_pydatetime()
 
         px_df = get_barchart_timeseries(
-            start=start_ts.to_pydatetime(),
-            end=end_ts.to_pydatetime(),
+            start=fetch_start,
+            end=fetch_end,
             interval=None,  # daily settles
-            tickers=tickers,
+            tickers=sorted(needed_tickers),
             use_globex=use_globex,
         )
         if px_df.empty:
@@ -538,26 +601,21 @@ class IRSwapsTB(ZODBCacheMixin):
                 curve_by_day[day] = ch
             return ch
 
-        for label in need_fetch_labels:
+        # ---------- SECOND PASS: compute only the missing-pre-today points ----------
+        for label in tqdm(need_fetch_labels, desc="SFR CVX...", disable=not self._show_tqdm, leave=True):
             colname = _col_name(label)
-            # Start with any cached rows we collected in pass 1 (so partial labels keep their cached dates)
             rows = list(pre_cached_rows.get(label, []))
-
-            missing_dates = partial_missing_dates.get(label)
+            missing_dates = partial_missing_dates.get(label, set())
 
             def _iter_eval_dates_for_label() -> Iterable[pd.Timestamp]:
-                if missing_dates is not None:
-                    for dts in sorted(missing_dates):
-                        if dts in px_df.index:
-                            yield dts
-                else:
-                    for dts in px_df.index:
-                        yield pd.Timestamp(dts)
+                # iterate only the dates we *actually* need and that exist in px_df
+                for dts in sorted(missing_dates):
+                    if dts in px_df.index:
+                        yield dts
 
             if _is_imm(label):
                 leg = f"{leg_prefix}{label}"
                 if leg not in px_df.columns:
-                    # cannot compute; keep whatever cached rows we had (if any)
                     if rows:
                         df_i = pd.DataFrame(rows).sort_values(_date_col, kind="mergesort").set_index(_date_col)[[colname]]
                         out_frames.append(df_i)
@@ -577,7 +635,6 @@ class IRSwapsTB(ZODBCacheMixin):
                 for dts in _iter_eval_dates_for_label():
                     try:
                         ts = pd.Timestamp(dts).to_pydatetime()
-
                         price = px_df.at[dts, leg]
                         if pd.isna(price):
                             continue
@@ -592,38 +649,30 @@ class IRSwapsTB(ZODBCacheMixin):
                         record = {_date_col: pd.Timestamp(dts).to_pydatetime(), colname: cvx}
                         rows.append(record)
 
-                        # also write a canonical cache entry under the query’s own col_name for reuse
                         if not _is_today(ts):
                             mapping[self._cache_key(ts, curve, q)] = {_date_col: ts, q.col_name(curve): cvx}
-                    except:
+                    except Exception:
                         pass
 
             else:
-                # CM or pack/bundle
-                ranks = _span_ranks(label)
-                cm = _cm_rank(label)
-                need_ranks = [cm] if cm else (ranks or [])
-                if not need_ranks:
+                # CM / PACKS / BUNDLES
+                ranks = _ranks_for_label(label) or []
+                if not ranks:
                     continue
 
                 q_cache: dict[str, IRSwapQuery] = {}
+
                 for dts in _iter_eval_dates_for_label():
                     try:
                         d = pd.Timestamp(dts).date()
-
-                        try:
-                            codes = [_imm_code_from_date_rank(d, r) for r in need_ranks]
-                        except Exception:
-                            continue
-
+                        codes = [_imm_code_from_date_rank(d, r) for r in ranks]
                         legs_here = [f"{leg_prefix}{c}" for c in codes]
-                        # Require all legs present for today
                         if not all((leg in px_df.columns) and pd.notna(px_df.at[dts, leg]) for leg in legs_here):
                             continue
 
                         anchor_code = codes[0]
                         end_code = codes[-1]
-                        q_key = f"{anchor_code}->{end_code}"  # include tail so horizon is unique
+                        q_key = f"{anchor_code}->{end_code}"
 
                         q = q_cache.get(q_key)
                         if q is None:
@@ -656,7 +705,8 @@ class IRSwapsTB(ZODBCacheMixin):
                         ts = pd.Timestamp(dts).to_pydatetime()
                         if not _is_today(ts):
                             mapping[self._cache_key(ts, curve, q)] = {_date_col: ts, q.col_name(curve): cvx}
-                    except:
+
+                    except Exception:
                         pass
 
             if rows:
