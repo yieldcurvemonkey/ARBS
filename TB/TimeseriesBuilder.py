@@ -2,6 +2,7 @@ import datetime
 from collections import defaultdict
 from typing import TYPE_CHECKING, DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 
+import re
 import pandas as pd
 
 from Query.Base.BaseQuery import BaseQuery
@@ -27,6 +28,25 @@ def _flatten_base_queries(queries: Iterable[Union[BaseQuery, List[BaseQuery]]]) 
         else:
             flat.extend(q.return_query())
     return flat
+
+
+def _ct_alias_to_y(tenor: str) -> str:
+    """'CT2/CT10' -> '2Y/10Y', 'ct05xCT30' -> '05Yx30Y'"""
+    _CT_RE = re.compile(r"(?i)\bct\s*(\d+)\b")
+    return _CT_RE.sub(r"\1Y", str(tenor))
+
+
+def _y_alias_to_ct(tenor: str) -> str:
+    """'5Y' -> 'CT5', '2Y/10Y' -> 'CT2/CT10', '2Yx10Y' -> 'CT2xCT10'"""
+    _Y_RE = re.compile(r"(?i)\b(\d+)\s*y\b")
+    return _Y_RE.sub(r"CT\1", str(tenor))
+
+
+def _safe_col_name(q, default: str) -> str:
+    try:
+        return q.col_name()
+    except Exception:
+        return default
 
 
 class TimeseriesBuilder:
@@ -133,21 +153,60 @@ class TimeseriesBuilder:
         if irswap_spread_queries:
             irss_frb_qs = []
             irrs_irs_qs = []
+            pair_specs = []
+
+            _CT_RE = re.compile(r"(?i)\bct\s*(\d+)\b")
+            _Y_RE = re.compile(r"(?i)\b(\d+)\s*y\b")
+
             for q in irswap_spread_queries:
                 if q.value == IRSwapValue.MMSS:
-                    irss_frb_qs.append(FixedRateBondQuery(cusip=q.tenor, value=FixedRateBondValue.YTM))
-                    irrs_irs_qs.append(IRSwapQuery(curve=q.curve, tenor=q.tenor, value=IRSwapValue.RATE))
+                    q_frb = FixedRateBondQuery(cusip=q.tenor, value=FixedRateBondValue.YTM)
+                    q_irs = IRSwapQuery(curve=q.curve, tenor=q.tenor, value=IRSwapValue.RATE)
+                    op = "swap_minus_cash"  # spread = IRS - UST
+                    mult = 100.0  # report in bps
+
                 elif q.value == IRSwapValue.SPREADOVER:
-                    if "ct" in str(q.tenor).lower():
-                        irss_frb_qs.append(FixedRateBondQuery(cusip=q.tenor, value=FixedRateBondValue.YTM))
-                        irrs_irs_qs.append(IRSwapQuery(curve=q.curve, tenor=f"{str(q.tenor)[2:]}Y", value=IRSwapValue.RATE))
-                    elif "y" in str(q.tenor).lower():
-                        irss_frb_qs.append(FixedRateBondQuery(cusip=f"CT{str(q.tenor)[:-1]}", value=FixedRateBondValue.YTM))
-                        irrs_irs_qs.append(IRSwapQuery(curve=q.curve, tenor=q.tenor, value=IRSwapValue.RATE))
+                    t = str(q.tenor)
+                    if _CT_RE.search(t):
+                        q_frb = FixedRateBondQuery(cusip=t, value=FixedRateBondValue.YTM)
+                        q_irs = IRSwapQuery(curve=q.curve, tenor=_ct_alias_to_y(t), value=IRSwapValue.RATE)
+                    elif _Y_RE.search(t):
+                        q_frb = FixedRateBondQuery(cusip=_y_alias_to_ct(t), value=FixedRateBondValue.YTM)
+                        q_irs = IRSwapQuery(curve=q.curve, tenor=t, value=IRSwapValue.RATE)
                     else:
-                        raise NotImplementedError()
+                        raise NotImplementedError(f"Unrecognized SPREADOVER tenor: {t!r}")
+                    op = "swap_minus_cash"  # spreadover = IRS - UST
+                    mult = 100.0
+
                 else:
-                    raise NotImplementedError()
+                    raise NotImplementedError(f"Unhandled spread type: {q.value}")
+
+                irss_frb_qs.append(q_frb)
+                irrs_irs_qs.append(q_irs)
+
+                # Record robust pairing info using expected column names
+                irs_col = _safe_col_name(
+                    q_irs,
+                    f"{getattr(q_irs,'curve','IRS')}.{getattr(q_irs,'tenor','')}.{IRSwapValue.RATE.name}",
+                )
+                frb_col = _safe_col_name(
+                    q_frb,
+                    f"{getattr(q_frb,'cusip','CUSIP')}.{FixedRateBondValue.YTM.name}",
+                )
+                spread_name = _safe_col_name(
+                    q,
+                    f"{getattr(q,'curve','IRS')}.{getattr(q,'tenor','')}.{getattr(q,'value',IRSwapValue.MMSS).name}",
+                )
+
+                pair_specs.append(
+                    {
+                        "spread_name": spread_name,
+                        "irs_col": irs_col,
+                        "frb_col": frb_col,
+                        "op": op,  # 'swap_minus_cash' or 'cash_minus_swap'
+                        "mult": mult,  # e.g., 100.0 for bps
+                    }
+                )
 
             irs_df = self._routers["IRS"].get_timeseries(  # type: ignore[attr-defined]
                 start,
@@ -169,27 +228,21 @@ class TimeseriesBuilder:
             )
 
             spread_cols: Dict[str, pd.Series] = {}
-            for q_spread, q_frb, q_irs in zip(irswap_spread_queries, irss_frb_qs, irrs_irs_qs):
-                try:
-                    irs_col = q_irs.col_name()
-                except Exception:
-                    irs_col = f"{getattr(q_irs, 'curve', 'IRS')}.{getattr(q_irs, 'tenor', '')}.{IRSwapValue.RATE.name}"
+            idx = irs_df.index.union(cash_df.index)
+            for spec in pair_specs:
+                a = irs_df[spec["irs_col"]].reindex(idx) if spec["irs_col"] in irs_df.columns else pd.Series(index=idx, dtype="float64")
+                b = cash_df[spec["frb_col"]].reindex(idx) if spec["frb_col"] in cash_df.columns else pd.Series(index=idx, dtype="float64")
 
-                try:
-                    frb_col = q_frb.col_name()
-                except Exception:
-                    frb_col = f"{getattr(q_frb, 'cusip', 'CUSIP')}.{FixedRateBondValue.YTM.name}"
+                # future-proof for 'ASW' and 'CAS'
+                if spec["op"] == "swap_minus_cash":
+                    if "out" in spread_name.lower():
+                        spread = (a - b) * spec["mult"]
+                    else:
+                        spread = a - b
+                else:
+                    raise ValueError(f"Unknown op: {spec['op']}")
 
-                try:
-                    spread_name = q_spread.col_name()
-                except Exception:
-                    vname = q_spread.value.name if getattr(q_spread, "value", None) else "SPREAD"
-                    spread_name = f"{getattr(q_spread, 'curve', 'IRS')}.{getattr(q_spread, 'tenor', '')}.{vname}"
-
-                idx = irs_df.index.union(cash_df.index)
-                a = irs_df[irs_col].reindex(idx) if irs_col in irs_df.columns else pd.Series(index=idx, dtype="float64")
-                b = cash_df[frb_col].reindex(idx) if frb_col in cash_df.columns else pd.Series(index=idx, dtype="float64")
-                spread_cols[spread_name] = (a - b) * 100.0
+                spread_cols[spec["spread_name"]] = spread
 
             if spread_cols:
                 spread_df = pd.DataFrame(spread_cols).sort_index()

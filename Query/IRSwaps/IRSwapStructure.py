@@ -295,19 +295,23 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
             if i != idx:
                 risk_weights[i] = math.copysign(risk_weights[i], -risk_weights[idx])
 
-        def _normalize_leg(s: str) -> str:
-            # grab tenor tokens like 3M, 6m, 1Y, 2y (case-insensitive)
-            parts = re.findall(r"\d+\s*[dwmy]", s, flags=re.I)
-            parts = [p.upper().replace(" ", "") for p in parts]
-            if len(parts) == 1:
-                return parts[0]
-            if len(parts) == 2:
-                return f"{parts[0]}x{parts[1]}"
-            return s
+        try:
 
-        front_tenor = _normalize_leg(front_tenor)
-        belly_tenor = _normalize_leg(belly_tenor)
-        back_tenor = _normalize_leg(back_tenor)
+            def _normalize_leg(s: str) -> str:
+                # grab tenor tokens like 3M, 6m, 1Y, 2y (case-insensitive)
+                parts = re.findall(r"\d+\s*[dwmy]", s, flags=re.I)
+                parts = [p.upper().replace(" ", "") for p in parts]
+                if len(parts) == 1:
+                    return parts[0]
+                if len(parts) == 2:
+                    return f"{parts[0]}x{parts[1]}"
+                return s
+
+            front_tenor = _normalize_leg(front_tenor)
+            belly_tenor = _normalize_leg(belly_tenor)
+            back_tenor = _normalize_leg(back_tenor)
+        except:
+            pass
 
         leg0 = dict(
             tenor=front_tenor,
