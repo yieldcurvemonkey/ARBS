@@ -93,6 +93,35 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             return QLIRSwapCurve(ql_curve_id=curve_name, ql_curve_handle=ql_curve_handle, ql_curve_index=irswap_index, meta_data={"timestamp": ts})
 
+        elif self.source.upper() in ["CME_NY_EOD_LIVE-RL_BASIC", "CME_NY_EOD_LIVE_RL_BASIC"]:
+            from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.CMEFetcherV2 import CMEFetcherV2
+            from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            assert type(timestamp) == datetime.date or timestamp == "live", "CME_NY_EOD ONLY HAS EOD - 'timestamp' must be type 'datetime.date' or Literal['live']"
+            assert curve_name in RATESLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."
+
+            curve_id = f"{self.source.upper()}-{curve_name}-{timestamp}"
+            cmef = CMEFetcherV2(**self.config)
+
+            ts, rl_curve_handle = next(
+                iter(
+                    cmef.build_rl_eod_curves(
+                        curve_id=curve_id,
+                        curve=curve_name,
+                        bdates=["live" if timestamp == datetime.date.today() else timestamp],
+                        show_tqdm=False,
+                        **kwargs,
+                    ).items()
+                )
+            )
+
+            ref = datetime.date.today() if type(timestamp) == str else timestamp
+            fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            fixings_series: pd.Series = fixings_series[fixings_series.index.date < ref]
+
+            return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=fixings_series, meta_data={"timestamp": ts, "id": curve_id})
+
         elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q12", "SDR_INTRADAY_RL_USD_SOFR_MT_Q12"]:
             assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
             assert curve_name == "USD-SOFR-1D", "SOFR!"
@@ -328,8 +357,43 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                     sofr_fixings.loc[target_dt] = float(last_val)
                     sofr_fixings = sofr_fixings.sort_index()
 
-            curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_OIS_STIR_MISC"
+            curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_STIR_MISC"
             ts, rl_curve_handle = rl_usd_sofr_stir_curve(
+                curve_id=curve_id,
+                snap=timestamp,
+                sofr_fixings=sofr_fixings,
+                cache=self._rl_curve_cache if timestamp != "live" else None,
+                force_refresh=kwargs.get("force_refresh", False),
+            )
+            return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
+
+        elif self.source.upper() in ["SDR_INTRADAY-RL_USD_OIS_STIR_MISC", "SDR_INTRADAY_RL_USD_OIS_STIR_MISC"]:
+            assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
+            assert curve_name == "USD-FEDFUNDS", "FEDFUNDS!"
+
+            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_ois_stir_misc.rl_usd_ois_stir_misc import rl_usd_ois_stir_curve
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
+            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+
+            # for when we need to build curve before 8am est sofr fixings
+            FIXINGS_TOL = 1
+            if not sofr_fixings.empty:
+                from pandas.tseries.holiday import USFederalHolidayCalendar
+                from pandas.tseries.offsets import CustomBusinessDay
+
+                cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+                target_dt = (pd.Timestamp(ref) - (cbd * FIXINGS_TOL)).normalize()
+                idx_norm = sofr_fixings.index.normalize()
+                if target_dt not in idx_norm:
+                    last_val = sofr_fixings.iloc[-1]
+                    sofr_fixings.loc[target_dt] = float(last_val)
+                    sofr_fixings = sofr_fixings.sort_index()
+
+            curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_OIS_STIR_MISC"
+            ts, rl_curve_handle = rl_usd_ois_stir_curve(
                 curve_id=curve_id,
                 snap=timestamp,
                 sofr_fixings=sofr_fixings,

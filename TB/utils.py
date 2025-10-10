@@ -42,7 +42,7 @@ def _canonicalize_value(v):
     return v  # numbers/strings/None
 
 
-def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None):
+def make_secondary_axis_plot_v1(*, ylabel_left=None, ylabel_right=None, title=None):
     """
     Returns: plot, fig, ax_left, ax_right, legend
 
@@ -126,6 +126,120 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None)
         handles = state["left_lines"] + state["right_lines"]
         labels = [h.get_label() for h in handles]
         ax_left.legend(handles, labels, loc=loc, **kwargs)
+
+    return plot, fig, ax_left, ax_right, legend
+
+
+def make_secondary_axis_plot_v2(*, ylabel_left=None, ylabel_right=None, title=None):
+    """
+    Returns: plot, fig, ax_left, ax_right, legend
+
+    plot(series, *, label=None, which='auto'|'left'|'right', **kwargs)
+      - series: pandas.Series (index is x, values are y)
+      - default label is series.name (tuple names are joined)
+      - 'left'  → plot on the primary left y-axis
+      - 'right' or 'auto' → plot on a NEW secondary y-axis (each call makes a new one)
+    legend(loc='best', **kwargs)
+    """
+    fig, ax_left = plt.subplots()
+    # Leave room on the right for multiple secondary axes
+    fig.subplots_adjust(right=0.75)
+
+    if title:
+        ax_left.set_title(title)
+    if ylabel_left:
+        ax_left.set_ylabel(ylabel_left)
+
+    # Shared color cycle across ALL axes
+    colors = plt.rcParams.get("axes.prop_cycle", None)
+    colors = (colors.by_key().get("color", []) if colors is not None else []) or [f"C{i}" for i in range(10)]
+
+    state = {
+        "left_lines": [],
+        "right_lines": [],
+        "right_axes": [],
+        "color_idx": 0,
+        "left_color": None,
+    }
+
+    def _next_color():
+        c = colors[state["color_idx"] % len(colors)]
+        state["color_idx"] += 1
+        return c
+
+    def _stringify_name(n):
+        if n is None:
+            return "series"
+        if isinstance(n, tuple):
+            return " ".join(map(str, n))
+        return str(n)
+
+    def _new_right_axis():
+        """Create a new secondary y-axis on the right, offsetting the spine to avoid overlap."""
+        idx = len(state["right_axes"])
+        ax = ax_left.twinx()
+
+        # Make frame visible but remove background patch so axes stack cleanly
+        ax.set_frame_on(True)
+        ax.patch.set_visible(False)
+
+        # Offset each new right axis spine a bit further to the right
+        # e.g., 1.00 (default), 1.10, 1.20, ...
+        offset = 1.0 + 0.10 * idx
+        ax.spines["right"].set_position(("axes", offset))
+        # Ensure the extra spine is drawn on top
+        ax.spines["right"].set_zorder(10 + idx)
+
+        state["right_axes"].append(ax)
+        return ax
+
+    def plot(series: pd.Series, *, label=None, which="auto", **kwargs):
+        if not isinstance(series, pd.Series):
+            raise TypeError("plot() expects a pandas Series")
+
+        # default label from series name
+        if label is None:
+            label = _stringify_name(series.name)
+
+        # Choose target axis:
+        # - 'left'  → plot on primary left axis
+        # - 'auto' or 'right' → always create a NEW right axis for this series
+        if which == "left":
+            target = ax_left
+        else:
+            target = _new_right_axis()
+
+        # ensure different colors unless user specifies one
+        if "color" not in kwargs:
+            kwargs["color"] = _next_color()
+
+        (line,) = target.plot(series.index, series.values, label=label, **kwargs)
+
+        # remember for legend
+        if target is ax_left:
+            state["left_lines"].append(line)
+            # color left ticks/label to the first left line
+            if state["left_color"] is None:
+                state["left_color"] = line.get_color()
+                ax_left.tick_params(axis="y", labelcolor=state["left_color"])
+                if ylabel_left:
+                    ax_left.yaxis.label.set_color(state["left_color"])
+        else:
+            state["right_lines"].append(line)
+            # Label/tick color for this particular right axis
+            target.tick_params(axis="y", labelcolor=line.get_color())
+            # Use provided global ylabel_right if given; else default to the series label
+            target.set_ylabel(ylabel_right or label, color=line.get_color())
+
+        return line
+
+    def legend(loc="best", **kwargs):
+        handles = state["left_lines"] + state["right_lines"]
+        labels = [h.get_label() for h in handles]
+        ax_left.legend(handles, labels, loc=loc, **kwargs)
+
+    # For backward compatibility, return the MOST RECENT right axis (or None initially)
+    ax_right = None
 
     return plot, fig, ax_left, ax_right, legend
 
