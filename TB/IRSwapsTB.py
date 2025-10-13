@@ -185,9 +185,9 @@ class IRSwapsTB(ZODBCacheMixin):
         self.close()
 
     def close(self):
-        if hasattr(self, self._CACHE_ATTR):
-            self._logger.debug(f"Closing ZODB connection for cache: {self._CACHE_ATTR}")
-            self.close_zodb()
+        if hasattr(self, self._cache_attr):
+            self._logger.debug(f"Closing ZODB connection for cache: {self._cache_attr}")
+            self.close_zodb() 
 
     def _cache_key(self, d: DateLike, curve_name: str, q: IRSwapQuery) -> str:
         ns = _dt_to_epoch_ns(d)
@@ -298,7 +298,7 @@ class IRSwapsTB(ZODBCacheMixin):
 
         with self.batched():
             mapping = getattr(self, self._cache_attr)
-            for row, q, curve_name, d in new_rows_with_q:
+            for (row, q, curve_name, d) in new_rows_with_q:
                 if _is_today(d):
                     continue
                 mapping[self._cache_key(d, curve_name, q)] = row

@@ -193,7 +193,7 @@ def make_secondary_axis_plot_v2(*, ylabel_left=None, ylabel_right=None, title=No
         state["right_axes"].append(ax)
         return ax
 
-    def plot(series: pd.Series, *, label=None, which="auto", **kwargs):
+    def plot(series: pd.Series, *, label=None, which="left", **kwargs):
         if not isinstance(series, pd.Series):
             raise TypeError("plot() expects a pandas Series")
 
