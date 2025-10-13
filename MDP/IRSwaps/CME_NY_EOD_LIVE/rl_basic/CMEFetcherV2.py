@@ -184,7 +184,7 @@ class CMEFetcherV2(BaseFetcher):
                 if type.lower() == "df":
                     rl_discount_curve = rl.Curve(
                         nodes=dict(zip(datetime_series, type_series)),
-                        id=curve_id,
+                        id=f"{curve_id}-{curve_date}",
                         convention=RATESLIB_CURVE_DEFINITIONS[curve]["DayCounter"],
                         calendar=RATESLIB_CURVE_DEFINITIONS[curve]["Calendar"],
                         modifier=RATESLIB_CURVE_DEFINITIONS[curve]["BusinessConvention"],

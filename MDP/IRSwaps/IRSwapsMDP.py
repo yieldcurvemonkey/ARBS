@@ -544,6 +544,49 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             return out
 
+        elif self.source.upper() in ["CME_NY_EOD_LIVE-RL_BASIC", "CME_NY_EOD_LIVE_RL_BASIC"]:
+            from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.CMEFetcherV2 import CMEFetcherV2
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            def _to_date(x):
+                if x == "live":
+                    return datetime.date.today()
+                if isinstance(x, datetime.datetime):
+                    return x.date()
+                return x  # already a date
+
+            bdates: List[datetime.date] = [_to_date(t) for t in timestamps]
+            cmef = CMEFetcherV2(**self.config)
+            built = cmef.build_rl_eod_curves(
+                curve_id=f"{self.source}-{curve_name}-bulk",
+                curve=curve_name,
+                type="Df",
+                bdates=bdates,
+                show_tqdm=True,
+                ignore_cache=ignore_cache,
+                **request,
+            )
+
+            for ref_date, rl_curve in built.items():
+                ts = ref_date
+                if isinstance(ref_date, (datetime.datetime, pd.Timestamp)):
+                    ref_date = ref_date.date()
+
+                if rl_curve is None:
+                    continue
+
+                fixings_series = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+                fixings_series = fixings_series[fixings_series.index.date < ref_date] * 100.0
+
+                out[ref_date] = RLIRSwapCurve(
+                    rl_curve_id=curve_name,
+                    rl_curve_handle=rl_curve,
+                    fixings=fixings_series,
+                    meta_data={"timestamp": ts},
+                )
+
+            return out
+
         elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q12", "SDR_INTRADAY_RL_USD_SOFR_MT_Q12"]:
             from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mt_q12.rl_usd_sofr_mt_q12 import rl_usd_sofr_mt_curve_bulk, rl_usd_sofr_mt_curve
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve

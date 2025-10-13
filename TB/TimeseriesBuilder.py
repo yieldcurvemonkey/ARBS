@@ -235,7 +235,7 @@ class TimeseriesBuilder:
 
                 # future-proof for 'ASW' and 'CAS'
                 if spec["op"] == "swap_minus_cash":
-                    if "out" in spread_name.lower():
+                    if "outright" in spread_name.lower():
                         spread = (a - b) * spec["mult"]
                     else:
                         spread = a - b

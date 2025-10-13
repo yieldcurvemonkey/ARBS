@@ -423,9 +423,14 @@ class ErisFuturesFetcher(BaseFetcher):
                 )
             )
 
+            intraday_ts = datetime.datetime.fromisoformat(
+                str(parser.parse(discount_curve_df["Time"].iloc[0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
+            )
+            intraday_ts = intraday_ts.astimezone(pytz.timezone("America/New_York"))
+
             rl_discount_curve = rl.Curve(
                 nodes=dict(zip(discount_curve_filtered_df["Date"], discount_curve_filtered_df["DiscountFactor"])),
-                id=curve_id,
+                id=f"{curve_id}-{intraday_ts}",
                 convention="act360",
                 calendar="nyc",
                 modifier="MF",
@@ -434,11 +439,6 @@ class ErisFuturesFetcher(BaseFetcher):
             )
 
             if return_intraday_timestamp:
-                intraday_ts = datetime.datetime.fromisoformat(
-                    str(parser.parse(discount_curve_df["Time"].iloc[0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
-                )
-                intraday_ts = intraday_ts.astimezone(pytz.timezone("America/New_York"))
-
                 return rl_discount_curve, intraday_ts
 
             return rl_discount_curve

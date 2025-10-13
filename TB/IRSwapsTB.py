@@ -118,6 +118,10 @@ def _build_row_for_query(
             q_eff = replace(q, structure=structure, structure_id=structure, structure_kwargs=skw)
 
         col_name = q_eff.col_name(curve.id())
+
+        mr = dict(q_eff.market_request or {})
+        mr[q_eff.mdp_time_key] = getattr(curve, "meta_data", {}).get("timestamp", ref_dt)
+        q_eff = replace(q_eff, market_request=mr)
         q_eff = q_eff._edited(curve)
     else:
         q_eff = q
