@@ -93,10 +93,17 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         raise NotImplementedError("rateslib not implemented")
 
     def carry_bps_running(self, irswap: rl.IRS, horizon: str):
-        raise NotImplementedError("rateslib not implemented")
+        if self.effective_date(irswap=irswap) > self.calendar_advance(
+            self.reference_date(), f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]}b"
+        ):
+            return 0
+        fwd_irs = self.build_irswap(fwd=horizon, maturity_date=self.maturity_date(irswap))
+        return (self.fair_rate(fwd_irs) - self.fair_rate(irswap)) * 10_000
 
     def roll_bps_running(self, irswap: rl.IRS, horizon: str):
-        return (self.fair_rate(irswap) * 100 - float(irswap.rate(curves=self._rl_curve_handle.roll(horizon)))) * 100
+        rolled_irs = self.build_irswap(effective_date=self.effective_date(irswap), maturity_date=self.calendar_advance(self.maturity_date(irswap), f"-{horizon}"))
+        return (self.fair_rate(irswap) - self.fair_rate(rolled_irs)) * 10_000
+        # return (self.fair_rate(irswap) * 100 - float(irswap.rate(curves=self._rl_curve_handle.roll(horizon)))) * 100
 
     def carry_and_roll_bps_running(self, irswap: rl.IRS, horizon: str):
         raise NotImplementedError("rateslib not implemented")

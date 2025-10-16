@@ -269,7 +269,7 @@ def calc_carry_bps_running(swap: ql.VanillaSwap, curve_handle: ql.YieldTermStruc
         curve=curve,
         curve_handle=curve_handle,
         effective_date=ql_date_to_pydate(swap.startDate() + horizon),
-        maturity_date=ql_date_to_pydate(swap.maturityDate() - horizon),
+        maturity_date=ql_date_to_pydate(swap.maturityDate()),
     )
     return (fwd_rolled_swap.fixedRate() - swap.fixedRate()) * 10_000
 

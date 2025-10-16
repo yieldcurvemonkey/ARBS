@@ -125,6 +125,7 @@ class IRSwapQuery(BaseQuery):
     curve: Optional[str] = None  # becomes market_request['curve_name']
 
     structure_kwargs: Dict[str, Any] = field(default_factory=dict)
+    value_kwargs: Dict[str, Any] = field(default_factory=dict)
     risk_weight: Optional[float] = None
     _curve_name: Optional[str] = None
 
@@ -265,13 +266,71 @@ class IRSwapQuery(BaseQuery):
             verb = f"Paid {human_format_risk}" if self.structure_kwargs["bpv"] < 0 else f"Rec {human_format_risk}"
             to_return = f"{verb} {prefix}{suffix}"
 
-        return re.sub(r'\s\s+', " ", to_return)
+        # TODO add value_kwargs
+
+        return re.sub(r"\s\s+", " ", to_return)
 
     def eval_expression(self, cube_name: Optional[str] = None, ignore_risk_weight: bool = False) -> str:
         col = self.col_name(cube_name=cube_name)
         if (self.risk_weight is not None) and (not ignore_risk_weight):
             return f"{self.risk_weight} * `{col}`"
         return f"`{col}`"
+
+    def resolve_query(self, ref_dt):
+        import copy
+
+        q = copy.deepcopy(self)
+
+        def _norm(tok: str) -> str:
+            t = (tok or "").strip().upper().replace(" ", "")
+            t = t.replace("X", "x")
+            m = re.match(r"^(\d+[DWMY])(\d+[DWMY])$", t)
+            if m:
+                return f"{m.group(1)}x{m.group(2)}"
+            return t
+
+        if q.tenor is not None:
+            structure = getattr(q, "structure", None)
+            txt = (getattr(q, "tenor", "") or "") or (getattr(q, "node", "") or "") or (getattr(q, "label", "") or "")
+            skw = dict(getattr(q, "structure_kwargs", {}) or {})
+
+            x_ct = txt.count("x")
+            slash_ct = txt.count("/")
+
+            if x_ct >= 2 or slash_ct >= 2:
+                structure = IRSwapStructure.FLY
+                tokens = [_norm(t) for t in re.split(r"\s*/\s*", txt) if t.strip()]
+                if len(tokens) != 3:
+                    raise ValueError(f"Expected 3 legs for FLY, got {len(tokens)} in '{txt}'")
+                skw["front_tenor"], skw["belly_tenor"], skw["back_tenor"] = tokens
+
+            elif x_ct == 1 or slash_ct == 1:
+                structure = IRSwapStructure.CURVE
+                tokens = [_norm(t) for t in re.split(r"\s*/\s*", txt) if t.strip()]
+                if len(tokens) == 2:
+                    skw["front_tenor"], skw["back_tenor"] = tokens
+                else:
+                    structure = IRSwapStructure.OUTRIGHT if structure is None else structure
+                    skw["tenor"] = _norm(txt)
+
+            else:
+                structure = IRSwapStructure.OUTRIGHT if structure is None else structure
+                skw["tenor"] = _norm(q.tenor)
+
+            skw.setdefault("bpv", 1)
+            try:
+                q_eff = replace(q, structure=structure, structure_kwargs=skw)
+            except TypeError:
+                q_eff = replace(q, structure=structure, structure_id=structure, structure_kwargs=skw)
+
+            mr = dict(q_eff.market_request or {})
+            mr[q_eff.mdp_time_key] = getattr(self.curve, "meta_data", {}).get("timestamp", ref_dt)
+            q_eff = replace(q_eff, market_request=mr)
+            q_eff = q_eff._edited(self.curve)
+        else:
+            q_eff = q
+
+        return q_eff
 
     # ---- arithmetic sugar (keeps IRSwapQuery type) ----
 

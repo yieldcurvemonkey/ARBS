@@ -129,7 +129,7 @@ def _build_row_for_query(
 
     pkg, rw = q_eff.resolve_package(pricer_or_curve=curve, is_for_timeseries=True)
     val_map = q_eff.build_value_map(pricer_or_curve=curve, package=pkg, risk_weights=rw)
-    value = val_map.apply(value=q_eff.value)
+    value = val_map.apply(value=q_eff.value, **q.value_kwargs)
     return ref_dt, col_name, float(value)
 
 
@@ -187,7 +187,7 @@ class IRSwapsTB(ZODBCacheMixin):
     def close(self):
         if hasattr(self, self._cache_attr):
             self._logger.debug(f"Closing ZODB connection for cache: {self._cache_attr}")
-            self.close_zodb() 
+            self.close_zodb()
 
     def _cache_key(self, d: DateLike, curve_name: str, q: IRSwapQuery) -> str:
         ns = _dt_to_epoch_ns(d)
@@ -298,7 +298,7 @@ class IRSwapsTB(ZODBCacheMixin):
 
         with self.batched():
             mapping = getattr(self, self._cache_attr)
-            for (row, q, curve_name, d) in new_rows_with_q:
+            for row, q, curve_name, d in new_rows_with_q:
                 if _is_today(d):
                     continue
                 mapping[self._cache_key(d, curve_name, q)] = row
@@ -425,6 +425,8 @@ class IRSwapsTB(ZODBCacheMixin):
         partial_missing_dates: dict[str, set[pd.Timestamp]] = {}
         missing_today_dates: dict[str, set[pd.Timestamp]] = {}
         pre_cached_rows: dict[str, list[dict]] = {}
+
+        pending_writes: list[tuple[str, dict]] = []
 
         for raw_label in items:
             label = raw_label.strip().upper()
@@ -626,9 +628,8 @@ class IRSwapsTB(ZODBCacheMixin):
                         record = {_date_col: pd.Timestamp(dts).to_pydatetime(), colname: cvx}
                         rows.append(record)
 
-                        # DO NOT cache "today"
                         if not _is_today(ts):
-                            mapping[self._cache_key(ts, curve, q)] = {_date_col: ts, q.col_name(curve): cvx}
+                            pending_writes.append((self._cache_key(ts, curve, q), {_date_col: ts, q.col_name(curve): cvx}))
                     except Exception:
                         pass
 
@@ -681,13 +682,19 @@ class IRSwapsTB(ZODBCacheMixin):
 
                         ts = pd.Timestamp(dts).to_pydatetime()
                         if not _is_today(ts):
-                            mapping[self._cache_key(ts, curve, q)] = {_date_col: ts, q.col_name(curve): cvx}
+                            pending_writes.append((self._cache_key(ts, curve, q), {_date_col: ts, q.col_name(curve): cvx}))
                     except Exception:
                         pass
 
             if rows:
                 df_i = pd.DataFrame(rows).sort_values(_date_col, kind="mergesort").drop_duplicates(subset=[_date_col], keep="last").set_index(_date_col)[[colname]]
                 out_frames.append(df_i)
+
+        if pending_writes:
+            with self.batched():
+                mapping = getattr(self, self._cache_attr)  # re-grab in case of ConnectionProxy refresh
+                for k, rec in pending_writes:
+                    mapping[k] = rec
 
         if not out_frames:
             return pd.DataFrame()

@@ -1,7 +1,7 @@
 import datetime
 import hashlib
 import re
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Literal, Tuple, Dict
 
 import pandas as pd
 
@@ -195,3 +195,95 @@ class _RLCurveCache(ZODBCacheMixin):
         }
         self.zodb_commit()
         return key, result_json, pricing_location
+
+    def _eris_key(self, curve_id: str, as_of: Union[datetime.date, str]) -> str:
+        return f"{as_of}-ERIS_EOD_LIVE-rl_basic_{curve_id}"
+
+    def get_eris_eod_live_rl_basic(
+        self,
+        *,
+        curve_id: str,
+        as_of: Union[datetime.date, Literal["live"]],
+        force_refresh: bool = False,
+        fetcher_kwargs: Optional[dict] = None,
+    ) -> Tuple[str, str, Union[datetime.date, datetime.datetime]]:
+        from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
+
+        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
+        mapping = getattr(self, self._cache_attr)
+
+        key = self._eris_key(curve_id, as_of)
+        if as_of != "live" and (not force_refresh) and key in mapping:
+            stored = mapping[key]
+            return key, stored["result"], stored["timestamp"]
+
+        eff = ErisFuturesFetcher()
+        kwargs = dict(show_tqdm=False, return_intraday_timestamp=True)
+        if fetcher_kwargs:
+            kwargs.update(fetcher_kwargs)
+
+        rl_curve, ts = eff.fetch_intraday_discount_curve(
+            curve_id=curve_id,
+            date=None if as_of == "live" else as_of,
+            **kwargs,
+        )
+        result_json = rl_curve.to_json()
+
+        if as_of != "live":
+            mapping[key] = {"result": result_json, "timestamp": ts}
+            self.zodb_commit()
+
+        return key, result_json, ts
+
+    def bulk_get_eris_eod_live_rl_basic(
+        self,
+        *,
+        base_curve_id: str,
+        bdates: List[datetime.date],
+        force_refresh: bool = False,
+        fetcher_kwargs: Optional[dict] = None,
+    ) -> Dict[datetime.date, str]:
+        from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
+
+        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
+        mapping = getattr(self, self._cache_attr)
+
+        to_fetch: List[datetime.date] = []
+        out: Dict[datetime.date, str] = {}
+
+        if not force_refresh:
+            for d in bdates:
+                k = self._eris_key(base_curve_id, d)
+                if k in mapping:
+                    out[d] = mapping[k]["result"]
+                else:
+                    to_fetch.append(d)
+        else:
+            to_fetch = list(bdates)
+
+        if to_fetch:
+            eff = ErisFuturesFetcher()
+            kwargs = dict(show_tqdm=False, return_intraday_timestamp=False)
+            if fetcher_kwargs:
+                kwargs.update(fetcher_kwargs)
+
+            built = eff.fetch_intraday_discount_curve(
+                curve_id=base_curve_id,
+                bdates=to_fetch,
+                **kwargs,
+            )  # Dict[date, rl.Curve]
+
+            pending = []
+            for d, curve in built.items():
+                k = self._eris_key(base_curve_id, d)
+                js = curve.to_json()
+                out[d] = js
+                pending.append((k, {"result": js, "timestamp": d}))
+
+            if pending:
+                with self.batched():  # write-all-once pattern
+                    mapping = getattr(self, self._cache_attr)  # refresh in case of proxy
+                    for k, payload in pending:
+                        mapping[k] = payload
+
+        return out

@@ -1,11 +1,20 @@
 import datetime
+import warnings
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 import pandas as pd
+import pytz
+
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    module=r"ZODB\.Connection",
+    message=r".*object you're saving is large.*",
+)
 
 from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
-from Query.Base._GenericPricable import _GenericPricable
 from MDP.MarketDataProvider import MarketDataProvider
+from Query.Base._GenericPricable import _GenericPricable
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 
 
@@ -15,10 +24,15 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         super().__init__(source, **kwargs)
         self.force_refresh_fixings = force_refresh_fixings
 
-        if "SDR_INTRADAY-RL" in source.upper() or "SDR_INTRADAY_RL" in source.upper():
+        if "SDR_INTRADAY-RL" in source.upper() or "SDR_INTRADAY_RL" in source.upper() or "SDR_3PM_EOD-RL" in source.upper() or "SDR_3PM_EOD_RL" in source.upper():
             from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
 
             self._rl_curve_cache = _RLCurveCache(cache_name="SDR_INTRADAY-RL_CURVE_CACHE")
+
+        if "ERIS_EOD_LIVE-RL_BASIC" in source.upper() or "ERIS_EOD_LIVE_RL_BASIC" in source.upper():
+            from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
+
+            self._rl_curve_cache = _RLCurveCache(cache_name="ERIS_EOD_LIVE-RL_BASIC")
 
         if "GSQUANT-RL" in source.upper() or "GSQUANT_RL" in source.upper():
             from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
@@ -121,6 +135,38 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             fixings_series: pd.Series = fixings_series[fixings_series.index.date < ref]
 
             return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=fixings_series, meta_data={"timestamp": ts, "id": curve_id})
+
+        elif self.source.upper() in ["ERIS_EOD_LIVE-RL_BASIC", "ERIS_EOD_LIVE_RL_BASIC"]:
+            from rateslib import from_json
+
+            from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
+            from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            assert type(timestamp) == datetime.date or timestamp == "live", "CME_NY_EOD ONLY HAS EOD - 'timestamp' must be type 'datetime.date' or Literal['live']"
+            assert curve_name in RATESLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."
+
+            curve_id = f"{self.source.upper()}-{curve_name}-{timestamp}"
+
+            if timestamp == "live":
+                eff = ErisFuturesFetcher(**self.config)
+                rl_curve_handle, ts = eff.fetch_intraday_discount_curve(curve_id=curve_id, date=None, show_tqdm=True, return_intraday_timestamp=True, **kwargs)
+            else:
+                _, rl_json, ts = self._rl_curve_cache.get_eris_eod_live_rl_basic(
+                    curve_id=curve_id, as_of=timestamp, force_refresh=kwargs.get("force_refresh", False), fetcher_kwargs={"show_tqdm": False}
+                )
+                rl_curve_handle = from_json(rl_json)
+
+            ref = datetime.date.today() if timestamp == "live" else timestamp
+            fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            fixings_series = fixings_series[fixings_series.index.date < ref]
+
+            return RLIRSwapCurve(
+                rl_curve_id=curve_name,
+                rl_curve_handle=rl_curve_handle,
+                fixings=fixings_series,
+                meta_data={"timestamp": ts, "id": curve_id},
+            )
 
         elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q12", "SDR_INTRADAY_RL_USD_SOFR_MT_Q12"]:
             assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
@@ -437,6 +483,31 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
             return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
 
+        elif self.source.upper() in ["SDR_3PM_EOD-RL_USD_SOFR_MTV2_Q12X11", "SDR_3PM_EOD_RL_USD_SOFR_MTV2_Q12X11"]:
+            assert type(timestamp) == datetime.date or timestamp == "live", "need to pass in a 'datetime.date' timestamp"
+            assert curve_name == "USD-SOFR-1D", "SOFR!"
+
+            # 3pm close
+            if timestamp.lower() != "live":
+                timestamp = pytz.timezone("America/New_York").localize(datetime.datetime(timestamp.year, timestamp.month, timestamp.day, 15, 00))
+
+            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mtv2_q12x11.rl_usd_sofr_mtv2_q12x11 import rl_usd_sofr_mt_curve
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
+            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+
+            curve_id = f"{timestamp}-SDR_3PM_EOD-RL_USD_SOFR_MTV2_Q12x11"
+            ts, rl_curve_handle = rl_usd_sofr_mt_curve(
+                curve_id=curve_id,
+                snap=timestamp,
+                sofr_fixings=sofr_fixings,
+                cache=self._rl_curve_cache if timestamp != "live" else None,
+                force_refresh=kwargs.get("force_refresh", False),
+            )
+            return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
+
         elif "GSQUANT-RL" in self.source.upper() or "GSQUANT_RL" in self.source.upper():
             assert type(timestamp) == datetime.date, "GSQUANT ONLY HAS EOD - 'timestamp' must be type 'datetime.date'"
 
@@ -544,6 +615,64 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             return out
 
+        elif self.source.upper() in ["ERIS_EOD_LIVE-RL_BASIC", "ERIS_EOD_LIVE_RL_BASIC"]:
+            from rateslib import from_json
+
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            def _to_date(x):
+                if x == "live":
+                    return datetime.date.today()
+                if isinstance(x, datetime.datetime):
+                    return x.date()
+                return x  # already a date
+
+            bdates: List[datetime.date] = [_to_date(t) for t in timestamps]
+
+            today = datetime.date.today()
+            past_dates = [d for d in bdates if d < today]
+            today_dates = [d for d in bdates if d == today]
+
+            built_json: Dict[datetime.date, str] = {}
+            if past_dates:
+                built_json = self._rl_curve_cache.bulk_get_eris_eod_live_rl_basic(
+                    base_curve_id=f"{self.source}-{curve_name}-bulk",
+                    bdates=past_dates,
+                    force_refresh=ignore_cache,
+                    fetcher_kwargs={"show_tqdm": True},
+                )
+
+            for ref_date in today_dates:
+                _, rl_json_live, ts_live = self._rl_curve_cache.get_eris_eod_live_rl_basic(
+                    curve_id=f"{self.source}-{curve_name}-live",
+                    as_of="live",
+                    force_refresh=True if ignore_cache else False,
+                    fetcher_kwargs={"show_tqdm": True},
+                )
+                fixings_series = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+                fixings_series = fixings_series[fixings_series.index.date < ref_date] * 100.0
+
+                out[ref_date] = RLIRSwapCurve(
+                    rl_curve_id=curve_name,
+                    rl_curve_handle=from_json(rl_json_live),
+                    fixings=fixings_series,
+                    meta_data={"timestamp": ts_live},  # live intraday timestamp
+                )
+
+            for ref_date, json_str in built_json.items():
+                ts = ref_date  # EOD (date) timestamp semantics for cached paths
+                fixings_series = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+                fixings_series = fixings_series[fixings_series.index.date < ref_date] * 100.0
+
+                out[ref_date] = RLIRSwapCurve(
+                    rl_curve_id=curve_name,
+                    rl_curve_handle=from_json(json_str),
+                    fixings=fixings_series,
+                    meta_data={"timestamp": ts},
+                )
+
+            return out
+
         elif self.source.upper() in ["CME_NY_EOD_LIVE-RL_BASIC", "CME_NY_EOD_LIVE_RL_BASIC"]:
             from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.CMEFetcherV2 import CMEFetcherV2
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
@@ -588,7 +717,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             return out
 
         elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q12", "SDR_INTRADAY_RL_USD_SOFR_MT_Q12"]:
-            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mt_q12.rl_usd_sofr_mt_q12 import rl_usd_sofr_mt_curve_bulk, rl_usd_sofr_mt_curve
+            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mt_q12.rl_usd_sofr_mt_q12 import rl_usd_sofr_mt_curve, rl_usd_sofr_mt_curve_bulk
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             max_ref_date = max(t.date() if isinstance(t, (datetime.date, datetime.datetime)) else datetime.date.today() for t in timestamps)
@@ -643,7 +772,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             return out
 
         elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MTV2_Q12X11", "SDR_INTRADAY_RL_USD_SOFR_MTV2_Q12X11"]:
-            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mtv2_q12x11.rl_usd_sofr_mtv2_q12x11 import rl_usd_sofr_mt_curve_bulk, rl_usd_sofr_mt_curve
+            from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mtv2_q12x11.rl_usd_sofr_mtv2_q12x11 import rl_usd_sofr_mt_curve, rl_usd_sofr_mt_curve_bulk
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             max_ref_date = max(t.date() if isinstance(t, (datetime.date, datetime.datetime)) else datetime.date.today() for t in timestamps)

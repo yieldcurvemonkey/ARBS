@@ -9,7 +9,7 @@ from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
 
 _N_SER_CONTRACTS = 11
 _N_SFR_CONTRACTS = 12
-_N_PLUS_FOMC_YRS = 3
+_N_PLUS_FOMC_YRS = 1
 # _MT_TENORS = ["5Y", "10Y", "30Y"]
 _MT_TENORS = ["5Y", "7Y", "10Y", "20Y", "30Y"]
 _MT_TENOR_MAX = f"{max([int(t[:-1]) for t in _MT_TENORS])}Y"
