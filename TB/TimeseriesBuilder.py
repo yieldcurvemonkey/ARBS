@@ -163,7 +163,7 @@ class TimeseriesBuilder:
                     q_frb = FixedRateBondQuery(cusip=q.tenor, value=FixedRateBondValue.YTM)
                     q_irs = IRSwapQuery(curve=q.curve, tenor=q.tenor, value=IRSwapValue.RATE)
                     op = "swap_minus_cash"  # spread = IRS - UST
-                    mult = 100.0  # report in bps
+                    # mult = 100.0  # report in bps
 
                 elif q.value == IRSwapValue.SPREADOVER:
                     t = str(q.tenor)
@@ -176,7 +176,7 @@ class TimeseriesBuilder:
                     else:
                         raise NotImplementedError(f"Unrecognized SPREADOVER tenor: {t!r}")
                     op = "swap_minus_cash"  # spreadover = IRS - UST
-                    mult = 100.0
+                    # mult = 100.0
 
                 else:
                     raise NotImplementedError(f"Unhandled spread type: {q.value}")
@@ -204,7 +204,7 @@ class TimeseriesBuilder:
                         "irs_col": irs_col,
                         "frb_col": frb_col,
                         "op": op,  # 'swap_minus_cash' or 'cash_minus_swap'
-                        "mult": mult,  # e.g., 100.0 for bps
+                        # "mult": mult,  # e.g., 100.0 for bps
                     }
                 )
 
@@ -235,8 +235,8 @@ class TimeseriesBuilder:
 
                 # future-proof for 'ASW' and 'CAS'
                 if spec["op"] == "swap_minus_cash":
-                    if "outright" in spread_name.lower():
-                        spread = (a - b) * spec["mult"]
+                    if "outright" in str(spec["irs_col"]).lower():
+                        spread = (a - b) * 100 
                     else:
                         spread = a - b
                 else:
