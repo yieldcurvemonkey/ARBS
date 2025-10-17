@@ -27,7 +27,7 @@ def simulate_mean_reversion_ou(df: pd.DataFrame, steps: Optional[int] = 252) -> 
 
     def get_first_passage_time(start_value, mean, sigma, lambda_param):
         simulations = 150
-        monte_carlo_df = ou_monte_carlo(start_value, mean, sigma, lambda_param, simulations, 100)
+        monte_carlo_df = ou_monte_carlo(start_value, mean, sigma, lambda_param, simulations, steps)
         return count_while(100, monte_carlo_df, mean, simulations)
 
     def get_mean_reversion_params(df: pd.DataFrame):
