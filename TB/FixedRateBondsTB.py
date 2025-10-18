@@ -199,7 +199,7 @@ class FixedRateBondsTB(ZODBCacheMixin):
         for d in ref_points:
             for q in flat:
                 k = self._cache_key(d, q)
-                if (k in cache_map) and not ignore_cache:
+                if (k in cache_map) and not ignore_cache and not (d == datetime.date.today() or d == "live"):
                     cached_rows.append(cache_map[k])
                 else:
                     to_fetch_cusips_by_date[d].add(q.cusip)
@@ -215,7 +215,7 @@ class FixedRateBondsTB(ZODBCacheMixin):
             for d in dates_to_price:
                 try:
                     pricer_map: Dict[str, object] = self.mdp.get_pricer(
-                        {"cusips": list(sorted(to_fetch_cusips_by_date[d])), "timestamp": d, "ignore_cache": ignore_cache}
+                        {"cusips": list(sorted(to_fetch_cusips_by_date[d])), "timestamp": "live" if d == datetime.date.today() else d, "ignore_cache": ignore_cache}
                     )
                 except Exception as e:
                     self._logger.exception(f"Pricer fetch failed for date={d}'. Error: {e}")
@@ -225,16 +225,20 @@ class FixedRateBondsTB(ZODBCacheMixin):
                 tasks: List[Tuple[datetime.datetime | datetime.date, FixedRateBondQuery, Dict[str, object]]] = []
 
                 for q in qs:
-                    if not isinstance(pricer_map, dict):
-                        self._logger.warning(f"No pricer returned for CUSIP='{q.cusip}' on date='{d}'.")
-                        pbar.update(1)
-                        continue
+                    try:
+                        if not isinstance(pricer_map, dict):
+                            self._logger.warning(f"No pricer returned for CUSIP='{q.cusip}' on date='{d}'.")
+                            pbar.update(1)
+                            continue
 
-                    indy_cusips = [k.strip() for k in str(q.cusip).split("/") if k.strip()]
-                    missing = [k for k in indy_cusips if k not in pricer_map]
-                    if missing:
-                        pricer_map = pricer_map | self.mdp.get_pricer({"cusips": missing, "timestamp": d, "ignore_cache": ignore_cache})
-                    tasks.append((d, q, dict((k, pricer_map[k]) for k in indy_cusips)))
+                        indy_cusips = [k.strip() for k in str(q.cusip).split("/") if k.strip()]
+                        missing = [k for k in indy_cusips if k not in pricer_map]
+                        if missing:
+                            pricer_map = pricer_map | self.mdp.get_pricer({"cusips": missing, "timestamp": d, "ignore_cache": ignore_cache})
+                        tasks.append((d, q, dict((k, pricer_map[k]) for k in indy_cusips)))
+                    except:
+                        # TODO handle errors
+                        pass
 
                 if not tasks:
                     continue

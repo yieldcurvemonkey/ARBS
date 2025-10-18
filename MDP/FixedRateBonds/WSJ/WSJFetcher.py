@@ -8,10 +8,11 @@ from typing import Dict, List, Literal, Optional, Tuple
 import httpx
 import numpy as np
 import pandas as pd
+import pytz
+import requests
 import tqdm
 import tqdm.asyncio
 import ujson as json
-import requests
 from requests.models import PreparedRequest
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -461,10 +462,16 @@ class WSJFetcher(BaseFetcher):
     def fetch_live_ust_quotes(
         self,
         cusips: List[str],
-    ) -> pd.DataFrame:
+        *,
+        batch_size: int = 50,
+        max_concurrent_tasks: int = 16,
+        show_tqdm: bool = False,
+    ) -> Dict[str, Dict[str, float]]:
+        from requests.models import PreparedRequest
 
         url = "https://api.wsj.net/api/dylan/quotes/v2/comp/quoteByDialect"
-        params = {
+
+        base_params = {
             "dialect": "official",
             "needed": "CompositeTrading|BluegrassChannels",
             "MaxInstrumentMatches": "1",
@@ -472,41 +479,102 @@ class WSJFetcher(BaseFetcher):
             "EntitlementToken": "cecc4267a0194af89ca343805a3e57af",
             "ckey": "cecc4267a0",
             "dialects": "Charting",
-            "id": ",".join([f"Bond-US-{get_isin_from_cusip(c, "US")[2:]}" for c in cusips]),
+            # "id" will be filled per batch
         }
 
-        prep = PreparedRequest()
-        prep.prepare_url(url, params)
+        def _chunks(lst: List[str], n: int):
+            for i in range(0, len(lst), n):
+                yield lst[i : i + n]
 
-        headers = {
-            "authority": "api.wsj.net",
-            "method": "GET",
-            "path": prep.path_url,
-            "scheme": "https",
-            "Connection": "keep-alive",
-            "Pragma": "no-cache",
-            "Cache-Control": "no-cache",
-            "sec-ch-ua": '" Not A;Brand";v="99", "Chromium";v="99", "Google Chrome";v="99"',
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "sec-ch-ua-mobile": "?0",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.74 Safari/537.36",
-            "sec-ch-ua-platform": '"macOS"',
-            "Origin": "https://www.wsj.com",
-            "Sec-Fetch-Site": "cross-site",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Dest": "empty",
-            "Referer": "https://www.wsj.com/",
-            "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
-        }
+        async def _fetch_batch(client: httpx.AsyncClient, batch: List[str]) -> Dict[str, Dict[str, Optional[float]]]:
+            # WSJ expects ids like: Bond-US-<ISIN_WITHOUT_COUNTRY_PREFIX>
+            ids = ",".join([f"Bond-US-{get_isin_from_cusip(c, 'US')[2:]}" for c in batch])
 
-        res = requests.get(prep.url, headers=headers)
-        res_json = res.json()["InstrumentResponses"]
-        quotes = {}
-        for b in res_json:
-            c = b["Matches"][0]["Instrument"]["Cusip"]
-            price = b["Matches"][0]["BondSpecific"]["TradePrice"]["Value"]
-            ytm = b["Matches"][0]["BondSpecific"]["Yield"]
+            params = dict(base_params)
+            params["id"] = ids
 
-            quotes[c] = {"price": price, "ytm": ytm}
+            prep = PreparedRequest()
+            prep.prepare_url(url, params)
 
-        return quotes
+            headers = {
+                "authority": "api.wsj.net",
+                "method": "GET",
+                "path": prep.path_url,
+                "scheme": "https",
+                "Connection": "keep-alive",
+                "Pragma": "no-cache",
+                "Cache-Control": "no-cache",
+                "sec-ch-ua": '" Not A;Brand";v="99", "Chromium";v="99", "Google Chrome";v="99"',
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "sec-ch-ua-mobile": "?0",
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.74 Safari/537.36",
+                "sec-ch-ua-platform": '"macOS"',
+                "Origin": "https://www.wsj.com",
+                "Sec-Fetch-Site": "cross-site",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Dest": "empty",
+                "Referer": "https://www.wsj.com/",
+                "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
+            }
+
+            out: Dict[str, Dict[str, Optional[float]]] = {}
+            try:
+                resp = await client.get(prep.url, headers=headers)
+                resp.raise_for_status()
+                payload = resp.json().get("InstrumentResponses", [])
+
+                for entry in payload:
+                    try:
+                        match = entry["Matches"][0]
+                        c = match["Instrument"]["Cusip"]
+                        price = match.get("BondSpecific", {}).get("TradePrice", {}).get("Value")
+                        ytm = match.get("BondSpecific", {}).get("Yield")
+                        timestamp = match.get("CompositeTrading", {}).get("Last", {}).get("Time")
+                        out[c] = {
+                            "price": price,
+                            "ytm": ytm,
+                            "timestamp": pytz.UTC.localize(datetime.fromisoformat(timestamp)).astimezone(pytz.timezone("America/New_York")),
+                        }
+                    except Exception:
+                        # If WSJ couldn't match, keep None values so caller sees it's missing
+                        # Try to back-fill CUSIP if possible
+                        try:
+                            c = entry["RequestedSymbol"].split("-")[-1]  # last token is ISIN w/o country in some cases
+                        except Exception:
+                            c = None
+                        if c:
+                            out.setdefault(c, {"price": None, "ytm": None, "timestamp": None})
+                return out
+
+            except Exception as e:
+                self._logger.error(f"WSJ live quotes batch failed: {e}")
+                # Return empty for this batch; caller will simply miss these until retry
+                return out
+
+        async def _runner(batches: List[List[str]]) -> Dict[str, Dict[str, Optional[float]]]:
+            semaphore = asyncio.Semaphore(max_concurrent_tasks)
+
+            async with httpx.AsyncClient(
+                timeout=self._global_timeout,
+                mounts=self._httpx_proxies,
+                verify=False,
+                http2=True,
+            ) as client:
+
+                async def _guarded(batch):
+                    async with semaphore:
+                        return await _fetch_batch(client, batch)
+
+                tasks = [_guarded(b) for b in batches]
+                if show_tqdm:
+                    results = await tqdm.asyncio.tqdm.gather(*tasks, desc="FETCHING LIVE UST QUOTES...")
+                else:
+                    results = await asyncio.gather(*tasks)
+
+            merged: Dict[str, Dict[str, Optional[float]]] = {}
+            for d in results:
+                merged.update(d)
+            return merged
+
+        batches = list(_chunks(cusips, batch_size))
+        return asyncio.run(_runner(batches))

@@ -240,6 +240,15 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
                 QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["Frequency"],
             ),
         )
+    
+    def time_to_maturity(self):
+        as_of = self.reference_date()
+        mat = self.maturity_date()
+        dc = ql.ActualActual(ql.ActualActual.Actual365)
+        ql_as_of = ql.Date(as_of.day, as_of.month, as_of.year)
+        ql_mat = ql.Date(mat.day, mat.month, mat.year) 
+        ql.Settings.instance().evaluationDate = ql_as_of
+        return dc.yearFraction(ql_as_of, ql_mat)
 
     def zspread(self):
         raise NotImplementedError()

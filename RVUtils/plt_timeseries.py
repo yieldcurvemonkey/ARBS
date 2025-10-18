@@ -1,3 +1,8 @@
+import datetime
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
 from RVUtils.mean_reversion import simulate_mean_reversion_ou
 
 
@@ -32,10 +37,6 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None)
         {'kind': 'vr',          'k': 5, 'window': 252, 'returns': 'simple', 'label': None, 'style': {}, 'hide': False},
       ]
     """
-    import datetime
-    import numpy as np
-    import pandas as pd
-    import matplotlib.pyplot as plt
 
     fig, ax_left = plt.subplots()
     fig.subplots_adjust(right=0.75)

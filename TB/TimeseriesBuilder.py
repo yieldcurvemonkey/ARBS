@@ -4,12 +4,15 @@ from typing import TYPE_CHECKING, DefaultDict, Dict, Iterable, List, Optional, T
 
 import re
 import pandas as pd
+import tqdm
 
 from Query.Base.BaseQuery import BaseQuery
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
+from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 from Query.IRSwaps.IRSwapValue import IRSwapValue
+from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 
 from TB.utils import DateLike
 
@@ -87,6 +90,7 @@ class TimeseriesBuilder:
 
         per_product_frames: List[Tuple[str, pd.DataFrame]] = []
         irswap_spread_queries: List[IRSwapQuery] = []
+        irswap_asw_queries: List[IRSwapQuery] = []
 
         for product, qs in by_product.items():
             tb = self._routers.get(product)
@@ -96,12 +100,13 @@ class TimeseriesBuilder:
             if product == "IRS":
                 irs_qs_unfiltered: List[IRSwapQuery] = [q for q in qs if isinstance(q, IRSwapQuery)]
 
-                irs_qs = []
+                irs_qs: List[IRSwapQuery] = []
+
                 for q in irs_qs_unfiltered:
                     if q.value in [IRSwapValue.MMSS, IRSwapValue.SPREADOVER]:
                         irswap_spread_queries.append(q)
-                    elif q.value in [IRSwapValue.ASW]:
-                        raise NotImplementedError()
+                    elif q.value in [IRSwapValue.PAR_PAR_ASW, IRSwapValue.PAR_PAR_ASW, IRSwapValue.TRUE_ASW, IRSwapValue.PROCEEDS_ASW, IRSwapValue.MARKET_ASW]:
+                        irswap_asw_queries.append(q)
                     else:
                         irs_qs.append(q)
 
@@ -236,7 +241,7 @@ class TimeseriesBuilder:
                 # future-proof for 'ASW' and 'CAS'
                 if spec["op"] == "swap_minus_cash":
                     if "outright" in str(spec["irs_col"]).lower():
-                        spread = (a - b) * 100 
+                        spread = (a - b) * 100
                     else:
                         spread = a - b
                 else:
@@ -249,6 +254,35 @@ class TimeseriesBuilder:
                 spread_df.index.name = self._date_col
                 per_product_frames.append(("SWAPSPREADS", pd.concat({"SWAPSPREADS": spread_df}, axis=1)))
 
+        if irswap_asw_queries:
+            irs_mdp = tb.mdp
+            frb_mdp = self._routers["FRB"].mdp
+
+            ref_points = pd.bdate_range(start, end).date.tolist()
+            rows = []
+            for d in tqdm.tqdm(ref_points, desc="PRICING ASSET SWAPS..."):
+                for q in irswap_asw_queries:
+                    try:
+                        curve = irs_mdp.get_pricer({"curve_name": q.curve, "timestamp": d})
+                        ql_curve = curve
+
+                        alias = str(q.tenor)
+                        frb_pricers = frb_mdp.get_pricer({"cusips": [alias], "timestamp": d})
+                        if not frb_pricers:
+                            continue
+                        frb_pricer = next(iter(frb_pricers.values()))
+
+                        idx = getattr(ql_curve, "index")() if hasattr(ql_curve, "index") else None
+                        asw_bps = _fair_asw_spread_bps(ql_curve, frb_pricer, par_par_asw=q.value == IRSwapValue.PAR_PAR_ASW)
+                        col = _safe_col_name(q, default=f"ASW[{q.curve}:{alias}]")
+                        rows.append((d, col, float(asw_bps)))
+                    except Exception:
+                        continue
+
+            if rows:
+                df = pd.DataFrame(rows, columns=[self._date_col, "Column", "Value"]).pivot(index=self._date_col, columns="Column", values="Value").sort_index()
+                per_product_frames.append(("IRS__ASW", df))
+
         if not per_product_frames:
             return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
 
@@ -259,3 +293,61 @@ class TimeseriesBuilder:
         out = out.sort_index()
         out.index.name = self._date_col
         return out
+
+    def spline_spread_builder(
+        self,
+    ):
+        pass
+
+
+def _fair_asw_spread_bps(swap_pricer: _IRSwapGenericCurve, frb_pricer: _FixedRateBondGenericPricer, par_par_asw: bool = True) -> float:
+    import QuantLib as ql
+    from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
+    from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
+    from Query.IRSwaps.backends.quantlib.ql_curve_building_utils import build_discount_curve_from_nodes
+
+    ql.Settings.instance().evaluationDate = datetime_to_ql_date(swap_pricer.reference_date())
+
+    ql_aug55 = frb_pricer.build_fixed_rate_bond(
+        issue_date=frb_pricer.issue_date(),
+        maturity_date=frb_pricer.maturity_date(),
+        coupon=frb_pricer.coupon(),
+        notional=100,
+    )
+
+    ql_curve_handle = ql.YieldTermStructureHandle(
+        build_discount_curve_from_nodes(
+            swap_pricer.nodes(), ql_dc=ql.Actual360(), ql_cal=ql.UnitedStates(ql.UnitedStates.GovernmentBond), interpolation_algo="df_log_linear"
+        )
+    )
+    ql_index: ql.SwapIndex = QUANTLIB_CURVE_DEFINITIONS["USD-SOFR-1D"]["ReferenceRate"](ql_curve_handle)
+    fixings_dict = swap_pricer.index().to_dict()
+    for d, f in fixings_dict.items():
+        try:
+            ql_index.addFixing(fixingDate=datetime_to_ql_date(d), fixing=f, forceOverwrite=True)
+        except:
+            continue
+
+    swap = ql.AssetSwap(
+        True,
+        ql_aug55,
+        frb_pricer.clean_price(),
+        ql_index,
+        0.0,
+        ql.Schedule(
+            datetime_to_ql_date(frb_pricer.issue_date()),
+            datetime_to_ql_date(frb_pricer.maturity_date()),
+            ql.Period(6, ql.Months),
+            ql.UnitedStates(ql.UnitedStates.GovernmentBond),
+            ql.ModifiedFollowing,
+            ql.ModifiedFollowing,
+            ql.DateGeneration.Forward,
+            False,
+        ),
+        ql_index.dayCounter(),
+        par_par_asw,
+    )
+    swap.setPricingEngine(ql.DiscountingSwapEngine(ql_curve_handle))
+
+    fair = float(swap.fairSpread())
+    return fair * 10_000

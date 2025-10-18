@@ -21,9 +21,12 @@ class IRSwapValue(Enum):
 
     SPREADOVER = auto()
     MMSS = auto()
+    PAR_PAR_ASW = auto()
+    TRUE_ASW = auto()
+    PROCEEDS_ASW = auto()
+    MARKET_ASW = auto()
 
     # TODO
-    ASW = auto()
     CVX_ADJ = auto()
 
 
