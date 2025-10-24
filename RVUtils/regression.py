@@ -22,9 +22,10 @@ def make_linear_regression_builder(
     add_constant: bool = True,
     date_color_bar: bool = False,
     preprocess: Optional[Dict[str, Any]] = None,
+    window: Optional[int] = None,
 ):
     """
-    Multi-linear regression builder with TLS/OLS/WLS/GLS and rich preprocessing.
+    Multi-linear regression builder with TLS/OLS/WLS/GLS, rich preprocessing, and rolling regression utilities.
     Dates are taken from the index; index MUST be datetime/date-like.
 
     Returns:
@@ -33,6 +34,10 @@ def make_linear_regression_builder(
       plot_actual_vs_predicted(title=None, date_color_bar=None, cmap="viridis", diff_verb=None)
       plot_residuals_vs_predicted(title=None, date_color_bar=None, cmap="viridis", diff_verb=None)
       get_data() -> (X_design_df, y_series, results)
+
+      if window is not None,
+      rolling_beta(*, window=None, model=None, name=None, step=1, min_obs=None, ...)
+      rolling_r2(*, window=None, model=None, step=1, min_obs=None, ...)
     """
 
     # --------------------- helpers: index coercion ---------------------
@@ -132,6 +137,7 @@ def make_linear_regression_builder(
         "scalers": {"X": {}, "y": None},  # scaling params if used
         "dropped_columns": {"missing": [], "zero_var": [], "high_corr": [], "high_vif": []},
         "preprocess": pp,
+        "window_default": (int(window) if window is not None else None),
     }
 
     # --------------------- add_indep_var ---------------------
@@ -1039,7 +1045,242 @@ def make_linear_regression_builder(
         ax.grid(True)
         plt.show()
 
+    def _rolling_core(
+        *,
+        model: Optional[str] = None,
+        window: Optional[int] = None,
+        weights: Optional[Union[pd.Series, np.ndarray, list]] = None,
+        tls_x_errs: Optional[np.ndarray] = None,
+        tls_y_errs: Optional[np.ndarray] = None,
+        tls_lambda: Optional[Union[float, Sequence[float]]] = None,
+        pcr_n_components: Optional[Union[int, float]] = None,
+        pcr_scale: bool = True,
+        step: int = 1,
+        min_obs: Optional[int] = None,
+        verbose: bool = False,
+    ):
+        """
+        Run rolling regressions using the current preprocessing settings and design.
+        Returns (beta_df, r2_series).
+        """
+        # Build full-sample design first (uses your preprocessing config)
+        X_used, y_used, date_used, w_used = _assemble_clean_data(weights=weights)
+
+        # Resolve model and window
+        mdl = (model.upper() if isinstance(model, str) else (state["model"] or "OLS")).upper()
+        if mdl not in {"OLS", "WLS", "GLS", "TLS", "PCR"}:
+            raise ValueError("model must be one of {'OLS','WLS','GLS','TLS','PCR'}")
+
+        W = int(window or state["window_default"] or 60)  # sane default = 60
+        if W < 3:
+            raise ValueError("window must be >= 3.")
+
+        # Columns for parameter matrix (respect constant the same way as fit())
+        beta_cols = list(X_used.columns) if len(X_used.columns) else (["const"] if add_constant else [])
+        beta_df = pd.DataFrame(index=y_used.index[max(W - 1, 0) :], columns=beta_cols, dtype=float)
+        r2 = pd.Series(index=beta_df.index, dtype=float, name="R2")
+
+        # Minimum observations (by default: a bit over-identified)
+        if min_obs is None:
+            p = max(len(beta_cols), 1)
+            min_obs = max(p + 1, 3)
+        step = int(step) if step and step > 0 else 1
+
+        # Rolling loop
+        n = len(y_used)
+        for end in range(W - 1, n, step):
+            start = end - W + 1
+            yw = y_used.iloc[start : end + 1]
+            Xw = X_used.iloc[start : end + 1]
+
+            if len(yw) < min_obs or Xw.shape[0] <= Xw.shape[1]:
+                # under-identified window; leave NaNs
+                continue
+
+            try:
+                if mdl == "PCR":
+                    Xp = Xw.drop(columns=["const"], errors="ignore")
+                    if Xp.shape[1] == 0:
+                        # no regressors; skip
+                        continue
+                    res_w = _pcr_fit(
+                        Xp,
+                        yw,
+                        n_components=pcr_n_components,
+                        scale=pcr_scale,
+                        verbose=False,
+                    )
+
+                elif mdl == "TLS":
+                    X_tls = Xw.drop(columns=["const"], errors="ignore")
+                    if tls_x_errs is None and tls_y_errs is None and tls_lambda is not None:
+                        lam = np.asarray(tls_lambda, dtype=float)
+                        nn, kk = X_tls.shape
+                        if lam.ndim == 0:
+                            sx = np.full((nn, kk), np.sqrt(float(lam)))
+                        elif lam.shape == (kk,):
+                            sx = np.sqrt(lam)[None, :].repeat(nn, axis=0)
+                        else:
+                            raise ValueError("tls_lambda must be a scalar or length-k array.")
+                        sy = np.ones(nn, dtype=float)
+                        res_w = _tls_fit(X_tls, yw, x_errs=sx, y_errs=sy, verbose=False)
+                    else:
+                        res_w = _tls_fit(X_tls, yw, x_errs=tls_x_errs, y_errs=tls_y_errs, verbose=False)
+
+                else:
+                    if mdl == "WLS":
+                        ww = w_used.iloc[start : end + 1] if w_used is not None else None
+                        if ww is None:
+                            raise ValueError("WLS rolling requires 'weights' provided to the builder or to rolling call.")
+                        sm_model = sm.WLS(yw, Xw, weights=ww)
+                    elif mdl == "GLS":
+                        sm_model = sm.GLS(yw, Xw)
+                    else:  # OLS
+                        sm_model = sm.OLS(yw, Xw)
+                    res_w = sm_model.fit()
+
+                # Store params aligned to full beta_cols (const + original features)
+                params_w = res_w.params.reindex(beta_cols)
+                beta_df.iloc[beta_df.index.get_loc(yw.index[-1])] = params_w.values
+                r2.iloc[r2.index.get_loc(yw.index[-1])] = getattr(res_w, "rsquared", np.nan)
+
+            except Exception as e:
+                if verbose:
+                    print(f"Rolling fit failed on window ending {yw.index[-1]}: {e}")
+                # keep NaNs and continue
+                continue
+
+        return beta_df, r2
+
+        # --------------------- public rolling APIs ---------------------
+
+    def rolling_beta(
+        *,
+        window: Optional[int] = None,
+        model: Optional[str] = None,
+        name: Optional[str] = None,
+        step: int = 1,
+        min_obs: Optional[int] = None,
+        weights: Optional[Union[pd.Series, np.ndarray, list]] = None,
+        tls_x_errs: Optional[np.ndarray] = None,
+        tls_y_errs: Optional[np.ndarray] = None,
+        tls_lambda: Optional[Union[float, Sequence[float]]] = None,
+        pcr_n_components: Optional[Union[int, float]] = None,
+        pcr_scale: bool = True,
+        verbose: bool = False,
+    ) -> Union[pd.DataFrame, pd.Series]:
+        """
+        Rolling betas over time (index = window end date).
+        - If `name` is None: returns a DataFrame of all parameters (including 'const' if present).
+        - If `name` provided: returns a Series for that coefficient.
+        """
+        beta_df, _ = _rolling_core(
+            model=model,
+            window=window,
+            weights=weights,
+            tls_x_errs=tls_x_errs,
+            tls_y_errs=tls_y_errs,
+            tls_lambda=tls_lambda,
+            pcr_n_components=pcr_n_components,
+            pcr_scale=pcr_scale,
+            step=step,
+            min_obs=min_obs,
+            verbose=verbose,
+        )
+        if name is None:
+            return beta_df
+        if name not in beta_df.columns:
+            raise KeyError(f"Coefficient '{name}' not found. Available: {list(beta_df.columns)}")
+        out = beta_df[name].copy()
+        out.name = f"beta[{name}]"
+        return out
+
+    def rolling_r2(
+        *,
+        window: Optional[int] = None,
+        model: Optional[str] = None,
+        step: int = 1,
+        min_obs: Optional[int] = None,
+        weights: Optional[Union[pd.Series, np.ndarray, list]] = None,
+        tls_x_errs: Optional[np.ndarray] = None,
+        tls_y_errs: Optional[np.ndarray] = None,
+        tls_lambda: Optional[Union[float, Sequence[float]]] = None,
+        pcr_n_components: Optional[Union[int, float]] = None,
+        pcr_scale: bool = True,
+        verbose: bool = False,
+    ) -> pd.Series:
+        """Rolling R² over time (index = window end date)."""
+        _, r2 = _rolling_core(
+            model=model,
+            window=window,
+            weights=weights,
+            tls_x_errs=tls_x_errs,
+            tls_y_errs=tls_y_errs,
+            tls_lambda=tls_lambda,
+            pcr_n_components=pcr_n_components,
+            pcr_scale=pcr_scale,
+            step=step,
+            min_obs=min_obs,
+            verbose=verbose,
+        )
+        return r2
+    
+    def rolling_correlation(
+        *,
+        window: Optional[int] = None,
+        step: int = 1,
+        min_obs: Optional[int] = None,
+        name: Optional[str] = None,
+        drop_const: bool = True,
+        method: str = "pearson",
+    ) -> Union[pd.DataFrame, pd.Series]:
+        if method.lower() != "pearson":
+            raise ValueError("rolling_correlation currently supports method='pearson' only.")
+
+        # Build full-sample design using your preprocessing pipeline
+        X_used, y_used, _date_used, _ = _assemble_clean_data()
+
+        # Choose window / min obs
+        W = int(window or state.get("window_default") or 60)
+        if W < 3:
+            raise ValueError("window must be >= 3.")
+        mp = int(min_obs) if min_obs is not None else W
+
+        # Select columns to correlate with y
+        Xc = X_used.drop(columns=["const"], errors="ignore") if drop_const else X_used.copy()
+        if Xc.shape[1] == 0:
+            raise ValueError("No regressors available for correlation (after dropping 'const').")
+
+        # Compute rolling Pearson correlations
+        corr_df = pd.DataFrame(index=y_used.index, columns=Xc.columns, dtype=float)
+        for col in Xc.columns:
+            corr_df[col] = y_used.rolling(window=W, min_periods=mp).corr(Xc[col])
+
+        # Keep indices that correspond to fully-formed windows; apply step
+        corr_df = corr_df.iloc[W-1::max(int(step), 1)]
+
+        if name is None:
+            return corr_df
+        if name not in corr_df.columns:
+            raise KeyError(f"'{name}' not found. Available: {list(corr_df.columns)}")
+        out = corr_df[name].copy()
+        out.name = f"corr(y,{name})"
+        return out
+
     def get_data():
         return state["X_used"], state["y_used"], state["results"]
+
+    if window is not None:
+        return (
+            add_indep_var,
+            fit,
+            plot_actual_vs_predicted,
+            plot_residuals_vs_predicted,
+            plot_residuals_timeseries,
+            get_data,
+            rolling_beta,
+            rolling_r2,
+            rolling_correlation
+        )
 
     return add_indep_var, fit, plot_actual_vs_predicted, plot_residuals_vs_predicted, plot_residuals_timeseries, get_data

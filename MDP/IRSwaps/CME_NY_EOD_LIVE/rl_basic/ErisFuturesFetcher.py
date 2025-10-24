@@ -161,8 +161,9 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
         self,
         date: Optional[datetime.date],
         workbook_type: Literal["EOD_DiscountFactors_SOFR", "EOD_ParCouponCurve_SOFR", "Eris_Intraday_DiscountFactors_SOFR"],
+        force_refresh: Optional[bool] = False,
     ) -> Tuple[Optional[BytesIO], Optional[str]]:
-        if date is None or "intraday" in workbook_type.lower():
+        if date is None or "intraday" in workbook_type.lower() or force_refresh:
             return None, None
 
         try:
@@ -485,13 +486,18 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
                 semaphore = asyncio.Semaphore(max_concurrent_tasks)
                 tasks = []
                 for d in dates:
+                    if d == datetime.date.today() or d == "live":
+                        workbook_type = "Eris_Intraday_DiscountFactors_SOFR"
+                    else:
+                        workbook_type = "EOD_DiscountFactors_SOFR"
+
                     tasks.append(
                         asyncio.create_task(
                             self._fetch_and_read_eris_ftp_file(
                                 semaphore=semaphore,
                                 client=client,
                                 date=d,
-                                workbook_type="Eris_Intraday_DiscountFactors_SOFR" if d == datetime.date.today() else "EOD_DiscountFactors_SOFR",
+                                workbook_type=workbook_type,
                                 force_refresh=self._force_refresh,
                             )
                         )
@@ -530,7 +536,7 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
                         intraday_ts = datetime.datetime.fromisoformat(
                             str(parser.parse(df["Time"].iloc[0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
                         ).astimezone(pytz.timezone("America/New_York"))
-                        tday = datetime.date.today()
+                        tday = intraday_ts.date()
 
                     curve = _df_to_curve(df, tday, intraday_ts, curve_id_prefix=curve_id)
                     curves[tday] = curve

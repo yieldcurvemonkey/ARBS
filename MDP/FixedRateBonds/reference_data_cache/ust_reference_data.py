@@ -166,7 +166,7 @@ def _fetch_fiscaldata(
 
     if append_free_float:
         append_mspd_table5 = True
-        append_soma_holdings = True 
+        append_soma_holdings = True
 
     if append_mspd_table3:
         ql_date = ql.Date(fetch_as_of.day, fetch_as_of.month, fetch_as_of.year)
@@ -181,7 +181,7 @@ def _fetch_fiscaldata(
         mspd_table3_df = mspd_table3_df.rename(columns={"security_class2_desc": "cusip"})
         mspd_table3_df = mspd_table3_df[["cusip"] + to_numeric]
         mspd_table3_df = mspd_table3_df.drop_duplicates(subset=["cusip"], keep="first")
-        df = pd.merge(left=df, right=mspd_table3_df, on="cusip")
+        df = pd.merge(left=df, right=mspd_table3_df, on="cusip", how="outer")
 
     if append_mspd_table5:
         ql_date = ql.Date(fetch_as_of.day, fetch_as_of.month, fetch_as_of.year)
@@ -197,7 +197,7 @@ def _fetch_fiscaldata(
         mspd_table5_df = mspd_table5_df.drop(columns=["cusip"]).rename(columns={"security_class2_desc": "cusip"})
         mspd_table5_df = mspd_table5_df[["cusip"] + to_numeric]
         mspd_table5_df = mspd_table5_df.drop_duplicates(subset=["cusip"], keep="first")
-        df = pd.merge(left=df, right=mspd_table5_df, on="cusip")
+        df = pd.merge(left=df, right=mspd_table5_df, on="cusip", how="outer")
 
     if append_soma_holdings:
         valid_soma_holding_dates_reponse = requests.get("https://markets.newyorkfed.org/api/soma/asofdates/list.json").json()
@@ -217,10 +217,12 @@ def _fetch_fiscaldata(
         soma_df["percentOutstanding"] = soma_df["percentOutstanding"] * 100
         soma_df = soma_df[["cusip"] + to_numeric + ["outstanding_amt_backed_out_from_soma"]]
         soma_df = soma_df.rename(columns={"parValue": "soma_holdings", "percentOutstanding": "soma_holdings_of_pct_outstanding"})
-        df = pd.merge(left=df, right=soma_df, on="cusip")
+        df = pd.merge(left=df, right=soma_df, on="cusip", how="outer")
 
     if append_free_float:
-        df["free_float"] = df["outstanding_amt"] - df["soma_holdings"] - df["portion_stripped_amt"] 
+        for c in ["outstanding_amt", "soma_holdings", "portion_stripped_amt"]:
+            df[c] = df[c].fillna(0)
+        df["free_float"] = df["outstanding_amt"] - df["soma_holdings"] - df["portion_stripped_amt"]
 
     return df
 

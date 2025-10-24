@@ -161,6 +161,19 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
             fixings_series = fixings_series[fixings_series.index.date < ref]
 
+            # FIXINGS_TOL = 1
+            # if not fixings_series.empty:
+            #     from pandas.tseries.holiday import USFederalHolidayCalendar
+            #     from pandas.tseries.offsets import CustomBusinessDay
+
+            #     cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+            #     target_dt = (pd.Timestamp(ref) - (cbd * FIXINGS_TOL)).normalize()
+            #     idx_norm = fixings_series.index.normalize()
+            #     if target_dt not in idx_norm:
+            #         last_val = fixings_series.iloc[-1]
+            #         fixings_series.loc[target_dt] = float(last_val)
+            #         fixings_series = fixings_series.sort_index()
+
             return RLIRSwapCurve(
                 rl_curve_id=curve_name,
                 rl_curve_handle=rl_curve_handle,

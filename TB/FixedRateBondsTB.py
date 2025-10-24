@@ -215,7 +215,12 @@ class FixedRateBondsTB(ZODBCacheMixin):
             for d in dates_to_price:
                 try:
                     pricer_map: Dict[str, object] = self.mdp.get_pricer(
-                        {"cusips": list(sorted(to_fetch_cusips_by_date[d])), "timestamp": "live" if d == datetime.date.today() else d, "ignore_cache": ignore_cache}
+                        {
+                            "cusips": list(sorted(to_fetch_cusips_by_date[d])),
+                            "timestamp": "live" if type(d) == datetime.date and d == datetime.date.today() else d,
+                            "ignore_cache": ignore_cache,
+                            "show_tqdm": False,
+                        }
                     )
                 except Exception as e:
                     self._logger.exception(f"Pricer fetch failed for date={d}'. Error: {e}")

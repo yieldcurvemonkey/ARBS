@@ -79,6 +79,7 @@ class TimeseriesBuilder:
         ignore_cache: Optional[bool] = False,
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
+        drop_multilevel_cols: Optional[bool] = True,
     ) -> pd.DataFrame:
         flat = _flatten_base_queries(queries)
 
@@ -292,6 +293,12 @@ class TimeseriesBuilder:
 
         out = out.sort_index()
         out.index.name = self._date_col
+        
+        # data errors
+        # out = out[((out < 200_000).all(axis=1)) & (out > -200_000).all(axis=1)]
+        if drop_multilevel_cols:
+            out.columns = out.columns.droplevel()
+
         return out
 
     def spline_spread_builder(

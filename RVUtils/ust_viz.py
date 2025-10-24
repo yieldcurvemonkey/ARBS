@@ -361,8 +361,8 @@ def plot_usts_comparison(
     cusip_col: Optional[str] = "cusip",
     hover_data: Optional[List[str]] = None,
     title: Optional[str] = None,
-    custom_x_axis: Optional[str] = "Time to Maturity",
-    custom_y_axis: Optional[str] = "Yield to Maturity",
+    custom_x_axis: Optional[str] = None,
+    custom_y_axis: Optional[str] = None,
     splines: Optional[List[Tuple[Callable, str]]] = None,
     cusips_filter: Optional[List[str]] = None,
     ust_labels_filter: Optional[List[str]] = None,
@@ -374,88 +374,130 @@ def plot_usts_comparison(
     plot_height=1000,
     plot_width=None,
     ignore_otr=False,
-    # NEW:
     fig: Optional[go.Figure] = None,
     opacity: float = 1.0,
-    name_suffix: Optional[str] = None,  # e.g. '2025-01-15'
+    name_suffix: Optional[str] = None,
     color_discrete_map: Optional[Dict[str, str]] = None,
     return_color_map: bool = False,
     show: bool = True,
 ):
+    from pandas.api.types import is_numeric_dtype as _isnum
+
+    if custom_x_axis is None:
+        custom_x_axis = ttm_col
+    if custom_y_axis is None:
+        custom_y_axis = ytm_col
+
+    def _trim_zeros(s: str) -> str:
+        return s.rstrip("0").rstrip(".") if "." in s else s
+
+    def _human_num(x) -> str:
+        if pd.isna(x):
+            return "NA"
+        try:
+            xv = float(x)
+        except Exception:
+            return str(x)
+        ax = abs(xv)
+        if ax >= 1e12:
+            return _trim_zeros(f"{xv/1e12:.3f}") + "Tn"
+        if ax >= 1e9:
+            return _trim_zeros(f"{xv/1e9:.3f}") + "Bn"
+        if ax >= 1e6:
+            return _trim_zeros(f"{xv/1e6:.3f}") + "Mn"
+        if ax >= 1e3:
+            return _trim_zeros(f"{xv/1e3:.3f}") + "K"
+        return _trim_zeros(f"{xv:.3f}")
+
+    def _uniq_key(base: str, taken: set[str]) -> str:
+        """Ensure the hover key doesn't collide with df columns or other hover keys."""
+        k = base
+        i = 2
+        while k in taken:
+            k = f"{base} ({i})"
+            i += 1
+        return k
+
+    def _make_hover_dict(sub: pd.DataFrame, cols: Optional[list[str]]):
+        if not cols:
+            return None
+        taken = set(sub.columns)  # reserved names → force rename
+        out = {}
+        for c in cols:
+            if c not in sub.columns:
+                # Not a real column → can use as-is, but still avoid dup keys
+                key = _uniq_key(str(c), taken | set(out.keys()))
+            else:
+                # Rename to avoid "Ambiguous input" (PX disallows same-name array + column)
+                key = _uniq_key(f"{c} (h)", taken | set(out.keys()))
+
+            s = sub[c] if c in sub.columns else pd.Series([None] * len(sub), index=sub.index)
+            if _isnum(s):
+                out[key] = s.map(_human_num)
+            else:
+                try:
+                    out[key] = s.dt.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    out[key] = s.astype(str)
+        return out
+
     curve_set_df = curve_set_df.copy()
 
     if cusips_filter:
         curve_set_df = curve_set_df[curve_set_df[cusip_col].isin(cusips_filter)]
-        cusips_filter_set = set(cusips_filter)
-        cusips_in_df = set(curve_set_df[cusip_col].unique())
-        cusips_not_in_df = cusips_filter_set - cusips_in_df
-        if len(cusips_not_in_df) > 0:
-            print("CUSIPs not in Curveset df:", cusips_not_in_df)
+        missing = set(cusips_filter) - set(curve_set_df[cusip_col].unique())
+        if missing:
+            print("CUSIPs not in Curveset df:", missing)
 
     if ust_labels_filter:
         curve_set_df = curve_set_df[curve_set_df["ust_label"].isin(ust_labels_filter)]
-        ust_labels_filter_set = set(ust_labels_filter)
-        labels_in_df = set(curve_set_df["ust_label"].unique())
-        labels_not_in_df = ust_labels_filter_set - labels_in_df
-        if len(labels_not_in_df) > 0:
-            print("Labels not in Curveset df:", labels_not_in_df)
+        missing = set(ust_labels_filter) - set(curve_set_df["ust_label"].unique())
+        if missing:
+            print("Labels not in Curveset df:", missing)
 
     curve_set_df = curve_set_df.sort_values(by=label_col, key=lambda s: s.str.extract(r"^(\d+)")[0].astype(int))
     curve_set_df["plot_group"] = curve_set_df[label_col].astype(str)
     otr_mask = curve_set_df["rank"] == 0
     curve_set_df.loc[otr_mask, "plot_group"] = "OTR - " + curve_set_df.loc[otr_mask, "plot_group"]
 
-    # Prepare or reuse target figure
     base_fig = fig if fig is not None else go.Figure()
 
-    # --- main cloud (non-OTR) ---
+    non_otr_df = curve_set_df[~otr_mask]
     px_fig = px.scatter(
-        curve_set_df[~otr_mask],
+        non_otr_df,
         x=ttm_col,
         y=ytm_col,
         color="plot_group",
-        hover_data=hover_data,
+        hover_data=_make_hover_dict(non_otr_df, hover_data),
         color_discrete_map=color_discrete_map,
-        opacity=opacity,  # applies to markers
+        opacity=opacity,
     )
 
-    # Build (or capture) a color map so a second call can reuse identical colors
     captured_color_map = {}
     for tr in px_fig.data:
-        cat = tr.name  # category name before we append suffix
-        col = None
-        # Try marker then line color
-        try:
-            col = tr.marker.color
-        except Exception:
-            pass
-        if col is None:
-            try:
-                col = tr.line.color
-            except Exception:
-                pass
+        cat = tr.name
+        col = getattr(getattr(tr, "marker", None), "color", None) or getattr(getattr(tr, "line", None), "color", None)
         if isinstance(cat, str) and col is not None and cat not in captured_color_map:
             captured_color_map[cat] = col
 
-    # Suffix, legendgroup, opacity, then add to base fig
     for tr in px_fig.data:
         base_name = tr.name
         tr.opacity = opacity
         if name_suffix:
             tr.name = f"{base_name} [{name_suffix}]"
-        tr.legendgroup = base_name  # toggling hides both dates for same bucket
+        tr.legendgroup = base_name
     base_fig.add_traces(px_fig.data)
 
-    # --- OTR layer (optional) ---
     if not ignore_otr and otr_mask.any():
         curve_set_df.loc[otr_mask, label_col] = curve_set_df.loc[otr_mask, label_col].apply(lambda x: f"OTR - {x}")
+        sub = curve_set_df[otr_mask]
         otr_fig = px.scatter(
-            curve_set_df[otr_mask],
+            sub,
             x=ttm_col,
             y=ytm_col,
             color=label_col,
-            hover_data=hover_data,
-            color_discrete_map=color_discrete_map,  # reuse if provided
+            hover_data=_make_hover_dict(sub, hover_data),
+            color_discrete_map=color_discrete_map,
             opacity=opacity,
         )
         for tr in otr_fig.data:
@@ -464,29 +506,22 @@ def plot_usts_comparison(
             if name_suffix:
                 tr.name = f"{base_name} [{name_suffix}]"
             tr.legendgroup = base_name
-            # keep OTR ring highlight
             tr.update(marker=dict(line=dict(color="white", width=2)))
         base_fig.add_traces(otr_fig.data)
 
-    # --- specific CUSIP/label highlights (keep your styling; set opacity + suffix) ---
     if cusips_hightlighter:
         for cusip_tuple in cusips_hightlighter:
-            if not isinstance(cusip_tuple, tuple):
-                cusip = cusip_tuple
-                label_color = "yellow"
-            else:
-                cusip, label_color = cusip_tuple
-
+            cusip, label_color = cusip_tuple if isinstance(cusip_tuple, tuple) else (cusip_tuple, "yellow")
             if cusip not in curve_set_df[cusip_col].values:
                 print(f"{cusip} not in Curveset df!")
                 continue
-
+            sub = curve_set_df[curve_set_df[cusip_col] == cusip]
             hi_fig = px.scatter(
-                curve_set_df[curve_set_df[cusip_col] == cusip],
+                sub,
                 x=ttm_col,
                 y=ytm_col,
                 color=cusip_col,
-                hover_data=hover_data,
+                hover_data=_make_hover_dict(sub, hover_data),
                 opacity=opacity,
             )
             for tr in hi_fig.data:
@@ -499,20 +534,18 @@ def plot_usts_comparison(
             base_fig.add_traces(hi_fig.data)
 
     if ust_labels_highlighter:
-        if isinstance(ust_labels_highlighter[0], tuple):
-            labels_tuples = ust_labels_highlighter
-        else:
-            labels_tuples = [(lab, "yellow") for lab in ust_labels_highlighter]
-        for ust_label, label_color in labels_tuples:
+        tuples = ust_labels_highlighter if isinstance(ust_labels_highlighter[0], tuple) else [(lab, "yellow") for lab in ust_labels_highlighter]
+        for ust_label, label_color in tuples:
             if ust_label not in curve_set_df["ust_label"].values:
                 print(f"{ust_label} not in Curveset df!")
                 continue
+            sub = curve_set_df[curve_set_df["ust_label"] == ust_label]
             lab_fig = px.scatter(
-                curve_set_df[curve_set_df["ust_label"] == ust_label],
+                sub,
                 x=ttm_col,
                 y=ytm_col,
                 color="ust_label",
-                hover_data=hover_data,
+                hover_data=_make_hover_dict(sub, hover_data),
                 opacity=opacity,
             )
             for tr in lab_fig.data:
@@ -524,7 +557,6 @@ def plot_usts_comparison(
                 tr.update(marker=dict(line=dict(color=label_color, width=4)))
             base_fig.add_traces(lab_fig.data)
 
-    # --- splines ---
     if splines:
         ttm_linspace = np.linspace(spline_lb, spline_ub, linspace_num)
         for curve_tup in splines:
@@ -546,7 +578,6 @@ def plot_usts_comparison(
                 )
             )
 
-    # --- layout (safe to call repeatedly) ---
     base_fig.update_layout(
         xaxis_title=custom_x_axis,
         yaxis_title=custom_y_axis,
@@ -558,8 +589,8 @@ def plot_usts_comparison(
         legend_title_text=label_col,
         newshape={"line": {"color": "red"}},
     )
-    base_fig.update_xaxes(showspikes=True, spikecolor="white", spikesnap="cursor", spikemode="across")
-    base_fig.update_yaxes(showspikes=True, spikecolor="white", spikesnap="cursor", spikethickness=0.5)
+    base_fig.update_xaxes(showspikes=True, spikecolor="white", spikesnap="cursor", spikemode="across", hoverformat=".3f")
+    base_fig.update_yaxes(showspikes=True, spikecolor="white", spikesnap="cursor", spikethickness=0.5, hoverformat=".3f")
     base_fig.update_coloraxes(showscale=False)
 
     if show:
@@ -576,6 +607,4 @@ def plot_usts_comparison(
             }
         )
 
-    if return_color_map:
-        return base_fig, captured_color_map
-    return base_fig
+    return (base_fig, captured_color_map) if return_color_map else base_fig
