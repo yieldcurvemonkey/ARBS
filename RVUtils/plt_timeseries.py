@@ -82,17 +82,51 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
             ax = ax_left.twinx()
             ax.set_frame_on(True)
             ax.patch.set_visible(False)
-            offset = 1.0 + 0.10 * idx
+
+            # ---- dynamic spacing between secondary right axes (in points) ----
+            GAP_PT = 28  # horizontal gap between adjacent right spines, ~0.39 in at 72 pt/in
+            gap_in = GAP_PT / 72.0
+
+            # Convert physical gap to "axes" units for spine positioning
+            fig_w_in = fig.get_figwidth()
+            ax_bbox = ax_left.get_position()  # in figure-fraction coords
+            ax_w_in = ax_bbox.width * fig_w_in
+            step_axes_units = gap_in / max(ax_w_in, 1e-6)
+
+            offset = 1.0 + step_axes_units * idx
             ax.spines["right"].set_position(("axes", offset))
             ax.spines["right"].set_zorder(10 + idx)
+
+            # ---- ensure there's enough figure right margin for all added axes ----
+            # Reserve space for: (i) all inter-axis gaps, (ii) tick labels & y-label area
+            LABEL_AREA_IN = 0.35  # base allowance for ticks/label on the outermost axis
+            reserve_in = gap_in * (idx + 1) + LABEL_AREA_IN
+            new_right_frac = 1.0 - min(0.45, reserve_in / fig_w_in)  # don't shrink past 55% width
+            # only tighten if needed (smaller "right" means larger outer margin)
+            cur = fig.subplotpars.right
+            if new_right_frac < cur:
+                fig.subplots_adjust(right=new_right_frac)
+
+            # Progressive padding so tick labels/ylabel don't collide
+            ax.tick_params(axis="y", which="both", pad=2 + 6 * idx)
+            ax.yaxis.labelpad = 10 + 6 * idx
+
             state["right_axes"].append(ax)
             return ax
+
         else:
-            # Plotly: dynamically add yaxisN (N >= 2), overlaying the main y-axis.
-            # Note: Plotly 'position' must be in [0,1]. We pack them slightly inside the right edge.
+            # --- inside _new_right_axis(), Plotly branch ONLY ---
             axis_idx = len(state["right_axes"]) + 2  # y2, y3, ...
             axis_name = f"yaxis{axis_idx}"
-            pos = max(0.80, 1.0 - 0.05 * (axis_idx - 2))  # 1.00, 0.95, 0.90, ... but clamp at 0.80
+
+            # positions for the stacked right axes
+            pos = max(0.80, 0.98 - 0.06 * (axis_idx - 2))
+
+            # NEW: per-axis title padding (standoff) so titles don’t overlap
+            STANDOFF_BASE = 16  # px
+            STANDOFF_STEP = 16  # px per extra right axis
+            standoff = STANDOFF_BASE + STANDOFF_STEP * (axis_idx - 2)
+
             fig.update_layout(
                 **{
                     axis_name: dict(
@@ -101,11 +135,18 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
                         side="right",
                         position=pos,
                         showgrid=False,
+                        ticks="outside",
+                        ticklabelposition="outside",
+                        title=dict(standoff=standoff),  # <- key: padding between axis and its title
                     )
                 }
             )
+
+            # remember the standoff so we can reuse it when we set the text later
+            state.setdefault("plotly_axis_meta", {})[axis_name] = {"standoff": standoff}
+
             state["right_axes"].append(axis_idx)
-            return axis_idx  # return numeric id for later use
+            return axis_idx
 
     def _remember_line_mpl(line, label, series_like: pd.Series, meta: dict | None = None):
         s_valid = series_like.dropna()
@@ -556,13 +597,24 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
             return (last_val - base_val), last_dt, base_dt
 
     # ---------- plot ----------
-    def plot(series: pd.Series, *, label=None, which="left", pipeline=None, indicators=None, ou=None, guess_units=True, **kwargs):
+    def plot(series: pd.Series, *, label=None, which="left", pipeline=None, indicators=None, ou=None, guess_units=True, step: bool | str = False, **kwargs):
+
         if not isinstance(series, pd.Series):
             raise TypeError("plot() expects a pandas Series")
         if label is None:
             label = _stringify_name(series.name)
 
         s_proc = _apply_pipeline(series, pipeline or {})
+
+        # normalize step param
+        _step_mode = None
+        if isinstance(step, bool):
+            _step_mode = "post" if step else None
+        elif isinstance(step, str):
+            sm = step.lower().strip()
+            if sm not in ("pre", "post", "mid"):
+                raise ValueError("step must be one of {False, True, 'pre', 'post', 'mid'}")
+            _step_mode = sm
 
         # Target axis (mpl Axes or plotly axis name)
         if state["engine"] == "matplotlib":
@@ -581,9 +633,15 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
 
         # --- main line ---
         if state["engine"] == "matplotlib":
-            (line,) = (ax_left if which == "left" else target).plot(
-                s_proc.index, s_proc.values, label=label, color=color, **{k: v for k, v in kwargs.items() if k != "color"}
-            )
+            ax_target = ax_left if which == "left" else target
+            plot_fn = ax_target.step if _step_mode else ax_target.plot
+
+            plot_kwargs = {k: v for k, v in kwargs.items() if k != "color"}
+            if _step_mode:
+                (line,) = plot_fn(s_proc.index, s_proc.values, where=_step_mode, label=label, color=color, **plot_kwargs)
+            else:
+                (line,) = plot_fn(s_proc.index, s_proc.values, label=label, color=color, **plot_kwargs)
+
             _remember_line_mpl(line, label, s_proc)
             if which == "left":
                 state["left_lines"].append(line)
@@ -593,10 +651,12 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
                     ax_left.set_ylabel(ylabel_left or label, color=state["left_color"])
             else:
                 state["right_lines"].append(line)
-                target.tick_params(axis="y", labelcolor=line.get_color())
-                target.set_ylabel(ylabel_right or label, color=line.get_color())
+                ax_target.tick_params(axis="y", labelcolor=line.get_color())
+                ax_target.set_ylabel(ylabel_right or label, color=line.get_color())
+
         else:
             # plotly trace
+            shape_map = {"pre": "vh", "post": "hv", "mid": "hvh"}
             trace = dict(
                 x=s_proc.index,
                 y=s_proc.values,
@@ -606,25 +666,30 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
                 yaxis=target,
                 showlegend=True,
             )
+            if _step_mode:
+                trace["line_shape"] = shape_map[_step_mode]
+
             fig.add_trace(go.Scatter(**trace))
             trace_idx = len(fig.data) - 1
             _remember_line_plotly(trace_idx, label, s_proc)
 
             if which == "left" and state["left_color"] is None:
                 state["left_color"] = color
-                # Set left axis styling
                 fig.update_yaxes(
                     title=dict(text=(ylabel_left or label), font=dict(color=color)),
                     tickfont=dict(color=color),
                 )
             elif which == "right":
-                # Title and tick color for this right axis
                 axis_name = target.replace("y", "yaxis") if target != "y" else "yaxis"
+                # keep the standoff we stored when creating the axis
+                standoff = state.get("plotly_axis_meta", {}).get(axis_name, {}).get("standoff", 16)
                 fig.update_layout(
                     **{
                         axis_name: dict(
-                            title=dict(text=(ylabel_right or label), font=dict(color=color)),
+                            title=dict(text=(ylabel_right or label), font=dict(color=color), standoff=standoff),
                             tickfont=dict(color=color),
+                            ticks="outside",
+                            ticklabelposition="outside",
                         )
                     }
                 )
@@ -1010,17 +1075,12 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
                             {"trace_idx": len(fig.data) - 1, "label": lbl, "last_dt": last_dt2, "last_val": float(delta), "kind": "cum_change", **meta_flag}
                         )
 
-        # OU overlay
         if ou and isinstance(ou, dict) and ou.get("enable", False):
-            _plot_ou(
-                (
-                    ax_left
-                    if state["engine"] == "matplotlib" and which == "left"
-                    else (_new_right_axis() if state["engine"] == "matplotlib" else ("y" if which == "left" else target))
-                ),
-                s_proc,
-                ou,
-            )
+            if state["engine"] == "matplotlib":
+                target_for_ou = ax_left if which == "left" else target  # <-- reuse target
+            else:
+                target_for_ou = "y" if which == "left" else target  # <-- reuse target
+            _plot_ou(target_for_ou, s_proc, ou)
 
         return None  # line handle isn't relied upon by callers in this design
 

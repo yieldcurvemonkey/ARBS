@@ -183,7 +183,7 @@ def append_timeseries(
     if isinstance(df.index, pd.DatetimeIndex):
         sdf = df.copy()
         sdf.index = sdf.index.tz_convert(None) if sdf.index.tz else sdf.index
-        groups: Dict[date, pd.DataFrame] = {d.date(): g for d, g in sdf.groupby(sdf.index.date)}
+        groups: Dict[date, pd.DataFrame] = {pd.Timestamp(d).date(): g for d, g in sdf.groupby(sdf.index.date)}
     else:
         # No datetime index; use provided as_of_date
         if as_of_date is None:

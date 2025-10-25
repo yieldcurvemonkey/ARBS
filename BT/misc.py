@@ -3,17 +3,34 @@ import datetime
 import pandas as pd
 import QuantLib as ql
 
+from typing import Optional
 
-def ql_cal_date_range(ql_cal: ql.Calendar, start: datetime.datetime, end: datetime.datetime):
+
+def ql_cal_date_range(
+    ql_cal: ql.Calendar,
+    start: datetime.datetime,
+    end: datetime.datetime,
+    freq: Optional[str] = "1b",
+    open_time: Optional[datetime.time] = datetime.time(7, 00),
+    close_time: Optional[datetime.time] = datetime.time(15, 00),
+):
     if type(start) == datetime.datetime and start.tzinfo is not None:
         assert str(start.tzinfo) == str(end.tzinfo), "must be from same tz!"
-        assert start.time() == end.time(), "must be same closes!"
+        # assert start.time() == end.time(), "must be same closes!"
 
     def _to_ql_date(dt: datetime.datetime):
         return ql.Date(dt.day, dt.month, dt.year)
 
-    pd_range = pd.date_range(start=start, end=end, freq="1b")
-    return [d for d in pd_range if ql_cal.isBusinessDay(_to_ql_date(d))]
+    pd_range = pd.date_range(start=start, end=end, freq=freq)
+    date_filtered_range = [d for d in pd_range if ql_cal.isBusinessDay(_to_ql_date(d))]
+    if "min" in freq or "hr" in freq:
+        time_filtered_range = []
+        for ts in date_filtered_range:
+            if ts.time() >= open_time and ts.time() <= close_time:
+                time_filtered_range.append(ts)
+        return time_filtered_range
+
+    return date_filtered_range
 
 
 def _to_ql(d: datetime.date) -> ql.Date:
