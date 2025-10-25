@@ -1,20 +1,23 @@
+import contextlib
 import datetime
 import re
-from typing import Any, Dict, Iterable, List, Literal, Optional, Union, Tuple
+import threading
+from collections import OrderedDict, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 import pytz
-import threading
-import contextlib
-import tqdm
-from collections import OrderedDict
-
 import QuantLib as ql
+import tqdm
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base._GenericPricable import _GenericPricable
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
+
+DateLike = Union[datetime.date, datetime.datetime, Literal["live"]]
+_BulkOut = Dict[DateLike, Dict[str, "_FixedRateBondGenericPricer"]]
 
 
 @contextlib.contextmanager
@@ -394,11 +397,12 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 return out
 
         elif self.source.upper() == "USTS_WEBULL_WSJ_LIVE-RL":
+            from pandas.tseries.offsets import BDay
+
             from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
             from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
             from MDP.FixedRateBonds.WSJ.WSJFetcher import WSJFetcher, get_isin_from_cusip
             from Query.FixedRateBonds.backends.rateslib.RLFixedRateBondPricer import RLFixedRateBondPricer
-            from pandas.tseries.offsets import BDay
 
             force_refresh = bool(kwargs.get("force_refresh", False))
             as_of_ref = datetime.date.today() if timestamp == "live" else timestamp.date()
@@ -869,6 +873,312 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
 
     def _wsj_buffer_date(self) -> ql.Date:
         return ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(ql.Date.todaysDate(), ql.Period("-3D"))
+
+    def bulk_get_data(
+        self,
+        timestamps: Sequence[DateLike],
+        cusips: Sequence[str],
+        *,
+        show_tqdm: bool = False,
+        force_refresh: bool = False,
+        max_workers: int = 8,
+    ) -> _BulkOut:
+        # if not timestamps or not cusips:
+        #     return {}
+
+        # -------- helpers (mirror your existing patterns) --------
+        def _clean_list(symbols: Iterable[str]) -> List[str]:
+            out: List[str] = []
+            for s in symbols:
+                s = (s or "").strip()
+                if "x" in s and "Ox" not in s:
+                    out.extend([p for p in s.split("x") if p])
+                elif "/" in s and not re.match(r"^\d{2}\d{2}/\d{1,2}$", s):
+                    out.extend([p for p in s.split("/") if p])
+                else:
+                    out.append(s)
+            return out
+
+        def _is_live(ts: DateLike) -> bool:
+            today = datetime.date.today()
+            return (ts == "live") or (isinstance(ts, datetime.date) and not isinstance(ts, datetime.datetime) and ts == today)
+
+        def _as_of_ref(ts: DateLike) -> datetime.date:
+            return datetime.date.today() if ts == "live" else (ts.date() if isinstance(ts, datetime.datetime) else ts)
+
+        def _ts_to_ql_date(ts: DateLike):
+            if ts == "live":
+                return ql.Date.todaysDate()
+            if isinstance(ts, datetime.datetime):
+                d = ts.date()
+            else:
+                d = ts
+            return ql.Date(d.day, d.month, d.year)
+
+        # Use your existing ZODB open/commit lifecycle.
+        with self.__open__():
+            out: _BulkOut = defaultdict(dict)
+
+            # Pre-prepare per-timestamp jobs
+            jobs: List[Tuple[DateLike, List[str]]] = []
+            base_cusips = _clean_list(cusips)
+            for ts in timestamps:
+                jobs.append((ts, base_cusips))
+
+            def _process_one(ts: DateLike, symbols: List[str]) -> Tuple[DateLike, Dict[str, "_FixedRateBondGenericPricer"]]:
+                # --- alias resolution per timestamp ---
+                from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
+
+                as_of_ref = _as_of_ref(ts)
+                ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
+                ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)].copy()
+                ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+
+                alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(symbols, ts, ref_df=ref_df)  # :contentReference[oaicite:0]{index=0}
+
+                result: Dict[str, "_FixedRateBondGenericPricer"] = {}
+
+                # -------------------- QL path (FedInvest/WSJ) --------------------
+                if self.source.upper() == "USTS_FEDINVEST_WSJ_LIVE-QL":
+                    from MDP.FixedRateBonds.WSJ.WSJFetcher import WSJFetcher, get_isin_from_cusip
+                    from Query.FixedRateBonds.backends.quantlib.QLFixedRateBondPricer import QLFixedRateBondPricer
+
+                    is_live = _is_live(ts)
+                    wsj_buffer = self._wsj_buffer_date()
+                    ts_qldate = _ts_to_ql_date(ts)
+                    in_wsj_buffer = ts_qldate > wsj_buffer
+
+                    if is_live:
+                        wsj = WSJFetcher()
+                        live_data = wsj.fetch_live_ust_quotes(cusips=list(alias_to_cusip.values()))
+                        for original, cusip in alias_to_cusip.items():
+                            try:
+                                meta = dict(meta_by_cusip[cusip])
+                                meta["timestamp"] = live_data[cusip]["timestamp"]
+                                result[original] = QLFixedRateBondPricer(
+                                    ql_frb_id="USTS",
+                                    reference_date=live_data[cusip]["timestamp"].date(),
+                                    issue_date=meta["issue_date"],
+                                    maturity_date=meta["maturity_date"],
+                                    cpn=meta["cpn"],
+                                    ytm=float(live_data[cusip]["ytm"]),
+                                    meta_data=meta,
+                                )
+                            except Exception:
+                                pass
+                        return ts, result
+
+                    if in_wsj_buffer:
+                        wsj = WSJFetcher()
+                        mapping = {get_isin_from_cusip(c, "US")[2:]: c for c in alias_to_cusip.values()}
+                        wide = wsj.ust_intraday_timeseries(mapping, show_tqdm=show_tqdm)
+
+                        est = pytz.timezone("America/New_York")
+                        assert isinstance(ts, datetime.date) and not isinstance(ts, datetime.datetime)
+                        t_3pm = est.localize(datetime.datetime(ts.year, ts.month, ts.day, 15, 0, 0)).astimezone(pytz.UTC)
+                        idx = wide.index
+                        pos = idx.get_indexer([t_3pm], method="nearest")[0]
+                        nearest_ts = idx[pos]
+                        if abs(nearest_ts - t_3pm) > pd.Timedelta("30min"):
+                            raise ValueError("No intraday snapshot within 30min of 3pm ET")
+
+                        for original, cusip in alias_to_cusip.items():
+                            try:
+                                y = wide[cusip].iloc[pos]
+                                if pd.isna(y):
+                                    col = wide[cusip].dropna()
+                                    if col.empty:
+                                        raise ValueError(f"No intraday data for {cusip} near 3pm")
+                                    nearest_ts = col.index[col.index.get_indexer([t_3pm], method="nearest")[0]]
+                                    y = col.loc[nearest_ts]
+                                meta = dict(meta_by_cusip[cusip])
+                                meta["timestamp"] = nearest_ts
+                                result[original] = QLFixedRateBondPricer(
+                                    ql_frb_id="USTS",
+                                    reference_date=nearest_ts.date(),
+                                    issue_date=meta["issue_date"],
+                                    maturity_date=meta["maturity_date"],
+                                    cpn=meta["cpn"],
+                                    ytm=float(y),
+                                    meta_data=meta,
+                                )
+                            except Exception:
+                                pass
+                        return ts, result
+
+                    # Historical daily close via FedInvest
+                    from pandas.tseries.offsets import BDay
+
+                    timestamp_dt = datetime.datetime(as_of_ref.year, as_of_ref.month, as_of_ref.day)
+
+                    self._ensure_pricer_cache()
+                    cache = getattr(self, self._FRB_PRICER_CACHE)
+
+                    # One FedInvest snapshot per date; then fill pricers
+                    fi_map = self.fi.runner(dates=[timestamp_dt], refresh_cache=force_refresh)
+                    fi_df = fi_map.get(timestamp_dt)
+                    if fi_df is None or fi_df.empty:
+                        raise KeyError(f"No FedInvest snapshot for {as_of_ref} (key: {timestamp_dt})")
+
+                    fi_df = fi_df.set_index("cusip")
+
+                    from Query.FixedRateBonds.backends.quantlib.QLFixedRateBondPricer import QLFixedRateBondPricer
+
+                    for original, cusip in alias_to_cusip.items():
+                        try:
+                            clean_price = float(fi_df.loc[cusip]["eod_price"])
+                        except Exception:
+                            continue
+
+                        meta = self._pyify_meta(meta_by_cusip[cusip])
+                        args = {
+                            "ql_frb_id": "USTS",
+                            "reference_date": as_of_ref.isoformat(),
+                            "clean_price": clean_price,
+                            "meta_data": meta,
+                            "schema": 1,
+                            "source": "fedinvest",
+                        }
+                        cache_key = f"{as_of_ref.isoformat()}-{cusip}-{self.source.upper()}"
+                        self._threadsafe_cache_put(cache_key, args)  # guarded writer
+                        result[original] = self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
+                    return ts, result
+
+                # -------------------- RL path (Webull/WSJ live) --------------------
+                elif self.source.upper() == "USTS_WEBULL_WSJ_LIVE-RL":
+                    from pandas.tseries.offsets import BDay
+
+                    from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
+                    from MDP.FixedRateBonds.WSJ.WSJFetcher import WSJFetcher
+                    from Query.FixedRateBonds.backends.rateslib.RLFixedRateBondPricer import RLFixedRateBondPricer
+
+                    is_live = _is_live(ts)
+                    if is_live:
+                        wsj = WSJFetcher()
+                        live_data = wsj.fetch_live_ust_quotes(cusips=list(alias_to_cusip.values()))
+                        for original, cusip in alias_to_cusip.items():
+                            try:
+                                meta = dict(meta_by_cusip[cusip])
+                                meta["timestamp"] = live_data[cusip]["timestamp"]
+                                result[original] = RLFixedRateBondPricer(
+                                    rl_frb_id="USTS",
+                                    reference_date=live_data[cusip]["timestamp"].date(),
+                                    issue_date=meta["issue_date"],
+                                    maturity_date=meta["maturity_date"],
+                                    cpn=meta["cpn"],
+                                    ytm=float(live_data[cusip]["ytm"]),
+                                    meta_data=meta,
+                                )
+                            except Exception:
+                                pass
+                        return ts, result
+
+                    # non-live intraday: try cache first, then batch fetch via Webull
+                    self._ensure_pricer_cache()
+                    cache = getattr(self, self._FRB_PRICER_CACHE)
+                    to_fetch: "OrderedDict[str, str]" = OrderedDict()
+
+                    # exact ts is required (your RL branch keys on exact timestamp)
+                    if isinstance(ts, datetime.datetime):
+                        # Check for cached pricers/args under both (cusip, original)
+                        for original, cusip in alias_to_cusip.items():
+                            hit = None
+                            for key_c in (cusip, original):
+                                cache_key = f"{ts.isoformat()}-{key_c}-{self.source.upper()}"
+                                hit = self._threadsafe_cache_get(cache_key)
+                                if hit is not None:
+                                    break
+                            if hit is not None and not force_refresh:
+                                # build pricer whether cached object or args
+                                if hasattr(hit, "__class__") and hit.__class__.__name__ == "RLFixedRateBondPricer":
+                                    result[original] = hit  # already a pricer
+                                else:
+                                    result[original] = self._build_pricer_from_args(
+                                        hit, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn"
+                                    )
+                            else:
+                                to_fetch[original] = cusip
+
+                        if not to_fetch:
+                            return ts, result
+
+                        # Batch fetch all needed cusips around the day, then fill cache for *all* points
+                        ny = pytz.timezone("America/New_York")
+                        start_ny = ny.localize(datetime.datetime(ts.year, ts.month, ts.day, 7, 0, 0)) - BDay(1)
+                        end_ny = ny.localize(datetime.datetime(ts.year, ts.month, ts.day, 17, 0, 0)) + BDay(1)
+
+                        wb = WebullFintechFetcher(debug_verbose=False, error_verbose=True)
+                        wide: pd.DataFrame = wb.intraday_by_cusips(
+                            cusips=list(to_fetch.values()),
+                            start=start_ny,
+                            end=end_ny,
+                            show_tqdm=show_tqdm,
+                        )  # batched async underneath  :contentReference[oaicite:1]{index=1}  :contentReference[oaicite:2]{index=2}
+
+                        # Persist all timeslices to ZODB (same scheme as your RL branch)
+                        for original, cusip in to_fetch.items():
+                            if cusip not in wide.columns:
+                                continue
+                            series = wide[cusip].dropna()
+                            for curr_ts, ytm in series.items():
+                                args = {
+                                    "rl_frb_id": "USTS",
+                                    "reference_date": curr_ts.date().isoformat(),
+                                    "ytm": float(ytm),
+                                    "meta_data": self._pyify_meta({**meta_by_cusip[cusip], "timestamp": curr_ts.isoformat()}),
+                                    "schema": 1,
+                                    "source": f"{curr_ts.isoformat()}-{cusip}-{self.source.upper()}",
+                                }
+                                cache_key = f"{curr_ts.isoformat()}-{cusip}-{self.source.upper()}"
+                                self._threadsafe_cache_put(cache_key, args)
+
+                            # Return the exact request point if present; else leave missing
+                            if ts in series.index:
+                                curr_ts = ts
+                                ytm = float(series.loc[curr_ts])
+                                args = {
+                                    "rl_frb_id": "USTS",
+                                    "reference_date": curr_ts.date().isoformat(),
+                                    "ytm": ytm,
+                                    "meta_data": self._pyify_meta({**meta_by_cusip[cusip], "timestamp": curr_ts.isoformat()}),
+                                    "schema": 1,
+                                    "source": f"{curr_ts.isoformat()}-{cusip}-{self.source.upper()}",
+                                }
+                                result[original] = self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
+
+                        self.zodb_commit()
+                        return ts, result
+
+                    # If we got here, user passed a date (not datetime) for RL non-live; no canonical source
+                    # for an RL daily close in your repo; we’ll just raise to match your existing semantics.
+                    raise NotImplementedError("For RL, pass an intraday datetime for timestamp or 'live'.")
+
+                # -------------------- Unsupported source --------------------
+                else:
+                    raise NotImplementedError(f"Unsupported source {self.source}")
+
+            # -------- fan out (timestamp-level) with threads --------
+            results: List[Tuple[DateLike, Dict[str, "_FixedRateBondGenericPricer"]]] = []
+            if max_workers == 1 or len(jobs) == 1:
+                iterable = jobs
+                if show_tqdm:
+                    iterable = tqdm.tqdm(iterable, desc="FETCHING PRICERS")
+                for ts, syms in iterable:
+                    results.append(_process_one(ts, syms))
+            else:
+                with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="frb-mdp") as pool:
+                    futures = {pool.submit(_process_one, ts, syms): (ts, syms) for ts, syms in jobs}
+                    iterator = as_completed(futures)
+                    if show_tqdm:
+                        iterator = tqdm.tqdm(iterator, total=len(futures), desc="FETCHING PRICERS")
+                    for fut in iterator:
+                        results.append(fut.result())
+
+            for ts, res in results:
+                if res:
+                    out[ts].update(res)
+
+            return dict(out)
 
     def __open__(self):
         with self._open_lock:
