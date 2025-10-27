@@ -11,6 +11,7 @@ import httpx
 import pandas as pd
 import pytz
 import ujson as json
+import sys
 
 
 class BaseFetcher:
@@ -185,7 +186,17 @@ class WebullFintechFetcher(BaseFetcher):
         }
 
         to_return = bbg_to_globex.get(root, root) + suf
-        return to_return.replace("SFR", "SR3").replace("SER", "SR1").replace("FF", "ZQ").replace("UXY", "TN").replace("US", "ZB")
+        return (
+            to_return.replace("SFR", "SR3")
+            .replace("SER", "SR1")
+            .replace("FF", "ZQ")
+            .replace("UXY", "TN")
+            .replace("US", "ZB")
+            .replace("ZT", "ZTMAIN")
+            .replace("TU", "ZTMAIN")
+            .replace("ZF", "ZFMAIN")
+            .replace("FV", "ZFMAIN")
+        )
 
     async def _request_with_retries(
         self,
@@ -1146,3 +1157,181 @@ class WebullFintechFetcher(BaseFetcher):
         start_chi = chi.localize(start_passed) if start_passed.tzinfo is None else start_passed.astimezone(chi)
         end_chi = chi.localize(end) if end.tzinfo is None else end.astimezone(chi)
         return merged.loc[(merged.index >= start_chi) & (merged.index <= end_chi)]
+
+    async def _eod_futures_for_ticker(
+        self,
+        client: httpx.AsyncClient,
+        ticker_id: Union[str, int],
+        start: Optional[datetime],
+        end: Optional[datetime],
+        *,
+        bar_type: str = "d1",
+        count: int = 800,
+        headers: Dict[str, str],
+        value_col: str = "last",
+        max_slices: int = 50,
+        max_retries: int = 3,
+        backoff_factor: int = 1,
+    ) -> Optional[pd.DataFrame]:
+        # Coerce start/end to dates for daily slicing
+        start_date = start.date() if isinstance(start, datetime) else start
+        end_date = end.date() if isinstance(end, datetime) else end
+
+        # Cursor anchor: 17:00 America/Chicago on 'end' if provided, else now()
+        chi = pytz.timezone("America/Chicago")
+        if end_date is None:
+            cursor_dt = datetime.now(chi)
+        else:
+            cursor_dt = chi.localize(datetime(end_date.year, end_date.month, end_date.day, 17, 0))
+
+        slices: List[pd.DataFrame] = []
+        seen_earliest: Optional[pd.Timestamp] = None
+
+        for _ in range(max_slices):
+            df_slice = await self._fetch_futures_slice(
+                client,
+                ticker_id=ticker_id,
+                as_of_epoch=int(cursor_dt.timestamp()),
+                bar_type=bar_type,  # 'd1' by default
+                count=int(min(max(count, 1), 800)),
+                headers=headers,
+                value_col=value_col,
+                max_retries=max_retries,
+                backoff_factor=backoff_factor,
+            )
+            if df_slice is None or df_slice.empty:
+                break
+
+            # Restrict to <= end_date (if provided)
+            if end_date is not None:
+                df_slice = df_slice[df_slice["timestamp"].dt.date <= end_date]
+            if df_slice.empty:
+                break
+
+            slices.append(df_slice)
+
+            earliest = df_slice["timestamp"].min()
+            # Stop if we crossed the start boundary (if provided)
+            if start_date is not None and earliest.date() <= start_date:
+                break
+
+            # No progress safeguard
+            if seen_earliest is not None and earliest >= seen_earliest:
+                break
+            seen_earliest = earliest
+
+            # Step back one day before the earliest bar we have so far
+            cursor_dt = (earliest - pd.Timedelta(days=1)).to_pydatetime().replace(tzinfo=timezone.utc)
+
+        if not slices:
+            return None
+
+        df = pd.concat(slices, ignore_index=True)
+        df = df.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
+
+        if start_date is not None:
+            df = df[df["timestamp"].dt.date >= start_date]
+        if end_date is not None:
+            df = df[df["timestamp"].dt.date <= end_date]
+
+        df["timestamp"] = df["timestamp"].dt.date
+        df = df.set_index("timestamp")
+        return df.rename(columns={value_col: value_col})
+
+    async def _fetch_all_eod_futures(
+        self,
+        client: httpx.AsyncClient,
+        ticker_by_key: Dict[str, Optional[int]],
+        start: Optional[datetime],
+        end: Optional[datetime],
+        *,
+        bar_type: str,
+        count: int,
+        headers_trend: Dict[str, str],
+        value_col: str,
+        max_concurrent_tasks: int,
+        show_tqdm: bool,
+    ) -> Dict[str, Optional[pd.DataFrame]]:
+        sem = asyncio.Semaphore(max_concurrent_tasks)
+
+        async def _task(key: str, tid: Optional[int]):
+            if tid is None:
+                return key, None
+            async with sem:
+                df = await self._eod_futures_for_ticker(
+                    client,
+                    ticker_id=tid,
+                    start=start,
+                    end=end,
+                    bar_type=bar_type,
+                    count=count,
+                    headers=headers_trend,
+                    value_col=value_col,
+                )
+                return key, df
+
+        tasks = [_task(k, v) for k, v in ticker_by_key.items()]
+        if show_tqdm:
+            import tqdm.asyncio
+
+            results = await tqdm.asyncio.tqdm.gather(*tasks, desc="FETCHING FUTURES EOD...")
+        else:
+            results = await asyncio.gather(*tasks)
+        return dict(results)
+
+    def eod_by_tickers(
+        self,
+        tickers: List[str],
+        start: Optional[datetime],
+        end: Optional[datetime],
+        *,
+        bar_type: str = "d1",
+        count: int = 800,
+        value_col: str = "last",
+        max_concurrent_tasks: int = 32,
+        max_keepalive_connections: int = 32,
+        one_df: bool = True,
+        show_tqdm: bool = True,
+    ) -> Union[Dict[str, Optional[pd.DataFrame]], pd.DataFrame]:
+        headers = WebullFintechFetcher.DEFAULT_HEADERS
+        limits = httpx.Limits(max_connections=max_concurrent_tasks, max_keepalive_connections=max_keepalive_connections)
+
+        async def _run():
+            async with httpx.AsyncClient(
+                limits=limits,
+                timeout=self._global_timeout,
+                mounts=self._httpx_proxies,
+                http2=True,
+                verify=False,
+            ) as client:
+                ticker_by_sym = await self._resolve_ticker_ids_for_symbols(
+                    client, symbols=tickers, headers=headers, max_concurrent_tasks=max_concurrent_tasks, show_tqdm=show_tqdm
+                )
+                df_by_sym = await self._fetch_all_eod_futures(
+                    client,
+                    ticker_by_key=ticker_by_sym,
+                    start=start,
+                    end=end,
+                    bar_type=bar_type,
+                    count=count,
+                    headers_trend=headers.trend,
+                    value_col=value_col,
+                    max_concurrent_tasks=max_concurrent_tasks,
+                    show_tqdm=show_tqdm,
+                )
+                return df_by_sym
+
+        results: Dict[str, Optional[pd.DataFrame]] = asyncio.run(_run())
+        if not one_df:
+            return results
+
+        frames: Dict[str, pd.DataFrame] = {k: v for k, v in results.items() if isinstance(v, pd.DataFrame) and not v.empty}
+        if not frames:
+            return pd.DataFrame()
+
+        # Merge on daily date index
+        merged = pd.concat(
+            [(df[value_col] if value_col in df.columns else df.iloc[:, 0]).rename(sym) for sym, df in frames.items()],
+            axis=1,
+        )
+        return merged.sort_index()

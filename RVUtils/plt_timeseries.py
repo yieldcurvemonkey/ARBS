@@ -309,6 +309,8 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
         vol = r.rolling(int(window)).std(ddof=1)
         if annualize:
             vol = vol * np.sqrt(trading_days)
+        if vol.iloc[-1] > 1000:
+            vol = vol / 100
         return vol
 
     def _z(s, window=60):

@@ -81,6 +81,7 @@ class TimeseriesBuilder:
         timestamps: Optional[List[datetime.datetime]] = None,
         drop_multilevel_cols: Optional[bool] = True,
     ) -> pd.DataFrame:
+        assert start <= end, "must have end > start"
         flat = _flatten_base_queries(queries)
 
         by_product: DefaultDict[str, List[BaseQuery]] = defaultdict(list)
