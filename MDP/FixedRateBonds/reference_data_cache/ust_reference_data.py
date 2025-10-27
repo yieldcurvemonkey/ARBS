@@ -108,7 +108,7 @@ def _add_ttm_columns_with_quantlib(df: pd.DataFrame, as_of: datetime.date) -> pd
         df["ttm_d"] = []
         return df
 
-    dc = ql.ActualActual(ql.ActualActual.ISMA)
+    dc = ql.ActualActual(ql.ActualActual.Actual365)
     ql_as_of = ql.Date(as_of.day, as_of.month, as_of.year)
     ql.Settings.instance().evaluationDate = ql_as_of
 
@@ -134,6 +134,10 @@ def _add_ttm_columns_with_quantlib(df: pd.DataFrame, as_of: datetime.date) -> pd
 def _fetch_fiscaldata(
     fetch_as_of: Union[datetime.date, Literal["all"]],
     process_as_of: datetime.date,
+    append_mspd_table3: bool = False,
+    append_mspd_table5: bool = False,
+    append_soma_holdings: bool = False,
+    append_free_float: bool = False,
     source_kwargs={},
 ) -> pd.DataFrame:
     otrs: Iterable[Union[int, str]] = source_kwargs.get("otrs", (2, 3, 5, 7, 10, 20, 30))
@@ -158,8 +162,69 @@ def _fetch_fiscaldata(
     ]
     df = df[keep].copy()
     df = df.rename(columns={"original_security_term": "oi", "int_rate": "cpn", "ttm_y": "ttm"})
+    df = df.sort_values(by="maturity_date")
 
-    return df.sort_values(by="maturity_date")
+    if append_free_float:
+        append_mspd_table5 = True
+        append_soma_holdings = True
+
+    if append_mspd_table3:
+        ql_date = ql.Date(fetch_as_of.day, fetch_as_of.month, fetch_as_of.year)
+        to_fetch: ql.Date = ql.NullCalendar().endOfMonth(ql_date - ql.Period("1m"))
+        mspd_table3_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_3_market?filter=record_date:eq:{datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth()).strftime("%Y-%m-%d")}&page[size]=10000"
+        mspd_table3_df = pd.DataFrame(requests.get(mspd_table3_url).json()["data"])
+        mspd_table3_df = mspd_table3_df[mspd_table3_df["security_class1_desc"].isin(["Notes", "Bonds"])]
+        to_numeric = ["issued_amt", "outstanding_amt"]
+        for n in to_numeric:
+            mspd_table3_df[n] = pd.to_numeric(mspd_table3_df[n], errors="coerce")
+
+        mspd_table3_df = mspd_table3_df.rename(columns={"security_class2_desc": "cusip"})
+        mspd_table3_df = mspd_table3_df[["cusip"] + to_numeric]
+        mspd_table3_df = mspd_table3_df.drop_duplicates(subset=["cusip"], keep="first")
+        df = pd.merge(left=df, right=mspd_table3_df, on="cusip", how="outer")
+
+    if append_mspd_table5:
+        ql_date = ql.Date(fetch_as_of.day, fetch_as_of.month, fetch_as_of.year)
+        to_fetch: ql.Date = ql.NullCalendar().endOfMonth(ql_date - ql.Period("1m"))
+
+        mspd_table5_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_5?filter=record_date:eq:{datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth()).strftime("%Y-%m-%d")}&page[size]=10000"
+        mspd_table5_df = pd.DataFrame(requests.get(mspd_table5_url).json()["data"])
+        mspd_table5_df = mspd_table5_df[mspd_table5_df["security_class1_desc"].isin(["Treasury Bonds", "Treasury Notes"])]
+        to_numeric = ["outstanding_amt", "portion_unstripped_amt", "portion_stripped_amt", "reconstituted_amt"]
+        for n in to_numeric:
+            mspd_table5_df[n] = pd.to_numeric(mspd_table5_df[n], errors="coerce") * 1000
+
+        mspd_table5_df = mspd_table5_df.drop(columns=["cusip"]).rename(columns={"security_class2_desc": "cusip"})
+        mspd_table5_df = mspd_table5_df[["cusip"] + to_numeric]
+        mspd_table5_df = mspd_table5_df.drop_duplicates(subset=["cusip"], keep="first")
+        df = pd.merge(left=df, right=mspd_table5_df, on="cusip", how="outer")
+
+    if append_soma_holdings:
+        valid_soma_holding_dates_reponse = requests.get("https://markets.newyorkfed.org/api/soma/asofdates/list.json").json()
+        valid_soma_dates_dt = [datetime.datetime.strptime(dt_string, "%Y-%m-%d").date() for dt_string in valid_soma_holding_dates_reponse["soma"]["asOfDates"]]
+        valid_closest_date = min(
+            (valid_date for valid_date in valid_soma_dates_dt if valid_date <= fetch_as_of),
+            key=lambda valid_date: abs(fetch_as_of - valid_date),
+        )
+        soma_url = f'https://markets.newyorkfed.org/api/soma/tsy/get/asof/{valid_closest_date.strftime("%Y-%m-%d")}.json'
+        soma_df = pd.DataFrame(requests.get(soma_url).json()["soma"]["holdings"])
+        soma_df = soma_df[soma_df["securityType"] == "NotesBonds"]
+        to_numeric = ["parValue", "percentOutstanding"]
+        for n in to_numeric:
+            soma_df[n] = pd.to_numeric(soma_df[n], errors="coerce")
+
+        soma_df["outstanding_amt_backed_out_from_soma"] = soma_df["parValue"] / soma_df["percentOutstanding"]
+        soma_df["percentOutstanding"] = soma_df["percentOutstanding"] * 100
+        soma_df = soma_df[["cusip"] + to_numeric + ["outstanding_amt_backed_out_from_soma"]]
+        soma_df = soma_df.rename(columns={"parValue": "soma_holdings", "percentOutstanding": "soma_holdings_of_pct_outstanding"})
+        df = pd.merge(left=df, right=soma_df, on="cusip", how="outer")
+
+    if append_free_float:
+        for c in ["outstanding_amt", "soma_holdings", "portion_stripped_amt"]:
+            df[c] = df[c].fillna(0)
+        df["free_float"] = df["outstanding_amt"] - df["soma_holdings"] - df["portion_stripped_amt"]
+
+    return df
 
 
 def update_reference_data(

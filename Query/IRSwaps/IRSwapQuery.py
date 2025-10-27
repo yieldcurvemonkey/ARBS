@@ -276,7 +276,7 @@ class IRSwapQuery(BaseQuery):
             return f"{self.risk_weight} * `{col}`"
         return f"`{col}`"
 
-    def resolve_query(self, ref_dt):
+    def resolve_query(self, ref_dt, pricer_or_curve):
         import copy
 
         q = copy.deepcopy(self)
@@ -326,7 +326,7 @@ class IRSwapQuery(BaseQuery):
             mr = dict(q_eff.market_request or {})
             mr[q_eff.mdp_time_key] = getattr(self.curve, "meta_data", {}).get("timestamp", ref_dt)
             q_eff = replace(q_eff, market_request=mr)
-            q_eff = q_eff._edited(self.curve)
+            q_eff = q_eff._edited(pricer_or_curve)
         else:
             q_eff = q
 

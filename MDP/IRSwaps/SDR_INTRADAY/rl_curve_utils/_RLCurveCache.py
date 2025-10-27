@@ -262,7 +262,7 @@ class _RLCurveCache(ZODBCacheMixin):
             to_fetch = list(bdates)
 
         if to_fetch:
-            eff = ErisFuturesFetcher()
+            eff = ErisFuturesFetcher(force_refresh=force_refresh)
             kwargs = dict(show_tqdm=False, return_intraday_timestamp=False)
             if fetcher_kwargs:
                 kwargs.update(fetcher_kwargs)

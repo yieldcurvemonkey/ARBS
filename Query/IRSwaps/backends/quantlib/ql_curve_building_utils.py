@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import Annotated, Dict, List, Literal, Optional
 
 import numpy as np
@@ -174,7 +174,7 @@ def build_discount_curve_from_nodes(
     try:
         dates = []
         for k in ql_curve_nodes.keys():
-            if isinstance(k, datetime):
+            if isinstance(k, datetime) or isinstance(k, date):
                 dates.append(k)
             elif isinstance(k, str):
                 try:

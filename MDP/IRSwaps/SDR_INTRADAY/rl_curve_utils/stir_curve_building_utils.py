@@ -666,13 +666,41 @@ def get_barchart_timeseries(
     import pandas as pd
     import requests
 
+    # --- add this near the top of get_barchart_timeseries() ---
+
+    # BBG ↔︎ Globex roots for US Treasury futures
+    _BBG_TO_GLOBEX_TSY = {
+        "US": "ZB",   # 30Y
+        "TY": "ZN",   # 10Y
+        "FV": "ZF",   # 5Y
+        "TU": "ZT",   # 2Y
+        "WN": "UD",   # Ultra Bond
+        "UXY": "TN",  # Ultra 10Y (Bloomberg root UXY → CME/Globex TN)
+    }
+    _GLOBEX_TO_BBG_TSY = {v: k for k, v in _BBG_TO_GLOBEX_TSY.items()}
+
+    # generic helper: swap a root if the symbol looks like ROOT + <month><yy>
+    import re as _re
+    def _swap_root(sym: str, mapping: dict[str, str]) -> str:
+        m = _re.match(r"^([A-Z/]+?)([FGHJKMNQUVXZ]\d{2})$", sym)
+        if not m:
+            return mapping.get(sym, sym)  # if no <M><YY> suffix, leave as-is unless exact root match
+        root, suf = m.groups()
+        return mapping.get(root, root) + suf
+
+
     # ---------------- symbol mapping ----------------
     def to_barchart_symbol(x: str):
         if use_globex:
-            return x.replace("/SR1", "SL").replace("/SR3", "SQ").replace("/ZQ", "ZQ")
-        return x.replace("SER", "SL").replace("SFR", "SQ").replace("FF", "ZQ")
+            x = x.replace("/SR1", "SL").replace("/SR3", "SQ").replace("/ZQ", "ZQ")
+        x = x.replace("SER", "SL").replace("SFR", "SQ").replace("FF", "ZQ")
+
+        x = _swap_root(x, _BBG_TO_GLOBEX_TSY)
+        return x
 
     def from_barchart_symbol(x: str):
+        x = _swap_root(x, _GLOBEX_TO_BBG_TSY)
+
         if use_globex:
             return x.replace("SL", "/SR1").replace("SQ", "/SR3").replace("ZQ", "/ZQ")
         return x.replace("SL", "SER").replace("SQ", "SFR").replace("ZQ", "FF")
@@ -688,9 +716,11 @@ def get_barchart_timeseries(
     # e.g. SFRZ25, SERM26, FFH26, ZQZ25, /SR3Z25, /SR1M26, /ZQH26
     _MONTH = r"[FGHJKMNQUVXZ]"
     if use_globex:
-        _LEG_PAT = re.compile(r"(?:/SR[13]|/ZQ|SFR|SER|FF|ZQ)" + _MONTH + r"\d{2}")
+        roots = r"(?:/SR[13]|/ZQ|SFR|SER|FF|ZQ|US|TY|FV|TU|WN|UXY|ZB|ZN|ZF|ZT|UB|TN)"
     else:
-        _LEG_PAT = re.compile(r"(?:SFR|SER|FF|ZQ)" + _MONTH + r"\d{2}")
+        roots = r"(?:SFR|SER|FF|ZQ|US|TY|FV|TU|WN|UXY|ZB|ZN|ZF|ZT|UB|TN)" 
+
+    _LEG_PAT = re.compile(rf"{roots}{_MONTH}\d{{2}}")
 
     def _extract_legs(expr_label: str) -> List[str]:
         return _LEG_PAT.findall(expr_label)

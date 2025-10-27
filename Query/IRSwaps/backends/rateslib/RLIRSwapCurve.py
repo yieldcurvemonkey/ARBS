@@ -107,6 +107,10 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
 
     def carry_and_roll_bps_running(self, irswap: rl.IRS, horizon: str):
         raise NotImplementedError("rateslib not implemented")
+    
+    def nodes(self):
+        rl_nodes: dict[pd.Timestamp, float] = self.handle().nodes._nodes
+        return {ts.date(): df for ts, df in rl_nodes.items()}
 
     def build_irswap(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None):
         if fwd:

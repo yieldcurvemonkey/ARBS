@@ -1,6 +1,6 @@
 import datetime
 from abc import ABC
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
 from Query.Base._GenericPricable import _GenericPricable
 from Query.Base._GenericPricer import _GenericPricer
@@ -31,6 +31,8 @@ class _IRSwapGenericCurve(_GenericPricer[_GenericPricable], ABC):
     def carry_bps_running(self, irswap: _IRSwapGenericObject, horizon: str) -> float: ...
     def roll_bps_running(self, irswap: _IRSwapGenericObject, horizon: str) -> float: ...
     def carry_and_roll_bps_running(self, irswap: _IRSwapGenericObject, horizon: str) -> float: ...
+
+    def nodes(self) -> Dict[datetime.date, float]: ...
 
     def resolve_pricable(self, irswap: _IRSwapGenericObject, risk_weight: Optional[float] = None) -> _IRSwapGenericObject: ...
 
