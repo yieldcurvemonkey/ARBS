@@ -1,30 +1,14 @@
 """
-Futures Query Object
+Futures Query for Backtesting
 
-Main query interface for futures backtesting.
-Follows the pattern of IRSwapQuery for consistency.
+Contract format: SFRZ4 (SFR + month code + year digit)
+- SFR = 3-Month SOFR futures
+- SER = 1-Month SOFR futures
+- Month codes: H=Mar, M=Jun, U=Sep, Z=Dec
+- Year: Single digit for 2020s (4=2024, 5=2025)
 
-Contract Code Format:
-    SFR = 3-Month SOFR futures
-    Z = December
-    4 = 2024
-    => SFRZ4 = December 2024 3-Month SOFR futures
-
-IMM Month Codes:
-    H = March
-    M = June
-    U = September
-    Z = December
-
-Pack Colors (4 consecutive contracts):
-    WHITE = contracts 1-4
-    RED = contracts 2-5
-    GREEN = contracts 3-6
-    BLUE = contracts 4-7
-    GOLD = contracts 5-8
-
-Note: ED (Eurodollar) futures were discontinued in June 2023.
-      Use SFR (3-Month SOFR) for current/forward backtests.
+Pack colors for calendar spreads:
+- WHITE/RED/GREEN/BLUE/GOLD = 4 consecutive quarterly contracts
 """
 
 import re
@@ -73,8 +57,14 @@ CONTRACT_SPECS = {
         "currency": "USD",
         "product_type": "STIR",
     },
+    "SER": {  # 1-Month SOFR
+        "multiplier": 4167.0,      # Different multiplier for 1M
+        "tick_size": 0.0025,
+        "currency": "USD",
+        "product_type": "STIR",
+    },
     "ED": {  # Eurodollar (discontinued June 2023, kept for historical backtests)
-        "multiplier": 2500.0,      # $2500 per bp
+        "multiplier": 2500.0,
         "tick_size": 0.005,        # 0.5bp = $12.50
         "currency": "USD",
         "product_type": "STIR",
@@ -107,9 +97,11 @@ def parse_futures_contract(contract: str) -> Dict[str, Any]:
         {'prefix': 'SFR', 'month_code': 'Z', 'year_digit': '4',
          'year': 2024, 'month': 12}
     """
-    # Match pattern: 2+ letters, 1 letter (month), 1 digit (year)
-    pattern = r'^([A-Z]{2,})([HMUZ])(\d)$'
-    match = re.match(pattern, contract.upper())
+    contract = contract.strip().upper()
+
+    # Match pattern: 2-3 letters, 1 letter (month), 1-2 digits (year)
+    pattern = r'^([A-Z]{2,3})([HMUZ])(\d{1,2})$'
+    match = re.match(pattern, contract)
 
     if not match:
         raise ValueError(f"Invalid contract code: {contract}")
@@ -121,9 +113,14 @@ def parse_futures_contract(contract: str) -> Dict[str, Any]:
 
     month = IMM_MONTH_CODES[month_code]
 
-    # Determine year from digit (assume 2020s for now)
-    # More sophisticated logic could use current year as reference
-    year = 2020 + int(year_digit)
+    # Determine year from digit(s)
+    if len(year_digit) == 1:
+        # Assume 2020s for single digit
+        year = 2020 + int(year_digit)
+    else:
+        # Two digits: 00-69 = 2000s, 70-99 = 1900s
+        yy = int(year_digit)
+        year = 2000 + yy if yy <= 69 else 1900 + yy
 
     return {
         'prefix': prefix,
