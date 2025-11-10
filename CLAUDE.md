@@ -4,6 +4,78 @@ You are an experienced, pragmatic software engineer. You don't over-engineer a s
 
 **Rule #1**: If you want exception to ANY rule, YOU MUST STOP and get explicit permission from Peter first. BREAKING THE LETTER OR SPIRIT OF THE RULES IS FAILURE.
 
+## MVP Project Goals (Futures/Swaps Backtesting)
+
+**Primary Objective**: Build a minimal end-to-end backtest that **measures correctly**, not necessarily profitably.
+
+### Critical MVP Principles
+
+1. **Measurement over Performance**
+   - Goal is ACCURATE measurement of strategy performance
+   - NOT required: Positive IC or profitable returns
+   - If strategy loses money, that's FINE - we measure it accurately
+   - No cherry-picking or optimizing for results
+
+2. **Minimal → Maximal Approach**
+   - Start with simplest working implementation (Minimal)
+   - Prove it works end-to-end
+   - Then add complexity (Maximal) only when needed
+   - Each component independently tested before integration
+
+3. **Test-Driven Development (TDD)**
+   - Design tests from business perspective FIRST
+   - Then implement to make tests pass
+   - All modules have comprehensive test coverage
+   - Follow the test → implement → refactor cycle strictly
+
+### MVP Architecture
+
+```
+Query Layer:     FuturesQuery → MockFuture objects
+       ↓
+Adapter Layer:   FuturesAdapter → DataFrame (price, next_price, roll_date)
+       ↓
+Signal Layer:    CarrySignal → standardized alphas (z-scores)
+       ↓
+Risk Layer:      LedoitWolfShrinkage → covariance matrix Σ
+       ↓
+Optimizer Layer: MeanVarianceOptimizer → portfolio weights
+       ↓
+Backtest Layer:  (TODO) Track positions → calculate P&L → measure IC/Sharpe
+```
+
+### Completed Components (157 tests passing)
+
+- **Query** (44 tests): Futures infrastructure, structures, value calculations
+- **Signals** (31 tests): BaseSignal, CarrySignal, IC calculation utilities
+- **Risk** (22 tests): SampleCovariance, LedoitWolfShrinkage, comparison
+- **Optimizer** (18 tests): Mean-variance optimizer (Markowitz 1952)
+- **Adapter** (8 tests): Query → Signals bridge with proper format translation
+- **Other** (34 tests): Accounting, smoke tests, fixtures
+
+### Next: Minimal Backtest Loop
+
+Build simplest possible backtest that:
+1. Takes list of futures contracts
+2. For each date:
+   - Use FuturesAdapter to get prices
+   - Generate carries with CarrySignal
+   - Estimate covariance with LedoitWolfShrinkage
+   - Optimize weights with MeanVarianceOptimizer
+   - Track positions and calculate P&L
+3. Output: Returns time series, realized IC, realized Sharpe
+
+**Success Criteria**: End-to-end system produces measurable results (regardless of sign)
+
+### Maximal Enhancements (Later)
+
+Only add AFTER minimal backtest works:
+- Transaction costs (proportional + quadratic impact)
+- DV01 constraints (fixed income risk limits)
+- Cardinality constraints (L0 penalty)
+- Multiple signals (momentum, mean reversion)
+- Advanced covariance (3-factor PCA, nodewise regression)
+
 ## Foundational rules
 
 - Doing it right is better than doing it fast. You are not in a rush. NEVER skip steps or take shortcuts.
