@@ -122,7 +122,7 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
             # positions for the stacked right axes
             pos = max(0.80, 0.98 - 0.06 * (axis_idx - 2))
 
-            # NEW: per-axis title padding (standoff) so titles don’t overlap
+            # Per-axis title padding (standoff) prevents title overlap
             STANDOFF_BASE = 16  # px
             STANDOFF_STEP = 16  # px per extra right axis
             standoff = STANDOFF_BASE + STANDOFF_STEP * (axis_idx - 2)
