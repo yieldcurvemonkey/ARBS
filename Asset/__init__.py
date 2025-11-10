@@ -2,5 +2,6 @@
 
 from .Base import Asset, AssetTransition
 from .PriceFuture import PriceFuture
+from .RollableFuture import RollableFuture
 
-__all__ = ['Asset', 'AssetTransition', 'PriceFuture']
+__all__ = ['Asset', 'AssetTransition', 'PriceFuture', 'RollableFuture']
