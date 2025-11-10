@@ -22,10 +22,10 @@ class FuturesValue(Enum):
     Futures value metrics.
 
     Examples:
-        PRICE: 94.50 (Eurodollar futures price)
+        PRICE: 94.50 (SOFR futures price)
         IMPLIED_RATE: 5.50% (100 - 94.50)
         NPV: $1,250 (price change * multiplier * quantity)
-        DV01: $25 per contract per bp for Eurodollar
+        DV01: $25 per contract per bp for SOFR
         MARGIN: $1,500 per contract (initial margin)
         BASIS: 5.2 bps (futures implied rate - swap rate)
         CONVEXITY_ADJ: 2.5 bps (futures-FRA convexity)

@@ -293,7 +293,7 @@ class TestConventionIntegration:
 
         @dataclass
         class MockFuturesPosition:
-            contract: str = "EDZ4"
+            contract: str = "SFRZ4"
             quantity: float = 10.0
             multiplier: float = 2500.0
             expiry: date = date(2024, 12, 18)

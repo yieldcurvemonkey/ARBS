@@ -464,7 +464,7 @@ class QuarterlyRoll(DaysBeforeExpiryRoll):
     Roll to next quarterly contract (IMM dates).
 
     Used for:
-    - STIR futures (Eurodollar, SOFR, etc.)
+    - STIR futures (SOFR, SOFR, etc.)
     - Quarterly bond futures
     - Other IMM-traded contracts
 
@@ -476,12 +476,12 @@ class QuarterlyRoll(DaysBeforeExpiryRoll):
         Get next quarterly IMM contract.
 
         This would construct a new query/position for the next quarterly
-        contract (e.g., EDH5 -> EDM5).
+        contract (e.g., SFRH5 -> SFRM5).
 
         Actual implementation depends on product query structure.
         """
         # Placeholder - actual implementation would:
-        # 1. Parse current contract code (e.g., "EDH5")
+        # 1. Parse current contract code (e.g., "SFRH5")
         # 2. Determine next IMM month
         # 3. Construct new contract code
         # 4. Return new query/position
@@ -551,7 +551,7 @@ def get_contract_expiry(contract: str) -> date:
     Get expiry date from contract code.
 
     Args:
-        contract: Contract code (e.g., "EDZ4" = Dec 2024 Eurodollar)
+        contract: Contract code (e.g., "SFRZ4" = Dec 2024 SOFR)
 
     Returns:
         Expiry date (third Wednesday of contract month)
@@ -570,14 +570,14 @@ def get_contract_expiry(contract: str) -> date:
     if len(contract) < 3:
         raise ValueError(f"Invalid contract code: {contract}")
 
-    # Parse month code (e.g., 'Z' from 'EDZ4')
+    # Parse month code (e.g., 'Z' from 'SFRZ4')
     month_code = contract[-2]
     if month_code not in month_codes:
         raise ValueError(f"Invalid month code: {month_code}")
 
     month = month_codes[month_code]
 
-    # Parse year (e.g., '4' from 'EDZ4' = 2024)
+    # Parse year (e.g., '4' from 'SFRZ4' = 2024)
     year_digit = contract[-1]
     if not year_digit.isdigit():
         raise ValueError(f"Invalid year digit: {year_digit}")

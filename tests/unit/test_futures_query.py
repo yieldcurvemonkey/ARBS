@@ -99,13 +99,13 @@ class TestFuturesQuery:
         query = FuturesQuery(
             structure=FuturesStructure.OUTRIGHT,
             value=FuturesValue.PRICE,
-            contract="EDZ4",
+            contract="SFRZ4",
             currency="USD"
         )
 
         assert query.structure == FuturesStructure.OUTRIGHT
         assert query.value == FuturesValue.PRICE
-        assert query.contract == "EDZ4"
+        assert query.contract == "SFRZ4"
         assert query.currency == "USD"
 
     def test_futures_query_is_frozen(self):
@@ -117,11 +117,11 @@ class TestFuturesQuery:
         query = FuturesQuery(
             structure=FuturesStructure.OUTRIGHT,
             value=FuturesValue.PRICE,
-            contract="EDZ4"
+            contract="SFRZ4"
         )
 
         with pytest.raises(FrozenInstanceError):
-            query.contract = "EDH5"
+            query.contract = "SFRH5"
 
     def test_futures_query_defaults(self):
         """Test FuturesQuery default values."""
@@ -132,14 +132,14 @@ class TestFuturesQuery:
         query = FuturesQuery(
             structure=FuturesStructure.OUTRIGHT,
             value=FuturesValue.PRICE,
-            contract="EDZ4"
+            contract="SFRZ4"
         )
 
         # Check defaults
         assert query.currency == "USD"
         assert query.product_type == "STIR"
         assert query.multiplier == 2500.0
-        assert query.tick_size == 0.005  # 0.5bp = 0.005
+        assert query.tick_size == 0.0025  # 0.25bp for SFR
 
     def test_futures_query_contract_parsing(self):
         """Test that contract code is parsed correctly."""
@@ -149,10 +149,10 @@ class TestFuturesQuery:
 
         # Test various contract codes
         test_cases = [
-            ("EDZ4", "ED", "Z", "4", 2024, 12),  # Eurodollar Dec 2024
-            ("EDH5", "ED", "H", "5", 2025, 3),   # Eurodollar Mar 2025
-            ("EDM5", "ED", "M", "5", 2025, 6),   # Eurodollar Jun 2025
-            ("EDU5", "ED", "U", "5", 2025, 9),   # Eurodollar Sep 2025
+            ("SFRZ4", "SFR", "Z", "4", 2024, 12),  # Eurodollar Dec 2024
+            ("SFRH5", "SFR", "H", "5", 2025, 3),   # Eurodollar Mar 2025
+            ("SFRM5", "SFR", "M", "5", 2025, 6),   # Eurodollar Jun 2025
+            ("SFRU5", "SFR", "U", "5", 2025, 9),   # Eurodollar Sep 2025
         ]
 
         for contract, prefix, month_code, year_digit, expected_year, expected_month in test_cases:
@@ -169,8 +169,8 @@ class TestFuturesQuery:
         from Query.Futures.FuturesStructure import FuturesStructure
         from Query.Futures.FuturesValue import FuturesValue
 
-        # EDZ4 = December 2024 = third Wednesday
-        expiry = get_contract_expiry("EDZ4")
+        # SFRZ4 = December 2024 = third Wednesday
+        expiry = get_contract_expiry("SFRZ4")
 
         assert expiry.year == 2024
         assert expiry.month == 12
@@ -189,7 +189,7 @@ class TestFuturesQuery:
         query = FuturesQuery(
             structure=FuturesStructure.OUTRIGHT,
             value=FuturesValue.PRICE,
-            contract="EDZ4",
+            contract="SFRZ4",
             expiry=expiry
         )
 
@@ -212,13 +212,13 @@ class TestFuturesQueryArithmetic:
         q1 = FuturesQuery(
             structure=FuturesStructure.OUTRIGHT,
             value=FuturesValue.PRICE,
-            contract="EDZ4"
+            contract="SFRZ4"
         )
 
         q2 = FuturesQuery(
             structure=FuturesStructure.OUTRIGHT,
             value=FuturesValue.PRICE,
-            contract="EDH5"
+            contract="SFRH5"
         )
 
         # Adding should create a composite query or raise not implemented
@@ -236,13 +236,13 @@ class TestFuturesQueryArithmetic:
         q1 = FuturesQuery(
             structure=FuturesStructure.OUTRIGHT,
             value=FuturesValue.PRICE,
-            contract="EDH5"
+            contract="SFRH5"
         )
 
         q2 = FuturesQuery(
             structure=FuturesStructure.OUTRIGHT,
             value=FuturesValue.PRICE,
-            contract="EDZ4"
+            contract="SFRZ4"
         )
 
         # H5 - Z4 = calendar spread
@@ -259,7 +259,7 @@ class TestFuturesQueryArithmetic:
         q1 = FuturesQuery(
             structure=FuturesStructure.OUTRIGHT,
             value=FuturesValue.PRICE,
-            contract="EDZ4",
+            contract="SFRZ4",
             quantity=1.0
         )
 
@@ -285,13 +285,13 @@ class TestCalendarSpreadQuery:
         query = FuturesQuery(
             structure=FuturesStructure.CALENDAR,
             value=FuturesValue.PRICE,
-            front_contract="EDZ4",
-            back_contract="EDH5"
+            front_contract="SFRZ4",
+            back_contract="SFRH5"
         )
 
         assert query.structure == FuturesStructure.CALENDAR
-        assert query.front_contract == "EDZ4"
-        assert query.back_contract == "EDH5"
+        assert query.front_contract == "SFRZ4"
+        assert query.back_contract == "SFRH5"
 
 
 # =============================================================================
@@ -311,7 +311,7 @@ class TestPackQuery:
         query = FuturesQuery(
             structure=FuturesStructure.PACK,
             value=FuturesValue.PRICE,
-            pack_color="RED",  # or could be first_contract="EDH5"
+            pack_color="RED",  # or could be first_contract="SFRH5"
             currency="USD"
         )
 
@@ -335,7 +335,7 @@ class TestBundleQuery:
         query = FuturesQuery(
             structure=FuturesStructure.BUNDLE,
             value=FuturesValue.PRICE,
-            bundle_start_contract="EDH5"
+            bundle_start_contract="SFRH5"
         )
 
         assert query.structure == FuturesStructure.BUNDLE
@@ -357,7 +357,7 @@ class TestBasisQuery:
         query = FuturesQuery(
             structure=FuturesStructure.BASIS,
             value=FuturesValue.BASIS,
-            contract="EDZ4",
+            contract="SFRZ4",
             swap_tenor="3M"  # 3-month swap to match Eurodollar
         )
 
@@ -377,33 +377,33 @@ class TestFuturesHelpers:
         from Query.Futures.FuturesQuery import get_next_imm_contract
 
         # From Dec 2024, next is Mar 2025
-        next_contract = get_next_imm_contract("EDZ4")
-        assert next_contract == "EDH5"
+        next_contract = get_next_imm_contract("SFRZ4")
+        assert next_contract == "SFRH5"
 
         # From Mar 2025, next is Jun 2025
-        next_contract = get_next_imm_contract("EDH5")
-        assert next_contract == "EDM5"
+        next_contract = get_next_imm_contract("SFRH5")
+        assert next_contract == "SFRM5"
 
         # From Jun 2025, next is Sep 2025
-        next_contract = get_next_imm_contract("EDM5")
-        assert next_contract == "EDU5"
+        next_contract = get_next_imm_contract("SFRM5")
+        assert next_contract == "SFRU5"
 
         # From Sep 2025, next is Dec 2025
-        next_contract = get_next_imm_contract("EDU5")
-        assert next_contract == "EDZ5"
+        next_contract = get_next_imm_contract("SFRU5")
+        assert next_contract == "SFRZ5"
 
     def test_get_contract_chain(self):
         """Test getting a chain of contracts."""
         from Query.Futures.FuturesQuery import get_contract_chain
 
-        # Get 4 contracts starting from EDZ4
-        chain = get_contract_chain("EDZ4", count=4)
+        # Get 4 contracts starting from SFRZ4
+        chain = get_contract_chain("SFRZ4", count=4)
 
         assert len(chain) == 4
-        assert chain[0] == "EDZ4"
-        assert chain[1] == "EDH5"
-        assert chain[2] == "EDM5"
-        assert chain[3] == "EDU5"
+        assert chain[0] == "SFRZ4"
+        assert chain[1] == "SFRH5"
+        assert chain[2] == "SFRM5"
+        assert chain[3] == "SFRU5"
 
     def test_pack_colors(self):
         """Test pack color definitions."""

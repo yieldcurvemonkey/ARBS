@@ -79,14 +79,14 @@ class TestMockMarketData:
         assert mock_eur_curve.rate("3M") == 0.0390
 
     def test_mock_ed_prices(self, mock_ed_prices):
-        """Test Eurodollar futures prices fixture."""
-        assert "EDZ4" in mock_ed_prices
-        assert mock_ed_prices["EDZ4"].price == 94.50
-        assert mock_ed_prices["EDZ4"].contract == "EDZ4"
+        """Test SOFR futures prices fixture."""
+        assert "SFRZ4" in mock_ed_prices
+        assert mock_ed_prices["SFRZ4"].price == 94.50
+        assert mock_ed_prices["SFRZ4"].contract == "SFRZ4"
 
         # Test curve shape (inverted)
-        assert mock_ed_prices["EDZ4"].price < mock_ed_prices["EDH5"].price
-        assert mock_ed_prices["EDH5"].price < mock_ed_prices["EDM5"].price
+        assert mock_ed_prices["SFRZ4"].price < mock_ed_prices["SFRH5"].price
+        assert mock_ed_prices["SFRH5"].price < mock_ed_prices["SFRM5"].price
 
 
 class TestMockPricer:
@@ -99,7 +99,7 @@ class TestMockPricer:
 
     def test_mock_pricer_futures_prices(self, mock_pricer):
         """Test pricer has futures prices."""
-        price = mock_pricer.futures_price("EDZ4")
+        price = mock_pricer.futures_price("SFRZ4")
         assert price == 94.50
 
         # Test default

@@ -149,7 +149,7 @@ def mock_eur_curve(base_date) -> MockCurve:
 @dataclass
 class MockFuturesPrice:
     """Mock futures price data."""
-    contract: str  # e.g., "EDZ4"
+    contract: str  # e.g., "SFRZ4"
     price: float
     date: date
     settlement_price: float = None
@@ -163,13 +163,13 @@ class MockFuturesPrice:
 
 @pytest.fixture
 def mock_ed_prices(base_date) -> Dict[str, MockFuturesPrice]:
-    """Return mock Eurodollar futures prices."""
-    # Typical Eurodollar curve: front higher (inverted), back lower
+    """Return mock SOFR futures prices."""
+    # Typical SOFR curve: front higher (inverted), back lower
     contracts = {
-        "EDZ4": 94.50,  # Dec 2024 - 5.50%
-        "EDH5": 94.75,  # Mar 2025 - 5.25%
-        "EDM5": 95.00,  # Jun 2025 - 5.00%
-        "EDU5": 95.20,  # Sep 2025 - 4.80%
+        "SFRZ4": 94.50,  # Dec 2024 - 5.50%
+        "SFRH5": 94.75,  # Mar 2025 - 5.25%
+        "SFRM5": 95.00,  # Jun 2025 - 5.00%
+        "SFRU5": 95.20,  # Sep 2025 - 4.80%
         "EDZ5": 95.35,  # Dec 2025 - 4.65%
         "EDH6": 95.50,  # Mar 2026 - 4.50%
         "EDM6": 95.60,  # Jun 2026 - 4.40%

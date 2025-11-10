@@ -5,10 +5,10 @@ Main query interface for futures backtesting.
 Follows the pattern of IRSwapQuery for consistency.
 
 Contract Code Format:
-    ED = Eurodollar
+    SFR = 3-Month SOFR futures
     Z = December
     4 = 2024
-    => EDZ4 = December 2024 Eurodollar futures
+    => SFRZ4 = December 2024 3-Month SOFR futures
 
 IMM Month Codes:
     H = March
@@ -22,6 +22,9 @@ Pack Colors (4 consecutive contracts):
     GREEN = contracts 3-6
     BLUE = contracts 4-7
     GOLD = contracts 5-8
+
+Note: ED (Eurodollar) futures were discontinued in June 2023.
+      Use SFR (3-Month SOFR) for current/forward backtests.
 """
 
 import re
@@ -64,15 +67,15 @@ PACK_COLORS = {
 
 # Contract specifications (can be extended for other products)
 CONTRACT_SPECS = {
-    "ED": {  # Eurodollar
-        "multiplier": 2500.0,      # $2500 per bp
-        "tick_size": 0.005,        # 0.5bp = $12.50
+    "SFR": {  # 3-Month SOFR (current standard)
+        "multiplier": 2500.0,
+        "tick_size": 0.0025,       # 0.25bp = $6.25
         "currency": "USD",
         "product_type": "STIR",
     },
-    "SR3": {  # 3-Month SOFR
-        "multiplier": 2500.0,
-        "tick_size": 0.0025,       # 0.25bp
+    "ED": {  # Eurodollar (discontinued June 2023, kept for historical backtests)
+        "multiplier": 2500.0,      # $2500 per bp
+        "tick_size": 0.005,        # 0.5bp = $12.50
         "currency": "USD",
         "product_type": "STIR",
     },
@@ -94,14 +97,14 @@ def parse_futures_contract(contract: str) -> Dict[str, Any]:
     Parse futures contract code into components.
 
     Args:
-        contract: Contract code (e.g., "EDZ4")
+        contract: Contract code (e.g., "SFRZ4")
 
     Returns:
         Dict with keys: prefix, month_code, year_digit, year, month
 
     Examples:
-        >>> parse_futures_contract("EDZ4")
-        {'prefix': 'ED', 'month_code': 'Z', 'year_digit': '4',
+        >>> parse_futures_contract("SFRZ4")
+        {'prefix': 'SFR', 'month_code': 'Z', 'year_digit': '4',
          'year': 2024, 'month': 12}
     """
     # Match pattern: 2+ letters, 1 letter (month), 1 digit (year)
@@ -138,13 +141,13 @@ def get_contract_expiry(contract: str) -> date:
     IMM dates are the third Wednesday of Mar/Jun/Sep/Dec.
 
     Args:
-        contract: Contract code (e.g., "EDZ4")
+        contract: Contract code (e.g., "SFRZ4")
 
     Returns:
         Expiry date (third Wednesday of contract month)
 
     Examples:
-        >>> get_contract_expiry("EDZ4")
+        >>> get_contract_expiry("SFRZ4")
         datetime.date(2024, 12, 18)
     """
     parsed = parse_futures_contract(contract)
@@ -170,16 +173,16 @@ def get_next_imm_contract(contract: str) -> str:
     Get the next quarterly IMM contract.
 
     Args:
-        contract: Current contract (e.g., "EDZ4")
+        contract: Current contract (e.g., "SFRZ4")
 
     Returns:
-        Next contract (e.g., "EDH5")
+        Next contract (e.g., "SFRH5")
 
     Examples:
-        >>> get_next_imm_contract("EDZ4")
-        "EDH5"
-        >>> get_next_imm_contract("EDU5")
-        "EDZ5"
+        >>> get_next_imm_contract("SFRZ4")
+        "SFRH5"
+        >>> get_next_imm_contract("SFRU5")
+        "SFRZ5"
     """
     parsed = parse_futures_contract(contract)
     prefix = parsed['prefix']
@@ -216,8 +219,8 @@ def get_contract_chain(contract: str, count: int) -> List[str]:
         List of contract codes
 
     Examples:
-        >>> get_contract_chain("EDZ4", 4)
-        ["EDZ4", "EDH5", "EDM5", "EDU5"]
+        >>> get_contract_chain("SFRZ4", 4)
+        ["SFRZ4", "SFRH5", "SFRM5", "SFRU5"]
     """
     chain = [contract]
     current = contract
@@ -244,8 +247,8 @@ def get_pack_contracts(
         List of 4 contract codes
 
     Examples:
-        >>> get_pack_contracts("EDH5", "RED")
-        ["EDM5", "EDU5", "EDZ5", "EDH6"]  # Skip first, take next 4
+        >>> get_pack_contracts("SFRH5", "RED")
+        ["SFRM5", "SFRU5", "SFRZ5", "SFRH6"]  # Skip first, take next 4
     """
     offset = PACK_COLORS.get(color.upper(), 0)
 
@@ -268,7 +271,7 @@ class FuturesQuery(BaseQuery):
     User-facing args for different structures:
 
     OUTRIGHT:
-        contract: Contract code (e.g., "EDZ4")
+        contract: Contract code (e.g., "SFRZ4")
         quantity: Number of contracts (default 1.0)
 
     CALENDAR:
@@ -301,8 +304,8 @@ class FuturesQuery(BaseQuery):
 
     # Contract specifications (auto-populated from contract code)
     product_type: str = "STIR"
-    multiplier: float = 2500.0  # Default for Eurodollar
-    tick_size: float = 0.005    # Default for Eurodollar (0.5bp)
+    multiplier: float = 2500.0  # Default for SFR/SOFR
+    tick_size: float = 0.0025   # Default for SFR (0.25bp = $6.25)
     expiry: Optional[date] = None
 
     # Calendar spread fields
@@ -339,7 +342,7 @@ class FuturesQuery(BaseQuery):
                     specs = CONTRACT_SPECS[prefix]
                     if self.multiplier == 2500.0:  # Only override if still default
                         object.__setattr__(self, 'multiplier', specs['multiplier'])
-                    if self.tick_size == 0.005:
+                    if self.tick_size == 0.0025:  # SFR default
                         object.__setattr__(self, 'tick_size', specs['tick_size'])
                     if self.currency == "USD":
                         object.__setattr__(self, 'currency', specs['currency'])
