@@ -171,7 +171,8 @@ def _fetch_fiscaldata(
     if append_mspd_table3:
         ql_date = ql.Date(fetch_as_of.day, fetch_as_of.month, fetch_as_of.year)
         to_fetch: ql.Date = ql.NullCalendar().endOfMonth(ql_date - ql.Period("1m"))
-        mspd_table3_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_3_market?filter=record_date:eq:{datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth()).strftime("%Y-%m-%d")}&page[size]=10000"
+        fetch_date = datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth())
+        mspd_table3_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_3_market?filter=record_date:eq:{fetch_date.strftime('%Y-%m-%d')}&page[size]=10000"
         mspd_table3_df = pd.DataFrame(requests.get(mspd_table3_url).json()["data"])
         mspd_table3_df = mspd_table3_df[mspd_table3_df["security_class1_desc"].isin(["Notes", "Bonds"])]
         to_numeric = ["issued_amt", "outstanding_amt"]
@@ -187,7 +188,8 @@ def _fetch_fiscaldata(
         ql_date = ql.Date(fetch_as_of.day, fetch_as_of.month, fetch_as_of.year)
         to_fetch: ql.Date = ql.NullCalendar().endOfMonth(ql_date - ql.Period("1m"))
 
-        mspd_table5_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_5?filter=record_date:eq:{datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth()).strftime("%Y-%m-%d")}&page[size]=10000"
+        fetch_date = datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth())
+        mspd_table5_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_5?filter=record_date:eq:{fetch_date.strftime('%Y-%m-%d')}&page[size]=10000"
         mspd_table5_df = pd.DataFrame(requests.get(mspd_table5_url).json()["data"])
         mspd_table5_df = mspd_table5_df[mspd_table5_df["security_class1_desc"].isin(["Treasury Bonds", "Treasury Notes"])]
         to_numeric = ["outstanding_amt", "portion_unstripped_amt", "portion_stripped_amt", "reconstituted_amt"]

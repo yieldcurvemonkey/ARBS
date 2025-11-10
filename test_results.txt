@@ -1,0 +1,398 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.14, pytest-9.0.0, pluggy-1.6.0 -- /usr/local/bin/python
+cachedir: .pytest_cache
+rootdir: /home/user/ARBS
+plugins: anyio-4.11.0, cov-7.0.0
+collecting ... collected 47 items
+
+tests/test_backtest_simple.py::TestBasicBacktest::test_empty_backtest_runs PASSED [  2%]
+tests/test_backtest_simple.py::TestBasicBacktest::test_single_trade_backtest FAILED [  4%]
+tests/test_backtest_simple.py::TestAlwaysOnTrigger::test_always_on_trigger_fires_every_step FAILED [  6%]
+tests/test_backtest_simple.py::TestMultipleTriggers::test_multiple_date_triggers FAILED [  8%]
+tests/test_backtest_simple.py::TestQueryResolution::test_outright_resolves_to_package FAILED [ 10%]
+tests/test_backtest_simple.py::TestQueryResolution::test_curve_resolves_to_multiple_instruments FAILED [ 12%]
+tests/test_backtest_simple.py::TestQueryResolution::test_fly_resolves_to_three_legs FAILED [ 14%]
+tests/test_backtest_simple.py::TestValueCalculation::test_calculate_npv FAILED [ 17%]
+tests/test_backtest_simple.py::TestValueCalculation::test_calculate_par_rate FAILED [ 19%]
+tests/test_backtest_simple.py::TestValueCalculation::test_default_mtm_value PASSED [ 21%]
+tests/test_portfolio.py::TestUnwindByTag::test_unwind_single_position_by_tag FAILED [ 23%]
+tests/test_portfolio.py::TestUnwindByTag::test_unwind_multiple_positions_same_tag FAILED [ 25%]
+tests/test_portfolio.py::TestUnwindByTag::test_partial_unwind_by_tag FAILED [ 27%]
+tests/test_portfolio.py::TestUnwindWithFees::test_unwind_with_transaction_cost FAILED [ 29%]
+tests/test_portfolio.py::TestPortfolioIteration::test_iterate_open_positions FAILED [ 31%]
+tests/test_portfolio.py::TestPortfolioIteration::test_position_opened_timestamp FAILED [ 34%]
+tests/test_portfolio.py::TestRealizedPnL::test_realized_pnl_accumulates FAILED [ 36%]
+tests/test_portfolio.py::TestRealizedPnL::test_mtm_includes_open_and_realized FAILED [ 38%]
+tests/test_portfolio.py::TestPortfolioTradeCount::test_count_trades_in_window FAILED [ 40%]
+tests/test_query_basics.py::TestQueryCreation::test_create_simple_outright_query PASSED [ 42%]
+tests/test_query_basics.py::TestQueryCreation::test_create_outright_with_bpv PASSED [ 44%]
+tests/test_query_basics.py::TestQueryCreation::test_create_curve_query FAILED [ 46%]
+tests/test_query_basics.py::TestQueryCreation::test_create_fly_query PASSED [ 48%]
+tests/test_query_basics.py::TestQueryMarketRequest::test_mdp_request_with_date PASSED [ 51%]
+tests/test_query_basics.py::TestQueryMarketRequest::test_mdp_request_with_live_timestamp PASSED [ 53%]
+tests/test_query_basics.py::TestQuerySignatures::test_signature_is_stable PASSED [ 55%]
+tests/test_query_basics.py::TestQuerySignatures::test_signature_differs_by_parameter PASSED [ 57%]
+tests/test_query_basics.py::TestQueryTags::test_add_tags_to_query PASSED [ 59%]
+tests/test_query_basics.py::TestQueryTags::test_query_with_custom_name PASSED [ 61%]
+tests/test_query_basics.py::TestQueryArithmetic::test_negate_query PASSED [ 63%]
+tests/test_query_basics.py::TestQueryArithmetic::test_scale_query PASSED [ 65%]
+tests/test_query_basics.py::TestQueryValidation::test_missing_required_fields_raises_error FAILED [ 68%]
+tests/test_query_basics.py::TestQueryValidation::test_invalid_tenor_format PASSED [ 70%]
+tests/test_triggers.py::TestDateTriggers::test_date_trigger_fires_on_specified_date FAILED [ 72%]
+tests/test_triggers.py::TestDateTriggers::test_date_trigger_does_not_fire_on_other_dates PASSED [ 74%]
+tests/test_triggers.py::TestDateTriggers::test_multiple_date_trigger PASSED [ 76%]
+tests/test_triggers.py::TestCustomTriggers::test_always_on_trigger PASSED [ 78%]
+tests/test_triggers.py::TestCustomTriggers::test_never_fire_trigger PASSED [ 80%]
+tests/test_triggers.py::TestCustomTriggers::test_day_of_week_trigger PASSED [ 82%]
+tests/test_triggers.py::TestConditionalTriggers::test_time_window_trigger PASSED [ 85%]
+tests/test_triggers.py::TestConditionalTriggers::test_first_occurrence_trigger PASSED [ 87%]
+tests/test_triggers.py::TestRiskBasedTriggers::test_risk_threshold_trigger PASSED [ 89%]
+tests/test_triggers.py::TestTriggerInfo::test_trigger_info_carries_metadata PASSED [ 91%]
+tests/test_triggers.py::TestPeriodicTriggers::test_monthly_trigger PASSED [ 93%]
+tests/test_triggers.py::TestPeriodicTriggers::test_every_n_days_trigger PASSED [ 95%]
+tests/test_triggers.py::TestTriggerComposition::test_and_trigger PASSED  [ 97%]
+tests/test_triggers.py::TestTriggerComposition::test_or_trigger PASSED   [100%]
+
+=================================== FAILURES ===================================
+_________________ TestBasicBacktest.test_single_trade_backtest _________________
+tests/test_backtest_simple.py:83: in test_single_trade_backtest
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+_________ TestAlwaysOnTrigger.test_always_on_trigger_fires_every_step __________
+tests/test_backtest_simple.py:139: in test_always_on_trigger_fires_every_step
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+_______________ TestMultipleTriggers.test_multiple_date_triggers _______________
+tests/test_backtest_simple.py:199: in test_multiple_date_triggers
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+____________ TestQueryResolution.test_outright_resolves_to_package _____________
+tests/test_backtest_simple.py:233: in test_outright_resolves_to_package
+    package, weights = query.resolve_package(pricer_or_curve=pricer)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+_______ TestQueryResolution.test_curve_resolves_to_multiple_instruments ________
+tests/test_backtest_simple.py:249: in test_curve_resolves_to_multiple_instruments
+    query = IRSwapQuery(
+<string>:21: in __init__
+    ???
+Query/IRSwaps/IRSwapQuery.py:146: in __post_init__
+    assert ("front_tenor" in self.structure_kwargs and "back_tenor" in self.structure_kwargs) or (
+E   AssertionError: CURVE requires both leg tenors OR both leg (effective_date & maturity_date)
+_____________ TestQueryResolution.test_fly_resolves_to_three_legs ______________
+tests/test_backtest_simple.py:288: in test_fly_resolves_to_three_legs
+    package, weights = query.resolve_package(pricer_or_curve=pricer)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:336: in _build_fly
+    self._build_spreadable(
+Query/IRSwaps/IRSwapStructure.py:151: in _build_spreadable
+    unit_swaps = [self._leg(**spec, notional=1.0) for spec in leg_specs]
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:151: in <listcomp>
+    unit_swaps = [self._leg(**spec, notional=1.0) for spec in leg_specs]
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+___________________ TestValueCalculation.test_calculate_npv ____________________
+tests/test_backtest_simple.py:321: in test_calculate_npv
+    package, weights = query.resolve_package(pricer_or_curve=pricer)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+_________________ TestValueCalculation.test_calculate_par_rate _________________
+tests/test_backtest_simple.py:349: in test_calculate_par_rate
+    package, weights = query.resolve_package(pricer_or_curve=pricer)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:186: in _build_outright
+    assert notional is not None or bpv is not None, "must pass in `notional` or `bpv` if not for timeseries buildig"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AssertionError: must pass in `notional` or `bpv` if not for timeseries buildig
+______________ TestUnwindByTag.test_unwind_single_position_by_tag ______________
+tests/test_portfolio.py:70: in test_unwind_single_position_by_tag
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+___________ TestUnwindByTag.test_unwind_multiple_positions_same_tag ____________
+tests/test_portfolio.py:132: in test_unwind_multiple_positions_same_tag
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+__________________ TestUnwindByTag.test_partial_unwind_by_tag __________________
+tests/test_portfolio.py:190: in test_partial_unwind_by_tag
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+_____________ TestUnwindWithFees.test_unwind_with_transaction_cost _____________
+tests/test_portfolio.py:242: in test_unwind_with_transaction_cost
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+______________ TestPortfolioIteration.test_iterate_open_positions ______________
+tests/test_portfolio.py:290: in test_iterate_open_positions
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+____________ TestPortfolioIteration.test_position_opened_timestamp _____________
+tests/test_portfolio.py:333: in test_position_opened_timestamp
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:186: in _build_outright
+    assert notional is not None or bpv is not None, "must pass in `notional` or `bpv` if not for timeseries buildig"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AssertionError: must pass in `notional` or `bpv` if not for timeseries buildig
+________________ TestRealizedPnL.test_realized_pnl_accumulates _________________
+tests/test_portfolio.py:403: in test_realized_pnl_accumulates
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+_____________ TestRealizedPnL.test_mtm_includes_open_and_realized ______________
+tests/test_portfolio.py:447: in test_mtm_includes_open_and_realized
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:195: in _build_outright
+    self._leg(
+Query/IRSwaps/IRSwapStructure.py:108: in _leg
+    elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
+                                                                 ^^^^^^^^^^^^^^^^
+E   AttributeError: 'MockPricer' object has no attribute 'id'
+_____________ TestPortfolioTradeCount.test_count_trades_in_window ______________
+tests/test_portfolio.py:499: in test_count_trades_in_window
+    bt.run()
+BT/query_engine.py:145: in run
+    package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseQuery.py:89: in resolve_package
+    package, weights = struct_map.apply(self.structure_id, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Query/Base/BaseStructure.py:27: in apply
+    return builder(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+Query/IRSwaps/IRSwapStructure.py:186: in _build_outright
+    assert notional is not None or bpv is not None, "must pass in `notional` or `bpv` if not for timeseries buildig"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AssertionError: must pass in `notional` or `bpv` if not for timeseries buildig
+__________________ TestQueryCreation.test_create_curve_query ___________________
+tests/test_query_basics.py:59: in test_create_curve_query
+    query = IRSwapQuery(
+<string>:21: in __init__
+    ???
+Query/IRSwaps/IRSwapQuery.py:146: in __post_init__
+    assert ("front_tenor" in self.structure_kwargs and "back_tenor" in self.structure_kwargs) or (
+E   AssertionError: CURVE requires both leg tenors OR both leg (effective_date & maturity_date)
+________ TestQueryValidation.test_missing_required_fields_raises_error _________
+tests/test_query_basics.py:279: in test_missing_required_fields_raises_error
+    query = IRSwapQuery(
+<string>:21: in __init__
+    ???
+Query/IRSwaps/IRSwapQuery.py:143: in __post_init__
+    self.tenor or (self.effective_date and self.maturity_date) or self.is_mms
+E   AssertionError: OUTRIGHT requires tenor OR (effective_date & maturity_date) OR is_mms=True
+__________ TestDateTriggers.test_date_trigger_fires_on_specified_date __________
+tests/test_triggers.py:38: in test_date_trigger_fires_on_specified_date
+    result = trigger.requirements.has_triggered(state_on_target)
+             ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'DateTrigger' object has no attribute 'requirements'
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_backtest_simple.py::TestBasicBacktest::test_single_trade_backtest
+FAILED tests/test_backtest_simple.py::TestAlwaysOnTrigger::test_always_on_trigger_fires_every_step
+FAILED tests/test_backtest_simple.py::TestMultipleTriggers::test_multiple_date_triggers
+FAILED tests/test_backtest_simple.py::TestQueryResolution::test_outright_resolves_to_package
+FAILED tests/test_backtest_simple.py::TestQueryResolution::test_curve_resolves_to_multiple_instruments
+FAILED tests/test_backtest_simple.py::TestQueryResolution::test_fly_resolves_to_three_legs
+FAILED tests/test_backtest_simple.py::TestValueCalculation::test_calculate_npv
+FAILED tests/test_backtest_simple.py::TestValueCalculation::test_calculate_par_rate
+FAILED tests/test_portfolio.py::TestUnwindByTag::test_unwind_single_position_by_tag
+FAILED tests/test_portfolio.py::TestUnwindByTag::test_unwind_multiple_positions_same_tag
+FAILED tests/test_portfolio.py::TestUnwindByTag::test_partial_unwind_by_tag
+FAILED tests/test_portfolio.py::TestUnwindWithFees::test_unwind_with_transaction_cost
+FAILED tests/test_portfolio.py::TestPortfolioIteration::test_iterate_open_positions
+FAILED tests/test_portfolio.py::TestPortfolioIteration::test_position_opened_timestamp
+FAILED tests/test_portfolio.py::TestRealizedPnL::test_realized_pnl_accumulates
+FAILED tests/test_portfolio.py::TestRealizedPnL::test_mtm_includes_open_and_realized
+FAILED tests/test_portfolio.py::TestPortfolioTradeCount::test_count_trades_in_window
+FAILED tests/test_query_basics.py::TestQueryCreation::test_create_curve_query
+FAILED tests/test_query_basics.py::TestQueryValidation::test_missing_required_fields_raises_error
+FAILED tests/test_triggers.py::TestDateTriggers::test_date_trigger_fires_on_specified_date
+================== 20 failed, 27 passed, 3 warnings in 4.34s ===================
