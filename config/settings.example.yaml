@@ -1,0 +1,139 @@
+# config/settings.example.yaml
+# Copy to config/settings.yaml and customize
+
+app:
+  name: ARBS
+  version: "1.0.0"
+  debug: false
+  description: "Awesome Rates Backtesting System"
+
+environment: development  # development, staging, production
+
+# ==================== Data Configuration ====================
+data:
+  sources:
+    primary: "CME_NY_EOD_LIVE-ql_basic"
+    fallback: null
+    
+  # API Credentials
+  apis:
+    fred:
+      enabled: true
+      key: "${FRED_API_KEY}"
+      timeout_seconds: 30
+      base_url: "https://api.stlouisfed.org/fred"
+    
+    cme:
+      enabled: true
+      timeout_seconds: 30
+      ftp_base_url: "https://www.cmegroup.com/ftp"
+      use_proxy: false
+      proxy_server: null
+
+# ==================== Cache Configuration ====================
+cache:
+  backend: "zodb"  # zodb, redis, memory
+  
+  # File system cache (ZODB)
+  root_path: "${ARBS_CACHE_ROOT:~/.cache/arbs/zodb}"
+  
+  # Cache options
+  use_btree: true
+  force_refresh: false
+  pool_size: 32
+  max_size_gb: 100
+  
+  # Maintenance
+  pack_enabled: true
+  pack_interval_days: 7
+  cleanup_interval_hours: 24
+
+# ==================== Backtest Configuration ====================
+backtest:
+  default_time_grid_resolution: "1D"
+  max_portfolio_size: 1000000
+  enable_audit_log: true
+  
+  # Performance tuning
+  batch_size: 100
+  enable_gc: true
+  gc_interval: 1000
+  
+  # Validation
+  validate_dates: true
+  validate_queries: true
+
+# ==================== Data Fetching ====================
+fetcher:
+  concurrent_workers: 4
+  timeout_seconds: 30
+  max_retries: 3
+  retry_backoff_seconds: 5
+  
+  # Rate limiting
+  rate_limit_enabled: true
+  rate_limit_qps: 10  # Queries per second
+
+# ==================== Logging ====================
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "[%(asctime)s] %(name)s - %(levelname)s - %(message)s"
+  
+  # Console output
+  console:
+    enabled: true
+    level: "INFO"
+  
+  # File output
+  file:
+    enabled: true
+    path: "logs/arbs.log"
+    level: "DEBUG"
+    max_size_mb: 100
+    backup_count: 10
+    
+  # Module-specific levels (optional)
+  modules:
+    BT: "INFO"
+    MDP: "INFO"
+    Query: "DEBUG"
+    Caching: "INFO"
+
+# ==================== Monitoring ====================
+monitoring:
+  enabled: false
+  
+  metrics:
+    enabled: false
+    port: 8000
+    path: "/metrics"
+  
+  health_check:
+    enabled: true
+    interval_seconds: 60
+    timeout_seconds: 10
+  
+  alerts:
+    enabled: false
+    email: "ops@company.com"
+    slack_webhook: null
+
+# ==================== Performance ====================
+performance:
+  # CPU/Memory
+  max_workers: 4
+  memory_limit_mb: 8000
+  
+  # Optimization
+  vectorize_operations: true
+  use_numba: false  # Requires numba installation
+
+# ==================== Development ====================
+development:
+  reload_on_change: false
+  ipython_debugger: false
+  profiling_enabled: false
+  
+  test_mode: false
+  test_cache_dir: "/tmp/arbs_test"
+  

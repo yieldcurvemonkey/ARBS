@@ -1,0 +1,47 @@
+# arbs-backtest.service.example
+# Systemd unit file for ARBS backtest service
+# Installation:
+#   1. Copy to: /etc/systemd/system/arbs-backtest.service
+#   2. Run: sudo systemctl daemon-reload
+#   3. Enable: sudo systemctl enable arbs-backtest
+#   4. Start: sudo systemctl start arbs-backtest
+
+[Unit]
+Description=ARBS Backtesting Service
+Documentation=https://github.com/yieldcurvemonkey/ARBS
+After=network.target
+Wants=arbs-backtest.timer
+
+[Service]
+Type=simple
+User=arbs
+Group=arbs
+WorkingDirectory=/opt/arbs
+
+# Environment variables
+EnvironmentFile=/opt/arbs/.env
+Environment="PATH=/opt/arbs/venv/bin"
+Environment="PYTHONPATH=/opt/arbs"
+Environment="PYTHONUNBUFFERED=1"
+
+# Startup command
+ExecStart=/opt/arbs/venv/bin/python /opt/arbs/scripts/production_backtest.py
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Security
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arbs
+
+[Install]
+WantedBy=multi-user.target
+
