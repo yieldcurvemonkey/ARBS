@@ -1,3 +1,5 @@
+# ABOUTME: Futures query dataclass for backtesting with contract parsing and structure management
+# ABOUTME: Parses contract codes (SFRZ4), calculates expiry dates, manages packs/calendars/bundles
 """
 Futures Query for Backtesting
 

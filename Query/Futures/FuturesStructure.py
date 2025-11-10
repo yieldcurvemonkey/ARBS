@@ -1,3 +1,5 @@
+# ABOUTME: Futures structure types enum for backtesting
+# ABOUTME: Defines OUTRIGHT, CALENDAR, PACK, BUNDLE, BASIS structure types
 """
 Futures Structure Enum
 

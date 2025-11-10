@@ -1,3 +1,5 @@
+# ABOUTME: Alpha signal generation module implementing Grinold-Kahn framework
+# ABOUTME: Provides standardized signal generation, IC calculation, and signal quality evaluation
 """
 Alpha Signal Generation Module
 

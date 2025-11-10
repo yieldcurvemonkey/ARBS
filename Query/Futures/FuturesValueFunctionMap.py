@@ -1,3 +1,5 @@
+# ABOUTME: Futures value function map for calculating position metrics
+# ABOUTME: Calculates PRICE, IMPLIED_RATE, NPV, DV01 for futures positions with weighted aggregation
 """
 Futures Value Function Map
 

@@ -1,3 +1,5 @@
+# ABOUTME: Abstract base class for all alpha signals in the Grinold-Kahn framework
+# ABOUTME: Provides standardized signal generation, z-score normalization, and IC calculation
 """
 BaseSignal - Abstract base class for all alpha signals
 

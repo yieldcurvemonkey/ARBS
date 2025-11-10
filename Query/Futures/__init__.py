@@ -1,3 +1,5 @@
+# ABOUTME: Futures query module for backtesting infrastructure
+# ABOUTME: Provides FuturesQuery, FuturesStructure (outright/calendar/pack/bundle), and FuturesValue (price/DV01/NPV)
 """
 Futures Query Module
 

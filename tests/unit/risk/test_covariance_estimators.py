@@ -1,3 +1,5 @@
+# ABOUTME: Test suite for covariance estimators (SampleCovariance, LedoitWolfShrinkage)
+# ABOUTME: Verifies stability (condition number), shrinkage intensity, and comparison utilities
 """
 Tests for Covariance Estimators
 

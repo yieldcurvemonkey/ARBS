@@ -1,3 +1,5 @@
+# ABOUTME: Test suite for CarrySignal futures carry calculator
+# ABOUTME: Verifies calendar spread carry calculation, annualization, and IC > 0.05 benchmark
 """
 Tests for CarrySignal
 

@@ -1,3 +1,5 @@
+# ABOUTME: Risk estimation module for portfolio optimization
+# ABOUTME: Implements covariance estimators (Ledoit-Wolf shrinkage, sample covariance) for mean-variance optimization
 """
 Risk Estimation Module
 

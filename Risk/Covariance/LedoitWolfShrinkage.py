@@ -1,3 +1,5 @@
+# ABOUTME: Ledoit-Wolf shrinkage covariance estimator (industry standard, >5000 citations)
+# ABOUTME: Implements Σ̂_LW = δ*F + (1-δ)*S with data-driven shrinkage intensity for improved stability
 """
 Ledoit-Wolf Shrinkage Covariance Estimator
 

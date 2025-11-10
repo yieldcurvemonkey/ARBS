@@ -1,3 +1,5 @@
+# ABOUTME: Utility functions for alpha signal analysis and evaluation
+# ABOUTME: Exports IC calculation functions for measuring predictive power
 """
 Signal utility functions.
 """

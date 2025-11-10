@@ -1,3 +1,5 @@
+# ABOUTME: Futures structure function map for building priceable futures objects
+# ABOUTME: Maps FuturesStructure enum to builders for OUTRIGHT/CALENDAR/PACK/BUNDLE with risk weights
 """
 Futures Structure Function Map
 

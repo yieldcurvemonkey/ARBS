@@ -1,3 +1,5 @@
+# ABOUTME: Abstract base class for all covariance matrix estimators
+# ABOUTME: Defines standard interface for fit(), get_covariance(), condition_number(), and missing data handling
 """
 BaseCovarianceEstimator - Abstract base class for covariance estimation
 

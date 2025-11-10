@@ -1,3 +1,5 @@
+# ABOUTME: Futures value metrics enum for backtesting calculations
+# ABOUTME: Defines PRICE, IMPLIED_RATE, NPV, DV01, MARGIN, BASIS, CONVEXITY_ADJ, CARRY
 """
 Futures Value Enum
 

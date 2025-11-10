@@ -1,3 +1,5 @@
+# ABOUTME: Test suite for BaseSignal abstract class
+# ABOUTME: Verifies signal generation, z-score standardization, IC calculation, and metadata tracking
 """
 Tests for BaseSignal
 

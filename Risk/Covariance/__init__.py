@@ -1,3 +1,5 @@
+# ABOUTME: Covariance matrix estimation methods for portfolio optimization
+# ABOUTME: Exports SampleCovariance, LedoitWolfShrinkage, and comparison utilities
 """
 Covariance estimation methods.
 """

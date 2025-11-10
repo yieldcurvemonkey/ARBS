@@ -1,3 +1,5 @@
+# ABOUTME: Information Coefficient (IC) calculation utilities for alpha signal evaluation
+# ABOUTME: Provides Pearson/Spearman IC, significance testing, time-series stability, and decay analysis
 """
 Information Coefficient (IC) Calculation Utilities
 

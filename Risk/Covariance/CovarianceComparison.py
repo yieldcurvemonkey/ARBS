@@ -1,3 +1,5 @@
+# ABOUTME: Covariance estimator comparison and benchmarking utilities
+# ABOUTME: Compares estimators on condition number, portfolio variance, out-of-sample performance, and computation time
 """
 Covariance Estimator Comparison Utilities
 
