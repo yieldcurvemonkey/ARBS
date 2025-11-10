@@ -1,6 +1,13 @@
 # Awesome Rates Backtesting System (ARBS)
 
-A modular research codebase for building yield curves, pricing interest rate derivative, and running event- or query-driven backtests. The design mirrors “adapter”-style patterns so the backtester is **product-agnostic** while product-specific logic lives behind adapters.
+A modular research codebase for building yield curves, pricing interest rate derivatives, and running event- or query-driven backtests. The design mirrors "adapter"-style patterns so the backtester is **product-agnostic** while product-specific logic lives behind adapters.
+
+## 📚 Documentation
+
+- **[Usage Examples](docs/EXAMPLES.md)** - Practical examples with working code
+- **[Test Report](docs/TEST_REPORT.md)** - TDD analysis and test coverage
+- **[Test Suite](tests/README.md)** - Test documentation and patterns
+- **Architecture Overview** - See below
 
 ---
 
@@ -20,6 +27,15 @@ A modular research codebase for building yield curves, pricing interest rate der
 
 ---
 
+## 🚀 Quick Links
+
+- **New to ARBS?** → Start with [docs/EXAMPLES.md](docs/EXAMPLES.md)
+- **Want to test?** → See [tests/README.md](tests/README.md)
+- **Looking for examples?** → Check [fomc_fly_backtest.py](fomc_fly_backtest.py) or [notebooks](.)
+- **Need help?** → Read the troubleshooting section below
+
+---
+
 ## Quick Start
 
 ### 1) Environment
@@ -32,7 +48,13 @@ A modular research codebase for building yield curves, pricing interest rate der
   - `tqdm`
 
 ```bash
-pip install -r requirements.txt 
+pip install -r requirements.txt
+```
+
+**Optional**: For testing:
+```bash
+pip install pytest pytest-cov
+pytest tests/ -v
 ```
 
 Some data builders (e.g., CME/fixings/SDR) may require credentials or local files. See MDP/IRSwaps/* modules
