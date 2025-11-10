@@ -229,6 +229,12 @@ def mock_pricer(mock_usd_curve, mock_ed_prices) -> MockPricer:
     )
 
 
+@pytest.fixture
+def mock_futures_pricer(mock_pricer) -> MockPricer:
+    """Alias for mock_pricer for futures-specific tests."""
+    return mock_pricer
+
+
 # =============================================================================
 # Mock MDP Fixtures
 # =============================================================================
