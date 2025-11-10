@@ -1,0 +1,47 @@
+# requirements-prod.txt
+# Production dependencies (pinned versions for reproducibility)
+# Use: pip install -r requirements-prod.txt
+
+# Core data science
+numpy==2.3.2
+pandas==2.3.1
+pyarrow==21.0.0
+
+# Interest rate modeling
+QuantLib==1.39
+rateslib==2.1.1
+
+# Object database and persistence
+ZODB==6.0.1
+BTrees==6.1
+persistent==6.1.1
+transaction==5.0
+zc.lockfile==3.0.post1
+zope.interface==7.2
+
+# HTTP and networking
+aiohttp==3.12.15
+httpx==0.28.1
+h2==4.2.0
+httpx-socks==0.10.1
+requests==2.32.4
+
+# Utilities
+ujson==5.10.0
+tqdm==4.67.1
+scikit-learn==1.7.2
+
+# Optional: Visualization (remove if not needed)
+matplotlib==3.10.5
+plotly==6.3.1
+
+# Optional: Jupyter (remove if not needed)
+ipykernel==6.30.1
+nest-asyncio==1.6.0
+
+# Production utilities (optional)
+# gunicorn==22.0.0  # For running as service
+# supervisor==4.2.5  # For process management
+# prometheus-client==0.21.0  # For metrics
+# python-dotenv==1.0.0  # For .env files
+

@@ -1,0 +1,23 @@
+# requirements-ci.txt
+# CI/CD dependencies for testing and linting
+# Use in GitHub Actions or similar CI systems
+
+# Base requirements
+-r requirements.txt
+
+# Testing
+pytest>=7.0
+pytest-cov>=4.0
+pytest-asyncio>=0.20.0
+coverage>=7.0
+
+# Code quality
+black>=23.0
+flake8>=6.0
+mypy>=1.0
+isort>=5.10
+
+# Security scanning (optional)
+bandit>=1.7
+safety>=2.3
+

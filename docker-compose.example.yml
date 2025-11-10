@@ -1,0 +1,33 @@
+# docker-compose.example.yml
+# Usage: docker-compose -f docker-compose.example.yml up
+
+version: '3.8'
+
+services:
+  arbs-backtest:
+    build:
+      context: .
+      dockerfile: Dockerfile.example
+    container_name: arbs-backtest
+    environment:
+      FRED_API_KEY: ${FRED_API_KEY}
+      ARBS_CACHE_ROOT: /mnt/arbs_cache
+      LOG_LEVEL: INFO
+    volumes:
+      - arbs-cache:/mnt/arbs_cache
+      - ./logs:/var/log/arbs
+      - ./config:/opt/arbs/config:ro
+    ports:
+      - "8000:8000"  # For metrics if enabled
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP; IRSwapsMDP()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  arbs-cache:
+    driver: local
+

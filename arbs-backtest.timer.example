@@ -1,0 +1,24 @@
+# arbs-backtest.timer.example
+# Systemd timer for periodic ARBS backtest runs
+# Installation:
+#   1. Copy to: /etc/systemd/system/arbs-backtest.timer
+#   2. Run: sudo systemctl daemon-reload
+#   3. Enable: sudo systemctl enable arbs-backtest.timer
+#   4. Start: sudo systemctl start arbs-backtest.timer
+
+[Unit]
+Description=ARBS Backtest Scheduler
+Documentation=https://github.com/yieldcurvemonkey/ARBS
+Requires=arbs-backtest.service
+
+[Timer]
+# Run every weekday at 9 PM ET (01:00 UTC next day)
+OnCalendar=Mon-Fri *-*-* 21:00:00
+Persistent=true
+
+# Accuracy
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+
