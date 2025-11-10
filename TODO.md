@@ -41,24 +41,42 @@
   - Extracts prices, next_prices, roll_dates
   - Handles calendar spreads
 
-### 🔄 In Progress
-
-- [ ] Minimal Backtest Loop
-  - Load historical data (or use mock data)
+- [x] Minimal Backtest Loop
+  - 12 tests passing
+  - Complete Query→Adapter→Signals→Risk→Optimizer→Backtest pipeline
   - For each date:
     1. Generate signals (CarrySignal)
     2. Estimate covariance (LedoitWolfShrinkage)
     3. Optimize weights (MeanVarianceOptimizer)
     4. Track positions and P&L
-  - Output: Returns time series, IC, Sharpe ratio
+  - Output: BacktestResult with returns, IC, Sharpe ratio, weights, prices
 
-### 📋 Pending (Minimal)
+- [x] End-to-End Measurement
+  - ✅ MVP COMPLETE!
+  - End-to-end example: `examples/run_minimal_backtest.py`
+  - Full pipeline executed successfully
+  - IC, Sharpe, returns all calculated correctly
+  - **Goal achieved**: System measures correctly regardless of profitability
 
-- [ ] End-to-End Measurement
-  - Run backtest on futures data
-  - Calculate realized IC (may be negative, that's okay)
-  - Calculate realized Sharpe (may be negative, that's okay)
-  - **Goal**: Verify system works end-to-end with real numbers
+## 🎉 MVP COMPLETE
+
+**The minimal viable backtest is working end-to-end!**
+
+All components integrated:
+1. Query → FuturesQuery gets contract prices
+2. Adapter → Converts to signal-ready format
+3. Signals → CarrySignal generates alphas
+4. Risk → LedoitWolfShrinkage estimates covariance
+5. Optimizer → MeanVarianceOptimizer calculates weights
+6. Backtest → Tracks positions and measures P&L
+
+**Measurement philosophy achieved:**
+- System measures accurately (not just when profitable)
+- IC can be positive or negative (we measure it honestly)
+- Sharpe can be positive or negative (we track it correctly)
+- Returns tracked with proper position accounting
+
+### 📋 Future Enhancements (Not Required for MVP)
 
 ## Phase 2: Maximal Enhancements (Later)
 
@@ -88,13 +106,14 @@
 - Nodewise regression (2025 research)
 - Dynamic covariance (time-varying)
 
-## Test Count: 157 passing
+## Test Count: 169 passing ✅
 
 - Futures: 44 tests
 - Signals: 31 tests
 - Risk: 22 tests
 - Optimizer: 18 tests
 - Adapter: 8 tests
+- Backtest: 12 tests
 - Other: 34 tests
 
 ## Architecture
@@ -110,7 +129,9 @@ Risk Layer:         Risk/Covariance (LedoitWolf → Σ)
                          ↓
 Optimizer Layer:    Optimizer/MeanVariance (alphas + Σ → weights)
                          ↓
-Backtest Layer:     (TODO) Track positions, calculate P&L, measure IC
+Backtest Layer:     Backtest/MinimalBacktest (track positions, P&L, IC)
+                         ↓
+                    BacktestResult (returns, IC, Sharpe, total return)
 ```
 
 ## Key Principles

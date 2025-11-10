@@ -28,7 +28,7 @@ You are an experienced, pragmatic software engineer. You don't over-engineer a s
    - All modules have comprehensive test coverage
    - Follow the test → implement → refactor cycle strictly
 
-### MVP Architecture
+### MVP Architecture ✅ COMPLETE
 
 ```
 Query Layer:     FuturesQuery → MockFuture objects
@@ -41,35 +41,47 @@ Risk Layer:      LedoitWolfShrinkage → covariance matrix Σ
        ↓
 Optimizer Layer: MeanVarianceOptimizer → portfolio weights
        ↓
-Backtest Layer:  (TODO) Track positions → calculate P&L → measure IC/Sharpe
+Backtest Layer:  MinimalBacktest → track positions → calculate P&L → measure IC/Sharpe
+       ↓
+Result:          BacktestResult (returns, IC, Sharpe, total return)
 ```
 
-### Completed Components (157 tests passing)
+### 🎉 MVP COMPLETE - All Components Integrated (169 tests passing)
 
 - **Query** (44 tests): Futures infrastructure, structures, value calculations
 - **Signals** (31 tests): BaseSignal, CarrySignal, IC calculation utilities
 - **Risk** (22 tests): SampleCovariance, LedoitWolfShrinkage, comparison
 - **Optimizer** (18 tests): Mean-variance optimizer (Markowitz 1952)
 - **Adapter** (8 tests): Query → Signals bridge with proper format translation
+- **Backtest** (12 tests): MinimalBacktest end-to-end integration
 - **Other** (34 tests): Accounting, smoke tests, fixtures
 
-### Next: Minimal Backtest Loop
+**End-to-end example**: `examples/run_minimal_backtest.py` demonstrates full pipeline working
 
-Build simplest possible backtest that:
-1. Takes list of futures contracts
-2. For each date:
-   - Use FuturesAdapter to get prices
-   - Generate carries with CarrySignal
-   - Estimate covariance with LedoitWolfShrinkage
-   - Optimize weights with MeanVarianceOptimizer
-   - Track positions and calculate P&L
-3. Output: Returns time series, realized IC, realized Sharpe
+### ✅ MVP Achievement Summary
 
-**Success Criteria**: End-to-end system produces measurable results (regardless of sign)
+The minimal backtest is **complete and working**:
 
-### Maximal Enhancements (Later)
+**What It Does:**
+1. Takes list of futures contracts (e.g., SFRZ4, SFRH5, SFRM5, SFRU5)
+2. For each date (weekly rebalancing):
+   - Uses FuturesAdapter to get prices and format data
+   - Generates carry alphas with CarrySignal
+   - Estimates covariance with LedoitWolfShrinkage
+   - Optimizes portfolio weights with MeanVarianceOptimizer
+   - Tracks positions and calculates P&L
+3. Outputs: BacktestResult with returns time series, IC, Sharpe ratio, total return
 
-Only add AFTER minimal backtest works:
+**Success Criteria Met:**
+- ✅ End-to-end system produces measurable results
+- ✅ Measurements are accurate (regardless of profitability)
+- ✅ All 6 layers integrated successfully
+- ✅ 169 tests passing with comprehensive coverage
+- ✅ MVP philosophy achieved: measure correctly, not necessarily profitably
+
+### Future Enhancements (Not Required for MVP)
+
+These are **optional** enhancements to add only if needed:
 - Transaction costs (proportional + quadratic impact)
 - DV01 constraints (fixed income risk limits)
 - Cardinality constraints (L0 penalty)
