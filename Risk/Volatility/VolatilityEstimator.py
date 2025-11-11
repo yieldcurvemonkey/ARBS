@@ -26,8 +26,9 @@ Example:
 """
 
 from abc import ABC, abstractmethod
+import polars as pl
 import pandas as pd
-from typing import Dict
+from typing import Dict, Union
 
 
 class VolatilityEstimator(ABC):
@@ -50,7 +51,7 @@ class VolatilityEstimator(ABC):
     """
 
     @abstractmethod
-    def estimate(self, returns: pd.DataFrame) -> Dict[str, float]:
+    def estimate(self, returns: Union[pl.DataFrame, pd.DataFrame]) -> Dict[str, float]:
         """
         Estimate volatility for each asset.
 
@@ -66,7 +67,7 @@ class VolatilityEstimator(ABC):
             Vol = f(returns) × √(annualization_factor)
 
         Example:
-            >>> returns = pd.DataFrame({
+            >>> returns = pl.DataFrame({
             ...     'SFRZ4': [0.01, -0.01, 0.02, -0.02],
             ...     'SFRH5': [0.005, -0.005, 0.01, -0.01]
             ... })

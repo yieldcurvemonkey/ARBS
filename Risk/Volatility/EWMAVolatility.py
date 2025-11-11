@@ -31,7 +31,8 @@ Use Cases:
 
 import numpy as np
 import pandas as pd
-from typing import Dict
+import polars as pl
+from typing import Dict, Union
 
 from Risk.Volatility.VolatilityEstimator import VolatilityEstimator
 
@@ -79,7 +80,7 @@ class EWMAVolatility(VolatilityEstimator):
         self.halflife = halflife
         self.annualization_factor = annualization_factor
 
-    def estimate(self, returns: pd.DataFrame) -> Dict[str, float]:
+    def estimate(self, returns: Union[pl.DataFrame, pd.DataFrame]) -> Dict[str, float]:
         """
         Calculate EWMA volatility from historical returns.
 
@@ -90,14 +91,14 @@ class EWMAVolatility(VolatilityEstimator):
             Vol = EWMA_std × √(annualization_factor)
 
         Args:
-            returns: Historical returns DataFrame
+            returns: Historical returns DataFrame (pandas or polars)
                      Rows = time periods, Columns = assets
 
         Returns:
             Dict mapping asset → annualized EWMA volatility
 
         Example:
-            >>> returns = pd.DataFrame({
+            >>> returns = pl.DataFrame({
             ...     'SFRZ4': [0.001] * 50 + list(np.random.randn(50) * 0.05)
             ... })
             >>> vol_est = EWMAVolatility(halflife=10, annualization_factor=252)
@@ -112,6 +113,10 @@ class EWMAVolatility(VolatilityEstimator):
         """
         if len(returns) == 0:
             return {}
+
+        # Convert polars to pandas for uniform handling
+        if isinstance(returns, pl.DataFrame):
+            returns = returns.to_pandas()
 
         # Calculate EWMA standard deviation
         ewm_std = returns.ewm(halflife=self.halflife).std()

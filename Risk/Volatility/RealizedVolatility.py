@@ -116,7 +116,11 @@ class RealizedVolatility(VolatilityEstimator):
         std_dict = {}
         for col in recent_returns.columns:
             std_val = recent_returns[col].std()
-            std_dict[col] = std_val if std_val is not None else 0.0
+            # Handle both None (pandas) and NaN (polars)
+            if std_val is None or (isinstance(std_val, float) and np.isnan(std_val)):
+                std_dict[col] = 0.0
+            else:
+                std_dict[col] = std_val
 
         # Annualize: Vol = Std × √T
         annualized_vols = {
