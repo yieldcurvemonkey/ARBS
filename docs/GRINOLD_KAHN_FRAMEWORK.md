@@ -680,3 +680,200 @@ print(f"IC: {results.information_coefficient:.3f}")
 8. **Iterate and improve** - add more signals, refine risk model
 
 Focus on **simplicity and robustness** first, then add complexity.
+
+---
+
+## 8. Equity-Specific Implementation (Extension from Book Study)
+
+**Date Added**: 2025-11-11
+**Source**: Complete synthesis of Grinold & Kahn "Active Portfolio Management" (1999, 621 pages)
+
+**Context**: ARBS was built on Grinold-Kahn equity principles, then applied to futures/swaps. This section documents how to extend ARBS back to its native domain (equities), specifically for **sector-based equity portfolios**.
+
+### A. Key Insight: ARBS is Already Grinold-Kahn Compliant
+
+**What ARBS Already Has** (No Changes Needed):
+- ✅ `ReturnsCalculator`: Returns-first design (fundamental to equity factor models)
+- ✅ `AlphaGenerator`: IC × Vol × Z formula (exact match to Chapter 10)
+- ✅ `LedoitWolfShrinkage`: Works for any asset class
+- ✅ `MeanVarianceOptimizer`: Markowitz/Grinold-Kahn optimization
+- ✅ `Portfolio`: Benchmark tracking, active returns, IR calculation
+- ✅ `TearSheet`: Performance analysis (IC, Sharpe, cumulative returns)
+- ✅ `SignalCombiner`: IC-weighted signal blending
+
+### B. Equity vs Futures: Key Differences
+
+| Dimension | Futures (Current) | Equities (Extension) |
+|-----------|-------------------|----------------------|
+| **Universe** | 20-50 contracts | 100-500 stocks |
+| **Breadth** | 240 bets/year | 2,000 bets/year (8× more!) |
+| **Signal type** | Time-series | Cross-sectional (rank) |
+| **Primary signals** | Carry, Momentum | Value, Momentum, Quality |
+| **IC range** | 0.08-0.15 | 0.03-0.06 |
+| **Achievable IR** | 1.0-1.5 | 1.0-2.0 |
+| **Benchmark** | Cash | S&P 500, Russell 3000 |
+| **Rebalancing** | Monthly | Monthly/Quarterly |
+| **Transaction costs** | Low (~5-10 bps) | Higher (~20-50 bps) |
+| **Constraints** | Few | Many (long-only, sector-neutral, position limits) |
+
+**Key takeaway**: Equities have **8× more breadth** but **3× lower IC**. Architecture must adapt to cross-sectional signals and constraints.
+
+### C. Fundamental Law for Equities (from Chapter 6)
+
+**Formula**: `IR = IC × √BR × TC`
+
+**Example** (500-stock portfolio, quarterly rebalancing):
+```
+IC = 0.03 (value signal)
+BR = 500 × 4 = 2,000
+TC = 0.70 (transfer coefficient, long-only constraint)
+
+IR = 0.03 × √2,000 × 0.70 ≈ 0.94
+```
+
+**Target**: Top-quartile manager = IR 0.5. **We should achieve IR 1.0+** with multi-signal approach.
+
+### D. Multi-Factor Risk Model for Equities (from Chapter 3)
+
+**Structure**:
+```
+r_n = Σ_k X_{n,k} · b_k + u_n
+
+Covariance: V = X · F · X^T + Δ
+```
+
+**17-factor model for MVP**:
+- **11 GICS sectors**: Energy, Materials, Industrials, Consumer Discretionary, Consumer Staples, Health Care, Financials, Information Technology, Communication Services, Utilities, Real Estate
+- **6 styles**: Size, Value, Momentum, Quality, Low Volatility, Dividend Yield
+
+**Efficiency**: 500² = 250,000 parameters → 37,225 (**93% reduction**)
+
+### E. Equity Signal Types (from Chapters 8-11)
+
+#### 1. Value Signals (DDM from Chapter 9)
+
+**Formula**: `α_value = d/p + g - β · f_B`
+
+Where:
+- d/p = dividend yield
+- g = (1 - payout_ratio) × ROE
+- β = equity beta, f_B = market risk premium
+
+**Expected IC**: 0.03-0.04, **Horizon**: 12-24 months
+
+#### 2. Momentum Signals (from Chapter 11)
+
+**Formula**: 12-month return (skip last month)
+
+**Expected IC**: 0.04-0.06, **Horizon**: 3-6 months
+
+#### 3. Quality Signals (from Chapter 9)
+
+**Metrics**: ROE, Debt/Equity (inverted), Earnings stability
+
+**Expected IC**: 0.02-0.03, **Horizon**: 24+ months
+
+#### 4. Signal Combination
+
+**IC-weighted blending**:
+```
+α_combined = Σ_k (IC_k / Σ IC_j) × α_k
+```
+
+**Expected combined IC**: 0.06-0.07 (assuming uncorrelated signals)
+
+### F. Optimization Constraints for Equities (from Chapters 14-15)
+
+**CRITICAL FINDING** (Chapter 15): Long-only constraint **cuts IR by ~50%!**
+
+**Transfer coefficient** (TC):
+- Unconstrained: TC = 1.0
+- Long-only: TC ≈ 0.5-0.6
+- Long-only + sector-neutral: TC ≈ 0.4-0.5
+
+**Constraint types**:
+1. **Long-only**: `h_i ≥ 0`
+2. **Sector-neutral**: `Σ_{i ∈ sector} (h_i - h_Bi) = 0`
+3. **Position limits**: `|h_i - h_Bi| ≤ w_max` (typically 3-5%)
+4. **Turnover limit**: `Σ |h_i - h_old| ≤ TO_max`
+
+### G. Transaction Costs (from Chapter 16)
+
+**Inventory risk model** (square-root law):
+```
+TC_i = c · σ_i · √(V_trade / V_avg) + commission
+```
+
+**Rule**: Costs ~1 day's volatility to trade 1 day's volume
+
+**Empirical data**:
+- 1% of volume → 1.0% impact
+- 5% of volume → 2.2% impact
+- 10% of volume → 3.2% impact
+
+### H. Implementation Roadmap
+
+#### Phase 1: Query & Data (Weeks 1-3)
+- `Query/Equities/` (EquityQuery, EquityStructure, EquityValue)
+- `MDP/YahooFinance/` (price, dividend, fundamental data)
+- `Adapter/EquityAdapter.py` (Query → Polars DataFrame)
+
+#### Phase 2: Signals (Weeks 4-7)
+- `Signals/Equities/ValueSignal.py`
+- `Signals/Equities/MomentumSignal.py`
+- `Signals/Equities/QualitySignal.py`
+- Extend `BaseSignal` with cross-sectional methods
+
+#### Phase 3: Risk Models (Weeks 8-11)
+- `Risk/FactorModel/EquityFactorModel.py` (17 factors)
+- `Risk/Covariance/FactorCovariance.py` (V = X·F·X^T + Δ)
+- `Risk/Covariance/PPFMCovariance.py` (multi-sector joint estimation)
+
+#### Phase 4: Optimization (Weeks 12-14)
+- `Optimizer/constraints/` (LongOnly, SectorNeutral, PositionLimit, Turnover)
+- `Optimizer/AlphaNeutralizer.py` (scale, trim, neutralize)
+- `TransactionCosts/InventoryRiskModel.py`
+
+#### Phase 5: Analysis (Weeks 15-17)
+- `Analysis/FactorAttribution.py`
+- Extend `TearSheet` with factor decomposition
+
+**Total timeline**: **17 weeks (4 months)**
+
+### I. Connection to PPFM Paper
+
+**Paper**: "Adaptive Multi-task Learning for Multi-sector Portfolio Optimization"
+
+**Grinold-Kahn APT** (Chapter 7): `E{r_n} = Σ_k X_{n,k} · m_k`
+
+**PPFM approach**: Learn sector relatedness via projection penalty
+
+**Integration**:
+- GICS sectors = primary factors (11)
+- Styles = secondary factors (6)
+- PPFM for covariance estimation
+- Grinold-Kahn for alpha generation
+
+### J. Validation Targets
+
+| Strategy | IC | BR | IR (theoretical) | IR (with TC=0.6) |
+|----------|-----|-----|------------------|------------------|
+| Single (value) | 0.03 | 2,000 | 1.34 | 0.80 |
+| Two signals | 0.058 | 2,000 | 2.59 | 1.55 |
+| Three signals | 0.067 | 2,000 | 3.00 | 1.80 |
+
+**Benchmark**: Top-quartile = IR 0.5. **Target**: IR 1.0+
+
+### K. Documentation References
+
+**Detailed notes** (4,893 lines total):
+- `docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md` (executive summary)
+- `docs/books/grinold_kahn_equity_notes_part1_foundations.md` (728 lines)
+- `docs/books/grinold_kahn_equity_notes_part2_valuation.md` (1,477 lines)
+- `docs/books/grinold_kahn_equity_notes_part3_forecasting.md` (1,616 lines)
+- `docs/books/grinold_kahn_equity_notes_part4_implementation.md` (1,072 lines)
+- `docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md` (concept-to-code mapping)
+
+---
+
+**End of Grinold-Kahn Framework Document**
