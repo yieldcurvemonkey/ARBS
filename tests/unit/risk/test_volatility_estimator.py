@@ -11,7 +11,7 @@ Validates:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from typing import Dict
 
 from Risk.Volatility.VolatilityEstimator import VolatilityEstimator
@@ -36,7 +36,7 @@ class TestRealizedVolatility:
         vol_est = RealizedVolatility(lookback=5, annualization_factor=252)
 
         # Simple returns: [0.01, -0.01, 0.02, -0.02, 0.01]
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': [0.01, -0.01, 0.02, -0.02, 0.01],
         })
 
@@ -52,7 +52,7 @@ class TestRealizedVolatility:
         """Estimate volatility for multiple assets."""
         vol_est = RealizedVolatility(lookback=10, annualization_factor=252)
 
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': np.random.randn(20) * 0.01,
             'SFRH5': np.random.randn(20) * 0.02,
             'SFRM5': np.random.randn(20) * 0.015,
@@ -73,7 +73,7 @@ class TestRealizedVolatility:
         vol_est = RealizedVolatility(lookback=5, annualization_factor=252)
 
         # 20 periods of data, but only last 5 should be used
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': [0.0] * 15 + [0.01, -0.01, 0.02, -0.02, 0.01],
         })
 
@@ -93,7 +93,7 @@ class TestRealizedVolatility:
         # Weekly data: annualize with √52
         vol_weekly = RealizedVolatility(lookback=20, annualization_factor=52)
 
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': np.random.randn(30) * 0.01,
         })
 
@@ -112,7 +112,7 @@ class TestRealizedVolatility:
         """Zero volatility when returns are constant."""
         vol_est = RealizedVolatility(lookback=10, annualization_factor=252)
 
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': [0.01] * 20,  # Constant return
         })
 
@@ -126,7 +126,7 @@ class TestRealizedVolatility:
         vol_est = RealizedVolatility(lookback=20, annualization_factor=252)
 
         # Only 10 periods (less than lookback)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': np.random.randn(10) * 0.01,
         })
 
@@ -153,7 +153,7 @@ class TestEWMAVolatility:
         """Calculate EWMA volatility."""
         vol_est = EWMAVolatility(halflife=10, annualization_factor=252)
 
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': np.random.randn(50) * 0.01,
         })
 
@@ -168,7 +168,7 @@ class TestEWMAVolatility:
         realized_vol = RealizedVolatility(lookback=50, annualization_factor=252)
 
         # Low volatility initially, then spike
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': [0.001] * 40 + list(np.random.randn(10) * 0.05),
         })
 
@@ -191,7 +191,7 @@ class TestEWMAVolatility:
         vol_long = EWMAVolatility(halflife=30, annualization_factor=252)
 
         # Regime change: low vol → high vol
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': [0.001] * 30 + list(np.random.randn(20) * 0.05),
         })
 
@@ -210,7 +210,7 @@ class TestEdgeCases:
         """Handle single period of returns."""
         vol_est = RealizedVolatility(lookback=10, annualization_factor=252)
 
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': [0.01],
         })
 
@@ -225,7 +225,7 @@ class TestEdgeCases:
         """Handle empty returns DataFrame."""
         vol_est = RealizedVolatility(lookback=10, annualization_factor=252)
 
-        returns = pd.DataFrame()
+        returns = pl.DataFrame()
 
         vols = vol_est.estimate(returns)
 
@@ -236,7 +236,7 @@ class TestEdgeCases:
         """Handle NaN values in returns."""
         vol_est = RealizedVolatility(lookback=10, annualization_factor=252)
 
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': [0.01, np.nan, 0.02, -0.01, np.nan, 0.01],
         })
 
@@ -255,7 +255,7 @@ class TestDefaultParameters:
         vol_est = RealizedVolatility()
 
         # Create 100 periods
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': list(np.random.randn(50) * 0.01) + list(np.random.randn(50) * 0.05),
         })
 
@@ -271,7 +271,7 @@ class TestDefaultParameters:
         """Default annualization factor is 252 (daily)."""
         vol_est = RealizedVolatility(lookback=20)
 
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': np.random.randn(30) * 0.01,
         })
 
