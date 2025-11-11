@@ -4,7 +4,7 @@ import numpy as np
 from scipy import optimize
 from scipy.optimize import minimize
 from scipy.optimize import check_grad
-import pandas as pd
+import polars as pl
 import random
 
 
@@ -55,7 +55,7 @@ class ZeroCouponCurve:
         
         self.yield_data = yield_data
         self.dates = self.yield_data['date']
-        self.yield_data = self.yield_data.drop(columns = 'date')
+        self.yield_data = self.yield_data.drop('date')
         
         #Multiply ny 100 if yield data is not specified as percentage
         if percent == False:
@@ -65,7 +65,7 @@ class ZeroCouponCurve:
             
         
         self.ytm_data = ytm_data
-        self.ytm_data = self.ytm_data.drop(columns = 'date')
+        self.ytm_data = self.ytm_data.drop('date')
         self.ytm_data = np.array(self.ytm_data)
         
         self.yield_data = self.yield_data.astype(float)
@@ -281,17 +281,19 @@ class ZeroCouponCurve:
         return residuals, param_trials
                             
     def calc_nss_yields(self, parameters, results):
-        
+
         yields = np.zeros((len(parameters), len(results)))
-        
+
         for i in range(len(parameters)):
             yields[i] = self.nss_model(results, parameters[i])
-            
-        yields = pd.DataFrame(yields)
-        yields = yields.loc[yields.sum(axis = 1) != 0]
-        yields = pd.merge(self.dates, yields, left_on = self.dates.index, right_on = yields.index)
-        yields = yields.drop(columns = 'key_0')
-            
+
+        yields = pl.DataFrame(yields)
+        yields = yields.filter(pl.sum_horizontal(pl.all()) != 0)
+        yields = yields.with_row_index('row_idx')
+        dates_df = self.dates.to_frame('date').with_row_index('row_idx')
+        yields = dates_df.join(yields, on='row_idx')
+        yields = yields.drop('row_idx')
+
         return yields
 
 

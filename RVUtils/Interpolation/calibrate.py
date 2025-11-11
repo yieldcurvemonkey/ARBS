@@ -7,7 +7,7 @@ from typing import Any, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
+import polars as pl
 from numpy.linalg import lstsq
 from scipy.optimize import OptimizeResult, minimize
 
@@ -243,10 +243,10 @@ def calibrate_smith_wilson_ols(
 
 
 # def calibrate_pca_yield_curve(
-#     ytms: npt.NDArray[np.float64], historical_df: pd.DataFrame, n_components: int = 3, use_changes: bool = False
+#     ytms: npt.NDArray[np.float64], historical_df: pl.DataFrame, n_components: int = 3, use_changes: bool = False
 # ) -> Tuple[PCACurve, Any]:
 #     if use_changes:
-#         historical_df = historical_df.diff().dropna()
+#         historical_df = historical_df.diff().drop_nulls()
 #     pca_model = PCACurve(n_components=n_components)
 #     pca_model.fit(ytms)
 #     return pca_model, pca_model.explained_variance
