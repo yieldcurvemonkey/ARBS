@@ -28,26 +28,35 @@ You are an experienced, pragmatic software engineer. You don't over-engineer a s
    - All modules have comprehensive test coverage
    - Follow the test → implement → refactor cycle strictly
 
-### MVP Architecture ✅ COMPLETE
+### Current Architecture (Returns-First Design)
 
 ```
 Query Layer:     FuturesQuery → MockFuture objects
        ↓
-Adapter Layer:   FuturesAdapter → DataFrame (price, next_price, roll_date)
+Adapter Layer:   FuturesAdapter → DataFrame (returns, metadata)
        ↓
-Signal Layer:    CarrySignal → standardized alphas (z-scores)
+Returns:         ReturnsCalculator → standardized returns matrix
        ↓
-Risk Layer:      LedoitWolfShrinkage → covariance matrix Σ
+Volatility:      VolatilityEstimator → volatility forecasts
        ↓
-Optimizer Layer: MeanVarianceOptimizer → portfolio weights
+Signals:         CarrySignal → raw signals (z-scores)
        ↓
-Backtest Layer:  MinimalBacktest → track positions → calculate P&L → measure IC/Sharpe
+Alpha:           AlphaGenerator → scaled alphas (IC × Vol × Z)
+       ↓
+Risk:            LedoitWolfShrinkage → covariance matrix Σ
+       ↓
+Optimizer:       MeanVarianceOptimizer → portfolio weights
+       ↓
+Portfolio:       Portfolio(returns) → composite asset with nested tracking
+       ↓
+Analysis:        TearSheet → IC/Sharpe/returns analysis
        ↓
 Result:          BacktestResult (returns, IC, Sharpe, total return)
 ```
 
-### 🎉 MVP COMPLETE - All Components Integrated (169 tests passing)
+### ✅ Architecture Status (346 tests passing)
 
+**MVP V1 - Core Pipeline (169 tests)**
 - **Query** (44 tests): Futures infrastructure, structures, value calculations
 - **Signals** (31 tests): BaseSignal, CarrySignal, IC calculation utilities
 - **Risk** (22 tests): SampleCovariance, LedoitWolfShrinkage, comparison
@@ -56,27 +65,30 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
 - **Backtest** (12 tests): MinimalBacktest end-to-end integration
 - **Other** (34 tests): Accounting, smoke tests, fixtures
 
-**End-to-end example**: `examples/run_minimal_backtest.py` demonstrates full pipeline working
+**Architecture V2 - Grinold-Kahn Enhancements (177 tests)**
+- **ReturnsCalculator** (16 tests): Returns-first data pipeline foundation
+- **VolatilityEstimator** (18 tests): Volatility forecasting for alpha scaling
+- **AlphaGenerator** (16 tests): IC × Vol × Z formula for optimal alphas
+- **TearSheet** (19 tests): Comprehensive performance analysis
+- **Integration** (8 tests): End-to-end critical architecture tests
+- **Portfolio V2** (100 tests): Composite asset with nested portfolio support
 
-### ✅ MVP Achievement Summary
+**End-to-end example**: `examples/run_minimal_backtest.py` demonstrates full pipeline
 
-The minimal backtest is **complete and working**:
+### Architecture Improvements Applied
 
-**What It Does:**
-1. Takes list of futures contracts (e.g., SFRZ4, SFRH5, SFRM5, SFRU5)
-2. For each date (weekly rebalancing):
-   - Uses FuturesAdapter to get prices and format data
-   - Generates carry alphas with CarrySignal
-   - Estimates covariance with LedoitWolfShrinkage
-   - Optimizes portfolio weights with MeanVarianceOptimizer
-   - Tracks positions and calculates P&L
-3. Outputs: BacktestResult with returns time series, IC, Sharpe ratio, total return
+**Critical Architectural Fixes:**
+1. **Returns-First Design**: Portfolio accepts returns not prices (Grinold-Kahn compliant)
+2. **Alpha Generation**: Proper IC × Vol × Z scaling for optimal alpha magnitudes
+3. **Signal Pipeline**: Raw signals → scaled alphas → portfolio weights
+4. **Nested Portfolios**: Portfolio as composite Asset supporting hierarchical composition
 
 **Success Criteria Met:**
 - ✅ End-to-end system produces measurable results
 - ✅ Measurements are accurate (regardless of profitability)
-- ✅ All 6 layers integrated successfully
-- ✅ 169 tests passing with comprehensive coverage
+- ✅ All layers integrated successfully
+- ✅ 346 tests passing with comprehensive coverage
+- ✅ Grinold-Kahn architecture compliance
 - ✅ MVP philosophy achieved: measure correctly, not necessarily profitably
 
 ### Future Enhancements (Not Required for MVP)
