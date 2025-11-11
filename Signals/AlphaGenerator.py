@@ -45,9 +45,8 @@ Example:
 """
 
 from datetime import date
-from typing import Dict, Optional, Union
+from typing import Dict, Optional
 import polars as pl
-import pandas as pd
 import numpy as np
 
 from Risk.Volatility.VolatilityEstimator import VolatilityEstimator
@@ -132,7 +131,7 @@ class AlphaGenerator:
     def signals_to_alphas(
         self,
         signals: Dict[str, float],
-        returns_history: Union[pl.DataFrame, pd.DataFrame],
+        returns_history: pl.DataFrame,
         as_of: date
     ) -> Dict[str, float]:
         """
@@ -170,7 +169,6 @@ class AlphaGenerator:
             leading to absurd predictions (Z=2.0 → 200% return).
         """
         # Estimate volatilities from returns history
-        # Note: vol_estimator expects the original format (pandas or polars)
         volatilities = self.vol_estimator.estimate(returns_history)
 
         # Determine IC to use (static or dynamic)
@@ -194,8 +192,8 @@ class AlphaGenerator:
 
     def estimate_dynamic_ic(
         self,
-        signals_history: Union[pl.DataFrame, pd.DataFrame],
-        returns_history: Union[pl.DataFrame, pd.DataFrame],
+        signals_history: pl.DataFrame,
+        returns_history: pl.DataFrame,
         as_of: Optional[date] = None
     ) -> float:
         """
@@ -233,12 +231,6 @@ class AlphaGenerator:
             - signals.loc[t] should predict returns.loc[t+1]
             - Use shift() to ensure signals don't look ahead
         """
-        # Convert pandas to polars if needed
-        if isinstance(signals_history, pd.DataFrame):
-            signals_history = pl.from_pandas(signals_history)
-        if isinstance(returns_history, pd.DataFrame):
-            returns_history = pl.from_pandas(returns_history)
-
         # Validate inputs
         if len(signals_history) == 0 or len(returns_history) == 0:
             return self.IC  # Fallback to static IC
@@ -461,8 +453,8 @@ class AlphaGenerator:
     def signals_to_alphas_with_dynamic_ic(
         self,
         signals: Dict[str, float],
-        returns_history: Union[pl.DataFrame, pd.DataFrame],
-        signals_history: Union[pl.DataFrame, pd.DataFrame],
+        returns_history: pl.DataFrame,
+        signals_history: pl.DataFrame,
         as_of: date
     ) -> Dict[str, float]:
         """
