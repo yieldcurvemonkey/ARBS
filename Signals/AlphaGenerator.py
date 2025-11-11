@@ -38,14 +38,15 @@ Grinold-Kahn Framework:
 Example:
     >>> alpha_gen = AlphaGenerator(IC=0.05)
     >>> signals = {'SFRZ4': 1.5}  # Strong carry signal
-    >>> returns_history = pd.DataFrame({'SFRZ4': [0.01, -0.01, ...]})
+    >>> returns_history = pl.DataFrame({'SFRZ4': [0.01, -0.01, ...]})
     >>> alphas = alpha_gen.signals_to_alphas(signals, returns_history, as_of)
     >>> alphas['SFRZ4']
     0.0075  # 0.75% expected return (sensible, not 150%!)
 """
 
 from datetime import date
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
+import polars as pl
 import pandas as pd
 import numpy as np
 
@@ -69,7 +70,7 @@ class AlphaGenerator:
     Example:
         >>> alpha_gen = AlphaGenerator(IC=0.05)
         >>> signals = {'SFRZ4': 2.0, 'SFRH5': -1.0}
-        >>> returns_history = pd.DataFrame({
+        >>> returns_history = pl.DataFrame({
         ...     'SFRZ4': [0.01, -0.01, 0.02, ...],
         ...     'SFRH5': [0.005, -0.005, 0.01, ...]
         ... })
@@ -131,7 +132,7 @@ class AlphaGenerator:
     def signals_to_alphas(
         self,
         signals: Dict[str, float],
-        returns_history: pd.DataFrame,
+        returns_history: Union[pl.DataFrame, pd.DataFrame],
         as_of: date
     ) -> Dict[str, float]:
         """
@@ -158,7 +159,7 @@ class AlphaGenerator:
 
         Example:
             >>> signals = {'SFRZ4': 1.5}  # Strong signal (1.5 std devs)
-            >>> returns_history = pd.DataFrame({'SFRZ4': [...]})  # 10% vol
+            >>> returns_history = pl.DataFrame({'SFRZ4': [...]})  # 10% vol
             >>> alphas = alpha_gen.signals_to_alphas(signals, returns_history, as_of)
             >>> alphas['SFRZ4']
             0.0075  # IC(0.05) × Vol(0.10) × Z(1.5) = 0.75% expected return
@@ -169,6 +170,7 @@ class AlphaGenerator:
             leading to absurd predictions (Z=2.0 → 200% return).
         """
         # Estimate volatilities from returns history
+        # Note: vol_estimator expects the original format (pandas or polars)
         volatilities = self.vol_estimator.estimate(returns_history)
 
         # Determine IC to use (static or dynamic)
@@ -192,8 +194,8 @@ class AlphaGenerator:
 
     def estimate_dynamic_ic(
         self,
-        signals_history: pd.DataFrame,
-        returns_history: pd.DataFrame,
+        signals_history: Union[pl.DataFrame, pd.DataFrame],
+        returns_history: Union[pl.DataFrame, pd.DataFrame],
         as_of: Optional[date] = None
     ) -> float:
         """
@@ -220,8 +222,8 @@ class AlphaGenerator:
         Example:
             >>> # Rolling IC
             >>> alpha_gen = AlphaGenerator(IC=0.05, dynamic_ic=True, ic_method="rolling", ic_lookback=60)
-            >>> signals = pd.DataFrame({'SFRZ4': [1.5, 2.0, ...], ...})
-            >>> returns = pd.DataFrame({'SFRZ4': [0.01, -0.01, ...], ...})
+            >>> signals = pl.DataFrame({'SFRZ4': [1.5, 2.0, ...], ...})
+            >>> returns = pl.DataFrame({'SFRZ4': [0.01, -0.01, ...], ...})
             >>> ic = alpha_gen.estimate_dynamic_ic(signals, returns)
             >>> ic
             0.073  # Current IC is higher than static 0.05
@@ -231,26 +233,29 @@ class AlphaGenerator:
             - signals.loc[t] should predict returns.loc[t+1]
             - Use shift() to ensure signals don't look ahead
         """
+        # Convert pandas to polars if needed
+        if isinstance(signals_history, pd.DataFrame):
+            signals_history = pl.from_pandas(signals_history)
+        if isinstance(returns_history, pd.DataFrame):
+            returns_history = pl.from_pandas(returns_history)
+
         # Validate inputs
-        if signals_history.empty or returns_history.empty:
+        if len(signals_history) == 0 or len(returns_history) == 0:
             return self.IC  # Fallback to static IC
 
-        # Align signals and returns (ensure same assets and dates)
+        # Align signals and returns (ensure same assets)
         common_assets = list(set(signals_history.columns) & set(returns_history.columns))
         if not common_assets:
             return self.IC  # No common assets, fallback to static IC
 
-        # Filter to common assets and dates
-        signals = signals_history[common_assets].copy()
-        returns = returns_history[common_assets].copy()
+        # Filter to common assets
+        signals = signals_history[common_assets].clone()
+        returns = returns_history[common_assets].clone()
 
-        # Align by index (dates)
-        common_dates = signals.index.intersection(returns.index)
-        if len(common_dates) < self.ic_min_periods:
+        # Both DataFrames should have the same number of rows already
+        # In polars, we align by row position (not by index like pandas)
+        if len(signals) < self.ic_min_periods or len(returns) < self.ic_min_periods:
             return self.IC  # Insufficient history, fallback to static IC
-
-        signals = signals.loc[common_dates]
-        returns = returns.loc[common_dates]
 
         # Estimate IC based on method
         if self.ic_method == "rolling":
@@ -272,10 +277,41 @@ class AlphaGenerator:
 
         return ic
 
+    def _apply_ewma(self, values: list, halflife: int, min_periods: int) -> float:
+        """
+        Apply exponentially weighted moving average to a list of values.
+
+        Args:
+            values: List of values to apply EWMA to
+            halflife: Half-life parameter for EWMA
+            min_periods: Minimum periods required for result
+
+        Returns:
+            Last value in EWMA series
+        """
+        if len(values) < min_periods:
+            return self.IC
+
+        # Calculate alpha (decay factor) from halflife
+        # halflife = ln(2) / ln(1 / (1 - alpha))
+        # alpha = 1 - exp(-ln(2) / halflife)
+        alpha = 1.0 - np.exp(-np.log(2) / halflife)
+
+        # Apply EWMA
+        ewma_values = []
+        for i, val in enumerate(values):
+            if i == 0:
+                ewma_values.append(val)
+            else:
+                ewma_val = alpha * val + (1 - alpha) * ewma_values[-1]
+                ewma_values.append(ewma_val)
+
+        return ewma_values[-1]
+
     def _estimate_rolling_ic(
         self,
-        signals: pd.DataFrame,
-        returns: pd.DataFrame
+        signals: pl.DataFrame,
+        returns: pl.DataFrame
     ) -> float:
         """
         Estimate IC using rolling window correlation.
@@ -286,12 +322,12 @@ class AlphaGenerator:
         """
         # Use last ic_lookback periods
         lookback = min(self.ic_lookback, len(signals))
-        signals_window = signals.iloc[-lookback:]
-        returns_window = returns.iloc[-lookback:]
+        signals_window = signals.slice(-lookback, lookback)
+        returns_window = returns.slice(-lookback, lookback)
 
         # Flatten signals and returns for correlation calculation
-        signals_flat = signals_window.values.flatten()
-        returns_flat = returns_window.values.flatten()
+        signals_flat = signals_window.to_numpy().flatten()
+        returns_flat = returns_window.to_numpy().flatten()
 
         # Remove NaN pairs
         valid_mask = ~(np.isnan(signals_flat) | np.isnan(returns_flat))
@@ -308,8 +344,8 @@ class AlphaGenerator:
 
     def _estimate_ewma_ic(
         self,
-        signals: pd.DataFrame,
-        returns: pd.DataFrame
+        signals: pl.DataFrame,
+        returns: pl.DataFrame
     ) -> float:
         """
         Estimate IC using Exponentially Weighted Moving Average.
@@ -323,8 +359,8 @@ class AlphaGenerator:
 
         for i in range(len(signals)):
             # Get signals and returns for this period
-            signals_period = signals.iloc[i].values
-            returns_period = returns.iloc[i].values
+            signals_period = signals[i].to_numpy()
+            returns_period = returns[i].to_numpy()
 
             # Remove NaN pairs
             valid_mask = ~(np.isnan(signals_period) | np.isnan(returns_period))
@@ -344,16 +380,15 @@ class AlphaGenerator:
         if len(period_ics) < self.ic_min_periods:
             return self.IC  # Insufficient observations
 
-        # Apply EWMA
-        ic_series = pd.Series(period_ics)
-        ewma_ic = ic_series.ewm(halflife=self.ic_halflife, min_periods=self.ic_min_periods).mean().iloc[-1]
+        # Apply EWMA (manual implementation since polars doesn't have ewm)
+        ewma_ic = self._apply_ewma(period_ics, self.ic_halflife, self.ic_min_periods)
 
         return ewma_ic
 
     def _estimate_regime_ic(
         self,
-        signals: pd.DataFrame,
-        returns: pd.DataFrame,
+        signals: pl.DataFrame,
+        returns: pl.DataFrame,
         as_of: Optional[date]
     ) -> float:
         """
@@ -369,17 +404,17 @@ class AlphaGenerator:
         # High vol = recent realized vol > historical average
         # Low vol = recent realized vol < historical average
 
-        # Calculate rolling volatility
-        returns_std = returns.std(axis=1)  # Cross-sectional std per date
+        # Calculate rolling volatility (cross-sectional std per row in polars)
+        returns_std = returns.select(pl.all().std(ddof=1)).to_numpy().flatten()
 
         if len(returns_std) < self.ic_min_periods:
             return self.IC  # Insufficient history
 
         # Recent volatility (last 20 periods)
-        recent_vol = returns_std.iloc[-20:].mean()
+        recent_vol = np.mean(returns_std[-20:]) if len(returns_std) >= 20 else np.mean(returns_std)
 
         # Historical average volatility
-        hist_vol = returns_std.mean()
+        hist_vol = np.mean(returns_std)
 
         # Determine regime
         is_high_vol = recent_vol > hist_vol
@@ -390,21 +425,27 @@ class AlphaGenerator:
 
         # Calculate IC for current regime
         if is_high_vol:
-            # Use high vol periods
-            signals_regime = signals[high_vol_mask]
-            returns_regime = returns[high_vol_mask]
+            # Use high vol periods (use boolean mask with row indices)
+            indices = np.where(high_vol_mask)[0]
+            if len(indices) == 0:
+                return self.IC
+            signals_regime = signals.slice(int(indices[0]), int(indices[-1] - indices[0] + 1))
+            returns_regime = returns.slice(int(indices[0]), int(indices[-1] - indices[0] + 1))
         else:
             # Use low vol periods
-            signals_regime = signals[low_vol_mask]
-            returns_regime = returns[low_vol_mask]
+            indices = np.where(low_vol_mask)[0]
+            if len(indices) == 0:
+                return self.IC
+            signals_regime = signals.slice(int(indices[0]), int(indices[-1] - indices[0] + 1))
+            returns_regime = returns.slice(int(indices[0]), int(indices[-1] - indices[0] + 1))
 
         # Calculate IC for this regime using rolling method
         if len(signals_regime) < self.ic_min_periods:
             return self.IC  # Insufficient regime observations
 
         # Flatten and calculate correlation
-        signals_flat = signals_regime.values.flatten()
-        returns_flat = returns_regime.values.flatten()
+        signals_flat = signals_regime.to_numpy().flatten()
+        returns_flat = returns_regime.to_numpy().flatten()
 
         valid_mask = ~(np.isnan(signals_flat) | np.isnan(returns_flat))
         signals_valid = signals_flat[valid_mask]
@@ -420,8 +461,8 @@ class AlphaGenerator:
     def signals_to_alphas_with_dynamic_ic(
         self,
         signals: Dict[str, float],
-        returns_history: pd.DataFrame,
-        signals_history: pd.DataFrame,
+        returns_history: Union[pl.DataFrame, pd.DataFrame],
+        signals_history: Union[pl.DataFrame, pd.DataFrame],
         as_of: date
     ) -> Dict[str, float]:
         """
@@ -441,8 +482,8 @@ class AlphaGenerator:
         Example:
             >>> alpha_gen = AlphaGenerator(IC=0.05, dynamic_ic=True, ic_method="ewma")
             >>> signals = {'SFRZ4': 2.0}
-            >>> returns_hist = pd.DataFrame({...})  # Historical returns
-            >>> signals_hist = pd.DataFrame({...})  # Historical signals
+            >>> returns_hist = pl.DataFrame({...})  # Historical returns
+            >>> signals_hist = pl.DataFrame({...})  # Historical signals
             >>> alphas = alpha_gen.signals_to_alphas_with_dynamic_ic(
             ...     signals, returns_hist, signals_hist, date(2024, 11, 1)
             ... )

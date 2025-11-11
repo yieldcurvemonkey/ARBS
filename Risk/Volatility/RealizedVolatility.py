@@ -29,7 +29,8 @@ Example:
 
 import numpy as np
 import pandas as pd
-from typing import Dict
+import polars as pl
+from typing import Dict, Union
 
 from Risk.Volatility.VolatilityEstimator import VolatilityEstimator
 
@@ -77,7 +78,7 @@ class RealizedVolatility(VolatilityEstimator):
         self.lookback = lookback
         self.annualization_factor = annualization_factor
 
-    def estimate(self, returns: pd.DataFrame) -> Dict[str, float]:
+    def estimate(self, returns: Union[pd.DataFrame, pl.DataFrame]) -> Dict[str, float]:
         """
         Calculate realized volatility from historical returns.
 
@@ -108,6 +109,10 @@ class RealizedVolatility(VolatilityEstimator):
         """
         if len(returns) == 0:
             return {}
+
+        # Convert polars to pandas for uniform handling
+        if isinstance(returns, pl.DataFrame):
+            returns = returns.to_pandas()
 
         # Use last `lookback` periods (or all if insufficient data)
         recent_returns = returns.tail(self.lookback)
