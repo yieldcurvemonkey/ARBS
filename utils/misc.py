@@ -1,6 +1,5 @@
 from decimal import Decimal, ROUND_HALF_UP
 import math
-import pandas as pd
 
 
 def human_format(

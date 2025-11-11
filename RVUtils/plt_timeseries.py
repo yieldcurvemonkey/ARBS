@@ -2,7 +2,7 @@
 # ABOUTME: Matplotlib helpers for visualizing price series and spreads
 import datetime
 import numpy as np
-import pandas as pd
+import polars as pl
 import matplotlib.pyplot as plt
 
 from RVUtils.mean_reversion import simulate_mean_reversion_ou
@@ -74,8 +74,14 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
         return str(n)
 
     def _fmt_dt(ts):
-        ts = pd.Timestamp(ts)
-        return ts.strftime("%Y-%m-%d") if ts.time() == datetime.time(0, 0, 0) else ts.isoformat(sep=" ")
+        # Convert to datetime for formatting (polars doesn't have Timestamp)
+        if isinstance(ts, datetime.datetime):
+            dt = ts
+        elif isinstance(ts, str):
+            dt = datetime.datetime.fromisoformat(ts)
+        else:
+            dt = datetime.datetime.fromtimestamp(float(ts))
+        return dt.strftime("%Y-%m-%d") if dt.time() == datetime.time(0, 0, 0) else dt.isoformat(sep=" ")
 
     # Create a new "right" axis
     def _new_right_axis():
@@ -150,11 +156,12 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
             state["right_axes"].append(axis_idx)
             return axis_idx
 
-    def _remember_line_mpl(line, label, series_like: pd.Series, meta: dict | None = None):
-        s_valid = series_like.dropna()
+    def _remember_line_mpl(line, label, series_like: pl.Series, meta: dict | None = None):
+        s_valid = series_like.drop_nulls()
         if len(s_valid) > 0:
-            last_dt = s_valid.index[-1]
-            last_val = s_valid.iloc[-1]
+            # Note: polars Series don't have index - this will need refactoring
+            last_dt = None  # TODO: handle datetime column separately
+            last_val = s_valid[-1]
         else:
             last_dt, last_val = None, np.nan
         entry = {"line": line, "label": label, "last_dt": last_dt, "last_val": last_val}
@@ -162,11 +169,12 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
             entry.update(meta)
         state["series_meta"].append(entry)
 
-    def _remember_line_plotly(trace_idx: int, label, series_like: pd.Series, meta: dict | None = None):
-        s_valid = series_like.dropna()
+    def _remember_line_plotly(trace_idx: int, label, series_like: pl.Series, meta: dict | None = None):
+        s_valid = series_like.drop_nulls()
         if len(s_valid) > 0:
-            last_dt = s_valid.index[-1]
-            last_val = s_valid.iloc[-1]
+            # Note: polars Series don't have index - this will need refactoring
+            last_dt = None  # TODO: handle datetime column separately
+            last_val = s_valid[-1]
         else:
             last_dt, last_val = None, np.nan
         entry = {"trace_idx": trace_idx, "label": label, "last_dt": last_dt, "last_val": last_val}
