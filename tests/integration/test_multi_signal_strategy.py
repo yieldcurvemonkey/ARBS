@@ -52,6 +52,9 @@ def trending_market_data():
             # Generate dates
             dates = pd.date_range(start=start_date, end=end_date, freq='D')
 
+            # Set seed for deterministic test behavior
+            np.random.seed(42)
+
             # Trending prices
             if 'TREND_UP' in instrument:
                 # Strong uptrend with noise
@@ -92,6 +95,9 @@ def ranging_market_data():
             # Generate dates
             dates = pd.date_range(start=start_date, end=end_date, freq='D')
 
+            # Set seed for deterministic test behavior
+            np.random.seed(42)
+
             # Oscillating prices (sine wave + noise)
             if 'RANGE_A' in instrument:
                 # High frequency oscillation
@@ -130,6 +136,9 @@ def carry_market_data():
     class CarryMDP:
         def get_price_history(self, instrument, start_date, end_date):
             dates = pd.date_range(start=start_date, end=end_date, freq='D')
+
+            # Set seed for deterministic test behavior
+            np.random.seed(42)
 
             # Prices with carry drift
             if 'HIGH_CARRY' in instrument:
@@ -427,7 +436,6 @@ class TestRealisticBacktest:
         class RealisticMDP:
             def __init__(self):
                 # Generate 100 days of price history
-                np.random.seed(42)
                 self.start_date = date(2024, 1, 1)
                 self.dates = [self.start_date + timedelta(days=i) for i in range(100)]
 
@@ -440,12 +448,14 @@ class TestRealisticBacktest:
 
             def _generate_trending_prices(self, n, trend):
                 """Generate trending prices."""
+                np.random.seed(42)
                 drift = np.linspace(0, trend * n, n)
                 noise = np.random.randn(n) * 0.002
                 return 95.0 + drift + noise
 
             def _generate_ranging_prices(self, n):
                 """Generate oscillating prices."""
+                np.random.seed(43)
                 oscillation = np.sin(np.linspace(0, 4 * np.pi, n)) * 0.5
                 noise = np.random.randn(n) * 0.002
                 return 95.0 + oscillation + noise
