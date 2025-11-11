@@ -501,11 +501,13 @@ class GrinoldKahnBacktest:
 - ✅ Portfolio.calculate_return() refactored to accept returns
 - ✅ MinimalBacktest uses ReturnsCalculator and AlphaGenerator
 - ✅ Returns-first architecture implemented
+- ✅ MomentumSignal (trend-following signal)
+- ✅ MeanReversionSignal (statistical arbitrage signal)
+- ✅ SignalCombiner (multi-signal combination framework, 156 tests)
 
 ### Remaining
 - [ ] GrinoldKahnPortfolio integrated strategy class
-- [ ] Additional signals (RollDownSignal, CurveSteepnessSignal)
-- [ ] Multi-signal combination framework
+- [ ] Additional signals (RollDownSignal, CurveSteepnessSignal, Curve Positioning)
 - [ ] Performance attribution decomposition
 
-Total: 346 tests passing
+Total: 502 tests passing

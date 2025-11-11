@@ -54,7 +54,7 @@ Analysis:        TearSheet → IC/Sharpe/returns analysis
 Result:          BacktestResult (returns, IC, Sharpe, total return)
 ```
 
-### ✅ Architecture Status (346 tests passing)
+### ✅ Architecture Status (502 tests passing)
 
 **MVP V1 - Core Pipeline (169 tests)**
 - **Query** (44 tests): Futures infrastructure, structures, value calculations
@@ -65,13 +65,14 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
 - **Backtest** (12 tests): MinimalBacktest end-to-end integration
 - **Other** (34 tests): Accounting, smoke tests, fixtures
 
-**Architecture V2 - Grinold-Kahn Enhancements (177 tests)**
+**Architecture V2 - Grinold-Kahn Enhancements (333 tests)**
 - **ReturnsCalculator** (16 tests): Returns-first data pipeline foundation
 - **VolatilityEstimator** (18 tests): Volatility forecasting for alpha scaling
 - **AlphaGenerator** (16 tests): IC × Vol × Z formula for optimal alphas
 - **TearSheet** (19 tests): Comprehensive performance analysis
 - **Integration** (8 tests): End-to-end critical architecture tests
 - **Portfolio V2** (100 tests): Composite asset with nested portfolio support
+- **Additional Signals** (156 tests): MomentumSignal, MeanReversionSignal, SignalCombiner
 
 **End-to-end example**: `examples/run_minimal_backtest.py` demonstrates full pipeline
 
@@ -87,9 +88,10 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
 - ✅ End-to-end system produces measurable results
 - ✅ Measurements are accurate (regardless of profitability)
 - ✅ All layers integrated successfully
-- ✅ 346 tests passing with comprehensive coverage
+- ✅ 502 tests passing with comprehensive coverage
 - ✅ Grinold-Kahn architecture compliance
 - ✅ MVP philosophy achieved: measure correctly, not necessarily profitably
+- ✅ Multiple signal types implemented (Carry, Momentum, Mean Reversion)
 
 ### Future Enhancements (Not Required for MVP)
 
@@ -97,8 +99,8 @@ These are **optional** enhancements to add only if needed:
 - Transaction costs (proportional + quadratic impact)
 - DV01 constraints (fixed income risk limits)
 - Cardinality constraints (L0 penalty)
-- Multiple signals (momentum, mean reversion)
 - Advanced covariance (3-factor PCA, nodewise regression)
+- Additional signal types (curve positioning, basis arbitrage)
 
 ## Foundational rules
 

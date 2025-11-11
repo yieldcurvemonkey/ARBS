@@ -80,49 +80,56 @@ All components integrated:
 
 **Goal: Align with Grinold-Kahn framework - alphas from returns, not prices**
 
-### ✅ Completed (177 additional tests)
+### ✅ Completed (333 additional tests)
 
 - [x] Returns Calculation
   - ReturnsCalculator (simple returns, log returns, period conversion)
   - Proper handling of NaN, zeros, negatives
-  - 23 tests passing
+  - 16 tests passing
 
 - [x] Volatility Estimation
   - VolatilityEstimator (Realized, EWMA)
   - Standardized interface for multiple estimators
   - Annualization and scaling logic
-  - 28 tests passing
+  - 18 tests passing
 
 - [x] Alpha Generation (Grinold-Kahn Compliant)
   - AlphaGenerator: IC × Vol × Z-score
   - Transform raw signals → expected returns
   - Proper dimensionality (bps/day or % return)
-  - 31 tests passing
+  - 16 tests passing
 
 - [x] Portfolio Architecture
   - Portfolio as composite Asset (nested support)
   - Returns-first: calculates returns, not prices
   - Composition engine for weighted combinations
-  - 45 tests passing
+  - 100 tests passing
 
 - [x] TearSheet Analysis
   - Comprehensive performance metrics
   - Risk-adjusted returns (Sharpe, Sortino, Calmar)
   - Drawdown analysis
-  - 18 tests passing
+  - 19 tests passing
 
 - [x] Integration Testing
   - End-to-end returns flow validation
   - Cross-validation against MVP V1
   - Alpha generation pipeline tests
-  - 32 tests passing
+  - 8 tests passing
+
+- [x] Additional Signals
+  - MomentumSignal (trend-following)
+  - MeanReversionSignal (statistical arbitrage)
+  - SignalCombiner (multi-signal strategies)
+  - 156 tests passing
 
 **Architecture V2 Achievement:**
 - System now generates alphas from returns (Grinold-Kahn compliant)
 - Proper volatility scaling (IC × Vol × Z)
 - Portfolio composition with nested assets
 - Comprehensive performance analysis
-- All tests passing (346 total)
+- Multiple signal types implemented (Carry, Momentum, Mean Reversion)
+- All tests passing (502 total)
 
 ### 📋 Future Enhancements (Not Required for MVP)
 
@@ -143,18 +150,18 @@ All components integrated:
 - Turnover constraints
 - Holding period minimums
 
-### Additional Signals
-- Momentum
-- Mean reversion
-- Volatility
-- Multi-signal combination
+### Additional Signals (Beyond Current Implementation)
+- Curve positioning signals (steepeners, flatteners, butterflies)
+- Basis arbitrage (futures vs swaps)
+- Volatility regime signals
+- Advanced multi-factor combinations
 
 ### Advanced Covariance
 - 3-factor PCA (for highly correlated assets)
 - Nodewise regression (2025 research)
 - Dynamic covariance (time-varying)
 
-## Test Count: 346 passing ✅
+## Test Count: 502 passing ✅
 
 ### MVP V1 Components (169 tests)
 - Futures: 44 tests
@@ -165,13 +172,14 @@ All components integrated:
 - Backtest: 12 tests
 - Other: 34 tests
 
-### Architecture V2 Components (177 tests)
-- Returns: 23 tests
-- Volatility: 28 tests
-- AlphaGenerator: 31 tests
-- Portfolio: 45 tests
-- TearSheet: 18 tests
-- Integration: 32 tests
+### Architecture V2 Components (333 tests)
+- Returns: 16 tests
+- Volatility: 18 tests
+- AlphaGenerator: 16 tests
+- Portfolio: 100 tests
+- TearSheet: 19 tests
+- Integration: 8 tests
+- Additional Signals: 156 tests (Momentum, Mean Reversion, Combiner)
 
 ## Architecture
 
