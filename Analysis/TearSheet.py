@@ -12,7 +12,8 @@ Generates comprehensive performance analysis including:
 Inspired by pyfolio tear sheets but tailored for futures/swaps strategies.
 
 Example:
-    >>> returns = pd.Series([0.01, -0.01, 0.02, ...])
+    >>> import polars as pl
+    >>> returns = pl.Series([0.01, -0.01, 0.02, ...])
     >>> tear_sheet = TearSheet(returns, periods_per_year=252)
     >>> metrics = tear_sheet.calculate_metrics()
     >>> print(f"Sharpe: {metrics.sharpe_ratio:.2f}")
@@ -24,8 +25,9 @@ Example:
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 import numpy as np
+import polars as pl
 import pandas as pd
 
 
@@ -71,8 +73,9 @@ class TearSheet:
     drawdown analysis, and visualization plots.
 
     Attributes:
-        returns: Return series (indexed by date)
+        returns: Return series (polars Series)
         periods_per_year: Periods per year for annualization (252=daily, 52=weekly)
+        dates: Optional date series for aggregation methods
 
     Methods:
         calculate_metrics: Compute summary statistics
@@ -90,17 +93,19 @@ class TearSheet:
 
     def __init__(
         self,
-        returns: pd.Series,
+        returns: Union[pd.Series, pl.Series, pl.DataFrame],
         periods_per_year: int = 252,
-        risk_free_rate: float = 0.0
+        risk_free_rate: float = 0.0,
+        dates: Optional[Union[pd.Series, pl.Series]] = None
     ):
         """
         Initialize tear sheet analyzer.
 
         Args:
-            returns: Return series (decimal, e.g., 0.01 = 1%)
+            returns: Return series (decimal, e.g., 0.01 = 1%) or DataFrame with 'date' and returns columns
             periods_per_year: Annualization factor (252=daily, 52=weekly, 12=monthly)
             risk_free_rate: Risk-free rate for Sharpe calculation (annualized)
+            dates: Optional date series for aggregation methods (if returns is a Series without dates)
 
         Example:
             Daily returns:
@@ -109,9 +114,26 @@ class TearSheet:
             Weekly returns:
             >>> tear_sheet = TearSheet(returns, periods_per_year=52)
         """
-        self.returns = returns
+        # Handle DataFrame or Series with dates
+        if isinstance(returns, pl.DataFrame):
+            self.dates = returns['date']
+            self.returns = returns.select(pl.exclude('date')).to_series()
+        else:
+            self.returns = returns
+            self.dates = dates
+
         self.periods_per_year = periods_per_year
         self.risk_free_rate = risk_free_rate
+
+    def _to_polars(self, series: Union[pd.Series, pl.Series]) -> pl.Series:
+        """Convert pandas Series to polars Series if needed."""
+        if isinstance(series, pd.Series):
+            return pl.Series(series.values)
+        return series
+
+    def _to_pandas(self, series: pl.Series, index=None) -> pd.Series:
+        """Convert polars Series to pandas Series."""
+        return pd.Series(series.to_list(), index=index)
 
     def calculate_metrics(self) -> TearSheetMetrics:
         """
@@ -124,7 +146,9 @@ class TearSheet:
             >>> metrics = tear_sheet.calculate_metrics()
             >>> print(f"Sharpe: {metrics.sharpe_ratio:.2f}")
         """
-        if len(self.returns) == 0:
+        returns_pl = self._to_polars(self.returns)
+
+        if len(returns_pl) == 0:
             return TearSheetMetrics(
                 total_return=np.nan,
                 annual_return=np.nan,
@@ -135,22 +159,29 @@ class TearSheet:
             )
 
         # Total return (compounded)
-        total_return = (1 + self.returns).prod() - 1
+        returns_array = returns_pl.to_numpy()
+        total_return = float(np.prod(1 + returns_array) - 1)
 
         # Annualized return (geometric mean)
-        if len(self.returns) > 1:
-            n_periods = len(self.returns)
+        if len(returns_pl) > 1:
+            n_periods = len(returns_pl)
             annual_return = (1 + total_return) ** (self.periods_per_year / n_periods) - 1
         else:
             annual_return = total_return * self.periods_per_year
 
         # Annualized volatility
-        annual_volatility = self.returns.std() * np.sqrt(self.periods_per_year)
+        std_val = returns_pl.std()
+        if std_val is None or np.isnan(std_val):
+            std = 0.0
+        else:
+            std = float(std_val)
+        annual_volatility = std * np.sqrt(self.periods_per_year)
 
         # Sharpe ratio (annualized, using arithmetic mean)
         # Sharpe uses arithmetic mean, not geometric
         if annual_volatility > 0:
-            arithmetic_annual_return = self.returns.mean() * self.periods_per_year
+            mean = float(returns_pl.mean())
+            arithmetic_annual_return = mean * self.periods_per_year
             sharpe_ratio = (arithmetic_annual_return - self.risk_free_rate) / annual_volatility
         else:
             sharpe_ratio = np.nan
@@ -158,7 +189,8 @@ class TearSheet:
         # Max drawdown
         drawdowns = self.calculate_drawdowns()
         if len(drawdowns) > 0:
-            max_drawdown = drawdowns.min()
+            drawdowns_pl = self._to_polars(drawdowns)
+            max_drawdown = float(drawdowns_pl.min())
         else:
             max_drawdown = 0.0
 
@@ -177,7 +209,7 @@ class TearSheet:
             calmar_ratio=calmar_ratio,
         )
 
-    def calculate_drawdowns(self) -> pd.Series:
+    def calculate_drawdowns(self) -> Union[pd.Series, pl.Series]:
         """
         Calculate drawdown series (distance from running peak).
 
@@ -191,21 +223,29 @@ class TearSheet:
             >>> max_dd = drawdowns.min()
             >>> print(f"Max drawdown: {max_dd:.2%}")
         """
-        if len(self.returns) == 0:
-            return pd.Series(dtype=float)
+        returns_pl = self._to_polars(self.returns)
 
-        # Calculate cumulative returns (wealth index)
-        wealth_index = (1 + self.returns).cumprod()
+        if len(returns_pl) == 0:
+            if isinstance(self.returns, pd.Series):
+                return pd.Series(dtype=float)
+            return pl.Series(values=[], dtype=pl.Float64)
 
-        # Calculate running peak
-        running_peak = wealth_index.expanding().max()
+        # Calculate cumulative returns (wealth index) using numpy
+        returns_array = returns_pl.to_numpy()
+        wealth_index_array = np.cumprod(1 + returns_array)
+
+        # Calculate running peak using numpy's maximum.accumulate
+        running_peak_array = np.maximum.accumulate(wealth_index_array)
 
         # Drawdown = (current - peak) / peak
-        drawdowns = (wealth_index - running_peak) / running_peak
+        drawdowns_array = (wealth_index_array - running_peak_array) / running_peak_array
 
-        return drawdowns
+        # Return in same format as input
+        if isinstance(self.returns, pd.Series):
+            return pd.Series(drawdowns_array, index=self.returns.index)
+        return pl.Series(values=drawdowns_array, dtype=pl.Float64)
 
-    def calculate_cumulative_returns(self) -> pd.Series:
+    def calculate_cumulative_returns(self) -> Union[pd.Series, pl.Series]:
         """
         Calculate cumulative return series (starting from 0).
 
@@ -216,15 +256,23 @@ class TearSheet:
             >>> cum_returns = tear_sheet.calculate_cumulative_returns()
             >>> print(f"Final return: {cum_returns.iloc[-1]:.2%}")
         """
-        if len(self.returns) == 0:
-            return pd.Series(dtype=float)
+        returns_pl = self._to_polars(self.returns)
+
+        if len(returns_pl) == 0:
+            if isinstance(self.returns, pd.Series):
+                return pd.Series(dtype=float)
+            return pl.Series(values=[], dtype=pl.Float64)
 
         # Cumulative product - 1 (to start from 0, not 1)
-        cum_returns = (1 + self.returns).cumprod() - 1
+        returns_array = returns_pl.to_numpy()
+        cum_returns_array = np.cumprod(1 + returns_array) - 1
 
-        return cum_returns
+        # Return in same format as input
+        if isinstance(self.returns, pd.Series):
+            return pd.Series(cum_returns_array, index=self.returns.index)
+        return pl.Series(values=cum_returns_array, dtype=pl.Float64)
 
-    def aggregate_monthly_returns(self) -> pd.Series:
+    def aggregate_monthly_returns(self) -> Union[pd.Series, pl.Series]:
         """
         Aggregate returns to monthly frequency.
 
@@ -235,6 +283,35 @@ class TearSheet:
             >>> monthly = tear_sheet.aggregate_monthly_returns()
             >>> print(monthly.head())
         """
+        # Handle polars Series case
+        if isinstance(self.returns, pl.Series):
+            if len(self.returns) == 0 or self.dates is None:
+                return pl.Series(values=[], dtype=pl.Float64)
+
+            dates_pl = self._to_polars(self.dates)
+            returns_pl = self.returns
+
+            # Create DataFrame with dates and returns
+            df = pl.DataFrame({
+                'date': dates_pl,
+                'returns': returns_pl
+            })
+
+            # Extract year-month
+            df = df.with_columns(
+                pl.col('date').dt.strftime('%Y-%m').alias('month')
+            )
+
+            # Compound returns within each month
+            monthly = (
+                df.group_by('month')
+                .agg(((1 + pl.col('returns')).product() - 1).alias('returns'))
+                .sort('month')
+            )
+
+            return monthly.select(pl.col('returns')).to_series()
+
+        # Handle pandas Series case
         if len(self.returns) == 0 or not isinstance(self.returns.index, pd.DatetimeIndex):
             return pd.Series(dtype=float)
 
@@ -247,7 +324,7 @@ class TearSheet:
 
         return monthly
 
-    def aggregate_annual_returns(self) -> pd.Series:
+    def aggregate_annual_returns(self) -> Union[pd.Series, pl.Series]:
         """
         Aggregate returns to annual frequency.
 
@@ -258,6 +335,35 @@ class TearSheet:
             >>> annual = tear_sheet.aggregate_annual_returns()
             >>> print(annual)
         """
+        # Handle polars Series case
+        if isinstance(self.returns, pl.Series):
+            if len(self.returns) == 0 or self.dates is None:
+                return pl.Series(values=[], dtype=pl.Float64)
+
+            dates_pl = self._to_polars(self.dates)
+            returns_pl = self.returns
+
+            # Create DataFrame with dates and returns
+            df = pl.DataFrame({
+                'date': dates_pl,
+                'returns': returns_pl
+            })
+
+            # Extract year
+            df = df.with_columns(
+                pl.col('date').dt.strftime('%Y').alias('year')
+            )
+
+            # Compound returns within each year
+            annual = (
+                df.group_by('year')
+                .agg(((1 + pl.col('returns')).product() - 1).alias('returns'))
+                .sort('year')
+            )
+
+            return annual.select(pl.col('returns')).to_series()
+
+        # Handle pandas Series case
         if len(self.returns) == 0 or not isinstance(self.returns.index, pd.DatetimeIndex):
             return pd.Series(dtype=float)
 
