@@ -5,5 +5,6 @@ from .PriceFuture import PriceFuture
 from .RollableFuture import RollableFuture
 from .Position import Position
 from .Portfolio import Portfolio
+from .GrinoldKahnPortfolio import GrinoldKahnPortfolio
 
-__all__ = ['Asset', 'AssetTransition', 'PriceFuture', 'RollableFuture', 'Position', 'Portfolio']
+__all__ = ['Asset', 'AssetTransition', 'PriceFuture', 'RollableFuture', 'Position', 'Portfolio', 'GrinoldKahnPortfolio']
