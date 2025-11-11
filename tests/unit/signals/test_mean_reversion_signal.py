@@ -407,7 +407,7 @@ class TestICBenchmark:
 
         # Simulate trending vs ranging scenarios
         # Trending: mean reversion performs poorly
-        trend_ic = 0.05  # Placeholder - in real scenarios, measure actual performance
+        trend_ic = 0.05  # Test value - real scenarios would measure actual performance
 
         # This is more of an integration test - for MVP we'll verify
         # that mean reversion doesn't have EXCEPTIONAL IC (> 0.15) in all conditions
