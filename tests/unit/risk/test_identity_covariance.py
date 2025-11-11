@@ -24,7 +24,7 @@ Properties:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
 class TestIdentityCovarianceBasics:
@@ -52,9 +52,9 @@ class TestIdentityCovarianceEstimation:
 
         # Create simple returns data
         np.random.seed(42)
-        returns = pd.DataFrame(
+        returns = pl.DataFrame(
             np.random.randn(100, 5),
-            columns=['A', 'B', 'C', 'D', 'E']
+            schema=['A', 'B', 'C', 'D', 'E']
         )
 
         estimator = IdentityCovariance()
@@ -70,7 +70,7 @@ class TestIdentityCovarianceEstimation:
         from Risk.Covariance.IdentityCovariance import IdentityCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimator = IdentityCovariance()
         cov_matrix = estimator.fit(returns)
@@ -91,10 +91,10 @@ class TestIdentityCovarianceEstimation:
         from Risk.Covariance.IdentityCovariance import IdentityCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         # Calculate expected mean variance
-        individual_variances = returns.var()
+        individual_variances = returns.var().to_numpy().flatten()
         expected_mean_variance = individual_variances.mean()
 
         estimator = IdentityCovariance()
@@ -110,7 +110,7 @@ class TestIdentityCovarianceEstimation:
         from Risk.Covariance.IdentityCovariance import IdentityCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 1), columns=['A'])
+        returns = pl.DataFrame(np.random.randn(100, 1), schema=['A'])
 
         estimator = IdentityCovariance()
         cov_matrix = estimator.fit(returns)
@@ -119,7 +119,7 @@ class TestIdentityCovarianceEstimation:
         assert cov_matrix.shape == (1, 1)
 
         # Value should equal the asset's variance
-        expected_variance = returns['A'].var()
+        expected_variance = returns.var().to_numpy().flatten()[0]
         assert abs(cov_matrix[0, 0] - expected_variance) < 1e-10
 
     def test_multiple_assets(self):
@@ -128,7 +128,7 @@ class TestIdentityCovarianceEstimation:
 
         np.random.seed(42)
         n_assets = 10
-        returns = pd.DataFrame(np.random.randn(100, n_assets))
+        returns = pl.DataFrame(np.random.randn(100, n_assets))
 
         estimator = IdentityCovariance()
         cov_matrix = estimator.fit(returns)
@@ -137,7 +137,7 @@ class TestIdentityCovarianceEstimation:
         assert cov_matrix.shape == (n_assets, n_assets)
 
         # Verify identity structure (I × σ²)
-        mean_var = returns.var().mean()
+        mean_var = returns.var().to_numpy().flatten().mean()
         expected = np.eye(n_assets) * mean_var
 
         np.testing.assert_array_almost_equal(cov_matrix, expected, decimal=10)
@@ -151,7 +151,7 @@ class TestIdentityCovarianceEstimation:
         # Create returns with uniform variance
         # All assets have same underlying variance
         base_returns = np.random.randn(100)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': base_returns + np.random.randn(100) * 0.01,
             'B': base_returns * 1.0 + np.random.randn(100) * 0.01,
             'C': base_returns * 1.0 + np.random.randn(100) * 0.01,
@@ -161,7 +161,7 @@ class TestIdentityCovarianceEstimation:
         cov_matrix = estimator.fit(returns)
 
         # Should be close to identity scaled by common variance
-        mean_var = returns.var().mean()
+        mean_var = returns.var().to_numpy().flatten().mean()
 
         # Diagonal should all be mean_var
         diagonal_values = np.diag(cov_matrix)
@@ -174,14 +174,14 @@ class TestIdentityCovarianceEstimation:
         np.random.seed(42)
 
         # Create returns with widely varying variances
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'Low_Vol': np.random.randn(100) * 0.1,   # Low variance
             'Med_Vol': np.random.randn(100) * 1.0,   # Medium variance
             'High_Vol': np.random.randn(100) * 10.0, # High variance
         })
 
         # Calculate individual and mean variance
-        individual_vars = returns.var()
+        individual_vars = returns.var().to_numpy().flatten()
         mean_var = individual_vars.mean()
 
         # Verify variances are actually different
@@ -195,14 +195,14 @@ class TestIdentityCovarianceEstimation:
         assert np.allclose(diagonal_values, mean_var)
 
         # Verify it's different from at least some individual variances
-        assert not np.allclose(diagonal_values[0], individual_vars.iloc[0])
+        assert not np.allclose(diagonal_values[0], individual_vars[0])
 
     def test_output_is_positive_definite(self):
         """Identity scaled by positive number should be positive definite."""
         from Risk.Covariance.IdentityCovariance import IdentityCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimator = IdentityCovariance()
         cov_matrix = estimator.fit(returns)
@@ -227,7 +227,7 @@ class TestIdentityCovarianceProperties:
         from Risk.Covariance.IdentityCovariance import IdentityCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(50, 5))
+        returns = pl.DataFrame(np.random.randn(50, 5))
 
         estimator = IdentityCovariance()
         cov_matrix = estimator.fit(returns)
@@ -239,7 +239,7 @@ class TestIdentityCovarianceProperties:
         from Risk.Covariance.IdentityCovariance import IdentityCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(50, 10))
+        returns = pl.DataFrame(np.random.randn(50, 10))
 
         estimator = IdentityCovariance()
         cov_matrix = estimator.fit(returns)
@@ -253,9 +253,9 @@ class TestIdentityCovarianceProperties:
 
         np.random.seed(42)
         n_assets = 5
-        returns = pd.DataFrame(np.random.randn(100, n_assets))
+        returns = pl.DataFrame(np.random.randn(100, n_assets))
 
-        mean_var = returns.var().mean()
+        mean_var = returns.var().to_numpy().flatten().mean()
 
         estimator = IdentityCovariance()
         cov_matrix = estimator.fit(returns)
@@ -283,7 +283,7 @@ class TestIntegrationWithBase:
         from Risk.Covariance.IdentityCovariance import IdentityCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimator = IdentityCovariance()
         cov_from_fit = estimator.fit(returns)
@@ -296,7 +296,7 @@ class TestIntegrationWithBase:
         from Risk.Covariance.IdentityCovariance import IdentityCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimator = IdentityCovariance()
         estimator.fit(returns)
@@ -313,10 +313,9 @@ class TestEdgeCases:
         from Risk.Covariance.IdentityCovariance import IdentityCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
-
-        # Introduce NaN values
-        returns.iloc[10:20, 2] = np.nan
+        data = np.random.randn(100, 5)
+        data[10:20, 2] = np.nan
+        returns = pl.DataFrame(data)
 
         estimator = IdentityCovariance(handle_missing='drop')
         cov_matrix = estimator.fit(returns)
@@ -331,7 +330,7 @@ class TestEdgeCases:
 
         np.random.seed(42)
         # Very small returns
-        returns = pd.DataFrame(np.random.randn(100, 5) * 1e-10)
+        returns = pl.DataFrame(np.random.randn(100, 5) * 1e-10)
 
         estimator = IdentityCovariance()
         cov_matrix = estimator.fit(returns)
@@ -346,7 +345,7 @@ class TestEdgeCases:
 
         np.random.seed(42)
         # Very large returns
-        returns = pd.DataFrame(np.random.randn(100, 5) * 1e10)
+        returns = pl.DataFrame(np.random.randn(100, 5) * 1e10)
 
         estimator = IdentityCovariance()
         cov_matrix = estimator.fit(returns)
