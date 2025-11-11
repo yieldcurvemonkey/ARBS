@@ -18,7 +18,7 @@ MVP Goal: Measure correctly, not necessarily positive IC
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date, timedelta
 
 
@@ -71,15 +71,15 @@ class TestSingleContractConversion:
 
         # Should have one row
         assert len(df) == 1
-        assert 'SFRZ4' in df['contract'].values
+        assert 'SFRZ4' in df['contract'].to_list()
 
         # Should have price
         assert 'price' in df.columns
-        assert df.loc[0, 'price'] > 0
+        assert df[0, 'price'] > 0
 
         # Should have expiry (roll date)
         assert 'roll_date' in df.columns
-        assert isinstance(df.loc[0, 'roll_date'], date)
+        assert isinstance(df[0, 'roll_date'], date)
 
     def test_multiple_outright_contracts(self, mock_mdp):
         """Multiple outright contracts → DataFrame with multiple rows."""
@@ -103,7 +103,7 @@ class TestSingleContractConversion:
         assert len(df) == 3
 
         # All contracts present
-        assert set(df['contract']) == set(contracts)
+        assert set(df['contract'].to_list()) == set(contracts)
 
 
 class TestOutputFormat:
@@ -139,7 +139,7 @@ class TestOutputFormat:
         df = adapter.convert(queries, as_of)
 
         # Price should be reasonable for SOFR futures (90-100 range typically)
-        price = df.loc[0, 'price']
+        price = df[0, 'price']
         assert not np.isnan(price)
         assert 85.0 < price < 105.0  # Wide range to allow for various market conditions
 

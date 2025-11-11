@@ -37,7 +37,7 @@ Example:
 from datetime import date, timedelta
 from typing import Optional, Any, List, Dict
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from Signals.Base.BaseSignal import BaseSignal
 
@@ -104,7 +104,7 @@ class MomentumSignal(BaseSignal):
 
     def _calculate_raw_signal(
         self,
-        inst_data: pd.DataFrame,
+        inst_data: pl.DataFrame,
         market_data: Optional[Any],
         as_of: date,
     ) -> float:
@@ -112,7 +112,7 @@ class MomentumSignal(BaseSignal):
         Calculate raw momentum signal for a single instrument.
 
         Args:
-            inst_data: Price history DataFrame with 'date' and 'price' columns
+            inst_data: Price history polars DataFrame with 'date' and 'price' columns
             market_data: Market data (unused for momentum)
             as_of: Calculation date
 
@@ -137,33 +137,35 @@ class MomentumSignal(BaseSignal):
         # Ensure we have date column
         if 'date' not in inst_data.columns:
             # Assume index is dates if no date column
-            inst_data = inst_data.copy()
-            inst_data['date'] = inst_data.index
+            inst_data = inst_data.clone()
+            inst_data = inst_data.with_row_index('date')
 
         # Convert date column to datetime if needed
-        if not pd.api.types.is_datetime64_any_dtype(inst_data['date']):
-            inst_data = inst_data.copy()
-            inst_data['date'] = pd.to_datetime(inst_data['date'])
+        if inst_data['date'].dtype != pl.Date and inst_data['date'].dtype != pl.Datetime:
+            inst_data = inst_data.clone()
+            inst_data = inst_data.with_columns(
+                pl.col('date').str.strptime(pl.Date, '%Y-%m-%d').cast(pl.Datetime)
+            )
 
         # Sort by date
-        inst_data = inst_data.sort_values('date')
+        inst_data = inst_data.sort('date')
 
         # Get current price
-        current_price = inst_data['price'].iloc[-1]
+        current_price = inst_data['price'][-1]
 
         # Calculate lookback date (convert as_of to datetime for comparison)
-        lookback_date = pd.Timestamp(as_of) - timedelta(days=self.lookback_days)
+        lookback_date = as_of - timedelta(days=self.lookback_days)
 
         # Find price at lookback date (or closest available)
-        hist_data = inst_data[inst_data['date'] <= lookback_date]
+        hist_data = inst_data.filter(pl.col('date') <= lookback_date)
 
         if len(hist_data) == 0:
             # Not enough history - use earliest available
             if len(inst_data) < 2:
                 return 0.0
-            lookback_price = inst_data['price'].iloc[0]
+            lookback_price = inst_data['price'][0]
         else:
-            lookback_price = hist_data['price'].iloc[-1]
+            lookback_price = hist_data['price'][-1]
 
         # Calculate momentum
         if lookback_price <= 0:
@@ -177,8 +179,8 @@ class MomentumSignal(BaseSignal):
         # Annualize if requested
         if self.annualize:
             # Calculate actual days used
-            end_date = inst_data['date'].iloc[-1]
-            start_date = hist_data['date'].iloc[-1] if len(hist_data) > 0 else inst_data['date'].iloc[0]
+            end_date = inst_data['date'][-1]
+            start_date = hist_data['date'][-1] if len(hist_data) > 0 else inst_data['date'][0]
             actual_days = (end_date - start_date).days
             if actual_days > 0:
                 momentum = momentum * (self.business_days_per_year / actual_days)

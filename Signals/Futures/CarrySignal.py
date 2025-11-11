@@ -27,7 +27,7 @@ Futures-Swap Basis:
 from datetime import date
 from typing import Optional, Any
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from Signals.Base.BaseSignal import BaseSignal
 
@@ -72,7 +72,7 @@ class CarrySignal(BaseSignal):
 
     def _calculate_raw_signal(
         self,
-        inst_data: pd.DataFrame,
+        inst_data: pl.DataFrame,
         market_data: Optional[Any],
         as_of: date,
     ) -> float:
@@ -93,14 +93,20 @@ class CarrySignal(BaseSignal):
         """
         # Extract required fields
         try:
-            front_price = inst_data.iloc[0]["price"]
-            next_price = inst_data.iloc[0].get("next_price", np.nan)
-            roll_date = inst_data.iloc[0].get("roll_date", None)
+            row_0 = inst_data.row(0, named=True)
+            front_price = row_0["price"]
+            next_price = row_0.get("next_price", np.nan)
+            roll_date = row_0.get("roll_date", None)
         except (KeyError, IndexError):
             return np.nan
 
         # Check for missing data
-        if pd.isna(next_price) or roll_date is None:
+        try:
+            is_na_next_price = np.isnan(next_price)
+        except (TypeError, ValueError):
+            is_na_next_price = next_price is None
+
+        if is_na_next_price or roll_date is None:
             return np.nan
 
         # Calculate calendar spread (front - back)
@@ -140,7 +146,7 @@ class CarrySignal(BaseSignal):
 
         # Apply basis adjustment if requested
         if self.include_basis:
-            convexity_adj = inst_data.iloc[0].get("convexity_adjustment", 0.0)
+            convexity_adj = row_0.get("convexity_adjustment", 0.0)
             carry_bps_per_year += convexity_adj
 
         return carry_bps_per_year

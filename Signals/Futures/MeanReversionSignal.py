@@ -38,7 +38,7 @@ Example:
 from datetime import date, timedelta
 from typing import Optional, Any, List, Dict
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from Signals.Base.BaseSignal import BaseSignal
 
@@ -102,7 +102,7 @@ class MeanReversionSignal(BaseSignal):
 
     def _calculate_raw_signal(
         self,
-        inst_data: pd.DataFrame,
+        inst_data: pl.DataFrame,
         market_data: Optional[Any],
         as_of: date,
     ) -> float:
@@ -110,7 +110,7 @@ class MeanReversionSignal(BaseSignal):
         Calculate raw mean reversion signal for a single instrument.
 
         Args:
-            inst_data: Price history DataFrame with 'date' and 'price' columns
+            inst_data: Price history Polars DataFrame with 'date' and 'price' columns
             market_data: Market data (unused for mean reversion)
             as_of: Calculation date
 
@@ -137,26 +137,27 @@ class MeanReversionSignal(BaseSignal):
 
         # Ensure we have date column
         if 'date' not in inst_data.columns:
-            # Assume index is dates if no date column
-            inst_data = inst_data.copy()
-            inst_data['date'] = inst_data.index
+            # Polars: handle index differently, assume we need to add date
+            return 0.0
 
         # Convert date column to datetime if needed
-        if not pd.api.types.is_datetime64_any_dtype(inst_data['date']):
-            inst_data = inst_data.copy()
-            inst_data['date'] = pd.to_datetime(inst_data['date'])
+        date_dtype = inst_data['date'].dtype
+        if date_dtype not in [pl.Date, pl.Datetime, pl.Datetime('us'), pl.Datetime('ms')]:
+            inst_data = inst_data.with_columns(
+                pl.col('date').str.strptime(pl.Datetime, '%Y-%m-%d')
+            )
 
         # Sort by date
-        inst_data = inst_data.sort_values('date')
+        inst_data = inst_data.sort('date')
 
         # Get current price
-        current_price = inst_data['price'].iloc[-1]
+        current_price = inst_data['price'].to_list()[-1]
 
         # Calculate lookback date
-        lookback_date = pd.Timestamp(as_of) - timedelta(days=self.lookback_days)
+        lookback_date = as_of - timedelta(days=self.lookback_days)
 
         # Filter to lookback window (include current date for getting current price)
-        window_data = inst_data[inst_data['date'] >= lookback_date]
+        window_data = inst_data.filter(pl.col('date') >= lookback_date)
 
         if len(window_data) < 2:
             # Not enough history
@@ -164,7 +165,7 @@ class MeanReversionSignal(BaseSignal):
 
         # Calculate mean and std from PAST prices (exclude current price)
         # This is critical for mean reversion: compare current to historical mean
-        past_prices = window_data['price'].values[:-1]  # Exclude last (current) price
+        past_prices = window_data['price'].to_numpy()[:-1]  # Exclude last (current) price
 
         if len(past_prices) < 1:
             # Need at least one historical price
