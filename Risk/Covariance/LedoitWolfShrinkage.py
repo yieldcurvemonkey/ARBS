@@ -29,7 +29,7 @@ From 2025 research: Most widely used shrinkage method in practice.
 """
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from typing import Optional
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
@@ -69,7 +69,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         self.target_matrix: Optional[np.ndarray] = None
         self.sample_cov: Optional[np.ndarray] = None
 
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate Ledoit-Wolf shrinkage covariance matrix.
 
@@ -89,7 +89,9 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         T, N = returns_clean.shape
 
         # Calculate sample covariance
-        self.sample_cov = returns_clean.cov().to_numpy()
+        # For polars DataFrames, convert to numpy and use numpy.cov
+        returns_np = returns_clean.to_numpy()
+        self.sample_cov = np.cov(returns_np.T)
 
         # Calculate shrinkage target
         self.target_matrix = self._compute_target(returns_clean)
@@ -107,7 +109,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
 
         return self.cov_matrix_
 
-    def _compute_target(self, returns: pd.DataFrame) -> np.ndarray:
+    def _compute_target(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Compute shrinkage target matrix F.
 
@@ -135,7 +137,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         else:
             raise ValueError(f"Unknown target type: {self.target_type}")
 
-    def _constant_correlation_target(self, returns: pd.DataFrame) -> np.ndarray:
+    def _constant_correlation_target(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Compute constant correlation target.
 

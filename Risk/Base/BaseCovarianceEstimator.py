@@ -113,22 +113,26 @@ class BaseCovarianceEstimator(ABC):
         cov = self.get_covariance()
         return np.linalg.cond(cov)
 
-    def _handle_missing_data(self, returns: pl.DataFrame) -> pl.DataFrame:
+    def _handle_missing_data(self, returns) -> pl.DataFrame:
         """
         Handle missing data according to strategy.
 
         Args:
-            returns: DataFrame with possible NaN values
+            returns: DataFrame with possible NaN values (polars or pandas)
 
         Returns:
-            DataFrame with NaN handled
+            DataFrame with NaN handled (polars)
         """
+        # Convert pandas to polars if needed
+        import pandas as pd
+        if isinstance(returns, pd.DataFrame):
+            returns = pl.from_pandas(returns)
+
         if self.handle_missing == 'drop':
             # Drop rows with any NaN
             return returns.drop_nulls()
         elif self.handle_missing == 'pairwise':
             # Keep all data, use pairwise complete observations
-            # (polars .cov() does this by default)
             return returns
         else:
             raise ValueError(f"Unknown handle_missing: {self.handle_missing}")
