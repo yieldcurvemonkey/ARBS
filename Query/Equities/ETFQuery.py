@@ -8,7 +8,7 @@ from Query.Base.BaseQuery import BaseQuery
 from Query.Equities.EquityValue import EquityValue
 
 
-@dataclass
+@dataclass(frozen=True)
 class ETFQuery(BaseQuery):
     """
     Query for sector ETF data from Yahoo Finance.
@@ -32,9 +32,9 @@ class ETFQuery(BaseQuery):
         ... )
     """
 
-    ticker: str
-    sector: str
-    value: EquityValue
+    ticker: str = ""
+    sector: str = ""
+    value: EquityValue = EquityValue.PRICE
     lookback_days: int = 252
     weight: float = 1.0
     metadata: Dict = field(default_factory=dict)
@@ -85,3 +85,16 @@ class ETFQuery(BaseQuery):
     def __post_init__(self):
         """Validate after initialization."""
         self.validate()
+
+    # Abstract method implementations from BaseQuery
+    def return_query(self):
+        """Return list of queries."""
+        return [self]
+
+    def col_name(self, cube_name=None):
+        """Human-friendly column name."""
+        return f"{self.ticker}"
+
+    def eval_expression(self, cube_name=None):
+        """Return evaluable expression string."""
+        return f"ETFQuery({self.ticker}, {self.sector})"
