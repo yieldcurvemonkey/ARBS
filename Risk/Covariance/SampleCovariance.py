@@ -21,7 +21,7 @@ Use as baseline for comparison with shrinkage methods.
 """
 
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
 
@@ -45,7 +45,7 @@ class SampleCovariance(BaseCovarianceEstimator):
         """
         super().__init__(handle_missing=handle_missing)
 
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate sample covariance matrix.
 
@@ -63,10 +63,10 @@ class SampleCovariance(BaseCovarianceEstimator):
         # Store asset names
         self.asset_names_ = list(returns_clean.columns)
 
-        # Convert back to pandas for covariance calculation
-        # pandas .cov() uses ddof=1 (unbiased estimator)
-        returns_pd = returns_clean.to_pandas()
-        self.cov_matrix_ = returns_pd.cov().to_numpy()
+        # Calculate covariance matrix using numpy
+        # np.cov with ddof=1 (unbiased estimator, same as pandas default)
+        returns_array = returns_clean.to_numpy()
+        self.cov_matrix_ = np.cov(returns_array, rowvar=False, ddof=1)
 
         return self.cov_matrix_
 
