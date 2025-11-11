@@ -28,7 +28,7 @@ From Ledoit & Wolf (2003, 2004): "Improved Estimation of the Covariance Matrix"
 """
 
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
 
@@ -53,7 +53,7 @@ class ConstantCorrelationCovariance(BaseCovarianceEstimator):
         super().__init__(handle_missing=handle_missing)
         self.mean_correlation_: float = None
 
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate constant correlation covariance matrix.
 
@@ -78,7 +78,16 @@ class ConstantCorrelationCovariance(BaseCovarianceEstimator):
         self.asset_names_ = list(returns_clean.columns)
 
         # Get sample covariance and correlation
-        sample_cov = returns_clean.cov().values
+        # Convert to numpy for covariance calculation (polars lacks .cov() method)
+        returns_array = returns_clean.to_numpy()
+        sample_cov = np.cov(returns_array.T)
+
+        # Ensure 2D array (np.cov returns scalar for single asset)
+        if sample_cov.ndim == 0:
+            sample_cov = np.array([[sample_cov]])
+        elif sample_cov.ndim == 1:
+            sample_cov = np.array([sample_cov])
+
         sample_std = np.sqrt(np.diag(sample_cov))
 
         # Handle single asset case
