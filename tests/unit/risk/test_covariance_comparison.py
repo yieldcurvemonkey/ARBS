@@ -17,7 +17,7 @@ Business Requirements:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from io import StringIO
 import sys
 
@@ -36,7 +36,7 @@ class TestCompareEstimatorsBasic:
     def test_compare_two_estimators(self):
         """Should compare Sample and Ledoit-Wolf estimators."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -52,7 +52,7 @@ class TestCompareEstimatorsBasic:
     def test_compare_single_estimator(self):
         """Should work with single estimator (edge case)."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -65,7 +65,7 @@ class TestCompareEstimatorsBasic:
     def test_compare_three_estimators(self):
         """Should handle more than two estimators."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 8))
+        returns = pl.DataFrame(np.random.randn(100, 8))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -85,7 +85,7 @@ class TestCompareEstimatorsMetrics:
     def test_includes_all_required_metrics(self):
         """Should include condition number, frobenius norm, portfolio variance, and fit time."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -101,7 +101,7 @@ class TestCompareEstimatorsMetrics:
     def test_includes_eigenvalue_metrics(self):
         """Should include min/max eigenvalues and determinant."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -115,7 +115,7 @@ class TestCompareEstimatorsMetrics:
     def test_condition_number_is_valid(self):
         """Condition number should be positive and finite."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -131,7 +131,7 @@ class TestCompareEstimatorsMetrics:
     def test_frobenius_norm_is_positive(self):
         """Frobenius norm should be positive."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -142,7 +142,7 @@ class TestCompareEstimatorsMetrics:
     def test_portfolio_variance_is_positive(self):
         """Portfolio variance should be positive."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -153,7 +153,7 @@ class TestCompareEstimatorsMetrics:
     def test_fit_time_is_reasonable(self):
         """Fit time should be positive and less than 1 second for typical case."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -169,7 +169,7 @@ class TestCompareEstimatorsMetrics:
     def test_min_eigenvalue_nonnegative_for_sample(self):
         """Min eigenvalue should be non-negative (positive semidefinite)."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -181,7 +181,7 @@ class TestCompareEstimatorsMetrics:
     def test_min_eigenvalue_positive_for_ledoit_wolf(self):
         """Min eigenvalue should be strictly positive for Ledoit-Wolf."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Ledoit-Wolf': LedoitWolfShrinkage()}
 
@@ -192,7 +192,7 @@ class TestCompareEstimatorsMetrics:
     def test_max_eigenvalue_greater_than_min(self):
         """Max eigenvalue should be greater than min eigenvalue."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -208,7 +208,7 @@ class TestCompareEstimatorsShrinkageIntensity:
     def test_captures_shrinkage_intensity_for_ledoit_wolf(self):
         """Should capture shrinkage intensity for Ledoit-Wolf."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Ledoit-Wolf': LedoitWolfShrinkage()}
 
@@ -221,7 +221,7 @@ class TestCompareEstimatorsShrinkageIntensity:
     def test_no_shrinkage_intensity_for_sample_covariance(self):
         """Sample covariance should not have shrinkage intensity."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -235,10 +235,10 @@ class TestCompareEstimatorsShrinkageIntensity:
         np.random.seed(42)
 
         # Well-conditioned data (T >> N)
-        returns_well = pd.DataFrame(np.random.randn(200, 10))
+        returns_well = pl.DataFrame(np.random.randn(200, 10))
 
         # Ill-conditioned data (T ≈ N)
-        returns_ill = pd.DataFrame(np.random.randn(30, 25))
+        returns_ill = pl.DataFrame(np.random.randn(30, 25))
 
         estimators_well = {'LW': LedoitWolfShrinkage()}
         estimators_ill = {'LW': LedoitWolfShrinkage()}
@@ -257,7 +257,7 @@ class TestCompareEstimatorsCustomWeights:
     def test_uses_equal_weights_by_default(self):
         """Should use equal weights when none provided."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -273,7 +273,7 @@ class TestCompareEstimatorsCustomWeights:
     def test_uses_custom_weights(self):
         """Should use custom weights when provided."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         # Custom weights (concentrated in first asset)
         custom_weights = np.array([0.6, 0.2, 0.1, 0.05, 0.05])
@@ -291,7 +291,7 @@ class TestCompareEstimatorsCustomWeights:
     def test_custom_weights_differ_from_equal_weights(self):
         """Custom weights should give different portfolio variance than equal weights."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         # Very unequal weights
         custom_weights = np.array([0.8, 0.1, 0.05, 0.03, 0.02])
@@ -315,7 +315,7 @@ class TestCompareEstimatorsComparison:
         """Ledoit-Wolf should have better condition number than Sample when T ≈ N."""
         np.random.seed(42)
         # Ill-conditioned: T ≈ N
-        returns = pd.DataFrame(np.random.randn(30, 25))
+        returns = pl.DataFrame(np.random.randn(30, 25))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -330,7 +330,7 @@ class TestCompareEstimatorsComparison:
     def test_ledoit_wolf_has_higher_min_eigenvalue(self):
         """Ledoit-Wolf should have higher min eigenvalue (more stable)."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(50, 20))
+        returns = pl.DataFrame(np.random.randn(50, 20))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -346,7 +346,7 @@ class TestCompareEstimatorsComparison:
         """Comparison should clearly show stability improvement from shrinkage."""
         np.random.seed(42)
         # Challenging case: T slightly > N
-        returns = pd.DataFrame(np.random.randn(60, 50))
+        returns = pl.DataFrame(np.random.randn(60, 50))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -370,7 +370,7 @@ class TestPrintComparison:
     def test_print_comparison_produces_output(self):
         """Should print formatted table to stdout."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -397,7 +397,7 @@ class TestPrintComparison:
     def test_print_comparison_shows_shrinkage_intensity(self):
         """Should show shrinkage intensity for Ledoit-Wolf."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Ledoit-Wolf': LedoitWolfShrinkage()}
 
@@ -418,7 +418,7 @@ class TestPrintComparison:
     def test_print_comparison_handles_single_estimator(self):
         """Should print table with single estimator."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -439,7 +439,7 @@ class TestPrintComparison:
     def test_print_comparison_handles_no_shrinkage_intensity(self):
         """Should not show shrinkage intensity for Sample covariance."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -478,8 +478,8 @@ class TestOutOfSampleComparison:
     def test_out_of_sample_comparison_basic(self):
         """Should compute out-of-sample metrics."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 10))
-        returns_out = pd.DataFrame(np.random.randn(50, 10))
+        returns_in = pl.DataFrame(np.random.randn(50, 10))
+        returns_out = pl.DataFrame(np.random.randn(50, 10))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -495,8 +495,8 @@ class TestOutOfSampleComparison:
     def test_out_of_sample_includes_all_metrics(self):
         """Should include predicted variance, actual variance, and errors."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 10))
-        returns_out = pd.DataFrame(np.random.randn(50, 10))
+        returns_in = pl.DataFrame(np.random.randn(50, 10))
+        returns_out = pl.DataFrame(np.random.randn(50, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -511,8 +511,8 @@ class TestOutOfSampleComparison:
     def test_actual_variance_is_same_for_all_estimators(self):
         """Actual variance should be same for all estimators (it's the ground truth)."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 10))
-        returns_out = pd.DataFrame(np.random.randn(50, 10))
+        returns_in = pl.DataFrame(np.random.randn(50, 10))
+        returns_out = pl.DataFrame(np.random.randn(50, 10))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -530,8 +530,8 @@ class TestOutOfSampleComparison:
     def test_prediction_error_is_absolute_difference(self):
         """Prediction error should be |predicted - actual|."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 10))
-        returns_out = pd.DataFrame(np.random.randn(50, 10))
+        returns_in = pl.DataFrame(np.random.randn(50, 10))
+        returns_out = pl.DataFrame(np.random.randn(50, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -545,8 +545,8 @@ class TestOutOfSampleComparison:
     def test_relative_error_is_normalized(self):
         """Relative error should be prediction_error / actual_variance."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 10))
-        returns_out = pd.DataFrame(np.random.randn(50, 10))
+        returns_in = pl.DataFrame(np.random.randn(50, 10))
+        returns_out = pl.DataFrame(np.random.randn(50, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -560,8 +560,8 @@ class TestOutOfSampleComparison:
     def test_out_of_sample_uses_equal_weights_by_default(self):
         """Should use equal weights when none provided."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 5))
-        returns_out = pd.DataFrame(np.random.randn(50, 5))
+        returns_in = pl.DataFrame(np.random.randn(50, 5))
+        returns_out = pl.DataFrame(np.random.randn(50, 5))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -577,8 +577,8 @@ class TestOutOfSampleComparison:
     def test_out_of_sample_uses_custom_weights(self):
         """Should use custom weights when provided."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 5))
-        returns_out = pd.DataFrame(np.random.randn(50, 5))
+        returns_in = pl.DataFrame(np.random.randn(50, 5))
+        returns_out = pl.DataFrame(np.random.randn(50, 5))
 
         # Custom weights
         custom_weights = np.array([0.5, 0.25, 0.15, 0.07, 0.03])
@@ -596,8 +596,8 @@ class TestOutOfSampleComparison:
     def test_out_of_sample_single_estimator(self):
         """Should work with single estimator (edge case)."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 10))
-        returns_out = pd.DataFrame(np.random.randn(50, 10))
+        returns_in = pl.DataFrame(np.random.randn(50, 10))
+        returns_out = pl.DataFrame(np.random.randn(50, 10))
 
         estimators = {'Ledoit-Wolf': LedoitWolfShrinkage()}
 
@@ -621,8 +621,8 @@ class TestOutOfSampleComparativePerformance:
         for i in range(n_trials):
             # Generate fresh data each trial
             np.random.seed(42 + i)
-            returns_in = pd.DataFrame(np.random.randn(50, 20))
-            returns_out = pd.DataFrame(np.random.randn(50, 20))
+            returns_in = pl.DataFrame(np.random.randn(50, 20))
+            returns_out = pl.DataFrame(np.random.randn(50, 20))
 
             estimators = {
                 'Sample': SampleCovariance(),
@@ -642,8 +642,8 @@ class TestOutOfSampleComparativePerformance:
         """Ledoit-Wolf should reduce overfitting in ill-conditioned case."""
         np.random.seed(42)
         # Ill-conditioned: T ≈ N
-        returns_in = pd.DataFrame(np.random.randn(40, 35))
-        returns_out = pd.DataFrame(np.random.randn(40, 35))
+        returns_in = pl.DataFrame(np.random.randn(40, 35))
+        returns_out = pl.DataFrame(np.random.randn(40, 35))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -663,11 +663,12 @@ class TestOutOfSampleEdgeCases:
     def test_handles_zero_variance_portfolio(self):
         """Should handle case where out-of-sample variance is near zero."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 5))
+        returns_in = pl.DataFrame(np.random.randn(50, 5))
 
-        # Out-of-sample: nearly constant returns
-        returns_out = pd.DataFrame(np.ones((50, 5)) * 0.001)
-        returns_out.iloc[0, :] = 0.002  # Tiny variation
+        # Out-of-sample: nearly constant returns with tiny variation
+        returns_data = np.ones((50, 5)) * 0.001
+        returns_data[0, :] = 0.002
+        returns_out = pl.DataFrame(returns_data)
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -683,8 +684,8 @@ class TestOutOfSampleEdgeCases:
     def test_predicted_variance_is_positive(self):
         """Predicted variance should always be positive."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 10))
-        returns_out = pd.DataFrame(np.random.randn(50, 10))
+        returns_in = pl.DataFrame(np.random.randn(50, 10))
+        returns_out = pl.DataFrame(np.random.randn(50, 10))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -699,8 +700,8 @@ class TestOutOfSampleEdgeCases:
     def test_actual_variance_is_positive(self):
         """Actual variance should be positive (or very close to zero)."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 10))
-        returns_out = pd.DataFrame(np.random.randn(50, 10))
+        returns_in = pl.DataFrame(np.random.randn(50, 10))
+        returns_out = pl.DataFrame(np.random.randn(50, 10))
 
         estimators = {'Sample': SampleCovariance()}
 
@@ -715,7 +716,7 @@ class TestIntegrationWithExistingTests:
     def test_comparison_consistent_with_individual_estimator_tests(self):
         """Metrics from compare_estimators should match individual estimator behavior."""
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         # Compare using compare_estimators
         estimators = {'Ledoit-Wolf': LedoitWolfShrinkage()}
@@ -734,8 +735,8 @@ class TestIntegrationWithExistingTests:
     def test_out_of_sample_consistent_with_manual_calculation(self):
         """Out-of-sample metrics should match manual calculation."""
         np.random.seed(42)
-        returns_in = pd.DataFrame(np.random.randn(50, 10))
-        returns_out = pd.DataFrame(np.random.randn(50, 10))
+        returns_in = pl.DataFrame(np.random.randn(50, 10))
+        returns_out = pl.DataFrame(np.random.randn(50, 10))
 
         # Use comparison function
         estimators = {'Sample': SampleCovariance()}
