@@ -2,7 +2,7 @@
 # ABOUTME: Defines the interface for individual components that can be combined into composite signals
 from abc import ABC, abstractmethod
 from typing import Any, Dict
-import pandas as pd
+import polars as pl
 
 
 class SignalComponent(ABC):
@@ -30,7 +30,7 @@ class SignalComponent(ABC):
         self.metadata = metadata if metadata is not None else {}
 
     @abstractmethod
-    def calculate(self, data: pd.DataFrame) -> pd.DataFrame:
+    def calculate(self, data: pl.DataFrame) -> pl.DataFrame:
         """
         Calculate component signal values.
 

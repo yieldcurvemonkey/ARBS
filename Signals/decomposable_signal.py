@@ -3,7 +3,7 @@
 
 from abc import ABC, abstractmethod
 from typing import Dict
-import pandas as pd
+import polars as pl
 
 
 class DecomposableSignal(ABC):
@@ -39,7 +39,7 @@ class DecomposableSignal(ABC):
         return {name: 1.0 / n_components for name in components.keys()}
 
     @abstractmethod
-    def get_components(self) -> Dict[str, pd.DataFrame]:
+    def get_components(self) -> Dict[str, pl.DataFrame]:
         """
         Get the individual signal components.
 
@@ -52,7 +52,7 @@ class DecomposableSignal(ABC):
         """
         raise NotImplementedError("Subclasses must implement get_components()")
 
-    def get_composite_signal(self) -> pd.DataFrame:
+    def get_composite_signal(self) -> pl.DataFrame:
         """
         Compute the composite signal as a weighted sum of components.
 
@@ -68,11 +68,7 @@ class DecomposableSignal(ABC):
 
         # Initialize composite signal with zeros matching the shape of first component
         first_component = next(iter(components.values()))
-        composite = pd.DataFrame(
-            0.0,
-            index=first_component.index,
-            columns=first_component.columns
-        )
+        composite = first_component * 0.0
 
         # Add weighted components
         for component_name, component_df in components.items():
