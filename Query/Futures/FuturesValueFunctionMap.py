@@ -55,8 +55,6 @@ class FuturesValueFunctionMap(BaseValueFunctionMap[FuturesValue, float]):
             FuturesValue.IMPLIED_RATE: self._implied_rate,
             FuturesValue.NPV: self._npv,
             FuturesValue.DV01: self._dv01,
-            # FuturesValue.CARRY: self._carry,  # TODO: Phase 3.4
-            # FuturesValue.MARGIN: self._margin,  # TODO: Phase 3.4
         }
 
     def _get_contract_price(self, fut: MockFuture, curve: Any) -> float:

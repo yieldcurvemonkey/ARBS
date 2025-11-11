@@ -31,15 +31,14 @@ from Query.Futures.FuturesQuery import (
 
 
 # =============================================================================
-# Mock Futures Object (temporary for Phase 3.2)
+# Futures Contract Representation
 # =============================================================================
-# TODO: Replace with actual STIRFuture from curve.build_stirf()
 
 @dataclass
 class MockFuture:
     """
-    Temporary mock futures object for testing.
-    Will be replaced with actual STIRFuture from pricing backend.
+    Futures contract with metadata for pricing and risk calculations.
+    Contains contract specifications needed by value calculators.
     """
     contract: str
     expiry: date
@@ -81,7 +80,6 @@ class FuturesStructureFunctionMap(BaseStructureFunctionMap[FuturesStructure, Moc
             FuturesStructure.CALENDAR: partial(self._build_calendar),
             FuturesStructure.PACK: partial(self._build_pack),
             FuturesStructure.BUNDLE: partial(self._build_bundle),
-            # FuturesStructure.BASIS: partial(self._build_basis),  # TODO: Phase 3.3
         }
 
     def _build_single_contract(
@@ -260,6 +258,3 @@ class FuturesStructureFunctionMap(BaseStructureFunctionMap[FuturesStructure, Moc
         adjusted_rw = [sign * rw for rw in risk_weights]
 
         return (futures, adjusted_rw)
-
-    # TODO: Implement _build_basis() for Phase 3.3
-    # This requires building both futures and a matched-maturity swap

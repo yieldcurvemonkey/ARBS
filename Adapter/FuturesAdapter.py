@@ -130,8 +130,6 @@ class FuturesAdapter(BaseAdapter):
                 if row is not None:
                     rows.append(row)
 
-            # TODO: Handle PACK, BUNDLE, BASIS in later phases
-
         if len(rows) == 0:
             return pd.DataFrame(columns=[
                 'contract', 'price', 'next_contract', 'next_price',
