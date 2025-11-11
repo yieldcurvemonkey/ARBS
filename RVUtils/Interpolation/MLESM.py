@@ -1,3 +1,5 @@
+# ABOUTME: Maximum likelihood estimation for exponential smoothing models
+# ABOUTME: Statistical curve fitting with MLE parameter optimization
 # reference:
 # https://publications.gc.ca/site/archivee-archived.html?url=https://publications.gc.ca/collections/collection_2014/banque-bank-canada/FB3-2-102-29-eng.pdf
 

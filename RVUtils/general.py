@@ -1,3 +1,5 @@
+# ABOUTME: General utility functions for relative value analysis
+# ABOUTME: Common helpers and calculations used across RV strategies
 import pandas as pd
 
 import gs_quant.timeseries.econometrics as gsqtse

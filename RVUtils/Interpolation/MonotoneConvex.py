@@ -1,3 +1,5 @@
+# ABOUTME: Monotone convex interpolation method for yield curves
+# ABOUTME: Preserves monotonicity and convexity properties in interpolation
 #!/usr/bin/env python3
 
 # SPIA - Income annuity (SPIA and DIA) price calculator

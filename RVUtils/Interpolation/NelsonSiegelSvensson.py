@@ -1,3 +1,5 @@
+# ABOUTME: Nelson-Siegel-Svensson parametric curve interpolation
+# ABOUTME: Six-parameter extension of Nelson-Siegel with additional flexibility
 # stolen from https://github.com/luphord/nelson_siegel_svensson/blob/master/nelson_siegel_svensson/nss.py
 # -*- coding: utf-8 -*-
 

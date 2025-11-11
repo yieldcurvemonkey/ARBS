@@ -1,3 +1,5 @@
+# ABOUTME: Arbitrage hedge ratio calculations
+# ABOUTME: Computes optimal hedge ratios for relative value trades
 # https://github.com/hudson-and-thames/arbitragelab/blob/32ccd567e8541965a35293a67944945f6d377f65/arbitragelab/hedge_ratios/linear.py#L13
 
 """

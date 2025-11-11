@@ -1,3 +1,5 @@
+# ABOUTME: Diebold-Li parametric curve interpolation method  
+# ABOUTME: Three-factor dynamic Nelson-Siegel term structure model
 import numpy as np
 
 

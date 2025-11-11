@@ -1,3 +1,5 @@
+# ABOUTME: Regression analysis tools for relative value
+# ABOUTME: Statistical regression methods for spread relationships and cointegration
 import datetime
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional, Sequence, Union

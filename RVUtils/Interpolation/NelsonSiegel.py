@@ -1,3 +1,5 @@
+# ABOUTME: Nelson-Siegel parametric curve interpolation method
+# ABOUTME: Three-parameter parsimonious model for yield curve shapes
 # stolen from https://github.com/luphord/nelson_siegel_svensson/blob/master/nelson_siegel_svensson/ns.py
 # -*- coding: utf-8 -*-
 

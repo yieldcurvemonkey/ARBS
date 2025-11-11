@@ -1,3 +1,5 @@
+# ABOUTME: Bjork-Christensen parametric curve interpolation method
+# ABOUTME: Four-parameter term structure model for yield curve fitting
 from dataclasses import dataclass
 from typing import Union, Tuple, Any
 import numpy as np

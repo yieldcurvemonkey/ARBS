@@ -1,3 +1,5 @@
+# ABOUTME: Mean reversion analysis tools and calculations
+# ABOUTME: Half-life estimation and mean reversion statistics for pairs trading
 from datetime import timedelta
 from typing import Optional
 

@@ -1,3 +1,5 @@
+# ABOUTME: Time series plotting utilities
+# ABOUTME: Matplotlib helpers for visualizing price series and spreads
 import datetime
 import numpy as np
 import pandas as pd
