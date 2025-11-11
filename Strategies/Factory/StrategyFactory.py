@@ -18,9 +18,9 @@ from pathlib import Path
 
 from Strategies.Config.StrategyConfig import StrategyConfig
 from Strategies.Factory.SignalFactory import SignalFactory
+from Strategies.Factory.AlphaFactory import AlphaFactory
+from Strategies.Factory.CovarianceFactory import CovarianceFactory
 from Signals.AlphaGenerator import AlphaGenerator
-from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
-from Risk.Covariance.SampleCovariance import SampleCovariance
 from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 from Asset.GrinoldKahnPortfolio import GrinoldKahnPortfolio
 
@@ -126,43 +126,21 @@ class StrategyFactory:
         """
         Create AlphaGenerator from configuration.
 
+        Uses AlphaFactory for extensible IC method selection.
+
         Args:
             config: StrategyConfig instance
 
         Returns:
             AlphaGenerator instance
         """
-        # Determine if dynamic IC is needed
-        if config.alpha.method == 'static':
-            alpha_gen = AlphaGenerator(IC=config.alpha.IC)
-        elif config.alpha.method == 'rolling':
-            alpha_gen = AlphaGenerator(
-                IC=config.alpha.IC,
-                dynamic_ic=True,
-                ic_method='rolling',
-                ic_lookback=config.alpha.ic_lookback
-            )
-        elif config.alpha.method == 'ewma':
-            alpha_gen = AlphaGenerator(
-                IC=config.alpha.IC,
-                dynamic_ic=True,
-                ic_method='ewma',
-                ic_halflife=config.alpha.ic_halflife
-            )
-        elif config.alpha.method == 'regime':
-            alpha_gen = AlphaGenerator(
-                IC=config.alpha.IC,
-                dynamic_ic=True,
-                ic_method='regime'
-            )
-        else:
-            raise ValueError(f"Unknown IC method: {config.alpha.method}")
-
-        return alpha_gen
+        return AlphaFactory.create_alpha_generator(config)
 
     def _create_risk_model(self, config: StrategyConfig):
         """
         Create covariance estimator from configuration.
+
+        Uses CovarianceFactory for extensible covariance method selection.
 
         Args:
             config: StrategyConfig instance
@@ -170,15 +148,7 @@ class StrategyFactory:
         Returns:
             Covariance estimator instance
         """
-        if config.risk.covariance == 'ledoit_wolf':
-            return LedoitWolfShrinkage()
-        elif config.risk.covariance == 'sample':
-            return SampleCovariance()
-        elif config.risk.covariance == 'constant_correlation':
-            # Use Ledoit-Wolf with constant correlation target
-            return LedoitWolfShrinkage()
-        else:
-            raise ValueError(f"Unknown covariance method: {config.risk.covariance}")
+        return CovarianceFactory.create_covariance_estimator(config)
 
     def _create_optimizer(self, config: StrategyConfig) -> MeanVarianceOptimizer:
         """

@@ -31,9 +31,17 @@ class SignalConfig:
 
     def __post_init__(self):
         """Validate signal configuration."""
-        valid_types = ['carry', 'momentum', 'mean_reversion', 'custom']
+        # Import here to avoid circular dependencies
+        from Strategies.Factory.SignalFactory import SignalFactory
+
+        # Allow all registered signal types plus 'custom'
+        valid_types = SignalFactory.list_available_signals() + ['custom']
         if self.type not in valid_types:
-            raise ValueError(f"Invalid signal type '{self.type}'. Must be one of {valid_types}")
+            raise ValueError(
+                f"Invalid signal type '{self.type}'. "
+                f"Available types: {valid_types}. "
+                f"Use SignalFactory.register_signal() to add new types."
+            )
 
         if self.weight < 0:
             raise ValueError(f"Signal weight must be non-negative, got {self.weight}")
@@ -52,9 +60,16 @@ class AlphaConfig:
         if not 0 < self.IC < 1:
             raise ValueError(f"IC must be between 0 and 1, got {self.IC}")
 
-        valid_methods = ['static', 'rolling', 'ewma', 'regime']
+        # Import here to avoid circular dependencies
+        from Strategies.Factory.AlphaFactory import AlphaFactory
+
+        valid_methods = AlphaFactory.list_available_methods()
         if self.method not in valid_methods:
-            raise ValueError(f"Invalid IC method '{self.method}'. Must be one of {valid_methods}")
+            raise ValueError(
+                f"Invalid IC method '{self.method}'. "
+                f"Available methods: {valid_methods}. "
+                f"Use AlphaFactory.register_method() to add new methods."
+            )
 
 
 @dataclass
@@ -66,9 +81,16 @@ class RiskConfig:
 
     def __post_init__(self):
         """Validate risk configuration."""
-        valid_covariance = ['ledoit_wolf', 'sample', 'constant_correlation']
+        # Import here to avoid circular dependencies
+        from Strategies.Factory.CovarianceFactory import CovarianceFactory
+
+        valid_covariance = CovarianceFactory.list_available_methods()
         if self.covariance not in valid_covariance:
-            raise ValueError(f"Invalid covariance method '{self.covariance}'. Must be one of {valid_covariance}")
+            raise ValueError(
+                f"Invalid covariance method '{self.covariance}'. "
+                f"Available methods: {valid_covariance}. "
+                f"Use CovarianceFactory.register_covariance() to add new methods."
+            )
 
         if self.volatility_target is not None and self.volatility_target <= 0:
             raise ValueError(f"Volatility target must be positive, got {self.volatility_target}")
