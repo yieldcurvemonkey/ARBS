@@ -12,7 +12,7 @@ Validates:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date, timedelta
 from typing import Dict
 
@@ -62,7 +62,7 @@ class TestMomentumCalculation:
 
         # Create uptrending price history
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(10)]
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': [95.0 + i * 0.1 for i in range(10)]  # Uptrend
         })
@@ -83,7 +83,7 @@ class TestMomentumCalculation:
 
         # Create downtrending price history
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(10)]
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': [95.0 - i * 0.1 for i in range(10)]  # Downtrend
         })
@@ -104,7 +104,7 @@ class TestMomentumCalculation:
 
         # Create flat price history
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(10)]
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': [95.0] * 10  # Flat
         })
@@ -123,7 +123,7 @@ class TestMomentumCalculation:
         """Longer lookback captures larger price changes."""
         # Create price history with steady trend
         dates = [date(2024, 1, 1) + timedelta(days=i) for i in range(100)]
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': [95.0 + i * 0.01 for i in range(100)]  # Linear trend
         })
@@ -160,19 +160,19 @@ class TestMultiInstrumentMomentum:
             def get_price_history(self, instrument, start_date, end_date):
                 if instrument == 'SFRZ4':
                     # Uptrend
-                    dates = pd.date_range(start_date, end_date, freq='D')
-                    return pd.DataFrame({
+                    dates = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
+                    return pl.DataFrame({
                         'date': dates,
                         'price': [95.0 + i * 0.05 for i in range(len(dates))]
                     })
                 elif instrument == 'SFRH5':
                     # Downtrend
-                    dates = pd.date_range(start_date, end_date, freq='D')
-                    return pd.DataFrame({
+                    dates = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
+                    return pl.DataFrame({
                         'date': dates,
                         'price': [94.9 - i * 0.03 for i in range(len(dates))]
                     })
-                return pd.DataFrame()
+                return pl.DataFrame()
 
         mdp = MockMDP()
         instruments = ['SFRZ4', 'SFRH5']
@@ -196,7 +196,7 @@ class TestMultiInstrumentMomentum:
         # Create diverse momentum across instruments
         class MockMDP:
             def get_price_history(self, instrument, start_date, end_date):
-                dates = pd.date_range(start_date, end_date, freq='D')
+                dates = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
                 if instrument == 'A':
                     prices = [100.0 + i * 0.1 for i in range(len(dates))]  # Strong up
                 elif instrument == 'B':
@@ -208,7 +208,7 @@ class TestMultiInstrumentMomentum:
                 else:  # 'E'
                     prices = [100.0 - i * 0.1 for i in range(len(dates))]  # Strong down
 
-                return pd.DataFrame({'date': dates, 'price': prices})
+                return pl.DataFrame({'date': dates, 'price': prices})
 
         mdp = MockMDP()
         instruments = ['A', 'B', 'C', 'D', 'E']
@@ -232,7 +232,7 @@ class TestEdgeCases:
 
         # Only 5 days of history (less than lookback)
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(5)]
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': [95.0 + i * 0.1 for i in range(5)]
         })
@@ -252,7 +252,7 @@ class TestEdgeCases:
         signal = MomentumSignal(lookback_days=10, standardize=False)
 
         # Empty price history
-        price_history = pd.DataFrame({'date': [], 'price': []})
+        price_history = pl.DataFrame({'date': [], 'price': []})
 
         raw_momentum = signal._calculate_raw_signal(
             inst_data=price_history,
@@ -267,7 +267,7 @@ class TestEdgeCases:
         """Handle single price point."""
         signal = MomentumSignal(lookback_days=10, standardize=False)
 
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': [date(2024, 11, 1)],
             'price': [95.0]
         })
@@ -295,7 +295,7 @@ class TestMomentumMethods:
 
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(20)]
         # Price increases from 100 to 110 over 20 days
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': [100.0 + i * 0.5 for i in range(20)]  # Steady uptrend
         })
@@ -320,7 +320,7 @@ class TestMomentumMethods:
 
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(20)]
         # Price increases from 100 to 110 over 20 days
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': [100.0 + i * 0.5 for i in range(20)]  # Steady uptrend
         })
@@ -345,7 +345,7 @@ class TestMomentumIntegration:
         # Uptrend then downtrend
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(30)]
         prices = [95.0 + i * 0.1 for i in range(15)] + [96.5 - i * 0.1 for i in range(15)]
-        price_history = pd.DataFrame({'date': dates, 'price': prices})
+        price_history = pl.DataFrame({'date': dates, 'price': prices})
 
         # Momentum at day 10 (during uptrend)
         momentum_up = signal._calculate_raw_signal(
@@ -370,7 +370,7 @@ class TestMomentumIntegration:
         # Create clear momentum differences
         class MockMDP:
             def get_price_history(self, instrument, start_date, end_date):
-                dates = pd.date_range(start_date, end_date, freq='D')
+                dates = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
                 if instrument == 'STRONG_UP':
                     prices = [100.0 + i * 0.2 for i in range(len(dates))]
                 elif instrument == 'WEAK_UP':
@@ -379,7 +379,7 @@ class TestMomentumIntegration:
                     prices = [100.0 - i * 0.05 for i in range(len(dates))]
                 else:  # 'STRONG_DOWN'
                     prices = [100.0 - i * 0.2 for i in range(len(dates))]
-                return pd.DataFrame({'date': dates, 'price': prices})
+                return pl.DataFrame({'date': dates, 'price': prices})
 
         mdp = MockMDP()
         instruments = ['STRONG_UP', 'WEAK_UP', 'WEAK_DOWN', 'STRONG_DOWN']
