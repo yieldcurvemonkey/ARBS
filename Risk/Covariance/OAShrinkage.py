@@ -111,7 +111,7 @@ class OAShrinkage(BaseCovarianceEstimator):
         T, N = returns_clean.shape
 
         # 3. Convert to numpy
-        returns_array = returns_clean.values
+        returns_array = returns_clean.to_numpy()
 
         # 4. Call sklearn OAS
         self._estimator = OAS(store_precision=self.store_precision)

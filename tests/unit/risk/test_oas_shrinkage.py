@@ -13,7 +13,7 @@ Tests cover:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from Risk.Covariance.OAShrinkage import OAShrinkage, SKLEARN_AVAILABLE
 from Risk.risk_model_factory import RiskModelFactory
@@ -50,9 +50,9 @@ def simple_returns():
     """Well-conditioned returns (T=100, N=5)."""
     np.random.seed(42)
     T, N = 100, 5
-    returns = pd.DataFrame(
+    returns = pl.DataFrame(
         np.random.randn(T, N) * 0.01,
-        columns=[f"Asset_{i}" for i in range(N)]
+        schema=[f"Asset_{i}" for i in range(N)]
     )
     return returns
 
@@ -62,9 +62,9 @@ def small_sample_returns():
     """Ill-conditioned returns (T=30, N=25)."""
     np.random.seed(42)
     T, N = 30, 25
-    returns = pd.DataFrame(
+    returns = pl.DataFrame(
         np.random.randn(T, N) * 0.01,
-        columns=[f"Asset_{i}" for i in range(N)]
+        schema=[f"Asset_{i}" for i in range(N)]
     )
     return returns
 
@@ -167,7 +167,7 @@ class TestOASEdgeCases:
 
     def test_single_asset(self):
         """Test with single asset."""
-        returns = pd.DataFrame({'Asset_0': np.random.randn(100) * 0.01})
+        returns = pl.DataFrame({'Asset_0': np.random.randn(100) * 0.01})
 
         estimator = OAShrinkage()
         cov = estimator.fit(returns)
@@ -177,7 +177,7 @@ class TestOASEdgeCases:
 
     def test_two_assets(self):
         """Test with two assets (minimum correlation case)."""
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'Asset_0': np.random.randn(100) * 0.01,
             'Asset_1': np.random.randn(100) * 0.01,
         })
@@ -224,15 +224,15 @@ class TestOASShrinkageProperties:
     def test_higher_shrinkage_for_small_samples(self):
         """Verify OAS uses more shrinkage when T/N is small."""
         # Well-conditioned case (T >> N)
-        returns_large = pd.DataFrame(
+        returns_large = pl.DataFrame(
             np.random.randn(500, 5) * 0.01,
-            columns=[f"Asset_{i}" for i in range(5)]
+            schema=[f"Asset_{i}" for i in range(5)]
         )
 
         # Ill-conditioned case (T ≈ N)
-        returns_small = pd.DataFrame(
+        returns_small = pl.DataFrame(
             np.random.randn(30, 25) * 0.01,
-            columns=[f"Asset_{i}" for i in range(25)]
+            schema=[f"Asset_{i}" for i in range(25)]
         )
 
         est_large = OAShrinkage()
@@ -258,7 +258,7 @@ class TestOASComparison:
     def test_reduces_condition_number(self, small_sample_returns):
         """Verify OAS reduces condition number vs sample covariance."""
         # Sample covariance
-        sample_cov = small_sample_returns.cov().values
+        sample_cov = np.cov(small_sample_returns.to_numpy(), rowvar=False, ddof=1)
         cond_sample = np.linalg.cond(sample_cov)
 
         # OAS
@@ -276,7 +276,7 @@ class TestOASComparison:
 
         # OAS shrinks toward (tr(S)/N) * I
         # So off-diagonal correlations should be reduced vs sample
-        sample_corr = simple_returns.corr().values
+        sample_corr = np.corrcoef(simple_returns.to_numpy(), rowvar=False)
         oas_corr = estimator.get_correlation()
 
         # Average absolute off-diagonal correlation
