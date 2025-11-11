@@ -1,3 +1,5 @@
+# ABOUTME: Query-based action protocol and implementations for backtesting
+# ABOUTME: Generates query orders from actions (similar to actions.py but uses BaseQuery instead of pricers)
 # BT/query_actions.py
 from __future__ import annotations
 from dataclasses import dataclass, replace

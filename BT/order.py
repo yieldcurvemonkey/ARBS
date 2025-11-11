@@ -1,3 +1,5 @@
+# ABOUTME: Order dataclass for backtest trade execution
+# ABOUTME: Represents a trade order with timestamp, instrument, and optional metadata
 from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass

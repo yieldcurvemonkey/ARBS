@@ -1,3 +1,5 @@
+# ABOUTME: Query-based strategy with triggers
+# ABOUTME: Defines strategy as collection of triggers that generate query orders
 # BT/query_strategy.py
 from __future__ import annotations
 import datetime

@@ -1,3 +1,5 @@
+# ABOUTME: Miscellaneous utility functions for backtesting
+# ABOUTME: Calendar date range generation and time-related helpers using QuantLib calendars
 import datetime
 
 import pandas as pd

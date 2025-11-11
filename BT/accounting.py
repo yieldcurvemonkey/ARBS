@@ -1,3 +1,5 @@
+# ABOUTME: Generic accounting abstractions for backtesting (settlement, margin, roll conventions)
+# ABOUTME: Provides composable base classes and implementations for product-agnostic cash flow tracking
 """
 Generic accounting abstractions for backtesting.
 

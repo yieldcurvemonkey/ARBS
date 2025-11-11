@@ -1,3 +1,5 @@
+# ABOUTME: Generic backtest engine coordinating strategy, execution, and portfolio management
+# ABOUTME: Iterates through time grid, executes strategy triggers/actions, tracks P&L and risk
 from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, field

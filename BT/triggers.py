@@ -1,3 +1,5 @@
+# ABOUTME: Trigger protocol and implementations for event-driven backtesting
+# ABOUTME: Conditional logic that activates actions (time-based, signal-based, portfolio state-based triggers)
 # BT/triggers.py
 from __future__ import annotations
 import datetime as dt

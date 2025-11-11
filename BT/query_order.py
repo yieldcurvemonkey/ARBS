@@ -1,3 +1,5 @@
+# ABOUTME: Query order dataclass for query-based backtesting
+# ABOUTME: Represents trade orders using BaseQuery instead of priceable instruments
 # BT/query_order.py
 from __future__ import annotations
 import datetime

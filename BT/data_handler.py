@@ -1,3 +1,5 @@
+# ABOUTME: Time grid iterator for backtesting
+# ABOUTME: Provides simple iteration over scheduled datetime states
 # BT/data_handler.py
 from __future__ import annotations
 import datetime

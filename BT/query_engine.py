@@ -1,3 +1,5 @@
+# ABOUTME: Query-based backtest engine using BaseQuery abstraction
+# ABOUTME: Coordinates strategy execution, portfolio management, and order processing with query-based workflow
 from __future__ import annotations
 
 import datetime
