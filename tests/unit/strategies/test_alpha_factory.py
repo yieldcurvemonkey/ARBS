@@ -90,8 +90,7 @@ def test_alpha_factory_regime():
 def test_alpha_factory_custom_method():
     """Test registering and using custom IC method.
 
-    Note: Tests AlphaFactory directly since StrategyConfig validation
-    will be updated in Phase 1.4 to allow custom methods.
+    Uses mock config objects to test factory in isolation.
     """
     def custom_creator(config) -> AlphaGenerator:
         # Custom method doubles the IC
@@ -122,7 +121,7 @@ def test_alpha_factory_custom_method():
 def test_alpha_factory_unknown_method():
     """Test error on unknown IC method.
 
-    Tests factory directly to verify error handling.
+    Uses mock config to verify error handling.
     """
     from dataclasses import dataclass
 

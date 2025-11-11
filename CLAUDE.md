@@ -54,7 +54,7 @@ Analysis:        TearSheet → IC/Sharpe/returns analysis
 Result:          BacktestResult (returns, IC, Sharpe, total return)
 ```
 
-### ✅ Architecture Status (502 tests passing)
+### ✅ Architecture Status (582 tests passing)
 
 **MVP V1 - Core Pipeline (169 tests)**
 - **Query** (44 tests): Futures infrastructure, structures, value calculations
@@ -74,6 +74,13 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
 - **Portfolio V2** (100 tests): Composite asset with nested portfolio support
 - **Additional Signals** (156 tests): MomentumSignal, MeanReversionSignal, SignalCombiner
 
+**Architecture V3 - Strategy Factory System (80 tests)**
+- **YAML Configuration** (23 tests): StrategyConfig parser with validation
+- **Factory Pattern** (17 tests): AlphaFactory (9), CovarianceFactory (8)
+- **Strategy Creation** (21 tests): StrategyFactory component instantiation
+- **Template Registry** (13 tests): Pre-built strategy templates
+- **Dynamic Validation** (6 tests): Runtime extension verification
+
 **End-to-end example**: `examples/run_minimal_backtest.py` demonstrates full pipeline
 
 ### Architecture Improvements Applied
@@ -88,10 +95,12 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
 - ✅ End-to-end system produces measurable results
 - ✅ Measurements are accurate (regardless of profitability)
 - ✅ All layers integrated successfully
-- ✅ 502 tests passing with comprehensive coverage
+- ✅ 582 tests passing with comprehensive coverage
 - ✅ Grinold-Kahn architecture compliance
 - ✅ MVP philosophy achieved: measure correctly, not necessarily profitably
 - ✅ Multiple signal types implemented (Carry, Momentum, Mean Reversion)
+- ✅ Modular factory system enables extension without code modification
+- ✅ YAML-based strategy configuration for rapid experimentation
 
 ### Future Enhancements (Not Required for MVP)
 

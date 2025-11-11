@@ -64,8 +64,7 @@ def test_covariance_factory_constant_correlation():
 def test_covariance_factory_custom_estimator():
     """Test registering and using custom covariance estimator.
 
-    Tests factory directly since StrategyConfig validation
-    will be updated in Phase 1.4.
+    Uses mock config objects to test factory in isolation.
     """
     # Create a custom covariance estimator
     class CustomCovariance:
@@ -96,7 +95,7 @@ def test_covariance_factory_custom_estimator():
 def test_covariance_factory_unknown_method():
     """Test error on unknown covariance method.
 
-    Tests factory directly to verify error handling.
+    Uses mock config to verify error handling.
     """
     from dataclasses import dataclass
 

@@ -1,8 +1,8 @@
 """
 Test dynamic validation - verify custom types work after registration.
 
-This test proves that Phase 1.4 works: StrategyConfig validation now queries
-the factory registries, allowing custom types to pass validation.
+Tests that StrategyConfig validation queries factory registries,
+allowing custom component types to pass validation.
 """
 
 import pytest
@@ -29,7 +29,7 @@ def test_custom_signal_type_passes_validation_after_registration():
     # Register custom signal
     SignalFactory.register_signal('custom_test_signal', CustomTestSignal)
 
-    # This should NOT raise validation error (Phase 1.4 fix)
+    # Validation should accept registered custom types
     config_dict = {
         'strategy': {'name': 'Test', 'type': 'custom'},
         'universe': {'asset_class': 'futures', 'instruments': ['SFRZ4']},
@@ -50,7 +50,7 @@ def test_custom_alpha_method_passes_validation_after_registration():
 
     AlphaFactory.register_method('custom_alpha_method', custom_alpha_creator)
 
-    # This should NOT raise validation error (Phase 1.4 fix)
+    # Validation should accept registered custom methods
     config_dict = {
         'strategy': {'name': 'Test', 'type': 'carry'},
         'universe': {'asset_class': 'futures', 'instruments': ['SFRZ4']},
@@ -73,7 +73,7 @@ def test_custom_covariance_passes_validation_after_registration():
 
     CovarianceFactory.register_covariance('custom_cov_method', CustomCovariance)
 
-    # This should NOT raise validation error (Phase 1.4 fix)
+    # Validation should accept registered custom methods
     config_dict = {
         'strategy': {'name': 'Test', 'type': 'carry'},
         'universe': {'asset_class': 'futures', 'instruments': ['SFRZ4']},
