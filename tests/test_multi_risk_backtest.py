@@ -25,7 +25,7 @@ MVP Philosophy:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date, timedelta
 from typing import Dict
 
@@ -85,10 +85,11 @@ class TestSyntheticBacktest:
 
         returns = np.random.multivariate_normal(mean, cov_scaled, n_periods)
 
-        return pd.DataFrame(
-            returns,
-            columns=['SFRZ4', 'SFRH5', 'SFRM5']
-        )
+        return pl.DataFrame({
+            'SFRZ4': returns[:, 0],
+            'SFRH5': returns[:, 1],
+            'SFRM5': returns[:, 2],
+        })
 
     @pytest.fixture
     def synthetic_signals(self):
@@ -112,15 +113,11 @@ class TestSyntheticBacktest:
             synthetic_returns,
             date(2024, 11, 1)
         )
-        alphas = pd.Series(alphas_dict)
+        alphas = pl.Series('alphas', list(alphas_dict.values()))
 
-        # Estimate covariance
-        cov_matrix = risk_model.fit(synthetic_returns)
-        cov_df = pd.DataFrame(
-            cov_matrix,
-            index=synthetic_returns.columns,
-            columns=synthetic_returns.columns
-        )
+        # Estimate covariance (risk_model expects pandas DataFrame)
+        cov_matrix = risk_model.fit(synthetic_returns.to_pandas())
+        cov_df = pl.DataFrame(cov_matrix, schema=synthetic_returns.columns)
 
         # Optimize
         weights = optimizer.optimize(alphas, cov_df)
@@ -128,9 +125,9 @@ class TestSyntheticBacktest:
         # Validate
         assert len(weights) == 3
         assert abs(weights.sum() - 1.0) < 1e-6, "Weights must sum to 1"
-        assert all(w >= -1e-10 for w in weights.values), "No shorts (long_only=True)"
-        assert not any(np.isnan(weights.values)), "No NaN weights"
-        assert not any(np.isinf(weights.values)), "No inf weights"
+        assert all(w >= -1e-10 for w in weights.values()), "No shorts (long_only=True)"
+        assert not any(np.isnan(list(weights.values()))), "No NaN weights"
+        assert not any(np.isinf(list(weights.values()))), "No inf weights"
 
     def test_pipeline_with_ledoit_wolf(self, synthetic_returns, synthetic_signals):
         """Test complete pipeline with Ledoit-Wolf shrinkage."""
@@ -145,15 +142,11 @@ class TestSyntheticBacktest:
             synthetic_returns,
             date(2024, 11, 1)
         )
-        alphas = pd.Series(alphas_dict)
+        alphas = pl.Series('alphas', list(alphas_dict.values()))
 
         # Estimate covariance
         cov_matrix = risk_model.fit(synthetic_returns)
-        cov_df = pd.DataFrame(
-            cov_matrix,
-            index=synthetic_returns.columns,
-            columns=synthetic_returns.columns
-        )
+        cov_df = pl.DataFrame(cov_matrix, schema=synthetic_returns.columns)
 
         # Optimize
         weights = optimizer.optimize(alphas, cov_df)
@@ -161,9 +154,9 @@ class TestSyntheticBacktest:
         # Validate
         assert len(weights) == 3
         assert abs(weights.sum() - 1.0) < 1e-6, "Weights must sum to 1"
-        assert all(w >= -1e-10 for w in weights.values), "No shorts (long_only=True)"
-        assert not any(np.isnan(weights.values)), "No NaN weights"
-        assert not any(np.isinf(weights.values)), "No inf weights"
+        assert all(w >= -1e-10 for w in weights.values()), "No shorts (long_only=True)"
+        assert not any(np.isnan(list(weights.values()))), "No NaN weights"
+        assert not any(np.isinf(list(weights.values()))), "No inf weights"
 
     def test_pipeline_with_constant_correlation(self, synthetic_returns, synthetic_signals):
         """Test complete pipeline with constant correlation model."""
@@ -178,15 +171,11 @@ class TestSyntheticBacktest:
             synthetic_returns,
             date(2024, 11, 1)
         )
-        alphas = pd.Series(alphas_dict)
+        alphas = pl.Series('alphas', list(alphas_dict.values()))
 
         # Estimate covariance
         cov_matrix = risk_model.fit(synthetic_returns)
-        cov_df = pd.DataFrame(
-            cov_matrix,
-            index=synthetic_returns.columns,
-            columns=synthetic_returns.columns
-        )
+        cov_df = pl.DataFrame(cov_matrix, schema=synthetic_returns.columns)
 
         # Optimize
         weights = optimizer.optimize(alphas, cov_df)
@@ -194,9 +183,9 @@ class TestSyntheticBacktest:
         # Validate
         assert len(weights) == 3
         assert abs(weights.sum() - 1.0) < 1e-6, "Weights must sum to 1"
-        assert all(w >= -1e-10 for w in weights.values), "No shorts (long_only=True)"
-        assert not any(np.isnan(weights.values)), "No NaN weights"
-        assert not any(np.isinf(weights.values)), "No inf weights"
+        assert all(w >= -1e-10 for w in weights.values()), "No shorts (long_only=True)"
+        assert not any(np.isnan(list(weights.values()))), "No NaN weights"
+        assert not any(np.isinf(list(weights.values()))), "No inf weights"
 
     def test_pipeline_with_diagonal(self, synthetic_returns, synthetic_signals):
         """Test complete pipeline with diagonal covariance."""
@@ -211,15 +200,11 @@ class TestSyntheticBacktest:
             synthetic_returns,
             date(2024, 11, 1)
         )
-        alphas = pd.Series(alphas_dict)
+        alphas = pl.Series('alphas', list(alphas_dict.values()))
 
         # Estimate covariance
         cov_matrix = risk_model.fit(synthetic_returns)
-        cov_df = pd.DataFrame(
-            cov_matrix,
-            index=synthetic_returns.columns,
-            columns=synthetic_returns.columns
-        )
+        cov_df = pl.DataFrame(cov_matrix, schema=synthetic_returns.columns)
 
         # Optimize
         weights = optimizer.optimize(alphas, cov_df)
@@ -227,9 +212,9 @@ class TestSyntheticBacktest:
         # Validate
         assert len(weights) == 3
         assert abs(weights.sum() - 1.0) < 1e-6, "Weights must sum to 1"
-        assert all(w >= -1e-10 for w in weights.values), "No shorts (long_only=True)"
-        assert not any(np.isnan(weights.values)), "No NaN weights"
-        assert not any(np.isinf(weights.values)), "No inf weights"
+        assert all(w >= -1e-10 for w in weights.values()), "No shorts (long_only=True)"
+        assert not any(np.isnan(list(weights.values()))), "No NaN weights"
+        assert not any(np.isinf(list(weights.values()))), "No inf weights"
 
     def test_pipeline_with_identity(self, synthetic_returns, synthetic_signals):
         """Test complete pipeline with identity covariance."""
@@ -244,15 +229,11 @@ class TestSyntheticBacktest:
             synthetic_returns,
             date(2024, 11, 1)
         )
-        alphas = pd.Series(alphas_dict)
+        alphas = pl.Series('alphas', list(alphas_dict.values()))
 
         # Estimate covariance
         cov_matrix = risk_model.fit(synthetic_returns)
-        cov_df = pd.DataFrame(
-            cov_matrix,
-            index=synthetic_returns.columns,
-            columns=synthetic_returns.columns
-        )
+        cov_df = pl.DataFrame(cov_matrix, schema=synthetic_returns.columns)
 
         # Optimize
         weights = optimizer.optimize(alphas, cov_df)
@@ -260,9 +241,9 @@ class TestSyntheticBacktest:
         # Validate
         assert len(weights) == 3
         assert abs(weights.sum() - 1.0) < 1e-6, "Weights must sum to 1"
-        assert all(w >= -1e-10 for w in weights.values), "No shorts (long_only=True)"
-        assert not any(np.isnan(weights.values)), "No NaN weights"
-        assert not any(np.isinf(weights.values)), "No inf weights"
+        assert all(w >= -1e-10 for w in weights.values()), "No shorts (long_only=True)"
+        assert not any(np.isnan(list(weights.values()))), "No NaN weights"
+        assert not any(np.isinf(list(weights.values()))), "No inf weights"
 
 
 class TestRiskModelComparison:
@@ -286,7 +267,7 @@ class TestRiskModelComparison:
             synthetic_returns,
             date(2024, 11, 1)
         )
-        alphas = pd.Series(alphas_dict)
+        alphas = pl.Series('alphas', list(alphas_dict.values()))
 
         # Test each risk model
         model_names = ['sample', 'ledoit_wolf', 'constant_correlation', 'diagonal', 'identity']
@@ -294,12 +275,8 @@ class TestRiskModelComparison:
 
         for model_name in model_names:
             risk_model = risk_model_factory.create(model_name)
-            cov_matrix = risk_model.fit(synthetic_returns)
-            cov_df = pd.DataFrame(
-                cov_matrix,
-                index=synthetic_returns.columns,
-                columns=synthetic_returns.columns
-            )
+            cov_matrix = risk_model.fit(synthetic_returns.to_pandas())
+            cov_df = pl.DataFrame(cov_matrix, schema=synthetic_returns.columns)
             weights = optimizer.optimize(alphas, cov_df)
             weights_by_model[model_name] = weights
 
@@ -320,7 +297,11 @@ class TestRiskModelComparison:
         cov_scaled = [[c / 252 for c in row] for row in cov]
         returns = np.random.multivariate_normal(mean, cov_scaled, n_periods)
 
-        return pd.DataFrame(returns, columns=['SFRZ4', 'SFRH5', 'SFRM5'])
+        return pl.DataFrame({
+            'SFRZ4': returns[:, 0],
+            'SFRH5': returns[:, 1],
+            'SFRM5': returns[:, 2],
+        })
 
     @pytest.fixture
     def synthetic_signals(self):
@@ -343,9 +324,9 @@ class TestRiskModelComparison:
             # Validate weights
             assert len(weights) == 3, f"{model_name}: Wrong number of weights"
             assert abs(weights.sum() - 1.0) < 1e-6, f"{model_name}: Weights must sum to 1"
-            assert all(w >= -1e-10 for w in weights.values), f"{model_name}: No shorts allowed"
-            assert not any(np.isnan(weights.values)), f"{model_name}: No NaN weights"
-            assert not any(np.isinf(weights.values)), f"{model_name}: No inf weights"
+            assert all(w >= -1e-10 for w in weights.values()), f"{model_name}: No shorts allowed"
+            assert not any(np.isnan(list(weights.values()))), f"{model_name}: No NaN weights"
+            assert not any(np.isinf(list(weights.values()))), f"{model_name}: No inf weights"
 
         # Document that models may produce similar results with good data
         print("\n" + "="*70)
@@ -379,28 +360,24 @@ class TestRiskModelComparison:
             synthetic_returns,
             date(2024, 11, 1)
         )
-        alphas = pd.Series(alphas_dict)
+        alphas = pl.Series('alphas', list(alphas_dict.values()))
 
         # Diagonal model
         diagonal_model = risk_model_factory.create('diagonal')
-        diag_cov = diagonal_model.fit(synthetic_returns)
-        diag_cov_df = pd.DataFrame(
-            diag_cov,
-            index=synthetic_returns.columns,
-            columns=synthetic_returns.columns
-        )
+        diag_cov = diagonal_model.fit(synthetic_returns.to_pandas())
 
         # Verify it's truly diagonal
-        for i, row in enumerate(synthetic_returns.columns):
-            for j, col in enumerate(synthetic_returns.columns):
+        n = len(diag_cov)
+        for i in range(n):
+            for j in range(n):
                 if i != j:
-                    assert abs(diag_cov_df.loc[row, col]) < 1e-10, \
-                        f"Diagonal model has non-zero off-diagonal: {row}, {col}"
+                    assert abs(diag_cov[i, j]) < 1e-10, \
+                        f"Diagonal model has non-zero off-diagonal: ({i}, {j})"
 
     def test_identity_model_equal_variance(self, synthetic_returns):
         """Identity model should have equal variance for all assets."""
         identity_model = risk_model_factory.create('identity')
-        identity_cov = identity_model.fit(synthetic_returns)
+        identity_cov = identity_model.fit(synthetic_returns.to_pandas())
 
         # Check diagonal elements are all equal
         diag_elements = np.diag(identity_cov)
@@ -433,7 +410,7 @@ class TestRiskModelComparison:
         for model_name, weights in all_model_weights.items():
             # Calculate Herfindahl index (concentration measure)
             # HHI = 1 means fully concentrated, 1/N means perfectly diversified
-            herfindahl = (weights ** 2).sum()
+            herfindahl = sum(w ** 2 for w in weights.values())
             concentrations[model_name] = herfindahl
 
         # Verify we computed concentrations for all models
@@ -469,8 +446,8 @@ class TestRiskModelPerformance:
         optimizer = MeanVarianceOptimizer(risk_aversion=1.0, long_only=True)
 
         # Split data: first 50 periods for estimation, last 10 for testing
-        train_returns = synthetic_returns.iloc[:50]
-        test_returns = synthetic_returns.iloc[50:]
+        train_returns = synthetic_returns.slice(0, 50)
+        test_returns = synthetic_returns.slice(50, None)
 
         # Generate alphas from signals
         alphas_dict = alpha_gen.signals_to_alphas(
@@ -478,7 +455,7 @@ class TestRiskModelPerformance:
             train_returns,
             date(2024, 11, 1)
         )
-        alphas = pd.Series(alphas_dict)
+        alphas = pl.Series('alphas', list(alphas_dict.values()))
 
         # Test each model
         model_names = ['sample', 'ledoit_wolf', 'constant_correlation', 'diagonal', 'identity']
@@ -487,30 +464,26 @@ class TestRiskModelPerformance:
         for model_name in model_names:
             # Get weights from model
             risk_model = risk_model_factory.create(model_name)
-            cov_matrix = risk_model.fit(train_returns)
-            cov_df = pd.DataFrame(
-                cov_matrix,
-                index=train_returns.columns,
-                columns=train_returns.columns
-            )
+            cov_matrix = risk_model.fit(train_returns.to_pandas())
+            cov_df = pl.DataFrame(cov_matrix, schema=train_returns.columns)
             weights = optimizer.optimize(alphas, cov_df)
 
             # Calculate out-of-sample returns
             portfolio_returns = []
-            for _, row in test_returns.iterrows():
-                port_ret = sum(weights[asset] * row[asset] for asset in weights.index)
+            for row in test_returns.iter_rows(named=True):
+                port_ret = sum(weights[asset] * row[asset] for asset in weights.keys())
                 portfolio_returns.append(port_ret)
 
-            port_series = pd.Series(portfolio_returns)
+            port_array = np.array(portfolio_returns)
 
             # Calculate metrics
-            mean_ret = port_series.mean()
-            std_ret = port_series.std()
+            mean_ret = np.mean(port_array)
+            std_ret = np.std(port_array)
             sharpe = (mean_ret / std_ret) * np.sqrt(252) if std_ret > 0 else 0.0
 
             results[model_name] = {
                 'weights': weights,
-                'returns': port_series,
+                'returns': port_array,
                 'mean_return': mean_ret,
                 'volatility': std_ret,
                 'sharpe_ratio': sharpe,
@@ -533,7 +506,11 @@ class TestRiskModelPerformance:
         cov_scaled = [[c / 252 for c in row] for row in cov]
         returns = np.random.multivariate_normal(mean, cov_scaled, n_periods)
 
-        return pd.DataFrame(returns, columns=['SFRZ4', 'SFRH5', 'SFRM5'])
+        return pl.DataFrame({
+            'SFRZ4': returns[:, 0],
+            'SFRH5': returns[:, 1],
+            'SFRM5': returns[:, 2],
+        })
 
     @pytest.fixture
     def synthetic_signals(self):
@@ -548,7 +525,7 @@ class TestRiskModelPerformance:
         """All models produce valid performance metrics."""
         for model_name, result in backtest_results.items():
             # Check returns are not all NaN
-            assert not result['returns'].isna().all(), \
+            assert not np.all(np.isnan(result['returns'])), \
                 f"{model_name}: Returns are all NaN"
 
             # Check metrics are finite
@@ -626,7 +603,7 @@ class TestEdgeCases:
     def test_all_models_handle_single_asset(self):
         """All models work with single asset."""
         np.random.seed(42)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252)
         })
         signals = {'SFRZ4': 1.0}
@@ -635,14 +612,15 @@ class TestEdgeCases:
         optimizer = MeanVarianceOptimizer(risk_aversion=1.0, long_only=True)
 
         alphas_dict = alpha_gen.signals_to_alphas(signals, returns, date(2024, 11, 1))
-        alphas = pd.Series(alphas_dict)
+        # For single asset, name the Series with the asset name
+        alphas = pl.Series(returns.columns[0], list(alphas_dict.values()))
 
         model_names = ['sample', 'ledoit_wolf', 'constant_correlation', 'diagonal', 'identity']
 
         for model_name in model_names:
             risk_model = risk_model_factory.create(model_name)
-            cov_matrix = risk_model.fit(returns)
-            cov_df = pd.DataFrame(cov_matrix, index=returns.columns, columns=returns.columns)
+            cov_matrix = risk_model.fit(returns.to_pandas())
+            cov_df = pl.DataFrame(cov_matrix, schema=returns.columns)
             weights = optimizer.optimize(alphas, cov_df)
 
             # Single asset with long_only → 100% allocation
@@ -652,7 +630,7 @@ class TestEdgeCases:
     def test_all_models_handle_zero_signals(self):
         """All models handle zero signals gracefully."""
         np.random.seed(42)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),
             'SFRH5': np.random.randn(60) * 0.12 / np.sqrt(252),
         })
@@ -662,18 +640,18 @@ class TestEdgeCases:
         optimizer = MeanVarianceOptimizer(risk_aversion=1.0, long_only=True)
 
         alphas_dict = alpha_gen.signals_to_alphas(signals, returns, date(2024, 11, 1))
-        alphas = pd.Series(alphas_dict)
+        alphas = pl.Series('alphas', list(alphas_dict.values()))
 
         model_names = ['sample', 'ledoit_wolf', 'constant_correlation', 'diagonal', 'identity']
 
         for model_name in model_names:
             risk_model = risk_model_factory.create(model_name)
-            cov_matrix = risk_model.fit(returns)
-            cov_df = pd.DataFrame(cov_matrix, index=returns.columns, columns=returns.columns)
+            cov_matrix = risk_model.fit(returns.to_pandas())
+            cov_df = pl.DataFrame(cov_matrix, schema=returns.columns)
             weights = optimizer.optimize(alphas, cov_df)
 
             # Zero signals should produce valid weights
             assert abs(weights.sum() - 1.0) < 1e-6, \
                 f"{model_name}: Weights must sum to 1 even with zero signals"
-            assert not any(np.isnan(weights.values)), \
+            assert not any(np.isnan(list(weights.values()))), \
                 f"{model_name}: No NaN weights with zero signals"

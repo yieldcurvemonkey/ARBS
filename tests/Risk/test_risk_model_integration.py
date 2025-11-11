@@ -27,6 +27,7 @@ Risk Models Tested:
 
 import pytest
 import numpy as np
+import polars as pl
 import pandas as pd
 from datetime import date
 
@@ -84,7 +85,7 @@ class TestBackwardCompatibilityDirectImports:
 
         # Create mock returns
         np.random.seed(42)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': np.random.randn(60) * 0.02,
             'B': np.random.randn(60) * 0.03,
             'C': np.random.randn(60) * 0.025,

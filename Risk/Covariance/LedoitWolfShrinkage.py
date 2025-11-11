@@ -29,7 +29,7 @@ From 2025 research: Most widely used shrinkage method in practice.
 """
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from typing import Optional
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
@@ -69,7 +69,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         self.target_matrix: Optional[np.ndarray] = None
         self.sample_cov: Optional[np.ndarray] = None
 
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate Ledoit-Wolf shrinkage covariance matrix.
 
@@ -89,14 +89,16 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         T, N = returns_clean.shape
 
         # Calculate sample covariance
-        self.sample_cov = returns_clean.cov().values
+        # For polars DataFrames, convert to numpy and use numpy.cov
+        returns_np = returns_clean.to_numpy()
+        self.sample_cov = np.cov(returns_np.T)
 
         # Calculate shrinkage target
         self.target_matrix = self._compute_target(returns_clean)
 
         # Calculate optimal shrinkage intensity
         self.shrinkage_intensity = self._compute_shrinkage_intensity(
-            returns_clean.values, self.sample_cov, self.target_matrix
+            returns_clean.to_numpy(), self.sample_cov, self.target_matrix
         )
 
         # Apply shrinkage: Σ̂_LW = δ * F + (1-δ) * S
@@ -107,7 +109,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
 
         return self.cov_matrix_
 
-    def _compute_target(self, returns: pd.DataFrame) -> np.ndarray:
+    def _compute_target(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Compute shrinkage target matrix F.
 
@@ -121,7 +123,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
 
         if self.target_type == 'diagonal':
             # Diagonal: var(r_i) on diagonal, zeros off-diagonal
-            variances = returns.var(ddof=1).values
+            variances = returns.var(ddof=1).to_numpy()
             return np.diag(variances)
 
         elif self.target_type == 'identity':
@@ -135,7 +137,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         else:
             raise ValueError(f"Unknown target type: {self.target_type}")
 
-    def _constant_correlation_target(self, returns: pd.DataFrame) -> np.ndarray:
+    def _constant_correlation_target(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Compute constant correlation target.
 
@@ -154,7 +156,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
             Constant correlation matrix (N×N)
         """
         # Calculate sample correlation matrix
-        corr_matrix = returns.corr().values
+        corr_matrix = returns.corr().to_numpy()
 
         # Average off-diagonal correlation
         n = corr_matrix.shape[0]
@@ -166,7 +168,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         np.fill_diagonal(target_corr, 1.0)
 
         # Convert to covariance using sample standard deviations
-        std = returns.std(ddof=1).values
+        std = returns.std(ddof=1).to_numpy()
         target_cov = target_corr * np.outer(std, std)
 
         return target_cov

@@ -24,7 +24,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, List
-import pandas as pd
+import polars as pl
 
 
 @dataclass
@@ -41,10 +41,10 @@ class BacktestResult:
         sharpe_ratio: Return / volatility (annualized)
         total_return: Cumulative return over backtest period
     """
-    weights: pd.DataFrame
-    returns: pd.Series
-    signals: pd.DataFrame
-    prices: pd.DataFrame
+    weights: pl.DataFrame
+    returns: pl.Series
+    signals: pl.DataFrame
+    prices: pl.DataFrame
     ic: float
     sharpe_ratio: float
     total_return: float
@@ -85,8 +85,8 @@ class BaseBacktest(ABC):
 
         Example:
             >>> contracts = ['SFRZ4', 'SFRH5', 'SFRM5']
-            >>> dates = pd.date_range('2024-01-01', '2024-12-31', freq='W')
-            >>> result = backtest.run(contracts, dates.tolist())
+            >>> dates = pl.datetime_range('2024-01-01', '2024-12-31', interval='1w').to_list()
+            >>> result = backtest.run(contracts, dates)
             >>> print(f"Sharpe: {result.sharpe_ratio:.2f}, IC: {result.ic:.3f}")
         """
         pass

@@ -20,8 +20,8 @@ Critical Insight:
 
 import pytest
 import numpy as np
-import pandas as pd
-from datetime import date
+import polars as pl
+from datetime import date, timedelta
 from typing import Dict
 
 from Signals.AlphaGenerator import AlphaGenerator
@@ -67,7 +67,7 @@ class TestSignalsToAlphas:
         signals = {'SFRZ4': 2.0}  # Z-score = 2.0
 
         # Historical returns with 10% vol
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),  # Daily returns → 10% annual vol
         })
 
@@ -87,7 +87,7 @@ class TestSignalsToAlphas:
 
         signals = {'SFRZ4': -1.5}  # Negative Z-score
 
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),
         })
 
@@ -106,7 +106,7 @@ class TestSignalsToAlphas:
 
         signals = {'SFRZ4': 0.0}  # No signal
 
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),
         })
 
@@ -128,7 +128,7 @@ class TestSignalsToAlphas:
             'SFRM5': 0.5
         }
 
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),
             'SFRH5': np.random.randn(60) * 0.15 / np.sqrt(252),  # Higher vol
             'SFRM5': np.random.randn(60) * 0.08 / np.sqrt(252),  # Lower vol
@@ -165,7 +165,7 @@ class TestICScaling:
 
         signals = {'SFRZ4': 2.0}
 
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),
         })
 
@@ -182,7 +182,7 @@ class TestICScaling:
 
         signals = {'SFRZ4': 2.0}
 
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),
         })
 
@@ -207,7 +207,7 @@ class TestVolatilityScaling:
         # LOW_VOL has 10% vol, HIGH_VOL has 20% vol
         # Use fixed seed for reproducibility
         np.random.seed(42)
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'LOW_VOL': np.random.randn(60) * 0.10 / np.sqrt(252),
             'HIGH_VOL': np.random.randn(60) * 0.20 / np.sqrt(252),
         })
@@ -226,7 +226,7 @@ class TestVolatilityScaling:
         signals = {'CONSTANT': 1.0}
 
         # Constant returns → zero volatility
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'CONSTANT': [0.01] * 60,
         })
 
@@ -246,7 +246,7 @@ class TestEdgeCases:
         signals = {'SFRZ4': 1.0, 'NEW_ASSET': 1.0}
 
         # NEW_ASSET not in returns history
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),
         })
 
@@ -266,7 +266,7 @@ class TestEdgeCases:
 
         signals = {}
 
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),
         })
 
@@ -281,7 +281,7 @@ class TestEdgeCases:
 
         signals = {'SFRZ4': 1.0}
 
-        returns_history = pd.DataFrame()
+        returns_history = pl.DataFrame()
 
         alphas = alpha_gen.signals_to_alphas(signals, returns_history, date(2024, 11, 1))
 
@@ -309,7 +309,7 @@ class TestRealWorldExample:
         signals = {'CARRY_TRADE': 1.5}
 
         # Create returns with 12% volatility
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'CARRY_TRADE': np.random.randn(60) * 0.12 / np.sqrt(252),
         })
 
@@ -346,9 +346,8 @@ class TestDynamicICBasics:
         alpha_gen = AlphaGenerator(IC=0.05, dynamic_ic=True, ic_method="invalid", ic_min_periods=10)
 
         # Need sufficient data to pass initial checks
-        dates = pd.date_range('2024-01-01', periods=30)
-        signals_hist = pd.DataFrame({'SFRZ4': np.random.randn(30)}, index=dates)
-        returns_hist = pd.DataFrame({'SFRZ4': np.random.randn(30)}, index=dates)
+        signals_hist = pl.DataFrame({'SFRZ4': np.random.randn(30)})
+        returns_hist = pl.DataFrame({'SFRZ4': np.random.randn(30)})
 
         with pytest.raises(ValueError, match="Unknown ic_method"):
             alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
@@ -369,10 +368,9 @@ class TestRollingICEstimation:
         # Perfect correlation: signals = returns
         np.random.seed(42)
         values = np.random.randn(60)
-        dates = pd.date_range('2024-01-01', periods=60)
 
-        signals_hist = pd.DataFrame({'SFRZ4': values}, index=dates)
-        returns_hist = pd.DataFrame({'SFRZ4': values}, index=dates)  # Perfect correlation
+        signals_hist = pl.DataFrame({'SFRZ4': values})
+        returns_hist = pl.DataFrame({'SFRZ4': values})  # Perfect correlation
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -390,8 +388,8 @@ class TestRollingICEstimation:
 
         # No correlation: independent random variables
         np.random.seed(42)
-        signals_hist = pd.DataFrame({'SFRZ4': np.random.randn(60)})
-        returns_hist = pd.DataFrame({'SFRZ4': np.random.randn(60)})
+        signals_hist = pl.DataFrame({'SFRZ4': np.random.randn(60)})
+        returns_hist = pl.DataFrame({'SFRZ4': np.random.randn(60)})
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -410,10 +408,9 @@ class TestRollingICEstimation:
         # Negative correlation: signals = -returns
         np.random.seed(42)
         values = np.random.randn(60)
-        dates = pd.date_range('2024-01-01', periods=60)
 
-        signals_hist = pd.DataFrame({'SFRZ4': values}, index=dates)
-        returns_hist = pd.DataFrame({'SFRZ4': -values}, index=dates)  # Negative correlation
+        signals_hist = pl.DataFrame({'SFRZ4': values})
+        returns_hist = pl.DataFrame({'SFRZ4': -values})  # Negative correlation
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -433,10 +430,9 @@ class TestRollingICEstimation:
         np.random.seed(42)
         signals = np.random.randn(60)
         noise = np.random.randn(60) * 0.5  # Add noise
-        dates = pd.date_range('2024-01-01', periods=60)
 
-        signals_hist = pd.DataFrame({'SFRZ4': signals}, index=dates)
-        returns_hist = pd.DataFrame({'SFRZ4': signals + noise}, index=dates)
+        signals_hist = pl.DataFrame({'SFRZ4': signals})
+        returns_hist = pl.DataFrame({'SFRZ4': signals + noise})
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -454,8 +450,8 @@ class TestRollingICEstimation:
         )
 
         # Only 10 periods (< ic_min_periods)
-        signals_hist = pd.DataFrame({'SFRZ4': np.random.randn(10)})
-        returns_hist = pd.DataFrame({'SFRZ4': np.random.randn(10)})
+        signals_hist = pl.DataFrame({'SFRZ4': np.random.randn(10)})
+        returns_hist = pl.DataFrame({'SFRZ4': np.random.randn(10)})
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -479,7 +475,6 @@ class TestEWMAICEstimation:
         np.random.seed(42)
         n_periods = 60
         n_assets = 5
-        dates = pd.date_range('2024-01-01', periods=n_periods)
 
         signals_data = {}
         returns_data = {}
@@ -488,8 +483,8 @@ class TestEWMAICEstimation:
             signals_data[f'ASSET_{i}'] = values
             returns_data[f'ASSET_{i}'] = values  # Perfect correlation
 
-        signals_hist = pd.DataFrame(signals_data, index=dates)
-        returns_hist = pd.DataFrame(returns_data, index=dates)
+        signals_hist = pl.DataFrame(signals_data)
+        returns_hist = pl.DataFrame(returns_data)
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -522,8 +517,8 @@ class TestEWMAICEstimation:
             signals_data[f'ASSET_{i}'] = signals
             returns_data[f'ASSET_{i}'] = np.concatenate([returns_early, returns_late])
 
-        signals_hist = pd.DataFrame(signals_data)
-        returns_hist = pd.DataFrame(returns_data)
+        signals_hist = pl.DataFrame(signals_data)
+        returns_hist = pl.DataFrame(returns_data)
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -553,16 +548,20 @@ class TestRegimeAwareICEstimation:
         # Recent periods: high vol
         returns_late = np.random.randn(30, 3) * 0.05
 
-        returns_hist = pd.DataFrame(
-            np.vstack([returns_early, returns_late]),
-            columns=['A', 'B', 'C']
-        )
+        returns_array = np.vstack([returns_early, returns_late])
+        returns_hist = pl.DataFrame({
+            'A': returns_array[:, 0],
+            'B': returns_array[:, 1],
+            'C': returns_array[:, 2]
+        })
 
         # Signals correlated with returns
-        signals_hist = pd.DataFrame(
-            returns_hist.values + np.random.randn(60, 3) * 0.01,
-            columns=['A', 'B', 'C']
-        )
+        signals_array = returns_array + np.random.randn(60, 3) * 0.01
+        signals_hist = pl.DataFrame({
+            'A': signals_array[:, 0],
+            'B': signals_array[:, 1],
+            'C': signals_array[:, 2]
+        })
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -580,8 +579,8 @@ class TestRegimeAwareICEstimation:
         )
 
         # Only 15 periods in current regime
-        signals_hist = pd.DataFrame({'SFRZ4': np.random.randn(15)})
-        returns_hist = pd.DataFrame({'SFRZ4': np.random.randn(15)})
+        signals_hist = pl.DataFrame({'SFRZ4': np.random.randn(15)})
+        returns_hist = pl.DataFrame({'SFRZ4': np.random.randn(15)})
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -596,8 +595,8 @@ class TestDynamicICEdgeCases:
         """Empty signals history falls back to static IC."""
         alpha_gen = AlphaGenerator(IC=0.05, dynamic_ic=True, ic_method="rolling")
 
-        signals_hist = pd.DataFrame()
-        returns_hist = pd.DataFrame({'SFRZ4': np.random.randn(60)})
+        signals_hist = pl.DataFrame()
+        returns_hist = pl.DataFrame({'SFRZ4': np.random.randn(60)})
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -608,8 +607,8 @@ class TestDynamicICEdgeCases:
         """Empty returns history falls back to static IC."""
         alpha_gen = AlphaGenerator(IC=0.05, dynamic_ic=True, ic_method="rolling")
 
-        signals_hist = pd.DataFrame({'SFRZ4': np.random.randn(60)})
-        returns_hist = pd.DataFrame()
+        signals_hist = pl.DataFrame({'SFRZ4': np.random.randn(60)})
+        returns_hist = pl.DataFrame()
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -620,8 +619,8 @@ class TestDynamicICEdgeCases:
         """No common assets falls back to static IC."""
         alpha_gen = AlphaGenerator(IC=0.05, dynamic_ic=True, ic_method="rolling")
 
-        signals_hist = pd.DataFrame({'SFRZ4': np.random.randn(60)})
-        returns_hist = pd.DataFrame({'SFRH5': np.random.randn(60)})
+        signals_hist = pl.DataFrame({'SFRZ4': np.random.randn(60)})
+        returns_hist = pl.DataFrame({'SFRH5': np.random.randn(60)})
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -633,9 +632,8 @@ class TestDynamicICEdgeCases:
         alpha_gen = AlphaGenerator(IC=0.05, dynamic_ic=True, ic_method="rolling")
 
         # Random data - IC should be valid correlation coefficient
-        dates = pd.date_range('2024-01-01', periods=60)
-        signals_hist = pd.DataFrame({'SFRZ4': np.random.randn(60)}, index=dates)
-        returns_hist = pd.DataFrame({'SFRZ4': np.random.randn(60)}, index=dates)
+        signals_hist = pl.DataFrame({'SFRZ4': np.random.randn(60)})
+        returns_hist = pl.DataFrame({'SFRZ4': np.random.randn(60)})
 
         ic = alpha_gen.estimate_dynamic_ic(signals_hist, returns_hist)
 
@@ -659,8 +657,8 @@ class TestDynamicICIntegration:
         np.random.seed(42)
         values = np.random.randn(60)
 
-        signals_hist = pd.DataFrame({'SFRZ4': values})
-        returns_hist = pd.DataFrame({'SFRZ4': values * 0.01})  # High correlation
+        signals_hist = pl.DataFrame({'SFRZ4': values})
+        returns_hist = pl.DataFrame({'SFRZ4': values * 0.01})  # High correlation
 
         current_signals = {'SFRZ4': 2.0}
 
@@ -685,8 +683,8 @@ class TestDynamicICIntegration:
         )
 
         np.random.seed(42)
-        signals_hist = pd.DataFrame({'SFRZ4': np.random.randn(60)})
-        returns_hist = pd.DataFrame({'SFRZ4': np.random.randn(60)})
+        signals_hist = pl.DataFrame({'SFRZ4': np.random.randn(60)})
+        returns_hist = pl.DataFrame({'SFRZ4': np.random.randn(60)})
         current_signals = {'SFRZ4': 2.0}
 
         # Original IC
@@ -708,8 +706,8 @@ class TestDynamicICIntegration:
         alpha_gen = AlphaGenerator(IC=0.05, dynamic_ic=False)
 
         np.random.seed(42)
-        signals_hist = pd.DataFrame({'SFRZ4': np.random.randn(60)})
-        returns_hist = pd.DataFrame({'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252)})
+        signals_hist = pl.DataFrame({'SFRZ4': np.random.randn(60)})
+        returns_hist = pl.DataFrame({'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252)})
         current_signals = {'SFRZ4': 2.0}
 
         # Should use static IC

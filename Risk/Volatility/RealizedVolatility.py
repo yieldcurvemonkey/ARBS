@@ -16,19 +16,19 @@ Where:
 Example:
     Daily returns, 60-day lookback:
     >>> vol_est = RealizedVolatility(lookback=60, annualization_factor=252)
-    >>> returns = pd.DataFrame({'SFRZ4': daily_returns})
+    >>> returns = pl.DataFrame({'SFRZ4': daily_returns})
     >>> vols = vol_est.estimate(returns)
     >>> vols['SFRZ4']
     0.15  # 15% annualized volatility
 
     Weekly returns, 52-week lookback:
     >>> vol_est = RealizedVolatility(lookback=52, annualization_factor=52)
-    >>> returns = pd.DataFrame({'SFRZ4': weekly_returns})
+    >>> returns = pl.DataFrame({'SFRZ4': weekly_returns})
     >>> vols = vol_est.estimate(returns)
 """
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from typing import Dict
 
 from Risk.Volatility.VolatilityEstimator import VolatilityEstimator
@@ -50,7 +50,7 @@ class RealizedVolatility(VolatilityEstimator):
 
     Example:
         >>> vol_est = RealizedVolatility(lookback=60, annualization_factor=252)
-        >>> returns = pd.DataFrame({
+        >>> returns = pl.DataFrame({
         ...     'SFRZ4': np.random.randn(100) * 0.01,
         ...     'SFRH5': np.random.randn(100) * 0.015
         ... })
@@ -77,7 +77,7 @@ class RealizedVolatility(VolatilityEstimator):
         self.lookback = lookback
         self.annualization_factor = annualization_factor
 
-    def estimate(self, returns: pd.DataFrame) -> Dict[str, float]:
+    def estimate(self, returns: pl.DataFrame) -> Dict[str, float]:
         """
         Calculate realized volatility from historical returns.
 
@@ -92,7 +92,7 @@ class RealizedVolatility(VolatilityEstimator):
             Dict mapping asset → annualized volatility
 
         Example:
-            >>> returns = pd.DataFrame({
+            >>> returns = pl.DataFrame({
             ...     'SFRZ4': [0.01, -0.01, 0.02, -0.02, 0.01],
             ...     'SFRH5': [0.005, -0.005, 0.01, -0.01, 0.005]
             ... })
@@ -113,12 +113,19 @@ class RealizedVolatility(VolatilityEstimator):
         recent_returns = returns.tail(self.lookback)
 
         # Calculate standard deviation for each asset
-        std_devs = recent_returns.std()
+        std_dict = {}
+        for col in recent_returns.columns:
+            std_val = recent_returns[col].std()
+            # Handle both None (pandas) and NaN (polars)
+            if std_val is None or (isinstance(std_val, float) and np.isnan(std_val)):
+                std_dict[col] = 0.0
+            else:
+                std_dict[col] = std_val
 
         # Annualize: Vol = Std × √T
-        annualized_vols = std_devs * np.sqrt(self.annualization_factor)
+        annualized_vols = {
+            col: std * np.sqrt(self.annualization_factor)
+            for col, std in std_dict.items()
+        }
 
-        # Convert to dict, handling NaN
-        vols = annualized_vols.fillna(0.0).to_dict()
-
-        return vols
+        return annualized_vols

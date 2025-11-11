@@ -14,7 +14,7 @@ from Strategies.Factory.CovarianceFactory import CovarianceFactory
 from Strategies.Config.StrategyConfig import StrategyConfig
 from Signals.Base.BaseSignal import BaseSignal
 from Signals.AlphaGenerator import AlphaGenerator
-import pandas as pd
+import polars as pl
 
 
 class CustomTestSignal(BaseSignal):
@@ -23,7 +23,7 @@ class CustomTestSignal(BaseSignal):
         super().__init__(name='custom_test_signal')
 
     def calculate(self, prices, dates):
-        return pd.DataFrame(0.0, index=dates, columns=prices.columns)
+        return pl.DataFrame({col: [0.0] * len(dates) for col in prices.columns})
 
 
 def test_custom_signal_type_passes_validation_after_registration():

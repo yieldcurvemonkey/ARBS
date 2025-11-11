@@ -21,7 +21,7 @@ Test Scenarios:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date, timedelta
 from typing import Dict, List
 
@@ -50,7 +50,7 @@ def trending_market_data():
     class TrendingMDP:
         def get_price_history(self, instrument, start_date, end_date):
             # Generate dates
-            dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            dates = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
 
             # Set seed for deterministic test behavior
             np.random.seed(42)
@@ -72,7 +72,7 @@ def trending_market_data():
                 noise = np.random.randn(len(dates)) * 0.1
                 prices = 95.0 + trend + noise
 
-            return pd.DataFrame({
+            return pl.DataFrame({
                 'date': dates,
                 'price': prices
             })
@@ -93,7 +93,7 @@ def ranging_market_data():
     class RangingMDP:
         def get_price_history(self, instrument, start_date, end_date):
             # Generate dates
-            dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            dates = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
 
             # Set seed for deterministic test behavior
             np.random.seed(42)
@@ -115,7 +115,7 @@ def ranging_market_data():
                 noise = np.random.randn(len(dates)) * 0.25
                 prices = 95.0 + oscillation + noise
 
-            return pd.DataFrame({
+            return pl.DataFrame({
                 'date': dates,
                 'price': prices
             })
@@ -135,7 +135,7 @@ def carry_market_data():
     """
     class CarryMDP:
         def get_price_history(self, instrument, start_date, end_date):
-            dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            dates = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
 
             # Set seed for deterministic test behavior
             np.random.seed(42)
@@ -157,7 +157,7 @@ def carry_market_data():
                 noise = np.random.randn(len(dates)) * 0.1
                 prices = 95.0 + drift + noise
 
-            return pd.DataFrame({
+            return pl.DataFrame({
                 'date': dates,
                 'price': prices
             })
@@ -310,7 +310,7 @@ class TestDynamicIC:
 
         # Create synthetic returns
         np.random.seed(42)
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'ASSET': np.random.randn(60) * 0.10 / np.sqrt(252)
         })
 
@@ -332,7 +332,7 @@ class TestDynamicIC:
         signals = {'A': 2.0, 'B': 0.5, 'C': -0.5}  # Strong signal on A
 
         np.random.seed(42)
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'A': np.random.randn(60) * 0.01,
             'B': np.random.randn(60) * 0.01,
             'C': np.random.randn(60) * 0.01,
@@ -463,7 +463,7 @@ class TestRealisticBacktest:
             def get_price_history(self, instrument, start_date, end_date):
                 """Get price history for instrument."""
                 if instrument not in self.prices:
-                    return pd.DataFrame({'date': [], 'price': []})
+                    return pl.DataFrame({'date': [], 'price': []})
 
                 # Filter dates
                 prices = self.prices[instrument]
@@ -471,7 +471,7 @@ class TestRealisticBacktest:
                 filtered_dates = [d for d, m in zip(self.dates, mask) if m]
                 filtered_prices = [p for p, m in zip(prices, mask) if m]
 
-                return pd.DataFrame({
+                return pl.DataFrame({
                     'date': filtered_dates,
                     'price': filtered_prices
                 })
@@ -495,7 +495,7 @@ class TestRealisticBacktest:
         instruments = ['ASSET_A', 'ASSET_B', 'ASSET_C']
 
         # Create returns history
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'ASSET_A': np.random.randn(60) * 0.01,
             'ASSET_B': np.random.randn(60) * 0.01,
             'ASSET_C': np.random.randn(60) * 0.01,

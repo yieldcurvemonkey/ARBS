@@ -17,7 +17,7 @@ Carry is one of the most reliable signals in fixed income:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date, timedelta
 
 
@@ -48,7 +48,7 @@ class TestFuturesCarryCalculation:
         signal = CarrySignal(name="futures_carry")
 
         # Mock futures data: front contract SFRZ4, back contract SFRH5
-        inst_data = pd.DataFrame({
+        inst_data = pl.DataFrame({
             "date": [date(2024, 11, 1)],
             "contract": ["SFRZ4"],
             "price": [94.50],  # Front price
@@ -74,7 +74,7 @@ class TestFuturesCarryCalculation:
         signal = CarrySignal(name="futures_carry")
 
         # Backwardation: front (94.50) > back (94.45)
-        inst_data = pd.DataFrame({
+        inst_data = pl.DataFrame({
             "date": [date(2024, 11, 1)],
             "contract": ["SFRZ4"],
             "price": [94.50],
@@ -99,7 +99,7 @@ class TestFuturesCarryCalculation:
         signal = CarrySignal(name="futures_carry")
 
         # Contango: front (94.45) < back (94.50)
-        inst_data = pd.DataFrame({
+        inst_data = pl.DataFrame({
             "date": [date(2024, 11, 1)],
             "contract": ["SFRZ4"],
             "price": [94.45],
@@ -128,7 +128,7 @@ class TestCarryAnnualization:
         signal = CarrySignal(name="futures_carry", annualize=True)
 
         # Calendar spread: 5 bps over 47 days
-        inst_data = pd.DataFrame({
+        inst_data = pl.DataFrame({
             "date": [date(2024, 11, 1)],
             "contract": ["SFRZ4"],
             "price": [94.50],
@@ -154,14 +154,14 @@ class TestCarryAnnualization:
         signal = CarrySignal(name="futures_carry", annualize=True)
 
         # Same spread, different times to roll
-        inst_data_short = pd.DataFrame({
+        inst_data_short = pl.DataFrame({
             "date": [date(2024, 11, 1)],
             "price": [94.50],
             "next_price": [94.45],  # 5 bps spread
             "roll_date": [date(2024, 11, 15)],  # 14 days
         })
 
-        inst_data_long = pd.DataFrame({
+        inst_data_long = pl.DataFrame({
             "date": [date(2024, 11, 1)],
             "price": [94.50],
             "next_price": [94.45],  # Same 5 bps spread
@@ -186,7 +186,7 @@ class TestCarryBasisAdjustment:
 
         # Futures carry with basis adjustment
         # Basis ≈ 1bp per quarter for SOFR futures vs swaps
-        inst_data = pd.DataFrame({
+        inst_data = pl.DataFrame({
             "date": [date(2024, 11, 1)],
             "contract": ["SFRZ4"],
             "price": [94.50],
@@ -218,21 +218,21 @@ class TestCarryForMultipleContracts:
 
         # Three contracts: SFRZ4, SFRH5, SFRM5
         inst_data_list = [
-            pd.DataFrame({
+            pl.DataFrame({
                 "date": [date(2024, 11, 1)],
                 "contract": ["SFRZ4"],
                 "price": [94.50],
                 "next_price": [94.45],
                 "roll_date": [date(2024, 12, 18)],
             }),
-            pd.DataFrame({
+            pl.DataFrame({
                 "date": [date(2024, 11, 1)],
                 "contract": ["SFRH5"],
                 "price": [94.45],
                 "next_price": [94.40],
                 "roll_date": [date(2025, 3, 19)],
             }),
-            pd.DataFrame({
+            pl.DataFrame({
                 "date": [date(2024, 11, 1)],
                 "contract": ["SFRM5"],
                 "price": [94.40],
@@ -259,19 +259,19 @@ class TestCarryStandardization:
 
         # Create contracts with varying carry
         inst_data_list = [
-            pd.DataFrame({
+            pl.DataFrame({
                 "price": [94.50], "next_price": [94.45], "roll_date": [date(2024, 12, 18)]
             }),
-            pd.DataFrame({
+            pl.DataFrame({
                 "price": [94.50], "next_price": [94.48], "roll_date": [date(2024, 12, 18)]
             }),
-            pd.DataFrame({
+            pl.DataFrame({
                 "price": [94.50], "next_price": [94.52], "roll_date": [date(2024, 12, 18)]
             }),
-            pd.DataFrame({
+            pl.DataFrame({
                 "price": [94.50], "next_price": [94.47], "roll_date": [date(2024, 12, 18)]
             }),
-            pd.DataFrame({
+            pl.DataFrame({
                 "price": [94.50], "next_price": [94.49], "roll_date": [date(2024, 12, 18)]
             }),
         ]
@@ -323,7 +323,7 @@ class TestCarryEdgeCases:
         signal = CarrySignal(name="futures_carry")
 
         # 1 day before roll
-        inst_data = pd.DataFrame({
+        inst_data = pl.DataFrame({
             "date": [date(2024, 12, 17)],
             "price": [94.50],
             "next_price": [94.48],
@@ -343,7 +343,7 @@ class TestCarryEdgeCases:
         signal = CarrySignal(name="futures_carry")
 
         # No next contract data
-        inst_data = pd.DataFrame({
+        inst_data = pl.DataFrame({
             "date": [date(2024, 11, 1)],
             "contract": ["SFRZ4"],
             "price": [94.50],
@@ -362,7 +362,7 @@ class TestCarryEdgeCases:
         signal = CarrySignal(name="futures_carry")
 
         # Zero spread (flat curve)
-        inst_data = pd.DataFrame({
+        inst_data = pl.DataFrame({
             "date": [date(2024, 11, 1)],
             "price": [94.50],
             "next_price": [94.50],  # Same price

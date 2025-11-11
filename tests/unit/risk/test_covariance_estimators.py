@@ -23,7 +23,7 @@ From 2025 research:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
 class TestCovarianceEstimatorBasics:
@@ -60,16 +60,16 @@ class TestSampleCovariance:
 
         # Create simple returns data
         np.random.seed(42)
-        returns = pd.DataFrame(
+        returns = pl.DataFrame(
             np.random.randn(100, 5),
-            columns=['A', 'B', 'C', 'D', 'E']
+            schema=['A', 'B', 'C', 'D', 'E']
         )
 
         estimator = SampleCovariance()
         cov_matrix = estimator.fit(returns)
 
         # Compare to numpy
-        expected = returns.cov().values
+        expected = np.cov(returns.to_numpy(), rowvar=False, bias=False)
         np.testing.assert_array_almost_equal(cov_matrix, expected, decimal=6)
 
     def test_sample_covariance_returns_correct_shape(self):
@@ -77,7 +77,7 @@ class TestSampleCovariance:
         from Risk.Covariance.SampleCovariance import SampleCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(50, 10))
+        returns = pl.DataFrame(np.random.randn(50, 10))
 
         estimator = SampleCovariance()
         cov_matrix = estimator.fit(returns)
@@ -89,7 +89,7 @@ class TestSampleCovariance:
         from Risk.Covariance.SampleCovariance import SampleCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(50, 5))
+        returns = pl.DataFrame(np.random.randn(50, 5))
 
         estimator = SampleCovariance()
         cov_matrix = estimator.fit(returns)
@@ -101,7 +101,7 @@ class TestSampleCovariance:
         from Risk.Covariance.SampleCovariance import SampleCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimator = SampleCovariance()
         cov_matrix = estimator.fit(returns)
@@ -119,7 +119,7 @@ class TestLedoitWolfShrinkage:
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimator = LedoitWolfShrinkage()
         cov_matrix = estimator.fit(returns)
@@ -134,7 +134,7 @@ class TestLedoitWolfShrinkage:
         from Risk.Covariance.SampleCovariance import SampleCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(50, 10))
+        returns = pl.DataFrame(np.random.randn(50, 10))
 
         # Sample covariance
         sample_est = SampleCovariance()
@@ -155,7 +155,7 @@ class TestLedoitWolfShrinkage:
 
         # Create ill-conditioned case: N close to T
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(30, 25))  # T=30, N=25
+        returns = pl.DataFrame(np.random.randn(30, 25))  # T=30, N=25
 
         # Sample covariance (ill-conditioned)
         sample_est = SampleCovariance()
@@ -178,7 +178,7 @@ class TestLedoitWolfShrinkage:
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimator = LedoitWolfShrinkage()
         cov_matrix = estimator.fit(returns)
@@ -197,7 +197,7 @@ class TestHighDimensionalScenarios:
 
         # N > T: singular matrix
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(20, 30))  # T=20, N=30
+        returns = pl.DataFrame(np.random.randn(20, 30))  # T=20, N=30
 
         estimator = SampleCovariance()
         cov_matrix = estimator.fit(returns)
@@ -212,7 +212,7 @@ class TestHighDimensionalScenarios:
 
         # N close to T (realistic for portfolios)
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(60, 50))  # T=60, N=50
+        returns = pl.DataFrame(np.random.randn(60, 50))  # T=60, N=50
 
         estimator = LedoitWolfShrinkage()
         cov_matrix = estimator.fit(returns)
@@ -228,7 +228,7 @@ class TestHighDimensionalScenarios:
 
         # Small T, moderate N
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(30, 20))  # T=30, N=20
+        returns = pl.DataFrame(np.random.randn(30, 20))  # T=30, N=20
 
         estimator = LedoitWolfShrinkage()
         estimator.fit(returns)
@@ -249,7 +249,7 @@ class TestCovarianceComparison:
         from Risk.Covariance.CovarianceComparison import compare_estimators
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -268,7 +268,7 @@ class TestCovarianceComparison:
         from Risk.Covariance.CovarianceComparison import compare_estimators
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(50, 20))
+        returns = pl.DataFrame(np.random.randn(50, 20))
 
         estimators = {
             'Sample': SampleCovariance(),
@@ -293,7 +293,7 @@ class TestOutOfSamplePerformance:
         np.random.seed(42)
 
         # In-sample: estimate covariance
-        returns_in = pd.DataFrame(np.random.randn(50, 10))
+        returns_in = pl.DataFrame(np.random.randn(50, 10))
 
         sample_est = SampleCovariance()
         lw_est = LedoitWolfShrinkage()
@@ -302,7 +302,7 @@ class TestOutOfSamplePerformance:
         cov_lw = lw_est.fit(returns_in)
 
         # Out-of-sample: measure actual variance
-        returns_out = pd.DataFrame(np.random.randn(50, 10))
+        returns_out = pl.DataFrame(np.random.randn(50, 10))
 
         # Equal-weighted portfolio
         weights = np.ones(10) / 10
@@ -312,7 +312,7 @@ class TestOutOfSamplePerformance:
         var_pred_lw = weights @ cov_lw @ weights
 
         # Actual variance
-        portfolio_returns = returns_out @ weights
+        portfolio_returns = returns_out.to_numpy() @ weights
         var_actual = np.var(portfolio_returns, ddof=1)
 
         # LW prediction error should be smaller (on average)
@@ -333,7 +333,7 @@ class TestIntegrationWithOptimization:
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimator = LedoitWolfShrinkage()
         cov_matrix = estimator.fit(returns)
@@ -354,7 +354,7 @@ class TestIntegrationWithOptimization:
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimator = LedoitWolfShrinkage()
         cov_matrix = estimator.fit(returns)
@@ -379,7 +379,7 @@ class TestBusinessRequirements:
 
         np.random.seed(42)
         # Realistic portfolio: 100 assets, 252 days (1 year)
-        returns = pd.DataFrame(np.random.randn(252, 100))
+        returns = pl.DataFrame(np.random.randn(252, 100))
 
         estimator = LedoitWolfShrinkage()
 
@@ -395,11 +395,11 @@ class TestBusinessRequirements:
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
-
+        data = np.random.randn(100, 10)
         # Introduce NaN values
-        returns.iloc[10:20, 2] = np.nan
-        returns.iloc[30:35, 5] = np.nan
+        data[10:20, 2] = np.nan
+        data[30:35, 5] = np.nan
+        returns = pl.DataFrame(data)
 
         estimator = LedoitWolfShrinkage(handle_missing='pairwise')
         cov_matrix = estimator.fit(returns)
@@ -425,11 +425,12 @@ class TestBusinessRequirements:
         idio = np.random.randn(n_obs, n_assets) * 0.3
 
         # Returns: 90% common, 10% idiosyncratic
-        returns = pd.DataFrame(0.9 * common + 0.1 * idio)
+        returns = pl.DataFrame(0.9 * common + 0.1 * idio)
 
         # Verify high correlation
-        corr_matrix = returns.corr()
-        assert np.median(corr_matrix.values[np.triu_indices(10, k=1)]) > 0.8
+        returns_array = returns.to_numpy()
+        corr_matrix = np.corrcoef(returns_array, rowvar=False)
+        assert np.median(corr_matrix[np.triu_indices(10, k=1)]) > 0.8
 
         # LW should still work
         estimator = LedoitWolfShrinkage()

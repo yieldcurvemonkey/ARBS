@@ -57,15 +57,16 @@ class SampleCovariance(BaseCovarianceEstimator):
         Returns:
             Sample covariance matrix (N×N)
         """
-        # Handle missing data
+        # Handle missing data (returns polars DataFrame)
         returns_clean = self._handle_missing_data(returns)
 
         # Store asset names
         self.asset_names_ = list(returns_clean.columns)
 
-        # Calculate sample covariance
+        # Convert back to pandas for covariance calculation
         # pandas .cov() uses ddof=1 (unbiased estimator)
-        self.cov_matrix_ = returns_clean.cov().values
+        returns_pd = returns_clean.to_pandas()
+        self.cov_matrix_ = returns_pd.cov().to_numpy()
 
         return self.cov_matrix_
 

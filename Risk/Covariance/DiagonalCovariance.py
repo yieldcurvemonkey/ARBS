@@ -70,8 +70,9 @@ class DiagonalCovariance(BaseCovarianceEstimator):
         self.asset_names_ = list(returns_clean.columns)
 
         # Calculate variances (diagonal elements)
-        # pandas .var() uses ddof=1 (unbiased estimator)
-        variances = returns_clean.var().values
+        # polars .var() returns a DataFrame, convert back to pandas for consistency
+        var_result = returns_clean.to_pandas().var()
+        variances = var_result.to_numpy()
 
         # Create diagonal matrix
         self.cov_matrix_ = np.diag(variances)

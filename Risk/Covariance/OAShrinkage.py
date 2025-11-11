@@ -39,7 +39,7 @@ with fewer than 5× observations vs assets (T/N < 5).
 """
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from typing import Optional
 
 try:
@@ -90,7 +90,7 @@ class OAShrinkage(BaseCovarianceEstimator):
         self.sample_cov: Optional[np.ndarray] = None
         self._estimator: Optional[OAS] = None
 
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate OAS covariance matrix.
 
@@ -111,7 +111,7 @@ class OAShrinkage(BaseCovarianceEstimator):
         T, N = returns_clean.shape
 
         # 3. Convert to numpy
-        returns_array = returns_clean.values
+        returns_array = returns_clean.to_numpy()
 
         # 4. Call sklearn OAS
         self._estimator = OAS(store_precision=self.store_precision)

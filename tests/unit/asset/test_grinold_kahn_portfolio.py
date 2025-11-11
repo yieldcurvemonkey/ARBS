@@ -12,7 +12,7 @@ Validates:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date
 from typing import Dict
 
@@ -98,7 +98,7 @@ class TestGenerateWeights:
         )
 
         # Create synthetic returns history
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': [0.01, -0.01, 0.02, -0.01, 0.01] * 10,
             'SFRH5': [0.005, -0.005, 0.01, -0.005, 0.005] * 10
         })
@@ -131,7 +131,7 @@ class TestGenerateWeights:
             optimizer=MeanVarianceOptimizer(risk_aversion=1.0, long_only=True)
         )
 
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': [0.01, -0.01, 0.02, -0.01, 0.01] * 10,
             'SFRH5': [0.005, -0.005, 0.01, -0.005, 0.005] * 10
         })
@@ -156,7 +156,7 @@ class TestGenerateWeights:
             signals=[signal1, signal2]
         )
 
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': [0.01, -0.01, 0.02, -0.01, 0.01] * 10,
             'SFRH5': [0.005, -0.005, 0.01, -0.005, 0.005] * 10
         })
@@ -273,7 +273,7 @@ class TestGrinoldKahnIntegration:
 
         # Create returns history
         np.random.seed(42)
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': np.random.normal(0.001, 0.01, 60),
             'SFRH5': np.random.normal(0.001, 0.008, 60),
             'SFRM5': np.random.normal(0.001, 0.009, 60)
@@ -312,7 +312,7 @@ class TestGrinoldKahnIntegration:
         )
 
         # Initial history with normal volatility
-        returns1 = pd.DataFrame({
+        returns1 = pl.DataFrame({
             'SFRZ4': [0.01, -0.01, 0.02, -0.01, 0.01] * 10,
             'SFRH5': [0.005, -0.005, 0.01, -0.005, 0.005] * 10
         })
@@ -325,7 +325,7 @@ class TestGrinoldKahnIntegration:
         )
 
         # Updated history with much more volatile data for SFRZ4
-        returns2 = pd.DataFrame({
+        returns2 = pl.DataFrame({
             'SFRZ4': [0.01, -0.01, 0.02, -0.01, 0.01] * 10 + [0.10, -0.10, 0.12, -0.08, 0.10] * 2,
             'SFRH5': [0.005, -0.005, 0.01, -0.005, 0.005] * 10 + [0.005, -0.005, 0.01, -0.005, 0.005] * 2
         })

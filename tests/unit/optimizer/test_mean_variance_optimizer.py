@@ -33,7 +33,7 @@ Maximal Additions (later):
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
 class TestMeanVarianceOptimizerBasics:
@@ -73,8 +73,8 @@ class TestSingleAssetOptimization:
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
         # Single asset with positive signal
-        alphas = pd.Series([1.0], index=['SFRZ4'])
-        cov = pd.DataFrame([[0.01]], index=['SFRZ4'], columns=['SFRZ4'])
+        alphas = pl.Series('SFRZ4', [1.0])
+        cov = pl.DataFrame({'SFRZ4': [0.01]})
 
         optimizer = MeanVarianceOptimizer(long_only=True)
         weights = optimizer.optimize(alphas, cov)
@@ -88,8 +88,8 @@ class TestSingleAssetOptimization:
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
         # Single asset with negative signal
-        alphas = pd.Series([-1.0], index=['SFRZ4'])
-        cov = pd.DataFrame([[0.01]], index=['SFRZ4'], columns=['SFRZ4'])
+        alphas = pl.Series('SFRZ4', [-1.0])
+        cov = pl.DataFrame({'SFRZ4': [0.01]})
 
         # With allow_cash=True, can hold cash when signals are negative
         optimizer = MeanVarianceOptimizer(long_only=True, allow_cash=True)
@@ -103,8 +103,8 @@ class TestSingleAssetOptimization:
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
         # Single asset with negative signal
-        alphas = pd.Series([-1.0], index=['SFRZ4'])
-        cov = pd.DataFrame([[0.01]], index=['SFRZ4'], columns=['SFRZ4'])
+        alphas = pl.Series('SFRZ4', [-1.0])
+        cov = pl.DataFrame({'SFRZ4': [0.01]})
 
         # Long-short with allow_cash: can hold zero or negative position
         optimizer = MeanVarianceOptimizer(
@@ -129,13 +129,13 @@ class TestTwoAssetOptimization:
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
         # Asset A has signal 2.0, Asset B has signal 1.0
-        alphas = pd.Series([2.0, 1.0], index=['A', 'B'])
+        alphas = pl.Series('alphas', [2.0, 1.0])
 
         # Uncorrelated (ρ = 0), equal variance
-        cov = pd.DataFrame([
-            [0.01, 0.0],
-            [0.0, 0.01],
-        ], index=['A', 'B'], columns=['A', 'B'])
+        cov = pl.DataFrame({
+            'A': [0.01, 0.0],
+            'B': [0.0, 0.01],
+        })
 
         optimizer = MeanVarianceOptimizer(long_only=True)
         weights = optimizer.optimize(alphas, cov)
@@ -149,13 +149,13 @@ class TestTwoAssetOptimization:
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
         # Equal signals
-        alphas = pd.Series([1.0, 1.0], index=['A', 'B'])
+        alphas = pl.Series('alphas', [1.0, 1.0])
 
         # Uncorrelated, equal variance
-        cov = pd.DataFrame([
-            [0.01, 0.0],
-            [0.0, 0.01],
-        ], index=['A', 'B'], columns=['A', 'B'])
+        cov = pl.DataFrame({
+            'A': [0.01, 0.0],
+            'B': [0.0, 0.01],
+        })
 
         optimizer = MeanVarianceOptimizer(long_only=True)
         weights = optimizer.optimize(alphas, cov)
@@ -169,22 +169,22 @@ class TestTwoAssetOptimization:
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
         # Equal positive signals
-        alphas = pd.Series([1.0, 1.0], index=['A', 'B'])
+        alphas = pl.Series('alphas', [1.0, 1.0])
 
         # Highly correlated (ρ = 0.95)
-        cov = pd.DataFrame([
-            [0.01, 0.0095],
-            [0.0095, 0.01],
-        ], index=['A', 'B'], columns=['A', 'B'])
+        cov = pl.DataFrame({
+            'A': [0.01, 0.0095],
+            'B': [0.0095, 0.01],
+        })
 
         optimizer = MeanVarianceOptimizer(long_only=True, risk_aversion=2.0)
         weights_corr = optimizer.optimize(alphas, cov)
 
         # Compare to uncorrelated case
-        cov_uncorr = pd.DataFrame([
-            [0.01, 0.0],
-            [0.0, 0.01],
-        ], index=['A', 'B'], columns=['A', 'B'])
+        cov_uncorr = pl.DataFrame({
+            'A': [0.01, 0.0],
+            'B': [0.0, 0.01],
+        })
 
         weights_uncorr = optimizer.optimize(alphas, cov_uncorr)
 
@@ -203,8 +203,8 @@ class TestRiskAversion:
 
         # Single volatile asset with allow_cash (to see risk aversion effect)
         # Use small alpha and high variance so risk aversion matters
-        alphas = pd.Series([0.5], index=['A'])  # Smaller alpha
-        cov = pd.DataFrame([[0.10]], index=['A'], columns=['A'])  # Very high variance
+        alphas = pl.Series('A', [0.5])  # Smaller alpha
+        cov = pl.DataFrame({'A': [0.10]})  # Very high variance
 
         # Low risk aversion (allows more exposure)
         opt_low = MeanVarianceOptimizer(
@@ -238,14 +238,14 @@ class TestConstraints:
 
         # 5 assets with random signals
         np.random.seed(42)
-        alphas = pd.Series(np.random.randn(5), index=['A', 'B', 'C', 'D', 'E'])
+        alphas = pl.Series('alphas', np.random.randn(5).tolist())
 
         # Random covariance (use Ledoit-Wolf to ensure PSD)
-        returns = pd.DataFrame(np.random.randn(100, 5), columns=['A', 'B', 'C', 'D', 'E'])
+        returns = pl.DataFrame({col: np.random.randn(100).tolist() for col in ['A', 'B', 'C', 'D', 'E']})
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
         lw = LedoitWolfShrinkage()
         cov_matrix = lw.fit(returns)
-        cov = pd.DataFrame(cov_matrix, index=alphas.index, columns=alphas.index)
+        cov = pl.DataFrame(cov_matrix)
 
         optimizer = MeanVarianceOptimizer(long_only=True)
         weights = optimizer.optimize(alphas, cov)
@@ -258,14 +258,14 @@ class TestConstraints:
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
         # Mixed signals
-        alphas = pd.Series([1.0, -1.0, 0.5, -0.5], index=['A', 'B', 'C', 'D'])
+        alphas = pl.Series('alphas', [1.0, -1.0, 0.5, -0.5])
 
         # Create covariance
-        returns = pd.DataFrame(np.random.randn(100, 4), columns=['A', 'B', 'C', 'D'])
+        returns = pl.DataFrame({col: np.random.randn(100).tolist() for col in ['A', 'B', 'C', 'D']})
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
         lw = LedoitWolfShrinkage()
         cov_matrix = lw.fit(returns)
-        cov = pd.DataFrame(cov_matrix, index=alphas.index, columns=alphas.index)
+        cov = pl.DataFrame(cov_matrix)
 
         optimizer = MeanVarianceOptimizer(long_only=False, leverage_limit=2.0)
         weights = optimizer.optimize(alphas, cov)
@@ -278,14 +278,14 @@ class TestConstraints:
         """Individual position bounds are respected."""
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
-        alphas = pd.Series([2.0, 1.0, 0.5], index=['A', 'B', 'C'])
+        alphas = pl.Series('alphas', [2.0, 1.0, 0.5])
 
         # Create covariance
-        returns = pd.DataFrame(np.random.randn(100, 3), columns=['A', 'B', 'C'])
+        returns = pl.DataFrame({col: np.random.randn(100).tolist() for col in ['A', 'B', 'C']})
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
         lw = LedoitWolfShrinkage()
         cov_matrix = lw.fit(returns)
-        cov = pd.DataFrame(cov_matrix, index=alphas.index, columns=alphas.index)
+        cov = pl.DataFrame(cov_matrix)
 
         # Max 40% per position
         optimizer = MeanVarianceOptimizer(
@@ -313,14 +313,14 @@ class TestScalability:
             'SFRH7', 'SFRM7'
         ]
         np.random.seed(42)
-        alphas = pd.Series(np.random.randn(10), index=contracts)
+        alphas = pl.Series('alphas', np.random.randn(10).tolist())
 
         # Generate covariance using Ledoit-Wolf
-        returns = pd.DataFrame(np.random.randn(100, 10), columns=contracts)
+        returns = pl.DataFrame({col: np.random.randn(100).tolist() for col in contracts})
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
         lw = LedoitWolfShrinkage()
         cov_matrix = lw.fit(returns)
-        cov = pd.DataFrame(cov_matrix, index=contracts, columns=contracts)
+        cov = pl.DataFrame(cov_matrix)
 
         optimizer = MeanVarianceOptimizer(long_only=True)
         weights = optimizer.optimize(alphas, cov)
@@ -335,14 +335,14 @@ class TestScalability:
         # 50 assets
         assets = [f"Asset_{i}" for i in range(50)]
         np.random.seed(42)
-        alphas = pd.Series(np.random.randn(50), index=assets)
+        alphas = pl.Series('alphas', np.random.randn(50).tolist())
 
         # Generate covariance using Ledoit-Wolf (critical for N=50)
-        returns = pd.DataFrame(np.random.randn(200, 50), columns=assets)
+        returns = pl.DataFrame({col: np.random.randn(200).tolist() for col in assets})
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
         lw = LedoitWolfShrinkage()
         cov_matrix = lw.fit(returns)
-        cov = pd.DataFrame(cov_matrix, index=assets, columns=assets)
+        cov = pl.DataFrame(cov_matrix)
 
         optimizer = MeanVarianceOptimizer(long_only=True)
         weights = optimizer.optimize(alphas, cov)
@@ -358,13 +358,13 @@ class TestEdgeCases:
         """All zero signals → zero weights (or equal allocation)."""
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
-        alphas = pd.Series([0.0, 0.0, 0.0], index=['A', 'B', 'C'])
+        alphas = pl.Series('alphas', [0.0, 0.0, 0.0])
 
-        returns = pd.DataFrame(np.random.randn(100, 3), columns=['A', 'B', 'C'])
+        returns = pl.DataFrame({col: np.random.randn(100).tolist() for col in ['A', 'B', 'C']})
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
         lw = LedoitWolfShrinkage()
         cov_matrix = lw.fit(returns)
-        cov = pd.DataFrame(cov_matrix, index=alphas.index, columns=alphas.index)
+        cov = pl.DataFrame(cov_matrix)
 
         optimizer = MeanVarianceOptimizer(long_only=True)
         weights = optimizer.optimize(alphas, cov)
@@ -379,13 +379,13 @@ class TestEdgeCases:
         """All negative signals with long-only → zero weights (cash)."""
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
-        alphas = pd.Series([-1.0, -2.0, -0.5], index=['A', 'B', 'C'])
+        alphas = pl.Series('alphas', [-1.0, -2.0, -0.5])
 
-        returns = pd.DataFrame(np.random.randn(100, 3), columns=['A', 'B', 'C'])
+        returns = pl.DataFrame({col: np.random.randn(100).tolist() for col in ['A', 'B', 'C']})
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
         lw = LedoitWolfShrinkage()
         cov_matrix = lw.fit(returns)
-        cov = pd.DataFrame(cov_matrix, index=alphas.index, columns=alphas.index)
+        cov = pl.DataFrame(cov_matrix)
 
         optimizer = MeanVarianceOptimizer(long_only=True, allow_cash=True)
         weights = optimizer.optimize(alphas, cov)
@@ -397,8 +397,8 @@ class TestEdgeCases:
         """Mismatched alphas and covariance → raises ValueError."""
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
-        alphas = pd.Series([1.0, 2.0], index=['A', 'B'])
-        cov = pd.DataFrame([[0.01]], index=['C'], columns=['C'])  # Different assets
+        alphas = pl.Series('alphas', [1.0, 2.0])
+        cov = pl.DataFrame({'C': [0.01]})  # Different assets
 
         optimizer = MeanVarianceOptimizer()
 

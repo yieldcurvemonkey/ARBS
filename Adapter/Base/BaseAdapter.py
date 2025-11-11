@@ -18,7 +18,7 @@ Output format:
 from abc import ABC, abstractmethod
 from datetime import date
 from typing import Any, List
-import pandas as pd
+import polars as pl
 
 
 class BaseAdapter(ABC):
@@ -44,7 +44,7 @@ class BaseAdapter(ABC):
         self,
         queries: List[Any],
         as_of_date: date,
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         """
         Convert query results to signal-ready DataFrame.
 

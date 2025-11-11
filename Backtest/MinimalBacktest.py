@@ -39,7 +39,7 @@ Output:
 from datetime import date
 from typing import Any, List
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from Backtest.Base.BaseBacktest import BaseBacktest, BacktestResult
 from Adapter.FuturesAdapter import FuturesAdapter
@@ -158,33 +158,43 @@ class MinimalBacktest(BaseBacktest):
                 continue
 
             # Store prices
-            prices = pd.Series({row['contract']: row['price'] for _, row in df.iterrows()})
-            all_prices.append({'date': as_of, **prices.to_dict()})
+            if isinstance(df, pl.DataFrame):
+                prices = {row['contract']: row['price'] for row in df.iter_rows(named=True)}
+            else:
+                prices = {row['contract']: row['price'] for _, row in df.iterrows()}
+            all_prices.append({'date': as_of, **prices})
 
             # Calculate returns if we have previous prices
             if previous_prices is not None and previous_weights is not None:
                 # Use ReturnsCalculator for price → return conversion
-                curr_prices_dict = prices.to_dict()
-                prev_prices_dict = previous_prices.to_dict()
-                returns_dict = self.returns_calc.calculate_returns(curr_prices_dict, prev_prices_dict)
-                returns = pd.Series(returns_dict)
+                returns_dict = self.returns_calc.calculate_returns(prices, previous_prices)
 
-                if len(returns) > 0:
-                    return_history.append(returns)
+                if len(returns_dict) > 0:
+                    return_history.append(returns_dict)
 
                     # Calculate portfolio return (weighted sum of returns)
-                    common_contracts = list(set(returns.index) & set(previous_weights.index))
+                    common_contracts = list(set(returns_dict.keys()) & set(previous_weights.keys()))
                     if len(common_contracts) > 0:
-                        port_ret = sum(previous_weights[c] * returns.get(c, 0.0) for c in common_contracts)
+                        port_ret = sum(previous_weights[c] * returns_dict.get(c, 0.0) for c in common_contracts)
                         all_returns.append({'date': as_of, 'return': port_ret})
 
             # Step 2: Generate carry signals
             signals = {}
-            for _, row in df.iterrows():
+            if isinstance(df, pl.DataFrame):
+                row_iter = df.iter_rows(named=True)
+            else:
+                row_iter = (row for _, row in df.iterrows())
+
+            for row in row_iter:
                 contract = row['contract']
                 price = row['price']
-                next_price = row.get('next_price', np.nan)
-                roll_date = row.get('roll_date', as_of)
+                # Handle both pandas and polars row access
+                if isinstance(df, pl.DataFrame):
+                    next_price = row.get('next_price') or np.nan
+                    roll_date = row.get('roll_date') or as_of
+                else:
+                    next_price = row.get('next_price', np.nan)
+                    roll_date = row.get('roll_date', as_of)
 
                 # Convert roll_date to date if it's a Timestamp
                 if hasattr(roll_date, 'date'):
@@ -201,60 +211,64 @@ class MinimalBacktest(BaseBacktest):
             if len(signals) == 0:
                 signals = {c: 0.0 for c in contracts}
 
-            signals_series = pd.Series(signals)
             all_signals.append({'date': as_of, **signals})
 
             # Step 3: Estimate covariance (if we have enough history)
             if len(return_history) >= self.min_history:
-                returns_df = pd.DataFrame(return_history).fillna(0)
+                returns_df = pl.DataFrame(return_history).fill_null(0)
                 cov_matrix = self.risk_model.fit(returns_df)
-                cov_df = pd.DataFrame(cov_matrix, index=returns_df.columns, columns=returns_df.columns)
             else:
                 # Not enough history: use identity (equal variance, no correlation)
-                cov_df = pd.DataFrame(
-                    np.eye(len(signals_series)) * 0.01,
-                    index=signals_series.index,
-                    columns=signals_series.index
-                )
+                cov_matrix = np.eye(len(signals)) * 0.01
 
             # Step 4: Convert signals → alphas using IC × Vol × Z
             # First standardize signals to z-scores
-            if signals_series.std() > 0:
-                z_scores = (signals_series - signals_series.mean()) / signals_series.std()
+            signal_values = list(signals.values())
+            if np.std(signal_values) > 0:
+                mean_sig = np.mean(signal_values)
+                std_sig = np.std(signal_values)
+                z_scores = {c: (signals[c] - mean_sig) / std_sig for c in signals.keys()}
             else:
-                z_scores = signals_series
+                z_scores = signals
 
             # Convert z-scores → alphas (expected returns)
             if len(return_history) > 0:
-                returns_df = pd.DataFrame(return_history).fillna(0)
+                returns_df = pl.DataFrame(return_history).fill_null(0)
                 alphas_dict = self.alpha_generator.signals_to_alphas(
-                    z_scores.to_dict(),
+                    z_scores,
                     returns_df,
                     as_of
                 )
-                alphas = pd.Series(alphas_dict)
+                alphas = alphas_dict
             else:
                 # No history: use z-scores directly (fallback)
                 alphas = z_scores
 
             # Step 5: Optimize weights
             try:
-                weights = self.optimizer.optimize(alphas, cov_df)
-                all_weights.append({'date': as_of, **weights.to_dict()})
+                weights = self.optimizer.optimize(alphas, cov_matrix)
+                all_weights.append({'date': as_of, **weights})
                 previous_weights = weights
             except Exception:
                 # Optimization failed: use equal weights
-                equal_weights = pd.Series(1.0 / len(alphas), index=alphas.index)
-                all_weights.append({'date': as_of, **equal_weights.to_dict()})
+                equal_weights = {c: 1.0 / len(alphas) for c in alphas.keys()}
+                all_weights.append({'date': as_of, **equal_weights})
                 previous_weights = equal_weights
 
             previous_prices = prices
 
         # Convert to DataFrames
-        weights_df = pd.DataFrame(all_weights).set_index('date').fillna(0)
-        signals_df = pd.DataFrame(all_signals).set_index('date').fillna(0)
-        prices_df = pd.DataFrame(all_prices).set_index('date').fillna(0)
-        returns_series = pd.Series({r['date']: r['return'] for r in all_returns})
+        weights_df = pl.DataFrame(all_weights).fill_null(0) if all_weights else pl.DataFrame()
+        signals_df = pl.DataFrame(all_signals).fill_null(0) if all_signals else pl.DataFrame()
+        prices_df = pl.DataFrame(all_prices).fill_null(0) if all_prices else pl.DataFrame()
+        # Convert returns dict to pl.Series
+        returns_dict = {r['date']: r['return'] for r in all_returns}
+        if returns_dict:
+            dates = list(returns_dict.keys())
+            values = list(returns_dict.values())
+            returns_series = pl.Series(values=values)
+        else:
+            returns_series = pl.Series(values=[], dtype=pl.Float64)
 
         # Calculate performance metrics
         ic = self._calculate_ic(signals_df, returns_series)
@@ -271,7 +285,7 @@ class MinimalBacktest(BaseBacktest):
             total_return=total_return,
         )
 
-    def _calculate_ic(self, signals: pd.DataFrame, returns: pd.Series) -> float:
+    def _calculate_ic(self, signals: pl.DataFrame, returns: pl.Series) -> float:
         """Calculate Information Coefficient."""
         if len(returns) < 2:
             return np.nan
@@ -281,22 +295,27 @@ class MinimalBacktest(BaseBacktest):
         # More sophisticated: lag signals properly
         try:
             # Get signal values (flatten across contracts)
-            signal_values = signals.values.flatten()
+            if len(signals) > 0:
+                signal_values = signals.to_numpy().flatten()
+            else:
+                signal_values = []
             # Crude approximation for MVP
             if len(signal_values) > 0 and len(returns) > 0:
+                return_values = returns.to_numpy()
                 # Just check if positive signals → positive returns on average
-                return calculate_ic(signal_values[:len(returns)], returns.values)
+                return calculate_ic(signal_values[:len(return_values)], return_values)
             return 0.0
         except Exception:
             return 0.0
 
-    def _calculate_sharpe(self, returns: pd.Series) -> float:
+    def _calculate_sharpe(self, returns: pl.Series) -> float:
         """Calculate Sharpe ratio (annualized)."""
         if len(returns) < 2:
             return np.nan
 
-        mean_ret = returns.mean()
-        std_ret = returns.std()
+        return_values = returns.to_numpy()
+        mean_ret = np.mean(return_values)
+        std_ret = np.std(return_values)
 
         if std_ret == 0:
             return 0.0
@@ -305,22 +324,23 @@ class MinimalBacktest(BaseBacktest):
         sharpe = (mean_ret / std_ret) * np.sqrt(52)
         return sharpe
 
-    def _calculate_total_return(self, returns: pd.Series) -> float:
+    def _calculate_total_return(self, returns: pl.Series) -> float:
         """Calculate cumulative return."""
         if len(returns) == 0:
             return 0.0
 
         # Compound returns
-        cum_ret = (1 + returns).prod() - 1
+        return_values = returns.to_numpy()
+        cum_ret = np.prod(1 + return_values) - 1
         return cum_ret
 
     def _empty_result(self) -> BacktestResult:
         """Return empty result for edge cases."""
         return BacktestResult(
-            weights=pd.DataFrame(),
-            returns=pd.Series(dtype=float),
-            signals=pd.DataFrame(),
-            prices=pd.DataFrame(),
+            weights=pl.DataFrame(),
+            returns=pl.Series(values=[], dtype=pl.Float64),
+            signals=pl.DataFrame(),
+            prices=pl.DataFrame(),
             ic=np.nan,
             sharpe_ratio=np.nan,
             total_return=0.0,

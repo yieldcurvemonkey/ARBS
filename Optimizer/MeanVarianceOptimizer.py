@@ -42,11 +42,30 @@ Maximal Additions (Phase 2):
 """
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from scipy.optimize import minimize
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 
 from Optimizer.Base.BaseOptimizer import BaseOptimizer
+
+
+class WeightsDict(dict):
+    """
+    Wrapper around dict that provides Series-like methods for compatibility.
+
+    Allows both dict-like access (weights['A']) and Series-like operations:
+    - weights.sum(): sum all values
+    - abs(weights): absolute value of all weights
+    - len(weights): number of assets
+    """
+
+    def sum(self) -> float:
+        """Sum all portfolio weights."""
+        return sum(self.values())
+
+    def __abs__(self):
+        """Return WeightsDict with absolute values."""
+        return WeightsDict({k: abs(v) for k, v in self.items()})
 
 
 class MeanVarianceOptimizer(BaseOptimizer):
@@ -89,9 +108,9 @@ class MeanVarianceOptimizer(BaseOptimizer):
 
     def optimize(
         self,
-        alphas: pd.Series,
-        covariance: pd.DataFrame,
-    ) -> pd.Series:
+        alphas: pl.Series,
+        covariance: pl.DataFrame,
+    ) -> Dict[str, float]:
         """
         Optimize portfolio weights.
 
@@ -100,25 +119,45 @@ class MeanVarianceOptimizer(BaseOptimizer):
             covariance: Covariance matrix (N×N)
 
         Returns:
-            Optimal portfolio weights (asset → weight)
+            Optimal portfolio weights (asset → weight as dict)
 
         Example:
-            >>> alphas = pd.Series([1.0, 0.5, -0.5], index=['A', 'B', 'C'])
-            >>> cov = pd.DataFrame(...)
+            >>> alphas = pl.Series('alphas', [1.0, 0.5, -0.5])
+            >>> cov = pl.DataFrame(...)
             >>> optimizer = MeanVarianceOptimizer(risk_aversion=1.0, long_only=True)
             >>> weights = optimizer.optimize(alphas, cov)
             >>> print(weights)
-            A    0.50
-            B    0.30
-            C    0.20
+            {'A': 0.50, 'B': 0.30, 'C': 0.20}
         """
-        # Validate inputs
-        self._validate_inputs(alphas, covariance)
+        # Validate inputs (override to work with Polars)
+        self._validate_inputs_polars(alphas, covariance)
 
-        # Align alphas and covariance
-        assets = list(alphas.index)
-        alphas_aligned = alphas[assets].values
-        cov_matrix = covariance.loc[assets, assets].values
+        # Extract asset names and values from Polars objects
+        if isinstance(alphas, pl.Series):
+            # For single-asset Series, the name is the asset
+            if len(alphas) == 1:
+                assets = [alphas.name] if alphas.name else ['Asset_0']
+                alphas_aligned = alphas.to_numpy()
+            else:
+                # Multi-asset Series: assume asset names are column headers in cov
+                assets = covariance.columns
+                alphas_aligned = alphas.to_numpy()
+        else:
+            raise ValueError("alphas must be a polars Series")
+
+        # Validate asset count matches
+        if len(alphas_aligned) != len(assets):
+            raise ValueError(
+                f"alphas and covariance must have same assets. "
+                f"Alphas count: {len(alphas_aligned)}, Covariance assets: {len(assets)}"
+            )
+
+        # Convert covariance DataFrame to numpy, selecting rows/columns by asset names
+        if isinstance(covariance, pl.DataFrame):
+            # Select columns in order of assets
+            cov_matrix = covariance.select(assets).to_numpy()
+        else:
+            raise ValueError("covariance must be a polars DataFrame")
 
         # Get dimensions
         n_assets = len(assets)
@@ -155,10 +194,54 @@ class MeanVarianceOptimizer(BaseOptimizer):
         else:
             weights_array = result.x
 
-        # Convert to Series
-        self.weights_ = pd.Series(weights_array, index=assets)
+        # Convert to WeightsDict with asset names as keys
+        weights_dict = WeightsDict({asset: float(weight) for asset, weight in zip(assets, weights_array)})
+        self.weights_ = weights_dict
 
-        return self.weights_
+        return weights_dict
+
+    def _validate_inputs_polars(
+        self,
+        alphas: pl.Series,
+        covariance: pl.DataFrame,
+    ) -> None:
+        """
+        Validate that alphas and covariance are compatible (Polars version).
+
+        Overrides BaseOptimizer._validate_inputs to work with Polars objects
+        which don't have .index attribute.
+
+        Args:
+            alphas: Alpha signals (Polars Series)
+            covariance: Covariance matrix (Polars DataFrame)
+
+        Raises:
+            ValueError: If inputs are incompatible
+        """
+        # Check that alphas is Series
+        if not isinstance(alphas, pl.Series):
+            raise ValueError("alphas must be a polars Series")
+
+        # Check that covariance is DataFrame
+        if not isinstance(covariance, pl.DataFrame):
+            raise ValueError("covariance must be a polars DataFrame")
+
+        # Check covariance is square
+        n_cols = len(covariance.columns)
+        n_rows = covariance.shape[0]
+        if n_rows != n_cols:
+            raise ValueError(
+                f"Covariance must be square, got {n_rows}x{n_cols}"
+            )
+
+        # Check for NaN values in alphas
+        if alphas.null_count() > 0:
+            raise ValueError("Alphas contain NaN values")
+
+        # Check for NaN values in covariance
+        null_counts = covariance.null_count()
+        if null_counts.sum_horizontal().max() > 0:
+            raise ValueError("Covariance contains NaN values")
 
     def _objective(
         self,
@@ -263,9 +346,9 @@ class MeanVarianceOptimizer(BaseOptimizer):
 
     def portfolio_statistics(
         self,
-        alphas: pd.Series,
-        covariance: pd.DataFrame,
-        weights: Optional[pd.Series] = None,
+        alphas: pl.Series,
+        covariance: pl.DataFrame,
+        weights: Optional[WeightsDict] = None,
     ) -> dict:
         """
         Calculate portfolio statistics for given weights.
@@ -287,11 +370,23 @@ class MeanVarianceOptimizer(BaseOptimizer):
         if weights is None:
             weights = self.get_weights()
 
-        # Align
-        assets = list(weights.index)
-        w = weights[assets].values
-        alpha_vec = alphas[assets].values
-        cov = covariance.loc[assets, assets].values
+        # Extract assets and values from WeightsDict
+        if isinstance(weights, (WeightsDict, dict)):
+            assets = list(weights.keys())
+            w = np.array([weights[asset] for asset in assets])
+        else:
+            raise ValueError("weights must be a WeightsDict or dict")
+
+        # Extract alphas and covariance for the same assets
+        if isinstance(alphas, pl.Series):
+            alpha_vec = alphas.to_numpy()
+        else:
+            raise ValueError("alphas must be a polars Series")
+
+        if isinstance(covariance, pl.DataFrame):
+            cov = covariance.select(assets).to_numpy()
+        else:
+            raise ValueError("covariance must be a polars DataFrame")
 
         # Expected return
         expected_return = np.dot(alpha_vec, w)

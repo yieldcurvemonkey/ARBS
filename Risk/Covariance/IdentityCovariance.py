@@ -82,7 +82,8 @@ class IdentityCovariance(BaseCovarianceEstimator):
         self.asset_names_ = list(returns_clean.columns)
 
         # Calculate individual variances for each asset
-        individual_variances = returns_clean.var()
+        # Convert to pandas since polars.var() returns DataFrame, not Series
+        individual_variances = returns_clean.to_pandas().var()
 
         # Calculate mean variance across all assets
         mean_variance = individual_variances.mean()

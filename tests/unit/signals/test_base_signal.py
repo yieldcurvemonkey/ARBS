@@ -18,7 +18,7 @@ Test structure follows AlphaEval framework (2025):
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date, timedelta
 
 
@@ -55,7 +55,7 @@ class TestSignalGeneration:
         signal = TestSignal(name="test_signal")
 
         # Mock instrument data
-        inst_data = pd.DataFrame({
+        inst_data = pl.DataFrame({
             "date": [date(2025, 1, 1), date(2025, 1, 2)],
             "price": [100.0, 101.0],
         })
@@ -80,9 +80,9 @@ class TestSignalGeneration:
 
         # Mock data for 3 instruments
         inst_data_list = [
-            pd.DataFrame({"date": [date(2025, 1, 1)], "price": [100.0]}),
-            pd.DataFrame({"date": [date(2025, 1, 1)], "price": [200.0]}),
-            pd.DataFrame({"date": [date(2025, 1, 1)], "price": [300.0]}),
+            pl.DataFrame({"date": [date(2025, 1, 1)], "price": [100.0]}),
+            pl.DataFrame({"date": [date(2025, 1, 1)], "price": [200.0]}),
+            pl.DataFrame({"date": [date(2025, 1, 1)], "price": [300.0]}),
         ]
 
         alphas = signal.generate_batch(
@@ -110,7 +110,7 @@ class TestSignalStandardization:
 
         # Create data with known distribution
         inst_data_list = [
-            pd.DataFrame({"value": [v]}) for v in [10, 20, 30, 40, 50]
+            pl.DataFrame({"value": [v]}) for v in [10, 20, 30, 40, 50]
         ]
 
         alphas = signal.generate_batch(
@@ -134,8 +134,8 @@ class TestSignalStandardization:
         signal = TestSignal(name="test_signal", standardize=False)
 
         inst_data_list = [
-            pd.DataFrame({"value": [10]}),
-            pd.DataFrame({"value": [20]}),
+            pl.DataFrame({"value": [10]}),
+            pl.DataFrame({"value": [20]}),
         ]
 
         alphas = signal.generate_batch(
@@ -173,7 +173,7 @@ class TestSignalMetadata:
 
         signal = TestSignal(name="test")
 
-        inst_data = pd.DataFrame({"value": [1.0]})
+        inst_data = pl.DataFrame({"value": [1.0]})
         as_of = date(2025, 1, 15)
 
         signal.generate(inst_data=inst_data, market_data=None, as_of=as_of)
@@ -297,11 +297,11 @@ class TestICTimeSeries:
         from Signals.Utils.IC import calculate_ic_time_series
 
         # Create time series of forecasts and actuals
-        dates = pd.date_range(start="2025-01-01", periods=100, freq="D")
+        dates = pl.datetime_range(start="2025-01-01", periods=100, interval="1d")
         np.random.seed(42)
 
-        forecasts = pd.Series(np.random.randn(100), index=dates)
-        actuals = pd.Series(0.2 * forecasts + 0.8 * np.random.randn(100), index=dates)
+        forecasts = pl.Series(np.random.randn(100), index=dates)
+        actuals = pl.Series(0.2 * forecasts + 0.8 * np.random.randn(100), index=dates)
 
         ic_series = calculate_ic_time_series(
             forecasts=forecasts,
@@ -309,7 +309,7 @@ class TestICTimeSeries:
             window=20,  # 20-day rolling window
         )
 
-        assert isinstance(ic_series, pd.Series)
+        assert isinstance(ic_series, pl.Series)
         assert len(ic_series) > 0
         assert ic_series.index[0] >= dates[19]  # First IC after 20 days
 
@@ -318,15 +318,15 @@ class TestICTimeSeries:
         from Signals.Utils.IC import calculate_ic_decay
 
         # Create signal with decaying IC
-        dates = pd.date_range(start="2025-01-01", periods=100, freq="D")
+        dates = pl.datetime_range(start="2025-01-01", periods=100, interval="1d")
         np.random.seed(42)
 
         # IC decays exponentially
         days = np.arange(100)
         decay_factor = np.exp(-days / 20)  # Halflife = 20 days
 
-        forecasts = pd.Series(np.random.randn(100), index=dates)
-        actuals = pd.Series(
+        forecasts = pl.Series(np.random.randn(100), index=dates)
+        actuals = pl.Series(
             decay_factor * forecasts + (1 - decay_factor) * np.random.randn(100),
             index=dates
         )

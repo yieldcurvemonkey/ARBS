@@ -15,7 +15,7 @@ Output format:
 from abc import ABC, abstractmethod
 from typing import Optional
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
 class BaseCovarianceEstimator(ABC):
@@ -40,7 +40,7 @@ class BaseCovarianceEstimator(ABC):
         self.asset_names_: Optional[list] = None
 
     @abstractmethod
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate covariance matrix from returns.
 
@@ -113,22 +113,26 @@ class BaseCovarianceEstimator(ABC):
         cov = self.get_covariance()
         return np.linalg.cond(cov)
 
-    def _handle_missing_data(self, returns: pd.DataFrame) -> pd.DataFrame:
+    def _handle_missing_data(self, returns) -> pl.DataFrame:
         """
         Handle missing data according to strategy.
 
         Args:
-            returns: DataFrame with possible NaN values
+            returns: DataFrame with possible NaN values (polars or pandas)
 
         Returns:
-            DataFrame with NaN handled
+            DataFrame with NaN handled (polars)
         """
+        # Convert pandas to polars if needed
+        import pandas as pd
+        if isinstance(returns, pd.DataFrame):
+            returns = pl.from_pandas(returns)
+
         if self.handle_missing == 'drop':
             # Drop rows with any NaN
-            return returns.dropna()
+            return returns.drop_nulls()
         elif self.handle_missing == 'pairwise':
             # Keep all data, use pairwise complete observations
-            # (pandas .cov() does this by default)
             return returns
         else:
             raise ValueError(f"Unknown handle_missing: {self.handle_missing}")

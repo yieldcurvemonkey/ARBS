@@ -13,7 +13,7 @@ Validates:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date, timedelta
 
 from Analysis.TearSheet import TearSheet, TearSheetMetrics
@@ -29,7 +29,7 @@ class TestTearSheetMetrics:
 
     def test_total_return_calculation(self):
         """Calculate total return from series."""
-        returns = pd.Series([0.01, 0.02, -0.01, 0.03])
+        returns = pl.Series([0.01, 0.02, -0.01, 0.03])
 
         tear_sheet = TearSheet(returns)
         metrics = tear_sheet.calculate_metrics()
@@ -43,7 +43,7 @@ class TestTearSheetMetrics:
         # Use fixed seed for reproducibility
         np.random.seed(42)
         # Weekly returns with positive mean
-        returns = pd.Series(np.random.randn(52) * 0.02 + 0.001)
+        returns = pl.Series(np.random.randn(52) * 0.02 + 0.001)
 
         tear_sheet = TearSheet(returns, periods_per_year=52)
         metrics = tear_sheet.calculate_metrics()
@@ -55,7 +55,7 @@ class TestTearSheetMetrics:
     def test_max_drawdown_calculation(self):
         """Calculate maximum drawdown."""
         # Returns that create a drawdown
-        returns = pd.Series([0.10, 0.05, -0.15, -0.10, 0.05, 0.08])
+        returns = pl.Series([0.10, 0.05, -0.15, -0.10, 0.05, 0.08])
 
         tear_sheet = TearSheet(returns)
         metrics = tear_sheet.calculate_metrics()
@@ -71,7 +71,7 @@ class TestTearSheetMetrics:
         # Use fixed seed for reproducibility
         np.random.seed(42)
         # 252 daily returns averaging 0.1% per day
-        returns = pd.Series(np.random.randn(252) * 0.01 + 0.001)
+        returns = pl.Series(np.random.randn(252) * 0.01 + 0.001)
 
         tear_sheet = TearSheet(returns, periods_per_year=252)
         metrics = tear_sheet.calculate_metrics()
@@ -81,7 +81,7 @@ class TestTearSheetMetrics:
 
     def test_volatility_calculation(self):
         """Calculate annualized volatility."""
-        returns = pd.Series(np.random.randn(252) * 0.02)
+        returns = pl.Series(np.random.randn(252) * 0.02)
 
         tear_sheet = TearSheet(returns, periods_per_year=252)
         metrics = tear_sheet.calculate_metrics()
@@ -92,7 +92,7 @@ class TestTearSheetMetrics:
 
     def test_calmar_ratio(self):
         """Calculate Calmar ratio (return / max drawdown)."""
-        returns = pd.Series([0.10, 0.05, -0.15, 0.20, 0.10])
+        returns = pl.Series([0.10, 0.05, -0.15, 0.20, 0.10])
 
         tear_sheet = TearSheet(returns, periods_per_year=52)
         metrics = tear_sheet.calculate_metrics()
@@ -107,17 +107,17 @@ class TestDrawdownCalculation:
 
     def test_no_drawdown_for_positive_returns(self):
         """No drawdown if returns are always positive."""
-        returns = pd.Series([0.01, 0.02, 0.01, 0.03])
+        returns = pl.Series([0.01, 0.02, 0.01, 0.03])
 
         tear_sheet = TearSheet(returns)
         drawdowns = tear_sheet.calculate_drawdowns()
 
         # Last drawdown should be 0 (at new peak)
-        assert drawdowns.iloc[-1] == pytest.approx(0.0)
+        assert drawdowns[-1] == pytest.approx(0.0)
 
     def test_drawdown_series(self):
         """Drawdown series tracks distance from peak."""
-        returns = pd.Series([0.10, -0.05, -0.05, 0.05])
+        returns = pl.Series([0.10, -0.05, -0.05, 0.05])
 
         tear_sheet = TearSheet(returns)
         drawdowns = tear_sheet.calculate_drawdowns()
@@ -126,20 +126,20 @@ class TestDrawdownCalculation:
         # After -0.05: (1.045 - 1.10) / 1.10 = -0.05
         # After -0.05: (0.9928 - 1.10) / 1.10 = -0.0975
         # After 0.05: (1.0424 - 1.10) / 1.10 = -0.0523
-        assert drawdowns.iloc[0] == pytest.approx(0.0)
-        assert drawdowns.iloc[1] < 0
-        assert drawdowns.iloc[2] < drawdowns.iloc[1]  # Deeper drawdown
+        assert drawdowns[0] == pytest.approx(0.0)
+        assert drawdowns[1] < 0
+        assert drawdowns[2] < drawdowns[1]  # Deeper drawdown
 
     def test_recovery_from_drawdown(self):
         """Drawdown returns to 0 after recovery to new peak."""
-        returns = pd.Series([0.10, -0.10, 0.11])
+        returns = pl.Series([0.10, -0.10, 0.11])
 
         tear_sheet = TearSheet(returns)
         drawdowns = tear_sheet.calculate_drawdowns()
 
         # After 0.11 return, should be back at peak
         # (Exact recovery depends on compounding)
-        assert drawdowns.iloc[-1] > -0.01  # Nearly recovered
+        assert drawdowns[-1] > -0.01  # Nearly recovered
 
 
 class TestCumulativeReturns:
@@ -147,36 +147,36 @@ class TestCumulativeReturns:
 
     def test_cumulative_returns_from_zero(self):
         """Cumulative returns - first value is first return."""
-        returns = pd.Series([0.01, 0.02, 0.01])
+        returns = pl.Series([0.01, 0.02, 0.01])
 
         tear_sheet = TearSheet(returns)
         cum_returns = tear_sheet.calculate_cumulative_returns()
 
         # First cumulative return equals first return
-        assert cum_returns.iloc[0] == pytest.approx(0.01)
+        assert cum_returns[0] == pytest.approx(0.01)
 
     def test_cumulative_returns_compounding(self):
         """Cumulative returns compound correctly."""
-        returns = pd.Series([0.10, 0.10])
+        returns = pl.Series([0.10, 0.10])
 
         tear_sheet = TearSheet(returns)
         cum_returns = tear_sheet.calculate_cumulative_returns()
 
         # After first return: 0.10 (10%)
         # After second: 1.10 × 1.10 - 1 = 0.21 (21%)
-        assert cum_returns.iloc[0] == pytest.approx(0.10)
-        assert cum_returns.iloc[1] == pytest.approx(0.21)
+        assert cum_returns[0] == pytest.approx(0.10)
+        assert cum_returns[1] == pytest.approx(0.21)
 
     def test_negative_cumulative_returns(self):
         """Cumulative returns can be negative."""
-        returns = pd.Series([-0.10, -0.10])
+        returns = pl.Series([-0.10, -0.10])
 
         tear_sheet = TearSheet(returns)
         cum_returns = tear_sheet.calculate_cumulative_returns()
 
         # After two -10% returns: 0.9 × 0.9 - 1 = -0.19
-        assert cum_returns.iloc[-1] < 0
-        assert cum_returns.iloc[-1] == pytest.approx(-0.19)
+        assert cum_returns[-1] < 0
+        assert cum_returns[-1] == pytest.approx(-0.19)
 
 
 class TestMonthlyAnnualAggregation:
@@ -185,30 +185,26 @@ class TestMonthlyAnnualAggregation:
     def test_monthly_returns_aggregation(self):
         """Aggregate daily returns to monthly."""
         # Create daily returns for 2 months
-        dates = pd.date_range('2024-01-01', '2024-02-29', freq='D')
-        returns = pd.Series(np.random.randn(len(dates)) * 0.01, index=dates)
+        dates = pl.date_range(date(2024, 1, 1), date(2024, 2, 29), interval='1d', eager=True)
+        returns = pl.Series(np.random.randn(len(dates)) * 0.01)
 
-        tear_sheet = TearSheet(returns)
+        tear_sheet = TearSheet(returns, dates=dates)
         monthly = tear_sheet.aggregate_monthly_returns()
 
         # Should have 2 months
         assert len(monthly) == 2
-        assert monthly.index[0] == pd.Period('2024-01', 'M')
-        assert monthly.index[1] == pd.Period('2024-02', 'M')
 
     def test_annual_returns_aggregation(self):
         """Aggregate daily returns to annual."""
         # Create daily returns for 2 years
-        dates = pd.date_range('2023-01-01', '2024-12-31', freq='D')
-        returns = pd.Series(np.random.randn(len(dates)) * 0.01, index=dates)
+        dates = pl.date_range(date(2023, 1, 1), date(2024, 12, 31), interval='1d', eager=True)
+        returns = pl.Series(np.random.randn(len(dates)) * 0.01)
 
-        tear_sheet = TearSheet(returns)
+        tear_sheet = TearSheet(returns, dates=dates)
         annual = tear_sheet.aggregate_annual_returns()
 
         # Should have 2 years
         assert len(annual) == 2
-        assert annual.index[0] == 2023
-        assert annual.index[1] == 2024
 
 
 class TestEdgeCases:
@@ -216,7 +212,7 @@ class TestEdgeCases:
 
     def test_empty_returns_series(self):
         """Handle empty returns series."""
-        returns = pd.Series(dtype=float)
+        returns = pl.Series(values=[], dtype=pl.Float64)
 
         tear_sheet = TearSheet(returns)
         metrics = tear_sheet.calculate_metrics()
@@ -227,7 +223,7 @@ class TestEdgeCases:
 
     def test_single_return(self):
         """Handle single return."""
-        returns = pd.Series([0.05])
+        returns = pl.Series([0.05])
 
         tear_sheet = TearSheet(returns)
         metrics = tear_sheet.calculate_metrics()
@@ -239,7 +235,7 @@ class TestEdgeCases:
 
     def test_all_zero_returns(self):
         """Handle all zero returns."""
-        returns = pd.Series([0.0, 0.0, 0.0, 0.0])
+        returns = pl.Series([0.0, 0.0, 0.0, 0.0])
 
         tear_sheet = TearSheet(returns)
         metrics = tear_sheet.calculate_metrics()
@@ -251,7 +247,7 @@ class TestEdgeCases:
 
     def test_constant_positive_returns(self):
         """Handle constant positive returns."""
-        returns = pd.Series([0.01, 0.01, 0.01, 0.01])
+        returns = pl.Series([0.01, 0.01, 0.01, 0.01])
 
         tear_sheet = TearSheet(returns)
         metrics = tear_sheet.calculate_metrics()

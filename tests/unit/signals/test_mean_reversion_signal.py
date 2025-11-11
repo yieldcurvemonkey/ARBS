@@ -13,7 +13,7 @@ Validates:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date, timedelta
 
 from Signals.Futures.MeanReversionSignal import MeanReversionSignal
@@ -63,7 +63,7 @@ class TestMeanReversionCalculation:
         # Create price history: high then drops (below mean)
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(10)]
         prices = [100.0] * 5 + [95.0] * 5  # Mean ≈ 97.5, current = 95 < mean
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': prices
         })
@@ -84,7 +84,7 @@ class TestMeanReversionCalculation:
         # Create price history: low then rises (above mean)
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(10)]
         prices = [95.0] * 5 + [100.0] * 5  # Mean ≈ 97.5, current = 100 > mean
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': prices
         })
@@ -107,7 +107,7 @@ class TestMeanReversionCalculation:
         prices = [100.0 + np.sin(i) for i in range(15)]  # Oscillating
         # Set last price to mean of PAST 10 prices (excluding current)
         prices[-1] = np.mean(prices[-11:-1])  # Mean of 10 prices before current
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': prices
         })
@@ -128,7 +128,7 @@ class TestMeanReversionCalculation:
         # Simple controlled example
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(10)]
         prices = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 105.0]
-        price_history = pd.DataFrame({'date': dates, 'price': prices})
+        price_history = pl.DataFrame({'date': dates, 'price': prices})
 
         raw_signal = signal._calculate_raw_signal(
             inst_data=price_history,
@@ -156,7 +156,7 @@ class TestMultipleLookbackPeriods:
         # Create price spike
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(30)]
         prices = [100.0] * 25 + [110.0] * 5  # Recent spike
-        price_history = pd.DataFrame({'date': dates, 'price': prices})
+        price_history = pl.DataFrame({'date': dates, 'price': prices})
 
         raw_signal = signal._calculate_raw_signal(
             inst_data=price_history,
@@ -174,7 +174,7 @@ class TestMultipleLookbackPeriods:
         # Create extended deviation
         dates = [date(2024, 9, 1) + timedelta(days=i) for i in range(90)]
         prices = [100.0] * 60 + [95.0] * 30  # Extended drop
-        price_history = pd.DataFrame({'date': dates, 'price': prices})
+        price_history = pl.DataFrame({'date': dates, 'price': prices})
 
         raw_signal = signal._calculate_raw_signal(
             inst_data=price_history,
@@ -190,7 +190,7 @@ class TestMultipleLookbackPeriods:
         # Create price history with recent change from baseline
         dates = [date(2024, 10, 1) + timedelta(days=i) for i in range(70)]
         prices = [100.0] * 60 + [105.0] * 10  # Recent increase
-        price_history = pd.DataFrame({'date': dates, 'price': prices})
+        price_history = pl.DataFrame({'date': dates, 'price': prices})
 
         # Short lookback (includes recent 105s, so mean is higher, deviation smaller)
         signal_short = MeanReversionSignal(lookback_days=20, standardize=False)
@@ -227,7 +227,7 @@ class TestStandardization:
         for deviation in [-2, -1, 0, 1, 2]:
             dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(15)]
             prices = [100.0] * 10 + [100.0 + deviation * 5] * 5
-            inst_data_list.append(pd.DataFrame({'date': dates, 'price': prices}))
+            inst_data_list.append(pl.DataFrame({'date': dates, 'price': prices}))
 
         signals = signal.generate_batch(inst_data_list, None, date(2024, 11, 15))
 
@@ -247,15 +247,15 @@ class TestStandardization:
         # Instrument 1: Way above mean (strong sell)
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(15)]
         prices1 = [100.0] * 10 + [120.0] * 5
-        inst_data_list.append(pd.DataFrame({'date': dates, 'price': prices1}))
+        inst_data_list.append(pl.DataFrame({'date': dates, 'price': prices1}))
 
         # Instrument 2: At mean (neutral)
         prices2 = [100.0] * 15
-        inst_data_list.append(pd.DataFrame({'date': dates, 'price': prices2}))
+        inst_data_list.append(pl.DataFrame({'date': dates, 'price': prices2}))
 
         # Instrument 3: Way below mean (strong buy)
         prices3 = [100.0] * 10 + [80.0] * 5
-        inst_data_list.append(pd.DataFrame({'date': dates, 'price': prices3}))
+        inst_data_list.append(pl.DataFrame({'date': dates, 'price': prices3}))
 
         signals = signal.generate_batch(inst_data_list, None, date(2024, 11, 15))
 
@@ -272,7 +272,7 @@ class TestEdgeCases:
 
         # All prices equal
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(15)]
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': [100.0] * 15
         })
@@ -292,7 +292,7 @@ class TestEdgeCases:
 
         # Only 5 days of history (less than lookback)
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(5)]
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': dates,
             'price': [100.0 + i for i in range(5)]
         })
@@ -313,7 +313,7 @@ class TestEdgeCases:
         signal = MeanReversionSignal(lookback_days=10, standardize=False)
 
         # Empty price history
-        price_history = pd.DataFrame({'date': [], 'price': []})
+        price_history = pl.DataFrame({'date': [], 'price': []})
 
         raw_signal = signal._calculate_raw_signal(
             inst_data=price_history,
@@ -331,7 +331,7 @@ class TestEdgeCases:
         # Price history with NaN
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(10)]
         prices = [100.0, 101.0, np.nan, 102.0, 103.0, 104.0, 105.0, np.nan, 106.0, 107.0]
-        price_history = pd.DataFrame({'date': dates, 'price': prices})
+        price_history = pl.DataFrame({'date': dates, 'price': prices})
 
         # Should handle NaN gracefully
         raw_signal = signal._calculate_raw_signal(
@@ -347,7 +347,7 @@ class TestEdgeCases:
         """Handle single price point."""
         signal = MeanReversionSignal(lookback_days=10, standardize=False)
 
-        price_history = pd.DataFrame({
+        price_history = pl.DataFrame({
             'date': [date(2024, 11, 1)],
             'price': [100.0]
         })
@@ -426,7 +426,7 @@ class TestMeanReversionInversion:
         # Price above mean → should give NEGATIVE signal (sell)
         dates = [date(2024, 11, 1) + timedelta(days=i) for i in range(10)]
         prices = [100.0] * 5 + [110.0] * 5
-        price_history = pd.DataFrame({'date': dates, 'price': prices})
+        price_history = pl.DataFrame({'date': dates, 'price': prices})
 
         raw_signal = signal._calculate_raw_signal(
             inst_data=price_history,
@@ -448,16 +448,16 @@ class TestMeanReversionInversion:
         # Instrument A: Massive spike (3 std devs above mean)
         # Gradual rise then huge spike
         prices_a = list(range(100, 115)) + [100, 101, 102, 103, 104] + [140.0] * 5
-        inst_data_list.append(pd.DataFrame({'date': dates, 'price': prices_a}))
+        inst_data_list.append(pl.DataFrame({'date': dates, 'price': prices_a}))
 
         # Instrument B: Moderate deviation (1 std dev above mean)
         # Oscillating then small spike
         prices_b = [100 + 2*np.sin(i/2) for i in range(20)] + [105.0] * 5
-        inst_data_list.append(pd.DataFrame({'date': dates, 'price': prices_b}))
+        inst_data_list.append(pl.DataFrame({'date': dates, 'price': prices_b}))
 
         # Instrument C: Near mean (oscillating around mean)
         prices_c = [100 + np.sin(i) for i in range(25)]
-        inst_data_list.append(pd.DataFrame({'date': dates, 'price': prices_c}))
+        inst_data_list.append(pl.DataFrame({'date': dates, 'price': prices_c}))
 
         signals = signal.generate_batch(inst_data_list, None, date(2024, 11, 25))
 

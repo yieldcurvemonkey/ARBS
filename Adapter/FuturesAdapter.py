@@ -3,7 +3,7 @@
 """
 Futures Adapter
 
-Converts FuturesQuery results into signal-ready DataFrame format.
+Converts FuturesQuery results into signal-ready Polars DataFrame format.
 
 Input:
 - List[FuturesQuery]: Product queries (OUTRIGHT, CALENDAR, etc.)
@@ -37,7 +37,7 @@ Business Logic:
 from datetime import date, timedelta
 from typing import Any, List
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from Adapter.Base.BaseAdapter import BaseAdapter
 from Query.Futures.FuturesQuery import (
@@ -82,7 +82,7 @@ class FuturesAdapter(BaseAdapter):
         self,
         queries: List[FuturesQuery],
         as_of_date: date,
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         """
         Convert futures queries to signal-ready DataFrame.
 
@@ -112,10 +112,14 @@ class FuturesAdapter(BaseAdapter):
         """
         if len(queries) == 0:
             # Return empty DataFrame with expected columns
-            return pd.DataFrame(columns=[
-                'contract', 'price', 'next_contract', 'next_price',
-                'roll_date', 'expiry'
-            ])
+            return pl.DataFrame({
+                'contract': [],
+                'price': [],
+                'next_contract': [],
+                'next_price': [],
+                'roll_date': [],
+                'expiry': []
+            })
 
         rows = []
 
@@ -131,12 +135,16 @@ class FuturesAdapter(BaseAdapter):
                     rows.append(row)
 
         if len(rows) == 0:
-            return pd.DataFrame(columns=[
-                'contract', 'price', 'next_contract', 'next_price',
-                'roll_date', 'expiry'
-            ])
+            return pl.DataFrame({
+                'contract': [],
+                'price': [],
+                'next_contract': [],
+                'next_price': [],
+                'roll_date': [],
+                'expiry': []
+            })
 
-        df = pd.DataFrame(rows)
+        df = pl.DataFrame(rows)
         return df
 
     def _convert_outright(
