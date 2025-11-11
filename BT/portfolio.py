@@ -1,3 +1,5 @@
+# ABOUTME: Portfolio class for tracking positions and calculating P&L in backtests
+# ABOUTME: Manages instrument positions with add/close operations and pricing/valuation methods
 from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, field

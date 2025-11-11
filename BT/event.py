@@ -1,3 +1,5 @@
+# ABOUTME: Event and trigger information structures for backtest state management
+# ABOUTME: Defines TriggerInfo dataclass to track trigger activation and associated metadata
 # BT/event.py
 from __future__ import annotations
 from dataclasses import dataclass, field

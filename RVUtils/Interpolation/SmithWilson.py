@@ -1,3 +1,5 @@
+# ABOUTME: Smith-Wilson interpolation and extrapolation method
+# ABOUTME: Used for long-term yield curve extrapolation with convergence properties
 from typing import List, Optional, Union
 
 import numpy as np

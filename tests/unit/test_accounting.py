@@ -1,3 +1,5 @@
+# ABOUTME: Tests for BT/accounting.py conventions
+# ABOUTME: Validates settlement, margin, and roll convention implementations
 """
 Unit tests for generic accounting abstractions.
 

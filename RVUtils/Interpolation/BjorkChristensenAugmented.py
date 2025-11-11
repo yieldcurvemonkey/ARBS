@@ -1,3 +1,5 @@
+# ABOUTME: Augmented Bjork-Christensen parametric curve interpolation
+# ABOUTME: Extended Bjork-Christensen with additional shape parameters
 import numpy as np
 
 

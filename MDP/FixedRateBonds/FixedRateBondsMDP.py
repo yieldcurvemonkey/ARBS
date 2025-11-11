@@ -2,6 +2,7 @@ import contextlib
 import datetime
 import re
 import threading
+import warnings
 from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, Union
@@ -352,9 +353,12 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                             ytm=float(live_data[cusip]["ytm"]),
                             meta_data=meta,
                         )
-                    except:
-                        # TODO handle errors
-                        pass
+                    except KeyError as e:
+                        warnings.warn(f"Missing data for {original} (CUSIP {cusip}): {e}")
+                    except (ValueError, TypeError) as e:
+                        warnings.warn(f"Invalid data for {original} (CUSIP {cusip}): {e}")
+                    except Exception as e:
+                        warnings.warn(f"Failed to create pricer for {original} (CUSIP {cusip}): {e}")
                 return out
 
             if is_in_wsj_buffer:
@@ -391,9 +395,12 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                             ytm=float(y),
                             meta_data=meta,
                         )
-                    except:
-                        # TODO handle errors
-                        pass
+                    except KeyError as e:
+                        warnings.warn(f"Missing data for {original} (CUSIP {cusip}): {e}")
+                    except (ValueError, TypeError) as e:
+                        warnings.warn(f"Invalid data for {original} (CUSIP {cusip}): {e}")
+                    except Exception as e:
+                        warnings.warn(f"Failed to create pricer for {original} (CUSIP {cusip}): {e}")
                 return out
 
         elif self.source.upper() == "USTS_WEBULL_WSJ_LIVE-RL":
@@ -429,9 +436,12 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                             ytm=float(live_data[cusip]["ytm"]),
                             meta_data=meta,
                         )
-                    except:
-                        # TODO handle errors
-                        pass
+                    except KeyError as e:
+                        warnings.warn(f"Missing data for {original} (CUSIP {cusip}): {e}")
+                    except (ValueError, TypeError) as e:
+                        warnings.warn(f"Invalid data for {original} (CUSIP {cusip}): {e}")
+                    except Exception as e:
+                        warnings.warn(f"Failed to create pricer for {original} (CUSIP {cusip}): {e}")
                 return out
 
             self._ensure_pricer_cache()
@@ -489,9 +499,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             try:
                 pricers[c] = self._get_single_pricer(cusip=c, timestamp=timestamp, kwargs=kwargs)
             except Exception as e:
-                # TODO handle errros
-                pass
-                # print(f"Failed to fetch {c}", e)
+                warnings.warn(f"Failed to fetch CUSIP {c}: {e}")
 
         return pricers
 

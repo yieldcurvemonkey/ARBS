@@ -1,3 +1,5 @@
+# ABOUTME: Seasonality analysis and decomposition utilities
+# ABOUTME: Tools for detecting and modeling seasonal patterns in time series
 import pandas as pd
 import QuantLib as ql
 from typing import Optional

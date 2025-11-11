@@ -1,3 +1,5 @@
+# ABOUTME: General curve interpolator interface and implementations
+# ABOUTME: Base classes and utilities for yield curve interpolation methods
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Any

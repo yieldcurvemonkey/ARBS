@@ -1,3 +1,5 @@
+# ABOUTME: Action protocol and implementations for backtesting trade execution
+# ABOUTME: Defines callable actions that generate orders (add trade, close position, rebalance)
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Protocol, Type

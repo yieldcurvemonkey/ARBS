@@ -1,3 +1,5 @@
+# ABOUTME: Generic accounting abstractions for backtesting (settlement, margin, roll conventions)
+# ABOUTME: Provides composable base classes and implementations for product-agnostic cash flow tracking
 """
 Generic accounting abstractions for backtesting.
 
@@ -276,9 +278,9 @@ class SimpleMargin(MarginConvention):
         notional = getattr(position, 'quantity', 1_000_000)
 
         # VM is the P&L
-        # For simplicity, assume linear relationship
-        # This is a mock - real implementation would track previous NPV
-        return 0.0  # Placeholder
+        # Real implementation would track previous NPV to calculate P&L
+        # Returns 0.0 until NPV tracking is implemented
+        return 0.0
 
 
 @dataclass
@@ -450,11 +452,10 @@ class DaysBeforeExpiryRoll(RollConvention):
         """
         Get next contract to roll into.
 
-        This is a placeholder - actual implementation depends on product type.
-        For futures, this would return the next quarterly contract.
+        Base implementation returns None. Product-specific subclasses
+        should override to return the appropriate next contract.
         """
-        # This is product-specific and would be implemented in subclasses
-        # or handled by the backtest engine
+        # Override in subclasses for product-specific roll logic
         return None
 
 
@@ -475,20 +476,12 @@ class QuarterlyRoll(DaysBeforeExpiryRoll):
         """
         Get next quarterly IMM contract.
 
-        This would construct a new query/position for the next quarterly
-        contract (e.g., SFRH5 -> SFRM5).
-
-        Actual implementation depends on product query structure.
+        Returns "NEXT_QUARTERLY" string when rolling is needed.
+        Full implementation requires parsing contract codes and
+        constructing the next quarterly contract query/position.
         """
-        # Placeholder - actual implementation would:
-        # 1. Parse current contract code (e.g., "SFRH5")
-        # 2. Determine next IMM month
-        # 3. Construct new contract code
-        # 4. Return new query/position
-
-        # For now, return a marker that roll is needed
         if self.should_roll(position, current_date):
-            return "NEXT_QUARTERLY"  # Placeholder
+            return "NEXT_QUARTERLY"
 
         return None
 

@@ -1,3 +1,5 @@
+# ABOUTME: Pricer-based strategy with triggers for backtesting
+# ABOUTME: Evaluates triggers to generate instrument orders (pricer-based workflow)
 # BT/strategy.py
 from __future__ import annotations
 import datetime as dt

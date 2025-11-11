@@ -1,3 +1,5 @@
+# ABOUTME: Smoke tests for pytest setup and basic fixtures
+# ABOUTME: Validates test infrastructure, fixtures, and mock data providers work correctly
 """
 Smoke tests to verify pytest setup and fixtures.
 

@@ -27,8 +27,6 @@ class IRSwapValue(Enum):
     TRUE_ASW = auto()
     PROCEEDS_ASW = auto()
     MARKET_ASW = auto()
-
-    # TODO
     CVX_ADJ = auto()
 
 

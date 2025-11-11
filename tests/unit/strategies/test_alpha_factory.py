@@ -1,3 +1,5 @@
+# ABOUTME: Tests for AlphaFactory strategy component
+# ABOUTME: Validates alpha generation factory pattern and dynamic registration
 """
 Tests for AlphaFactory - registry-based alpha generator creation.
 

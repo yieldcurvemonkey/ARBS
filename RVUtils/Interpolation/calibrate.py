@@ -1,3 +1,5 @@
+# ABOUTME: Calibration utilities for parametric curve models
+# ABOUTME: Parameter optimization and curve fitting helpers
 # adapted from https://github.com/luphord/nelson_siegel_svensson/blob/master/nelson_siegel_svensson/calibrate.py
 # -*- coding: utf-8 -*-
 

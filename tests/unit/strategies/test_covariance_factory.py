@@ -1,3 +1,5 @@
+# ABOUTME: Tests for CovarianceFactory strategy component  
+# ABOUTME: Validates covariance estimation factory pattern and available methods
 """
 Tests for CovarianceFactory - registry-based covariance estimator creation.
 

@@ -1,3 +1,5 @@
+# ABOUTME: Vasicek short-rate model interpolation
+# ABOUTME: Interest rate curve fitting using Vasicek mean-reverting process
 from typing import Tuple, Union, Any
 
 import matplotlib.pyplot as plt

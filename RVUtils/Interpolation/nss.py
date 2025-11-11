@@ -1,3 +1,5 @@
+# ABOUTME: Nelson-Siegel-Svensson implementation and optimization
+# ABOUTME: Numerical methods for NSS parameter calibration and curve generation
 import numpy as np
 from scipy import optimize
 from scipy.optimize import minimize

@@ -1,3 +1,5 @@
+# ABOUTME: US Treasury visualization utilities
+# ABOUTME: Specialized plotting functions for Treasury curves and spreads
 from datetime import datetime
 from typing import Annotated, Callable, Dict, List, Optional, Tuple
 

@@ -1,3 +1,5 @@
+# ABOUTME: Query-based portfolio tracking resolved positions
+# ABOUTME: Manages positions as packages of priceable instruments with weights and timestamps
 # BT/query_portfolio.py
 from __future__ import annotations
 import datetime

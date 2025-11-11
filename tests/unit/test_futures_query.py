@@ -1,3 +1,5 @@
+# ABOUTME: Tests for futures query infrastructure
+# ABOUTME: Validates FuturesQuery, helper functions, and contract specifications
 """
 Unit tests for Futures query objects.
 

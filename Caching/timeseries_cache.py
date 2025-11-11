@@ -1,3 +1,5 @@
+# ABOUTME: Time series data caching infrastructure
+# ABOUTME: Manages cached time series with metadata, versioning, and efficient retrieval
 # Caching/timeseries_cache.py
 from __future__ import annotations
 

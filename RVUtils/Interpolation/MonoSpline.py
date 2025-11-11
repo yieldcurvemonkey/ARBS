@@ -1,3 +1,5 @@
+# ABOUTME: Monotone spline interpolation for yield curves
+# ABOUTME: Ensures monotonicity constraints on interpolated curves
 # Stolen from https://github.com/antdvid/MonotonicCubicInterpolation/blob/master/monospline.py
 
 
