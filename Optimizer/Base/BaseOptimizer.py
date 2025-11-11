@@ -7,18 +7,18 @@ All optimizers should inherit from this class and implement
 the optimize() method to convert alphas + covariance → weights.
 
 Input format:
-- alphas: pandas Series (asset → expected return/alpha)
-- covariance: pandas DataFrame (N×N, asset×asset)
+- alphas: polars Series (asset → expected return/alpha)
+- covariance: polars DataFrame (N×N, asset×asset)
 
 Output format:
-- weights: pandas Series (asset → portfolio weight)
+- weights: polars Series (asset → portfolio weight)
 - Sum of weights = 1.0 (for long-only) or constrained by leverage
 """
 
 from abc import ABC, abstractmethod
 from typing import Optional
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
 class BaseOptimizer(ABC):
@@ -45,14 +45,14 @@ class BaseOptimizer(ABC):
         """
         self.risk_aversion = risk_aversion
         self.long_only = long_only
-        self.weights_: Optional[pd.Series] = None
+        self.weights_: Optional[pl.Series] = None
 
     @abstractmethod
     def optimize(
         self,
-        alphas: pd.Series,
-        covariance: pd.DataFrame,
-    ) -> pd.Series:
+        alphas: pl.Series,
+        covariance: pl.DataFrame,
+    ) -> pl.Series:
         """
         Optimize portfolio weights given alphas and covariance.
 
@@ -68,7 +68,7 @@ class BaseOptimizer(ABC):
         """
         pass
 
-    def get_weights(self) -> pd.Series:
+    def get_weights(self) -> pl.Series:
         """
         Get the optimized portfolio weights.
 
@@ -84,8 +84,8 @@ class BaseOptimizer(ABC):
 
     def _validate_inputs(
         self,
-        alphas: pd.Series,
-        covariance: pd.DataFrame,
+        alphas: pl.Series,
+        covariance: pl.DataFrame,
     ) -> None:
         """
         Validate that alphas and covariance are compatible.

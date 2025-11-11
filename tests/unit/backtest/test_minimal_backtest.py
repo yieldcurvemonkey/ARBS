@@ -41,7 +41,7 @@ Maximal Additions (later):
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date, timedelta
 
 
@@ -166,10 +166,11 @@ class TestPerformanceMetrics:
         from Backtest.MinimalBacktest import MinimalBacktest
 
         contracts = ['SFRZ4', 'SFRH5']
-        dates = pd.date_range(start='2024-06-15', periods=10, freq='W')
+        start_date = date(2024, 6, 15)
+        dates = [start_date + timedelta(weeks=i) for i in range(10)]
 
         backtest = MinimalBacktest(mdp=mock_mdp)
-        result = backtest.run(contracts, dates.tolist())
+        result = backtest.run(contracts, dates)
 
         # Should have Sharpe ratio (can be negative)
         assert hasattr(result, 'sharpe_ratio')
@@ -180,10 +181,11 @@ class TestPerformanceMetrics:
         from Backtest.MinimalBacktest import MinimalBacktest
 
         contracts = ['SFRZ4', 'SFRH5', 'SFRM5']
-        dates = pd.date_range(start='2024-06-15', periods=10, freq='W')
+        start_date = date(2024, 6, 15)
+        dates = [start_date + timedelta(weeks=i) for i in range(10)]
 
         backtest = MinimalBacktest(mdp=mock_mdp)
-        result = backtest.run(contracts, dates.tolist())
+        result = backtest.run(contracts, dates)
 
         # Should have IC (can be negative - that's okay for MVP)
         assert hasattr(result, 'ic')

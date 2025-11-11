@@ -21,7 +21,7 @@ from abc import ABC, abstractmethod
 from datetime import date
 from typing import Any, List, Optional
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
 class BaseSignal(ABC):
@@ -61,7 +61,7 @@ class BaseSignal(ABC):
     @abstractmethod
     def _calculate_raw_signal(
         self,
-        inst_data: pd.DataFrame,
+        inst_data: pl.DataFrame,
         market_data: Optional[Any],
         as_of: date,
     ) -> float:
@@ -82,7 +82,7 @@ class BaseSignal(ABC):
 
     def generate(
         self,
-        inst_data: pd.DataFrame,
+        inst_data: pl.DataFrame,
         market_data: Optional[Any],
         as_of: date,
     ) -> float:
@@ -115,7 +115,7 @@ class BaseSignal(ABC):
 
     def generate_batch(
         self,
-        inst_data_list: List[pd.DataFrame],
+        inst_data_list: List[pl.DataFrame],
         market_data: Optional[Any],
         as_of: date,
     ) -> np.ndarray:
@@ -188,7 +188,7 @@ class BaseSignal(ABC):
 
         return z_scores
 
-    def get_history(self, start_date: Optional[date] = None) -> pd.DataFrame:
+    def get_history(self, start_date: Optional[date] = None) -> pl.DataFrame:
         """
         Get signal generation history.
 
@@ -202,7 +202,7 @@ class BaseSignal(ABC):
             raise ValueError("Signal history tracking is disabled")
 
         if not self.history:
-            return pd.DataFrame(columns=["date", "signal_values"])
+            return pl.DataFrame({"date": [], "signal_values": []})
 
         # Convert history dict to DataFrame
         data = []
@@ -213,12 +213,12 @@ class BaseSignal(ABC):
                     "signal_values": values if isinstance(values, (list, np.ndarray)) else [values],
                 })
 
-        return pd.DataFrame(data)
+        return pl.DataFrame(data)
 
     def calculate_ic(
         self,
-        forecasts: pd.Series,
-        actuals: pd.Series,
+        forecasts: pl.Series,
+        actuals: pl.Series,
     ) -> float:
         """
         Calculate Information Coefficient for this signal.
@@ -234,7 +234,7 @@ class BaseSignal(ABC):
             IC (Pearson correlation)
         """
         from Signals.Utils.IC import calculate_ic
-        return calculate_ic(forecasts.values, actuals.values)
+        return calculate_ic(forecasts.to_numpy(), actuals.to_numpy())
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name='{self.name}', standardize={self.standardize})"
