@@ -89,14 +89,14 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         T, N = returns_clean.shape
 
         # Calculate sample covariance
-        self.sample_cov = returns_clean.cov().values
+        self.sample_cov = returns_clean.cov().to_numpy()
 
         # Calculate shrinkage target
         self.target_matrix = self._compute_target(returns_clean)
 
         # Calculate optimal shrinkage intensity
         self.shrinkage_intensity = self._compute_shrinkage_intensity(
-            returns_clean.values, self.sample_cov, self.target_matrix
+            returns_clean.to_numpy(), self.sample_cov, self.target_matrix
         )
 
         # Apply shrinkage: Σ̂_LW = δ * F + (1-δ) * S
@@ -121,7 +121,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
 
         if self.target_type == 'diagonal':
             # Diagonal: var(r_i) on diagonal, zeros off-diagonal
-            variances = returns.var(ddof=1).values
+            variances = returns.var(ddof=1).to_numpy()
             return np.diag(variances)
 
         elif self.target_type == 'identity':
@@ -154,7 +154,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
             Constant correlation matrix (N×N)
         """
         # Calculate sample correlation matrix
-        corr_matrix = returns.corr().values
+        corr_matrix = returns.corr().to_numpy()
 
         # Average off-diagonal correlation
         n = corr_matrix.shape[0]
@@ -166,7 +166,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         np.fill_diagonal(target_corr, 1.0)
 
         # Convert to covariance using sample standard deviations
-        std = returns.std(ddof=1).values
+        std = returns.std(ddof=1).to_numpy()
         target_cov = target_corr * np.outer(std, std)
 
         return target_cov

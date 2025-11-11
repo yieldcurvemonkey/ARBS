@@ -71,7 +71,7 @@ class DiagonalCovariance(BaseCovarianceEstimator):
 
         # Calculate variances (diagonal elements)
         # pandas .var() uses ddof=1 (unbiased estimator)
-        variances = returns_clean.var().values
+        variances = returns_clean.var().to_numpy()
 
         # Create diagonal matrix
         self.cov_matrix_ = np.diag(variances)

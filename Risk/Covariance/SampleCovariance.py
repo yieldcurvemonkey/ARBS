@@ -65,7 +65,7 @@ class SampleCovariance(BaseCovarianceEstimator):
 
         # Calculate sample covariance
         # pandas .cov() uses ddof=1 (unbiased estimator)
-        self.cov_matrix_ = returns_clean.cov().values
+        self.cov_matrix_ = returns_clean.cov().to_numpy()
 
         return self.cov_matrix_
 
