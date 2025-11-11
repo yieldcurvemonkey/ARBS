@@ -1,3 +1,5 @@
+# ABOUTME: Pytest configuration and shared fixtures
+# ABOUTME: Defines test fixtures for dates, mock data, pricers, and golden file helpers
 """
 Pytest configuration and shared fixtures for ARBS backtesting tests.
 

@@ -1,3 +1,5 @@
+# ABOUTME: Tests for futures value calculations
+# ABOUTME: Validates price, NPV, DV01, and implied rate computations
 """
 Tests for FuturesValueFunctionMap
 

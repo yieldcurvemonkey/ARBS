@@ -1,3 +1,5 @@
+# ABOUTME: Caching utility functions and helpers
+# ABOUTME: Common tools for cache key generation, serialization, and data handling
 import re
 import hashlib
 import ujson as json

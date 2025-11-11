@@ -1,3 +1,5 @@
+# ABOUTME: Tests for dynamic strategy validation
+# ABOUTME: Validates runtime verification of strategy component extensions
 """
 Test dynamic validation - verify custom types work after registration.
 

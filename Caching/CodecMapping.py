@@ -1,3 +1,5 @@
+# ABOUTME: Codec mapping for persistent object serialization
+# ABOUTME: Provides encoding/decoding mappings for ZODB persistent storage
 from typing import Any, Callable, MutableMapping
 
 from persistent.mapping import PersistentMapping

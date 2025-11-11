@@ -1,3 +1,5 @@
+# ABOUTME: ZODB cache mixin for persistent object storage
+# ABOUTME: Provides caching functionality using ZODB database with transaction support
 import contextlib
 import functools
 import os

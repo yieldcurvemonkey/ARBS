@@ -1,3 +1,5 @@
+# ABOUTME: Tests for futures structure mapping functionality
+# ABOUTME: Validates outright, calendar, pack, and bundle structure builders
 """
 Tests for FuturesStructureFunctionMap
 
