@@ -92,13 +92,13 @@ class TestSignalToWeightsPipeline:
         # Convert alphas dict to polars Series for optimizer (order must match covariance)
         asset_order = returns_history.columns
         alphas_values = [alphas_dict[asset] for asset in asset_order]
-        alphas = pl.Series(alphas_values, name='alphas')
+        alphas = pl.Series(name='alphas', values=alphas_values)
         weights = optimizer.optimize(alphas, cov_df)
 
         # Verify weights
         assert len(weights) == 3
         assert abs(weights.sum() - 1.0) < 1e-6, "Weights must sum to 1"
-        assert all(w >= -1e-10 for w in weights.values), "No shorts (long_only=True)"
+        assert all(w >= -1e-10 for w in weights.values()), "No shorts (long_only=True)"
 
         # Asset with highest alpha should have highest weight
         highest_alpha_idx = alphas_values.index(max(alphas_values))
@@ -190,7 +190,7 @@ class TestSignalToWeightsPipeline:
         cov_high = risk_model.fit(returns_high_corr.to_pandas())
         cov_df_high = pl.DataFrame(cov_high, schema=returns_high_corr.columns)
         alphas_high_values = [alphas_high_dict[asset] for asset in returns_high_corr.columns]
-        alphas_high = pl.Series(alphas_high_values, name='alphas')
+        alphas_high = pl.Series(name='alphas', values=alphas_high_values)
         weights_high = optimizer.optimize(alphas_high, cov_df_high)
 
         # Get weights for low correlation case
@@ -200,13 +200,13 @@ class TestSignalToWeightsPipeline:
         cov_low = risk_model.fit(returns_low_corr.to_pandas())
         cov_df_low = pl.DataFrame(cov_low, schema=returns_low_corr.columns)
         alphas_low_values = [alphas_low_dict[asset] for asset in returns_low_corr.columns]
-        alphas_low = pl.Series(alphas_low_values, name='alphas')
+        alphas_low = pl.Series(name='alphas', values=alphas_low_values)
         weights_low = optimizer.optimize(alphas_low, cov_df_low)
 
         # Weights should be more balanced for low correlation
         # (diversification benefit)
-        weight_spread_high = weights_high.max() - weights_high.min()
-        weight_spread_low = weights_low.max() - weights_low.min()
+        weight_spread_high = max(weights_high.values()) - min(weights_high.values())
+        weight_spread_low = max(weights_low.values()) - min(weights_low.values())
 
         # Can't concentrate as much in high corr case
         assert weight_spread_high <= weight_spread_low + 0.1, \
@@ -246,7 +246,7 @@ class TestSignalToWeightsPipeline:
         cov_matrix = risk_model.fit(returns_history.to_pandas())
         cov_df = pl.DataFrame(cov_matrix, schema=returns_history.columns)
         alphas_values = [alphas_dict[asset] for asset in returns_history.columns]
-        alphas = pl.Series(alphas_values, name='alphas')
+        alphas = pl.Series(name='alphas', values=alphas_values)
         weights = optimizer.optimize(alphas, cov_df)
 
         # Weights should reflect both alpha AND risk
@@ -284,7 +284,7 @@ class TestSignalToWeightsPipeline:
         cov_matrix = risk_model.fit(returns_history.to_pandas())
         cov_df = pl.DataFrame(cov_matrix, schema=returns_history.columns)
         alphas_low_values = [alphas_low_dict[asset] for asset in returns_history.columns]
-        alphas_low = pl.Series(alphas_low_values, name='alphas')
+        alphas_low = pl.Series(name='alphas', values=alphas_low_values)
         weights_low = optimizer.optimize(alphas_low, cov_df)
 
         # High IC case
@@ -292,7 +292,7 @@ class TestSignalToWeightsPipeline:
             signals, returns_history, date(2024, 11, 1)
         )
         alphas_high_values = [alphas_high_dict[asset] for asset in returns_history.columns]
-        alphas_high = pl.Series(alphas_high_values, name='alphas')
+        alphas_high = pl.Series(name='alphas', values=alphas_high_values)
         weights_high = optimizer.optimize(alphas_high, cov_df)
 
         # Higher IC → more concentration in STRONG signal
@@ -337,7 +337,7 @@ class TestRealisticScenarios:
         cov_matrix = risk_model.fit(returns_history.to_pandas())
         cov_df = pl.DataFrame(cov_matrix, schema=returns_history.columns)
         alphas_values = [alphas_dict[asset] for asset in returns_history.columns]
-        alphas = pl.Series(alphas_values, name='alphas')
+        alphas = pl.Series(name='alphas', values=alphas_values)
         weights = optimizer.optimize(alphas, cov_df)
 
         # HIGH_CARRY should get highest weight
@@ -348,7 +348,7 @@ class TestRealisticScenarios:
         # Weights sum to 1
         assert abs(weights.sum() - 1.0) < 1e-6
         # At least one asset should have substantial weight
-        assert weights.max() > 0.5
+        assert max(weights.values()) > 0.5
 
     def test_vol_regime_change(self):
         """
