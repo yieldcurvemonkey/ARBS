@@ -73,9 +73,13 @@ Both return standardized format:
 
 ### Dependencies
 
+```bash
+pip install polars numpy matplotlib seaborn
+```
+
 - Python 3.8+
-- numpy
-- pandas
-- matplotlib
-- seaborn
+- **polars** (high-performance DataFrames)
+- numpy (for correlation calculations)
+- matplotlib (for visualizations)
+- seaborn (for heatmaps)
 

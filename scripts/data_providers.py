@@ -1,10 +1,12 @@
-# ABOUTME: ETL interfaces and implementations for futures returns data
+# ABOUTME: ETL interfaces and implementations for futures returns data using Polars
 # ABOUTME: Provides DataProvider abstraction allowing easy swap between synthetic and real data
 """
-Futures Returns Data Providers
+Futures Returns Data Providers (Polars Implementation)
 
 ETL system for loading futures returns with clean interface.
 Swap synthetic → real data by changing one line.
+
+Uses Polars for high-performance data operations.
 
 Usage:
     from scripts.data_providers import SyntheticFuturesProvider, RealFuturesProvider
@@ -27,7 +29,7 @@ Usage:
 from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime, timedelta
-import pandas as pd
+import polars as pl
 import numpy as np
 
 
@@ -45,8 +47,8 @@ class FuturesDataProvider(ABC):
         maturities: List[str],
         start_date: str,
         end_date: str,
-        frequency: str = "D"
-    ) -> pd.DataFrame:
+        frequency: str = "1d"
+    ) -> pl.DataFrame:
         """
         Get futures returns DataFrame.
 
@@ -55,12 +57,12 @@ class FuturesDataProvider(ABC):
             maturities: List of maturities (e.g., ["3M", "6M", "1Y", "2Y"])
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
-            frequency: Data frequency ("D" for daily, "W" for weekly)
+            frequency: Data frequency ("1d" for daily, "1w" for weekly)
 
         Returns:
-            DataFrame with:
-                - Index: DatetimeIndex
-                - Columns: "{currency}_{maturity}" (e.g., "USD_3M", "EUR_1Y")
+            Polars DataFrame with:
+                - Column "date": Date (pl.Date)
+                - Columns "{currency}_{maturity}": Returns (f64)
                 - Values: Returns (decimal, e.g., 0.001 for 10bp daily return)
         """
         pass
@@ -104,17 +106,17 @@ class SyntheticFuturesProvider(FuturesDataProvider):
         maturities: List[str],
         start_date: str,
         end_date: str,
-        frequency: str = "D"
-    ) -> pd.DataFrame:
+        frequency: str = "1d"
+    ) -> pl.DataFrame:
         """Generate synthetic futures returns with block correlation structure."""
 
         # Parse dates
-        start = pd.to_datetime(start_date)
-        end = pd.to_datetime(end_date)
+        start = datetime.fromisoformat(start_date)
+        end = datetime.fromisoformat(end_date)
 
-        # Create date index
-        date_index = pd.date_range(start, end, freq=frequency)
-        n_periods = len(date_index)
+        # Create date range
+        date_range = pl.date_range(start, end, interval=frequency, eager=True)
+        n_periods = len(date_range)
 
         # Build column names
         columns = [f"{curr}_{mat}" for curr in currencies for mat in maturities]
@@ -132,12 +134,12 @@ class SyntheticFuturesProvider(FuturesDataProvider):
         uncorrelated = np.random.randn(n_periods, n_instruments)
         correlated_returns = uncorrelated @ L.T
 
-        # Create DataFrame
-        returns_df = pd.DataFrame(
-            correlated_returns,
-            index=date_index,
-            columns=columns
-        )
+        # Create Polars DataFrame
+        data_dict = {"date": date_range}
+        for i, col_name in enumerate(columns):
+            data_dict[col_name] = correlated_returns[:, i]
+
+        returns_df = pl.DataFrame(data_dict)
 
         return returns_df
 
@@ -207,8 +209,7 @@ class RealFuturesProvider(FuturesDataProvider):
             ...
 
     Or price DataFrame format:
-        Index: dates
-        Columns: USD_3M, USD_6M, EUR_3M, EUR_6M, ...
+        Columns: date, USD_3M, USD_6M, EUR_3M, EUR_6M, ...
         Values: prices
     """
 
@@ -243,8 +244,8 @@ class RealFuturesProvider(FuturesDataProvider):
         maturities: List[str],
         start_date: str,
         end_date: str,
-        frequency: str = "D"
-    ) -> pd.DataFrame:
+        frequency: str = "1d"
+    ) -> pl.DataFrame:
         """Load real futures returns from file."""
 
         # Load prices if not cached
@@ -261,19 +262,29 @@ class RealFuturesProvider(FuturesDataProvider):
                 f"Requested: {columns}, Available: {list(self._prices.columns)}"
             )
 
-        prices = self._prices[available_columns]
+        # Select date column + available price columns
+        prices = self._prices.select(["date"] + available_columns)
 
         # Filter dates
-        start = pd.to_datetime(start_date)
-        end = pd.to_datetime(end_date)
-        prices = prices.loc[start:end]
+        start_dt = datetime.fromisoformat(start_date)
+        end_dt = datetime.fromisoformat(end_date)
 
-        # Resample if needed
-        if frequency != "D":
-            prices = prices.resample(frequency).last()
+        prices = prices.filter(
+            (pl.col("date") >= start_dt) & (pl.col("date") <= end_dt)
+        )
 
-        # Calculate returns
-        returns = prices.pct_change().dropna()
+        # Resample if needed (Polars groupby_dynamic)
+        if frequency != "1d":
+            prices = prices.group_by_dynamic(
+                "date",
+                every=frequency
+            ).agg([pl.col(col).last() for col in available_columns])
+
+        # Calculate returns (pct_change equivalent)
+        returns = prices.with_columns([
+            ((pl.col(col) / pl.col(col).shift(1)) - 1.0).alias(col)
+            for col in available_columns
+        ]).drop_nulls()
 
         return returns
 
@@ -281,42 +292,47 @@ class RealFuturesProvider(FuturesDataProvider):
         """Load price data from file."""
 
         if self.file_format == "csv":
-            df = pd.read_csv(self.data_path)
+            df = pl.read_csv(self.data_path)
             self._prices = self._pivot_long_to_wide(df)
 
         elif self.file_format == "parquet":
-            df = pd.read_parquet(self.data_path)
+            df = pl.read_parquet(self.data_path)
             self._prices = self._pivot_long_to_wide(df)
 
         elif self.file_format == "wide":
             # Already in wide format
-            df = pd.read_csv(self.data_path, index_col=0, parse_dates=True)
-            self._prices = df
+            df = pl.read_csv(self.data_path)
+            # Ensure date column is parsed
+            self._prices = df.with_columns(
+                pl.col(self.date_column).str.to_date().alias("date")
+            )
 
         else:
             raise ValueError(f"Unknown file format: {self.file_format}")
 
-    def _pivot_long_to_wide(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _pivot_long_to_wide(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Convert long format to wide format.
 
         From:
             date, contract, price
         To:
-            date (index), USD_3M, USD_6M, EUR_3M, ...
+            date, USD_3M, USD_6M, EUR_3M, ...
         """
         # Parse date column
-        df[self.date_column] = pd.to_datetime(df[self.date_column])
+        df = df.with_columns(
+            pl.col(self.date_column).str.to_date().alias("date")
+        )
 
         # Pivot to wide format
         wide = df.pivot(
-            index=self.date_column,
-            columns=self.contract_column,
-            values=self.price_column
+            values=self.price_column,
+            index="date",
+            on=self.contract_column
         )
 
         # Sort by date
-        wide = wide.sort_index()
+        wide = wide.sort("date")
 
         return wide
 
@@ -327,7 +343,7 @@ class RealFuturesProvider(FuturesDataProvider):
 
 if __name__ == "__main__":
     print("="*70)
-    print("Futures Data Provider Examples")
+    print("Futures Data Provider Examples (Polars)")
     print("="*70)
     print()
 
@@ -342,18 +358,18 @@ if __name__ == "__main__":
         maturities=["3M", "6M", "1Y", "2Y"],
         start_date="2024-01-01",
         end_date="2024-12-31",
-        frequency="D"
+        frequency="1d"
     )
 
     print(f"Shape: {returns.shape}")
-    print(f"Columns: {list(returns.columns)}")
-    print(f"Date range: {returns.index[0]} to {returns.index[-1]}")
+    print(f"Columns: {returns.columns}")
+    print(f"Date range: {returns['date'].min()} to {returns['date'].max()}")
     print()
     print("First 5 rows:")
     print(returns.head())
     print()
-    print("Correlation matrix (sample):")
-    print(returns.corr().round(2))
+    print("Schema:")
+    print(returns.schema)
     print()
 
     # Example 2: Real data (template - will error without actual file)
