@@ -46,7 +46,8 @@ Example:
 """
 
 from datetime import date
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
+import polars as pl
 import pandas as pd
 import numpy as np
 
@@ -183,7 +184,7 @@ class GrinoldKahnPortfolio(Asset):
     def generate_weights(
         self,
         instruments: List[str],
-        returns_history: pd.DataFrame,
+        returns_history: Union[pl.DataFrame, pd.DataFrame],
         market_data: Optional[Any],
         as_of: date
     ) -> Dict[str, float]:
@@ -207,7 +208,7 @@ class GrinoldKahnPortfolio(Asset):
             Dict mapping instrument → weight (summing to 1.0)
 
         Example:
-            >>> returns = pd.DataFrame({
+            >>> returns = pl.DataFrame({
             ...     'SFRZ4': [0.01, -0.01, 0.02, ...],
             ...     'SFRH5': [0.005, -0.005, 0.01, ...]
             ... })
@@ -234,7 +235,9 @@ class GrinoldKahnPortfolio(Asset):
         cov_matrix = self.risk_model.fit(returns_history)
 
         # Step 4: Optimize portfolio
-        weights = self._optimize_portfolio(alphas, cov_matrix, returns_history.columns)
+        # Convert column_order to list (polars returns list, pandas returns Index)
+        column_order = list(returns_history.columns) if not isinstance(returns_history.columns, list) else returns_history.columns
+        weights = self._optimize_portfolio(alphas, cov_matrix, column_order)
 
         # Update state
         self.current_weights = weights
@@ -296,7 +299,7 @@ class GrinoldKahnPortfolio(Asset):
         self,
         alphas: Dict[str, float],
         cov_matrix: np.ndarray,
-        column_order: pd.Index
+        column_order: List[str]
     ) -> Dict[str, float]:
         """
         Optimize portfolio given alphas and covariance.
@@ -320,22 +323,24 @@ class GrinoldKahnPortfolio(Asset):
         # Get assets in correct order
         assets = list(alphas.keys())
 
-        # Convert alphas dict → pandas Series
-        alpha_series = pd.Series(alphas)
+        # Extract covariance submatrix for these assets
+        # Find indices of assets in the original column_order
+        asset_indices = [column_order.index(asset) for asset in assets]
 
-        # Extract covariance submatrix for these assets as DataFrame
-        cov_df = pd.DataFrame(
-            cov_matrix,
-            index=column_order,
-            columns=column_order
-        )
-        cov_sub_df = cov_df.loc[assets, assets]
+        # Extract submatrix using numpy indexing
+        cov_sub = cov_matrix[np.ix_(asset_indices, asset_indices)]
 
-        # Optimize (returns pandas Series)
-        weight_series = self.optimizer.optimize(alpha_series, cov_sub_df)
+        # Convert alphas dict and covariance to polars for optimizer
+        # Create polars Series with alphas values (optimizer gets asset names from covariance DataFrame)
+        alpha_values = [alphas[asset] for asset in assets]
+        alpha_series = pl.Series(name='alpha', values=alpha_values, dtype=pl.Float64)
 
-        # Convert to dict
-        weights = weight_series.to_dict()
+        # Create polars DataFrame for covariance submatrix with asset names as columns
+        cov_dict = {asset: cov_sub[i, :].tolist() for i, asset in enumerate(assets)}
+        cov_sub_df = pl.DataFrame(cov_dict)
+
+        # Optimize (returns dict)
+        weights = self.optimizer.optimize(alpha_series, cov_sub_df)
 
         return weights
 
