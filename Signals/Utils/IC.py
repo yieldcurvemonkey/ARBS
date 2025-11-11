@@ -22,7 +22,7 @@ IC decay (halflife):
 """
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from scipy import stats
 from typing import Tuple
 
@@ -161,10 +161,10 @@ def calculate_ic_significance(
 
 
 def calculate_ic_time_series(
-    forecasts: pd.Series,
-    actuals: pd.Series,
+    forecasts: pl.Series,
+    actuals: pl.Series,
     window: int = 20,
-) -> pd.Series:
+) -> pl.Series:
     """
     Calculate rolling IC over time.
 
@@ -180,30 +180,45 @@ def calculate_ic_time_series(
         Time series of rolling IC values
 
     Example:
-        >>> dates = pd.date_range('2025-01-01', periods=100, freq='D')
-        >>> forecasts = pd.Series(np.random.randn(100), index=dates)
-        >>> actuals = pd.Series(0.2 * forecasts + 0.8 * np.random.randn(100), index=dates)
+        >>> dates = pl.datetime_range('2025-01-01', periods=100, interval='1d')
+        >>> forecasts = pl.Series(np.random.randn(100))
+        >>> actuals = pl.Series(0.2 * forecasts + 0.8 * np.random.randn(100))
         >>> ic_series = calculate_ic_time_series(forecasts, actuals, window=20)
         >>> print(f"IC stability (std): {ic_series.std():.3f}")
     """
+    # Preserve index from original series
+    index = forecasts.index if hasattr(forecasts, 'index') else None
+
     # Align forecasts and actuals on date index
-    aligned = pd.DataFrame({
+    aligned = pl.DataFrame({
         'forecast': forecasts,
         'actual': actuals,
-    }).dropna()
+    }).drop_nulls()
 
     if len(aligned) < window:
-        return pd.Series(dtype=float)
+        return pl.Series(dtype=pl.Float64)
 
     # Calculate rolling correlation
-    ic_series = aligned['forecast'].rolling(window=window).corr(aligned['actual'])
+    # Use rolling window to compute correlation at each position
+    ic_values = []
+    for i in range(len(aligned) - window + 1):
+        window_forecast = aligned['forecast'][i:i+window].to_numpy()
+        window_actual = aligned['actual'][i:i+window].to_numpy()
+        ic = calculate_ic(window_forecast, window_actual)
+        ic_values.append(ic)
 
-    return ic_series.dropna()
+    # Create series with values, starting from window position
+    if index is not None and len(ic_values) > 0:
+        result = pl.Series(ic_values, index=index[window-1:])
+    else:
+        result = pl.Series(ic_values)
+
+    return result.drop_nulls()
 
 
 def calculate_ic_decay(
-    forecasts: pd.Series,
-    actuals: pd.Series,
+    forecasts: pl.Series,
+    actuals: pl.Series,
     max_lag: int = 60,
 ) -> float:
     """
@@ -224,12 +239,12 @@ def calculate_ic_decay(
         Halflife in days (time for IC to decay to 50% of initial)
 
     Example:
-        >>> dates = pd.date_range('2025-01-01', periods=100, freq='D')
-        >>> forecasts = pd.Series(np.random.randn(100), index=dates)
+        >>> dates = pl.datetime_range('2025-01-01', periods=100, interval='1d')
+        >>> forecasts = pl.Series(np.random.randn(100))
         >>> # Create signal with 20-day halflife
         >>> days = np.arange(100)
         >>> decay = np.exp(-days / 20)
-        >>> actuals = pd.Series(decay * forecasts + (1-decay) * np.random.randn(100), index=dates)
+        >>> actuals = pl.Series(decay * forecasts + (1-decay) * np.random.randn(100))
         >>> halflife = calculate_ic_decay(forecasts, actuals)
         >>> print(f"Halflife: {halflife:.1f} days")  # Should be ~20
     """
@@ -241,7 +256,7 @@ def calculate_ic_decay(
         actuals_lagged = actuals.shift(-lag)
 
         # Calculate IC
-        ic = calculate_ic(forecasts.values, actuals_lagged.values)
+        ic = calculate_ic(forecasts.to_numpy(), actuals_lagged.to_numpy())
 
         if not np.isnan(ic):
             ic_at_lags.append((lag, abs(ic)))  # Use absolute IC
@@ -250,10 +265,10 @@ def calculate_ic_decay(
         return np.nan
 
     # Convert to DataFrame
-    ic_df = pd.DataFrame(ic_at_lags, columns=['lag', 'ic'])
+    ic_df = pl.DataFrame(ic_at_lags, schema=['lag', 'ic'])
 
     # Initial IC (at lag 0)
-    ic_0 = ic_df.iloc[0]['ic']
+    ic_0 = ic_df[0]['ic']
 
     if ic_0 < 0.01:
         # IC too small to measure decay
@@ -263,21 +278,21 @@ def calculate_ic_decay(
     target_ic = ic_0 * 0.5
 
     # Find first lag where IC < target
-    below_target = ic_df[ic_df['ic'] < target_ic]
+    below_target = ic_df.filter(pl.col('ic') < target_ic)
 
     if len(below_target) == 0:
         # IC hasn't decayed to 50% within max_lag
         return float(max_lag)
 
     # Interpolate to find exact halflife
-    halflife = below_target.iloc[0]['lag']
+    halflife = below_target[0]['lag']
 
     return float(halflife)
 
 
 def calculate_ic_statistics(
-    forecasts: pd.Series,
-    actuals: pd.Series,
+    forecasts: pl.Series,
+    actuals: pl.Series,
     window: int = 20,
 ) -> dict:
     """
@@ -302,17 +317,17 @@ def calculate_ic_statistics(
         Dictionary with IC statistics
 
     Example:
-        >>> dates = pd.date_range('2025-01-01', periods=100, freq='D')
-        >>> forecasts = pd.Series(np.random.randn(100), index=dates)
-        >>> actuals = pd.Series(0.3 * forecasts + 0.7 * np.random.randn(100), index=dates)
+        >>> dates = pl.datetime_range('2025-01-01', periods=100, interval='1d')
+        >>> forecasts = pl.Series(np.random.randn(100))
+        >>> actuals = pl.Series(0.3 * forecasts + 0.7 * np.random.randn(100))
         >>> stats = calculate_ic_statistics(forecasts, actuals)
         >>> print(f"IC: {stats['ic']:.3f}, Stability: {stats['ic_stability']:.3f}")
     """
     # Overall IC
-    ic, p_value = calculate_ic_significance(forecasts.values, actuals.values)
+    ic, p_value = calculate_ic_significance(forecasts.to_numpy(), actuals.to_numpy())
 
     # Rank IC (robust to outliers)
-    rank_ic = calculate_rank_ic(forecasts.values, actuals.values)
+    rank_ic = calculate_rank_ic(forecasts.to_numpy(), actuals.to_numpy())
 
     # IC time series (stability)
     ic_series = calculate_ic_time_series(forecasts, actuals, window=window)
