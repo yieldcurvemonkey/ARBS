@@ -324,9 +324,9 @@ class TestRiskModelComparison:
             # Validate weights
             assert len(weights) == 3, f"{model_name}: Wrong number of weights"
             assert abs(weights.sum() - 1.0) < 1e-6, f"{model_name}: Weights must sum to 1"
-            assert all(w >= -1e-10 for w in weights.values), f"{model_name}: No shorts allowed"
-            assert not any(np.isnan(weights.values)), f"{model_name}: No NaN weights"
-            assert not any(np.isinf(weights.values)), f"{model_name}: No inf weights"
+            assert all(w >= -1e-10 for w in weights.values()), f"{model_name}: No shorts allowed"
+            assert not any(np.isnan(list(weights.values()))), f"{model_name}: No NaN weights"
+            assert not any(np.isinf(list(weights.values()))), f"{model_name}: No inf weights"
 
         # Document that models may produce similar results with good data
         print("\n" + "="*70)
@@ -410,7 +410,7 @@ class TestRiskModelComparison:
         for model_name, weights in all_model_weights.items():
             # Calculate Herfindahl index (concentration measure)
             # HHI = 1 means fully concentrated, 1/N means perfectly diversified
-            herfindahl = (weights ** 2).sum()
+            herfindahl = sum(w ** 2 for w in weights.values())
             concentrations[model_name] = herfindahl
 
         # Verify we computed concentrations for all models
@@ -612,7 +612,8 @@ class TestEdgeCases:
         optimizer = MeanVarianceOptimizer(risk_aversion=1.0, long_only=True)
 
         alphas_dict = alpha_gen.signals_to_alphas(signals, returns, date(2024, 11, 1))
-        alphas = pl.Series('alphas', list(alphas_dict.values()))
+        # For single asset, name the Series with the asset name
+        alphas = pl.Series(returns.columns[0], list(alphas_dict.values()))
 
         model_names = ['sample', 'ledoit_wolf', 'constant_correlation', 'diagonal', 'identity']
 
@@ -652,5 +653,5 @@ class TestEdgeCases:
             # Zero signals should produce valid weights
             assert abs(weights.sum() - 1.0) < 1e-6, \
                 f"{model_name}: Weights must sum to 1 even with zero signals"
-            assert not any(np.isnan(weights.values)), \
+            assert not any(np.isnan(list(weights.values()))), \
                 f"{model_name}: No NaN weights with zero signals"
