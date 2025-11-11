@@ -1,0 +1,186 @@
+# Pandas to Polars Migration Manifest
+# Total: 135 Python files
+# Strategy: Migrate in batches of 10, doing core files + tests in parallel
+# Commit after each batch
+
+# ============================================================================
+# BATCH 1: Base Classes + Their Tests (10 files)
+# ============================================================================
+Adapter/Base/BaseAdapter.py
+Risk/Base/BaseCovarianceEstimator.py
+Signals/Base/BaseSignal.py
+Backtest/Base/BaseBacktest.py
+Optimizer/Base/BaseOptimizer.py
+Asset/Base/Asset.py
+tests/unit/signals/test_base_signal.py
+tests/unit/backtest/test_minimal_backtest.py
+tests/unit/optimizer/test_mean_variance_optimizer.py
+tests/unit/asset/test_grinold_kahn_portfolio.py
+
+# ============================================================================
+# BATCH 2: Core Adapters + Signals + Their Tests (10 files)
+# ============================================================================
+Adapter/FuturesAdapter.py
+Adapter/__init__.py
+Signals/Futures/CarrySignal.py
+Signals/Futures/MomentumSignal.py
+Signals/Futures/MeanReversionSignal.py
+tests/unit/adapter/test_futures_adapter.py
+tests/unit/signals/test_carry_signal.py
+tests/unit/signals/test_momentum_signal.py
+tests/unit/signals/test_mean_reversion_signal.py
+Signals/Utils/IC.py
+
+# ============================================================================
+# BATCH 3: AlphaGenerator + Risk Covariance Models + Tests (10 files)
+# ============================================================================
+Signals/AlphaGenerator.py
+Risk/Covariance/LedoitWolfShrinkage.py
+Risk/Covariance/SampleCovariance.py
+Risk/Covariance/ConstantCorrelationCovariance.py
+Risk/Covariance/DiagonalCovariance.py
+tests/unit/signals/test_alpha_generator.py
+tests/unit/risk/test_covariance_estimators.py
+tests/unit/risk/test_constant_correlation.py
+tests/unit/risk/test_diagonal_covariance.py
+Risk/Covariance/IdentityCovariance.py
+
+# ============================================================================
+# BATCH 4: More Risk Models + Volatility + Tests (10 files)
+# ============================================================================
+Risk/Covariance/OAShrinkage.py
+Risk/Covariance/CovarianceComparison.py
+Risk/Volatility/VolatilityEstimator.py
+Risk/Volatility/RealizedVolatility.py
+Risk/Volatility/EWMAVolatility.py
+tests/unit/risk/test_identity_covariance.py
+tests/unit/risk/test_oas_shrinkage.py
+tests/unit/risk/test_covariance_comparison.py
+tests/unit/risk/test_volatility_estimator.py
+tests/Risk/test_risk_model_integration.py
+
+# ============================================================================
+# BATCH 5: Portfolio + Backtest + Analysis + Tests (10 files)
+# ============================================================================
+Asset/GrinoldKahnPortfolio.py
+Backtest/MinimalBacktest.py
+Backtest/__init__.py
+Optimizer/MeanVarianceOptimizer.py
+Analysis/TearSheet.py
+tests/unit/analysis/test_tear_sheet.py
+tests/integration/test_multi_signal_strategy.py
+tests/integration/test_signal_to_weights_pipeline.py
+tests/test_multi_risk_backtest.py
+tests/unit/strategies/test_dynamic_validation.py
+
+# ============================================================================
+# BATCH 6: Signal Components + Tests + Examples (10 files)
+# ============================================================================
+Signals/decomposable_signal.py
+Signals/signal_component.py
+tests/Signals/test_decomposable_signal.py
+tests/Signals/test_signal_component.py
+examples/run_minimal_backtest.py
+examples/custom_components_example.py
+examples/signal_decomposition_example.py
+examples/validate_dynamic_ic.py
+examples/yaml_strategy_example.py
+Risk/templates/external_risk_model_template.py
+
+# ============================================================================
+# BATCH 7: Utilities + Caching (10 files)
+# ============================================================================
+BT/misc.py
+Caching/timeseries_cache.py
+TB/FixedRateBondsTB.py
+TB/IRSwapsTB.py
+TB/TimeseriesBuilder.py
+TB/utils.py
+utils/misc.py
+utils/ql_utils.py
+tests/risk/templates/test_risk_model_template.py
+fomc_fly_backtest.py
+
+# ============================================================================
+# BATCH 8: RVUtils (10 files)
+# ============================================================================
+RVUtils/arbl_hedge_ratios.py
+RVUtils/general.py
+RVUtils/Interpolation/calibrate.py
+RVUtils/Interpolation/nss.py
+RVUtils/mean_reversion.py
+RVUtils/plt_timeseries.py
+RVUtils/regression.py
+RVUtils/seasonality_utils.py
+RVUtils/ust_viz.py
+scripts/analyze_correlation_structure.py
+
+# ============================================================================
+# BATCH 9: Query Backends (10 files)
+# ============================================================================
+Query/Futures/FuturesQuery.py
+Query/IRSwaps/backends/quantlib/ql_curve_building_utils.py
+Query/IRSwaps/backends/quantlib/utils.py
+Query/IRSwaps/backends/rateslib/RLIRSwapCurve.py
+MDP/IRSwaps/IRSwapsMDP.py
+MDP/IRSwaps/fixings_cache/fixings_cache.py
+MDP/IRSwaps/GSQUANT/rl_basic/build.py
+MDP/FixedRateBonds/FixedRateBondsMDP.py
+MDP/FixedRateBonds/reference_data_cache/cme_tcf.py
+MDP/FixedRateBonds/reference_data_cache/ust_reference_data.py
+
+# ============================================================================
+# BATCH 10: MDP Fixed Rate Bonds Fetchers (10 files)
+# ============================================================================
+MDP/FixedRateBonds/FEDINVEST/FedInvestFetcher.py
+MDP/FixedRateBonds/PUBLICDOTCOM/PublicDotcomDataFetcher.py
+MDP/FixedRateBonds/WEBULL/WebullFintechFetcher.py
+MDP/FixedRateBonds/WSJ/WSJFetcher.py
+MDP/IRSwaps/CME_NY_EOD_LIVE/ql_basic/CMEFetcher.py
+MDP/IRSwaps/CME_NY_EOD_LIVE/ql_basic/CMEFetcherV2.py
+MDP/IRSwaps/CME_NY_EOD_LIVE/ql_basic/ErisFuturesFetcher.py
+MDP/IRSwaps/CME_NY_EOD_LIVE/ql_basic/FixingsFetcher.py
+MDP/IRSwaps/CME_NY_EOD_LIVE/ql_basic/FredFetcher.py
+MDP/IRSwaps/CME_NY_EOD_LIVE/rl_basic/CMEFetcher.py
+
+# ============================================================================
+# BATCH 11: MDP IRSwaps RL Basic (10 files)
+# ============================================================================
+MDP/IRSwaps/CME_NY_EOD_LIVE/rl_basic/CMEFetcherV2.py
+MDP/IRSwaps/CME_NY_EOD_LIVE/rl_basic/ErisFuturesFetcher.py
+MDP/IRSwaps/SDR_INTRADAY/rl_curve_utils/_RLCurveCache.py
+MDP/IRSwaps/SDR_INTRADAY/rl_curve_utils/BarchartFetcher.py
+MDP/IRSwaps/SDR_INTRADAY/rl_curve_utils/ErisFuturesFetcher.py
+MDP/IRSwaps/SDR_INTRADAY/rl_curve_utils/rl_usd_curve_stir_builder.py
+MDP/IRSwaps/SDR_INTRADAY/rl_curve_utils/rl_usd_sofr_mt_builder_parallel.py
+MDP/IRSwaps/SDR_INTRADAY/rl_curve_utils/rl_usd_sofr_mt_builder.py
+MDP/IRSwaps/SDR_INTRADAY/rl_curve_utils/stir_curve_building_utils.py
+MDP/IRSwaps/SDR_INTRADAY/rl_curve_utils/tos.py
+
+# ============================================================================
+# BATCH 12: MDP IRSwaps SDR INTRADAY (10 files)
+# ============================================================================
+MDP/IRSwaps/SDR_INTRADAY/rl_usd_ois_stir_misc/rl_usd_ois_stir_misc.py
+MDP/IRSwaps/SDR_INTRADAY/rl_usd_ois_stir_q12x12/rl_usd_ois_stir_q12x12.py
+MDP/IRSwaps/SDR_INTRADAY/rl_usd_ois_stir_q12x9/rl_usd_ois_stir_q12x9.py
+MDP/IRSwaps/SDR_INTRADAY/rl_usd_sofr_mt_misc/rl_usd_sofr_mt_misc.py
+MDP/IRSwaps/SDR_INTRADAY/rl_usd_sofr_mt_q12/rl_usd_sofr_mt_q12.py
+MDP/IRSwaps/SDR_INTRADAY/rl_usd_sofr_mt_q16/rl_usd_sofr_mt_q16.py
+MDP/IRSwaps/SDR_INTRADAY/rl_usd_sofr_mtv2_q12x11/rl_usd_sofr_mtv2_q12x11.py
+MDP/IRSwaps/SDR_INTRADAY/rl_usd_sofr_stir_misc/rl_usd_sofr_stir_misc.py
+MDP/IRSwaps/SDR_INTRADAY/rl_usd_sofr_stir_q12x12/rl_usd_sofr_stir_q12x12.py
+MDP/IRSwaps/SDR_INTRADAY/rl_usd_sofr_stir_q12x8/rl_usd_sofr_stir_q12x8.py
+
+# ============================================================================
+# BATCH 13: MDP IRSwaps SDR INTRADAY Final Files (5 files)
+# ============================================================================
+MDP/IRSwaps/SDR_INTRADAY/rl_usd_sofr_stir_q13x10/rl_usd_sofr_stir_q13x10.py
+MDP/IRSwaps/SDR_INTRADAY/rl_curve_utils/SDRDataBuilder.py
+
+# ============================================================================
+# Summary:
+# - Batch 1-5: Core backtesting system (50 files)
+# - Batch 6-7: Signal components, utilities, examples (20 files)
+# - Batch 8-13: Data providers, Query backends (65 files)
+# - Total: 135 files
+# ============================================================================
