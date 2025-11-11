@@ -28,7 +28,6 @@ Risk Models Tested:
 import pytest
 import numpy as np
 import polars as pl
-import pandas as pd
 from datetime import date
 
 
@@ -105,7 +104,7 @@ class TestBackwardCompatibilityDirectImports:
 
         # Create mock returns
         np.random.seed(42)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': np.random.randn(60) * 0.02,
             'B': np.random.randn(60) * 0.03,
             'C': np.random.randn(60) * 0.025,
@@ -159,7 +158,7 @@ class TestBackwardCompatibilityModuleImports:
 
         # Create mock returns with higher N/T ratio to trigger shrinkage
         np.random.seed(42)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': np.random.randn(30) * 0.02,
             'B': np.random.randn(30) * 0.03,
             'C': np.random.randn(30) * 0.025,
@@ -268,13 +267,13 @@ class TestFactoryIntegration:
 
         # Both should produce identical results
         np.random.seed(42)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': np.random.randn(60) * 0.02,
             'B': np.random.randn(60) * 0.03,
         })
 
-        factory_cov = factory_sample.fit(returns.copy())
-        direct_cov = direct_sample.fit(returns.copy())
+        factory_cov = factory_sample.fit(returns.clone())
+        direct_cov = direct_sample.fit(returns.clone())
 
         assert np.allclose(factory_cov, direct_cov)
 
@@ -287,7 +286,7 @@ class TestFactoryIntegration:
 def mock_returns():
     """Create mock returns for testing."""
     np.random.seed(42)
-    return pd.DataFrame({
+    return pl.DataFrame({
         'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),
         'SFRH5': np.random.randn(60) * 0.12 / np.sqrt(252),
         'SFRM5': np.random.randn(60) * 0.08 / np.sqrt(252),
@@ -429,7 +428,7 @@ class TestAllModelsValidation:
 
         for name in model_names:
             model = risk_model_factory.create(name)
-            cov = model.fit(mock_returns.copy())
+            cov = model.fit(mock_returns.clone())
 
             # Valid shape
             n = len(mock_returns.columns)
@@ -541,14 +540,13 @@ class TestOptimizerIntegration:
         cov_matrix = risk_model.fit(mock_returns)
 
         # Create DataFrame for optimizer
-        cov_df = pd.DataFrame(
+        cov_df = pl.DataFrame(
             cov_matrix,
-            index=mock_returns.columns,
-            columns=mock_returns.columns
+            schema=mock_returns.columns
         )
 
         # Create alphas (mock signals)
-        alphas = pd.Series([0.01, -0.005, 0.008, 0.002], index=mock_returns.columns)
+        alphas = pl.Series(values=[0.01, -0.005, 0.008, 0.002], name='alphas')
 
         # Optimize
         optimizer = MeanVarianceOptimizer(risk_aversion=1.0, long_only=True)
@@ -569,14 +567,13 @@ class TestOptimizerIntegration:
         cov_matrix = risk_model.fit(mock_returns)
 
         # Create DataFrame
-        cov_df = pd.DataFrame(
+        cov_df = pl.DataFrame(
             cov_matrix,
-            index=mock_returns.columns,
-            columns=mock_returns.columns
+            schema=mock_returns.columns
         )
 
         # Create alphas
-        alphas = pd.Series([0.01, -0.005, 0.008, 0.002], index=mock_returns.columns)
+        alphas = pl.Series(values=[0.01, -0.005, 0.008, 0.002], name='alphas')
 
         # Optimize
         optimizer = MeanVarianceOptimizer(risk_aversion=1.0, long_only=True)
@@ -593,18 +590,17 @@ class TestOptimizerIntegration:
         from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
         model_names = ['sample', 'ledoit_wolf', 'constant_correlation', 'diagonal', 'identity']
-        alphas = pd.Series([0.01, -0.005, 0.008, 0.002], index=mock_returns.columns)
+        alphas = pl.Series(values=[0.01, -0.005, 0.008, 0.002], name='alphas')
 
         for name in model_names:
             # Fit covariance
             model = risk_model_factory.create(name)
-            cov_matrix = model.fit(mock_returns.copy())
+            cov_matrix = model.fit(mock_returns.clone())
 
             # Create DataFrame
-            cov_df = pd.DataFrame(
+            cov_df = pl.DataFrame(
                 cov_matrix,
-                index=mock_returns.columns,
-                columns=mock_returns.columns
+                schema=mock_returns.columns
             )
 
             # Optimize
@@ -628,7 +624,7 @@ class TestOptimizerIntegration:
         idiosync = np.random.randn(T, 4) * 0.005  # Idiosyncratic noise
 
         # Assets with positive correlation via common factor
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': factor + idiosync[:, 0],
             'B': factor + idiosync[:, 1],
             'C': factor + idiosync[:, 2],
@@ -636,15 +632,14 @@ class TestOptimizerIntegration:
         })
 
         # Balanced alphas (not dominated by single asset)
-        alphas = pd.Series([0.003, 0.0025, 0.0028, 0.0027], index=returns.columns)
+        alphas = pl.Series(values=[0.003, 0.0025, 0.0028, 0.0027], name='alphas')
 
         # Optimize with SampleCovariance (captures correlations)
         sample_model = SampleCovariance()
         sample_cov = sample_model.fit(returns)
-        sample_cov_df = pd.DataFrame(
+        sample_cov_df = pl.DataFrame(
             sample_cov,
-            index=returns.columns,
-            columns=returns.columns
+            schema=returns.columns
         )
         optimizer = MeanVarianceOptimizer(risk_aversion=2.0, long_only=True)
         sample_weights = optimizer.optimize(alphas, sample_cov_df)
@@ -652,17 +647,16 @@ class TestOptimizerIntegration:
         # Optimize with DiagonalCovariance (ignores correlations)
         diagonal_model = DiagonalCovariance()
         diagonal_cov = diagonal_model.fit(returns)
-        diagonal_cov_df = pd.DataFrame(
+        diagonal_cov_df = pl.DataFrame(
             diagonal_cov,
-            index=returns.columns,
-            columns=returns.columns
+            schema=returns.columns
         )
         diagonal_weights = optimizer.optimize(alphas, diagonal_cov_df)
 
         # With correlation structure and balanced alphas, weights should differ
         # Diagonal ignores correlation → may over-diversify
         # Sample considers correlation → may concentrate more
-        max_diff = np.max(np.abs(sample_weights.values - diagonal_weights.values))
+        max_diff = np.max(np.abs(sample_weights.to_numpy() - diagonal_weights.to_numpy()))
         assert max_diff > 0.01  # At least 1% difference in some weight
 
 
@@ -681,7 +675,7 @@ class TestNoBreakingChanges:
         result = model.fit(mock_returns)
 
         assert isinstance(result, np.ndarray)
-        assert not isinstance(result, pd.DataFrame)
+        assert not isinstance(result, pl.DataFrame)
 
     def test_get_covariance_method_exists(self, mock_returns):
         """get_covariance() method still exists."""
