@@ -1,3 +1,5 @@
+# ABOUTME: Enumeration of computable fixed rate bond metrics and their calculation functions
+# ABOUTME: Includes YTM, prices (clean/dirty), NPV, Greeks (PV01, duration, convexity)
 from enum import Enum, auto
 from typing import Any, Callable, Dict, List
 

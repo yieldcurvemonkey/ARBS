@@ -1,3 +1,5 @@
+# ABOUTME: Abstract base class for product-agnostic backtest queries
+# ABOUTME: Provides interface for building MDP requests and resolving structure/value maps
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 

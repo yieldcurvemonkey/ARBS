@@ -1,0 +1,77 @@
+# Month-End Seasonality Strategy
+# Calendar-based strategy exploiting month-end rebalancing flows
+
+strategy:
+  name: "Month-End Forward Fly"
+  type: "calendar_seasonality"
+  description: "Trade 1Yx2Y/1Yx5Y/1Yx10Y fly around month-end"
+  mode: "query"
+
+# Instrument universe
+universe:
+  asset_class: "swaps"
+  instruments: ["1Yx2Y/1Yx5Y/1Yx10Y"]  # Forward-starting fly
+  source: "CME_NY_EOD_LIVE-ql_basic"
+
+# Query configuration
+queries:
+  - name: "month_end_fly"
+    type: "fly"
+    config:
+      curve: "USD-SOFR-1D"
+      front_tenor: "1Yx2Y"   # 1-year forward starting 2-year swap
+      belly_tenor: "1Yx5Y"   # 1-year forward starting 5-year swap
+      back_tenor: "1Yx10Y"   # 1-year forward starting 10-year swap
+      bpv: -100000           # Pay 100k BPV
+      side: "pay_belly"      # Pay belly (receive wings)
+      tags: ["month_end"]
+
+# Entry rule: Calendar-based (N days before month-end)
+entry:
+  type: "calendar"
+  config:
+    pattern: "month_end"
+    offset_days: -3          # Enter 3 business days BEFORE month-end
+    calendar: "US_GOVERNMENT_BOND"
+    recurring: true          # Repeat every month
+
+# Exit rule: Calendar-based (N days after month-end)
+exit:
+  type: "calendar"
+  config:
+    pattern: "month_end"
+    offset_days: 3           # Exit 3 business days AFTER month-end
+    calendar: "US_GOVERNMENT_BOND"
+    recurring: true
+
+# Execution
+execution:
+  rebalance_frequency: "event_driven"
+  transaction_costs: 0.0
+  calendar: "US_GOVERNMENT_BOND"
+
+# Backtest
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2025-10-01"
+  initial_capital: 1000000.0
+  currency: "USD"
+
+# Strategy Logic:
+# 1. For each month:
+#    a. Entry: 3 business days before month-end (e.g., 2024-01-26)
+#    b. Exit: 3 business days after month-end (e.g., 2024-02-05)
+# 2. Each cycle is independent
+# 3. Position is tagged with "month_end" for tracking
+# 4. Exploits month-end rebalancing flows
+#
+# Calendar Calculation Example (January 2024):
+# - Month-end: 2024-01-31 (Wednesday)
+# - Last business day of month: 2024-01-31
+# - Entry: 3 BD before = 2024-01-26 (Friday)
+# - Exit: 3 BD after (in February) = 2024-02-05 (Monday)
+#
+# Expected Pattern:
+# - Institutional investors rebalance at month-end
+# - Forward rates adjust before/after rebalancing
+# - Strategy captures this predictable flow

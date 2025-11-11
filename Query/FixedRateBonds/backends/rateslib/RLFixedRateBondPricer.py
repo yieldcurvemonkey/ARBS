@@ -1,3 +1,5 @@
+# ABOUTME: Concrete implementation of fixed rate bond pricer interface using rateslib library
+# ABOUTME: Provides bond pricing, Greeks calculation, and analytics backed by rateslib functionality
 import datetime
 from dataclasses import dataclass
 from typing import Union, Any, Optional

@@ -1,3 +1,5 @@
+# ABOUTME: Builder functions for constructing interest rate swap structures (outright, curve, fly)
+# ABOUTME: Handles risk-weighted notional sizing and multi-leg swap portfolio construction
 import datetime
 import math
 import re

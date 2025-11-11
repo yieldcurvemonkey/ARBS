@@ -1,3 +1,5 @@
+# ABOUTME: Generic function map that converts structure enums to builder functions
+# ABOUTME: Maps instrument structures (like swap schedules) to lists of component objects
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Type, TypeVar, Generic, Dict, Callable, List, Any, Tuple

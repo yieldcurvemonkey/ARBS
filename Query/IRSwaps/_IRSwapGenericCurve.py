@@ -1,3 +1,5 @@
+# ABOUTME: Abstract interface for yield curves that price interest rate swaps
+# ABOUTME: Defines curve operations (building swaps, computing values, calendar handling) independent of backend
 import datetime
 from abc import ABC
 from typing import Any, Dict, Optional, Protocol, runtime_checkable

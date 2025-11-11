@@ -1,0 +1,101 @@
+# Multi-Signal Strategy
+# Combines carry, momentum, and mean reversion signals
+
+strategy:
+  name: "Multi-Signal Futures"
+  type: "multi_signal"
+  description: "Carry + Momentum + Mean Reversion with IC weighting"
+  mode: "signal"
+
+# Instrument universe
+universe:
+  asset_class: "futures"
+  instruments:
+    - "SFRZ4"
+    - "SFRH5"
+    - "SFRM5"
+    - "SFRU5"
+    - "SFRZ5"
+    - "SFRH6"
+  source: "live"
+
+# Multiple signals with different characteristics
+signals:
+  # Signal 1: Carry (value signal)
+  - name: "futures_carry"
+    type: "carry"
+    config:
+      method: "calendar_spread"
+      annualize: true
+      standardize: true
+    weight: 1.0  # Equal weight (can be IC-weighted later)
+
+  # Signal 2: Momentum (trend following)
+  - name: "price_momentum"
+    type: "momentum"
+    config:
+      lookback_days: 30     # 30-day momentum
+      method: "returns"     # Simple returns-based
+      standardize: true
+    weight: 1.0
+
+  # Signal 3: Mean Reversion (contrarian)
+  - name: "mean_reversion"
+    type: "mean_reversion"
+    config:
+      lookback_days: 20     # 20-day mean reversion
+      method: "z_score"     # Z-score based
+      threshold: 2.0        # Only trigger when |z| > 2
+      standardize: true
+    weight: 1.0
+
+# Alpha generation
+alpha:
+  IC: 0.05          # Average IC across signals
+  method: "static"  # Could use "dynamic" for rolling IC estimation
+
+# Risk model
+risk:
+  covariance: "ledoit_wolf"
+  lookback: 60
+  volatility_target: 0.12  # Slightly higher vol target for multi-signal
+
+# Portfolio optimizer
+optimizer:
+  type: "mean_variance"
+  risk_aversion: 1.5  # Slightly more conservative
+  constraints:
+    long_only: true
+    max_position: 0.30   # More diversified (max 30% per position)
+    leverage: 1.0
+    # Optional: Sector limits if futures are categorized
+    # sector_limits:
+    #   "STIR": 0.60  # Max 60% in short-term rates
+
+# Execution
+execution:
+  rebalance_frequency: "weekly"
+  transaction_costs: 0.0001
+  calendar: "US"
+
+# Backtest
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 1000000.0
+  currency: "USD"
+
+# Strategy Logic:
+# 1. Calculate all three signals independently
+# 2. Each signal generates z-scores for the universe
+# 3. Combine signals using equal weighting: z_combined = mean(z_carry, z_mom, z_mr)
+# 4. Convert combined signal to alphas: alpha = IC × Vol × z_combined
+# 5. Optimize weights given alphas and covariance
+# 6. Rebalance weekly
+#
+# Expected Benefits:
+# - Diversification across signal types (value, trend, contrarian)
+# - Lower correlation between signals → higher Sharpe ratio
+# - More robust to regime changes
+# - Fundamental Law: IR = IC × sqrt(Breadth)
+#   With 3 signals, breadth increases → higher IR

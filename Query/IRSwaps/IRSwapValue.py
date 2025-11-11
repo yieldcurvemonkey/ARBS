@@ -1,3 +1,5 @@
+# ABOUTME: Enumeration of computable interest rate swap metrics and their calculation functions
+# ABOUTME: Includes rates, Greeks (DV01, gamma), NPV, carry metrics, and asset swap spreads
 import math
 import numpy as np
 from enum import Enum, auto

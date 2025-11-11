@@ -1,3 +1,5 @@
+# ABOUTME: Abstract interface defining methods for interest rate swap contracts
+# ABOUTME: Specifies core swap operations (rates, NPV, Greeks, carry) independent of backend implementation
 import datetime
 from abc import ABC, abstractmethod
 

@@ -1,4 +1,5 @@
-# Query/Base/product_adapter.py
+# ABOUTME: Pluggable adapter interface for products (futures, IRS, swaptions, etc.)
+# ABOUTME: Allows backtest engine to remain product-agnostic via abstract methods and adapter registry
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterable, List, Tuple, Type

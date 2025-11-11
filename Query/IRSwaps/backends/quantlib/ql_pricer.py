@@ -1,3 +1,5 @@
+# ABOUTME: Factory functions for constructing QuantLib swap instruments with market conventions
+# ABOUTME: Builds vanilla and OIS swaps with proper sizing, tenors, and side (receive/pay) logic
 import datetime
 from typing import Literal, Optional
 

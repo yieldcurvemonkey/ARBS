@@ -1,3 +1,5 @@
+# ABOUTME: Product adapter for fixed rate bonds that creates structure and value function maps
+# ABOUTME: Registers FRB product type and provides standardized product interface to Query layer
 from typing import Any, List
 
 from Query.Base._GenericPricable import _GenericPricable

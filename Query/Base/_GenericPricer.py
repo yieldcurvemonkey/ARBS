@@ -1,3 +1,5 @@
+# ABOUTME: Generic pricer interface for valuing instruments
+# ABOUTME: Defines NPV calculation and pricable resolution methods
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Generic, Any, Optional

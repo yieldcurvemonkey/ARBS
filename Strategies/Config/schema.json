@@ -1,0 +1,347 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ARBS Strategy Configuration Schema",
+  "description": "Schema for validating ARBS strategy YAML configurations",
+  "type": "object",
+  "required": ["strategy", "universe", "execution", "backtest"],
+  "properties": {
+    "strategy": {
+      "type": "object",
+      "required": ["name", "type", "mode"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Strategy name identifier",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "description": "Strategy type",
+          "enum": [
+            "carry", "momentum", "mean_reversion",
+            "multi_signal", "event_driven", "calendar_seasonality",
+            "regime_switching", "custom"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description"
+        },
+        "mode": {
+          "type": "string",
+          "description": "Strategy mode",
+          "enum": ["query", "signal"]
+        }
+      }
+    },
+    "universe": {
+      "type": "object",
+      "required": ["asset_class"],
+      "properties": {
+        "asset_class": {
+          "type": "string",
+          "description": "Asset class",
+          "enum": ["futures", "swaps", "bonds", "mixed"]
+        },
+        "instruments": {
+          "oneOf": [
+            {"type": "array", "items": {"type": "string"}},
+            {"type": "string"}
+          ],
+          "description": "List of instrument tickers or 'dynamic'"
+        },
+        "source": {
+          "type": "string",
+          "description": "Market data source"
+        }
+      }
+    },
+    "queries": {
+      "type": "array",
+      "description": "Query definitions (for query mode)",
+      "items": {
+        "type": "object",
+        "required": ["name", "type", "config"],
+        "properties": {
+          "name": {"type": "string"},
+          "type": {
+            "type": "string",
+            "enum": ["outright", "fly", "curve", "custom"]
+          },
+          "config": {"type": "object"}
+        }
+      }
+    },
+    "signals": {
+      "type": "array",
+      "description": "Signal definitions (for signal mode)",
+      "items": {
+        "type": "object",
+        "required": ["type", "config"],
+        "properties": {
+          "name": {"type": "string"},
+          "type": {
+            "type": "string",
+            "enum": ["carry", "momentum", "mean_reversion", "custom"]
+          },
+          "config": {"type": "object"},
+          "weight": {
+            "oneOf": [
+              {"type": "number", "minimum": 0},
+              {"type": "string", "enum": ["adaptive"]}
+            ]
+          }
+        }
+      }
+    },
+    "alpha": {
+      "type": "object",
+      "description": "Alpha generation config (for signal mode)",
+      "properties": {
+        "IC": {
+          "type": "number",
+          "description": "Information Coefficient",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "method": {
+          "type": "string",
+          "enum": ["static", "dynamic"]
+        },
+        "dynamic_config": {
+          "type": "object",
+          "properties": {
+            "lookback_periods": {"type": "integer", "minimum": 1},
+            "min_periods": {"type": "integer", "minimum": 1}
+          }
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "required": ["covariance"],
+      "properties": {
+        "covariance": {
+          "type": "string",
+          "enum": ["ledoit_wolf", "sample", "constant_correlation"]
+        },
+        "lookback": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Historical window in days"
+        },
+        "volatility_target": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Target annualized volatility"
+        },
+        "factor_model": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "factors": {
+              "type": "array",
+              "items": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "optimizer": {
+      "type": "object",
+      "description": "Portfolio optimizer config (for signal mode)",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["mean_variance", "risk_parity", "min_variance"]
+        },
+        "risk_aversion": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Risk aversion parameter (lambda)"
+        },
+        "constraints": {
+          "type": "object",
+          "properties": {
+            "long_only": {"type": "boolean"},
+            "max_position": {"type": "number", "minimum": 0, "maximum": 1},
+            "max_short_position": {"type": "number", "minimum": -1, "maximum": 0},
+            "leverage": {"type": "number", "minimum": 0},
+            "max_turnover": {"type": "number", "minimum": 0, "maximum": 1},
+            "dv01_limit": {
+              "type": "object",
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "max_dv01": {"type": "number"}
+              }
+            },
+            "cardinality": {
+              "type": "object",
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "max_positions": {"type": "integer", "minimum": 1}
+              }
+            }
+          }
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "description": "Entry rules (for query mode)",
+      "required": ["type", "config"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["date", "signal", "event", "calendar", "signal_with_event", "multi"]
+        },
+        "config": {"type": "object"}
+      }
+    },
+    "exit": {
+      "type": "object",
+      "description": "Exit rules (for query mode)",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["date", "signal", "event", "calendar", "stop_loss", "take_profit", "holding_period", "structural_expiry", "multi"]
+        },
+        "config": {"type": "object"},
+        "operator": {
+          "type": "string",
+          "enum": ["any", "all"],
+          "description": "For multi-condition exit: 'any' (OR) or 'all' (AND)"
+        },
+        "conditions": {
+          "type": "array",
+          "description": "List of exit conditions (for multi type)",
+          "items": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": {"type": "string"},
+              "config": {"type": "object"}
+            }
+          }
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": ["rebalance_frequency"],
+      "properties": {
+        "rebalance_frequency": {
+          "type": "string",
+          "enum": ["daily", "weekly", "monthly", "event_driven"]
+        },
+        "transaction_costs": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "proportional": {"type": "number", "minimum": 0},
+            "fixed": {"type": "number", "minimum": 0},
+            "market_impact": {
+              "type": "object",
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "model": {"type": "string", "enum": ["linear", "quadratic"]},
+                "coefficient": {"type": "number"}
+              }
+            },
+            "slippage": {
+              "type": "object",
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "model": {"type": "string", "enum": ["percent", "fixed"]},
+                "value": {"type": "number"}
+              }
+            }
+          }
+        },
+        "rebalancing": {
+          "type": "object",
+          "properties": {
+            "method": {"type": "string", "enum": ["periodic", "threshold"]},
+            "threshold": {"type": "number", "minimum": 0, "maximum": 1},
+            "min_frequency": {"type": "string"}
+          }
+        },
+        "calendar": {
+          "type": "string",
+          "description": "Business day calendar (e.g., 'US', 'US_GOVERNMENT_BOND')"
+        }
+      }
+    },
+    "backtest": {
+      "type": "object",
+      "required": ["start_date", "end_date", "initial_capital"],
+      "properties": {
+        "start_date": {
+          "type": "string",
+          "format": "date",
+          "description": "Backtest start date (YYYY-MM-DD)"
+        },
+        "end_date": {
+          "type": "string",
+          "format": "date",
+          "description": "Backtest end date (YYYY-MM-DD)"
+        },
+        "initial_capital": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Starting capital"
+        },
+        "currency": {
+          "type": "string",
+          "default": "USD",
+          "description": "Base currency"
+        },
+        "features": {
+          "type": "object",
+          "properties": {
+            "slippage": {"type": "object"},
+            "benchmark": {"type": "object"},
+            "risk_metrics": {
+              "type": "array",
+              "items": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "regime": {
+      "type": "object",
+      "description": "Regime switching configuration",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "detector": {
+          "type": "object",
+          "properties": {
+            "module": {"type": "string"},
+            "class": {"type": "string"}
+          }
+        },
+        "update_frequency": {"type": "string"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"strategy": {"properties": {"mode": {"const": "signal"}}}}
+      },
+      "then": {
+        "required": ["signals", "alpha", "optimizer"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"strategy": {"properties": {"mode": {"const": "query"}}}}
+      },
+      "then": {
+        "required": ["queries", "entry", "exit"]
+      }
+    }
+  ]
+}
