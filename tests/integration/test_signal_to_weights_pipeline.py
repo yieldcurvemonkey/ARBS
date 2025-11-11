@@ -18,7 +18,7 @@ Critical Tests:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date
 
 from Signals.Futures.CarrySignal import CarrySignal
@@ -56,7 +56,7 @@ class TestSignalToWeightsPipeline:
 
         # Step 2: Create synthetic returns history (60 periods)
         np.random.seed(42)
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),  # 10% vol
             'SFRH5': np.random.randn(60) * 0.12 / np.sqrt(252),  # 12% vol
             'SFRM5': np.random.randn(60) * 0.08 / np.sqrt(252),  # 8% vol
@@ -68,29 +68,31 @@ class TestSignalToWeightsPipeline:
             returns_history,
             date(2024, 11, 1)
         )
-        alphas = pd.Series(alphas_dict)
 
         # Verify alphas are sensible (not raw z-scores!)
         # Z=1.5 should NOT become 150% alpha
-        assert all(abs(alpha) < 0.05 for alpha in alphas.values), \
-            f"Alphas too large: {alphas.to_dict()}"
+        assert all(abs(alpha) < 0.05 for alpha in alphas_dict.values()), \
+            f"Alphas too large: {alphas_dict}"
 
         # Positive signal → positive alpha
-        assert alphas['SFRZ4'] > 0
+        assert alphas_dict['SFRZ4'] > 0
         # Negative signal → negative alpha
-        assert alphas['SFRH5'] < 0
+        assert alphas_dict['SFRH5'] < 0
         # Small positive signal → small positive alpha
-        assert 0 < alphas['SFRM5'] < alphas['SFRZ4']
+        assert 0 < alphas_dict['SFRM5'] < alphas_dict['SFRZ4']
 
         # Step 4: Estimate covariance
-        cov_matrix = risk_model.fit(returns_history)
-        cov_df = pd.DataFrame(
+        cov_matrix = risk_model.fit(returns_history.to_pandas())
+        cov_df = pl.DataFrame(
             cov_matrix,
-            index=returns_history.columns,
-            columns=returns_history.columns
+            schema=returns_history.columns
         )
 
         # Step 5: Optimize weights
+        # Convert alphas dict to polars Series for optimizer (order must match covariance)
+        asset_order = returns_history.columns
+        alphas_values = [alphas_dict[asset] for asset in asset_order]
+        alphas = pl.Series(alphas_values, name='alphas')
         weights = optimizer.optimize(alphas, cov_df)
 
         # Verify weights
@@ -99,7 +101,8 @@ class TestSignalToWeightsPipeline:
         assert all(w >= -1e-10 for w in weights.values), "No shorts (long_only=True)"
 
         # Asset with highest alpha should have highest weight
-        highest_alpha_asset = alphas.idxmax()
+        highest_alpha_idx = alphas_values.index(max(alphas_values))
+        highest_alpha_asset = asset_order[highest_alpha_idx]
         assert weights[highest_alpha_asset] > weights['SFRM5'], \
             "Highest alpha should get highest weight"
 
@@ -111,7 +114,7 @@ class TestSignalToWeightsPipeline:
         # All zero signals
         signals = {'SFRZ4': 0.0, 'SFRH5': 0.0, 'SFRM5': 0.0}
 
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'SFRZ4': np.random.randn(60) * 0.01,
             'SFRH5': np.random.randn(60) * 0.01,
             'SFRM5': np.random.randn(60) * 0.01,
@@ -119,9 +122,8 @@ class TestSignalToWeightsPipeline:
 
         # Convert signals → alphas (should all be 0)
         alphas_dict = alpha_gen.signals_to_alphas(signals, returns_history, date(2024, 11, 1))
-        alphas = pd.Series(alphas_dict)
 
-        assert all(alpha == pytest.approx(0.0) for alpha in alphas.values), \
+        assert all(alpha == pytest.approx(0.0) for alpha in alphas_dict.values()), \
             "Zero signals should produce zero alphas"
 
     def test_units_consistency(self):
@@ -137,7 +139,7 @@ class TestSignalToWeightsPipeline:
         # Signals are z-scores (dimensionless)
         signals = {'ASSET1': 2.0, 'ASSET2': -1.5}
 
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'ASSET1': np.random.randn(60) * 0.10 / np.sqrt(252),
             'ASSET2': np.random.randn(60) * 0.10 / np.sqrt(252),
         })
@@ -170,31 +172,35 @@ class TestSignalToWeightsPipeline:
         # Create highly correlated returns
         np.random.seed(42)
         base_returns = np.random.randn(60) * 0.01
-        returns_high_corr = pd.DataFrame({
+        returns_high_corr = pl.DataFrame({
             'ASSET1': base_returns + np.random.randn(60) * 0.001,  # 0.001 noise
             'ASSET2': base_returns + np.random.randn(60) * 0.001,  # Same base
         })
 
         # Create low correlation returns
-        returns_low_corr = pd.DataFrame({
+        returns_low_corr = pl.DataFrame({
             'ASSET1': np.random.randn(60) * 0.01,
             'ASSET2': np.random.randn(60) * 0.01,
         })
 
         # Get weights for high correlation case
-        alphas_high = pd.Series(alpha_gen.signals_to_alphas(
+        alphas_high_dict = alpha_gen.signals_to_alphas(
             signals, returns_high_corr, date(2024, 11, 1)
-        ))
-        cov_high = risk_model.fit(returns_high_corr)
-        cov_df_high = pd.DataFrame(cov_high, index=alphas_high.index, columns=alphas_high.index)
+        )
+        cov_high = risk_model.fit(returns_high_corr.to_pandas())
+        cov_df_high = pl.DataFrame(cov_high, schema=returns_high_corr.columns)
+        alphas_high_values = [alphas_high_dict[asset] for asset in returns_high_corr.columns]
+        alphas_high = pl.Series(alphas_high_values, name='alphas')
         weights_high = optimizer.optimize(alphas_high, cov_df_high)
 
         # Get weights for low correlation case
-        alphas_low = pd.Series(alpha_gen.signals_to_alphas(
+        alphas_low_dict = alpha_gen.signals_to_alphas(
             signals, returns_low_corr, date(2024, 11, 1)
-        ))
-        cov_low = risk_model.fit(returns_low_corr)
-        cov_df_low = pd.DataFrame(cov_low, index=alphas_low.index, columns=alphas_low.index)
+        )
+        cov_low = risk_model.fit(returns_low_corr.to_pandas())
+        cov_df_low = pl.DataFrame(cov_low, schema=returns_low_corr.columns)
+        alphas_low_values = [alphas_low_dict[asset] for asset in returns_low_corr.columns]
+        alphas_low = pl.Series(alphas_low_values, name='alphas')
         weights_low = optimizer.optimize(alphas_low, cov_df_low)
 
         # Weights should be more balanced for low correlation
@@ -222,23 +228,25 @@ class TestSignalToWeightsPipeline:
 
         # Create returns with different volatilities
         np.random.seed(42)
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'LOW_VOL': np.random.randn(60) * 0.05 / np.sqrt(252),   # 5% vol
             'HIGH_VOL': np.random.randn(60) * 0.20 / np.sqrt(252),  # 20% vol
         })
 
         # Convert signals → alphas
-        alphas = pd.Series(alpha_gen.signals_to_alphas(
+        alphas_dict = alpha_gen.signals_to_alphas(
             signals, returns_history, date(2024, 11, 1)
-        ))
+        )
 
         # HIGH_VOL should have higher alpha (IC × Vol × Z)
-        assert alphas['HIGH_VOL'] > alphas['LOW_VOL'] * 2, \
+        assert alphas_dict['HIGH_VOL'] > alphas_dict['LOW_VOL'] * 2, \
             "Higher vol should produce higher alpha for same signal"
 
         # Optimize weights
-        cov_matrix = risk_model.fit(returns_history)
-        cov_df = pd.DataFrame(cov_matrix, index=returns_history.columns, columns=returns_history.columns)
+        cov_matrix = risk_model.fit(returns_history.to_pandas())
+        cov_df = pl.DataFrame(cov_matrix, schema=returns_history.columns)
+        alphas_values = [alphas_dict[asset] for asset in returns_history.columns]
+        alphas = pl.Series(alphas_values, name='alphas')
         weights = optimizer.optimize(alphas, cov_df)
 
         # Weights should reflect both alpha AND risk
@@ -264,23 +272,27 @@ class TestSignalToWeightsPipeline:
         signals = {'STRONG': 2.0, 'WEAK': 0.5}
 
         np.random.seed(42)
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'STRONG': np.random.randn(60) * 0.10 / np.sqrt(252),
             'WEAK': np.random.randn(60) * 0.10 / np.sqrt(252),
         })
 
         # Low IC case
-        alphas_low = pd.Series(alpha_gen_low.signals_to_alphas(
+        alphas_low_dict = alpha_gen_low.signals_to_alphas(
             signals, returns_history, date(2024, 11, 1)
-        ))
-        cov_matrix = risk_model.fit(returns_history)
-        cov_df = pd.DataFrame(cov_matrix, index=returns_history.columns, columns=returns_history.columns)
+        )
+        cov_matrix = risk_model.fit(returns_history.to_pandas())
+        cov_df = pl.DataFrame(cov_matrix, schema=returns_history.columns)
+        alphas_low_values = [alphas_low_dict[asset] for asset in returns_history.columns]
+        alphas_low = pl.Series(alphas_low_values, name='alphas')
         weights_low = optimizer.optimize(alphas_low, cov_df)
 
         # High IC case
-        alphas_high = pd.Series(alpha_gen_high.signals_to_alphas(
+        alphas_high_dict = alpha_gen_high.signals_to_alphas(
             signals, returns_history, date(2024, 11, 1)
-        ))
+        )
+        alphas_high_values = [alphas_high_dict[asset] for asset in returns_history.columns]
+        alphas_high = pl.Series(alphas_high_values, name='alphas')
         weights_high = optimizer.optimize(alphas_high, cov_df)
 
         # Higher IC → more concentration in STRONG signal
@@ -310,20 +322,22 @@ class TestRealisticScenarios:
         }
 
         np.random.seed(42)
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'HIGH_CARRY': np.random.randn(60) * 0.12 / np.sqrt(252),
             'MED_CARRY': np.random.randn(60) * 0.10 / np.sqrt(252),
             'NEG_CARRY': np.random.randn(60) * 0.11 / np.sqrt(252),
         })
 
         # Convert signals → alphas
-        alphas = pd.Series(alpha_gen.signals_to_alphas(
+        alphas_dict = alpha_gen.signals_to_alphas(
             carry_signals, returns_history, date(2024, 11, 1)
-        ))
+        )
 
         # Optimize
-        cov_matrix = risk_model.fit(returns_history)
-        cov_df = pd.DataFrame(cov_matrix, index=returns_history.columns, columns=returns_history.columns)
+        cov_matrix = risk_model.fit(returns_history.to_pandas())
+        cov_df = pl.DataFrame(cov_matrix, schema=returns_history.columns)
+        alphas_values = [alphas_dict[asset] for asset in returns_history.columns]
+        alphas = pl.Series(alphas_values, name='alphas')
         weights = optimizer.optimize(alphas, cov_df)
 
         # HIGH_CARRY should get highest weight
@@ -350,7 +364,7 @@ class TestRealisticScenarios:
         low_vol_returns = np.random.randn(50) * 0.05 / np.sqrt(252)
         high_vol_returns = np.random.randn(10) * 0.20 / np.sqrt(252)
 
-        returns_history = pd.DataFrame({
+        returns_history = pl.DataFrame({
             'ASSET': np.concatenate([low_vol_returns, high_vol_returns])
         })
 
@@ -358,7 +372,7 @@ class TestRealisticScenarios:
         alphas = alpha_gen.signals_to_alphas(signals, returns_history, date(2024, 11, 1))
 
         # Alpha should be larger than if we only had low vol
-        low_vol_only = pd.DataFrame({'ASSET': low_vol_returns})
+        low_vol_only = pl.DataFrame({'ASSET': low_vol_returns})
         alphas_low = alpha_gen.signals_to_alphas(signals, low_vol_only, date(2024, 11, 1))
 
         # Recent high vol should increase alpha
