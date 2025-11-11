@@ -216,6 +216,7 @@ If you catch yourself writing "new", "old", "legacy", "wrapper", "unified", or i
 - When starting work without a clear branch for the current task, YOU MUST create a WIP branch.
 - YOU MUST TRACK All non-trivial changes in git.
 - YOU MUST commit frequently throughout the development process, even if your high-level tasks are not yet done. Commit your journal entries.
+- **YOU MUST PUSH TO REMOTE IMMEDIATELY AFTER EVERY COMMIT** - VMs are ephemeral and commits only exist locally until pushed. Use `git push -u origin <branch>` after each commit.
 - NEVER SKIP, EVADE OR DISABLE A PRE-COMMIT HOOK
 - NEVER use `git add -A` unless you've just done a `git status` - Don't add random test files to the repo.
 
