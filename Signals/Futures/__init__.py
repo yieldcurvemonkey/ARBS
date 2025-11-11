@@ -1,9 +1,10 @@
 # ABOUTME: Futures-specific alpha signal implementations
-# ABOUTME: Exports CarrySignal for futures calendar spread carry calculations
+# ABOUTME: Exports CarrySignal, MomentumSignal for futures alpha generation
 """
 Futures-specific alpha signals.
 """
 
 from Signals.Futures.CarrySignal import CarrySignal
+from Signals.Futures.MomentumSignal import MomentumSignal
 
-__all__ = ["CarrySignal"]
+__all__ = ["CarrySignal", "MomentumSignal"]
