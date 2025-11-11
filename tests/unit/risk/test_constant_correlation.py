@@ -24,7 +24,7 @@ Business Requirements:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
 class TestConstantCorrelationBasics:
@@ -52,9 +52,9 @@ class TestConstantCorrelationEstimation:
 
         # Create simple returns data
         np.random.seed(42)
-        returns = pd.DataFrame(
+        returns = pl.DataFrame(
             np.random.randn(100, 5),
-            columns=['A', 'B', 'C', 'D', 'E']
+            schema=['A', 'B', 'C', 'D', 'E']
         )
 
         estimator = ConstantCorrelationCovariance()
@@ -69,7 +69,7 @@ class TestConstantCorrelationEstimation:
         from Risk.Covariance.ConstantCorrelationCovariance import ConstantCorrelationCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(50, 5))
+        returns = pl.DataFrame(np.random.randn(50, 5))
 
         estimator = ConstantCorrelationCovariance()
         cov_matrix = estimator.fit(returns)
@@ -82,7 +82,7 @@ class TestConstantCorrelationEstimation:
         from Risk.Covariance.ConstantCorrelationCovariance import ConstantCorrelationCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimator = ConstantCorrelationCovariance()
         cov_matrix = estimator.fit(returns)
@@ -96,7 +96,7 @@ class TestConstantCorrelationEstimation:
         from Risk.Covariance.ConstantCorrelationCovariance import ConstantCorrelationCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimator = ConstantCorrelationCovariance()
         cov_matrix = estimator.fit(returns)
@@ -121,13 +121,13 @@ class TestConstantCorrelationEstimation:
         from Risk.Covariance.ConstantCorrelationCovariance import ConstantCorrelationCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimator = ConstantCorrelationCovariance()
         cov_matrix = estimator.fit(returns)
 
-        # Sample variances
-        sample_var = returns.var(ddof=1).values
+        # Sample variances (polars .var() returns single-row DataFrame, flatten to 1D array)
+        sample_var = returns.var().to_numpy().flatten()
 
         # Constant correlation variances (diagonal)
         cc_var = np.diag(cov_matrix)
@@ -144,14 +144,14 @@ class TestEdgeCases:
         from Risk.Covariance.ConstantCorrelationCovariance import ConstantCorrelationCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 1), columns=['A'])
+        returns = pl.DataFrame(np.random.randn(100, 1), schema=['A'])
 
         estimator = ConstantCorrelationCovariance()
         cov_matrix = estimator.fit(returns)
 
         # Should be 1×1 matrix with variance
         assert cov_matrix.shape == (1, 1)
-        expected_var = returns.var(ddof=1).values[0]
+        expected_var = returns.var().to_numpy().flatten()[0]
         np.testing.assert_almost_equal(cov_matrix[0, 0], expected_var)
 
     def test_zero_correlation(self):
@@ -160,14 +160,14 @@ class TestEdgeCases:
 
         np.random.seed(42)
         # Create uncorrelated returns
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         # Manually set correlation to 0 by using orthogonal data
         # (In practice, ρ will be computed from data, so we'll check approximately)
         estimator = ConstantCorrelationCovariance()
 
         # Create perfectly uncorrelated data
-        returns_ortho = pd.DataFrame({
+        returns_ortho = pl.DataFrame({
             'A': np.random.randn(100),
             'B': np.random.randn(100),
             'C': np.random.randn(100),
@@ -192,7 +192,7 @@ class TestEdgeCases:
         np.random.seed(42)
         # Create perfectly correlated returns
         base = np.random.randn(100, 1)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': base.flatten(),
             'B': base.flatten() * 1.5,  # Scaled version
             'C': base.flatten() * 0.8,  # Another scaled version
@@ -217,7 +217,7 @@ class TestEdgeCases:
         np.random.seed(42)
         # Create negatively correlated returns
         base = np.random.randn(100)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': base,
             'B': -base + np.random.randn(100) * 0.1,  # Negatively correlated
         })
@@ -244,14 +244,15 @@ class TestAnalyticalSolution:
 
         # Create simple returns with known properties
         np.random.seed(42)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': [1.0, 2.0, 3.0, 4.0, 5.0],
             'B': [2.0, 3.0, 4.0, 5.0, 6.0],
             'C': [3.0, 4.0, 5.0, 6.0, 7.0],
         })
 
         # Calculate expected values manually
-        sample_cov = returns.cov().values
+        returns_array = returns.to_numpy()
+        sample_cov = np.cov(returns_array.T)
         sample_std = np.sqrt(np.diag(sample_cov))
         sample_corr = sample_cov / np.outer(sample_std, sample_std)
 
@@ -287,7 +288,7 @@ class TestIntegrationWithOptimization:
         from Risk.Covariance.ConstantCorrelationCovariance import ConstantCorrelationCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimator = ConstantCorrelationCovariance()
         cov_matrix = estimator.fit(returns)
@@ -305,7 +306,7 @@ class TestIntegrationWithOptimization:
         from Risk.Covariance.ConstantCorrelationCovariance import ConstantCorrelationCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 20))
+        returns = pl.DataFrame(np.random.randn(100, 20))
 
         estimator = ConstantCorrelationCovariance()
         cov_matrix = estimator.fit(returns)
