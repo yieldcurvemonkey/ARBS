@@ -27,7 +27,7 @@ Output:
 
 from datetime import date, timedelta
 import numpy as np
-import pandas as pd
+import polars as pl
 from Backtest.MinimalBacktest import MinimalBacktest
 
 
@@ -122,7 +122,7 @@ def run_example():
     # Define backtest period (weekly rebalancing)
     start_date = date(2024, 9, 1)
     end_date = date(2024, 12, 1)
-    dates = pd.date_range(start_date, end_date, freq='W').tolist()
+    dates = pl.date_range(start_date, end_date, "1w", eager=True).to_list()
     dates = [d.date() if hasattr(d, 'date') else d for d in dates]
 
     print("Running backtest...")
