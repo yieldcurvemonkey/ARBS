@@ -15,6 +15,7 @@ httpx==0.28.1
 h2==4.2.0
 httpx-socks==0.10.1
 requests==2.32.4
+yfinance==0.2.49
 ujson==5.10.0
 tqdm==4.67.1
 matplotlib==3.10.5
