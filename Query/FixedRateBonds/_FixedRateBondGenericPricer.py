@@ -1,3 +1,5 @@
+# ABOUTME: Abstract interface for pricing engines that value fixed rate bond instruments
+# ABOUTME: Defines bond pricing operations (YTM, prices, duration) independent of backend implementation
 import datetime
 from abc import ABC, abstractmethod
 from typing import Any, Optional

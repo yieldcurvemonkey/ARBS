@@ -1,3 +1,5 @@
+# ABOUTME: Maps curve identifiers to rateslib-specific market conventions and parameters
+# ABOUTME: Defines calendars, day counters, business conventions for each swap curve type
 from typing import Dict
 import rateslib as rl
 

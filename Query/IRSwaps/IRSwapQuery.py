@@ -1,3 +1,5 @@
+# ABOUTME: High-level query interface for interest rate swaps with rich formatting and display
+# ABOUTME: Provides user-friendly API for constructing, pricing, and analyzing swap structures
 import datetime
 import re
 from dataclasses import dataclass, field, replace

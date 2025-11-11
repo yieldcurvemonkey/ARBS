@@ -1,0 +1,109 @@
+# FOMC Butterfly Strategy
+# Event-driven strategy trading FOMC meeting-referenced butterflies
+
+strategy:
+  name: "FOMC Butterfly"
+  type: "event_driven"
+  description: "Pay belly 2s5s10s fly when carry positive, referenced to FOMC dates"
+  mode: "query"  # Query-based (event-driven, not signal-based)
+
+# Instrument universe (dynamically resolved from FOMC dates)
+universe:
+  asset_class: "swaps"
+  instruments: "dynamic"  # Will be resolved based on FOMC calendar
+  source: "ERIS_EOD_LIVE-rl_basic"
+
+# Query configuration (defines the trade structure)
+queries:
+  - name: "fomc_fly"
+    type: "fly"
+    config:
+      curve: "USD-SOFR-1D"
+      # Tenors are dynamically resolved to FOMC dates
+      # front_tenor: FOMC-i (next FOMC meeting)
+      # belly_tenor: FOMC-i+1 (second FOMC meeting)
+      # back_tenor: FOMC-i+2 (third FOMC meeting)
+      tenor_resolution: "fomc_meetings"
+      fomc_indices: [1, 2, 3]  # Next 3 FOMC meetings
+      bpv: 100000              # Receive 100k BPV
+      side: "receive_belly"    # Receive belly (pay wings)
+      tags: ["fomc_fly"]       # Tag for position tracking
+
+# Entry rule: Signal-based with event calendar
+entry:
+  type: "signal_with_event"
+  config:
+    # Signal condition
+    signal:
+      name: "2s5s10s_carry"
+      type: "carry"
+      query:
+        type: "fly"
+        curve: "USD-SOFR-1D"
+        front_tenor: "2Y"
+        belly_tenor: "5Y"
+        back_tenor: "10Y"
+      operator: ">"
+      threshold: 0.0
+      horizon: "3m"  # 3-month carry horizon
+
+    # Event calendar constraint
+    event_constraint:
+      calendar: "USD-FEDFUNDS"
+      event_type: "meeting"
+      min_days_to_next: 5  # Only enter if >= 5 days to next FOMC
+
+# Exit rule: Multi-condition (signal flip OR leg expiry)
+exit:
+  type: "multi"
+  operator: "any"  # Exit on ANY condition (OR logic)
+  conditions:
+    # Condition 1: Carry flips negative
+    - type: "signal"
+      config:
+        signal: "2s5s10s_carry"
+        operator: "<="
+        threshold: 0.0
+
+    # Condition 2: One business day before front leg expires
+    - type: "structural_expiry"
+      config:
+        leg: "front"  # Front leg of butterfly
+        offset_days: -1  # 1 day before expiry
+
+    # Condition 3: Maximum holding period
+    - type: "holding_period"
+      config:
+        max_days: 90  # Exit after 90 days regardless
+
+# Execution parameters
+execution:
+  rebalance_frequency: "event_driven"  # Only on entry/exit triggers
+  transaction_costs: 0.0  # Assume no transaction costs for now
+  calendar: "US_GOVERNMENT_BOND"  # US Government Bond calendar
+
+# Backtest configuration
+backtest:
+  start_date: "2025-01-01"
+  end_date: "2025-10-21"
+  initial_capital: 1000000.0
+  currency: "USD"
+
+# Strategy Logic (from notebook):
+# 1. Calculate 2s5s10s carry daily
+# 2. When carry > 0 and >= 5 days to next FOMC:
+#    a. Resolve next 3 FOMC meeting dates
+#    b. Create fly: FOMC-1 / FOMC-2 / FOMC-3
+#    c. Enter position (receive belly)
+#    d. Tag position for tracking
+# 3. Exit when:
+#    - Carry flips to <= 0, OR
+#    - 1 day before front leg expires, OR
+#    - 90 days holding period
+# 4. Track P&L via mark-to-market
+#
+# Notes:
+# - This is an EVENT-DRIVEN strategy, not a systematic signal strategy
+# - Uses QueryDrivenBacktest engine, not GrinoldKahnPortfolio
+# - Entry/exit dates are determined dynamically based on signals and events
+# - Each entry creates a new "episode" with its own exit trigger

@@ -1,3 +1,5 @@
+# ABOUTME: Product adapter for IRSwaps that resolves treasury aliases/CUSIPs to swap contracts
+# ABOUTME: Bridges Query layer to MDP data sources and provides standardized product interface
 from __future__ import annotations
 
 import datetime

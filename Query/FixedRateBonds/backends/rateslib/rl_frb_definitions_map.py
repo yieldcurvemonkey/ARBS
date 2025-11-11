@@ -1,3 +1,5 @@
+# ABOUTME: Maps bond identifiers to rateslib-specific market conventions and parameters
+# ABOUTME: Defines instrument specifications for fixed rate bond pricing with rateslib backend
 from typing import Dict
 
 from definitions.FixedRateBonds import FRB_DEFINITIONS

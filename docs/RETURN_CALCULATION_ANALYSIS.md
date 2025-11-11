@@ -333,4 +333,4 @@ This will make the system **robust for real futures backtesting**.
 - [ ] RollableFuture implementation
 - [ ] YieldInstrument support for bonds/swaps
 
-Total: 346 tests passing
+Total: 502 tests passing

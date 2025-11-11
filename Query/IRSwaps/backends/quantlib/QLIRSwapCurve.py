@@ -1,3 +1,5 @@
+# ABOUTME: Concrete implementation of IR swap curve interface using QuantLib library
+# ABOUTME: Provides curve building, pricing, and date handling backed by QuantLib functionality
 import datetime
 from dataclasses import dataclass
 from typing import Union, Any, Optional

@@ -1,3 +1,5 @@
+# ABOUTME: Utility functions for building QuantLib discount curves with various interpolation methods
+# ABOUTME: Supports log-linear, cubic, and other interpolation schemes for yield curve construction
 from datetime import datetime, date
 from typing import Annotated, Dict, List, Literal, Optional
 

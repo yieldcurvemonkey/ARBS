@@ -1,0 +1,180 @@
+# Advanced Multi-Signal Strategy
+# Demonstrates advanced features: custom signals, constraints, transaction costs
+
+strategy:
+  name: "Advanced Multi-Signal"
+  type: "multi_signal_advanced"
+  description: "Multi-signal with custom plugins, DV01 constraints, transaction costs"
+  mode: "signal"
+
+# Instrument universe
+universe:
+  asset_class: "futures"
+  instruments:
+    - "SFRZ4"
+    - "SFRH5"
+    - "SFRM5"
+    - "SFRU5"
+    - "SFRZ5"
+    - "SFRH6"
+    - "SFRM6"
+    - "SFRU6"
+  source: "live"
+
+# Multiple signals including custom
+signals:
+  # Built-in: Carry
+  - name: "carry"
+    type: "carry"
+    config:
+      method: "calendar_spread"
+      annualize: true
+      standardize: true
+    weight: 1.0
+
+  # Built-in: Momentum
+  - name: "momentum"
+    type: "momentum"
+    config:
+      lookback_days: 30
+      method: "returns"
+      standardize: true
+    weight: 1.0
+
+  # Built-in: Mean Reversion
+  - name: "mean_reversion"
+    type: "mean_reversion"
+    config:
+      lookback_days: 20
+      method: "z_score"
+      threshold: 2.0
+      standardize: true
+    weight: 1.0
+
+  # Custom: Macro signal (loaded from Python module)
+  - name: "custom_macro"
+    type: "custom"
+    config:
+      module: "strategies.custom.macro_signals"
+      class: "FedPolicySignal"
+      params:
+        indicators: ["FEDRATE", "INFLATION", "UNEMPLOYMENT"]
+        lookback: 90
+        standardize: true
+    weight: 0.5  # Lower weight for experimental signal
+
+# Alpha generation with dynamic IC
+alpha:
+  IC: 0.05
+  method: "dynamic"  # Dynamically estimate IC from rolling window
+  dynamic_config:
+    lookback_periods: 60  # Use last 60 rebalances to estimate IC
+    min_periods: 20       # Minimum periods before using dynamic IC
+
+# Risk model with advanced features
+risk:
+  covariance: "ledoit_wolf"
+  lookback: 60
+  volatility_target: 0.12
+
+  # Advanced: Factor risk model (optional)
+  factor_model:
+    enabled: true
+    factors: ["level", "slope", "curvature"]  # 3-factor PCA
+
+  # Advanced: Regime-dependent covariance (optional)
+  regime_switching:
+    enabled: false  # Disabled for MVP
+    method: "hmm"   # Hidden Markov Model
+    n_regimes: 2    # Bull/bear or trending/ranging
+
+# Optimizer with advanced constraints
+optimizer:
+  type: "mean_variance"
+  risk_aversion: 1.0
+
+  constraints:
+    long_only: false         # Allow shorting
+    max_position: 0.25       # Max 25% in any single instrument
+    max_short_position: -0.15  # Max 15% short
+    leverage: 1.5            # Allow up to 150% gross exposure
+
+    # DV01 constraint (for fixed income strategies)
+    dv01_limit:
+      enabled: true
+      max_dv01: 500000       # Max $500k DV01 exposure
+
+    # Cardinality constraint (L0 penalty)
+    cardinality:
+      enabled: true
+      max_positions: 5       # Hold at most 5 positions
+
+    # Turnover constraint
+    max_turnover: 0.30       # Max 30% turnover per rebalance
+
+# Execution with transaction costs
+execution:
+  rebalance_frequency: "weekly"
+  calendar: "US"
+
+  # Transaction costs
+  transaction_costs:
+    enabled: true
+    proportional: 0.0001     # 1 bp proportional cost
+    fixed: 5.0               # $5 fixed cost per trade
+
+    # Market impact (quadratic)
+    market_impact:
+      enabled: true
+      coefficient: 0.001     # Impact = coef × (trade_size / ADV)^2
+
+  # Rebalancing rules
+  rebalancing:
+    method: "threshold"      # Only rebalance if drift exceeds threshold
+    threshold: 0.05          # Rebalance if any weight drifts > 5%
+    min_frequency: "weekly"  # But check at least weekly
+
+# Backtest
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 1000000.0
+  currency: "USD"
+
+  # Advanced backtest features
+  features:
+    # Slippage
+    slippage:
+      enabled: true
+      model: "percent"
+      value: 0.0001  # 1 bp slippage
+
+    # Benchmark
+    benchmark:
+      enabled: true
+      type: "equal_weight"  # Compare to equal-weight portfolio
+
+    # Risk metrics
+    risk_metrics:
+      - "sharpe"
+      - "sortino"
+      - "max_drawdown"
+      - "calmar"
+      - "IC"
+      - "turnover"
+
+# Expected Behavior:
+# 1. Load 4 signals (3 built-in + 1 custom)
+# 2. Combine signals using equal weighting
+# 3. Convert to alphas using dynamic IC (estimated from rolling window)
+# 4. Optimize with:
+#    - Long/short portfolio (leverage up to 1.5x)
+#    - Max 5 positions (cardinality constraint)
+#    - DV01 limit of $500k
+#    - Max 25% long, max 15% short per position
+# 5. Apply transaction costs:
+#    - 1 bp proportional
+#    - $5 fixed per trade
+#    - Market impact (quadratic)
+# 6. Only rebalance if weights drift > 5% (reduce turnover)
+# 7. Track comprehensive risk metrics

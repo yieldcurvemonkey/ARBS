@@ -1,3 +1,5 @@
+# ABOUTME: Concrete implementation of IR swap curve interface using rateslib library
+# ABOUTME: Provides curve building, pricing, and date handling backed by rateslib functionality
 import datetime
 import pandas as pd
 from dataclasses import dataclass

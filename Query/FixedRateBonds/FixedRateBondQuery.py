@@ -1,3 +1,5 @@
+# ABOUTME: High-level query interface for fixed rate bonds with rich formatting and display
+# ABOUTME: Provides user-friendly API for constructing, pricing, and analyzing bond structures
 import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple, Union

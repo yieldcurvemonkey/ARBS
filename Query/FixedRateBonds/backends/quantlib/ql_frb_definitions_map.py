@@ -1,3 +1,5 @@
+# ABOUTME: Maps bond identifiers to QuantLib-specific market conventions and parameters
+# ABOUTME: Defines calendars, day counters, frequencies for fixed rate bond pricing with QuantLib backend
 from typing import Dict
 import QuantLib as ql
 

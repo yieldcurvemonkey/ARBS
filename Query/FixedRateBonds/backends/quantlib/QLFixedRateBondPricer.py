@@ -1,3 +1,5 @@
+# ABOUTME: Concrete implementation of fixed rate bond pricer interface using QuantLib library
+# ABOUTME: Provides bond pricing, Greeks calculation, and analytics backed by QuantLib functionality
 import datetime
 from dataclasses import dataclass
 from typing import Union, Any, Optional

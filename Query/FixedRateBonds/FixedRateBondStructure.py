@@ -1,3 +1,5 @@
+# ABOUTME: Builder functions for constructing fixed rate bond structures (outright, curve, fly)
+# ABOUTME: Handles risk-weighted notional sizing and multi-leg bond portfolio construction
 from enum import Enum, auto
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple

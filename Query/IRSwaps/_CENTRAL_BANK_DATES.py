@@ -1,3 +1,5 @@
+# ABOUTME: Historical Federal Reserve FOMC meeting dates organized by period labels
+# ABOUTME: Maps period codes (feb23, mar23, etc.) to date ranges for central bank policy analysis
 import datetime
 
 from definitions.IRSwaps import CURVE_DEFINITIONS

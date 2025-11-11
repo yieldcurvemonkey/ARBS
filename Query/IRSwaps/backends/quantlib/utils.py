@@ -1,3 +1,5 @@
+# ABOUTME: Utility functions for converting between Python dates and QuantLib dates
+# ABOUTME: Handles date conversions and business day calendar operations for QuantLib integration
 from datetime import date, datetime
 from typing import Optional
 from zoneinfo import ZoneInfo

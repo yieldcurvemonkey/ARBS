@@ -1,3 +1,5 @@
+# ABOUTME: Abstract interface defining methods for fixed rate bond contracts
+# ABOUTME: Specifies core bond operations (YTM, prices, duration, convexity) independent of backend
 import datetime
 from abc import ABC, abstractmethod
 

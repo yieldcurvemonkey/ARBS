@@ -1,0 +1,71 @@
+# Simple Carry Strategy
+# A basic single-signal strategy trading futures carry
+
+strategy:
+  name: "Simple Futures Carry"
+  type: "carry"
+  description: "Long high carry futures, short low carry futures"
+  mode: "signal"  # Signal-based (Grinold-Kahn framework)
+
+# Instrument universe
+universe:
+  asset_class: "futures"
+  instruments:
+    - "SFRZ4"  # SOFR Dec 2024
+    - "SFRH5"  # SOFR Mar 2025
+    - "SFRM5"  # SOFR Jun 2025
+    - "SFRU5"  # SOFR Sep 2025
+  source: "live"  # Use live market data
+
+# Signal configuration
+signals:
+  - name: "futures_carry"
+    type: "carry"
+    config:
+      method: "calendar_spread"  # Use front/back price spread
+      annualize: true            # Annualize carry
+      standardize: true          # Convert to z-scores
+    weight: 1.0
+
+# Alpha generation
+alpha:
+  IC: 0.05          # Information Coefficient (forecast skill)
+  method: "static"  # Use fixed IC (not dynamic)
+
+# Risk model
+risk:
+  covariance: "ledoit_wolf"  # Ledoit-Wolf shrinkage estimator
+  lookback: 60               # Use 60-day window for covariance estimation
+  volatility_target: 0.10    # Target 10% annualized volatility (optional)
+
+# Portfolio optimizer
+optimizer:
+  type: "mean_variance"  # Mean-variance (Markowitz) optimization
+  risk_aversion: 1.0     # Lambda parameter (higher = more risk averse)
+  constraints:
+    long_only: true      # Long-only portfolio (no shorting)
+    max_position: 0.40   # Max 40% in any single instrument
+    leverage: 1.0        # Max 100% gross exposure (no leverage)
+
+# Execution parameters
+execution:
+  rebalance_frequency: "weekly"  # Rebalance every week
+  transaction_costs: 0.0001      # 1 bp transaction cost (optional)
+  calendar: "US"                 # US business day calendar
+
+# Backtest configuration
+backtest:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 1000000.0  # $1M starting capital
+  currency: "USD"
+
+# Expected results
+# This configuration will:
+# 1. Calculate carry signal for each futures contract
+# 2. Standardize to z-scores (mean=0, std=1)
+# 3. Convert z-scores to alphas using IC × Vol × Z
+# 4. Estimate covariance matrix using Ledoit-Wolf
+# 5. Optimize portfolio weights (max alpha - risk_aversion * variance)
+# 6. Rebalance weekly
+# 7. Track performance (returns, Sharpe, IC)
