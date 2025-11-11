@@ -140,20 +140,19 @@ class Portfolio(Asset):
 
     def calculate_return(
         self,
-        prev_prices: Dict[str, float],
-        curr_prices: Dict[str, float],
+        returns: Dict[str, float],
         **kwargs
     ) -> float:
         """
         Calculate portfolio return as weighted sum of constituent returns.
 
-        Delegates to each constituent asset's calculate_return() method,
-        then combines with portfolio weights.
+        Portfolio return is simply Σ(w_i × r_i) where r_i are the returns
+        of the constituent assets. This is the mathematically correct
+        formulation from Grinold-Kahn framework.
 
         Args:
-            prev_prices: Map from asset ID → previous price
-            curr_prices: Map from asset ID → current price
-            **kwargs: Passed to constituent calculate_return() calls
+            returns: Map from asset ID → return (decimal)
+            **kwargs: Passed to nested portfolio calculate_return() calls
 
         Returns:
             Portfolio return as decimal
@@ -162,21 +161,24 @@ class Portfolio(Asset):
             r_portfolio = Σ(w_i × r_i)
             where:
                 w_i = position[i].quantity (weight)
-                r_i = position[i].asset.calculate_return(prev, curr)
+                r_i = returns[asset_id]
 
         Example:
             60% SFRZ4, 40% SFRH5:
-            >>> prev = {'SFRZ4': 95.0, 'SFRH5': 94.0}
-            >>> curr = {'SFRZ4': 96.0, 'SFRH5': 94.5}
-            >>> port.calculate_return(prev, curr)
-            # = 0.6 × (96-95)/95 + 0.4 × (94.5-94)/94
+            >>> returns = {'SFRZ4': 0.0105, 'SFRH5': 0.0053}
+            >>> port.calculate_return(returns)
             # = 0.6 × 0.0105 + 0.4 × 0.0053
             # = 0.0084
 
         Nested Portfolio:
             Automatically handles recursion - sub-portfolio's
-            calculate_return() is called, which recursively calculates
-            its own constituents' returns.
+            calculate_return() is called with the same returns dict,
+            which recursively calculates its own constituents' returns.
+
+        Note:
+            This is the correct formulation for portfolio mathematics.
+            Returns are stationary data (can estimate covariance).
+            Prices are non-stationary (covariance meaningless).
         """
         portfolio_return = 0.0
 
@@ -186,15 +188,13 @@ class Portfolio(Asset):
 
             # Check if asset is a Portfolio (nested)
             if isinstance(asset, Portfolio):
-                # For nested portfolios, pass price dicts through
-                # (not individual prices - portfolio needs all constituent prices)
-                asset_return = asset.calculate_return(prev_prices, curr_prices, **kwargs)
+                # For nested portfolios, pass returns dict through
+                # Sub-portfolio will extract its constituents' returns
+                asset_return = asset.calculate_return(returns, **kwargs)
             else:
-                # For atomic assets (PriceFuture, etc.), extract prices
+                # For atomic assets, extract return from dict
                 asset_id = asset.get_identifier()
-                prev_price = prev_prices.get(asset_id, 0.0)
-                curr_price = curr_prices.get(asset_id, 0.0)
-                asset_return = asset.calculate_return(prev_price, curr_price, **kwargs)
+                asset_return = returns.get(asset_id, 0.0)
 
             # Add weighted contribution
             portfolio_return += weight * asset_return

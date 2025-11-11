@@ -46,7 +46,9 @@ from Adapter.FuturesAdapter import FuturesAdapter
 from Query.Futures.FuturesQuery import FuturesQuery
 from Query.Futures.FuturesStructure import FuturesStructure
 from Signals.Futures.CarrySignal import CarrySignal
+from Signals.AlphaGenerator import AlphaGenerator
 from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
+from Risk.Returns.ReturnsCalculator import ReturnsCalculator
 from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 from Signals.Utils.IC import calculate_ic
 
@@ -70,6 +72,7 @@ class MinimalBacktest(BaseBacktest):
         risk_aversion: float = 1.0,
         long_only: bool = True,
         min_history: int = 20,
+        IC: float = 0.05,
     ):
         """
         Initialize minimal backtest.
@@ -79,16 +82,20 @@ class MinimalBacktest(BaseBacktest):
             risk_aversion: Risk aversion λ (higher = more conservative)
             long_only: If True, only allow positive weights
             min_history: Minimum periods needed for covariance estimation
+            IC: Information Coefficient (forecasting skill, default 0.05)
         """
         super().__init__(mdp)
         self.risk_aversion = risk_aversion
         self.long_only = long_only
         self.min_history = min_history
+        self.IC = IC
 
         # Initialize components
         self.adapter = FuturesAdapter(mdp)
         self.signal = CarrySignal(name='carry', standardize=True)
+        self.alpha_generator = AlphaGenerator(IC=IC)
         self.risk_model = LedoitWolfShrinkage()
+        self.returns_calc = ReturnsCalculator(method="percent")
         self.optimizer = MeanVarianceOptimizer(
             risk_aversion=risk_aversion,
             long_only=long_only,
@@ -112,10 +119,11 @@ class MinimalBacktest(BaseBacktest):
         Algorithm:
             For each date:
             1. Get prices via Adapter
-            2. Generate carry signals
-            3. Estimate covariance from return history
-            4. Optimize portfolio weights
-            5. Track positions and calculate returns
+            2. Generate carry signals (z-scores)
+            3. Convert signals → alphas using IC × Vol × Z
+            4. Estimate covariance from return history
+            5. Optimize portfolio weights using alphas
+            6. Track positions and calculate returns
         """
         if len(contracts) == 0 or len(dates) == 0:
             return self._empty_result()
@@ -155,20 +163,19 @@ class MinimalBacktest(BaseBacktest):
 
             # Calculate returns if we have previous prices
             if previous_prices is not None and previous_weights is not None:
-                # Align prices
-                common_contracts = list(set(prices.index) & set(previous_prices.index))
-                if len(common_contracts) > 0:
-                    ret = {}
-                    for c in common_contracts:
-                        if previous_prices[c] > 0:
-                            ret[c] = (prices[c] - previous_prices[c]) / previous_prices[c]
-                    returns = pd.Series(ret)
+                # Use ReturnsCalculator for price → return conversion
+                curr_prices_dict = prices.to_dict()
+                prev_prices_dict = previous_prices.to_dict()
+                returns_dict = self.returns_calc.calculate_returns(curr_prices_dict, prev_prices_dict)
+                returns = pd.Series(returns_dict)
+
+                if len(returns) > 0:
                     return_history.append(returns)
 
-                    # Calculate portfolio return
-                    common_in_weights = list(set(common_contracts) & set(previous_weights.index))
-                    if len(common_in_weights) > 0:
-                        port_ret = sum(previous_weights[c] * returns.get(c, 0.0) for c in common_in_weights)
+                    # Calculate portfolio return (weighted sum of returns)
+                    common_contracts = list(set(returns.index) & set(previous_weights.index))
+                    if len(common_contracts) > 0:
+                        port_ret = sum(previous_weights[c] * returns.get(c, 0.0) for c in common_contracts)
                         all_returns.append({'date': as_of, 'return': port_ret})
 
             # Step 2: Generate carry signals
@@ -210,13 +217,27 @@ class MinimalBacktest(BaseBacktest):
                     columns=signals_series.index
                 )
 
-            # Step 4: Optimize weights
-            # Standardize signals (z-scores)
+            # Step 4: Convert signals → alphas using IC × Vol × Z
+            # First standardize signals to z-scores
             if signals_series.std() > 0:
-                alphas = (signals_series - signals_series.mean()) / signals_series.std()
+                z_scores = (signals_series - signals_series.mean()) / signals_series.std()
             else:
-                alphas = signals_series
+                z_scores = signals_series
 
+            # Convert z-scores → alphas (expected returns)
+            if len(return_history) > 0:
+                returns_df = pd.DataFrame(return_history).fillna(0)
+                alphas_dict = self.alpha_generator.signals_to_alphas(
+                    z_scores.to_dict(),
+                    returns_df,
+                    as_of
+                )
+                alphas = pd.Series(alphas_dict)
+            else:
+                # No history: use z-scores directly (fallback)
+                alphas = z_scores
+
+            # Step 5: Optimize weights
             try:
                 weights = self.optimizer.optimize(alphas, cov_df)
                 all_weights.append({'date': as_of, **weights.to_dict()})

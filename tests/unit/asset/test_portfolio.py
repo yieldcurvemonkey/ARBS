@@ -104,13 +104,12 @@ class TestReturnCalculation:
         positions = [Position(asset, 1.0, 95.0, date(2024, 11, 1))]
         port = Portfolio('SINGLE_ASSET', positions)
 
-        prev_prices = {'SFRZ4': 95.0}
-        curr_prices = {'SFRZ4': 96.0}
+        # Portfolio now accepts returns dict (not price dicts)
+        returns = {'SFRZ4': 0.010526}  # (96-95)/95
 
-        port_return = port.calculate_return(prev_prices, curr_prices)
-        asset_return = asset.calculate_return(95.0, 96.0)
+        port_return = port.calculate_return(returns)
 
-        assert abs(port_return - asset_return) < 1e-10
+        assert abs(port_return - 0.010526) < 1e-6
 
     def test_two_asset_weighted_return(self):
         """Portfolio return is weighted average of constituent returns."""
@@ -124,17 +123,16 @@ class TestReturnCalculation:
 
         port = Portfolio('TWO_ASSET', positions)
 
-        prev_prices = {'SFRZ4': 95.0, 'SFRH5': 94.0}
-        curr_prices = {'SFRZ4': 96.0, 'SFRH5': 94.5}
-
-        port_return = port.calculate_return(prev_prices, curr_prices)
-
-        # Manual calculation:
+        # Portfolio accepts returns dict (not prices)
         # SFRZ4: (96 - 95) / 95 = 0.010526
         # SFRH5: (94.5 - 94) / 94 = 0.005319
-        # Portfolio: 0.6 × 0.010526 + 0.4 × 0.005319 = 0.008444
         r1 = (96.0 - 95.0) / 95.0
         r2 = (94.5 - 94.0) / 94.0
+        returns = {'SFRZ4': r1, 'SFRH5': r2}
+
+        port_return = port.calculate_return(returns)
+
+        # Portfolio: 0.6 × 0.010526 + 0.4 × 0.005319 = 0.008444
         expected = 0.6 * r1 + 0.4 * r2
 
         assert abs(port_return - expected) < 1e-6
@@ -154,30 +152,29 @@ class TestReturnCalculation:
 
         port = Portfolio('EQUAL_WEIGHT', positions)
 
-        prev_prices = {'SFRZ4': 95.0, 'SFRH5': 94.9, 'SFRM5': 94.8}
-        curr_prices = {'SFRZ4': 96.0, 'SFRH5': 95.2, 'SFRM5': 95.0}
-
-        port_return = port.calculate_return(prev_prices, curr_prices)
-
+        # Calculate returns from prices
         r1 = (96.0 - 95.0) / 95.0
         r2 = (95.2 - 94.9) / 94.9
         r3 = (95.0 - 94.8) / 94.8
+        returns = {'SFRZ4': r1, 'SFRH5': r2, 'SFRM5': r3}
+
+        port_return = port.calculate_return(returns)
+
         expected = (r1 + r2 + r3) / 3.0
 
         assert abs(port_return - expected) < 1e-6
 
-    def test_missing_price_defaults_to_zero(self):
-        """Missing price in dict defaults to 0."""
+    def test_missing_return_defaults_to_zero(self):
+        """Missing return in dict defaults to 0."""
         asset = PriceFuture('SFRZ4')
         positions = [Position(asset, 1.0, 95.0, date(2024, 11, 1))]
         port = Portfolio('TEST_PORT', positions)
 
-        prev_prices = {}  # Missing SFRZ4
-        curr_prices = {'SFRZ4': 96.0}
+        returns = {}  # Missing SFRZ4 return
 
-        port_return = port.calculate_return(prev_prices, curr_prices)
-        # prev_price defaults to 0, so return is undefined (0)
-        assert port_return == 0.0 or port_return != port_return  # NaN check
+        port_return = port.calculate_return(returns)
+        # Missing return defaults to 0
+        assert port_return == 0.0
 
 
 class TestTransitionDetection:
@@ -288,30 +285,27 @@ class TestNestedPortfolios:
             ]
         )
 
-        # Price dict contains all underlying assets (not portfolio "prices")
-        prev_prices = {
-            'SFRZ4': 95.0,
-            'SFRH5': 94.0,
-            'SFRM5': 94.8
-        }
-        curr_prices = {
-            'SFRZ4': 96.0,
-            'SFRH5': 94.5,
-            'SFRM5': 95.0
+        # Calculate returns from prices
+        r1 = (96.0 - 95.0) / 95.0  # 0.010526
+        r2 = (94.5 - 94.0) / 94.0  # 0.005319
+        r3 = (95.0 - 94.8) / 94.8  # 0.002110
+
+        # Returns dict contains all underlying assets (not portfolio "returns")
+        returns = {
+            'SFRZ4': r1,
+            'SFRH5': r2,
+            'SFRM5': r3
         }
 
         # Calculate manually:
         # Sub-portfolio return:
-        r1 = (96.0 - 95.0) / 95.0  # 0.010526
-        r2 = (94.5 - 94.0) / 94.0  # 0.005319
         sub_return = 0.5 * r1 + 0.5 * r2  # 0.007923
 
         # Main portfolio return:
-        r3 = (95.0 - 94.8) / 94.8  # 0.002110
         # Using sub-portfolio return directly:
         main_return_expected = 0.6 * sub_return + 0.4 * r3
 
-        main_return = main_port.calculate_return(prev_prices, curr_prices)
+        main_return = main_port.calculate_return(returns)
 
         assert abs(main_return - main_return_expected) < 1e-6
 
@@ -324,7 +318,7 @@ class TestEmptyAndEdgeCases:
         port = Portfolio('EMPTY', [])
 
         # Should not raise error, just return 0
-        port_return = port.calculate_return({}, {})
+        port_return = port.calculate_return({})
         assert port_return == 0.0
 
     def test_empty_portfolio_weights_dont_need_to_sum(self):
