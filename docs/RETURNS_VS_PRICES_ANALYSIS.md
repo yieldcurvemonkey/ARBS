@@ -1,5 +1,12 @@
 # Returns vs Prices - Mathematical Foundation
 
+**Document Status**: Analysis Complete
+**Date Written**: 2025-11-11
+**Implementation Status**: Phase 1 Complete (Returns infrastructure, AlphaGenerator, VolatilityEstimator)
+**Last Updated**: 2025-11-11
+
+---
+
 ## The Fundamental Issue
 
 **Prices are levels (non-stationary), Returns are differences (stationary)**
@@ -419,3 +426,25 @@ where:
 2. Refactor MinimalBacktest to convert prices→returns once per period
 3. Update tests to use returns instead of prices
 4. Verify IC calculation uses returns (not prices)
+
+---
+
+## Implementation Status (Updated 2025-11-11)
+
+### Completed
+- ✅ ReturnsCalculator (16 tests)
+- ✅ VolatilityEstimator (18 tests)
+- ✅ AlphaGenerator (16 tests)
+- ✅ TearSheet (19 tests)
+- ✅ Portfolio.calculate_return() refactored to accept returns
+- ✅ MinimalBacktest uses ReturnsCalculator and AlphaGenerator
+- ✅ Returns-first data architecture fully implemented
+- ✅ Covariance estimation from returns (not prices)
+- ✅ IC calculation using returns
+
+### Remaining
+- [ ] Additional validation and edge case testing
+- [ ] Full end-to-end integration verification
+- [ ] Documentation of returns pipeline
+
+Total: 346 tests passing

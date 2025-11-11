@@ -1,5 +1,12 @@
 # Grinold-Kahn Implementation Gap Analysis
 
+**Document Status**: Analysis Complete
+**Date Written**: 2025-11-11
+**Implementation Status**: Phase 1 Complete (Returns infrastructure, AlphaGenerator, VolatilityEstimator)
+**Last Updated**: 2025-11-11
+
+---
+
 ## Current State vs Framework Requirements
 
 ### ✅ What We Have (Implemented)
@@ -481,3 +488,24 @@ class GrinoldKahnBacktest:
 6. **Integration test**: Signal → Alpha → Weights → Portfolio Return
 
 **Goal**: Complete returns-first architecture in next session, then build Grinold-Kahn strategy on top.
+
+---
+
+## Implementation Status (Updated 2025-11-11)
+
+### Completed
+- ✅ ReturnsCalculator (16 tests)
+- ✅ VolatilityEstimator (18 tests)
+- ✅ AlphaGenerator (16 tests)
+- ✅ TearSheet (19 tests)
+- ✅ Portfolio.calculate_return() refactored to accept returns
+- ✅ MinimalBacktest uses ReturnsCalculator and AlphaGenerator
+- ✅ Returns-first architecture implemented
+
+### Remaining
+- [ ] GrinoldKahnPortfolio integrated strategy class
+- [ ] Additional signals (RollDownSignal, CurveSteepnessSignal)
+- [ ] Multi-signal combination framework
+- [ ] Performance attribution decomposition
+
+Total: 346 tests passing

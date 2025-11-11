@@ -76,6 +76,54 @@ All components integrated:
 - Sharpe can be positive or negative (we track it correctly)
 - Returns tracked with proper position accounting
 
+## Architecture V2: Returns-First Refactoring (COMPLETE)
+
+**Goal: Align with Grinold-Kahn framework - alphas from returns, not prices**
+
+### ✅ Completed (177 additional tests)
+
+- [x] Returns Calculation
+  - ReturnsCalculator (simple returns, log returns, period conversion)
+  - Proper handling of NaN, zeros, negatives
+  - 23 tests passing
+
+- [x] Volatility Estimation
+  - VolatilityEstimator (Realized, EWMA)
+  - Standardized interface for multiple estimators
+  - Annualization and scaling logic
+  - 28 tests passing
+
+- [x] Alpha Generation (Grinold-Kahn Compliant)
+  - AlphaGenerator: IC × Vol × Z-score
+  - Transform raw signals → expected returns
+  - Proper dimensionality (bps/day or % return)
+  - 31 tests passing
+
+- [x] Portfolio Architecture
+  - Portfolio as composite Asset (nested support)
+  - Returns-first: calculates returns, not prices
+  - Composition engine for weighted combinations
+  - 45 tests passing
+
+- [x] TearSheet Analysis
+  - Comprehensive performance metrics
+  - Risk-adjusted returns (Sharpe, Sortino, Calmar)
+  - Drawdown analysis
+  - 18 tests passing
+
+- [x] Integration Testing
+  - End-to-end returns flow validation
+  - Cross-validation against MVP V1
+  - Alpha generation pipeline tests
+  - 32 tests passing
+
+**Architecture V2 Achievement:**
+- System now generates alphas from returns (Grinold-Kahn compliant)
+- Proper volatility scaling (IC × Vol × Z)
+- Portfolio composition with nested assets
+- Comprehensive performance analysis
+- All tests passing (346 total)
+
 ### 📋 Future Enhancements (Not Required for MVP)
 
 ## Phase 2: Maximal Enhancements (Later)
@@ -106,8 +154,9 @@ All components integrated:
 - Nodewise regression (2025 research)
 - Dynamic covariance (time-varying)
 
-## Test Count: 169 passing ✅
+## Test Count: 346 passing ✅
 
+### MVP V1 Components (169 tests)
 - Futures: 44 tests
 - Signals: 31 tests
 - Risk: 22 tests
@@ -116,12 +165,21 @@ All components integrated:
 - Backtest: 12 tests
 - Other: 34 tests
 
+### Architecture V2 Components (177 tests)
+- Returns: 23 tests
+- Volatility: 28 tests
+- AlphaGenerator: 31 tests
+- Portfolio: 45 tests
+- TearSheet: 18 tests
+- Integration: 32 tests
+
 ## Architecture
 
+### V1: Price-Based Flow (Original MVP)
 ```
 Data Layer:         Query/Futures (MockFuture objects)
                          ↓
-Adapter Layer:      Adapter/FuturesAdapter (DataFrame)
+Adapter Layer:      Adapter/FuturesAdapter (DataFrame with prices)
                          ↓
 Signal Layer:       Signals/Futures (CarrySignal → alphas)
                          ↓
@@ -132,6 +190,27 @@ Optimizer Layer:    Optimizer/MeanVariance (alphas + Σ → weights)
 Backtest Layer:     Backtest/MinimalBacktest (track positions, P&L, IC)
                          ↓
                     BacktestResult (returns, IC, Sharpe, total return)
+```
+
+### V2: Returns-First Flow (Grinold-Kahn Compliant)
+```
+Data Layer:         Asset/Portfolio (prices or nested assets)
+                         ↓
+Returns Layer:      ReturnsCalculator (prices → returns)
+                         ↓
+Volatility Layer:   VolatilityEstimator (returns → realized/EWMA vol)
+                         ↓
+Signal Layer:       Raw signals (carry, momentum, etc.)
+                         ↓
+Alpha Layer:        AlphaGenerator (IC × Vol × Z → expected returns)
+                         ↓
+Risk Layer:         Risk/Covariance (returns → Σ)
+                         ↓
+Optimizer Layer:    Optimizer/MeanVariance (alphas + Σ → weights)
+                         ↓
+Portfolio Layer:    Portfolio composition (weighted assets)
+                         ↓
+Analysis Layer:     TearSheet (Sharpe, Sortino, Calmar, drawdowns)
 ```
 
 ## Key Principles
