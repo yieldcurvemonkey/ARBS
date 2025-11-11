@@ -88,17 +88,87 @@ print(bt.mtm_history)           # dict[datetime -> portfolio MTM]
 print(bt.realized_pnl_history)  # realized P&L over time (unwinds only)
 ```
 
-## Repository Layout 
+## Repository Layout
 
 ```txt
 BT/                    # Backtesting engines, strategies, triggers, orders, portfolios
 Caching/               # ZODB-based persistent cache + codecs/utilities
 definitions/           # Product/curve definitions (e.g., IRS curve metadata)
+docs/                  # Documentation, references, research papers, books
 MDP/                   # Market Data Providers and curve builders (CME EOD, SDR, GSQuant/RatesLib)
 Query/                 # Product-agnostic BaseQuery + adapters + product-specific (IRS) structures/values/backends
 TB/                    # Toolboxes/utilities for batch/query runs over time grids
 utils/                 # Misc utilities (e.g., QuantLib date bridges)
 ```
+
+## Documentation Guide
+
+The `docs/` directory contains theoretical foundations, design documents, and research references. Use these resources during development to ensure implementations align with quantitative finance best practices.
+
+### Core References
+
+**[Grinold-Kahn Active Portfolio Management](docs/references/Grinold-Kahn-Active-Portfolio-Management.md)** (PDF: `docs/books/`)
+- **Foundational text** for ARBS architecture
+- Use when: Implementing signals, risk models, optimizers, or performance analysis
+- Key topics: Fundamental Law (IR = IC × √N), alpha scaling, covariance estimation, mean-variance optimization
+- Cross-references to ARBS code for each concept
+
+### Design Documents
+
+**Architecture & Design**:
+- `GRINOLD_KAHN_FRAMEWORK.md` - High-level framework alignment
+- `GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md` - Missing components vs. book
+- `GRINOLD_KAHN_DETAILED_SPECS.md` - Detailed specifications
+- `RETURNS_VS_PRICES_ANALYSIS.md` - Why returns-first design
+- `ASSET_ABSTRACTION_DESIGN.md` - Asset/Portfolio hierarchy
+- `COMPOSABLE_PORTFOLIO_ARCHITECTURE.md` - Nested portfolio patterns
+
+**Component-Specific**:
+- `ALPHA_GENERATOR.md` - IC × Vol × Z formula implementation
+- `VOLATILITY_ESTIMATOR.md` - Volatility forecasting methods
+- `RETURNS_CALCULATOR.md` - Returns calculation pipeline
+- `TEAR_SHEET.md` - Performance analysis metrics
+- `SIGNAL_COMBINATION_METHODS.md` - Multi-signal strategies
+
+**Strategy Development**:
+- `USER_GUIDE_STRATEGY_CREATION.md` - How to create new strategies
+- `STRATEGY_MODULARIZATION_DESIGN.md` - Factory pattern for strategies
+- `ADDING_CUSTOM_COMPONENTS.md` - Extending the system
+
+### When to Use Documentation
+
+**Before Implementation**:
+1. **Check Grinold-Kahn reference** - Verify theoretical correctness
+2. **Review design docs** - Understand existing patterns
+3. **Check gap analysis** - See if component already planned
+
+**During Development**:
+1. **Reference formulas** - Use exact specifications from Grinold-Kahn
+2. **Follow patterns** - Match existing architecture (returns-first, etc.)
+3. **Cross-reference code** - Use file paths in reference docs
+
+**During Testing**:
+1. **Validate against theory** - Check if results match expected behavior
+2. **Performance metrics** - Use tearsheet definitions from docs
+3. **Integration** - Verify components work together per design docs
+
+**When Stuck**:
+1. **Gap analysis** - Check if problem already documented
+2. **Design docs** - See if solution already specified
+3. **Grinold-Kahn** - Consult theoretical foundation
+
+### Improving Documentation
+
+As you work:
+- **Update cross-references** when adding new files
+- **Document design decisions** in relevant design docs
+- **Add worked examples** to component docs
+- **Keep gap analysis current** as features are implemented
+- **Update Grinold-Kahn cross-references** for new components
+
+The documentation is **living**—improve it as you learn.
+
+---
 
 ## Architecture
 
