@@ -18,9 +18,13 @@ from Risk.Covariance.SectorBased.BlockDiagonal.HierarchicalSectorClustering impo
 from Risk.Covariance.SectorBased.BlockDiagonal.BlockDiagonalCovariance import (
     BlockDiagonalCovariance,
 )
+from Risk.Covariance.SectorBased.BlockDiagonal.BaiNgIC import (
+    BaiNgIC,
+)
 
 __all__ = [
     "HierarchicalSectorClustering",
     "ClusteringResult",
     "BlockDiagonalCovariance",
+    "BaiNgIC",
 ]
