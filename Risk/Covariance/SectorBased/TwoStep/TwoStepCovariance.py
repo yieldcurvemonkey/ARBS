@@ -23,7 +23,9 @@ import numpy as np
 import polars as pl
 from typing import Optional, Literal
 
-from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
+from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import (
+    SectorBasedCovarianceEstimator,
+)
 from Risk.Covariance.SectorBased.BlockDiagonal.HierarchicalSectorClustering import (
     HierarchicalSectorClustering,
     ClusteringResult,
@@ -31,7 +33,7 @@ from Risk.Covariance.SectorBased.BlockDiagonal.HierarchicalSectorClustering impo
 from Risk.Covariance.SectorBased.TwoStep.RandomMatrixFilter import RandomMatrixFilter
 
 
-class TwoStepCovariance(BaseCovarianceEstimator):
+class TwoStepCovariance(SectorBasedCovarianceEstimator):
     """
     Two-step covariance estimator (best performer from García-Medina 2024).
 
@@ -57,7 +59,8 @@ class TwoStepCovariance(BaseCovarianceEstimator):
             rmt_filter: Apply RMT filtering to each cluster (default: True)
             handle_missing: How to handle missing data
         """
-        super().__init__(handle_missing=handle_missing)
+        # TwoStep always uses hierarchical clustering
+        super().__init__(clustering_method="hierarchical", handle_missing=handle_missing)
 
         self.n_clusters = n_clusters
         self.linkage_method = linkage_method
@@ -73,13 +76,14 @@ class TwoStepCovariance(BaseCovarianceEstimator):
         # Store clustering result
         self.clustering_result_: Optional[ClusteringResult] = None
 
-    def fit(self, returns: pl.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame, sector_col: Optional[str] = None) -> np.ndarray:
         """
         Estimate covariance using two-step procedure.
 
         Args:
             returns: DataFrame with columns [ticker, date, return]
                      Long format: each row is (ticker, date, return)
+            sector_col: Ignored (TwoStep always uses hierarchical clustering)
 
         Returns:
             Covariance matrix (N×N numpy array)
@@ -87,20 +91,22 @@ class TwoStepCovariance(BaseCovarianceEstimator):
         Raises:
             ValueError: If required columns missing or insufficient data
         """
-        # Validate input
-        self._validate_input(returns)
+        # Validate input (no sector column required)
+        required_cols = ["ticker", "date", "return"]
+        missing = [col for col in required_cols if col not in returns.columns]
+        if missing:
+            raise ValueError(f"Missing required columns: {missing}")
 
         # Handle missing data
         returns_clean = self._handle_missing_data(returns)
 
-        # Convert long format to wide format
-        returns_wide, tickers = self._long_to_wide(returns_clean)
-
-        # Store asset names (sorted for consistency)
+        # Convert to wide format
+        returns_np, tickers = self._convert_to_wide_format(returns_clean)
+        # Sort tickers for consistency with original implementation
         self.asset_names_ = sorted(tickers)
 
         # Get dimensions
-        T, N = returns_wide.shape
+        T, N = returns_np.shape
 
         # Validate sufficient observations
         if T < 10:
@@ -108,67 +114,21 @@ class TwoStepCovariance(BaseCovarianceEstimator):
                 f"Insufficient observations: T={T}. Need at least 10 observations."
             )
 
-        # Convert to numpy array
-        returns_np = returns_wide.to_numpy()
-
         # Step 1: Hierarchical clustering
         self.clustering_result_ = self.clusterer.fit(returns_np, tickers)
 
-        # Get cluster assignments
-        cluster_assignments = self.clustering_result_.cluster_assignments
+        # Get cluster assignments and store in sector_mapping_
+        self.sector_mapping_ = self.clustering_result_.cluster_assignments
 
         # Step 2: Estimate covariance per cluster with RMT filtering
         cov_matrix = self._estimate_clustered_covariance(
-            returns_np, tickers, cluster_assignments, T
+            returns_np, tickers, self.sector_mapping_, T
         )
 
         # Store result
         self.cov_matrix_ = cov_matrix
 
         return self.cov_matrix_
-
-    def _validate_input(self, returns: pl.DataFrame) -> None:
-        """
-        Validate input DataFrame.
-
-        Args:
-            returns: DataFrame to validate
-
-        Raises:
-            ValueError: If required columns missing
-        """
-        required_cols = ["ticker", "date", "return"]
-        missing = [col for col in required_cols if col not in returns.columns]
-
-        if missing:
-            raise ValueError(f"Missing required columns: {missing}")
-
-    def _long_to_wide(self, returns: pl.DataFrame) -> tuple[pl.DataFrame, list[str]]:
-        """
-        Convert long format DataFrame to wide format.
-
-        Args:
-            returns: Long format DataFrame [ticker, date, return]
-
-        Returns:
-            Tuple of (wide_df, tickers)
-            - wide_df: T×N DataFrame with dates as rows, tickers as columns
-            - tickers: List of ticker names
-        """
-        # Pivot to wide format
-        wide = returns.pivot(
-            index="date",
-            columns="ticker",
-            values="return",
-        ).sort("date")
-
-        # Get ticker names (all columns except 'date')
-        tickers = [col for col in wide.columns if col != "date"]
-
-        # Drop date column for covariance calculation
-        wide_returns = wide.select(tickers)
-
-        return wide_returns, tickers
 
     def _estimate_clustered_covariance(
         self,

@@ -284,7 +284,7 @@ class TestStochasticBlockCovariance:
 
         estimator = StochasticBlockCovariance(allow_inter_block=True)
 
-        with pytest.raises(ValueError, match="Missing required columns.*sector"):
+        with pytest.raises(ValueError, match="Sector column 'sector' not found"):
             estimator.fit(df)
 
     def test_handles_single_sector(self):
