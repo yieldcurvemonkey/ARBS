@@ -19,6 +19,7 @@ from Signals.SectorRotation.SectorMomentumSignal import SectorMomentumSignal
 from Signals.SectorRotation.SectorReversionSignal import SectorReversionSignal
 from Signals.SectorRotation.FundamentalProcessor import FundamentalProcessor
 from Signals.SectorRotation.FundamentalSignal import FundamentalSignal
+from Signals.SectorRotation.SectorLongShortPortfolio import SectorLongShortPortfolio
 
 __all__ = [
     "MomentumFactor",
@@ -28,4 +29,5 @@ __all__ = [
     "SectorReversionSignal",
     "FundamentalProcessor",
     "FundamentalSignal",
+    "SectorLongShortPortfolio",
 ]
