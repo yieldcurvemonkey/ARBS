@@ -10,7 +10,8 @@ from dataclasses import replace
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import pandas as pd
+import pandas as pd  # Keep for timestamp/date_range utilities
+import polars as pl
 import QuantLib as ql
 from tqdm import tqdm
 
@@ -59,8 +60,8 @@ def _clone_risk_weights(rws):
         return None
     if isinstance(rws, np.ndarray):
         return rws.copy()
-    if isinstance(rws, (pd.Series, pd.DataFrame)):
-        return rws.copy(deep=True)
+    if isinstance(rws, (pd.Series, pd.DataFrame, pl.Series, pl.DataFrame)):
+        return rws.clone() if isinstance(rws, (pl.Series, pl.DataFrame)) else rws.copy(deep=True)
     if isinstance(rws, (list, tuple, set, dict)):
         return copy.deepcopy(rws)
     if hasattr(rws, "copy") and callable(rws.copy):
@@ -197,7 +198,7 @@ class FixedRateBondsTB(ZODBCacheMixin):
         ignore_cache: Optional[bool] = False,
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         if timestamps is not None and len(timestamps) > 0:
             ref_points = sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
             is_intraday = True
@@ -244,25 +245,40 @@ class FixedRateBondsTB(ZODBCacheMixin):
                     self._logger.debug(f"[TS cache] read failed for symbol={symbol}: {ex}")
                     df_ts = pd.DataFrame()
 
-                if df_ts.empty:
+                if (isinstance(df_ts, pl.DataFrame) and df_ts.is_empty()) or (isinstance(df_ts, pd.DataFrame) and df_ts.empty):
                     continue
 
                 # Normalize index to naive timestamps/dates comparable to ref_points
                 # If '_index_ts' handling happened, read_timeseries already restored index.
-                if not isinstance(df_ts.index, (pd.DatetimeIndex, pd.Index)):
-                    df_ts.index = pd.to_datetime(df_ts.index)
+                if isinstance(df_ts, pd.DataFrame):
+                    if not isinstance(df_ts.index, (pd.DatetimeIndex, pd.Index)):
+                        df_ts.index = pd.to_datetime(df_ts.index)
 
                 # Allow either single 'value' column or multi-column; take the first numeric
-                col_candidates = [c for c in df_ts.columns if pd.api.types.is_numeric_dtype(df_ts[c])]
+                if isinstance(df_ts, pl.DataFrame):
+                    col_candidates = [c for c in df_ts.columns if df_ts[c].dtype in pl.NUMERIC_DTYPES]
+                else:
+                    col_candidates = [c for c in df_ts.columns if pd.api.types.is_numeric_dtype(df_ts[c])]
                 if not col_candidates:
                     continue
                 c0 = col_candidates[0]
 
                 # For date-only schedules, cast to .date() for matching
-                if not is_intraday:
-                    present = {ts_ts.date(): float(v) for ts_ts, v in df_ts[c0].items()}
+                if isinstance(df_ts, pl.DataFrame):
+                    # Polars: iterate over rows
+                    if not is_intraday:
+                        # Assume first column is timestamp/date
+                        ts_col = df_ts.columns[0]
+                        present = {row[ts_col].date(): float(row[c0]) for row in df_ts.iter_rows(named=True)}
+                    else:
+                        ts_col = df_ts.columns[0]
+                        present = {pd.Timestamp(row[ts_col]): float(row[c0]) for row in df_ts.iter_rows(named=True)}
                 else:
-                    present = {pd.Timestamp(ts_ts): float(v) for ts_ts, v in df_ts[c0].items()}
+                    # Pandas: use index
+                    if not is_intraday:
+                        present = {ts_ts.date(): float(v) for ts_ts, v in df_ts[c0].items()}
+                    else:
+                        present = {pd.Timestamp(ts_ts): float(v) for ts_ts, v in df_ts[c0].items()}
 
                 # Add rows for dates/timestamps we have, but skip "today" to avoid staleness
                 for rp in ref_points:
@@ -296,12 +312,9 @@ class FixedRateBondsTB(ZODBCacheMixin):
                 to_price_dates.append(d)
 
         if not to_price_dates and cached_rows:
-            df = pd.DataFrame(cached_rows, columns=[self._date_col, "_col", "_val"])
-            out = df.pivot_table(index=self._date_col, columns="_col", values="_val", aggfunc="last").sort_index()
-            out = out.reset_index()
-            out.index.name = None
-            out.columns.name = None
-            return out.set_index(self._date_col)
+            df = pl.DataFrame(cached_rows, schema=[self._date_col, "_col", "_val"])
+            out = df.pivot(values="_val", index=self._date_col, columns="_col", aggregate_function="last", sort_columns=True)
+            return out.sort(self._date_col)
 
         def _split_components(txt: str) -> List[str]:
             s = (txt or "").strip()
@@ -427,11 +440,8 @@ class FixedRateBondsTB(ZODBCacheMixin):
 
         all_rows = cached_rows + [r for (r, _q, _d) in new_rows_with_q]
         if not all_rows:
-            return pd.DataFrame(columns=[self._date_col])
+            return pl.DataFrame(schema={self._date_col: pl.Date})
 
-        df = pd.DataFrame(all_rows, columns=[self._date_col, "_col", "_val"])
-        out = df.pivot_table(index=self._date_col, columns="_col", values="_val", aggfunc="last").sort_index()
-        out = out.reset_index()
-        out.index.name = None
-        out.columns.name = None
-        return out.set_index(self._date_col)
+        df = pl.DataFrame(all_rows, schema=[self._date_col, "_col", "_val"])
+        out = df.pivot(values="_val", index=self._date_col, columns="_col", aggregate_function="last", sort_columns=True)
+        return out.sort(self._date_col)

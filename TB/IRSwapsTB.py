@@ -8,6 +8,7 @@ from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 from dataclasses import replace
 
 import re
+import polars as pl
 import pandas as pd
 from tqdm import tqdm
 
@@ -307,12 +308,9 @@ class IRSwapsTB(ZODBCacheMixin):
         if not all_rows:
             return pd.DataFrame(columns=[self._date_col])
 
-        df = pd.DataFrame(all_rows, columns=[self._date_col, "_col", "_val"])
-        out = df.pivot_table(index=self._date_col, columns="_col", values="_val", aggfunc="last").sort_index()
-        out = out.reset_index()
-        out.index.name = None
-        out.columns.name = None
-        out = out.set_index(self._date_col)
+        df = pl.DataFrame(all_rows, schema=[self._date_col, "_col", "_val"], orient="row")
+        out = df.pivot(index=self._date_col, columns="_col", values="_val", aggregate_function="last").sort(self._date_col)
+        out = out.to_pandas().set_index(self._date_col)
 
         return out
 
@@ -510,7 +508,7 @@ class IRSwapsTB(ZODBCacheMixin):
 
             if rows and not (miss_pre or miss_today):
                 # fully cached
-                df_cached = pd.DataFrame(rows).sort_values(_date_col, kind="mergesort").set_index(_date_col)[[colname]]
+                df_cached = pl.DataFrame(rows).sort(_date_col).to_pandas().set_index(_date_col)[[colname]]
                 out_frames_cached.append(df_cached)
             else:
                 if rows:
@@ -596,7 +594,7 @@ class IRSwapsTB(ZODBCacheMixin):
                 leg = f"{leg_prefix}{label}"
                 if leg not in px_df.columns:
                     if rows:
-                        df_i = pd.DataFrame(rows).sort_values(_date_col, kind="mergesort").set_index(_date_col)[[colname]]
+                        df_i = pl.DataFrame(rows).sort(_date_col).to_pandas().set_index(_date_col)[[colname]]
                         out_frames.append(df_i)
                     continue
 
@@ -613,7 +611,7 @@ class IRSwapsTB(ZODBCacheMixin):
 
                 for dts in _iter_eval_dates_for_label():
                     try:
-                        ts = pd.Timestamp(dts).to_pydatetime()
+                        ts = dts if isinstance(dts, datetime.datetime) else pd.Timestamp(dts).to_pydatetime()
                         price = px_df.at[dts, leg]
                         if pd.isna(price):
                             continue
@@ -625,7 +623,7 @@ class IRSwapsTB(ZODBCacheMixin):
                         _, rl_sfr = build_rl_stirf(ticker=leg, curve_id=ch.id(), price=float(price), use_globex=use_globex)
                         cvx = float(vmap.apply(value=IRSwapValue.CVX_ADJ, **{"sfr": [rl_sfr]}))
 
-                        record = {_date_col: pd.Timestamp(dts).to_pydatetime(), colname: cvx}
+                        record = {_date_col: ts if isinstance(dts, datetime.datetime) else pd.Timestamp(dts).to_pydatetime(), colname: cvx}
                         rows.append(record)
 
                         if not _is_today(ts):
@@ -678,16 +676,16 @@ class IRSwapsTB(ZODBCacheMixin):
                             rl_sfrs.append(rl_sfr)
 
                         cvx = float(vmap.apply(value=IRSwapValue.CVX_ADJ, **{"sfr": rl_sfrs}))
-                        rows.append({_date_col: pd.Timestamp(dts).to_pydatetime(), colname: cvx})
+                        rows.append({_date_col: dts if isinstance(dts, datetime.datetime) else pd.Timestamp(dts).to_pydatetime(), colname: cvx})
 
-                        ts = pd.Timestamp(dts).to_pydatetime()
+                        ts = dts if isinstance(dts, datetime.datetime) else pd.Timestamp(dts).to_pydatetime()
                         if not _is_today(ts):
                             pending_writes.append((self._cache_key(ts, curve, q), {_date_col: ts, q.col_name(curve): cvx}))
                     except Exception:
                         pass
 
             if rows:
-                df_i = pd.DataFrame(rows).sort_values(_date_col, kind="mergesort").drop_duplicates(subset=[_date_col], keep="last").set_index(_date_col)[[colname]]
+                df_i = pl.DataFrame(rows).sort(_date_col).unique(subset=[_date_col], keep="last").to_pandas().set_index(_date_col)[[colname]]
                 out_frames.append(df_i)
 
         if pending_writes:

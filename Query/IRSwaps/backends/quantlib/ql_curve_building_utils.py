@@ -4,15 +4,15 @@ from datetime import datetime, date
 from typing import Annotated, Dict, List, Literal, Optional
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import QuantLib as ql
 
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_pydate
 
 
 def build_ql_discount_curve(
-    datetime_series: pd.Series,
-    discount_factor_series: pd.Series,
+    datetime_series: pl.Series,
+    discount_factor_series: pl.Series,
     ql_dc: ql.DayCounter,
     ql_cal: ql.Calendar,
     interpolation_algo: Optional[
@@ -43,7 +43,7 @@ def build_ql_discount_curve(
     except KeyError:
         raise ValueError(f"QuantLib has no discount curve with {interpolation_algo} interpolation")
 
-    ql_dates = datetime_series.apply(datetime_to_ql_date).to_list()
+    ql_dates = [datetime_to_ql_date(d) for d in datetime_series.to_list()]
     discount_factors = discount_factor_series.to_list()
 
     ql_curve: ql.DiscountCurve = curve_class(ql_dates, discount_factors, ql_dc, ql_cal)
@@ -92,8 +92,8 @@ def build_piecewise_ql_discount_curve(
 
 
 def build_ql_zero_curve(
-    datetime_series: pd.Series,
-    zero_rate_series: pd.Series,
+    datetime_series: pl.Series,
+    zero_rate_series: pl.Series,
     ql_dc: ql.DayCounter,
     ql_cal: ql.Calendar,
     interpolation_algo: Optional[
@@ -126,7 +126,7 @@ def build_ql_zero_curve(
     except KeyError:
         raise ValueError(f"QuantLib has no zero curve with {interpolation_algo} interpolation.")
 
-    ql_dates = datetime_series.apply(datetime_to_ql_date).to_list()
+    ql_dates = [datetime_to_ql_date(d) for d in datetime_series.to_list()]
     rates = zero_rate_series.to_list()
 
     ql_curve: ql.ZeroCurve = curve_class(ql_dates, rates, ql_dc, ql_cal)
@@ -180,15 +180,15 @@ def build_discount_curve_from_nodes(
                 dates.append(k)
             elif isinstance(k, str):
                 try:
-                    dates.append(pd.Timestamp(k))
+                    dates.append(datetime.fromisoformat(k))
                 except Exception as e:
                     raise ValueError(f"Bad date string {k!r}: {e}") from None
             else:
                 raise TypeError(f"Unsupported key type {type(k)}: {k!r}")
 
         return build_ql_discount_curve(
-            datetime_series=pd.Series(dates),
-            discount_factor_series=pd.Series(ql_curve_nodes.values()),
+            datetime_series=pl.Series(dates),
+            discount_factor_series=pl.Series(list(ql_curve_nodes.values())),
             ql_dc=ql_dc,
             ql_cal=ql_cal,
             interpolation_algo=interpolation_algo,

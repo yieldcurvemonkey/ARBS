@@ -3,6 +3,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 
 import re
+import polars as pl
 import pandas as pd
 import tqdm
 
@@ -80,7 +81,7 @@ class TimeseriesBuilder:
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
         drop_multilevel_cols: Optional[bool] = True,
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         assert start <= end, "must have end > start"
         flat = _flatten_base_queries(queries)
 
@@ -90,7 +91,7 @@ class TimeseriesBuilder:
                 raise ValueError(f"Query missing 'product': {q!r}")
             by_product[q.product].append(q)
 
-        per_product_frames: List[Tuple[str, pd.DataFrame]] = []
+        per_product_frames: List[Tuple[str, pl.DataFrame]] = []
         irswap_spread_queries: List[IRSwapQuery] = []
         irswap_asw_queries: List[IRSwapQuery] = []
 
@@ -149,12 +150,24 @@ class TimeseriesBuilder:
                 #     timestamps=timestamps,
                 # )
 
-            if df is None or df.empty:
+            if df is None or (hasattr(df, 'is_empty') and df.is_empty()) or (hasattr(df, 'empty') and df.empty):
                 continue
-            if self._date_col in df.columns:
-                df = df.set_index(self._date_col)
 
-            df = pd.concat({product: df}, axis=1)
+            # Convert pandas to polars if needed
+            if isinstance(df, pd.DataFrame):
+                df = pl.from_pandas(df)
+
+            # Handle index column
+            if self._date_col not in df.columns and df.to_pandas().index.name == self._date_col:
+                # Index is already the date column (from pandas), convert properly
+                df = pl.from_pandas(df.to_pandas().reset_index())
+            elif self._date_col not in df.columns:
+                # No date column found, skip
+                continue
+
+            # Add product level to columns
+            renamed_cols = {col: f"{product}.{col}" for col in df.columns if col != self._date_col}
+            df = df.rename(renamed_cols)
             per_product_frames.append((product, df))
 
         if irswap_spread_queries:
@@ -234,27 +247,61 @@ class TimeseriesBuilder:
                 timestamps=timestamps,
             )
 
-            spread_cols: Dict[str, pd.Series] = {}
-            idx = irs_df.index.union(cash_df.index)
+            # Convert to polars if needed
+            if isinstance(irs_df, pd.DataFrame):
+                irs_df = pl.from_pandas(irs_df)
+            if isinstance(cash_df, pd.DataFrame):
+                cash_df = pl.from_pandas(cash_df)
+
+            # Get union of dates from both DataFrames
+            irs_dates = set(irs_df[self._date_col].to_list() if self._date_col in irs_df.columns else [])
+            cash_dates = set(cash_df[self._date_col].to_list() if self._date_col in cash_df.columns else [])
+            all_dates = sorted(irs_dates | cash_dates)
+
+            spread_data = {self._date_col: all_dates}
             for spec in pair_specs:
-                a = irs_df[spec["irs_col"]].reindex(idx) if spec["irs_col"] in irs_df.columns else pd.Series(index=idx, dtype="float64")
-                b = cash_df[spec["frb_col"]].reindex(idx) if spec["frb_col"] in cash_df.columns else pd.Series(index=idx, dtype="float64")
+                # Extract columns and align to all_dates
+                irs_col = spec["irs_col"]
+                frb_col = spec["frb_col"]
 
-                # future-proof for 'ASW' and 'CAS'
-                if spec["op"] == "swap_minus_cash":
-                    if "outright" in str(spec["irs_col"]).lower():
-                        spread = (a - b) * 100
-                    else:
-                        spread = a - b
+                # Create full-indexed series for each column
+                if irs_col in irs_df.columns:
+                    a_df = irs_df.select([self._date_col, irs_col])
+                    a_dict = dict(zip(a_df[self._date_col].to_list(), a_df[irs_col].to_list()))
                 else:
-                    raise ValueError(f"Unknown op: {spec['op']}")
+                    a_dict = {}
 
-                spread_cols[spec["spread_name"]] = spread
+                if frb_col in cash_df.columns:
+                    b_df = cash_df.select([self._date_col, frb_col])
+                    b_dict = dict(zip(b_df[self._date_col].to_list(), b_df[frb_col].to_list()))
+                else:
+                    b_dict = {}
 
-            if spread_cols:
-                spread_df = pd.DataFrame(spread_cols).sort_index()
-                spread_df.index.name = self._date_col
-                per_product_frames.append(("SWAPSPREADS", pd.concat({"SWAPSPREADS": spread_df}, axis=1)))
+                # Calculate spread for each date
+                spread_vals = []
+                for d in all_dates:
+                    a_val = a_dict.get(d)
+                    b_val = b_dict.get(d)
+
+                    if a_val is not None and b_val is not None:
+                        if spec["op"] == "swap_minus_cash":
+                            if "outright" in str(spec["irs_col"]).lower():
+                                spread_vals.append((a_val - b_val) * 100)
+                            else:
+                                spread_vals.append(a_val - b_val)
+                        else:
+                            raise ValueError(f"Unknown op: {spec['op']}")
+                    else:
+                        spread_vals.append(None)
+
+                spread_data[spec["spread_name"]] = spread_vals
+
+            if len(spread_data) > 1:  # More than just date column
+                spread_df = pl.DataFrame(spread_data).sort(self._date_col)
+                # Add SWAPSPREADS prefix to all columns except date
+                renamed_cols = {col: f"SWAPSPREADS.{col}" for col in spread_df.columns if col != self._date_col}
+                spread_df = spread_df.rename(renamed_cols)
+                per_product_frames.append(("SWAPSPREADS", spread_df))
 
         if irswap_asw_queries:
             irs_mdp = tb.mdp
@@ -282,23 +329,39 @@ class TimeseriesBuilder:
                         continue
 
             if rows:
-                df = pd.DataFrame(rows, columns=[self._date_col, "Column", "Value"]).pivot(index=self._date_col, columns="Column", values="Value").sort_index()
+                # Create DataFrame and pivot using pandas, then convert to polars
+                df_pd = pd.DataFrame(rows, columns=[self._date_col, "Column", "Value"]).pivot(index=self._date_col, columns="Column", values="Value").sort_index()
+                df = pl.from_pandas(df_pd.reset_index())
                 per_product_frames.append(("IRS__ASW", df))
 
         if not per_product_frames:
-            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+            return pl.DataFrame({self._date_col: []})
 
+        # Join all DataFrames on the date column
         out = per_product_frames[0][1]
         for _, df in per_product_frames[1:]:
-            out = out.join(df, how="outer")
+            out = out.join(df, on=self._date_col, how="outer")
 
-        out = out.sort_index()
-        out.index.name = self._date_col
-        
+        out = out.sort(self._date_col)
+
         # data errors
-        # out = out[((out < 200_000).all(axis=1)) & (out > -200_000).all(axis=1)]
+        # Filter for data quality (commented out as in original)
+        # numeric_cols = [col for col in out.columns if col != self._date_col]
+        # out = out.filter(
+        #     pl.all_horizontal([pl.col(col).is_between(-200_000, 200_000) for col in numeric_cols])
+        # )
+
         if drop_multilevel_cols:
-            out.columns = out.columns.droplevel()
+            # Remove product prefix from column names (e.g., "IRS.curve.tenor.RATE" -> "curve.tenor.RATE")
+            new_names = {}
+            for col in out.columns:
+                if col != self._date_col and '.' in col:
+                    # Split on first dot to remove product prefix
+                    parts = col.split('.', 1)
+                    if len(parts) > 1:
+                        new_names[col] = parts[1]
+            if new_names:
+                out = out.rename(new_names)
 
         return out
 
