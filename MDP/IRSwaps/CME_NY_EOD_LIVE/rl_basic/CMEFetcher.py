@@ -7,21 +7,18 @@ from io import BytesIO
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
-import pandas as pd  # Keep for compatibility
 import polars as pl
 import pyarrow
 import pyarrow.csv
 import tqdm.asyncio
 from dateutil.relativedelta import relativedelta
-from pandas.errors import DtypeWarning
-from pandas.tseries.offsets import BDay
 
 import rateslib as rl
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
 
-warnings.filterwarnings("ignore", category=FutureWarning  # polars equivalent)
+warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys
@@ -31,8 +28,39 @@ if sys.platform == "win32":
     asyncio.set_event_loop(loop)
 
 
-def is_business_day(date: pd.Timestamp | datetime.date):
-    return bool(len(pd.bdate_range(date, date)))
+def is_business_day(date: datetime.date) -> bool:
+    """Check if date is a business day (Monday-Friday)."""
+    if isinstance(date, datetime.datetime):
+        date = date.date()
+    return date.weekday() < 5  # Monday=0, Friday=4
+
+
+def add_business_days(date: datetime.date, days: int) -> datetime.date:
+    """Add business days to a date."""
+    if isinstance(date, datetime.datetime):
+        date = date.date()
+    current = date
+    while days != 0:
+        current += datetime.timedelta(days=1 if days > 0 else -1)
+        if is_business_day(current):
+            days += -1 if days > 0 else 1
+    return current
+
+
+def business_day_range(start: datetime.date, end: datetime.date) -> List[datetime.date]:
+    """Generate list of business days between start and end (inclusive)."""
+    if isinstance(start, datetime.datetime):
+        start = start.date()
+    if isinstance(end, datetime.datetime):
+        end = end.date()
+
+    result = []
+    current = start
+    while current <= end:
+        if is_business_day(current):
+            result.append(current)
+        current += datetime.timedelta(days=1)
+    return result
 
 
 class CMEFetcher(BaseFetcher, ZODBCacheMixin):
@@ -56,7 +84,7 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
     }
 
-    # _curve_report_cache: Dict[datetime, pd.DataFrame] = {}
+    # _curve_report_cache: Dict[datetime, pl.DataFrame] = {}
 
     def __init__(
         self,
@@ -108,20 +136,20 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
         check_archives_mannual: Optional[bool] = False,
     ) -> Tuple[str, Dict[str, str]]:
         most_recent_bday = (
-            datetime.date.today() if is_business_day(datetime.date.today()) else datetime.date.today() - BDay(1)
+            datetime.date.today() if is_business_day(datetime.date.today()) else add_business_days(datetime.date.today(), -1)
         )  # CME FTP doesn't necessarily follow any cal
 
         curve_report_filename = "CME_Curve_Report_EOD" if use_eod_report else "CME_Curve_Report"
         if auto_check_archives:
             archival_date = most_recent_bday - relativedelta(months=1)
-            is_in_archive = pd.Timestamp(curve_date) < pd.Timestamp(archival_date)
+            is_in_archive = curve_date < archival_date
         else:
             is_in_archive = check_archives_mannual
 
         if is_in_archive:
-            ftp_path = f"/span/archive/cme/irs/{curve_date.year}/{curve_report_filename}_{curve_date.strftime("%Y%m%d")}.csv"
+            ftp_path = f"/span/archive/cme/irs/{curve_date.year}/{curve_report_filename}_{curve_date.strftime('%Y%m%d')}.csv"
         else:
-            ftp_path = f"/span/data/cme/irs/{curve_report_filename}_{curve_date.strftime("%Y%m%d")}.csv"
+            ftp_path = f"/span/data/cme/irs/{curve_report_filename}_{curve_date.strftime('%Y%m%d')}.csv"
 
         url = f"{self._base_cme_ftp_url}{ftp_path}"
         return url, self._build_cme_ftp_request_headers(method="GET", path=ftp_path, referer=url.rpartition("/")[0]), is_in_archive
@@ -197,7 +225,7 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
         file_name: str,
         convert_key_into_dt: bool,
         use_pyarrow: Optional[bool] = False,
-    ) -> Tuple[Optional[Union[str, datetime.date]], Optional[pd.DataFrame]]:
+    ) -> Tuple[Optional[Union[str, datetime.date]], Optional[pl.DataFrame]]:
         file_name_lower = file_name.lower()
         extension = None
         if file_name_lower.endswith((".xls", ".xlsx")):
@@ -209,19 +237,10 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
 
         buffer_io = BytesIO(file_buffer)
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DtypeWarning)
-            if extension == "excel":
-                df = pd.read_excel(buffer_io)
-            else:  # csv
-                if use_pyarrow:
-                    try:
-                        table: pyarrow.Table = pyarrow.csv.read_csv(buffer_io)
-                        df = table.to_pandas()
-                    except ImportError:
-                        df = pd.read_csv(buffer_io, low_memory=False)
-                else:
-                    df = pd.read_csv(buffer_io, low_memory=False)
+        if extension == "excel":
+            df = pl.read_excel(buffer_io)
+        else:  # csv
+            df = pl.read_csv(buffer_io)
 
         key = file_name
         if convert_key_into_dt:
@@ -232,7 +251,7 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
 
         return key, df
 
-    def _partition_cached_dates(self, dates: List[datetime.date]) -> Tuple[Dict[datetime.date, pd.DataFrame], List[datetime.date]]:
+    def _partition_cached_dates(self, dates: List[datetime.date]) -> Tuple[Dict[datetime.date, pl.DataFrame], List[datetime.date]]:
         cached, missing = {}, []
         cache = self._curve_report_cache
         for d in dates:
@@ -263,9 +282,9 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
         max_connections: Optional[int] = 64,
         max_keepalive_connections: Optional[int] = 5,
         ignore_cache: Optional[bool] = False,
-    ) -> Dict[datetime.date, pd.DataFrame]:
+    ) -> Dict[datetime.date, pl.DataFrame]:
         self._ensure_cache()
-        dates = bdates or pd.date_range(start_date, end_date, freq="B").to_pydatetime().tolist()
+        dates = bdates or business_day_range(start_date, end_date)
 
         if ignore_cache:
             cached_part, to_fetch = {}, dates
@@ -351,33 +370,45 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
 
         rl_curves_dict: Dict[datetime.date, rl.Curve] = {}
         curve_iter = (
-            tqdm.tqdm(cme_eod_curve_reports_dict_df.items(), desc=f"BUILDING {curve} {"DISCOUNT" if type.lower() == "df" else "ZERO"} CURVES..")
+            tqdm.tqdm(cme_eod_curve_reports_dict_df.items(), desc=f"BUILDING {curve} {'DISCOUNT' if type.lower() == 'df' else 'ZERO'} CURVES..")
             if show_tqdm
             else cme_eod_curve_reports_dict_df.items()
         )
         for curve_date, curve_report_df in curve_iter:
-            curve_report_df.columns = [x.lower() for x in curve_report_df.columns]
+            # Convert column names to lowercase
+            curve_report_df = curve_report_df.rename({col: col.lower() for col in curve_report_df.columns})
 
             try:
-                curve_report_df = curve_report_df[curve_report_df["curve name"] == curve]
-                if curve_report_df.empty:
+                # Filter by curve name
+                curve_report_df = curve_report_df.filter(pl.col("curve name") == curve)
+                if curve_report_df.height == 0:
                     rl_curves_dict[curve_date] = None
                     self._logger.error(f"No data from {curve} on {curve_date}")
                     continue
 
-                curve_report_df[date_col] = pd.to_datetime(curve_report_df[date_col], format="%m/%d/%Y", errors="coerce")
-                curve_report_df = curve_report_df.sort_values(by=[date_col])
-                curve_report_df[type.lower()] = pd.to_numeric(curve_report_df[type.lower()], errors="coerce")
+                # Convert date column to datetime
+                curve_report_df = curve_report_df.with_columns(
+                    pl.col(date_col).str.to_date("%m/%d/%Y").alias(date_col)
+                )
+                # Sort by date
+                curve_report_df = curve_report_df.sort(date_col)
 
-                datetime_series = curve_report_df[date_col].reset_index(drop=True).copy()
-                type_series = curve_report_df[type.lower()].reset_index(drop=True).copy()
+                # Convert type column to numeric (cast to float)
+                curve_report_df = curve_report_df.with_columns(
+                    pl.col(type.lower()).cast(pl.Float64, strict=False).alias(type.lower())
+                )
 
-                if not curve_date in datetime_series and type.lower() == "df":
-                    datetime_series = pd.concat([pd.Series([curve_date]), datetime_series])
-                    type_series = pd.concat([pd.Series([1]), type_series])
+                # Extract series as lists
+                datetime_list = curve_report_df[date_col].to_list()
+                type_list = curve_report_df[type.lower()].to_list()
+
+                # Prepend curve_date and 1.0 if needed
+                if type.lower() == "df" and curve_date not in datetime_list:
+                    datetime_list = [curve_date] + datetime_list
+                    type_list = [1.0] + type_list
 
                 rl_discount_curve = rl.Curve(
-                    nodes=dict(zip(datetime_series, type_series)),
+                    nodes=dict(zip(datetime_list, type_list)),
                     id=curve,
                     convention=rl_day_count,
                     calendar=rl_calendar,

@@ -4,7 +4,6 @@ import sys
 import warnings
 from typing import Dict, List, Literal, Optional
 
-import pandas as pd  # Keep for compatibility
 import polars as pl
 import pytz
 import tqdm.asyncio
@@ -21,7 +20,7 @@ from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CU
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_datetime
 
 
-warnings.filterwarnings("ignore", category=FutureWarning  # polars equivalent)
+warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys
@@ -153,46 +152,67 @@ class CMEFetcherV2(BaseFetcher):
                 ignore_cache=ignore_cache,
             )
 
+            curve_type_desc = "DISCOUNT" if type == "Df" else "ZERO"
             curve_iter = (
-                tqdm.tqdm(cme_eod_curve_reports_dict_df.items(), desc=f"BUILDING {curve} {"DISCOUNT" if type == "Df" else "ZERO"} CURVES..")
+                tqdm.tqdm(cme_eod_curve_reports_dict_df.items(), desc=f"BUILDING {curve} {curve_type_desc} CURVES..")
                 if show_tqdm
                 else cme_eod_curve_reports_dict_df.items()
             )
             for curve_date, curve_report_df in curve_iter:
-                curve_report_df.columns = [x.lower() if x != date_col else x for x in curve_report_df.columns]
+                # Rename columns to lowercase except date_col
+                curve_report_df = curve_report_df.rename(
+                    {col: col.lower() if col != date_col else col for col in curve_report_df.columns}
+                )
 
                 # try:
                 if curve == "USD-FEDFUNDS" and curve_date < datetime.date(2021, 6, 28):
                     curve = "USD-OIS"
 
-                curve_report_df = curve_report_df[curve_report_df["curve name"] == curve]
-                if curve_report_df.empty:
+                curve_report_df = curve_report_df.filter(pl.col("curve name") == curve)
+                if curve_report_df.is_empty():
                     rl_curves_dict[curve_date] = None
                     self._logger.error(f"No data from {curve} on {curve_date}")
                     continue
 
-                curve_report_df[date_col] = pd.to_datetime(curve_report_df[date_col], format="%m/%d/%Y", errors="coerce")
-                curve_report_df = curve_report_df.sort_values(by=[date_col])
-                curve_report_df[type.lower()] = pd.to_numeric(curve_report_df[type.lower()], errors="coerce")
+                # Parse dates and convert to datetime, then sort
+                curve_report_df = curve_report_df.with_columns(
+                    pl.col(date_col).str.to_datetime(format="%m/%d/%Y", strict=False)
+                ).sort(date_col)
 
-                datetime_series = curve_report_df[date_col].reset_index(drop=True).copy()
-                type_series = curve_report_df[type.lower()].reset_index(drop=True).copy()
+                # Convert type column to numeric
+                curve_report_df = curve_report_df.with_columns(
+                    pl.col(type.lower()).cast(pl.Float64, strict=False)
+                )
 
-                if not curve_date in datetime_series and type.lower() == "df":
-                    datetime_series = pd.concat([pd.Series([pd.Timestamp(curve_date)]), datetime_series])
-                    type_series = pd.concat([pd.Series([1]), type_series])
+                datetime_series = curve_report_df[date_col]
+                type_series = curve_report_df[type.lower()]
+
+                # Prepend curve_date with discount factor 1.0 if not present
+                if type.lower() == "df" and curve_date not in datetime_series.to_list():
+                    datetime_series = pl.concat([
+                        pl.Series([curve_date]),
+                        datetime_series
+                    ])
+                    type_series = pl.concat([
+                        pl.Series([1.0]),
+                        type_series
+                    ])
 
                 if type.lower() == "df":
+                    # Convert polars Series to list for rateslib
+                    datetime_list = datetime_series.to_list()
+                    type_list = type_series.to_list()
+
                     rl_discount_curve = rl.Curve(
-                        nodes=dict(zip(datetime_series, type_series)),
+                        nodes=dict(zip(datetime_list, type_list)),
                         id=f"{curve_id}-{curve_date}",
                         convention=RATESLIB_CURVE_DEFINITIONS[curve]["DayCounter"],
                         calendar=RATESLIB_CURVE_DEFINITIONS[curve]["Calendar"],
                         modifier=RATESLIB_CURVE_DEFINITIONS[curve]["BusinessConvention"],
                         interpolation="log_linear",
-                        t=[datetime_series.iloc[15], datetime_series.iloc[15], datetime_series.iloc[15], datetime_series.iloc[15]]
-                        + datetime_series.iloc[16:-1].to_list()
-                        + [datetime_series.iloc[-1], datetime_series.iloc[-1], datetime_series.iloc[-1], datetime_series.iloc[-1]],
+                        t=[datetime_list[15], datetime_list[15], datetime_list[15], datetime_list[15]]
+                        + datetime_list[16:-1]
+                        + [datetime_list[-1], datetime_list[-1], datetime_list[-1], datetime_list[-1]],
                     )
 
                 # CME Curve Report release

@@ -1,4 +1,4 @@
-import pandas as pd  # Keep for compatibility
+import pandas as pd  # Required for gs_quant Dataset API compatibility and pl.from_pandas conversion
 import polars as pl
 import datetime
 import rateslib as rl
@@ -204,35 +204,72 @@ def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
     GsSession.use(client_id=gs_client_id, client_secret=gs_secret_key, scopes=GsSession.Scopes.get_default())
 
     gs_ds = "IR_SWAP_RATES_V1_STANDARD"
-    gs_ds_coverage = pd.read_excel(rf"C:\Users\chris\clee\ARBS\MDP\IRSwaps\GSQUANT\COVERAGE\{gs_ds}_COVERAGE.xlsx")
-    df = Dataset(gs_ds).get_data(
-        start=as_of, end=as_of, assetId=gs_ds_coverage[gs_ds_coverage["name"].isin(GSQUANT_CURVE_MAP[curve]["rl_basic"]["base_tenors"])]["assetId"]
+    gs_ds_coverage = pl.read_excel(rf"C:\Users\chris\clee\ARBS\MDP\IRSwaps\GSQUANT\COVERAGE\{gs_ds}_COVERAGE.xlsx")
+
+    # Filter coverage for base tenors
+    filtered_asset_ids = gs_ds_coverage.filter(
+        pl.col("name").is_in(GSQUANT_CURVE_MAP[curve]["rl_basic"]["base_tenors"])
+    )["assetId"].to_list()
+
+    # Get data from GS Quant (returns pandas DataFrame, convert to polars)
+    df_gs = Dataset(gs_ds).get_data(
+        start=as_of, end=as_of, assetId=filtered_asset_ids
     )
-    df["tenor"] = df["assetId"].map(dict(zip(gs_ds_coverage["assetId"], gs_ds_coverage["name"])))
-    df = df.reset_index(drop=True).set_index("tenor").reindex(GSQUANT_CURVE_MAP[curve]["rl_basic"]["base_tenors"])
-    df["effectiveDate"] = pd.to_datetime(df["effectiveDate"], errors="coerce")
-    df["terminationDate"] = pd.to_datetime(df["terminationDate"], errors="coerce")
-    df["rate"] = df["rate"] * 100
+    df = pl.from_pandas(df_gs)
 
-    def make_swap(row):
-        return rl.IRS(
-            effective=row["effectiveDate"],
-            termination=row["terminationDate"],
-            fixed_rate=row["rate"],
-            curves=curve_id,
-            spec=RATESLIB_CURVE_DEFINITIONS[curve]["ReferenceRate"],
+    # Create tenor mapping
+    tenor_map = dict(zip(gs_ds_coverage["assetId"], gs_ds_coverage["name"]))
+    df = df.with_columns(
+        pl.col("assetId").replace(tenor_map).alias("tenor")
+    )
+
+    # Set tenor as join key and reindex to base_tenors order
+    base_tenors_df = pl.DataFrame({"tenor": GSQUANT_CURVE_MAP[curve]["rl_basic"]["base_tenors"]})
+    df = base_tenors_df.join(df, on="tenor", how="left")
+
+    # Convert date columns to datetime (handle both string and datetime types)
+    # If already datetime from pandas, cast to polars datetime; if string, parse it
+    df = df.with_columns([
+        pl.col("effectiveDate").cast(pl.Datetime).alias("effectiveDate"),
+        pl.col("terminationDate").cast(pl.Datetime).alias("terminationDate"),
+        (pl.col("rate") * 100).alias("rate")
+    ])
+
+    # Create instruments using list comprehension (polars doesn't have apply)
+    instruments = []
+    for row in df.iter_rows(named=True):
+        instruments.append(
+            rl.IRS(
+                effective=row["effectiveDate"],
+                termination=row["terminationDate"],
+                fixed_rate=row["rate"],
+                curves=curve_id,
+                spec=RATESLIB_CURVE_DEFINITIONS[curve]["ReferenceRate"],
+            )
         )
+    df = df.with_columns(pl.Series("instruments", instruments))
 
-    df["instruments"] = df.apply(make_swap, axis=1)
-
-    nodes = {pd.Timestamp(as_of): 1.0}
-    nodes.update(dict(zip(df["terminationDate"], [1.0] * len(df))))
+    # Build nodes dict using datetime objects instead of pd.Timestamp
+    nodes = {datetime.datetime.combine(as_of, datetime.time()): 1.0}
+    termination_dates = df["terminationDate"].to_list()
+    nodes.update(dict(zip(termination_dates, [1.0] * len(termination_dates))))
     nodes = dict(sorted(nodes.items()))
 
-    knots = GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"].copy()[1:-1]
-    knots = [df.loc[i]["terminationDate"] for i in knots]
+    # Get knots by filtering df for specific tenor names (maintain order)
+    knot_tenors = GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"].copy()[1:-1]
+    knots = []
+    for tenor in knot_tenors:
+        knot_date = df.filter(pl.col("tenor") == tenor)["terminationDate"][0]
+        knots.append(knot_date)
 
-    extrapolated = df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][-1]]["terminationDate"] + GSQUANT_CURVE_MAP[curve]["rl_basic"]["extrapolation"]
+    # Get extrapolated date
+    last_knot_tenor = GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][-1]
+    last_knot_date = df.filter(pl.col("tenor") == last_knot_tenor)["terminationDate"][0]
+    extrapolated = last_knot_date + GSQUANT_CURVE_MAP[curve]["rl_basic"]["extrapolation"]
+
+    # Get first knot date for t parameter
+    first_knot_tenor = GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]
+    first_knot_date = df.filter(pl.col("tenor") == first_knot_tenor)["terminationDate"][0]
 
     rl_curve = rl.Curve(
         nodes=nodes,
@@ -243,10 +280,10 @@ def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
         interpolation="log_linear",
         # fmt: off
         t=[
-            df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
-            df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
-            df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
-            df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
+            first_knot_date,
+            first_knot_date,
+            first_knot_date,
+            first_knot_date,
         ]
         + knots
         + [
@@ -258,12 +295,12 @@ def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
 
     rl_solver = rl.Solver(
         curves=[rl_curve],
-        instruments=df["instruments"],
-        s=df["rate"],
+        instruments=df["instruments"].to_list(),
+        s=df["rate"].to_list(),
         id=curve_id,
         func_tol=1e-8,
         conv_tol=1e-8,
-        weights=[1] * len(df["instruments"]),
+        weights=[1] * len(df),
     )
 
-    return curve_id, rl_curve, df["pricingLocation"].iloc[-1]
+    return curve_id, rl_curve, df["pricingLocation"][-1]

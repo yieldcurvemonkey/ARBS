@@ -1,16 +1,16 @@
+# ABOUTME: Fetches interest rate fixings (SOFR, EFFR, CORRA, etc.) from various data sources.
+# ABOUTME: Uses native Python for data processing; FredFetcher dependency still returns pandas DataFrames.
 import asyncio
 import functools
 import warnings
 from datetime import datetime
 from typing import Dict, Optional
 
-import pandas as pd  # Keep for compatibility
-import polars as pl
 import QuantLib as ql
 import requests
 
 from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
-from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.FredFetcher import FredFetcher
+from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.FredFetcher import FredFetcher  # Returns pandas DataFrames
 from Query.IRSwaps.backends.quantlib.utils import most_recent_business_day_ql
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -117,41 +117,67 @@ class FixingsFetcher(BaseFetcher):
 
     def _fetch_fred_series(self, series_id: str) -> Dict[datetime, float]:
         assert self.fred_api_key, "REQUEST CURVE IS FETCHED FROM FRED - NEED API KEY"
+        # FredFetcher returns pandas DataFrame - convert to native Python immediately
         fixings_df = self._fred_fetcher.fred.get_multiple_series(series_ids=[series_id], one_df=True)
-        fixings_df.index = pd.to_datetime(fixings_df.index, errors="coerce")
-        return dict(zip(fixings_df.index, fixings_df[series_id] / 100))
+        # Convert pandas DataFrame to dict using native pandas methods, then process with Python
+        result = {}
+        for idx, value in zip(fixings_df.index, fixings_df[series_id]):
+            # Skip null/NaN values
+            if value is not None and value == value:  # NaN check (NaN != NaN)
+                result[idx] = value / 100
+        return result
 
     def _sofr_nyfrb(self):
         end_date = most_recent_business_day_ql(ql_calendar=ql.UnitedStates(ql.UnitedStates.SOFR), to_pydate=True)
-        url = f"https://markets.newyorkfed.org/api/rates/secured/sofr/search.json?startDate=2018-04-01&endDate={end_date.strftime("%Y-%m-%d")}&type=rate"
+        url = f"https://markets.newyorkfed.org/api/rates/secured/sofr/search.json?startDate=2018-04-01&endDate={end_date.strftime('%Y-%m-%d')}&type=rate"
         res = requests.get(
             url,
             headers=self._nyfrb_base_headers,
             proxies=self._proxies,
         )
         res.raise_for_status()
-        df = pd.DataFrame(res.json()["refRates"])
-        if df.empty:
-            raise ValueError("SOFR df is empty")
-        df["effectiveDate"] = pd.to_datetime(df["effectiveDate"], errors="coerce")
-        df["percentRate"] = pd.to_numeric(df["percentRate"], errors="coerce") / 100
-        return dict(zip(df["effectiveDate"], df["percentRate"]))
+        data = res.json()["refRates"]
+        if not data:
+            raise ValueError("SOFR data is empty")
+
+        result = {}
+        for item in data:
+            try:
+                # Parse date string to datetime
+                date = datetime.strptime(item["effectiveDate"], "%Y-%m-%d")
+                # Convert rate to float and divide by 100
+                rate = float(item["percentRate"]) / 100
+                result[date] = rate
+            except (ValueError, KeyError):
+                # Skip items with invalid date or rate
+                continue
+        return result
 
     def _effr_nyfrb(self):
         end_date = most_recent_business_day_ql(ql_calendar=ql.UnitedStates(ql.UnitedStates.SOFR), to_pydate=True)
-        url = f"https://markets.newyorkfed.org/api/rates/unsecured/effr/search.json?startDate=2000-07-03&endDate={end_date.strftime("%Y-%m-%d")}&type=rate"
+        url = f"https://markets.newyorkfed.org/api/rates/unsecured/effr/search.json?startDate=2000-07-03&endDate={end_date.strftime('%Y-%m-%d')}&type=rate"
         res = requests.get(
             url,
             headers=self._nyfrb_base_headers,
             proxies=self._proxies,
         )
         res.raise_for_status()
-        df = pd.DataFrame(res.json()["refRates"])
-        if df.empty:
-            raise ValueError("EFFR df is empty")
-        df["effectiveDate"] = pd.to_datetime(df["effectiveDate"], errors="coerce")
-        df["percentRate"] = pd.to_numeric(df["percentRate"], errors="coerce") / 100
-        return dict(zip(df["effectiveDate"], df["percentRate"]))
+        data = res.json()["refRates"]
+        if not data:
+            raise ValueError("EFFR data is empty")
+
+        result = {}
+        for item in data:
+            try:
+                # Parse date string to datetime
+                date = datetime.strptime(item["effectiveDate"], "%Y-%m-%d")
+                # Convert rate to float and divide by 100
+                rate = float(item["percentRate"]) / 100
+                result[date] = rate
+            except (ValueError, KeyError):
+                # Skip items with invalid date or rate
+                continue
+        return result
 
     def _corra_boc(self):
         res = requests.get("https://www.bankofcanada.ca/valet/observations/CORRA_WEIGHTED_MEAN_RATE/json", headers=self._boc_base_headers)
