@@ -231,11 +231,15 @@ class TestFactorExtractor:
         T = 100
         dates = [date(2024, 1, 1) + timedelta(days=i) for i in range(T)]
 
+        # Create DataFrame with correct shapes
+        tickers = ["AAPL"] * T + ["MSFT"] * T
+        all_dates = dates + dates
+
         df = pl.DataFrame({
-            "ticker": ["AAPL", "MSFT"] * 50,
-            "date": dates * 2,
+            "ticker": tickers,
+            "date": all_dates,
             "return": np.random.randn(T * 2),
-            "sector": ["Technology"] * 100,
+            "sector": ["Technology"] * (T * 2),
         })
 
         # Introduce missing values
