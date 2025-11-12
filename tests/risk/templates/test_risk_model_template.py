@@ -633,7 +633,7 @@ class TestComparisonWithReference:
         """
         # [PLACEHOLDER: Add test data from reference paper]
         # Example:
-        # returns = pd.DataFrame(REFERENCE_PAPER_DATA)
+        # returns = pl.DataFrame(REFERENCE_PAPER_DATA)
         # model = [PLACEHOLDER_CLASS]([PLACEHOLDER_PAPER_PARAMS])
         # cov_matrix = model.fit(returns)
         #
@@ -769,18 +769,16 @@ class TestOptimizerIntegration:
         model = [PLACEHOLDER_CLASS]()
         cov_matrix = model.fit(simple_returns)
 
-        # Convert to DataFrame for optimizer (using pandas for optimizer compatibility)
-        import pandas as pd
-        cov_df = pd.DataFrame(
+        # Convert to DataFrame for optimizer (polars format)
+        cov_df = pl.DataFrame(
             cov_matrix,
-            index=simple_returns.columns,
-            columns=simple_returns.columns
+            schema=simple_returns.columns
         )
 
         # Create mock alphas (signals)
-        alphas = pd.Series(
-            [0.01, -0.005, 0.008, 0.002, -0.003],
-            index=simple_returns.columns
+        alphas = pl.Series(
+            "alphas",
+            [0.01, -0.005, 0.008, 0.002, -0.003]
         )
 
         # Optimize
@@ -841,16 +839,14 @@ class TestOptimizerIntegration:
         model = [PLACEHOLDER_CLASS]()
         cov_matrix = model.fit(simple_returns)
 
-        # Convert to pandas for optimizer (using pandas for optimizer compatibility)
-        import pandas as pd
-        cov_df = pd.DataFrame(
+        # Convert to polars for optimizer
+        cov_df = pl.DataFrame(
             cov_matrix,
-            index=simple_returns.columns,
-            columns=simple_returns.columns
+            schema=simple_returns.columns
         )
 
         # Create alphas
-        alphas = pd.Series([0.01, -0.005, 0.008, 0.002, -0.003], index=simple_returns.columns)
+        alphas = pl.Series("alphas", [0.01, -0.005, 0.008, 0.002, -0.003])
 
         # Optimize with different risk aversion
         optimizer_low = MeanVarianceOptimizer(risk_aversion=0.5, long_only=True)

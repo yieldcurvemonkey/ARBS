@@ -4,8 +4,9 @@ from typing import TYPE_CHECKING, DefaultDict, Dict, Iterable, List, Optional, T
 
 import re
 import polars as pl
-import pandas as pd  # Keep for bdate_range utility
+import pandas as pd  # Keep ONLY for isinstance() type checks (backward compatibility)
 import tqdm
+import QuantLib as ql
 
 from Query.Base.BaseQuery import BaseQuery
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
@@ -16,6 +17,7 @@ from Query.IRSwaps.IRSwapValue import IRSwapValue
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 
 from TB.utils import DateLike
+from utils.ql_utils import datetime_to_ql_date
 
 # Avoid hard import cycles for optional type checking
 if TYPE_CHECKING:
@@ -307,7 +309,15 @@ class TimeseriesBuilder:
             irs_mdp = tb.mdp
             frb_mdp = self._routers["FRB"].mdp
 
-            ref_points = pd.bdate_range(start, end).date.tolist()
+            # Generate business day dates using polars and QuantLib calendar
+            cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+            date_range_list = pl.date_range(start, end, interval="1d", eager=True).to_list()
+            ref_points = []
+            for d in date_range_list:
+                date_val = d if isinstance(d, datetime.date) else d.date()
+                qld = datetime_to_ql_date(date_val)
+                if cal.isBusinessDay(qld):
+                    ref_points.append(date_val)
             rows = []
             for d in tqdm.tqdm(ref_points, desc="PRICING ASSET SWAPS..."):
                 for q in irswap_asw_queries:

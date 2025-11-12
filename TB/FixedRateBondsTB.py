@@ -10,7 +10,6 @@ from dataclasses import replace
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import pandas as pd  # Keep ONLY for pd.date_range utility (no DataFrame/Series operations)
 import polars as pl
 import QuantLib as ql
 from tqdm import tqdm
@@ -181,12 +180,16 @@ class FixedRateBondsTB(ZODBCacheMixin):
 
     # >>> added
     @staticmethod
-    def _to_timestamp(d: DateLike) -> pd.Timestamp:
+    def _to_timestamp(d: DateLike) -> datetime.datetime:
+        """Convert DateLike to datetime.datetime for consistent handling"""
         if isinstance(d, datetime.datetime):
-            return pd.Timestamp(d)
+            return d
         if isinstance(d, datetime.date):
-            return pd.Timestamp(d)
-        return pd.Timestamp(d)
+            return datetime.datetime(d.year, d.month, d.day)
+        # Handle string dates
+        if isinstance(d, str):
+            return datetime.datetime.fromisoformat(d)
+        return datetime.datetime.fromtimestamp(d) if isinstance(d, (int, float)) else d
 
     def get_timeseries(
         self,
@@ -206,19 +209,24 @@ class FixedRateBondsTB(ZODBCacheMixin):
             is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
             if is_intraday:
                 assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
+                # Convert pandas frequency to polars interval
                 eff_freq = freq or "1T"
-                rng = pd.date_range(start=start, end=end, freq=eff_freq, tz=start.tzinfo)
-                ref_points = rng.to_pydatetime().tolist()
+                interval = eff_freq.replace("T", "m").replace("H", "h").replace("D", "d")
+                rng = pl.datetime_range(start, end, interval=interval, time_zone=str(start.tzinfo), eager=True)
+                ref_points = [dt for dt in rng.to_list()]
             else:
                 if self._skip_non_business:
                     bd = []
-                    for d in pd.date_range(start=start, end=end, freq="D"):
-                        qld = datetime_to_ql_date(d.date())
+                    date_range_list = pl.date_range(start, end, interval="1d", eager=True).to_list()
+                    for d in date_range_list:
+                        date_val = d if isinstance(d, datetime.date) else d.date()
+                        qld = datetime_to_ql_date(date_val)
                         if self._cal.isBusinessDay(qld):
-                            bd.append(d.date())
+                            bd.append(date_val)
                     ref_points = bd
                 else:
-                    ref_points = pd.date_range(start, end, freq="D").date.tolist()
+                    date_range_list = pl.date_range(start, end, interval="1d", eager=True).to_list()
+                    ref_points = [d if isinstance(d, datetime.date) else d.date() for d in date_range_list]
 
         flat: List[FixedRateBondQuery] = _flatten_queries(queries)
 
@@ -260,7 +268,13 @@ class FixedRateBondsTB(ZODBCacheMixin):
                 if not is_intraday:
                     present = {row[ts_col].date(): float(row[c0]) for row in df_ts.iter_rows(named=True)}
                 else:
-                    present = {pd.Timestamp(row[ts_col]): float(row[c0]) for row in df_ts.iter_rows(named=True)}
+                    # Convert to datetime for intraday matching
+                    present = {}
+                    for row in df_ts.iter_rows(named=True):
+                        ts_val = row[ts_col]
+                        if not isinstance(ts_val, datetime.datetime):
+                            ts_val = datetime.datetime.fromisoformat(str(ts_val)) if isinstance(ts_val, str) else self._to_timestamp(ts_val)
+                        present[ts_val] = float(row[c0])
 
                 # Add rows for dates/timestamps we have, but skip "today" to avoid staleness
                 for rp in ref_points:
@@ -395,9 +409,9 @@ class FixedRateBondsTB(ZODBCacheMixin):
                 mapping[self._cache_key(d, q)] = row
 
         if self._use_ts_cache and new_rows_with_q:
-            ts_root = getattr(self, self._cache_attr)  # persistent mapping works as “root” for catalog
+            ts_root = getattr(self, self._cache_attr)  # persistent mapping works as "root" for catalog
             # Group rows by query (symbol)
-            grouped: Dict[str, List[Tuple[pd.Timestamp, float, str]]] = defaultdict(list)
+            grouped: Dict[str, List[Tuple[datetime.datetime, float, str]]] = defaultdict(list)
             for (dt_like, col, val), q, _d in new_rows_with_q:
                 sym = self._ts_symbol_for_query(q)
                 ts = self._to_timestamp(dt_like)

@@ -11,7 +11,6 @@ from dataclasses import replace
 
 import re
 import polars as pl
-import pandas as pd  # Keep for date utilities (pd.bdate_range, pd.date_range, pd.to_datetime)
 from tqdm import tqdm
 
 import QuantLib as ql
@@ -209,16 +208,30 @@ class IRSwapsTB(ZODBCacheMixin):
         timestamps: Optional[List[datetime.datetime]] = None,
     ) -> pl.DataFrame:
         if timestamps is not None and len(timestamps) > 0:
-            ref_points = sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
+            # Convert timestamps to datetime list
+            ref_points = sorted([
+                dt if isinstance(dt, datetime.datetime) else datetime.datetime.fromisoformat(str(dt))
+                for dt in timestamps
+            ])
         else:
             is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
             if is_intraday:
                 assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
                 eff_freq = freq or "1T"  # default to 1-minute resolution
-                rng = pd.date_range(start=start, end=end, freq=eff_freq, tz=start.tzinfo)
-                ref_points = rng.to_pydatetime().tolist()
+                # Convert pandas frequency to polars interval
+                interval = eff_freq.replace("T", "m").replace("H", "h").replace("D", "d")
+                rng = pl.datetime_range(start, end, interval=interval, time_zone=str(start.tzinfo), eager=True)
+                ref_points = [dt for dt in rng.to_list()]
             else:
-                ref_points = pd.bdate_range(start, end).date.tolist()
+                # Generate business day dates using polars and QuantLib calendar
+                cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+                date_range_list = pl.date_range(start, end, interval="1d", eager=True).to_list()
+                ref_points = []
+                for d in date_range_list:
+                    date_val = d if isinstance(d, datetime.date) else d.date()
+                    qld = datetime_to_ql_date(date_val)
+                    if cal.isBusinessDay(qld):
+                        ref_points.append(date_val)
 
         flat = _flatten_queries(queries)
         by_curve = _group_queries_by_curve(flat)
@@ -413,16 +426,17 @@ class IRSwapsTB(ZODBCacheMixin):
         if not items:
             return pl.DataFrame()
 
-        start_ts = pd.to_datetime(start).normalize()
-        end_ts = pd.to_datetime(end).normalize()
-        eval_index = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), start_ts, end_ts)
+        # Normalize start and end to datetime
+        start_dt = start if isinstance(start, datetime.datetime) else datetime.datetime.combine(start, datetime.time())
+        end_dt = end if isinstance(end, datetime.datetime) else datetime.datetime.combine(end, datetime.time())
+        eval_index = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), start_dt, end_dt)
         today_date = datetime.date.today()
 
         out_frames_cached: list[pl.DataFrame] = []
         need_fetch_labels: list[str] = []
 
-        partial_missing_dates: dict[str, set[pd.Timestamp]] = {}
-        missing_today_dates: dict[str, set[pd.Timestamp]] = {}
+        partial_missing_dates: dict[str, set[datetime.datetime]] = {}
+        missing_today_dates: dict[str, set[datetime.datetime]] = {}
         pre_cached_rows: dict[str, list[dict]] = {}
 
         pending_writes: list[tuple[str, dict]] = []
@@ -432,8 +446,8 @@ class IRSwapsTB(ZODBCacheMixin):
             colname = _col_name(label)
 
             rows: list[dict] = []
-            miss_pre: set[pd.Timestamp] = set()
-            miss_today: set[pd.Timestamp] = set()
+            miss_pre: set[datetime.datetime] = set()
+            miss_today: set[datetime.datetime] = set()
 
             for dts in eval_index:
                 ts = dts.to_pydatetime()
@@ -478,7 +492,10 @@ class IRSwapsTB(ZODBCacheMixin):
                     if dk is None:
                         (miss_pre if dts.date() < today_date else miss_today).add(dts)
                         continue
-                    dt_val = pd.Timestamp(rec[dk])
+                    # Convert to datetime
+                    dt_val = rec[dk]
+                    if not isinstance(dt_val, datetime.datetime):
+                        dt_val = datetime.datetime.fromisoformat(str(dt_val)) if isinstance(dt_val, str) else dt_val
 
                     cand = [k for k in rec.keys() if k != dk]
                     if not cand:
@@ -500,7 +517,8 @@ class IRSwapsTB(ZODBCacheMixin):
                 else:
                     try:
                         dt_val, _orig_col, val = rec
-                        dt_val = pd.Timestamp(dt_val)
+                        if not isinstance(dt_val, datetime.datetime):
+                            dt_val = datetime.datetime.fromisoformat(str(dt_val)) if isinstance(dt_val, str) else dt_val
                         val = float(val)
                     except Exception:
                         (miss_pre if dts.date() < today_date else miss_today).add(dts)
@@ -530,7 +548,7 @@ class IRSwapsTB(ZODBCacheMixin):
             return reduce(lambda left, right: left.join(right, on=_date_col, how="outer"), out_frames_cached).sort(_date_col)
 
         needed_tickers: set[str] = set()
-        needed_dates: list[pd.Timestamp] = []
+        needed_dates: list[datetime.datetime] = []
         for label in need_fetch_labels:
             pre = partial_missing_dates.get(label, set())
             tod = missing_today_dates.get(label, set())
@@ -592,7 +610,7 @@ class IRSwapsTB(ZODBCacheMixin):
             rows = list(pre_cached_rows.get(label, []))
             miss_all = partial_missing_dates.get(label, set()) | missing_today_dates.get(label, set())
 
-            def _iter_eval_dates_for_label() -> Iterable[pd.Timestamp]:
+            def _iter_eval_dates_for_label() -> Iterable[datetime.datetime]:
                 for dts in sorted(miss_all):
                     if dts in px_df.index:
                         yield dts
@@ -618,7 +636,7 @@ class IRSwapsTB(ZODBCacheMixin):
 
                 for dts in _iter_eval_dates_for_label():
                     try:
-                        ts = dts if isinstance(dts, datetime.datetime) else pd.Timestamp(dts).to_pydatetime()
+                        ts = dts if isinstance(dts, datetime.datetime) else (datetime.datetime.fromisoformat(str(dts)) if isinstance(dts, str) else dts)
                         price = px_df.at[dts, leg]
                         if price is None or (isinstance(price, float) and math.isnan(price)):
                             continue
@@ -630,7 +648,8 @@ class IRSwapsTB(ZODBCacheMixin):
                         _, rl_sfr = build_rl_stirf(ticker=leg, curve_id=ch.id(), price=float(price), use_globex=use_globex)
                         cvx = float(vmap.apply(value=IRSwapValue.CVX_ADJ, **{"sfr": [rl_sfr]}))
 
-                        record = {_date_col: ts if isinstance(dts, datetime.datetime) else pd.Timestamp(dts).to_pydatetime(), colname: cvx}
+                        ts_final = ts if isinstance(dts, datetime.datetime) else (datetime.datetime.fromisoformat(str(dts)) if isinstance(dts, str) else dts)
+                        record = {_date_col: ts_final, colname: cvx}
                         rows.append(record)
 
                         if not _is_today(ts):
@@ -648,7 +667,7 @@ class IRSwapsTB(ZODBCacheMixin):
 
                 for dts in _iter_eval_dates_for_label():
                     try:
-                        d = pd.Timestamp(dts).date()
+                        d = dts.date() if isinstance(dts, datetime.datetime) else dts
                         codes = [_imm_code_from_date_rank(d, r) for r in ranks]
                         legs_here = [f"{leg_prefix}{c}" for c in codes]
                         if not all(
@@ -688,11 +707,11 @@ class IRSwapsTB(ZODBCacheMixin):
                             rl_sfrs.append(rl_sfr)
 
                         cvx = float(vmap.apply(value=IRSwapValue.CVX_ADJ, **{"sfr": rl_sfrs}))
-                        rows.append({_date_col: dts if isinstance(dts, datetime.datetime) else pd.Timestamp(dts).to_pydatetime(), colname: cvx})
+                        ts_final = dts if isinstance(dts, datetime.datetime) else (datetime.datetime.fromisoformat(str(dts)) if isinstance(dts, str) else dts)
+                        rows.append({_date_col: ts_final, colname: cvx})
 
-                        ts = dts if isinstance(dts, datetime.datetime) else pd.Timestamp(dts).to_pydatetime()
-                        if not _is_today(ts):
-                            pending_writes.append((self._cache_key(ts, curve, q), {_date_col: ts, q.col_name(curve): cvx}))
+                        if not _is_today(ts_final):
+                            pending_writes.append((self._cache_key(ts_final, curve, q), {_date_col: ts_final, q.col_name(curve): cvx}))
                     except Exception:
                         pass
 
