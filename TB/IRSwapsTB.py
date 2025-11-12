@@ -9,7 +9,7 @@ from dataclasses import replace
 
 import re
 import polars as pl
-import pandas as pd
+import pandas as pd  # Keep for date utilities and return type compatibility
 from tqdm import tqdm
 
 import QuantLib as ql

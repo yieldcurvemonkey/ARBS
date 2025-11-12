@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, DefaultDict, Dict, Iterable, List, Optional, T
 
 import re
 import polars as pl
-import pandas as pd
+import pandas as pd  # Keep for bdate_range and pivot compatibility
 import tqdm
 
 from Query.Base.BaseQuery import BaseQuery
