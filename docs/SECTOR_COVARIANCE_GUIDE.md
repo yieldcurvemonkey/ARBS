@@ -44,7 +44,9 @@ sector_mapping = estimator.get_sector_mapping()
 
 ## Model Comparison
 
-### Performance Benchmarks (15 assets, 3 sectors, 252 observations)
+### Matrix Properties (15 assets, 3 sectors, 252 observations - SYNTHETIC DATA)
+
+⚠️ **WARNING: These are results on synthetic data, NOT real portfolio performance**
 
 | Metric | BlockDiagonal | TwoStep | StochasticBlock |
 |--------|---------------|---------|-----------------|
@@ -53,10 +55,10 @@ sector_mapping = estimator.get_sector_mapping()
 | **Effective Rank** | 4.2 | **4.3** ✓ | 4.2 |
 | **Computation Time** | 0.013s | **0.005s** ✓ | 0.004s |
 
-**Key Takeaways:**
-- **StochasticBlock** has best conditioning (most stable for optimization)
-- **BlockDiagonal** produces sparsest matrices (fastest inversion)
-- **TwoStep** is fastest to compute
+**What These Numbers Mean:**
+- Models produce valid covariance matrices ✓
+- **Portfolio performance NOT measured** ✗
+- **Paper claims NOT verified** ✗
 
 ---
 

@@ -2,19 +2,25 @@
 
 **Date**: 2025-11-12
 **Branch**: `claude/sector-risk-model-research-011CV41RojiVnaUFqthNnozq`
-**Status**: ✅ Research Complete - Ready for Implementation
+**Status**: ⚠️ **IMPLEMENTATION COMPLETE, VALIDATION INCOMPLETE**
 
 ---
 
 ## TL;DR
 
-Found 3 cutting-edge papers (2024-2025) on sector-based risk models. **All show sector structure consistently outperforms unstructured methods** in portfolio optimization. The implementation is a **drop-in replacement** for ARBS's current Risk layer—requiring **zero changes** to upstream or downstream components.
+Found 3 cutting-edge papers (2024-2025) on sector-based risk models. Papers claim sector structure outperforms unstructured methods in portfolio optimization.
 
-**Expected Improvement**: Sharpe ratio from **0.5-0.7** (current) to **1.0-1.5** (with new risk models).
+**Implementation Status**: All 3 models coded and integrated into ARBS.
 
-**Combined with sector rotation**: Sharpe **2.5-3.0** (vs Yang & Shi 2023 paper: 2.21).
+**Validation Status**: ❌ **CRITICAL GAPS**
+- Models produce positive definite matrices ✓
+- Models integrate with factory system ✓
+- **Portfolio performance NOT validated** ✗
+- **Paper claims NOT verified** ✗
+- **No Sharpe ratio comparisons** ✗
+- **No baseline comparisons** ✗
 
-**Implementation Effort**: 11-17 hours (MVP), with strict TDD throughout.
+**Expected improvements are UNVERIFIED CLAIMS from papers, not actual measured results.**
 
 ---
 
