@@ -2,6 +2,7 @@ import datetime
 import hashlib
 import json
 import logging
+import math
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import reduce
@@ -417,7 +418,7 @@ class IRSwapsTB(ZODBCacheMixin):
         eval_index = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), start_ts, end_ts)
         today_date = datetime.date.today()
 
-        out_frames_cached: list[pd.DataFrame] = []
+        out_frames_cached: list[pl.DataFrame] = []
         need_fetch_labels: list[str] = []
 
         partial_missing_dates: dict[str, set[pd.Timestamp]] = {}
@@ -573,13 +574,11 @@ class IRSwapsTB(ZODBCacheMixin):
             return reduce(lambda left, right: left.join(right, on=_date_col, how="outer"), out_frames_cached).sort(_date_col)
 
         px_df = px_df.sort_index()
-        for c in px_df.columns:
-            px_df[c] = pd.to_numeric(px_df[c], errors="coerce")
 
         # Curve handle cache per date
         curve_by_day: dict[datetime.date, object] = {}
 
-        out_frames: list[pd.DataFrame] = out_frames_cached[:]  # include fully cached labels
+        out_frames: list[pl.DataFrame] = out_frames_cached[:]  # include fully cached labels
 
         def _get_curve_for_day(day: datetime.date):
             ch = curve_by_day.get(day)
@@ -621,7 +620,7 @@ class IRSwapsTB(ZODBCacheMixin):
                     try:
                         ts = dts if isinstance(dts, datetime.datetime) else pd.Timestamp(dts).to_pydatetime()
                         price = px_df.at[dts, leg]
-                        if pd.isna(price):
+                        if price is None or (isinstance(price, float) and math.isnan(price)):
                             continue
 
                         ch = _get_curve_for_day(dts.date())
@@ -652,7 +651,12 @@ class IRSwapsTB(ZODBCacheMixin):
                         d = pd.Timestamp(dts).date()
                         codes = [_imm_code_from_date_rank(d, r) for r in ranks]
                         legs_here = [f"{leg_prefix}{c}" for c in codes]
-                        if not all((leg in px_df.columns) and pd.notna(px_df.at[dts, leg]) for leg in legs_here):
+                        if not all(
+                            (leg in px_df.columns) and
+                            (val := px_df.at[dts, leg]) is not None and
+                            not (isinstance(val, float) and math.isnan(val))
+                            for leg in legs_here
+                        ):
                             continue
 
                         anchor_code = codes[0]

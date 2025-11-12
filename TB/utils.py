@@ -88,9 +88,13 @@ def make_secondary_axis_plot_v1(*, ylabel_left=None, ylabel_right=None, title=No
             return " ".join(map(str, n))
         return str(n)
 
-    def plot(series: pd.Series, *, label=None, which="auto", **kwargs):
-        if not isinstance(series, pd.Series):
-            raise TypeError("plot() expects a pandas Series")
+    def plot(series: Union[pd.Series, pl.Series], *, label=None, which="auto", **kwargs):
+        if not isinstance(series, (pd.Series, pl.Series)):
+            raise TypeError("plot() expects a pandas or polars Series")
+
+        # Convert polars Series to pandas for plotting compatibility
+        if isinstance(series, pl.Series):
+            series = series.to_pandas()
 
         # decide axis
         target = ax_left if (which == "left" or (which == "auto" and not state["first_done"])) else ax_right
@@ -179,7 +183,8 @@ def make_secondary_axis_plot_v2(*, ylabel_left=None, ylabel_right=None, title=No
         return str(n)
 
     def _fmt_dt(ts):
-        ts = pd.Timestamp(ts)
+        if not isinstance(ts, datetime.datetime):
+            ts = datetime.datetime.fromisoformat(str(ts)) if isinstance(ts, str) else ts
         return ts.strftime("%Y-%m-%d") if ts.time() == datetime.time(0, 0, 0) else ts.isoformat(sep=" ")
 
     def _new_right_axis():
@@ -193,9 +198,14 @@ def make_secondary_axis_plot_v2(*, ylabel_left=None, ylabel_right=None, title=No
         state["right_axes"].append(ax)
         return ax
 
-    def plot(series: pd.Series, *, label=None, which="left", **kwargs):
-        if not isinstance(series, pd.Series):
-            raise TypeError("plot() expects a pandas Series")
+    def plot(series: Union[pd.Series, pl.Series], *, label=None, which="left", **kwargs):
+        if not isinstance(series, (pd.Series, pl.Series)):
+            raise TypeError("plot() expects a pandas or polars Series")
+
+        # Convert polars Series to pandas for plotting compatibility
+        if isinstance(series, pl.Series):
+            series = series.to_pandas()
+
         if label is None:
             label = _stringify_name(series.name)
 
@@ -260,7 +270,7 @@ def make_secondary_axis_plot_v2(*, ylabel_left=None, ylabel_right=None, title=No
 
 
 def timeseries_df_plotter(
-    df: pd.DataFrame,
+    df: Union[pd.DataFrame, pl.DataFrame],
     cols_to_plot: List[str],
     cols_to_plot_raxis: Optional[List[str]] = None,
     use_plotly: Optional[bool] = False,
@@ -272,10 +282,21 @@ def timeseries_df_plotter(
     entry_date: Optional[DateLike] = None,
     entry_level: Optional[float] = None,
 ):
+    # Convert polars DataFrame to pandas for plotting compatibility
+    if isinstance(df, pl.DataFrame):
+        df = df.to_pandas()
+
     assert isinstance(df.index, pd.DatetimeIndex), "The DataFrame must have a DatetimeIndex"
 
-    def _tz_label(ts: pd.Timestamp) -> str:
+    def _tz_label(ts: datetime.datetime) -> str:
         # Prefer DST-aware abbreviation like 'EST'/'EDT'; fall back to UTC offset.
+        # Convert to datetime if needed
+        if not isinstance(ts, datetime.datetime):
+            if hasattr(ts, 'to_pydatetime'):
+                ts = ts.to_pydatetime()
+            else:
+                ts = datetime.datetime.fromisoformat(str(ts))
+
         name = ts.tzname()
         if name:
             return name
@@ -290,7 +311,7 @@ def timeseries_df_plotter(
     df = df.copy()
     tz_aware = getattr(df.index, "tz", None) is not None
     if tz_aware:
-        tz_text = [_tz_label(pd.Timestamp(x)) for x in df.index]
+        tz_text = [_tz_label(x) for x in df.index]
         hover_template = "%{x|%Y-%m-%d %H:%M:%S} %{text}<br>%{y}<extra></extra>"
     else:
         tz_text = None
