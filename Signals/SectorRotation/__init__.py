@@ -17,6 +17,7 @@ from Signals.SectorRotation.ReversionFactor import ReversionFactor
 from Signals.SectorRotation.CrossSectionalNeutralizer import CrossSectionalNeutralizer
 from Signals.SectorRotation.SectorMomentumSignal import SectorMomentumSignal
 from Signals.SectorRotation.SectorReversionSignal import SectorReversionSignal
+from Signals.SectorRotation.FundamentalProcessor import FundamentalProcessor
 
 __all__ = [
     "MomentumFactor",
@@ -24,4 +25,5 @@ __all__ = [
     "CrossSectionalNeutralizer",
     "SectorMomentumSignal",
     "SectorReversionSignal",
+    "FundamentalProcessor",
 ]
