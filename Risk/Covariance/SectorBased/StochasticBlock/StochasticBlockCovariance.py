@@ -27,16 +27,12 @@ from typing import Optional, Dict, List
 from scipy import linalg
 from sklearn.cluster import AgglomerativeClustering
 
-from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
-from Risk.Covariance.SectorBased.sector_utils import (
-    validate_sector_data,
-    long_to_wide,
-    extract_sector_mapping,
-    group_tickers_by_sector,
+from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import (
+    SectorBasedCovarianceEstimator,
 )
 
 
-class StochasticBlockCovariance(BaseCovarianceEstimator):
+class StochasticBlockCovariance(SectorBasedCovarianceEstimator):
     """
     Estimates covariance with stochastic block structure allowing inter-block correlations.
 
@@ -79,21 +75,20 @@ class StochasticBlockCovariance(BaseCovarianceEstimator):
             min_eigenvalue: Minimum eigenvalue for positive definiteness
             handle_missing: How to handle missing data ('drop' or 'pairwise')
         """
-        super().__init__(handle_missing=handle_missing)
+        clustering_method = "hierarchical" if discover_blocks else "predefined"
+        super().__init__(clustering_method=clustering_method, handle_missing=handle_missing)
 
         self.allow_inter_block = allow_inter_block
         self.alpha = alpha
-        self.discover_blocks = discover_blocks
         self.n_clusters = n_clusters
         self.shrinkage_per_block = shrinkage_per_block
         self.min_eigenvalue = min_eigenvalue
 
         # Fitted attributes
         self.ticker_order_: Optional[List[str]] = None
-        self.sector_mapping_: Optional[Dict[str, str]] = None
         self.alpha_: Optional[float] = None  # Fitted alpha value
 
-    def fit(self, returns: pl.DataFrame, sector_col: str = "sector") -> np.ndarray:
+    def fit(self, returns: pl.DataFrame, sector_col: Optional[str] = "sector") -> np.ndarray:
         """
         Estimate covariance matrix from returns.
 
@@ -109,23 +104,20 @@ class StochasticBlockCovariance(BaseCovarianceEstimator):
             ValueError: If required columns missing or data invalid
         """
         # Validate input data
-        if not self.discover_blocks:
-            validate_sector_data(returns, sector_col=sector_col)
+        self._validate_sector_input(returns, sector_col)
 
         # Handle missing data
-        returns = self._handle_missing_data(returns)
+        returns_clean = self._handle_missing_data(returns)
 
         # Convert to wide format (T×N)
-        returns_wide, tickers = long_to_wide(returns, value_col="return")
-        returns_array = returns_wide.to_numpy()  # T×N
+        returns_array, tickers = self._convert_to_wide_format(returns_clean)
         self.ticker_order_ = tickers
         self.asset_names_ = tickers
 
-        # Get or discover sector mapping
-        if self.discover_blocks:
-            self.sector_mapping_ = self._discover_sectors(returns_array, tickers)
-        else:
-            self.sector_mapping_ = extract_sector_mapping(returns, sector_col=sector_col)
+        # Determine sector mapping
+        self.sector_mapping_ = self._determine_sector_assignments(
+            returns_array, tickers, returns_clean, sector_col
+        )
 
         # Compute full sample covariance (baseline)
         cov_full = np.cov(returns_array, rowvar=False)  # N×N
@@ -148,8 +140,8 @@ class StochasticBlockCovariance(BaseCovarianceEstimator):
             # Pure block-diagonal (no inter-block correlations)
             cov_matrix = cov_block
 
-        # Ensure positive definiteness
-        cov_matrix = self._ensure_positive_definite(cov_matrix)
+        # Ensure positive definiteness (using inherited method)
+        cov_matrix = self._ensure_positive_definite(cov_matrix, min_eigenvalue=self.min_eigenvalue)
 
         # Store fitted covariance
         self.cov_matrix_ = cov_matrix
@@ -174,8 +166,8 @@ class StochasticBlockCovariance(BaseCovarianceEstimator):
         n_assets = len(tickers)
         cov_block = np.zeros((n_assets, n_assets))
 
-        # Group tickers by sector
-        sector_groups = group_tickers_by_sector(self.sector_mapping_)
+        # Group tickers by sector (using inherited method)
+        sector_groups = self.get_sector_groups()
 
         # Get ticker indices
         ticker_to_idx = {ticker: i for i, ticker in enumerate(tickers)}
@@ -246,80 +238,6 @@ class StochasticBlockCovariance(BaseCovarianceEstimator):
 
         return cov_shrunk
 
-    def _discover_sectors(
-        self,
-        returns_array: np.ndarray,
-        tickers: List[str],
-    ) -> Dict[str, str]:
-        """
-        Discover sector structure via hierarchical clustering.
-
-        Args:
-            returns_array: T×N returns matrix
-            tickers: List of ticker names
-
-        Returns:
-            Dictionary mapping ticker → discovered_sector
-        """
-        # Compute correlation matrix
-        corr_matrix = np.corrcoef(returns_array, rowvar=False)
-
-        # Convert correlation to distance (1 - |corr|)
-        distance_matrix = 1 - np.abs(corr_matrix)
-
-        # Ensure valid distance matrix (symmetric, non-negative)
-        distance_matrix = np.maximum(distance_matrix, 0)
-        distance_matrix = (distance_matrix + distance_matrix.T) / 2
-
-        # Hierarchical clustering
-        if self.n_clusters is None:
-            # Auto-select number of clusters (heuristic: sqrt(N))
-            n_clusters = max(2, int(np.sqrt(len(tickers))))
-        else:
-            n_clusters = self.n_clusters
-
-        clustering = AgglomerativeClustering(
-            n_clusters=n_clusters,
-            metric='precomputed',
-            linkage='average',
-        )
-
-        # Fit clustering
-        labels = clustering.fit_predict(distance_matrix)
-
-        # Create sector mapping
-        sector_mapping = {}
-        for ticker, label in zip(tickers, labels):
-            sector_mapping[ticker] = f"Cluster_{label}"
-
-        return sector_mapping
-
-    def _ensure_positive_definite(self, cov_matrix: np.ndarray) -> np.ndarray:
-        """
-        Ensure covariance matrix is positive definite.
-
-        Uses eigenvalue clipping: λᵢ → max(λᵢ, ε)
-
-        Args:
-            cov_matrix: Potentially singular covariance matrix
-
-        Returns:
-            Positive definite covariance matrix
-        """
-        # Eigenvalue decomposition
-        eigenvalues, eigenvectors = linalg.eigh(cov_matrix)
-
-        # Clip small/negative eigenvalues
-        eigenvalues = np.maximum(eigenvalues, self.min_eigenvalue)
-
-        # Reconstruct
-        cov_matrix_pd = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
-
-        # Ensure symmetry (numerical stability)
-        cov_matrix_pd = (cov_matrix_pd + cov_matrix_pd.T) / 2
-
-        return cov_matrix_pd
-
     def get_block_structure(self) -> Dict[str, List[str]]:
         """
         Get the fitted block structure (sector groupings).
@@ -330,10 +248,8 @@ class StochasticBlockCovariance(BaseCovarianceEstimator):
         Raises:
             ValueError: If fit() hasn't been called yet
         """
-        if self.sector_mapping_ is None:
-            raise ValueError("Must call fit() before get_block_structure()")
-
-        return group_tickers_by_sector(self.sector_mapping_)
+        # Use inherited method
+        return self.get_sector_groups()
 
     def get_cross_sector_correlations(self) -> pl.DataFrame:
         """
