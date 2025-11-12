@@ -1,0 +1,55 @@
+# Global Macro Strategy with Stochastic Block Covariance
+# Critical for cross-currency and cross-asset class strategies
+# Captures both within-sector and cross-sector correlations
+
+strategy:
+  name: "Global Macro - StochasticBlock"
+  type: "multi_signal"
+  description: "Multi-signal strategy with cross-sector correlation modeling from Chen et al. (2025)"
+
+universe:
+  asset_class: "futures"
+  instruments: "global"  # Equities, FX, commodities, rates
+
+signals:
+  - type: "momentum"
+    config:
+      lookback: 60
+    weight: 0.6
+
+  - type: "carry"
+    config:
+      lookback: 20
+    weight: 0.4
+
+alpha:
+  IC: 0.05
+  method: "static"
+  ic_lookback: 60
+
+risk:
+  covariance: "stochastic_block"
+  covariance_config:
+    allow_inter_block: true  # Enable cross-sector correlations
+    alpha: 0.7  # 70% block-diagonal, 30% full covariance
+    shrinkage_per_block: true  # Apply Ledoit-Wolf per sector
+    discover_blocks: false  # Use predefined sectors
+  lookback: 60
+
+optimizer:
+  type: "mean_variance"
+  risk_aversion: 2.0  # Higher risk aversion for macro
+  constraints:
+    long_only: false  # Allow shorts for macro
+    max_position: 0.15
+    min_position: -0.10
+    leverage: 2.0  # Higher leverage for macro
+
+execution:
+  rebalance_frequency: "weekly"
+  transaction_costs: 0.002  # Higher costs for global assets
+
+backtest:
+  start_date: "2020-01-01"
+  end_date: "2024-01-01"
+  initial_capital: 10000000

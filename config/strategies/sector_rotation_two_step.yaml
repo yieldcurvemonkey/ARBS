@@ -1,0 +1,48 @@
+# Sector Rotation Strategy with Two-Step Covariance
+# Best empirical performer from García-Medina et al. (2024)
+# Combines hierarchical clustering with random matrix filtering
+
+strategy:
+  name: "Sector Rotation - TwoStep"
+  type: "carry"
+  description: "Carry strategy with hierarchical clustering + RMT filtering (best diversification)"
+
+universe:
+  asset_class: "futures"
+  instruments: "sp500"  # Or dow30, nasdaq100
+
+signals:
+  - type: "carry"
+    config:
+      lookback: 60
+    weight: 1.0
+
+alpha:
+  IC: 0.05
+  method: "static"
+  ic_lookback: 60
+
+risk:
+  covariance: "two_step"
+  covariance_config:
+    n_clusters: 10  # Discovers ~10 sectors
+    linkage_method: "ward"  # Hierarchical clustering method
+    rmt_filter: true  # Apply random matrix filtering
+  lookback: 60
+
+optimizer:
+  type: "mean_variance"
+  risk_aversion: 1.0
+  constraints:
+    long_only: true
+    max_position: 0.10
+    leverage: 1.0
+
+execution:
+  rebalance_frequency: "weekly"
+  transaction_costs: 0.001
+
+backtest:
+  start_date: "2020-01-01"
+  end_date: "2024-01-01"
+  initial_capital: 1000000
