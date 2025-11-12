@@ -163,6 +163,8 @@ class RandomMatrixFilter:
         Estimate noise variance σ² from eigenvalue spectrum.
 
         Uses median of smallest eigenvalues as robust estimator of noise level.
+        Conservative approach: use smallest 10% of eigenvalues (min 1, max n_assets//2)
+        to avoid overestimating noise when most eigenvalues are signal.
 
         Args:
             eigenvalues: Array of eigenvalues (sorted descending)
@@ -173,15 +175,15 @@ class RandomMatrixFilter:
             Estimated noise variance σ²
         """
         if self.sigma_estimator == "median":
-            # Use median of smallest 50% of eigenvalues as noise estimate
-            # This assumes at least half the eigenvalues are noise
-            n_noise = max(1, n_assets // 2)
+            # Use median of smallest 10% of eigenvalues as noise estimate
+            # More conservative than 50% to handle cases with many signal eigenvalues
+            n_noise = max(1, min(n_assets // 10, n_assets // 2))
             noise_eigenvalues = eigenvalues[-n_noise:]
             sigma_sq = np.median(noise_eigenvalues)
 
         elif self.sigma_estimator == "robust":
             # Robust estimator: MAD (Median Absolute Deviation)
-            n_noise = max(1, n_assets // 2)
+            n_noise = max(1, min(n_assets // 10, n_assets // 2))
             noise_eigenvalues = eigenvalues[-n_noise:]
             median = np.median(noise_eigenvalues)
             mad = np.median(np.abs(noise_eigenvalues - median))
