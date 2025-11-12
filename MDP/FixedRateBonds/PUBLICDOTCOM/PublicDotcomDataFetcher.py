@@ -5,10 +5,10 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Literal
 
 import httpx
-import pandas as pd
+import polars as pl
 import requests
 
-warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+warnings.filterwarnings("ignore", category=FutureWarning  # polars equivalent)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys
@@ -114,7 +114,7 @@ class PublicDotcomDataFetcher(DataFetcherBase):
         cols_to_return = ["Date", "Price", "YTM"]  # YTW is same as YTM for cash USTs
         retries = 0
         try:
-            if pd.isna(cusip) or not cusip:
+            if cusip is None or not cusip:
                 raise ValueError(f"Public.com - invalid CUSIP passed")
 
             while retries < max_retries:
@@ -147,15 +147,16 @@ class PublicDotcomDataFetcher(DataFetcherBase):
                     data_url = f"https://prod-api.154310543964.hellopublic.com/fixedincomegateway/v1/graph/data?cusip={cusip}&span={span}"
                     response = await client.get(data_url, headers=data_headers)
                     response.raise_for_status()
-                    df = pd.DataFrame(response.json()["data"])
-                    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-                    df["unitPrice"] = pd.to_numeric(df["unitPrice"]) * 100
-                    df["yieldToWorst"] = pd.to_numeric(df["yieldToWorst"]) * 100
-                    df.columns = cols_to_return
+                    df = pl.DataFrame(response.json()["data"])
+                    df = df.with_columns([
+                        pl.col("timestamp").str.to_datetime(strict=False).alias("Date"),
+                        (pl.col("unitPrice").cast(pl.Float64) * 100).alias("Price"),
+                        (pl.col("yieldToWorst").cast(pl.Float64) * 100).alias("YTM")
+                    ]).select(cols_to_return)
                     if start_date:
-                        df = df[df["Date"].dt.date >= start_date.date()]
+                        df = df.filter(pl.col("Date").cast(pl.Date) >= start_date.date())
                     if end_date:
-                        df = df[df["Date"].dt.date <= end_date.date()]
+                        df = df.filter(pl.col("Date").cast(pl.Date) <= end_date.date())
                     if uid:
                         return cusip, df, uid
                     return cusip, df
@@ -164,8 +165,8 @@ class PublicDotcomDataFetcher(DataFetcherBase):
                     self._logger.error(f"Public.com - Bad Status for {cusip}: {response.status_code}")
                     if response.status_code == 404 or response.status_code == 400:  # public.com endpoint doesnt throw a 404 specifically
                         if uid:
-                            return cusip, pd.DataFrame(columns=cols_to_return), uid
-                        return cusip, pd.DataFrame(columns=cols_to_return)
+                            return cusip, pl.DataFrame(schema={col: pl.Utf8 for col in cols_to_return}), uid
+                        return cusip, pl.DataFrame(schema={col: pl.Utf8 for col in cols_to_return})
 
                     retries += 1
                     wait_time = backoff_factor * (2 ** (retries - 1))
@@ -184,8 +185,8 @@ class PublicDotcomDataFetcher(DataFetcherBase):
         except Exception as e:
             self._logger.error(e)
             if uid:
-                return cusip, pd.DataFrame(columns=cols_to_return), uid
-            return cusip, pd.DataFrame(columns=cols_to_return)
+                return cusip, pl.DataFrame(schema={col: pl.Utf8 for col in cols_to_return}), uid
+            return cusip, pl.DataFrame(schema={col: pl.Utf8 for col in cols_to_return})
 
     async def _fetch_cusip_timeseries_public_dotcome_with_semaphore(self, semaphore, *args, **kwargs):
         async with semaphore:
@@ -240,7 +241,7 @@ class PublicDotcomDataFetcher(DataFetcherBase):
                 )
                 return all_data
 
-        dfs: List[Tuple[str, pd.DataFrame]] = asyncio.run(
+        dfs: List[Tuple[str, pl.DataFrame]] = asyncio.run(
             run_fetch_all(
                 cusips=cusips,
                 start_date=start_date,

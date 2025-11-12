@@ -13,7 +13,7 @@ params = {
 pylab.rcParams.update(params)
 
 import QuantLib as ql
-import pandas as pd
+import polars as pl
 import datetime
 import tqdm
 
@@ -108,7 +108,6 @@ if __name__ == "__main__":
     planned_exit: datetime.date | None = None
 
     for d in daily:
-        d = pd.Timestamp(d)
         sig = carry_map.get(d, float("nan")) > 0
 
         # leave if we've passed the planned exit
@@ -167,11 +166,14 @@ if __name__ == "__main__":
     bt = QueryDrivenBacktest(time_grid=tg, mdp=mdp, strategy=final_strategy)
     bt.run()
 
-    mtm = pd.Series(bt.mtm_history).sort_index()
-    print("Final MtM PnL:", float(mtm.iloc[-1]))
+    mtm = pl.DataFrame({
+        "date": list(bt.mtm_history.keys()),
+        "mtm": list(bt.mtm_history.values())
+    }).sort("date")
+    print("Final MtM PnL:", float(mtm["mtm"][-1]))
 
     plt.figure()
-    plt.plot(mtm.index, mtm.values, label="MtM PnL")
+    plt.plot(mtm["date"], mtm["mtm"], label="MtM PnL")
     plt.legend()
     plt.title(f"Rec {bpv_per_trade}/bp FOMC{fomc_fly[0]}/FOMC{fomc_fly[1]}/FOMC{fomc_fly[2]} Gap Fly when paid 2s5s10s {horizon_period} carry>0")
     plt.show()

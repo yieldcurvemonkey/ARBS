@@ -2,7 +2,7 @@
 # ABOUTME: Calendar date range generation and time-related helpers using QuantLib calendars
 import datetime
 
-import pandas as pd
+import polars as pl
 import QuantLib as ql
 
 from typing import Optional
@@ -23,8 +23,10 @@ def ql_cal_date_range(
     def _to_ql_date(dt: datetime.datetime):
         return ql.Date(dt.day, dt.month, dt.year)
 
-    pd_range = pd.date_range(start=start, end=end, freq=freq)
-    date_filtered_range = [d for d in pd_range if ql_cal.isBusinessDay(_to_ql_date(d))]
+    # Convert pandas frequency to polars interval format
+    interval = freq.replace("b", "d").replace("min", "m").replace("hr", "h")
+    pl_range = pl.date_range(start, end, interval=interval, eager=True).to_list()
+    date_filtered_range = [d for d in pl_range if ql_cal.isBusinessDay(_to_ql_date(d))]
     if "min" in freq or "hr" in freq:
         time_filtered_range = []
         for ts in date_filtered_range:

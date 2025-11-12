@@ -38,7 +38,7 @@ Usage Instructions:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from io import StringIO
 import sys
 
@@ -175,9 +175,9 @@ def simple_returns():
     Well-conditioned case: T >> N, no extreme correlations
     """
     np.random.seed(42)
-    return pd.DataFrame(
+    return pl.DataFrame(
         np.random.randn(100, 5) * 0.02,
-        columns=['A', 'B', 'C', 'D', 'E']
+        schema=['A', 'B', 'C', 'D', 'E']
     )
 
 
@@ -188,7 +188,7 @@ def small_sample_returns():
     Ill-conditioned case: T close to N, tests shrinkage/regularization
     """
     np.random.seed(42)
-    return pd.DataFrame(np.random.randn(30, 25) * 0.01)
+    return pl.DataFrame(np.random.randn(30, 25) * 0.01)
 
 
 @pytest.fixture
@@ -208,7 +208,7 @@ def correlated_returns():
     idio = np.random.randn(n_obs, n_assets) * 0.005
 
     # Returns: 85% common, 15% idiosyncratic
-    returns = pd.DataFrame(0.85 * common + 0.15 * idio)
+    returns = pl.DataFrame(0.85 * common + 0.15 * idio)
     return returns
 
 
@@ -219,12 +219,13 @@ def returns_with_nans():
     Contains ~10% missing data in random locations
     """
     np.random.seed(42)
-    returns = pd.DataFrame(np.random.randn(100, 5) * 0.02)
+    data = np.random.randn(100, 5) * 0.02
 
     # Introduce NaN values
-    returns.iloc[10:20, 2] = np.nan
-    returns.iloc[30:35, 4] = np.nan
+    data[10:20, 2] = np.nan
+    data[30:35, 4] = np.nan
 
+    returns = pl.DataFrame(data)
     return returns
 
 
@@ -405,7 +406,7 @@ class TestEdgeCases:
         from Risk.Covariance.[PLACEHOLDER_MODULE] import [PLACEHOLDER_CLASS]
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 1) * 0.02, columns=['A'])
+        returns = pl.DataFrame(np.random.randn(100, 1) * 0.02, schema=['A'])
 
         model = [PLACEHOLDER_CLASS]()
         cov_matrix = model.fit(returns)
@@ -424,7 +425,7 @@ class TestEdgeCases:
         from Risk.Covariance.[PLACEHOLDER_MODULE] import [PLACEHOLDER_CLASS]
 
         np.random.seed(42)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': np.random.randn(100) * 0.02,
             'B': np.random.randn(100) * 0.03,
         })
@@ -452,7 +453,7 @@ class TestEdgeCases:
         base = np.random.randn(100) * 0.02
 
         # Two perfectly correlated assets
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': base,
             'B': base * 2.0,  # Scaled version (perfect correlation)
         })
@@ -482,7 +483,7 @@ class TestEdgeCases:
         np.random.seed(42)
 
         # Independent assets (uncorrelated)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': np.random.randn(1000) * 0.02,
             'B': np.random.randn(1000) * 0.02,
             'C': np.random.randn(1000) * 0.02,
@@ -509,7 +510,7 @@ class TestEdgeCases:
         from Risk.Covariance.[PLACEHOLDER_MODULE] import [PLACEHOLDER_CLASS]
 
         # Constant returns (zero variance)
-        returns = pd.DataFrame({
+        returns = pl.DataFrame({
             'A': np.ones(100) * 0.001,
             'B': np.ones(100) * 0.002,
         })
@@ -558,7 +559,7 @@ class TestEdgeCases:
 
         np.random.seed(42)
         # Very small returns (stress test for numerical precision)
-        returns = pd.DataFrame(np.random.randn(100, 5) * 1e-10)
+        returns = pl.DataFrame(np.random.randn(100, 5) * 1e-10)
 
         model = [PLACEHOLDER_CLASS]()
         cov_matrix = model.fit(returns)
@@ -574,7 +575,7 @@ class TestEdgeCases:
 
         np.random.seed(42)
         # Very large returns
-        returns = pd.DataFrame(np.random.randn(100, 5) * 1e10)
+        returns = pl.DataFrame(np.random.randn(100, 5) * 1e10)
 
         model = [PLACEHOLDER_CLASS]()
         cov_matrix = model.fit(returns)
@@ -607,7 +608,8 @@ class TestComparisonWithReference:
         model_cov = model.fit(simple_returns)
 
         # Numpy baseline
-        numpy_cov = simple_returns.cov().values
+        numpy_cov = simple_returns.to_numpy()
+        numpy_cov = np.cov(numpy_cov, rowvar=False)
 
         # [PLACEHOLDER: Define expected relationship]
         # Example 1: Should match exactly
@@ -631,7 +633,7 @@ class TestComparisonWithReference:
         """
         # [PLACEHOLDER: Add test data from reference paper]
         # Example:
-        # returns = pd.DataFrame(REFERENCE_PAPER_DATA)
+        # returns = pl.DataFrame(REFERENCE_PAPER_DATA)
         # model = [PLACEHOLDER_CLASS]([PLACEHOLDER_PAPER_PARAMS])
         # cov_matrix = model.fit(returns)
         #
@@ -767,17 +769,16 @@ class TestOptimizerIntegration:
         model = [PLACEHOLDER_CLASS]()
         cov_matrix = model.fit(simple_returns)
 
-        # Convert to DataFrame for optimizer
-        cov_df = pd.DataFrame(
+        # Convert to DataFrame for optimizer (polars format)
+        cov_df = pl.DataFrame(
             cov_matrix,
-            index=simple_returns.columns,
-            columns=simple_returns.columns
+            schema=simple_returns.columns
         )
 
         # Create mock alphas (signals)
-        alphas = pd.Series(
-            [0.01, -0.005, 0.008, 0.002, -0.003],
-            index=simple_returns.columns
+        alphas = pl.Series(
+            "alphas",
+            [0.01, -0.005, 0.008, 0.002, -0.003]
         )
 
         # Optimize
@@ -837,14 +838,15 @@ class TestOptimizerIntegration:
         # Fit covariance
         model = [PLACEHOLDER_CLASS]()
         cov_matrix = model.fit(simple_returns)
-        cov_df = pd.DataFrame(
+
+        # Convert to polars for optimizer
+        cov_df = pl.DataFrame(
             cov_matrix,
-            index=simple_returns.columns,
-            columns=simple_returns.columns
+            schema=simple_returns.columns
         )
 
         # Create alphas
-        alphas = pd.Series([0.01, -0.005, 0.008, 0.002, -0.003], index=simple_returns.columns)
+        alphas = pl.Series("alphas", [0.01, -0.005, 0.008, 0.002, -0.003])
 
         # Optimize with different risk aversion
         optimizer_low = MeanVarianceOptimizer(risk_aversion=0.5, long_only=True)
@@ -947,7 +949,7 @@ class TestPerformanceRequirements:
 
         np.random.seed(42)
         # Realistic portfolio: 100 assets, 252 days (1 year)
-        returns = pd.DataFrame(np.random.randn(252, 100) * 0.01)
+        returns = pl.DataFrame(np.random.randn(252, 100) * 0.01)
 
         model = [PLACEHOLDER_CLASS]()
 
@@ -965,7 +967,7 @@ class TestPerformanceRequirements:
 
         np.random.seed(42)
         # Large portfolio: 500 assets, 252 days
-        returns = pd.DataFrame(np.random.randn(252, 500) * 0.01)
+        returns = pl.DataFrame(np.random.randn(252, 500) * 0.01)
 
         model = [PLACEHOLDER_CLASS]()
 
@@ -1000,7 +1002,7 @@ class TestPerformanceRequirements:
         import sys
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(252, 100) * 0.01)
+        returns = pl.DataFrame(np.random.randn(252, 100) * 0.01)
 
         model = [PLACEHOLDER_CLASS]()
         cov_matrix = model.fit(returns)
@@ -1033,7 +1035,7 @@ class TestOutOfSamplePerformance:
         np.random.seed(42)
 
         # In-sample: estimate covariance
-        returns_in = pd.DataFrame(np.random.randn(100, 10) * 0.02)
+        returns_in = pl.DataFrame(np.random.randn(100, 10) * 0.02)
 
         model = [PLACEHOLDER_CLASS]()
         sample = SampleCovariance()
@@ -1042,7 +1044,7 @@ class TestOutOfSamplePerformance:
         sample_cov = sample.fit(returns_in)
 
         # Out-of-sample: measure actual variance
-        returns_out = pd.DataFrame(np.random.randn(100, 10) * 0.02)
+        returns_out = pl.DataFrame(np.random.randn(100, 10) * 0.02)
 
         # Equal-weighted portfolio
         weights = np.ones(10) / 10
@@ -1052,7 +1054,7 @@ class TestOutOfSamplePerformance:
         sample_pred = weights @ sample_cov @ weights
 
         # Actual variance
-        portfolio_returns = returns_out @ weights
+        portfolio_returns = returns_out.to_numpy() @ weights
         actual_var = np.var(portfolio_returns, ddof=1)
 
         # Prediction errors

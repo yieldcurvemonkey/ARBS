@@ -43,7 +43,7 @@ From 2025 research: [Any relevant contemporary context or usage notes]
 # ==============================================================================
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from typing import Optional, Any
 
 # Import the base class
@@ -167,11 +167,11 @@ class [PLACEHOLDER_CLASSNAME](BaseCovarianceEstimator):
         [attribute_2]: [Description]
 
     Example:
-        >>> import pandas as pd
+        >>> import polars as pl
         >>> from Risk.Covariance.[YourEstimator] import [YourEstimator]
         >>>
         >>> # Create sample returns
-        >>> returns = pd.DataFrame(...)
+        >>> returns = pl.DataFrame(...)
         >>>
         >>> # Fit estimator
         >>> estimator = [YourEstimator]([parameters])
@@ -215,7 +215,7 @@ class [PLACEHOLDER_CLASSNAME](BaseCovarianceEstimator):
         # self.convergence_iterations: Optional[int] = None
         # self.fitted_params: Optional[dict] = None
 
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate covariance matrix using [ESTIMATOR_NAME].
 
@@ -263,7 +263,7 @@ class [PLACEHOLDER_CLASSNAME](BaseCovarianceEstimator):
         # STEP 3: Convert to numpy array
         # ======================================================================
         # Most external libraries expect numpy arrays, not DataFrames
-        returns_array = returns_clean.values  # Shape: (T, N)
+        returns_array = returns_clean.to_numpy()  # Shape: (T, N)
 
         # ======================================================================
         # STEP 4: Call external library
@@ -340,7 +340,7 @@ class [PLACEHOLDER_CLASSNAME](BaseCovarianceEstimator):
     # OPTIONAL: Helper methods for complex algorithms
     # ==========================================================================
 
-    def _compute_custom_covariance(self, returns: pd.DataFrame) -> np.ndarray:
+    def _compute_custom_covariance(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Custom covariance computation (if implementing algorithm yourself).
 
@@ -433,9 +433,9 @@ if __name__ == "__main__":
     T, N = 100, 5  # 100 time periods, 5 assets
 
     returns_array = np.random.randn(T, N) * 0.01  # 1% volatility
-    returns_df = pd.DataFrame(
+    returns_df = pl.DataFrame(
         returns_array,
-        columns=[f'Asset_{i}' for i in range(N)]
+        schema=[f'Asset_{i}' for i in range(N)]
     )
 
     # Initialize and fit estimator

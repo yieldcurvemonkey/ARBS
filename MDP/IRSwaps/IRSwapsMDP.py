@@ -2,7 +2,8 @@ import datetime
 import warnings
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
-import pandas as pd
+import pandas as pd  # Keep for interface compatibility - convert polars DataFrame to pandas Series where needed (RLIRSwapCurve, QuantLib)
+import polars as pl
 import pytz
 
 warnings.filterwarnings(
@@ -16,6 +17,24 @@ from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base._GenericPricable import _GenericPricable
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
+
+
+def _fixings_df_to_series(fixings_df: pl.DataFrame, curve_name: str) -> pd.Series:
+    """Convert polars DataFrame from _fetch_fixings to pandas Series for interface compatibility."""
+    pdf = fixings_df.to_pandas()
+    pdf[curve_name] = pd.to_datetime(pdf[curve_name])
+    pdf = pdf.set_index(curve_name)
+    return pdf["Fixing"]
+
+
+def _get_last_business_day_before(ref_date: datetime.date, calendar, days_back: int = 1) -> datetime.date:
+    """Get the last business day N days before ref_date using QuantLib calendar."""
+    import QuantLib as ql
+    from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
+
+    ql_date = datetime_to_ql_date(ref_date)
+    ql_target = calendar.advance(ql_date, -days_back, ql.Days, ql.Preceding)
+    return datetime.date(ql_target.year(), ql_target.month(), ql_target.dayOfMonth())
 
 
 class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
@@ -60,9 +79,10 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
         from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
 
-        assert not QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"].isHoliday(
+        curve_calendar = QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"]
+        assert not curve_calendar.isHoliday(
             datetime_to_ql_date(timestamp if type(timestamp) == datetime.datetime or type(timestamp) == datetime.date else datetime.date.today())
-        ), f"{timestamp} is a holiday in the {QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"]}!"
+        ), f"{timestamp} is a holiday in the {curve_calendar}!"
 
         if self.source.upper() in ["CME_NY_EOD_LIVE-QL_BASIC", "CME_NY_EOD_LIVE_QL_BASIC"]:
             import QuantLib as ql
@@ -96,9 +116,12 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             irswap_index: ql.SwapIndex = QUANTLIB_CURVE_DEFINITIONS[curve_name]["ReferenceRate"](ql_curve_handle)
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp
-            fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            fixings_series: pd.Series = fixings_series[fixings_series.index.date < ref]
-            fixings_dict = fixings_series.to_dict()
+            fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            fixings_df = fixings_df.filter(pl.col(curve_name).dt.date() < ref)
+            # Convert to dict for QuantLib: map date -> fixing
+            dates_list = fixings_df[curve_name].dt.date().to_list()
+            fixings_list = fixings_df["Fixing"].to_list()
+            fixings_dict = dict(zip(dates_list, fixings_list))
             for d, f in fixings_dict.items():
                 try:
                     irswap_index.addFixing(fixingDate=datetime_to_ql_date(d), fixing=f, forceOverwrite=True)
@@ -131,8 +154,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp
-            fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            fixings_series: pd.Series = fixings_series[fixings_series.index.date < ref]
+            fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            fixings_df = fixings_df.filter(pl.col(curve_name).dt.date() < ref)
+            fixings_series = _fixings_df_to_series(fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=fixings_series, meta_data={"timestamp": ts, "id": curve_id})
 
@@ -158,11 +182,12 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 rl_curve_handle = from_json(rl_json)
 
             ref = datetime.date.today() if timestamp == "live" else timestamp
-            fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            fixings_series = fixings_series[fixings_series.index.date < ref]
+            fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            fixings_df = fixings_df.filter(pl.col(curve_name).dt.date() < ref)
+            fixings_series = _fixings_df_to_series(fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             # FIXINGS_TOL = 1
-            # if not fixings_series.empty:
+            # if not fixings_df.is_empty():
             #     from pandas.tseries.holiday import USFederalHolidayCalendar
             #     from pandas.tseries.offsets import CustomBusinessDay
 
@@ -189,8 +214,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
             curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
             ts, rl_curve_handle = rl_usd_sofr_mt_curve(
                 curve_id=curve_id,
@@ -209,8 +235,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
             curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_MT_Q16"
             ts, rl_curve_handle = rl_usd_sofr_mt_curve(
                 curve_id=curve_id,
@@ -229,8 +256,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
             curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_MT_MISC"
 
             ts, rl_curve_handle = rl_usd_sofr_mt_curve(
@@ -250,8 +278,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_STIR_Q12x8"
             ts, rl_curve_handle = rl_usd_sofr_stir_curve(
@@ -271,8 +300,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_STIR_Q13x10"
             ts, rl_curve_handle = rl_usd_sofr_stir_curve(
@@ -293,22 +323,26 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
 
             # for when we need to build curve before 8am est sofr fixings
             FIXINGS_TOL = 1
-            if not sofr_fixings.empty:
-                from pandas.tseries.holiday import USFederalHolidayCalendar
-                from pandas.tseries.offsets import CustomBusinessDay
+            if not sofr_fixings_df.is_empty():
+                import QuantLib as ql
 
-                cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-                target_dt = (pd.Timestamp(ref) - (cbd * FIXINGS_TOL)).normalize()
-                idx_norm = sofr_fixings.index.normalize()
-                if target_dt not in idx_norm:
-                    last_val = sofr_fixings.iloc[-1]
-                    sofr_fixings.loc[target_dt] = float(last_val)
-                    sofr_fixings = sofr_fixings.sort_index()
+                calendar = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+                target_date = _get_last_business_day_before(ref, calendar, FIXINGS_TOL)
+                target_dt = datetime.datetime.combine(target_date, datetime.time())
+                # Check if target_dt exists in the data (comparing truncated dates)
+                dates_truncated = sofr_fixings_df[curve_name].dt.truncate("1d")
+                target_dt_truncated = pl.lit(target_dt).cast(pl.Datetime).dt.truncate("1d")
+                if not sofr_fixings_df.filter(dates_truncated == target_dt_truncated).height > 0:
+                    last_val = sofr_fixings_df["Fixing"][-1]
+                    new_row = pl.DataFrame({curve_name: [target_dt], "Fixing": [float(last_val)]})
+                    sofr_fixings_df = pl.concat([sofr_fixings_df, new_row]).sort(curve_name)
+
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_OIS_STIR_Q12x9"
             ts, rl_curve_handle = rl_usd_ois_stir_curve(
@@ -329,22 +363,26 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
 
             # for when we need to build curve before 8am est sofr fixings
             FIXINGS_TOL = 1
-            if not sofr_fixings.empty:
-                from pandas.tseries.holiday import USFederalHolidayCalendar
-                from pandas.tseries.offsets import CustomBusinessDay
+            if not sofr_fixings_df.is_empty():
+                import QuantLib as ql
 
-                cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-                target_dt = (pd.Timestamp(ref) - (cbd * FIXINGS_TOL)).normalize()
-                idx_norm = sofr_fixings.index.normalize()
-                if target_dt not in idx_norm:
-                    last_val = sofr_fixings.iloc[-1]
-                    sofr_fixings.loc[target_dt] = float(last_val)
-                    sofr_fixings = sofr_fixings.sort_index()
+                calendar = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+                target_date = _get_last_business_day_before(ref, calendar, FIXINGS_TOL)
+                target_dt = datetime.datetime.combine(target_date, datetime.time())
+                # Check if target_dt exists in the data (comparing truncated dates)
+                dates_truncated = sofr_fixings_df[curve_name].dt.truncate("1d")
+                target_dt_truncated = pl.lit(target_dt).cast(pl.Datetime).dt.truncate("1d")
+                if not sofr_fixings_df.filter(dates_truncated == target_dt_truncated).height > 0:
+                    last_val = sofr_fixings_df["Fixing"][-1]
+                    new_row = pl.DataFrame({curve_name: [target_dt], "Fixing": [float(last_val)]})
+                    sofr_fixings_df = pl.concat([sofr_fixings_df, new_row]).sort(curve_name)
+
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_OIS_STIR_Q12x12"
             ts, rl_curve_handle = rl_usd_ois_stir_curve(
@@ -364,22 +402,26 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
 
             # for when we need to build curve before 8am est sofr fixings
             FIXINGS_TOL = 1
-            if not sofr_fixings.empty:
-                from pandas.tseries.holiday import USFederalHolidayCalendar
-                from pandas.tseries.offsets import CustomBusinessDay
+            if not sofr_fixings_df.is_empty():
+                import QuantLib as ql
 
-                cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-                target_dt = (pd.Timestamp(ref) - (cbd * FIXINGS_TOL)).normalize()
-                idx_norm = sofr_fixings.index.normalize()
-                if target_dt not in idx_norm:
-                    last_val = sofr_fixings.iloc[-1]
-                    sofr_fixings.loc[target_dt] = float(last_val)
-                    sofr_fixings = sofr_fixings.sort_index()
+                calendar = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+                target_date = _get_last_business_day_before(ref, calendar, FIXINGS_TOL)
+                target_dt = datetime.datetime.combine(target_date, datetime.time())
+                # Check if target_dt exists in the data (comparing truncated dates)
+                dates_truncated = sofr_fixings_df[curve_name].dt.truncate("1d")
+                target_dt_truncated = pl.lit(target_dt).cast(pl.Datetime).dt.truncate("1d")
+                if not sofr_fixings_df.filter(dates_truncated == target_dt_truncated).height > 0:
+                    last_val = sofr_fixings_df["Fixing"][-1]
+                    new_row = pl.DataFrame({curve_name: [target_dt], "Fixing": [float(last_val)]})
+                    sofr_fixings_df = pl.concat([sofr_fixings_df, new_row]).sort(curve_name)
+
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_STIR_Q12x12"
             ts, rl_curve_handle = rl_usd_sofr_stir_curve(
@@ -399,22 +441,26 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
 
             # for when we need to build curve before 8am est sofr fixings
             FIXINGS_TOL = 1
-            if not sofr_fixings.empty:
-                from pandas.tseries.holiday import USFederalHolidayCalendar
-                from pandas.tseries.offsets import CustomBusinessDay
+            if not sofr_fixings_df.is_empty():
+                import QuantLib as ql
 
-                cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-                target_dt = (pd.Timestamp(ref) - (cbd * FIXINGS_TOL)).normalize()
-                idx_norm = sofr_fixings.index.normalize()
-                if target_dt not in idx_norm:
-                    last_val = sofr_fixings.iloc[-1]
-                    sofr_fixings.loc[target_dt] = float(last_val)
-                    sofr_fixings = sofr_fixings.sort_index()
+                calendar = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+                target_date = _get_last_business_day_before(ref, calendar, FIXINGS_TOL)
+                target_dt = datetime.datetime.combine(target_date, datetime.time())
+                # Check if target_dt exists in the data (comparing truncated dates)
+                dates_truncated = sofr_fixings_df[curve_name].dt.truncate("1d")
+                target_dt_truncated = pl.lit(target_dt).cast(pl.Datetime).dt.truncate("1d")
+                if not sofr_fixings_df.filter(dates_truncated == target_dt_truncated).height > 0:
+                    last_val = sofr_fixings_df["Fixing"][-1]
+                    new_row = pl.DataFrame({curve_name: [target_dt], "Fixing": [float(last_val)]})
+                    sofr_fixings_df = pl.concat([sofr_fixings_df, new_row]).sort(curve_name)
+
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_STIR_MISC"
             ts, rl_curve_handle = rl_usd_sofr_stir_curve(
@@ -434,22 +480,26 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
 
             # for when we need to build curve before 8am est sofr fixings
             FIXINGS_TOL = 1
-            if not sofr_fixings.empty:
-                from pandas.tseries.holiday import USFederalHolidayCalendar
-                from pandas.tseries.offsets import CustomBusinessDay
+            if not sofr_fixings_df.is_empty():
+                import QuantLib as ql
 
-                cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-                target_dt = (pd.Timestamp(ref) - (cbd * FIXINGS_TOL)).normalize()
-                idx_norm = sofr_fixings.index.normalize()
-                if target_dt not in idx_norm:
-                    last_val = sofr_fixings.iloc[-1]
-                    sofr_fixings.loc[target_dt] = float(last_val)
-                    sofr_fixings = sofr_fixings.sort_index()
+                calendar = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+                target_date = _get_last_business_day_before(ref, calendar, FIXINGS_TOL)
+                target_dt = datetime.datetime.combine(target_date, datetime.time())
+                # Check if target_dt exists in the data (comparing truncated dates)
+                dates_truncated = sofr_fixings_df[curve_name].dt.truncate("1d")
+                target_dt_truncated = pl.lit(target_dt).cast(pl.Datetime).dt.truncate("1d")
+                if not sofr_fixings_df.filter(dates_truncated == target_dt_truncated).height > 0:
+                    last_val = sofr_fixings_df["Fixing"][-1]
+                    new_row = pl.DataFrame({curve_name: [target_dt], "Fixing": [float(last_val)]})
+                    sofr_fixings_df = pl.concat([sofr_fixings_df, new_row]).sort(curve_name)
+
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_OIS_STIR_MISC"
             ts, rl_curve_handle = rl_usd_ois_stir_curve(
@@ -469,22 +519,26 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
 
             # for when we need to build curve before 8am est sofr fixings
             FIXINGS_TOL = 1
-            if not sofr_fixings.empty:
-                from pandas.tseries.holiday import USFederalHolidayCalendar
-                from pandas.tseries.offsets import CustomBusinessDay
+            if not sofr_fixings_df.is_empty():
+                import QuantLib as ql
 
-                cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-                target_dt = (pd.Timestamp(ref) - (cbd * FIXINGS_TOL)).normalize()
-                idx_norm = sofr_fixings.index.normalize()
-                if target_dt not in idx_norm:
-                    last_val = sofr_fixings.iloc[-1]
-                    sofr_fixings.loc[target_dt] = float(last_val)
-                    sofr_fixings = sofr_fixings.sort_index()
+                calendar = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+                target_date = _get_last_business_day_before(ref, calendar, FIXINGS_TOL)
+                target_dt = datetime.datetime.combine(target_date, datetime.time())
+                # Check if target_dt exists in the data (comparing truncated dates)
+                dates_truncated = sofr_fixings_df[curve_name].dt.truncate("1d")
+                target_dt_truncated = pl.lit(target_dt).cast(pl.Datetime).dt.truncate("1d")
+                if not sofr_fixings_df.filter(dates_truncated == target_dt_truncated).height > 0:
+                    last_val = sofr_fixings_df["Fixing"][-1]
+                    new_row = pl.DataFrame({curve_name: [target_dt], "Fixing": [float(last_val)]})
+                    sofr_fixings_df = pl.concat([sofr_fixings_df, new_row]).sort(curve_name)
+
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             curve_id = f"{timestamp}-SDR_INTRADAY-RL_USD_SOFR_MTV2_Q12x11"
             ts, rl_curve_handle = rl_usd_sofr_mt_curve(
@@ -508,8 +562,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             ref = datetime.date.today() if type(timestamp) == str else timestamp.date()
-            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < ref).with_columns(pl.col("Fixing") * 100)
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             curve_id = f"{timestamp}-SDR_3PM_EOD-RL_USD_SOFR_MTV2_Q12x11"
             ts, rl_curve_handle = rl_usd_sofr_mt_curve(
@@ -533,8 +588,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
             rl_curve_handle = from_json(rl_curve_serialized)
 
-            fixings = _fetch_fixings(as_of_date=timestamp, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            fixings: pd.Series = fixings[fixings.index.date < timestamp] * 100
+            fixings_df = _fetch_fixings(as_of_date=timestamp, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            fixings_df = fixings_df.filter(pl.col(curve_name).dt.date() < timestamp).with_columns(pl.col("Fixing") * 100)
+            fixings = _fixings_df_to_series(fixings_df, curve_name)  # Convert to pandas Series for interface compatibility
 
             return RLIRSwapCurve(
                 rl_curve_id=curve_name,
@@ -603,7 +659,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             for ref_date, ql_curve in built.items():
                 ts = ref_date
-                if type(ref_date) == datetime.datetime or type(ref_date) == pd.Timestamp:
+                if isinstance(ref_date, datetime.datetime):
                     ref_date = ref_date.date()
 
                 if ql_curve is None:
@@ -611,9 +667,13 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 ql_curve_handle = ql.YieldTermStructureHandle(ql_curve)
                 irswap_index = ql_curve_def["ReferenceRate"](ql_curve_handle)
 
-                fixings_series = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-                fixings_series = fixings_series[fixings_series.index.date < ref_date]
-                for d, f in fixings_series.to_dict().items():
+                fixings_df = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+                fixings_df = fixings_df.filter(pl.col(curve_name).dt.date() < ref_date)
+                # Convert to dict for QuantLib: map date -> fixing
+                dates_list = fixings_df[curve_name].dt.date().to_list()
+                fixings_list = fixings_df["Fixing"].to_list()
+                fixings_dict = dict(zip(dates_list, fixings_list))
+                for d, f in fixings_dict.items():
                     try:
                         irswap_index.addFixing(fixingDate=datetime_to_ql_date(d), fixing=f, forceOverwrite=True)
                     except Exception:
@@ -662,8 +722,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                     force_refresh=True if ignore_cache else False,
                     fetcher_kwargs={"show_tqdm": True},
                 )
-                fixings_series = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-                fixings_series = fixings_series[fixings_series.index.date < ref_date] * 100.0
+                fixings_df = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+                fixings_df = fixings_df.filter(pl.col(curve_name).dt.date() < ref_date).with_columns(pl.col("Fixing") * 100.0)
+                fixings_series = _fixings_df_to_series(fixings_df, curve_name)
 
                 out[ref_date] = RLIRSwapCurve(
                     rl_curve_id=curve_name,
@@ -674,8 +735,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             for ref_date, json_str in built_json.items():
                 ts = ref_date  # EOD (date) timestamp semantics for cached paths
-                fixings_series = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-                fixings_series = fixings_series[fixings_series.index.date < ref_date] * 100.0
+                fixings_df = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+                fixings_df = fixings_df.filter(pl.col(curve_name).dt.date() < ref_date).with_columns(pl.col("Fixing") * 100.0)
+                fixings_series = _fixings_df_to_series(fixings_df, curve_name)
 
                 out[ref_date] = RLIRSwapCurve(
                     rl_curve_id=curve_name,
@@ -711,14 +773,15 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             for ref_date, rl_curve in built.items():
                 ts = ref_date
-                if isinstance(ref_date, (datetime.datetime, pd.Timestamp)):
+                if isinstance(ref_date, datetime.datetime):
                     ref_date = ref_date.date()
 
                 if rl_curve is None:
                     continue
 
-                fixings_series = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-                fixings_series = fixings_series[fixings_series.index.date < ref_date] * 100.0
+                fixings_df = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+                fixings_df = fixings_df.filter(pl.col(curve_name).dt.date() < ref_date).with_columns(pl.col("Fixing") * 100.0)
+                fixings_series = _fixings_df_to_series(fixings_df, curve_name)
 
                 out[ref_date] = RLIRSwapCurve(
                     rl_curve_id=curve_name,
@@ -734,7 +797,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             max_ref_date = max(t.date() if isinstance(t, (datetime.date, datetime.datetime)) else datetime.date.today() for t in timestamps)
-            full_fixings_series = _fetch_fixings(as_of_date=max_ref_date, curve_name="USD-SOFR-1D", force_refresh=self.force_refresh_fixings).sort_index()
+            full_fixings_df = _fetch_fixings(as_of_date=max_ref_date, curve_name="USD-SOFR-1D", force_refresh=self.force_refresh_fixings).sort("USD-SOFR-1D")
+            full_fixings_series = _fixings_df_to_series(full_fixings_df, "USD-SOFR-1D")
 
             datetime_snaps = [t for t in timestamps if isinstance(t, datetime.datetime)]
             live_snap_requested = "live" in timestamps
@@ -755,7 +819,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 if rl_curve is None:
                     continue
                 ref_date = ts.date()
-                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date] * 100.0
+                fixings_for_curve_df = full_fixings_df.filter(pl.col("USD-SOFR-1D").dt.date() < ref_date).with_columns(pl.col("Fixing") * 100.0)
+                fixings_for_curve = _fixings_df_to_series(fixings_for_curve_df, "USD-SOFR-1D")
                 curve_id_for_snap = f"{ts}-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
                 out[ts] = RLIRSwapCurve(
                     rl_curve_id=curve_name,
@@ -766,7 +831,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             if live_snap_requested:
                 ref_date = datetime.date.today()
-                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date] * 100.0
+                fixings_for_curve_df = full_fixings_df.filter(pl.col("USD-SOFR-1D").dt.date() < ref_date).with_columns(pl.col("Fixing") * 100.0)
+                fixings_for_curve = _fixings_df_to_series(fixings_for_curve_df, "USD-SOFR-1D")
                 curve_id = "live-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
                 ts_out, rl_curve = rl_usd_sofr_mt_curve(
                     curve_id=curve_id,
@@ -790,22 +856,26 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             max_ref_date = max(t.date() if isinstance(t, (datetime.date, datetime.datetime)) else datetime.date.today() for t in timestamps)
 
-            sofr_fixings = _fetch_fixings(as_of_date=max_ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < max_ref_date] * 100
+            sofr_fixings_df = _fetch_fixings(as_of_date=max_ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort(curve_name)
+            sofr_fixings_df = sofr_fixings_df.filter(pl.col(curve_name).dt.date() < max_ref_date).with_columns(pl.col("Fixing") * 100)
 
             # for when we need to build curve before 8am est sofr fixings
             FIXINGS_TOL = 1
-            if not sofr_fixings.empty:
-                from pandas.tseries.holiday import USFederalHolidayCalendar
-                from pandas.tseries.offsets import CustomBusinessDay
+            if not sofr_fixings_df.is_empty():
+                import QuantLib as ql
 
-                cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-                target_dt = (pd.Timestamp(max_ref_date) - (cbd * FIXINGS_TOL)).normalize()
-                idx_norm = sofr_fixings.index.normalize()
-                if target_dt not in idx_norm:
-                    last_val = sofr_fixings.iloc[-1]
-                    sofr_fixings.loc[target_dt] = float(last_val)
-                    sofr_fixings = sofr_fixings.sort_index()
+                calendar = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+                target_date = _get_last_business_day_before(max_ref_date, calendar, FIXINGS_TOL)
+                target_dt = datetime.datetime.combine(target_date, datetime.time())
+                # Check if target_dt exists in the data (comparing truncated dates)
+                dates_truncated = sofr_fixings_df[curve_name].dt.truncate("1d")
+                target_dt_truncated = pl.lit(target_dt).cast(pl.Datetime).dt.truncate("1d")
+                if not sofr_fixings_df.filter(dates_truncated == target_dt_truncated).height > 0:
+                    last_val = sofr_fixings_df["Fixing"][-1]
+                    new_row = pl.DataFrame({curve_name: [target_dt], "Fixing": [float(last_val)]})
+                    sofr_fixings_df = pl.concat([sofr_fixings_df, new_row]).sort(curve_name)
+
+            sofr_fixings = _fixings_df_to_series(sofr_fixings_df, curve_name)
 
             datetime_snaps = [t for t in timestamps if isinstance(t, datetime.datetime)]
             live_snap_requested = "live" in timestamps

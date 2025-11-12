@@ -23,7 +23,7 @@ Following Grinold-Kahn framework principles:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date
 
 

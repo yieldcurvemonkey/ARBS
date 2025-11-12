@@ -8,22 +8,19 @@ from io import BytesIO
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
-import pandas as pd
+import polars as pl
 import pytz
 import QuantLib as ql
 import rateslib as rl
 import tqdm
 import tqdm.asyncio
 from dateutil import parser, tz
-from pandas.errors import DtypeWarning
-from pandas.tseries.holiday import USFederalHolidayCalendar
-from pandas.tseries.offsets import CustomBusinessDay
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import get_fomc_meetings_list, get_short_end_curve_tickers
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_pydate
 
-warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys
@@ -149,7 +146,7 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
         self.zodb_open_cache(cache_attr=self._cache_attr, path=cache_path)
 
     def _cache_key(self, date: Optional[datetime.date], workbook_type: str) -> str:
-        if hasattr(date, "date"):  # pandas.Timestamp compatibility
+        if hasattr(date, "date"):  # Handle datetime objects with date() method
             date = date.date()
         if "Intraday" in workbook_type and date is None:
             return f"{workbook_type}::intraday"
@@ -268,24 +265,21 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
             self._logger.error(e)
             return None, None
 
-    def _read_file(self, file_buffer: BytesIO, file_name: str) -> Tuple[Union[str, datetime.date], pd.DataFrame]:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DtypeWarning)
+    def _read_file(self, file_buffer: BytesIO, file_name: str) -> Tuple[Union[str, datetime.date], pl.DataFrame]:
+        if file_name.lower().endswith((".xlsx", ".xls")):
+            df = pl.read_excel(file_buffer)
+        elif file_name.lower().endswith(".csv"):
+            df = pl.read_csv(file_buffer)
+        else:
+            return None
 
-            if file_name.lower().endswith((".xlsx", ".xls")):
-                df = pd.read_excel(file_buffer)
-            elif file_name.lower().endswith(".csv"):
-                df = pd.read_csv(file_buffer, low_memory=False)
-            else:
-                return None
+        try:
+            datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d").date()
+            key = datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d").date()
+        except Exception:
+            key = file_name
 
-            try:
-                datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d").date()
-                key = datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d").date()
-            except Exception:
-                key = file_name
-
-            return key, df
+        return key, df
 
     async def _fetch_and_read_eris_ftp_file(
         self,
@@ -327,9 +321,10 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
         max_concurrent_tasks: Optional[int] = 64,
         max_keepalive_connections: Optional[int] = 5,
         verbose: Optional[bool] = False,
-    ) -> Dict[datetime.date, pd.DataFrame]:
-        bdates_idx = pd.date_range(start=start_date, end=end_date, freq=CustomBusinessDay(calendar=USFederalHolidayCalendar()))
-        dates: List[datetime.date] = [d.date() for d in bdates_idx]
+    ) -> Dict[datetime.date, pl.DataFrame]:
+        # Use QuantLib calendar for business days instead of pandas
+        us_calendar = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+        dates: List[datetime.date] = get_bdates_between(start_date, end_date, us_calendar)
 
         async def build_tasks(client: httpx.AsyncClient):
             tasks = []
@@ -366,7 +361,7 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
 
             # Stage cache writes then commit once
             staged: List[Tuple[str, Dict[str, Any]]] = []
-            out_pairs: List[Tuple[Union[str, datetime.date], pd.DataFrame]] = []
+            out_pairs: List[Tuple[Union[str, datetime.date], pl.DataFrame]] = []
             for item in results:
                 if item is None:
                     continue
@@ -417,14 +412,20 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
             return ql.Date(dt.day, ql_month, dt.year)
 
         def _df_to_curve(
-            discount_curve_df: pd.DataFrame,
+            discount_curve_df: pl.DataFrame,
             tday: datetime.date,
             intraday_ts: datetime.datetime,
             curve_id_prefix: str,
         ) -> rl.Curve:
-            discount_curve_df = discount_curve_df.copy()
-            discount_curve_df["Date"] = pd.to_datetime(discount_curve_df["Date"], errors="coerce")
-            discount_curve_df["DiscountFactor"] = pd.to_numeric(discount_curve_df["DiscountFactor"], errors="coerce")
+            discount_curve_df = discount_curve_df.clone()
+            # Parse Date column to datetime, handling errors
+            discount_curve_df = discount_curve_df.with_columns(
+                pl.col("Date").str.to_datetime(strict=False).alias("Date")
+            )
+            # Convert DiscountFactor to numeric, handling errors
+            discount_curve_df = discount_curve_df.with_columns(
+                pl.col("DiscountFactor").cast(pl.Float64, strict=False).alias("DiscountFactor")
+            )
 
             fomc_curve_nodes = get_fomc_meetings_list(as_of=tday, n_plus_years=1)
             sfr_tickers = get_short_end_curve_tickers(as_of=tday, first_n_sr1=0, first_n_sr3=12, use_globex=False)
@@ -436,7 +437,8 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
                     *[d for d in imm_nodes if (d.year, d.month) not in {(d.year, d.month) for d in fomc_curve_nodes}],
                 }
             )
-            st_nodes = pd.to_datetime(st_nodes).sort_values()
+            # Sort st_nodes as datetime objects
+            st_nodes = sorted([datetime.datetime.combine(d, datetime.time.min) if isinstance(d, datetime.date) else d for d in st_nodes])
 
             mt_nodes: List[datetime.datetime] = []
             start_dt = datetime.datetime(tday.year, tday.month, tday.day)
@@ -446,11 +448,11 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
 
             assert len(mt_nodes) >= 15, "medium term nodes not found! - curve health error!"
 
-            discount_curve_se_df = discount_curve_df[discount_curve_df["Date"].isin(st_nodes)]
-            discount_curve_mt_df = discount_curve_df[discount_curve_df["Date"].isin(mt_nodes)]
-            discount_curve_filtered_df = pd.concat([discount_curve_se_df, discount_curve_mt_df]).sort_values(by="Date")
+            discount_curve_se_df = discount_curve_df.filter(pl.col("Date").is_in(st_nodes))
+            discount_curve_mt_df = discount_curve_df.filter(pl.col("Date").is_in(mt_nodes))
+            discount_curve_filtered_df = pl.concat([discount_curve_se_df, discount_curve_mt_df]).sort("Date")
 
-            mt_dates = discount_curve_filtered_df[discount_curve_filtered_df["Date"] > max(st_nodes)]["Date"].to_list()
+            mt_dates = discount_curve_filtered_df.filter(pl.col("Date") > max(st_nodes))["Date"].to_list()
             last_mt = mt_dates[-1]
             tail = _ql_date_to_datetime(
                 ql.NullCalendar().advance(
@@ -476,7 +478,7 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
         if bdates:
             dates: List[datetime.date] = []
             for d in bdates:
-                if hasattr(d, "date"):  # pandas.Timestamp support
+                if hasattr(d, "date"):  # Handle datetime objects with date() method
                     d = d.date()
                 if d == "live":
                     d = datetime.date.today()
@@ -534,7 +536,7 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
                         intraday_ts = pytz.timezone("America/New_York").localize(datetime.datetime(tday.year, tday.month, tday.day, 15, 0))
                     else:
                         intraday_ts = datetime.datetime.fromisoformat(
-                            str(parser.parse(df["Time"].iloc[0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
+                            str(parser.parse(df["Time"][0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
                         ).astimezone(pytz.timezone("America/New_York"))
                         tday = intraday_ts.date()
 
@@ -591,7 +593,7 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
 
             if date is None:
                 intraday_ts = datetime.datetime.fromisoformat(
-                    str(parser.parse(discount_curve_df["Time"].iloc[0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
+                    str(parser.parse(discount_curve_df["Time"][0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
                 ).astimezone(pytz.timezone("America/New_York"))
                 curve = _df_to_curve(discount_curve_df, the_date, intraday_ts, curve_id_prefix=curve_id)
             else:

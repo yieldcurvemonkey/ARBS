@@ -11,7 +11,7 @@ Compares accuracy of IC estimates and resulting alpha predictions.
 """
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from datetime import date, timedelta
 
 from Signals.AlphaGenerator import AlphaGenerator
@@ -33,7 +33,7 @@ def generate_synthetic_data(n_periods=200, n_assets=5, true_ic=0.08):
     np.random.seed(42)
 
     # Generate dates
-    dates = pd.date_range('2020-01-01', periods=n_periods, freq='W')
+    dates = pl.date_range(start=date(2020, 1, 1), periods=n_periods, interval='1w', eager=True)
 
     # Generate random signals (z-scores)
     signals = np.random.randn(n_periods, n_assets)
@@ -48,8 +48,14 @@ def generate_synthetic_data(n_periods=200, n_assets=5, true_ic=0.08):
 
     # Create DataFrames
     asset_names = [f'ASSET_{i}' for i in range(n_assets)]
-    signals_df = pd.DataFrame(signals, index=dates, columns=asset_names)
-    returns_df = pd.DataFrame(returns, index=dates, columns=asset_names)
+    signals_df = pl.DataFrame({
+        'date': dates,
+        **{asset_names[i]: signals[:, i] for i in range(n_assets)}
+    })
+    returns_df = pl.DataFrame({
+        'date': dates,
+        **{asset_names[i]: returns[:, i] for i in range(n_assets)}
+    })
 
     return signals_df, returns_df
 
@@ -140,7 +146,7 @@ def validate_regime_adaptation():
     np.random.seed(42)
     n_periods = 200
     n_assets = 5
-    dates = pd.date_range('2020-01-01', periods=n_periods, freq='W')
+    dates = pl.date_range(start=date(2020, 1, 1), periods=n_periods, interval='1w', eager=True)
 
     # Early period: high IC
     signals_early = np.random.randn(100, n_assets)
@@ -159,8 +165,14 @@ def validate_regime_adaptation():
     returns = np.vstack([returns_early, returns_late]) * 0.02
 
     asset_names = [f'ASSET_{i}' for i in range(n_assets)]
-    signals_df = pd.DataFrame(signals, index=dates, columns=asset_names)
-    returns_df = pd.DataFrame(returns, index=dates, columns=asset_names)
+    signals_df = pl.DataFrame({
+        'date': dates,
+        **{asset_names[i]: signals[:, i] for i in range(n_assets)}
+    })
+    returns_df = pl.DataFrame({
+        'date': dates,
+        **{asset_names[i]: returns[:, i] for i in range(n_assets)}
+    })
 
     print("Data characteristics:")
     print(f"  Early period (0-100):  IC = {ic_early:.3f}")

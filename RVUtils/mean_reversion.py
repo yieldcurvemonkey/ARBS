@@ -4,10 +4,10 @@ from datetime import timedelta
 from typing import Optional
 
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
-def simulate_mean_reversion_ou(df: pd.DataFrame, steps: Optional[int] = 252) -> pd.DataFrame:
+def simulate_mean_reversion_ou(df: pl.DataFrame, steps: Optional[int] = 252) -> pl.DataFrame:
     def count_while(steps, monte_carlo_df, mean, simulations):
         results = []
         for j in range(simulations):
@@ -32,14 +32,15 @@ def simulate_mean_reversion_ou(df: pd.DataFrame, steps: Optional[int] = 252) -> 
         monte_carlo_df = ou_monte_carlo(start_value, mean, sigma, lambda_param, simulations, steps)
         return count_while(100, monte_carlo_df, mean, simulations)
 
-    def get_mean_reversion_params(df: pd.DataFrame):
+    def get_mean_reversion_params(df: pl.DataFrame):
         n = len(df) - 1
-        s = df.sum().iloc[0]
-        sx = s - df.iloc[-1, 0]
-        sy = s - df.iloc[0, 0]
-        sxy = (df.iloc[:, 0] * df.iloc[:, 0].shift(1)).sum()
-        syy = (df.iloc[1:, 0] ** 2).sum()
-        sxx = (df.iloc[:-1, 0] ** 2).sum()
+        col = df[:, 0]
+        s = col.sum()
+        sx = s - df[-1, 0]
+        sy = s - df[0, 0]
+        sxy = (col * col.shift(1)).sum()
+        syy = (df[1:, 0] ** 2).sum()
+        sxx = (df[:-1, 0] ** 2).sum()
 
         mean = (sy * sxx - sx * sxy) / (n * (sxx - sxy) - (sx**2 - sx * sy))
         lambda_param = -np.log((sxy - mean * sx - mean * sy + n * mean**2) / (sxx - 2 * mean * sx + n * mean**2))
@@ -49,9 +50,12 @@ def simulate_mean_reversion_ou(df: pd.DataFrame, steps: Optional[int] = 252) -> 
         return mean, lambda_param, sigma_squared
 
     mean, lambda_param, sigma_squared = get_mean_reversion_params(df)
-    start_value = df.iloc[-1, 0]
+    start_value = df[-1, 0]
 
-    date_array = [df.index[-1] + timedelta(days=t) for t in range(steps)]
+    # Note: Assumes df has a datetime column accessible via row indexing
+    # If df was migrated from pandas with datetime index, that index should now be a column
+    last_date = df.row(-1)[0] if df.shape[1] > 1 else df.row(-1)[0]
+    date_array = [last_date + timedelta(days=t) for t in range(steps)]
     expected_values = []
     upper_1_sigma, lower_1_sigma = [], []
     upper_2_sigma, lower_2_sigma = [], []
@@ -71,7 +75,7 @@ def simulate_mean_reversion_ou(df: pd.DataFrame, steps: Optional[int] = 252) -> 
         upper_2_sigma.append(value + 2 * standard_deviation)
         lower_2_sigma.append(value - 2 * standard_deviation)
 
-    forecast_df = pd.DataFrame(
+    forecast_df = pl.DataFrame(
         {
             "date": date_array,
             "mean_reversion": expected_values,
@@ -80,6 +84,6 @@ def simulate_mean_reversion_ou(df: pd.DataFrame, steps: Optional[int] = 252) -> 
             "+2_sigma": upper_2_sigma,
             "-2_sigma": lower_2_sigma,
         }
-    ).set_index("date")
+    )
 
     return forecast_df, get_first_passage_time(start_value, mean, sigma_squared, lambda_param)

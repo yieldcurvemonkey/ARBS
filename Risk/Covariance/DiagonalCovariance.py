@@ -25,7 +25,7 @@ Limitations:
 """
 
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
 
@@ -49,7 +49,7 @@ class DiagonalCovariance(BaseCovarianceEstimator):
         """
         super().__init__(handle_missing=handle_missing)
 
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate diagonal covariance matrix.
 
@@ -70,9 +70,8 @@ class DiagonalCovariance(BaseCovarianceEstimator):
         self.asset_names_ = list(returns_clean.columns)
 
         # Calculate variances (diagonal elements)
-        # polars .var() returns a DataFrame, convert back to pandas for consistency
-        var_result = returns_clean.to_pandas().var()
-        variances = var_result.to_numpy()
+        # .var() returns a single-row DataFrame with variance of each column
+        variances = returns_clean.var().to_numpy()[0]
 
         # Create diagonal matrix
         self.cov_matrix_ = np.diag(variances)

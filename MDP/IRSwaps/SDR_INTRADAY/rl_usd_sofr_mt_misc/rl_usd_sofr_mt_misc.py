@@ -1,6 +1,6 @@
 import datetime
-import pandas as pd
-from typing import Optional, Tuple
+import polars as pl
+from typing import Any, Optional, Tuple
 
 import rateslib as rl
 
@@ -19,7 +19,7 @@ _EXTRAPOLATION_YRS = 30
 def rl_usd_sofr_mt_curve(
     curve_id: str,
     snap: datetime.datetime,
-    sofr_fixings: pd.Series,
+    sofr_fixings: Any,  # pd.Series from caller - passed through to downstream functions
     cache: _RLCurveCache,
     force_refresh: Optional[bool] = False,
 ) -> Tuple[datetime.datetime, rl.Curve]:

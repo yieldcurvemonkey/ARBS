@@ -17,7 +17,7 @@ from Signals.AlphaGenerator import AlphaGenerator
 from Strategies.Factory import SignalFactory, AlphaFactory, CovarianceFactory
 from Strategies.Registry import StrategyRegistry
 from Strategies.Config.StrategyConfig import StrategyConfig
-import pandas as pd
+import polars as pl
 import numpy as np
 
 
@@ -44,7 +44,7 @@ class SMASignal(BaseSignal):
         self.slow_window = slow_window
         self.standardize = standardize
 
-    def calculate(self, prices: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.DataFrame:
+    def calculate(self, prices: pl.DataFrame, dates) -> pl.DataFrame:
         """
         Calculate SMA crossover signal.
 
@@ -52,8 +52,12 @@ class SMASignal(BaseSignal):
             DataFrame of signal values (1 for bullish, -1 for bearish, 0 for neutral)
         """
         # Calculate fast and slow moving averages
-        fast_ma = prices.rolling(window=self.fast_window).mean()
-        slow_ma = prices.rolling(window=self.slow_window).mean()
+        fast_ma = prices.select([
+            pl.col(c).rolling_mean(window_size=self.fast_window) for c in prices.columns
+        ])
+        slow_ma = prices.select([
+            pl.col(c).rolling_mean(window_size=self.slow_window) for c in prices.columns
+        ])
 
         # Signal: fast MA - slow MA (positive when fast > slow)
         signal = fast_ma - slow_ma
@@ -62,8 +66,8 @@ class SMASignal(BaseSignal):
             # Z-score normalize
             signal = (signal - signal.mean()) / (signal.std() + 1e-8)
 
-        # Reindex to requested dates and fill NaN with 0
-        signal = signal.reindex(dates).fillna(0)
+        # Fill NaN with 0
+        signal = signal.fill_null(0).fill_nan(0)
 
         return signal
 
@@ -113,7 +117,7 @@ class ConstantCorrelationCovariance:
         """
         self.target_correlation = target_correlation
 
-    def estimate(self, returns: pd.DataFrame) -> pd.DataFrame:
+    def estimate(self, returns: pl.DataFrame) -> pl.DataFrame:
         """
         Estimate covariance with constant correlation shrinkage.
 
@@ -123,11 +127,12 @@ class ConstantCorrelationCovariance:
         Returns:
             Covariance matrix DataFrame
         """
-        # Sample covariance
-        sample_cov = returns.cov()
+        # Sample covariance (convert to numpy for calculation)
+        returns_np = returns.to_numpy()
+        sample_cov = np.cov(returns_np, rowvar=False)
 
         # Create constant correlation target
-        n_assets = len(sample_cov)
+        n_assets = sample_cov.shape[0]
         target = np.ones((n_assets, n_assets)) * self.target_correlation
         np.fill_diagonal(target, 1.0)
 
@@ -139,7 +144,8 @@ class ConstantCorrelationCovariance:
         shrinkage_intensity = 0.3
         shrunk_cov = (1 - shrinkage_intensity) * sample_cov + shrinkage_intensity * target_cov
 
-        return pd.DataFrame(shrunk_cov, index=sample_cov.index, columns=sample_cov.columns)
+        # Convert back to polars DataFrame
+        return pl.DataFrame(shrunk_cov, schema=returns.columns)
 
 
 # =============================================================================

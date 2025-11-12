@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from datetime import date
 from typing import Dict, Optional, Any
-import pandas as pd
+import polars as pl
 import numpy as np
 
 from Signals.Base.BaseSignal import BaseSignal
@@ -79,7 +79,7 @@ class DecomposableCarrySignal(CarrySignal, DecomposableSignal):
 
     def _calculate_raw_signal(
         self,
-        inst_data: pd.DataFrame,
+        inst_data: pl.DataFrame,
         market_data: Optional[Any],
         as_of: date,
     ) -> float:
@@ -96,7 +96,7 @@ class DecomposableCarrySignal(CarrySignal, DecomposableSignal):
         # Use parent implementation
         return super()._calculate_raw_signal(inst_data, market_data, as_of)
 
-    def get_components(self) -> Dict[str, pd.DataFrame]:
+    def get_components(self) -> Dict[str, pl.DataFrame]:
         """
         Get carry signal components.
 
@@ -113,17 +113,20 @@ class DecomposableCarrySignal(CarrySignal, DecomposableSignal):
         as_of = self._last_as_of
 
         # Extract prices
-        front_price = inst_data.iloc[0]["price"]
-        next_price = inst_data.iloc[0].get("next_price", np.nan)
-        roll_date = inst_data.iloc[0].get("roll_date", None)
+        row = inst_data.row(0, named=True)
+        front_price = row["price"]
+        next_price = row.get("next_price", np.nan)
+        roll_date = row.get("roll_date", None)
 
-        if pd.isna(next_price) or roll_date is None:
+        # Check for missing data (polars equivalent of pd.isna)
+        is_missing_price = next_price is None or (isinstance(next_price, float) and np.isnan(next_price))
+        if is_missing_price or roll_date is None:
             # Return zero components if data missing
-            zero_df = pd.DataFrame(0.0, index=[as_of], columns=['signal'])
+            zero_df = pl.DataFrame({'signal': [0.0]})
             return {
-                'front_carry': zero_df.copy(),
-                'back_carry': zero_df.copy(),
-                'term_structure_slope': zero_df.copy()
+                'front_carry': zero_df.clone(),
+                'back_carry': zero_df.clone(),
+                'term_structure_slope': zero_df.clone()
             }
 
         # Calculate days to roll
@@ -152,9 +155,9 @@ class DecomposableCarrySignal(CarrySignal, DecomposableSignal):
 
         # Create DataFrames (shape: dates x assets)
         # For this example, single date and single asset
-        front_df = pd.DataFrame(front_carry_annualized, index=[as_of], columns=['signal'])
-        back_df = pd.DataFrame(back_carry_annualized, index=[as_of], columns=['signal'])
-        slope_df = pd.DataFrame(slope_annualized, index=[as_of], columns=['signal'])
+        front_df = pl.DataFrame({'signal': [front_carry_annualized]})
+        back_df = pl.DataFrame({'signal': [back_carry_annualized]})
+        slope_df = pl.DataFrame({'signal': [slope_annualized]})
 
         return {
             'front_carry': front_df,
@@ -178,7 +181,7 @@ def decompose_momentum_signal_guide():
 
     Implementation Pattern:
         class DecomposableMomentumSignal(MomentumSignal, DecomposableSignal):
-            def get_components(self) -> Dict[str, pd.DataFrame]:
+            def get_components(self) -> Dict[str, pl.DataFrame]:
                 # Calculate momentum at different lookback periods
                 short_term = self._calculate_momentum(lookback_days=21)
                 medium_term = self._calculate_momentum(lookback_days=63)
@@ -217,7 +220,7 @@ def decompose_mean_reversion_signal_guide():
 
     Implementation Pattern:
         class DecomposableMeanReversionSignal(MeanReversionSignal, DecomposableSignal):
-            def get_components(self) -> Dict[str, pd.DataFrame]:
+            def get_components(self) -> Dict[str, pl.DataFrame]:
                 # Calculate mean reversion components
                 price_deviation = self._calculate_price_deviation()
                 reversion_velocity = self._calculate_reversion_velocity()
@@ -249,9 +252,9 @@ def decompose_mean_reversion_signal_guide():
 # MAIN DEMONSTRATION
 # =============================================================================
 
-def create_sample_data() -> pd.DataFrame:
+def create_sample_data() -> pl.DataFrame:
     """Create sample futures data for demonstration."""
-    return pd.DataFrame({
+    return pl.DataFrame({
         'price': [94.50],
         'next_price': [94.45],
         'roll_date': [date(2025, 12, 15)]
@@ -315,12 +318,12 @@ def demonstrate_decomposition():
     print(f"  Total signal value: {signal_value:.2f} bps/year")
     print(f"\nComponent Breakdown:")
     for component_name, component_df in components.items():
-        component_value = component_df.iloc[0, 0]
+        component_value = component_df.item(0, 0)
         print(f"  {component_name}: {component_value:.2f} bps/year")
 
     # Get composite signal (weighted sum of components)
     composite = decomposable_carry.get_composite_signal()
-    composite_value = composite.iloc[0, 0]
+    composite_value = composite.item(0, 0)
 
     print(f"\nComposite Signal (equal weights):")
     print(f"  Value: {composite_value:.2f} bps/year")
@@ -363,7 +366,7 @@ def demonstrate_custom_weighting():
     print(f"  Signal name: {decomposable_carry.name}")
     print(f"\nComponent Values:")
     for component_name, component_df in components.items():
-        component_value = component_df.iloc[0, 0]
+        component_value = component_df.item(0, 0)
         weight = custom_weights[component_name]
         weighted_value = component_value * weight
         print(f"  {component_name}:")
@@ -373,7 +376,7 @@ def demonstrate_custom_weighting():
 
     # Get composite signal
     composite = decomposable_carry.get_composite_signal()
-    composite_value = composite.iloc[0, 0]
+    composite_value = composite.item(0, 0)
 
     print(f"\nComposite Signal (custom weights):")
     print(f"  Value: {composite_value:.2f} bps/year")
@@ -401,7 +404,7 @@ def demonstrate_dynamic_weighting():
     decomposable_carry._calculate_raw_signal(sample_data, None, date(2025, 11, 1))
 
     initial_composite = decomposable_carry.get_composite_signal()
-    initial_value = initial_composite.iloc[0, 0]
+    initial_value = initial_composite.item(0, 0)
 
     print(f"\nInitial Configuration:")
     print(f"  Weights: {decomposable_carry.component_weights}")
@@ -416,7 +419,7 @@ def demonstrate_dynamic_weighting():
     }
 
     new_composite = decomposable_carry.get_composite_signal()
-    new_value = new_composite.iloc[0, 0]
+    new_value = new_composite.item(0, 0)
 
     print(f"\nNew Configuration:")
     print(f"  Weights: {decomposable_carry.component_weights}")

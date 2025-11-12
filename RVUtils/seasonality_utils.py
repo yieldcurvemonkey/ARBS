@@ -1,12 +1,13 @@
 # ABOUTME: Seasonality analysis and decomposition utilities
 # ABOUTME: Tools for detecting and modeling seasonal patterns in time series
-import pandas as pd
+import polars as pl
+import pandas as pd  # Still needed for Timestamp compatibility with QuantLib
 import QuantLib as ql
 from typing import Optional
 
 
 def monthend_cumsum_seasonality(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     *,
     value_col: str | None = None,
     window: int = 5,
@@ -15,13 +16,16 @@ def monthend_cumsum_seasonality(
     relative_to: str = "month_end",
     metric: str = "abs",
     baseline_fallback: str = "first_valid",
-) -> pd.DataFrame:
+) -> pl.DataFrame:
+    # Convert polars to pandas for processing (needed for QuantLib integration and index-based operations)
+    df_pd = df.to_pandas()
+
     if value_col is None:
-        if df.shape[1] != 1:
+        if df_pd.shape[1] != 1:
             raise ValueError("Provide value_col when df has multiple columns.")
-        s = df.iloc[:, 0].copy()
+        s = df_pd.iloc[:, 0].copy()
     else:
-        s = df[value_col].copy()
+        s = df_pd[value_col].copy()
 
     idx = pd.to_datetime(s.index)
     if getattr(idx, "tz", None) is not None:
@@ -30,7 +34,7 @@ def monthend_cumsum_seasonality(
     s = s[~s.index.duplicated(keep="last")].sort_index()
 
     if s.empty:
-        return pd.DataFrame(index=range(-window, window + 1))
+        return pl.from_pandas(pd.DataFrame(index=range(-window, window + 1)))
 
     def _to_qld(d: pd.Timestamp) -> ql.Date:
         return ql.Date(d.day, int(d.month), d.year)
@@ -57,7 +61,7 @@ def monthend_cumsum_seasonality(
             m += 1
 
     if not anchors_ts:
-        return pd.DataFrame(index=range(-window, window + 1))
+        return pl.from_pandas(pd.DataFrame(index=range(-window, window + 1)))
 
     rel = list(range(-window, window + 1))
 
@@ -148,4 +152,4 @@ def monthend_cumsum_seasonality(
         ],
         axis=1,
     )
-    return out
+    return pl.from_pandas(out)

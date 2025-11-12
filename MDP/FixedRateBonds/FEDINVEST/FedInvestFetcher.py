@@ -6,13 +6,14 @@ from typing import Dict, List, Optional
 
 import threading
 import httpx
-import pandas as pd
+import pandas as pd  # Required for pd.read_html() - no polars equivalent for HTML parsing
+import polars as pl
 import tqdm
 import tqdm.asyncio
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 
-warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+warnings.filterwarnings("ignore", category=FutureWarning  # polars equivalent)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys
@@ -199,17 +200,21 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
                         response = await client.get(redirect_url, headers=headers)
 
                     response.raise_for_status()
+                    # pd.read_html required - no polars equivalent for HTML parsing
                     tables = pd.read_html(response.content, header=0)
-                    df = tables[0]
+                    # Convert to polars immediately after parsing
+                    df = pl.from_pandas(tables[0])
                     if cusips:
-                        missing_cusips = [cusip for cusip in cusips if cusip not in df["CUSIP"].values]
+                        cusip_set = set(df["CUSIP"].to_list())
+                        missing_cusips = [cusip for cusip in cusips if cusip not in cusip_set]
                         if missing_cusips:
                             self._logger.warning(f"UST Prices Warning - The following CUSIPs are not found in the DataFrame: {missing_cusips}")
-                    df = df[df["CUSIP"].isin(cusips)] if cusips else df
-                    df.columns = df.columns.str.lower()
+                    df = df.filter(pl.col("CUSIP").is_in(cusips)) if cusips else df
+                    # Lowercase all column names
+                    df = df.rename({col: col.lower() for col in df.columns})
                     # df = df.query("`security type` not in ['TIPS', 'MARKET BASED FRN']")
                     df = df.rename(
-                        columns={
+                        {
                             "buy": "offer_price",
                             "security type": "type",
                             "rate": "coupon",
@@ -217,11 +222,15 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
                             "end of day": "eod_price",
                         }
                     )
-                    df["coupon"] = df["coupon"].str.replace("%", "", regex=False).astype(float)
+                    df = df.with_columns(
+                        pl.col("coupon").str.replace("%", "").cast(pl.Float64)
+                    )
 
+                    # Convert back to pandas for compatibility with existing consumers
+                    result_df = df.select(cols_to_return).to_pandas()
                     if uid:
-                        return date, df[cols_to_return], uid
-                    return date, df[cols_to_return]
+                        return date, result_df, uid
+                    return date, result_df
 
                 except httpx.HTTPStatusError as e:
                     self._logger.error(f"UST Prices - Bad Status for {date}: {response.status_code}")
@@ -244,9 +253,11 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
             raise ValueError(f"UST Prices - Max retries exceeded for {date}")
         except Exception as e:
             self._logger.error(e)
+            # Return empty DataFrame with correct schema (pandas for compatibility)
+            empty_df = pl.DataFrame({col: [] for col in cols_to_return}).to_pandas()
             if uid:
-                return date, pd.DataFrame(columns=cols_to_return), uid
-            return date, pd.DataFrame(columns=cols_to_return)
+                return date, empty_df, uid
+            return date, empty_df
 
     async def _fetch_cusip_prices_fedinvest_with_semaphore(self, semaphore, *args, **kwargs):
         async with semaphore:
@@ -309,17 +320,18 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
             dates_to_fetch = [d for d in dates if d.date() not in cached]
 
         if not dates_to_fetch:
-            return {dt: cache[pd.Timestamp(dt.date())] for dt in dates}
+            return {dt: cache[dt.date()] for dt in dates}
 
         fetched_dict = dict(asyncio.run(run_fetch_all(dates=dates_to_fetch)))
         for dt, df in fetched_dict.items():
-            cache[pd.Timestamp(dt.date())] = df
+            cache[dt.date()] = df
         if fetched_dict:
             self.zodb_commit()
 
+        # Return pandas DataFrames for compatibility with existing consumers
         out: Dict[datetime, pd.DataFrame] = {}
         for dt in dates:
-            key = pd.Timestamp(dt.date())
+            key = dt.date()
             out[dt] = cache[key]
 
         self.close_zodb()

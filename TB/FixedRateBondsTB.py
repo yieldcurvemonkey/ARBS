@@ -10,7 +10,7 @@ from dataclasses import replace
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import QuantLib as ql
 from tqdm import tqdm
 
@@ -59,8 +59,8 @@ def _clone_risk_weights(rws):
         return None
     if isinstance(rws, np.ndarray):
         return rws.copy()
-    if isinstance(rws, (pd.Series, pd.DataFrame)):
-        return rws.copy(deep=True)
+    if isinstance(rws, (pl.Series, pl.DataFrame)):
+        return rws.clone()
     if isinstance(rws, (list, tuple, set, dict)):
         return copy.deepcopy(rws)
     if hasattr(rws, "copy") and callable(rws.copy):
@@ -180,12 +180,16 @@ class FixedRateBondsTB(ZODBCacheMixin):
 
     # >>> added
     @staticmethod
-    def _to_timestamp(d: DateLike) -> pd.Timestamp:
+    def _to_timestamp(d: DateLike) -> datetime.datetime:
+        """Convert DateLike to datetime.datetime for consistent handling"""
         if isinstance(d, datetime.datetime):
-            return pd.Timestamp(d)
+            return d
         if isinstance(d, datetime.date):
-            return pd.Timestamp(d)
-        return pd.Timestamp(d)
+            return datetime.datetime(d.year, d.month, d.day)
+        # Handle string dates
+        if isinstance(d, str):
+            return datetime.datetime.fromisoformat(d)
+        return datetime.datetime.fromtimestamp(d) if isinstance(d, (int, float)) else d
 
     def get_timeseries(
         self,
@@ -197,27 +201,32 @@ class FixedRateBondsTB(ZODBCacheMixin):
         ignore_cache: Optional[bool] = False,
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         if timestamps is not None and len(timestamps) > 0:
-            ref_points = sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
+            ref_points = sorted([dt if isinstance(dt, datetime.datetime) else datetime.datetime.combine(dt, datetime.time()) for dt in timestamps])
             is_intraday = True
         else:
             is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
             if is_intraday:
                 assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
+                # Convert pandas frequency to polars interval
                 eff_freq = freq or "1T"
-                rng = pd.date_range(start=start, end=end, freq=eff_freq, tz=start.tzinfo)
-                ref_points = rng.to_pydatetime().tolist()
+                interval = eff_freq.replace("T", "m").replace("H", "h").replace("D", "d")
+                rng = pl.datetime_range(start, end, interval=interval, time_zone=str(start.tzinfo), eager=True)
+                ref_points = [dt for dt in rng.to_list()]
             else:
                 if self._skip_non_business:
                     bd = []
-                    for d in pd.date_range(start=start, end=end, freq="D"):
-                        qld = datetime_to_ql_date(d.date())
+                    date_range_list = pl.date_range(start, end, interval="1d", eager=True).to_list()
+                    for d in date_range_list:
+                        date_val = d if isinstance(d, datetime.date) else d.date()
+                        qld = datetime_to_ql_date(date_val)
                         if self._cal.isBusinessDay(qld):
-                            bd.append(d.date())
+                            bd.append(date_val)
                     ref_points = bd
                 else:
-                    ref_points = pd.date_range(start, end, freq="D").date.tolist()
+                    date_range_list = pl.date_range(start, end, interval="1d", eager=True).to_list()
+                    ref_points = [d if isinstance(d, datetime.date) else d.date() for d in date_range_list]
 
         flat: List[FixedRateBondQuery] = _flatten_queries(queries)
 
@@ -242,27 +251,30 @@ class FixedRateBondsTB(ZODBCacheMixin):
                     )
                 except Exception as ex:
                     self._logger.debug(f"[TS cache] read failed for symbol={symbol}: {ex}")
-                    df_ts = pd.DataFrame()
+                    df_ts = pl.DataFrame()
 
-                if df_ts.empty:
+                if isinstance(df_ts, pl.DataFrame) and df_ts.is_empty():
                     continue
 
-                # Normalize index to naive timestamps/dates comparable to ref_points
-                # If '_index_ts' handling happened, read_timeseries already restored index.
-                if not isinstance(df_ts.index, (pd.DatetimeIndex, pd.Index)):
-                    df_ts.index = pd.to_datetime(df_ts.index)
-
                 # Allow either single 'value' column or multi-column; take the first numeric
-                col_candidates = [c for c in df_ts.columns if pd.api.types.is_numeric_dtype(df_ts[c])]
+                col_candidates = [c for c in df_ts.columns if df_ts[c].dtype in pl.NUMERIC_DTYPES]
                 if not col_candidates:
                     continue
                 c0 = col_candidates[0]
 
                 # For date-only schedules, cast to .date() for matching
+                # Assume first column is timestamp/date
+                ts_col = df_ts.columns[0]
                 if not is_intraday:
-                    present = {ts_ts.date(): float(v) for ts_ts, v in df_ts[c0].items()}
+                    present = {row[ts_col].date(): float(row[c0]) for row in df_ts.iter_rows(named=True)}
                 else:
-                    present = {pd.Timestamp(ts_ts): float(v) for ts_ts, v in df_ts[c0].items()}
+                    # Convert to datetime for intraday matching
+                    present = {}
+                    for row in df_ts.iter_rows(named=True):
+                        ts_val = row[ts_col]
+                        if not isinstance(ts_val, datetime.datetime):
+                            ts_val = datetime.datetime.fromisoformat(str(ts_val)) if isinstance(ts_val, str) else self._to_timestamp(ts_val)
+                        present[ts_val] = float(row[c0])
 
                 # Add rows for dates/timestamps we have, but skip "today" to avoid staleness
                 for rp in ref_points:
@@ -296,12 +308,9 @@ class FixedRateBondsTB(ZODBCacheMixin):
                 to_price_dates.append(d)
 
         if not to_price_dates and cached_rows:
-            df = pd.DataFrame(cached_rows, columns=[self._date_col, "_col", "_val"])
-            out = df.pivot_table(index=self._date_col, columns="_col", values="_val", aggfunc="last").sort_index()
-            out = out.reset_index()
-            out.index.name = None
-            out.columns.name = None
-            return out.set_index(self._date_col)
+            df = pl.DataFrame(cached_rows, schema=[self._date_col, "_col", "_val"])
+            out = df.pivot(values="_val", index=self._date_col, columns="_col", aggregate_function="last", sort_columns=True)
+            return out.sort(self._date_col)
 
         def _split_components(txt: str) -> List[str]:
             s = (txt or "").strip()
@@ -400,9 +409,9 @@ class FixedRateBondsTB(ZODBCacheMixin):
                 mapping[self._cache_key(d, q)] = row
 
         if self._use_ts_cache and new_rows_with_q:
-            ts_root = getattr(self, self._cache_attr)  # persistent mapping works as “root” for catalog
+            ts_root = getattr(self, self._cache_attr)  # persistent mapping works as "root" for catalog
             # Group rows by query (symbol)
-            grouped: Dict[str, List[Tuple[pd.Timestamp, float, str]]] = defaultdict(list)
+            grouped: Dict[str, List[Tuple[datetime.datetime, float, str]]] = defaultdict(list)
             for (dt_like, col, val), q, _d in new_rows_with_q:
                 sym = self._ts_symbol_for_query(q)
                 ts = self._to_timestamp(dt_like)
@@ -412,8 +421,10 @@ class FixedRateBondsTB(ZODBCacheMixin):
                 if not rows:
                     continue
                 rows_sorted = sorted(rows, key=lambda x: x[0])
-                ts_index = pd.DatetimeIndex([t for (t, _v, _c) in rows_sorted])
-                df_sym = pd.DataFrame({"value": [v for (_t, v, _c) in rows_sorted]}, index=ts_index)
+                df_sym = pl.DataFrame({
+                    "timestamp": [t for (t, _v, _c) in rows_sorted],
+                    "value": [v for (_t, v, _c) in rows_sorted]
+                })
                 # append_timeseries partitions by calendar date
                 try:
                     append_timeseries(
@@ -427,11 +438,8 @@ class FixedRateBondsTB(ZODBCacheMixin):
 
         all_rows = cached_rows + [r for (r, _q, _d) in new_rows_with_q]
         if not all_rows:
-            return pd.DataFrame(columns=[self._date_col])
+            return pl.DataFrame(schema={self._date_col: pl.Date})
 
-        df = pd.DataFrame(all_rows, columns=[self._date_col, "_col", "_val"])
-        out = df.pivot_table(index=self._date_col, columns="_col", values="_val", aggfunc="last").sort_index()
-        out = out.reset_index()
-        out.index.name = None
-        out.columns.name = None
-        return out.set_index(self._date_col)
+        df = pl.DataFrame(all_rows, schema=[self._date_col, "_col", "_val"])
+        out = df.pivot(values="_val", index=self._date_col, columns="_col", aggregate_function="last", sort_columns=True)
+        return out.sort(self._date_col)

@@ -33,7 +33,7 @@ Mathematics:
 """
 
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
 
@@ -62,7 +62,7 @@ class IdentityCovariance(BaseCovarianceEstimator):
         """
         super().__init__(handle_missing=handle_missing)
 
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate identity covariance matrix.
 
@@ -82,11 +82,11 @@ class IdentityCovariance(BaseCovarianceEstimator):
         self.asset_names_ = list(returns_clean.columns)
 
         # Calculate individual variances for each asset
-        # Convert to pandas since polars.var() returns DataFrame, not Series
-        individual_variances = returns_clean.to_pandas().var()
+        # polars.var() returns 1-row DataFrame with variance for each column
+        individual_variances = returns_clean.var()
 
         # Calculate mean variance across all assets
-        mean_variance = individual_variances.mean()
+        mean_variance = individual_variances.to_numpy().mean()
 
         # Number of assets
         n_assets = len(self.asset_names_)

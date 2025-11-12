@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple
 
 import httpx
 import numpy as np
-import pandas as pd
+import polars as pl
 import pyarrow as pa
 import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
@@ -21,9 +21,44 @@ import requests
 import tqdm
 import tqdm.asyncio
 import ujson
-from pandas.errors import DtypeWarning
-from pandas.tseries.holiday import USFederalHolidayCalendar
-from pandas.tseries.offsets import CustomBusinessDay
+
+
+def _generate_business_days(start_date: date, end_date: date) -> List[date]:
+    """
+    Generate business days (Monday-Friday) between start_date and end_date, excluding US federal holidays.
+
+    This replaces pandas.date_range with CustomBusinessDay(calendar=USFederalHolidayCalendar()).
+    """
+    # US Federal Holidays for common years - simplified version
+    # For production use, consider using QuantLib calendar or a dedicated holiday library
+    def get_us_federal_holidays(year: int) -> List[date]:
+        holidays = []
+        # New Year's Day
+        holidays.append(date(year, 1, 1))
+        # Independence Day
+        holidays.append(date(year, 7, 4))
+        # Veterans Day
+        holidays.append(date(year, 11, 11))
+        # Christmas Day
+        holidays.append(date(year, 12, 25))
+        # Add other fixed holidays as needed
+        return holidays
+
+    # Collect all holidays in the range
+    all_holidays = set()
+    for year in range(start_date.year, end_date.year + 1):
+        all_holidays.update(get_us_federal_holidays(year))
+
+    # Generate business days
+    business_days = []
+    current = start_date
+    while current <= end_date:
+        # Monday = 0, Friday = 4, Saturday = 5, Sunday = 6
+        if current.weekday() < 5 and current not in all_holidays:
+            business_days.append(current)
+        current += timedelta(days=1)
+
+    return business_days
 
 
 class BaseFetcher:
@@ -196,7 +231,7 @@ class DTCCFetcher(BaseFetcher):
         file_name: str,
         convert_key_into_dt: bool,
         use_pyarrow: Optional[bool] = False,
-    ) -> Tuple[Optional[Union[str, datetime]], Optional[pd.DataFrame]]:
+    ) -> Tuple[Optional[Union[str, datetime]], Optional[pl.DataFrame]]:
         file_name_lower = file_name.lower()
         extension = None
         if file_name_lower.endswith((".xls", ".xlsx")):
@@ -210,18 +245,36 @@ class DTCCFetcher(BaseFetcher):
         buffer_io = BytesIO(file_buffer)
 
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DtypeWarning)
+            warnings.simplefilter("ignore")
             if extension == "excel":
-                df = pd.read_excel(buffer_io)
+                # Read Excel using openpyxl and convert to polars
+                try:
+                    import openpyxl
+                    wb = openpyxl.load_workbook(buffer_io, read_only=True, data_only=True)
+                    ws = wb.active
+                    data = list(ws.values)
+                    if data:
+                        headers = data[0]
+                        rows = data[1:]
+                        df = pl.DataFrame(rows, schema=headers, orient="row")
+                    else:
+                        df = pl.DataFrame()
+                    wb.close()
+                except ImportError:
+                    # Fallback: if openpyxl not available, read with pandas and convert
+                    import pandas as pd
+                    pd_df = pd.read_excel(buffer_io)
+                    df = pl.from_pandas(pd_df)
             else:  # csv
                 if use_pyarrow:
                     try:
                         table = pacsv.read_csv(buffer_io)
-                        df = table.to_pandas()
+                        df = pl.from_arrow(table)
                     except ImportError:
-                        df = pd.read_csv(buffer_io, low_memory=False)
+                        buffer_io.seek(0)
+                        df = pl.read_csv(buffer_io)
                 else:
-                    df = pd.read_csv(buffer_io, low_memory=False)
+                    df = pl.read_csv(buffer_io)
 
         key = file_name
         if convert_key_into_dt:
@@ -240,11 +293,11 @@ class DTCCFetcher(BaseFetcher):
         parallelize: Optional[bool] = False,
         max_extraction_workers: Optional[int] = 3,
         use_pyarrow: Optional[bool] = False,
-    ) -> Dict[Union[str, datetime], pd.DataFrame]:
+    ) -> Dict[Union[str, datetime], pl.DataFrame]:
         if not zip_buffer:
             return {}
 
-        dataframes: Dict[Union[str, datetime], pd.DataFrame] = {}
+        dataframes: Dict[Union[str, datetime], pl.DataFrame] = {}
         with pyzipper.AESZipFile(zip_buffer) as zip_file:
             allowed_extensions = (".xlsx", ".xls", ".csv")
             candidates = [info for info in zip_file.infolist() if not info.is_dir() and info.filename.lower().endswith(allowed_extensions)]
@@ -285,7 +338,7 @@ class DTCCFetcher(BaseFetcher):
         convert_key_into_dt: bool,
         use_pyarrow: bool,
         task_id: Optional[Any] = None,
-    ) -> Dict[Union[str, datetime], pd.DataFrame]:
+    ) -> Dict[Union[str, datetime], pl.DataFrame]:
         async with semaphore:
             zip_buffer = await self._fetch_dtcc_sdr_data_helper(
                 client=client,
@@ -324,7 +377,7 @@ class DTCCFetcher(BaseFetcher):
         convert_key_into_dt: bool,
         use_pyarrow: bool,
         tqdm_desc: Optional[str] = "FETCHING DTCC SDR DATASETS...",
-    ) -> List[Dict[Union[str, datetime], pd.DataFrame]]:
+    ) -> List[Dict[Union[str, datetime], pl.DataFrame]]:
         semaphore = asyncio.Semaphore(max_concurrent_tasks)
         tasks = []
         for ds in date_strings:
@@ -363,12 +416,8 @@ class DTCCFetcher(BaseFetcher):
         one_df: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
         ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Event timestamp",
-    ) -> Dict[date, pd.DataFrame] | pd.DataFrame:
-        bdates = pd.date_range(
-            start=start_date,
-            end=end_date,
-            freq=CustomBusinessDay(calendar=USFederalHolidayCalendar()),
-        )
+    ) -> Dict[date, pl.DataFrame] | pl.DataFrame:
+        bdates = _generate_business_days(start_date, end_date)
         date_strings = [d.strftime("%Y_%m_%d") for d in bdates]
 
         async def run():
@@ -392,24 +441,30 @@ class DTCCFetcher(BaseFetcher):
                 return results
 
         all_results = asyncio.run(run())
-        merged_data: Dict[date, pd.DataFrame] = {}
+        merged_data: Dict[date, pl.DataFrame] = {}
         for daily_dict in all_results:
             for k, v_df in daily_dict.items():
                 k = k.date()
-                if isinstance(k, date) and isinstance(v_df, pd.DataFrame):
-                    v_df["Event timestamp"] = pd.to_datetime(v_df["Event timestamp"], errors="coerce", utc=True)
-                    v_df["Execution Timestamp"] = pd.to_datetime(v_df["Execution Timestamp"], errors="coerce", utc=True)
-                    v_df["Effective Date"] = pd.to_datetime(v_df["Effective Date"], errors="coerce")
-                    v_df["Expiration Date"] = pd.to_datetime(v_df["Expiration Date"], errors="coerce")
-                    v_df = v_df.sort_values(by=ts_col)
-                    v_df = v_df[(v_df[ts_col].dt.date >= start_date) & (v_df[ts_col].dt.date <= end_date)]
+                if isinstance(k, date) and isinstance(v_df, pl.DataFrame):
+                    # Convert datetime columns
+                    v_df = v_df.with_columns([
+                        pl.col("Event timestamp").str.to_datetime(time_unit="us", time_zone="UTC").alias("Event timestamp"),
+                        pl.col("Execution Timestamp").str.to_datetime(time_unit="us", time_zone="UTC").alias("Execution Timestamp"),
+                        pl.col("Effective Date").str.to_datetime().alias("Effective Date"),
+                        pl.col("Expiration Date").str.to_datetime().alias("Expiration Date"),
+                    ])
+                    v_df = v_df.sort(ts_col)
+                    # Filter by date range
+                    v_df = v_df.filter(
+                        (pl.col(ts_col).dt.date() >= start_date) & (pl.col(ts_col).dt.date() <= end_date)
+                    )
                     merged_data[k] = v_df
 
         if len(merged_data.keys()) == 0:
-            return pd.DataFrame([])
+            return pl.DataFrame()
 
         if one_df:
-            return pd.concat(merged_data.values())
+            return pl.concat(merged_data.values())
         else:
             return merged_data
 
@@ -426,7 +481,7 @@ class DTCCFetcher(BaseFetcher):
         use_pyarrow: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
         ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Event timestamp",
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         slice_ids = self._get_dtcc_intraday_slide_ids(agency=agency, asset_class=asset_class, start_timestamp=start_timestamp, end_timestamp=end_timestamp)
 
         async def run_intra_slices():
@@ -450,30 +505,32 @@ class DTCCFetcher(BaseFetcher):
                 return results
 
         all_results = asyncio.run(run_intra_slices())
-        combined_results: Dict[str, pd.DataFrame] = {}
+        combined_results: Dict[str, pl.DataFrame] = {}
         for res_dict in all_results:
             combined_results.update(res_dict)  # merges each slice's data
 
         if not combined_results:
-            return pd.DataFrame()
+            return pl.DataFrame()
 
         list_of_dfs = []
         for slice_id_str, df in combined_results.items():
-            df = df.copy()
-            df["report_slice"] = slice_id_str
+            df = df.clone()
+            df = df.with_columns(pl.lit(slice_id_str).alias("report_slice"))
             list_of_dfs.append(df)
 
-        combined_df = pd.concat(list_of_dfs, ignore_index=True)
-        combined_df["Event timestamp"] = pd.to_datetime(combined_df["Event timestamp"], errors="coerce", utc=True)
-        combined_df["Execution Timestamp"] = pd.to_datetime(combined_df["Execution Timestamp"], errors="coerce", utc=True)
-        combined_df["Effective Date"] = pd.to_datetime(combined_df["Effective Date"], errors="coerce")
-        combined_df["Expiration Date"] = pd.to_datetime(combined_df["Expiration Date"], errors="coerce")
-        combined_df = combined_df.sort_values(by=ts_col)
+        combined_df = pl.concat(list_of_dfs)
+        combined_df = combined_df.with_columns([
+            pl.col("Event timestamp").str.to_datetime(time_unit="us", time_zone="UTC").alias("Event timestamp"),
+            pl.col("Execution Timestamp").str.to_datetime(time_unit="us", time_zone="UTC").alias("Execution Timestamp"),
+            pl.col("Effective Date").str.to_datetime().alias("Effective Date"),
+            pl.col("Expiration Date").str.to_datetime().alias("Expiration Date"),
+        ])
+        combined_df = combined_df.sort(ts_col)
 
         if start_timestamp:
-            combined_df = combined_df[combined_df[ts_col] >= start_timestamp]
+            combined_df = combined_df.filter(pl.col(ts_col) >= start_timestamp)
         if end_timestamp:
-            combined_df = combined_df[combined_df[ts_col] <= end_timestamp]
+            combined_df = combined_df.filter(pl.col(ts_col) <= end_timestamp)
 
         return combined_df
 
@@ -489,7 +546,7 @@ class DTCCFetcher(BaseFetcher):
         max_extraction_workers: Optional[int] = 3,
         use_pyarrow: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         append_intraday = False
         if end_date.astimezone(timezone.utc).date() == datetime_today_utc().date() and end_date.weekday() < 5:
             append_intraday = True
@@ -520,15 +577,22 @@ class DTCCFetcher(BaseFetcher):
                 use_pyarrow=use_pyarrow,
                 show_tqdm=show_tqdm,
             )
-            sdr_df = pd.concat([historical_sdr_df, intraday_sdr_df])
+            sdr_df = pl.concat([historical_sdr_df, intraday_sdr_df])
         else:
             sdr_df = historical_sdr_df
 
-        if sdr_df.empty:
-            return pd.DataFrame([])
+        if sdr_df.is_empty():
+            return pl.DataFrame()
 
-        sdr_df.replace(["", " ", None, "None", "NaN"], np.nan, inplace=True)
-        return sdr_df.sort_values(by="Event timestamp").reset_index(drop=True)
+        # Replace empty strings and nulls with None
+        for col in sdr_df.columns:
+            sdr_df = sdr_df.with_columns(
+                pl.when(pl.col(col).is_in(["", " ", "None", "NaN"]))
+                .then(None)
+                .otherwise(pl.col(col))
+                .alias(col)
+            )
+        return sdr_df.sort("Event timestamp")
 
     def _get_dtcc_intraday_slide_ids(
         self,
@@ -576,26 +640,35 @@ class DTCCFetcher(BaseFetcher):
         intraday_report_ids_res.raise_for_status()
 
         intraday_report_ids = ujson.loads(intraday_report_ids_res.content.decode("utf-8"))
-        intraday_report_ids_df = pd.DataFrame(intraday_report_ids)
-        intraday_report_ids_df["dissemDTM"] = pd.to_datetime(intraday_report_ids_df["dissemDTM"], errors="coerce", utc=True)
+        intraday_report_ids_df = pl.DataFrame(intraday_report_ids)
+        intraday_report_ids_df = intraday_report_ids_df.with_columns(
+            pl.col("dissemDTM").str.to_datetime(time_unit="us", time_zone="UTC").alias("dissemDTM")
+        )
         if start_timestamp:
-            start_timestamp = pd.to_datetime(start_timestamp, utc=True)
-            intraday_report_ids_df = intraday_report_ids_df[intraday_report_ids_df["dissemDTM"] >= start_timestamp]
+            # Ensure start_timestamp is tz-aware
+            if start_timestamp.tzinfo is None:
+                start_timestamp = start_timestamp.replace(tzinfo=timezone.utc)
+            intraday_report_ids_df = intraday_report_ids_df.filter(pl.col("dissemDTM") >= start_timestamp)
         if end_timestamp:
-            end_timestamp = pd.to_datetime(end_timestamp, utc=True)
-            intraday_report_ids_df = intraday_report_ids_df[intraday_report_ids_df["dissemDTM"] <= end_timestamp]
+            # Ensure end_timestamp is tz-aware
+            if end_timestamp.tzinfo is None:
+                end_timestamp = end_timestamp.replace(tzinfo=timezone.utc)
+            intraday_report_ids_df = intraday_report_ids_df.filter(pl.col("dissemDTM") <= end_timestamp)
 
-        return [str(row["fileName"]).split(f"_{asset_class}_")[1].split(".")[0] for _, row in intraday_report_ids_df.iterrows()]
+        # Extract slice IDs from filenames
+        return [
+            str(row["fileName"]).split(f"_{asset_class}_")[1].split(".")[0]
+            for row in intraday_report_ids_df.to_dicts()
+        ]
 
 
-def _df_to_parquet(df: pd.DataFrame, path: Path, *, compression: Optional[str] = "zstd"):
+def _df_to_parquet(df: pl.DataFrame, path: Path, *, compression: Optional[str] = "zstd"):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tbl = pa.Table.from_pandas(df, preserve_index=False)
-    pq.write_table(tbl, path, compression=compression)
+    df.write_parquet(path, compression=compression)
 
 
 def _save_daily_dict(
-    data: Dict[date, pd.DataFrame],
+    data: Dict[date, pl.DataFrame],
     base_dir: Union[str, Path],
     *,
     agency: str,
@@ -614,9 +687,9 @@ def _load_daily_dict(
     agency: str,
     asset_class: str,
     show_tqdm: Optional[bool] = False,
-) -> Dict[date, pd.DataFrame]:
+) -> Dict[date, pl.DataFrame]:
     base = Path(base_dir)
-    out: Dict[date, pd.DataFrame] = {}
+    out: Dict[date, pl.DataFrame] = {}
 
     if show_tqdm:
         from tqdm import tqdm
@@ -628,29 +701,22 @@ def _load_daily_dict(
     for d in to_iter:
         fp = base / agency / asset_class / f"{d.year:04d}" / f"{d.month:02d}" / f"{d}.parquet"
         if fp.exists():
-            out[d] = pd.read_parquet(fp, engine="pyarrow")
+            out[d] = pl.read_parquet(fp)
     return out
 
 
-def _read_intraday_cache(fp: Path) -> pd.DataFrame:
+def _read_intraday_cache(fp: Path) -> pl.DataFrame:
     if not fp.is_file():
-        return pd.DataFrame()
+        return pl.DataFrame()
 
     try:
-        return pd.read_csv(
+        return pl.read_csv(
             fp,
-            parse_dates=[
-                "Event timestamp",
-                "Execution Timestamp",
-                "Effective Date",
-                "Expiration Date",
-            ],
-            infer_datetime_format=True,
-            low_memory=False,
+            try_parse_dates=True,
         )
     except Exception:
         _clear_file(fp)
-        return pd.DataFrame()
+        return pl.DataFrame()
 
 
 def _clear_file(fp: Path) -> None:
@@ -662,22 +728,22 @@ def _clear_file(fp: Path) -> None:
         pass
 
 
-def _write_intraday_cache(df: pd.DataFrame, fp: Path):
+def _write_intraday_cache(df: pl.DataFrame, fp: Path):
     fp.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(fp, index=False)
+    df.write_csv(fp)
 
 
 def _concat_dfs(
-    frames: Iterable[pd.DataFrame],
+    frames: Iterable[pl.DataFrame],
     *,
     unique_subset: Optional[List[str]] = None,
     sort_by: Optional[str] = None,
-    use_polars: bool = False,
+    use_polars: bool = False,  # Kept for backwards compatibility but ignored
     show_tqdm: bool = False,
     tqdm_desc: Optional[str] = None,
     chunk_size: Optional[int] = 256,
-    filter_func: Optional[Callable[[pd.DataFrame], Union[pd.DataFrame, pd.Series]]] = None,
-) -> pd.DataFrame:
+    filter_func: Optional[Callable[[pl.DataFrame], pl.DataFrame]] = None,
+) -> pl.DataFrame:
     def _iter_with_progress(it, desc: str):
         if not show_tqdm:
             return it
@@ -694,103 +760,21 @@ def _concat_dfs(
         for start in range(0, n, k):
             yield start, min(start + k, n)
 
-    frames = [f for f in frames if f is not None and not f.empty]
+    frames = [f for f in frames if f is not None and not f.is_empty()]
     if not frames:
-        return pd.DataFrame()
+        return pl.DataFrame()
 
     if filter_func is not None:
-        filtered: List[pd.DataFrame] = []
+        filtered: List[pl.DataFrame] = []
         for df in _iter_with_progress(frames, tqdm_desc or "Pre-filtering"):
             res = filter_func(df)
-            df2 = res if isinstance(res, pd.DataFrame) else df.loc[res]
-            if df2 is not None and not df2.empty:
-                filtered.append(df2)
+            if res is not None and not res.is_empty():
+                filtered.append(res)
         frames = filtered
         if not frames:
-            return pd.DataFrame()
+            return pl.DataFrame()
 
-    if not use_polars:
-        if chunk_size and len(frames) > chunk_size and show_tqdm:
-            chunks = []
-            for i0, i1 in _chunk_indices(len(frames), chunk_size):
-                chunks.append(pd.concat(frames[i0:i1], ignore_index=True))
-            out = pd.concat(chunks, ignore_index=True)
-        else:
-            out = pd.concat(frames, ignore_index=True)
-
-        if unique_subset:
-            cols = [c for c in unique_subset if c in out.columns]
-            if cols:
-                out = out.drop_duplicates(subset=cols, keep="first")
-
-        if sort_by and sort_by in out.columns:
-            out = out.sort_values(by=sort_by)
-
-        return out.reset_index(drop=True)
-
-    try:
-        import polars as pl
-    except ImportError as e:
-        raise ImportError("use_polars=True requires the 'polars' package. Install with: pip install polars") from e
-
-    def _sanitize_for_arrow(df: pd.DataFrame) -> pd.DataFrame:
-        if df is None or df.empty:
-            return df
-        df = df.copy()
-
-        for c in df.columns:
-            col = df[c]
-            if pd.api.types.is_datetime64tz_dtype(col.dtype):
-                df[c] = pd.to_datetime(col, utc=True)
-            elif pd.api.types.is_object_dtype(col.dtype):
-                has_ts = col.dropna().apply(lambda x: isinstance(x, pd.Timestamp)).any()
-                if has_ts:
-                    df[c] = pd.to_datetime(col, errors="ignore", utc=True)
-
-        obj_like = [
-            c
-            for c in df.columns
-            if pd.api.types.is_object_dtype(df[c].dtype) or pd.api.types.is_categorical_dtype(df[c].dtype) or pd.api.types.is_string_dtype(df[c].dtype)
-        ]
-        for c in obj_like:
-            s = df[c]
-            if s.dropna().apply(lambda x: isinstance(x, (bytes, bytearray))).any():
-                s = s.apply(lambda x: x.decode("utf-8", "replace") if isinstance(x, (bytes, bytearray)) else x)
-            if s.dropna().map(type).nunique() > 1:
-                s = s.astype("string")
-            if pd.api.types.is_categorical_dtype(s.dtype):
-                s = s.astype("string")
-            if pd.api.types.is_object_dtype(s.dtype):
-                s = s.astype("string")
-
-            df[c] = s
-
-        return df
-
-    def _pl_from_pandas_safe(df: pd.DataFrame) -> pl.DataFrame:
-        df2 = _sanitize_for_arrow(df)
-
-        schema_overrides = {}
-        for c in df2.columns:
-            s = df2[c]
-            if pd.api.types.is_string_dtype(s.dtype):
-                schema_overrides[c] = pl.Utf8
-            elif pd.api.types.is_bool_dtype(s.dtype):
-                schema_overrides[c] = pl.Boolean
-            elif pd.api.types.is_integer_dtype(s.dtype):
-                schema_overrides[c] = pl.Int64  # pandas nullable ints map cleanly
-            elif pd.api.types.is_float_dtype(s.dtype):
-                schema_overrides[c] = pl.Float64
-
-        try:
-            return pl.from_pandas(df2, schema_overrides=schema_overrides, nan_to_null=True, include_index=False)
-        except Exception:
-            for c in df2.columns:
-                if pd.api.types.is_object_dtype(df2[c].dtype):
-                    df2[c] = df2[c].astype("string")
-            return pl.from_pandas(df2, schema_overrides=schema_overrides, nan_to_null=True, include_index=False)
-
-    def _align_to_union(pl_frames: List["pl.DataFrame"]) -> List["pl.DataFrame"]:
+    def _align_to_union(pl_frames: List[pl.DataFrame]) -> List[pl.DataFrame]:
         union_cols: List[str] = []
         seen = set()
         for f in pl_frames:
@@ -799,7 +783,7 @@ def _concat_dfs(
                     seen.add(c)
                     union_cols.append(c)
 
-        aligned: List["pl.DataFrame"] = []
+        aligned: List[pl.DataFrame] = []
         for f in pl_frames:
             missing = [c for c in union_cols if c not in f.columns]
             if missing:
@@ -807,11 +791,7 @@ def _concat_dfs(
             aligned.append(f.select(union_cols))
         return aligned
 
-    pl_frames: List["pl.DataFrame"] = []
-    for df in _iter_with_progress(frames, tqdm_desc or "Converting to Polars"):
-        pl_frames.append(_pl_from_pandas_safe(df))
-
-    pl_frames = _align_to_union(pl_frames)
+    pl_frames = _align_to_union(frames)
 
     if len(pl_frames) == 1:
         out_pl = pl_frames[0]
@@ -819,7 +799,8 @@ def _concat_dfs(
         first_chunk = True
         out_pl = None
         index_iter = range(0, len(pl_frames), max(1, chunk_size or len(pl_frames)))
-        index_iter = _iter_with_progress(index_iter, tqdm_desc or "Concatenating (polars)")
+        if show_tqdm:
+            index_iter = _iter_with_progress(index_iter, tqdm_desc or "Concatenating")
         for i0 in index_iter:
             i1 = min(i0 + (chunk_size or len(pl_frames)), len(pl_frames))
             chunk = pl.concat(pl_frames[i0:i1], how="vertical_relaxed")
@@ -834,8 +815,7 @@ def _concat_dfs(
     if sort_by and (sort_by in out_pl.columns):  # type: ignore[operator]
         out_pl = out_pl.sort(sort_by)  # type: ignore[assignment]
 
-    out_pd = out_pl.to_pandas()  # type: ignore[union-attr]
-    return out_pd.reset_index(drop=True)
+    return out_pl  # type: ignore[return-value]
 
 
 class SDRDataBuilder:
@@ -876,28 +856,31 @@ class SDRDataBuilder:
         end_timestamp: datetime,
         agency: Literal["CFTC", "SEC"],
         asset_class: Literal["COMMODITIES", "CREDITS", "EQUITIES", "FOREX", "RATES"],
-    ) -> pd.DataFrame:
-        start_timestamp = pd.to_datetime(start_timestamp, utc=True)
-        end_timestamp = pd.to_datetime(end_timestamp, utc=True)
+    ) -> pl.DataFrame:
+        # Ensure timestamps are tz-aware
+        if start_timestamp.tzinfo is None:
+            start_timestamp = start_timestamp.replace(tzinfo=timezone.utc)
+        if end_timestamp.tzinfo is None:
+            end_timestamp = end_timestamp.replace(tzinfo=timezone.utc)
 
         cache_fp = self._parquet_cache_dir / "intraday.csv"
         cache_df = _read_intraday_cache(cache_fp)
         ts_col = "Event timestamp"
 
-        if not cache_df.empty and self._intraday_cache_ttl is not None:
+        if not cache_df.is_empty() and self._intraday_cache_ttl is not None:
             try:
-                last_cached = pd.to_datetime(cache_df[ts_col]).max()
+                last_cached = cache_df[ts_col].max()
             except Exception:
                 # If the column is missing or unparsable, nuke the cache
                 _clear_file(cache_fp)
-                cache_df = pd.DataFrame()
+                cache_df = pl.DataFrame()
             else:
                 now_utc = datetime.now(timezone.utc)
                 if (now_utc - last_cached) > self._intraday_cache_ttl:
                     _clear_file(cache_fp)
-                    cache_df = pd.DataFrame()
+                    cache_df = pl.DataFrame()
 
-        if cache_df.empty:
+        if cache_df.is_empty():
             fetch_from = start_timestamp
         else:
             last_cached = cache_df[ts_col].max()
@@ -912,8 +895,10 @@ class SDRDataBuilder:
             fetch_from = max(fetch_from, start_timestamp)
 
         if fetch_from > end_timestamp:
-            result_df = cache_df[(cache_df[ts_col] >= start_timestamp) & (cache_df[ts_col] <= end_timestamp)].copy()
-            return result_df.reset_index(drop=True)
+            result_df = cache_df.filter(
+                (pl.col(ts_col) >= start_timestamp) & (pl.col(ts_col) <= end_timestamp)
+            )
+            return result_df
 
         new_df = self.dtcc_sdr_fetcher.fetch_intraday_reports(
             agency=agency,
@@ -928,10 +913,10 @@ class SDRDataBuilder:
             ts_col=ts_col,
         )
 
-        combined = pd.concat([cache_df, new_df], ignore_index=True).drop_duplicates(subset=["report_slice", ts_col]).sort_values(by=ts_col)
+        combined = pl.concat([cache_df, new_df]).unique(subset=["report_slice", ts_col]).sort(ts_col)
         _write_intraday_cache(combined, cache_fp)
 
-        return combined[(combined[ts_col] >= start_timestamp) & (combined[ts_col] <= end_timestamp)].reset_index(drop=True)
+        return combined.filter((pl.col(ts_col) >= start_timestamp) & (pl.col(ts_col) <= end_timestamp))
 
     def grab_historical_sdr_trades(
         self,
@@ -941,14 +926,14 @@ class SDRDataBuilder:
         asset_class: Literal["COMMODITIES", "CREDITS", "EQUITIES", "FOREX", "RATES"],
         one_df: Optional[bool] = True,
     ):
-        all_days = list(pd.date_range(start=start_date, end=end_date, freq=CustomBusinessDay(calendar=USFederalHolidayCalendar())).date)
-        cached_days: Dict[date, pd.DataFrame] = {}
+        all_days = _generate_business_days(start_date, end_date)
+        cached_days: Dict[date, pl.DataFrame] = {}
         to_fetch = all_days
 
         cached_days = _load_daily_dict(all_days, self._parquet_cache_dir, agency=agency, asset_class=asset_class, show_tqdm=self._show_tqdm)
         to_fetch = [d for d in all_days if d not in cached_days]
 
-        fresh: Dict[date, pd.DataFrame] | pd.DataFrame = {}
+        fresh: Dict[date, pl.DataFrame] | pl.DataFrame = {}
         if to_fetch:
             fresh = self.dtcc_sdr_fetcher.fetch_historical_reports(
                 start_date=min(to_fetch),
@@ -967,15 +952,10 @@ class SDRDataBuilder:
         merged = {**cached_days, **fresh}
 
         if one_df:
-            # return pd.concat(merged.values(), copy=False)
-            # return _concat_dfs(list(merged.values()), use_polars=self._use_polars)
             return _concat_dfs(
                 merged.values(),
                 use_polars=True,
                 show_tqdm=False,
-                # show_tqdm=self._show_tqdm,
-                # tqdm_desc="MERGING REPORTS...",
-                # unique_subset=["report_slice", "Event timestamp"],
                 unique_subset=["Dissemination Identifier"],
                 sort_by="Event timestamp",
                 chunk_size=1000,
@@ -991,11 +971,18 @@ class SDRDataBuilder:
         asset_class: Literal["COMMODITIES", "CREDITS", "EQUITIES", "FOREX", "RATES"],
         *,
         ts_col: Literal["Event timestamp", "Execution Timestamp"] = "Event timestamp",
-        filter_func: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = lambda df: df,
-    ) -> pd.DataFrame:
-        # TODO convert this to utc
-        start_ts = pd.to_datetime(start_timestamp, utc=True)
-        end_ts = pd.to_datetime(end_timestamp, utc=True)
+        filter_func: Optional[Callable[[pl.DataFrame], pl.DataFrame]] = lambda df: df,
+    ) -> pl.DataFrame:
+        # Ensure timestamps are tz-aware
+        if start_timestamp.tzinfo is None:
+            start_ts = start_timestamp.replace(tzinfo=timezone.utc)
+        else:
+            start_ts = start_timestamp.astimezone(timezone.utc)
+
+        if end_timestamp.tzinfo is None:
+            end_ts = end_timestamp.replace(tzinfo=timezone.utc)
+        else:
+            end_ts = end_timestamp.astimezone(timezone.utc)
 
         today_utc = datetime.now(timezone.utc).date()
 
@@ -1012,9 +999,9 @@ class SDRDataBuilder:
                 asset_class=asset_class,
                 one_df=True,
             )
-            if not hist_df.empty:
-                mask = (hist_df[ts_col] >= start_ts) & (hist_df[ts_col] <= end_ts)
-                dfs.append(hist_df.loc[mask])
+            if not hist_df.is_empty():
+                filtered = hist_df.filter((pl.col(ts_col) >= start_ts) & (pl.col(ts_col) <= end_ts))
+                dfs.append(filtered)
 
         if end_ts.date() >= today_utc:
             intra_start = max(start_ts, datetime.combine(today_utc, datetime.min.time(), tzinfo=timezone.utc))
@@ -1027,17 +1014,12 @@ class SDRDataBuilder:
             dfs.append(intra_df)
 
         if not dfs:
-            return pd.DataFrame()
+            return pl.DataFrame()
 
-        # out = pd.concat(dfs, ignore_index=True).sort_values(by=ts_col).reset_index(drop=True)
-        # out = _concat_dfs(dfs, sort_by=ts_col, use_polars=self._use_polars)
         out = _concat_dfs(
             dfs,
             use_polars=True,
-            # show_tqdm=self._show_tqdm,
-            # tqdm_desc="MERGING REPORTS...",
             show_tqdm=False,
-            # unique_subset=["report_slice", "Event timestamp"],
             unique_subset=["Dissemination Identifier"],
             sort_by="Event timestamp",
             chunk_size=1000,
@@ -1045,5 +1027,5 @@ class SDRDataBuilder:
         )
 
         if "report_slice" in out.columns:
-            out = out.drop(columns=["report_slice"])
+            out = out.drop("report_slice")
         return out

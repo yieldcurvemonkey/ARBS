@@ -11,7 +11,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple, Union
 
-import pandas as pd
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import transaction
@@ -114,23 +114,31 @@ def _hash_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _df_min_max_ts(df: pd.DataFrame) -> Tuple[str, str]:
-    idx = df.index
-    if isinstance(idx, pd.DatetimeIndex):
-        return (idx.min().isoformat(), idx.max().isoformat())
-    # fallback to a column called 'timestamp' if present
-    if "timestamp" in df.columns and pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
-        return (df["timestamp"].min().isoformat(), df["timestamp"].max().isoformat())
-    # not datetime: store row indices as strings
-    return (str(df.index.min()), str(df.index.max()))
+def _df_min_max_ts(df: pl.DataFrame) -> Tuple[str, str]:
+    # Check for _index_ts column (from pandas-indexed data)
+    if "_index_ts" in df.columns and df.schema["_index_ts"] in [pl.Datetime, pl.Date]:
+        min_val = df["_index_ts"].min()
+        max_val = df["_index_ts"].max()
+        return (min_val.isoformat(), max_val.isoformat())
+    # Check for timestamp column
+    if "timestamp" in df.columns and df.schema["timestamp"] in [pl.Datetime, pl.Date]:
+        min_val = df["timestamp"].min()
+        max_val = df["timestamp"].max()
+        return (min_val.isoformat(), max_val.isoformat())
+    # Check for any datetime column
+    for col_name in df.columns:
+        if df.schema[col_name] in [pl.Datetime, pl.Date]:
+            min_val = df[col_name].min()
+            max_val = df[col_name].max()
+            return (min_val.isoformat(), max_val.isoformat())
+    # No datetime column: use row indices as strings
+    return ("0", str(len(df) - 1))
 
 
-def _df_to_table(df: pd.DataFrame) -> pa.Table:
-    if isinstance(df.index, pd.DatetimeIndex):
-        df = df.copy()
-        df.insert(0, "_index_ts", df.index.tz_localize(None) if df.index.tz else df.index)
-        df.reset_index(drop=True, inplace=True)
-    return pa.Table.from_pandas(df, preserve_index=False)
+def _df_to_table(df: pl.DataFrame) -> pa.Table:
+    # Polars doesn't have an index, data is already in columns
+    # Convert directly to Arrow table
+    return df.to_arrow()
 
 
 def _write_parquet_bytes(table: pa.Table, compression: str = DEFAULT_COMPRESSION, row_group_size: int = DEFAULT_ROW_GROUP_SIZE) -> bytes:
@@ -161,9 +169,9 @@ class WriteOptions:
 def append_timeseries(
     root,
     symbol: str,
-    df: pd.DataFrame,
+    df: Union[pl.DataFrame, "pd.DataFrame"],  # Accept both pandas and polars
     *,
-    as_of_date: Optional[date] = None,  # if None, will use df index/column
+    as_of_date: Optional[date] = None,  # if None, will use df datetime column
     opts: Optional[WriteOptions] = None,
 ) -> List[FileMetaDict]:
     """
@@ -175,6 +183,19 @@ def append_timeseries(
     if df is None or len(df) == 0:
         return []
 
+    # Convert pandas to polars if needed
+    is_pandas = hasattr(df, 'index') and not isinstance(df, pl.DataFrame)
+    if is_pandas:
+        import pandas as pd
+        # If pandas DataFrame has DatetimeIndex, convert it to a column
+        if isinstance(df.index, pd.DatetimeIndex):
+            df_copy = df.copy()
+            df_copy.insert(0, "_index_ts", df_copy.index.tz_localize(None) if df_copy.index.tz else df_copy.index)
+            df_copy.reset_index(drop=True, inplace=True)
+            df = pl.from_pandas(df_copy)
+        else:
+            df = pl.from_pandas(df)
+
     opts = opts or WriteOptions(base_dir="./data/ts")
     base_dir = Path(opts.base_dir)
     symbol = _sanitize_symbol(symbol)
@@ -182,14 +203,31 @@ def append_timeseries(
     s_idx = _symbol_index(cat, symbol)
 
     # Partition df by date
-    if isinstance(df.index, pd.DatetimeIndex):
-        sdf = df.copy()
-        sdf.index = sdf.index.tz_convert(None) if sdf.index.tz else sdf.index
-        groups: Dict[date, pd.DataFrame] = {pd.Timestamp(d).date(): g for d, g in sdf.groupby(sdf.index.date)}
+    # Find datetime column
+    datetime_col = None
+    for col_name in df.columns:
+        if df.schema[col_name] in [pl.Datetime, pl.Date]:
+            datetime_col = col_name
+            break
+
+    if datetime_col is not None:
+        # Group by date extracted from datetime column
+        df_with_date = df.with_columns(pl.col(datetime_col).cast(pl.Date).alias("_partition_date"))
+        groups: Dict[date, pl.DataFrame] = {}
+        for group_df in df_with_date.partition_by("_partition_date", as_dict=False):
+            partition_date = group_df["_partition_date"][0]
+            # Convert polars date to Python date
+            if isinstance(partition_date, date):
+                py_date = partition_date
+            else:
+                py_date = partition_date.date() if hasattr(partition_date, 'date') else date.fromisoformat(str(partition_date))
+            # Remove the temporary partition column
+            clean_df = group_df.drop("_partition_date")
+            groups[py_date] = clean_df
     else:
-        # No datetime index; use provided as_of_date
+        # No datetime column; use provided as_of_date
         if as_of_date is None:
-            raise ValueError("DataFrame has no DatetimeIndex; provide as_of_date.")
+            raise ValueError("DataFrame has no datetime column; provide as_of_date.")
         groups = {as_of_date: df}
 
     metas: List[FileMetaDict] = []
@@ -221,7 +259,7 @@ def append_timeseries(
         else:
             os.replace(tmp_path, final_path)
 
-        rows = g.shape[0]
+        rows = len(g)
         size = final_path.stat().st_size
         ts_min, ts_max = _df_min_max_ts(g)
         meta: FileMetaDict = {
@@ -259,9 +297,14 @@ def read_timeseries(
     end: Optional[Union[date, datetime]] = None,
     columns: Optional[List[str]] = None,
     base_dir: Union[str, Path] = "./data/ts",
-) -> pd.DataFrame:
+    return_pandas: bool = True,  # For backward compatibility with existing code
+) -> Union[pl.DataFrame, "pd.DataFrame"]:
     """
     Read back timeseries for symbol over [start, end], concatenating Parquet partitions.
+
+    Args:
+        return_pandas: If True (default), returns pandas DataFrame for backward compatibility.
+                      If False, returns polars DataFrame.
     """
     cat = _ensure_catalog(root)
     symbol = _sanitize_symbol(symbol)
@@ -273,10 +316,13 @@ def read_timeseries(
         s = _to_datestr(start) if start else min(s_idx.by_date.keys(), default=None)
         e = _to_datestr(end) if end else max(s_idx.by_date.keys(), default=None)
         if s is None or e is None:
-            return pd.DataFrame()
+            if return_pandas:
+                import pandas as pd
+                return pd.DataFrame()
+            return pl.DataFrame()
         dates = [d for d in s_idx.by_date.keys() if s <= d <= e]
 
-    parts: List[pd.DataFrame] = []
+    parts: List[pl.DataFrame] = []
     for d in dates:
         date_map = s_idx.by_date.get(d)
         if not date_map:
@@ -287,21 +333,52 @@ def read_timeseries(
                 # stale entry – skip; optional: schedule cleanup
                 continue
             tbl = pq.read_table(p, columns=columns)
-            df = tbl.to_pandas()
-            if "_index_ts" in df.columns:
-                df.set_index(pd.to_datetime(df["_index_ts"], utc=False), inplace=True)
-                df.drop(columns=["_index_ts"], inplace=True)
+            df = pl.from_arrow(tbl)
+            # Note: _index_ts column is kept as a regular column in polars
+            # (polars doesn't have an index concept)
             parts.append(df)
 
     if not parts:
-        return pd.DataFrame()
-    out = pd.concat(parts, axis=0)
+        if return_pandas:
+            import pandas as pd
+            return pd.DataFrame()
+        return pl.DataFrame()
+    out = pl.concat(parts)
+
     # If user provided start/end as datetimes, trim exactly
-    if isinstance(start, datetime):
-        out = out[out.index >= pd.Timestamp(start)]
-    if isinstance(end, datetime):
-        out = out[out.index <= pd.Timestamp(end)]
-    return out.sort_index()
+    # Find the datetime column to filter on
+    datetime_col = None
+    if "_index_ts" in out.columns:
+        datetime_col = "_index_ts"
+    elif "timestamp" in out.columns:
+        datetime_col = "timestamp"
+    else:
+        # Find first datetime column
+        for col_name in out.columns:
+            if out.schema[col_name] in [pl.Datetime, pl.Date]:
+                datetime_col = col_name
+                break
+
+    if datetime_col and isinstance(start, datetime):
+        out = out.filter(pl.col(datetime_col) >= start)
+    if datetime_col and isinstance(end, datetime):
+        out = out.filter(pl.col(datetime_col) <= end)
+
+    # Sort by datetime column if it exists
+    if datetime_col:
+        out = out.sort(datetime_col)
+
+    # Convert back to pandas if requested (for backward compatibility)
+    if return_pandas:
+        import pandas as pd
+        pandas_df = out.to_pandas()
+        # If _index_ts column exists, set it as the index (restoring pandas convention)
+        if "_index_ts" in pandas_df.columns:
+            pandas_df.set_index(pd.to_datetime(pandas_df["_index_ts"], utc=False), inplace=True)
+            pandas_df.drop(columns=["_index_ts"], inplace=True)
+        return pandas_df
+
+    return out
 
 
 def register_negative_cache(

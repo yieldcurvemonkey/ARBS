@@ -46,9 +46,8 @@ Example:
 """
 
 from datetime import date
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any
 import polars as pl
-import pandas as pd
 import numpy as np
 
 from Asset.Base import Asset, AssetTransition
@@ -184,7 +183,7 @@ class GrinoldKahnPortfolio(Asset):
     def generate_weights(
         self,
         instruments: List[str],
-        returns_history: Union[pl.DataFrame, pd.DataFrame],
+        returns_history: pl.DataFrame,
         market_data: Optional[Any],
         as_of: date
     ) -> Dict[str, float]:
@@ -235,8 +234,8 @@ class GrinoldKahnPortfolio(Asset):
         cov_matrix = self.risk_model.fit(returns_history)
 
         # Step 4: Optimize portfolio
-        # Convert column_order to list (polars returns list, pandas returns Index)
-        column_order = list(returns_history.columns) if not isinstance(returns_history.columns, list) else returns_history.columns
+        # Get column names (polars returns list)
+        column_order = returns_history.columns
         weights = self._optimize_portfolio(alphas, cov_matrix, column_order)
 
         # Update state

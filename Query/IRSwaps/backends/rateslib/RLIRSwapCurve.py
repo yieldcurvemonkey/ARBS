@@ -1,7 +1,7 @@
 # ABOUTME: Concrete implementation of IR swap curve interface using rateslib library
 # ABOUTME: Provides curve building, pricing, and date handling backed by rateslib functionality
 import datetime
-import pandas as pd
+import polars as pl
 from dataclasses import dataclass
 from typing import Union, Any, Optional
 
@@ -18,7 +18,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
     # _rl_curve_solver_handle: rl.Solver
     _meta_data: Any
 
-    def __init__(self, rl_curve_id: str, rl_curve_handle: rl.Curve, fixings: pd.Series, meta_data: Any):
+    def __init__(self, rl_curve_id: str, rl_curve_handle: rl.Curve, fixings: pl.Series, meta_data: Any):
         self._rl_curve_id = rl_curve_id
         self._rl_curve_handle = rl_curve_handle
         # self._rl_curve_solver_handle = rl_curve_solver_handle
@@ -45,7 +45,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
     def handle(self) -> rl.Curve:
         return self._rl_curve_handle
 
-    def index(self) -> pd.Series:
+    def index(self) -> pl.Series:
         return self._fixings
 
     def meta(self):
@@ -95,8 +95,9 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         raise NotImplementedError("rateslib not implemented")
 
     def carry_bps_running(self, irswap: rl.IRS, horizon: str):
+        settlement_days = RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]
         if self.effective_date(irswap=irswap) > self.calendar_advance(
-            self.reference_date(), f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]}b"
+            self.reference_date(), f"{settlement_days}b"
         ):
             return 0
         fwd_irs = self.build_irswap(fwd=horizon, maturity_date=self.maturity_date(irswap))
@@ -111,13 +112,14 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         raise NotImplementedError("rateslib not implemented")
     
     def nodes(self):
-        rl_nodes: dict[pd.Timestamp, float] = self.handle().nodes._nodes
+        rl_nodes = self.handle().nodes._nodes
         return {ts.date(): df for ts, df in rl_nodes.items()}
 
     def build_irswap(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None):
         if fwd:
             if fwd == "0D":
-                rl_effective = self.calendar_advance(self.reference_date(), f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]}b")
+                settlement_days = RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]
+                rl_effective = self.calendar_advance(self.reference_date(), f"{settlement_days}b")
             else:
                 rl_effective = self.calendar_advance(self.reference_date(), fwd)
         else:

@@ -21,7 +21,7 @@ Use Cases:
 
 import pytest
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
 class TestDiagonalCovarianceBasics:
@@ -49,9 +49,9 @@ class TestDiagonalCovarianceEstimation:
 
         # Create simple returns data
         np.random.seed(42)
-        returns = pd.DataFrame(
+        returns = pl.DataFrame(
             np.random.randn(100, 5),
-            columns=['A', 'B', 'C', 'D', 'E']
+            schema=['A', 'B', 'C', 'D', 'E']
         )
 
         estimator = DiagonalCovariance()
@@ -68,7 +68,7 @@ class TestDiagonalCovarianceEstimation:
         from Risk.Covariance.DiagonalCovariance import DiagonalCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimator = DiagonalCovariance()
         cov_matrix = estimator.fit(returns)
@@ -85,16 +85,16 @@ class TestDiagonalCovarianceEstimation:
         from Risk.Covariance.DiagonalCovariance import DiagonalCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(
+        returns = pl.DataFrame(
             np.random.randn(100, 5),
-            columns=['A', 'B', 'C', 'D', 'E']
+            schema=['A', 'B', 'C', 'D', 'E']
         )
 
         estimator = DiagonalCovariance()
         cov_matrix = estimator.fit(returns)
 
         # Compare diagonal to returns.var()
-        expected_variances = returns.var().values
+        expected_variances = returns.var().to_numpy().flatten()
         actual_variances = np.diag(cov_matrix)
 
         np.testing.assert_array_almost_equal(
@@ -108,7 +108,7 @@ class TestDiagonalCovarianceEstimation:
         from Risk.Covariance.DiagonalCovariance import DiagonalCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 1), columns=['A'])
+        returns = pl.DataFrame(np.random.randn(100, 1), schema=['A'])
 
         estimator = DiagonalCovariance()
         cov_matrix = estimator.fit(returns)
@@ -126,7 +126,7 @@ class TestDiagonalCovarianceEstimation:
 
         np.random.seed(42)
         n_assets = 10
-        returns = pd.DataFrame(np.random.randn(100, n_assets))
+        returns = pl.DataFrame(np.random.randn(100, n_assets))
 
         estimator = DiagonalCovariance()
         cov_matrix = estimator.fit(returns)
@@ -147,13 +147,13 @@ class TestDiagonalCovarianceProperties:
         from Risk.Covariance.DiagonalCovariance import DiagonalCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimator = DiagonalCovariance()
         cov_matrix = estimator.fit(returns)
 
         # Expected: diagonal matrix with variances
-        expected = np.diag(returns.var().values)
+        expected = np.diag(returns.var().to_numpy().flatten())
 
         np.testing.assert_array_almost_equal(cov_matrix, expected, decimal=10)
 
@@ -162,7 +162,7 @@ class TestDiagonalCovarianceProperties:
         from Risk.Covariance.DiagonalCovariance import DiagonalCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(50, 5))
+        returns = pl.DataFrame(np.random.randn(50, 5))
 
         estimator = DiagonalCovariance()
         cov_matrix = estimator.fit(returns)
@@ -175,7 +175,7 @@ class TestDiagonalCovarianceProperties:
         from Risk.Covariance.DiagonalCovariance import DiagonalCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 5))
+        returns = pl.DataFrame(np.random.randn(100, 5))
 
         estimator = DiagonalCovariance()
         cov_matrix = estimator.fit(returns)
@@ -198,7 +198,7 @@ class TestDiagonalCovarianceIntegration:
         from Risk.Covariance.DiagonalCovariance import DiagonalCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimator = DiagonalCovariance()
         cov_matrix = estimator.fit(returns)
@@ -215,7 +215,7 @@ class TestDiagonalCovarianceIntegration:
         from Risk.Covariance.DiagonalCovariance import DiagonalCovariance
 
         np.random.seed(42)
-        returns = pd.DataFrame(np.random.randn(100, 10))
+        returns = pl.DataFrame(np.random.randn(100, 10))
 
         estimator = DiagonalCovariance()
         cov_matrix = estimator.fit(returns)

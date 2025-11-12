@@ -19,7 +19,7 @@ Formula (Realized):
 
 Example:
     >>> vol_est = RealizedVolatility(lookback=60)
-    >>> returns = pd.DataFrame({'SFRZ4': [0.01, -0.01, 0.02, ...]})
+    >>> returns = pl.DataFrame({'SFRZ4': [0.01, -0.01, 0.02, ...]})
     >>> vols = vol_est.estimate(returns)
     >>> vols['SFRZ4']
     0.15  # 15% annualized volatility
@@ -27,8 +27,7 @@ Example:
 
 from abc import ABC, abstractmethod
 import polars as pl
-import pandas as pd
-from typing import Dict, Union
+from typing import Dict
 
 
 class VolatilityEstimator(ABC):
@@ -51,7 +50,7 @@ class VolatilityEstimator(ABC):
     """
 
     @abstractmethod
-    def estimate(self, returns: Union[pl.DataFrame, pd.DataFrame]) -> Dict[str, float]:
+    def estimate(self, returns: pl.DataFrame) -> Dict[str, float]:
         """
         Estimate volatility for each asset.
 

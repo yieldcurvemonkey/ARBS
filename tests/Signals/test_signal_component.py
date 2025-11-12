@@ -1,7 +1,7 @@
 # ABOUTME: Test suite for SignalComponent abstract base class
 # ABOUTME: Validates abstract interface, concrete implementations, and component attributes
 import pytest
-import pandas as pd
+import polars as pl
 import numpy as np
 from typing import Dict, Any
 
@@ -15,7 +15,7 @@ class MockSignalComponent(SignalComponent):
         """Initialize mock component with simple calculation logic."""
         super().__init__(name=name, metadata=metadata or {})
 
-    def calculate(self, data: pd.DataFrame) -> pd.DataFrame:
+    def calculate(self, data: pl.DataFrame) -> pl.DataFrame:
         """Simple calculation: multiply all values by 2."""
         return data * 2
 
@@ -32,12 +32,12 @@ class TestSignalComponent:
     def test_concrete_implementation_calculate(self):
         """Mock implementation should return calculated DataFrame."""
         component = MockSignalComponent()
-        data = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        data = pl.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
 
         result = component.calculate(data)
 
-        expected = pd.DataFrame({"a": [2, 4, 6], "b": [8, 10, 12]})
-        pd.testing.assert_frame_equal(result, expected)
+        expected = pl.DataFrame({"a": [2, 4, 6], "b": [8, 10, 12]})
+        assert result.frame_equal(expected)
 
     def test_name_attribute(self):
         """Component should allow setting and getting name."""
@@ -77,15 +77,15 @@ class TestSignalComponent:
         component = MockSignalComponent()
 
         # Test with different data shapes
-        data1 = pd.DataFrame({"x": [1.0, 2.0, 3.0]})
+        data1 = pl.DataFrame({"x": [1.0, 2.0, 3.0]})
         result1 = component.calculate(data1)
-        assert result1["x"].tolist() == [2.0, 4.0, 6.0]
+        assert result1["x"].to_list() == [2.0, 4.0, 6.0]
 
-        data2 = pd.DataFrame({"a": [10], "b": [20], "c": [30]})
+        data2 = pl.DataFrame({"a": [10], "b": [20], "c": [30]})
         result2 = component.calculate(data2)
-        assert result2["a"].tolist() == [20]
-        assert result2["b"].tolist() == [40]
-        assert result2["c"].tolist() == [60]
+        assert result2["a"].to_list() == [20]
+        assert result2["b"].to_list() == [40]
+        assert result2["c"].to_list() == [60]
 
     def test_metadata_is_dict(self):
         """Metadata should be a dictionary type."""

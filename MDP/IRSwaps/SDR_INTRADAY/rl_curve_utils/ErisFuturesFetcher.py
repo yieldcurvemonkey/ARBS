@@ -8,16 +8,13 @@ from io import BytesIO
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
-import pandas as pd
+import polars as pl
 import pytz
 import rateslib as rl
 import QuantLib as ql
 import tqdm
 import tqdm.asyncio
 from dateutil import parser, tz
-from pandas.errors import DtypeWarning
-from pandas.tseries.holiday import USFederalHolidayCalendar
-from pandas.tseries.offsets import CustomBusinessDay
 
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_pydate
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
@@ -25,7 +22,7 @@ from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
     get_short_end_curve_tickers,
 )
 
-warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys
@@ -145,7 +142,7 @@ class ErisFuturesFetcher(BaseFetcher):
             file_name = "Eris_Intraday_DiscountFactors_SOFR.csv"
         else:
             archives_path = f"archives/{date.year}/{date.month:02}-{calendar.month_name[date.month]}"
-            file_name = f"Eris_{date.strftime("%Y%m%d")}_{workbook_type}.csv"
+            file_name = f"Eris_{date.strftime('%Y%m%d')}_{workbook_type}.csv"
             if diff_month(datetime.date.today(), date) < 3:
                 eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{file_name}"
             else:
@@ -195,24 +192,21 @@ class ErisFuturesFetcher(BaseFetcher):
             self._logger.error(e)
             return None, None
 
-    def _read_file(self, file_buffer: BytesIO, file_name: str) -> Tuple[Union[str, datetime.date], pd.DataFrame]:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DtypeWarning)
+    def _read_file(self, file_buffer: BytesIO, file_name: str) -> Tuple[Union[str, datetime.date], pl.DataFrame]:
+        if file_name.lower().endswith((".xlsx", ".xls")):
+            df = pl.read_excel(file_buffer)
+        elif file_name.lower().endswith(".csv"):
+            df = pl.read_csv(file_buffer)
+        else:
+            return None
 
-            if file_name.lower().endswith((".xlsx", ".xls")):
-                df = pd.read_excel(file_buffer)
-            elif file_name.lower().endswith(".csv"):
-                df = pd.read_csv(file_buffer, low_memory=False)
-            else:
-                return None
+        try:
+            datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d")
+            key = datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d")
+        except:
+            key = file_name
 
-            try:
-                datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d")
-                key = datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d")
-            except:
-                key = file_name
-
-            return key, df
+        return key, df
 
     async def _fetch_and_read_eris_ftp_file(
         self,
@@ -240,9 +234,9 @@ class ErisFuturesFetcher(BaseFetcher):
         max_concurrent_tasks: Optional[int] = 64,
         max_keepalive_connections: Optional[int] = 5,
         verbose: Optional[bool] = False,
-    ) -> Dict[datetime.date, pd.DataFrame]:
+    ) -> Dict[datetime.date, pl.DataFrame]:
 
-        bdates = pd.date_range(start=start_date, end=end_date, freq=CustomBusinessDay(calendar=USFederalHolidayCalendar()))
+        bdates = get_bdates_between(start_date, end_date, ql.UnitedStates(ql.UnitedStates.GovernmentBond))
 
         async def build_tasks(
             client: httpx.AsyncClient,
@@ -270,18 +264,16 @@ class ErisFuturesFetcher(BaseFetcher):
                 )
                 return all_data
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DtypeWarning)
-            results: List[Tuple[str, pd.DataFrame]] = asyncio.run(
-                run_fetch_all(
-                    dates=bdates,
-                )
+        results: List[Tuple[str, pl.DataFrame]] = asyncio.run(
+            run_fetch_all(
+                dates=bdates,
             )
-            if results is None or len(results) == 0:
-                print('"fetch_eris_ftp_timeseries" --- empty results') if verbose else None
-                return {}
+        )
+        if results is None or len(results) == 0:
+            print('"fetch_eris_ftp_timeseries" --- empty results') if verbose else None
+            return {}
 
-            return dict(results)
+        return dict(results)
 
     def fetch_intraday_discount_curve(
         self,
@@ -293,7 +285,7 @@ class ErisFuturesFetcher(BaseFetcher):
         return_df: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
         return_intraday_timestamp: Optional[bool] = True,
-    ) -> rl.Curve | pd.DataFrame | Tuple[rl.Curve, datetime.datetime]:
+    ) -> rl.Curve | pl.DataFrame | Tuple[rl.Curve, datetime.datetime]:
 
         def ql_date_to_datetime(ql_date: ql.Date) -> datetime.datetime:
             return datetime.datetime(ql_date.year(), ql_date.month(), ql_date.dayOfMonth())
@@ -365,17 +357,17 @@ class ErisFuturesFetcher(BaseFetcher):
                 all_data = await build_tasks(client=client)
                 return all_data
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DtypeWarning)
-            results: List[Tuple[str, pd.DataFrame]] = asyncio.run(run_fetch_all())
-            if results is None or len(results) == 0:
-                return {}
+        results: List[Tuple[str, pl.DataFrame]] = asyncio.run(run_fetch_all())
+        if results is None or len(results) == 0:
+            return {}
 
-            discount_curve_df = dict(results)["Eris_Intraday_DiscountFactors_SOFR.csv"]
-            discount_curve_df["Date"] = pd.to_datetime(discount_curve_df["Date"], errors="coerce")
-            discount_curve_df["DiscountFactor"] = pd.to_numeric(discount_curve_df["DiscountFactor"], errors="coerce")
-            if return_df:
-                return discount_curve_df
+        discount_curve_df = dict(results)["Eris_Intraday_DiscountFactors_SOFR.csv"]
+        discount_curve_df = discount_curve_df.with_columns([
+            pl.col("Date").str.to_datetime(),
+            pl.col("DiscountFactor").cast(pl.Float64, strict=False)
+        ])
+        if return_df:
+            return discount_curve_df
 
             tday = datetime.date.today()
             fomc_curve_nodes = get_fomc_meetings_list(as_of=tday, n_plus_years=n_plus_fomc_years)
@@ -406,7 +398,7 @@ class ErisFuturesFetcher(BaseFetcher):
                 )
 
             tail = max(mt_nodes) + datetime.timedelta(days=360 * 20)
-            discount_curve_df = discount_curve_df[discount_curve_df["Date"].isin(st_nodes + mt_nodes)]
+            discount_curve_df = discount_curve_df.filter(pl.col("Date").is_in(st_nodes + mt_nodes))
             rl_discount_curve = rl.Curve(
                 nodes=dict(zip(discount_curve_df["Date"], discount_curve_df["DiscountFactor"])),
                 id=curve_id,
@@ -419,7 +411,7 @@ class ErisFuturesFetcher(BaseFetcher):
 
             if return_intraday_timestamp:
                 intraday_ts = datetime.datetime.fromisoformat(
-                    str(parser.parse(discount_curve_df["Time"].iloc[0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
+                    str(parser.parse(discount_curve_df["Time"][0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
                 )
                 intraday_ts = intraday_ts.astimezone(pytz.timezone("America/New_York"))
 

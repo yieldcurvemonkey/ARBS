@@ -18,7 +18,7 @@ Key differences from RealizedVolatility:
 
 Example:
     >>> vol_est = EWMAVolatility(halflife=30, annualization_factor=252)
-    >>> returns = pd.DataFrame({'SFRZ4': daily_returns})
+    >>> returns = pl.DataFrame({'SFRZ4': daily_returns})
     >>> vols = vol_est.estimate(returns)
     >>> vols['SFRZ4']
     0.18  # Recent volatility weighted more
@@ -30,9 +30,8 @@ Use Cases:
 """
 
 import numpy as np
-import pandas as pd
 import polars as pl
-from typing import Dict, Union
+from typing import Dict
 
 from Risk.Volatility.VolatilityEstimator import VolatilityEstimator
 
@@ -53,7 +52,7 @@ class EWMAVolatility(VolatilityEstimator):
 
     Example:
         >>> vol_est = EWMAVolatility(halflife=30, annualization_factor=252)
-        >>> returns = pd.DataFrame({
+        >>> returns = pl.DataFrame({
         ...     'SFRZ4': np.random.randn(100) * 0.01,
         ... })
         >>> vols = vol_est.estimate(returns)
@@ -80,18 +79,19 @@ class EWMAVolatility(VolatilityEstimator):
         self.halflife = halflife
         self.annualization_factor = annualization_factor
 
-    def estimate(self, returns: Union[pl.DataFrame, pd.DataFrame]) -> Dict[str, float]:
+    def estimate(self, returns: pl.DataFrame) -> Dict[str, float]:
         """
         Calculate EWMA volatility from historical returns.
 
-        Uses pandas ewm (exponentially weighted moment) with halflife.
+        Uses polars ewm_std (exponentially weighted moment) with alpha derived from halflife.
 
         Formula:
-            EWMA_std = returns.ewm(halflife=h).std()
+            alpha = 1 - exp(-ln(2) / halflife)
+            EWMA_std = returns.ewm_std(alpha=alpha)
             Vol = EWMA_std × √(annualization_factor)
 
         Args:
-            returns: Historical returns DataFrame (pandas or polars)
+            returns: Historical returns DataFrame (polars)
                      Rows = time periods, Columns = assets
 
         Returns:
@@ -114,20 +114,22 @@ class EWMAVolatility(VolatilityEstimator):
         if len(returns) == 0:
             return {}
 
-        # Convert polars to pandas for uniform handling
-        if isinstance(returns, pl.DataFrame):
-            returns = returns.to_pandas()
+        # Calculate alpha from halflife: alpha = 1 - exp(-ln(2) / halflife)
+        alpha = 1 - np.exp(-np.log(2) / self.halflife)
 
-        # Calculate EWMA standard deviation
-        ewm_std = returns.ewm(halflife=self.halflife).std()
+        # Calculate EWMA standard deviation for each column
+        ewm_std = returns.select([
+            pl.col(col).ewm_std(alpha=alpha).alias(col)
+            for col in returns.columns
+        ])
 
         # Use last value (most recent estimate)
-        latest_std = ewm_std.iloc[-1]
+        latest_std = ewm_std.row(-1, named=True)
 
         # Annualize: Vol = EWMA_std × √T
-        annualized_vols = latest_std * np.sqrt(self.annualization_factor)
+        annualized_vols = {
+            asset: (std if std is not None else 0.0) * np.sqrt(self.annualization_factor)
+            for asset, std in latest_std.items()
+        }
 
-        # Convert to dict, handling NaN
-        vols = annualized_vols.fillna(0.0).to_dict()
-
-        return vols
+        return annualized_vols

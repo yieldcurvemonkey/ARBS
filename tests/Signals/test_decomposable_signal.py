@@ -2,7 +2,7 @@
 # ABOUTME: Validates abstract method enforcement, component composition, and weighting strategies
 
 import pytest
-import pandas as pd
+import polars as pl
 import numpy as np
 from abc import ABC
 from Signals.decomposable_signal import DecomposableSignal
@@ -36,18 +36,18 @@ class TestDecomposableSignal:
 
     def test_concrete_implementation_components(self):
         """Concrete implementation should return components dict"""
-        dates = pd.date_range('2020-01-01', periods=5)
         assets = ['ES', 'TY']
 
-        comp_a = pd.DataFrame(
-            np.random.randn(5, 2),
-            index=dates,
-            columns=assets
+        data_a = np.random.randn(5, 2)
+        data_b = np.random.randn(5, 2)
+
+        comp_a = pl.DataFrame(
+            data_a,
+            schema=assets
         )
-        comp_b = pd.DataFrame(
-            np.random.randn(5, 2),
-            index=dates,
-            columns=assets
+        comp_b = pl.DataFrame(
+            data_b,
+            schema=assets
         )
 
         signal = MockDecomposableSignal({
@@ -59,23 +59,24 @@ class TestDecomposableSignal:
         assert isinstance(components, dict)
         assert 'component_a' in components
         assert 'component_b' in components
-        assert components['component_a'].equals(comp_a)
-        assert components['component_b'].equals(comp_b)
+        assert components['component_a'].frame_equal(comp_a)
+        assert components['component_b'].frame_equal(comp_b)
 
     def test_get_composite_signal(self):
         """get_composite_signal() should combine components using weights"""
-        dates = pd.date_range('2020-01-01', periods=3)
         assets = ['ES', 'TY']
 
-        comp_a = pd.DataFrame(
-            [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
-            index=dates,
-            columns=assets
+        comp_a = pl.DataFrame(
+            {
+                'ES': [1.0, 3.0, 5.0],
+                'TY': [2.0, 4.0, 6.0]
+            }
         )
-        comp_b = pd.DataFrame(
-            [[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]],
-            index=dates,
-            columns=assets
+        comp_b = pl.DataFrame(
+            {
+                'ES': [10.0, 30.0, 50.0],
+                'TY': [20.0, 40.0, 60.0]
+            }
         )
 
         signal = MockDecomposableSignal(
@@ -86,19 +87,19 @@ class TestDecomposableSignal:
         composite = signal.get_composite_signal()
 
         # Expected: 0.3 * comp_a + 0.7 * comp_b
-        expected = pd.DataFrame(
-            [[7.3, 14.6], [21.9, 29.2], [36.5, 43.8]],
-            index=dates,
-            columns=assets
+        expected = pl.DataFrame(
+            {
+                'ES': [7.3, 21.9, 36.5],
+                'TY': [14.6, 29.2, 43.8]
+            }
         )
 
-        pd.testing.assert_frame_equal(composite, expected)
+        assert composite.frame_equal(expected)
 
     def test_component_weights_attribute(self):
         """Should be able to set and get component_weights"""
-        dates = pd.date_range('2020-01-01', periods=2)
-        comp_a = pd.DataFrame([[1.0]], index=dates[:1], columns=['ES'])
-        comp_b = pd.DataFrame([[2.0]], index=dates[:1], columns=['ES'])
+        comp_a = pl.DataFrame({'ES': [1.0]})
+        comp_b = pl.DataFrame({'ES': [2.0]})
 
         weights = {'component_a': 0.4, 'component_b': 0.6}
         signal = MockDecomposableSignal(
@@ -110,11 +111,9 @@ class TestDecomposableSignal:
 
     def test_equal_weights(self):
         """Default weights should be equal (1/n for n components)"""
-        dates = pd.date_range('2020-01-01', periods=2)
-
-        comp_a = pd.DataFrame([[1.0]], index=dates[:1], columns=['ES'])
-        comp_b = pd.DataFrame([[2.0]], index=dates[:1], columns=['ES'])
-        comp_c = pd.DataFrame([[3.0]], index=dates[:1], columns=['ES'])
+        comp_a = pl.DataFrame({'ES': [1.0]})
+        comp_b = pl.DataFrame({'ES': [2.0]})
+        comp_c = pl.DataFrame({'ES': [3.0]})
 
         signal = MockDecomposableSignal({
             'component_a': comp_a,
@@ -125,17 +124,15 @@ class TestDecomposableSignal:
         composite = signal.get_composite_signal()
 
         # Expected: (1 + 2 + 3) / 3 = 2.0
-        expected = pd.DataFrame([[2.0]], index=dates[:1], columns=['ES'])
+        expected = pl.DataFrame({'ES': [2.0]})
 
-        pd.testing.assert_frame_equal(composite, expected)
+        assert composite.frame_equal(expected)
 
     def test_custom_weights(self):
         """Should support different weights per component"""
-        dates = pd.date_range('2020-01-01', periods=2)
-
-        comp_a = pd.DataFrame([[10.0]], index=dates[:1], columns=['ES'])
-        comp_b = pd.DataFrame([[20.0]], index=dates[:1], columns=['ES'])
-        comp_c = pd.DataFrame([[30.0]], index=dates[:1], columns=['ES'])
+        comp_a = pl.DataFrame({'ES': [10.0]})
+        comp_b = pl.DataFrame({'ES': [20.0]})
+        comp_c = pl.DataFrame({'ES': [30.0]})
 
         signal = MockDecomposableSignal(
             {
@@ -153,16 +150,14 @@ class TestDecomposableSignal:
         composite = signal.get_composite_signal()
 
         # Expected: 0.1*10 + 0.2*20 + 0.7*30 = 1 + 4 + 21 = 26.0
-        expected = pd.DataFrame([[26.0]], index=dates[:1], columns=['ES'])
+        expected = pl.DataFrame({'ES': [26.0]})
 
-        pd.testing.assert_frame_equal(composite, expected)
+        assert composite.frame_equal(expected)
 
     def test_zero_weight(self):
         """Component with zero weight should be excluded from composite"""
-        dates = pd.date_range('2020-01-01', periods=2)
-
-        comp_a = pd.DataFrame([[5.0]], index=dates[:1], columns=['ES'])
-        comp_b = pd.DataFrame([[10.0]], index=dates[:1], columns=['ES'])
+        comp_a = pl.DataFrame({'ES': [5.0]})
+        comp_b = pl.DataFrame({'ES': [10.0]})
 
         signal = MockDecomposableSignal(
             {'component_a': comp_a, 'component_b': comp_b},
@@ -172,31 +167,27 @@ class TestDecomposableSignal:
         composite = signal.get_composite_signal()
 
         # Expected: 0.0*5 + 1.0*10 = 10.0
-        expected = pd.DataFrame([[10.0]], index=dates[:1], columns=['ES'])
+        expected = pl.DataFrame({'ES': [10.0]})
 
-        pd.testing.assert_frame_equal(composite, expected)
+        assert composite.frame_equal(expected)
 
     def test_single_component(self):
         """Should handle single component edge case"""
-        dates = pd.date_range('2020-01-01', periods=2)
-
-        comp_a = pd.DataFrame([[7.5]], index=dates[:1], columns=['ES'])
+        comp_a = pl.DataFrame({'ES': [7.5]})
 
         signal = MockDecomposableSignal({'component_a': comp_a})
 
         composite = signal.get_composite_signal()
 
         # Expected: 1.0 * 7.5 = 7.5
-        expected = pd.DataFrame([[7.5]], index=dates[:1], columns=['ES'])
+        expected = pl.DataFrame({'ES': [7.5]})
 
-        pd.testing.assert_frame_equal(composite, expected)
+        assert composite.frame_equal(expected)
 
     def test_negative_weights(self):
         """Should allow negative weights for inverse positioning"""
-        dates = pd.date_range('2020-01-01', periods=2)
-
-        comp_a = pd.DataFrame([[10.0]], index=dates[:1], columns=['ES'])
-        comp_b = pd.DataFrame([[5.0]], index=dates[:1], columns=['ES'])
+        comp_a = pl.DataFrame({'ES': [10.0]})
+        comp_b = pl.DataFrame({'ES': [5.0]})
 
         signal = MockDecomposableSignal(
             {'component_a': comp_a, 'component_b': comp_b},
@@ -206,24 +197,21 @@ class TestDecomposableSignal:
         composite = signal.get_composite_signal()
 
         # Expected: 1.0*10 + (-0.5)*5 = 10 - 2.5 = 7.5
-        expected = pd.DataFrame([[7.5]], index=dates[:1], columns=['ES'])
+        expected = pl.DataFrame({'ES': [7.5]})
 
-        pd.testing.assert_frame_equal(composite, expected)
+        assert composite.frame_equal(expected)
 
     def test_composite_signal_shape(self):
         """Composite signal should match component shape"""
-        dates = pd.date_range('2020-01-01', periods=4)
         assets = ['ES', 'TY', 'GC']
 
-        comp_a = pd.DataFrame(
+        comp_a = pl.DataFrame(
             np.ones((4, 3)),
-            index=dates,
-            columns=assets
+            schema=assets
         )
-        comp_b = pd.DataFrame(
+        comp_b = pl.DataFrame(
             np.ones((4, 3)) * 2,
-            index=dates,
-            columns=assets
+            schema=assets
         )
 
         signal = MockDecomposableSignal(
@@ -234,5 +222,4 @@ class TestDecomposableSignal:
         composite = signal.get_composite_signal()
 
         assert composite.shape == (4, 3)
-        assert list(composite.index) == list(dates)
         assert list(composite.columns) == assets

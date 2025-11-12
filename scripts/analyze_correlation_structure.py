@@ -23,10 +23,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict, List, Tuple
+from datetime import datetime
 
 from scripts.data_providers import FuturesDataProvider, SyntheticFuturesProvider
 
@@ -38,7 +39,7 @@ class CorrelationAnalyzer:
     Validates block-diagonal structure hypothesis.
     """
 
-    def __init__(self, returns: pd.DataFrame):
+    def __init__(self, returns: pl.DataFrame):
         """
         Initialize analyzer.
 
@@ -49,12 +50,17 @@ class CorrelationAnalyzer:
                 - Values: Returns (decimal)
         """
         self.returns = returns
-        self.corr_matrix = returns.corr()
+        # Compute correlation matrix using numpy
+        # Polars doesn't have DataFrame.corr(), so we use numpy
+        returns_array = returns.select(pl.all().exclude("date")).to_numpy()
+        corr_array = np.corrcoef(returns_array.T)
+        corr_columns = [col for col in returns.columns if col != "date"]
+        self.corr_matrix = pl.DataFrame(corr_array, schema=corr_columns)
 
         # Parse currency/maturity from column names
         self.instruments = self._parse_instruments()
 
-    def _parse_instruments(self) -> pd.DataFrame:
+    def _parse_instruments(self) -> pl.DataFrame:
         """
         Parse currency and maturity from column names.
 
@@ -64,6 +70,8 @@ class CorrelationAnalyzer:
         instruments = []
 
         for col in self.returns.columns:
+            if col == "date":
+                continue
             if "_" in col:
                 currency, maturity = col.split("_", 1)
             else:
@@ -77,7 +85,7 @@ class CorrelationAnalyzer:
                 "maturity": maturity
             })
 
-        return pd.DataFrame(instruments)
+        return pl.DataFrame(instruments)
 
     def calculate_block_statistics(self) -> Dict[str, float]:
         """
@@ -96,12 +104,12 @@ class CorrelationAnalyzer:
         n = len(self.instruments)
 
         for i in range(n):
-            curr_i = self.instruments.iloc[i]["currency"]
+            curr_i = self.instruments.row(i, named=True)["currency"]
 
             for j in range(i + 1, n):  # Upper triangle only
-                curr_j = self.instruments.iloc[j]["currency"]
+                curr_j = self.instruments.row(j, named=True)["currency"]
 
-                corr_val = self.corr_matrix.iloc[i, j]
+                corr_val = self.corr_matrix.row(i)[j]
 
                 if curr_i == curr_j:
                     within_corrs.append(corr_val)
@@ -156,18 +164,24 @@ class CorrelationAnalyzer:
             save_path: Optional path to save figure
         """
         # Sort instruments by currency then maturity for clear blocks
-        sorted_instruments = self.instruments.sort_values(["currency", "maturity"])
-        sorted_cols = sorted_instruments["instrument"].tolist()
+        sorted_instruments = self.instruments.sort(["currency", "maturity"])
+        sorted_cols = sorted_instruments["instrument"].to_list()
 
         # Reorder correlation matrix
-        sorted_corr = self.corr_matrix.loc[sorted_cols, sorted_cols]
+        # Select columns in sorted order
+        sorted_corr = self.corr_matrix.select(sorted_cols)
+        # Reorder rows by converting to numpy and back
+        col_to_idx = {col: idx for idx, col in enumerate(self.corr_matrix.columns)}
+        row_order = [col_to_idx[col] for col in sorted_cols]
+        sorted_corr_array = sorted_corr.to_numpy()[row_order, :]
+        sorted_corr = pl.DataFrame(sorted_corr_array, schema=sorted_cols)
 
         # Create plot
         fig, ax = plt.subplots(figsize=figsize)
 
         # Heatmap
         sns.heatmap(
-            sorted_corr,
+            sorted_corr.to_numpy(),
             annot=False,
             cmap="RdYlGn",
             center=0.5,
@@ -179,10 +193,10 @@ class CorrelationAnalyzer:
         )
 
         # Add block boundaries
-        currencies = sorted_instruments["currency"].unique()
+        currencies = sorted_instruments["currency"].unique().to_list()
         cumulative = 0
         for currency in currencies:
-            n_instruments = (sorted_instruments["currency"] == currency).sum()
+            n_instruments = sorted_instruments.filter(pl.col("currency") == currency).height
             cumulative += n_instruments
 
             # Draw boundary lines
@@ -224,10 +238,10 @@ class CorrelationAnalyzer:
 
         n = len(self.instruments)
         for i in range(n):
-            curr_i = self.instruments.iloc[i]["currency"]
+            curr_i = self.instruments.row(i, named=True)["currency"]
             for j in range(i + 1, n):
-                curr_j = self.instruments.iloc[j]["currency"]
-                corr_val = self.corr_matrix.iloc[i, j]
+                curr_j = self.instruments.row(j, named=True)["currency"]
+                corr_val = self.corr_matrix.row(i)[j]
 
                 if curr_i == curr_j:
                     within_corrs.append(corr_val)
@@ -279,17 +293,20 @@ class CorrelationAnalyzer:
         report.append("")
 
         # Dataset info
+        num_instruments = len([col for col in self.returns.columns if col != "date"])
         report.append("Dataset:")
-        report.append(f"  Instruments: {len(self.returns.columns)}")
+        report.append(f"  Instruments: {num_instruments}")
         report.append(f"  Observations: {len(self.returns)}")
-        report.append(f"  Date range: {self.returns.index[0]} to {self.returns.index[-1]}")
+        if "date" in self.returns.columns:
+            date_col = self.returns["date"]
+            report.append(f"  Date range: {date_col[0]} to {date_col[-1]}")
         report.append("")
 
         # Currency breakdown
-        currency_counts = self.instruments.groupby("currency").size()
+        currency_counts = self.instruments.group_by("currency").agg(pl.len().alias("count"))
         report.append("Instruments by Currency:")
-        for curr, count in currency_counts.items():
-            report.append(f"  {curr}: {count} instruments")
+        for row in currency_counts.iter_rows(named=True):
+            report.append(f"  {row['currency']}: {row['count']} instruments")
         report.append("")
 
         # Block statistics
@@ -380,8 +397,11 @@ def main():
         frequency="D"
     )
 
-    print(f"✓ Loaded {returns.shape[0]} observations for {returns.shape[1]} instruments")
-    print(f"  Date range: {returns.index[0].date()} to {returns.index[-1].date()}")
+    num_instruments = len([col for col in returns.columns if col != "date"])
+    print(f"✓ Loaded {returns.height} observations for {num_instruments} instruments")
+    if "date" in returns.columns:
+        date_col = returns["date"]
+        print(f"  Date range: {date_col[0].date()} to {date_col[-1].date()}")
     print()
 
     # =========================================================================
@@ -446,7 +466,7 @@ def main():
     report_path = "docs/research/arbs_correlation_structure.md"
     with open(report_path, "w") as f:
         f.write("# ARBS Futures Correlation Structure Analysis\n\n")
-        f.write("**Generated**: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S") + "\n\n")
+        f.write("**Generated**: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\n\n")
         f.write("```\n")
         f.write(report)
         f.write("\n```\n")

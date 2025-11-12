@@ -5,7 +5,7 @@ from typing import Annotated, Callable, Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
+import polars as pl
 import plotly.express as px
 import plotly.graph_objs as go
 import seaborn as sns
@@ -21,7 +21,7 @@ warnings.simplefilter(action="ignore", category=FutureWarning)
 
 
 def plot_timeseries(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     y_cols: List[str],
     x_col="Date",
     max_ticks=10,
@@ -37,14 +37,14 @@ def plot_timeseries(
     secondary_y_cols: Optional[List[str]] = None,
     html_path: Optional[str] = None,
 ):
-    copy_df = df.copy()
+    copy_df = df.clone()
     date_col = "Date"
 
-    copy_df[date_col] = pd.to_datetime(copy_df[date_col])
+    copy_df = copy_df.with_columns(pl.col(date_col).str.to_datetime())
     if date_subset_range:
-        copy_df = copy_df[(copy_df[date_col] >= date_subset_range[0]) & (copy_df[date_col] <= date_subset_range[1])]
+        copy_df = copy_df.filter((pl.col(date_col) >= date_subset_range[0]) & (pl.col(date_col) <= date_subset_range[1]))
     if flip:
-        copy_df = copy_df.iloc[::-1]
+        copy_df = copy_df.reverse()
 
     if secondary_y_cols:
         fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -155,7 +155,7 @@ def plot_timeseries(
 
 
 def plot_usts(
-    curve_set_df: pd.DataFrame,
+    curve_set_df: pl.DataFrame,
     ttm_col: Optional[str] = "time_to_maturity",
     ytm_col: Optional[str] = "ytm",
     label_col: Optional[str] = "original_security_term",
@@ -176,33 +176,45 @@ def plot_usts(
     plot_width=None,
     ignore_otr=False,
 ):
-    curve_set_df = curve_set_df.copy()
+    curve_set_df = curve_set_df.clone()
 
     if cusips_filter:
-        curve_set_df = curve_set_df[curve_set_df[cusip_col].isin(cusips_filter)]
+        curve_set_df = curve_set_df.filter(pl.col(cusip_col).is_in(cusips_filter))
         cusips_filter_set = set(cusips_filter)
         cusips_in_df = set(curve_set_df[cusip_col].unique())
         cusips_not_in_df = cusips_filter_set - cusips_in_df
         print("CUSIPs not in Curveset df:", cusips_not_in_df)
 
     if ust_labels_filter:
-        curve_set_df = curve_set_df[curve_set_df["ust_label"].isin(ust_labels_filter)]
+        curve_set_df = curve_set_df.filter(pl.col("ust_label").is_in(ust_labels_filter))
         ust_labels_filter_set = set(ust_labels_filter)
         labels_in_df = set(curve_set_df["ust_label"].unique())
         labels_not_in_df = ust_labels_filter_set - labels_in_df
         print("Labels not in Curveset df:", labels_not_in_df)
 
-    curve_set_df = curve_set_df.sort_values(by=label_col, key=lambda s: s.str.extract(r"^(\d+)")[0].astype(int))
-    curve_set_df["plot_group"] = curve_set_df[label_col].astype(str)
+    curve_set_df = curve_set_df.with_columns(
+        pl.col(label_col).str.extract(r"^(\d+)", 1).cast(pl.Int64).alias("_sort_key")
+    ).sort("_sort_key").drop("_sort_key")
+    curve_set_df = curve_set_df.with_columns(pl.col(label_col).cast(pl.Utf8).alias("plot_group"))
 
     otr_mask = curve_set_df["rank"] == 0
-    curve_set_df.loc[otr_mask, "plot_group"] = "OTR - " + curve_set_df.loc[otr_mask, "plot_group"]
-    fig = px.scatter(curve_set_df[~otr_mask], x=ttm_col, y=ytm_col, color="plot_group", hover_data=hover_data)
+    curve_set_df = curve_set_df.with_columns(
+        pl.when(pl.col("rank") == 0)
+        .then(pl.lit("OTR - ") + pl.col("plot_group"))
+        .otherwise(pl.col("plot_group"))
+        .alias("plot_group")
+    )
+    fig = px.scatter(curve_set_df.filter(pl.col("rank") != 0).to_pandas(), x=ttm_col, y=ytm_col, color="plot_group", hover_data=hover_data)
 
     if not ignore_otr:
-        curve_set_df.loc[otr_mask, label_col] = curve_set_df.loc[otr_mask, label_col].apply(lambda x: f"OTR - {x}")
+        curve_set_df = curve_set_df.with_columns(
+            pl.when(pl.col("rank") == 0)
+            .then(pl.lit("OTR - ") + pl.col(label_col))
+            .otherwise(pl.col(label_col))
+            .alias(label_col)
+        )
         otr_fig = px.scatter(
-            curve_set_df[otr_mask],
+            curve_set_df.filter(pl.col("rank") == 0).to_pandas(),
             x=ttm_col,
             y=ytm_col,
             color=label_col,
@@ -224,12 +236,12 @@ def plot_usts(
             else:
                 cusip, label_color = cusip_tuple
 
-            if cusip not in curve_set_df[cusip_col].values:
+            if cusip not in curve_set_df[cusip_col].to_list():
                 print(f"{cusip} not in Curveset df!")
                 continue
 
             cusip_highlight_fig = px.scatter(
-                curve_set_df[curve_set_df[cusip_col] == cusip],
+                curve_set_df.filter(pl.col(cusip_col) == cusip).to_pandas(),
                 x=ttm_col,
                 y=ytm_col,
                 color=cusip_col,
@@ -268,12 +280,12 @@ def plot_usts(
                 else:
                     ust_label, label_color = label_tuple
 
-                if ust_label not in curve_set_df["ust_label"].values:
+                if ust_label not in curve_set_df["ust_label"].to_list():
                     print(f"{ust_label} not in Curveset df!")
                     continue
 
                 ust_labels_highlight_fig = px.scatter(
-                    curve_set_df[curve_set_df["ust_label"] == ust_label],
+                    curve_set_df.filter(pl.col("ust_label") == ust_label).to_pandas(),
                     x=ttm_col,
                     y=ytm_col,
                     color="ust_label",
@@ -287,9 +299,8 @@ def plot_usts(
                     )
                 fig.add_traces(ust_labels_highlight_fig.data)
         else:
-            ust_labels_highlight_mask = curve_set_df["ust_label"].isin(ust_labels_highlighter)
             ust_labels_highlight_fig = px.scatter(
-                curve_set_df[ust_labels_highlight_mask],
+                curve_set_df.filter(pl.col("ust_label").is_in(ust_labels_highlighter)).to_pandas(),
                 x=ttm_col,
                 y=ytm_col,
                 color="ust_label",
@@ -356,7 +367,7 @@ def plot_usts(
 
 
 def plot_usts_comparison(
-    curve_set_df: pd.DataFrame,
+    curve_set_df: pl.DataFrame,
     ttm_col: Optional[str] = "time_to_maturity",
     ytm_col: Optional[str] = "ytm",
     label_col: Optional[str] = "original_security_term",
@@ -383,7 +394,9 @@ def plot_usts_comparison(
     return_color_map: bool = False,
     show: bool = True,
 ):
-    from pandas.api.types import is_numeric_dtype as _isnum
+    def _is_numeric_dtype(dtype):
+        """Check if polars dtype is numeric"""
+        return dtype in [pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64, pl.Float32, pl.Float64]
 
     if custom_x_axis is None:
         custom_x_axis = ttm_col
@@ -394,12 +407,14 @@ def plot_usts_comparison(
         return s.rstrip("0").rstrip(".") if "." in s else s
 
     def _human_num(x) -> str:
-        if pd.isna(x):
+        if x is None or (hasattr(x, '__iter__') and not isinstance(x, str) and len(list(x)) == 0):
             return "NA"
         try:
             xv = float(x)
         except Exception:
             return str(x)
+        if not isinstance(xv, (int, float)) or (isinstance(xv, float) and (xv != xv)):  # Check for NaN
+            return "NA"
         ax = abs(xv)
         if ax >= 1e12:
             return _trim_zeros(f"{xv/1e12:.3f}") + "Tn"
@@ -420,7 +435,7 @@ def plot_usts_comparison(
             i += 1
         return k
 
-    def _make_hover_dict(sub: pd.DataFrame, cols: Optional[list[str]]):
+    def _make_hover_dict(sub: pl.DataFrame, cols: Optional[list[str]]):
         if not cols:
             return None
         taken = set(sub.columns)  # reserved names → force rename
@@ -433,40 +448,55 @@ def plot_usts_comparison(
                 # Rename to avoid "Ambiguous input" (PX disallows same-name array + column)
                 key = _uniq_key(f"{c} (h)", taken | set(out.keys()))
 
-            s = sub[c] if c in sub.columns else pd.Series([None] * len(sub), index=sub.index)
-            if _isnum(s):
-                out[key] = s.map(_human_num)
+            if c in sub.columns:
+                s = sub[c].to_list()
+                dtype = sub[c].dtype
+                if _is_numeric_dtype(dtype):
+                    out[key] = [_human_num(v) for v in s]
+                else:
+                    try:
+                        # Check if it's a datetime column
+                        if dtype in [pl.Datetime, pl.Date]:
+                            out[key] = sub[c].dt.strftime("%Y-%m-%d %H:%M:%S").to_list()
+                        else:
+                            out[key] = sub[c].cast(pl.Utf8).to_list()
+                    except Exception:
+                        out[key] = sub[c].cast(pl.Utf8).to_list()
             else:
-                try:
-                    out[key] = s.dt.strftime("%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    out[key] = s.astype(str)
+                out[key] = [None] * len(sub)
         return out
 
-    curve_set_df = curve_set_df.copy()
+    curve_set_df = curve_set_df.clone()
 
     if cusips_filter:
-        curve_set_df = curve_set_df[curve_set_df[cusip_col].isin(cusips_filter)]
+        curve_set_df = curve_set_df.filter(pl.col(cusip_col).is_in(cusips_filter))
         missing = set(cusips_filter) - set(curve_set_df[cusip_col].unique())
         if missing:
             print("CUSIPs not in Curveset df:", missing)
 
     if ust_labels_filter:
-        curve_set_df = curve_set_df[curve_set_df["ust_label"].isin(ust_labels_filter)]
+        curve_set_df = curve_set_df.filter(pl.col("ust_label").is_in(ust_labels_filter))
         missing = set(ust_labels_filter) - set(curve_set_df["ust_label"].unique())
         if missing:
             print("Labels not in Curveset df:", missing)
 
-    curve_set_df = curve_set_df.sort_values(by=label_col, key=lambda s: s.str.extract(r"^(\d+)")[0].astype(int))
-    curve_set_df["plot_group"] = curve_set_df[label_col].astype(str)
+    curve_set_df = curve_set_df.with_columns(
+        pl.col(label_col).str.extract(r"^(\d+)", 1).cast(pl.Int64).alias("_sort_key")
+    ).sort("_sort_key").drop("_sort_key")
+    curve_set_df = curve_set_df.with_columns(pl.col(label_col).cast(pl.Utf8).alias("plot_group"))
     otr_mask = curve_set_df["rank"] == 0
-    curve_set_df.loc[otr_mask, "plot_group"] = "OTR - " + curve_set_df.loc[otr_mask, "plot_group"]
+    curve_set_df = curve_set_df.with_columns(
+        pl.when(pl.col("rank") == 0)
+        .then(pl.lit("OTR - ") + pl.col("plot_group"))
+        .otherwise(pl.col("plot_group"))
+        .alias("plot_group")
+    )
 
     base_fig = fig if fig is not None else go.Figure()
 
-    non_otr_df = curve_set_df[~otr_mask]
+    non_otr_df = curve_set_df.filter(pl.col("rank") != 0)
     px_fig = px.scatter(
-        non_otr_df,
+        non_otr_df.to_pandas(),
         x=ttm_col,
         y=ytm_col,
         color="plot_group",
@@ -490,11 +520,16 @@ def plot_usts_comparison(
         tr.legendgroup = base_name
     base_fig.add_traces(px_fig.data)
 
-    if not ignore_otr and otr_mask.any():
-        curve_set_df.loc[otr_mask, label_col] = curve_set_df.loc[otr_mask, label_col].apply(lambda x: f"OTR - {x}")
-        sub = curve_set_df[otr_mask]
+    if not ignore_otr and curve_set_df.filter(pl.col("rank") == 0).height > 0:
+        curve_set_df = curve_set_df.with_columns(
+            pl.when(pl.col("rank") == 0)
+            .then(pl.lit("OTR - ") + pl.col(label_col))
+            .otherwise(pl.col(label_col))
+            .alias(label_col)
+        )
+        sub = curve_set_df.filter(pl.col("rank") == 0)
         otr_fig = px.scatter(
-            sub,
+            sub.to_pandas(),
             x=ttm_col,
             y=ytm_col,
             color=label_col,
@@ -514,12 +549,12 @@ def plot_usts_comparison(
     if cusips_hightlighter:
         for cusip_tuple in cusips_hightlighter:
             cusip, label_color = cusip_tuple if isinstance(cusip_tuple, tuple) else (cusip_tuple, "yellow")
-            if cusip not in curve_set_df[cusip_col].values:
+            if cusip not in curve_set_df[cusip_col].to_list():
                 print(f"{cusip} not in Curveset df!")
                 continue
-            sub = curve_set_df[curve_set_df[cusip_col] == cusip]
+            sub = curve_set_df.filter(pl.col(cusip_col) == cusip)
             hi_fig = px.scatter(
-                sub,
+                sub.to_pandas(),
                 x=ttm_col,
                 y=ytm_col,
                 color=cusip_col,
@@ -538,12 +573,12 @@ def plot_usts_comparison(
     if ust_labels_highlighter:
         tuples = ust_labels_highlighter if isinstance(ust_labels_highlighter[0], tuple) else [(lab, "yellow") for lab in ust_labels_highlighter]
         for ust_label, label_color in tuples:
-            if ust_label not in curve_set_df["ust_label"].values:
+            if ust_label not in curve_set_df["ust_label"].to_list():
                 print(f"{ust_label} not in Curveset df!")
                 continue
-            sub = curve_set_df[curve_set_df["ust_label"] == ust_label]
+            sub = curve_set_df.filter(pl.col("ust_label") == ust_label)
             lab_fig = px.scatter(
-                sub,
+                sub.to_pandas(),
                 x=ttm_col,
                 y=ytm_col,
                 color="ust_label",

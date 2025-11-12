@@ -2,7 +2,6 @@ import calendar
 from datetime import datetime, timedelta, timezone, date
 from typing import List, Optional
 from zoneinfo import ZoneInfo
-import pandas as pd
 import QuantLib as ql
 
 DEFAULT_SWAP_TENORS = [
@@ -260,8 +259,8 @@ def parse_tenor_string(tenor_str):
 
 
 def most_recent_business_day_ql(ql_calendar: ql.Calendar, tz: Optional[str] = "UTC", to_pydate: Optional[bool] = False):
-    current_ts = pd.Timestamp.now(ZoneInfo(tz)).normalize()
-    current_pydate = current_ts.to_pydatetime().date()
+    current_datetime = datetime.now(ZoneInfo(tz))
+    current_pydate = current_datetime.date()
     current_ql = ql.Date(current_pydate.day, current_pydate.month, current_pydate.year)
 
     while not ql_calendar.isBusinessDay(current_ql):
@@ -274,8 +273,12 @@ def most_recent_business_day_ql(ql_calendar: ql.Calendar, tz: Optional[str] = "U
 
 
 def most_recent_business_day_from_date(input_date: datetime, ql_calendar: ql.Calendar, tz: str = "UTC", to_pydate: bool = True):
-    ts = pd.Timestamp(input_date, tz=tz).normalize()
-    pydate = ts.to_pydatetime().date()
+    # If input_date is naive, localize it to the specified timezone
+    if input_date.tzinfo is None:
+        input_with_tz = input_date.replace(tzinfo=ZoneInfo(tz))
+    else:
+        input_with_tz = input_date.astimezone(ZoneInfo(tz))
+    pydate = input_with_tz.date()
     current_ql = ql.Date(pydate.day, pydate.month, pydate.year)
 
     while not ql_calendar.isBusinessDay(current_ql):

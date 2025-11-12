@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-import pandas as pd
+import polars as pl
 import QuantLib as ql
 
 
@@ -40,8 +40,7 @@ def datetime_to_ql_date(dt: datetime):
 
 
 def most_recent_business_day_ql(ql_calendar: ql.Calendar, tz: Optional[str] = "UTC", to_pydate: Optional[bool] = False):
-    current_ts = pd.Timestamp.now(ZoneInfo(tz)).normalize()
-    current_pydate = current_ts.to_pydatetime().date()
+    current_pydate = datetime.now(ZoneInfo(tz)).date()
     current_ql = ql.Date(current_pydate.day, current_pydate.month, current_pydate.year)
 
     while not ql_calendar.isBusinessDay(current_ql):

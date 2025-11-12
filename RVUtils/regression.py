@@ -6,7 +6,8 @@ from typing import Any, Callable, Dict, Optional, Sequence, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
+import pandas as pd  # Keep pandas for statsmodels compatibility
+import polars as pl
 import statsmodels.api as sm
 from scipy import stats
 from scipy.odr import ODR, Model, RealData
@@ -16,8 +17,8 @@ from RVUtils.mean_reversion import simulate_mean_reversion_ou
 
 def make_linear_regression_builder(
     *,
-    df: Optional[pd.DataFrame] = None,
-    y: Optional[pd.Series] = None,
+    df: Optional[Union[pl.DataFrame, pd.DataFrame]] = None,
+    y: Optional[Union[pl.Series, pd.Series]] = None,
     y_col: Optional[str] = None,
     on_diff: bool = False,
     on_returns: bool = False,
@@ -58,6 +59,13 @@ def make_linear_regression_builder(
         out = obj.copy()
         out.index = _to_dt_index(out.index, who)
         return out
+
+    # --------------------- polars to pandas conversion ---------------------
+    # Convert polars inputs to pandas for statsmodels compatibility
+    if df is not None and isinstance(df, pl.DataFrame):
+        df = df.to_pandas()
+    if y is not None and isinstance(y, pl.Series):
+        y = y.to_pandas()
 
     # --------------------- resolve y / df ---------------------
     if on_diff and on_returns:

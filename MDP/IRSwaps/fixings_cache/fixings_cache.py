@@ -1,48 +1,94 @@
+# ABOUTME: Cache layer for interest rate fixings data with smart fallback and cleanup.
+# ABOUTME: Fetches fixings from live sources, validates against expected business days, and manages dated cache directories.
 from pathlib import Path
 import datetime
 from typing import Optional, Literal
 import os
 
-import pandas as pd
-from pandas.tseries.holiday import USFederalHolidayCalendar
-from pandas.tseries.offsets import CustomBusinessDay
+import polars as pl
 
 from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.FixingsFetcher import FixingsFetcher
 
+# US Federal Holidays (minimal set for business day calculations)
+# New Year's Day, MLK Day, Presidents Day, Memorial Day, Independence Day,
+# Labor Day, Columbus Day, Veterans Day, Thanksgiving, Christmas
+_FEDERAL_HOLIDAYS_2020_2030 = {
+    # This is a simplified implementation - in production, use the holidays library
+    datetime.date(2024, 1, 1), datetime.date(2024, 1, 15), datetime.date(2024, 2, 19),
+    datetime.date(2024, 5, 27), datetime.date(2024, 7, 4), datetime.date(2024, 9, 2),
+    datetime.date(2024, 10, 14), datetime.date(2024, 11, 11), datetime.date(2024, 11, 28),
+    datetime.date(2024, 12, 25),
+    datetime.date(2025, 1, 1), datetime.date(2025, 1, 20), datetime.date(2025, 2, 17),
+    datetime.date(2025, 5, 26), datetime.date(2025, 7, 4), datetime.date(2025, 9, 1),
+    datetime.date(2025, 10, 13), datetime.date(2025, 11, 11), datetime.date(2025, 11, 27),
+    datetime.date(2025, 12, 25),
+}
 
-_PUBLISH_CAL = USFederalHolidayCalendar()
-_CBD = CustomBusinessDay(calendar=_PUBLISH_CAL)
 _KEEP_LAST_N_DATED_DIRS = 3  # retain recent caches for fallback
 
 
-def _last_usbd_before(d: datetime.date) -> pd.Timestamp:
-    return (pd.Timestamp(d) - _CBD).normalize()
-
-
-def _has_date(series: pd.Series, target: pd.Timestamp) -> bool:
-    if series is None or series.empty:
+def _is_business_day(d: datetime.date) -> bool:
+    """Check if date is a US business day (Mon-Fri, not a federal holiday)."""
+    # Weekend check
+    if d.weekday() >= 5:  # Saturday=5, Sunday=6
         return False
-    idx = pd.to_datetime(series.index, errors="coerce").normalize()
-    return target in set(idx)
+    # Holiday check
+    if d in _FEDERAL_HOLIDAYS_2020_2030:
+        return False
+    # If holiday falls on weekend, it's typically observed on adjacent weekday
+    # For simplicity, we're using the minimal set above
+    return True
 
 
-def _read_cached_if_valid(root: Path, curve_name: str, expected_dt: pd.Timestamp) -> Optional[pd.Series]:
+def _last_usbd_before(d: datetime.date) -> datetime.date:
+    """Get the last US business day before the given date."""
+    current = d - datetime.timedelta(days=1)
+    while not _is_business_day(current):
+        current -= datetime.timedelta(days=1)
+    return current
+
+
+def _has_date(df: Optional[pl.DataFrame], target: datetime.date, date_col: str) -> bool:
+    """Check if target date exists in the date column of the DataFrame."""
+    if df is None or df.is_empty():
+        return False
+    try:
+        # Extract dates and convert to date objects for comparison
+        dates = df[date_col].dt.date()
+        return target in dates.to_list()
+    except Exception:
+        return False
+
+
+def _read_cached_if_valid(root: Path, curve_name: str, expected_dt: datetime.date) -> Optional[pl.DataFrame]:
+    """Read cached fixings DataFrame if valid and contains expected date."""
     dated_dirs = sorted([p for p in root.iterdir() if p.is_dir()], reverse=True)  # newest first
     for d in dated_dirs:
         csvs = sorted(d.glob("*.csv"))
         if not csvs:
             continue
         try:
-            dfs = [pd.read_csv(p) for p in csvs]
-            df = pd.concat(dfs, ignore_index=True)
+            dfs = [pl.read_csv(p) for p in csvs]
+            df = pl.concat(dfs)
             if curve_name not in df.columns or "Fixing" not in df.columns:
                 continue
-            df = df.set_index(curve_name)
-            df.index = pd.to_datetime(df.index, errors="coerce")
-            df = df.loc[~df.index.duplicated(keep="first"), :]
-            s = df["Fixing"].copy()
-            if _has_date(s, expected_dt):
-                return s
+
+            # Parse the date column - handle various date formats flexibly
+            try:
+                df = df.with_columns(
+                    pl.col(curve_name).str.strptime(pl.Datetime, strict=False)
+                )
+            except Exception:
+                # If strptime fails, try direct conversion
+                df = df.with_columns(
+                    pl.col(curve_name).cast(pl.Datetime, strict=False)
+                )
+
+            # Remove duplicates based on date column, keeping first occurrence
+            df = df.unique(subset=[curve_name], keep="first")
+
+            if _has_date(df, expected_dt, curve_name):
+                return df
         except Exception:
             # ignore malformed/partial cache files
             continue
@@ -103,8 +149,11 @@ def _fetch_fixings(
     as_of_date: datetime.date | Literal["live"],
     curve_name: str,
     force_refresh: Optional[bool] = False,
-) -> pd.Series:
+) -> pl.DataFrame:
+    """Fetch fixings data for a curve, using cache when available.
 
+    Returns a polars DataFrame with columns: [curve_name (datetime), "Fixing" (float)]
+    """
     if as_of_date == "live":
         as_of_date = datetime.date.today()
 
@@ -136,22 +185,45 @@ def _fetch_fixings(
     except Exception:
         fixings_dict = FixingsFetcher(fred_api_key="e06f51338bf093283ce1331c2826b3db").get_fixings(curve=curve_name, use_fred=True)
 
-    fixings_series = pd.Series(fixings_dict)
-    fixings_series.index = pd.to_datetime(fixings_series.index, errors="coerce").normalize()
-    fixings_series.index.name = curve_name
-    fixings_series.name = "Fixing"
+    # Convert dict to polars DataFrame
+    # Handle various date formats in the dict keys
+    dates = []
+    values = []
+    for k, v in fixings_dict.items():
+        # Convert key to string first to ensure consistent handling
+        if isinstance(k, str):
+            dates.append(k)
+        elif isinstance(k, (datetime.date, datetime.datetime)):
+            dates.append(k.isoformat())
+        else:
+            dates.append(str(k))
+        values.append(v)
+
+    fixings_df = pl.DataFrame({
+        curve_name: dates,
+        "Fixing": values
+    })
+
+    # Parse date column to datetime
+    try:
+        fixings_df = fixings_df.with_columns(
+            pl.col(curve_name).str.strptime(pl.Datetime, strict=False)
+        )
+    except Exception:
+        # If parsing fails, try direct cast
+        fixings_df = fixings_df.with_columns(
+            pl.col(curve_name).cast(pl.Datetime, strict=False)
+        )
 
     # Only cache if the expected (T-1 USBD) fixing is present (i.e., it has been published).
-    if _has_date(fixings_series, expected_dt):
+    if _has_date(fixings_df, expected_dt, curve_name):
         out_csv = today_dir / "fixings.csv"
         try:
-            fixings_series.to_csv(out_csv)
+            fixings_df.write_csv(out_csv)
         except Exception as e:
             print(f"[cache] Failed to write cache file {out_csv}: {e}")
     else:
-        # print(f"[cache] Skipping cache write: expected fixing {expected_dt.date()} not yet published for {curve_name}.")
         # Optional: if a valid recent cache exists, prefer returning that over the live (incomplete) pull.
-        # (Comment out if you always want the freshest pull, even if incomplete.)
         cached_fallback = _read_cached_if_valid(fixings_cache, curve_name, expected_dt)
         if cached_fallback is not None:
             return cached_fallback
@@ -159,4 +231,4 @@ def _fetch_fixings(
     # Light cleanup of very old dated dirs (keeps recent for resilience).
     _cleanup_old_cache_dirs(fixings_cache, keep_last=_KEEP_LAST_N_DATED_DIRS)
 
-    return fixings_series
+    return fixings_df

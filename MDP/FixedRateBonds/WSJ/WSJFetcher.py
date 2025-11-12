@@ -7,7 +7,7 @@ from typing import Dict, List, Literal, Optional, Tuple
 
 import httpx
 import numpy as np
-import pandas as pd
+import polars as pl
 import pytz
 import requests
 import tqdm
@@ -179,25 +179,25 @@ class WSJFetcher(BaseFetcher):
                     response.raise_for_status()
                     json_data = response.json()
                     if intraday_timestamp:
-                        df = pd.DataFrame(
+                        df = pl.DataFrame(
                             {"Date": json_data["Series"][0]["CurrentQuote"]["DateUtc"], wsj_ticker_key: [d[0] for d in json_data["Series"][0]["DataPoints"]]}
                         )
                     else:
-                        df = pd.DataFrame({"Date": json_data["TimeInfo"]["Ticks"], wsj_ticker_key: [d[0] for d in json_data["Series"][0]["DataPoints"]]})
+                        df = pl.DataFrame({"Date": json_data["TimeInfo"]["Ticks"], wsj_ticker_key: [d[0] for d in json_data["Series"][0]["DataPoints"]]})
 
                     if append_most_recent_last:
-                        intraday_df = pd.DataFrame(
+                        intraday_df = pl.DataFrame(
                             {"Date": json_data["Series"][0]["CurrentQuote"]["DateUtc"], wsj_ticker_key: [d[0] for d in json_data["Series"][0]["DataPoints"]]}
                         ).tail(1)
 
-                        df = pd.concat([df.head(-1), intraday_df])
+                        df = pl.concat([df.head(-1), intraday_df])
 
-                    df["Date"] = pd.to_datetime(df["Date"], unit="ms", utc=True)
-                    df = df.drop_duplicates(subset=["Date"]).sort_values(by="Date")
+                    df = df.with_columns(pl.from_epoch("Date", time_unit="ms").dt.replace_time_zone("UTC").alias("Date"))
+                    df = df.unique(subset=["Date"]).sort("Date")
                     if start_date:
-                        df = df[df["Date"].dt.date >= start_date.date()]
+                        df = df.filter(pl.col("Date").dt.date() >= start_date.date())
                     if end_date:
-                        df = df[df["Date"].dt.date <= end_date.date()]
+                        df = df.filter(pl.col("Date").dt.date() <= end_date.date())
 
                     if uid:
                         return wsj_ticker_key, df, uid
@@ -207,8 +207,8 @@ class WSJFetcher(BaseFetcher):
                     self._logger.error(f"WSJ - Bad Status: {response.status_code}")
                     if response.status_code == 404:
                         if uid:
-                            return wsj_ticker_key, pd.DataFrame(columns=cols_to_return), uid
-                        return wsj_ticker_key, pd.DataFrame(columns=cols_to_return)
+                            return wsj_ticker_key, pl.DataFrame(schema={col: pl.Utf8 if col == "Date" else pl.Float64 for col in cols_to_return}), uid
+                        return wsj_ticker_key, pl.DataFrame(schema={col: pl.Utf8 if col == "Date" else pl.Float64 for col in cols_to_return})
 
                     retries += 1
                     wait_time = backoff_factor * (2 ** (retries - 1))
@@ -227,8 +227,8 @@ class WSJFetcher(BaseFetcher):
         except Exception as e:
             self._logger.error(e)
             if uid:
-                return wsj_ticker_key, pd.DataFrame(columns=cols_to_return), uid
-            return wsj_ticker_key, pd.DataFrame(columns=cols_to_return)
+                return wsj_ticker_key, pl.DataFrame(schema={col: pl.Utf8 if col == "Date" else pl.Float64 for col in cols_to_return}), uid
+            return wsj_ticker_key, pl.DataFrame(schema={col: pl.Utf8 if col == "Date" else pl.Float64 for col in cols_to_return})
 
     async def _fetch_timeseries_with_semaphore(self, semaphore, *args, **kwargs):
         async with semaphore:
@@ -284,7 +284,7 @@ class WSJFetcher(BaseFetcher):
                 )
                 return all_data
 
-        dfs: List[Tuple[str, pd.DataFrame]] = asyncio.run(
+        dfs: List[Tuple[str, pl.DataFrame]] = asyncio.run(
             run_fetch_all(
                 wsj_ticker_keys=wsj_ticker_keys,
                 start_date=start_date,
@@ -298,8 +298,8 @@ class WSJFetcher(BaseFetcher):
                 if df is not None:
                     dict_df[symbol] = df
 
-            merge_dfs_on_column = lambda dfs_dict, on_column: reduce(lambda left, right: pd.merge(left, right, on=on_column, how="outer"), dfs_dict.values())
-            return merge_dfs_on_column(dict_df, "Date").reset_index(drop=True).set_index("Date")
+            merge_dfs_on_column = lambda dfs_dict, on_column: reduce(lambda left, right: left.join(right, on=on_column, how="full"), dfs_dict.values())
+            return merge_dfs_on_column(dict_df, "Date")
 
         return dict(dfs)
 
@@ -374,10 +374,10 @@ class WSJFetcher(BaseFetcher):
                     response = await client.get(prep_url.url, headers=headers)
                     response.raise_for_status()
                     json_data = response.json()
-                    df = pd.DataFrame({"Timestamp": json_data["TimeInfo"]["Ticks"], wsj_ticker_key: [d[0] for d in json_data["Series"][0]["DataPoints"]]})
+                    df = pl.DataFrame({"Timestamp": json_data["TimeInfo"]["Ticks"], wsj_ticker_key: [d[0] for d in json_data["Series"][0]["DataPoints"]]})
 
-                    df["Timestamp"] = pd.to_datetime(df["Timestamp"], unit="ms", utc=True)
-                    df = df.drop_duplicates(subset=["Timestamp"]).sort_values(by="Timestamp")
+                    df = df.with_columns(pl.from_epoch("Timestamp", time_unit="ms").dt.replace_time_zone("UTC").alias("Timestamp"))
+                    df = df.unique(subset=["Timestamp"]).sort("Timestamp")
 
                     if uid:
                         return wsj_ticker_key, df, uid
@@ -387,8 +387,8 @@ class WSJFetcher(BaseFetcher):
                     self._logger.error(f"WSJ - Bad Status: {response.status_code}")
                     if response.status_code == 404:
                         if uid:
-                            return wsj_ticker_key, pd.DataFrame(columns=cols_to_return), uid
-                        return wsj_ticker_key, pd.DataFrame(columns=cols_to_return)
+                            return wsj_ticker_key, pl.DataFrame(schema={col: pl.Utf8 if col == "Date" else pl.Float64 for col in cols_to_return}), uid
+                        return wsj_ticker_key, pl.DataFrame(schema={col: pl.Utf8 if col == "Date" else pl.Float64 for col in cols_to_return})
 
                     retries += 1
                     wait_time = backoff_factor * (2 ** (retries - 1))
@@ -407,8 +407,8 @@ class WSJFetcher(BaseFetcher):
         except Exception as e:
             self._logger.error(e)
             if uid:
-                return wsj_ticker_key, pd.DataFrame(columns=cols_to_return), uid
-            return wsj_ticker_key, pd.DataFrame(columns=cols_to_return)
+                return wsj_ticker_key, pl.DataFrame(schema={col: pl.Utf8 if col == "Date" else pl.Float64 for col in cols_to_return}), uid
+            return wsj_ticker_key, pl.DataFrame(schema={col: pl.Utf8 if col == "Date" else pl.Float64 for col in cols_to_return})
 
     async def _fetch_ust_intraday_timeseries_with_semaphore(self, semaphore, *args, **kwargs):
         async with semaphore:
@@ -444,7 +444,7 @@ class WSJFetcher(BaseFetcher):
                 )
                 return all_data
 
-        dfs: List[Tuple[str, pd.DataFrame]] = asyncio.run(
+        dfs: List[Tuple[str, pl.DataFrame]] = asyncio.run(
             run_fetch_all(
                 wsj_ticker_keys=wsj_ticker_keys.keys(),
             )
@@ -455,9 +455,9 @@ class WSJFetcher(BaseFetcher):
             if df is not None:
                 dict_df[wsj_ticker_keys[symbol]] = df
 
-        merge_dfs_on_column = lambda dfs_dict, on_column: reduce(lambda left, right: pd.merge(left, right, on=on_column, how="outer"), dfs_dict.values())
-        df = merge_dfs_on_column(dict_df, "Timestamp").reset_index(drop=True).set_index("Timestamp")
-        return df.rename(columns=wsj_ticker_keys)
+        merge_dfs_on_column = lambda dfs_dict, on_column: reduce(lambda left, right: left.join(right, on=on_column, how="full"), dfs_dict.values())
+        df = merge_dfs_on_column(dict_df, "Timestamp")
+        return df.rename({old: new for old, new in wsj_ticker_keys.items() if old in df.columns})
 
     def fetch_live_ust_quotes(
         self,

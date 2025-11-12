@@ -18,12 +18,30 @@ else:
     import urllib as url_parse
     import urllib2 as url_error
 
-import pandas as pd
+import polars as pl
 
 urlopen = url_request.urlopen
 quote_plus = url_parse.quote_plus
 urlencode = url_parse.urlencode
 HTTPError = url_error.HTTPError
+
+
+def _to_datetime(date_input):
+    """
+    Convert date string or datetime to datetime object.
+    Replacement for pd.to_datetime with errors='raise'.
+    """
+    if isinstance(date_input, datetime):
+        return date_input
+    if isinstance(date_input, str):
+        # Try common datetime formats
+        for fmt in ["%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%m/%d/%Y", "%m/%d/%y"]:
+            try:
+                return datetime.strptime(date_input, fmt)
+            except ValueError:
+                continue
+        raise ValueError(f"Unable to parse date string: {date_input}")
+    raise TypeError(f"Unsupported date type: {type(date_input)}")
 
 
 class Fred:
@@ -117,7 +135,7 @@ class Fred:
                 else:
                     val = float(val)
                 data[self._parse(child.get("date"))] = val
-            return pd.Series(data)
+            return data
         except httpx.HTTPStatusError as exc:
             root = ET.fromstring(exc.response.text)
             raise ValueError(root.get("message"))
@@ -126,10 +144,16 @@ class Fred:
         """
         helper function for parsing FRED date string into datetime
         """
-        rv = pd.to_datetime(date_str, format=format)
-        if hasattr(rv, "to_pydatetime"):
-            rv = rv.to_pydatetime()
-        return rv
+        if format is None:
+            # Try common datetime formats
+            for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]:
+                try:
+                    return datetime.strptime(date_str, fmt)
+                except ValueError:
+                    continue
+            # If no format works, raise error
+            raise ValueError(f"Unable to parse date string: {date_str}")
+        return datetime.strptime(date_str, format)
 
     def get_series_info(self, series_id):
         """
@@ -149,7 +173,7 @@ class Fred:
         root = self.__fetch_data(url)
         if root is None or not len(root):
             raise ValueError("No info exists for series id: " + series_id)
-        info = pd.Series(list(root)[0].attrib)
+        info = dict(list(root)[0].attrib)
         return info
 
     def get_series(
@@ -176,10 +200,10 @@ class Fred:
         """
         url = "%s/series/observations?series_id=%s" % (self.root_url, series_id)
         if observation_start is not None:
-            observation_start = pd.to_datetime(observation_start, errors="raise")
+            observation_start = _to_datetime(observation_start)
             url += "&observation_start=" + observation_start.strftime("%Y-%m-%d")
         if observation_end is not None:
-            observation_end = pd.to_datetime(observation_end, errors="raise")
+            observation_end = _to_datetime(observation_end)
             url += "&observation_end=" + observation_end.strftime("%Y-%m-%d")
         if kwargs.keys():
             url += "&" + urlencode(kwargs)
@@ -194,7 +218,7 @@ class Fred:
             else:
                 val = float(val)
             data[self._parse(child.get("date"))] = val
-        return pd.Series(data)
+        return data
 
     def get_multiple_series(
         self, series_ids, observation_start=None, observation_end=None, one_df=False, enable_date_col=False, **kwargs,
@@ -211,14 +235,12 @@ class Fred:
             for series_id in series_ids:
                 url = "%s/series/observations?series_id=%s" % (root_url, series_id)
                 if observation_start is not None:
-                    observation_start = pd.to_datetime(
-                        observation_start, errors="raise"
-                    )
+                    observation_start = _to_datetime(observation_start)
                     url += "&observation_start=" + observation_start.strftime(
                         "%Y-%m-%d"
                     )
                 if observation_end is not None:
-                    observation_end = pd.to_datetime(observation_end, errors="raise")
+                    observation_end = _to_datetime(observation_end)
                     url += "&observation_end=" + observation_end.strftime("%Y-%m-%d")
                 if kwargs.keys():
                     url += "&" + urlencode(kwargs)
@@ -251,15 +273,36 @@ class Fred:
                 kwargs=kwargs,
             )
         )
-        
+
         if one_df:
-            df = pd.concat(results, axis=1)
-            df.columns = series_ids
-            if enable_date_col:
-                df.insert(0, 'Date', df.index)
-                df = df.reset_index(drop=True)
+            # Convert dict results to polars DataFrames and join them
+            dfs = []
+            for series_id, data_dict in zip(series_ids, results):
+                # Convert dict to DataFrame with date and value columns
+                df_single = pl.DataFrame({
+                    "Date": list(data_dict.keys()),
+                    series_id: list(data_dict.values())
+                })
+                dfs.append(df_single)
+
+            # Join all DataFrames on Date column
+            if len(dfs) == 0:
+                return pl.DataFrame()
+
+            df = dfs[0]
+            for df_next in dfs[1:]:
+                df = df.join(df_next, on="Date", how="outer")
+
+            # Sort by date
+            df = df.sort("Date")
+
+            if not enable_date_col:
+                # Set Date as index (keep it but move to end behavior similar to pandas index)
+                # In polars, we just keep Date as first column if enable_date_col is False
+                pass
+
             return df
-        
+
         return results
 
     def get_series_latest_release(self, series_id):
@@ -295,8 +338,10 @@ class Fred:
             a Series where each index is the observation date and the value is the data for the Fred series
         """
         df = self.get_series_all_releases(series_id)
-        first_release = df.groupby("date").head(1)
-        data = first_release.set_index("date")["value"]
+        # Get first release for each date (first row in each date group)
+        first_release = df.sort(["date", "realtime_start"]).group_by("date").first()
+        # Convert to dict with date as key and value as value
+        data = dict(zip(first_release["date"].to_list(), first_release["value"].to_list()))
         return data
 
     def get_series_as_of_date(self, series_id, as_of_date):
@@ -316,9 +361,9 @@ class Fred:
         data : Series
             a Series where each index is the observation date and the value is the data for the Fred series
         """
-        as_of_date = pd.to_datetime(as_of_date)
+        as_of_date = _to_datetime(as_of_date)
         df = self.get_series_all_releases(series_id)
-        data = df[df["realtime_start"] <= as_of_date]
+        data = df.filter(pl.col("realtime_start") <= as_of_date)
         return data
 
     def get_series_all_releases(
@@ -377,8 +422,9 @@ class Fred:
                 "value": val,
             }
             i += 1
-        data = pd.DataFrame(data).T
-        return data
+        # Convert dict of dicts to DataFrame
+        df = pl.DataFrame(list(data.values()))
+        return df
 
     def get_series_vintage_dates(self, series_id):
         """
@@ -442,18 +488,25 @@ class Fred:
                 data[series_id][field] = child.get(field)
 
         if num_results_returned > 0:
-            data = pd.DataFrame(data, columns=series_ids).T
+            # Convert dict of dicts to DataFrame
+            df = pl.DataFrame(list(data.values()))
             # parse datetime columns
-            for field in [
+            datetime_fields = [
                 "realtime_start",
                 "realtime_end",
                 "observation_start",
                 "observation_end",
                 "last_updated",
-            ]:
-                data[field] = data[field].apply(self._parse, format=None)
-            # set index name
-            data.index.name = "series id"
+            ]
+            for field in datetime_fields:
+                if field in df.columns:
+                    df = df.with_columns(
+                        pl.col(field).map_elements(
+                            lambda x: self._parse(x, format=None) if x else None,
+                            return_dtype=pl.Datetime
+                        )
+                    )
+            data = df
         else:
             data = None
         return data, num_results_total
@@ -521,7 +574,7 @@ class Fred:
             for i in range(1, max_results_needed // self.max_results_per_request + 1):
                 offset = i * self.max_results_per_request
                 next_data, _ = self.__do_series_search(url + "&offset=" + str(offset))
-                data = pd.concat([data, next_data])
+                data = pl.concat([data, next_data])
         return data.head(max_results_needed)
 
     def search(self, text, limit=1000, order_by=None, sort_order=None, filter=None):
@@ -667,22 +720,21 @@ class FredFetcher(BaseFetcher):
             observation_start=start_date,
             observation_end=end_date,
         )
-        df.columns = [
-            "CMT3M",
-            "CMT6M",
-            "CMT1",
-            "CMT2",
-            "CMT3",
-            "CMT5",
-            "CMT7",
-            "CMT10",
-            "CMT20",
-            "CMT30",
-        ]
+        # Rename columns
+        df = df.rename({
+            "DTB3": "CMT3M",
+            "DTB6": "CMT6M",
+            "DGS1": "CMT1",
+            "DGS2": "CMT2",
+            "DGS3": "CMT3",
+            "DGS5": "CMT5",
+            "DGS7": "CMT7",
+            "DGS10": "CMT10",
+            "DGS20": "CMT20",
+            "DGS30": "CMT30",
+        })
         if tenors:
-            tenors = ["Date"] + tenors
-            return df[tenors]
-        df = df.dropna()
-        df = df.rename_axis("Date").reset_index()
-        df = df.set_index("Date")
+            cols_to_select = ["Date"] + tenors
+            return df.select(cols_to_select)
+        df = df.drop_nulls()
         return df

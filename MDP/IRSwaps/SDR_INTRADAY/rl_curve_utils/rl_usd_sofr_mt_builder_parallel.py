@@ -4,7 +4,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Literal, Optional, Tuple
 
-import pandas as pd
+import polars as pl
 import pytz
 import QuantLib as ql
 import rateslib as rl
@@ -49,14 +49,19 @@ proxy_cycler = itertools.cycle(NORDVPN_HOSTS)
 NY = pytz.timezone("America/New_York")
 
 # --- Worker-global variables ---
-_SDR_VWAP_DF: Optional[pd.DataFrame] = None
-_STIR_DAY_DF: Optional[pd.DataFrame] = None
+_SDR_VWAP_DF: Optional[pl.DataFrame] = None
+_STIR_DAY_DF: Optional[pl.DataFrame] = None
 
 
 def _safe_fixed_rate(f):
     try:
-        return f._fixed_rate.iloc[-1]
-    except Exception:
+        # Handle polars Series
+        if isinstance(f._fixed_rate, pl.Series):
+            return f._fixed_rate[-1]
+        # Handle list/array-like
+        return f._fixed_rate[-1]
+    except (TypeError, IndexError):
+        # Scalar value
         return f._fixed_rate
 
 
@@ -82,7 +87,7 @@ def _datetime_to_ql_date(dt: datetime.datetime) -> ql.Date:
     return ql.Date(dt.day, ql_month, dt.year)
 
 
-def _init_worker_env_and_data(sdr_vwap_df: pd.DataFrame, stir_df: pd.DataFrame, blas_threads: int = 1) -> None:
+def _init_worker_env_and_data(sdr_vwap_df: pl.DataFrame, stir_df: pl.DataFrame, blas_threads: int = 1) -> None:
     """Initializes each worker by setting BLAS threads and storing daily dataframes."""
     os.environ["OMP_NUM_THREADS"] = str(blas_threads)
     os.environ["MKL_NUM_THREADS"] = str(blas_threads)
@@ -94,34 +99,35 @@ def _init_worker_env_and_data(sdr_vwap_df: pd.DataFrame, stir_df: pd.DataFrame, 
     _STIR_DAY_DF = stir_df
 
 
-def _calculate_daily_sdr_vwap_timeseries(day_sdr_df: pd.DataFrame, as_of_day: datetime.date, medium_term_tenors) -> pd.DataFrame:
+def _calculate_daily_sdr_vwap_timeseries(day_sdr_df: pl.DataFrame, as_of_day: datetime.date, medium_term_tenors) -> pl.DataFrame:
     spot_datetime = ql_date_to_datetime(
         ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(
             datetime_to_ql_date(datetime.datetime(as_of_day.year, as_of_day.month, as_of_day.day)), ql.Period("2D"), ql.ModifiedFollowing
         )
     )
     usd_sofr_ois_upis = ["QZXQ4R16245X", "QZPB5VSBGRCD"]
-    intraday_df = day_sdr_df.copy().sort_values(by="Execution Timestamp")
-    intraday_df["Fixed rate-Leg 1"] = pd.to_numeric(intraday_df["Fixed rate-Leg 1"], errors="coerce")
-    intraday_df = (
-        intraday_df[
-            (intraday_df["Unique Product Identifier"].isin(usd_sofr_ois_upis))
-            & (intraday_df["Effective Date"].dt.date == spot_datetime.date())
-            & (intraday_df["Action type"] == "NEWT")
-            & (intraday_df["Event type"] == "TRAD")
-            & (intraday_df["Fixed rate-Leg 1"] > 0)
-            & (intraday_df["Platform identifier"] != "XOFF")
-            & (intraday_df["Large notional off-facility swap election indicator"].isna())
-            & (intraday_df["Other payment type"] != "UFRO")
-        ]
-        .set_index("Execution Timestamp")
-        .sort_index()
-    )
-    intraday_df.index = intraday_df.index.tz_convert(NY)
 
-    # sod_ny = NY.localize(datetime.datetime(as_of_day.year, as_of_day.month, as_of_day.day, 0, 0))
-    # eod_ny = NY.localize(datetime.datetime(as_of_day.year, as_of_day.month, as_of_day.day, 23, 59))
-    # minute_grid = pd.date_range(start=sod_ny, end=eod_ny, freq="T", tz=NY)
+    # Convert Fixed rate-Leg 1 to numeric
+    intraday_df = day_sdr_df.clone().with_columns(
+        pl.col("Fixed rate-Leg 1").cast(pl.Float64, strict=False)
+    ).sort("Execution Timestamp")
+
+    # Filter based on conditions
+    intraday_df = intraday_df.filter(
+        pl.col("Unique Product Identifier").is_in(usd_sofr_ois_upis)
+        & (pl.col("Effective Date").dt.date() == spot_datetime.date())
+        & (pl.col("Action type") == "NEWT")
+        & (pl.col("Event type") == "TRAD")
+        & (pl.col("Fixed rate-Leg 1") > 0)
+        & (pl.col("Platform identifier") != "XOFF")
+        & pl.col("Large notional off-facility swap election indicator").is_null()
+        & (pl.col("Other payment type") != "UFRO")
+    ).sort("Execution Timestamp")
+
+    # Convert timestamp to NY timezone
+    intraday_df = intraday_df.with_columns(
+        pl.col("Execution Timestamp").dt.convert_time_zone("America/New_York").alias("Execution Timestamp")
+    )
 
     vwap_series_dict = {}
     for tenor in medium_term_tenors:
@@ -135,49 +141,101 @@ def _calculate_daily_sdr_vwap_timeseries(day_sdr_df: pd.DataFrame, as_of_day: da
                 ql.Period(tenor),
             )
         )
-        intraday_subset = intraday_df[intraday_df["Expiration Date"].dt.date == maturity_datetime.date()]
-        w = intraday_subset["Notional amount-Leg 1"].replace(r"[^\d.]", "", regex=True).astype(float)
-        minute_vwap = intraday_subset.assign(w=w, wx=intraday_subset["Fixed rate-Leg 1"] * w).resample("T").agg({"wx": "sum", "w": "sum"})
-        minute_vwap["Fixed rate-Leg 1"] = minute_vwap["wx"] / minute_vwap["w"]
-        minute_vwap = minute_vwap[["Fixed rate-Leg 1"]]
-        idx = pd.date_range(intraday_subset.index.min().floor("T"), intraday_subset.index.max().ceil("T"), freq="T", tz=intraday_subset.index.tz)
-        minute_vwap = minute_vwap.reindex(idx)
 
-        minute_ffill = minute_vwap.ffill()
-        sod = minute_ffill.index[-1].normalize() + pd.Timedelta(hours=0, minutes=1)
-        eod = minute_ffill.index[-1].normalize() + pd.Timedelta(hours=23, minutes=59)
-        target_idx = pd.date_range(start=sod, end=eod, freq="T", tz=minute_ffill.index.tz)
-        minute_ffill_eod = minute_ffill.reindex(target_idx).ffill().bfill()
+        # Filter for specific maturity
+        intraday_subset = intraday_df.filter(
+            pl.col("Expiration Date").dt.date() == maturity_datetime.date()
+        )
+
+        if intraday_subset.height == 0:
+            continue
+
+        # Extract weights from notional (remove non-numeric characters)
+        intraday_subset = intraday_subset.with_columns([
+            pl.col("Notional amount-Leg 1").str.replace_all(r"[^\d.]", "").cast(pl.Float64).alias("w")
+        ]).with_columns([
+            (pl.col("Fixed rate-Leg 1") * pl.col("w")).alias("wx")
+        ])
+
+        # Group by minute and calculate VWAP
+        minute_vwap = intraday_subset.group_by_dynamic(
+            "Execution Timestamp",
+            every="1m",
+            period="1m",
+        ).agg([
+            pl.col("wx").sum(),
+            pl.col("w").sum(),
+        ]).with_columns([
+            (pl.col("wx") / pl.col("w")).alias("Fixed rate-Leg 1")
+        ]).select(["Execution Timestamp", "Fixed rate-Leg 1"])
+
+        # Get time range (min/max return datetime objects, not Series)
+        min_ts = intraday_subset["Execution Timestamp"].min()
+        max_ts = intraday_subset["Execution Timestamp"].max()
+
+        # Truncate to minute boundaries
+        min_ts_truncated = min_ts.replace(second=0, microsecond=0)
+        max_ts_truncated = max_ts.replace(second=0, microsecond=0) + datetime.timedelta(minutes=1)
+
+        # Create complete minute grid
+        minute_grid = pl.datetime_range(
+            min_ts_truncated,
+            max_ts_truncated,
+            interval="1m",
+            time_zone="America/New_York",
+            eager=True
+        ).to_frame("Execution Timestamp")
+
+        # Join and forward fill
+        minute_vwap_filled = minute_grid.join(
+            minute_vwap, on="Execution Timestamp", how="left"
+        ).with_columns([
+            pl.col("Fixed rate-Leg 1").forward_fill()
+        ])
+
+        # Extend to full day
+        last_ts = minute_vwap_filled["Execution Timestamp"].max()
+        # Truncate to day boundary and add time
+        sod = last_ts.replace(hour=0, minute=1, second=0, microsecond=0)
+        eod = last_ts.replace(hour=23, minute=59, second=0, microsecond=0)
+
+        target_grid = pl.datetime_range(
+            sod,
+            eod,
+            interval="1m",
+            time_zone="America/New_York",
+            eager=True
+        ).to_frame("Execution Timestamp")
+
+        minute_ffill_eod = target_grid.join(
+            minute_vwap_filled, on="Execution Timestamp", how="left"
+        ).with_columns([
+            pl.col("Fixed rate-Leg 1").forward_fill().backward_fill()
+        ])
+
+        # Store both timestamp and VWAP value
+        if "Execution Timestamp" not in vwap_series_dict:
+            vwap_series_dict["Execution Timestamp"] = minute_ffill_eod["Execution Timestamp"]
         vwap_series_dict[f"{tenor}_VWAP"] = minute_ffill_eod["Fixed rate-Leg 1"]
 
-        # sub = intraday_df[intraday_df["Expiration Date"].dt.date == maturity_datetime.date()].copy()
-        # if sub.empty:
-        #     # still output a series (NaNs); you can ffill at consumption-time if desired
-        #     vwap_series_dict[f"{tenor}_VWAP"] = pd.Series(index=minute_grid, dtype=float)
-        #     continue
-
-        # # minute aggregation (sum of weights and weighted price *within* each minute)
-        # sub["w"] = sub["Notional amount-Leg 1"].replace(r"[^\d.]", "", regex=True).astype(float)
-        # sub["wx"] = sub["w"] * sub["Fixed rate-Leg 1"]
-        # per_min = sub.resample("T").agg({"wx": "sum", "w": "sum"}).reindex(minute_grid).ffill().bfill()
-
-        # # ---- CAUSAL VWAP: expanding sums up to each minute ----
-        # cwx = per_min["wx"].cumsum()
-        # cw = per_min["w"].cumsum()
-
-        # # avoid divide-by-zero; where cw==0 keep NaN (will be ffilled by consumer)
-        # vwap_causal = cwx.where(cw == 0, cwx / cw)
-        # vwap_series_dict[f"{tenor}_VWAP"] = vwap_causal
-
-    return pd.DataFrame(*[vwap_series_dict])
-    # return pd.DataFrame(vwap_series_dict)
+    # Create DataFrame from dict - Execution Timestamp should be first
+    if vwap_series_dict:
+        # Get the timestamp column
+        ts_col = vwap_series_dict.pop("Execution Timestamp", None)
+        result = pl.DataFrame(vwap_series_dict)
+        if ts_col is not None:
+            result = result.insert_column(0, ts_col.alias("Execution Timestamp"))
+        return result
+    else:
+        # Return empty dataframe with at least Execution Timestamp column
+        return pl.DataFrame({"Execution Timestamp": []})
 
 
 def _build_one_mt_curve_worker(
     *,
     base_curve_id: str,
     snap_iso: str,
-    sofr_fixings: pd.Series,
+    sofr_fixings: Dict,
     n_ser_contracts: int,
     n_sfr_contracts: int,
     n_plus_fomc_years: int,
@@ -192,19 +250,27 @@ def _build_one_mt_curve_worker(
     day_sdr_vwap_df = _SDR_VWAP_DF
     day_stir_df = _STIR_DAY_DF
 
-    snap = pd.to_datetime(snap_iso)
+    # Parse timestamp
+    snap = datetime.datetime.fromisoformat(snap_iso)
     curve_id = f"{snap}-{base_curve_id}"
-    snap = snap.tz_convert(NY) if snap.tzinfo is not None else NY.localize(snap)
+    snap = snap.astimezone(NY) if snap.tzinfo is not None else NY.localize(snap)
 
-    stir_df_snap = day_stir_df[day_stir_df.index <= snap].tail(1)
-    if stir_df_snap.empty:
+    # Filter STIR data up to snap time (assuming day_stir_df has timestamp index or column)
+    stir_df_snap = day_stir_df.filter(
+        pl.col("timestamp") <= snap
+    ).tail(1)
+    if stir_df_snap.height == 0:
         raise ValueError(f"No STIR data available for snapshot {snap}")
 
     rl_stirfs: Dict[str, rl.STIRFuture] = {}
-    for t, q in stir_df_snap.T.iterrows():
-        if ("/ZQ" if use_globex else "FF") in t:
+    # Iterate over columns (tickers) in stir_df_snap
+    for ticker in stir_df_snap.columns:
+        if ticker == "timestamp":  # Skip timestamp column
             continue
-        obj_t, obj_stirf = build_rl_stirf(ticker=t, curve_id=curve_id, price=q, fixings=sofr_fixings, use_globex=use_globex)
+        if ("/ZQ" if use_globex else "FF") in ticker:
+            continue
+        price = stir_df_snap[ticker][0]
+        obj_t, obj_stirf = build_rl_stirf(ticker=ticker, curve_id=curve_id, price=price, fixings=sofr_fixings, use_globex=use_globex)
         rl_stirfs[obj_t] = obj_stirf
 
     # 2) Look up swap rates from pre-calculated daily VWAP timeseries
@@ -223,8 +289,15 @@ def _build_one_mt_curve_worker(
 
         rate_at_snap = 0.0
         if vwap_col in day_sdr_vwap_df.columns:
-            val = day_sdr_vwap_df[vwap_col].loc[:snap].ffill().iloc[-1]
-            rate_at_snap = float(val) if pd.notna(val) else 0.0
+            # Filter up to snap time and forward fill, then get last value
+            filtered = day_sdr_vwap_df.filter(
+                pl.col("Execution Timestamp") <= snap
+            ).with_columns([
+                pl.col(vwap_col).forward_fill()
+            ])
+            if filtered.height > 0:
+                val = filtered[vwap_col][-1]
+                rate_at_snap = float(val) if val is not None else 0.0
 
         assert rate_at_snap != 0.0, "should not be zero!"
 
@@ -288,7 +361,7 @@ def rl_usd_sofr_mt_builder_parallel(
     *,
     base_curve_id: str,
     snaps: List[datetime.datetime],
-    sofr_fixings: pd.Series,
+    sofr_fixings: Dict,
     n_ser_contracts: int,
     n_sfr_contracts: int,
     n_plus_fomc_years: int,
@@ -302,7 +375,11 @@ def rl_usd_sofr_mt_builder_parallel(
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
 
-    norm_snaps = sorted([pd.to_datetime(s).tz_localize(NY) if s.tzinfo is None else pd.to_datetime(s).astimezone(NY) for s in snaps])
+    # Normalize snapshots to NY timezone
+    norm_snaps = sorted([
+        s.tz_localize(NY) if s.tzinfo is None else s.astimezone(NY)
+        for s in snaps
+    ])
     by_day = {}
     for s in norm_snaps:
         by_day.setdefault(s.date(), []).append(s)
@@ -312,8 +389,8 @@ def rl_usd_sofr_mt_builder_parallel(
     bcf = BarchartFetcher(proxies=None, debug_verbose=False)
     bcf._fetch_session_tokens()
 
-    sdr_vwap_by_day: Dict[datetime.date, pd.DataFrame] = {}
-    stir_by_day: Dict[datetime.date, pd.DataFrame] = {}
+    sdr_vwap_by_day: Dict[datetime.date, pl.DataFrame] = {}
+    stir_by_day: Dict[datetime.date, pl.DataFrame] = {}
 
     for day in tqdm(by_day.keys(), desc="Prefetching and preparing daily data"):
         # start_ts = NY.localize(datetime.datetime.combine(day, datetime.time.min))
@@ -322,6 +399,12 @@ def rl_usd_sofr_mt_builder_parallel(
         end_ts = NY.localize(datetime.datetime(day.year, day.month, day.day, 23, 59))
 
         sdr_df = sdr_builder.grab_sdr_trades(start_timestamp=start_ts, end_timestamp=end_ts, agency="CFTC", asset_class="RATES")
+
+        # Convert to polars if pandas (SDRDataBuilder returns pandas)
+        if not isinstance(sdr_df, pl.DataFrame):
+            import pandas as pd
+            sdr_df = pl.from_pandas(sdr_df)
+
         sdr_vwap_by_day[day] = _calculate_daily_sdr_vwap_timeseries(sdr_df, day, medium_term_tenors)
 
         tickers = get_short_end_curve_tickers(as_of=day, first_n_sr1=n_ser_contracts, first_n_sr3=n_sfr_contracts, use_globex=use_globex)
@@ -453,8 +536,30 @@ def rl_usd_sofr_mt_builder_parallel(
             max_concurrent_tasks=max_conc + 3,
             max_keepalive_connections=max(36, max_conc) + 3,
         )
-        stir_df.columns = [from_barchart_symbol(x) for x in stir_df.columns]
-        stir_df = stir_df.bfill().ffill()
+
+        # Convert to polars if pandas (BarchartFetcher returns pandas)
+        if hasattr(stir_df, 'to_polars'):
+            # pandas DataFrame
+            import pandas as pd
+            stir_df = pl.from_pandas(stir_df.reset_index())
+        elif not isinstance(stir_df, pl.DataFrame):
+            # Just in case it's something else
+            import pandas as pd
+            stir_df = pl.from_pandas(pd.DataFrame(stir_df).reset_index())
+
+        # Rename columns
+        stir_df = stir_df.rename({col: from_barchart_symbol(col) for col in stir_df.columns if col != 'index'})
+
+        # Backward fill then forward fill all columns
+        fill_cols = [col for col in stir_df.columns if col != 'index']
+        stir_df = stir_df.with_columns([
+            pl.col(col).backward_fill().forward_fill() for col in fill_cols
+        ])
+
+        # Rename index column to timestamp if it exists
+        if 'index' in stir_df.columns:
+            stir_df = stir_df.rename({'index': 'timestamp'})
+
         stir_by_day[day] = stir_df
 
         # tickers = get_short_end_curve_tickers(as_of=day, first_n_sr1=n_ser_contracts, first_n_sr3=n_sfr_contracts, use_globex=use_globex)
@@ -471,7 +576,7 @@ def rl_usd_sofr_mt_builder_parallel(
             max_workers=max_workers,
             mp_context=mp_ctx,
             initializer=_init_worker_env_and_data,
-            initargs=(sdr_vwap_by_day.get(day, pd.DataFrame()), stir_by_day.get(day, pd.DataFrame()), 1),
+            initargs=(sdr_vwap_by_day.get(day, pl.DataFrame()), stir_by_day.get(day, pl.DataFrame()), 1),
         ) as ex:
             futures = [
                 ex.submit(

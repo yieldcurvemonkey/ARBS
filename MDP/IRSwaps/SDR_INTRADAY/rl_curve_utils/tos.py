@@ -1,3 +1,5 @@
+# ABOUTME: TOS (ThinkOrSwim/Schwab) API client for fetching SOFR futures prices and quotes
+# ABOUTME: Includes CME contract code parsing and US business day calendar utilities
 from __future__ import annotations
 
 import asyncio
@@ -9,15 +11,29 @@ from collections import OrderedDict
 from typing import Any, Dict, Iterable, List, Literal, Optional, Callable, Union
 
 import aiohttp
-import pandas as pd
+import holidays
+import polars as pl
 import pytz
 import rateslib as rl
 import requests
-from pandas.tseries.holiday import USFederalHolidayCalendar
-from pandas.tseries.offsets import CustomBusinessDay
+from dateutil.relativedelta import relativedelta
 
-us_bd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+# US business day calendar using holidays library
+us_holidays = holidays.US()
 nytz = pytz.timezone("US/Eastern")
+
+
+def is_business_day(dt: datetime.date) -> bool:
+    """Check if a date is a US business day (not weekend or federal holiday)."""
+    return dt.weekday() < 5 and dt not in us_holidays
+
+
+def next_business_day(dt: datetime.date) -> datetime.date:
+    """Return the next US business day from the given date."""
+    dt = dt + datetime.timedelta(days=1)
+    while not is_business_day(dt):
+        dt = dt + datetime.timedelta(days=1)
+    return dt
 
 CME_MONTH_CODE = OrderedDict(
     [
@@ -37,14 +53,19 @@ CME_MONTH_CODE = OrderedDict(
 )
 
 
-def first_business_day_next_month(dt: pd.Timestamp) -> pd.Timestamp:
+def first_business_day_next_month(dt: datetime.datetime) -> datetime.datetime:
+    """Return the first US business day of the next month."""
     # Move to 1st of the following month
-    first_next_month = (dt + pd.DateOffset(months=1)).replace(day=1)
+    first_next_month = (dt + relativedelta(months=1)).replace(day=1)
     # If it's a business day, keep it; else roll forward
-    return first_next_month if us_bd.is_on_offset(first_next_month) else first_next_month + us_bd
+    if is_business_day(first_next_month.date()):
+        return first_next_month
+    else:
+        next_bd = next_business_day(first_next_month.date())
+        return datetime.datetime.combine(next_bd, datetime.time())
 
 
-def cme_code_effective_date(code: str) -> pd.Timestamp:
+def cme_code_effective_date(code: str) -> datetime.datetime:
     """
     Parse a CME code (e.g., 'EDZ5', 'SR1Z25', 'SIZ2027', 'Z25') and return the
     first US-business day of that contract month (weekends + US federal holidays).
@@ -76,24 +97,24 @@ def cme_code_effective_date(code: str) -> pd.Timestamp:
     month = CME_MONTH_CODE[month_letter]
 
     # First calendar day of the month
-    first = pd.Timestamp(year=year, month=month, day=1)
+    first = datetime.datetime(year=year, month=month, day=1)
 
     # US business day calendar (weekends + US federal holidays)
-    cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+    if is_business_day(first.date()):
+        return first
+    else:
+        next_bd = next_business_day(first.date())
+        return datetime.datetime.combine(next_bd, datetime.time())
 
-    # Use is_on_offset for broad pandas compatibility
-    eff = first if cbd.is_on_offset(first) else first + cbd
-    return eff
 
-
-def build_rl_stirf(ticker: str, curve_id: str, price: float, fixings: pd.Series = None, use_globex=True):
+def build_rl_stirf(ticker: str, curve_id: str, price: float, fixings: Optional[pl.Series] = None, use_globex=True):
     ser_key = "/SR1" if use_globex else "SER"
     sfr_key = "/SR3" if use_globex else "SFR"
 
     def build_rl_ser(month: str, curve_id: str, price: float):
         return f"{ser_key}{month}", rl.STIRFuture(
             effective=cme_code_effective_date(month),
-            termination=first_business_day_next_month(pd.Timestamp(cme_code_effective_date(month))),
+            termination=first_business_day_next_month(cme_code_effective_date(month)),
             spec="usd_stir1",
             roll="som",
             curves=curve_id,
@@ -119,13 +140,16 @@ def build_rl_stirf(ticker: str, curve_id: str, price: float, fixings: pd.Series 
     raise ValueError("Bad Ticker passed in")
 
 
-def get_sofr_fixings(n=90):
+def get_sofr_fixings(n=90) -> pl.Series:
+    """Fetch SOFR fixings from NY Fed API and return as polars Series indexed by date."""
     url = f"https://markets.newyorkfed.org/api/rates/secured/sofr/last/{n}.json"
     res = requests.get(url, headers={"accept": "application/json"})
-    df = pd.DataFrame(res.json()["refRates"])
-    df["effectiveDate"] = pd.to_datetime(df["effectiveDate"])
-    df["percentRate"] = pd.to_numeric(df["percentRate"])
-    df = df.set_index("effectiveDate").sort_index()
+    df = pl.DataFrame(res.json()["refRates"])
+    df = df.with_columns([
+        pl.col("effectiveDate").str.to_datetime().alias("effectiveDate"),
+        pl.col("percentRate").cast(pl.Float64).alias("percentRate")
+    ])
+    df = df.sort("effectiveDate")
     return df["percentRate"]
 
 
@@ -418,7 +442,7 @@ async def _fetch_one(
     frequency: int,
     retries: int = 2,
     backoff: float = 0.8,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     params = {
         "symbol": symbol,
         "periodType": period_type,
@@ -442,20 +466,31 @@ async def _fetch_one(
                 payload: Dict[str, Any] = await resp.json()
             candles = payload.get("candles", [])
             if not candles:
-                return pd.DataFrame(columns=["open", "high", "low", "close", "volume", "symbol"]).set_index(pd.DatetimeIndex([], name="datetime"))
+                return pl.DataFrame({
+                    "datetime": [],
+                    "open": [],
+                    "high": [],
+                    "low": [],
+                    "close": [],
+                    "volume": [],
+                    "symbol": []
+                })
 
-            df = pd.DataFrame.from_records(candles)
+            df = pl.DataFrame(candles)
             req = {"open", "high", "low", "close", "volume", "datetime"}
             missing = req - set(df.columns)
             if missing:
                 raise ValueError(f"{symbol}: missing keys {sorted(missing)}")
 
-            df["datetime"] = pd.to_datetime(df["datetime"], unit="ms", utc=True)
-            df.set_index("datetime", inplace=True)
-            for c in ("open", "high", "low", "close"):
-                df[c] = df[c].round(2)
-            df["symbol"] = symbol
-            df = df.sort_index()
+            df = df.with_columns([
+                pl.from_epoch(pl.col("datetime"), time_unit="ms").dt.replace_time_zone("UTC").alias("datetime"),
+                pl.col("open").round(2),
+                pl.col("high").round(2),
+                pl.col("low").round(2),
+                pl.col("close").round(2),
+                pl.lit(symbol).alias("symbol")
+            ])
+            df = df.sort("datetime")
             return df
         except Exception as e:
             if attempt >= retries:
@@ -478,7 +513,7 @@ async def _get_price_histories_async(
     join: Literal["outer", "inner"] = "outer",
     max_concurrency: int = 8,
     return_all_fields: bool = False,  # if True, returns dict of DataFrames per symbol
-) -> pd.DataFrame | Dict[str, pd.DataFrame]:
+) -> pl.DataFrame | Dict[str, pl.DataFrame]:
     """
     Async multi-symbol fetch. Returns a wide DataFrame of `value_col` by default.
 
@@ -508,7 +543,7 @@ async def _get_price_histories_async(
 
         sem = asyncio.Semaphore(max_concurrency)
 
-        async def bounded(sym: str) -> tuple[str, pd.DataFrame]:
+        async def bounded(sym: str) -> tuple[str, pl.DataFrame]:
             async with sem:
                 df = await _fetch_one(
                     sym,
@@ -524,14 +559,14 @@ async def _get_price_histories_async(
         results = await asyncio.gather(*(bounded(s) for s in syms), return_exceptions=True)
 
     # Collect successes and (optionally) raise aggregated errors
-    dfs: Dict[str, pd.DataFrame] = {}
+    dfs: Dict[str, pl.DataFrame] = {}
     errors: Dict[str, Exception] = {}
     for res in results:
         if isinstance(res, Exception):
             # this only happens if gather itself failed (rare); keep simple
             raise res
         sym, df = res
-        if df is None or df.empty:
+        if df is None or df.is_empty():
             errors[sym] = RuntimeError("empty dataframe")
         else:
             dfs[sym] = df
@@ -541,19 +576,29 @@ async def _get_price_histories_async(
         return dfs
 
     # Build wide frame of `value_col`
-    series_list = []
+    if not dfs:
+        # if everything failed/empty, return empty
+        return pl.DataFrame()
+
+    # Create wide format by joining on datetime
+    wide_dfs = []
     for sym, df in dfs.items():
         if value_col not in df.columns:
             errors[sym] = RuntimeError(f"missing column {value_col}")
             continue
-        s = df[value_col].rename(sym)
-        series_list.append(s)
+        # Select datetime and value_col, rename value_col to symbol
+        wide_dfs.append(df.select(["datetime", value_col]).rename({value_col: sym}))
 
-    if not series_list:
-        # if everything failed/empty, return empty
-        return pd.DataFrame()
+    if not wide_dfs:
+        return pl.DataFrame()
 
-    wide = pd.concat(series_list, axis=1, join=join).sort_index()
+    # Join all dataframes on datetime
+    wide = wide_dfs[0]
+    for df in wide_dfs[1:]:
+        how = "outer" if join == "outer" else "inner"
+        wide = wide.join(df, on="datetime", how=how)
+
+    wide = wide.sort("datetime")
     return wide
 
 
@@ -571,7 +616,7 @@ def get_price_histories(
     join: Literal["outer", "inner"] = "outer",
     max_concurrency: int = 8,
     return_all_fields: bool = False,
-) -> pd.DataFrame | Dict[str, pd.DataFrame]:
+) -> pl.DataFrame | Dict[str, pl.DataFrame]:
     loop = asyncio.get_event_loop()
     return loop.run_until_complete(
         _get_price_histories_async(
@@ -604,9 +649,9 @@ def get_price_history(
     frequency: int = 1,
     scope: str = "pystonk",
     session: Optional[requests.Session] = None,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """
-    Return OHLCV price history for `symbol` as a pandas DataFrame indexed by UTC datetime.
+    Return OHLCV price history for `symbol` as a polars DataFrame with UTC datetime column.
 
     Parameters
     ----------
@@ -625,7 +670,7 @@ def get_price_history(
 
     Returns
     -------
-    pd.DataFrame with columns: ['open','high','low','close','volume','symbol'] and a UTC DatetimeIndex.
+    pl.DataFrame with columns: ['datetime', 'open','high','low','close','volume','symbol']
     """
     if not symbol:
         raise ValueError("symbol is required")
@@ -670,26 +715,34 @@ def get_price_history(
     candles = payload.get("candles", [])
     if not isinstance(candles, list) or not candles:
         # Return empty, well-formed frame for consistency
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume", "symbol"]).set_index(pd.DatetimeIndex([], name="datetime"))
+        return pl.DataFrame({
+            "datetime": [],
+            "open": [],
+            "high": [],
+            "low": [],
+            "close": [],
+            "volume": [],
+            "symbol": []
+        })
 
-    df = pd.DataFrame.from_records(candles)
+    df = pl.DataFrame(candles)
     # Expected keys: 'open','high','low','close','volume','datetime' (ms since epoch)
     required = {"open", "high", "low", "close", "volume", "datetime"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"Unexpected API shape, missing keys: {sorted(missing)}")
 
-    df["datetime"] = pd.to_datetime(df["datetime"], unit="ms", utc=True)
-    df.set_index("datetime", inplace=True)
-    df.rename(columns={"open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"}, inplace=True)
-    df["symbol"] = symbol
-
-    # Round prices to 2dp to mirror original behavior
-    for c in ("open", "high", "low", "close"):
-        df[c] = df[c].round(2)
+    df = df.with_columns([
+        pl.from_epoch(pl.col("datetime"), time_unit="ms").dt.replace_time_zone("UTC").alias("datetime"),
+        pl.col("open").round(2),
+        pl.col("high").round(2),
+        pl.col("low").round(2),
+        pl.col("close").round(2),
+        pl.lit(symbol).alias("symbol")
+    ])
 
     # Sort by time just in case
-    df = df.sort_index()
+    df = df.sort("datetime")
 
     return df
 
@@ -703,7 +756,7 @@ def get_quotes(
     app_secret: Optional[str] = None,
     scope: str = "pystonk",
     session: Optional[requests.Session] = None,
-) -> pd.DataFrame:
+) -> Dict[str, Dict[str, Any]]:
     """
     Fetch quotes for multiple symbols via /marketdata/v1/quotes and return a DataFrame indexed by symbol.
     """
@@ -741,7 +794,7 @@ async def get_quotes_async(
     app_secret: Optional[str] = None,
     scope: str = "pystonk",
     session: Optional[aiohttp.ClientSession] = None,
-) -> pd.DataFrame:
+) -> Dict[str, Dict[str, Any]]:
     app_key = app_key or os.getenv("SCHWAB_APP_KEY")
     app_secret = app_secret or os.getenv("SCHWAB_APP_SECRET")
     if not app_key or not app_secret:

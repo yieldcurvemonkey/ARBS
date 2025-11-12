@@ -15,14 +15,14 @@ Use to benchmark Ledoit-Wolf vs Sample vs other methods.
 import time
 from typing import Dict
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
 
 
 def compare_estimators(
     estimators: Dict[str, BaseCovarianceEstimator],
-    returns: pd.DataFrame,
+    returns: pl.DataFrame,
     portfolio_weights: np.ndarray = None,
 ) -> Dict[str, Dict[str, float]]:
     """
@@ -133,8 +133,8 @@ def print_comparison(results: Dict[str, Dict[str, float]]) -> None:
 
 def out_of_sample_comparison(
     estimators: Dict[str, BaseCovarianceEstimator],
-    returns_in: pd.DataFrame,
-    returns_out: pd.DataFrame,
+    returns_in: pl.DataFrame,
+    returns_out: pl.DataFrame,
     portfolio_weights: np.ndarray = None,
 ) -> Dict[str, Dict[str, float]]:
     """
@@ -168,7 +168,7 @@ def out_of_sample_comparison(
     results = {}
 
     # Actual out-of-sample variance
-    portfolio_returns_out = returns_out @ portfolio_weights
+    portfolio_returns_out = returns_out.to_numpy() @ portfolio_weights
     actual_variance = np.var(portfolio_returns_out, ddof=1)
 
     for name, estimator in estimators.items():
