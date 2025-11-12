@@ -8,7 +8,7 @@ from io import StringIO
 from typing import Dict, List, Literal, Optional, Set, Tuple, Union
 
 import numpy as np
-import pandas as pd  # Keep for compatibility
+import pandas as pd  # Keep only for pd.read_html (no polars equivalent)
 import polars as pl
 import pytz
 import QuantLib as ql
@@ -208,7 +208,7 @@ def fetch_historical_usd_stir_curve_instruments_snapshot_barchart(
     max_conc = min(len(usd_stir_barchart_symbol), 36)
 
     # Ask BarchartFetcher to keep sockets alive behind the scenes.
-    df = bcf.barchart_timeseries_api(
+    pandas_df = bcf.barchart_timeseries_api(
         barchart_symbols=usd_stir_barchart_symbol,
         start_date=snap - datetime.timedelta(minutes=11),  # Barchart ~10m delay
         end_date=snap + datetime.timedelta(minutes=1),
@@ -219,9 +219,13 @@ def fetch_historical_usd_stir_curve_instruments_snapshot_barchart(
     )
 
     # ---------- postprocess ----------
-    df.columns = [from_barchart_symbol(x) for x in df.columns]
-    df = df.bfill().ffill()
-    return df[df.index <= snap].tail(1)
+    # BarchartFetcher returns pandas DataFrame - process then convert to polars
+    pandas_df.columns = [from_barchart_symbol(x) for x in pandas_df.columns]
+    pandas_df = pandas_df.bfill().ffill()
+    filtered_df = pandas_df[pandas_df.index <= snap].tail(1)
+
+    # Convert to polars before returning
+    return pl.from_pandas(filtered_df.reset_index())
 
 
 def get_fomc_meetings_list(as_of: Optional[Union[datetime.date, datetime.datetime]] = None, n_plus_years: Optional[int] = 0):
@@ -232,8 +236,8 @@ def get_fomc_meetings_list(as_of: Optional[Union[datetime.date, datetime.datetim
         def most_recent_business_day_ql(ql_calendar: ql.Calendar, tz: Optional[str] = "UTC", to_pydate: Optional[bool] = False):
             from zoneinfo import ZoneInfo
 
-            current_ts = pd.Timestamp.now(ZoneInfo(tz)).normalize()
-            current_pydate = current_ts.to_pydatetime().date()
+            current_dt = datetime.datetime.now(ZoneInfo(tz)).replace(hour=0, minute=0, second=0, microsecond=0)
+            current_pydate = current_dt.date()
             current_ql = ql.Date(current_pydate.day, current_pydate.month, current_pydate.year)
 
             while not ql_calendar.isBusinessDay(current_ql):
@@ -310,20 +314,19 @@ def get_fomc_meetings_list(as_of: Optional[Union[datetime.date, datetime.datetim
     if as_of.date() == rl.dt.today().date():
         return _get_live_fomc_meeting_live()
 
-    historical_meeting_dates: pd.Series[Union[datetime.date, datetime.datetime]] = fetch_fomc_rate_history_table()["Date"]
+    historical_df = fetch_fomc_rate_history_table()
+    historical_meeting_dates = historical_df["Date"].to_list()
     live_fomc_dates = _get_live_fomc_meeting_live(as_of=as_of)
     if as_of > max(historical_meeting_dates):
         return live_fomc_dates
 
     last_avaliable_fomc_tradable = rl.dt(as_of.year + n_plus_years, 12, 31)
-    historical_meeting_dates = pd.concat([historical_meeting_dates, pd.Series(live_fomc_dates)], ignore_index=True)
-    historical_meeting_dates = historical_meeting_dates[
-        (historical_meeting_dates >= as_of) & ((historical_meeting_dates < last_avaliable_fomc_tradable))
-    ].sort_values()
-    return historical_meeting_dates.to_list()
+    all_dates = historical_meeting_dates + live_fomc_dates
+    filtered_dates = [d for d in all_dates if (d >= as_of) and (d < last_avaliable_fomc_tradable)]
+    return sorted(filtered_dates)
 
 
-def fetch_fomc_rate_history_table() -> pd.DataFrame:
+def fetch_fomc_rate_history_table() -> pl.DataFrame:
     import warnings
 
     warnings.filterwarnings("ignore", category=FutureWarning)
@@ -351,22 +354,25 @@ def fetch_fomc_rate_history_table() -> pd.DataFrame:
     if target_table_tag is None:
         raise RuntimeError("Could not find the 'FOMC Federal Funds Rate History' table on the page.")
 
-    # Parse the single table HTML to DataFrame
-    df = pd.read_html(StringIO(str(target_table_tag)), flavor="lxml")[0]
+    # Parse the single table HTML to DataFrame (pd.read_html has no polars equivalent)
+    pandas_df = pd.read_html(StringIO(str(target_table_tag)), flavor="lxml")[0]
 
     # Basic clean-up: normalize column names
-    df.columns = (
-        df.columns.map(lambda c: " ".join(str(c).split()))
+    pandas_df.columns = (
+        pandas_df.columns.map(lambda c: " ".join(str(c).split()))
         .str.replace(r"\[\d+\]", "", regex=True)  # drop footnote markers like [22]
         .str.replace(r"\s+", " ", regex=True)
         .str.strip()
     )
 
-    # Strip footnote markers inside cells
-    df = df.applymap(lambda x: re.sub(r"\[\d+\]", "", str(x)).strip() if pd.notna(x) else x)
+    # Strip footnote markers inside cells using native Python
+    for col in pandas_df.columns:
+        pandas_df[col] = pandas_df[col].apply(
+            lambda x: re.sub(r"\[\d+\]", "", str(x)).strip() if x is not None and not (isinstance(x, float) and np.isnan(x)) else x
+        )
 
-    # Try to coerce any percentage/range columns to numeric when possible
-    def to_numeric_series(s: pd.Series) -> pd.Series:
+    # Try to coerce any percentage/range columns to numeric when possible (keep pandas for pd.read_html compatibility)
+    def to_numeric_series(s):
         # If many cells look like percents or numbers, attempt conversion
         text = " ".join(s.dropna().astype(str).head(20).tolist())
         looks_numeric = bool(re.search(r"(\d|%|\.\d|\d\.\d|\d+\s*–\s*\d+)", text))
@@ -395,32 +401,34 @@ def fetch_fomc_rate_history_table() -> pd.DataFrame:
     # Apply conversion cautiously; if a column turns into a DataFrame (range split), collect it
     new_cols = {}
     drop_cols = []
-    for col in list(df.columns):
-        converted = to_numeric_series(df[col])
+    for col in list(pandas_df.columns):
+        converted = to_numeric_series(pandas_df[col])
         if isinstance(converted, pd.DataFrame):
             new_cols.update({c: converted[c] for c in converted.columns})
             drop_cols.append(col)
         else:
-            df[col] = converted
+            pandas_df[col] = converted
 
     if new_cols:
-        df = pd.concat([df.drop(columns=drop_cols), pd.DataFrame(new_cols)], axis=1)
+        pandas_df = pd.concat([pandas_df.drop(columns=drop_cols), pd.DataFrame(new_cols)], axis=1)
 
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df["Target Mid"] = (
-        df["Fed. Funds Rate"]
+    pandas_df["Date"] = pd.to_datetime(pandas_df["Date"], errors="coerce")
+    pandas_df["Target Mid"] = (
+        pandas_df["Fed. Funds Rate"]
         .astype(str)
         .str.replace("%", "", regex=False)
         .str.split(r"[–-]", expand=True)  # handles en-dash or hyphen
         .astype(float)
         .mean(axis=1)  # midpoint of lower/upper
     )
-    df["Move"] = df["Target Mid"].diff().mul(100) * -1
-    df["Move"] = df["Move"].fillna(0).astype(int)
-    return df
+    pandas_df["Move"] = pandas_df["Target Mid"].diff().mul(100) * -1
+    pandas_df["Move"] = pandas_df["Move"].fillna(0).astype(int)
+
+    # Convert to polars before returning
+    return pl.from_pandas(pandas_df)
 
 
-def get_fixings(rate: Literal["sofr", "effr"], n: Optional[int] = 90) -> pd.Series:
+def get_fixings(rate: Literal["sofr", "effr"], n: Optional[int] = 90) -> pl.Series:
     if rate == "sofr":
         url = f"https://markets.newyorkfed.org/api/rates/secured/sofr/last/{n}.json"
     else:
@@ -429,25 +437,27 @@ def get_fixings(rate: Literal["sofr", "effr"], n: Optional[int] = 90) -> pd.Seri
     res.raise_for_status()
     data = res.json().get("refRates", [])
 
-    df = pd.DataFrame(data)
-    if df.empty:
+    df = pl.DataFrame(data)
+    if df.is_empty():
         raise ValueError(f"No {rate} data returned from NY Fed API.")
 
-    df["effectiveDate"] = pd.to_datetime(df["effectiveDate"]).dt.date
-    df["percentRate"] = pd.to_numeric(df["percentRate"], errors="coerce")
-    df = df.dropna(subset=["percentRate"]).set_index("effectiveDate").sort_index()
+    df = df.with_columns([
+        pl.col("effectiveDate").str.to_date().alias("effectiveDate"),
+        pl.col("percentRate").cast(pl.Float64, strict=False).alias("percentRate")
+    ])
+    df = df.filter(pl.col("percentRate").is_not_null()).sort("effectiveDate")
 
     tz = pytz.timezone("America/Chicago")
     yday = datetime.datetime.now(tz).date() - datetime.timedelta(days=1)
     cal = ql.UnitedStates(ql.UnitedStates.FederalReserve)
     y_qld = ql.Date(yday.day, yday.month, yday.year)
 
-    if cal.isBusinessDay(y_qld) and (yday not in df.index):
-        last_val = float(df["percentRate"].iloc[-1])
-        df.loc[yday] = last_val
-        df = df.sort_index()
+    existing_dates = df["effectiveDate"].to_list()
+    if cal.isBusinessDay(y_qld) and (yday not in existing_dates):
+        last_val = float(df["percentRate"][-1])
+        new_row = pl.DataFrame({"effectiveDate": [yday], "percentRate": [last_val]})
+        df = pl.concat([df, new_row]).sort("effectiveDate")
 
-    df.index = pd.to_datetime(df.index)
     return df["percentRate"]
 
 
@@ -498,14 +508,20 @@ def get_turn_dates_bday_adj(
     return sorted(list(turn_dates))
 
 
-def build_rl_stirf(ticker: str, curve_id: str, price: float, fixings: pd.Series = None, use_globex=True):
+def build_rl_stirf(ticker: str, curve_id: str, price: float, fixings: pl.Series = None, use_globex=True):
     ser_key = "/SR1" if use_globex else "SER"
     sfr_key = "/SR3" if use_globex else "SFR"
 
     def build_rl_ser(month: str, curve_id: str, price: float):
+        eff_date = cme_code_effective_date(month)
+        # Convert to datetime if it's a date object
+        if isinstance(eff_date, datetime.date) and not isinstance(eff_date, datetime.datetime):
+            eff_dt = datetime.datetime.combine(eff_date, datetime.time())
+        else:
+            eff_dt = eff_date
         return f"{ser_key}{month}", rl.STIRFuture(
-            effective=cme_code_effective_date(month),
-            termination=first_business_day_next_month(pd.Timestamp(cme_code_effective_date(month))),
+            effective=eff_date,
+            termination=first_business_day_next_month(eff_dt),
             spec="usd_stir1",
             roll="som",
             curves=curve_id,
@@ -571,7 +587,7 @@ def build_rl_fomc_turn_flies(fomc_nodes: List[Union[datetime.date, datetime.date
 def fetch_stir_market_data(
     curve_id_local: str,
     snap_local: Union[datetime.datetime, datetime.date, List[Union[datetime.datetime, datetime.date]], str],
-    fixings: pd.Series,
+    fixings: pl.Series,
     side: Literal["bid", "mid", "ask"],
     include_serff: bool,
     use_globex: bool,
@@ -634,16 +650,22 @@ def fetch_stir_market_data(
             ),
             use_globex=use_globex,
         )
-        curve_timestamp = stir_df.index[0]
+        # stir_df is now a polars DataFrame with datetime column (first column is the index from pandas)
+        datetime_col_name = stir_df.columns[0]
+        curve_timestamp = stir_df[datetime_col_name][0]
         rl_stirfs = {}
         serff_basis = {}
         ff = "/ZQ" if use_globex else "FF"
         ser = "/SR1" if use_globex else "SER"
-        for t, q in stir_df.T.iterrows():
+
+        # Iterate over columns (excluding the datetime column)
+        for col_name in stir_df.columns[1:]:
+            t = col_name
+            q = stir_df[col_name][-1]  # Get last value
             if ff in t:
                 curr_contract = str(t).replace(ff, "")
                 if curr_contract not in serff_basis:
-                    serff_basis[curr_contract] = stir_df[f"{ser}{curr_contract}"].iloc[-1] - stir_df[f"{ff}{curr_contract}"].iloc[-1]
+                    serff_basis[curr_contract] = stir_df[f"{ser}{curr_contract}"][-1] - stir_df[f"{ff}{curr_contract}"][-1]
             else:
                 obj_t, obj_stirf = build_rl_stirf(ticker=t, curve_id=curve_id_local, price=q, fixings=fixings, use_globex=use_globex)
                 rl_stirfs[obj_t] = obj_stirf
@@ -664,8 +686,6 @@ def get_barchart_timeseries(
     from typing import Iterable, List, Set
     from urllib.parse import quote
 
-    import pandas as pd  # Keep for compatibility
-import polars as pl
     import requests
 
     # --- add this near the top of get_barchart_timeseries() ---
@@ -740,7 +760,7 @@ import polars as pl
             raw_legs.add(t)
 
     if not raw_legs:
-        return pd.DataFrame()
+        return pl.DataFrame()
 
     usd_stir_barchart_symbol = [to_barchart_symbol(x) for x in sorted(raw_legs)]
 
@@ -851,7 +871,7 @@ import polars as pl
         start = datetime.datetime(start.year, start.month, start.day)
         end = datetime.datetime(end.year, end.month, end.day)
 
-    df = bcf.barchart_timeseries_api(
+    pandas_df = bcf.barchart_timeseries_api(
         barchart_symbols=usd_stir_barchart_symbol,
         start_date=start,
         end_date=end,
@@ -861,12 +881,21 @@ import polars as pl
         max_keepalive_connections=max(36, max_conc) + 3,
     )
 
-    df.columns = [from_barchart_symbol(x) for x in df.columns]
-    df = df.sort_index().bfill().ffill()
+    # BarchartFetcher returns pandas DataFrame - rename columns and fill
+    pandas_df.columns = [from_barchart_symbol(x) for x in pandas_df.columns]
+    pandas_df = pandas_df.sort_index().bfill().ffill()
 
-    # Ensure numeric dtypes for leg columns so math doesn’t yield NaNs due to object dtype
-    for c in df.columns:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+    # Ensure numeric dtypes for leg columns so math doesn't yield NaNs due to object dtype
+    for c in pandas_df.columns:
+        pandas_df[c] = pd.to_numeric(pandas_df[c], errors="coerce")
+
+    # Convert to polars for remaining operations
+    # Note: BarchartFetcher uses DatetimeIndex, so we need to handle the index
+    pandas_df_reset = pandas_df.reset_index()
+    df = pl.from_pandas(pandas_df_reset)
+
+    # Get the datetime column name (usually 'index' or 'timestamp')
+    datetime_col = df.columns[0]
 
     def _quote_legs_in_expr(expr_label: str) -> str:
         # Backtick any recognized legs so eval can handle names with '/' or '-'
@@ -877,35 +906,35 @@ import polars as pl
                 out = re.sub(rf"(?<![A-Za-z0-9_/]){re.escape(col)}(?![A-Za-z0-9_/])", f"`{col}`", out)
         return out
 
-    def _manual_eval(label: str) -> pd.Series:
+    def _manual_eval(label: str) -> pl.Series:
         """
         Fallback: handle + - * / on legs only (no parentheses).
         """
         tokens = re.findall(r"([+\-*/])|((?:/SR[13]|/ZQ|SFR|SER|FF|ZQ)" + _MONTH + r"\d{2})", label.replace(" ", ""))
         if not tokens:
-            return pd.Series(index=df.index, dtype=float)
+            return pl.Series([None] * df.height, dtype=pl.Float64)
 
         parts: list[str] = []
         for op, leg in tokens:
             parts.append(op if op else leg)
 
-        def _get(leg: str) -> pd.Series:
+        def _get(leg: str) -> pl.Series:
             if leg in df.columns:
                 return df[leg]
             if f"`{leg}`" in df.columns:
                 return df[f"`{leg}`"]
-            return pd.Series(index=df.index, dtype=float)
+            return pl.Series([None] * df.height, dtype=pl.Float64)
 
         if parts and parts[0] in "+-*/":
-            acc = pd.Series(0.0, index=df.index, dtype=float)
+            acc = pl.Series([0.0] * df.height, dtype=pl.Float64)
             idx = 0
         else:
-            acc = _get(parts[0]).astype(float)
+            acc = _get(parts[0]).cast(pl.Float64)
             idx = 1
 
         while idx < len(parts):
             op = parts[idx]
-            nxt = _get(parts[idx + 1]).astype(float) if (idx + 1) < len(parts) else pd.Series(0.0, index=df.index)
+            nxt = _get(parts[idx + 1]).cast(pl.Float64) if (idx + 1) < len(parts) else pl.Series([0.0] * df.height, dtype=pl.Float64)
             if op == "+":
                 acc = acc + nxt
             elif op == "-":
@@ -913,40 +942,28 @@ import polars as pl
             elif op == "*":
                 acc = acc * nxt
             elif op == "/":
-                acc = acc / nxt.replace(0, np.nan)
+                # Replace 0 with None for division
+                nxt_safe = pl.when(nxt == 0).then(None).otherwise(nxt)
+                acc = acc / nxt_safe
             idx += 2
         return acc
-
-    def _ensure_label_column_exists(label: str):
-        """
-        After eval, some pandas versions may keep a backticked column name literally.
-        Normalize to plain label.
-        """
-        bt = f"`{label}`"
-        if (label not in df.columns) and (bt in df.columns):
-            df.rename(columns={bt: label}, inplace=True)
 
     outputs: List[str] = []
     for t in tickers:
         if _is_expr(t):
             label = t[1:-1].strip()  # without outer backticks
-            rhs = _quote_legs_in_expr(label)
-
-            # Try eval first (supports parentheses, etc.)
-            try:
-                df.eval(f"`{label}` = {rhs}", inplace=True, engine="python")
-                _ensure_label_column_exists(label)
-            except Exception:
-                # Hard fail → manual
-                df[label] = _manual_eval(label)
-
-            # If present but all-NaN (legs didn’t bind), recompute manually
-            if (label not in df.columns) or df[label].isna().all():
-                df[label] = _manual_eval(label)
-
+            # Use manual eval since polars doesn't have df.eval
+            result_series = _manual_eval(label)
+            df = df.with_columns(result_series.alias(label))
             outputs.append(label)
         else:
             outputs.append(t)
 
     # Return only requested columns, preserving user order, without KeyError on missing
-    return df.filter(outputs)
+    valid_outputs = [col for col in outputs if col in df.columns]
+    if not valid_outputs:
+        return pl.DataFrame()
+
+    # Return polars DataFrame with datetime column and requested columns
+    result_df = df.select([datetime_col] + valid_outputs)
+    return result_df

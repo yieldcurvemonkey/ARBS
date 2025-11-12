@@ -3,17 +3,47 @@ import hashlib
 import re
 from typing import List, Optional, Union, Literal, Tuple, Dict
 
-import pandas as pd  # Keep for compatibility
 import polars as pl
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 
 
-def _series_sha1(s: pd.Series) -> str:
-    ss = s.copy()
-    ss.index = pd.to_datetime(ss.index)
-    ss = ss.sort_index()
-    parts = (f"{idx.date().isoformat()}={val:.12g}" for idx, val in ss.items())
+def _series_sha1(df: pl.DataFrame) -> str:
+    """
+    Create SHA1 hash of a time series.
+
+    Args:
+        df: DataFrame with date/datetime in first column, values in second column
+    """
+    # Clone to avoid modifying original
+    df = df.clone()
+
+    # Get column names
+    date_col, value_col = df.columns[0], df.columns[1]
+
+    # Ensure date column is datetime/date type
+    if df[date_col].dtype not in [pl.Date, pl.Datetime]:
+        df = df.with_columns(pl.col(date_col).cast(pl.Datetime))
+
+    # Sort by date
+    df = df.sort(date_col)
+
+    # Generate hash parts
+    parts = []
+    for row in df.iter_rows(named=True):
+        date_val = row[date_col]
+        # Extract date part
+        if isinstance(date_val, datetime.datetime):
+            date_str = date_val.date().isoformat()
+        elif isinstance(date_val, datetime.date):
+            date_str = date_val.isoformat()
+        else:
+            # Handle polars datetime/date objects
+            date_str = str(date_val)[:10]  # Take YYYY-MM-DD part
+
+        value = row[value_col]
+        parts.append(f"{date_str}={value:.12g}")
+
     h = hashlib.sha1("\n".join(parts).encode()).hexdigest()
     return h[:10]
 
@@ -35,7 +65,7 @@ def _normalize_snap(snap: Union[datetime.date, datetime.datetime, List[Union[dat
 def _make_key(
     curve_id: str,
     snap: Union[datetime.date, datetime.datetime, List[Union[datetime.date, datetime.datetime]]],
-    sofr_fixings: pd.Series,
+    sofr_fixings: pl.DataFrame,
     n_ser: int,
     n_sfr: int,
     n_plus_fomc_years: int,
@@ -68,7 +98,7 @@ class _RLCurveCache(ZODBCacheMixin):
         *,
         curve_id: str,
         snap: Union[datetime.datetime, datetime.date, List[Union[datetime.datetime, datetime.date]]],
-        sofr_fixings: pd.Series,
+        sofr_fixings: pl.DataFrame,
         n_ser: int,
         n_sfr: int,
         n_plus_fomc_years: int,
@@ -108,7 +138,7 @@ class _RLCurveCache(ZODBCacheMixin):
         *,
         curve_id: str,
         snap: Union[datetime.datetime, datetime.date, List[Union[datetime.datetime, datetime.date]]],
-        sofr_fixings: pd.Series,
+        sofr_fixings: pl.DataFrame,
         n_ser: int,
         n_sfr: int,
         n_plus_fomc_years: int,
@@ -142,7 +172,7 @@ class _RLCurveCache(ZODBCacheMixin):
         *,
         curve_id: str,
         snap: Union[datetime.datetime, datetime.date, List[Union[datetime.datetime, datetime.date]]],
-        sofr_fixings: pd.Series,
+        sofr_fixings: pl.DataFrame,
         n_ser: int,
         n_sfr: int,
         n_plus_fomc_years: int,

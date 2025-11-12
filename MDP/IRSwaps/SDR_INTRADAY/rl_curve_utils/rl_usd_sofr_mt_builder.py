@@ -3,7 +3,6 @@ import os
 import re
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
-import pandas as pd  # Keep for compatibility
 import polars as pl
 import pytz
 import QuantLib as ql
@@ -25,7 +24,7 @@ def rl_usd_sofr_mt_builder(
     *,
     curve_id: str,
     snap: Union[datetime.datetime, datetime.date, List[Union[datetime.datetime, datetime.date]]],
-    sofr_fixings: pd.Series,
+    sofr_fixings,  # Accepts dict-like or series-like (pandas/polars) - passed to rateslib
     n_ser_contracts: int,
     n_sfr_contracts: int,
     n_plus_fomc_years: int,
@@ -43,7 +42,14 @@ def rl_usd_sofr_mt_builder(
 
     def _safe_fixed_rate(f):
         try:
-            return f._fixed_rate.iloc[-1]
+            # Handle both scalar and array-like _fixed_rate
+            fixed_rate = f._fixed_rate
+            if hasattr(fixed_rate, 'iloc'):  # pandas Series
+                return fixed_rate.iloc[-1]
+            elif hasattr(fixed_rate, '__getitem__') and hasattr(fixed_rate, '__len__'):  # polars or list-like
+                return fixed_rate[-1]
+            else:
+                return fixed_rate
         except Exception:
             return f._fixed_rate
 
@@ -70,7 +76,7 @@ def rl_usd_sofr_mt_builder(
     def _fetch_stir_market_data(
         curve_id_local: str,
         snap_local: Union[datetime.datetime, datetime.date, List[Union[datetime.datetime, datetime.date]], str],
-        fixings: pd.Series,
+        fixings,  # Accepts dict-like or series-like (pandas/polars) - passed to rateslib
         side: Literal["bid", "mid", "ask"],
         include_serff: bool,
     ) -> Tuple[Union[datetime.datetime, datetime.date], Dict[str, rl.STIRFuture], Dict[str, float]]:
@@ -215,25 +221,33 @@ def rl_usd_sofr_mt_builder(
             )
 
             usd_sofr_ois_upis = ["QZXQ4R16245X", "QZPB5VSBGRCD"]
-            intraday_df = sdr_df.copy().sort_values(by="Execution Timestamp")
-            intraday_df["Fixed rate-Leg 1"] = pd.to_numeric(intraday_df["Fixed rate-Leg 1"], errors="coerce")
+            # sdr_df is polars DataFrame from SDRDataBuilder
             intraday_df = (
-                intraday_df[
-                    (intraday_df["Unique Product Identifier"].isin(usd_sofr_ois_upis))
-                    & (intraday_df["Effective Date"].dt.date == spot_datetime.date())
-                    & (intraday_df["Action type"] == "NEWT")
-                    & (intraday_df["Event type"] == "TRAD")
-                    & (intraday_df["Fixed rate-Leg 1"] > 0)
-                    & (intraday_df["Platform identifier"] != "XOFF")
-                    & (intraday_df["Large notional off-facility swap election indicator"].isna())
-                    & (intraday_df["Other payment type"] != "UFRO")
-                ]
-                .set_index("Execution Timestamp")
-                .sort_index()
+                sdr_df.clone()
+                .sort("Execution Timestamp")
+                .with_columns([
+                    pl.col("Fixed rate-Leg 1").cast(pl.Float64, strict=False)
+                ])
+                .filter(
+                    pl.col("Unique Product Identifier").is_in(usd_sofr_ois_upis)
+                    & (pl.col("Effective Date").dt.date() == spot_datetime.date())
+                    & (pl.col("Action type") == "NEWT")
+                    & (pl.col("Event type") == "TRAD")
+                    & (pl.col("Fixed rate-Leg 1") > 0)
+                    & (pl.col("Platform identifier") != "XOFF")
+                    & pl.col("Large notional off-facility swap election indicator").is_null()
+                    & (pl.col("Other payment type") != "UFRO")
+                )
+                .sort("Execution Timestamp")
             )
-            intraday_df.index = intraday_df.index.tz_convert(snap_dt.tzinfo)
-            intraday_df = intraday_df[intraday_df.index <= snap_dt]
-            intraday_df.index = intraday_df.index.tz_convert(NY_tz)
+            # Convert timezone and filter
+            intraday_df = intraday_df.with_columns([
+                pl.col("Execution Timestamp").dt.convert_time_zone(str(snap_dt.tzinfo))
+            ]).filter(
+                pl.col("Execution Timestamp") <= snap_dt
+            ).with_columns([
+                pl.col("Execution Timestamp").dt.convert_time_zone("America/New_York")
+            ])
 
             rl_irs: Dict[str, rl.IRS] = {}
             for tenor in medium_term_tenors:
@@ -247,25 +261,78 @@ def rl_usd_sofr_mt_builder(
                         ql.Period(tenor),
                     )
                 )
-                intraday_subset = intraday_df[intraday_df["Expiration Date"].dt.date == maturity_datetime.date()]
-                w = intraday_subset["Notional amount-Leg 1"].replace(r"[^\d.]", "", regex=True).astype(float)
-                minute_vwap = intraday_subset.assign(w=w, wx=intraday_subset["Fixed rate-Leg 1"] * w).resample("T").agg({"wx": "sum", "w": "sum"})
-                minute_vwap["Fixed rate-Leg 1"] = minute_vwap["wx"] / minute_vwap["w"]
-                minute_vwap = minute_vwap[["Fixed rate-Leg 1"]]
-                idx = pd.date_range(intraday_subset.index.min().floor("T"), intraday_subset.index.max().ceil("T"), freq="T", tz=intraday_subset.index.tz)
-                minute_vwap = minute_vwap.reindex(idx)
-
-                minute_ffill = minute_vwap.ffill()
-                target_idx = pd.date_range(start=minute_ffill.index[0], end=snap_dt, freq="T", tz=minute_ffill.index.tz)
-                minute_ffill_eod = minute_ffill.reindex(target_idx).ffill()
-
-                rl_irs[tenor] = rl.IRS(
-                    effective=spot_datetime,
-                    termination=maturity_datetime,
-                    fixed_rate=minute_ffill_eod.loc[snap_dt]["Fixed rate-Leg 1"] * 100,
-                    curves=curve_id_local,
-                    spec="usd_irs",
+                # Filter for matching maturity
+                intraday_subset = intraday_df.filter(
+                    pl.col("Expiration Date").dt.date() == maturity_datetime.date()
                 )
+
+                # Calculate weights from notional amounts (remove non-numeric characters)
+                intraday_subset = intraday_subset.with_columns([
+                    pl.col("Notional amount-Leg 1")
+                    .str.replace_all(r"[^\d.]", "")
+                    .cast(pl.Float64, strict=False)
+                    .alias("w"),
+                ]).with_columns([
+                    (pl.col("Fixed rate-Leg 1") * pl.col("w")).alias("wx")
+                ])
+
+                # Group by minute and calculate VWAP
+                minute_vwap = (
+                    intraday_subset
+                    .group_by_dynamic("Execution Timestamp", every="1m")
+                    .agg([
+                        pl.col("wx").sum().alias("wx"),
+                        pl.col("w").sum().alias("w"),
+                    ])
+                    .with_columns([
+                        (pl.col("wx") / pl.col("w")).alias("Fixed rate-Leg 1")
+                    ])
+                    .select(["Execution Timestamp", "Fixed rate-Leg 1"])
+                    .sort("Execution Timestamp")
+                )
+
+                # Create full minute range and forward fill
+                if len(minute_vwap) > 0:
+                    # Get time range
+                    min_time = intraday_subset["Execution Timestamp"].min()
+                    max_time = intraday_subset["Execution Timestamp"].max()
+
+                    # Create minute range from min to snap_dt
+                    # Polars doesn't have date_range with timezone, so we create it manually
+                    start_minute = min_time.replace(second=0, microsecond=0)
+                    end_minute = snap_dt.replace(second=0, microsecond=0)
+
+                    # Create timestamp range
+                    minutes_count = int((end_minute - start_minute).total_seconds() / 60) + 1
+                    minute_range = [start_minute + datetime.timedelta(minutes=i) for i in range(minutes_count)]
+
+                    # Create full range dataframe
+                    full_range_df = pl.DataFrame({
+                        "Execution Timestamp": minute_range
+                    })
+
+                    # Join and forward fill
+                    minute_ffill = (
+                        full_range_df
+                        .join(minute_vwap, on="Execution Timestamp", how="left")
+                        .with_columns([
+                            pl.col("Fixed rate-Leg 1").forward_fill()
+                        ])
+                    )
+
+                    # Get value at snap_dt (find closest minute)
+                    snap_minute = snap_dt.replace(second=0, microsecond=0)
+                    rate_at_snap = minute_ffill.filter(
+                        pl.col("Execution Timestamp") == snap_minute
+                    )["Fixed rate-Leg 1"][0]
+
+                    rl_irs[tenor] = rl.IRS(
+                        effective=spot_datetime,
+                        termination=maturity_datetime,
+                        fixed_rate=rate_at_snap * 100,
+                        curves=curve_id_local,
+                        spec="usd_irs",
+                    )
 
             return snap_dt, rl_irs
 

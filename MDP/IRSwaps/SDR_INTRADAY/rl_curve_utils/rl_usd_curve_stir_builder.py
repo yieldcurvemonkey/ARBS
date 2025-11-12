@@ -3,7 +3,6 @@ import os
 import re
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
-import pandas as pd  # Keep for compatibility
 import polars as pl
 import pytz
 import rateslib as rl
@@ -23,7 +22,7 @@ def rl_usd_sofr_stir_builder(
     *,
     curve_id: str,
     snap: Union[datetime.datetime, Literal["live"]],
-    sofr_fixings: pd.Series,
+    sofr_fixings: pl.Series,
     n_ser_contracts: int,
     n_sfr_contracts: int,
     n_plus_fomc_years: int,
@@ -37,15 +36,19 @@ def rl_usd_sofr_stir_builder(
     warnings.filterwarnings("ignore", category=UserWarning)
 
     def _safe_fixed_rate(f):
+        # Handle both Series-like and scalar _fixed_rate from rateslib
         try:
-            return f._fixed_rate.iloc[-1]
+            # If it's a sequence, get the last element
+            if hasattr(f._fixed_rate, '__getitem__'):
+                return f._fixed_rate[-1]
+            return f._fixed_rate
         except Exception:
             return f._fixed_rate
 
     def _fetch_stir_market_data(
         curve_id_local: str,
         snap_local: Union[datetime.datetime, datetime.date, List[Union[datetime.datetime, datetime.date]], str],
-        fixings: pd.Series,
+        fixings: pl.Series,
         side: Literal["bid", "mid", "ask"],
         include_serff: bool,
     ) -> Tuple[Union[datetime.datetime, datetime.date], Dict[str, rl.STIRFuture], Dict[str, float]]:
@@ -103,16 +106,23 @@ def rl_usd_sofr_stir_builder(
                 ),
                 use_globex=use_globex,
             )
-            curve_timestamp = stir_df.index[0]
+            # Get first date value from the Date column
+            curve_timestamp = stir_df["Date"][0]
             rl_stirfs = {}
             serff_basis = {}
             ff = "/ZQ" if use_globex else "FF"
             ser = "/SR1" if use_globex else "SER"
-            for t, q in stir_df.T.iterrows():
+            # Iterate over columns (excluding Date column)
+            for col_name in stir_df.columns:
+                if col_name == "Date":
+                    continue
+                t = col_name
+                # Get the last non-null value in this column
+                q = stir_df[col_name][-1]
                 if ff in t:
                     curr_contract = str(t).replace(ff, "")
                     if curr_contract not in serff_basis:
-                        serff_basis[curr_contract] = stir_df[f"{ser}{curr_contract}"].iloc[-1] - stir_df[f"{ff}{curr_contract}"].iloc[-1]
+                        serff_basis[curr_contract] = stir_df[f"{ser}{curr_contract}"][-1] - stir_df[f"{ff}{curr_contract}"][-1]
                 else:
                     obj_t, obj_stirf = build_rl_stirf(ticker=t, curve_id=curve_id_local, price=q, fixings=fixings, use_globex=use_globex)
                     rl_stirfs[obj_t] = obj_stirf
@@ -171,7 +181,7 @@ def rl_usd_ois_stir_builder(
     *,
     curve_id: str,
     snap: Union[datetime.datetime, Literal["live"]],
-    sofr_fixings: pd.Series,
+    sofr_fixings: pl.Series,
     n_ser_contracts: int,
     n_sfr_contracts: int,
     n_plus_fomc_years: int,
@@ -185,15 +195,19 @@ def rl_usd_ois_stir_builder(
     warnings.filterwarnings("ignore", category=UserWarning)
 
     def _safe_fixed_rate(f):
+        # Handle both Series-like and scalar _fixed_rate from rateslib
         try:
-            return f._fixed_rate.iloc[-1]
+            # If it's a sequence, get the last element
+            if hasattr(f._fixed_rate, '__getitem__'):
+                return f._fixed_rate[-1]
+            return f._fixed_rate
         except Exception:
             return f._fixed_rate
 
     def _fetch_stir_market_data(
         curve_id_local: str,
         snap_local: Union[datetime.datetime, datetime.date, List[Union[datetime.datetime, datetime.date]], str],
-        fixings: pd.Series,
+        fixings: pl.Series,
         side: Literal["bid", "mid", "ask"],
         include_serff: bool,
     ) -> Tuple[Union[datetime.datetime, datetime.date], Dict[str, rl.STIRFuture], Dict[str, float]]:
@@ -251,16 +265,23 @@ def rl_usd_ois_stir_builder(
                 ),
                 use_globex=use_globex,
             )
-            curve_timestamp = stir_df.index[0]
+            # Get first date value from the Date column
+            curve_timestamp = stir_df["Date"][0]
             rl_stirfs = {}
             serff_basis = {}
             ff = "/ZQ" if use_globex else "FF"
             ser = "/SR1" if use_globex else "SER"
-            for t, q in stir_df.T.iterrows():
+            # Iterate over columns (excluding Date column)
+            for col_name in stir_df.columns:
+                if col_name == "Date":
+                    continue
+                t = col_name
+                # Get the last non-null value in this column
+                q = stir_df[col_name][-1]
                 if ff in t:
                     curr_contract = str(t).replace(ff, "")
                     if curr_contract not in serff_basis:
-                        serff_basis[curr_contract] = stir_df[f"{ser}{curr_contract}"].iloc[-1] - stir_df[f"{ff}{curr_contract}"].iloc[-1]
+                        serff_basis[curr_contract] = stir_df[f"{ser}{curr_contract}"][-1] - stir_df[f"{ff}{curr_contract}"][-1]
                 else:
                     obj_t, obj_stirf = build_rl_stirf(ticker=t, curve_id=curve_id_local, price=q, fixings=fixings, use_globex=use_globex)
                     rl_stirfs[obj_t] = obj_stirf
