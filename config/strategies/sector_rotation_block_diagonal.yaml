@@ -1,0 +1,49 @@
+# Sector Rotation Strategy with Block-Diagonal Covariance
+# Uses factor model with block-diagonal residual structure
+
+strategy:
+  name: "Sector Rotation - BlockDiagonal"
+  type: "mean_reversion"
+  description: "Mean reversion strategy with block-diagonal covariance from Žignić et al. (2024)"
+
+universe:
+  asset_class: "futures"
+  instruments: "sp500"  # Or dow30, nasdaq100
+
+signals:
+  - type: "mean_reversion"
+    config:
+      lookback: 20
+      z_score_threshold: 2.0
+    weight: 1.0
+
+alpha:
+  IC: 0.05
+  method: "static"
+  ic_lookback: 60
+
+risk:
+  covariance: "block_diagonal"
+  covariance_config:
+    n_factors: 5
+    clustering_method: "predefined"  # Use sector column
+    shrinkage_method: "ledoit_wolf"
+    bias_correction: true
+  lookback: 60
+
+optimizer:
+  type: "mean_variance"
+  risk_aversion: 1.0
+  constraints:
+    long_only: true
+    max_position: 0.10
+    leverage: 1.0
+
+execution:
+  rebalance_frequency: "weekly"
+  transaction_costs: 0.001
+
+backtest:
+  start_date: "2020-01-01"
+  end_date: "2024-01-01"
+  initial_capital: 1000000

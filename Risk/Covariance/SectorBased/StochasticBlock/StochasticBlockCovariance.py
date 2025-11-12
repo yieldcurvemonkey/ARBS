@@ -208,6 +208,11 @@ class StochasticBlockCovariance(SectorBasedCovarianceEstimator):
         """
         T, n = returns.shape
 
+        # Handle single-asset case
+        if n == 1:
+            variance = np.var(returns[:, 0], ddof=1)
+            return np.array([[variance]])
+
         # Sample covariance
         S = np.cov(returns, rowvar=False)
 

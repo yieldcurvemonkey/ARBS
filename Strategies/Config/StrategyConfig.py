@@ -76,6 +76,7 @@ class AlphaConfig:
 class RiskConfig:
     """Configuration for risk model."""
     covariance: str = 'ledoit_wolf'
+    covariance_config: Dict[str, Any] = field(default_factory=dict)
     volatility_target: Optional[float] = None
     lookback: int = 60
 

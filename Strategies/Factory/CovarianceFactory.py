@@ -39,11 +39,23 @@ class CovarianceFactory:
         # Import here to avoid circular dependencies
         from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
         from Risk.Covariance.SampleCovariance import SampleCovariance
+        from Risk.Covariance.SectorBased.BlockDiagonal.BlockDiagonalCovariance import (
+            BlockDiagonalCovariance,
+        )
+        from Risk.Covariance.SectorBased.TwoStep.TwoStepCovariance import (
+            TwoStepCovariance,
+        )
+        from Risk.Covariance.SectorBased.StochasticBlock.StochasticBlockCovariance import (
+            StochasticBlockCovariance,
+        )
 
         cls._COVARIANCE_REGISTRY = {
             'ledoit_wolf': LedoitWolfShrinkage,
             'sample': SampleCovariance,
             'constant_correlation': LedoitWolfShrinkage,  # Same as ledoit_wolf for now
+            'block_diagonal': BlockDiagonalCovariance,
+            'two_step': TwoStepCovariance,
+            'stochastic_block': StochasticBlockCovariance,
         }
 
     @classmethod
@@ -75,7 +87,10 @@ class CovarianceFactory:
             )
 
         estimator_class = cls._COVARIANCE_REGISTRY[method]
-        return estimator_class()
+
+        # Pass covariance_config parameters to estimator
+        cov_config = getattr(config.risk, 'covariance_config', {})
+        return estimator_class(**cov_config)
 
     @classmethod
     def register_covariance(cls, name: str, estimator_class: Type) -> None:
