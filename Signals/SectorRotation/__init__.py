@@ -16,10 +16,12 @@ from Signals.SectorRotation.MomentumFactor import MomentumFactor
 from Signals.SectorRotation.ReversionFactor import ReversionFactor
 from Signals.SectorRotation.CrossSectionalNeutralizer import CrossSectionalNeutralizer
 from Signals.SectorRotation.SectorMomentumSignal import SectorMomentumSignal
+from Signals.SectorRotation.SectorReversionSignal import SectorReversionSignal
 
 __all__ = [
     "MomentumFactor",
     "ReversionFactor",
     "CrossSectionalNeutralizer",
     "SectorMomentumSignal",
+    "SectorReversionSignal",
 ]
