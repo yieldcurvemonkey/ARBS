@@ -298,24 +298,148 @@ When we create `SectorMomentumSignal(BaseSignal)`:
 
 ---
 
+## ✅ Phase 2 Complete: Signal Wrappers (2/2 Components)
+
+**Date**: 2025-11-12
+**Time Taken**: ~2 hours (TDD + implementation)
+
+### 4. SectorMomentumSignal ✅
+**File**: `Signals/SectorRotation/SectorMomentumSignal.py` (150 lines)
+**Tests**: `tests/unit/signals/sector_rotation/test_sector_momentum_signal.py` (12 test methods, 350+ lines)
+
+**Purpose**: Wraps MomentumFactor within BaseSignal framework
+
+**Implementation Highlights**:
+- ✅ **Extends BaseSignal** (proper ARBS architecture integration)
+- ✅ **Polars-native** (NO pandas)
+- Implements `_calculate_raw_signal()` for single sector
+- Uses `generate_batch()` for cross-sectional signals
+- Inherits z-score standardization from BaseSignal
+- IC tracking and history from BaseSignal
+- Default: MOM_7M (7 months, exclude recent 10%)
+
+**Integration with Grinold-Kahn**:
+```python
+# Raw momentum → z-scores → scaled alphas
+signal = SectorMomentumSignal(lookback_months=7)
+z_scores = signal.generate_batch(sector_data_list, None, as_of)
+# AlphaGenerator: α = IC × Vol × Z
+alphas = alpha_gen.generate(z_scores, volatilities, IC)
+```
+
+**Test Coverage**:
+- Initialization and custom parameters
+- Single sector raw signal calculation
+- Batch generation (multiple sectors)
+- Z-score standardization (mean=0, std=1)
+- History tracking
+- IC calculation
+- Insufficient data handling
+- Output schema validation
+
+---
+
+### 5. SectorReversionSignal ✅
+**File**: `Signals/SectorRotation/SectorReversionSignal.py` (140 lines)
+**Tests**: `tests/unit/signals/sector_rotation/test_sector_reversion_signal.py` (14 test methods, 420+ lines)
+
+**Purpose**: Wraps ReversionFactor within BaseSignal framework
+
+**Contrarian Strategy**:
+- Recent winners (positive returns) → NEGATIVE signal (short)
+- Recent losers (negative returns) → POSITIVE signal (long)
+- Formula: REV_30D = -Σ(30 days returns)
+
+**Implementation Highlights**:
+- ✅ **Extends BaseSignal** (proper ARBS architecture integration)
+- ✅ **Polars-native** (NO pandas)
+- Implements `_calculate_raw_signal()` for single sector
+- Contrarian logic validated in tests
+- Default: REV_30D (30 days lookback)
+- Paper target: Sharpe 0.87 (BEST single factor!)
+
+**Test Coverage**:
+- Initialization and custom parameters
+- Winner sector (negative signal)
+- Loser sector (positive signal)
+- Contrarian logic verification
+- Batch generation
+- Z-score standardization
+- History tracking
+- IC calculation
+- Short-term reversion behavior
+
+---
+
+## Phase 2 Implementation Metrics
+
+### Code Statistics
+
+| Component | Implementation | Tests | Test Methods | Total Lines |
+|-----------|---------------|-------|--------------|-------------|
+| SectorMomentumSignal | 150 | 350+ | 12 | 500+ |
+| SectorReversionSignal | 140 | 420+ | 14 | 560+ |
+| **Phase 2 Total** | **290** | **770+** | **26** | **1,060+** |
+| **Cumulative (P1+P2)** | **900** | **1,820+** | **65** | **2,720+** |
+
+### Phase 2 Success Metrics
+
+- ✅ **2/2 signal wrappers complete**
+- ✅ **290 lines implementation code**
+- ✅ **770+ lines test code** (TDD: tests written FIRST)
+- ✅ **26 test methods** covering all functionality
+- ✅ **100% Polars-native** (NO pandas - verified)
+- ✅ **100% BaseSignal integration** (proper inheritance)
+- ✅ **IC tracking enabled** for alpha quality monitoring
+- ✅ **Z-score standardization** via BaseSignal._standardize()
+- ✅ **History tracking** for signal analysis
+
+### Phase 2 Architecture Validation
+
+**Signal Wrapper Pattern**:
+```python
+class SectorMomentumSignal(BaseSignal):
+    def __init__(self, lookback_months=7):
+        super().__init__(name="sector_momentum", standardize=True)
+        self.momentum_factor = MomentumFactor(lookback_months)
+
+    def _calculate_raw_signal(self, inst_data, market_data, as_of):
+        momentum_df = self.momentum_factor.calculate(inst_data)
+        return momentum_df.filter(pl.col("date") == as_of)["momentum_factor"][0]
+```
+
+**Benefits**:
+- ✅ Separation of concerns (factor calculation vs signal framework)
+- ✅ Reusability (MomentumFactor can be used standalone)
+- ✅ Testability (factor and signal tested independently)
+- ✅ Integration (BaseSignal provides IC, history, standardization)
+
+---
+
+## Commits Summary (Phase 2)
+
+### Commit 5: SectorMomentumSignal
+```
+feat(sector-rotation): Implement SectorMomentumSignal with TDD
+- SectorMomentumSignal.py (150 lines, extends BaseSignal)
+- test_sector_momentum_signal.py (12 tests, 350+ lines)
+- Default MOM_7M configuration (paper optimal)
+```
+
+### Commit 6: SectorReversionSignal
+```
+feat(sector-rotation): Implement SectorReversionSignal with TDD
+- SectorReversionSignal.py (140 lines, extends BaseSignal)
+- test_sector_reversion_signal.py (14 tests, 420+ lines)
+- Contrarian strategy: REV_30D (best single factor)
+- Phase 2 COMPLETE
+```
+
+---
+
 ## Next Steps (Remaining Components)
 
-### Phase 2: Signal Wrappers (Immediate Next)
-**Estimated**: 2-3 hours with TDD
-
-#### A. SectorMomentumSignal(BaseSignal)
-- Wraps MomentumFactor + CrossSectionalNeutralizer
-- Implements `_calculate_raw_signal()` method
-- Inherits IC tracking, history from BaseSignal
-- Tests: 10-12 test methods
-
-#### B. SectorReversionSignal(BaseSignal)
-- Wraps ReversionFactor + CrossSectionalNeutralizer
-- Implements `_calculate_raw_signal()` method
-- Inherits IC tracking, history from BaseSignal
-- Tests: 10-12 test methods
-
-### Phase 3: Fundamental Components
+### Phase 3: Fundamental Components (Immediate Next)
 **Estimated**: 4-6 hours with TDD
 
 #### C. FundamentalProcessor
@@ -491,8 +615,8 @@ Components integrate seamlessly:
 **Phase 1 (Foundation)**: ✅ COMPLETE (3/3 components)
 - Time Taken: ~3-4 hours (TDD + documentation)
 
-**Phase 2 (Signal Wrappers)**: 🔄 NEXT
-- Estimated: 2-3 hours
+**Phase 2 (Signal Wrappers)**: ✅ COMPLETE (2/2 components)
+- Time Taken: ~2 hours (TDD + documentation)
 - Components: SectorMomentumSignal, SectorReversionSignal
 
 **Phase 3 (Fundamentals)**: Pending
@@ -508,30 +632,37 @@ Components integrate seamlessly:
 - End-to-end pipeline + validation
 
 **Total Estimated**: ~14-20 hours for complete implementation
-**Completed So Far**: ~3-4 hours (20-25% done)
+**Completed So Far**: ~5-6 hours (30-35% done) - Phases 1 & 2 complete!
 
 ---
 
 ## Conclusion
 
-✅ **Phase 1: Foundation COMPLETE**
+✅ **Phases 1 & 2: Foundation + Signal Wrappers COMPLETE**
 
-Three critical components implemented with strict TDD and Polars-only:
+Five critical components implemented with strict TDD and Polars-only:
+
+**Phase 1 (Foundation)**:
 1. **MomentumFactor**: 7-month momentum (MOM_7M, Sharpe 0.62 target)
 2. **ReversionFactor**: 30-day reversion (REV_30D, Sharpe 0.87 target)
 3. **CrossSectionalNeutralizer**: Z-score normalization (mean=0, std=1)
 
-**Quality Metrics**:
-- 610 lines implementation
-- 1,050+ lines tests (39 methods)
-- 100% Polars-native (NO pandas)
-- 100% TDD workflow (tests → implementation)
-- 100% ARBS architecture alignment
+**Phase 2 (Signal Wrappers)**:
+4. **SectorMomentumSignal**: BaseSignal wrapper for momentum
+5. **SectorReversionSignal**: BaseSignal wrapper for reversion (contrarian)
 
-**Ready for Phase 2**: Signal wrappers (SectorMomentumSignal, SectorReversionSignal)
+**Quality Metrics (Cumulative)**:
+- 900 lines implementation code
+- 1,820+ lines tests (65 methods)
+- 100% Polars-native (NO pandas - verified across all files)
+- 100% TDD workflow (tests → implementation → refactor)
+- 100% ARBS architecture alignment (BaseSignal inheritance)
+- IC tracking, history, and standardization fully integrated
+
+**Ready for Phase 3**: Fundamental components (FundamentalProcessor, FundamentalSignal with neural network)
 
 ---
 
 **Branch**: `claude/sector-macro-model-research-011CV2zpevAPWTyYLmrD1GYw`
-**Status**: ✅ Ready for review and continuation
-**Next**: Signal wrappers (BaseSignal subclasses)
+**Status**: ✅ Phases 1 & 2 complete, ready for Phase 3
+**Next**: Fundamental components (FundamentalProcessor + neural network FundamentalSignal)
