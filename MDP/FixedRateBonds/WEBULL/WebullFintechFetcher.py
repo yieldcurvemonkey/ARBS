@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
 
 import httpx
-import pandas as pd  # Keep for compatibility
 import polars as pl
 import pytz
 import ujson as json
@@ -314,7 +313,7 @@ class WebullFintechFetcher(BaseFetcher):
             data = resp.json().get("data", [])
             if not data:
                 return None
-            tid = int(pd.DataFrame(data)["tickerId"].iloc[-1])
+            tid = int(data[-1]["tickerId"])
             await self._cache_set_ticker(cusip, tid)
             return tid
         except Exception as e:
@@ -322,10 +321,10 @@ class WebullFintechFetcher(BaseFetcher):
             return None
 
     @staticmethod
-    def _parse_value_list_to_df(value_list: List[str], value_col: str = "ytm") -> pd.DataFrame:
+    def _parse_value_list_to_df(value_list: List[str], value_col: str = "ytm") -> pl.DataFrame:
         # Webull returns strings like: "<epoch>,<value>"
         if not value_list:
-            return pd.DataFrame(columns=["timestamp", value_col])
+            return pl.DataFrame({"timestamp": [], value_col: []}, schema={"timestamp": pl.Datetime("us", "UTC"), value_col: pl.Float64})
         parsed = []
         for s in value_list:
             try:
@@ -335,9 +334,9 @@ class WebullFintechFetcher(BaseFetcher):
             except Exception:
                 continue
         if not parsed:
-            return pd.DataFrame(columns=["timestamp", value_col])
-        df = pd.DataFrame(parsed)
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+            return pl.DataFrame({"timestamp": [], value_col: []}, schema={"timestamp": pl.Datetime("us", "UTC"), value_col: pl.Float64})
+        df = pl.DataFrame(parsed)
+        df = df.with_columns(pl.from_epoch("timestamp", time_unit="s").dt.replace_time_zone("UTC").alias("timestamp"))
         return df
 
     async def _fetch_trend_slice(
@@ -353,7 +352,7 @@ class WebullFintechFetcher(BaseFetcher):
         value_col: str = "ytm",
         max_retries: int = 3,
         backoff_factor: int = 1,
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[pl.DataFrame]:
         url = self._build_trend_url(ticker_id, period, count, as_of_epoch)
         resp = await self._request_with_retries(client, "GET", url, headers=headers, max_retries=max_retries, backoff_factor=backoff_factor)
         if not resp:
@@ -387,7 +386,7 @@ class WebullFintechFetcher(BaseFetcher):
         max_slices: int = 200,
         max_retries: int = 3,
         backoff_factor: int = 1,
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[pl.DataFrame]:
         start = self._require_tz(start)
         end = self._require_tz(end)
 
@@ -396,8 +395,8 @@ class WebullFintechFetcher(BaseFetcher):
         if cursor_dt.tzinfo is None or cursor_dt.tzinfo.utcoffset(cursor_dt) is None:
             raise ValueError("end must be timezone-aware or None.")
 
-        slices: List[pd.DataFrame] = []
-        seen_earliest: Optional[pd.Timestamp] = None
+        slices: List[pl.DataFrame] = []
+        seen_earliest: Optional[datetime] = None
 
         for _ in range(max_slices):
             df_slice = await self._fetch_trend_slice(
@@ -412,13 +411,13 @@ class WebullFintechFetcher(BaseFetcher):
                 max_retries=max_retries,
                 backoff_factor=backoff_factor,
             )
-            if df_slice is None or df_slice.empty:
+            if df_slice is None or df_slice.is_empty():
                 break
 
             # Keep only rows <= end if provided
             if end is not None:
-                df_slice = df_slice[df_slice["timestamp"] <= end.astimezone(timezone.utc)]
-            if df_slice.empty:
+                df_slice = df_slice.filter(pl.col("timestamp") <= end.astimezone(timezone.utc))
+            if df_slice.is_empty():
                 break
 
             slices.append(df_slice)
@@ -434,22 +433,21 @@ class WebullFintechFetcher(BaseFetcher):
             seen_earliest = earliest
 
             # Step back one minute earlier than earliest to avoid overlap
-            cursor_dt = (earliest - pd.Timedelta(minutes=1)).to_pydatetime()
+            cursor_dt = earliest - timedelta(minutes=1)
             cursor_dt = cursor_dt.replace(tzinfo=timezone.utc)
 
         if not slices:
             return None
 
-        df = pd.concat(slices, ignore_index=True)
-        df = df.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
+        df = pl.concat(slices)
+        df = df.unique(subset=["timestamp"], keep="last").sort("timestamp")
 
         # Final windowing
         if start is not None:
-            df = df[df["timestamp"] >= start.astimezone(timezone.utc)]
+            df = df.filter(pl.col("timestamp") >= start.astimezone(timezone.utc))
         if end is not None:
-            df = df[df["timestamp"] <= end.astimezone(timezone.utc)]
+            df = df.filter(pl.col("timestamp") <= end.astimezone(timezone.utc))
 
-        df = df.set_index("timestamp")
         return df
 
     async def _resolve_ticker_ids_for_cusips(
@@ -491,7 +489,7 @@ class WebullFintechFetcher(BaseFetcher):
         value_col: str,
         max_concurrent_tasks: int,
         show_tqdm: bool,
-    ) -> Dict[str, Optional[pd.DataFrame]]:
+    ) -> Dict[str, Optional[pl.DataFrame]]:
         sem = asyncio.Semaphore(max_concurrent_tasks)
 
         async def _task(key: str, tid: Optional[int]):
@@ -534,7 +532,7 @@ class WebullFintechFetcher(BaseFetcher):
         max_keepalive_connections: int = 32,
         merge_val_col: Optional[str] = None,
         show_tqdm: bool = False,
-    ) -> Union[Dict[str, Optional[pd.DataFrame]], pd.DataFrame]:
+    ) -> Union[Dict[str, Optional[pl.DataFrame]], pl.DataFrame]:
         start_passed = start
         start = start - timedelta(days=3)
 
@@ -569,39 +567,61 @@ class WebullFintechFetcher(BaseFetcher):
                 )
                 return df_by_cusip
 
-        results: Dict[str, Optional[pd.DataFrame]] = asyncio.run(_run())
+        results: Dict[str, Optional[pl.DataFrame]] = asyncio.run(_run())
 
-        frames: Dict[str, pd.DataFrame] = {k: v for k, v in results.items() if isinstance(v, pd.DataFrame) and not v.empty}
+        frames: Dict[str, pl.DataFrame] = {k: v for k, v in results.items() if isinstance(v, pl.DataFrame) and not v.is_empty()}
         if not frames:
-            return pd.DataFrame()
+            return pl.DataFrame()
 
-        def _merge(dfs_dict: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-            cols = []
-            for cusip, df in dfs_dict.items():
-                colname = cusip
-                value_name = merge_val_col or value_col
-                cols.append(df.rename(columns={value_col: colname})[[cusip if cusip in df.columns else colname]])
-            # The above attempted to rename; do a clean per-cusip selection/rename instead:
-            cols = []
-            for cusip, df in dfs_dict.items():
-                value_name = merge_val_col or value_col
-                series = df[value_name].rename(cusip)
-                cols.append(series)
-            merged = pd.concat(cols, axis=1)
-            return merged.sort_index()
+        # Merge all DataFrames on timestamp
+        value_name = merge_val_col or value_col
+        merged_dfs = []
+        for cusip, df in frames.items():
+            df_renamed = df.select([pl.col("timestamp"), pl.col(value_name).alias(cusip)])
+            merged_dfs.append(df_renamed)
 
+        if not merged_dfs:
+            return pl.DataFrame()
+
+        # Start with first DataFrame
+        merged = merged_dfs[0]
+        for df in merged_dfs[1:]:
+            merged = merged.join(df, on="timestamp", how="outer_coalesce")
+
+        merged = merged.sort("timestamp")
+
+        # Convert to NY timezone
         ny = pytz.timezone("America/New_York")
-        df = _merge(frames)
-        df.index = df.index.tz_convert(ny)
+        merged = merged.with_columns(pl.col("timestamp").dt.convert_time_zone("America/New_York"))
 
-        grid = pd.date_range(start=start, end=end, freq="1min", tz=ny)
-        pos = grid.indexer_between_time(time(7, 00), time(17, 00))
-        session_index = grid[pos]
-        df = df.reindex(session_index).ffill().bfill()
+        # Create session grid (7:00-17:00 NY time)
+        current = start.replace(tzinfo=ny) if start.tzinfo is None else start.astimezone(ny)
+        end_tz = end.replace(tzinfo=ny) if end.tzinfo is None else end.astimezone(ny)
 
+        session_times = []
+        while current <= end_tz:
+            if time(7, 0) <= current.time() <= time(17, 0):
+                session_times.append(current)
+            current += timedelta(minutes=1)
+
+        if not session_times:
+            return pl.DataFrame()
+
+        # Create grid DataFrame and join
+        grid_df = pl.DataFrame({"timestamp": session_times})
+        merged = grid_df.join(merged, on="timestamp", how="left")
+
+        # Forward fill and backward fill
+        value_cols = [c for c in merged.columns if c != "timestamp"]
+        for col in value_cols:
+            merged = merged.with_columns(pl.col(col).forward_fill().backward_fill())
+
+        # Final time window
         start_ny = ny.localize(start_passed) if start_passed.tzinfo is None else start_passed.astimezone(ny)
         end_ny = ny.localize(end) if end.tzinfo is None else end.astimezone(ny)
-        return df.loc[(df.index >= start_ny) & (df.index <= end_ny)]
+        merged = merged.filter((pl.col("timestamp") >= start_ny) & (pl.col("timestamp") <= end_ny))
+
+        return merged
 
     def intraday_by_ticker_ids(
         self,
@@ -619,7 +639,7 @@ class WebullFintechFetcher(BaseFetcher):
         one_df: bool = False,
         merge_val_col: Optional[str] = None,
         show_tqdm: bool = False,
-    ) -> Union[Dict[str, Optional[pd.DataFrame]], pd.DataFrame]:
+    ) -> Union[Dict[str, Optional[pl.DataFrame]], pl.DataFrame]:
         limits = httpx.Limits(max_connections=max_concurrent_tasks, max_keepalive_connections=max_keepalive_connections)
 
         async def _run():
@@ -646,15 +666,28 @@ class WebullFintechFetcher(BaseFetcher):
                 )
                 return out
 
-        results: Dict[str, Optional[pd.DataFrame]] = asyncio.run(_run())
+        results: Dict[str, Optional[pl.DataFrame]] = asyncio.run(_run())
         if not one_df:
             return results
 
-        frames: Dict[str, pd.DataFrame] = {k: v for k, v in results.items() if isinstance(v, pd.DataFrame) and not v.empty}
+        frames: Dict[str, pl.DataFrame] = {k: v for k, v in results.items() if isinstance(v, pl.DataFrame) and not v.is_empty()}
         if not frames:
-            return pd.DataFrame()
-        merged = pd.concat([df[value_col].rename(k) for k, df in frames.items()], axis=1)
-        return merged.sort_index()
+            return pl.DataFrame()
+
+        # Merge all DataFrames on timestamp
+        merged_dfs = []
+        for key, df in frames.items():
+            df_renamed = df.select([pl.col("timestamp"), pl.col(value_col).alias(key)])
+            merged_dfs.append(df_renamed)
+
+        if not merged_dfs:
+            return pl.DataFrame()
+
+        merged = merged_dfs[0]
+        for df in merged_dfs[1:]:
+            merged = merged.join(df, on="timestamp", how="outer_coalesce")
+
+        return merged.sort("timestamp")
 
     async def _eod_for_ticker(
         self,
@@ -671,11 +704,11 @@ class WebullFintechFetcher(BaseFetcher):
         max_slices: int = 50,
         max_retries: int = 3,
         backoff_factor: int = 1,
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[pl.DataFrame]:
         cursor_dt = pytz.timezone("America/New_York").localize(datetime(end.year, end.month, end.day, 17, 00))
 
-        slices: List[pd.DataFrame] = []
-        seen_earliest: Optional[pd.Timestamp] = None
+        slices: List[pl.DataFrame] = []
+        seen_earliest: Optional[datetime] = None
 
         for _ in range(max_slices):
             df_slice = await self._fetch_trend_slice(
@@ -690,20 +723,20 @@ class WebullFintechFetcher(BaseFetcher):
                 max_retries=max_retries,
                 backoff_factor=backoff_factor,
             )
-            if df_slice is None or df_slice.empty:
+            if df_slice is None or df_slice.is_empty():
                 break
 
             # Keep only rows <= end if provided
             if end is not None:
-                df_slice = df_slice[df_slice["timestamp"].dt.date <= end]
-            if df_slice.empty:
+                df_slice = df_slice.filter(pl.col("timestamp").dt.date() <= end.date())
+            if df_slice.is_empty():
                 break
 
             slices.append(df_slice)
 
             earliest = df_slice["timestamp"].min()
             # Stop if we crossed the start boundary
-            if start is not None and earliest.date() <= start:
+            if start is not None and earliest.date() <= start.date():
                 break
 
             # Detect no progress
@@ -712,21 +745,21 @@ class WebullFintechFetcher(BaseFetcher):
             seen_earliest = earliest
 
             # Move cursor back just before earliest to fetch prior years
-            cursor_dt = (earliest - pd.Timedelta(days=1)).to_pydatetime().replace(tzinfo=timezone.utc)
+            cursor_dt = (earliest - timedelta(days=1)).replace(tzinfo=timezone.utc)
 
         if not slices:
             return None
 
-        df = pd.concat(slices, ignore_index=True)
-        df = df.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
+        df = pl.concat(slices)
+        df = df.unique(subset=["timestamp"], keep="last").sort("timestamp")
 
         if start is not None:
-            df = df[df["timestamp"].dt.date >= start]
+            df = df.filter(pl.col("timestamp").dt.date() >= start.date())
         if end is not None:
-            df = df[df["timestamp"].dt.date <= end]
+            df = df.filter(pl.col("timestamp").dt.date() <= end.date())
 
-        df["timestamp"] = df["timestamp"].dt.date
-        return df.set_index("timestamp")
+        df = df.with_columns(pl.col("timestamp").dt.date().alias("timestamp"))
+        return df
 
     async def _fetch_all_eod(
         self,
@@ -742,7 +775,7 @@ class WebullFintechFetcher(BaseFetcher):
         value_col: str,
         max_concurrent_tasks: int,
         show_tqdm: bool,
-    ) -> Dict[str, Optional[pd.DataFrame]]:
+    ) -> Dict[str, Optional[pl.DataFrame]]:
         sem = asyncio.Semaphore(max_concurrent_tasks)
 
         async def _task(key: str, tid: Optional[int]):
@@ -786,7 +819,7 @@ class WebullFintechFetcher(BaseFetcher):
         one_df: bool = True,
         merge_val_col: Optional[str] = None,
         show_tqdm: bool = True,
-    ) -> Union[Dict[str, Optional[pd.DataFrame]], pd.DataFrame]:
+    ) -> Union[Dict[str, Optional[pl.DataFrame]], pl.DataFrame]:
         headers = WebullFintechFetcher.DEFAULT_HEADERS
         limits = httpx.Limits(max_connections=max_concurrent_tasks, max_keepalive_connections=max_keepalive_connections)
 
@@ -816,15 +849,29 @@ class WebullFintechFetcher(BaseFetcher):
                 )
                 return df_by_cusip
 
-        results: Dict[str, Optional[pd.DataFrame]] = asyncio.run(_run())
+        results: Dict[str, Optional[pl.DataFrame]] = asyncio.run(_run())
         if not one_df:
             return results
 
-        frames: Dict[str, pd.DataFrame] = {k: v for k, v in results.items() if isinstance(v, pd.DataFrame) and not v.empty}
+        frames: Dict[str, pl.DataFrame] = {k: v for k, v in results.items() if isinstance(v, pl.DataFrame) and not v.is_empty()}
         if not frames:
-            return pd.DataFrame()
-        merged = pd.concat([(df[(merge_val_col or value_col)]).rename(k) for k, df in frames.items()], axis=1)
-        return merged.sort_index()
+            return pl.DataFrame()
+
+        # Merge all DataFrames on timestamp
+        value_name = merge_val_col or value_col
+        merged_dfs = []
+        for key, df in frames.items():
+            df_renamed = df.select([pl.col("timestamp"), pl.col(value_name).alias(key)])
+            merged_dfs.append(df_renamed)
+
+        if not merged_dfs:
+            return pl.DataFrame()
+
+        merged = merged_dfs[0]
+        for df in merged_dfs[1:]:
+            merged = merged.join(df, on="timestamp", how="outer_coalesce")
+
+        return merged.sort("timestamp")
 
     async def _get_ticker_id_from_symbol(
         self,
@@ -846,16 +893,15 @@ class WebullFintechFetcher(BaseFetcher):
                 if not data:
                     continue
                 # Prefer entries whose symbol/root match our query if possible
-                df = pd.DataFrame(data)
                 # Heuristic: pick last item (Webull often appends the best match last), but
                 # if we have an exact case-insensitive symbol match, prefer it.
                 tid = None
-                if "symbol" in df.columns:
-                    exact = df[df["symbol"].astype(str).str.casefold() == key.casefold()]
-                    if not exact.empty:
-                        tid = int(exact["tickerId"].iloc[-1])
-                if tid is None:
-                    tid = int(df["tickerId"].iloc[-1])
+                key_lower = key.casefold()
+                for item in data:
+                    if "symbol" in item and str(item.get("symbol", "")).casefold() == key_lower:
+                        tid = int(item["tickerId"])
+                if tid is None and data:
+                    tid = int(data[-1]["tickerId"])
                 return tid
             except Exception:
                 continue
@@ -899,7 +945,7 @@ class WebullFintechFetcher(BaseFetcher):
         value_col: str,
         max_concurrent_tasks: int,
         show_tqdm: bool,
-    ) -> Dict[str, Optional[pd.DataFrame]]:
+    ) -> Dict[str, Optional[pl.DataFrame]]:
         sem = asyncio.Semaphore(max_concurrent_tasks)
 
         async def _task(key: str, tid: Optional[int]):
@@ -928,7 +974,7 @@ class WebullFintechFetcher(BaseFetcher):
         return dict(results)
 
     @staticmethod
-    def _parse_futures_payload_to_df(payload: Any, value_col: str = "last") -> pd.DataFrame:
+    def _parse_futures_payload_to_df(payload: Any, value_col: str = "last") -> pl.DataFrame:
         """
         Webull futures charts may come back in a few shapes. We try, in order:
         - node["data"] as list[str] like "epoch,open,high,low,close,volume,oi"
@@ -939,9 +985,9 @@ class WebullFintechFetcher(BaseFetcher):
         """
         node = payload[0] if isinstance(payload, list) and payload else payload
         if not node:
-            return pd.DataFrame(columns=["timestamp", value_col])
+            return pl.DataFrame({"timestamp": [], value_col: []}, schema={"timestamp": pl.Datetime("us", "UTC"), value_col: pl.Float64})
 
-        def _from_string_list(lst: List[str]) -> pd.DataFrame:
+        def _from_string_list(lst: List[str]) -> pl.DataFrame:
             rows = []
             for s in lst or []:
                 try:
@@ -958,9 +1004,9 @@ class WebullFintechFetcher(BaseFetcher):
                 except Exception:
                     continue
             if not rows:
-                return pd.DataFrame(columns=["timestamp", value_col])
-            df = pd.DataFrame(rows)
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+                return pl.DataFrame({"timestamp": [], value_col: []}, schema={"timestamp": pl.Datetime("us", "UTC"), value_col: pl.Float64})
+            df = pl.DataFrame(rows)
+            df = df.with_columns(pl.from_epoch("timestamp", time_unit="s").dt.replace_time_zone("UTC").alias("timestamp"))
             return df
 
         # 1) "data" key with list[str]
@@ -974,9 +1020,8 @@ class WebullFintechFetcher(BaseFetcher):
         # 3) separate arrays 't' and 'c'
         if all(k in node for k in ("t", "c")) and isinstance(node["t"], list) and isinstance(node["c"], list):
             try:
-                ts = pd.to_datetime(pd.Series(node["t"]).astype("int64"), unit="s", utc=True)
-                cl = pd.Series(node["c"]).astype(float)
-                df = pd.DataFrame({"timestamp": ts, value_col: cl})
+                df = pl.DataFrame({"timestamp": node["t"], value_col: node["c"]})
+                df = df.with_columns(pl.from_epoch("timestamp", time_unit="s").dt.replace_time_zone("UTC").alias("timestamp"))
                 return df
             except Exception:
                 pass
@@ -994,11 +1039,11 @@ class WebullFintechFetcher(BaseFetcher):
                 except Exception:
                     continue
             if rows:
-                df = pd.DataFrame(rows)
-                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+                df = pl.DataFrame(rows)
+                df = df.with_columns(pl.from_epoch("timestamp", time_unit="s").dt.replace_time_zone("UTC").alias("timestamp"))
                 return df
 
-        return pd.DataFrame(columns=["timestamp", value_col])
+        return pl.DataFrame({"timestamp": [], value_col: []}, schema={"timestamp": pl.Datetime("us", "UTC"), value_col: pl.Float64})
 
     async def _fetch_futures_slice(
         self,
@@ -1012,7 +1057,7 @@ class WebullFintechFetcher(BaseFetcher):
         value_col: str = "last",
         max_retries: int = 3,
         backoff_factor: int = 1,
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[pl.DataFrame]:
         url = self._build_futures_url(ticker_id, bar_type=bar_type, count=count, ts_epoch=as_of_epoch, restoration=0)
         resp = await self._request_with_retries(client, "GET", url, headers=headers, max_retries=max_retries, backoff_factor=backoff_factor)
         if not resp:
@@ -1040,15 +1085,15 @@ class WebullFintechFetcher(BaseFetcher):
         max_slices: int = 200,
         max_retries: int = 3,
         backoff_factor: int = 1,
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[pl.DataFrame]:
         start = self._require_tz(start)
         end = self._require_tz(end)
         cursor_dt = end if end is not None else datetime.now(timezone.utc)
         if cursor_dt.tzinfo is None or cursor_dt.tzinfo.utcoffset(cursor_dt) is None:
             raise ValueError("end must be timezone-aware or None.")
 
-        slices: List[pd.DataFrame] = []
-        seen_earliest: Optional[pd.Timestamp] = None
+        slices: List[pl.DataFrame] = []
+        seen_earliest: Optional[datetime] = None
 
         for _ in range(max_slices):
             df_slice = await self._fetch_futures_slice(
@@ -1062,13 +1107,13 @@ class WebullFintechFetcher(BaseFetcher):
                 max_retries=max_retries,
                 backoff_factor=backoff_factor,
             )
-            if df_slice is None or df_slice.empty:
+            if df_slice is None or df_slice.is_empty():
                 break
 
             # Keep only rows <= end if provided
             if end is not None:
-                df_slice = df_slice[df_slice["timestamp"] <= end.astimezone(timezone.utc)]
-            if df_slice.empty:
+                df_slice = df_slice.filter(pl.col("timestamp") <= end.astimezone(timezone.utc))
+            if df_slice.is_empty():
                 break
 
             slices.append(df_slice)
@@ -1081,18 +1126,18 @@ class WebullFintechFetcher(BaseFetcher):
                 break
             seen_earliest = earliest
 
-            cursor_dt = (earliest - pd.Timedelta(minutes=1)).to_pydatetime().replace(tzinfo=timezone.utc)
+            cursor_dt = (earliest - timedelta(minutes=1)).replace(tzinfo=timezone.utc)
 
         if not slices:
             return None
 
-        df = pd.concat(slices, ignore_index=True)
-        df = df.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
+        df = pl.concat(slices)
+        df = df.unique(subset=["timestamp"], keep="last").sort("timestamp")
         if start is not None:
-            df = df[df["timestamp"] >= start.astimezone(timezone.utc)]
+            df = df.filter(pl.col("timestamp") >= start.astimezone(timezone.utc))
         if end is not None:
-            df = df[df["timestamp"] <= end.astimezone(timezone.utc)]
-        return df.set_index("timestamp")
+            df = df.filter(pl.col("timestamp") <= end.astimezone(timezone.utc))
+        return df
 
     def intraday_by_tickers(
         self,
@@ -1106,7 +1151,7 @@ class WebullFintechFetcher(BaseFetcher):
         max_concurrent_tasks: int = 32,
         max_keepalive_connections: int = 32,
         show_tqdm: bool = True,
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         if start is None or end is None:
             raise ValueError("start and end are required (timezone-aware datetimes).")
         start_passed = start
@@ -1140,24 +1185,58 @@ class WebullFintechFetcher(BaseFetcher):
                 )
                 return df_by_sym
 
-        results: Dict[str, Optional[pd.DataFrame]] = asyncio.run(_run())
-        frames = {k: v for k, v in results.items() if isinstance(v, pd.DataFrame) and not v.empty}
+        results: Dict[str, Optional[pl.DataFrame]] = asyncio.run(_run())
+        frames = {k: v for k, v in results.items() if isinstance(v, pl.DataFrame) and not v.is_empty()}
         if not frames:
-            return pd.DataFrame()
+            return pl.DataFrame()
 
-        # Merge and regularize to NY session 07:00–17:00 (mirrors intraday_by_cusips)
-        merged = pd.concat([df[value_col].rename(k) for k, df in frames.items()], axis=1).sort_index()
+        # Merge all DataFrames on timestamp
+        merged_dfs = []
+        for key, df in frames.items():
+            df_renamed = df.select([pl.col("timestamp"), pl.col(value_col).alias(key)])
+            merged_dfs.append(df_renamed)
+
+        if not merged_dfs:
+            return pl.DataFrame()
+
+        merged = merged_dfs[0]
+        for df in merged_dfs[1:]:
+            merged = merged.join(df, on="timestamp", how="outer_coalesce")
+
+        merged = merged.sort("timestamp")
+
+        # Convert to Chicago timezone
         chi = pytz.timezone("America/Chicago")
-        merged.index = merged.index.tz_convert(chi)
+        merged = merged.with_columns(pl.col("timestamp").dt.convert_time_zone("America/Chicago"))
 
-        grid = pd.date_range(start=start, end=end, freq="1min", tz=chi)
-        pos = grid.indexer_between_time(time(7, 0), time(17, 0))
-        session_index = grid[pos]
-        merged = merged.reindex(session_index).ffill().bfill()
+        # Create session grid (7:00-17:00 Chicago time)
+        current = start.replace(tzinfo=chi) if start.tzinfo is None else start.astimezone(chi)
+        end_tz = end.replace(tzinfo=chi) if end.tzinfo is None else end.astimezone(chi)
 
+        session_times = []
+        while current <= end_tz:
+            if time(7, 0) <= current.time() <= time(17, 0):
+                session_times.append(current)
+            current += timedelta(minutes=1)
+
+        if not session_times:
+            return pl.DataFrame()
+
+        # Create grid DataFrame and join
+        grid_df = pl.DataFrame({"timestamp": session_times})
+        merged = grid_df.join(merged, on="timestamp", how="left")
+
+        # Forward fill and backward fill
+        value_cols = [c for c in merged.columns if c != "timestamp"]
+        for col in value_cols:
+            merged = merged.with_columns(pl.col(col).forward_fill().backward_fill())
+
+        # Final time window
         start_chi = chi.localize(start_passed) if start_passed.tzinfo is None else start_passed.astimezone(chi)
         end_chi = chi.localize(end) if end.tzinfo is None else end.astimezone(chi)
-        return merged.loc[(merged.index >= start_chi) & (merged.index <= end_chi)]
+        merged = merged.filter((pl.col("timestamp") >= start_chi) & (pl.col("timestamp") <= end_chi))
+
+        return merged
 
     async def _eod_futures_for_ticker(
         self,
@@ -1173,7 +1252,7 @@ class WebullFintechFetcher(BaseFetcher):
         max_slices: int = 50,
         max_retries: int = 3,
         backoff_factor: int = 1,
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[pl.DataFrame]:
         # Coerce start/end to dates for daily slicing
         start_date = start.date() if isinstance(start, datetime) else start
         end_date = end.date() if isinstance(end, datetime) else end
@@ -1185,8 +1264,8 @@ class WebullFintechFetcher(BaseFetcher):
         else:
             cursor_dt = chi.localize(datetime(end_date.year, end_date.month, end_date.day, 17, 0))
 
-        slices: List[pd.DataFrame] = []
-        seen_earliest: Optional[pd.Timestamp] = None
+        slices: List[pl.DataFrame] = []
+        seen_earliest: Optional[datetime] = None
 
         for _ in range(max_slices):
             df_slice = await self._fetch_futures_slice(
@@ -1200,13 +1279,13 @@ class WebullFintechFetcher(BaseFetcher):
                 max_retries=max_retries,
                 backoff_factor=backoff_factor,
             )
-            if df_slice is None or df_slice.empty:
+            if df_slice is None or df_slice.is_empty():
                 break
 
             # Restrict to <= end_date (if provided)
             if end_date is not None:
-                df_slice = df_slice[df_slice["timestamp"].dt.date <= end_date]
-            if df_slice.empty:
+                df_slice = df_slice.filter(pl.col("timestamp").dt.date() <= end_date)
+            if df_slice.is_empty():
                 break
 
             slices.append(df_slice)
@@ -1222,22 +1301,21 @@ class WebullFintechFetcher(BaseFetcher):
             seen_earliest = earliest
 
             # Step back one day before the earliest bar we have so far
-            cursor_dt = (earliest - pd.Timedelta(days=1)).to_pydatetime().replace(tzinfo=timezone.utc)
+            cursor_dt = (earliest - timedelta(days=1)).replace(tzinfo=timezone.utc)
 
         if not slices:
             return None
 
-        df = pd.concat(slices, ignore_index=True)
-        df = df.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
+        df = pl.concat(slices)
+        df = df.unique(subset=["timestamp"], keep="last").sort("timestamp")
 
         if start_date is not None:
-            df = df[df["timestamp"].dt.date >= start_date]
+            df = df.filter(pl.col("timestamp").dt.date() >= start_date)
         if end_date is not None:
-            df = df[df["timestamp"].dt.date <= end_date]
+            df = df.filter(pl.col("timestamp").dt.date() <= end_date)
 
-        df["timestamp"] = df["timestamp"].dt.date
-        df = df.set_index("timestamp")
-        return df.rename(columns={value_col: value_col})
+        df = df.with_columns(pl.col("timestamp").dt.date().alias("timestamp"))
+        return df
 
     async def _fetch_all_eod_futures(
         self,
@@ -1252,7 +1330,7 @@ class WebullFintechFetcher(BaseFetcher):
         value_col: str,
         max_concurrent_tasks: int,
         show_tqdm: bool,
-    ) -> Dict[str, Optional[pd.DataFrame]]:
+    ) -> Dict[str, Optional[pl.DataFrame]]:
         sem = asyncio.Semaphore(max_concurrent_tasks)
 
         async def _task(key: str, tid: Optional[int]):
@@ -1293,7 +1371,7 @@ class WebullFintechFetcher(BaseFetcher):
         max_keepalive_connections: int = 32,
         one_df: bool = True,
         show_tqdm: bool = True,
-    ) -> Union[Dict[str, Optional[pd.DataFrame]], pd.DataFrame]:
+    ) -> Union[Dict[str, Optional[pl.DataFrame]], pl.DataFrame]:
         headers = WebullFintechFetcher.DEFAULT_HEADERS
         limits = httpx.Limits(max_connections=max_concurrent_tasks, max_keepalive_connections=max_keepalive_connections)
 
@@ -1322,17 +1400,26 @@ class WebullFintechFetcher(BaseFetcher):
                 )
                 return df_by_sym
 
-        results: Dict[str, Optional[pd.DataFrame]] = asyncio.run(_run())
+        results: Dict[str, Optional[pl.DataFrame]] = asyncio.run(_run())
         if not one_df:
             return results
 
-        frames: Dict[str, pd.DataFrame] = {k: v for k, v in results.items() if isinstance(v, pd.DataFrame) and not v.empty}
+        frames: Dict[str, pl.DataFrame] = {k: v for k, v in results.items() if isinstance(v, pl.DataFrame) and not v.is_empty()}
         if not frames:
-            return pd.DataFrame()
+            return pl.DataFrame()
 
-        # Merge on daily date index
-        merged = pd.concat(
-            [(df[value_col] if value_col in df.columns else df.iloc[:, 0]).rename(sym) for sym, df in frames.items()],
-            axis=1,
-        )
-        return merged.sort_index()
+        # Merge all DataFrames on timestamp
+        merged_dfs = []
+        for sym, df in frames.items():
+            col_to_use = value_col if value_col in df.columns else df.columns[1] if len(df.columns) > 1 else df.columns[0]
+            df_renamed = df.select([pl.col("timestamp"), pl.col(col_to_use).alias(sym)])
+            merged_dfs.append(df_renamed)
+
+        if not merged_dfs:
+            return pl.DataFrame()
+
+        merged = merged_dfs[0]
+        for df in merged_dfs[1:]:
+            merged = merged.join(df, on="timestamp", how="outer_coalesce")
+
+        return merged.sort("timestamp")

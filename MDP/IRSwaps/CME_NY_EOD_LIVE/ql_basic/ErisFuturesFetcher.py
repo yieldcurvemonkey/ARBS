@@ -8,22 +8,18 @@ from io import BytesIO
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
-import pandas as pd  # Keep for compatibility
 import polars as pl
 import pytz
 import QuantLib as ql
 import tqdm
 import tqdm.asyncio
 from dateutil import parser, tz
-from pandas.errors import DtypeWarning
-from pandas.tseries.holiday import USFederalHolidayCalendar
-from pandas.tseries.offsets import CustomBusinessDay
 
 from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
 from Query.IRSwaps.backends.quantlib.ql_curve_building_utils import build_ql_discount_curve
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_pydate
 
-warnings.filterwarnings("ignore", category=FutureWarning  # polars equivalent)
+warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys
@@ -100,7 +96,7 @@ class ErisFuturesFetcher(BaseFetcher):
             file_name = "Eris_Intraday_DiscountFactors_SOFR.csv"
         else:
             archives_path = f"archives/{date.year}/{date.month:02}-{calendar.month_name[date.month]}"
-            file_name = f"Eris_{date.strftime("%Y%m%d")}_{workbook_type}.csv"
+            file_name = f"Eris_{date.strftime('%Y%m%d')}_{workbook_type}.csv"
             if diff_month(datetime.date.today(), date) < 3:
                 eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{file_name}"
             else:
@@ -150,24 +146,21 @@ class ErisFuturesFetcher(BaseFetcher):
             self._logger.error(e)
             return None, None
 
-    def _read_file(self, file_buffer: BytesIO, file_name: str) -> Tuple[Union[str, datetime.date], pd.DataFrame]:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DtypeWarning)
+    def _read_file(self, file_buffer: BytesIO, file_name: str) -> Tuple[Union[str, datetime.date], pl.DataFrame]:
+        if file_name.lower().endswith((".xlsx", ".xls")):
+            df = pl.read_excel(file_buffer)
+        elif file_name.lower().endswith(".csv"):
+            df = pl.read_csv(file_buffer)
+        else:
+            return None
 
-            if file_name.lower().endswith((".xlsx", ".xls")):
-                df = pd.read_excel(file_buffer)
-            elif file_name.lower().endswith(".csv"):
-                df = pd.read_csv(file_buffer, low_memory=False)
-            else:
-                return None
+        try:
+            datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d")
+            key = datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d")
+        except:
+            key = file_name
 
-            try:
-                datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d")
-                key = datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d")
-            except:
-                key = file_name
-
-            return key, df
+        return key, df
 
     async def _fetch_and_read_eris_ftp_file(
         self,
@@ -195,9 +188,10 @@ class ErisFuturesFetcher(BaseFetcher):
         max_concurrent_tasks: Optional[int] = 64,
         max_keepalive_connections: Optional[int] = 5,
         verbose: Optional[bool] = False,
-    ) -> Dict[datetime.date, pd.DataFrame]:
+    ) -> Dict[datetime.date, pl.DataFrame]:
 
-        bdates = pd.date_range(start=start_date, end=end_date, freq=CustomBusinessDay(calendar=USFederalHolidayCalendar()))
+        ql_cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+        bdates = get_bdates_between(start_date=start_date, end_date=end_date, calendar=ql_cal)
 
         async def build_tasks(
             client: httpx.AsyncClient,
@@ -225,18 +219,16 @@ class ErisFuturesFetcher(BaseFetcher):
                 )
                 return all_data
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DtypeWarning)
-            results: List[Tuple[str, pd.DataFrame]] = asyncio.run(
-                run_fetch_all(
-                    dates=bdates,
-                )
+        results: List[Tuple[str, pl.DataFrame]] = asyncio.run(
+            run_fetch_all(
+                dates=bdates,
             )
-            if results is None or len(results) == 0:
-                print('"fetch_eris_ftp_timeseries" --- empty results') if verbose else None
-                return {}
+        )
+        if results is None or len(results) == 0:
+            print('"fetch_eris_ftp_timeseries" --- empty results') if verbose else None
+            return {}
 
-            return dict(results)
+        return dict(results)
 
     def fetch_historical_eod_discount_curves(
         self,
@@ -304,40 +296,40 @@ class ErisFuturesFetcher(BaseFetcher):
                 )
                 return all_data
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DtypeWarning)
-            results: List[Tuple[str, pd.DataFrame]] = asyncio.run(
-                run_fetch_all(
-                    dates=bdates,
-                )
+        results: List[Tuple[str, pl.DataFrame]] = asyncio.run(
+            run_fetch_all(
+                dates=bdates,
             )
-            if results is None or len(results) == 0:
-                return {}
+        )
+        if results is None or len(results) == 0:
+            return {}
 
-            dict_df: Dict[datetime.date, pd.DataFrame] = dict(results)
-            dict_ql_discount_curves: Dict[datetime.date, ql.DiscountCurve] = {}
-            for dt, discount_curve_df in dict_df.items():
-                if dt is None or discount_curve_df is None:
-                    continue
-                discount_curve_df["Date"] = pd.to_datetime(discount_curve_df["Date"], errors="coerce")
-                discount_curve_df["DiscountFactor"] = pd.to_numeric(discount_curve_df["DiscountFactor"], errors="coerce")
-                ql_curve = build_ql_discount_curve(
-                    datetime_series=discount_curve_df["Date"],
-                    discount_factor_series=discount_curve_df["DiscountFactor"],
-                    ql_dc=ql_dc,
-                    ql_cal=ql_cal,
-                    interpolation_algo=f"df_{interpolation_algo}",
-                )
-                if enable_extrapolation:
-                    ql_curve.enableExtrapolation()
-                dict_ql_discount_curves[dt] = ql_curve
+        dict_df: Dict[datetime.date, pl.DataFrame] = dict(results)
+        dict_ql_discount_curves: Dict[datetime.date, ql.DiscountCurve] = {}
+        for dt, discount_curve_df in dict_df.items():
+            if dt is None or discount_curve_df is None:
+                continue
+            discount_curve_df = discount_curve_df.with_columns([
+                pl.col("Date").str.to_datetime(strict=False),
+                pl.col("DiscountFactor").cast(pl.Float64, strict=False)
+            ])
+            ql_curve = build_ql_discount_curve(
+                datetime_series=discount_curve_df["Date"].to_pandas(),
+                discount_factor_series=discount_curve_df["DiscountFactor"].to_pandas(),
+                ql_dc=ql_dc,
+                ql_cal=ql_cal,
+                interpolation_algo=f"df_{interpolation_algo}",
+            )
+            if enable_extrapolation:
+                ql_curve.enableExtrapolation()
+            dict_ql_discount_curves[dt] = ql_curve
 
-            if append_intraday:
-                dict_ql_discount_curves[datetime_today_utc()] = self.fetch_intraday_discount_curve(
-                    ql_dc=ql_dc, ql_cal=ql_cal, show_tqdm=show_tqdm, interpolation_algo=interpolation_algo
-                )
+        if append_intraday:
+            dict_ql_discount_curves[datetime_today_utc()] = self.fetch_intraday_discount_curve(
+                ql_dc=ql_dc, ql_cal=ql_cal, show_tqdm=show_tqdm, interpolation_algo=interpolation_algo
+            )
 
-            return dict_ql_discount_curves
+        return dict_ql_discount_curves
 
     def fetch_intraday_discount_curve(
         self,
@@ -361,7 +353,7 @@ class ErisFuturesFetcher(BaseFetcher):
         ] = "log_linear",
         enable_extrapolation: Optional[bool] = False,
         return_intraday_timestamp: Optional[bool] = False,
-    ) -> ql.DiscountCurve | pd.DataFrame | Tuple[ql.DiscountCurve, datetime.date]:
+    ) -> ql.DiscountCurve | pl.DataFrame | Tuple[ql.DiscountCurve, datetime.date]:
         async def build_tasks(
             client: httpx.AsyncClient,
         ):
@@ -384,34 +376,34 @@ class ErisFuturesFetcher(BaseFetcher):
                 all_data = await build_tasks(client=client)
                 return all_data
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DtypeWarning)
-            results: List[Tuple[str, pd.DataFrame]] = asyncio.run(run_fetch_all())
-            if results is None or len(results) == 0:
-                return {}
+        results: List[Tuple[str, pl.DataFrame]] = asyncio.run(run_fetch_all())
+        if results is None or len(results) == 0:
+            return {}
 
-            discount_curve_df = dict(results)["Eris_Intraday_DiscountFactors_SOFR.csv"]
-            discount_curve_df["Date"] = pd.to_datetime(discount_curve_df["Date"], errors="coerce")
-            discount_curve_df["DiscountFactor"] = pd.to_numeric(discount_curve_df["DiscountFactor"], errors="coerce")
-            if return_df:
-                return discount_curve_df
+        discount_curve_df = dict(results)["Eris_Intraday_DiscountFactors_SOFR.csv"]
+        discount_curve_df = discount_curve_df.with_columns([
+            pl.col("Date").str.to_datetime(strict=False),
+            pl.col("DiscountFactor").cast(pl.Float64, strict=False)
+        ])
+        if return_df:
+            return discount_curve_df
 
-            ql_discount_curve = build_ql_discount_curve(
-                datetime_series=discount_curve_df["Date"],
-                discount_factor_series=discount_curve_df["DiscountFactor"],
-                ql_dc=ql_dc,
-                ql_cal=ql_cal,
-                interpolation_algo=f"df_{interpolation_algo}",
+        ql_discount_curve = build_ql_discount_curve(
+            datetime_series=discount_curve_df["Date"].to_pandas(),
+            discount_factor_series=discount_curve_df["DiscountFactor"].to_pandas(),
+            ql_dc=ql_dc,
+            ql_cal=ql_cal,
+            interpolation_algo=f"df_{interpolation_algo}",
+        )
+        if enable_extrapolation:
+            ql_discount_curve.enableExtrapolation()
+
+        if return_intraday_timestamp:
+            intraday_ts = datetime.datetime.fromisoformat(
+                str(parser.parse(discount_curve_df["Time"][0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
             )
-            if enable_extrapolation:
-                ql_discount_curve.enableExtrapolation()
+            intraday_ts = intraday_ts.astimezone(pytz.timezone("America/New_York"))
 
-            if return_intraday_timestamp:
-                intraday_ts = datetime.datetime.fromisoformat(
-                    str(parser.parse(discount_curve_df["Time"].iloc[0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
-                )
-                intraday_ts = intraday_ts.astimezone(pytz.timezone("America/New_York"))
+            return ql_discount_curve, intraday_ts
 
-                return ql_discount_curve, intraday_ts
-
-            return ql_discount_curve
+        return ql_discount_curve

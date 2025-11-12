@@ -7,7 +7,7 @@ from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, Union
 
-import pandas as pd  # Keep for compatibility
+import pandas as pd  # Pandas compatibility - for external interface types only
 import polars as pl
 import pytz
 import QuantLib as ql
@@ -30,6 +30,19 @@ def _closer(obj):
         getattr(obj, "close_zodb", lambda: None)()
 
 
+def _add_business_days(dt: datetime.datetime, days: int) -> datetime.datetime:
+    """Add business days to a datetime using QuantLib calendar."""
+    calendar = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    ql_date = ql.Date(dt.day, dt.month, dt.year)
+    ql_date = calendar.advance(ql_date, ql.Period(days, ql.Days))
+    result = datetime.datetime(ql_date.year(), ql_date.month(), ql_date.dayOfMonth())
+    # Preserve time and timezone info
+    result = result.replace(hour=dt.hour, minute=dt.minute, second=dt.second, microsecond=dt.microsecond)
+    if dt.tzinfo:
+        result = dt.tzinfo.localize(result.replace(tzinfo=None))
+    return result
+
+
 def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> Optional[str]:
     if not isinstance(alias, str):
         return None
@@ -50,26 +63,32 @@ def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> Optional[str]:
     year = 1900 + yy if yy >= 80 else 2000 + yy
     prev_month = 12 if mm == 1 else (mm - 1)
 
+    # Convert to polars for efficient operations
+    df = pl.from_pandas(ref_table)
+
     # Parse maturity dates
-    mats = pd.to_datetime(ref_table["maturity_date"], errors="coerce")
-    if mats.isna().all():
+    df = df.with_columns(
+        pl.col("maturity_date").str.strptime(pl.Date, "%Y-%m-%d", strict=False).alias("mat_parsed")
+    )
+
+    if df["mat_parsed"].is_null().all():
         raise ValueError("All maturity_date values failed to parse as dates")
 
-    def _is_eom(ts: pd.Timestamp) -> bool:
-        d = ts.date()
-        qd = ql.Date(d.day, d.month, d.year)
-        return qd == ql.UnitedStates(ql.UnitedStates.GovernmentBond).endOfMonth(qd)
+    # Filter for target month/year
+    mask_target = (df["mat_parsed"].dt.year() == year) & (df["mat_parsed"].dt.month() == mm)
+    fam = df.filter(mask_target)
 
-    mask_target = (mats.dt.year.eq(year)) & (mats.dt.month.eq(mm))
-    fam = ref_table.loc[mask_target].copy()
-    if fam.empty:
-        prev_month = 12 if mm == 1 else (mm - 1)
+    if len(fam) == 0:
         prev_year = year - 1 if mm == 1 else year
-        is_cal_eom = mats.dt.is_month_end
-        mask_prev_eom = (mats.dt.year.eq(prev_year)) & (mats.dt.month.eq(prev_month)) & is_cal_eom
-        fam = ref_table.loc[mask_prev_eom].copy()
+        # Check if it's end of month (approximate - check if day >= 28)
+        mask_prev_eom = (
+            (df["mat_parsed"].dt.year() == prev_year) &
+            (df["mat_parsed"].dt.month() == prev_month) &
+            (df["mat_parsed"].dt.day() >= 28)
+        )
+        fam = df.filter(mask_prev_eom)
 
-    if fam.empty:
+    if len(fam) == 0:
         raise KeyError(f"Alias '{alias}' did not resolve to any CUSIP in reference data")
 
     oi_num = m.group("oi")
@@ -77,37 +96,42 @@ def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> Optional[str]:
         want = str(int(oi_num))
 
         def _norm_oi_cell(x) -> str:
-            if pd.isna(x):
+            if x is None:
                 return ""
             s = str(x)
             mnum = re.search(r"(\d+)", s)
             return mnum.group(1) if mnum else s.strip()
 
-        fam = fam[fam["oi"].map(_norm_oi_cell).str.casefold() == want.casefold()]
-        if fam.empty:
+        fam = fam.with_columns(
+            pl.col("oi").map_elements(_norm_oi_cell, return_dtype=pl.Utf8).alias("oi_norm")
+        ).filter(pl.col("oi_norm").str.to_lowercase() == want.lower())
+
+        if len(fam) == 0:
             raise KeyError(f"Alias '{alias}' with oi '{want}' found no matches")
     else:
         # Require disambiguation if multiple OI buckets exist
         if "oi" in fam.columns:
+            # Extract unique numeric OI values
+            oi_values = fam["oi"].drop_nulls().to_list()
+            oi_set = set()
+            for v in oi_values:
+                s = str(v)
+                mnum = re.search(r"(\d+)", s)
+                oi_set.add(mnum.group(1) if mnum else s.strip())
+            oi_set = sorted(oi_set)
 
-            def _oi_num_set(col: pd.Series):
-                out = set()
-                for v in col.dropna().astype(str):
-                    mnum = re.search(r"(\d+)", v)
-                    out.add(mnum.group(1) if mnum else v.strip())
-                return sorted(out)
-
-            oi_set = _oi_num_set(fam["oi"])
             if len(oi_set) > 1:
                 raise AssertionError(
                     f"Ambiguous alias '{alias}'. Multiple original-issue buckets found: {', '.join(oi_set)}. "
                     f"Use an oi-aware alias like 'MMYY-10' (e.g., '{alias}-{oi_set[0]}')."
                 )
 
+    # Sort by maturity_date and issue_date if available
     sort_cols = [c for c in ["maturity_date", "issue_date"] if c in fam.columns]
     if sort_cols:
-        fam = fam.sort_values(sort_cols)
-    unique_cusips = fam["cusip"].astype(str).unique()
+        fam = fam.sort(sort_cols)
+
+    unique_cusips = fam["cusip"].cast(pl.Utf8).unique().to_list()
 
     if len(unique_cusips) != 1:
         raise AssertionError(f"Alias '{alias}' maps to multiple CUSIPs: {', '.join(unique_cusips)}. " f"Please specify oi explicitly (e.g., '{alias}-30').")
@@ -154,7 +178,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
         except Exception:
             pass
 
-        if isinstance(v, (pd.Timestamp, datetime.datetime, datetime.date)):
+        if isinstance(v, (datetime.datetime, datetime.date)):
             return v.isoformat()
         return v
 
@@ -185,6 +209,9 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
         alias_to_cusip: "OrderedDict[str, str]" = OrderedDict()
         meta_by_cusip: Dict[str, dict] = {}
 
+        # Convert to polars for efficient filtering
+        df = pl.from_pandas(ref_df)
+
         # Pre-computed ref view for the as-of filter is already passed in
         # and includes the 'rank' column.
         for raw in symbols:
@@ -199,24 +226,24 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 if m_ct:
                     rank, tenor = 0, int(m_ct.group(1))
                     oi = f"{tenor}-Year"
-                    hit = ref_df[(ref_df["oi"] == oi) & (ref_df["rank"] == rank)]
-                    if hit.empty:
+                    hit = df.filter((pl.col("oi") == oi) & (pl.col("rank") == rank))
+                    if len(hit) == 0:
                         raise KeyError(f"No CT{tenor} in ref data for {alias}")
-                    cusip = str(hit.iloc[0]["cusip"])
+                    cusip = str(hit["cusip"][0])
                 elif m_o:
                     rank, tenor = len(m_o.group(1)), int(m_o.group(2))
                     oi = f"{tenor}-Year"
-                    hit = ref_df[(ref_df["oi"] == oi) & (ref_df["rank"] == rank)]
-                    if hit.empty:
+                    hit = df.filter((pl.col("oi") == oi) & (pl.col("rank") == rank))
+                    if len(hit) == 0:
                         raise KeyError(f"No O{'O'* (rank-1)}{tenor} match for {alias}")
-                    cusip = str(hit.iloc[0]["cusip"])
+                    cusip = str(hit["cusip"][0])
                 elif m_ox:
                     rank, tenor = int(m_ox.group(1)), int(m_ox.group(2))
                     oi = f"{tenor}-Year"
-                    hit = ref_df[(ref_df["oi"] == oi) & (ref_df["rank"] == rank)]
-                    if hit.empty:
+                    hit = df.filter((pl.col("oi") == oi) & (pl.col("rank") == rank))
+                    if len(hit) == 0:
                         raise KeyError(f"No Ox{rank}{tenor} match for {alias}")
-                    cusip = str(hit.iloc[0]["cusip"])
+                    cusip = str(hit["cusip"][0])
                 else:
                     # Monthly alias (MMYY or MMYY-oi)
                     try:
@@ -232,10 +259,10 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 cusip = alias
 
             # attach meta (first row for that cusip)
-            row = ref_df[ref_df["cusip"] == cusip]
-            if row.empty:
+            row = df.filter(pl.col("cusip") == cusip)
+            if len(row) == 0:
                 raise KeyError(f"CUSIP {cusip} not present in reference set for {timestamp}")
-            meta_by_cusip[cusip] = row.iloc[0].to_dict()
+            meta_by_cusip[cusip] = row.row(0, named=True)
             alias_to_cusip[raw] = cusip
 
         return alias_to_cusip, meta_by_cusip
@@ -372,13 +399,14 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 idx = wide.index
                 pos = idx.get_indexer([t_3pm], method="nearest")[0]
                 nearest_ts = idx[pos]
-                if abs(nearest_ts - t_3pm) > pd.Timedelta("30min"):
+                if abs(nearest_ts - t_3pm) > datetime.timedelta(minutes=30):
                     raise ValueError("No intraday snapshot within 30min of 3pm ET")
 
                 for original, cusip in alias_to_cusip.items():
                     try:
+                        import math
                         y = wide[cusip].iloc[pos]
-                        if pd.isna(y):
+                        if y is None or (isinstance(y, float) and math.isnan(y)):
                             col = wide[cusip].dropna()
                             if col.empty:
                                 raise ValueError(f"No intraday data for {cusip} near 3pm")
@@ -405,8 +433,6 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 return out
 
         elif self.source.upper() == "USTS_WEBULL_WSJ_LIVE-RL":
-            from pandas.tseries.offsets import BDay
-
             from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
             from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
             from MDP.FixedRateBonds.WSJ.WSJFetcher import WSJFetcher, get_isin_from_cusip
@@ -470,8 +496,8 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             wb = WebullFintechFetcher(debug_verbose=False, error_verbose=True)
             t = timestamp
             ny = pytz.timezone("America/New_York")
-            start_ny = ny.localize(datetime.datetime(t.year, t.month, t.day, 7, 0, 0)) - BDay(1)
-            end_ny = ny.localize(datetime.datetime(t.year, t.month, t.day, 17, 0, 0)) + BDay(1)
+            start_ny = _add_business_days(ny.localize(datetime.datetime(t.year, t.month, t.day, 7, 0, 0)), -1)
+            end_ny = _add_business_days(ny.localize(datetime.datetime(t.year, t.month, t.day, 17, 0, 0)), 1)
             wide = wb.intraday_by_cusips(cusips=list(alias_to_cusip_to_fetch.values()), start=start_ny, end=end_ny, show_tqdm=bool(kwargs.get("show_tqdm", True)))
             for original, cusip in alias_to_cusip_to_fetch.items():
                 for curr_ts, ytm in wide[cusip].items():
@@ -718,7 +744,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 intraday_df = intraday_df.sort_index()
                 pos = intraday_df.index.get_indexer([ts_utc], method="nearest")[0]
                 nearest_ts = intraday_df.index[pos]
-                tolerance = pd.Timedelta("30min")
+                tolerance = datetime.timedelta(minutes=30)
                 if abs(nearest_ts - ts_utc) > tolerance:
                     raise ValueError(f"No snapshot within {tolerance} of 3pm close")
 
@@ -988,13 +1014,14 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                         idx = wide.index
                         pos = idx.get_indexer([t_3pm], method="nearest")[0]
                         nearest_ts = idx[pos]
-                        if abs(nearest_ts - t_3pm) > pd.Timedelta("30min"):
+                        if abs(nearest_ts - t_3pm) > datetime.timedelta(minutes=30):
                             raise ValueError("No intraday snapshot within 30min of 3pm ET")
 
                         for original, cusip in alias_to_cusip.items():
                             try:
+                                import math
                                 y = wide[cusip].iloc[pos]
-                                if pd.isna(y):
+                                if y is None or (isinstance(y, float) and math.isnan(y)):
                                     col = wide[cusip].dropna()
                                     if col.empty:
                                         raise ValueError(f"No intraday data for {cusip} near 3pm")
@@ -1016,8 +1043,6 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                         return ts, result
 
                     # Historical daily close via FedInvest
-                    from pandas.tseries.offsets import BDay
-
                     timestamp_dt = datetime.datetime(as_of_ref.year, as_of_ref.month, as_of_ref.day)
 
                     self._ensure_pricer_cache()
@@ -1055,8 +1080,6 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
 
                 # -------------------- RL path (Webull/WSJ live) --------------------
                 elif self.source.upper() == "USTS_WEBULL_WSJ_LIVE-RL":
-                    from pandas.tseries.offsets import BDay
-
                     from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
                     from MDP.FixedRateBonds.WSJ.WSJFetcher import WSJFetcher
                     from Query.FixedRateBonds.backends.rateslib.RLFixedRateBondPricer import RLFixedRateBondPricer
@@ -1113,8 +1136,8 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
 
                         # Batch fetch all needed cusips around the day, then fill cache for *all* points
                         ny = pytz.timezone("America/New_York")
-                        start_ny = ny.localize(datetime.datetime(ts.year, ts.month, ts.day, 7, 0, 0)) - BDay(1)
-                        end_ny = ny.localize(datetime.datetime(ts.year, ts.month, ts.day, 17, 0, 0)) + BDay(1)
+                        start_ny = _add_business_days(ny.localize(datetime.datetime(ts.year, ts.month, ts.day, 7, 0, 0)), -1)
+                        end_ny = _add_business_days(ny.localize(datetime.datetime(ts.year, ts.month, ts.day, 17, 0, 0)), 1)
 
                         wb = WebullFintechFetcher(debug_verbose=False, error_verbose=True)
                         wide: pd.DataFrame = wb.intraday_by_cusips(

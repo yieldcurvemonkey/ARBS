@@ -1,10 +1,12 @@
+# ABOUTME: CME Treasury Curve Futures (TCF) reference data downloader.
+# ABOUTME: Fetches and parses CME TCF settlement files from web endpoint.
+
 import datetime
 import io
 import gzip
 import zlib
 from typing import Optional, Dict
 
-import pandas as pd  # Keep for compatibility
 import polars as pl
 import requests
 
@@ -27,18 +29,29 @@ DEFAULT_CME_HEADERS: Dict[str, str] = {
 }
 
 
+def _subtract_business_day(date: datetime.date) -> datetime.date:
+    """Subtract one business day from the given date."""
+    days_to_subtract = 1
+    while days_to_subtract > 0:
+        date -= datetime.timedelta(days=1)
+        # Skip weekends (5=Saturday, 6=Sunday)
+        if date.weekday() < 5:
+            days_to_subtract -= 1
+    return date
+
+
 def read_cme_tcf_with_headers(
     as_of: datetime.date,
     *,
     timeout: int = 30,
     headers: Optional[Dict[str, str]] = None,
     session: Optional[requests.sessions.Session] = None,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     if not isinstance(as_of, datetime.date):
         raise TypeError("as_of must be a datetime.date")
 
     if as_of == datetime.date.today():
-        as_of = (pd.Timestamp(as_of) - pd.tseries.offsets.BDay(1)).date()
+        as_of = _subtract_business_day(as_of)
 
     url = f"https://www.cmegroup.com/ftp/settle/TCF/TCF_{as_of:%Y%m%d}.csv"
     sess = session or requests.Session()
@@ -98,11 +111,25 @@ def read_cme_tcf_with_headers(
             break
     csv_text = "\n".join(lines[head_idx:])
 
-    # Sniff delimiter
-    df = pd.read_csv(io.StringIO(csv_text), sep=None, engine="python")
-    df.columns = [c.strip().replace(" ", "_").lower() for c in df.columns]
-    df.insert(0, "as_of", pd.Timestamp(as_of))
+    # Sniff delimiter by trying common separators
+    delimiter = ","
+    first_line = csv_text.split("\n", 1)[0] if csv_text else ""
+    for sep in (",", "|", ";", "\t"):
+        if first_line.count(sep) >= 1:
+            delimiter = sep
+            break
 
+    # Read CSV with polars
+    df = pl.read_csv(io.StringIO(csv_text), separator=delimiter)
+
+    # Normalize column names
+    df = df.rename({col: col.strip().replace(" ", "_").lower() for col in df.columns})
+
+    # Add as_of column at the beginning
+    df = df.with_columns(pl.lit(as_of).alias("as_of"))
+    df = df.select(["as_of"] + [col for col in df.columns if col != "as_of"])
+
+    # Map clearport codes to Bloomberg tickers
     clearport_to_bbg = {
         "17": "US",
         "21": "TY",
@@ -113,5 +140,8 @@ def read_cme_tcf_with_headers(
         "TWE": "TWE",
         "UBE": "WN",
     }
-    df["ticker"] = df["pfcode"].map(clearport_to_bbg)
+    df = df.with_columns(
+        pl.col("pfcode").replace(clearport_to_bbg, default=None).alias("ticker")
+    )
+
     return df
