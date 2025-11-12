@@ -4,12 +4,13 @@ import json
 import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import reduce
 from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 from dataclasses import replace
 
 import re
 import polars as pl
-import pandas as pd  # Keep for date utilities and return type compatibility
+import pandas as pd  # Keep for date utilities (pd.bdate_range, pd.date_range, pd.to_datetime)
 from tqdm import tqdm
 
 import QuantLib as ql
@@ -205,7 +206,7 @@ class IRSwapsTB(ZODBCacheMixin):
         ignore_cache: Optional[bool] = False,
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         if timestamps is not None and len(timestamps) > 0:
             ref_points = sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
         else:
@@ -306,11 +307,10 @@ class IRSwapsTB(ZODBCacheMixin):
 
         all_rows = cached_rows + [r for (r, _q, _cn, _d) in new_rows_with_q]
         if not all_rows:
-            return pd.DataFrame(columns=[self._date_col])
+            return pl.DataFrame()
 
         df = pl.DataFrame(all_rows, schema=[self._date_col, "_col", "_val"], orient="row")
         out = df.pivot(index=self._date_col, columns="_col", values="_val", aggregate_function="last").sort(self._date_col)
-        out = out.to_pandas().set_index(self._date_col)
 
         return out
 
@@ -322,7 +322,7 @@ class IRSwapsTB(ZODBCacheMixin):
         *,
         ignore_cache: bool = False,
         use_globex: bool = False,
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         import rateslib as rl
 
         from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
@@ -410,7 +410,7 @@ class IRSwapsTB(ZODBCacheMixin):
             return None  # IMM handled separately
 
         if not items:
-            return pd.DataFrame()
+            return pl.DataFrame()
 
         start_ts = pd.to_datetime(start).normalize()
         end_ts = pd.to_datetime(end).normalize()
@@ -508,7 +508,7 @@ class IRSwapsTB(ZODBCacheMixin):
 
             if rows and not (miss_pre or miss_today):
                 # fully cached
-                df_cached = pl.DataFrame(rows).sort(_date_col).to_pandas().set_index(_date_col)[[colname]]
+                df_cached = pl.DataFrame(rows).sort(_date_col).select([_date_col, colname])
                 out_frames_cached.append(df_cached)
             else:
                 if rows:
@@ -523,8 +523,10 @@ class IRSwapsTB(ZODBCacheMixin):
         # nothing left to compute → avoid any barchart call
         if not need_fetch_labels:
             if not out_frames_cached:
-                return pd.DataFrame()
-            return pd.concat(out_frames_cached, axis=1).sort_index(kind="mergesort")
+                return pl.DataFrame()
+            if len(out_frames_cached) == 1:
+                return out_frames_cached[0]
+            return reduce(lambda left, right: left.join(right, on=_date_col, how="outer"), out_frames_cached).sort(_date_col)
 
         needed_tickers: set[str] = set()
         needed_dates: list[pd.Timestamp] = []
@@ -548,8 +550,10 @@ class IRSwapsTB(ZODBCacheMixin):
 
         if not needed_tickers:
             if not out_frames_cached:
-                return pd.DataFrame()
-            return pd.concat(out_frames_cached, axis=1).sort_index(kind="mergesort")
+                return pl.DataFrame()
+            if len(out_frames_cached) == 1:
+                return out_frames_cached[0]
+            return reduce(lambda left, right: left.join(right, on=_date_col, how="outer"), out_frames_cached).sort(_date_col)
 
         fetch_start = min(needed_dates).to_pydatetime()
         fetch_end = max(needed_dates).to_pydatetime()
@@ -562,7 +566,11 @@ class IRSwapsTB(ZODBCacheMixin):
             use_globex=use_globex,
         )
         if px_df.empty:
-            return pd.concat(out_frames_cached, axis=1).sort_index(kind="mergesort") if out_frames_cached else pd.DataFrame()
+            if not out_frames_cached:
+                return pl.DataFrame()
+            if len(out_frames_cached) == 1:
+                return out_frames_cached[0]
+            return reduce(lambda left, right: left.join(right, on=_date_col, how="outer"), out_frames_cached).sort(_date_col)
 
         px_df = px_df.sort_index()
         for c in px_df.columns:
@@ -594,7 +602,7 @@ class IRSwapsTB(ZODBCacheMixin):
                 leg = f"{leg_prefix}{label}"
                 if leg not in px_df.columns:
                     if rows:
-                        df_i = pl.DataFrame(rows).sort(_date_col).to_pandas().set_index(_date_col)[[colname]]
+                        df_i = pl.DataFrame(rows).sort(_date_col).select([_date_col, colname])
                         out_frames.append(df_i)
                     continue
 
@@ -685,7 +693,7 @@ class IRSwapsTB(ZODBCacheMixin):
                         pass
 
             if rows:
-                df_i = pl.DataFrame(rows).sort(_date_col).unique(subset=[_date_col], keep="last").to_pandas().set_index(_date_col)[[colname]]
+                df_i = pl.DataFrame(rows).sort(_date_col).unique(subset=[_date_col], keep="last").select([_date_col, colname])
                 out_frames.append(df_i)
 
         if pending_writes:
@@ -695,6 +703,8 @@ class IRSwapsTB(ZODBCacheMixin):
                     mapping[k] = rec
 
         if not out_frames:
-            return pd.DataFrame()
+            return pl.DataFrame()
 
-        return pd.concat(out_frames, axis=1).sort_index(kind="mergesort")
+        if len(out_frames) == 1:
+            return out_frames[0]
+        return reduce(lambda left, right: left.join(right, on=_date_col, how="outer"), out_frames).sort(_date_col)

@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, DefaultDict, Dict, Iterable, List, Optional, T
 
 import re
 import polars as pl
-import pandas as pd  # Keep for bdate_range and pivot compatibility
+import pandas as pd  # Keep for bdate_range utility
 import tqdm
 
 from Query.Base.BaseQuery import BaseQuery
@@ -153,16 +153,16 @@ class TimeseriesBuilder:
             if df is None or (hasattr(df, 'is_empty') and df.is_empty()) or (hasattr(df, 'empty') and df.empty):
                 continue
 
-            # Convert pandas to polars if needed
+            # Convert pandas to polars if needed, handling index properly
             if isinstance(df, pd.DataFrame):
-                df = pl.from_pandas(df)
+                # If date is in index, reset it before converting
+                if self._date_col not in df.columns and df.index.name == self._date_col:
+                    df = pl.from_pandas(df.reset_index())
+                else:
+                    df = pl.from_pandas(df)
 
-            # Handle index column
-            if self._date_col not in df.columns and df.to_pandas().index.name == self._date_col:
-                # Index is already the date column (from pandas), convert properly
-                df = pl.from_pandas(df.to_pandas().reset_index())
-            elif self._date_col not in df.columns:
-                # No date column found, skip
+            # Now df is polars - check if date column exists
+            if self._date_col not in df.columns:
                 continue
 
             # Add product level to columns
@@ -329,9 +329,9 @@ class TimeseriesBuilder:
                         continue
 
             if rows:
-                # Create DataFrame and pivot using pandas, then convert to polars
-                df_pd = pd.DataFrame(rows, columns=[self._date_col, "Column", "Value"]).pivot(index=self._date_col, columns="Column", values="Value").sort_index()
-                df = pl.from_pandas(df_pd.reset_index())
+                # Create DataFrame and pivot using polars
+                df = pl.DataFrame(rows, schema=[self._date_col, "Column", "Value"], orient="row")
+                df = df.pivot(index=self._date_col, columns="Column", values="Value", aggregate_function="last").sort(self._date_col)
                 per_product_frames.append(("IRS__ASW", df))
 
         if not per_product_frames:

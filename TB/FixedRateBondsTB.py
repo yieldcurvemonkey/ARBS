@@ -10,7 +10,7 @@ from dataclasses import replace
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import pandas as pd  # Keep for timestamp/date_range utilities
+import pandas as pd  # Keep ONLY for pd.date_range utility (no DataFrame/Series operations)
 import polars as pl
 import QuantLib as ql
 from tqdm import tqdm
@@ -60,8 +60,8 @@ def _clone_risk_weights(rws):
         return None
     if isinstance(rws, np.ndarray):
         return rws.copy()
-    if isinstance(rws, (pd.Series, pd.DataFrame, pl.Series, pl.DataFrame)):
-        return rws.clone() if isinstance(rws, (pl.Series, pl.DataFrame)) else rws.copy(deep=True)
+    if isinstance(rws, (pl.Series, pl.DataFrame)):
+        return rws.clone()
     if isinstance(rws, (list, tuple, set, dict)):
         return copy.deepcopy(rws)
     if hasattr(rws, "copy") and callable(rws.copy):
@@ -200,7 +200,7 @@ class FixedRateBondsTB(ZODBCacheMixin):
         timestamps: Optional[List[datetime.datetime]] = None,
     ) -> pl.DataFrame:
         if timestamps is not None and len(timestamps) > 0:
-            ref_points = sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
+            ref_points = sorted([dt if isinstance(dt, datetime.datetime) else datetime.datetime.combine(dt, datetime.time()) for dt in timestamps])
             is_intraday = True
         else:
             is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
@@ -243,42 +243,24 @@ class FixedRateBondsTB(ZODBCacheMixin):
                     )
                 except Exception as ex:
                     self._logger.debug(f"[TS cache] read failed for symbol={symbol}: {ex}")
-                    df_ts = pd.DataFrame()
+                    df_ts = pl.DataFrame()
 
-                if (isinstance(df_ts, pl.DataFrame) and df_ts.is_empty()) or (isinstance(df_ts, pd.DataFrame) and df_ts.empty):
+                if isinstance(df_ts, pl.DataFrame) and df_ts.is_empty():
                     continue
 
-                # Normalize index to naive timestamps/dates comparable to ref_points
-                # If '_index_ts' handling happened, read_timeseries already restored index.
-                if isinstance(df_ts, pd.DataFrame):
-                    if not isinstance(df_ts.index, (pd.DatetimeIndex, pd.Index)):
-                        df_ts.index = pd.to_datetime(df_ts.index)
-
                 # Allow either single 'value' column or multi-column; take the first numeric
-                if isinstance(df_ts, pl.DataFrame):
-                    col_candidates = [c for c in df_ts.columns if df_ts[c].dtype in pl.NUMERIC_DTYPES]
-                else:
-                    col_candidates = [c for c in df_ts.columns if pd.api.types.is_numeric_dtype(df_ts[c])]
+                col_candidates = [c for c in df_ts.columns if df_ts[c].dtype in pl.NUMERIC_DTYPES]
                 if not col_candidates:
                     continue
                 c0 = col_candidates[0]
 
                 # For date-only schedules, cast to .date() for matching
-                if isinstance(df_ts, pl.DataFrame):
-                    # Polars: iterate over rows
-                    if not is_intraday:
-                        # Assume first column is timestamp/date
-                        ts_col = df_ts.columns[0]
-                        present = {row[ts_col].date(): float(row[c0]) for row in df_ts.iter_rows(named=True)}
-                    else:
-                        ts_col = df_ts.columns[0]
-                        present = {pd.Timestamp(row[ts_col]): float(row[c0]) for row in df_ts.iter_rows(named=True)}
+                # Assume first column is timestamp/date
+                ts_col = df_ts.columns[0]
+                if not is_intraday:
+                    present = {row[ts_col].date(): float(row[c0]) for row in df_ts.iter_rows(named=True)}
                 else:
-                    # Pandas: use index
-                    if not is_intraday:
-                        present = {ts_ts.date(): float(v) for ts_ts, v in df_ts[c0].items()}
-                    else:
-                        present = {pd.Timestamp(ts_ts): float(v) for ts_ts, v in df_ts[c0].items()}
+                    present = {pd.Timestamp(row[ts_col]): float(row[c0]) for row in df_ts.iter_rows(named=True)}
 
                 # Add rows for dates/timestamps we have, but skip "today" to avoid staleness
                 for rp in ref_points:
@@ -425,8 +407,10 @@ class FixedRateBondsTB(ZODBCacheMixin):
                 if not rows:
                     continue
                 rows_sorted = sorted(rows, key=lambda x: x[0])
-                ts_index = pd.DatetimeIndex([t for (t, _v, _c) in rows_sorted])
-                df_sym = pd.DataFrame({"value": [v for (_t, v, _c) in rows_sorted]}, index=ts_index)
+                df_sym = pl.DataFrame({
+                    "timestamp": [t for (t, _v, _c) in rows_sorted],
+                    "value": [v for (_t, v, _c) in rows_sorted]
+                })
                 # append_timeseries partitions by calendar date
                 try:
                     append_timeseries(
