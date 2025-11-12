@@ -15,8 +15,12 @@ from Risk.Covariance.SectorBased.BlockDiagonal.HierarchicalSectorClustering impo
     HierarchicalSectorClustering,
     ClusteringResult,
 )
+from Risk.Covariance.SectorBased.BlockDiagonal.BlockDiagonalCovariance import (
+    BlockDiagonalCovariance,
+)
 
 __all__ = [
     "HierarchicalSectorClustering",
     "ClusteringResult",
+    "BlockDiagonalCovariance",
 ]
