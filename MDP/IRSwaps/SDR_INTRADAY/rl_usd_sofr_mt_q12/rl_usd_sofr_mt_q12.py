@@ -1,5 +1,4 @@
 import datetime
-import pandas as pd  # Keep for compatibility
 import polars as pl
 from typing import Optional, Tuple, Dict, List
 
@@ -17,7 +16,7 @@ _N_PLUS_FOMC_YRS = 3
 def rl_usd_sofr_mt_curve(
     curve_id: str,
     snap: datetime.datetime,
-    sofr_fixings: pd.Series,
+    sofr_fixings: pl.Series,
     cache: _RLCurveCache,
     force_refresh: Optional[bool] = False,
 ) -> Tuple[datetime.datetime, rl.Curve]:
@@ -48,7 +47,7 @@ def rl_usd_sofr_mt_curve(
 def rl_usd_sofr_mt_curve_bulk(
     base_curve_id: str,
     snaps: List[datetime.datetime],
-    sofr_fixings: pd.Series,
+    sofr_fixings: pl.Series,
     cache: _RLCurveCache,
     max_workers: int,
     force_refresh: Optional[bool] = False,
