@@ -12,7 +12,8 @@ from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple
 
 import httpx
 import numpy as np
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pyarrow as pa
 import pyarrow.csv as pacsv
 import pyarrow.parquet as pq

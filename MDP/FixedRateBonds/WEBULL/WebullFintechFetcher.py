@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
 
 import httpx
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pytz
 import ujson as json
 import sys

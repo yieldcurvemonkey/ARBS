@@ -1,5 +1,6 @@
 import datetime
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 from typing import Optional, Tuple, Dict, List
 
 import rateslib as rl

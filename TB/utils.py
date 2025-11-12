@@ -8,7 +8,8 @@ from zoneinfo import ZoneInfo
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import plotly.graph_objects as go
 import tqdm
 from scipy.stats import tstd, zscore

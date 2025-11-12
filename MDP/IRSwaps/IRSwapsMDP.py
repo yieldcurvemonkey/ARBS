@@ -2,7 +2,8 @@ import datetime
 import warnings
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pytz
 
 warnings.filterwarnings(

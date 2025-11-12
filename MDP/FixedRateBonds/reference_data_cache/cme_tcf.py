@@ -4,7 +4,8 @@ import gzip
 import zlib
 from typing import Optional, Dict
 
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import requests
 
 DEFAULT_CME_HEADERS: Dict[str, str] = {

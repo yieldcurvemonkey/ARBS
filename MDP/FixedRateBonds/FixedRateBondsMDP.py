@@ -7,7 +7,8 @@ from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, Union
 
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pytz
 import QuantLib as ql
 import tqdm

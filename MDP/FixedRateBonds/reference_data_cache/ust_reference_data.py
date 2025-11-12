@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 from typing import Iterable, List, Literal, Optional, Union
 
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import QuantLib as ql

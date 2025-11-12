@@ -18,7 +18,8 @@ else:
     import urllib as url_parse
     import urllib2 as url_error
 
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 
 urlopen = url_request.urlopen
 quote_plus = url_parse.quote_plus

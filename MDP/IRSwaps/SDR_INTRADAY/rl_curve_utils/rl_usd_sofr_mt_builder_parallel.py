@@ -4,7 +4,8 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Literal, Optional, Tuple
 
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pytz
 import QuantLib as ql
 import rateslib as rl

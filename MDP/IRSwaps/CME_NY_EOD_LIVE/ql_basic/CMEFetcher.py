@@ -7,7 +7,8 @@ from io import BytesIO
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pyarrow
 import pyarrow.csv
 import QuantLib as ql
@@ -20,7 +21,7 @@ from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
 from Query.IRSwaps.backends.quantlib.ql_curve_building_utils import build_ql_discount_curve, build_ql_zero_curve
 
-warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+warnings.filterwarnings("ignore", category=FutureWarning  # polars equivalent)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys

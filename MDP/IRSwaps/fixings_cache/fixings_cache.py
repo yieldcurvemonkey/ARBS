@@ -3,7 +3,8 @@ import datetime
 from typing import Optional, Literal
 import os
 
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 from pandas.tseries.holiday import USFederalHolidayCalendar
 from pandas.tseries.offsets import CustomBusinessDay
 

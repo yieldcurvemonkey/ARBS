@@ -3,7 +3,8 @@ import hashlib
 import re
 from typing import List, Optional, Union, Literal, Tuple, Dict
 
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 

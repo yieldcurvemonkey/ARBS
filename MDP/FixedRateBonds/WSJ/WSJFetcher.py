@@ -7,7 +7,8 @@ from typing import Dict, List, Literal, Optional, Tuple
 
 import httpx
 import numpy as np
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pytz
 import requests
 import tqdm

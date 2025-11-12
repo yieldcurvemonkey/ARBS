@@ -8,7 +8,8 @@ from typing import Annotated, Dict, List, Literal, Optional, Tuple
 from urllib.parse import quote, unquote, urlencode
 
 import httpx
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import requests
 import tqdm
 import tqdm.asyncio

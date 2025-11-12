@@ -1,4 +1,5 @@
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import datetime
 import rateslib as rl
 

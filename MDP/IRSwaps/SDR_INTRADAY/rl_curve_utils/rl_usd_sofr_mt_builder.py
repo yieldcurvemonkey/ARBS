@@ -3,7 +3,8 @@ import os
 import re
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pytz
 import QuantLib as ql
 import rateslib as rl

@@ -8,7 +8,8 @@ from io import BytesIO
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pytz
 import rateslib as rl
 import QuantLib as ql
@@ -25,7 +26,7 @@ from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
     get_short_end_curve_tickers,
 )
 
-warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+warnings.filterwarnings("ignore", category=FutureWarning  # polars equivalent)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys

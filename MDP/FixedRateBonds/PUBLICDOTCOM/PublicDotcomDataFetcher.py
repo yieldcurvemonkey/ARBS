@@ -5,10 +5,11 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Literal
 
 import httpx
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import requests
 
-warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+warnings.filterwarnings("ignore", category=FutureWarning  # polars equivalent)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys

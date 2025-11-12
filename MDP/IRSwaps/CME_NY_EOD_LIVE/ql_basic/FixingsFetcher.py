@@ -4,7 +4,8 @@ import warnings
 from datetime import datetime
 from typing import Dict, Optional
 
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import QuantLib as ql
 import requests
 

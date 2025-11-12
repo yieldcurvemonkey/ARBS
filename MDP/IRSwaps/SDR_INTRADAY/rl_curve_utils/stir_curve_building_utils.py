@@ -8,7 +8,8 @@ from io import StringIO
 from typing import Dict, List, Literal, Optional, Set, Tuple, Union
 
 import numpy as np
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pytz
 import QuantLib as ql
 import rateslib as rl
@@ -663,7 +664,8 @@ def get_barchart_timeseries(
     from typing import Iterable, List, Set
     from urllib.parse import quote
 
-    import pandas as pd
+    import pandas as pd  # Keep for compatibility
+import polars as pl
     import requests
 
     # --- add this near the top of get_barchart_timeseries() ---

@@ -4,7 +4,8 @@ import sys
 import warnings
 from typing import Dict, List, Literal, Optional
 
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pytz
 import tqdm.asyncio
 
@@ -20,7 +21,7 @@ from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CU
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_datetime
 
 
-warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+warnings.filterwarnings("ignore", category=FutureWarning  # polars equivalent)
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys

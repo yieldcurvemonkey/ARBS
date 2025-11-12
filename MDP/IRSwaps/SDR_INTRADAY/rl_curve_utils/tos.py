@@ -9,7 +9,8 @@ from collections import OrderedDict
 from typing import Any, Dict, Iterable, List, Literal, Optional, Callable, Union
 
 import aiohttp
-import pandas as pd
+import pandas as pd  # Keep for compatibility
+import polars as pl
 import pytz
 import rateslib as rl
 import requests
