@@ -23,20 +23,15 @@ import polars as pl
 from typing import Optional, Literal
 from sklearn.decomposition import PCA
 
-from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
-from Risk.Covariance.SectorBased.BlockDiagonal.HierarchicalSectorClustering import (
-    HierarchicalSectorClustering,
+from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import (
+    SectorBasedCovarianceEstimator,
 )
 from Risk.Covariance.SectorBased.sector_utils import (
-    validate_sector_data,
-    long_to_wide,
-    extract_sector_mapping,
-    group_tickers_by_sector,
     create_block_diagonal_matrix,
 )
 
 
-class BlockDiagonalCovariance(BaseCovarianceEstimator):
+class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
     """
     Estimates covariance with sector-based block-diagonal structure.
 
@@ -67,15 +62,10 @@ class BlockDiagonalCovariance(BaseCovarianceEstimator):
             bias_correction: Apply eigenvalue bias correction when p > T
             handle_missing: How to handle missing data
         """
-        super().__init__(handle_missing=handle_missing)
+        super().__init__(clustering_method=clustering_method, handle_missing=handle_missing)
         self.n_factors = n_factors
-        self.clustering_method = clustering_method
         self.shrinkage_method = shrinkage_method
         self.bias_correction = bias_correction
-
-        self.clusterer = (
-            HierarchicalSectorClustering() if clustering_method == "hierarchical" else None
-        )
 
     def fit(
         self,
@@ -97,39 +87,39 @@ class BlockDiagonalCovariance(BaseCovarianceEstimator):
             ValueError: If required columns missing or data insufficient
         """
         # Validate data
-        if self.clustering_method == "predefined":
-            if sector_col is None:
-                raise ValueError("sector_col must be provided for predefined clustering")
-            validate_sector_data(returns, sector_col)
+        self._validate_sector_input(returns, sector_col)
+
+        # Handle missing data
+        returns_clean = self._handle_missing_data(returns)
 
         # Convert to wide format for computation
-        wide_returns, tickers = long_to_wide(returns, pivot_col="ticker", value_col="return")
+        returns_matrix, tickers = self._convert_to_wide_format(returns_clean)
         self.asset_names_ = tickers
-
-        # Convert to numpy for computation
-        returns_matrix = wide_returns.to_numpy()  # T×p
-        T, p = returns_matrix.shape
 
         # Step 1: Extract common factors and compute residuals
         factor_loadings, factor_cov, residuals = self._extract_factors(returns_matrix)
 
         # Step 2: Determine sector/cluster assignments
+        # Note: BlockDiagonal clusters on residuals, not raw returns (unique feature)
         if self.clustering_method == "predefined":
-            ticker_sector_map = extract_sector_mapping(returns, sector_col)
+            self.sector_mapping_ = self._determine_sector_assignments(
+                returns_matrix, tickers, returns_clean, sector_col
+            )
         else:
-            # Use hierarchical clustering on residuals
-            clustering_result = self.clusterer.fit(residuals, tickers)
-            ticker_sector_map = clustering_result.cluster_assignments
+            # Cluster on residuals (after factor extraction)
+            self.sector_mapping_ = self._discover_sectors_hierarchical(
+                residuals, tickers, n_clusters=None
+            )
 
         # Step 3: Estimate per-block residual covariances
-        sector_groups = group_tickers_by_sector(ticker_sector_map)
+        sector_groups = self.get_sector_groups()
         block_covariances = self._estimate_block_covariances(
             residuals, tickers, sector_groups
         )
 
         # Step 4: Reconstruct full covariance matrix
         self.cov_matrix_ = self._reconstruct_covariance(
-            factor_loadings, factor_cov, block_covariances, tickers, ticker_sector_map
+            factor_loadings, factor_cov, block_covariances, tickers, self.sector_mapping_
         )
 
         return self.cov_matrix_
@@ -378,11 +368,8 @@ class BlockDiagonalCovariance(BaseCovarianceEstimator):
         # Full covariance
         full_cov = factor_component + residual_component
 
-        # Ensure positive definite
-        min_eigenvalue = np.min(np.linalg.eigvalsh(full_cov))
-        if min_eigenvalue <= 0:
-            # Add small diagonal regularization
-            full_cov += np.eye(p) * (abs(min_eigenvalue) + 1e-8)
+        # Ensure positive definite (using inherited method)
+        full_cov = self._ensure_positive_definite(full_cov, min_eigenvalue=1e-8)
 
         return full_cov
 
