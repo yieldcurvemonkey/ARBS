@@ -68,6 +68,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         self.shrinkage_intensity: Optional[float] = None
         self.target_matrix: Optional[np.ndarray] = None
         self.sample_cov: Optional[np.ndarray] = None
+        self.block_shrinkage_intensities_: Optional[dict] = None
 
     def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
@@ -245,6 +246,117 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         if self.shrinkage_intensity is None:
             raise ValueError("Must call fit() before get_shrinkage_intensity()")
         return self.shrinkage_intensity
+
+    def apply_per_block_shrinkage(
+        self,
+        blocks: dict,
+        returns_by_block: dict,
+        target: str = "constant_correlation",
+    ) -> dict:
+        """
+        Apply Ledoit-Wolf shrinkage to each block separately.
+
+        This implements per-block shrinkage from the sector risk model paper,
+        where each sector gets its own data-driven shrinkage intensity α_m.
+
+        Formula (Paper 2, Equation 3.3):
+            Ŝ^c_m = α_m·Ŝ^c_m + (1 - α_m)·S̃^c_m
+
+        where:
+        - Ŝ^c_m: Sample covariance of block m
+        - S̃^c_m: Shrinkage target (constant correlation)
+        - α_m: Ledoit-Wolf intensity for block m (data-driven, different per block)
+
+        Args:
+            blocks: Dict mapping sector names to sample covariance matrices (N_m × N_m)
+            returns_by_block: Dict mapping sector names to returns arrays (T × N_m)
+            target: Shrinkage target type (default: 'constant_correlation')
+
+        Returns:
+            Dict mapping sector names to shrunk covariance matrices
+
+        Example:
+            >>> blocks = {
+            ...     'Technology': tech_cov,  # 5×5
+            ...     'Utilities': util_cov,   # 3×3
+            ... }
+            >>> returns_by_block = {
+            ...     'Technology': tech_returns,  # T×5
+            ...     'Utilities': util_returns,   # T×3
+            ... }
+            >>> shrunk = estimator.apply_per_block_shrinkage(blocks, returns_by_block)
+        """
+        shrunk_blocks = {}
+        self.block_shrinkage_intensities_ = {}
+
+        for sector_name, sample_cov in blocks.items():
+            # Get returns for this block
+            returns = returns_by_block[sector_name]
+
+            # Convert to polars for consistency with existing methods
+            returns_pl = pl.DataFrame(returns)
+
+            # Calculate shrinkage target for this block
+            target_matrix = self._compute_target_for_block(returns_pl, target)
+
+            # Calculate optimal shrinkage intensity for this block
+            alpha = self._compute_shrinkage_intensity(
+                returns, sample_cov, target_matrix
+            )
+
+            # Store shrinkage intensity
+            self.block_shrinkage_intensities_[sector_name] = alpha
+
+            # Apply shrinkage: Ŝ = α·Ŝ + (1-α)·S̃
+            shrunk_cov = alpha * sample_cov + (1 - alpha) * target_matrix
+
+            shrunk_blocks[sector_name] = shrunk_cov
+
+        return shrunk_blocks
+
+    def _compute_target_for_block(
+        self,
+        returns: pl.DataFrame,
+        target: str,
+    ) -> np.ndarray:
+        """
+        Compute shrinkage target for a single block.
+
+        Args:
+            returns: Returns DataFrame for the block
+            target: Target type ('constant_correlation', 'diagonal', 'identity')
+
+        Returns:
+            Target matrix (N×N)
+        """
+        # Temporarily set target type
+        original_target = self.target_type
+        self.target_type = target
+
+        # Compute target using existing method
+        target_matrix = self._compute_target(returns)
+
+        # Restore original target type
+        self.target_type = original_target
+
+        return target_matrix
+
+    def get_block_shrinkage_intensities(self) -> dict:
+        """
+        Get the shrinkage intensities for each block.
+
+        Returns:
+            Dict mapping sector names to shrinkage intensities α ∈ [0, 1]
+
+        Raises:
+            ValueError: If apply_per_block_shrinkage() hasn't been called yet
+        """
+        if self.block_shrinkage_intensities_ is None:
+            raise ValueError(
+                "Must call apply_per_block_shrinkage() before "
+                "get_block_shrinkage_intensities()"
+            )
+        return self.block_shrinkage_intensities_
 
     def __repr__(self) -> str:
         return f"LedoitWolfShrinkage(target='{self.target_type}')"
