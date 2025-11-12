@@ -14,10 +14,10 @@ Based on Yang & Shi (2023) "Sector Rotation by Factor Model and Fundamental Anal
 
 from Signals.SectorRotation.MomentumFactor import MomentumFactor
 from Signals.SectorRotation.ReversionFactor import ReversionFactor
-# from Signals.SectorRotation.CrossSectionalNeutralizer import CrossSectionalNeutralizer
+from Signals.SectorRotation.CrossSectionalNeutralizer import CrossSectionalNeutralizer
 
 __all__ = [
     "MomentumFactor",
     "ReversionFactor",
-    # "CrossSectionalNeutralizer",  # TODO: implement next
+    "CrossSectionalNeutralizer",
 ]
