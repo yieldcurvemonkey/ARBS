@@ -81,7 +81,65 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
 - **Template Registry** (13 tests): Pre-built strategy templates
 - **Dynamic Validation** (6 tests): Runtime extension verification
 
-**End-to-end example**: `examples/run_minimal_backtest.py` demonstrates full pipeline
+**Architecture V4 - Generic Backtest (18+ tests)**
+- **Generic Backtest** (18 tests): Unified backtest supporting all asset classes and signal types
+- **Configurable Components**: Dependency injection for adapter, signals, risk models, optimizers
+- **Two Workflows**: Query-based (futures/swaps) and DataFrame-based (equities/ETFs)
+- **Multi-Signal Support**: Single or multiple signals with automatic combiner
+- **Backwards Compatible**: MinimalBacktest remains for futures-specific use cases
+
+**Usage Patterns:**
+
+1. **Futures Carry** (backwards compatible with MinimalBacktest):
+   ```python
+   from Backtest.Backtest import Backtest
+   from Adapter.FuturesAdapter import FuturesAdapter
+   from Signals.Futures.CarrySignal import CarrySignal
+
+   backtest = Backtest(
+       mdp=market_data_provider,
+       adapter=FuturesAdapter(mdp),
+       signals=CarrySignal()
+   )
+   result = backtest.run(contracts=['SFRZ4', 'SFRH5'], dates=[...])
+   ```
+
+2. **Equity Momentum** (new capability):
+   ```python
+   from Backtest.Backtest import Backtest
+   from Signals.Futures.MomentumSignal import MomentumSignal
+
+   backtest = Backtest(
+       signals=MomentumSignal(lookback=20),
+       risk_aversion=3.0
+   )
+   result = backtest.run_from_dataframe(returns_df, dates=[...])
+   ```
+
+3. **Multi-Signal** (new capability):
+   ```python
+   from Backtest.Backtest import Backtest
+   from Signals.SignalCombiner import SignalCombiner
+
+   backtest = Backtest(
+       mdp=mdp,
+       adapter=FuturesAdapter(mdp),
+       signals=[CarrySignal(), MomentumSignal()],
+       signal_combiner=SignalCombiner(method='ic_weighted')
+   )
+   result = backtest.run(contracts=[...], dates=[...])
+   ```
+
+**Key Design Decisions:**
+- MinimalBacktest remains for futures carry strategies (no breaking changes)
+- Generic Backtest recommended for all new code
+- Component injection enables testing without full integration
+- Two workflows support different data availability patterns
+- Signal combiner auto-created for multiple signals with equal-weight default
+
+**End-to-end examples**:
+- `examples/run_minimal_backtest.py` - Futures carry (legacy)
+- Generic Backtest examples in `Backtest/__init__.py`
 
 ### Architecture Improvements Applied
 
@@ -95,12 +153,15 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
 - ✅ End-to-end system produces measurable results
 - ✅ Measurements are accurate (regardless of profitability)
 - ✅ All layers integrated successfully
-- ✅ 582 tests passing with comprehensive coverage
+- ✅ 600+ tests passing with comprehensive coverage
 - ✅ Grinold-Kahn architecture compliance
 - ✅ MVP philosophy achieved: measure correctly, not necessarily profitably
 - ✅ Multiple signal types implemented (Carry, Momentum, Mean Reversion)
 - ✅ Modular factory system enables extension without code modification
 - ✅ YAML-based strategy configuration for rapid experimentation
+- ✅ Generic backtest supports all asset classes (futures, swaps, equities)
+- ✅ Multi-signal strategies with configurable combiner
+- ✅ Backwards compatibility maintained (MinimalBacktest unchanged)
 
 ### Future Enhancements (Not Required for MVP)
 
