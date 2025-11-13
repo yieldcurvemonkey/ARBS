@@ -295,7 +295,7 @@ class TestConstraints:
         weights = optimizer.optimize(alphas, cov)
 
         # No position exceeds 40%
-        assert all(weights <= 0.4 + 0.01)
+        assert all(w <= 0.4 + 0.01 for w in weights.values())
         assert abs(weights.sum() - 1.0) < 0.01
 
 
