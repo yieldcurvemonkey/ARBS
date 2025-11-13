@@ -21,7 +21,8 @@ from abc import abstractmethod
 from typing import Dict, List, Literal, Optional
 import numpy as np
 import polars as pl
-from sklearn.cluster import AgglomerativeClustering
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import squareform
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
 from Risk.Covariance.SectorBased.sector_utils import (
@@ -59,6 +60,7 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
         super().__init__(handle_missing=handle_missing)
         self.clustering_method = clustering_method
         self.sector_mapping_: Optional[Dict[str, str]] = None
+        self.correlation_clusters_: Optional[Dict[str, str]] = None
 
     @abstractmethod
     def fit(
@@ -191,12 +193,10 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
         if n_clusters is None:
             n_clusters = max(2, int(np.sqrt(N)))
 
-        # Hierarchical clustering
-        clustering = AgglomerativeClustering(
-            n_clusters=n_clusters, metric="precomputed", linkage="average"
-        )
-
-        labels = clustering.fit_predict(distance_matrix)
+        # Hierarchical clustering using scipy
+        condensed_dist = squareform(distance_matrix, checks=False)
+        Z = linkage(condensed_dist, method='average')
+        labels = fcluster(Z, n_clusters, criterion='maxclust') - 1  # Make 0-indexed
 
         # Create sector mapping
         sector_mapping = {}
@@ -260,6 +260,218 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
         """
         sector_mapping = self.get_sector_mapping()
         return group_tickers_by_sector(sector_mapping)
+
+    def get_correlation_clusters(
+        self,
+        threshold: float = 0.85,
+        max_cluster_size: int = 10,
+        n_clusters: Optional[int] = None,
+    ) -> Dict[str, str]:
+        """
+        Detect correlation clusters using hierarchical clustering.
+
+        Groups assets by correlation structure to identify concentration risk.
+        Uses distance metric: d = 1 - |ρ| where ρ is correlation.
+
+        Args:
+            threshold: Correlation threshold for clustering (default 0.85)
+                      Assets with |ρ| > threshold are considered similar
+            max_cluster_size: Maximum number of assets per cluster (default 10)
+                             If cluster exceeds size, it will be split
+            n_clusters: Number of clusters to form (if None, uses heuristic: sqrt(N))
+
+        Returns:
+            Dictionary mapping ticker → cluster_id (e.g., "cluster_0", "cluster_1")
+
+        Raises:
+            ValueError: If fit() hasn't been called yet
+
+        Example:
+            >>> estimator = SectorBasedCovarianceEstimator()
+            >>> estimator.fit(returns)
+            >>> clusters = estimator.get_correlation_clusters(threshold=0.85)
+            >>> print(clusters)
+            {'AAPL': 'cluster_0', 'MSFT': 'cluster_0', 'JPM': 'cluster_1'}
+        """
+        # Check that fit has been called
+        if not hasattr(self, 'asset_names_'):
+            raise ValueError("Must call fit() before get_correlation_clusters()")
+
+        # Get returns matrix (need to reconstruct or store during fit)
+        # For now, compute correlation from covariance if available
+        if not hasattr(self, 'cov_matrix_'):
+            raise ValueError("Covariance matrix not available. Call fit() first.")
+
+        tickers = self.asset_names_
+        N = len(tickers)
+
+        # Convert covariance to correlation matrix
+        # Correlation: ρ_ij = σ_ij / (σ_i × σ_j)
+        std_devs = np.sqrt(np.diag(self.cov_matrix_))
+        std_matrix = np.outer(std_devs, std_devs)
+
+        # Avoid division by zero
+        std_matrix = np.where(std_matrix > 1e-10, std_matrix, 1.0)
+
+        corr_matrix = self.cov_matrix_ / std_matrix
+
+        # Ensure correlation matrix is valid [-1, 1]
+        corr_matrix = np.clip(corr_matrix, -1.0, 1.0)
+
+        # Distance metric: d = 1 - |ρ|
+        distance_matrix = 1 - np.abs(corr_matrix)
+
+        # Ensure valid distance matrix (non-negative, symmetric)
+        distance_matrix = np.maximum(distance_matrix, 0)
+        distance_matrix = (distance_matrix + distance_matrix.T) / 2
+        np.fill_diagonal(distance_matrix, 0)  # Distance to self is zero
+
+        # Auto-select number of clusters if not specified
+        if n_clusters is None:
+            n_clusters = max(2, int(np.sqrt(N)))
+
+        # Hierarchical clustering using scipy
+        # Convert distance matrix to condensed form for linkage
+        condensed_dist = squareform(distance_matrix, checks=False)
+
+        # Perform hierarchical clustering
+        Z = linkage(condensed_dist, method='average')
+
+        # Cut dendrogram to get cluster labels
+        labels = fcluster(Z, n_clusters, criterion='maxclust') - 1  # Make 0-indexed
+
+        # Create initial cluster mapping
+        cluster_mapping = {}
+        for ticker, label in zip(tickers, labels):
+            cluster_mapping[ticker] = f"cluster_{label}"
+
+        # Enforce max_cluster_size by splitting large clusters
+        cluster_mapping = self._enforce_max_cluster_size(
+            cluster_mapping, distance_matrix, tickers, max_cluster_size
+        )
+
+        # Store for later retrieval
+        self.correlation_clusters_ = cluster_mapping
+
+        return cluster_mapping
+
+    def _enforce_max_cluster_size(
+        self,
+        cluster_mapping: Dict[str, str],
+        distance_matrix: np.ndarray,
+        tickers: List[str],
+        max_cluster_size: int,
+    ) -> Dict[str, str]:
+        """
+        Split clusters that exceed max_cluster_size.
+
+        Args:
+            cluster_mapping: Initial cluster assignments
+            distance_matrix: Distance matrix for re-clustering
+            tickers: List of ticker names
+            max_cluster_size: Maximum assets per cluster
+
+        Returns:
+            Updated cluster mapping with no cluster exceeding max_size
+        """
+        # Group tickers by cluster
+        clusters = {}
+        for ticker, cluster_id in cluster_mapping.items():
+            if cluster_id not in clusters:
+                clusters[cluster_id] = []
+            clusters[cluster_id].append(ticker)
+
+        # Check if any cluster exceeds max_size
+        new_mapping = {}
+        cluster_counter = 0
+
+        for cluster_id, cluster_tickers in clusters.items():
+            if len(cluster_tickers) <= max_cluster_size:
+                # Keep as is
+                for ticker in cluster_tickers:
+                    new_mapping[ticker] = f"cluster_{cluster_counter}"
+                cluster_counter += 1
+            else:
+                # Split this cluster
+                # Get indices for this cluster
+                ticker_to_idx = {t: i for i, t in enumerate(tickers)}
+                cluster_indices = [ticker_to_idx[t] for t in cluster_tickers]
+
+                # Extract sub-distance matrix
+                sub_distance = distance_matrix[np.ix_(cluster_indices, cluster_indices)]
+
+                # Determine number of sub-clusters needed
+                n_subclusters = int(np.ceil(len(cluster_tickers) / max_cluster_size))
+
+                # Re-cluster
+                if n_subclusters > 1:
+                    # Use scipy for sub-clustering
+                    sub_condensed = squareform(sub_distance, checks=False)
+                    sub_Z = linkage(sub_condensed, method='average')
+                    sub_labels = fcluster(sub_Z, n_subclusters, criterion='maxclust')
+
+                    # Map sub-labels to unique cluster IDs
+                    # Get unique sub-labels and create mapping
+                    unique_sublabels = sorted(set(sub_labels))
+                    label_to_cluster = {
+                        sublabel: cluster_counter + i
+                        for i, sublabel in enumerate(unique_sublabels)
+                    }
+
+                    for ticker, sub_label in zip(cluster_tickers, sub_labels):
+                        new_mapping[ticker] = f"cluster_{label_to_cluster[sub_label]}"
+
+                    cluster_counter += len(unique_sublabels)
+                else:
+                    # Single cluster (shouldn't happen, but safety)
+                    for ticker in cluster_tickers:
+                        new_mapping[ticker] = f"cluster_{cluster_counter}"
+                    cluster_counter += 1
+
+        # Recursively enforce until no cluster exceeds max_size
+        # (in case sub-clustering still produced large clusters)
+        groups = {}
+        for ticker, cluster_id in new_mapping.items():
+            if cluster_id not in groups:
+                groups[cluster_id] = []
+            groups[cluster_id].append(ticker)
+
+        max_size = max(len(tickers) for tickers in groups.values())
+        if max_size > max_cluster_size:
+            # Recursively apply constraint
+            return self._enforce_max_cluster_size(
+                new_mapping, distance_matrix, tickers, max_cluster_size
+            )
+
+        return new_mapping
+
+    def get_cluster_groups(self) -> Dict[str, List[str]]:
+        """
+        Get cluster → list of tickers mapping (inverted from get_correlation_clusters).
+
+        Returns:
+            Dictionary mapping cluster_id → list of tickers in that cluster
+
+        Raises:
+            ValueError: If get_correlation_clusters() hasn't been called yet
+
+        Example:
+            >>> estimator.get_correlation_clusters()
+            >>> groups = estimator.get_cluster_groups()
+            >>> print(groups)
+            {'cluster_0': ['AAPL', 'MSFT'], 'cluster_1': ['JPM', 'GS']}
+        """
+        if self.correlation_clusters_ is None:
+            raise ValueError("Must call get_correlation_clusters() before get_cluster_groups()")
+
+        # Invert the mapping
+        groups = {}
+        for ticker, cluster_id in self.correlation_clusters_.items():
+            if cluster_id not in groups:
+                groups[cluster_id] = []
+            groups[cluster_id].append(ticker)
+
+        return groups
 
     def __repr__(self) -> str:
         return (

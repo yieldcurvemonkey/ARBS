@@ -1,21 +1,12 @@
-# ABOUTME: Utility functions for alpha signal analysis and evaluation
-# ABOUTME: Exports IC calculation functions for measuring predictive power
+# ABOUTME: Utility functions for signal generation including feature engineering
+# ABOUTME: Provides momentum, value, quality, and technical indicator calculations
 """
-Signal utility functions.
+Signal utilities for feature engineering and helper functions.
+
+Modules:
+    FeatureEngineering: Calculate momentum, value, quality, technical features
 """
 
-from Signals.Utils.IC import (
-    calculate_ic,
-    calculate_rank_ic,
-    calculate_ic_significance,
-    calculate_ic_time_series,
-    calculate_ic_decay,
-)
+from .FeatureEngineering import FeatureEngineering
 
-__all__ = [
-    "calculate_ic",
-    "calculate_rank_ic",
-    "calculate_ic_significance",
-    "calculate_ic_time_series",
-    "calculate_ic_decay",
-]
+__all__ = ["FeatureEngineering"]
