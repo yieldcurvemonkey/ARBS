@@ -137,7 +137,7 @@ class TestFuturesCarryWorkflow:
         from Adapter.FuturesAdapter import FuturesAdapter
         from Signals.Futures.CarrySignal import CarrySignal
 
-        adapter = FuturesAdapter(mdp=mock_mdp)
+        adapter = FuturesAdapter(market_data_provider=mock_mdp)
         signal = CarrySignal(name='carry')
 
         backtest = Backtest(
@@ -193,7 +193,7 @@ class TestFuturesCarryWorkflow:
         # Generic Backtest (same configuration)
         generic = Backtest(
             mdp=mock_mdp,
-            adapter=FuturesAdapter(mdp=mock_mdp),
+            adapter=FuturesAdapter(market_data_provider=mock_mdp),
             signals=CarrySignal(),
             risk_aversion=1.0,
             long_only=True,
@@ -214,8 +214,8 @@ class TestFuturesMomentumWorkflow:
         from Adapter.FuturesAdapter import FuturesAdapter
         from Signals.Futures.MomentumSignal import MomentumSignal
 
-        adapter = FuturesAdapter(mdp=mock_mdp)
-        signal = MomentumSignal(lookback=20, name='momentum')
+        adapter = FuturesAdapter(market_data_provider=mock_mdp)
+        signal = MomentumSignal(lookback_days=20, name='momentum')
 
         backtest = Backtest(
             mdp=mock_mdp,
@@ -245,7 +245,7 @@ class TestFuturesMomentumWorkflow:
         # Carry backtest
         carry_bt = Backtest(
             mdp=mock_mdp,
-            adapter=FuturesAdapter(mdp=mock_mdp),
+            adapter=FuturesAdapter(market_data_provider=mock_mdp),
             signals=CarrySignal()
         )
         carry_result = carry_bt.run(contracts, dates)
@@ -253,8 +253,8 @@ class TestFuturesMomentumWorkflow:
         # Momentum backtest
         momentum_bt = Backtest(
             mdp=mock_mdp,
-            adapter=FuturesAdapter(mdp=mock_mdp),
-            signals=MomentumSignal(lookback=20)
+            adapter=FuturesAdapter(market_data_provider=mock_mdp),
+            signals=MomentumSignal(lookback_days=20)
         )
         momentum_result = momentum_bt.run(contracts, dates)
 
@@ -275,10 +275,10 @@ class TestMultiSignalWorkflow:
         from Signals.Futures.MomentumSignal import MomentumSignal
         from Signals.SignalCombiner import SignalCombiner
 
-        adapter = FuturesAdapter(mdp=mock_mdp)
+        adapter = FuturesAdapter(market_data_provider=mock_mdp)
         carry = CarrySignal(name='carry')
-        momentum = MomentumSignal(lookback=20, name='momentum')
-        combiner = SignalCombiner(method='equal')
+        momentum = MomentumSignal(lookback_days=20, name='momentum')
+        combiner = SignalCombiner()
 
         backtest = Backtest(
             mdp=mock_mdp,
@@ -304,7 +304,7 @@ class TestMultiSignalWorkflow:
         from Signals.SignalCombiner import SignalCombiner
 
         carry = CarrySignal(name='carry')
-        momentum = MomentumSignal(lookback=20, name='momentum')
+        momentum = MomentumSignal(lookback_days=20, name='momentum')
 
         # Don't provide combiner - should auto-create
         backtest = Backtest(signals=[carry, momentum])
@@ -339,7 +339,7 @@ class TestDataFrameWorkflow:
             'return': [0.02, -0.01, 0.01, 0.03]
         })
 
-        backtest = Backtest(signals=MomentumSignal(lookback=20))
+        backtest = Backtest(signals=MomentumSignal(lookback_days=20))
 
         dates = [date(2024, 6, 15), date(2024, 6, 22)]
         result = backtest.run_from_dataframe(returns_df, dates)
@@ -357,7 +357,7 @@ class TestDataFrameWorkflow:
         # Create backtest WITH adapter
         backtest = Backtest(
             mdp=mock_mdp,
-            adapter=FuturesAdapter(mdp=mock_mdp),
+            adapter=FuturesAdapter(market_data_provider=mock_mdp),
             signals=CarrySignal()
         )
 
@@ -381,7 +381,7 @@ class TestDataFrameWorkflow:
             'return': [0.02, -0.01, 0.03]
         })
 
-        backtest = Backtest(signals=MomentumSignal(lookback=20))
+        backtest = Backtest(signals=MomentumSignal(lookback_days=20))
 
         # Only trade AAPL and MSFT
         result = backtest.run_from_dataframe(

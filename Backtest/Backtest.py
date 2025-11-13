@@ -147,7 +147,7 @@ class Backtest(BaseBacktest):
             if signal_combiner is None:
                 # Import here to avoid circular dependency
                 from Signals.SignalCombiner import SignalCombiner
-                self.signal_combiner = SignalCombiner(method='equal')
+                self.signal_combiner = SignalCombiner()
             else:
                 self.signal_combiner = signal_combiner
         else:
@@ -248,15 +248,58 @@ class Backtest(BaseBacktest):
 
             # Step 2: Generate signals using configured signal(s)
             if len(self.signals) == 1:
-                # Single signal
-                signals = self.signals[0].generate(df, as_of)
+                # Single signal - call generate() per instrument
+                signals = {}
+                if isinstance(df, pl.DataFrame):
+                    row_iter = df.iter_rows(named=True)
+                else:
+                    row_iter = (row for _, row in df.iterrows())
+
+                for row in row_iter:
+                    contract = row['contract']
+                    # Create single-row DataFrame for this instrument
+                    if isinstance(df, pl.DataFrame):
+                        inst_df = df.filter(pl.col('contract') == contract)
+                    else:
+                        inst_df = df[df['contract'] == contract]
+                    # Generate signal for this instrument
+                    try:
+                        signal_value = self.signals[0].generate(inst_df, self.mdp, as_of)
+                        signals[contract] = signal_value
+                    except Exception:
+                        signals[contract] = 0.0
             else:
                 # Multiple signals: generate each and combine
-                individual_signals = [sig.generate(df, as_of) for sig in self.signals]
+                # First, generate signals for all instruments with each signal
+                individual_signals = []
+                for sig in self.signals:
+                    sig_dict = {}
+                    if isinstance(df, pl.DataFrame):
+                        row_iter = df.iter_rows(named=True)
+                    else:
+                        row_iter = (row for _, row in df.iterrows())
+
+                    for row in row_iter:
+                        contract = row['contract']
+                        if isinstance(df, pl.DataFrame):
+                            inst_df = df.filter(pl.col('contract') == contract)
+                        else:
+                            inst_df = df[df['contract'] == contract]
+                        try:
+                            signal_value = sig.generate(inst_df, self.mdp, as_of)
+                            sig_dict[contract] = signal_value
+                        except Exception:
+                            sig_dict[contract] = 0.0
+                    individual_signals.append(sig_dict)
 
                 # Combine signals
                 if self.signal_combiner is not None:
-                    signals = self.signal_combiner.combine(individual_signals, as_of)
+                    # Convert list of dicts to Dict[signal_name, signal_dict]
+                    signals_dict = {
+                        sig.name: sig_values
+                        for sig, sig_values in zip(self.signals, individual_signals)
+                    }
+                    signals = self.signal_combiner.combine(signals_dict, method='equal')
                 else:
                     # Fallback: equal weight combination
                     signals = {}
@@ -418,15 +461,41 @@ class Backtest(BaseBacktest):
             # Step 1: Generate signals using configured signal(s)
             # Signals work on returns DataFrame
             if len(self.signals) == 1:
-                # Single signal
-                signals = self.signals[0].generate(date_returns, as_of)
+                # Single signal - call generate() per instrument
+                signals = {}
+                for row in date_returns.iter_rows(named=True):
+                    ticker = row['ticker']
+                    # Create single-row DataFrame for this ticker
+                    inst_df = date_returns.filter(pl.col('ticker') == ticker)
+                    # Generate signal for this ticker
+                    try:
+                        signal_value = self.signals[0].generate(inst_df, None, as_of)
+                        signals[ticker] = signal_value
+                    except Exception:
+                        signals[ticker] = 0.0
             else:
                 # Multiple signals: generate each and combine
-                individual_signals = [sig.generate(date_returns, as_of) for sig in self.signals]
+                individual_signals = []
+                for sig in self.signals:
+                    sig_dict = {}
+                    for row in date_returns.iter_rows(named=True):
+                        ticker = row['ticker']
+                        inst_df = date_returns.filter(pl.col('ticker') == ticker)
+                        try:
+                            signal_value = sig.generate(inst_df, None, as_of)
+                            sig_dict[ticker] = signal_value
+                        except Exception:
+                            sig_dict[ticker] = 0.0
+                    individual_signals.append(sig_dict)
 
                 # Combine signals
                 if self.signal_combiner is not None:
-                    signals = self.signal_combiner.combine(individual_signals, as_of)
+                    # Convert list of dicts to Dict[signal_name, signal_dict]
+                    signals_dict = {
+                        sig.name: sig_values
+                        for sig, sig_values in zip(self.signals, individual_signals)
+                    }
+                    signals = self.signal_combiner.combine(signals_dict, method='equal')
                 else:
                     # Fallback: equal weight combination
                     signals = {}
