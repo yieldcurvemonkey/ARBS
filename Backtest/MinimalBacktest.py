@@ -3,6 +3,14 @@
 """
 Minimal Backtest
 
+NOTE: For new code, prefer Backtest.Backtest which supports:
+- Any signal type (not just carry)
+- Any adapter (futures, equities, custom)
+- Multiple signals with combiner
+- DataFrame-based workflow for equities
+
+MinimalBacktest is specific to futures carry strategies.
+
 Integrates all components for end-to-end strategy backtesting.
 
 Algorithm:
