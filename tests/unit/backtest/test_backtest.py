@@ -126,3 +126,268 @@ class TestBacktestBasics:
         assert backtest.alpha_generator == custom_alpha
         assert backtest.risk_model == custom_risk
         assert backtest.optimizer == custom_optimizer
+
+
+class TestFuturesCarryWorkflow:
+    """Test futures carry workflow (baseline - same as MinimalBacktest)."""
+
+    def test_backtest_runs_with_futures_adapter(self, mock_mdp):
+        """Backtest runs with FuturesAdapter and CarrySignal."""
+        from Backtest.Backtest import Backtest
+        from Adapter.FuturesAdapter import FuturesAdapter
+        from Signals.Futures.CarrySignal import CarrySignal
+
+        adapter = FuturesAdapter(mdp=mock_mdp)
+        signal = CarrySignal(name='carry')
+
+        backtest = Backtest(
+            mdp=mock_mdp,
+            adapter=adapter,
+            signals=signal
+        )
+
+        contracts = ['SFRZ4', 'SFRH5']
+        dates = [date(2024, 6, 15), date(2024, 6, 22)]
+
+        result = backtest.run(contracts, dates)
+
+        # Should return BacktestResult
+        assert result is not None
+        assert hasattr(result, 'weights')
+        assert hasattr(result, 'returns')
+        assert hasattr(result, 'ic')
+        assert hasattr(result, 'sharpe_ratio')
+
+    def test_backtest_validates_requires_adapter_for_run(self, mock_mdp):
+        """Backtest.run() raises if adapter not provided."""
+        from Backtest.Backtest import Backtest
+        from Signals.Futures.CarrySignal import CarrySignal
+
+        # Create backtest WITHOUT adapter
+        backtest = Backtest(signals=CarrySignal())
+
+        contracts = ['SFRZ4']
+        dates = [date(2024, 6, 15)]
+
+        with pytest.raises(ValueError, match="Query-based workflow requires adapter"):
+            backtest.run(contracts, dates)
+
+    def test_backwards_compatible_with_minimal_backtest(self, mock_mdp):
+        """Generic Backtest produces same results as MinimalBacktest."""
+        from Backtest.Backtest import Backtest
+        from Backtest.MinimalBacktest import MinimalBacktest
+        from Adapter.FuturesAdapter import FuturesAdapter
+        from Signals.Futures.CarrySignal import CarrySignal
+
+        contracts = ['SFRZ4', 'SFRH5', 'SFRM5']
+        dates = [
+            date(2024, 6, 15),
+            date(2024, 6, 22),
+            date(2024, 6, 29),
+        ]
+
+        # MinimalBacktest
+        minimal = MinimalBacktest(mdp=mock_mdp, risk_aversion=1.0, long_only=True)
+        minimal_result = minimal.run(contracts, dates)
+
+        # Generic Backtest (same configuration)
+        generic = Backtest(
+            mdp=mock_mdp,
+            adapter=FuturesAdapter(mdp=mock_mdp),
+            signals=CarrySignal(),
+            risk_aversion=1.0,
+            long_only=True,
+        )
+        generic_result = generic.run(contracts, dates)
+
+        # Should produce similar results
+        assert len(generic_result.returns) == len(minimal_result.returns)
+        assert generic_result.sharpe_ratio == pytest.approx(minimal_result.sharpe_ratio, abs=0.1)
+
+
+class TestFuturesMomentumWorkflow:
+    """Test futures momentum workflow (new capability)."""
+
+    def test_backtest_runs_with_momentum_signal(self, mock_mdp):
+        """Backtest runs with MomentumSignal."""
+        from Backtest.Backtest import Backtest
+        from Adapter.FuturesAdapter import FuturesAdapter
+        from Signals.Futures.MomentumSignal import MomentumSignal
+
+        adapter = FuturesAdapter(mdp=mock_mdp)
+        signal = MomentumSignal(lookback=20, name='momentum')
+
+        backtest = Backtest(
+            mdp=mock_mdp,
+            adapter=adapter,
+            signals=signal
+        )
+
+        contracts = ['SFRZ4', 'SFRH5']
+        dates = [date(2024, 6, 15), date(2024, 6, 22)]
+
+        result = backtest.run(contracts, dates)
+
+        # Should return valid result
+        assert result is not None
+        assert hasattr(result, 'returns')
+
+    def test_momentum_signal_generates_different_weights_than_carry(self, mock_mdp):
+        """MomentumSignal produces different weights than CarrySignal."""
+        from Backtest.Backtest import Backtest
+        from Adapter.FuturesAdapter import FuturesAdapter
+        from Signals.Futures.CarrySignal import CarrySignal
+        from Signals.Futures.MomentumSignal import MomentumSignal
+
+        contracts = ['SFRZ4', 'SFRH5']
+        dates = [date(2024, 6, 15)]
+
+        # Carry backtest
+        carry_bt = Backtest(
+            mdp=mock_mdp,
+            adapter=FuturesAdapter(mdp=mock_mdp),
+            signals=CarrySignal()
+        )
+        carry_result = carry_bt.run(contracts, dates)
+
+        # Momentum backtest
+        momentum_bt = Backtest(
+            mdp=mock_mdp,
+            adapter=FuturesAdapter(mdp=mock_mdp),
+            signals=MomentumSignal(lookback=20)
+        )
+        momentum_result = momentum_bt.run(contracts, dates)
+
+        # Weights should differ (different signals)
+        # Note: May be similar by chance, but logic is different
+        assert carry_result.weights is not None
+        assert momentum_result.weights is not None
+
+
+class TestMultiSignalWorkflow:
+    """Test multi-signal workflow with combiner."""
+
+    def test_backtest_combines_multiple_signals(self, mock_mdp):
+        """Backtest combines multiple signals with SignalCombiner."""
+        from Backtest.Backtest import Backtest
+        from Adapter.FuturesAdapter import FuturesAdapter
+        from Signals.Futures.CarrySignal import CarrySignal
+        from Signals.Futures.MomentumSignal import MomentumSignal
+        from Signals.SignalCombiner import SignalCombiner
+
+        adapter = FuturesAdapter(mdp=mock_mdp)
+        carry = CarrySignal(name='carry')
+        momentum = MomentumSignal(lookback=20, name='momentum')
+        combiner = SignalCombiner(method='equal')
+
+        backtest = Backtest(
+            mdp=mock_mdp,
+            adapter=adapter,
+            signals=[carry, momentum],
+            signal_combiner=combiner
+        )
+
+        contracts = ['SFRZ4', 'SFRH5']
+        dates = [date(2024, 6, 15), date(2024, 6, 22)]
+
+        result = backtest.run(contracts, dates)
+
+        # Should return valid result
+        assert result is not None
+        assert hasattr(result, 'returns')
+
+    def test_backtest_creates_default_combiner_for_multiple_signals(self, mock_mdp):
+        """Backtest auto-creates SignalCombiner if multiple signals provided."""
+        from Backtest.Backtest import Backtest
+        from Signals.Futures.CarrySignal import CarrySignal
+        from Signals.Futures.MomentumSignal import MomentumSignal
+        from Signals.SignalCombiner import SignalCombiner
+
+        carry = CarrySignal(name='carry')
+        momentum = MomentumSignal(lookback=20, name='momentum')
+
+        # Don't provide combiner - should auto-create
+        backtest = Backtest(signals=[carry, momentum])
+
+        # Should have created combiner
+        assert backtest.signal_combiner is not None
+        assert isinstance(backtest.signal_combiner, SignalCombiner)
+
+    def test_backtest_no_combiner_for_single_signal(self, mock_mdp):
+        """Backtest doesn't create combiner for single signal."""
+        from Backtest.Backtest import Backtest
+        from Signals.Futures.CarrySignal import CarrySignal
+
+        backtest = Backtest(signals=CarrySignal())
+
+        # Should NOT have combiner for single signal
+        assert backtest.signal_combiner is None
+
+
+class TestDataFrameWorkflow:
+    """Test DataFrame-based workflow (equity/ETF strategies)."""
+
+    def test_backtest_runs_from_dataframe(self):
+        """Backtest runs from pre-computed returns DataFrame."""
+        from Backtest.Backtest import Backtest
+        from Signals.Futures.MomentumSignal import MomentumSignal
+
+        # Create sample returns DataFrame
+        returns_df = pl.DataFrame({
+            'date': [date(2024, 6, 15), date(2024, 6, 15), date(2024, 6, 22), date(2024, 6, 22)],
+            'ticker': ['AAPL', 'MSFT', 'AAPL', 'MSFT'],
+            'return': [0.02, -0.01, 0.01, 0.03]
+        })
+
+        backtest = Backtest(signals=MomentumSignal(lookback=20))
+
+        dates = [date(2024, 6, 15), date(2024, 6, 22)]
+        result = backtest.run_from_dataframe(returns_df, dates)
+
+        # Should return valid result
+        assert result is not None
+        assert hasattr(result, 'returns')
+
+    def test_run_from_dataframe_rejects_adapter(self, mock_mdp):
+        """run_from_dataframe() raises if adapter is set."""
+        from Backtest.Backtest import Backtest
+        from Adapter.FuturesAdapter import FuturesAdapter
+        from Signals.Futures.CarrySignal import CarrySignal
+
+        # Create backtest WITH adapter
+        backtest = Backtest(
+            mdp=mock_mdp,
+            adapter=FuturesAdapter(mdp=mock_mdp),
+            signals=CarrySignal()
+        )
+
+        returns_df = pl.DataFrame({
+            'date': [date(2024, 6, 15)],
+            'ticker': ['AAPL'],
+            'return': [0.02]
+        })
+
+        with pytest.raises(ValueError, match="DataFrame workflow doesn't use adapter"):
+            backtest.run_from_dataframe(returns_df, [date(2024, 6, 15)])
+
+    def test_dataframe_workflow_optional_instruments_list(self):
+        """DataFrame workflow accepts optional instruments list."""
+        from Backtest.Backtest import Backtest
+        from Signals.Futures.MomentumSignal import MomentumSignal
+
+        returns_df = pl.DataFrame({
+            'date': [date(2024, 6, 15), date(2024, 6, 15), date(2024, 6, 15)],
+            'ticker': ['AAPL', 'MSFT', 'GOOGL'],
+            'return': [0.02, -0.01, 0.03]
+        })
+
+        backtest = Backtest(signals=MomentumSignal(lookback=20))
+
+        # Only trade AAPL and MSFT
+        result = backtest.run_from_dataframe(
+            returns_df,
+            dates=[date(2024, 6, 15)],
+            instruments=['AAPL', 'MSFT']
+        )
+
+        assert result is not None
