@@ -1,0 +1,46 @@
+REAL DATA VALIDATION RESULTS
+================================================================================
+
+Data: 40 tickers
+Train: 1516 days
+Test: 748 days
+
+1. Sample Covariance
+  HHI: 0.2782
+  Leverage: 2.54
+  RDI: 0.715
+  Sharpe: 0.365
+  R²_out: 0.000
+
+2. Ledoit-Wolf
+  HHI: 0.2781
+  Leverage: 2.54
+  RDI: 0.715
+  Sharpe: 0.365
+  R²_out: 0.000
+
+3. BlockDiagonal (Paper 2)
+  HHI: 0.3464
+  Leverage: 2.91
+  RDI: 0.780
+  Sharpe: 0.226
+  R²_out: 0.000
+
+4. TwoStep (Paper 1)
+  HHI: 0.2707
+  Leverage: 2.51
+  RDI: 0.711
+  Sharpe: 0.375
+  R²_out: 0.000
+
+5. StochasticBlock (Paper 3)
+  HHI: 0.0642
+  Leverage: 1.27
+  RDI: 0.439
+  Sharpe: 0.705
+  R²_out: 0.000
+
+
+Paper 1: ✅ VALIDATED
+Paper 2: ❌ NOT VALIDATED
+Paper 3: ✅ VALIDATED
