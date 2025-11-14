@@ -45,9 +45,13 @@ class MockSectorCovariance(SectorBasedCovarianceEstimator):
         self.asset_names_ = tickers
         self.returns_wide_ = returns_wide
 
-        # Store for clustering
-        n = len(tickers)
-        self.cov_matrix_ = np.eye(n)
+        # Compute actual covariance from returns (not identity matrix!)
+        # returns_wide is already a numpy array from _convert_to_wide_format
+        self.cov_matrix_ = np.cov(returns_wide.T)
+
+        # Handle single asset case: np.cov returns scalar, reshape to 1x1
+        if self.cov_matrix_.ndim == 0:
+            self.cov_matrix_ = self.cov_matrix_.reshape(1, 1)
 
         return self.cov_matrix_
 

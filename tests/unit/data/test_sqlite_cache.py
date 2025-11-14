@@ -190,7 +190,8 @@ class TestEquityPrices:
         )
 
         assert stored.height == 5
-        assert stored['close'].to_list() == [103.0, 104.0, 105.0, 106.0, 107.0]
+        # Date 2024-01-03 has close=102.0 (100 + index 2)
+        assert stored['close'].to_list() == [102.0, 103.0, 104.0, 105.0, 106.0]
 
     def test_get_equity_prices_empty(self, cache):
         """Test retrieving prices when none exist."""
@@ -256,14 +257,16 @@ class TestCacheCoverage:
 
     def test_is_stale_old_data(self, cache):
         """Test staleness check with old data."""
+        from datetime import datetime, timedelta
+
         symbol_id = cache.register_symbol('OLD', 'equity')
 
-        # Manually insert old data with old fetched_at
+        # Manually insert old data with old fetched_at (compute in Python)
+        old_timestamp = (datetime.now() - timedelta(days=10)).isoformat(sep=' ', timespec='seconds')
         cache._execute_query(f"""
             INSERT INTO cache_coverage
             (symbol_id, price_table, last_fetched, last_updated)
-            VALUES ({symbol_id}, 'equity_prices',
-                    datetime('now', '-10 days'), datetime('now', '-10 days'))
+            VALUES ({symbol_id}, 'equity_prices', '{old_timestamp}', '{old_timestamp}')
         """)
 
         assert cache.is_stale(symbol_id, 'equity_prices', max_age_days=1)

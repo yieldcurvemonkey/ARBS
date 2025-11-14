@@ -448,17 +448,21 @@ class SQLiteCache:
         if stats.height == 0 or stats['record_count'][0] == 0:
             return
 
+        # Compute timestamp in Python (not SQL) to avoid non-deterministic index error
+        current_timestamp = datetime.now().isoformat(sep=' ', timespec='seconds')
+
         # Update or insert coverage
         self.conn.execute(
             """
             INSERT OR REPLACE INTO cache_coverage
             (symbol_id, price_table, earliest_date, latest_date,
              record_count, last_fetched, last_updated)
-            VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 symbol_id, price_table, stats['earliest_date'][0],
-                stats['latest_date'][0], stats['record_count'][0]
+                stats['latest_date'][0], stats['record_count'][0],
+                current_timestamp, current_timestamp
             )
         )
 
@@ -495,9 +499,13 @@ class SQLiteCache:
         if result.height == 0:
             return None
 
+        # Convert string dates to Python date objects
+        earliest_str = result['earliest_date'][0]
+        latest_str = result['latest_date'][0]
+
         return {
-            'earliest_date': result['earliest_date'][0],
-            'latest_date': result['latest_date'][0],
+            'earliest_date': date.fromisoformat(earliest_str) if earliest_str else None,
+            'latest_date': date.fromisoformat(latest_str) if latest_str else None,
             'record_count': result['record_count'][0],
             'last_fetched': result['last_fetched'][0]
         }
