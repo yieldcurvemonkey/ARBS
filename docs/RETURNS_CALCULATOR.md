@@ -211,9 +211,9 @@ class FuturesAdapter:
         return prices
 ```
 
-**MinimalBacktest** (uses ReturnsCalculator):
+**Backtest** (uses ReturnsCalculator):
 ```python
-class MinimalBacktest:
+class Backtest:
     def __init__(self):
         self.returns_calc = ReturnsCalculator(method="percent")
 
@@ -502,7 +502,7 @@ combined = r1 + r2  # OK, same method
 - **VolatilityEstimator**: Estimates volatility FROM returns
 - **CovarianceEstimator**: Estimates covariance FROM returns
 - **AlphaGenerator**: Uses volatility (estimated from returns) to scale signals
-- **MinimalBacktest**: Uses returns to calculate P&L
+- **Backtest**: Uses returns to calculate P&L
 
 ---
 

@@ -18,7 +18,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import pandas as pd
 import polars as pl
 from glob import glob
 
@@ -53,7 +52,7 @@ def load_csv_file(filepath: Path) -> tuple:
     ticker = filepath.stem.upper()
 
     try:
-        df = pd.read_csv(filepath)
+        df = pl.read_csv(filepath)
 
         # Handle different date column names
         date_col = None
@@ -77,31 +76,33 @@ def load_csv_file(filepath: Path) -> tuple:
             print(f"  ⚠ {ticker}: No close price column found")
             return None, None
 
-        # Filter date range
-        df[date_col] = pd.to_datetime(df[date_col])
-        df = df[
-            (df[date_col] >= '2015-01-01') &
-            (df[date_col] <= '2023-12-31')
-        ]
+        # Parse dates and filter date range
+        df = df.with_columns(
+            pl.col(date_col).str.to_datetime().alias('date_parsed')
+        ).filter(
+            (pl.col('date_parsed') >= pl.datetime(2015, 1, 1)) &
+            (pl.col('date_parsed') <= pl.datetime(2023, 12, 31))
+        )
 
         if len(df) < 900:
             print(f"  ⚠ {ticker}: insufficient data ({len(df)} days)")
             return None, None
 
         # Calculate returns
-        df = df.sort_values(date_col)
-        df['return'] = df[close_col].pct_change()
+        df = df.sort('date_parsed').with_columns(
+            (pl.col(close_col) / pl.col(close_col).shift(1) - 1).alias('return')
+        )
 
-        # Convert to polars
-        df_polars = pl.DataFrame({
-            "ticker": ticker,
-            "date": df[date_col].dt.strftime('%Y-%m-%d').values,
-            "close": df[close_col].values,
-            "return": df['return'].values,
-            "sector": SECTOR_MAP.get(ticker, "Unknown"),
+        # Create final DataFrame
+        df_final = pl.DataFrame({
+            "ticker": pl.lit(ticker),
+            "date": df['date_parsed'].dt.strftime('%Y-%m-%d'),
+            "close": df[close_col],
+            "return": df['return'],
+            "sector": pl.lit(SECTOR_MAP.get(ticker, "Unknown")),
         })
 
-        return ticker, df_polars
+        return ticker, df_final
 
     except Exception as e:
         print(f"  ✗ {ticker}: {e}")

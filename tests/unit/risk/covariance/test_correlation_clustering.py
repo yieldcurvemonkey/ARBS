@@ -45,9 +45,13 @@ class MockSectorCovariance(SectorBasedCovarianceEstimator):
         self.asset_names_ = tickers
         self.returns_wide_ = returns_wide
 
-        # Store for clustering
-        n = len(tickers)
-        self.cov_matrix_ = np.eye(n)
+        # Compute actual covariance from returns (not identity matrix!)
+        # returns_wide is already a numpy array from _convert_to_wide_format
+        self.cov_matrix_ = np.cov(returns_wide.T)
+
+        # Handle single asset case: np.cov returns scalar, reshape to 1x1
+        if self.cov_matrix_.ndim == 0:
+            self.cov_matrix_ = self.cov_matrix_.reshape(1, 1)
 
         return self.cov_matrix_
 
@@ -74,9 +78,10 @@ class TestCorrelationClusteringBasics:
 
         clusters = estimator.get_correlation_clusters(threshold=0.85)
 
+        # get_correlation_clusters returns ticker → cluster_id mapping
         assert isinstance(clusters, dict)
-        assert all(isinstance(k, str) for k in clusters.keys())
-        assert all(isinstance(v, list) for v in clusters.values())
+        assert all(isinstance(k, str) for k in clusters.keys())  # Ticker names
+        assert all(isinstance(v, str) for v in clusters.values())  # Cluster IDs like "cluster_0"
 
 
 class TestPerfectBlockDiagonal:
@@ -172,19 +177,23 @@ class TestPerfectBlockDiagonal:
         returns_wide = perfect_block_returns.pivot(
             index="date", columns="ticker", values="return"
         )
-        corr_matrix = returns_wide.to_pandas().corr()
+        # Exclude date column and get only numeric ticker columns
+        tickers = [col for col in returns_wide.columns if col != 'date']
+        ticker_idx = {ticker: i for i, ticker in enumerate(tickers)}
+        returns_np = returns_wide.select(tickers).to_numpy()
+        corr_matrix = np.corrcoef(returns_np.T)
 
         clusters = estimator.get_correlation_clusters(threshold=0.85, n_clusters=3)
 
         # Check intra-cluster correlations
         # A-B should be highly correlated
-        assert abs(corr_matrix.loc["A", "B"]) > 0.85
+        assert abs(corr_matrix[ticker_idx["A"], ticker_idx["B"]]) > 0.85
 
         # C-D should be highly correlated
-        assert abs(corr_matrix.loc["C", "D"]) > 0.85
+        assert abs(corr_matrix[ticker_idx["C"], ticker_idx["D"]]) > 0.85
 
         # E-F should be highly correlated
-        assert abs(corr_matrix.loc["E", "F"]) > 0.85
+        assert abs(corr_matrix[ticker_idx["E"], ticker_idx["F"]]) > 0.85
 
     def test_low_inter_cluster_correlation(self, perfect_block_returns):
         """Cross-cluster correlation should be low."""
@@ -195,12 +204,16 @@ class TestPerfectBlockDiagonal:
         returns_wide = perfect_block_returns.pivot(
             index="date", columns="ticker", values="return"
         )
-        corr_matrix = returns_wide.to_pandas().corr()
+        # Exclude date column and get only numeric ticker columns
+        tickers = [col for col in returns_wide.columns if col != 'date']
+        ticker_idx = {ticker: i for i, ticker in enumerate(tickers)}
+        returns_np = returns_wide.select(tickers).to_numpy()
+        corr_matrix = np.corrcoef(returns_np.T)
 
         # Cross-cluster correlations should be low
-        assert abs(corr_matrix.loc["A", "C"]) < 0.5
-        assert abs(corr_matrix.loc["A", "E"]) < 0.5
-        assert abs(corr_matrix.loc["C", "E"]) < 0.5
+        assert abs(corr_matrix[ticker_idx["A"], ticker_idx["C"]]) < 0.5
+        assert abs(corr_matrix[ticker_idx["A"], ticker_idx["E"]]) < 0.5
+        assert abs(corr_matrix[ticker_idx["C"], ticker_idx["E"]]) < 0.5
 
 
 class TestOverlappingClusters:

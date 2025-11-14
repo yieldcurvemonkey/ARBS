@@ -20,7 +20,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import pandas as pd
 import polars as pl
 import requests
 from datetime import datetime
@@ -57,7 +56,7 @@ def load_cookies(cookie_file: Path) -> dict:
     return cookies
 
 
-def download_with_session(ticker: str, session: requests.Session) -> pd.DataFrame:
+def download_with_session(ticker: str, session: requests.Session) -> pl.DataFrame:
     """Download using authenticated session."""
     start_ts = int(datetime.strptime("2015-01-01", "%Y-%m-%d").timestamp())
     end_ts = int(datetime.strptime("2023-12-31", "%Y-%m-%d").timestamp())
@@ -79,7 +78,7 @@ def download_with_session(ticker: str, session: requests.Session) -> pd.DataFram
         response.raise_for_status()
 
         from io import StringIO
-        df = pd.read_csv(StringIO(response.text))
+        df = pl.read_csv(StringIO(response.text))
         return df
 
     except Exception as e:
@@ -147,24 +146,22 @@ def load_data() -> pl.DataFrame:
         print(f"\n[{sector}]")
 
         for ticker in tickers:
-            df_pandas = download_with_session(ticker, session)
+            df = download_with_session(ticker, session)
 
-            if df_pandas is None or len(df_pandas) < 900:
+            if df is None or len(df) < 900:
                 print(f"  ⚠ {ticker}: insufficient data")
                 continue
 
-            df_pandas['Return'] = df_pandas['Adj Close'].pct_change()
-
-            df_polars = pl.DataFrame({
-                "ticker": ticker,
-                "date": df_pandas['Date'].astype(str).values,
-                "close": df_pandas['Adj Close'].values,
-                "return": df_pandas['Return'].values,
-                "sector": sector,
+            df_final = pl.DataFrame({
+                "ticker": pl.lit(ticker),
+                "date": df['Date'].cast(pl.Utf8),
+                "close": df['Adj Close'],
+                "return": df['Adj Close'] / df['Adj Close'].shift(1) - 1,
+                "sector": pl.lit(sector),
             })
 
-            data_list.append(df_polars)
-            print(f"  ✓ {ticker}: {len(df_polars)} days")
+            data_list.append(df_final)
+            print(f"  ✓ {ticker}: {len(df_final)} days")
 
             time.sleep(0.3)  # Small delay
 

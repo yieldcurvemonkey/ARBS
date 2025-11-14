@@ -477,7 +477,7 @@ Demonstrates:
 """
 
 from Strategy.Factory.StrategyFactory import StrategyFactory
-from Backtest.MinimalBacktest import MinimalBacktest
+from Backtest.Backtest import Backtest
 
 def run_sector_rotation_backtest():
     # 1. Load strategy from YAML
@@ -489,7 +489,7 @@ def run_sector_rotation_backtest():
     data = load_real_market_data("sp500", "2020-01-01", "2024-01-01")
 
     # 3. Run backtest
-    backtest = MinimalBacktest(
+    backtest = Backtest(
         strategy=strategy,
         data=data,
         initial_capital=1000000,

@@ -290,7 +290,7 @@ print(annual)
 ### Data Flow
 
 ```
-MinimalBacktest
+Backtest
     ↓
 Portfolio Returns (time series)
     ↓
@@ -305,11 +305,11 @@ Performance Report
 ### Usage After Backtest
 
 ```python
-from Backtest.MinimalBacktest import MinimalBacktest
+from Backtest.Backtest import Backtest
 from Analysis.TearSheet import TearSheet
 
 # Run backtest
-backtest = MinimalBacktest(...)
+backtest = Backtest(...)
 result = backtest.run()
 
 # Analyze with TearSheet
@@ -809,7 +809,7 @@ if dd_end:
 
 ## Related Components
 
-- **MinimalBacktest**: Produces return series that TearSheet analyzes
+- **Backtest**: Produces return series that TearSheet analyzes
 - **VolatilityEstimator**: TearSheet calculates realized volatility similarly
 - **AlphaGenerator**: IC can be measured using TearSheet metrics
 

@@ -763,7 +763,7 @@ alphas = alpha_gen.signals_to_alphas(signals, returns_history, as_of)
 - **BaseSignal**: Generates signals (Z-scores) that AlphaGenerator converts
 - **VolatilityEstimator**: Estimates volatilities used in alpha scaling
 - **MeanVarianceOptimizer**: Receives alphas to optimize portfolio weights
-- **MinimalBacktest**: Orchestrates signal → alpha → weights flow
+- **Backtest**: Orchestrates signal → alpha → weights flow
 
 ---
 

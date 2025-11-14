@@ -447,7 +447,7 @@ class TestMeanReversionInversion:
 
         # Instrument A: Massive spike (3 std devs above mean)
         # Gradual rise then huge spike
-        prices_a = list(range(100, 115)) + [100, 101, 102, 103, 104] + [140.0] * 5
+        prices_a = [float(x) for x in range(100, 115)] + [100.0, 101.0, 102.0, 103.0, 104.0] + [140.0] * 5
         inst_data_list.append(pl.DataFrame({'date': dates, 'price': prices_a}))
 
         # Instrument B: Moderate deviation (1 std dev above mean)

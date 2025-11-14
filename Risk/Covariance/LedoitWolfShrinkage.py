@@ -90,9 +90,14 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         T, N = returns_clean.shape
 
         # Calculate sample covariance
-        # For polars DataFrames, convert to numpy and use numpy.cov
         returns_np = returns_clean.to_numpy()
-        self.sample_cov = np.cov(returns_np.T)
+
+        # Use pairwise computation if requested
+        if self.handle_missing == 'pairwise':
+            self.sample_cov = self._pairwise_covariance(returns_np)
+        else:
+            # Standard covariance (drops rows with any NaN)
+            self.sample_cov = np.cov(returns_np.T)
 
         # Calculate shrinkage target
         self.target_matrix = self._compute_target(returns_clean)
@@ -110,6 +115,41 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
 
         return self.cov_matrix_
 
+    def _pairwise_covariance(self, returns_np: np.ndarray) -> np.ndarray:
+        """
+        Compute covariance using pairwise complete observations.
+
+        For each pair of assets (i, j), compute covariance using only
+        observations where both assets have valid (non-NaN) values.
+
+        Args:
+            returns_np: Returns matrix (T×N) with possible NaN values
+
+        Returns:
+            Covariance matrix (N×N) computed pairwise
+        """
+        N = returns_np.shape[1]
+        cov_matrix = np.zeros((N, N))
+
+        for i in range(N):
+            for j in range(i, N):  # Symmetric, only compute upper triangle
+                # Get complete observations for this pair
+                valid_mask = ~(np.isnan(returns_np[:, i]) | np.isnan(returns_np[:, j]))
+                valid_i = returns_np[valid_mask, i]
+                valid_j = returns_np[valid_mask, j]
+
+                # Compute covariance for this pair
+                if len(valid_i) > 1:
+                    cov_ij = np.cov(valid_i, valid_j)[0, 1]
+                else:
+                    # Not enough observations, use 0
+                    cov_ij = 0.0
+
+                cov_matrix[i, j] = cov_ij
+                cov_matrix[j, i] = cov_ij  # Symmetric
+
+        return cov_matrix
+
     def _compute_target(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Compute shrinkage target matrix F.
@@ -124,7 +164,12 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
 
         if self.target_type == 'diagonal':
             # Diagonal: var(r_i) on diagonal, zeros off-diagonal
-            variances = returns.var(ddof=1).to_numpy()
+            if self.handle_missing == 'pairwise':
+                # Compute variances ignoring NaN
+                returns_np = returns.to_numpy()
+                variances = np.nanvar(returns_np, axis=0, ddof=1)
+            else:
+                variances = returns.var(ddof=1).to_numpy()
             return np.diag(variances)
 
         elif self.target_type == 'identity':
@@ -157,7 +202,20 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
             Constant correlation matrix (N×N)
         """
         # Calculate sample correlation matrix
-        corr_matrix = returns.corr().to_numpy()
+        returns_np = returns.to_numpy()
+
+        # Use pairwise if needed (to avoid NaN)
+        if self.handle_missing == 'pairwise':
+            cov_matrix = self._pairwise_covariance(returns_np)
+            # Convert to correlation
+            std = np.sqrt(np.diag(cov_matrix))
+            std_matrix = np.outer(std, std)
+            std_matrix = np.where(std_matrix > 1e-10, std_matrix, 1.0)
+            corr_matrix = cov_matrix / std_matrix
+            corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
+            np.fill_diagonal(corr_matrix, 1.0)
+        else:
+            corr_matrix = np.corrcoef(returns_np.T)
 
         # Average off-diagonal correlation
         n = corr_matrix.shape[0]
@@ -169,7 +227,10 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         np.fill_diagonal(target_corr, 1.0)
 
         # Convert to covariance using sample standard deviations
-        std = returns.std(ddof=1).to_numpy()
+        if self.handle_missing == 'pairwise':
+            std = np.sqrt(np.nanvar(returns_np, axis=0, ddof=1))
+        else:
+            std = returns.std(ddof=1).to_numpy()
         target_cov = target_corr * np.outer(std, std)
 
         return target_cov

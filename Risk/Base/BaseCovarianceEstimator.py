@@ -118,13 +118,21 @@ class BaseCovarianceEstimator(ABC):
         Handle missing data according to strategy.
 
         Args:
-            returns: DataFrame with possible NaN values
+            returns: DataFrame with possible NaN values (from numpy arrays)
 
         Returns:
             DataFrame with NaN handled
         """
+        # Convert NaN to null (polars doesn't recognize numpy NaN as null)
+        # Replace NaN with None in each column
+        for col in returns.columns:
+            if returns[col].dtype in [pl.Float64, pl.Float32]:
+                returns = returns.with_columns(
+                    pl.when(pl.col(col).is_nan()).then(None).otherwise(pl.col(col)).alias(col)
+                )
+
         if self.handle_missing == 'drop':
-            # Drop rows with any NaN
+            # Drop rows with any null
             return returns.drop_nulls()
         elif self.handle_missing == 'pairwise':
             # Keep all data, use pairwise complete observations

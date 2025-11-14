@@ -305,6 +305,10 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
         tickers = self.asset_names_
         N = len(tickers)
 
+        # Edge case: single asset
+        if N == 1:
+            return {tickers[0]: "cluster_0"}
+
         # Convert covariance to correlation matrix
         # Correlation: ρ_ij = σ_ij / (σ_i × σ_j)
         std_devs = np.sqrt(np.diag(self.cov_matrix_))
@@ -314,6 +318,9 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
         std_matrix = np.where(std_matrix > 1e-10, std_matrix, 1.0)
 
         corr_matrix = self.cov_matrix_ / std_matrix
+
+        # Replace NaN/Inf with 0 (happens when both assets have zero variance)
+        corr_matrix = np.nan_to_num(corr_matrix, nan=0.0, posinf=1.0, neginf=-1.0)
 
         # Ensure correlation matrix is valid [-1, 1]
         corr_matrix = np.clip(corr_matrix, -1.0, 1.0)
@@ -325,6 +332,9 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
         distance_matrix = np.maximum(distance_matrix, 0)
         distance_matrix = (distance_matrix + distance_matrix.T) / 2
         np.fill_diagonal(distance_matrix, 0)  # Distance to self is zero
+
+        # Final check: replace any remaining NaN/Inf
+        distance_matrix = np.nan_to_num(distance_matrix, nan=1.0, posinf=1.0, neginf=1.0)
 
         # Auto-select number of clusters if not specified
         if n_clusters is None:

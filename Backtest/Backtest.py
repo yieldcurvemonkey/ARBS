@@ -14,7 +14,7 @@ Flexible backtest engine supporting:
 
 Usage Patterns:
 
-1. Futures Carry (same as MinimalBacktest):
+1. Futures Carry (query-based workflow):
    >>> from Backtest.Backtest import Backtest
    >>> from Adapter.FuturesAdapter import FuturesAdapter
    >>> from Signals.Futures.CarrySignal import CarrySignal
@@ -26,7 +26,7 @@ Usage Patterns:
    ... )
    >>> result = backtest.run(contracts=['SFRZ4'], dates=[...])
 
-2. Futures Momentum (new capability):
+2. Futures Momentum (query-based workflow):
    >>> backtest = Backtest(
    ...     mdp=mdp,
    ...     adapter=FuturesAdapter(mdp),
@@ -34,7 +34,7 @@ Usage Patterns:
    ... )
    >>> result = backtest.run(contracts=['SFRZ4'], dates=[...])
 
-3. Multi-Signal (new capability):
+3. Multi-Signal (query-based workflow):
    >>> backtest = Backtest(
    ...     mdp=mdp,
    ...     adapter=FuturesAdapter(mdp),
@@ -43,7 +43,7 @@ Usage Patterns:
    ... )
    >>> result = backtest.run(contracts=['SFRZ4'], dates=[...])
 
-4. Equity/ETF Strategies (new capability):
+4. Equity/ETF Strategies (DataFrame-based workflow):
    >>> backtest = Backtest(
    ...     signals=VolatilitySignal(),
    ...     risk_aversion=3.0

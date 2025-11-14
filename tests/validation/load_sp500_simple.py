@@ -11,9 +11,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import pandas as pd
 import polars as pl
-import numpy as np
 from datetime import datetime
 
 # S&P 500 representative tickers across sectors
@@ -29,9 +27,9 @@ TICKERS = {
 }
 
 
-def download_yahoo_data(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
+def download_yahoo_data(ticker: str, start_date: str, end_date: str) -> pl.DataFrame:
     """
-    Download data directly from Yahoo Finance using pandas.
+    Download data directly from Yahoo Finance using polars.
 
     Args:
         ticker: Stock ticker
@@ -39,7 +37,7 @@ def download_yahoo_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
         end_date: End date (YYYY-MM-DD)
 
     Returns:
-        pandas DataFrame with OHLCV data
+        polars DataFrame with OHLCV data
     """
     # Convert dates to Unix timestamps
     start_ts = int(datetime.strptime(start_date, "%Y-%m-%d").timestamp())
@@ -52,7 +50,7 @@ def download_yahoo_data(ticker: str, start_date: str, end_date: str) -> pd.DataF
     )
 
     try:
-        df = pd.read_csv(url)
+        df = pl.read_csv(url)
         return df
     except Exception as e:
         print(f"  ✗ Error downloading {ticker}: {e}")
@@ -78,26 +76,23 @@ def load_sp500_data(
     for sector, tickers in TICKERS.items():
         print(f"[{sector}]")
         for ticker in tickers:
-            df_pandas = download_yahoo_data(ticker, start_date, end_date)
+            df = download_yahoo_data(ticker, start_date, end_date)
 
-            if df_pandas is None or len(df_pandas) < 900:
+            if df is None or len(df) < 900:
                 print(f"  ⚠ Skipping {ticker}: insufficient data")
                 continue
 
-            # Calculate returns
-            df_pandas['Return'] = df_pandas['Adj Close'].pct_change()
-
-            # Convert to polars
-            df_polars = pl.DataFrame({
-                "ticker": ticker,
-                "date": df_pandas['Date'].astype(str).values,
-                "close": df_pandas['Adj Close'].values,
-                "return": df_pandas['Return'].values,
-                "sector": sector,
+            # Calculate returns and create final DataFrame
+            df_final = pl.DataFrame({
+                "ticker": pl.lit(ticker),
+                "date": df['Date'].cast(pl.Utf8),
+                "close": df['Adj Close'],
+                "return": df['Adj Close'] / df['Adj Close'].shift(1) - 1,
+                "sector": pl.lit(sector),
             })
 
-            data_list.append(df_polars)
-            print(f"  ✓ {ticker}: {len(df_polars)} days")
+            data_list.append(df_final)
+            print(f"  ✓ {ticker}: {len(df_final)} days")
 
     if not data_list:
         raise ValueError("No data loaded!")

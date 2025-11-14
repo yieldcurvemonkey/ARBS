@@ -16,7 +16,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import pandas as pd
 import polars as pl
 import os
 import time
@@ -33,7 +32,7 @@ TICKERS = {
 }
 
 
-def download_quandl(ticker: str, api_key: str) -> pd.DataFrame:
+def download_quandl(ticker: str, api_key: str) -> pl.DataFrame:
     """
     Download from Nasdaq Data Link (Quandl).
 
@@ -45,15 +44,15 @@ def download_quandl(ticker: str, api_key: str) -> pd.DataFrame:
 
         # Try WIKI dataset first (free, historical)
         try:
-            df = ndl.get(f"WIKI/{ticker}", start_date="2015-01-01", end_date="2023-12-31")
-            return df
+            df_pandas = ndl.get(f"WIKI/{ticker}", start_date="2015-01-01", end_date="2023-12-31")
+            return pl.from_pandas(df_pandas)
         except:
             pass
 
         # Try EOD dataset
         try:
-            df = ndl.get(f"EOD/{ticker}", start_date="2015-01-01", end_date="2023-12-31")
-            return df
+            df_pandas = ndl.get(f"EOD/{ticker}", start_date="2015-01-01", end_date="2023-12-31")
+            return pl.from_pandas(df_pandas)
         except:
             pass
 
@@ -74,7 +73,7 @@ def download_quandl(ticker: str, api_key: str) -> pd.DataFrame:
             response.raise_for_status()
 
             from io import StringIO
-            df = pd.read_csv(StringIO(response.text))
+            df = pl.read_csv(StringIO(response.text))
             return df
         except:
             return None
@@ -95,33 +94,43 @@ def load_data(api_key: str) -> pl.DataFrame:
         print(f"[{sector}]")
 
         for ticker in tickers:
-            df_pandas = download_quandl(ticker, api_key)
+            df_polars = download_quandl(ticker, api_key)
 
-            if df_pandas is None or len(df_pandas) < 900:
+            if df_polars is None or len(df_polars) < 900:
                 print(f"  ⚠ {ticker}: insufficient data")
                 continue
 
             # Quandl format: Date, Open, High, Low, Close, Volume, etc.
-            df_pandas = df_pandas.reset_index()
+            # If Date is in index (from pandas API), it will be a column after from_pandas
 
             # Find the close column (might be 'Adj. Close' or 'Close')
-            close_col = 'Adj. Close' if 'Adj. Close' in df_pandas.columns else 'Close'
+            close_col = 'Adj. Close' if 'Adj. Close' in df_polars.columns else 'Close'
+
+            # Ensure we have Date column and sort
+            if 'Date' not in df_polars.columns:
+                # Date might be the first column without a name, or we need to get it from index
+                df_polars = df_polars.with_row_count('idx')
+                date_col = df_polars.columns[1] if len(df_polars.columns) > 1 else df_polars.columns[0]
+                df_polars = df_polars.rename({date_col: 'Date'})
+
+            df_polars = df_polars.sort('Date')
 
             # Calculate returns
-            df_pandas = df_pandas.sort_values('Date')
-            df_pandas['return'] = df_pandas[close_col].pct_change()
+            df_polars = df_polars.with_columns([
+                (pl.col(close_col) / pl.col(close_col).shift(1) - pl.lit(1)).alias('return')
+            ])
 
-            # Convert to polars
-            df_polars = pl.DataFrame({
-                "ticker": ticker,
-                "date": pd.to_datetime(df_pandas['Date']).dt.strftime('%Y-%m-%d').values,
-                "close": df_pandas[close_col].values,
-                "return": df_pandas['return'].values,
-                "sector": sector,
+            # Build final dataframe
+            df_final = pl.DataFrame({
+                "ticker": [ticker] * len(df_polars),
+                "date": df_polars['Date'].cast(pl.Utf8),
+                "close": df_polars[close_col],
+                "return": df_polars['return'],
+                "sector": [sector] * len(df_polars),
             })
 
-            data_list.append(df_polars)
-            print(f"  ✓ {ticker}: {len(df_polars)} days")
+            data_list.append(df_final)
+            print(f"  ✓ {ticker}: {len(df_final)} days")
 
             time.sleep(0.1)
 

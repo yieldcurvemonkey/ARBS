@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, DefaultDict, Dict, Iterable, List, Optional, T
 
 import re
 import polars as pl
-import pandas as pd  # Keep ONLY for isinstance() type checks (backward compatibility)
 import tqdm
 import QuantLib as ql
 
@@ -152,18 +151,14 @@ class TimeseriesBuilder:
                 #     timestamps=timestamps,
                 # )
 
-            if df is None or (hasattr(df, 'is_empty') and df.is_empty()) or (hasattr(df, 'empty') and df.empty):
+            if df is None or (hasattr(df, 'is_empty') and df.is_empty()):
                 continue
 
-            # Convert pandas to polars if needed, handling index properly
-            if isinstance(df, pd.DataFrame):
-                # If date is in index, reset it before converting
-                if self._date_col not in df.columns and df.index.name == self._date_col:
-                    df = pl.from_pandas(df.reset_index())
-                else:
-                    df = pl.from_pandas(df)
+            # Require polars DataFrame
+            if not isinstance(df, pl.DataFrame):
+                raise TypeError(f"Expected polars DataFrame, got {type(df).__name__}")
 
-            # Now df is polars - check if date column exists
+            # Check if date column exists
             if self._date_col not in df.columns:
                 continue
 
@@ -249,11 +244,11 @@ class TimeseriesBuilder:
                 timestamps=timestamps,
             )
 
-            # Convert to polars if needed
-            if isinstance(irs_df, pd.DataFrame):
-                irs_df = pl.from_pandas(irs_df)
-            if isinstance(cash_df, pd.DataFrame):
-                cash_df = pl.from_pandas(cash_df)
+            # Require polars DataFrames
+            if not isinstance(irs_df, pl.DataFrame):
+                raise TypeError(f"Expected polars DataFrame for irs_df, got {type(irs_df).__name__}")
+            if not isinstance(cash_df, pl.DataFrame):
+                raise TypeError(f"Expected polars DataFrame for cash_df, got {type(cash_df).__name__}")
 
             # Get union of dates from both DataFrames
             irs_dates = set(irs_df[self._date_col].to_list() if self._date_col in irs_df.columns else [])

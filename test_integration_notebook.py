@@ -14,7 +14,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path.cwd()))
 
 import numpy as np
-import pandas as pd
 import polars as pl
 from datetime import date, timedelta
 from typing import List, Dict, Tuple
@@ -98,7 +97,7 @@ try:
         index='date',
         columns='ticker',
         values='return'
-    ).to_pandas()
+    )
 
     print(f"✓ Generated {n_days} days of returns for {len(tickers)} stocks")
 except Exception as e:

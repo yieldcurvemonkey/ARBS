@@ -334,8 +334,6 @@ CREATE TABLE IF NOT EXISTS cache_coverage (
 
 CREATE INDEX IF NOT EXISTS idx_cache_coverage_symbol ON cache_coverage(symbol_id);
 CREATE INDEX IF NOT EXISTS idx_cache_coverage_last_fetched ON cache_coverage(last_fetched);
-CREATE INDEX IF NOT EXISTS idx_cache_coverage_stale ON cache_coverage(last_fetched)
-    WHERE last_fetched < datetime('now', '-1 day');
 
 
 -- CACHE_METADATA: Summary stats

@@ -186,10 +186,7 @@ def calculate_ic_time_series(
         >>> ic_series = calculate_ic_time_series(forecasts, actuals, window=20)
         >>> print(f"IC stability (std): {ic_series.std():.3f}")
     """
-    # Preserve index from original series
-    index = forecasts.index if hasattr(forecasts, 'index') else None
-
-    # Align forecasts and actuals on date index
+    # Align forecasts and actuals (no index needed - polars is index-free)
     aligned = pl.DataFrame({
         'forecast': forecasts,
         'actual': actuals,
@@ -207,12 +204,8 @@ def calculate_ic_time_series(
         ic = calculate_ic(window_forecast, window_actual)
         ic_values.append(ic)
 
-    # Create series with values, starting from window position
-    if index is not None and len(ic_values) > 0:
-        result = pl.Series(ic_values, index=index[window-1:])
-    else:
-        result = pl.Series(ic_values)
-
+    # Return series of IC values (caller manages alignment if needed)
+    result = pl.Series(ic_values)
     return result.drop_nulls()
 
 
@@ -268,7 +261,7 @@ def calculate_ic_decay(
     ic_df = pl.DataFrame(ic_at_lags, schema=['lag', 'ic'])
 
     # Initial IC (at lag 0)
-    ic_0 = ic_df[0]['ic']
+    ic_0 = ic_df.filter(pl.col('lag') == 0).select('ic')[0, 0]
 
     if ic_0 < 0.01:
         # IC too small to measure decay
@@ -284,8 +277,8 @@ def calculate_ic_decay(
         # IC hasn't decayed to 50% within max_lag
         return float(max_lag)
 
-    # Interpolate to find exact halflife
-    halflife = below_target[0]['lag']
+    # Get exact halflife (first lag where IC drops below target)
+    halflife = below_target.row(0)[0]  # Get 'lag' value from first row
 
     return float(halflife)
 

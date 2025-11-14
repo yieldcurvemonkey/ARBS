@@ -1,9 +1,9 @@
-# ABOUTME: End-to-end example demonstrating MinimalBacktest MVP
+# ABOUTME: End-to-end example demonstrating Backtest MVP
 # ABOUTME: Runs complete Query→Adapter→Signals→Risk→Optimizer→Backtest pipeline
 """
-Minimal Backtest Example
+Backtest Example
 
-Demonstrates end-to-end MVP backtest measuring a simple carry strategy.
+Demonstrates end-to-end MVP backtest measuring a carry strategy.
 
 MVP Philosophy:
 - Goal is ACCURATE MEASUREMENT, not profitability
@@ -28,7 +28,9 @@ Output:
 from datetime import date, timedelta
 import numpy as np
 import polars as pl
-from Backtest.MinimalBacktest import MinimalBacktest
+from Backtest.Backtest import Backtest
+from Adapter.FuturesAdapter import FuturesAdapter
+from Signals.Futures.CarrySignal import CarrySignal
 
 
 # Mock Market Data Provider for demonstration
@@ -87,19 +89,19 @@ class SimpleMockMDP:
 
 def run_example():
     """
-    Run minimal backtest example.
+    Run backtest example.
 
     Tests carry strategy on 3-month SOFR futures over 3-month period.
     """
     print("="*70)
-    print("Minimal Backtest MVP - End-to-End Example")
+    print("Backtest - End-to-End Example")
     print("="*70)
     print()
 
     # Setup
     print("Setup:")
     print("- Contracts: SFRZ4, SFRH5, SFRM5, SFRU5 (SOFR futures)")
-    print("- Strategy: Simple carry (long higher carry, short lower)")
+    print("- Strategy: Carry (long higher carry, short lower)")
     print("- Period: 2024-09-01 to 2024-12-01 (weekly rebalance)")
     print("- Risk model: Ledoit-Wolf covariance shrinkage")
     print("- Optimizer: Mean-variance (long-only)")
@@ -109,8 +111,10 @@ def run_example():
     mdp = SimpleMockMDP(base_rate=5.0, carry_spread=0.10)
 
     # Initialize backtest
-    backtest = MinimalBacktest(
+    backtest = Backtest(
         mdp=mdp,
+        adapter=FuturesAdapter(mdp),  # Futures data adapter
+        signals=CarrySignal(),  # Carry strategy signal
         risk_aversion=1.0,  # Moderate risk aversion
         long_only=True,     # Only long positions
         min_history=5,      # Need 5 weeks before estimating covariance
@@ -155,18 +159,24 @@ def run_example():
         print("Sample Portfolio Weights:")
         print()
         print("First period:")
-        first_weights = result.weights.iloc[0]
-        for contract, weight in first_weights.items():
+        first_row = result.weights[0]
+        for col in result.weights.columns:
+            if col == 'date':  # Skip date column
+                continue
+            weight = first_row[col][0] if hasattr(first_row[col], '__getitem__') else first_row[col]
             if abs(weight) > 0.01:
-                print(f"  {contract}: {weight:>6.2%}")
+                print(f"  {col}: {weight:>6.2%}")
         print()
 
         if len(result.weights) > 1:
             print("Last period:")
-            last_weights = result.weights.iloc[-1]
-            for contract, weight in last_weights.items():
+            last_row = result.weights[-1]
+            for col in result.weights.columns:
+                if col == 'date':  # Skip date column
+                    continue
+                weight = last_row[col][0] if hasattr(last_row[col], '__getitem__') else last_row[col]
                 if abs(weight) > 0.01:
-                    print(f"  {contract}: {weight:>6.2%}")
+                    print(f"  {col}: {weight:>6.2%}")
             print()
 
     # Show returns time series (first 5 and last 5)
@@ -175,16 +185,16 @@ def run_example():
         print()
         n_show = min(5, len(result.returns))
         print(f"First {n_show} periods:")
-        for idx in result.returns.index[:n_show]:
-            ret = result.returns[idx]
-            print(f"  {idx}: {ret:>8.4%}")
+        for i in range(n_show):
+            ret = result.returns[i]
+            print(f"  Period {i+1}: {ret:>8.4%}")
 
         if len(result.returns) > n_show:
             print()
             print(f"Last {n_show} periods:")
-            for idx in result.returns.index[-n_show:]:
-                ret = result.returns[idx]
-                print(f"  {idx}: {ret:>8.4%}")
+            for i in range(len(result.returns) - n_show, len(result.returns)):
+                ret = result.returns[i]
+                print(f"  Period {i+1}: {ret:>8.4%}")
         print()
 
     print("="*70)
