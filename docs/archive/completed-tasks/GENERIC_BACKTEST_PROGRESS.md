@@ -1,3 +1,13 @@
+**STATUS (2025-11-14)**: This progress report is now outdated.
+
+Original report: 18 tests
+Current status: 40+ tests across 3 files
+New features added: query workflow (run_from_queries)
+
+See BACKTEST_UNIFIED_API.md for current documentation.
+
+---
+
 # Generic Backtest Implementation Progress
 
 ## Status: COMPLETE AND TESTED ✅
