@@ -170,15 +170,15 @@ print(metrics)
 **Constructor**:
 ```python
 TearSheet(
-    returns: pd.Series,
+    returns: pl.Series,
     periods_per_year: int = 252,
     risk_free_rate: float = 0.0
 )
 ```
 
 **Parameters**:
-- `returns` (pd.Series): Return series (decimal, e.g., 0.01 = 1%)
-  - Index should be DatetimeIndex for time aggregation
+- `returns` (pl.Series): Return series (decimal, e.g., 0.01 = 1%)
+  - Provide dates separately via dates parameter for time aggregation
 - `periods_per_year` (int): Annualization factor (default: 252)
   - 252 = daily, 52 = weekly, 12 = monthly
 - `risk_free_rate` (float): Risk-free rate for Sharpe (annualized, default: 0.0)
@@ -186,16 +186,18 @@ TearSheet(
 **Example**:
 ```python
 from Analysis.TearSheet import TearSheet
-import pandas as pd
+import polars as pl
 
 # Daily returns
-returns = pd.Series([0.01, -0.01, 0.02, ...], index=pd.date_range(...))
+returns = pl.Series([0.01, -0.01, 0.02, ...])
+dates = pl.date_range(...)
 
 # Create tear sheet
 tear_sheet = TearSheet(
     returns,
     periods_per_year=252,
-    risk_free_rate=0.03  # 3% risk-free rate
+    risk_free_rate=0.03,  # 3% risk-free rate
+    dates=dates
 )
 ```
 
@@ -217,7 +219,7 @@ print(f"Max Drawdown: {metrics.max_drawdown:.2%}")
 ### calculate_drawdowns()
 
 ```python
-calculate_drawdowns() -> pd.Series
+calculate_drawdowns() -> pl.Series
 ```
 
 **Returns**: Series of drawdowns (negative values, 0 at peaks)
@@ -235,7 +237,7 @@ drawdowns.plot(title="Drawdown Over Time")
 ### calculate_cumulative_returns()
 
 ```python
-calculate_cumulative_returns() -> pd.Series
+calculate_cumulative_returns() -> pl.Series
 ```
 
 **Returns**: Series of cumulative returns (starting from 0)
@@ -243,7 +245,7 @@ calculate_cumulative_returns() -> pd.Series
 **Example**:
 ```python
 cum_returns = tear_sheet.calculate_cumulative_returns()
-print(f"Final Return: {cum_returns.iloc[-1]:.2%}")
+print(f"Final Return: {cum_returns[-1]:.2%}")
 
 # Plot cumulative returns
 cum_returns.plot(title="Cumulative Returns")
@@ -252,10 +254,10 @@ cum_returns.plot(title="Cumulative Returns")
 ### aggregate_monthly_returns()
 
 ```python
-aggregate_monthly_returns() -> pd.Series
+aggregate_monthly_returns() -> pl.Series
 ```
 
-**Returns**: Monthly return series (Period index)
+**Returns**: Monthly return series
 
 **Example**:
 ```python
@@ -269,10 +271,10 @@ print(monthly)
 ### aggregate_annual_returns()
 
 ```python
-aggregate_annual_returns() -> pd.Series
+aggregate_annual_returns() -> pl.Series
 ```
 
-**Returns**: Annual return series (year index)
+**Returns**: Annual return series
 
 **Example**:
 ```python
@@ -379,19 +381,20 @@ print(annual_returns)
 
 ```python
 from Analysis.TearSheet import TearSheet
-import pandas as pd
+import polars as pl
 import numpy as np
+from datetime import date, timedelta
 
 # Generate sample returns (252 days)
 np.random.seed(42)
-dates = pd.date_range('2024-01-01', periods=252, freq='D')
-returns = pd.Series(
-    np.random.randn(252) * 0.01 + 0.0005,  # Mean 0.05% daily
-    index=dates
+start_date = date(2024, 1, 1)
+dates = pl.date_range(start_date, start_date + timedelta(days=251), interval='1d', eager=True)
+returns = pl.Series(
+    np.random.randn(252) * 0.01 + 0.0005  # Mean 0.05% daily
 )
 
 # Create tear sheet
-tear_sheet = TearSheet(returns, periods_per_year=252)
+tear_sheet = TearSheet(returns, periods_per_year=252, dates=dates)
 
 # Calculate metrics
 metrics = tear_sheet.calculate_metrics()
@@ -410,24 +413,27 @@ print(metrics)
 
 ```python
 from Analysis.TearSheet import TearSheet
-import pandas as pd
+import polars as pl
 import matplotlib.pyplot as plt
+from datetime import date, timedelta
 
 # Returns with significant drawdown
-returns = pd.Series([
+start_date = date(2024, 1, 1)
+dates = pl.date_range(start_date, start_date + timedelta(weeks=9), interval='1w', eager=True)
+returns = pl.Series([
     0.02, 0.01, 0.03, -0.05, -0.08, -0.03, 0.02, 0.04, 0.05, 0.06
-], index=pd.date_range('2024-01-01', periods=10, freq='W'))
+])
 
-tear_sheet = TearSheet(returns, periods_per_year=52)
+tear_sheet = TearSheet(returns, periods_per_year=52, dates=dates)
 
 # Analyze drawdowns
 drawdowns = tear_sheet.calculate_drawdowns()
 
 print(f"Maximum Drawdown: {drawdowns.min():.2%}")
-print(f"Current Drawdown: {drawdowns.iloc[-1]:.2%}")
+print(f"Current Drawdown: {drawdowns[-1]:.2%}")
 
 # Find drawdown periods
-underwater = drawdowns[drawdowns < -0.05]  # Drawdowns > 5%
+underwater = drawdowns.filter(drawdowns < -0.05)  # Drawdowns > 5%
 print(f"Periods with DD > 5%: {len(underwater)}")
 
 # Plot
@@ -435,11 +441,13 @@ fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
 
 # Cumulative returns
 cum_returns = tear_sheet.calculate_cumulative_returns()
-(cum_returns * 100).plot(ax=ax1, title="Cumulative Returns (%)")
+ax1.plot(cum_returns.to_numpy() * 100)
+ax1.set_title("Cumulative Returns (%)")
 
 # Drawdowns
-(drawdowns * 100).plot(ax=ax2, title="Drawdown (%)", color='red')
-ax2.fill_between(drawdowns.index, 0, drawdowns * 100, color='red', alpha=0.3)
+ax2.plot(drawdowns.to_numpy() * 100, color='red')
+ax2.fill_between(range(len(drawdowns)), 0, drawdowns.to_numpy() * 100, color='red', alpha=0.3)
+ax2.set_title("Drawdown (%)")
 plt.tight_layout()
 plt.show()
 ```
@@ -448,18 +456,20 @@ plt.show()
 
 ```python
 from Analysis.TearSheet import TearSheet
-import pandas as pd
+import polars as pl
 import numpy as np
+from datetime import date
 
 # 2 years of daily returns
 np.random.seed(42)
-dates = pd.date_range('2023-01-01', '2024-12-31', freq='D')
-returns = pd.Series(
-    np.random.randn(len(dates)) * 0.015 + 0.0004,
-    index=dates
+start_date = date(2023, 1, 1)
+end_date = date(2024, 12, 31)
+dates = pl.date_range(start_date, end_date, interval='1d', eager=True)
+returns = pl.Series(
+    np.random.randn(len(dates)) * 0.015 + 0.0004
 )
 
-tear_sheet = TearSheet(returns, periods_per_year=252)
+tear_sheet = TearSheet(returns, periods_per_year=252, dates=dates)
 
 # Monthly returns
 monthly = tear_sheet.aggregate_monthly_returns()
@@ -478,27 +488,29 @@ print(annual)
 # 2024    -3.2%
 
 # Best/worst months
-print(f"\nBest Month:  {monthly.max():.2%} ({monthly.idxmax()})")
-print(f"Worst Month: {monthly.min():.2%} ({monthly.idxmin()})")
+print(f"\nBest Month:  {monthly.max():.2%}")
+print(f"Worst Month: {monthly.min():.2%}")
 ```
 
 ### Example 4: Comparing Strategies
 
 ```python
 from Analysis.TearSheet import TearSheet
-import pandas as pd
+import polars as pl
 import numpy as np
+from datetime import date, timedelta
 
 # Generate returns for two strategies
 np.random.seed(42)
-dates = pd.date_range('2024-01-01', periods=252, freq='D')
+start_date = date(2024, 1, 1)
+dates = pl.date_range(start_date, start_date + timedelta(days=251), interval='1d', eager=True)
 
-strategy_a = pd.Series(np.random.randn(252) * 0.012 + 0.0006, index=dates)
-strategy_b = pd.Series(np.random.randn(252) * 0.008 + 0.0004, index=dates)
+strategy_a = pl.Series(np.random.randn(252) * 0.012 + 0.0006)
+strategy_b = pl.Series(np.random.randn(252) * 0.008 + 0.0004)
 
 # Analyze both
-tear_sheet_a = TearSheet(strategy_a, periods_per_year=252)
-tear_sheet_b = TearSheet(strategy_b, periods_per_year=252)
+tear_sheet_a = TearSheet(strategy_a, periods_per_year=252, dates=dates)
+tear_sheet_b = TearSheet(strategy_b, periods_per_year=252, dates=dates)
 
 metrics_a = tear_sheet_a.calculate_metrics()
 metrics_b = tear_sheet_b.calculate_metrics()
@@ -518,22 +530,24 @@ print(f"{'Calmar Ratio':<20} {metrics_a.calmar_ratio:>11.2f} {metrics_b.calmar_r
 
 ```python
 from Analysis.TearSheet import TearSheet
-import pandas as pd
+import polars as pl
 import numpy as np
+from datetime import date, timedelta
 
 # Weekly returns (52 weeks)
 np.random.seed(42)
-dates = pd.date_range('2024-01-01', periods=52, freq='W')
-weekly_returns = pd.Series(
-    np.random.randn(52) * 0.02 + 0.002,
-    index=dates
+start_date = date(2024, 1, 1)
+dates = pl.date_range(start_date, start_date + timedelta(weeks=51), interval='1w', eager=True)
+weekly_returns = pl.Series(
+    np.random.randn(52) * 0.02 + 0.002
 )
 
 # Use weekly annualization
 tear_sheet = TearSheet(
     weekly_returns,
     periods_per_year=52,  # Weekly data
-    risk_free_rate=0.03   # 3% risk-free rate
+    risk_free_rate=0.03,   # 3% risk-free rate
+    dates=dates
 )
 
 metrics = tear_sheet.calculate_metrics()
@@ -675,8 +689,12 @@ print(f"Currently underwater: {duration_stats['current_duration']} periods")
 ```python
 def rolling_sharpe(returns, window=60, periods_per_year=252):
     """Calculate rolling Sharpe ratio."""
-    rolling_mean = returns.rolling(window).mean()
-    rolling_std = returns.rolling(window).std()
+    import polars as pl
+    import numpy as np
+
+    df = pl.DataFrame({'returns': returns})
+    rolling_mean = df.select(pl.col('returns').rolling_mean(window)).to_series()
+    rolling_std = df.select(pl.col('returns').rolling_std(window)).to_series()
 
     rolling_sharpe = (rolling_mean / rolling_std) * np.sqrt(periods_per_year)
     return rolling_sharpe
@@ -684,9 +702,8 @@ def rolling_sharpe(returns, window=60, periods_per_year=252):
 # Usage:
 returns = tear_sheet.returns
 rolling_sr = rolling_sharpe(returns, window=60)
-rolling_sr.plot(title="60-Day Rolling Sharpe Ratio")
 
-print(f"Current Sharpe (60d): {rolling_sr.iloc[-1]:.2f}")
+print(f"Current Sharpe (60d): {rolling_sr[-1]:.2f}")
 print(f"Average Sharpe (60d): {rolling_sr.mean():.2f}")
 ```
 
@@ -752,15 +769,15 @@ tear_sheet = TearSheet(weekly_returns, periods_per_year=52)  # Correct
 **Wrong**:
 ```python
 # Analyzing price series instead of returns
-prices = pd.Series([100, 105, 103, 108, ...])
+prices = pl.Series([100, 105, 103, 108, ...])
 tear_sheet = TearSheet(prices)  # WRONG! Needs returns
 ```
 
 **Right**:
 ```python
 # Calculate returns first
-prices = pd.Series([100, 105, 103, 108, ...])
-returns = prices.pct_change().dropna()
+prices = pl.Series([100, 105, 103, 108, ...])
+returns = prices.pct_change().drop_nulls()
 tear_sheet = TearSheet(returns)  # Correct
 ```
 
