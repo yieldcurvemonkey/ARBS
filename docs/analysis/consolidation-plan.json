@@ -308,21 +308,19 @@
       ],
       "total_lines": 4226,
       "consolidation_target": {
-        "primary": "docs/architecture/grinold-kahn.md",
-        "description": "Unified Grinold-Kahn implementation guide",
+        "primary": "docs/GRINOLD_KAHN_FRAMEWORK.md",
+        "description": "Grinold-Kahn framework documentation",
         "keep": [
-          "docs/GRINOLD_KAHN_FRAMEWORK.md"
+          "docs/GRINOLD_KAHN_FRAMEWORK.md",
+          "docs/GRINOLD_KAHN_DETAILED_SPECS.md",
+          "docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md"
         ],
-        "consolidate_into_primary": [
-          "docs/GRINOLD_KAHN_DETAILED_SPECS.md"
-        ],
+        "consolidate_into_primary": [],
         "keep_separate": [
           "docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md",
           "docs/references/Grinold-Kahn-Active-Portfolio-Management.md"
         ],
-        "archive": [
-          "docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md"
-        ],
+        "archive": [],
         "review_required": [
           "docs/GRINOLD_KAHN_DETAILED_SPECS.md",
           "docs/GRINOLD_KAHN_FRAMEWORK.md",

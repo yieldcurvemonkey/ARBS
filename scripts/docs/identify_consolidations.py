@@ -106,13 +106,15 @@ def propose_consolidation_targets(topic: str, plan: Dict) -> Dict:
     # Determine consolidation strategy based on topic
     consolidation_targets = {
         'grinold_kahn': {
-            'primary': 'docs/architecture/grinold-kahn.md',
-            'description': 'Unified Grinold-Kahn implementation guide',
-            'keep': ['docs/GRINOLD_KAHN_FRAMEWORK.md'],  # Most complete
-            'consolidate_into_primary': ['docs/GRINOLD_KAHN_DETAILED_SPECS.md'],
+            'primary': 'docs/GRINOLD_KAHN_FRAMEWORK.md',
+            'description': 'Grinold-Kahn framework documentation',
+            'keep': ['docs/GRINOLD_KAHN_FRAMEWORK.md',
+                    'docs/GRINOLD_KAHN_DETAILED_SPECS.md',
+                    'docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md'],
+            'consolidate_into_primary': [],
             'keep_separate': ['docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md',
                              'docs/references/Grinold-Kahn-Active-Portfolio-Management.md'],
-            'archive': ['docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md']
+            'archive': []
         },
         'backtest': {
             'primary': 'docs/BACKTEST_UNIFIED_API.md',

@@ -49,9 +49,9 @@ Found 7 topic groups with 3+ documents:
 ### Grinold Kahn
 - Files: 5
 - Total lines: 4,226
-- **Primary**: docs/architecture/grinold-kahn.md
-- **Keep**: 1 files
-- **Archive**: 1 files
+- **Primary**: docs/GRINOLD_KAHN_FRAMEWORK.md
+- **Keep**: 3 files
+- **Archive**: 0 files
 - **Review required**: 3 files
 
 ### Alpha Signal
@@ -128,7 +128,6 @@ ARCHIVE to docs/archive/phase-summaries/ and docs/archive/migrations/
 - **backtest**: Archive 5 docs, keep primary `docs/BACKTEST_UNIFIED_API.md`
 - **data_layer**: Archive 2 docs, keep primary `docs/DATA_LAYER_ARCHITECTURE.md`
 - **alpha_signal**: Archive 2 docs, keep primary `docs/ALPHA_GENERATOR.md`
-- **grinold_kahn**: Archive 1 docs, keep primary `docs/architecture/grinold-kahn.md`
 - **strategy**: Archive 4 docs, keep primary `docs/USER_GUIDE_STRATEGY_CREATION.md`
 - **risk_covariance**: Archive 1 docs, keep primary `docs/architecture/risk-covariance.md`
 
