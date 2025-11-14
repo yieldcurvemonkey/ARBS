@@ -1,5 +1,8 @@
 # Returns vs Prices - Mathematical Foundation
 
+**NOTE**: This analysis led to the returns-first architecture implemented in commit bf818d5 (2025-11-11).
+All recommendations have been implemented. Document retained for architectural rationale.
+
 **Document Status**: Analysis Complete
 **Date Written**: 2025-11-11
 **Implementation Status**: Phase 1 Complete (Returns infrastructure, AlphaGenerator, VolatilityEstimator)
@@ -205,7 +208,7 @@ class Portfolio(Asset):
 ### Design 2: Backtest Maintains Returns
 
 ```python
-class MinimalBacktest:
+class Backtest:
     def run(self, contracts, dates):
         # Convert prices to returns ONCE at data layer
         for i, as_of in enumerate(dates):
@@ -437,7 +440,7 @@ where:
 - ✅ AlphaGenerator (16 tests)
 - ✅ TearSheet (19 tests)
 - ✅ Portfolio.calculate_return() refactored to accept returns
-- ✅ MinimalBacktest uses ReturnsCalculator and AlphaGenerator
+- ✅ Backtest uses ReturnsCalculator and AlphaGenerator
 - ✅ Returns-first data architecture fully implemented
 - ✅ Covariance estimation from returns (not prices)
 - ✅ IC calculation using returns
