@@ -1,0 +1,663 @@
+{
+  "total_redundant_groups": 7,
+  "groups": {
+    "backtest": {
+      "files": [
+        {
+          "path": "BACKTEST_UNIFICATION_TASK.md",
+          "lines": 1340,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": false,
+          "action": "CONSOLIDATE",
+          "reason": "No references - candidate for consolidation"
+        },
+        {
+          "path": "docs/BACKTESTING_FUTURES_SWAPS_PLAN.md",
+          "lines": 767,
+          "last_modified": "2025-11-10",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "CONSOLIDATE",
+          "reason": ""
+        },
+        {
+          "path": "docs/BACKTEST_UNIFIED_API.md",
+          "lines": 724,
+          "last_modified": "2025-11-14",
+          "has_code_refs": true,
+          "has_doc_refs": true,
+          "action": "KEEP",
+          "reason": "Primary API/guide documentation"
+        },
+        {
+          "path": "docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md",
+          "lines": 1873,
+          "last_modified": "2025-11-13",
+          "has_code_refs": false,
+          "has_doc_refs": false,
+          "action": "CONSOLIDATE",
+          "reason": ""
+        },
+        {
+          "path": "docs/GENERIC_BACKTEST_MIGRATION_PLAN.md",
+          "lines": 581,
+          "last_modified": "2025-11-13",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "ARCHIVE",
+          "reason": "Completed plan document"
+        },
+        {
+          "path": "docs/GENERIC_BACKTEST_PROGRESS.md",
+          "lines": 147,
+          "last_modified": "2025-11-13",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "ARCHIVE",
+          "reason": "Progress tracking document"
+        },
+        {
+          "path": "docs/design/BACKTEST_UNIFICATION_PLAN.md",
+          "lines": 529,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "CONSOLIDATE",
+          "reason": ""
+        }
+      ],
+      "total_lines": 5961,
+      "consolidation_target": {
+        "primary": "docs/BACKTEST_UNIFIED_API.md",
+        "description": "Unified backtest API documentation",
+        "keep": [
+          "docs/BACKTEST_UNIFIED_API.md"
+        ],
+        "consolidate_into_primary": [],
+        "keep_separate": [
+          "docs/design/BACKTEST_UNIFICATION_PLAN.md"
+        ],
+        "archive": [
+          "BACKTEST_UNIFICATION_TASK.md",
+          "docs/BACKTESTING_FUTURES_SWAPS_PLAN.md",
+          "docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md",
+          "docs/GENERIC_BACKTEST_MIGRATION_PLAN.md",
+          "docs/GENERIC_BACKTEST_PROGRESS.md"
+        ],
+        "review_required": []
+      }
+    },
+    "data_layer": {
+      "files": [
+        {
+          "path": "docs/ACTION_PLAN_DATA_LAYER.md",
+          "lines": 237,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": false,
+          "action": "CONSOLIDATE",
+          "reason": "No references - candidate for consolidation"
+        },
+        {
+          "path": "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md",
+          "lines": 399,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md",
+          "lines": 430,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/DATA_LAYER_ARCHITECTURE.md",
+          "lines": 340,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        }
+      ],
+      "total_lines": 1406,
+      "consolidation_target": {
+        "primary": "docs/DATA_LAYER_ARCHITECTURE.md",
+        "description": "Data layer architecture documentation",
+        "keep": [
+          "docs/DATA_LAYER_ARCHITECTURE.md"
+        ],
+        "consolidate_into_primary": [
+          "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md"
+        ],
+        "keep_separate": [],
+        "archive": [
+          "docs/ACTION_PLAN_DATA_LAYER.md",
+          "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md"
+        ],
+        "review_required": [
+          "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md",
+          "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md",
+          "docs/DATA_LAYER_ARCHITECTURE.md"
+        ]
+      }
+    },
+    "alpha_signal": {
+      "files": [
+        {
+          "path": "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md",
+          "lines": 399,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/ALPHAVANTAGE_INTEGRATION_SPEC.md",
+          "lines": 861,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": false,
+          "action": "CONSOLIDATE",
+          "reason": "No references - candidate for consolidation"
+        },
+        {
+          "path": "docs/ALPHA_GENERATOR.md",
+          "lines": 784,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/SIGNAL_COMBINATION_METHODS.md",
+          "lines": 515,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        }
+      ],
+      "total_lines": 2559,
+      "consolidation_target": {
+        "primary": "docs/ALPHA_GENERATOR.md",
+        "description": "Alpha generation and signal documentation",
+        "keep": [
+          "docs/ALPHA_GENERATOR.md",
+          "docs/SIGNAL_COMBINATION_METHODS.md"
+        ],
+        "consolidate_into_primary": [],
+        "keep_separate": [],
+        "archive": [
+          "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md",
+          "docs/ALPHAVANTAGE_INTEGRATION_SPEC.md"
+        ],
+        "review_required": [
+          "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md",
+          "docs/ALPHA_GENERATOR.md",
+          "docs/SIGNAL_COMBINATION_METHODS.md"
+        ]
+      }
+    },
+    "portfolio": {
+      "files": [
+        {
+          "path": "docs/COMPOSABLE_PORTFOLIO_ARCHITECTURE.md",
+          "lines": 552,
+          "last_modified": "2025-11-10",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/references/Grinold-Kahn-Active-Portfolio-Management.md",
+          "lines": 358,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "KEEP",
+          "reason": "Reference material"
+        },
+        {
+          "path": "docs/resources/PORTFOLIO_MANAGEMENT_RESEARCH.md",
+          "lines": 837,
+          "last_modified": "2025-11-10",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        }
+      ],
+      "total_lines": 1747,
+      "consolidation_target": {
+        "primary": "docs/COMPOSABLE_PORTFOLIO_ARCHITECTURE.md",
+        "description": "Portfolio architecture documentation",
+        "keep": [
+          "docs/COMPOSABLE_PORTFOLIO_ARCHITECTURE.md"
+        ],
+        "consolidate_into_primary": [],
+        "keep_separate": [
+          "docs/references/Grinold-Kahn-Active-Portfolio-Management.md",
+          "docs/resources/PORTFOLIO_MANAGEMENT_RESEARCH.md"
+        ],
+        "archive": [],
+        "review_required": [
+          "docs/COMPOSABLE_PORTFOLIO_ARCHITECTURE.md",
+          "docs/resources/PORTFOLIO_MANAGEMENT_RESEARCH.md"
+        ]
+      }
+    },
+    "grinold_kahn": {
+      "files": [
+        {
+          "path": "docs/GRINOLD_KAHN_DETAILED_SPECS.md",
+          "lines": 1451,
+          "last_modified": "2025-11-10",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/GRINOLD_KAHN_FRAMEWORK.md",
+          "lines": 880,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md",
+          "lines": 514,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md",
+          "lines": 1023,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "KEEP",
+          "reason": "Design documentation"
+        },
+        {
+          "path": "docs/references/Grinold-Kahn-Active-Portfolio-Management.md",
+          "lines": 358,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "KEEP",
+          "reason": "Reference material"
+        }
+      ],
+      "total_lines": 4226,
+      "consolidation_target": {
+        "primary": "docs/architecture/grinold-kahn.md",
+        "description": "Unified Grinold-Kahn implementation guide",
+        "keep": [
+          "docs/GRINOLD_KAHN_FRAMEWORK.md"
+        ],
+        "consolidate_into_primary": [
+          "docs/GRINOLD_KAHN_DETAILED_SPECS.md"
+        ],
+        "keep_separate": [
+          "docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md",
+          "docs/references/Grinold-Kahn-Active-Portfolio-Management.md"
+        ],
+        "archive": [
+          "docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md"
+        ],
+        "review_required": [
+          "docs/GRINOLD_KAHN_DETAILED_SPECS.md",
+          "docs/GRINOLD_KAHN_FRAMEWORK.md",
+          "docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md"
+        ]
+      }
+    },
+    "strategy": {
+      "files": [
+        {
+          "path": "docs/MODULARITY_IMPROVEMENTS_PLAN.md",
+          "lines": 833,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": false,
+          "action": "CONSOLIDATE",
+          "reason": ""
+        },
+        {
+          "path": "docs/MODULARITY_REVIEW_AND_STRATEGY_TYPES.md",
+          "lines": 1028,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/STRATEGY_MODULARIZATION_DESIGN.md",
+          "lines": 1069,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/STRATEGY_MODULARIZATION_SUMMARY.md",
+          "lines": 527,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "ARCHIVE",
+          "reason": "Completed task documentation"
+        },
+        {
+          "path": "docs/STRATEGY_NOTEBOOKS_SUMMARY.md",
+          "lines": 365,
+          "last_modified": "2025-11-13",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "ARCHIVE",
+          "reason": "Completed task documentation"
+        },
+        {
+          "path": "docs/USER_GUIDE_STRATEGY_CREATION.md",
+          "lines": 1201,
+          "last_modified": "2025-11-14",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "KEEP",
+          "reason": "Primary API/guide documentation"
+        },
+        {
+          "path": "docs/design/LONG_SHORT_STRATEGY_DESIGN.md",
+          "lines": 1293,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "KEEP",
+          "reason": "Design documentation"
+        }
+      ],
+      "total_lines": 6316,
+      "consolidation_target": {
+        "primary": "docs/USER_GUIDE_STRATEGY_CREATION.md",
+        "description": "Strategy creation user guide",
+        "keep": [
+          "docs/USER_GUIDE_STRATEGY_CREATION.md"
+        ],
+        "consolidate_into_primary": [],
+        "keep_separate": [
+          "docs/STRATEGY_MODULARIZATION_DESIGN.md",
+          "docs/design/LONG_SHORT_STRATEGY_DESIGN.md"
+        ],
+        "archive": [
+          "docs/MODULARITY_IMPROVEMENTS_PLAN.md",
+          "docs/MODULARITY_REVIEW_AND_STRATEGY_TYPES.md",
+          "docs/STRATEGY_MODULARIZATION_SUMMARY.md",
+          "docs/STRATEGY_NOTEBOOKS_SUMMARY.md"
+        ],
+        "review_required": [
+          "docs/MODULARITY_REVIEW_AND_STRATEGY_TYPES.md",
+          "docs/STRATEGY_MODULARIZATION_DESIGN.md"
+        ]
+      }
+    },
+    "risk_covariance": {
+      "files": [
+        {
+          "path": "docs/SECTOR_COVARIANCE_GUIDE.md",
+          "lines": 381,
+          "last_modified": "2025-11-12",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/guides/extending_risk_models.md",
+          "lines": 919,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md",
+          "lines": 1167,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "KEEP",
+          "reason": "Reference material"
+        },
+        {
+          "path": "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md",
+          "lines": 113,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/research/SECTOR_COVARIANCE_PLAN.md",
+          "lines": 376,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "CONSOLIDATE",
+          "reason": ""
+        },
+        {
+          "path": "docs/research/current_arbs_covariance_usage.md",
+          "lines": 680,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/research/high_correlation_covariance.md",
+          "lines": 679,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        },
+        {
+          "path": "docs/research/practitioner_covariance_methods.md",
+          "lines": 358,
+          "last_modified": "2025-11-11",
+          "has_code_refs": false,
+          "has_doc_refs": true,
+          "action": "REVIEW",
+          "reason": "Has references - needs agent review"
+        }
+      ],
+      "total_lines": 4673,
+      "consolidation_target": {
+        "primary": "docs/architecture/risk-covariance.md",
+        "description": "Risk and covariance estimation guide",
+        "keep": [
+          "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md",
+          "docs/guides/extending_risk_models.md"
+        ],
+        "consolidate_into_primary": [
+          "docs/SECTOR_COVARIANCE_GUIDE.md",
+          "docs/research/current_arbs_covariance_usage.md"
+        ],
+        "keep_separate": [
+          "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md",
+          "docs/research/high_correlation_covariance.md",
+          "docs/research/practitioner_covariance_methods.md"
+        ],
+        "archive": [
+          "docs/research/SECTOR_COVARIANCE_PLAN.md"
+        ],
+        "review_required": [
+          "docs/SECTOR_COVARIANCE_GUIDE.md",
+          "docs/guides/extending_risk_models.md",
+          "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md",
+          "docs/research/current_arbs_covariance_usage.md",
+          "docs/research/high_correlation_covariance.md",
+          "docs/research/practitioner_covariance_methods.md"
+        ]
+      }
+    }
+  },
+  "orphans": {
+    "total": 18,
+    "files": [
+      {
+        "path": "ARCHITECTURE_RECOMMENDATIONS.md",
+        "lines": 366,
+        "last_modified": "2025-11-14",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "BACKTEST_UNIFICATION_TASK.md",
+        "lines": 1340,
+        "last_modified": "2025-11-14",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "FLAW_REMEDIATION_PLAN.md",
+        "lines": 1172,
+        "last_modified": "2025-11-11",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "IMPLEMENTATION_NOTE.md",
+        "lines": 55,
+        "last_modified": "2025-11-13",
+        "recommendation": "DELETE"
+      },
+      {
+        "path": "docs/ACTION_PLAN_DATA_LAYER.md",
+        "lines": 237,
+        "last_modified": "2025-11-14",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "docs/AGENT_DOCUMENTATION_STANDARDS.md",
+        "lines": 790,
+        "last_modified": "2025-11-14",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "docs/ALPHAVANTAGE_INTEGRATION_SPEC.md",
+        "lines": 861,
+        "last_modified": "2025-11-14",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "docs/DETAILED_UNDERSTANDING_PLAN.md",
+        "lines": 586,
+        "last_modified": "2025-11-13",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "docs/FINAL_VERIFICATION_RESULTS.md",
+        "lines": 287,
+        "last_modified": "2025-11-13",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md",
+        "lines": 1873,
+        "last_modified": "2025-11-13",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "docs/HONEST_NOTEBOOK_ASSESSMENT.md",
+        "lines": 296,
+        "last_modified": "2025-11-13",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "docs/MODULARITY_IMPROVEMENTS_PLAN.md",
+        "lines": 833,
+        "last_modified": "2025-11-11",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "docs/NEXT_STEPS_PARALLEL_PLAN.md",
+        "lines": 330,
+        "last_modified": "2025-11-13",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "docs/PDF_PROCESSING_PLAN.md",
+        "lines": 472,
+        "last_modified": "2025-11-11",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "docs/SCHEMA_INDEX.md",
+        "lines": 529,
+        "last_modified": "2025-11-14",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "docs/VERIFIED_INTEGRATIONS.md",
+        "lines": 469,
+        "last_modified": "2025-11-14",
+        "recommendation": "REVIEW"
+      },
+      {
+        "path": "tasks/notes-to-claude.md",
+        "lines": 53,
+        "last_modified": "2025-11-11",
+        "recommendation": "DELETE"
+      },
+      {
+        "path": "tests/validation/DATA_LOADING_INSTRUCTIONS.md",
+        "lines": 535,
+        "last_modified": "2025-11-12",
+        "recommendation": "REVIEW"
+      }
+    ]
+  },
+  "completed_tasks": {
+    "total": 15,
+    "files": [
+      "POLARS_MIGRATION_COMPLETE.md",
+      "POLARS_MIGRATION_PLAN.md",
+      "docs/GENERIC_BACKTEST_MIGRATION_PLAN.md",
+      "docs/MVP_EQUITY_SECTOR_COMPLETE.md",
+      "docs/PHASE1_COMPLETE_SUMMARY.md",
+      "docs/PHASE_3_COMPLETION_SUMMARY.md",
+      "docs/PHASE_4_COMPLETION_SUMMARY.md",
+      "docs/PHASE_4_PLAN.md",
+      "docs/SESSION_HANDOFF_NEXT_STEPS.md",
+      "docs/SESSION_SUMMARY_2025-11-11.md",
+      "docs/STRATEGY_MODULARIZATION_SUMMARY.md",
+      "docs/STRATEGY_NOTEBOOKS_SUMMARY.md",
+      "docs/phase3_common_patterns_analysis.md",
+      "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md",
+      "tasks/migration_progress.md"
+    ],
+    "recommendation": "ARCHIVE to docs/archive/phase-summaries/ and docs/archive/migrations/"
+  }
+}
