@@ -73,37 +73,41 @@ Supports two workflows:
 
 ---
 
-## Simplification Opportunities
+## Architecture Clarification
 
-### 1. **Legacy Code Consolidation** ⚠️
+### 1. **Two Backtesting Systems** ✅
 
-**Issue**: Duplicate backtesting code
+**NOT duplicates - serve different purposes:**
+
 ```
-BT/                     # Legacy backtesting
-├── accounting.py
-└── data_handler.py
+BT/                     # Query/Event-driven for derivatives/swaps
+├── query_engine.py     # QueryDrivenBacktest
+├── generic_engine.py   # EventDrivenBacktest
+├── accounting.py       # Settlement, margin, roll
+├── portfolio.py        # Derivative position tracking
+└── triggers.py         # Event-based triggers
 
-Backtest/               # New generic backtest
-├── Backtest.py         # ✅ Active
-└── Base/
-```
-
-**Question**: Is `BT/` still in use?
-
-**Recommendation**:
-```python
-# Check usage
-grep -r "from BT" . --include="*.py" | grep -v test | wc -l
-grep -r "import BT" . --include="*.py" | grep -v test | wc -l
+Backtest/               # Signal-based for equities/Grinold-Kahn
+├── Backtest.py         # Generic backtest with signals
+└── Base/               # BaseBacktest interface
 ```
 
-If not used in production code, consider:
-- Mark as deprecated in CLAUDE.md
-- Add deprecation warning to `BT/__init__.py`
-- Plan removal in next major version
+**Purpose Separation:**
+- **BT/**: Query-based workflow for swaps/futures/bonds
+  - Works with MDP (Market Data Providers)
+  - Uses BaseQuery abstraction
+  - Product-agnostic query resolution
+  - Event-driven or query-driven execution
+  - Examples: swap flies, curve positions, basis trades
 
-**Risk**: Low (if not used in production)
-**Benefit**: Reduced codebase size, less confusion
+- **Backtest/**: Signal-based workflow for equities/portfolios
+  - Works with DataFrame returns
+  - Uses Signal abstraction (Carry, Momentum, MeanReversion)
+  - Grinold-Kahn architecture (IC × Vol × Z)
+  - Portfolio optimization (Markowitz)
+  - Examples: equity momentum, sector rotation, multi-factor
+
+**Verdict**: Both systems needed. Do NOT consolidate or deprecate either.
 
 ---
 
