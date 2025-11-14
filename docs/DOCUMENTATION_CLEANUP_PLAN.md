@@ -1,57 +1,54 @@
 # Documentation Cleanup & Auto-Generation Plan
 
 Created: 2025-11-14
-Branch: `claude/docs-cleanup-autogen-<session-id>`
+Branch: claude/backtest-unification-setup-01CH1WQ6zsBhNHxU8xkhwVkQ
 
 ## Objective
 
-Analyze 164 markdown files, consolidate redundant content, create indexed structure, and generate architecture diagrams from code.
+Transform 164 markdown files (~110K lines) into unified, indexed documentation system with auto-generated architecture diagrams. Manual regeneration on demand, no automatic CI/CD.
 
 ## Current Inventory
 
 ```bash
-$ find . -name "*.md" -type f | grep -v "/\." | grep -v venv | wc -l
-164
+find . -name "*.md" -type f | grep -v "/\." | grep -v venv | wc -l
+# 164 files
 
-$ find . -name "*.md" -type f | grep -v "/\." | grep -v venv | xargs wc -l | tail -1
-109825 total
+find . -name "*.md" -type f | grep -v "/\." | grep -v venv | xargs wc -l | tail -1
+# 109825 total lines
 ```
 
-**File Distribution**:
-- Root level: 12 files
+File Distribution:
+- Root: 12 files (README, CLAUDE, etc.)
 - docs/: 45 files
 - docs/books/grinold_kahn_markdown/: 37 files
 - docs/design/: 8 files
 - docs/papers/: 50+ files
 - docs/references/: 12 files
-- Other: ~10 files
 
 ## Documentation Standards
 
 All documentation must:
 - State facts, not opinions
 - Include no emojis, checkboxes, or unnecessary formatting
-- Provide sufficient detail for execution on clean VM with no context
-- Link to source code with file:line references where applicable
-- Be indexed in central `docs/INDEX.md`
+- Provide sufficient detail for clean VM execution with no context
+- Link to source code with file:line references (e.g., `[Class](../path/file.py#L123-L456)`)
+- Be indexed in central docs/INDEX.md
 
 ## Phase 1: Parallel Document Analysis
 
 ### Task 1.1: Inventory All Markdown Files
-
-Create comprehensive inventory with metadata:
 
 **Script**: `scripts/docs/analyze_all_markdown.py`
 
 **For each file**, extract:
 - Full path
 - Line count, word count
-- First commit date (`git log --follow --diff-filter=A`)
-- Last modified date (`git log -1 --follow`)
-- Number of commits (`git log --follow --oneline | wc -l`)
-- Files that reference this doc (`grep -r "filename" --include="*.py" --include="*.md"`)
+- First commit date: `git log --follow --diff-filter=A`
+- Last modified date: `git log -1 --follow`
+- Number of commits: `git log --follow --oneline | wc -l`
+- Files that reference this doc: `grep -r "filename" --include="*.py" --include="*.md"`
 - Files this doc references (extract markdown links)
-- Category (inferred from path and content)
+- Category: essential, active_docs, design, reference, completed_task, outdated, redundant, orphan
 
 **Output**: `docs/analysis/inventory.json`
 
@@ -71,7 +68,9 @@ Create comprehensive inventory with metadata:
       "referenced_by_code": ["Backtest/__init__.py:5"],
       "referenced_by_docs": ["docs/getting-started.md:12"],
       "references": ["CLAUDE.md", "docs/architecture/overview.md"],
-      "category": "root_essential"
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Main entry point, up-to-date"
     },
     {
       "path": "POLARS_MIGRATION_COMPLETE.md",
@@ -83,7 +82,9 @@ Create comprehensive inventory with metadata:
       "referenced_by_code": [],
       "referenced_by_docs": [],
       "references": ["POLARS_MIGRATION_PLAN.md"],
-      "category": "completed_task"
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task, historical value only"
     }
   ]
 }
@@ -92,13 +93,16 @@ Create comprehensive inventory with metadata:
 **Execution**:
 ```bash
 python scripts/docs/analyze_all_markdown.py > docs/analysis/inventory.json
+git add docs/analysis/inventory.json
+git commit -m "docs: analyze all 164 markdown files"
+git push -u origin claude/backtest-unification-setup-01CH1WQ6zsBhNHxU8xkhwVkQ
 ```
 
 ### Task 1.2: Categorize Documents
 
-Based on inventory, categorize each file:
+**Script**: `scripts/docs/categorize_docs.py`
 
-**Categories**:
+**Category Definitions**:
 - `essential`: README.md, CLAUDE.md, CONTRIBUTING.md
 - `active_docs`: Current API docs, user guides, architecture
 - `design`: Design decisions, still relevant
@@ -108,8 +112,6 @@ Based on inventory, categorize each file:
 - `redundant`: Duplicate content
 - `orphan`: No references, no recent updates
 
-**Script**: `scripts/docs/categorize_docs.py`
-
 **Output**: `docs/analysis/categorization.json`
 
 ```json
@@ -118,59 +120,55 @@ Based on inventory, categorize each file:
   "active_docs": ["docs/BACKTEST_UNIFIED_API.md", ...],
   "design": ["docs/design/BACKTEST_UNIFICATION_PLAN.md", ...],
   "reference": ["docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md", ...],
-  "completed_task": ["POLARS_MIGRATION_COMPLETE.md", "PHASE_3_COMPLETION_SUMMARY.md", ...],
+  "completed_task": ["POLARS_MIGRATION_COMPLETE.md", ...],
   "outdated": ["docs/GENERIC_BACKTEST_PROGRESS.md", ...],
-  "redundant": ["GRINOLD_KAHN_FRAMEWORK.md", "docs/GRINOLD_KAHN_DETAILED_SPECS.md", ...],
+  "redundant": ["GRINOLD_KAHN_FRAMEWORK.md", ...],
   "orphan": ["docs/old_design.md", ...]
 }
 ```
 
-### Task 1.3: Identify Consolidation Groups
+**Execution**:
+```bash
+python scripts/docs/categorize_docs.py
+git add docs/analysis/categorization.json
+git commit -m "docs: categorize all markdown files"
+git push -u origin claude/backtest-unification-setup-01CH1WQ6zsBhNHxU8xkhwVkQ
+```
 
-Find related documents that should be merged:
+### Task 1.3: Identify Consolidation Groups
 
 **Consolidation Groups**:
 
-1. **Grinold-Kahn Documentation** (15 files):
-   - GRINOLD_KAHN_DETAILED_SPECS.md
-   - GRINOLD_KAHN_FRAMEWORK.md
-   - GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md
-   - docs/books/grinold_kahn_equity_notes_part1_foundations.md
-   - docs/books/grinold_kahn_equity_notes_part2_valuation.md
-   - docs/books/grinold_kahn_equity_notes_part3_forecasting.md
-   - docs/books/grinold_kahn_equity_notes_part4_implementation.md
-   - docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md
-   - (others)
-   - **Target**: `docs/architecture/grinold-kahn-framework.md`
+1. **Grinold-Kahn Documentation** (15 files)
+   - Sources: GRINOLD_KAHN_DETAILED_SPECS.md, GRINOLD_KAHN_FRAMEWORK.md, docs/books/grinold_kahn_equity_notes_part*.md
+   - Target: docs/architecture/grinold-kahn.md
 
-2. **Backtest Documentation** (8 files):
-   - BACKTEST_UNIFICATION_TASK.md
-   - docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md
-   - docs/GENERIC_BACKTEST_MIGRATION_PLAN.md
-   - docs/GENERIC_BACKTEST_PROGRESS.md
-   - docs/design/BACKTEST_UNIFICATION_PLAN.md
-   - **Keep**: docs/BACKTEST_UNIFIED_API.md (current)
-   - **Archive**: Planning/progress docs
-   - **Target**: docs/architecture/backtest-evolution.md (historical)
+2. **Backtest Documentation** (8 files)
+   - Keep: docs/BACKTEST_UNIFIED_API.md
+   - Archive: Planning/progress docs
+   - Target history: docs/architecture/backtest-evolution.md
 
-3. **Phase Summaries** (12 files):
-   - PHASE1_COMPLETE_SUMMARY.md
-   - PHASE_3_COMPLETION_SUMMARY.md
-   - PHASE_4_COMPLETION_SUMMARY.md
-   - SESSION_SUMMARY_2025-11-11.md
-   - (others)
-   - **Target**: CHANGELOG.md
+3. **Phase Summaries** (12 files)
+   - Sources: PHASE*_SUMMARY.md, SESSION_SUMMARY_*.md
+   - Target: CHANGELOG.md
 
-4. **Migration Documents** (4 files):
-   - POLARS_MIGRATION_PLAN.md
-   - POLARS_MIGRATION_COMPLETE.md
-   - **Target**: docs/archive/migrations/polars-migration.md
+4. **Migration Documents** (4 files)
+   - Sources: POLARS_MIGRATION_PLAN.md, POLARS_MIGRATION_COMPLETE.md
+   - Target: docs/archive/migrations/polars-migration.md
 
-5. **Book Chunks** (37 files):
-   - docs/books/grinold_kahn_markdown/grinold_kahn_chunk_001-032.md
-   - **Action**: Keep INDEX.md, archive individual chunks
+5. **Book Chunks** (37 files)
+   - Keep: docs/books/grinold_kahn_markdown/INDEX.md
+   - Archive: Individual chunks
 
 **Output**: `docs/analysis/consolidation-plan.json`
+
+**Execution**:
+```bash
+python scripts/docs/identify_consolidations.py
+git add docs/analysis/consolidation-plan.json
+git commit -m "docs: identify consolidation groups"
+git push -u origin claude/backtest-unification-setup-01CH1WQ6zsBhNHxU8xkhwVkQ
+```
 
 ## Phase 2: Documentation Structure
 
@@ -224,9 +222,7 @@ Find related documents that should be merged:
 │       └── book-chunks/
 ```
 
-### Central Index Structure
-
-**File**: `docs/INDEX.md`
+### Central Index (docs/INDEX.md)
 
 ```markdown
 # ARBS Documentation Index
@@ -279,6 +275,18 @@ Find related documents that should be merged:
 - [Phase Summaries](archive/phase-summaries/) - Development phases
 ```
 
+**Execution**:
+```bash
+mkdir -p docs/{architecture,user-guides,api-reference,design,references,archive}
+mkdir -p docs/archive/{completed-tasks,migrations,phase-summaries,book-chunks}
+
+python scripts/docs/create_structure.py
+
+git add docs/INDEX.md docs/architecture/ docs/user-guides/ docs/api-reference/
+git commit -m "docs: create new documentation structure"
+git push -u origin claude/backtest-unification-setup-01CH1WQ6zsBhNHxU8xkhwVkQ
+```
+
 ## Phase 3: Auto-Generation Tools
 
 ### Tool 1: Class Diagram Generator
@@ -289,33 +297,74 @@ Find related documents that should be merged:
 1. Parse Python files with `ast` module
 2. Extract class definitions and inheritance
 3. Extract public methods and key attributes
-4. Generate Mermaid `classDiagram` syntax
-5. Write to `docs/architecture/class-hierarchy.md`
+4. Generate Mermaid classDiagram syntax
+5. Write to docs/architecture/class-hierarchy.md
 
-**Usage**:
-```bash
-python scripts/docs/generate_class_diagrams.py
-```
+**Output Example** (docs/architecture/class-hierarchy.md):
 
-**Output Example**:
 ```markdown
 # Class Hierarchy
 
 Auto-generated: 2025-11-14 19:30:00
-Source: Backtest/, Signals/, Risk/, Optimizer/, Asset/
 
 ## Backtest System
 
-[Mermaid diagram showing BaseBacktest → Backtest with methods]
+```mermaid
+classDiagram
+    class BaseBacktest {
+        <<abstract>>
+        +mdp: MarketDataProvider
+        +run()
+        +_empty_result()
+    }
+
+    class Backtest {
+        +signals: List[BaseSignal]
+        +queries: List[BaseQuery]
+        +_workflow: str
+        +run()
+        +run_from_dataframe()
+        +run_from_queries()
+    }
+
+    BaseBacktest <|-- Backtest
+```
 
 ## Signal System
 
-[Mermaid diagram showing BaseSignal → CarrySignal, MomentumSignal, etc.]
+```mermaid
+classDiagram
+    class BaseSignal {
+        <<abstract>>
+        +name: str
+        +standardize: bool
+        +_calculate_raw_signal()
+        +generate()
+    }
+
+    class CarrySignal {
+        +_calculate_raw_signal()
+    }
+
+    class MomentumSignal {
+        +lookback: int
+        +_calculate_raw_signal()
+    }
+
+    BaseSignal <|-- CarrySignal
+    BaseSignal <|-- MomentumSignal
+```
 
 ## Source Code References
 
-- Backtest.Backtest: [Backtest/Backtest.py:73-642](../Backtest/Backtest.py#L73)
-- BaseSignal: [Signals/Base/BaseSignal.py:27-241](../Signals/Base/BaseSignal.py#L27)
+- Backtest.Backtest: [Backtest/Backtest.py:73-642](../../Backtest/Backtest.py#L73)
+- BaseSignal: [Signals/Base/BaseSignal.py:27-241](../../Signals/Base/BaseSignal.py#L27)
+- CarrySignal: [Signals/Futures/CarrySignal.py:15-89](../../Signals/Futures/CarrySignal.py#L15)
+```
+
+**Usage**:
+```bash
+python scripts/docs/generate_class_diagrams.py
 ```
 
 ### Tool 2: Data Flow Diagram Generator
@@ -323,16 +372,87 @@ Source: Backtest/, Signals/, Risk/, Optimizer/, Asset/
 **Script**: `scripts/docs/generate_flow_diagrams.py`
 
 **Algorithm**:
-1. Define key workflows manually (templates)
+1. Define key workflows (templates)
 2. Extract method calls from code with `ast`
 3. Verify flow matches actual code
-4. Generate Mermaid `flowchart` syntax
-5. Write to `docs/architecture/data-flow.md`
+4. Generate Mermaid flowchart syntax
+5. Write to docs/architecture/data-flow.md
 
-**Workflows**:
-- Signal-based backtest: Backtest.run() → adapter → signals → alpha → optimizer → result
-- Query-based backtest: Backtest.run_from_queries() → MDP → queries → MTM → result
-- Grinold-Kahn optimization: signals → z-scores → alphas → covariance → weights
+**Output Example** (docs/architecture/data-flow.md):
+
+```markdown
+# Data Flow Diagrams
+
+Auto-generated: 2025-11-14 19:30:00
+
+## Signal-Based Backtest Workflow
+
+```mermaid
+flowchart TD
+    A[Backtest.run] --> B{Workflow Type?}
+    B -->|signal| C[_run_signal_workflow]
+    B -->|query| D[run_from_queries]
+    B -->|hybrid| E[_run_hybrid]
+
+    C --> F[Adapter.convert]
+    F --> G[Get Returns DataFrame]
+
+    G --> H[For each date]
+    H --> I[Generate Signals]
+    I --> J[BaseSignal.generate]
+    J --> K{Multiple Signals?}
+    K -->|Yes| L[SignalCombiner.combine]
+    K -->|No| M[Single Signal]
+    L --> M
+
+    M --> N[Standardize Z-scores]
+    N --> O[AlphaGenerator.signals_to_alphas]
+    O --> P[Expected Returns α]
+
+    G --> Q[Returns History]
+    Q --> R[CovarianceEstimator.fit]
+    R --> S[Covariance Matrix Σ]
+
+    P --> T[Optimizer.optimize]
+    S --> T
+    T --> U[Portfolio Weights]
+
+    U --> V[Calculate Returns]
+    V --> W[Performance Metrics]
+    W --> X[BacktestResult]
+```
+
+## Grinold-Kahn Optimization Flow
+
+```mermaid
+flowchart LR
+    A[Raw Signals] --> B[Standardize]
+    B --> C[Z-Scores z]
+
+    C --> D[AlphaGenerator]
+    E[IC Estimate] --> D
+    F[Vol Forecasts σ] --> D
+    D --> G[α = IC × σ × z]
+
+    H[Returns History] --> I[VolatilityEstimator]
+    I --> F
+
+    H --> J[CovarianceEstimator]
+    J --> K[Σ Matrix]
+
+    G --> L[Optimizer]
+    K --> L
+    M[Risk Aversion λ] --> L
+
+    L --> N[Optimal Weights w*]
+    N --> O[Portfolio Return]
+```
+
+## Source Code References
+
+- Backtest._run_signal_workflow: [Backtest/Backtest.py:234-456](../../Backtest/Backtest.py#L234)
+- AlphaGenerator.signals_to_alphas: [Signals/AlphaGenerator.py:67-123](../../Signals/AlphaGenerator.py#L67)
+```
 
 **Usage**:
 ```bash
@@ -345,10 +465,69 @@ python scripts/docs/generate_flow_diagrams.py
 
 **Algorithm**:
 1. Parse all Python files
-2. Extract `import` and `from X import Y` statements
+2. Extract import statements
 3. Build dependency graph
-4. Generate Mermaid `graph` syntax
-5. Write to `docs/architecture/module-dependencies.md`
+4. Generate Mermaid graph syntax
+5. Write to docs/architecture/module-dependencies.md
+
+**Output Example** (docs/architecture/module-dependencies.md):
+
+```markdown
+# Module Dependencies
+
+Auto-generated: 2025-11-14 19:30:00
+
+## High-Level Module Structure
+
+```mermaid
+graph TD
+    Backtest --> Signals
+    Backtest --> Risk
+    Backtest --> Optimizer
+    Backtest --> Asset
+    Backtest --> Query
+
+    Asset --> Signals
+    Asset --> Risk
+    Asset --> Optimizer
+
+    Signals --> Query
+    Query --> MDP
+
+    Risk --> Returns
+    Risk --> Volatility
+```
+
+## Detailed Package Dependencies
+
+```mermaid
+graph LR
+    subgraph Backtest
+        BT[Backtest.Backtest]
+        BB[Backtest.Base.BaseBacktest]
+    end
+
+    subgraph Signals
+        SB[Signals.Base.BaseSignal]
+        SC[Signals.Futures.CarrySignal]
+        SA[Signals.AlphaGenerator]
+    end
+
+    subgraph Risk
+        RC[Risk.Covariance.LedoitWolf]
+        RV[Risk.Volatility.Realized]
+        RR[Risk.Returns.Calculator]
+    end
+
+    BT --> BB
+    BT --> SB
+    BT --> SA
+    BT --> RC
+    BT --> RR
+
+    SC --> SB
+```
+```
 
 **Usage**:
 ```bash
@@ -360,11 +539,105 @@ python scripts/docs/generate_dependency_graph.py
 **Script**: `scripts/docs/generate_api_docs.py`
 
 **Algorithm**:
-1. Use `pdoc` or custom parser
+1. Use `ast` to parse Python files
 2. Extract docstrings from classes and methods
-3. Format as markdown with code examples
-4. Include source code links (file:line)
-5. Write to `docs/api-reference/*.md`
+3. Extract method signatures
+4. Format as markdown with examples
+5. Include source code links
+6. Write to docs/api-reference/*.md
+
+**Output Example** (docs/api-reference/backtest.md):
+
+```markdown
+# Backtest API Reference
+
+Auto-generated: 2025-11-14 19:30:00
+
+## Backtest.Backtest
+
+Generic backtest with configurable components.
+
+**Source**: [Backtest/Backtest.py:73-642](../../Backtest/Backtest.py#L73)
+
+**Inheritance**: BaseBacktest → Backtest
+
+### Constructor
+
+```python
+def __init__(
+    self,
+    mdp: Optional[Any] = None,
+    adapter: Optional[Any] = None,
+    signals: Optional[Union[BaseSignal, List[BaseSignal]]] = None,
+    queries: Optional[List[BaseQuery]] = None,
+    triggers: Optional[List[Any]] = None,
+    alpha_generator: Optional[AlphaGenerator] = None,
+    risk_model: Optional[Any] = None,
+    optimizer: Optional[Any] = None,
+    IC: float = 0.05,
+    risk_aversion: float = 1.0,
+    long_only: bool = True,
+    min_history: int = 20,
+)
+```
+
+**Parameters**:
+- mdp (MarketDataProvider, optional): Market data provider for query workflow
+- adapter (BaseAdapter, optional): Converts queries to DataFrame
+- signals (BaseSignal | List[BaseSignal], optional): Signal(s) for alpha generation
+- queries (List[BaseQuery], optional): Queries to execute
+- IC (float): Information coefficient (default: 0.05)
+- risk_aversion (float): Risk aversion parameter (default: 1.0)
+- long_only (bool): Only long positions (default: True)
+- min_history (int): Minimum periods for covariance (default: 20)
+
+**Raises**:
+- ValueError: If neither signals nor queries provided
+- ValueError: If using queries without mdp
+
+### Methods
+
+#### run()
+
+**Source**: [Backtest/Backtest.py:234-456](../../Backtest/Backtest.py#L234)
+
+```python
+def run(
+    self,
+    contracts: List[str] = None,
+    dates: List[date] = None,
+    time_grid: List[date] = None,
+    **kwargs
+) -> BacktestResult
+```
+
+Run backtest using detected workflow.
+
+**Parameters**:
+- contracts (List[str], optional): Contract identifiers for signal workflow
+- dates (List[date], optional): Rebalance dates for signal workflow
+- time_grid (List[date], optional): Time grid for query workflow
+
+**Returns**: BacktestResult with performance metrics
+
+**Workflows**:
+- Signal workflow: Requires contracts and dates
+- Query workflow: Requires time_grid
+- Hybrid workflow: Combines both
+
+**Example**:
+```python
+from Backtest.Backtest import Backtest
+from Signals.Futures.CarrySignal import CarrySignal
+
+backtest = Backtest(
+    mdp=market_data_provider,
+    signals=CarrySignal()
+)
+result = backtest.run(contracts=['SFRZ4', 'SFRH5'], dates=[...])
+print(f"Sharpe: {result.sharpe_ratio}")
+```
+```
 
 **Usage**:
 ```bash
@@ -375,12 +648,14 @@ python scripts/docs/generate_api_docs.py
 
 **Makefile**:
 ```makefile
+.PHONY: docs
 docs:
+	@echo "Regenerating documentation..."
 	python scripts/docs/generate_class_diagrams.py
 	python scripts/docs/generate_flow_diagrams.py
 	python scripts/docs/generate_dependency_graph.py
 	python scripts/docs/generate_api_docs.py
-	@echo "Documentation regenerated"
+	@echo "Documentation updated"
 ```
 
 **Usage**:
@@ -388,16 +663,15 @@ docs:
 make docs
 ```
 
+Manual regeneration on demand. NO automatic CI/CD, NO pre-commit hooks.
+
 ## Phase 4: Execution on Clean VM
 
 ### Prerequisites
 
 ```bash
-# Python 3.11+
-python --version
-
-# Git
-git --version
+python --version  # 3.11+
+git --version     # 2.0+
 ```
 
 ### Step 1: Clone and Branch
@@ -406,11 +680,7 @@ git --version
 cd ~
 git clone https://github.com/pfin/ARBS.git
 cd ARBS
-
-# Create branch
-BRANCH_NAME="claude/docs-cleanup-$(date +%s)"
-git checkout -b "$BRANCH_NAME"
-echo "$BRANCH_NAME" > .branch-name
+git checkout -b claude/docs-cleanup-$(date +%s)
 ```
 
 ### Step 2: Install Dependencies
@@ -420,156 +690,151 @@ pip install -r requirements.txt
 pip install pdoc3 networkx
 ```
 
-### Step 3: Analyze All Documentation
+### Step 3: Analyze Documentation
 
 ```bash
-# Create analysis directory
 mkdir -p docs/analysis scripts/docs
 
-# Run analysis (outputs JSON)
+# Analyze all files
 python scripts/docs/analyze_all_markdown.py > docs/analysis/inventory.json
 
-# Categorize documents
+# Categorize
 python scripts/docs/categorize_docs.py
 
-# Identify consolidation groups
+# Identify consolidations
 python scripts/docs/identify_consolidations.py
+
+# Commit
+git add docs/analysis/
+git commit -m "docs: analyze 164 markdown files"
+git push -u origin $(git branch --show-current)
 ```
 
-### Step 4: Review Analysis
+### Step 4: Review and Execute Cleanup
 
 ```bash
-# Generate human-readable report
+# Generate report
 python scripts/docs/generate_report.py > docs/analysis/REPORT.md
 
 # Review
 less docs/analysis/REPORT.md
-```
 
-### Step 5: Execute Cleanup
-
-```bash
-# Dry run first
+# Dry run
 python scripts/docs/execute_cleanup.py --dry-run
-
-# Review changes
-git status
 
 # Execute
 python scripts/docs/execute_cleanup.py
 
-# Create new structure
+# Create structure
 python scripts/docs/create_structure.py
+
+# Commit
+git add -A
+git commit -m "docs: execute cleanup and create structure"
+git push -u origin $(git branch --show-current)
 ```
 
-### Step 6: Generate Auto-Docs
+### Step 5: Generate Auto-Docs
 
 ```bash
 make docs
+
+# Commit
+git add docs/architecture/ docs/api-reference/
+git commit -m "docs: generate architecture diagrams and API reference"
+git push -u origin $(git branch --show-current)
 ```
 
-### Step 7: Validate
+### Step 6: Validate
 
 ```bash
-# Validate all links
+# Validate links
 python scripts/docs/validate_links.py
 
-# Validate Mermaid syntax
+# Validate Mermaid
 python scripts/docs/validate_mermaid.py
-```
 
-### Step 8: Commit and Push
-
-```bash
+# Final commit
 git add -A
-git commit -m "docs: comprehensive cleanup and auto-generation
+git commit -m "docs: comprehensive cleanup complete
 
-Analysis Results:
-- Analyzed: 164 markdown files (~110K lines)
-- Archived: X completed task docs
-- Consolidated: Y related documents
-- Deleted: Z redundant files
+Analysis:
+- 164 files analyzed
+- Categorized and consolidated
+- Auto-generation tools implemented
+- Manual regeneration via make docs
 
-New Structure:
-- Central index at docs/INDEX.md
-- Auto-generated class diagrams (Mermaid)
-- Auto-generated flow charts (Mermaid)
-- Auto-generated module dependency graphs (Mermaid)
-- Auto-generated API reference docs
-- Manual regeneration via 'make docs'
-
-Result: Unified indexed documentation system
-"
-
-git push -u origin "$(cat .branch-name)"
+Result: Unified indexed documentation system"
+git push -u origin $(git branch --show-current)
 ```
 
 ## Orthogonal Task Breakdown
 
 ### Group A: Analysis Scripts (Parallel)
 
-**A1**: scripts/docs/analyze_all_markdown.py (30 min)
-**A2**: scripts/docs/categorize_docs.py (20 min)
-**A3**: scripts/docs/identify_consolidations.py (20 min)
-**A4**: scripts/docs/generate_report.py (15 min)
+A1: scripts/docs/analyze_all_markdown.py (30 min)
+A2: scripts/docs/categorize_docs.py (20 min)
+A3: scripts/docs/identify_consolidations.py (20 min)
+A4: scripts/docs/generate_report.py (15 min)
 
 ### Group B: Generation Scripts (Parallel)
 
-**B1**: scripts/docs/generate_class_diagrams.py (45 min)
-**B2**: scripts/docs/generate_flow_diagrams.py (45 min)
-**B3**: scripts/docs/generate_dependency_graph.py (30 min)
-**B4**: scripts/docs/generate_api_docs.py (45 min)
+B1: scripts/docs/generate_class_diagrams.py (45 min)
+B2: scripts/docs/generate_flow_diagrams.py (45 min)
+B3: scripts/docs/generate_dependency_graph.py (30 min)
+B4: scripts/docs/generate_api_docs.py (45 min)
 
 ### Group C: Execution Scripts (Parallel)
 
-**C1**: scripts/docs/execute_cleanup.py (30 min)
-**C2**: scripts/docs/create_structure.py (20 min)
-**C3**: scripts/docs/validate_links.py (20 min)
-**C4**: scripts/docs/validate_mermaid.py (15 min)
+C1: scripts/docs/execute_cleanup.py (30 min)
+C2: scripts/docs/create_structure.py (20 min)
+C3: scripts/docs/validate_links.py (20 min)
+C4: scripts/docs/validate_mermaid.py (15 min)
 
 ### Group D: Content Consolidation (Sequential)
 
-**D1**: Consolidate Grinold-Kahn docs → docs/architecture/grinold-kahn.md (45 min)
-**D2**: Consolidate backtest docs → docs/architecture/backtest-design.md (30 min)
-**D3**: Consolidate phase summaries → CHANGELOG.md (30 min)
-**D4**: Create docs/INDEX.md (20 min)
-**D5**: Create user guides from existing content (60 min)
-
-## Timeline Estimate
-
-**Phase 1 (Analysis)**: 2 hours
-**Phase 2 (Structure)**: 2 hours
-**Phase 3 (Auto-Gen)**: 4 hours
-**Phase 4 (Execution)**: 1 hour
-
-**Total**: 9 hours wall-clock time with parallelization
+D1: Consolidate Grinold-Kahn docs (45 min)
+D2: Consolidate backtest docs (30 min)
+D3: Consolidate phase summaries to CHANGELOG (30 min)
+D4: Create docs/INDEX.md (20 min)
+D5: Create user guides (60 min)
 
 ## Success Criteria
 
-**Analysis Complete**:
-- inventory.json exists with 164 files
+Analysis Complete:
+- inventory.json with 164 files
 - categorization.json categorizes all files
 - consolidation-plan.json identifies merge groups
 
-**Structure Complete**:
-- docs/INDEX.md exists and links to all active docs
-- All active docs accessible from index
+Structure Complete:
+- docs/INDEX.md exists and links all active docs
 - Archive directory contains historical docs
+- All active docs accessible from index
 
-**Auto-Generation Working**:
+Auto-Generation Working:
 - Class diagrams render in Mermaid
 - Flow charts render in Mermaid
 - Dependency graphs render in Mermaid
 - API docs generated from docstrings
 - Source code links work (file:line format)
 
-**Validation Passing**:
+Validation Passing:
 - All internal links resolve
 - All Mermaid syntax valid
 - All code examples reference existing code
 - No orphaned documents
 
-**Final State**:
-- Single command regenerates all auto-docs: `make docs`
-- Clear navigation from README → docs/INDEX.md → any topic
+Final State:
+- Single command regenerates all auto-docs: make docs
+- Clear navigation from README to docs/INDEX.md to any topic
 - All documentation accurate as of commit date
+- Manual regeneration only, no automatic hooks or CI/CD
+
+## Timeline Estimate
+
+Phase 1 (Analysis): 2 hours
+Phase 2 (Structure): 2 hours
+Phase 3 (Auto-Gen): 4 hours
+Phase 4 (Execution): 1 hour
+
+Total: 9 hours wall-clock time with parallelization
