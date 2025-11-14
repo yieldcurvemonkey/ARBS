@@ -20,20 +20,80 @@ A modular research codebase for building yield curves, pricing interest rate der
 
 ---
 
+## Development Environment Setup
+
+### Clean VM Installation (Recommended)
+
+This setup ensures a reproducible environment from scratch on a fresh VM:
+
+```bash
+# 1. Verify Python version (3.11+ required)
+python --version  # Should show Python 3.11.x or later
+
+# 2. Clone repository
+git clone https://github.com/pfin/ARBS.git
+cd ARBS
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Verify installation by running tests
+python -m pytest tests/unit/ -v
+
+# 5. Expected result: 1038+ tests passing (99.2% pass rate)
+```
+
+### Dependency Notes
+
+**Core Dependencies**:
+- Python 3.11+ (tested on 3.11.14)
+- numpy, scipy, polars (data processing)
+- QuantLib, rateslib (curve building and pricing)
+- ZODB, BTrees (persistent caching)
+- pytest (testing framework)
+
+**Known Installation Issues**:
+- If `multitasking` (yfinance dependency) fails to build, this is a known setuptools compatibility issue
+- Most core functionality will work without yfinance (only impacts Yahoo Finance MDP)
+- See `INSTALLATION_STATUS.md` for detailed diagnosis if installation fails
+
+**Verification**:
+```bash
+# Quick smoke test
+python -c "import numpy, polars, scipy, QuantLib, rateslib; print('Core deps OK')"
+
+# Full test suite
+python -m pytest tests/unit/ -v --tb=short
+
+# Check test coverage
+python -m pytest tests/unit/ --cov=. --cov-report=term-missing
+```
+
+### Virtual Environment (Optional but Recommended)
+
+```bash
+# Create virtual environment
+python -m venv venv
+
+# Activate (Linux/Mac)
+source venv/bin/activate
+
+# Activate (Windows)
+venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+---
+
 ## Quick Start
 
 ### 1) Environment
 
-- Python=3.13
-- Core libraries used in the repo (install as needed):
-  - `QuantLib`, `pandas`, `numpy`
-  - `rateslib` (for RL backends)
-  - `zodb`, `BTrees`, `persistent`, `transaction`, `zc.lockfile` (for ZODB caching)
-  - `tqdm`
-
-```bash
-pip install -r requirements.txt 
-```
+**Prerequisites**:
+- Python 3.11+ (see Development Environment Setup above)
+- All dependencies installed via `pip install -r requirements.txt`
 
 Some data builders (e.g., CME/fixings/SDR) may require credentials or local files. See MDP/IRSwaps/* modules
 
