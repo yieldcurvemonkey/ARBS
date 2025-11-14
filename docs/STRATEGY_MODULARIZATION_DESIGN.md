@@ -1059,7 +1059,7 @@ strategy.signals.append(CustomSignal())
 strategy.optimizer.risk_aversion = 2.0
 
 # Run backtest
-bt = MinimalBacktest(strategy=strategy, ...)
+bt = Backtest(strategy=strategy, ...)
 bt.run()
 ```
 

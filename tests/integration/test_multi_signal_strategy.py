@@ -32,7 +32,6 @@ from Signals.AlphaGenerator import AlphaGenerator
 from Asset.GrinoldKahnPortfolio import GrinoldKahnPortfolio
 from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
 from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
-from Backtest.MinimalBacktest import MinimalBacktest
 
 
 # Fixtures for synthetic market data

@@ -119,14 +119,14 @@ backtest:
 
 ```python
 from Strategies.Factory.StrategyFactory import StrategyFactory
-from Backtest.MinimalBacktest import MinimalBacktest
+from Backtest.Backtest import Backtest
 
 # Load strategy from YAML
 factory = StrategyFactory()
 strategy = factory.create_from_yaml('my_first_strategy.yaml')
 
 # Run backtest
-bt = MinimalBacktest(
+bt = Backtest(
     strategy=strategy,
     start_date='2024-01-01',
     end_date='2024-12-31'
@@ -230,7 +230,7 @@ backtest:
 ```python
 # run_backtest.py
 from Strategies.Factory.StrategyFactory import StrategyFactory
-from Backtest.MinimalBacktest import MinimalBacktest
+from Backtest.Backtest import Backtest
 from MDP.Futures.FuturesMDP import FuturesMDP
 import pandas as pd
 
@@ -242,7 +242,7 @@ strategy = factory.create_from_yaml('strategies/my_carry.yaml')
 mdp = FuturesMDP(source='live')
 
 # Run backtest
-bt = MinimalBacktest(
+bt = Backtest(
     strategy=strategy,
     market_data=mdp,
     start_date='2024-01-01',
@@ -275,11 +275,11 @@ python run_backtest.py
 %autoreload 2
 
 from Strategies.Factory.StrategyFactory import StrategyFactory
-from Backtest.MinimalBacktest import MinimalBacktest
+from Backtest.Backtest import Backtest
 
 # Load and run
 strategy = StrategyFactory().create_from_yaml('strategies/my_carry.yaml')
-results = MinimalBacktest(strategy=strategy).run()
+results = Backtest(strategy=strategy).run()
 
 # Visualize
 import matplotlib.pyplot as plt
@@ -954,14 +954,14 @@ execution:
 ```python
 # Compare with/without costs
 from Strategies.Factory.StrategyFactory import StrategyFactory
-from Backtest.MinimalBacktest import MinimalBacktest
+from Backtest.Backtest import Backtest
 
 # Strategy without costs
 config_no_costs = {
     'execution': {'transaction_costs': {'enabled': False}}
 }
 strategy_no_costs = StrategyFactory().create_from_dict(config_no_costs)
-results_no_costs = MinimalBacktest(strategy=strategy_no_costs).run()
+results_no_costs = Backtest(strategy=strategy_no_costs).run()
 
 # Strategy with costs
 config_with_costs = {
@@ -974,7 +974,7 @@ config_with_costs = {
     }
 }
 strategy_with_costs = StrategyFactory().create_from_dict(config_with_costs)
-results_with_costs = MinimalBacktest(strategy=strategy_with_costs).run()
+results_with_costs = Backtest(strategy=strategy_with_costs).run()
 
 # Compare
 print(f"Sharpe (no costs): {results_no_costs.sharpe_ratio:.2f}")
@@ -1192,7 +1192,7 @@ A: Not in the same strategy YAML. But you can run multiple strategies and combin
 
 **Examples:**
 - `strategies/examples/` - YAML example files
-- `examples/run_minimal_backtest.py` - End-to-end example
+- `examples/` - End-to-end backtest examples
 - `tests/integration/test_multi_signal_strategy.py` - Integration tests
 
 ---

@@ -6,7 +6,7 @@ You are an experienced, pragmatic software engineer. You don't over-engineer a s
 
 ## MVP Project Goals (Futures/Swaps Backtesting)
 
-**Primary Objective**: Build a minimal end-to-end backtest that **measures correctly**, not necessarily profitably.
+**Primary Objective**: Build an end-to-end backtest that **measures correctly**, not necessarily profitably.
 
 ### Critical MVP Principles
 
@@ -16,10 +16,10 @@ You are an experienced, pragmatic software engineer. You don't over-engineer a s
    - If strategy loses money, that's FINE - we measure it accurately
    - No cherry-picking or optimizing for results
 
-2. **Minimal → Maximal Approach**
-   - Start with simplest working implementation (Minimal)
+2. **Iterative Development**
+   - Start with working implementation
    - Prove it works end-to-end
-   - Then add complexity (Maximal) only when needed
+   - Then add features only when needed
    - Each component independently tested before integration
 
 3. **Test-Driven Development (TDD)**
@@ -62,7 +62,7 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
 - **Risk** (22 tests): SampleCovariance, LedoitWolfShrinkage, comparison
 - **Optimizer** (18 tests): Mean-variance optimizer (Markowitz 1952)
 - **Adapter** (8 tests): Query → Signals bridge with proper format translation
-- **Backtest** (12 tests): MinimalBacktest end-to-end integration
+- **Backtest** (12 tests): Generic backtest end-to-end integration
 - **Other** (34 tests): Accounting, smoke tests, fixtures
 
 **Architecture V2 - Grinold-Kahn Enhancements (333 tests)**
@@ -86,11 +86,11 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
 - **Configurable Components**: Dependency injection for adapter, signals, risk models, optimizers
 - **Two Workflows**: Query-based (futures/swaps) and DataFrame-based (equities/ETFs)
 - **Multi-Signal Support**: Single or multiple signals with automatic combiner
-- **Backwards Compatible**: MinimalBacktest remains for futures-specific use cases
+- **Unified Interface**: Single backtest class for all use cases
 
 **Usage Patterns:**
 
-1. **Futures Carry** (backwards compatible with MinimalBacktest):
+1. **Futures Carry** (query-based workflow):
    ```python
    from Backtest.Backtest import Backtest
    from Adapter.FuturesAdapter import FuturesAdapter
@@ -131,15 +131,14 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
    ```
 
 **Key Design Decisions:**
-- MinimalBacktest remains for futures carry strategies (no breaking changes)
-- Generic Backtest recommended for all new code
+- Single Backtest class supports all workflows (query-based and DataFrame-based)
 - Component injection enables testing without full integration
 - Two workflows support different data availability patterns
 - Signal combiner auto-created for multiple signals with equal-weight default
 
 **End-to-end examples**:
-- `examples/run_minimal_backtest.py` - Futures carry (legacy)
-- Generic Backtest examples in `Backtest/__init__.py`
+- `examples/run_backtest.py` - Futures carry strategy
+- Additional examples in `Backtest/__init__.py`
 
 ### Architecture Improvements Applied
 
@@ -161,7 +160,7 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
 - ✅ YAML-based strategy configuration for rapid experimentation
 - ✅ Generic backtest supports all asset classes (futures, swaps, equities)
 - ✅ Multi-signal strategies with configurable combiner
-- ✅ Backwards compatibility maintained (MinimalBacktest unchanged)
+- ✅ Unified interface for all backtesting workflows
 
 ### Future Enhancements (Not Required for MVP)
 

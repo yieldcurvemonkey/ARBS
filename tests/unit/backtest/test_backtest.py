@@ -10,16 +10,14 @@ Verifies the generic backtest can:
 3. Accept multiple signals with combiner
 4. Work with query-based workflow (futures)
 5. Work with DataFrame-based workflow (equities)
-6. Maintain backwards compatibility with MinimalBacktest usage
 
 Test Organization:
 - TestBacktestBasics: Instantiation, validation
-- TestFuturesCarryWorkflow: Baseline (same as MinimalBacktest)
-- TestFuturesMomentumWorkflow: New capability
+- TestFuturesCarryWorkflow: Futures carry baseline
+- TestFuturesMomentumWorkflow: Futures momentum strategy
 - TestMultiSignalWorkflow: Multiple signals + combiner
 - TestDataFrameWorkflow: Equity/ETF strategies
 - TestComponentInjection: Custom risk models, optimizers
-- TestBackwardsCompatibility: MinimalBacktest use cases still work
 """
 
 import pytest
@@ -129,7 +127,7 @@ class TestBacktestBasics:
 
 
 class TestFuturesCarryWorkflow:
-    """Test futures carry workflow (baseline - same as MinimalBacktest)."""
+    """Test futures carry workflow (baseline)."""
 
     def test_backtest_runs_with_futures_adapter(self, mock_mdp):
         """Backtest runs with FuturesAdapter and CarrySignal."""
@@ -172,37 +170,6 @@ class TestFuturesCarryWorkflow:
         with pytest.raises(ValueError, match="Query-based workflow requires adapter"):
             backtest.run(contracts, dates)
 
-    def test_backwards_compatible_with_minimal_backtest(self, mock_mdp):
-        """Generic Backtest produces same results as MinimalBacktest."""
-        from Backtest.Backtest import Backtest
-        from Backtest.MinimalBacktest import MinimalBacktest
-        from Adapter.FuturesAdapter import FuturesAdapter
-        from Signals.Futures.CarrySignal import CarrySignal
-
-        contracts = ['SFRZ4', 'SFRH5', 'SFRM5']
-        dates = [
-            date(2024, 6, 15),
-            date(2024, 6, 22),
-            date(2024, 6, 29),
-        ]
-
-        # MinimalBacktest
-        minimal = MinimalBacktest(mdp=mock_mdp, risk_aversion=1.0, long_only=True)
-        minimal_result = minimal.run(contracts, dates)
-
-        # Generic Backtest (same configuration)
-        generic = Backtest(
-            mdp=mock_mdp,
-            adapter=FuturesAdapter(market_data_provider=mock_mdp),
-            signals=CarrySignal(),
-            risk_aversion=1.0,
-            long_only=True,
-        )
-        generic_result = generic.run(contracts, dates)
-
-        # Should produce similar results
-        assert len(generic_result.returns) == len(minimal_result.returns)
-        assert generic_result.sharpe_ratio == pytest.approx(minimal_result.sharpe_ratio, abs=0.1)
 
 
 class TestFuturesMomentumWorkflow:

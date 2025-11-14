@@ -601,7 +601,7 @@ def attribute_performance(portfolio_returns, factor_returns):
 - ✅ Scales to 50+ assets (18 tests)
 
 ### Phase 4: Integration ✅ COMPLETE (2025-11-11)
-- ✅ Connected to backtest engine (MinimalBacktest)
+- ✅ Connected to backtest engine (Backtest)
 - ✅ TearSheet performance analysis (Sharpe, Sortino, Calmar, drawdowns)
 - ✅ End-to-end returns-first architecture (8 integration tests)
 
