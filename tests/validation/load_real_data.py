@@ -15,7 +15,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import pandas as pd
 import polars as pl
 from datetime import datetime
 
@@ -117,8 +116,8 @@ def download_all_data_batch() -> pl.DataFrame:
         print(f"✓ Downloaded {len(data)} days of data")
 
     except ImportError:
-        # Fallback to direct pandas read if pandas_datareader not available
-        print("Using direct pandas download (fallback)...")
+        # Fallback to direct download if pandas_datareader not available
+        print("Using direct download (fallback)...")
 
         all_data = []
         for i, ticker in enumerate(ALL_TICKERS):
@@ -134,8 +133,8 @@ def download_all_data_batch() -> pl.DataFrame:
             )
 
             try:
-                df = pd.read_csv(url)
-                df['Ticker'] = ticker
+                df = pl.read_csv(url)
+                df = df.with_columns(pl.lit(ticker).alias('Ticker'))
                 all_data.append(df)
             except Exception as e:
                 print(f"  ✗ Failed {ticker}: {e}")
@@ -145,7 +144,7 @@ def download_all_data_batch() -> pl.DataFrame:
             raise ValueError("No data downloaded!")
 
         # Combine all
-        data = pd.concat(all_data, ignore_index=True)
+        data = pl.concat(all_data)
         print(f"✓ Downloaded {len(data)} total observations")
 
     # Convert to long format
@@ -155,37 +154,63 @@ def download_all_data_batch() -> pl.DataFrame:
     for ticker in ALL_TICKERS:
         try:
             # Get this ticker's data
-            if 'Ticker' in data.columns:
-                ticker_data = data[data['Ticker'] == ticker].copy()
-            else:
-                # Multi-index from pandas_datareader
-                ticker_data = data.xs(ticker, level=1, axis=1, drop_level=False)
+            if hasattr(data, 'to_numpy'):  # pandas from external API
+                if 'Ticker' in data.columns:
+                    ticker_data = data[data['Ticker'] == ticker].copy()
+                else:
+                    # Multi-index from pandas_datareader
+                    ticker_data = data.xs(ticker, level=1, axis=1, drop_level=False)
 
-            # Get adjusted close
-            if 'Adj Close' in ticker_data.columns:
-                close_col = 'Adj Close'
-            elif ('Adj Close', ticker) in ticker_data.columns:
-                close_col = ('Adj Close', ticker)
-            else:
-                close_col = 'Close'
+                # Get adjusted close
+                if 'Adj Close' in ticker_data.columns:
+                    close_col = 'Adj Close'
+                elif ('Adj Close', ticker) in ticker_data.columns:
+                    close_col = ('Adj Close', ticker)
+                else:
+                    close_col = 'Close'
 
-            closes = ticker_data[close_col]
-            dates = closes.index
+                closes = ticker_data[close_col]
+                dates = closes.index
 
-            # Calculate returns
-            returns = closes.pct_change()
+                # Calculate returns
+                returns = closes.pct_change()
 
-            # Get sector
-            sector = SECTOR_MAP.get(ticker, "Unknown")
+                # Get sector
+                sector = SECTOR_MAP.get(ticker, "Unknown")
 
-            # Build DataFrame
-            df_ticker = pl.DataFrame({
-                "ticker": ticker,
-                "date": [d.strftime("%Y-%m-%d") for d in dates],
-                "close": closes.values,
-                "return": returns.values,
-                "sector": sector,
-            })
+                # Build DataFrame
+                df_ticker = pl.DataFrame({
+                    "ticker": ticker,
+                    "date": [d.strftime("%Y-%m-%d") for d in dates],
+                    "close": closes.values,
+                    "return": returns.values,
+                    "sector": sector,
+                })
+            else:  # already polars
+                ticker_data = data.filter(pl.col('Ticker') == ticker)
+
+                # Get adjusted close column
+                if 'Adj Close' in ticker_data.columns:
+                    close_col = 'Adj Close'
+                else:
+                    close_col = 'Close'
+
+                # Calculate returns
+                ticker_data = ticker_data.with_columns([
+                    (pl.col(close_col) / pl.col(close_col).shift(1) - pl.lit(1)).alias('return')
+                ])
+
+                # Get sector
+                sector = SECTOR_MAP.get(ticker, "Unknown")
+
+                # Build DataFrame
+                df_ticker = pl.DataFrame({
+                    "ticker": [ticker] * len(ticker_data),
+                    "date": ticker_data['Date'].cast(pl.Utf8),
+                    "close": ticker_data[close_col],
+                    "return": ticker_data['return'],
+                    "sector": [sector] * len(ticker_data),
+                })
 
             data_list.append(df_ticker)
             print(f"  ✓ {ticker}: {len(df_ticker)} days")

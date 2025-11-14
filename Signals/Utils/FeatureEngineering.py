@@ -407,25 +407,27 @@ class FeatureEngineering:
 
 if __name__ == "__main__":
     # Example usage
-    import pandas as pd
-    
+    from datetime import date, timedelta
+
     # Create sample data
-    dates = pd.date_range(start="2020-01-01", end="2023-12-31", freq="D")
+    start_date = date(2020, 1, 1)
+    end_date = date(2023, 12, 31)
+    dates = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
     np.random.seed(42)
-    
+
     data = []
     for ticker in ["AAPL", "GOOGL", "MSFT"]:
         returns = np.random.randn(len(dates)) * 0.02
         prices = 100 * np.exp(np.cumsum(returns))
-        
+
         for d, r, p in zip(dates, returns, prices):
             data.append({
                 "ticker": ticker,
-                "date": d.date(),
+                "date": d,
                 "return": r,
                 "price": p,
             })
-    
+
     df = pl.DataFrame(data)
     
     # Initialize feature engineering

@@ -16,7 +16,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import pandas as pd
 import polars as pl
 import requests
 import time
@@ -35,7 +34,7 @@ TICKERS = {
 }
 
 
-def download_alphavantage(ticker: str, api_key: str) -> pd.DataFrame:
+def download_alphavantage(ticker: str, api_key: str) -> pl.DataFrame:
     """
     Download data from Alpha Vantage.
 
@@ -58,7 +57,7 @@ def download_alphavantage(ticker: str, api_key: str) -> pd.DataFrame:
 
         # Parse CSV
         from io import StringIO
-        df = pd.read_csv(StringIO(response.text))
+        df = pl.read_csv(StringIO(response.text))
 
         # Check if we got an error message
         if 'Error Message' in df.columns or len(df) < 100:
@@ -94,38 +93,42 @@ def load_data(api_key: str) -> pl.DataFrame:
                 print(f"  Rate limit: waiting 60s...")
                 time.sleep(60)
 
-            df_pandas = download_alphavantage(ticker, api_key)
+            df_polars = download_alphavantage(ticker, api_key)
             call_count += 1
 
-            if df_pandas is None:
+            if df_polars is None:
                 continue
 
             # Filter to our date range (2015-2023)
-            df_pandas['timestamp'] = pd.to_datetime(df_pandas['timestamp'])
-            df_pandas = df_pandas[
-                (df_pandas['timestamp'] >= '2015-01-01') &
-                (df_pandas['timestamp'] <= '2023-12-31')
-            ]
+            df_polars = df_polars.with_columns([
+                pl.col('timestamp').str.strptime(pl.Date, format='%Y-%m-%d').alias('timestamp')
+            ])
+            df_polars = df_polars.filter(
+                (pl.col('timestamp') >= pl.lit('2015-01-01').str.strptime(pl.Date, format='%Y-%m-%d')) &
+                (pl.col('timestamp') <= pl.lit('2023-12-31').str.strptime(pl.Date, format='%Y-%m-%d'))
+            )
 
-            if len(df_pandas) < 900:
-                print(f"  ⚠ {ticker}: insufficient data ({len(df_pandas)} days)")
+            if len(df_polars) < 900:
+                print(f"  ⚠ {ticker}: insufficient data ({len(df_polars)} days)")
                 continue
 
-            # Calculate returns
-            df_pandas = df_pandas.sort_values('timestamp')
-            df_pandas['return'] = df_pandas['adjusted_close'].pct_change()
+            # Sort and calculate returns
+            df_polars = df_polars.sort('timestamp')
+            df_polars = df_polars.with_columns([
+                (pl.col('adjusted_close') / pl.col('adjusted_close').shift(1) - pl.lit(1)).alias('return')
+            ])
 
-            # Convert to polars
-            df_polars = pl.DataFrame({
-                "ticker": ticker,
-                "date": df_pandas['timestamp'].dt.strftime('%Y-%m-%d').values,
-                "close": df_pandas['adjusted_close'].values,
-                "return": df_pandas['return'].values,
-                "sector": sector,
+            # Build final dataframe
+            df_final = pl.DataFrame({
+                "ticker": [ticker] * len(df_polars),
+                "date": df_polars['timestamp'].cast(pl.Utf8),
+                "close": df_polars['adjusted_close'],
+                "return": df_polars['return'],
+                "sector": [sector] * len(df_polars),
             })
 
-            data_list.append(df_polars)
-            print(f"  ✓ {ticker}: {len(df_polars)} days")
+            data_list.append(df_final)
+            print(f"  ✓ {ticker}: {len(df_final)} days")
 
             time.sleep(0.5)  # Small delay between requests
 

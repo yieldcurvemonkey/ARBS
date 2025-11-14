@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import pandas as pd
 import polars as pl
 import numpy as np
 from datetime import datetime
@@ -72,7 +71,7 @@ def download_batch_yahoo(tickers: list[str], start_date: str, end_date: str) -> 
         return {}
 
 
-def download_single_yahoo(ticker: str, start_date: str, end_date: str, retry: int = 0) -> pd.DataFrame:
+def download_single_yahoo(ticker: str, start_date: str, end_date: str, retry: int = 0) -> pl.DataFrame:
     """
     Download single ticker with retry logic.
     """
@@ -85,7 +84,7 @@ def download_single_yahoo(ticker: str, start_date: str, end_date: str, retry: in
     )
 
     try:
-        df = pd.read_csv(url)
+        df = pl.read_csv(url)
         return df
     except Exception as e:
         if retry < 3 and "429" in str(e):
@@ -139,31 +138,47 @@ def load_sp500_data(
                 print(f"  Falling back to individual downloads...")
                 for ticker in batch:
                     time.sleep(0.5)  # Small delay between individual requests
-                    df_pandas = download_single_yahoo(ticker, start_date, end_date)
+                    df = download_single_yahoo(ticker, start_date, end_date)
 
-                    if df_pandas is not None and len(df_pandas) >= 900:
-                        batch_data[ticker] = df_pandas
+                    if df is not None and len(df) >= 900:
+                        batch_data[ticker] = df
 
             # Process successful downloads
-            for ticker, df_pandas in batch_data.items():
-                if len(df_pandas) < 900:
-                    print(f"    ⚠ {ticker}: insufficient data ({len(df_pandas)} days)")
+            for ticker, df_data in batch_data.items():
+                if len(df_data) < 900:
+                    print(f"    ⚠ {ticker}: insufficient data ({len(df_data)} days)")
                     continue
 
-                # Calculate returns
-                df_pandas['Return'] = df_pandas['Adj Close'].pct_change() if 'Adj Close' in df_pandas.columns else df_pandas['Close'].pct_change()
+                # Convert to polars if pandas (from external API)
+                if hasattr(df_data, 'to_numpy'):  # pandas DataFrame
+                    df_polars = pl.from_pandas(df_data)
+                else:  # already polars
+                    df_polars = df_data
 
-                # Convert to polars
-                df_polars = pl.DataFrame({
-                    "ticker": ticker,
-                    "date": df_pandas.index.strftime("%Y-%m-%d") if hasattr(df_pandas.index, 'strftime') else df_pandas['Date'].astype(str).values,
-                    "close": df_pandas['Adj Close'].values if 'Adj Close' in df_pandas.columns else df_pandas['Close'].values,
-                    "return": df_pandas['Return'].values,
-                    "sector": sector,
+                # Calculate returns
+                close_col = 'Adj Close' if 'Adj Close' in df_polars.columns else 'Close'
+                df_polars = df_polars.with_columns([
+                    (pl.col(close_col) / pl.col(close_col).shift(1) - pl.lit(1)).alias('return')
+                ])
+
+                # Get date as string
+                if 'Date' in df_polars.columns:
+                    dates = df_polars['Date'].cast(pl.Utf8)
+                else:
+                    # If Date is in index (from pandas), it should be in columns after from_pandas
+                    dates = df_polars.select(pl.first()).to_series().cast(pl.Utf8)
+
+                # Build final dataframe
+                df_final = pl.DataFrame({
+                    "ticker": [ticker] * len(df_polars),
+                    "date": dates,
+                    "close": df_polars[close_col],
+                    "return": df_polars['return'],
+                    "sector": [sector] * len(df_polars),
                 })
 
-                data_list.append(df_polars)
-                print(f"    ✓ {ticker}: {len(df_polars)} days")
+                data_list.append(df_final)
+                print(f"    ✓ {ticker}: {len(df_final)} days")
 
             # Delay between batches
             if i + batch_size < len(tickers):
