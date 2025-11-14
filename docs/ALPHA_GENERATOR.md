@@ -115,7 +115,12 @@ Alpha = IC × Vol × Z
 ```python
 AlphaGenerator(
     IC: float = 0.05,
-    vol_estimator: VolatilityEstimator = None
+    vol_estimator: VolatilityEstimator = None,
+    dynamic_ic: bool = False,
+    ic_method: str = "rolling",
+    ic_lookback: int = 60,
+    ic_halflife: int = 30,
+    ic_min_periods: int = 20
 )
 ```
 
@@ -123,9 +128,24 @@ AlphaGenerator(
 - `IC` (float): Information Coefficient (default: 0.05)
   - Measures forecasting skill
   - Typical range: 0.02 - 0.10
+  - Used as fallback when dynamic_ic=False or insufficient history
 - `vol_estimator` (VolatilityEstimator): Volatility estimator
   - Default: `RealizedVolatility(lookback=60)`
   - Can use any VolatilityEstimator implementation
+- `dynamic_ic` (bool): Enable dynamic (time-varying) IC estimation (default: False)
+  - When True, IC is estimated from historical signal performance
+  - Adapts to changing market conditions and signal decay
+- `ic_method` (str): Method for dynamic IC estimation (default: "rolling")
+  - Options: `"rolling"`, `"ewma"`, `"regime"`
+  - Only used when dynamic_ic=True
+- `ic_lookback` (int): Lookback window for rolling IC calculation (default: 60)
+  - Number of periods to use for rolling correlation
+  - Only used when ic_method="rolling"
+- `ic_halflife` (int): Half-life for EWMA IC calculation (default: 30)
+  - Controls how quickly old observations decay
+  - Only used when ic_method="ewma"
+- `ic_min_periods` (int): Minimum periods required for dynamic IC (default: 20)
+  - Falls back to static IC if insufficient history
 
 **Example**:
 ```python
@@ -133,16 +153,39 @@ from Signals.AlphaGenerator import AlphaGenerator
 from Risk.Volatility.RealizedVolatility import RealizedVolatility
 from Risk.Volatility.EWMAVolatility import EWMAVolatility
 
-# Conservative (low IC)
+# Static IC (original behavior)
 alpha_gen = AlphaGenerator(IC=0.03)
 
-# Aggressive (high IC, confident in signals)
+# Aggressive static IC (high IC, confident in signals)
 alpha_gen = AlphaGenerator(IC=0.10)
 
 # Custom volatility estimator
 alpha_gen = AlphaGenerator(
     IC=0.05,
     vol_estimator=EWMAVolatility(halflife=20)
+)
+
+# Dynamic IC with rolling window
+alpha_gen = AlphaGenerator(
+    IC=0.05,  # Fallback IC
+    dynamic_ic=True,
+    ic_method="rolling",
+    ic_lookback=60
+)
+
+# Dynamic IC with exponential weighting (adapts faster)
+alpha_gen = AlphaGenerator(
+    IC=0.05,
+    dynamic_ic=True,
+    ic_method="ewma",
+    ic_halflife=30
+)
+
+# Regime-aware IC (different IC for high/low volatility regimes)
+alpha_gen = AlphaGenerator(
+    IC=0.05,
+    dynamic_ic=True,
+    ic_method="regime"
 )
 ```
 
@@ -210,6 +253,352 @@ alphas = alpha_gen.signals_to_alphas(
 #     'SFRM5': 0.0037    # 0.37% expected return
 # }
 ```
+
+### estimate_dynamic_ic()
+
+```python
+estimate_dynamic_ic(
+    signals_history: pl.DataFrame,
+    returns_history: pl.DataFrame,
+    as_of: Optional[date] = None
+) -> float
+```
+
+**Purpose**: Estimate Information Coefficient (IC) dynamically from historical performance
+
+**Parameters**:
+- `signals_history` (pl.DataFrame): Historical signals
+  - Columns = assets, Rows = time periods
+  - Values = Z-scores from signal generation
+- `returns_history` (pl.DataFrame): Realized returns
+  - Columns = assets, Rows = time periods
+  - Returns should be forward-looking (returns AFTER signal)
+  - Must be properly aligned with signals_history
+- `as_of` (date, optional): Current date for regime detection
+  - If None, uses last date in history
+  - Only used when ic_method="regime"
+
+**Returns**:
+- float: Estimated IC (correlation coefficient between -1 and 1)
+- Typical range: 0.02 - 0.10 for successful strategies
+- Falls back to static IC if insufficient history
+
+**IC Methods**:
+
+1. **Rolling IC** (`ic_method="rolling"`):
+   - Simple rolling window correlation
+   - Formula: `IC_t = Corr(signals_{t-N:t}, returns_{t-N:t})`
+   - Uses last `ic_lookback` periods (default: 60)
+   - Interpretable but can be noisy with small windows
+
+2. **EWMA IC** (`ic_method="ewma"`):
+   - Exponentially weighted moving average
+   - Recent performance weighted more heavily
+   - Uses `ic_halflife` parameter (default: 30)
+   - Better adapts to regime changes
+
+3. **Regime-Aware IC** (`ic_method="regime"`):
+   - Different IC for different market regimes
+   - Detects high vs low volatility regimes
+   - Returns IC for current regime only
+   - Useful when signal performance varies by regime
+
+**Example**:
+```python
+from Signals.AlphaGenerator import AlphaGenerator
+import polars as pl
+from datetime import date
+
+# Create generator with dynamic IC
+alpha_gen = AlphaGenerator(
+    IC=0.05,  # Fallback
+    dynamic_ic=True,
+    ic_method="rolling",
+    ic_lookback=60
+)
+
+# Historical signals (Z-scores)
+signals_history = pl.DataFrame({
+    'SFRZ4': [1.5, 2.0, -1.0, ...],  # 60+ periods
+    'SFRH5': [-1.0, 0.5, 2.0, ...],
+    'SFRM5': [0.0, 1.0, -0.5, ...]
+})
+
+# Realized returns (forward-looking, aligned with signals)
+returns_history = pl.DataFrame({
+    'SFRZ4': [0.01, 0.02, -0.01, ...],  # Returns AFTER signals
+    'SFRH5': [-0.005, 0.003, 0.015, ...],
+    'SFRM5': [0.000, 0.008, -0.004, ...]
+})
+
+# Estimate IC from historical performance
+ic = alpha_gen.estimate_dynamic_ic(signals_history, returns_history)
+print(f"Estimated IC: {ic:.3f}")
+# Output: Estimated IC: 0.073 (signal is working better than expected!)
+
+# Use different methods
+alpha_gen_ewma = AlphaGenerator(IC=0.05, dynamic_ic=True, ic_method="ewma")
+ic_ewma = alpha_gen_ewma.estimate_dynamic_ic(signals_history, returns_history)
+print(f"EWMA IC: {ic_ewma:.3f}")
+```
+
+### signals_to_alphas_with_dynamic_ic()
+
+```python
+signals_to_alphas_with_dynamic_ic(
+    signals: Dict[str, float],
+    returns_history: pl.DataFrame,
+    signals_history: pl.DataFrame,
+    as_of: date
+) -> Dict[str, float]
+```
+
+**Purpose**: Convert signals to alphas using dynamically estimated IC
+
+**Parameters**:
+- `signals` (Dict[str, float]): Current signals (asset → Z-score)
+- `returns_history` (pl.DataFrame): Historical returns for IC estimation and volatility
+- `signals_history` (pl.DataFrame): Historical signals for IC estimation
+- `as_of` (date): Current date
+
+**Returns**:
+- Dict[str, float]: Map from asset → expected return (alpha)
+
+**How It Works**:
+1. Estimates IC from historical performance using `estimate_dynamic_ic()`
+2. Temporarily overrides static IC with dynamic IC
+3. Calls `signals_to_alphas()` with dynamic IC
+4. Restores original static IC (for next call)
+
+**Example**:
+```python
+from Signals.AlphaGenerator import AlphaGenerator
+import polars as pl
+from datetime import date
+
+# Create generator with EWMA dynamic IC
+alpha_gen = AlphaGenerator(
+    IC=0.05,  # Fallback IC
+    dynamic_ic=True,
+    ic_method="ewma",
+    ic_halflife=30
+)
+
+# Current signals
+signals = {
+    'SFRZ4': 2.0,   # Strong buy
+    'SFRH5': -1.5,  # Moderate sell
+    'SFRM5': 0.5    # Weak buy
+}
+
+# Historical signals and returns (60+ periods)
+signals_history = pl.DataFrame({...})
+returns_history = pl.DataFrame({...})
+
+# Convert to alphas with dynamic IC
+alphas = alpha_gen.signals_to_alphas_with_dynamic_ic(
+    signals,
+    returns_history,
+    signals_history,
+    as_of=date(2024, 11, 1)
+)
+
+print("Alphas with Dynamic IC:")
+for asset, alpha in alphas.items():
+    print(f"  {asset}: {alpha:>7.2%}")
+# Output:
+# Alphas with Dynamic IC:
+#   SFRZ4:    1.46%  (IC estimated at 0.073 from recent performance)
+#   SFRH5:   -1.10%
+#   SFRM5:    0.37%
+```
+
+**When to Use**:
+- Use `signals_to_alphas_with_dynamic_ic()` when you have historical signal performance
+- Use `signals_to_alphas()` when IC is known or static
+- Dynamic IC is recommended for production backtests (more realistic)
+
+---
+
+## Dynamic IC Deep Dive
+
+### Why Dynamic IC?
+
+**Problem with Static IC**: Assumes constant forecasting skill over time
+
+**Reality**: Signal performance varies due to:
+- Market regime changes (trending vs ranging)
+- Volatility cycles (high vol vs low vol)
+- Signal decay (as more people discover the pattern)
+- Structural breaks (regulatory changes, market evolution)
+
+**Solution**: Estimate IC dynamically from historical performance
+
+### IC Method Comparison
+
+| Method | Pros | Cons | Best For |
+|--------|------|------|----------|
+| **Static** | Simple, stable | Ignores regime changes | Baseline, quick prototyping |
+| **Rolling** | Interpretable, smooth | Slow to adapt, noisy | Stable signals, long history |
+| **EWMA** | Fast adaptation, recent focus | Can overreact | Adaptive signals, regime changes |
+| **Regime** | Regime-specific IC | Requires regime classification | Signals with known regime dependency |
+
+### Rolling IC: Simple Window Correlation
+
+**Formula**:
+```
+IC_t = Corr(signals_{t-N:t}, returns_{t-N:t})
+```
+
+**Example**:
+```python
+# Use 60-period rolling window
+alpha_gen = AlphaGenerator(
+    IC=0.05,  # Fallback
+    dynamic_ic=True,
+    ic_method="rolling",
+    ic_lookback=60
+)
+
+# All observations weighted equally
+# Good for stable signals with consistent performance
+```
+
+**Characteristics**:
+- Equal weight to all observations in window
+- Changes gradually as window slides
+- Requires at least `ic_min_periods` observations (default: 20)
+- Falls back to static IC if insufficient history
+
+### EWMA IC: Exponential Weighting
+
+**Formula**:
+```
+IC_t = Σ w_i × IC_i
+
+where:
+  w_i = α × (1-α)^i (exponential weights)
+  α = 1 - exp(-ln(2) / halflife)
+```
+
+**Example**:
+```python
+# Recent performance weighted heavily
+alpha_gen = AlphaGenerator(
+    IC=0.05,
+    dynamic_ic=True,
+    ic_method="ewma",
+    ic_halflife=30  # 30-period half-life
+)
+
+# Observations decay exponentially
+# Recent performance has 50% weight after 30 periods
+```
+
+**Characteristics**:
+- Recent observations weighted more heavily
+- Adapts faster to regime changes
+- Smoother than rolling (no "window edge" effects)
+- Halflife = periods for weight to decay to 50%
+
+**Choosing Halflife**:
+- Short halflife (10-20): Fast adaptation, more reactive
+- Medium halflife (30-60): Balanced, typical choice
+- Long halflife (100+): Slow adaptation, similar to rolling
+
+### Regime-Aware IC: Volatility Regimes
+
+**Method**:
+1. Calculate cross-sectional volatility for each period
+2. Classify periods as high-vol or low-vol (vs historical mean)
+3. Estimate IC separately for current regime
+
+**Example**:
+```python
+# Different IC for high vs low volatility
+alpha_gen = AlphaGenerator(
+    IC=0.05,
+    dynamic_ic=True,
+    ic_method="regime"
+)
+
+# If current regime is high-vol:
+#   Uses IC estimated from high-vol periods only
+# If current regime is low-vol:
+#   Uses IC estimated from low-vol periods only
+```
+
+**Use Cases**:
+- Carry signals: Often stronger in low-vol regimes
+- Momentum signals: Often stronger in trending (high-vol) regimes
+- Mean reversion: Often stronger in ranging (low-vol) regimes
+
+**Example with Signal Comparison**:
+```python
+import polars as pl
+from Signals.AlphaGenerator import AlphaGenerator
+from datetime import date
+
+# Historical data split by regime
+signals_hist = pl.DataFrame({
+    'SFRZ4': [...],  # 100 periods
+    'SFRH5': [...]
+})
+returns_hist = pl.DataFrame({
+    'SFRZ4': [...],
+    'SFRH5': [...]
+})
+
+# Regime-aware IC
+alpha_gen_regime = AlphaGenerator(
+    IC=0.05, dynamic_ic=True, ic_method="regime"
+)
+
+# Estimate IC (automatically detects current regime)
+ic_regime = alpha_gen_regime.estimate_dynamic_ic(signals_hist, returns_hist)
+
+# Example output:
+# Current regime: High volatility
+# IC in high-vol periods: 0.082
+# IC in low-vol periods: 0.031
+# → Returns 0.082 (current regime IC)
+```
+
+### Practical Recommendations
+
+**Start with Static IC**:
+```python
+alpha_gen = AlphaGenerator(IC=0.05)
+```
+- Simple, stable, good baseline
+- Use for initial development and testing
+
+**Upgrade to Rolling IC**:
+```python
+alpha_gen = AlphaGenerator(
+    IC=0.05, dynamic_ic=True, ic_method="rolling", ic_lookback=60
+)
+```
+- More realistic for production backtests
+- Accounts for time-varying signal performance
+
+**Use EWMA for Adaptive Strategies**:
+```python
+alpha_gen = AlphaGenerator(
+    IC=0.05, dynamic_ic=True, ic_method="ewma", ic_halflife=30
+)
+```
+- Best when signal performance changes over time
+- Faster adaptation to regime shifts
+
+**Use Regime IC for Known Patterns**:
+```python
+alpha_gen = AlphaGenerator(
+    IC=0.05, dynamic_ic=True, ic_method="regime"
+)
+```
+- When you know signal works differently in different regimes
+- Requires sufficient history in each regime
 
 ---
 
@@ -501,6 +890,229 @@ for asset, alpha in alphas.items():
 
 # Now alphas can be fed to optimizer
 # They're in correct units (expected returns, not Z-scores)
+```
+
+### Example 6: Dynamic IC with Rolling Window
+
+```python
+from Signals.AlphaGenerator import AlphaGenerator
+from Signals.CarrySignal import CarrySignal
+import polars as pl
+from datetime import date, timedelta
+
+# Create generator with rolling dynamic IC
+alpha_gen = AlphaGenerator(
+    IC=0.05,  # Fallback if insufficient history
+    dynamic_ic=True,
+    ic_method="rolling",
+    ic_lookback=60,
+    ic_min_periods=20
+)
+
+# Simulate backtest with signal history tracking
+carry_signal = CarrySignal()
+backtest_dates = [date(2024, 1, 1) + timedelta(days=i) for i in range(100)]
+
+# Track historical signals and returns
+signals_history = []
+returns_history = []
+
+for as_of in backtest_dates:
+    # Calculate current signals
+    signals = carry_signal.calculate(market_data, as_of)
+
+    # Store for IC estimation
+    signals_history.append(signals)
+
+    # Get returns (forward-looking)
+    returns = get_realized_returns(as_of)
+    returns_history.append(returns)
+
+    # Build DataFrames for IC estimation
+    if len(signals_history) >= 20:
+        signals_df = pl.DataFrame(signals_history)
+        returns_df = pl.DataFrame(returns_history)
+
+        # Convert to alphas with dynamic IC
+        alphas = alpha_gen.signals_to_alphas_with_dynamic_ic(
+            signals,
+            returns_df,
+            signals_df,
+            as_of
+        )
+
+        # Estimate IC directly (for monitoring)
+        current_ic = alpha_gen.estimate_dynamic_ic(signals_df, returns_df)
+        print(f"{as_of}: IC={current_ic:.3f}, Alpha={alphas.get('SFRZ4', 0):.2%}")
+    else:
+        # Not enough history, use static IC
+        alphas = alpha_gen.signals_to_alphas(signals, returns_df, as_of)
+        print(f"{as_of}: IC=0.050 (static), Alpha={alphas.get('SFRZ4', 0):.2%}")
+
+# Output shows IC adapting over time:
+# 2024-01-21: IC=0.050 (static), Alpha=1.00%
+# 2024-01-22: IC=0.062 (dynamic), Alpha=1.24%
+# 2024-01-23: IC=0.058 (dynamic), Alpha=1.16%
+# ...
+```
+
+### Example 7: Dynamic IC with EWMA (Fast Adaptation)
+
+```python
+from Signals.AlphaGenerator import AlphaGenerator
+import polars as pl
+from datetime import date
+
+# EWMA adapts faster to changing signal performance
+alpha_gen = AlphaGenerator(
+    IC=0.05,
+    dynamic_ic=True,
+    ic_method="ewma",
+    ic_halflife=30  # Recent 30 periods weighted heavily
+)
+
+# Historical signals and returns
+signals_history = pl.DataFrame({
+    'SFRZ4': [1.5, 2.0, -1.0, 0.5, ...],  # 100 periods
+    'SFRH5': [-1.0, 0.5, 2.0, -0.5, ...],
+})
+returns_history = pl.DataFrame({
+    'SFRZ4': [0.01, 0.02, -0.01, 0.005, ...],
+    'SFRH5': [-0.005, 0.003, 0.015, -0.003, ...],
+})
+
+# Current signals
+signals = {'SFRZ4': 2.0, 'SFRH5': -1.5}
+
+# Convert with EWMA IC
+alphas = alpha_gen.signals_to_alphas_with_dynamic_ic(
+    signals,
+    returns_history,
+    signals_history,
+    as_of=date(2024, 11, 1)
+)
+
+# Estimate IC to see current value
+ic_current = alpha_gen.estimate_dynamic_ic(signals_history, returns_history)
+print(f"EWMA IC: {ic_current:.3f}")
+print(f"Alphas: {alphas}")
+
+# If signal performance improved recently, EWMA will show higher IC
+# If signal performance degraded recently, EWMA will show lower IC
+```
+
+### Example 8: Regime-Aware IC (Volatility Regimes)
+
+```python
+from Signals.AlphaGenerator import AlphaGenerator
+import polars as pl
+import numpy as np
+from datetime import date
+
+# Different IC for high vs low volatility regimes
+alpha_gen = AlphaGenerator(
+    IC=0.05,
+    dynamic_ic=True,
+    ic_method="regime"
+)
+
+# Generate historical data with regime changes
+np.random.seed(42)
+
+# Low vol period (first 50 periods)
+low_vol_signals = np.random.randn(50, 3)
+low_vol_returns = np.random.randn(50, 3) * 0.01
+
+# High vol period (next 50 periods)
+high_vol_signals = np.random.randn(50, 3)
+high_vol_returns = np.random.randn(50, 3) * 0.03  # 3x volatility
+
+# Combine
+signals_history = pl.DataFrame({
+    'SFRZ4': np.concatenate([low_vol_signals[:, 0], high_vol_signals[:, 0]]),
+    'SFRH5': np.concatenate([low_vol_signals[:, 1], high_vol_signals[:, 1]]),
+    'SFRM5': np.concatenate([low_vol_signals[:, 2], high_vol_signals[:, 2]]),
+})
+returns_history = pl.DataFrame({
+    'SFRZ4': np.concatenate([low_vol_returns[:, 0], high_vol_returns[:, 0]]),
+    'SFRH5': np.concatenate([low_vol_returns[:, 1], high_vol_returns[:, 1]]),
+    'SFRM5': np.concatenate([low_vol_returns[:, 2], high_vol_returns[:, 2]]),
+})
+
+# Estimate IC (will use current regime)
+ic = alpha_gen.estimate_dynamic_ic(signals_history, returns_history)
+print(f"Regime IC: {ic:.3f}")
+
+# Current signals
+signals = {'SFRZ4': 1.5, 'SFRH5': -1.0, 'SFRM5': 0.5}
+
+# Convert to alphas (uses regime-specific IC)
+alphas = alpha_gen.signals_to_alphas_with_dynamic_ic(
+    signals,
+    returns_history,
+    signals_history,
+    as_of=date(2024, 11, 1)
+)
+
+print("Regime-Aware Alphas:")
+for asset, alpha in alphas.items():
+    print(f"  {asset}: {alpha:>7.2%}")
+
+# Output shows IC adapted to current regime:
+# Regime IC: 0.082 (detected high-vol regime)
+# Regime-Aware Alphas:
+#   SFRM5:    0.62%
+#   SFRH5:   -1.23%
+#   SFRZ4:    1.85%
+```
+
+### Example 9: Comparing IC Methods
+
+```python
+from Signals.AlphaGenerator import AlphaGenerator
+import polars as pl
+from datetime import date
+
+# Historical data
+signals_history = pl.DataFrame({...})  # 100 periods
+returns_history = pl.DataFrame({...})
+
+# Current signals
+signals = {'SFRZ4': 2.0, 'SFRH5': -1.5}
+
+# Compare all methods
+methods = {
+    'Static': AlphaGenerator(IC=0.05, dynamic_ic=False),
+    'Rolling': AlphaGenerator(IC=0.05, dynamic_ic=True, ic_method="rolling", ic_lookback=60),
+    'EWMA': AlphaGenerator(IC=0.05, dynamic_ic=True, ic_method="ewma", ic_halflife=30),
+    'Regime': AlphaGenerator(IC=0.05, dynamic_ic=True, ic_method="regime"),
+}
+
+print("IC Method Comparison:")
+print("-" * 60)
+
+for method_name, alpha_gen in methods.items():
+    if method_name == 'Static':
+        alphas = alpha_gen.signals_to_alphas(signals, returns_history, date(2024, 11, 1))
+        ic = 0.05  # Static
+    else:
+        alphas = alpha_gen.signals_to_alphas_with_dynamic_ic(
+            signals,
+            returns_history,
+            signals_history,
+            date(2024, 11, 1)
+        )
+        ic = alpha_gen.estimate_dynamic_ic(signals_history, returns_history)
+
+    print(f"{method_name:>10}: IC={ic:.3f}, SFRZ4 Alpha={alphas['SFRZ4']:>6.2%}")
+
+# Output:
+# IC Method Comparison:
+# ------------------------------------------------------------
+#     Static: IC=0.050, SFRZ4 Alpha= 1.00%
+#    Rolling: IC=0.062, SFRZ4 Alpha= 1.24%
+#       EWMA: IC=0.073, SFRZ4 Alpha= 1.46%
+#     Regime: IC=0.082, SFRZ4 Alpha= 1.64%
 ```
 
 ---
