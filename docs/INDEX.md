@@ -46,9 +46,8 @@
 
 ### Completion Summaries
 - **POLARS_MIGRATION_COMPLETE.md** - Pandas→Polars migration complete
-- **ACTUAL_VALIDATION_RESULTS.md** - Recent test validation results
-- **FINAL_VERIFICATION_RESULTS.md** - Notebook verification (4 notebooks)
-- **HONEST_NOTEBOOK_ASSESSMENT.md** - Notebook quality assessment (10 notebooks)
+- **NOTEBOOK_VALIDATION.md** - Notebook quality assessment and test results
+- **SECTOR_COVARIANCE_VALIDATION.md** - Sector-based covariance model validation
 - **PHASE_3_COMPLETION_SUMMARY.md** - Sector covariance implementation
 - **PHASE_4_COMPLETION_SUMMARY.md** - Real data validation
 - **PAPER_IMPLEMENTATION_FIDELITY.md** - Research paper implementation verification
