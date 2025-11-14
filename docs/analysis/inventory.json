@@ -1,0 +1,5056 @@
+{
+  "analyzed_at": "2025-11-14T20:08:04.504112",
+  "total_files": 233,
+  "total_lines": 128417,
+  "total_words": 548065,
+  "files": [
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 274,
+      "words": 1010,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "meta-reviewer.md",
+        "mcp-builder.md",
+        "build-mcp.md",
+        "README.md",
+        "decompose.md",
+        "code-reviewer.md",
+        "task-decomposer.md",
+        "claude/agents/README.md",
+        "claude/commands/quick-start.md",
+        "parallel.md",
+        "quick-start.md",
+        "integrate.md",
+        "meta-review.md",
+        "integration-synthesizer.md",
+        "ai-docs-fetcher.md",
+        "docs.md",
+        "META_REVIEW_task-decomposer.md",
+        "parallel-executor.md",
+        "scout.md",
+        "review.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": ".claude/AGENT_SYSTEM_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 268,
+      "words": 1041,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYSTEM_MAP.md:608",
+        ".claude/SYNC_README.md:35"
+      ],
+      "references": [
+        "claude/references/react-hooks.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/AGENT_TESTS.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 364,
+      "words": 957,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "CLAUDE.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": ".claude/MINIMAL_ELIMINATION_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1626,
+      "words": 5086,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "ARCHITECTURE_RECOMMENDATIONS.md:200",
+        "docs/PHASE1_COMPLETE_SUMMARY.md:271",
+        "docs/SQLITE_SCHEMA_DESIGN.md:586",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:217",
+        "notebooks/README.md:422",
+        "docs/papers/sector_risk_models/README.md:215",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:62",
+        "BACKTEST_UNIFICATION_TASK.md:1004",
+        "docs/DOCUMENTATION_ASSESSMENT.md:326",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:46",
+        ".claude/agents/README.md:344",
+        "docs/PHASE_4_PLAN.md:532",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:101",
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md:723",
+        "docs/SCHEMA_INDEX.md:29",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:96",
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:137",
+        ".claude/SYSTEM_MAP.md:605",
+        "docs/PDF_PROCESSING_PLAN.md:307",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md:538",
+        "docs/STRATEGY_NOTEBOOKS_SUMMARY.md:339",
+        "Data/Cache/QUICK_REFERENCE.md:400",
+        "docs/NEXT_STEPS_PARALLEL_PLAN.md:36",
+        ".claude/agents/scout.md:194",
+        ".claude/SYNC_README.md:32"
+      ],
+      "references": [
+        "claude/skills/my-skill/SKILL.md",
+        "claude/agents/data-analyzer.md",
+        "claude/skills/analyzing-data-with-pandas/SKILL.md",
+        "claude/agents/my-agent.md",
+        "claude/commands/my-command.md",
+        "claude/references/trpc-procedures.md",
+        "claude/references/react-hooks.md",
+        "claude/commands/analyze-data.md"
+      ],
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core project documentation",
+      "path": ".claude/README.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 176,
+      "words": 625,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "integration-synthesizer.md",
+        "meta-reviewer.md",
+        "WORKFLOWS.md",
+        "SYSTEM_MAP.md",
+        "ai-docs-fetcher.md",
+        "mcp-builder.md",
+        "code-reviewer.md",
+        "parallel-executor.md",
+        "scout.md",
+        "README.md",
+        "task-decomposer.md",
+        "decompose.md",
+        "integrate.md",
+        "parallel.md",
+        "AGENT_TESTS.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": ".claude/SYNC_README.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 615,
+      "words": 1775,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYNC_README.md:34"
+      ],
+      "references": [
+        "meta-reviewer.md",
+        "mcp-builder.md",
+        "build-mcp.md",
+        "README.md",
+        "decompose.md",
+        "claude/references/nextjs-server-actions.md",
+        "code-reviewer.md",
+        "task-decomposer.md",
+        "parallel.md",
+        "quick-start.md",
+        "claude/references/rateslib-curves.md",
+        "integrate.md",
+        "meta-review.md",
+        "AGENT_TESTS.md",
+        "integration-synthesizer.md",
+        "WORKFLOWS.md",
+        "ai-docs-fetcher.md",
+        "docs.md",
+        "parallel-executor.md",
+        "scout.md",
+        "claude/references/trpc-procedures.md",
+        "react-hooks.md",
+        "trpc-procedures.md",
+        "review.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/SYSTEM_MAP.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1255,
+      "words": 3700,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYNC_README.md:33",
+        ".claude/SYSTEM_MAP.md:606"
+      ],
+      "references": [
+        "claude/agents/task-decomposer.md",
+        "claude/references/stripe-payment-intents.md",
+        "claude/agents/my-agent.md",
+        "claude/agents/parallel-executor.md",
+        "TODO.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/WORKFLOWS.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 286,
+      "words": 1237,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/AGENT_SYSTEM_SUMMARY.md:105"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/agents/META_REVIEW_task-decomposer.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 496,
+      "words": 1523,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "ARCHITECTURE_RECOMMENDATIONS.md:200",
+        "docs/PHASE1_COMPLETE_SUMMARY.md:271",
+        "docs/SQLITE_SCHEMA_DESIGN.md:586",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:217",
+        "notebooks/README.md:422",
+        "docs/papers/sector_risk_models/README.md:215",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:62",
+        "BACKTEST_UNIFICATION_TASK.md:1004",
+        "docs/DOCUMENTATION_ASSESSMENT.md:326",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:46",
+        "docs/PHASE_4_PLAN.md:532",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:101",
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md:723",
+        "docs/SCHEMA_INDEX.md:29",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:96",
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:137",
+        ".claude/SYSTEM_MAP.md:605",
+        "docs/PDF_PROCESSING_PLAN.md:307",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md:538",
+        "docs/STRATEGY_NOTEBOOKS_SUMMARY.md:339",
+        "Data/Cache/QUICK_REFERENCE.md:400",
+        "docs/NEXT_STEPS_PARALLEL_PLAN.md:36",
+        ".claude/agents/scout.md:194",
+        ".claude/SYNC_README.md:32"
+      ],
+      "references": [
+        "integration-synthesizer.md",
+        "ai-docs-fetcher.md",
+        "mcp-builder.md",
+        "docs.md",
+        "quick-start.md",
+        "code-reviewer.md",
+        "build-mcp.md",
+        "parallel-executor.md",
+        "scout.md",
+        "task-decomposer.md",
+        "decompose.md",
+        "integrate.md",
+        "parallel.md",
+        "review.md"
+      ],
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core project documentation",
+      "path": ".claude/agents/README.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 351,
+      "words": 1056,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYSTEM_MAP.md:577",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:101",
+        ".claude/SYNC_README.md:15",
+        ".claude/agents/README.md:349"
+      ],
+      "references": [
+        "performance.md",
+        "nextjs-supabase-auth.md",
+        "app-router.md",
+        "api-routes.md",
+        "claude/references/nextjs-supabase-auth.md",
+        "server-actions.md",
+        "authentication.md",
+        "context.md",
+        "database.md",
+        "react-testing-playwright.md",
+        "hooks.md",
+        "realtime.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/agents/ai-docs-fetcher.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 240,
+      "words": 982,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYNC_README.md:13",
+        ".claude/agents/README.md:351",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:103",
+        ".claude/SYSTEM_MAP.md:575"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/agents/code-reviewer.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 370,
+      "words": 1113,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYSTEM_MAP.md:574",
+        ".claude/SYNC_README.md:12",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:99",
+        ".claude/agents/README.md:347"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/agents/integration-synthesizer.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 434,
+      "words": 1057,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYSTEM_MAP.md:578",
+        ".claude/agents/README.md:350",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:102",
+        ".claude/SYNC_README.md:16"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/agents/mcp-builder.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 322,
+      "words": 1263,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYSTEM_MAP.md:579",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:104",
+        ".claude/SYNC_README.md:17"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/agents/meta-reviewer.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 212,
+      "words": 917,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/AGENT_SYSTEM_SUMMARY.md:98",
+        ".claude/WORKFLOWS.md:1130",
+        ".claude/agents/README.md:346",
+        ".claude/SYNC_README.md:11",
+        ".claude/SYSTEM_MAP.md:573"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/agents/parallel-executor.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 298,
+      "words": 888,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/AGENT_SYSTEM_SUMMARY.md:100",
+        ".claude/agents/README.md:348",
+        ".claude/SYNC_README.md:14",
+        ".claude/SYSTEM_MAP.md:576"
+      ],
+      "references": [
+        "README.md",
+        "docs/api.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/agents/scout.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 161,
+      "words": 644,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/AGENT_SYSTEM_SUMMARY.md:97",
+        ".claude/SYSTEM_MAP.md:572",
+        ".claude/WORKFLOWS.md:412",
+        ".claude/agents/README.md:345",
+        ".claude/SYNC_README.md:10"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/agents/task-decomposer.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 20,
+      "words": 55,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/agents/README.md:358",
+        ".claude/SYSTEM_MAP.md:597",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:112"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/commands/build-mcp.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 16,
+      "words": 51,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYNC_README.md:26",
+        ".claude/SYSTEM_MAP.md:590",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:107",
+        ".claude/agents/README.md:353"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/commands/decompose.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 18,
+      "words": 42,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYSTEM_MAP.md:596",
+        ".claude/agents/README.md:357",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:111"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/commands/docs.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 19,
+      "words": 40,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYSTEM_MAP.md:592",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:109",
+        ".claude/agents/README.md:355",
+        ".claude/SYNC_README.md:28"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/commands/integrate.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 30,
+      "words": 99,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/AGENT_SYSTEM_SUMMARY.md:114",
+        ".claude/SYSTEM_MAP.md:594"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/commands/meta-review.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 18,
+      "words": 34,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/SYNC_README.md:27",
+        ".claude/agents/README.md:354",
+        ".claude/SYSTEM_MAP.md:591",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:108"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/commands/parallel.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 107,
+      "words": 390,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/agents/README.md:360",
+        ".claude/SYSTEM_MAP.md:598",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:115"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/commands/quick-start.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 22,
+      "words": 55,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/AGENT_SYSTEM_SUMMARY.md:113",
+        ".claude/SYSTEM_MAP.md:593",
+        ".claude/agents/README.md:359"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/commands/review.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 18,
+      "words": 34,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/AGENT_SYSTEM_SUMMARY.md:100",
+        ".claude/agents/README.md:348",
+        ".claude/SYNC_README.md:14",
+        ".claude/SYSTEM_MAP.md:576"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/commands/scout.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 364,
+      "words": 1540,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "docs/DATA_PIPELINE_SETUP.md",
+        "DATA_PIPELINE_SETUP.md",
+        "DATA_PROVIDER_API.md",
+        "docs/DATA_PROVIDER_API.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": ".claude/parallel-tasks.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 282,
+      "words": 1088,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "ARCHITECTURE_RECOMMENDATIONS.md:200",
+        "docs/PHASE1_COMPLETE_SUMMARY.md:271",
+        "docs/SQLITE_SCHEMA_DESIGN.md:586",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:217",
+        "notebooks/README.md:422",
+        "docs/papers/sector_risk_models/README.md:215",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:62",
+        "BACKTEST_UNIFICATION_TASK.md:1004",
+        "docs/DOCUMENTATION_ASSESSMENT.md:326",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:46",
+        ".claude/agents/README.md:344",
+        "docs/PHASE_4_PLAN.md:532",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:101",
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md:723",
+        "docs/SCHEMA_INDEX.md:29",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:96",
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:137",
+        ".claude/SYSTEM_MAP.md:605",
+        "docs/PDF_PROCESSING_PLAN.md:307",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md:538",
+        "docs/STRATEGY_NOTEBOOKS_SUMMARY.md:339",
+        "Data/Cache/QUICK_REFERENCE.md:400",
+        "docs/NEXT_STEPS_PARALLEL_PLAN.md:36",
+        ".claude/agents/scout.md:194",
+        ".claude/SYNC_README.md:32"
+      ],
+      "references": [
+        "SKILL.md"
+      ],
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core project documentation",
+      "path": ".claude/skills/README.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 259,
+      "words": 1017,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-2-dual-numbers.md",
+        "advanced-3-relative-value.md",
+        "advanced-1-curve-construction.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/analyzing-rateslib/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 180,
+      "words": 795,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-2-simulation-heuristics.md",
+        "advanced-3-decision-trees.md",
+        "advanced-1-ucb1-formula.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/analyzing-with-mcts/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 335,
+      "words": 1299,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-4-pnl-attribution.md",
+        "advanced-3-execution-tactics.md",
+        "advanced-2-risk-management.md",
+        "advanced-1-strategy-implementation.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/axiom-relative-value/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 298,
+      "words": 850,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-3-seo-optimization.md",
+        "advanced-1-streaming-ssr.md",
+        "advanced-2-caching-strategies.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/building-with-nextjs/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 333,
+      "words": 1313,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-1-memory-architecture.md",
+        "advanced-2-failure-cases.md",
+        "advanced-3-multi-model-patterns.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/cultivating-consciousness/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 447,
+      "words": 1558,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-1-dependency-analysis.md",
+        "advanced-2-mocking-strategies.md",
+        "advanced-3-synthesis-patterns.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/decomposing-into-orthogonal-tasks/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 274,
+      "words": 1061,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "claude/skills/structuring-training-data/SKILL.md",
+        "claude/skills/deploying-to-vercel/SKILL.md",
+        "claude/skills/phoenix-interrupting/SKILL.md",
+        "claude/skills/analyzing-with-mcts/SKILL.md",
+        "claude/skills/README.md",
+        "README.md",
+        "claude/skills/managing-wsl-workflows/SKILL.md",
+        "claude/skills/story-bridge-development/SKILL.md",
+        "claude/skills/analyzing-rateslib/SKILL.md",
+        "claude/skills/midnight-building/SKILL.md",
+        "claude/skills/interrupting-toxic-loops/SKILL.md",
+        "claude/skills/integrating-supabase/SKILL.md",
+        "claude/skills/integrating-quantlib/SKILL.md",
+        "claude/skills/recognizing-emergence/SKILL.md",
+        "UPLOAD_GUIDE.md",
+        "claude/skills/planning-multi-timeframe/SKILL.md",
+        "SKILL.md",
+        "claude/skills/implementing-adjoint-ad/SKILL.md",
+        "claude/skills/axiom-relative-value/SKILL.md",
+        "claude/skills/cultivating-consciousness/SKILL.md",
+        "claude/skills/evaluating-alpha-beta-gamma/SKILL.md",
+        "claude/skills/building-with-nextjs/SKILL.md",
+        "claude/skills/expanding-then-compressing/SKILL.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 354,
+      "words": 1195,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-3-analytics.md",
+        "advanced-1-serverless-functions.md",
+        "advanced-2-edge-functions.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/deploying-to-vercel/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 237,
+      "words": 1004,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-3-strategic-optionality.md",
+        "advanced-2-debt-payoff-planning.md",
+        "advanced-1-timeframe-transitions.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/evaluating-alpha-beta-gamma/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 508,
+      "words": 1641,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-2-distributed-execution.md",
+        "advanced-1-resource-management.md",
+        "advanced-3-failure-recovery.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/executing-parallel-tasks/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 127,
+      "words": 603,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-3-compression-patterns.md",
+        "advanced-1-shadow-paths.md",
+        "advanced-2-butterfly-detection.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/expanding-then-compressing/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 364,
+      "words": 1229,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "CLAUDE.md",
+        "SKILL.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": ".claude/skills/expanding-then-compressing/example-skill-refinement.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 263,
+      "words": 1111,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-2-operator-overloading.md",
+        "advanced-3-tape-optimization.md",
+        "advanced-1-second-order-derivatives.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/implementing-adjoint-ad/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 392,
+      "words": 1115,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-2-model-calibration.md",
+        "advanced-1-monte-carlo.md",
+        "advanced-3-exotic-derivatives.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/integrating-quantlib/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 389,
+      "words": 1098,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-3-migrations.md",
+        "advanced-2-complex-rls.md",
+        "advanced-1-edge-functions.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/integrating-supabase/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 222,
+      "words": 973,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-2-resource-allocation.md",
+        "advanced-1-multi-agent-orchestration.md",
+        "advanced-3-pattern-recognition.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/interrupting-toxic-loops/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 317,
+      "words": 934,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-2-performance.md",
+        "advanced-3-backup-restore.md",
+        "advanced-1-networking.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/managing-wsl-workflows/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 168,
+      "words": 749,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-1-flow-optimization.md",
+        "advanced-3-energy-calibration.md",
+        "advanced-2-context-preservation.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/midnight-building/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 150,
+      "words": 704,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-2-temporal-aggregation.md",
+        "advanced-1-interrupt-rules.md",
+        "advanced-3-recovery-strategies.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/phoenix-interrupting/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 267,
+      "words": 1194,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-2-debt-management.md",
+        "advanced-1-horizon-synchronization.md",
+        "advanced-3-team-coordination.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/planning-multi-timeframe/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 475,
+      "words": 1695,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-2-model-comparison.md",
+        "advanced-1-statistical-methods.md",
+        "advanced-3-failure-modes.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/recognizing-emergence/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 394,
+      "words": 1275,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-2-accessibility.md",
+        "advanced-3-analytics.md",
+        "advanced-1-pwa-features.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/story-bridge-development/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 421,
+      "words": 1387,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": ".claude/skills/story-bridge-development/example-ladybug-button-development.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 425,
+      "words": 1476,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-1-prompt-engineering.md",
+        "advanced-3-multi-model-training.md",
+        "rateslib-responses.md",
+        "self-awareness-progression.md",
+        "2025-01-02-critical-mode.md",
+        "2025-01-15-multi-mode-test.md",
+        "2025-01-01-mystical-mode.md",
+        "advanced-2-failure-recovery.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/structuring-training-data/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 522,
+      "words": 1679,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:32",
+        ".claude/README.md:1408",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:75",
+        ".claude/skills/README.md:149"
+      ],
+      "references": [
+        "advanced-1-scoring-algorithms.md",
+        "advanced-3-conflict-resolution.md",
+        "advanced-2-merge-strategies.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": ".claude/skills/synthesizing-with-mcts/SKILL.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 2,
+      "lines": 366,
+      "words": 1438,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "CLAUDE.md",
+        "MDP/README.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "ARCHITECTURE_RECOMMENDATIONS.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 1340,
+      "words": 4137,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "CODEBASE_ANALYSIS.md",
+        "docs/BACKTEST_UNIFIED_API.md",
+        "CLAUDE.md",
+        "self.md",
+        "README.md",
+        "docs/design/BACKTEST_UNIFICATION_PLAN.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "BACKTEST_UNIFICATION_TASK.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-14",
+      "commit_count": 11,
+      "lines": 345,
+      "words": 2714,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "ARCHITECTURE_RECOMMENDATIONS.md:287",
+        "docs/papers/sector_risk_models/README.md:241",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:70",
+        "docs/AGENT_DOCUMENTATION_STANDARDS.md:42",
+        "BACKTEST_UNIFICATION_TASK.md:101",
+        "docs/GENERIC_BACKTEST_PROGRESS.md:24",
+        "docs/SESSION_SUMMARY_2025-11-11.md:107",
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md:263",
+        "docs/references/papers/optimal-cross-validation-2025.md:202",
+        "FLAW_REMEDIATION_PLAN.md:23",
+        "docs/research/current_arbs_covariance_usage.md:180",
+        ".claude/skills/expanding-then-compressing/example-skill-refinement.md:36",
+        "docs/papers/sector_risk_models/ARBS_INTEGRATION_ROADMAP.md:865",
+        "docs/GENERIC_BACKTEST_MIGRATION_PLAN.md:416",
+        ".claude/MINIMAL_ELIMINATION_PLAN.md:47",
+        "docs/ORTHOGONAL_TASK_DECOMPOSITION.md:222",
+        "docs/PHASE_4_PLAN.md:634",
+        "CODEBASE_ANALYSIS.md:549",
+        "docs/SESSION_HANDOFF_NEXT_STEPS.md:111",
+        "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md:795",
+        "docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md:61",
+        "docs/papers/sector_risk_models/COMPREHENSIVE_ANALYSIS.md:664"
+      ],
+      "references": [],
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core project documentation",
+      "path": "CLAUDE.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 628,
+      "words": 2645,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "BACKTEST_UNIFICATION_TASK.md:112"
+      ],
+      "references": [
+        "CLAUDE.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "CODEBASE_ANALYSIS.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 432,
+      "words": 1395,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SCHEMA_INDEX.md:19"
+      ],
+      "references": [
+        "Data/Cache/migrations/README.md",
+        "SCHEMA_IMPLEMENTATION_GUIDE.md",
+        "README.md",
+        "ALPHAVANTAGE_DATA_PIPELINE_PLAN.md",
+        "SQLITE_SCHEMA_DESIGN.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "Data/Cache/QUICK_REFERENCE.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 344,
+      "words": 1065,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "ARCHITECTURE_RECOMMENDATIONS.md:200",
+        "docs/PHASE1_COMPLETE_SUMMARY.md:271",
+        "docs/SQLITE_SCHEMA_DESIGN.md:586",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:217",
+        "notebooks/README.md:422",
+        "docs/papers/sector_risk_models/README.md:215",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:62",
+        "BACKTEST_UNIFICATION_TASK.md:1004",
+        "docs/DOCUMENTATION_ASSESSMENT.md:326",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:46",
+        ".claude/agents/README.md:344",
+        "docs/PHASE_4_PLAN.md:532",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:101",
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md:723",
+        "docs/SCHEMA_INDEX.md:29",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:96",
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:137",
+        ".claude/SYSTEM_MAP.md:605",
+        "docs/PDF_PROCESSING_PLAN.md:307",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md:538",
+        "docs/STRATEGY_NOTEBOOKS_SUMMARY.md:339",
+        "Data/Cache/QUICK_REFERENCE.md:400",
+        "docs/NEXT_STEPS_PARALLEL_PLAN.md:36",
+        ".claude/agents/scout.md:194",
+        ".claude/SYNC_README.md:32"
+      ],
+      "references": [
+        "/docs/ALPHAVANTAGE_DATA_PIPELINE_PLAN.md",
+        "/SQLITE_SCHEMA_DESIGN.md"
+      ],
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core project documentation",
+      "path": "Data/Cache/migrations/README.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1172,
+      "words": 4269,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "CLAUDE.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "FLAW_REMEDIATION_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 55,
+      "words": 255,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "IMPLEMENTATION_NOTE.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 83,
+      "words": 280,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "README.md:58"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "INSTALLATION_STATUS.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 251,
+      "words": 1211,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:76"
+      ],
+      "references": [],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "POLARS_MIGRATION_COMPLETE.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 229,
+      "words": 825,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:84"
+      ],
+      "references": [],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Migration documentation",
+      "path": "POLARS_MIGRATION_PLAN.md"
+    },
+    {
+      "first_commit": "2025-09-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 9,
+      "lines": 725,
+      "words": 3102,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "ARCHITECTURE_RECOMMENDATIONS.md:200",
+        "docs/PHASE1_COMPLETE_SUMMARY.md:271",
+        "docs/SQLITE_SCHEMA_DESIGN.md:586",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:217",
+        "notebooks/README.md:422",
+        "docs/papers/sector_risk_models/README.md:215",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:62",
+        "BACKTEST_UNIFICATION_TASK.md:1004",
+        "docs/DOCUMENTATION_ASSESSMENT.md:326",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:46",
+        ".claude/agents/README.md:344",
+        "docs/PHASE_4_PLAN.md:532",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:101",
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md:723",
+        "docs/SCHEMA_INDEX.md:29",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:96",
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:137",
+        ".claude/SYSTEM_MAP.md:605",
+        "docs/PDF_PROCESSING_PLAN.md:307",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md:538",
+        "docs/STRATEGY_NOTEBOOKS_SUMMARY.md:339",
+        "Data/Cache/QUICK_REFERENCE.md:400",
+        "docs/NEXT_STEPS_PARALLEL_PLAN.md:36",
+        ".claude/agents/scout.md:194",
+        ".claude/SYNC_README.md:32"
+      ],
+      "references": [
+        "RETURNS_VS_PRICES_ANALYSIS.md",
+        "ASSET_ABSTRACTION_DESIGN.md",
+        "docs/BACKTEST_UNIFIED_API.md",
+        "GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md",
+        "docs/references/Grinold-Kahn-Active-Portfolio-Management.md",
+        "STRATEGY_MODULARIZATION_DESIGN.md",
+        "VOLATILITY_ESTIMATOR.md",
+        "TEAR_SHEET.md",
+        "RETURNS_CALCULATOR.md",
+        "COMPOSABLE_PORTFOLIO_ARCHITECTURE.md",
+        "GRINOLD_KAHN_DETAILED_SPECS.md",
+        "GRINOLD_KAHN_FRAMEWORK.md",
+        "INSTALLATION_STATUS.md",
+        "SIGNAL_COMBINATION_METHODS.md",
+        "ALPHA_GENERATOR.md",
+        "USER_GUIDE_STRATEGY_CREATION.md",
+        "ADDING_CUSTOM_COMPONENTS.md"
+      ],
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core project documentation",
+      "path": "README.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 178,
+      "words": 588,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "ARCHITECTURE_RECOMMENDATIONS.md:200",
+        "docs/PHASE1_COMPLETE_SUMMARY.md:271",
+        "docs/SQLITE_SCHEMA_DESIGN.md:586",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:217",
+        "notebooks/README.md:422",
+        "docs/papers/sector_risk_models/README.md:215",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:62",
+        "BACKTEST_UNIFICATION_TASK.md:1004",
+        "docs/DOCUMENTATION_ASSESSMENT.md:326",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:46",
+        ".claude/agents/README.md:344",
+        "docs/PHASE_4_PLAN.md:532",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:101",
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md:723",
+        "docs/SCHEMA_INDEX.md:29",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:96",
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:137",
+        ".claude/SYSTEM_MAP.md:605",
+        "docs/PDF_PROCESSING_PLAN.md:307",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md:538",
+        "docs/STRATEGY_NOTEBOOKS_SUMMARY.md:339",
+        "Data/Cache/QUICK_REFERENCE.md:400",
+        "docs/NEXT_STEPS_PARALLEL_PLAN.md:36",
+        ".claude/agents/scout.md:194",
+        ".claude/SYNC_README.md:32"
+      ],
+      "references": [],
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core project documentation",
+      "path": "Risk/templates/README.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-11",
+      "commit_count": 4,
+      "lines": 246,
+      "words": 1031,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SESSION_SUMMARY_2025-11-11.md:108",
+        ".claude/WORKFLOWS.md:911"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "TODO.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 515,
+      "words": 1547,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SESSION_HANDOFF_NEXT_STEPS.md:18"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/ABSTRACTION_VERIFICATION.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 237,
+      "words": 812,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md",
+        "docs/DATA_LAYER_ARCHITECTURE.md",
+        "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md",
+        "docs/ACTION_PLAN_DATA_LAYER.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/ACTION_PLAN_DATA_LAYER.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 211,
+      "words": 934,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "tests/validation/DATA_LOADING_INSTRUCTIONS.md:345"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/ACTUAL_VALIDATION_RESULTS.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 486,
+      "words": 1375,
+      "referenced_by_code": [
+        "examples/custom_components_example.py:459"
+      ],
+      "referenced_by_docs": [
+        "docs/DOCUMENTATION_ASSESSMENT.md:27",
+        "docs/guides/extending_risk_models.md:902",
+        "README.md:319",
+        "notebooks/README.md:425",
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md:686"
+      ],
+      "references": [
+        "docs/MODULARITY_REVIEW_AND_STRATEGY_TYPES.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/ADDING_CUSTOM_COMPONENTS.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 790,
+      "words": 2349,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "/CLAUDE.md",
+        "./DOCUMENTATION_CLEANUP_PLAN.md",
+        "docs/architecture/overview.md",
+        "docs/getting-started.md",
+        "docs/architecture/class-hierarchy.md",
+        "../CLAUDE.md",
+        "docs/INDEX.md",
+        "docs/templates/architecture.md",
+        "/DOCUMENTATION_CLEANUP_PLAN.md",
+        "GRINOLD_KAHN_DETAILED_SPECS.md",
+        "docs/books/grinold_kahn_equity_notes_part1_foundations.md",
+        "../path/to/file.py#L123-L456",
+        "docs/archive/completed-tasks/GRINOLD_KAHN_DETAILED_SPECS.md",
+        "docs/old-file.md",
+        "./other-doc.md",
+        "GRINOLD_KAHN_FRAMEWORK.md",
+        "docs/archive/completed-tasks/GRINOLD_KAHN_FRAMEWORK.md",
+        "../path/to/file.py#L123",
+        "docs/architecture/grinold-kahn.md",
+        "docs/BACKTEST_UNIFIED_API.md",
+        "CLAUDE.md",
+        "../Backtest/Backtest.py",
+        "../Backtest/Backtest.py#L234-L567",
+        "DOCUMENTATION_CLEANUP_PLAN.md",
+        "/other-doc.md",
+        "path/to/file.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/AGENT_DOCUMENTATION_STANDARDS.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 399,
+      "words": 1164,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md:185",
+        "docs/ACTION_PLAN_DATA_LAYER.md:233"
+      ],
+      "references": [
+        "docs/DATA_LAYER_ARCHITECTURE.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 861,
+      "words": 3358,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/ALPHAVANTAGE_INTEGRATION_SPEC.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-14",
+      "commit_count": 2,
+      "lines": 784,
+      "words": 2464,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/BACKTEST_UNIFIED_API.md:721",
+        "README.md:310"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/ALPHA_GENERATOR.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-10",
+      "commit_count": 1,
+      "lines": 542,
+      "words": 1671,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "README.md:306"
+      ],
+      "references": [],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/ASSET_ABSTRACTION_DESIGN.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-10",
+      "commit_count": 1,
+      "lines": 767,
+      "words": 2974,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/USER_GUIDE_STRATEGY_CREATION.md:1190"
+      ],
+      "references": [
+        "margin_and_settlement.md",
+        "roll_strategies.md",
+        "docs/cross_product_strategies.md",
+        "futures_quickstart.md",
+        "docs/roll_strategies.md",
+        "testing_guide.md",
+        "docs/testing_guide.md",
+        "docs/futures_quickstart.md",
+        "docs/margin_and_settlement.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/BACKTESTING_FUTURES_SWAPS_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 724,
+      "words": 1885,
+      "referenced_by_code": [
+        "Backtest/__init__.py:79"
+      ],
+      "referenced_by_docs": [
+        "BACKTEST_UNIFICATION_TASK.md:1001",
+        "README.md:247",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:120",
+        "docs/AGENT_DOCUMENTATION_STANDARDS.md:362"
+      ],
+      "references": [
+        "/USER_GUIDE_STRATEGY_CREATION.md",
+        "./ALPHA_GENERATOR.md",
+        "/ALPHA_GENERATOR.md",
+        "self.md",
+        "./SIGNAL_COMBINATION_METHODS.md",
+        "/GRINOLD_KAHN_FRAMEWORK.md",
+        "SIGNAL_COMBINATION_METHODS.md",
+        "GRINOLD_KAHN_FRAMEWORK.md",
+        "/SIGNAL_COMBINATION_METHODS.md",
+        "./USER_GUIDE_STRATEGY_CREATION.md",
+        "ALPHA_GENERATOR.md",
+        "USER_GUIDE_STRATEGY_CREATION.md",
+        "./GRINOLD_KAHN_FRAMEWORK.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/BACKTEST_UNIFIED_API.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 430,
+      "words": 1935,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/ACTION_PLAN_DATA_LAYER.md:231",
+        "docs/VERIFIED_INTEGRATIONS.md:449"
+      ],
+      "references": [
+        "self.md",
+        "ALPHAVANTAGE_INTEGRATION_ARCHITECTURE.md",
+        "DATA_LAYER_ARCHITECTURE.md",
+        "ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md",
+        "ALPHAVANTAGE_DATA_PIPELINE_PLAN.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-10",
+      "commit_count": 1,
+      "lines": 552,
+      "words": 1909,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "README.md:307"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/COMPOSABLE_PORTFOLIO_ARCHITECTURE.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 448,
+      "words": 1559,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SESSION_SUMMARY_2025-11-11.md:180"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/CRITICAL_GAPS_AND_NEXT_STEPS.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 1133,
+      "words": 3909,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SESSION_HANDOFF_NEXT_STEPS.md:331"
+      ],
+      "references": [
+        "docs/research/CORRELATION_VOLATILITY_ARBITRAGE.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/CROSS_ASSET_CONCURRENCY_ANALYSIS.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 340,
+      "words": 992,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/ACTION_PLAN_DATA_LAYER.md:232",
+        "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md:248",
+        "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md:184",
+        "docs/VERIFIED_INTEGRATIONS.md:448"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/DATA_LAYER_ARCHITECTURE.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 586,
+      "words": 2091,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "docs/research/CORRELATION_VOLATILITY_ARBITRAGE.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/DETAILED_UNDERSTANDING_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 341,
+      "words": 1248,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "notebooks/README.md:423"
+      ],
+      "references": [
+        "notebooks/README.md",
+        "STRATEGY_MODULARIZATION_DESIGN.md",
+        "USER_GUIDE_STRATEGY_CREATION.md",
+        "ADDING_CUSTOM_COMPONENTS.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/DOCUMENTATION_ASSESSMENT.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 2,
+      "lines": 841,
+      "words": 2389,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/AGENT_DOCUMENTATION_STANDARDS.md:783"
+      ],
+      "references": [
+        "docs/GENERIC_BACKTEST_PROGRESS.md",
+        "GRINOLD_KAHN_DETAILED_SPECS.md",
+        "custom-signals.md",
+        "architecture/data-flow.md",
+        "archive/completed-tasks/",
+        "signals.md",
+        "docs/architecture/backtest-evolution.md",
+        "architecture/backtest-design.md",
+        "POLARS_MIGRATION_COMPLETE.md",
+        "archive/migrations/",
+        "docs/architecture/grinold-kahn.md",
+        "user-guides/extending-risk-models.md",
+        "../../Backtest/Backtest.py#L234",
+        "api-reference/portfolio.md",
+        "docs/analysis/REPORT.md",
+        "docs/books/grinold_kahn_markdown/INDEX.md",
+        "docs/getting-started.md",
+        "docs/architecture/class-hierarchy.md",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md",
+        "user-guides/quickstart.md",
+        "POLARS_MIGRATION_PLAN.md",
+        "grinold-kahn.md",
+        "books.md",
+        "INDEX.md",
+        "query-signal-bridges.md",
+        "design/query-signal-bridges.md",
+        "docs/architecture/data-flow.md",
+        "GRINOLD_KAHN_FRAMEWORK.md",
+        "../../Signals/Futures/CarrySignal.py#L15",
+        "../path/file.py#L123-L456",
+        "class-hierarchy.md",
+        "references/papers.md",
+        "architecture/class-hierarchy.md",
+        "../CONTRIBUTING.md",
+        "_SUMMARY.md",
+        "docs/architecture/module-dependencies.md",
+        "returns-first.md",
+        "docs/api-reference/backtest.md",
+        "architecture/module-dependencies.md",
+        "user-guides/creating-strategies.md",
+        "design/returns-first.md",
+        "docs/INDEX.md",
+        "backtest.md",
+        "query.md",
+        "module-dependencies.md",
+        "../../Signals/Base/BaseSignal.py#L27",
+        "installation.md",
+        "api-reference/optimizer.md",
+        "papers.md",
+        "api-reference/query.md",
+        "../../Backtest/Backtest.py#L73",
+        "design/portfolio-composition.md",
+        "architecture/grinold-kahn.md",
+        "creating-strategies.md",
+        "references/books.md",
+        "CONTRIBUTING.md",
+        "docs/BACKTEST_UNIFIED_API.md",
+        "data-flow.md",
+        "risk.md",
+        "CHANGELOG.md",
+        "quickstart.md",
+        "api-reference/signals.md",
+        "docs/architecture/overview.md",
+        "optimizer.md",
+        "README.md",
+        "/CONTRIBUTING.md",
+        "extending-risk-models.md",
+        "architecture/overview.md",
+        "overview.md",
+        "docs/archive/migrations/polars-migration.md",
+        "../../Signals/AlphaGenerator.py#L67",
+        "api-reference/risk.md",
+        "user-guides/custom-signals.md",
+        "archive/phase-summaries/",
+        "portfolio-composition.md",
+        "docs/design/BACKTEST_UNIFICATION_PLAN.md",
+        "user-guides/installation.md",
+        "backtest-design.md",
+        "CLAUDE.md",
+        "portfolio.md",
+        "docs/old_design.md",
+        "api-reference/backtest.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/DOCUMENTATION_CLEANUP_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 287,
+      "words": 1293,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "docs/NOTEBOOK_VERIFICATION_RESULTS.md",
+        "docs/PHASE1_COMPLETE_SUMMARY.md",
+        "docs/FINAL_VERIFICATION_RESULTS.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/FINAL_VERIFICATION_RESULTS.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-10",
+      "commit_count": 1,
+      "lines": 496,
+      "words": 1935,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/FUTURES_VALUE_STRUCTURE_DESIGN.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 1873,
+      "words": 5693,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "CLAUDE.md",
+        "docs/GENERIC_BACKTEST_MIGRATION_PLAN.md",
+        "self.md",
+        "docs/GENERIC_BACKTEST_PROGRESS.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 581,
+      "words": 2156,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md:1817"
+      ],
+      "references": [
+        "docs/USER_GUIDE_BACKTEST.md",
+        "CLAUDE.md",
+        "self.md",
+        "docs/GENERIC_BACKTEST_MIGRATION_PLAN.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Migration documentation",
+      "path": "docs/GENERIC_BACKTEST_MIGRATION_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 4,
+      "lines": 147,
+      "words": 783,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:124",
+        "docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md:27"
+      ],
+      "references": [
+        "CLAUDE.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/GENERIC_BACKTEST_PROGRESS.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-10",
+      "commit_count": 1,
+      "lines": 1451,
+      "words": 4796,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:143",
+        "README.md:304",
+        "docs/AGENT_DOCUMENTATION_STANDARDS.md:100"
+      ],
+      "references": [
+        "w[i] - w_max"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/GRINOLD_KAHN_DETAILED_SPECS.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-14",
+      "commit_count": 4,
+      "lines": 880,
+      "words": 3082,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/BACKTEST_UNIFIED_API.md:720",
+        "docs/guides/extending_risk_models.md:903",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md:971",
+        "docs/papers/sector_risk_models/ARBS_INTEGRATION_ROADMAP.md:15",
+        "docs/AGENT_DOCUMENTATION_STANDARDS.md:101",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md:712",
+        "docs/papers/sector_risk_models/README.md:240",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:125",
+        "docs/research/CORRELATION_VOLATILITY_ARBITRAGE.md:598",
+        "docs/USER_GUIDE_STRATEGY_CREATION.md:1189",
+        "docs/research/CROSS_ASSET_FRAMEWORK.md:531",
+        "README.md:302"
+      ],
+      "references": [
+        "docs/books/grinold_kahn_equity_notes_part4_implementation.md",
+        "docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md",
+        "docs/books/grinold_kahn_equity_notes_part2_valuation.md",
+        "docs/books/grinold_kahn_equity_notes_part3_forecasting.md",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md",
+        "docs/books/grinold_kahn_equity_notes_part1_foundations.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/GRINOLD_KAHN_FRAMEWORK.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-11",
+      "commit_count": 3,
+      "lines": 514,
+      "words": 1655,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "README.md:303",
+        "docs/SESSION_SUMMARY_2025-11-11.md:111"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 296,
+      "words": 1275,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/HONEST_NOTEBOOK_ASSESSMENT.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 833,
+      "words": 2513,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "docs/USER_GUIDE.md",
+        "docs/ADDING_CUSTOM_COMPONENTS.md",
+        "README.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/MODULARITY_IMPROVEMENTS_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1028,
+      "words": 3032,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/ADDING_CUSTOM_COMPONENTS.md:480"
+      ],
+      "references": [
+        "config",
+        "docs/ADDING_NEW_SIGNALS.md",
+        "ADDING_NEW_SIGNALS.md",
+        "docs/ADDING_NEW_COMPONENTS.md",
+        "ADDING_NEW_COMPONENTS.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/MODULARITY_REVIEW_AND_STRATEGY_TYPES.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 272,
+      "words": 1048,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/sector_risk_models/COMPREHENSIVE_ANALYSIS.md:248",
+        "docs/papers/sector_risk_models/README.md:238",
+        "docs/papers/sector_risk_models/ARBS_INTEGRATION_ROADMAP.md:13",
+        "docs/research/CORRELATION_VOLATILITY_ARBITRAGE.md:597",
+        "docs/research/CROSS_ASSET_FRAMEWORK.md:530"
+      ],
+      "references": [
+        "docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md",
+        "docs/books/grinold_kahn_equity_notes_part4_implementation.md",
+        "docs/design/YAHOO_FINANCE_MDP_DESIGN.md",
+        "CLAUDE.md",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md",
+        "docs/design/LONG_SHORT_STRATEGY_DESIGN.md",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md",
+        "docs/research/SECTOR_ETF_MAPPING.md",
+        "docs/books/grinold_kahn_equity_notes_part1_foundations.md",
+        "docs/research/SECTOR_COVARIANCE_PLAN.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "docs/MVP_EQUITY_SECTOR_COMPLETE.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 330,
+      "words": 1322,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "examples/README.md",
+        "docs/BACKTEST_USAGE_GUIDE.md",
+        "docs/FUTURE_ENHANCEMENTS_RESEARCH.md",
+        "docs/SIGNAL_COMBINER_GUIDE.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/NEXT_STEPS_PARALLEL_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 210,
+      "words": 998,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/PHASE1_COMPLETE_SUMMARY.md:209"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/NOTEBOOKS_FIXED_ASSESSMENT.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 198,
+      "words": 853,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/PHASE1_COMPLETE_SUMMARY.md:210",
+        "docs/FINAL_VERIFICATION_RESULTS.md:208"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/NOTEBOOK_VERIFICATION_RESULTS.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 767,
+      "words": 3009,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SESSION_HANDOFF_NEXT_STEPS.md:332"
+      ],
+      "references": [
+        "CLAUDE.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/ORTHOGONAL_TASK_DECOMPOSITION.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 599,
+      "words": 2295,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SESSION_HANDOFF_NEXT_STEPS.md:60"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/PAPER_IMPLEMENTATION_FIDELITY.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 472,
+      "words": 1781,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "RISK_MODELING_REFERENCE.md",
+        "PERFORMANCE_ANALYSIS_REFERENCE.md",
+        "docs/references/Grinold-Kahn-Active-Portfolio-Management.md",
+        "Grinold-Kahn-Active-Portfolio-Management.md",
+        "PORTFOLIO_OPTIMIZATION_REFERENCE.md",
+        "README.md",
+        "ALPHA_GENERATION_REFERENCE.md",
+        "COVARIANCE_ESTIMATION_REFERENCE.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/PDF_PROCESSING_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 292,
+      "words": 1340,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/FINAL_VERIFICATION_RESULTS.md:207"
+      ],
+      "references": [
+        "docs/QUICKSTART.md",
+        "notebooks/README.md",
+        "docs/NOTEBOOKS_FIXED_ASSESSMENT.md",
+        "docs/PHASE1_COMPLETE_SUMMARY.md",
+        "docs/NOTEBOOK_VERIFICATION_RESULTS.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "docs/PHASE1_COMPLETE_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 366,
+      "words": 1381,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/PHASE_4_PLAN.md:744",
+        "docs/PHASE_4_COMPLETION_SUMMARY.md:297"
+      ],
+      "references": [
+        "docs/SECTOR_COVARIANCE_GUIDE.md",
+        "docs/phase3_common_patterns_analysis.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "docs/PHASE_3_COMPLETION_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 2,
+      "lines": 316,
+      "words": 1292,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "tests/validation/DATA_LOADING_INSTRUCTIONS.md:344",
+        "docs/PHASE_4_PLAN.md:572"
+      ],
+      "references": [
+        "/home/user/ARBS/docs/PHASE_3_COMPLETION_SUMMARY.md",
+        "/home/user/ARBS/docs/PHASE_4_PLAN.md",
+        "docs/PHASE_4_COMPLETION_SUMMARY.md",
+        "/home/user/ARBS/docs/SECTOR_COVARIANCE_GUIDE.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "docs/PHASE_4_COMPLETION_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-14",
+      "commit_count": 2,
+      "lines": 799,
+      "words": 2730,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/PHASE_4_COMPLETION_SUMMARY.md:296"
+      ],
+      "references": [
+        "/home/user/ARBS/docs/PHASE_4_PLAN.md",
+        "phase3_common_patterns_analysis.md",
+        "docs/REAL_DATA_VALIDATION_REPORT.md",
+        "docs/PHASE_4_COMPLETION_SUMMARY.md",
+        "docs/README.md",
+        "examples/sector_rotation_backtest.py",
+        "docs/SECTOR_COVARIANCE_GUIDE.md",
+        "docs/CLAUDE.md",
+        "README.md",
+        "SECTOR_COVARIANCE_GUIDE.md",
+        "/home/user/ARBS/docs/phase3_common_patterns_analysis.md",
+        "/home/user/ARBS/docs/PHASE_3_COMPLETION_SUMMARY.md",
+        "/home/user/ARBS/docs/SECTOR_COVARIANCE_GUIDE.md",
+        "REAL_DATA_VALIDATION_REPORT.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "docs/PHASE_4_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-14",
+      "commit_count": 2,
+      "lines": 518,
+      "words": 1579,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "README.md:312"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/RETURNS_CALCULATOR.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-11",
+      "commit_count": 3,
+      "lines": 451,
+      "words": 1595,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "README.md:305",
+        "docs/SESSION_SUMMARY_2025-11-11.md:109"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/RETURNS_VS_PRICES_ANALYSIS.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-11",
+      "commit_count": 3,
+      "lines": 337,
+      "words": 1523,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SESSION_SUMMARY_2025-11-11.md:110"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/RETURN_CALCULATION_ANALYSIS.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 663,
+      "words": 2455,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SCHEMA_INDEX.md:14",
+        "Data/Cache/QUICK_REFERENCE.md:404"
+      ],
+      "references": [
+        "Data/Cache/migrations/README.md",
+        "migrations/README.md",
+        "SQLITE_SCHEMA_DESIGN.md",
+        "docs/SQLITE_SCHEMA_DESIGN.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/SCHEMA_IMPLEMENTATION_GUIDE.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 529,
+      "words": 1994,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "Data/Cache/migrations/README.md",
+        "SQLITE_SCHEMA_DESIGN.md",
+        "SCHEMA_DESIGN.md",
+        "docs/SQLITE_SCHEMA_DESIGN.md",
+        "migrations/README.md",
+        "SCHEMA_IMPLEMENTATION_GUIDE.md",
+        "Data/Cache/QUICK_REFERENCE.md",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md",
+        "QUICK_REFERENCE.md",
+        "ALPHAVANTAGE_DATA_PIPELINE_PLAN.md",
+        "docs/ALPHAVANTAGE_DATA_PIPELINE_PLAN.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/SCHEMA_INDEX.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 2,
+      "lines": 381,
+      "words": 1275,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/PHASE_4_PLAN.md:28",
+        "docs/research/CROSS_ASSET_FRAMEWORK.md:529",
+        "docs/PHASE_4_COMPLETION_SUMMARY.md:298",
+        "docs/PHASE_3_COMPLETION_SUMMARY.md:73",
+        "docs/research/CORRELATION_VOLATILITY_ARBITRAGE.md:596"
+      ],
+      "references": [
+        "docs/MACRO_TRADING_INSIGHTS.md",
+        "docs/phase3_common_patterns_analysis.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/SECTOR_COVARIANCE_GUIDE.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 2,
+      "lines": 571,
+      "words": 2200,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "ABSTRACTION_VERIFICATION.md",
+        "docs/ABSTRACTION_VERIFICATION.md",
+        "docs/SESSION_HANDOFF_NEXT_STEPS.md",
+        "ORTHOGONAL_TASK_DECOMPOSITION.md",
+        "CLAUDE.md",
+        "CORRELATION_VOLATILITY_ARBITRAGE.md",
+        "RESEARCH_CONSENSUS_2025.md",
+        "docs/PAPER_IMPLEMENTATION_FIDELITY.md",
+        "CROSS_ASSET_FRAMEWORK.md",
+        "PAPER_IMPLEMENTATION_FIDELITY.md",
+        "CROSS_ASSET_CONCURRENCY_ANALYSIS.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "docs/SESSION_HANDOFF_NEXT_STEPS.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 418,
+      "words": 1636,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "RETURNS_VS_PRICES_ANALYSIS.md",
+        "docs/STRATEGY_MODULARIZATION_SUMMARY.md",
+        "GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md",
+        "CLAUDE.md",
+        "docs/STRATEGY_MODULARIZATION_DESIGN.md",
+        "docs/CRITICAL_GAPS_AND_NEXT_STEPS.md",
+        "docs/USER_GUIDE_STRATEGY_CREATION.md",
+        "RETURN_CALCULATION_ANALYSIS.md",
+        "TODO.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "docs/SESSION_SUMMARY_2025-11-11.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 515,
+      "words": 1967,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/BACKTEST_UNIFIED_API.md:722",
+        "docs/research/CORRELATION_VOLATILITY_ARBITRAGE.md:599",
+        "README.md:314"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/SIGNAL_COMBINATION_METHODS.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 966,
+      "words": 3370,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "Data/Cache/QUICK_REFERENCE.md:403",
+        "docs/SCHEMA_INDEX.md:21",
+        "Data/Cache/migrations/README.md:332",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md:269"
+      ],
+      "references": [
+        "ALPHAVANTAGE_DATA_PIPELINE_PLAN.md",
+        "README.md",
+        "DATA_PIPELINE_SETUP.md",
+        "DATA_PROVIDER_API.md"
+      ],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/SQLITE_SCHEMA_DESIGN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-14",
+      "commit_count": 2,
+      "lines": 1069,
+      "words": 3158,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/DOCUMENTATION_ASSESSMENT.md:29",
+        "docs/SESSION_SUMMARY_2025-11-11.md:130",
+        "docs/STRATEGY_MODULARIZATION_SUMMARY.md:38",
+        "README.md:318",
+        "docs/USER_GUIDE_STRATEGY_CREATION.md:1191"
+      ],
+      "references": [],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/STRATEGY_MODULARIZATION_DESIGN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 527,
+      "words": 1690,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SESSION_SUMMARY_2025-11-11.md:146"
+      ],
+      "references": [
+        "/home/user/ARBS/docs/STRATEGY_MODULARIZATION_DESIGN.md",
+        "/home/user/ARBS/docs/USER_GUIDE_STRATEGY_CREATION.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "docs/STRATEGY_MODULARIZATION_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 365,
+      "words": 1636,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "notebooks/README.md:424"
+      ],
+      "references": [
+        "notebooks/README.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "docs/STRATEGY_NOTEBOOKS_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-14",
+      "commit_count": 2,
+      "lines": 831,
+      "words": 2329,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "README.md:313"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/TEAR_SHEET.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-10",
+      "commit_count": 1,
+      "lines": 434,
+      "words": 1953,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/TRADER_REQUIREMENTS.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-14",
+      "commit_count": 2,
+      "lines": 1201,
+      "words": 3624,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/STRATEGY_MODULARIZATION_SUMMARY.md:85",
+        "docs/DOCUMENTATION_ASSESSMENT.md:28",
+        "docs/SESSION_SUMMARY_2025-11-11.md:138",
+        "docs/BACKTEST_UNIFIED_API.md:723",
+        "README.md:317"
+      ],
+      "references": [
+        "docs/BACKTESTING_FUTURES_SWAPS_PLAN.md",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md",
+        "docs/STRATEGY_MODULARIZATION_DESIGN.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/USER_GUIDE_STRATEGY_CREATION.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 469,
+      "words": 1481,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "CODEBASE_ASSESSMENT_DATA_LAYER.md",
+        "DATA_LAYER_ARCHITECTURE.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "docs/VERIFIED_INTEGRATIONS.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 666,
+      "words": 2083,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "README.md:311"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/VOLATILITY_ESTIMATOR.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 731,
+      "words": 3060,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART2.md:20",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md:965",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:122",
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md:248",
+        "docs/design/LONG_SHORT_STRATEGY_DESIGN.md:1281",
+        "docs/research/SECTOR_ETF_MAPPING.md:710",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md:870",
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART3.md:505",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:99"
+      ],
+      "references": [
+        "grinold_kahn_equity_notes_part1_foundations.md",
+        "grinold_kahn_equity_notes_part3_forecasting.md",
+        "grinold_kahn_equity_notes_part2_valuation.md",
+        "GRINOLD_KAHN_FRAMEWORK.md",
+        "grinold_kahn_equity_notes_part4_implementation.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 729,
+      "words": 3548,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md:249",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md:14",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md:967",
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART2.md:1030",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md:871",
+        "docs/AGENT_DOCUMENTATION_STANDARDS.md:102"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_equity_notes_part1_foundations.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1478,
+      "words": 6198,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART2.md:19",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md:15",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md:968",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md:872"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_equity_notes_part2_valuation.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1617,
+      "words": 5861,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/GRINOLD_KAHN_FRAMEWORK.md:873",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md:16",
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART2.md:230",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md:669"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_equity_notes_part3_forecasting.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1073,
+      "words": 4069,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md:970",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md:17",
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md:250",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md:874",
+        "docs/design/LONG_SHORT_STRATEGY_DESIGN.md:1282",
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART3.md:21",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:384"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_equity_notes_part4_implementation.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 39,
+      "words": 179,
+      "referenced_by_code": [
+        "scripts/convert_grinold_kahn_to_markdown.py:97"
+      ],
+      "referenced_by_docs": [
+        "docs/AGENT_DOCUMENTATION_STANDARDS.md:658",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:35",
+        "docs/SCHEMA_INDEX.md:300"
+      ],
+      "references": [
+        "grinold_kahn_chunk_029_pages_561-580.md",
+        "/grinold_kahn_chunk_025_pages_481-500.md",
+        "./grinold_kahn_chunk_007_pages_121-140.md",
+        "./grinold_kahn_chunk_026_pages_501-520.md",
+        "grinold_kahn_chunk_016_pages_301-320.md",
+        "grinold_kahn_chunk_001_pages_001-020.md",
+        "./grinold_kahn_chunk_024_pages_461-480.md",
+        "grinold_kahn_chunk_024_pages_461-480.md",
+        "grinold_kahn_chunk_007_pages_121-140.md",
+        "./grinold_kahn_chunk_021_pages_401-420.md",
+        "grinold_kahn_chunk_019_pages_361-380.md",
+        "/grinold_kahn_chunk_001_pages_001-020.md",
+        "./grinold_kahn_chunk_031_pages_601-620.md",
+        "./grinold_kahn_chunk_013_pages_241-260.md",
+        "grinold_kahn_chunk_005_pages_081-100.md",
+        "./grinold_kahn_chunk_032_pages_621-621.md",
+        "/grinold_kahn_chunk_012_pages_221-240.md",
+        "/grinold_kahn_chunk_027_pages_521-540.md",
+        "/grinold_kahn_chunk_009_pages_161-180.md",
+        "/grinold_kahn_chunk_020_pages_381-400.md",
+        "/grinold_kahn_chunk_030_pages_581-600.md",
+        "grinold_kahn_chunk_018_pages_341-360.md",
+        "grinold_kahn_chunk_008_pages_141-160.md",
+        "grinold_kahn_chunk_015_pages_281-300.md",
+        "/grinold_kahn_chunk_024_pages_461-480.md",
+        "./grinold_kahn_chunk_029_pages_561-580.md",
+        "./grinold_kahn_chunk_022_pages_421-440.md",
+        "./grinold_kahn_chunk_025_pages_481-500.md",
+        "grinold_kahn_chunk_021_pages_401-420.md",
+        "./grinold_kahn_chunk_018_pages_341-360.md",
+        "./grinold_kahn_chunk_017_pages_321-340.md",
+        "./grinold_kahn_chunk_015_pages_281-300.md",
+        "./grinold_kahn_chunk_003_pages_041-060.md",
+        "./grinold_kahn_chunk_030_pages_581-600.md",
+        "/grinold_kahn_chunk_010_pages_181-200.md",
+        "grinold_kahn_chunk_010_pages_181-200.md",
+        "/grinold_kahn_chunk_018_pages_341-360.md",
+        "grinold_kahn_chunk_014_pages_261-280.md",
+        "/grinold_kahn_chunk_013_pages_241-260.md",
+        "/grinold_kahn_chunk_004_pages_061-080.md",
+        "grinold_kahn_chunk_030_pages_581-600.md",
+        "grinold_kahn_chunk_020_pages_381-400.md",
+        "/grinold_kahn_chunk_028_pages_541-560.md",
+        "./grinold_kahn_chunk_005_pages_081-100.md",
+        "./grinold_kahn_chunk_010_pages_181-200.md",
+        "/grinold_kahn_chunk_022_pages_421-440.md",
+        "/grinold_kahn_chunk_026_pages_501-520.md",
+        "grinold_kahn_chunk_032_pages_621-621.md",
+        "./grinold_kahn_chunk_016_pages_301-320.md",
+        "/grinold_kahn_chunk_017_pages_321-340.md",
+        "./grinold_kahn_chunk_019_pages_361-380.md",
+        "grinold_kahn_chunk_011_pages_201-220.md",
+        "/grinold_kahn_chunk_029_pages_561-580.md",
+        "./grinold_kahn_chunk_012_pages_221-240.md",
+        "grinold_kahn_chunk_006_pages_101-120.md",
+        "./grinold_kahn_chunk_011_pages_201-220.md",
+        "./grinold_kahn_chunk_006_pages_101-120.md",
+        "/grinold_kahn_chunk_031_pages_601-620.md",
+        "grinold_kahn_chunk_025_pages_481-500.md",
+        "grinold_kahn_chunk_012_pages_221-240.md",
+        "grinold_kahn_chunk_026_pages_501-520.md",
+        "./grinold_kahn_chunk_023_pages_441-460.md",
+        "grinold_kahn_chunk_017_pages_321-340.md",
+        "./grinold_kahn_chunk_001_pages_001-020.md",
+        "/grinold_kahn_chunk_011_pages_201-220.md",
+        "./grinold_kahn_chunk_009_pages_161-180.md",
+        "grinold_kahn_chunk_013_pages_241-260.md",
+        "/grinold_kahn_chunk_016_pages_301-320.md",
+        "grinold_kahn_chunk_003_pages_041-060.md",
+        "./grinold_kahn_chunk_008_pages_141-160.md",
+        "grinold_kahn_chunk_009_pages_161-180.md",
+        "./grinold_kahn_chunk_002_pages_021-040.md",
+        "/grinold_kahn_chunk_007_pages_121-140.md",
+        "/grinold_kahn_chunk_023_pages_441-460.md",
+        "/grinold_kahn_chunk_006_pages_101-120.md",
+        "grinold_kahn_chunk_004_pages_061-080.md",
+        "./grinold_kahn_chunk_004_pages_061-080.md",
+        "/grinold_kahn_chunk_014_pages_261-280.md",
+        "/grinold_kahn_chunk_032_pages_621-621.md",
+        "./grinold_kahn_chunk_020_pages_381-400.md",
+        "/grinold_kahn_chunk_005_pages_081-100.md",
+        "./grinold_kahn_chunk_028_pages_541-560.md",
+        "./grinold_kahn_chunk_014_pages_261-280.md",
+        "/grinold_kahn_chunk_003_pages_041-060.md",
+        "/grinold_kahn_chunk_002_pages_021-040.md",
+        "/grinold_kahn_chunk_008_pages_141-160.md",
+        "grinold_kahn_chunk_023_pages_441-460.md",
+        "grinold_kahn_chunk_028_pages_541-560.md",
+        "grinold_kahn_chunk_031_pages_601-620.md",
+        "/grinold_kahn_chunk_015_pages_281-300.md",
+        "/grinold_kahn_chunk_019_pages_361-380.md",
+        "/grinold_kahn_chunk_021_pages_401-420.md",
+        "grinold_kahn_chunk_002_pages_021-040.md",
+        "./grinold_kahn_chunk_027_pages_521-540.md",
+        "grinold_kahn_chunk_022_pages_421-440.md",
+        "grinold_kahn_chunk_027_pages_521-540.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/INDEX.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 638,
+      "words": 4810,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:7"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_001_pages_001-020.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 667,
+      "words": 5259,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:8"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_002_pages_021-040.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 620,
+      "words": 5131,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:9"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_003_pages_041-060.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 862,
+      "words": 5657,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:10"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_004_pages_061-080.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 598,
+      "words": 5028,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:11"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_005_pages_081-100.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 710,
+      "words": 5313,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:12"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_006_pages_101-120.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 772,
+      "words": 5079,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:13"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_007_pages_121-140.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 598,
+      "words": 5076,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:14"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_008_pages_141-160.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 573,
+      "words": 5006,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:15"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_009_pages_161-180.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 872,
+      "words": 5668,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:16"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_010_pages_181-200.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 624,
+      "words": 5619,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:17"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_011_pages_201-220.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 558,
+      "words": 4584,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:18"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_012_pages_221-240.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 737,
+      "words": 4797,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:19"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_013_pages_241-260.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 734,
+      "words": 4846,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:20"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_014_pages_261-280.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 580,
+      "words": 4825,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:21"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_015_pages_281-300.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 636,
+      "words": 4653,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:22"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_016_pages_301-320.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 663,
+      "words": 5428,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:23"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_017_pages_321-340.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 555,
+      "words": 5010,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:24"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_018_pages_341-360.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 486,
+      "words": 3809,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:25"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_019_pages_361-380.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 854,
+      "words": 6412,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:26"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_020_pages_381-400.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 705,
+      "words": 5229,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:27"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_021_pages_401-420.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 590,
+      "words": 4183,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:28"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_022_pages_421-440.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 628,
+      "words": 5384,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:29"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_023_pages_441-460.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 644,
+      "words": 5131,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:30"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_024_pages_461-480.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 576,
+      "words": 4704,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:31"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_025_pages_481-500.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 792,
+      "words": 4222,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:32"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_026_pages_501-520.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 804,
+      "words": 5758,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:33"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_027_pages_521-540.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 733,
+      "words": 4966,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:34"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_028_pages_541-560.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 643,
+      "words": 5660,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:35"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_029_pages_561-580.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 581,
+      "words": 3739,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:36"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_030_pages_581-600.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 645,
+      "words": 1855,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:37"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_031_pages_601-620.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 28,
+      "words": 180,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/books/grinold_kahn_markdown/INDEX.md:38"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/books/grinold_kahn_markdown/grinold_kahn_chunk_032_pages_621-621.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1625,
+      "words": 5489,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART2.md:3"
+      ],
+      "references": [
+        "docs/books/grinold_kahn_equity_notes_part4_implementation.md",
+        "docs/design/YAHOO_FINANCE_MDP_DESIGN.md",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md",
+        "README.md",
+        "docs/design/LONG_SHORT_STRATEGY_DESIGN.md",
+        "docs/research/SECTOR_ETF_MAPPING.md",
+        "docs/research/RUSSELL_3000_UNIVERSE.md"
+      ],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/design/AGENT_ORCHESTRATION_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1839,
+      "words": 5997,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART3.md:3"
+      ],
+      "references": [
+        "docs/books/grinold_kahn_equity_notes_part2_valuation.md",
+        "AGENT_ORCHESTRATION_PLAN.md",
+        "docs/books/grinold_kahn_equity_notes_part3_forecasting.md",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md",
+        "SIGNAL_IC_RESULTS.md",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md",
+        "docs/books/grinold_kahn_equity_notes_part1_foundations.md",
+        "docs/validation/SIGNAL_IC_RESULTS.md"
+      ],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/design/AGENT_ORCHESTRATION_PLAN_PART2.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1335,
+      "words": 4211,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "docs/books/grinold_kahn_equity_notes_part4_implementation.md",
+        "docs/validation/IC_VALIDATION_REPORT.md",
+        "README_EQUITY_SECTOR.md",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md",
+        "docs/design/LONG_SHORT_STRATEGY_DESIGN.md",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md",
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PARTX.md",
+        "docs/validation/EQUITY_BACKTEST_RESULTS.md",
+        "docs/validation/PPFM_REPLICATION_REPORT.md",
+        "AGENT_ORCHESTRATION_PLAN_PART2.md"
+      ],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/design/AGENT_ORCHESTRATION_PLAN_PART3.md"
+    },
+    {
+      "first_commit": "2025-11-14",
+      "last_modified": "2025-11-14",
+      "commit_count": 1,
+      "lines": 529,
+      "words": 1674,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:121",
+        "BACKTEST_UNIFICATION_TASK.md:109"
+      ],
+      "references": [
+        "BRIDGE_COMPONENTS.md",
+        "MIGRATION_TO_UNIFIED.md",
+        "self.md"
+      ],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/design/BACKTEST_UNIFICATION_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 978,
+      "words": 3396,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART2.md:1032",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:100",
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART3.md:833",
+        "docs/design/YAHOO_FINANCE_MDP_DESIGN.md:6",
+        "docs/design/LONG_SHORT_STRATEGY_DESIGN.md:1283",
+        "docs/research/SECTOR_ETF_MAPPING.md:709",
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md:237"
+      ],
+      "references": [
+        "docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md",
+        "docs/books/grinold_kahn_equity_notes_part4_implementation.md",
+        "docs/books/grinold_kahn_equity_notes_part2_valuation.md",
+        "docs/books/grinold_kahn_equity_notes_part3_forecasting.md",
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md",
+        "docs/books/grinold_kahn_equity_notes_part1_foundations.md",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md"
+      ],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1023,
+      "words": 3344,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md:240",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md:875",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md:670"
+      ],
+      "references": [],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1293,
+      "words": 4853,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:396",
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md:239",
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART3.md:19"
+      ],
+      "references": [
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md",
+        "docs/books/grinold_kahn_equity_notes_part4_implementation.md",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md"
+      ],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/design/LONG_SHORT_STRATEGY_DESIGN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1745,
+      "words": 5421,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:277",
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md:238"
+      ],
+      "references": [
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md"
+      ],
+      "category": "design",
+      "recommendation": "KEEP",
+      "notes": "Design documentation",
+      "path": "docs/design/YAHOO_FINANCE_MDP_DESIGN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 919,
+      "words": 2747,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:56"
+      ],
+      "references": [
+        "docs/ADDING_CUSTOM_COMPONENTS.md",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/guides/extending_risk_models.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 615,
+      "words": 2879,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/MERGE_COMMENT.md:122"
+      ],
+      "references": [
+        "FINAL_SECTOR_ROTATION_SUMMARY.md",
+        "sector_rotation_test_specifications.md",
+        "sector_rotation_architecture_alignment.md",
+        "sector_rotation_math_extraction.md",
+        "SECTOR_ROTATION_IMPLEMENTATION_PROGRESS.md",
+        "sector_rotation_orthogonal_task_plan.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/COMPREHENSIVE_VERIFICATION.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 325,
+      "words": 1442,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/COMPREHENSIVE_VERIFICATION.md:425",
+        "docs/papers/sector_risk_models/README.md:239",
+        "docs/papers/MERGE_COMMENT.md:121",
+        "docs/papers/sector_risk_models/ARBS_INTEGRATION_ROADMAP.md:14",
+        "docs/papers/sector_risk_models/COMPREHENSIVE_ANALYSIS.md:259"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/FINAL_SECTOR_ROTATION_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 278,
+      "words": 1191,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "FINAL_SECTOR_ROTATION_SUMMARY.md",
+        "COMPREHENSIVE_VERIFICATION.md",
+        "sector_rotation_test_specifications.md",
+        "sector_rotation_architecture_alignment.md",
+        "sector_rotation_math_extraction.md",
+        "SECTOR_ROTATION_IMPLEMENTATION_PROGRESS.md",
+        "sector_rotation_orthogonal_task_plan.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/MERGE_COMMENT.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 2,
+      "lines": 669,
+      "words": 2524,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/MERGE_COMMENT.md:120",
+        "docs/papers/COMPREHENSIVE_VERIFICATION.md:424"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/SECTOR_ROTATION_IMPLEMENTATION_PROGRESS.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 880,
+      "words": 3129,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/sector_risk_models/EXECUTIVE_SUMMARY.md:380",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:44",
+        "docs/papers/sector_risk_models/README.md:16"
+      ],
+      "references": [
+        "docs/papers/sector_risk_models/ARBS_INTEGRATION_ROADMAP.md",
+        "docs/papers/sector_risk_models/COMPREHENSIVE_ANALYSIS.md",
+        "docs/papers/FINAL_SECTOR_ROTATION_SUMMARY.md",
+        "docs/papers/sector_risk_models/IMPLEMENTATION_PLAN.md",
+        "docs/CLAUDE.md",
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_risk_models/ARBS_INTEGRATION_ROADMAP.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 961,
+      "words": 3135,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:14"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_risk_models/COMPLETE_TASK_BREAKDOWN.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 780,
+      "words": 2821,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:42",
+        "docs/papers/sector_risk_models/ARBS_INTEGRATION_ROADMAP.md:873",
+        "docs/papers/sector_risk_models/EXECUTIVE_SUMMARY.md:369",
+        "docs/papers/sector_risk_models/README.md:15"
+      ],
+      "references": [
+        "CLAUDE.md",
+        "/docs/papers/FINAL_SECTOR_ROTATION_SUMMARY.md",
+        "/docs/MVP_EQUITY_SECTOR_COMPLETE.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_risk_models/COMPREHENSIVE_ANALYSIS.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 2,
+      "lines": 367,
+      "words": 1684,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "MACRO_TRADING_INSIGHTS.md",
+        "/home/user/ARBS/docs/papers/sector_risk_models/TEST_SPECIFICATIONS.md",
+        "COMPREHENSIVE_ANALYSIS.md",
+        "README.md",
+        "EXECUTIVE_SUMMARY.md",
+        "/home/user/ARBS/docs/papers/sector_risk_models/COMPLETE_TASK_BREAKDOWN.md",
+        "ARBS_INTEGRATION_ROADMAP.md",
+        "IMPLEMENTATION_PLAN.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 2,
+      "lines": 484,
+      "words": 2032,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "tests/validation/DATA_LOADING_INSTRUCTIONS.md:334",
+        "docs/papers/sector_risk_models/README.md:12",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:45"
+      ],
+      "references": [
+        "ARBS_INTEGRATION_ROADMAP.md",
+        "IMPLEMENTATION_PLAN.md",
+        "COMPREHENSIVE_ANALYSIS.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_risk_models/EXECUTIVE_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 1050,
+      "words": 3173,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART2.md:1032",
+        "docs/papers/sector_risk_models/EXECUTIVE_SUMMARY.md:374",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:100",
+        "docs/design/AGENT_ORCHESTRATION_PLAN_PART3.md:833",
+        "docs/design/YAHOO_FINANCE_MDP_DESIGN.md:6",
+        "docs/papers/sector_risk_models/README.md:17",
+        "docs/design/LONG_SHORT_STRATEGY_DESIGN.md:1283",
+        "docs/papers/sector_risk_models/PARALLEL_IMPLEMENTATION_PLAN.md:253",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:43",
+        "docs/papers/sector_risk_models/ARBS_INTEGRATION_ROADMAP.md:874",
+        "docs/research/SECTOR_ETF_MAPPING.md:709",
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md:237"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_risk_models/IMPLEMENTATION_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 422,
+      "words": 1965,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SECTOR_COVARIANCE_GUIDE.md:379",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:347"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_risk_models/MACRO_TRADING_INSIGHTS.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 344,
+      "words": 1128,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "IMPLEMENTATION_PLAN.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_risk_models/PARALLEL_IMPLEMENTATION_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 260,
+      "words": 938,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "ARCHITECTURE_RECOMMENDATIONS.md:200",
+        "docs/PHASE1_COMPLETE_SUMMARY.md:271",
+        "docs/SQLITE_SCHEMA_DESIGN.md:586",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:217",
+        "notebooks/README.md:422",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:62",
+        "BACKTEST_UNIFICATION_TASK.md:1004",
+        "docs/DOCUMENTATION_ASSESSMENT.md:326",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:46",
+        ".claude/agents/README.md:344",
+        "docs/PHASE_4_PLAN.md:532",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:101",
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md:723",
+        "docs/SCHEMA_INDEX.md:29",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:96",
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:137",
+        ".claude/SYSTEM_MAP.md:605",
+        "docs/PDF_PROCESSING_PLAN.md:307",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md:538",
+        "docs/STRATEGY_NOTEBOOKS_SUMMARY.md:339",
+        "Data/Cache/QUICK_REFERENCE.md:400",
+        "docs/NEXT_STEPS_PARALLEL_PLAN.md:36",
+        ".claude/agents/scout.md:194",
+        ".claude/SYNC_README.md:32"
+      ],
+      "references": [
+        "docs/papers/FINAL_SECTOR_ROTATION_SUMMARY.md",
+        "COMPREHENSIVE_ANALYSIS.md",
+        "docs/CLAUDE.md",
+        "EXECUTIVE_SUMMARY.md",
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md",
+        "ARBS_INTEGRATION_ROADMAP.md",
+        "IMPLEMENTATION_PLAN.md"
+      ],
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core project documentation",
+      "path": "docs/papers/sector_risk_models/README.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 540,
+      "words": 1997,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_risk_models/STOCHASTIC_BLOCK_IMPLEMENTATION_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 835,
+      "words": 2555,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:29"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_risk_models/TEST_SPECIFICATIONS.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 936,
+      "words": 3366,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/MERGE_COMMENT.md:117",
+        "docs/papers/COMPREHENSIVE_VERIFICATION.md:423"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_rotation_architecture_alignment.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 497,
+      "words": 1845,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/MERGE_COMMENT.md:114",
+        "docs/papers/COMPREHENSIVE_VERIFICATION.md:420"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_rotation_math_extraction.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 1672,
+      "words": 5135,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/COMPREHENSIVE_VERIFICATION.md:422",
+        "docs/papers/MERGE_COMMENT.md:116"
+      ],
+      "references": [
+        "docs/papers/sector_rotation_implementation_guide.md",
+        "sector_rotation_test_specifications.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_rotation_orthogonal_task_plan.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 1350,
+      "words": 3492,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/papers/sector_rotation_orthogonal_task_plan.md:1245",
+        "docs/papers/COMPREHENSIVE_VERIFICATION.md:421",
+        "docs/papers/MERGE_COMMENT.md:115"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/papers/sector_rotation_test_specifications.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 263,
+      "words": 928,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/PHASE_4_PLAN.md:30",
+        "docs/SECTOR_COVARIANCE_GUIDE.md:378",
+        "docs/PHASE_3_COMPLETION_SUMMARY.md:131"
+      ],
+      "references": [],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "docs/phase3_common_patterns_analysis.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 1167,
+      "words": 4636,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/research/high_correlation_covariance.md:669",
+        "docs/research/current_arbs_covariance_usage.md:72",
+        "docs/PDF_PROCESSING_PLAN.md:243"
+      ],
+      "references": [
+        "/home/user/ARBS/docs/references/Grinold-Kahn-Active-Portfolio-Management.md",
+        "CLAUDE.md",
+        "/home/user/ARBS/docs/references/papers/shrinkage-high-frequency-2016.md",
+        "/home/user/ARBS/docs/references/papers/ledoit-wolf-unknown-mean-2023.md",
+        "/home/user/ARBS/docs/references/papers/total-positivity-2019.md",
+        "/home/user/ARBS/docs/references/papers/optimal-cross-validation-2025.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 358,
+      "words": 1480,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/references/papers/shrinkage-high-frequency-2016.md:854",
+        "docs/PDF_PROCESSING_PLAN.md:308",
+        "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md:1093",
+        "README.md:293"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/Grinold-Kahn-Active-Portfolio-Management.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 98,
+      "words": 556,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/workflows/ARXIV_TO_CODE_PLAN.md:273",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:28"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/arxiv_candidates.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 667,
+      "words": 2045,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/workflows/ARXIV_TO_CODE_PLAN.md:279",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:33"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/implementation_sources.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 955,
+      "words": 3513,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "cost-aware-large-universe-2024.md",
+        "quadratic-costs-2020.md",
+        "grinold-kahn-notes.md",
+        "ledoit-wolf-unknown-mean-2023.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/101-alphas-2016.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 650,
+      "words": 3276,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/alphaagent-2025.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 532,
+      "words": 2868,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/alphaforge-2024.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 316,
+      "words": 1667,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/references/papers/101-alphas-2016.md:900"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/cost-aware-large-universe-2024.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 402,
+      "words": 1860,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/decision-focused-learning-2025.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 610,
+      "words": 2859,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/fast-qp-2022.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 521,
+      "words": 2222,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/inverse-optimization-2024.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 473,
+      "words": 2193,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/references/papers/101-alphas-2016.md:901",
+        "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md:1094"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/ledoit-wolf-unknown-mean-2023.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 846,
+      "words": 4054,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/llm-strategy-finding-2024.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 256,
+      "words": 1373,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/multi-asset-2025.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 523,
+      "words": 2296,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md:1097"
+      ],
+      "references": [
+        "/home/user/ARBS/docs/references/papers/ledoit-wolf-shrinkage.md",
+        "CLAUDE.md",
+        "/home/user/ARBS/docs/references/papers/random-matrix-theory-finance.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/optimal-cross-validation-2025.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 489,
+      "words": 2239,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/references/papers/101-alphas-2016.md:719"
+      ],
+      "references": [
+        "/home/user/ARBS/docs/architecture/risk-models.md",
+        "/home/user/ARBS/docs/architecture/optimizer.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/quadratic-costs-2020.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 261,
+      "words": 1459,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/risk-budgeting-2025.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 504,
+      "words": 2680,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/robust-cvar-2024.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 855,
+      "words": 3701,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md:1095"
+      ],
+      "references": [
+        "/home/user/ARBS/docs/references/papers/total-positivity-2019.md",
+        "/home/user/ARBS/docs/references/Grinold-Kahn-Active-Portfolio-Management.md"
+      ],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/shrinkage-high-frequency-2016.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 405,
+      "words": 2265,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/research/high_correlation_covariance.md:670",
+        "docs/references/papers/shrinkage-high-frequency-2016.md:853",
+        "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md:1096"
+      ],
+      "references": [],
+      "category": "reference",
+      "recommendation": "KEEP",
+      "notes": "Reference material",
+      "path": "docs/references/papers/total-positivity-2019.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 610,
+      "words": 2074,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/research/CROSS_ASSET_FRAMEWORK.md:179",
+        "docs/DETAILED_UNDERSTANDING_PLAN.md:315",
+        "docs/CROSS_ASSET_CONCURRENCY_ANALYSIS.md:272",
+        "docs/SESSION_HANDOFF_NEXT_STEPS.md:335"
+      ],
+      "references": [
+        "global_macro_rv_framework.md",
+        "docs/SECTOR_COVARIANCE_GUIDE.md",
+        "docs/SIGNAL_COMBINATION_METHODS.md",
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/research/CORRELATION_VOLATILITY_ARBITRAGE.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 113,
+      "words": 492,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/research/high_correlation_covariance.md:673"
+      ],
+      "references": [
+        "docs/research/grinold_kahn_fixed_income_covariance.md",
+        "docs/research/high_correlation_covariance.md",
+        "docs/research/current_arbs_covariance_usage.md",
+        "docs/research/practitioner_covariance_methods.md",
+        "docs/research/factor_models_fixed_income.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 556,
+      "words": 2388,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SESSION_HANDOFF_NEXT_STEPS.md:334"
+      ],
+      "references": [
+        "CORRELATION_VOLATILITY_ARBITRAGE.md",
+        "docs/SECTOR_COVARIANCE_GUIDE.md",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md",
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md",
+        "docs/research/CORRELATION_VOLATILITY_ARBITRAGE.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/research/CROSS_ASSET_FRAMEWORK.md"
+    },
+    {
+      "first_commit": "2025-11-13",
+      "last_modified": "2025-11-13",
+      "commit_count": 1,
+      "lines": 682,
+      "words": 2809,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/SESSION_HANDOFF_NEXT_STEPS.md:336"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/research/RESEARCH_CONSENSUS_2025.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 376,
+      "words": 1474,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md:244"
+      ],
+      "references": [
+        "block_diagonal_backtest_results.md",
+        "docs/research/arbs_correlation_structure.md",
+        "arbs_correlation_structure.md",
+        "docs/research/block_diagonal_backtest_results.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/research/SECTOR_COVARIANCE_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 715,
+      "words": 3437,
+      "referenced_by_code": [
+        "MDP/YahooFinance/sector_mapping.py:18"
+      ],
+      "referenced_by_docs": [
+        "docs/MVP_EQUITY_SECTOR_COMPLETE.md:243",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:199"
+      ],
+      "references": [
+        "docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md",
+        "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/research/SECTOR_ETF_MAPPING.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 680,
+      "words": 2661,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md:81"
+      ],
+      "references": [
+        "CLAUDE.md",
+        "/home/user/ARBS/docs/references/COVARIANCE_ESTIMATION_REFERENCE.md",
+        "COVARIANCE_ESTIMATION_REFERENCE.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/research/current_arbs_covariance_usage.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 513,
+      "words": 3216,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md:52"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/research/factor_models_fixed_income.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 679,
+      "words": 3020,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md:67"
+      ],
+      "references": [
+        "/home/user/ARBS/docs/references/papers/total-positivity-2019.md",
+        "/home/user/ARBS/docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md",
+        "/home/user/ARBS/docs/references/COVARIANCE_ESTIMATION_REFERENCE.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/research/high_correlation_covariance.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 358,
+      "words": 1914,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md:38"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/research/practitioner_covariance_methods.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-10",
+      "commit_count": 1,
+      "lines": 837,
+      "words": 3835,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/resources/papers/README.md:3"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/resources/PORTFOLIO_MANAGEMENT_RESEARCH.md"
+    },
+    {
+      "first_commit": "2025-11-10",
+      "last_modified": "2025-11-10",
+      "commit_count": 1,
+      "lines": 106,
+      "words": 435,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "ARCHITECTURE_RECOMMENDATIONS.md:200",
+        "docs/PHASE1_COMPLETE_SUMMARY.md:271",
+        "docs/SQLITE_SCHEMA_DESIGN.md:586",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:217",
+        "notebooks/README.md:422",
+        "docs/papers/sector_risk_models/README.md:215",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:62",
+        "BACKTEST_UNIFICATION_TASK.md:1004",
+        "docs/DOCUMENTATION_ASSESSMENT.md:326",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:46",
+        ".claude/agents/README.md:344",
+        "docs/PHASE_4_PLAN.md:532",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:101",
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md:723",
+        "docs/SCHEMA_INDEX.md:29",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:96",
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:137",
+        ".claude/SYSTEM_MAP.md:605",
+        "docs/PDF_PROCESSING_PLAN.md:307",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md:538",
+        "docs/STRATEGY_NOTEBOOKS_SUMMARY.md:339",
+        "Data/Cache/QUICK_REFERENCE.md:400",
+        "docs/NEXT_STEPS_PARALLEL_PLAN.md:36",
+        ".claude/agents/scout.md:194",
+        ".claude/SYNC_README.md:32"
+      ],
+      "references": [
+        "PORTFOLIO_MANAGEMENT_RESEARCH.md"
+      ],
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core project documentation",
+      "path": "docs/resources/papers/README.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 337,
+      "words": 1339,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md",
+        "docs/guides/extending_risk_models.md",
+        "docs/workflows/ARXIV_TO_CODE_PLAN.md",
+        "docs/references/arxiv_candidates.md",
+        "Risk/templates/README.md",
+        "docs/references/implementation_sources.md"
+      ],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Completed task documentation",
+      "path": "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 368,
+      "words": 1282,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:16"
+      ],
+      "references": [
+        "docs/references/arxiv_candidates.md",
+        "docs/references/implementation_sources.md"
+      ],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "docs/workflows/ARXIV_TO_CODE_PLAN.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-13",
+      "commit_count": 2,
+      "lines": 496,
+      "words": 2072,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "ARCHITECTURE_RECOMMENDATIONS.md:200",
+        "docs/PHASE1_COMPLETE_SUMMARY.md:271",
+        "docs/SQLITE_SCHEMA_DESIGN.md:586",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:217",
+        "docs/papers/sector_risk_models/README.md:215",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:62",
+        "BACKTEST_UNIFICATION_TASK.md:1004",
+        "docs/DOCUMENTATION_ASSESSMENT.md:326",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:46",
+        ".claude/agents/README.md:344",
+        "docs/PHASE_4_PLAN.md:532",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:101",
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md:723",
+        "docs/SCHEMA_INDEX.md:29",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:96",
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:137",
+        ".claude/SYSTEM_MAP.md:605",
+        "docs/PDF_PROCESSING_PLAN.md:307",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md:538",
+        "docs/STRATEGY_NOTEBOOKS_SUMMARY.md:339",
+        "Data/Cache/QUICK_REFERENCE.md:400",
+        "docs/NEXT_STEPS_PARALLEL_PLAN.md:36",
+        ".claude/agents/scout.md:194",
+        ".claude/SYNC_README.md:32"
+      ],
+      "references": [
+        "/docs/DOCUMENTATION_ASSESSMENT.md",
+        "/README.md",
+        "/docs/STRATEGY_NOTEBOOKS_SUMMARY.md",
+        "/docs/ADDING_CUSTOM_COMPONENTS.md",
+        "../docs/ADDING_CUSTOM_COMPONENTS.md",
+        "docs/ADDING_CUSTOM_COMPONENTS.md",
+        "../README.md",
+        "../docs/STRATEGY_NOTEBOOKS_SUMMARY.md",
+        "../docs/DOCUMENTATION_ASSESSMENT.md"
+      ],
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core project documentation",
+      "path": "notebooks/README.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 2,
+      "lines": 86,
+      "words": 203,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "ARCHITECTURE_RECOMMENDATIONS.md:200",
+        "docs/PHASE1_COMPLETE_SUMMARY.md:271",
+        "docs/SQLITE_SCHEMA_DESIGN.md:586",
+        "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md:217",
+        "notebooks/README.md:422",
+        "docs/papers/sector_risk_models/README.md:215",
+        "docs/DOCUMENTATION_CLEANUP_PLAN.md:62",
+        "BACKTEST_UNIFICATION_TASK.md:1004",
+        "docs/DOCUMENTATION_ASSESSMENT.md:326",
+        "docs/papers/sector_risk_models/EXECUTION_READINESS_SUMMARY.md:46",
+        ".claude/agents/README.md:344",
+        "docs/PHASE_4_PLAN.md:532",
+        "docs/design/AGENT_ORCHESTRATION_PLAN.md:101",
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md:723",
+        "docs/SCHEMA_INDEX.md:29",
+        ".claude/AGENT_SYSTEM_SUMMARY.md:96",
+        ".claude/skills/decomposing-into-orthogonal-tasks/example-agent-skills-creation.md:137",
+        ".claude/SYSTEM_MAP.md:605",
+        "docs/PDF_PROCESSING_PLAN.md:307",
+        "docs/SCHEMA_IMPLEMENTATION_GUIDE.md:538",
+        "docs/STRATEGY_NOTEBOOKS_SUMMARY.md:339",
+        "Data/Cache/QUICK_REFERENCE.md:400",
+        "docs/NEXT_STEPS_PARALLEL_PLAN.md:36",
+        ".claude/agents/scout.md:194",
+        ".claude/SYNC_README.md:32"
+      ],
+      "references": [
+        "docs/research/arbs_correlation_structure.md"
+      ],
+      "category": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core project documentation",
+      "path": "scripts/README.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 66,
+      "words": 310,
+      "referenced_by_code": [],
+      "referenced_by_docs": [
+        "tasks/notes-to-claude.md:26"
+      ],
+      "references": [],
+      "category": "completed_task",
+      "recommendation": "ARCHIVE",
+      "notes": "Migration documentation",
+      "path": "tasks/migration_progress.md"
+    },
+    {
+      "first_commit": "2025-11-11",
+      "last_modified": "2025-11-11",
+      "commit_count": 1,
+      "lines": 53,
+      "words": 257,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "migration_progress.md",
+        "tasks/migration_progress.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "tasks/notes-to-claude.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 535,
+      "words": 2290,
+      "referenced_by_code": [],
+      "referenced_by_docs": [],
+      "references": [
+        "docs/ACTUAL_VALIDATION_RESULTS.md",
+        "docs/PHASE_4_COMPLETION_SUMMARY.md",
+        "docs/FINAL_VALIDATION_REPORT.md",
+        "README_DATA_LOADING.md",
+        "docs/papers/sector_risk_models/EXECUTIVE_SUMMARY.md",
+        "tests/validation/README_DATA_LOADING.md",
+        "EXECUTIVE_SUMMARY.md",
+        "tests/validation/DATA_LOADING_INSTRUCTIONS.md"
+      ],
+      "category": "orphan",
+      "recommendation": "REVIEW",
+      "notes": "No references found, minimal activity",
+      "path": "tests/validation/DATA_LOADING_INSTRUCTIONS.md"
+    },
+    {
+      "first_commit": "2025-11-12",
+      "last_modified": "2025-11-12",
+      "commit_count": 1,
+      "lines": 94,
+      "words": 301,
+      "referenced_by_code": [
+        "tests/validation/validate_on_real_data.py:43"
+      ],
+      "referenced_by_docs": [
+        "tests/validation/DATA_LOADING_INSTRUCTIONS.md:38"
+      ],
+      "references": [],
+      "category": "active_docs",
+      "recommendation": "KEEP",
+      "notes": "Recently updated",
+      "path": "tests/validation/README_DATA_LOADING.md"
+    }
+  ]
+}
