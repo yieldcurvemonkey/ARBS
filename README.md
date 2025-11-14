@@ -288,6 +288,18 @@ utils/                 # Misc utilities
 
 The `docs/` directory contains theoretical foundations, design documents, and research references. Use these resources during development to ensure implementations align with quantitative finance best practices.
 
+### Documentation Index
+
+Complete documentation navigation: **[docs/INDEX.md](docs/INDEX.md)**
+
+Organized by:
+- Quick Start guides
+- Architecture documentation
+- User guides
+- Component references
+- Design documents
+- Workflows and tools
+
 ### Core References
 
 **[Grinold-Kahn Active Portfolio Management](docs/references/Grinold-Kahn-Active-Portfolio-Management.md)** (PDF: `docs/books/`)
