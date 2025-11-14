@@ -311,7 +311,8 @@ class TestICTimeSeries:
 
         assert isinstance(ic_series, pl.Series)
         assert len(ic_series) > 0
-        assert ic_series.index[0] >= dates[19]  # First IC after 20 days
+        # With 100 data points and window=20, we expect 81 IC values (100 - 20 + 1)
+        assert len(ic_series) == len(forecasts) - 20 + 1
 
     def test_ic_decay_can_be_measured(self):
         """Should measure IC decay over time (signal halflife)."""
