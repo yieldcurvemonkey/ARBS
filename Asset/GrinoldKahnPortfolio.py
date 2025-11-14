@@ -115,7 +115,7 @@ class GrinoldKahnPortfolio(Asset):
             rebalance_frequency: Rebalancing schedule (default: 'weekly')
 
         Example:
-            Minimal construction:
+            Basic construction:
             >>> portfolio = GrinoldKahnPortfolio(
             ...     identifier='GK_CARRY',
             ...     signals=[CarrySignal()]

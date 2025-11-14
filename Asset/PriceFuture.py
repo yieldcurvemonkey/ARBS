@@ -1,9 +1,9 @@
-# ABOUTME: Simple futures contract with price-based return calculation
+# ABOUTME: Futures contract with price-based return calculation
 # ABOUTME: Used for SOFR futures, equity index futures, commodities priced as $/unit
 """
-PriceFuture - Simple Price-Based Futures
+PriceFuture - Price-Based Futures Contract
 
-Implements basic futures contract with simple price returns:
+Implements futures contract with percentage price returns:
     return = (P_t - P_{t-1}) / P_{t-1}
 
 Used for:
@@ -16,7 +16,7 @@ Does NOT handle:
 - DV01 sensitivity (use YieldInstrument instead)
 - Complex corporate actions
 
-Simple, stateless return calculation - perfect for basic backtests.
+Stateless return calculation without corporate action handling.
 """
 
 from datetime import date
@@ -27,7 +27,7 @@ from Asset.Base import Asset, AssetTransition
 
 class PriceFuture(Asset):
     """
-    Simple futures contract with price-based returns.
+    Futures contract with price-based returns.
 
     Calculates returns as percentage price change:
         r_t = (P_t - P_{t-1}) / P_{t-1}

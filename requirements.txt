@@ -1,29 +1,54 @@
+# Core Scientific Computing
 numpy>=1.23.5,<2.3
+scipy>=1.10.0
+
+# Data Processing
 pandas==2.3.1
 polars==1.35.2
 pyarrow==21.0.0
+
+# Financial Libraries
 QuantLib==1.39
 rateslib==2.1.1
+
+# Persistent Storage (ZODB)
 ZODB==6.0.1
 BTrees==6.1
 persistent==6.1.1
 transaction==5.0
 zc.lockfile==3.0.post1
 zope.interface==7.2
+
+# HTTP/Network
 aiohttp==3.12.15
 httpx==0.28.1
 h2==4.2.0
 httpx-socks==0.10.1
 requests==2.32.4
-yfinance==0.2.49
+
+# Market Data
+# Note: yfinance may have build issues with multitasking dependency on some systems
+# If yfinance fails, comment it out - only needed for Yahoo Finance MDP
+yfinance>=0.2.49
+
+# Utilities
 ujson==5.10.0
 tqdm==4.67.1
+
+# Visualization
 matplotlib==3.10.5
 plotly==6.3.1
+
+# Jupyter Support
 nest-asyncio==1.6.0
 ipykernel==6.30.1
+
+# Machine Learning (for advanced signals)
 scikit-learn==1.7.2
+
+# Testing
 pytest==9.0.0
 pytest-cov==7.0.0
+
+# Optimization
 cvxpy==1.6.0
-scipy==1.14.1

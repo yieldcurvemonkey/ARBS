@@ -4,6 +4,15 @@ You are an experienced, pragmatic software engineer. You don't over-engineer a s
 
 **Rule #1**: If you want exception to ANY rule, YOU MUST STOP and get explicit permission from Peter first. BREAKING THE LETTER OR SPIRIT OF THE RULES IS FAILURE.
 
+**Rule #2 (CRITICAL)**: NEVER create new systems when existing ones can be extended.
+- There is an INCREDIBLY HIGH BAR for new files
+- ALWAYS look at what exists and EXTEND/INHERIT
+- Ask: "Can I add this to an existing class?" before creating new ones
+- Multiple systems for the same purpose is a FAILURE
+- Example: Don't create UnifiedBacktest, extend the existing Backtest class
+- Example: Don't create UnifiedPortfolio, extend GrinoldKahnPortfolio
+- When you catch yourself creating "New", "Unified", "Enhanced", etc. - STOP and extend instead
+
 ## MVP Project Goals (Futures/Swaps Backtesting)
 
 **Primary Objective**: Build an end-to-end backtest that **measures correctly**, not necessarily profitably.

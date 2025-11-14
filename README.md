@@ -20,20 +20,80 @@ A modular research codebase for building yield curves, pricing interest rate der
 
 ---
 
+## Development Environment Setup
+
+### Clean VM Installation (Recommended)
+
+This setup ensures a reproducible environment from scratch on a fresh VM:
+
+```bash
+# 1. Verify Python version (3.11+ required)
+python --version  # Should show Python 3.11.x or later
+
+# 2. Clone repository
+git clone https://github.com/pfin/ARBS.git
+cd ARBS
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Verify installation by running tests
+python -m pytest tests/unit/ -v
+
+# 5. Expected result: 1038+ tests passing (99.2% pass rate)
+```
+
+### Dependency Notes
+
+**Core Dependencies**:
+- Python 3.11+ (tested on 3.11.14)
+- numpy, scipy, polars (data processing)
+- QuantLib, rateslib (curve building and pricing)
+- ZODB, BTrees (persistent caching)
+- pytest (testing framework)
+
+**Known Installation Issues**:
+- If `multitasking` (yfinance dependency) fails to build, this is a known setuptools compatibility issue
+- Most core functionality will work without yfinance (only impacts Yahoo Finance MDP)
+- See `INSTALLATION_STATUS.md` for detailed diagnosis if installation fails
+
+**Verification**:
+```bash
+# Quick smoke test
+python -c "import numpy, polars, scipy, QuantLib, rateslib; print('Core deps OK')"
+
+# Full test suite
+python -m pytest tests/unit/ -v --tb=short
+
+# Check test coverage
+python -m pytest tests/unit/ --cov=. --cov-report=term-missing
+```
+
+### Virtual Environment (Optional but Recommended)
+
+```bash
+# Create virtual environment
+python -m venv venv
+
+# Activate (Linux/Mac)
+source venv/bin/activate
+
+# Activate (Windows)
+venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+---
+
 ## Quick Start
 
 ### 1) Environment
 
-- Python=3.13
-- Core libraries used in the repo (install as needed):
-  - `QuantLib`, `pandas`, `numpy`
-  - `rateslib` (for RL backends)
-  - `zodb`, `BTrees`, `persistent`, `transaction`, `zc.lockfile` (for ZODB caching)
-  - `tqdm`
-
-```bash
-pip install -r requirements.txt 
-```
+**Prerequisites**:
+- Python 3.11+ (see Development Environment Setup above)
+- All dependencies installed via `pip install -r requirements.txt`
 
 Some data builders (e.g., CME/fixings/SDR) may require credentials or local files. See MDP/IRSwaps/* modules
 
@@ -88,18 +148,87 @@ print(bt.mtm_history)           # dict[datetime -> portfolio MTM]
 print(bt.realized_pnl_history)  # realized P&L over time (unwinds only)
 ```
 
+### 3) Signal-based backtest (Grinold-Kahn)
+
+For equity/portfolio strategies using signals and optimization:
+
+```python
+import polars as pl
+from datetime import date
+from Backtest.Backtest import Backtest
+from Signals.Futures.CarrySignal import CarrySignal
+from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
+from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
+
+# Example returns DataFrame (polars)
+# In practice, use Adapter/FuturesAdapter or Adapter/EquityAdapter
+returns_df = pl.DataFrame({
+    'date': [date(2024, 1, d) for d in range(1, 31)],
+    'SFRZ4': [...],  # returns series
+    'SFRH5': [...],  # returns series
+})
+
+# Create backtest with signal and risk model
+backtest = Backtest(
+    signals=CarrySignal(),
+    risk_model=LedoitWolfShrinkage(),
+    optimizer=MeanVarianceOptimizer(risk_aversion=1.0, long_only=True),
+    rebalance_frequency='weekly'
+)
+
+# Run backtest
+result = backtest.run_from_dataframe(
+    returns_df=returns_df,
+    dates=returns_df['date'].to_list()
+)
+
+# Analysis
+print(result.sharpe_ratio)
+print(result.information_coefficient)
+print(result.total_return)
+```
+
+**Key Differences:**
+- BT/ uses **queries** (what to value) → MDP (market data) → pricing
+- Backtest/ uses **signals** (alpha forecasts) → returns → optimization
+
 ## Repository Layout
 
 ```txt
-BT/                    # Backtesting engines, strategies, triggers, orders, portfolios
-Caching/               # ZODB-based persistent cache + codecs/utilities
-definitions/           # Product/curve definitions (e.g., IRS curve metadata)
-docs/                  # Documentation, references, research papers, books
-MDP/                   # Market Data Providers and curve builders (CME EOD, SDR, GSQuant/RatesLib)
-Query/                 # Product-agnostic BaseQuery + adapters + product-specific (IRS) structures/values/backends
-TB/                    # Toolboxes/utilities for batch/query runs over time grids
-utils/                 # Misc utilities (e.g., QuantLib date bridges)
+BT/                    # Query/Event-driven backtesting for derivatives (swaps, futures, bonds)
+Backtest/              # Signal-based backtesting for equities (Grinold-Kahn framework)
+Signals/               # Alpha signal generation (Carry, Momentum, Mean Reversion)
+Risk/                  # Covariance estimation and volatility forecasting
+Optimizer/             # Portfolio optimization (Mean-Variance, CVaR)
+Asset/                 # Asset abstraction (Portfolio, PriceFuture, GrinoldKahnPortfolio)
+Adapter/               # Data adapters (Query → DataFrame bridge)
+Strategies/            # Strategy factory system (YAML-based configuration)
+Analysis/              # Performance analysis (TearSheet, metrics)
+
+# Data Layer
+MDP/                   # Market Data Providers (CME, SDR, Yahoo Finance, etc.)
+Query/                 # Product-agnostic queries for derivatives
+Caching/               # ZODB-based persistent cache
+
+# Supporting Infrastructure
+definitions/           # Product/curve definitions
+docs/                  # Documentation, design docs, research papers
+TB/                    # Toolboxes/utilities for batch processing
+RVUtils/               # Relative value utilities and curve interpolation
+utils/                 # Misc utilities
 ```
+
+### Two Backtesting Systems
+
+**BT/** - Query/Event-driven for derivatives:
+- `QueryDrivenBacktest` - Query-based workflow with MDP
+- `EventDrivenBacktest` - Event-based with triggers/actions
+- Used for: Swaps, futures, bonds, basis trades, curve strategies
+
+**Backtest/** - Signal-based for equities/portfolios:
+- `Backtest` - Generic backtest with Grinold-Kahn architecture
+- Signal-driven with portfolio optimization
+- Used for: Equity momentum, sector rotation, multi-factor strategies
 
 ## Documentation Guide
 

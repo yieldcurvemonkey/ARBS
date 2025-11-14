@@ -9,7 +9,7 @@ Provides a structured Python object for strategy creation.
 Example:
     >>> config = StrategyConfig.from_yaml('strategy.yaml')
     >>> config.strategy.name
-    'Simple Carry Strategy'
+    'Carry Strategy'
     >>> config.signals[0].type
     'carry'
 """
