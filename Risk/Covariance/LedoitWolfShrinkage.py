@@ -157,7 +157,8 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
             Constant correlation matrix (N×N)
         """
         # Calculate sample correlation matrix
-        corr_matrix = returns.corr().to_numpy()
+        returns_np = returns.to_numpy()
+        corr_matrix = np.corrcoef(returns_np.T)
 
         # Average off-diagonal correlation
         n = corr_matrix.shape[0]

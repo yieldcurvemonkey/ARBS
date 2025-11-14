@@ -172,19 +172,23 @@ class TestPerfectBlockDiagonal:
         returns_wide = perfect_block_returns.pivot(
             index="date", columns="ticker", values="return"
         )
-        corr_matrix = returns_wide.to_pandas().corr()
+        # Exclude date column and get only numeric ticker columns
+        tickers = [col for col in returns_wide.columns if col != 'date']
+        ticker_idx = {ticker: i for i, ticker in enumerate(tickers)}
+        returns_np = returns_wide.select(tickers).to_numpy()
+        corr_matrix = np.corrcoef(returns_np.T)
 
         clusters = estimator.get_correlation_clusters(threshold=0.85, n_clusters=3)
 
         # Check intra-cluster correlations
         # A-B should be highly correlated
-        assert abs(corr_matrix.loc["A", "B"]) > 0.85
+        assert abs(corr_matrix[ticker_idx["A"], ticker_idx["B"]]) > 0.85
 
         # C-D should be highly correlated
-        assert abs(corr_matrix.loc["C", "D"]) > 0.85
+        assert abs(corr_matrix[ticker_idx["C"], ticker_idx["D"]]) > 0.85
 
         # E-F should be highly correlated
-        assert abs(corr_matrix.loc["E", "F"]) > 0.85
+        assert abs(corr_matrix[ticker_idx["E"], ticker_idx["F"]]) > 0.85
 
     def test_low_inter_cluster_correlation(self, perfect_block_returns):
         """Cross-cluster correlation should be low."""
@@ -195,12 +199,16 @@ class TestPerfectBlockDiagonal:
         returns_wide = perfect_block_returns.pivot(
             index="date", columns="ticker", values="return"
         )
-        corr_matrix = returns_wide.to_pandas().corr()
+        # Exclude date column and get only numeric ticker columns
+        tickers = [col for col in returns_wide.columns if col != 'date']
+        ticker_idx = {ticker: i for i, ticker in enumerate(tickers)}
+        returns_np = returns_wide.select(tickers).to_numpy()
+        corr_matrix = np.corrcoef(returns_np.T)
 
         # Cross-cluster correlations should be low
-        assert abs(corr_matrix.loc["A", "C"]) < 0.5
-        assert abs(corr_matrix.loc["A", "E"]) < 0.5
-        assert abs(corr_matrix.loc["C", "E"]) < 0.5
+        assert abs(corr_matrix[ticker_idx["A"], ticker_idx["C"]]) < 0.5
+        assert abs(corr_matrix[ticker_idx["A"], ticker_idx["E"]]) < 0.5
+        assert abs(corr_matrix[ticker_idx["C"], ticker_idx["E"]]) < 0.5
 
 
 class TestOverlappingClusters:
