@@ -50,7 +50,7 @@ class TestSignalGeneration:
         class TestSignal(BaseSignal):
             def _calculate_raw_signal(self, inst_data, market_data, as_of):
                 # Simple test signal: return price change
-                return inst_data.iloc[0]["price"] - inst_data.iloc[-1]["price"]
+                return inst_data[0, "price"] - inst_data[-1, "price"]
 
         signal = TestSignal(name="test_signal")
 
@@ -74,7 +74,7 @@ class TestSignalGeneration:
 
         class TestSignal(BaseSignal):
             def _calculate_raw_signal(self, inst_data, market_data, as_of):
-                return inst_data.iloc[0]["price"] - inst_data.iloc[-1]["price"]
+                return inst_data[0, "price"] - inst_data[-1, "price"]
 
         signal = TestSignal(name="test_signal")
 
@@ -104,7 +104,7 @@ class TestSignalStandardization:
 
         class TestSignal(BaseSignal):
             def _calculate_raw_signal(self, inst_data, market_data, as_of):
-                return inst_data.iloc[0]["value"]
+                return inst_data[0, "value"]
 
         signal = TestSignal(name="test_signal", standardize=True)
 
@@ -129,7 +129,7 @@ class TestSignalStandardization:
 
         class TestSignal(BaseSignal):
             def _calculate_raw_signal(self, inst_data, market_data, as_of):
-                return inst_data.iloc[0]["value"]
+                return inst_data[0, "value"]
 
         signal = TestSignal(name="test_signal", standardize=False)
 
@@ -297,11 +297,11 @@ class TestICTimeSeries:
         from Signals.Utils.IC import calculate_ic_time_series
 
         # Create time series of forecasts and actuals
-        dates = pl.datetime_range(start="2025-01-01", periods=100, interval="1d")
         np.random.seed(42)
 
-        forecasts = pl.Series(np.random.randn(100), index=dates)
-        actuals = pl.Series(0.2 * forecasts + 0.8 * np.random.randn(100), index=dates)
+        forecast_values = np.random.randn(100)
+        forecasts = pl.Series(forecast_values)
+        actuals = pl.Series(0.2 * forecast_values + 0.8 * np.random.randn(100))
 
         ic_series = calculate_ic_time_series(
             forecasts=forecasts,
@@ -318,17 +318,15 @@ class TestICTimeSeries:
         from Signals.Utils.IC import calculate_ic_decay
 
         # Create signal with decaying IC
-        dates = pl.datetime_range(start="2025-01-01", periods=100, interval="1d")
         np.random.seed(42)
 
         # IC decays exponentially
         days = np.arange(100)
         decay_factor = np.exp(-days / 20)  # Halflife = 20 days
 
-        forecasts = pl.Series(np.random.randn(100), index=dates)
+        forecasts = pl.Series(np.random.randn(100))
         actuals = pl.Series(
-            decay_factor * forecasts + (1 - decay_factor) * np.random.randn(100),
-            index=dates
+            decay_factor * forecasts + (1 - decay_factor) * np.random.randn(100)
         )
 
         halflife = calculate_ic_decay(forecasts=forecasts, actuals=actuals)
