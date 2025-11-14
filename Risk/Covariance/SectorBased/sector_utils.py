@@ -62,10 +62,12 @@ def long_to_wide(
         - tickers: List of ticker names (column order)
     """
     # Pivot to wide format
+    # If there are duplicates, take the first value
     wide = returns.pivot(
         index="date",
-        columns=pivot_col,
+        on=pivot_col,
         values=value_col,
+        aggregate_function="first",
     ).sort("date")
 
     # Get ticker names (all columns except 'date')

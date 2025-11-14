@@ -74,9 +74,10 @@ class TestCorrelationClusteringBasics:
 
         clusters = estimator.get_correlation_clusters(threshold=0.85)
 
+        # get_correlation_clusters returns ticker → cluster_id mapping
         assert isinstance(clusters, dict)
-        assert all(isinstance(k, str) for k in clusters.keys())
-        assert all(isinstance(v, list) for v in clusters.values())
+        assert all(isinstance(k, str) for k in clusters.keys())  # Ticker names
+        assert all(isinstance(v, str) for v in clusters.values())  # Cluster IDs like "cluster_0"
 
 
 class TestPerfectBlockDiagonal:
