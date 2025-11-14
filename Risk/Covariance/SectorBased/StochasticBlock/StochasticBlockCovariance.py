@@ -80,6 +80,7 @@ class StochasticBlockCovariance(SectorBasedCovarianceEstimator):
 
         self.allow_inter_block = allow_inter_block
         self.alpha = alpha
+        self.discover_blocks = discover_blocks
         self.n_clusters = n_clusters
         self.shrinkage_per_block = shrinkage_per_block
         self.min_eigenvalue = min_eigenvalue
