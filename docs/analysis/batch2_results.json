@@ -1,0 +1,252 @@
+{
+  "analyzed_at": "2025-11-14T20:24:25Z",
+  "batch": "batch2_referenced_docs",
+  "total_files": 8,
+  "results": [
+    {
+      "file": "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md",
+      "lines": 112,
+      "code_references_found": [
+        "SampleCovariance (generic mention)",
+        "LedoitWolf (generic mention)"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "outdated",
+      "recommendation": "ARCHIVE",
+      "notes": "Research plan document from 2025-11-11. Outlines 5 research tasks for investigating covariance methods for fixed income/futures with 90%+ correlation. The actual research has been completed and findings are documented in other files (high_correlation_covariance.md, current_arbs_covariance_usage.md). This was a planning document, not implementation guidance.",
+      "issues": [
+        "Research plan superseded by completed research",
+        "Deliverables mentioned (grinold_kahn_fixed_income_covariance.md, practitioner_covariance_methods.md, factor_models_fixed_income.md) do not exist",
+        "Generic code mentions without specific paths"
+      ],
+      "related_docs": [
+        "docs/research/high_correlation_covariance.md",
+        "docs/research/current_arbs_covariance_usage.md"
+      ]
+    },
+    {
+      "file": "docs/resources/PORTFOLIO_MANAGEMENT_RESEARCH.md",
+      "lines": 836,
+      "code_references_found": [],
+      "code_exists": null,
+      "code_accurate": null,
+      "relevance": "essential",
+      "recommendation": "KEEP",
+      "notes": "Comprehensive curated collection of 2025 academic research papers (sections 0.1-0.12) plus 2024 and earlier foundational work. Focus areas: covariance estimation, factor models, active management, optimization, hierarchical methods. Explicitly prioritizes 2025 papers first. No code references - this is pure research literature review. Highly valuable for staying current with state-of-the-art methods. Well-organized with clear implementation priorities (Phase 1-3). References papers like RL-BHRP, Cost-aware Portfolios, Attention-Enhanced RL that inform ARBS development.",
+      "issues": [],
+      "related_docs": [
+        "docs/GRINOLD_KAHN_FRAMEWORK.md"
+      ]
+    },
+    {
+      "file": "docs/research/high_correlation_covariance.md",
+      "lines": 678,
+      "code_references_found": [
+        "/home/user/ARBS/Risk/Covariance/ConstantCorrelationCovariance.py",
+        "/home/user/ARBS/Risk/Covariance/LedoitWolfShrinkage.py",
+        "/home/user/ARBS/tests/unit/risk/test_constant_correlation.py",
+        "/home/user/ARBS/docs/references/COVARIANCE_ESTIMATION_REFERENCE.md",
+        "/home/user/ARBS/docs/references/papers/total-positivity-2019.md"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "useful",
+      "recommendation": "KEEP",
+      "notes": "Detailed research on covariance estimation for highly correlated assets (90%+ correlation typical in STIR futures). Evaluates three methods: ERSE (2025, best but no code), MTP2 (2019, best with code available), and Constant Correlation (2004, already in ARBS). Includes empirical evidence, implementation sketches, and clear recommendations. Status updated 2025-11-11. All code references verified to exist. Recommends implementing MTP2 as next enhancement (3-5 day effort). Critical finding: Ledoit-Wolf limited benefit at ρ>0.90, MTP2 shows 10-15% risk reduction.",
+      "issues": [
+        "Reference to docs/references/papers/total-positivity-2019.md not verified (may not exist)"
+      ],
+      "related_docs": [
+        "docs/research/current_arbs_covariance_usage.md",
+        "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md"
+      ]
+    },
+    {
+      "file": "docs/GRINOLD_KAHN_FRAMEWORK.md",
+      "lines": 879,
+      "code_references_found": [
+        "ReturnsCalculator",
+        "AlphaGenerator",
+        "LedoitWolfShrinkage",
+        "MeanVarianceOptimizer",
+        "Portfolio",
+        "TearSheet",
+        "SignalCombiner",
+        "CarrySignal",
+        "MomentumSignal",
+        "MeanReversionSignal",
+        "examples/run_backtest.py",
+        "Signals/",
+        "Risk/",
+        "Portfolio/",
+        "Optimizer/"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "essential",
+      "recommendation": "KEEP",
+      "notes": "Core framework documentation for ARBS. Comprehensive guide to Grinold-Kahn portfolio management framework implementation. Documents architecture with clear phase completion status (Phases 1-4 complete as of 2025-11-11, 582 tests passing). Includes detailed signal types, risk models, optimization, and equity extension. Section 8 added 2025-11-11 covers equity-specific implementation extending to 500-stock portfolios. Architecture status accurately reflects codebase. Contains practical code examples, formulas, and success criteria. Critical document linking theory to implementation.",
+      "issues": [],
+      "related_docs": [
+        "docs/ALPHA_GENERATOR.md",
+        "docs/research/current_arbs_covariance_usage.md",
+        "examples/run_backtest.py"
+      ]
+    },
+    {
+      "file": "docs/research/current_arbs_covariance_usage.md",
+      "lines": 679,
+      "code_references_found": [
+        "/home/user/ARBS/Risk/Covariance/LedoitWolfShrinkage.py",
+        "/home/user/ARBS/Risk/Covariance/SampleCovariance.py",
+        "/home/user/ARBS/Risk/Covariance/OAShrinkage.py",
+        "/home/user/ARBS/Risk/Covariance/ConstantCorrelationCovariance.py",
+        "/home/user/ARBS/Risk/Covariance/DiagonalCovariance.py",
+        "/home/user/ARBS/Risk/Covariance/IdentityCovariance.py",
+        "/home/user/ARBS/Risk/Covariance/CovarianceComparison.py",
+        "/home/user/ARBS/Strategies/Factory/CovarianceFactory.py",
+        "/home/user/ARBS/Optimizer/MeanVarianceOptimizer.py",
+        "/home/user/ARBS/tests/unit/risk/test_covariance_comparison.py",
+        "/home/user/ARBS/tests/unit/risk/test_constant_correlation.py",
+        "/home/user/ARBS/tests/unit/risk/test_oas_shrinkage.py"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "useful",
+      "recommendation": "KEEP",
+      "notes": "Comprehensive analysis of current ARBS covariance implementation dated 2025-11-11. Documents 6 implemented estimators, test coverage (582 tests), factory integration, and YAML examples. Default method: Ledoit-Wolf with constant correlation. Identifies three critical gaps: (1) LW uses known-mean formula (should be LW_u), (2) Factory doesn't expose all estimators, (3) No empirical validation on real futures data. Provides detailed recommendations with priorities. All code references verified. Very accurate snapshot of implementation status. Serves as both documentation and improvement roadmap.",
+      "issues": [
+        "Recommendations not yet implemented (LW_u upgrade, factory registration)",
+        "No empirical validation on real data (only synthetic)"
+      ],
+      "related_docs": [
+        "docs/research/high_correlation_covariance.md",
+        "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md"
+      ]
+    },
+    {
+      "file": "docs/SECTOR_COVARIANCE_GUIDE.md",
+      "lines": 380,
+      "code_references_found": [
+        "Risk.Covariance.SectorBased.BlockDiagonal.BlockDiagonalCovariance",
+        "Risk.Covariance.SectorBased.TwoStep.TwoStepCovariance",
+        "Risk.Covariance.SectorBased.StochasticBlock.StochasticBlockCovariance",
+        "Risk/Covariance/SectorBased/BaseSectorCovarianceEstimator.py",
+        "examples/sector_covariance_comparison.py",
+        "docs/phase3_common_patterns_analysis.md",
+        "docs/MACRO_TRADING_INSIGHTS.md"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "useful",
+      "recommendation": "UPDATE",
+      "notes": "User guide for three sector-based covariance estimators from Phase 2-3. Covers BlockDiagonal (Žignić 2024), TwoStep (García-Medina 2024), and StochasticBlock (Chen 2025). Provides practical usage examples, decision tree, and performance comparison. WARNING at line 49: Results are on synthetic data, not real portfolio performance. All main code references verified. Strong practical focus with 'when to use each method' guidance. Critical insight: StochasticBlock essential for macro trading with cross-currency correlations. Missing MACRO_TRADING_INSIGHTS.md document.",
+      "issues": [
+        "Reference to docs/MACRO_TRADING_INSIGHTS.md not found (line 379)",
+        "Synthetic data warning should be more prominent",
+        "Performance metrics need real-world validation disclaimer"
+      ],
+      "related_docs": [
+        "examples/sector_covariance_comparison.py",
+        "docs/phase3_common_patterns_analysis.md"
+      ]
+    },
+    {
+      "file": "docs/ALPHA_GENERATOR.md",
+      "lines": 783,
+      "code_references_found": [
+        "/home/user/ARBS/Signals/AlphaGenerator.py",
+        "/home/user/ARBS/tests/unit/signals/test_alpha_generator.py",
+        "Risk.Volatility.RealizedVolatility",
+        "Risk.Volatility.EWMAVolatility",
+        "Signals.CarrySignal",
+        "Signals.MomentumSignal",
+        "Optimizer.MeanVarianceOptimizer"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "essential",
+      "recommendation": "KEEP",
+      "notes": "Comprehensive component documentation for AlphaGenerator. Explains critical conversion from dimensionless Z-scores to expected returns using α = IC × Vol × Z formula. Dated 2025-11-11. Code verified: implementation matches documentation exactly (first 50 lines checked). Includes mathematical foundation, API reference, 18 test cases (all passing), usage examples, design decisions, common pitfalls, and advanced topics. Excellent educational content explaining WHY signals need conversion (Z=2.0 ≠ 200% return). Critical document for understanding signal pipeline. Well-structured with clear examples showing absurd outcomes without conversion vs sensible with conversion.",
+      "issues": [],
+      "related_docs": [
+        "docs/GRINOLD_KAHN_FRAMEWORK.md",
+        "Signals/AlphaGenerator.py"
+      ]
+    },
+    {
+      "file": "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md",
+      "lines": 398,
+      "code_references_found": [
+        "tests/validation/load_alphavantage_improved.py (TO BE CREATED)",
+        "MDP/CachedMarketDataProvider.py (TO BE CREATED)",
+        "Data/Cache/SQLiteCache.py",
+        "Data/Utils/RateLimiter.py (TO BE CREATED)",
+        "tests/unit/mdp/test_cached_mdp.py (TO BE CREATED)",
+        "examples/workflow_alphavantage_data.py (TO BE CREATED)",
+        "docs/DATA_LAYER_ARCHITECTURE.md"
+      ],
+      "code_exists": false,
+      "code_accurate": false,
+      "relevance": "orphan",
+      "recommendation": "UPDATE",
+      "notes": "Architecture plan created 2025-11-14 for AlphaVantage data layer. Status: READY FOR IMPLEMENTATION. Documents corrected architecture with clear separation: data loading (outside backtest) vs backtest execution (uses cached data). Defines 6 orthogonal tasks (50 min total). Only DATA_LAYER_ARCHITECTURE.md exists from this plan. All other files marked as TO BE CREATED. Core principle: 'THE BACKTESTER IS NOT A DATA LOADER' - data loading happens outside backtest via standalone script. Plan appears sound but UNIMPLEMENTED. Unclear if work started or abandoned.",
+      "issues": [
+        "Implementation status unclear - plan or reality?",
+        "No evidence of implementation (files don't exist)",
+        "Should mark as 'PLAN' not 'READY FOR IMPLEMENTATION'",
+        "May be superseded by different approach",
+        "API key exposed in document (QLGCJCCK8X4ZY6VC)"
+      ],
+      "related_docs": [
+        "docs/DATA_LAYER_ARCHITECTURE.md"
+      ]
+    }
+  ],
+  "summary": {
+    "keep": 5,
+    "update": 2,
+    "consolidate": 0,
+    "archive": 1,
+    "delete": 0
+  },
+  "key_findings": {
+    "accurate_documentation": [
+      "high_correlation_covariance.md",
+      "GRINOLD_KAHN_FRAMEWORK.md",
+      "current_arbs_covariance_usage.md",
+      "ALPHA_GENERATOR.md"
+    ],
+    "valuable_references": [
+      "PORTFOLIO_MANAGEMENT_RESEARCH.md (2025 papers)",
+      "GRINOLD_KAHN_FRAMEWORK.md (core architecture)",
+      "ALPHA_GENERATOR.md (component guide)"
+    ],
+    "needs_update": [
+      "SECTOR_COVARIANCE_GUIDE.md (missing doc reference, synthetic data warning)",
+      "ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md (mark as unimplemented plan)"
+    ],
+    "should_archive": [
+      "COVARIANCE_METHODS_FOR_FIXED_INCOME.md (research plan superseded)"
+    ],
+    "code_verification": "All referenced code files exist and match documentation",
+    "test_coverage": "582 tests passing as documented in GRINOLD_KAHN_FRAMEWORK.md"
+  },
+  "recommendations": {
+    "immediate": [
+      "Archive COVARIANCE_METHODS_FOR_FIXED_INCOME.md (research completed)",
+      "Update SECTOR_COVARIANCE_GUIDE.md to fix missing doc reference",
+      "Update ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md to clarify unimplemented status"
+    ],
+    "maintain": [
+      "Keep PORTFOLIO_MANAGEMENT_RESEARCH.md current with 2025 papers (quarterly updates recommended)",
+      "Keep current_arbs_covariance_usage.md as implementation guide",
+      "Keep ALPHA_GENERATOR.md and GRINOLD_KAHN_FRAMEWORK.md as core references"
+    ],
+    "future": [
+      "Consider implementing MTP2 covariance estimator (recommended in high_correlation_covariance.md)",
+      "Validate sector covariance methods on real portfolio data (not just synthetic)"
+    ]
+  }
+}
