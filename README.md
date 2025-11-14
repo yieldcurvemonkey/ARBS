@@ -148,49 +148,103 @@ print(bt.mtm_history)           # dict[datetime -> portfolio MTM]
 print(bt.realized_pnl_history)  # realized P&L over time (unwinds only)
 ```
 
-### 3) Signal-based backtest (Grinold-Kahn)
+### 3) Unified Backtest (Signal-based, Grinold-Kahn)
 
-For equity/portfolio strategies using signals and optimization:
+The unified `Backtest` class supports multiple workflows with a single interface.
+
+#### Query-Based Workflow (Futures/Swaps)
 
 ```python
-import polars as pl
-from datetime import date
 from Backtest.Backtest import Backtest
+from Adapter.FuturesAdapter import FuturesAdapter
 from Signals.Futures.CarrySignal import CarrySignal
-from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
-from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
 
-# Example returns DataFrame (polars)
-# In practice, use Adapter/FuturesAdapter or Adapter/EquityAdapter
-returns_df = pl.DataFrame({
-    'date': [date(2024, 1, d) for d in range(1, 31)],
-    'SFRZ4': [...],  # returns series
-    'SFRH5': [...],  # returns series
-})
-
-# Create backtest with signal and risk model
+# Create backtest with query-based data
 backtest = Backtest(
+    mdp=market_data_provider,
+    adapter=FuturesAdapter(mdp),  # Query → DataFrame bridge
     signals=CarrySignal(),
-    risk_model=LedoitWolfShrinkage(),
-    optimizer=MeanVarianceOptimizer(risk_aversion=1.0, long_only=True),
-    rebalance_frequency='weekly'
+    risk_aversion=1.0,
+    long_only=True,
 )
 
-# Run backtest
-result = backtest.run_from_dataframe(
-    returns_df=returns_df,
-    dates=returns_df['date'].to_list()
+# Run backtest via query workflow
+result = backtest.run(
+    contracts=['SFRZ4', 'SFRH5', 'SFRM5'],
+    dates=[date(2024, 6, 15), date(2024, 6, 22), ...]
 )
 
 # Analysis
-print(result.sharpe_ratio)
-print(result.information_coefficient)
-print(result.total_return)
+print(f"Sharpe: {result.sharpe_ratio:.3f}")
+print(f"IC: {result.ic:.3f}")
+print(f"Return: {result.total_return:.2%}")
 ```
 
-**Key Differences:**
-- BT/ uses **queries** (what to value) → MDP (market data) → pricing
-- Backtest/ uses **signals** (alpha forecasts) → returns → optimization
+#### DataFrame-Based Workflow (Equities/ETFs)
+
+```python
+from Backtest.Backtest import Backtest
+from Signals.Futures.MomentumSignal import MomentumSignal
+
+# Create backtest with pre-computed returns
+backtest = Backtest(
+    signals=MomentumSignal(lookback=20),
+    risk_aversion=2.0,
+    long_only=True,
+)
+
+# Prepare returns DataFrame
+returns_df = pl.DataFrame({
+    'date': [...],
+    'ticker': [...],
+    'return': [...],
+})
+
+# Run backtest via DataFrame workflow
+result = backtest.run_from_dataframe(
+    returns_df=returns_df,
+    dates=returns_df['date'].unique().to_list()
+)
+
+# Analysis
+print(f"Sharpe: {result.sharpe_ratio:.3f}")
+print(f"Return: {result.total_return:.2%}")
+```
+
+#### Multi-Signal Strategy
+
+```python
+from Signals.SignalCombiner import SignalCombiner
+
+# Combine multiple signals
+backtest = Backtest(
+    mdp=mdp,
+    adapter=FuturesAdapter(mdp),
+    signals=[
+        CarrySignal(name='carry'),
+        MomentumSignal(lookback=20, name='momentum')
+    ],
+    signal_combiner=SignalCombiner(method='equal'),
+    risk_aversion=1.5,
+)
+
+result = backtest.run(contracts=[...], dates=[...])
+```
+
+**Key Features:**
+- **Single class** for all workflows (query-based, DataFrame-based, hybrid)
+- **Signal-driven** alpha generation with portfolio optimization
+- **Component injection** for risk models, optimizers, signals
+- **Multi-signal support** with automatic combiner
+
+**Two Backtesting Systems:**
+- **BT/**: Query/Event-driven for derivatives (queries → MDP → pricing)
+- **Backtest/**: Signal-driven for portfolios (signals → returns → optimization)
+
+**See Also:**
+- `examples/backtest_query_workflow.py` - Query workflow examples
+- `examples/backtest_hybrid_workflow.py` - Hybrid workflow patterns
+- `docs/BACKTEST_UNIFIED_API.md` - Complete API documentation
 
 ## Repository Layout
 
