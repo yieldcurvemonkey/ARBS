@@ -1,5 +1,7 @@
 # Honest Assessment: Strategy Notebooks Quality
 
+**Related**: See FINAL_VERIFICATION_RESULTS.md for detailed test execution results on notebooks 10, 12, 13, 15.
+
 **Date**: 2025-11-13
 **Assessor**: Claude (verified by reading actual notebook content)
 

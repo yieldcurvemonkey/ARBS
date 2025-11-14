@@ -1,5 +1,7 @@
 # Final Notebook Verification Results
 
+**Related**: See HONEST_NOTEBOOK_ASSESSMENT.md for quality assessment of all 10 notebooks (06-15).
+
 **Date**: 2025-11-13
 **Session**: claude/verify-integration-notebook-011CV66ZrAdcoGXccRY1Up3E
 **Objective**: Fix and verify notebooks 10, 12, 13, 15 execute correctly with QuantLib installed
