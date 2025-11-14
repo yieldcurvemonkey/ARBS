@@ -67,6 +67,7 @@ from Signals.AlphaGenerator import AlphaGenerator
 from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
 from Risk.Returns.ReturnsCalculator import ReturnsCalculator
 from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
+from Query.Base.BaseQuery import BaseQuery
 
 
 class Backtest(BaseBacktest):
@@ -84,9 +85,13 @@ class Backtest(BaseBacktest):
         mdp: Optional[Any] = None,
         adapter: Optional[Any] = None,  # BaseAdapter
 
-        # Signals (required)
+        # Signals (signal workflow)
         signals: Optional[Union[BaseSignal, List[BaseSignal]]] = None,
         signal_combiner: Optional[Any] = None,  # SignalCombiner
+
+        # Queries (query workflow)
+        queries: Optional[List[BaseQuery]] = None,
+        triggers: Optional[List[Any]] = None,
 
         # Pipeline components (optional)
         alpha_generator: Optional[AlphaGenerator] = None,
@@ -103,11 +108,18 @@ class Backtest(BaseBacktest):
         """
         Initialize generic backtest with component injection.
 
+        Supports THREE workflows:
+        1. Signal-driven (existing): Provide signals
+        2. Query-driven (NEW): Provide mdp + queries
+        3. Hybrid (NEW): Provide both signals and queries
+
         Args:
             mdp: Market data provider (for query workflow)
             adapter: Converts queries → DataFrame (FuturesAdapter, EquityAdapter)
             signals: Single signal or list of signals to combine
             signal_combiner: How to combine multiple signals
+            queries: List of queries to execute (query workflow)
+            triggers: Event triggers (query workflow)
             alpha_generator: Converts signals → expected returns
             risk_model: Covariance estimator
             optimizer: Portfolio weight optimizer
@@ -118,15 +130,31 @@ class Backtest(BaseBacktest):
             min_history: Minimum periods for covariance estimation
 
         Raises:
-            ValueError: If signals not provided
+            ValueError: If neither signals nor queries provided
             ValueError: If using adapter without mdp
+            ValueError: If using queries without mdp
         """
         # Call parent
         super().__init__(mdp)
 
-        # Validate: Must provide signals
-        if signals is None:
-            raise ValueError("Must provide at least one signal")
+        # Detect workflow
+        self._workflow = self._detect_workflow(signals, mdp, queries)
+
+        # Validate based on workflow
+        if self._workflow == 'signal':
+            # Signal workflow: signals required
+            if signals is None:
+                raise ValueError("Signal workflow requires signals")
+        elif self._workflow == 'query':
+            # Query workflow: mdp + queries required
+            if mdp is None:
+                raise ValueError("Query workflow requires mdp")
+            if queries is None:
+                raise ValueError("Query workflow requires queries")
+        elif self._workflow == 'hybrid':
+            # Hybrid: both required
+            if mdp is None:
+                raise ValueError("Hybrid workflow requires mdp")
 
         # Validate: Adapter requires mdp
         if adapter is not None and mdp is None:
@@ -135,6 +163,10 @@ class Backtest(BaseBacktest):
         # Store configuration
         self.adapter = adapter
         self.min_history = min_history
+
+        # Store query workflow components
+        self.queries = queries or []
+        self.triggers = triggers or []
 
         # Handle signals (convert single to list)
         if isinstance(signals, BaseSignal):
@@ -162,13 +194,73 @@ class Backtest(BaseBacktest):
         )
         self.returns_calc = returns_calculator or ReturnsCalculator(method="percent")
 
+    def _detect_workflow(self, signals, mdp, queries) -> str:
+        """
+        Detect which workflow to use based on parameters.
+
+        Returns:
+            'signal': Signal-driven workflow
+            'query': Query-driven workflow
+            'hybrid': Both workflows
+        """
+        has_signals = signals is not None
+        has_queries = mdp is not None and queries is not None
+
+        if has_signals and has_queries:
+            return 'hybrid'
+        elif has_queries:
+            return 'query'
+        elif has_signals:
+            return 'signal'
+        else:
+            raise ValueError("Must provide either signals or (mdp + queries)")
+
     def run(
+        self,
+        contracts: List[str] = None,
+        dates: List[date] = None,
+        time_grid: List[date] = None,
+        **kwargs
+    ) -> BacktestResult:
+        """
+        Run backtest using detected workflow.
+
+        Routes to:
+        - run() with adapter for signal workflow (existing)
+        - run_from_queries() for query workflow (NEW)
+
+        Args:
+            contracts: List of contract codes (signal workflow with adapter)
+            dates: List of rebalance dates (signal workflow)
+            time_grid: List of dates (query workflow)
+            **kwargs: Additional arguments
+
+        Returns:
+            BacktestResult with performance metrics
+
+        Raises:
+            ValueError: If required parameters missing for detected workflow
+        """
+        # Route based on workflow
+        if self._workflow == 'query':
+            # Query workflow: use time_grid or dates
+            grid = time_grid if time_grid is not None else dates
+            if grid is None:
+                raise ValueError("Query workflow requires time_grid or dates")
+            return self.run_from_queries(time_grid=grid, **kwargs)
+        elif self._workflow in ('signal', 'hybrid'):
+            # Signal workflow: continue with existing logic
+            return self._run_signal_workflow(contracts=contracts, dates=dates)
+        else:
+            raise ValueError(f"Unknown workflow: {self._workflow}")
+
+    def _run_signal_workflow(
         self,
         contracts: List[str],
         dates: List[date],
     ) -> BacktestResult:
         """
-        Run backtest using query-based workflow.
+        Run backtest using signal-based workflow (existing implementation).
 
         Requires: self.mdp and self.adapter
 
@@ -185,8 +277,8 @@ class Backtest(BaseBacktest):
         # Validate workflow requirements
         if self.adapter is None or self.mdp is None:
             raise ValueError(
-                "Query-based workflow requires adapter and mdp. "
-                "Use run_from_dataframe() for DataFrame-based workflow."
+                "Signal workflow with adapter requires adapter and mdp. "
+                "Use run_from_dataframe() for DataFrame-based workflow without adapter."
             )
 
         if len(contracts) == 0 or len(dates) == 0:
@@ -566,6 +658,112 @@ class Backtest(BaseBacktest):
             signals=signals_df,
             prices=pl.DataFrame(),  # No prices in DataFrame workflow
             ic=ic,
+            sharpe_ratio=sharpe,
+            total_return=total_return,
+        )
+
+    def run_from_queries(
+        self,
+        time_grid: List[date],
+        **kwargs
+    ) -> BacktestResult:
+        """
+        Run backtest using query-driven workflow.
+
+        Executes queries via MDP at each time step.
+
+        Args:
+            time_grid: List of dates for query execution
+            **kwargs: Additional arguments
+
+        Returns:
+            BacktestResult with performance metrics
+
+        Raises:
+            ValueError: If mdp or queries not provided
+        """
+        # Validate workflow requirements
+        if self.mdp is None or len(self.queries) == 0:
+            raise ValueError(
+                "Query workflow requires mdp and queries. "
+                "Use run() or run_from_dataframe() for signal-based workflow."
+            )
+
+        if len(time_grid) == 0:
+            return self._empty_result()
+
+        # Storage for results
+        all_positions = []
+        all_returns = []
+        mtm_history = {}
+
+        previous_mtm = 0.0
+
+        for i, as_of in enumerate(time_grid):
+            # Ensure as_of is a date object
+            if hasattr(as_of, 'date'):
+                as_of = as_of.date()
+
+            # Execute queries via MDP
+            import datetime
+            now = datetime.datetime.combine(as_of, datetime.time())
+
+            # Calculate MTM for current positions
+            current_mtm = 0.0
+            for query in self.queries:
+                try:
+                    # Build MDP request
+                    mdp_request = query.build_mdp_request(now)
+                    pricer_or_curve = self.mdp.get_pricer(mdp_request)
+
+                    # Resolve package
+                    package, weights = query.resolve_package(pricer_or_curve=pricer_or_curve)
+
+                    # Build value map
+                    value_map = query.build_value_map(
+                        pricer_or_curve=pricer_or_curve,
+                        package=package,
+                        risk_weights=weights
+                    )
+
+                    # Get MTM value
+                    value_id = query.default_mtm_value_id()
+                    if value_id is not None:
+                        mtm_value = float(value_map.apply(value=value_id))
+                        current_mtm += mtm_value
+                except Exception as e:
+                    # Handle query execution failures gracefully
+                    continue
+
+            mtm_history[as_of] = current_mtm
+
+            # Calculate return from MTM change
+            if i > 0:
+                if previous_mtm != 0:
+                    period_return = (current_mtm - previous_mtm) / abs(previous_mtm)
+                else:
+                    period_return = 0.0
+                all_returns.append({'date': as_of, 'return': period_return})
+
+            previous_mtm = current_mtm
+
+        # Convert returns to series
+        if all_returns:
+            values = [r['return'] for r in all_returns]
+            returns_series = pl.Series(values=values)
+        else:
+            returns_series = pl.Series(values=[], dtype=pl.Float64)
+
+        # Calculate performance metrics
+        sharpe = self._calculate_sharpe(returns_series)
+        total_return = self._calculate_total_return(returns_series)
+
+        return BacktestResult(
+            weights=pl.DataFrame(),  # Query workflow doesn't track weights
+            returns=returns_series,
+            signals=pl.DataFrame(),  # No signals in pure query workflow
+            prices=pl.DataFrame(),
+            ic=np.nan,  # IC not applicable for query workflow
             sharpe_ratio=sharpe,
             total_return=total_return,
         )
