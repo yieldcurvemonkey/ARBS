@@ -66,7 +66,7 @@ All covariance estimators should inherit from `BaseCovarianceEstimator` and impl
 
 ```python
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
-import pandas as pd
+import polars as pl
 import numpy as np
 
 class BaseCovarianceEstimator(ABC):
@@ -84,7 +84,7 @@ class BaseCovarianceEstimator(ABC):
         self.asset_names_ = None      # Asset names from fitting
 
     @abstractmethod
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate covariance matrix from returns.
 
@@ -107,7 +107,7 @@ class BaseCovarianceEstimator(ABC):
 ```
 
 **Key Requirements:**
-- ✅ Must implement `fit(returns: pd.DataFrame) -> np.ndarray`
+- ✅ Must implement `fit(returns: pl.DataFrame) -> np.ndarray`
 - ✅ Must store result in `self.cov_matrix_` attribute
 - ✅ Must store asset names in `self.asset_names_` attribute
 - ✅ Return matrix must be N×N numpy array (symmetric, positive semi-definite)
@@ -118,7 +118,7 @@ Here's a complete example implementing a **diagonal covariance estimator** (assu
 
 ```python
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
-import pandas as pd
+import polars as pl
 import numpy as np
 
 class DiagonalCovariance(BaseCovarianceEstimator):
@@ -146,7 +146,7 @@ class DiagonalCovariance(BaseCovarianceEstimator):
         super().__init__(handle_missing=handle_missing)
         self.min_periods = min_periods
 
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate diagonal covariance matrix.
 
@@ -170,7 +170,7 @@ class DiagonalCovariance(BaseCovarianceEstimator):
             )
 
         # Calculate variances (diagonal elements)
-        variances = returns_clean.var(ddof=1).values
+        variances = returns_clean.var().to_numpy()[0]
 
         # Create diagonal matrix
         self.cov_matrix_ = np.diag(variances)
@@ -480,7 +480,8 @@ cov = estimator.get_covariance()  # Now works
 ```python
 def fit(self, returns):
     # Calculate covariance
-    cov = returns.cov().values
+    returns_array = returns.to_numpy()
+    cov = np.cov(returns_array, rowvar=False, ddof=1)
 
     # Add small diagonal term for numerical stability
     epsilon = 1e-8
@@ -500,7 +501,8 @@ def fit(self, returns):
     T, N = returns.shape  # T periods, N assets
 
     # Calculate covariance
-    cov = returns.cov().values
+    returns_array = returns.to_numpy()
+    cov = np.cov(returns_array, rowvar=False, ddof=1)
 
     # Verify shape
     assert cov.shape == (N, N), f"Expected ({N}, {N}), got {cov.shape}"
@@ -563,7 +565,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
 from Strategies.Factory.CovarianceFactory import CovarianceFactory
 from Strategies.Config.StrategyConfig import StrategyConfig
@@ -585,7 +587,7 @@ class IdentityCovariance(BaseCovarianceEstimator):
         """Initialize identity covariance estimator."""
         super().__init__(handle_missing=handle_missing)
 
-    def fit(self, returns: pd.DataFrame) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate identity covariance matrix.
 
@@ -700,9 +702,9 @@ def test_custom_risk_model():
 
     # Step 4: Test with mock data
     print("Step 4: Testing with mock returns data...")
-    returns = pd.DataFrame(
+    returns = pl.DataFrame(
         np.random.randn(100, 3) * 0.01,
-        columns=['SFRZ4', 'SFRH5', 'SFRM5']
+        schema=['SFRZ4', 'SFRH5', 'SFRM5']
     )
 
     cov_matrix = cov_estimator.fit(returns)
@@ -783,7 +785,7 @@ def __init__(self, required_param: float):
 ### fit() Implementation Pattern
 
 ```python
-def fit(self, returns: pd.DataFrame) -> np.ndarray:
+def fit(self, returns: pl.DataFrame) -> np.ndarray:
     """Standard pattern for fit() implementation."""
 
     # 1. Handle missing data
@@ -798,7 +800,8 @@ def fit(self, returns: pd.DataFrame) -> np.ndarray:
         raise ValueError(f"Insufficient data: {T} < {self.min_periods}")
 
     # 4. Calculate covariance
-    cov = returns_clean.cov().values
+    returns_array = returns_clean.to_numpy()
+    cov = np.cov(returns_array, rowvar=False, ddof=1)
 
     # 5. Regularize if needed
     epsilon = 1e-8
@@ -818,9 +821,9 @@ def test_my_risk_model():
     """Test custom risk model in isolation."""
 
     # Create mock returns
-    returns = pd.DataFrame(
+    returns = pl.DataFrame(
         np.random.randn(100, 5) * 0.01,
-        columns=[f'asset_{i}' for i in range(5)]
+        schema=[f'asset_{i}' for i in range(5)]
     )
 
     # Create and fit estimator
