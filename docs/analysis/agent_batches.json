@@ -1,0 +1,62 @@
+{
+  "batch1_referenced_docs": {
+    "description": "Risk/Covariance + Grinold-Kahn docs with code references",
+    "count": 10,
+    "docs": [
+      "docs/GRINOLD_KAHN_DETAILED_SPECS.md",
+      "docs/guides/extending_risk_models.md",
+      "docs/research/practitioner_covariance_methods.md",
+      "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md",
+      "docs/COMPOSABLE_PORTFOLIO_ARCHITECTURE.md",
+      "docs/MODULARITY_REVIEW_AND_STRATEGY_TYPES.md",
+      "docs/DATA_LAYER_ARCHITECTURE.md",
+      "docs/SIGNAL_COMBINATION_METHODS.md",
+      "docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md",
+      "docs/STRATEGY_MODULARIZATION_DESIGN.md"
+    ]
+  },
+  "batch2_referenced_docs": {
+    "description": "Remaining docs with references",
+    "count": 8,
+    "docs": [
+      "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md",
+      "docs/resources/PORTFOLIO_MANAGEMENT_RESEARCH.md",
+      "docs/research/high_correlation_covariance.md",
+      "docs/GRINOLD_KAHN_FRAMEWORK.md",
+      "docs/research/current_arbs_covariance_usage.md",
+      "docs/SECTOR_COVARIANCE_GUIDE.md",
+      "docs/ALPHA_GENERATOR.md",
+      "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md"
+    ]
+  },
+  "batch3_large_orphans": {
+    "description": "Large orphaned docs (>400 lines)",
+    "count": 10,
+    "docs": [
+      "BACKTEST_UNIFICATION_TASK.md",
+      "FLAW_REMEDIATION_PLAN.md",
+      "docs/AGENT_DOCUMENTATION_STANDARDS.md",
+      "docs/ALPHAVANTAGE_INTEGRATION_SPEC.md",
+      "docs/DETAILED_UNDERSTANDING_PLAN.md",
+      "docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md",
+      "docs/MODULARITY_IMPROVEMENTS_PLAN.md",
+      "docs/PDF_PROCESSING_PLAN.md",
+      "docs/SCHEMA_INDEX.md",
+      "docs/VERIFIED_INTEGRATIONS.md"
+    ]
+  },
+  "batch4_small_orphans": {
+    "description": "Remaining orphaned docs",
+    "count": 8,
+    "docs": [
+      "ARCHITECTURE_RECOMMENDATIONS.md",
+      "IMPLEMENTATION_NOTE.md",
+      "docs/ACTION_PLAN_DATA_LAYER.md",
+      "docs/FINAL_VERIFICATION_RESULTS.md",
+      "docs/HONEST_NOTEBOOK_ASSESSMENT.md",
+      "docs/NEXT_STEPS_PARALLEL_PLAN.md",
+      "tasks/notes-to-claude.md",
+      "tests/validation/DATA_LOADING_INSTRUCTIONS.md"
+    ]
+  }
+}

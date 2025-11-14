@@ -1,0 +1,101 @@
+{
+  "analyzed_at": "2025-11-14T20:25:31.012113",
+  "batch": "batch4_small_orphans",
+  "total_files": 8,
+  "results": [
+    {
+      "file": "ARCHITECTURE_RECOMMENDATIONS.md",
+      "lines": 365,
+      "purpose": "Architecture review with recommendations for naming violations, consolidation, and documentation improvements. Identified 9 files requiring naming fixes and questions about BT/, TB/, MDP provider status.",
+      "implemented": true,
+      "superseded_by": "Git commit 586cf38 (naming fixes) and 96017ec (architecture clarification). Issues addressed directly in code.",
+      "relevance": "outdated",
+      "recommendation": "ARCHIVE",
+      "notes": "Naming violations were fixed (removed 'Simple', 'Minimal', 'Phase' references). Architecture questions about BT/ vs Backtest/ were resolved (they serve different purposes). Recommendations about utilities consolidation and MDP documentation remain unaddressed but low priority.",
+      "historical_value": "High - documents what was wrong and what specific fixes were needed. Shows architecture review process and decision-making. Valuable reference for understanding why certain naming conventions exist."
+    },
+    {
+      "file": "IMPLEMENTATION_NOTE.md",
+      "lines": 54,
+      "purpose": "Documents adjustments made to cross-asset integration notebook (05_cross_asset_integration.ipynb). Notes API mismatches with SectorBasedCovarianceEstimator and data format issues.",
+      "implemented": true,
+      "superseded_by": "notebooks/05_cross_asset_integration.ipynb implementation and subsequent notebook updates",
+      "relevance": "outdated",
+      "recommendation": "ARCHIVE",
+      "notes": "Documents one-time implementation decisions and workarounds. Notebook exists and works. These notes explain why certain design choices were made (using LedoitWolfShrinkage instead of SectorBasedCovarianceEstimator) but are no longer needed as active documentation.",
+      "historical_value": "Medium - shows API evolution and design decisions made during notebook creation. May help understand why certain approaches were chosen."
+    },
+    {
+      "file": "docs/ACTION_PLAN_DATA_LAYER.md",
+      "lines": 236,
+      "purpose": "Data layer assessment and action plan. Concludes architecture is already correct, lists optional enhancements (CachedMarketDataProvider, enhanced loaders, workflow examples).",
+      "implemented": false,
+      "superseded_by": "Assessment confirmed architecture correctness. Optional enhancements not pursued.",
+      "relevance": "outdated",
+      "recommendation": "ARCHIVE",
+      "notes": "Status: 'Awaiting Peter's direction'. Outcome: Architecture validated as correct, no critical changes needed. Optional enhancements (CachedMarketDataProvider, enhanced AlphaVantage loader) were not implemented. Recommendation was 'validate and move on' which appears to have been followed.",
+      "historical_value": "Medium - documents data layer architecture validation process. Shows deliberate decision to NOT over-engineer when current solution works."
+    },
+    {
+      "file": "docs/FINAL_VERIFICATION_RESULTS.md",
+      "lines": 286,
+      "purpose": "Results from fixing and verifying notebooks 10, 12, 13, 15. Documents API mismatch resolution (MinimalBacktest usage), import path corrections, and component integration.",
+      "implemented": true,
+      "superseded_by": "Subsequent notebook updates and current notebook state",
+      "relevance": "outdated",
+      "recommendation": "ARCHIVE",
+      "notes": "Session: claude/verify-integration-notebook-011CV66ZrAdcoGXccRY1Up3E. Documents completed work: all 4 notebooks execute successfully, API mismatches fixed, proper ARBS integration demonstrated. This is a completion summary for a specific verification task.",
+      "historical_value": "Medium - documents what was broken in notebooks and how it was fixed. Useful for understanding notebook evolution and integration patterns."
+    },
+    {
+      "file": "docs/HONEST_NOTEBOOK_ASSESSMENT.md",
+      "lines": 295,
+      "purpose": "Quality assessment of 10 strategy notebooks: 6 excellent (full ARBS integration), 3 partial integration, 1 no integration (notebook 13 - pairs trading).",
+      "implemented": false,
+      "superseded_by": "Current notebook state. Assessment was a snapshot from 2025-11-13.",
+      "relevance": "redundant",
+      "recommendation": "DELETE",
+      "notes": "One-time assessment from Nov 13. Notebooks have likely evolved since then. Grep shows notebooks no longer use MinimalBacktest (0 matches), suggesting significant updates. This snapshot assessment has no lasting value - current notebook quality should be assessed fresh if needed.",
+      "historical_value": "Low - time-bound assessment that's outdated. No unique insights that can't be rediscovered by examining current notebooks."
+    },
+    {
+      "file": "docs/NEXT_STEPS_PARALLEL_PLAN.md",
+      "lines": 329,
+      "purpose": "Parallel execution plan for generic backtest adoption. 5 streams: example migration, integration tests, notebook updates, performance testing, documentation/research.",
+      "implemented": true,
+      "superseded_by": "Actual implementation of generic Backtest (Architecture V4) and subsequent development work",
+      "relevance": "outdated",
+      "recommendation": "ARCHIVE",
+      "notes": "Status: 'READY FOR PARALLEL EXECUTION'. Generic Backtest was implemented (18 tests passing, documented in CLAUDE.md). Plan called for migration examples, integration tests, notebook updates, and documentation. Some parts implemented (generic Backtest exists, examples exist), but specific parallel execution plan may not have been followed exactly.",
+      "historical_value": "Medium - shows planned approach to generic backtest rollout. Demonstrates task decomposition and parallel execution planning methodology."
+    },
+    {
+      "file": "tasks/notes-to-claude.md",
+      "lines": 52,
+      "purpose": "Design pattern documentation: tasks should be tracked in repository (tasks/ directory), not temporary files. Explains persistence philosophy and workflow.",
+      "implemented": true,
+      "superseded_by": null,
+      "relevance": "useful",
+      "recommendation": "KEEP",
+      "notes": "General guidance about task tracking pattern. The tasks/ directory still exists with migration files (migration_progress.md, pandas_to_polars_manifest.txt). This is evergreen documentation about HOW to track tasks, not a specific task itself. Still relevant for future Claude sessions.",
+      "historical_value": "High - captures important pattern for working with ephemeral VMs. Ensures work persists across sessions."
+    },
+    {
+      "file": "tests/validation/DATA_LOADING_INSTRUCTIONS.md",
+      "lines": 534,
+      "purpose": "Phase 4B instructions for loading real S&P 500 data and running portfolio validation. Step-by-step guide with 5 data source options and troubleshooting.",
+      "implemented": true,
+      "superseded_by": "Real data exists (sp500_real_data.parquet 936KB) and validation results exist (validation_results_real_data.txt)",
+      "relevance": "outdated",
+      "recommendation": "ARCHIVE",
+      "notes": "Highly detailed instructions for one-time data loading task. Data successfully loaded (parquet file exists). These instructions were for a specific phase (Phase 4B) of sector risk model validation. Could be useful as reference for reloading data or similar tasks, but primary purpose (initial data loading) is complete.",
+      "historical_value": "High - comprehensive methodology for data loading with multiple fallback options. Excellent reference for similar data loading tasks. Shows pragmatic approach to API limitations and data access challenges."
+    }
+  ],
+  "summary": {
+    "keep": 1,
+    "update": 0,
+    "archive": 6,
+    "delete": 1
+  }
+}

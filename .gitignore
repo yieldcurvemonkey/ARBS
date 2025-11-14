@@ -214,4 +214,5 @@ dump/
 
 # repo mix/ai stuff
 repomix-output.xml
-*.xml
+*.xml.journal
+.journal

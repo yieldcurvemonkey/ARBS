@@ -1,0 +1,215 @@
+{
+  "analyzed_at": "2025-11-14T20:11:58.552158",
+  "total_files": 107,
+  "categories": {
+    "orphan": [
+      "ARCHITECTURE_RECOMMENDATIONS.md",
+      "BACKTEST_UNIFICATION_TASK.md",
+      "FLAW_REMEDIATION_PLAN.md",
+      "IMPLEMENTATION_NOTE.md",
+      "docs/ACTION_PLAN_DATA_LAYER.md",
+      "docs/AGENT_DOCUMENTATION_STANDARDS.md",
+      "docs/ALPHAVANTAGE_INTEGRATION_SPEC.md",
+      "docs/DETAILED_UNDERSTANDING_PLAN.md",
+      "docs/FINAL_VERIFICATION_RESULTS.md",
+      "docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md",
+      "docs/HONEST_NOTEBOOK_ASSESSMENT.md",
+      "docs/MODULARITY_IMPROVEMENTS_PLAN.md",
+      "docs/NEXT_STEPS_PARALLEL_PLAN.md",
+      "docs/PDF_PROCESSING_PLAN.md",
+      "docs/SCHEMA_INDEX.md",
+      "docs/VERIFIED_INTEGRATIONS.md",
+      "tasks/notes-to-claude.md",
+      "tests/validation/DATA_LOADING_INSTRUCTIONS.md"
+    ],
+    "essential": [
+      "CLAUDE.md",
+      "Data/Cache/migrations/README.md",
+      "README.md",
+      "Risk/templates/README.md",
+      "docs/resources/papers/README.md",
+      "notebooks/README.md",
+      "scripts/README.md"
+    ],
+    "active_docs": [
+      "CODEBASE_ANALYSIS.md",
+      "Data/Cache/QUICK_REFERENCE.md",
+      "INSTALLATION_STATUS.md",
+      "TODO.md",
+      "docs/ABSTRACTION_VERIFICATION.md",
+      "docs/ACTUAL_VALIDATION_RESULTS.md",
+      "docs/ADDING_CUSTOM_COMPONENTS.md",
+      "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md",
+      "docs/ALPHA_GENERATOR.md",
+      "docs/BACKTESTING_FUTURES_SWAPS_PLAN.md",
+      "docs/BACKTEST_UNIFIED_API.md",
+      "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md",
+      "docs/COMPOSABLE_PORTFOLIO_ARCHITECTURE.md",
+      "docs/CRITICAL_GAPS_AND_NEXT_STEPS.md",
+      "docs/CROSS_ASSET_CONCURRENCY_ANALYSIS.md",
+      "docs/DATA_LAYER_ARCHITECTURE.md",
+      "docs/DOCUMENTATION_ASSESSMENT.md",
+      "docs/DOCUMENTATION_CLEANUP_PLAN.md",
+      "docs/GENERIC_BACKTEST_PROGRESS.md",
+      "docs/GRINOLD_KAHN_DETAILED_SPECS.md",
+      "docs/GRINOLD_KAHN_FRAMEWORK.md",
+      "docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md",
+      "docs/MODULARITY_REVIEW_AND_STRATEGY_TYPES.md",
+      "docs/NOTEBOOKS_FIXED_ASSESSMENT.md",
+      "docs/NOTEBOOK_VERIFICATION_RESULTS.md",
+      "docs/ORTHOGONAL_TASK_DECOMPOSITION.md",
+      "docs/PAPER_IMPLEMENTATION_FIDELITY.md",
+      "docs/RETURNS_CALCULATOR.md",
+      "docs/RETURNS_VS_PRICES_ANALYSIS.md",
+      "docs/RETURN_CALCULATION_ANALYSIS.md",
+      "docs/SCHEMA_IMPLEMENTATION_GUIDE.md",
+      "docs/SECTOR_COVARIANCE_GUIDE.md",
+      "docs/SIGNAL_COMBINATION_METHODS.md",
+      "docs/TEAR_SHEET.md",
+      "docs/TRADER_REQUIREMENTS.md",
+      "docs/USER_GUIDE_STRATEGY_CREATION.md",
+      "docs/VOLATILITY_ESTIMATOR.md",
+      "docs/guides/extending_risk_models.md",
+      "docs/research/CORRELATION_VOLATILITY_ARBITRAGE.md",
+      "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md",
+      "docs/research/CROSS_ASSET_FRAMEWORK.md",
+      "docs/research/RESEARCH_CONSENSUS_2025.md",
+      "docs/research/SECTOR_COVARIANCE_PLAN.md",
+      "docs/research/SECTOR_ETF_MAPPING.md",
+      "docs/research/current_arbs_covariance_usage.md",
+      "docs/research/factor_models_fixed_income.md",
+      "docs/research/high_correlation_covariance.md",
+      "docs/research/practitioner_covariance_methods.md",
+      "docs/resources/PORTFOLIO_MANAGEMENT_RESEARCH.md",
+      "docs/workflows/ARXIV_TO_CODE_PLAN.md",
+      "tests/validation/README_DATA_LOADING.md"
+    ],
+    "completed_task": [
+      "POLARS_MIGRATION_COMPLETE.md",
+      "POLARS_MIGRATION_PLAN.md",
+      "docs/GENERIC_BACKTEST_MIGRATION_PLAN.md",
+      "docs/MVP_EQUITY_SECTOR_COMPLETE.md",
+      "docs/PHASE1_COMPLETE_SUMMARY.md",
+      "docs/PHASE_3_COMPLETION_SUMMARY.md",
+      "docs/PHASE_4_COMPLETION_SUMMARY.md",
+      "docs/PHASE_4_PLAN.md",
+      "docs/SESSION_HANDOFF_NEXT_STEPS.md",
+      "docs/SESSION_SUMMARY_2025-11-11.md",
+      "docs/STRATEGY_MODULARIZATION_SUMMARY.md",
+      "docs/STRATEGY_NOTEBOOKS_SUMMARY.md",
+      "docs/phase3_common_patterns_analysis.md",
+      "docs/workflows/ARXIV_INTEGRATION_SUMMARY.md",
+      "tasks/migration_progress.md"
+    ],
+    "design": [
+      "docs/ASSET_ABSTRACTION_DESIGN.md",
+      "docs/FUTURES_VALUE_STRUCTURE_DESIGN.md",
+      "docs/SQLITE_SCHEMA_DESIGN.md",
+      "docs/STRATEGY_MODULARIZATION_DESIGN.md",
+      "docs/design/AGENT_ORCHESTRATION_PLAN.md",
+      "docs/design/AGENT_ORCHESTRATION_PLAN_PART2.md",
+      "docs/design/AGENT_ORCHESTRATION_PLAN_PART3.md",
+      "docs/design/BACKTEST_UNIFICATION_PLAN.md",
+      "docs/design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md",
+      "docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md",
+      "docs/design/LONG_SHORT_STRATEGY_DESIGN.md",
+      "docs/design/YAHOO_FINANCE_MDP_DESIGN.md"
+    ],
+    "reference": [
+      "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md",
+      "docs/references/Grinold-Kahn-Active-Portfolio-Management.md",
+      "docs/references/arxiv_candidates.md",
+      "docs/references/implementation_sources.md"
+    ]
+  },
+  "category_counts": {
+    "orphan": 18,
+    "essential": 7,
+    "active_docs": 51,
+    "completed_task": 15,
+    "design": 12,
+    "reference": 4
+  },
+  "redundant_groups": {
+    "backtest": {
+      "count": 7,
+      "files": [
+        "BACKTEST_UNIFICATION_TASK.md",
+        "docs/BACKTESTING_FUTURES_SWAPS_PLAN.md",
+        "docs/BACKTEST_UNIFIED_API.md",
+        "docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md",
+        "docs/GENERIC_BACKTEST_MIGRATION_PLAN.md",
+        "docs/GENERIC_BACKTEST_PROGRESS.md",
+        "docs/design/BACKTEST_UNIFICATION_PLAN.md"
+      ],
+      "total_lines": 5961
+    },
+    "data_layer": {
+      "count": 4,
+      "files": [
+        "docs/ACTION_PLAN_DATA_LAYER.md",
+        "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md",
+        "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md",
+        "docs/DATA_LAYER_ARCHITECTURE.md"
+      ],
+      "total_lines": 1406
+    },
+    "alpha_signal": {
+      "count": 4,
+      "files": [
+        "docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md",
+        "docs/ALPHAVANTAGE_INTEGRATION_SPEC.md",
+        "docs/ALPHA_GENERATOR.md",
+        "docs/SIGNAL_COMBINATION_METHODS.md"
+      ],
+      "total_lines": 2559
+    },
+    "portfolio": {
+      "count": 3,
+      "files": [
+        "docs/COMPOSABLE_PORTFOLIO_ARCHITECTURE.md",
+        "docs/references/Grinold-Kahn-Active-Portfolio-Management.md",
+        "docs/resources/PORTFOLIO_MANAGEMENT_RESEARCH.md"
+      ],
+      "total_lines": 1747
+    },
+    "grinold_kahn": {
+      "count": 5,
+      "files": [
+        "docs/GRINOLD_KAHN_DETAILED_SPECS.md",
+        "docs/GRINOLD_KAHN_FRAMEWORK.md",
+        "docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md",
+        "docs/design/GRINOLD_KAHN_KNOWLEDGE_GRAPH.md",
+        "docs/references/Grinold-Kahn-Active-Portfolio-Management.md"
+      ],
+      "total_lines": 4226
+    },
+    "strategy": {
+      "count": 7,
+      "files": [
+        "docs/MODULARITY_IMPROVEMENTS_PLAN.md",
+        "docs/MODULARITY_REVIEW_AND_STRATEGY_TYPES.md",
+        "docs/STRATEGY_MODULARIZATION_DESIGN.md",
+        "docs/STRATEGY_MODULARIZATION_SUMMARY.md",
+        "docs/STRATEGY_NOTEBOOKS_SUMMARY.md",
+        "docs/USER_GUIDE_STRATEGY_CREATION.md",
+        "docs/design/LONG_SHORT_STRATEGY_DESIGN.md"
+      ],
+      "total_lines": 6316
+    },
+    "risk_covariance": {
+      "count": 8,
+      "files": [
+        "docs/SECTOR_COVARIANCE_GUIDE.md",
+        "docs/guides/extending_risk_models.md",
+        "docs/references/COVARIANCE_ESTIMATION_REFERENCE.md",
+        "docs/research/COVARIANCE_METHODS_FOR_FIXED_INCOME.md",
+        "docs/research/SECTOR_COVARIANCE_PLAN.md",
+        "docs/research/current_arbs_covariance_usage.md",
+        "docs/research/high_correlation_covariance.md",
+        "docs/research/practitioner_covariance_methods.md"
+      ],
+      "total_lines": 4673
+    }
+  }
+}

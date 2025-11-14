@@ -1,0 +1,219 @@
+{
+  "analyzed_at": "2025-11-14T20:30:00Z",
+  "batch": "batch3_large_orphans",
+  "total_files": 10,
+  "results": [
+    {
+      "file": "BACKTEST_UNIFICATION_TASK.md",
+      "lines": 1340,
+      "purpose": "Detailed task breakdown for implementing generic Backtest class to replace MinimalBacktest. Includes VM setup instructions, parallel task execution plan, test design specs, and step-by-step implementation guide.",
+      "implemented": true,
+      "implementation_evidence": [
+        "Backtest/Backtest.py exists (generic class)",
+        "Git commits 2025-11-13 show implementation",
+        "Backtest/__init__.py documents unified API",
+        "No DeprecationWarning found (MinimalBacktest removed not deprecated)"
+      ],
+      "superseded_by": "docs/BACKTEST_UNIFIED_API.md",
+      "relevance": "historical",
+      "recommendation": "ARCHIVE",
+      "notes": "This was a detailed task breakdown document created before implementation. The generic Backtest class was successfully implemented on Nov 13-14, 2025. The doc served its purpose as a planning artifact and is now superseded by the actual API documentation (BACKTEST_UNIFIED_API.md). Contains valuable implementation approach details that show how the work was decomposed into orthogonal tasks.",
+      "historical_value": "High - documents the methodology used for parallel task execution and TDD approach. Useful as a template for future large refactorings."
+    },
+    {
+      "file": "FLAW_REMEDIATION_PLAN.md",
+      "lines": 1172,
+      "purpose": "Systematic plan to remediate 52+ identified flaws: missing ABOUTME comments (41 files), placeholder code (3 locations), TODO comments (7+), missing error handling (4 locations), and pytest.ini configuration (1).",
+      "implemented": true,
+      "implementation_evidence": [
+        "BT directory has 32 ABOUTME comments (16 files × 2 lines)",
+        "Git commits 2025-11-11 show ABOUTME additions",
+        "Commits show: 'docs: Add required ABOUTME comments to BT directory'",
+        "Similar commits for RVUtils directory"
+      ],
+      "superseded_by": null,
+      "relevance": "partially_outdated",
+      "recommendation": "UPDATE",
+      "notes": "Phase 4-6 (ABOUTME comments) were fully implemented on Nov 11, 2025. However, the plan also covered: Phase 1 (config cleanup), Phase 2 (error handling), and Phase 3 (placeholder code). Need to verify if these other phases were completed. If not, the plan is still partially relevant. The ABOUTME portion (largest section) is complete and can be marked as such.",
+      "historical_value": "Medium - Shows systematic approach to technical debt remediation. The completed portions should be documented, incomplete portions may still be actionable."
+    },
+    {
+      "file": "docs/AGENT_DOCUMENTATION_STANDARDS.md",
+      "lines": 790,
+      "purpose": "Comprehensive standards guide for agents working on ARBS documentation. Defines 4 agent types (Analysis, Consolidation, Generation, Validation), output formats, quality metrics, coordination protocols, and common pitfalls to avoid.",
+      "implemented": false,
+      "implementation_evidence": [
+        "docs/analysis/ directory exists with JSON files",
+        "Recent documentation work follows some patterns from this guide",
+        "Not code - this is a guideline document"
+      ],
+      "superseded_by": null,
+      "relevance": "useful",
+      "recommendation": "KEEP",
+      "notes": "This is not a plan to be 'implemented' - it's a reference guide for agents doing documentation work. The existence of docs/analysis/*.json shows the Analysis Agent patterns are being used. The guide is well-structured and follows the project's documentation standards (no emojis, factual language, clear structure). Should be kept as a reference for future documentation initiatives.",
+      "historical_value": "High - Active reference document. Defines standards that should be followed for consistency in documentation work."
+    },
+    {
+      "file": "docs/ALPHAVANTAGE_INTEGRATION_SPEC.md",
+      "lines": 861,
+      "purpose": "Complete API specification for AlphaVantage integration: authentication, endpoints, rate limits, request/response formats, adjusted price handling, free tier best practices, error handling, and integration checklist.",
+      "implemented": true,
+      "implementation_evidence": [
+        "VERIFIED_INTEGRATIONS.md confirms AlphaVantage integration exists",
+        "tests/validation/load_alphavantage.py is working",
+        "Outputs to sp500_real_data.parquet",
+        "Free tier API key in use: QLGCJCCK8X4ZY6VC"
+      ],
+      "superseded_by": "docs/VERIFIED_INTEGRATIONS.md",
+      "relevance": "useful",
+      "recommendation": "KEEP",
+      "notes": "While the integration already exists, this document serves as a valuable API reference with comprehensive details about endpoints, parameters, rate limiting, and best practices. It's more detailed than VERIFIED_INTEGRATIONS.md (which is verification-focused). Keep as reference documentation for anyone working with AlphaVantage API. Particularly useful sections: rate limit strategies, adjusted price handling, error codes, and integration checklist.",
+      "historical_value": "High - Detailed API reference still useful for development and troubleshooting."
+    },
+    {
+      "file": "docs/DETAILED_UNDERSTANDING_PLAN.md",
+      "lines": 586,
+      "purpose": "Framework synthesis for cross-asset portfolio construction showing equity sectors and global macro currencies follow identical mathematical structures. Includes current implementation status, missing components (correlation cluster constraints), and research questions to answer.",
+      "implemented": false,
+      "implementation_evidence": [
+        "Signals/SectorRotation/ directory exists with 9 files",
+        "SectorMomentumSignal, SectorReversionSignal, FundamentalSignal implemented",
+        "Risk/Covariance/SectorBased/ exists",
+        "Missing: Correlation cluster constraints in optimizer"
+      ],
+      "superseded_by": null,
+      "relevance": "useful",
+      "recommendation": "KEEP",
+      "notes": "This is a strategic research and architecture document, not a task plan. The 'Current Implementation Status' section shows SectorRotation signals are implemented (~100%) but correlation cluster constraints are missing (marked CRITICAL). The research questions about cross-asset factor models, correlation-aware optimization, and volatility dispersion trading are still relevant. This doc bridges theory and implementation, showing what exists vs what's needed. Keep as a roadmap for advanced features.",
+      "historical_value": "High - Strategic architecture document that provides context for future enhancements. Research questions remain valid."
+    },
+    {
+      "file": "docs/GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md",
+      "lines": 1873,
+      "purpose": "Extremely detailed step-by-step implementation plan for generic Backtest class. Includes test design (TDD red-green-refactor), implementation specs for each method, migration strategy from MinimalBacktest, integration steps, and documentation updates.",
+      "implemented": true,
+      "implementation_evidence": [
+        "Backtest/Backtest.py exists and is functional",
+        "Git log shows implementation completed Nov 13, 2025",
+        "commit 667417f: 'feat: Implement generic Backtest class'",
+        "Backtest/__init__.py documents unified API",
+        "tests/unit/backtest/ has test coverage"
+      ],
+      "superseded_by": "docs/BACKTEST_UNIFIED_API.md",
+      "relevance": "historical",
+      "recommendation": "ARCHIVE",
+      "notes": "This was an incredibly detailed implementation plan (1873 lines!) that followed TDD methodology. The generic Backtest class was successfully implemented following this plan. The document served its purpose as a detailed roadmap and is now superseded by the actual API documentation. Valuable as a case study of how to decompose a large refactoring into testable steps. Contains session resume instructions, progress tracking templates, and emergency recovery procedures that show best practices for managing complex implementations.",
+      "historical_value": "Very High - Exemplary implementation planning document. Shows methodical TDD approach, proper test design, and risk mitigation. Useful template for similar large-scale refactorings."
+    },
+    {
+      "file": "docs/MODULARITY_IMPROVEMENTS_PLAN.md",
+      "lines": 833,
+      "purpose": "Detailed plan to achieve 95% modularity (from 75%) by creating factory patterns: AlphaFactory (IC method registry), CovarianceFactory (covariance estimator registry), removing hardcoded type lists, and adding dynamic validation. Includes time estimates, acceptance criteria, and integration tests.",
+      "implemented": true,
+      "implementation_evidence": [
+        "Strategies/Factory/AlphaFactory.py exists",
+        "Strategies/Factory/CovarianceFactory.py exists",
+        "Git commit 2025-11-11: 'feat: Add AlphaFactory and CovarianceFactory'",
+        "Both factories use registry pattern for runtime extension",
+        "Strategies/Factory/__init__.py exports both factories"
+      ],
+      "superseded_by": null,
+      "relevance": "historical",
+      "recommendation": "ARCHIVE",
+      "notes": "Implementation plan for modularity improvements via factory patterns. Both AlphaFactory and CovarianceFactory were successfully implemented on Nov 11, 2025, achieving the Open/Closed Principle goals. The plan included 3 phases with detailed acceptance criteria - all appear to have been met based on the existence of the factory files with registry patterns. This was a successful refactoring that removed if/elif chains and hardcoded type lists. Document served its purpose and implementation is complete.",
+      "historical_value": "Medium - Shows good software design principles (factory pattern, registry pattern, Open/Closed). Useful example of incremental refactoring with clear success criteria."
+    },
+    {
+      "file": "docs/PDF_PROCESSING_PLAN.md",
+      "lines": 472,
+      "purpose": "Plan to extract mathematical content from 16 research PDFs and synthesize into 5 comprehensive reference manuals (Covariance Estimation, Portfolio Optimization, Alpha Generation, Performance Analysis, Risk Modeling). Includes download links, extraction methodology, and timeline estimates.",
+      "implemented": false,
+      "implementation_evidence": [
+        "docs/references/ has 4 files (not 16 papers + 5 manuals)",
+        "COVARIANCE_ESTIMATION_REFERENCE.md exists (34KB)",
+        "Grinold-Kahn-Active-Portfolio-Management.md exists",
+        "docs/references/papers/ directory exists but minimal content",
+        "Most PDFs not downloaded/processed"
+      ],
+      "superseded_by": null,
+      "relevance": "useful",
+      "recommendation": "KEEP",
+      "notes": "Plan to process 16 arXiv papers into reference documentation. Only partially completed: Covariance Estimation reference exists, but other planned manuals (Portfolio Optimization, Alpha Generation, Performance Analysis, Risk Modeling) do not. The plan includes specific arXiv IDs and URLs for download, extraction methodology, and synthesis approach. Still relevant and actionable. The COVARIANCE_ESTIMATION_REFERENCE.md (34KB) shows the intended output quality. This is a large effort (estimated 16 hours) that was started but not completed.",
+      "historical_value": "High - Actionable plan with clear deliverables. The one completed reference (Covariance) validates the approach. Remaining work is clearly defined."
+    },
+    {
+      "file": "docs/SCHEMA_INDEX.md",
+      "lines": 527,
+      "purpose": "Navigation guide and index for SQLite schema documentation. Provides quick links to 6 related docs totaling 3700+ lines (design spec, implementation guide, migration readme, sample queries, quick reference). Acts as entry point for developers implementing or using the SQLite cache.",
+      "implemented": true,
+      "implementation_evidence": [
+        "Data/Cache/SQLiteCache.py exists",
+        "Data/Cache/migrations/001_initial_schema.sql exists",
+        "Git commit 2025-11-14: 'feat: Implement SQLite cache infrastructure'",
+        "All referenced docs exist (verified in SCHEMA_INDEX.md)"
+      ],
+      "superseded_by": null,
+      "relevance": "useful",
+      "recommendation": "KEEP",
+      "notes": "This is an index/navigation document for the SQLite schema system. The SQLite cache was implemented on Nov 14, 2025, and all the referenced documentation exists. This doc serves as a 'table of contents' for the schema documentation system and provides guidance on which doc to use for different tasks (implementing, using, debugging, managing). It's well-structured with clear navigation paths and should be kept as the entry point to schema docs. Not a plan to implement - it's active reference documentation.",
+      "historical_value": "High - Active reference document. Essential navigation aid for the comprehensive schema documentation system."
+    },
+    {
+      "file": "docs/VERIFIED_INTEGRATIONS.md",
+      "lines": 469,
+      "purpose": "Documents that CME/Eris swap curves and AlphaVantage integrations already exist and are production-ready. Provides locations, usage patterns, supported curves, API details, and architecture verification. Created after parallel agent exploration confirmed Peter's claim that integrations were already implemented.",
+      "implemented": true,
+      "implementation_evidence": [
+        "This document IS the verification evidence",
+        "MDP/IRSwaps/CME_NY_EOD_LIVE/ exists with 4 implementations",
+        "ErisFuturesFetcher.py exists",
+        "tests/validation/load_alphavantage.py exists",
+        "fomc_fly_backtest.py exists and uses ERIS data"
+      ],
+      "superseded_by": null,
+      "relevance": "useful",
+      "recommendation": "KEEP",
+      "notes": "This is verification documentation created on Nov 14, 2025, to confirm existing integrations. It serves as a reference guide showing how to use CME/Eris swap curves and AlphaVantage data loaders. Includes correct usage patterns, supported curves, API keys, and example backtest scripts. This is active reference documentation showing what exists and how to use it. Well-structured with clear examples and code snippets. Essential for anyone working with swap curves or equity data.",
+      "historical_value": "High - Active reference documentation. Provides proof of implementation and usage guidance for data integrations."
+    }
+  ],
+  "summary": {
+    "keep": 6,
+    "update": 1,
+    "archive": 3,
+    "delete": 0
+  },
+  "key_findings": [
+    "3 major implementation plans were successfully executed: Generic Backtest (Nov 13), Factory Pattern (Nov 11), SQLite Cache (Nov 14)",
+    "ABOUTME comments remediation was completed (41 files) but other flaws from FLAW_REMEDIATION_PLAN may remain",
+    "PDF processing plan only 25% complete (1 of 5 reference manuals created)",
+    "Documentation standards guide and schema index are active reference docs, not plans to implement",
+    "All orphaned docs >400 lines have historical value - none should be deleted",
+    "3 docs are superseded by newer API docs but valuable as implementation methodology examples"
+  ],
+  "recommendations": {
+    "archive": [
+      "Move BACKTEST_UNIFICATION_TASK.md to docs/archive/completed-tasks/ - Implementation complete, superseded by BACKTEST_UNIFIED_API.md",
+      "Move GENERIC_BACKTEST_IMPLEMENTATION_PLAN.md to docs/archive/completed-tasks/ - Implementation complete, valuable as methodology example",
+      "Move MODULARITY_IMPROVEMENTS_PLAN.md to docs/archive/completed-tasks/ - Factories implemented, plan fulfilled"
+    ],
+    "update": [
+      "Update FLAW_REMEDIATION_PLAN.md to mark Phase 4-6 (ABOUTME) as complete, verify status of Phase 1-3"
+    ],
+    "keep": [
+      "AGENT_DOCUMENTATION_STANDARDS.md - Active reference guide for documentation work",
+      "ALPHAVANTAGE_INTEGRATION_SPEC.md - Detailed API reference despite integration existing",
+      "DETAILED_UNDERSTANDING_PLAN.md - Strategic roadmap for advanced features",
+      "PDF_PROCESSING_PLAN.md - Actionable plan with clear remaining work",
+      "SCHEMA_INDEX.md - Navigation guide for schema documentation system",
+      "VERIFIED_INTEGRATIONS.md - Essential usage reference for data integrations"
+    ]
+  },
+  "next_actions": [
+    "Archive 3 completed implementation plans to docs/archive/completed-tasks/",
+    "Update FLAW_REMEDIATION_PLAN.md status",
+    "Consider resuming PDF processing to complete remaining 4 reference manuals",
+    "Verify if correlation cluster constraints (from DETAILED_UNDERSTANDING_PLAN) are still needed",
+    "No deletions needed - all docs have value as reference or historical record"
+  ]
+}

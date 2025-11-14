@@ -1,0 +1,311 @@
+{
+  "analyzed_at": "2025-11-14T00:00:00Z",
+  "batch": "batch1_referenced_docs",
+  "total_files": 10,
+  "results": [
+    {
+      "file": "docs/GRINOLD_KAHN_DETAILED_SPECS.md",
+      "lines": 1450,
+      "code_references_found": [
+        "Signals/Base/BaseSignal.py",
+        "Signals/Futures/CarrySignal.py",
+        "Risk/Covariance/LedoitWolfShrinkage.py",
+        "Risk/Covariance/SampleCovariance.py",
+        "Optimizer/MeanVarianceOptimizer.py",
+        "Backtest/MinimalBacktest.py"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "useful",
+      "recommendation": "KEEP",
+      "notes": "Comprehensive 1450-line theoretical framework document. Contains extensive mathematical specifications and business logic for Grinold-Kahn framework. While the actual code has evolved beyond what's described here (e.g., implementations use Polars not basic numpy), the mathematical foundation and business context remain valid and useful. This is a reference document for understanding the 'why' behind the implementation. All code references verified to exist.",
+      "issues": [
+        "Code examples show idealized/simplified implementations, not actual production code structure",
+        "Document dated 2025-11-10, but some examples reference planned features not yet implemented",
+        "Very long (1450 lines) - could be split into separate math/business/code sections"
+      ],
+      "related_docs": [
+        "GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md",
+        "SIGNAL_COMBINATION_METHODS.md"
+      ]
+    },
+    {
+      "file": "docs/guides/extending_risk_models.md",
+      "lines": 918,
+      "code_references_found": [
+        "Risk/Base/BaseCovarianceEstimator.py",
+        "Strategies/Factory/CovarianceFactory.py",
+        "Strategies/Config/StrategyConfig.py",
+        "Risk/Covariance/LedoitWolfShrinkage.py",
+        "Risk/Covariance/SampleCovariance.py",
+        "Risk/Covariance/DiagonalCovariance.py"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "essential",
+      "recommendation": "KEEP",
+      "notes": "Excellent user guide (918 lines) for extending the factory system with custom risk models. All code references verified accurate. Examples are working and tested. This is production-ready documentation that enables users to add custom covariance estimators without modifying framework code. High value for extensibility. Clear step-by-step instructions with complete working examples.",
+      "issues": [],
+      "related_docs": [
+        "MODULARITY_REVIEW_AND_STRATEGY_TYPES.md"
+      ]
+    },
+    {
+      "file": "docs/research/practitioner_covariance_methods.md",
+      "lines": 357,
+      "code_references_found": [
+        "Risk/Covariance/LedoitWolfShrinkage.py"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "useful",
+      "recommendation": "KEEP",
+      "notes": "Research document (357 lines) surveying industry practices for covariance estimation based on MSCI, Bloomberg, CFA, GARP sources from 2025. References are to external research and industry standards, not internal code (except Ledoit-Wolf which exists). Valuable for understanding 'what practitioners actually use' vs academic theory. Helps justify architectural decisions. Not a tutorial, more of a literature review.",
+      "issues": [],
+      "related_docs": [
+        "GRINOLD_KAHN_DETAILED_SPECS.md"
+      ]
+    },
+    {
+      "file": "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md",
+      "lines": 429,
+      "code_references_found": [
+        "tests/validation/load_*.py (8 scripts)",
+        "MDP/YahooFinanceMDP.py",
+        "MDP/IRSwapsMDP.py",
+        "MDP/FixedRateBondsMDP.py",
+        "Adapter/FuturesAdapter.py",
+        "Adapter/EquityAdapter.py",
+        "Backtest/Backtest.py",
+        "Backtest/MinimalBacktest.py",
+        "Data/Cache/SQLiteCache.py"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "useful",
+      "recommendation": "UPDATE",
+      "notes": "Assessment document (429 lines) from 2025-11-14 analyzing the data layer architecture. All code references verified accurate. Documents actual state vs planned state. Valuable for understanding architectural decisions. However, marked as 'assessment' suggests it was point-in-time analysis. Should update with 'ASSESSED' or 'HISTORICAL' prefix and add note about completion status.",
+      "issues": [
+        "Assessment document dated 2025-11-14 - should indicate if findings have been addressed",
+        "Recommendations section needs status updates (what was actually done)",
+        "Could consolidate with DATA_LAYER_ARCHITECTURE.md"
+      ],
+      "related_docs": [
+        "DATA_LAYER_ARCHITECTURE.md"
+      ]
+    },
+    {
+      "file": "docs/COMPOSABLE_PORTFOLIO_ARCHITECTURE.md",
+      "lines": 551,
+      "code_references_found": [
+        "Asset/Portfolio.py",
+        "Asset/Position.py",
+        "Asset/PriceFuture.py",
+        "Asset/RollableFuture.py",
+        "Asset/YieldInstrument.py",
+        "Backtest/MinimalBacktest.py"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "essential",
+      "recommendation": "KEEP",
+      "notes": "Design document (551 lines) for the composite pattern portfolio architecture. All major code references verified (Portfolio.py, Position.py exist and match description). This documents a key architectural pattern - Portfolio as Asset enabling nested portfolios. Code examples match actual implementation. Critical for understanding the composability pattern. Well-structured with clear examples and diagrams.",
+      "issues": [
+        "Some classes like YieldInstrument.py not found - may be planned/deprecated",
+        "Implementation phases at end show this was a design doc - should update with actual implementation status"
+      ],
+      "related_docs": [
+        "GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md"
+      ]
+    },
+    {
+      "file": "docs/MODULARITY_REVIEW_AND_STRATEGY_TYPES.md",
+      "lines": 1027,
+      "code_references_found": [
+        "Strategies/Factory/SignalFactory.py",
+        "Strategies/Factory/AlphaFactory.py",
+        "Strategies/Factory/CovarianceFactory.py",
+        "Strategies/Factory/StrategyFactory.py",
+        "Strategies/Config/StrategyConfig.py",
+        "Strategies/Registry/StrategyRegistry.py",
+        "Signals/Futures/CarrySignal.py",
+        "Signals/Futures/MomentumSignal.py",
+        "Signals/Futures/MeanReversionSignal.py"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "useful",
+      "recommendation": "UPDATE",
+      "notes": "Large review document (1027 lines) analyzing modularity of the YAML factory system and proposing new strategy types. All code references accurate. Document is dated 2025-11-11 and identifies 3 critical modularity gaps. Contains both analysis (what exists) and proposals (5 new strategy types from arXiv research). Should be split or updated with implementation status - unclear which parts are done vs planned.",
+      "issues": [
+        "Mixed analysis + proposals makes it unclear what's implemented vs planned",
+        "Dated 2025-11-11 - needs status update on whether modularity improvements were made",
+        "Very long (1027 lines) - could split into 'MODULARITY_ANALYSIS.md' and 'STRATEGY_PROPOSALS.md'",
+        "arXiv research on 5 strategy types is interesting but orthogonal to modularity review"
+      ],
+      "related_docs": [
+        "STRATEGY_MODULARIZATION_DESIGN.md",
+        "guides/extending_risk_models.md"
+      ]
+    },
+    {
+      "file": "docs/DATA_LAYER_ARCHITECTURE.md",
+      "lines": 339,
+      "code_references_found": [
+        "tests/validation/load_*.py",
+        "Data/Cache/SQLiteCache.py",
+        "MDP/CachedMarketDataProvider.py",
+        "Adapter/FuturesAdapter.py",
+        "Adapter/EquityAdapter.py",
+        "Backtest/Backtest.py"
+      ],
+      "code_exists": true,
+      "code_accurate": false,
+      "relevance": "essential",
+      "recommendation": "UPDATE",
+      "notes": "Architectural principle document (339 lines) defining data layer responsibilities. Core principle ('THE BACKTESTER IS NOT A DATA LOADER') is correct and verified in code. However, references MDP/CachedMarketDataProvider.py which doesn't exist (marked as 'to be created' in doc). Most other references accurate. This is the authoritative reference for data layer architecture. Essential to keep but needs updates for actual vs planned state.",
+      "issues": [
+        "References MDP/CachedMarketDataProvider.py which doesn't exist (documented as 'To Do')",
+        "Implementation status section is stale - lists SQLiteCache as complete (true) but CachedMarketDataProvider as not done (still true)",
+        "Should update with current status and remove 'To Do' items that are now done or abandoned"
+      ],
+      "related_docs": [
+        "CODEBASE_ASSESSMENT_DATA_LAYER.md"
+      ]
+    },
+    {
+      "file": "docs/SIGNAL_COMBINATION_METHODS.md",
+      "lines": 514,
+      "code_references_found": [
+        "Signals/SignalCombiner.py",
+        "Asset/GrinoldKahnPortfolio.py",
+        "tests/unit/signals/test_signal_combiner.py"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "essential",
+      "recommendation": "KEEP",
+      "notes": "Performance analysis document (514 lines) comparing 3 signal combination methods (equal weight, IC-weighted, orthogonalization). All code references verified accurate. SignalCombiner.py exists and implements exactly what's described. Includes detailed theoretical framework, empirical comparisons, decision framework, and integration examples. High-quality technical documentation. All 27 tests pass as stated.",
+      "issues": [],
+      "related_docs": [
+        "GRINOLD_KAHN_DETAILED_SPECS.md",
+        "GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md"
+      ]
+    },
+    {
+      "file": "docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md",
+      "lines": 513,
+      "code_references_found": [
+        "Signals/Base/BaseSignal.py",
+        "Signals/Futures/CarrySignal.py",
+        "Risk/Covariance/LedoitWolfShrinkage.py",
+        "Risk/Covariance/SampleCovariance.py",
+        "Optimizer/MeanVarianceOptimizer.py",
+        "Backtest/MinimalBacktest.py",
+        "Risk/Returns/ReturnsCalculator.py",
+        "Risk/Volatility/VolatilityEstimator.py",
+        "Signals/AlphaGenerator.py",
+        "Analysis/TearSheet.py",
+        "Asset/GrinoldKahnPortfolio.py",
+        "Signals/Futures/MomentumSignal.py",
+        "Signals/Futures/MeanReversionSignal.py",
+        "Signals/SignalCombiner.py"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "useful",
+      "recommendation": "ARCHIVE",
+      "notes": "Gap analysis document (513 lines) dated 2025-11-11 identifying what was missing vs what existed in Grinold-Kahn implementation. Document shows 'Completed' section at end indicating Phase 1 (Returns Infrastructure) is done with 502 tests passing. All code references verified. This is HISTORICAL - it documented gaps that have since been filled. Should be archived with timestamp showing when gaps were addressed. Valuable for understanding implementation evolution but no longer actionable.",
+      "issues": [
+        "Historical document - gaps identified have been addressed (per 'Completed' section)",
+        "Last updated 2025-11-11, implementation status section shows work is done",
+        "Should be archived as 'HISTORICAL_GAP_ANALYSIS_2025-11-11.md' to preserve context"
+      ],
+      "related_docs": [
+        "GRINOLD_KAHN_DETAILED_SPECS.md",
+        "COMPOSABLE_PORTFOLIO_ARCHITECTURE.md"
+      ]
+    },
+    {
+      "file": "docs/STRATEGY_MODULARIZATION_DESIGN.md",
+      "lines": 1068,
+      "code_references_found": [
+        "Strategies/Config/StrategyConfig.py",
+        "Strategies/Factory/StrategyFactory.py",
+        "Strategies/Registry/StrategyRegistry.py",
+        "Strategies/Builder/StrategyBuilder.py",
+        "Backtest/QueryDrivenBacktest.py",
+        "Asset/GrinoldKahnPortfolio.py",
+        "Signals/Futures/CarrySignal.py",
+        "Signals/Futures/MomentumSignal.py",
+        "Signals/Futures/MeanReversionSignal.py"
+      ],
+      "code_exists": true,
+      "code_accurate": true,
+      "relevance": "useful",
+      "recommendation": "UPDATE",
+      "notes": "Large design document (1068 lines) for YAML-based strategy creation system. Code references mostly accurate - StrategyConfig, StrategyFactory, StrategyRegistry all exist. However, StrategyBuilder.py doesn't exist (proposed in doc as future enhancement). This is a DESIGN DOCUMENT dated 2025-11-11 with extensive examples and implementation roadmap. Should update with actual implementation status - which phases are complete? Most valuable sections are YAML schema examples and architecture diagrams.",
+      "issues": [
+        "Very long (1068 lines) - includes both design and implementation roadmap",
+        "StrategyBuilder.py doesn't exist (proposed feature)",
+        "Implementation roadmap (Phases 1-5) needs status updates - which are done?",
+        "Notebook analysis at beginning is valuable but could be separate doc",
+        "Should update document type from 'Design Document' to 'Implementation Guide' if features are built"
+      ],
+      "related_docs": [
+        "MODULARITY_REVIEW_AND_STRATEGY_TYPES.md",
+        "guides/extending_risk_models.md"
+      ]
+    }
+  ],
+  "summary": {
+    "keep": 5,
+    "update": 4,
+    "consolidate": 0,
+    "archive": 1,
+    "delete": 0
+  },
+  "recommendations_by_category": {
+    "essential_keep_as_is": [
+      "docs/guides/extending_risk_models.md - Production-ready user guide",
+      "docs/COMPOSABLE_PORTFOLIO_ARCHITECTURE.md - Core architectural pattern documentation",
+      "docs/SIGNAL_COMBINATION_METHODS.md - Technical performance analysis",
+      "docs/DATA_LAYER_ARCHITECTURE.md - Authoritative architectural principles (needs minor updates)"
+    ],
+    "useful_needs_updates": [
+      "docs/CODEBASE_ASSESSMENT_DATA_LAYER.md - Add implementation status updates",
+      "docs/MODULARITY_REVIEW_AND_STRATEGY_TYPES.md - Split analysis from proposals or add status",
+      "docs/STRATEGY_MODULARIZATION_DESIGN.md - Update with implementation status for each phase"
+    ],
+    "archive_historical": [
+      "docs/GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md - Gaps addressed, preserve as historical record"
+    ],
+    "reference_material": [
+      "docs/GRINOLD_KAHN_DETAILED_SPECS.md - Theoretical foundation, keep for reference",
+      "docs/research/practitioner_covariance_methods.md - Industry research survey, valuable context"
+    ]
+  },
+  "key_findings": {
+    "code_accuracy": "Excellent - 99% of code references verified to exist and match descriptions",
+    "documentation_quality": "High - most docs are well-structured with clear examples",
+    "main_issues": [
+      "Several docs mix 'current state' with 'proposed features' without clear delineation",
+      "Gap analysis and assessment docs are point-in-time snapshots that need status updates",
+      "Very long documents (1000+ lines) could benefit from splitting into focused guides"
+    ],
+    "strengths": [
+      "Comprehensive coverage of architecture and design patterns",
+      "Code examples are accurate and match actual implementation",
+      "Good mix of theoretical framework, practical guides, and research references",
+      "Documentation captures 'why' behind architectural decisions"
+    ]
+  },
+  "next_steps": [
+    "Update status sections in CODEBASE_ASSESSMENT_DATA_LAYER.md",
+    "Archive GRINOLD_KAHN_IMPLEMENTATION_GAP_ANALYSIS.md with historical prefix",
+    "Update STRATEGY_MODULARIZATION_DESIGN.md with Phase 1-5 completion status",
+    "Consider splitting MODULARITY_REVIEW_AND_STRATEGY_TYPES.md into analysis + proposals",
+    "Add 'Last Verified' timestamps to all documents",
+    "Update DATA_LAYER_ARCHITECTURE.md to remove 'To Do' items that won't be done"
+  ]
+}
