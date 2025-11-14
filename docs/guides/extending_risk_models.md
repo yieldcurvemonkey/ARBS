@@ -2,6 +2,14 @@
 
 This guide explains how to register new covariance estimators (risk models) in the factory system, enabling you to use custom risk estimation methods in your strategies without modifying framework code.
 
+## Template Files
+
+Template available at: `Risk/templates/external_risk_model_template.py`
+
+Template README: `Risk/templates/README.md`
+
+The template provides a complete skeleton for implementing new covariance estimators.
+
 ## Table of Contents
 - [Overview](#overview)
 - [Quick Start](#quick-start)
