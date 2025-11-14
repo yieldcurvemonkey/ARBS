@@ -56,6 +56,7 @@ from Signals.AlphaGenerator import AlphaGenerator
 from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
 from Risk.Volatility.RealizedVolatility import RealizedVolatility
 from Optimizer.MeanVarianceOptimizer import MeanVarianceOptimizer
+from BT.query_portfolio import ResolvedQueryPosition
 
 
 class GrinoldKahnPortfolio(Asset):
@@ -101,7 +102,8 @@ class GrinoldKahnPortfolio(Asset):
         alpha_generator: Optional[AlphaGenerator] = None,
         risk_model: Optional[Any] = None,
         optimizer: Optional[MeanVarianceOptimizer] = None,
-        rebalance_frequency: str = "weekly"
+        rebalance_frequency: str = "weekly",
+        track_query_positions: bool = False
     ):
         """
         Initialize GrinoldKahnPortfolio.
@@ -113,6 +115,7 @@ class GrinoldKahnPortfolio(Asset):
             risk_model: Covariance estimator (default: LedoitWolfShrinkage)
             optimizer: Portfolio optimizer (default: MeanVarianceOptimizer)
             rebalance_frequency: Rebalancing schedule (default: 'weekly')
+            track_query_positions: Enable query-based position tracking (default: False)
 
         Example:
             Basic construction:
@@ -141,6 +144,10 @@ class GrinoldKahnPortfolio(Asset):
         # Track state
         self.current_weights: Optional[Dict[str, float]] = None
         self.last_rebalance: Optional[date] = None
+
+        # Query position tracking
+        self.track_query_positions = track_query_positions
+        self._query_positions: List[ResolvedQueryPosition] = []
 
     def get_identifier(self) -> str:
         """
@@ -431,6 +438,47 @@ class GrinoldKahnPortfolio(Asset):
             return days_since_rebalance >= 30
         else:
             return False
+
+    def add_query_position(
+        self,
+        position: ResolvedQueryPosition,
+        as_of: date
+    ) -> None:
+        """
+        Add a query-based position to the portfolio.
+
+        Query positions are tracked separately from signal-based positions.
+        Returns from query positions are calculated via MTM changes.
+
+        Args:
+            position: ResolvedQueryPosition to add
+            as_of: Date position is added
+
+        Raises:
+            ValueError: If query position tracking is not enabled
+
+        Example:
+            >>> portfolio = GrinoldKahnPortfolio(
+            ...     identifier='GK_QUERY',
+            ...     signals=[...],
+            ...     track_query_positions=True
+            ... )
+            >>> position = ResolvedQueryPosition(
+            ...     package=[swap],
+            ...     weights=[1.0],
+            ...     opened=datetime(2024, 11, 1),
+            ...     source_query=query,
+            ...     meta={}
+            ... )
+            >>> portfolio.add_query_position(position, date(2024, 11, 1))
+        """
+        if not self.track_query_positions:
+            raise ValueError(
+                "Query position tracking is not enabled. "
+                "Initialize portfolio with track_query_positions=True."
+            )
+
+        self._query_positions.append(position)
 
     def __repr__(self) -> str:
         """String representation."""
