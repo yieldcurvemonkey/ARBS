@@ -4,9 +4,9 @@
 
 The unified `Backtest` class provides a single, flexible interface for running backtests across all asset classes and data sources. It supports three workflows:
 
-1. **Query-Based Workflow**: Uses MDP + Adapter for real-time/historical data (futures, swaps)
-2. **DataFrame-Based Workflow**: Uses pre-computed returns (equities, ETFs)
-3. **Hybrid Workflow**: Combines both approaches for multi-asset strategies
+1. **Signal-Based Query Workflow**: Uses MDP + Adapter + Signals for signal-driven strategies (futures, swaps)
+2. **DataFrame-Based Workflow**: Uses pre-computed returns + Signals (equities, ETFs)
+3. **Query-Driven Workflow**: Uses MDP + Queries directly without signals (custom query-based strategies)
 
 ### Key Design Principles
 
@@ -18,14 +18,14 @@ The unified `Backtest` class provides a single, flexible interface for running b
 ### Architecture
 
 ```
-Query Workflow:           DataFrame Workflow:
-MDP → Adapter             Pre-computed Returns
-  ↓                         ↓
-Signals                   Signals
-  ↓                         ↓
-Alpha Generator          Alpha Generator
-  ↓                         ↓
-Risk Model               Risk Model
+Signal-Based Query:      DataFrame Workflow:      Query-Driven:
+MDP → Adapter            Pre-computed Returns     MDP → Queries
+  ↓                         ↓                         ↓
+Signals                   Signals                   MTM Tracking
+  ↓                         ↓                         ↓
+Alpha Generator          Alpha Generator           Returns Calculation
+  ↓                         ↓                         ↓
+Risk Model               Risk Model                Performance Metrics
   ↓                         ↓
 Optimizer                Optimizer
   ↓                         ↓
@@ -57,9 +57,10 @@ class Backtest(BaseBacktest):
     """
     Generic backtest with configurable components.
 
-    Supports two workflows:
-    1. Query-based: mdp + adapter + contracts → run()
-    2. DataFrame-based: returns_df → run_from_dataframe()
+    Supports three workflows:
+    1. Signal-based query: mdp + adapter + signals + contracts → run()
+    2. DataFrame-based: signals + returns_df → run_from_dataframe()
+    3. Query-driven: mdp + queries + time_grid → run_from_queries()
     """
 ```
 
@@ -68,13 +69,17 @@ class Backtest(BaseBacktest):
 ```python
 def __init__(
     self,
-    # Data source (query workflow)
+    # Data source (signal-based query workflow)
     mdp: Optional[Any] = None,
     adapter: Optional[Any] = None,
 
-    # Signals (required)
+    # Signals (signal-based workflows)
     signals: Optional[Union[BaseSignal, List[BaseSignal]]] = None,
     signal_combiner: Optional[Any] = None,
+
+    # Queries (query-driven workflow)
+    queries: Optional[List[BaseQuery]] = None,
+    triggers: Optional[List[Any]] = None,
 
     # Pipeline components (optional)
     alpha_generator: Optional[AlphaGenerator] = None,
@@ -92,10 +97,12 @@ def __init__(
 
 **Parameters:**
 
-- `mdp` (Optional): Market data provider (for query workflow)
+- `mdp` (Optional): Market data provider (for query-based workflows)
 - `adapter` (Optional): Converts queries → DataFrame (FuturesAdapter, EquityAdapter)
-- `signals` (Required): Single signal or list of signals to combine
+- `signals` (Optional): Single signal or list of signals to combine (required for signal-based workflows)
 - `signal_combiner` (Optional): How to combine multiple signals
+- `queries` (Optional): List of queries to execute (required for query-driven workflow)
+- `triggers` (Optional): Event triggers (for query-driven workflow)
 - `alpha_generator` (Optional): Converts signals → expected returns (default: IC × Vol × Z)
 - `risk_model` (Optional): Covariance estimator (default: LedoitWolfShrinkage)
 - `optimizer` (Optional): Portfolio weight optimizer (default: MeanVarianceOptimizer)
@@ -107,8 +114,9 @@ def __init__(
 
 **Raises:**
 
-- `ValueError`: If signals not provided
+- `ValueError`: If neither signals nor queries provided
 - `ValueError`: If using adapter without mdp
+- `ValueError`: If using queries without mdp
 
 ---
 
@@ -211,6 +219,76 @@ result = backtest.run_from_dataframe(
 
 ---
 
+#### Query-Based Workflow: run_from_queries()
+
+```python
+def run_from_queries(
+    self,
+    time_grid: List[date],
+    **kwargs
+) -> BacktestResult
+```
+
+Run backtest using query-driven workflow.
+
+**Requires:** `self.mdp` and `self.queries`
+
+**Parameters:**
+
+- `time_grid` (List[date]): List of dates for query execution
+- `**kwargs`: Additional arguments
+
+**Returns:**
+
+- `BacktestResult`: Performance metrics and results
+
+**Raises:**
+
+- `ValueError`: If mdp or queries not provided
+
+**How it differs from other workflows:**
+
+| Feature | `run()` | `run_from_dataframe()` | `run_from_queries()` |
+|---------|---------|------------------------|---------------------|
+| Data Source | MDP + Adapter | Pre-computed returns | MDP + Queries |
+| Requires Signals | Yes | Yes | No (optional) |
+| Requires Adapter | Yes | No | No |
+| Use Case | Futures/swaps with signals | Equities/ETFs | Custom query-based strategies |
+| Tracking | Weights + returns | Weights + returns | MTM + returns |
+
+**Example:**
+
+```python
+from Backtest.Backtest import Backtest
+from Query.Futures.FuturesQuery import FuturesQuery
+from Query.Futures.FuturesStructure import FuturesStructure
+
+# Create queries
+queries = [
+    FuturesQuery(structure=FuturesStructure.OUTRIGHT, contract='SFRZ4'),
+    FuturesQuery(structure=FuturesStructure.OUTRIGHT, contract='SFRH5'),
+]
+
+# Setup backtest with query workflow
+backtest = Backtest(
+    mdp=market_data_provider,
+    queries=queries,
+)
+
+# Run using query workflow
+result = backtest.run_from_queries(
+    time_grid=[date(2024, 6, 15), date(2024, 6, 22), ...]
+)
+
+# Analyze results
+print(f"Sharpe: {result.sharpe_ratio:.3f}")
+print(f"Return: {result.total_return:.2%}")
+```
+
+**Note:** This workflow is designed for strategies that execute queries directly without signal generation. It tracks MTM (mark-to-market) values over time and calculates returns from MTM changes.
+
+---
+
 ### BacktestResult
 
 ```python
@@ -293,7 +371,38 @@ result = backtest.run_from_dataframe(
 print(f"Sharpe: {result.sharpe_ratio:.3f}")
 ```
 
-### 3. Multi-Signal Strategy
+### 3. Query-Driven Workflow
+
+Best for: Custom query-based strategies, direct MDP execution
+
+```python
+from Backtest.Backtest import Backtest
+from Query.Futures.FuturesQuery import FuturesQuery
+from Query.Futures.FuturesStructure import FuturesStructure
+
+# Create queries
+queries = [
+    FuturesQuery(structure=FuturesStructure.OUTRIGHT, contract='SFRZ4'),
+    FuturesQuery(structure=FuturesStructure.OUTRIGHT, contract='SFRH5'),
+]
+
+# Setup
+backtest = Backtest(
+    mdp=market_data_provider,
+    queries=queries,
+)
+
+# Run
+result = backtest.run_from_queries(
+    time_grid=[date(2024, 6, 15), date(2024, 6, 22), ...]
+)
+
+# Analyze
+print(f"Sharpe: {result.sharpe_ratio:.3f}")
+print(f"Return: {result.total_return:.2%}")
+```
+
+### 4. Multi-Signal Strategy
 
 Combine multiple signals with automatic combiner
 
@@ -316,7 +425,7 @@ result = backtest.run(contracts=[...], dates=[...])
 
 **Note**: If `signal_combiner` not provided, Backtest auto-creates `SignalCombiner()` with equal weights.
 
-### 4. Custom Components
+### 5. Custom Components
 
 Inject custom risk models, optimizers, etc.
 
