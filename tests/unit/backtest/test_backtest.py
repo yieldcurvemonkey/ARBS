@@ -39,7 +39,7 @@ class TestBacktestBasics:
         """Backtest raises ValueError if no signals provided."""
         from Backtest.Backtest import Backtest
 
-        with pytest.raises(ValueError, match="Must provide at least one signal"):
+        with pytest.raises(ValueError, match="Must provide either signals or.*queries"):
             Backtest()
 
     def test_backtest_accepts_single_signal(self):
@@ -167,7 +167,7 @@ class TestFuturesCarryWorkflow:
         contracts = ['SFRZ4']
         dates = [date(2024, 6, 15)]
 
-        with pytest.raises(ValueError, match="Query-based workflow requires adapter"):
+        with pytest.raises(ValueError, match="Signal workflow with adapter requires"):
             backtest.run(contracts, dates)
 
 
