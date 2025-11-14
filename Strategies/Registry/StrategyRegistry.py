@@ -33,7 +33,7 @@ class StrategyRegistry:
     _TEMPLATES = {
         'simple_carry': {
             'strategy': {
-                'name': 'Simple Carry Strategy',
+                'name': 'Carry Strategy',
                 'type': 'carry',
                 'description': 'Long high carry, short low carry'
             },
@@ -71,7 +71,7 @@ class StrategyRegistry:
 
         'simple_momentum': {
             'strategy': {
-                'name': 'Simple Momentum Strategy',
+                'name': 'Momentum Strategy',
                 'type': 'momentum',
                 'description': 'Time-series momentum (trend following)'
             },
@@ -183,7 +183,7 @@ class StrategyRegistry:
             >>> registry = StrategyRegistry()
             >>> template = registry.get_template('simple_carry')
             >>> template['strategy']['name']
-            'Simple Carry Strategy'
+            'Carry Strategy'
         """
         if name not in self._TEMPLATES:
             available = ', '.join(self.list_available())
@@ -220,7 +220,7 @@ class StrategyRegistry:
             ...     start_date='2024-06-01'
             ... )
             >>> strategy.identifier
-            'Simple Carry Strategy'
+            'Carry Strategy'
         """
         # Get template
         config_dict = self.get_template(template_name)

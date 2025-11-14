@@ -7,7 +7,9 @@ Converts alpha signals into optimal portfolio weights using
 modern portfolio theory (Markowitz 1952, Grinold-Kahn 1999).
 
 Modules:
-- MeanVarianceOptimizer: Core optimizer (minimal)
+- MeanVarianceOptimizer: Markowitz mean-variance optimizer
+- CVaRMeanVarianceOptimizer: CVaR-constrained optimizer
+- ClusterAwareMeanVarianceOptimizer: Cluster-aware optimizer
 - Base: Abstract base classes
 
 Usage:
@@ -27,13 +29,13 @@ Usage:
     optimizer = MeanVarianceOptimizer(risk_aversion=1.0, long_only=True)
     weights = optimizer.optimize(alphas, cov_matrix)
 
-Minimal Implementation:
+Features:
 - Mean-variance optimization with quadratic programming
 - Budget constraint (sum of weights)
 - Leverage constraint (sum of |weights|)
 - Position limits
 
-Maximal Additions (Phase 2):
+Potential Extensions:
 - Transaction costs (proportional + quadratic)
 - DV01 constraints (fixed income risk limits)
 - Cardinality constraints (L0 penalty)

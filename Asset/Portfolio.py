@@ -27,7 +27,6 @@ Portfolio (implements Asset)
 ```
 
 Example:
-    Simple portfolio:
     >>> asset1 = PriceFuture('SFRZ4')
     >>> asset2 = PriceFuture('SFRH5')
     >>> port = Portfolio('CARRY_PORT', [

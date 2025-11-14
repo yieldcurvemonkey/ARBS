@@ -25,16 +25,16 @@ Method:
 - Uses scipy.optimize.minimize with SLSQP (Sequential Least Squares)
 - Handles linear equality constraints (budget)
 - Handles linear inequality constraints (bounds, leverage)
-- Handles nonlinear constraints (if needed in maximal version)
+- Handles nonlinear constraints (if needed)
 
-Minimal Implementation (Phase 1):
+Current Features:
 - Mean-variance objective
 - Budget constraint: sum(w) = 1.0
 - Long-only bounds: w_i >= 0
 - Position limits: w_i <= max_weight
 - Leverage limit: sum(|w_i|) <= L
 
-Maximal Additions (Phase 2):
+Potential Extensions:
 - Transaction costs (proportional + quadratic)
 - DV01 constraints (fixed income)
 - Cardinality constraints (L0 penalty)

@@ -55,7 +55,7 @@ class StrategyFactory:
             >>> factory = StrategyFactory()
             >>> strategy = factory.create_from_yaml('strategy.yaml')
             >>> strategy.identifier
-            'Simple Carry Strategy'
+            'Carry Strategy'
         """
         config = StrategyConfig.from_yaml(yaml_path)
         return self.create_from_config(config)
