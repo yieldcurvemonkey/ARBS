@@ -97,6 +97,8 @@ Result:          BacktestResult (returns, IC, Sharpe, total return)
 - **Multi-Signal Support**: Single or multiple signals with automatic combiner
 - **Unified Interface**: Single backtest class for all use cases
 
+**NOTE**: Test counts in this section reflect initial implementation. Current codebase has 582 total tests. See CODEBASE_ANALYSIS.md for detailed metrics.
+
 **Usage Patterns:**
 
 1. **Futures Carry** (query-based workflow):

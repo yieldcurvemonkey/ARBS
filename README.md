@@ -40,7 +40,7 @@ pip install -r requirements.txt
 # 4. Verify installation by running tests
 python -m pytest tests/unit/ -v
 
-# 5. Expected result: 1038+ tests passing (99.2% pass rate)
+# 5. Expected result: 582 tests passing (updated 2025-11-14)
 ```
 
 ### Dependency Notes
@@ -99,7 +99,7 @@ Some data builders (e.g., CME/fixings/SDR) may require credentials or local file
 
 ### 2) First run (Query-driven backtest)
 
-#### See also [this](https://github.com/yieldcurvemonkey/ARBS/blob/main/month_end_irswaps_backtest.ipynb) notebook
+#### See also [this](https://github.com/pfin/ARBS/blob/main/month_end_irswaps_backtest.ipynb) notebook
 
 ```py
 import datetime as dt
