@@ -1,5 +1,5 @@
-# ABOUTME: Two-step covariance estimator from García-Medina (2024)
-# ABOUTME: Combines hierarchical clustering with random matrix filtering
+# ABOUTME: Two-step covariance (extends SectorBasedCovarianceEstimator) with RMT filtering
+# ABOUTME: Hierarchical clustering (Step 1) + random matrix filtering per cluster (Step 2)
 """
 Two-Step Covariance Estimator
 

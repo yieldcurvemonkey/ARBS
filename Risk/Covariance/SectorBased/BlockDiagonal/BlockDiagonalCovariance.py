@@ -1,5 +1,5 @@
-# ABOUTME: Block-diagonal covariance estimator with sector structure
-# ABOUTME: Integrates factor extraction and per-block Ledoit-Wolf shrinkage
+# ABOUTME: Block-diagonal covariance (extends SectorBasedCovarianceEstimator) with factor extraction
+# ABOUTME: Combines factor loading matrix Σ=B·Cov(F)·B^T with per-block Ledoit-Wolf shrinkage
 """
 BlockDiagonalCovariance
 

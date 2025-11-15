@@ -1,5 +1,5 @@
-# ABOUTME: Abstract base class for sector-based covariance estimators
-# ABOUTME: Provides common functionality for block-diagonal and clustered covariance models
+# ABOUTME: Sector-based covariance base (extends BaseCovarianceEstimator) with common sector utilities
+# ABOUTME: Provides validation, format conversion, hierarchical clustering, positive definiteness
 """
 SectorBasedCovarianceEstimator
 

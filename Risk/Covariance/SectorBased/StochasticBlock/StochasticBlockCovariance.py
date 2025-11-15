@@ -1,5 +1,5 @@
-# ABOUTME: StochasticBlock covariance estimator with inter-block correlations
-# ABOUTME: MVP implementation using block-diagonal base + regularized off-diagonal blocks
+# ABOUTME: Stochastic block covariance (extends SectorBasedCovarianceEstimator) with inter-block correlations
+# ABOUTME: Blends block-diagonal (within-sector) with full covariance (cross-sector) via sparsity parameter
 """
 StochasticBlockCovariance Estimator
 
