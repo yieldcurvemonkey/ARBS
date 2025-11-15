@@ -97,7 +97,9 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
             self.sample_cov = self._pairwise_covariance(returns_np)
         else:
             # Standard covariance (drops rows with any NaN)
-            self.sample_cov = np.cov(returns_np.T)
+            sample_cov = np.cov(returns_np.T)
+            # Ensure covariance is always 2D (np.cov returns scalar for single column)
+            self.sample_cov = np.atleast_2d(sample_cov)
 
         # Calculate shrinkage target
         self.target_matrix = self._compute_target(returns_clean)
@@ -216,6 +218,8 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
             np.fill_diagonal(corr_matrix, 1.0)
         else:
             corr_matrix = np.corrcoef(returns_np.T)
+            # Ensure correlation matrix is always 2D (np.corrcoef returns scalar for single column)
+            corr_matrix = np.atleast_2d(corr_matrix)
 
         # Average off-diagonal correlation
         n = corr_matrix.shape[0]

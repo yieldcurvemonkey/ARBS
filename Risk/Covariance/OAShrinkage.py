@@ -122,7 +122,9 @@ class OAShrinkage(BaseCovarianceEstimator):
         self.shrinkage_coefficient = self._estimator.shrinkage_
 
         # 6. Calculate sample covariance for reference
-        self.sample_cov = np.cov(returns_array, rowvar=False, ddof=1)
+        sample_cov = np.cov(returns_array, rowvar=False, ddof=1)
+        # Ensure covariance is always 2D (np.cov returns scalar for single column)
+        self.sample_cov = np.atleast_2d(sample_cov)
 
         # 7. Validate output
         self._validate_covariance_matrix(self.cov_matrix_)

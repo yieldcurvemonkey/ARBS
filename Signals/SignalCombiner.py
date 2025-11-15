@@ -70,19 +70,19 @@ class SignalCombiner:
         combine: Combine signals using specified method
     """
 
-    def __init__(self):
+    def __init__(self, method: str = 'equal'):
         """
         Initialize SignalCombiner.
 
-        The combiner is stateless and can be reused across multiple
-        signal combination operations.
+        Args:
+            method: Default combination method ('equal', 'ic_weighted', 'orthogonalize')
         """
-        pass
+        self.method = method
 
     def combine(
         self,
         signals: Dict[str, Dict[str, float]],
-        method: str = 'equal',
+        method: Optional[str] = None,
         ic_estimates: Optional[Dict[str, float]] = None,
     ) -> Dict[str, float]:
         """
@@ -118,6 +118,10 @@ class SignalCombiner:
             >>> combiner.combine(signals, method='ic_weighted', ic_estimates=ic_estimates)
             {'A': 0.667, 'B': -0.667}
         """
+        # Use instance method if not overridden
+        if method is None:
+            method = self.method
+
         # Handle empty signals
         if not signals:
             return {}

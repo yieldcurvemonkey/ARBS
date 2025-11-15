@@ -66,7 +66,10 @@ class SampleCovariance(BaseCovarianceEstimator):
         # Calculate covariance matrix using numpy
         # np.cov with ddof=1 (unbiased estimator, same as pandas default)
         returns_array = returns_clean.to_numpy()
-        self.cov_matrix_ = np.cov(returns_array, rowvar=False, ddof=1)
+        cov = np.cov(returns_array, rowvar=False, ddof=1)
+
+        # Ensure covariance is always 2D (np.cov returns scalar for single column)
+        self.cov_matrix_ = np.atleast_2d(cov)
 
         return self.cov_matrix_
 

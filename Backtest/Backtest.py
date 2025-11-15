@@ -391,7 +391,7 @@ class Backtest(BaseBacktest):
                         sig.name: sig_values
                         for sig, sig_values in zip(self.signals, individual_signals)
                     }
-                    signals = self.signal_combiner.combine(signals_dict, method='equal')
+                    signals = self.signal_combiner.combine(signals_dict)
                 else:
                     # Fallback: equal weight combination
                     signals = {}
@@ -587,7 +587,7 @@ class Backtest(BaseBacktest):
                         sig.name: sig_values
                         for sig, sig_values in zip(self.signals, individual_signals)
                     }
-                    signals = self.signal_combiner.combine(signals_dict, method='equal')
+                    signals = self.signal_combiner.combine(signals_dict)
                 else:
                     # Fallback: equal weight combination
                     signals = {}

@@ -36,7 +36,7 @@ class TestStrategyRegistry:
         registry = StrategyRegistry()
         template = registry.get_template('simple_carry')
 
-        assert template['strategy']['name'] == 'Simple Carry Strategy'
+        assert template['strategy']['name'] == 'Carry Strategy'
         assert template['strategy']['type'] == 'carry'
         assert len(template['signals']) == 1
         assert template['signals'][0]['type'] == 'carry'
@@ -54,7 +54,7 @@ class TestStrategyRegistry:
         strategy = registry.create_strategy('simple_carry')
 
         assert isinstance(strategy, GrinoldKahnPortfolio)
-        assert strategy.identifier == 'Simple Carry Strategy'
+        assert strategy.identifier == 'Carry Strategy'
         assert len(strategy.signals) == 1
         assert isinstance(strategy.signals[0], CarrySignal)
 
@@ -119,7 +119,7 @@ class TestStrategyRegistry:
 
         # Get template again - should be unchanged
         template2 = registry.get_template('simple_carry')
-        assert template2['strategy']['name'] == 'Simple Carry Strategy'
+        assert template2['strategy']['name'] == 'Carry Strategy'
 
     def test_save_template_to_yaml(self, tmp_path):
         """Should save template to YAML file."""
@@ -136,7 +136,7 @@ class TestStrategyRegistry:
         with open(output_file, 'r') as f:
             loaded = yaml.safe_load(f)
 
-        assert loaded['strategy']['name'] == 'Simple Carry Strategy'
+        assert loaded['strategy']['name'] == 'Carry Strategy'
 
 
 class TestConvenienceFunctions:
@@ -154,7 +154,7 @@ class TestConvenienceFunctions:
         strategy = quick_strategy('simple_carry', ['SFRZ4', 'SFRH5'])
 
         assert isinstance(strategy, GrinoldKahnPortfolio)
-        assert strategy.identifier == 'Simple Carry Strategy'
+        assert strategy.identifier == 'Carry Strategy'
 
 
 class TestTemplateRegistration:
@@ -209,7 +209,7 @@ class TestTemplateContent:
         strategy = registry.create_strategy('simple_momentum')
 
         assert isinstance(strategy, GrinoldKahnPortfolio)
-        assert strategy.identifier == 'Simple Momentum Strategy'
+        assert strategy.identifier == 'Momentum Strategy'
 
     def test_multi_signal_template_valid(self):
         """multi_signal template should be valid."""

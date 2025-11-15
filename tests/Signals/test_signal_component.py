@@ -37,7 +37,7 @@ class TestSignalComponent:
         result = component.calculate(data)
 
         expected = pl.DataFrame({"a": [2, 4, 6], "b": [8, 10, 12]})
-        assert result.frame_equal(expected)
+        assert result.equals(expected)
 
     def test_name_attribute(self):
         """Component should allow setting and getting name."""

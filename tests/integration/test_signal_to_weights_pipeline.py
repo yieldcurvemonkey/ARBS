@@ -82,7 +82,7 @@ class TestSignalToWeightsPipeline:
         assert 0 < alphas_dict['SFRM5'] < alphas_dict['SFRZ4']
 
         # Step 4: Estimate covariance
-        cov_matrix = risk_model.fit(returns_history.to_pandas())
+        cov_matrix = risk_model.fit(returns_history)
         cov_df = pl.DataFrame(
             cov_matrix,
             schema=returns_history.columns
@@ -187,7 +187,7 @@ class TestSignalToWeightsPipeline:
         alphas_high_dict = alpha_gen.signals_to_alphas(
             signals, returns_high_corr, date(2024, 11, 1)
         )
-        cov_high = risk_model.fit(returns_high_corr.to_pandas())
+        cov_high = risk_model.fit(returns_high_corr)
         cov_df_high = pl.DataFrame(cov_high, schema=returns_high_corr.columns)
         alphas_high_values = [alphas_high_dict[asset] for asset in returns_high_corr.columns]
         alphas_high = pl.Series(name='alphas', values=alphas_high_values)
@@ -197,7 +197,7 @@ class TestSignalToWeightsPipeline:
         alphas_low_dict = alpha_gen.signals_to_alphas(
             signals, returns_low_corr, date(2024, 11, 1)
         )
-        cov_low = risk_model.fit(returns_low_corr.to_pandas())
+        cov_low = risk_model.fit(returns_low_corr)
         cov_df_low = pl.DataFrame(cov_low, schema=returns_low_corr.columns)
         alphas_low_values = [alphas_low_dict[asset] for asset in returns_low_corr.columns]
         alphas_low = pl.Series(name='alphas', values=alphas_low_values)
@@ -243,7 +243,7 @@ class TestSignalToWeightsPipeline:
             "Higher vol should produce higher alpha for same signal"
 
         # Optimize weights
-        cov_matrix = risk_model.fit(returns_history.to_pandas())
+        cov_matrix = risk_model.fit(returns_history)
         cov_df = pl.DataFrame(cov_matrix, schema=returns_history.columns)
         alphas_values = [alphas_dict[asset] for asset in returns_history.columns]
         alphas = pl.Series(name='alphas', values=alphas_values)
@@ -281,7 +281,7 @@ class TestSignalToWeightsPipeline:
         alphas_low_dict = alpha_gen_low.signals_to_alphas(
             signals, returns_history, date(2024, 11, 1)
         )
-        cov_matrix = risk_model.fit(returns_history.to_pandas())
+        cov_matrix = risk_model.fit(returns_history)
         cov_df = pl.DataFrame(cov_matrix, schema=returns_history.columns)
         alphas_low_values = [alphas_low_dict[asset] for asset in returns_history.columns]
         alphas_low = pl.Series(name='alphas', values=alphas_low_values)
@@ -334,7 +334,7 @@ class TestRealisticScenarios:
         )
 
         # Optimize
-        cov_matrix = risk_model.fit(returns_history.to_pandas())
+        cov_matrix = risk_model.fit(returns_history)
         cov_df = pl.DataFrame(cov_matrix, schema=returns_history.columns)
         alphas_values = [alphas_dict[asset] for asset in returns_history.columns]
         alphas = pl.Series(name='alphas', values=alphas_values)
