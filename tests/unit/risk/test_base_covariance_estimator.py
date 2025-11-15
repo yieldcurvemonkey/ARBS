@@ -1,5 +1,5 @@
 # ABOUTME: Tests for BaseCovarianceEstimator validation methods
-# ABOUTME: Validates _validate_covariance_matrix, _ensure_positive_definite, and _calculate_condition_number
+# ABOUTME: Validates _validate_covariance_matrix, _ensure_positive_definite, and condition_number
 """
 Tests for BaseCovarianceEstimator validation methods.
 
@@ -8,7 +8,7 @@ Tests cover:
 2. _validate_covariance_matrix - invalid matrices (not square, not symmetric, negative eigenvalue)
 3. _ensure_positive_definite - eigenvalue clipping
 4. _ensure_positive_definite - symmetry preservation
-5. _calculate_condition_number - condition number calculation
+5. condition_number - condition number calculation and singular matrix handling
 """
 
 import pytest
@@ -142,21 +142,53 @@ def test_ensure_positive_definite_symmetry():
 
 
 # =============================================================================
-# Tests for _calculate_condition_number
+# Tests for condition_number
 # =============================================================================
 
-def test_calculate_condition_number():
-    """Test _calculate_condition_number computes κ = λ_max / λ_min."""
+def test_condition_number():
+    """Test condition_number computes κ = λ_max / λ_min."""
     estimator = SimpleCovarianceEstimator()
 
-    # Create diagonal matrix with known eigenvalues
-    eigenvalues = np.array([10.0, 5.0, 1.0])
-    cov = np.diag(eigenvalues)
+    # Create returns that will produce diagonal covariance with known eigenvalues
+    # Use uncorrelated returns with specific variances
+    np.random.seed(42)
+    n_samples = 1000
+    returns_data = {
+        'A': np.random.normal(0, np.sqrt(10.0), n_samples),  # var = 10.0
+        'B': np.random.normal(0, np.sqrt(5.0), n_samples),   # var = 5.0
+        'C': np.random.normal(0, np.sqrt(1.0), n_samples),   # var = 1.0
+    }
+    returns = pl.DataFrame(returns_data)
+
+    # Fit estimator
+    estimator.fit(returns)
 
     # Calculate condition number
-    kappa = estimator._calculate_condition_number(cov)
+    kappa = estimator.condition_number()
 
-    # Expected: 10.0 / 1.0 = 10.0
-    expected_kappa = 10.0
-    assert np.isclose(kappa, expected_kappa, rtol=1e-10), \
-        f"Expected κ={expected_kappa}, got κ={kappa}"
+    # Expected: approximately 10.0 / 1.0 = 10.0 (with some variance)
+    # Be lenient since we're using random data
+    assert 5.0 < kappa < 15.0, \
+        f"Expected κ ≈ 10.0 (range 5-15), got κ={kappa}"
+
+
+def test_condition_number_singular_matrix():
+    """Test condition_number returns inf for singular matrix."""
+    estimator = SimpleCovarianceEstimator()
+
+    # Create rank-deficient returns (singular covariance matrix)
+    # Perfect correlation: B = 2*A
+    returns = pl.DataFrame({
+        'A': [1.0, 2.0, 3.0, 4.0, 5.0],
+        'B': [2.0, 4.0, 6.0, 8.0, 10.0],  # Perfect correlation with A
+    })
+
+    # Fit estimator
+    estimator.fit(returns)
+
+    # Calculate condition number
+    kappa = estimator.condition_number()
+
+    # Should be inf (or very large for nearly singular)
+    assert kappa == np.inf or kappa > 1e10, \
+        f"Expected κ = inf for singular matrix, got κ={kappa}"

@@ -106,9 +106,11 @@ class BaseCovarianceEstimator(ABC):
         Condition number measures matrix stability:
         - κ < 100: Well-conditioned (good)
         - κ > 1000: Ill-conditioned (risky for inversion)
+        - κ = inf: Singular matrix (not invertible)
 
         Returns:
-            Condition number
+            Condition number (κ = σ_max / σ_min)
+            Returns np.inf for singular matrices
         """
         cov = self.get_covariance()
         return np.linalg.cond(cov)
@@ -195,26 +197,6 @@ class BaseCovarianceEstimator(ABC):
         cov_pd = (cov_pd + cov_pd.T) / 2
 
         return cov_pd
-
-    def _calculate_condition_number(self, cov_matrix: np.ndarray) -> float:
-        """
-        Calculate condition number of covariance matrix.
-
-        Condition number = λ_max / λ_min (ratio of largest to smallest eigenvalue)
-
-        Interpretation:
-        - κ < 100: Well-conditioned (safe for inversion)
-        - κ > 1000: Ill-conditioned (risky for portfolio optimization)
-        - κ > 10000: Severely ill-conditioned (requires regularization)
-
-        Args:
-            cov_matrix: Covariance matrix
-
-        Returns:
-            Condition number
-        """
-        eigenvalues = np.linalg.eigvalsh(cov_matrix)
-        return eigenvalues.max() / eigenvalues.min()
 
     def _handle_missing_data(self, returns: pl.DataFrame) -> pl.DataFrame:
         """
