@@ -41,9 +41,10 @@ import numpy as np
 import polars as pl
 
 from Signals.Base.BaseSignal import BaseSignal
+from Signals.Base.TimeSeriesSignalMixin import TimeSeriesSignalMixin
 
 
-class MeanReversionSignal(BaseSignal):
+class MeanReversionSignal(BaseSignal, TimeSeriesSignalMixin):
     """
     Mean reversion signal for futures.
 
@@ -205,120 +206,6 @@ class MeanReversionSignal(BaseSignal):
             signal = -1.0 * deviation
 
         return float(signal)
-
-    def calculate(
-        self,
-        instruments: List[str],
-        market_data: Any,
-        as_of: date
-    ) -> Dict[str, float]:
-        """
-        Calculate mean reversion signals for multiple instruments.
-
-        Args:
-            instruments: List of instrument identifiers
-            market_data: Market data provider with get_price_history method
-            as_of: Calculation date
-
-        Returns:
-            Dict mapping instrument → mean reversion signal (Z-score if standardize=True)
-
-        Example:
-            >>> signal = MeanReversionSignal(lookback_days=30)
-            >>> signals = signal.calculate(['SFRZ4', 'SFRH5'], mdp, date(2024, 11, 1))
-            >>> signals
-            {'SFRZ4': 1.2, 'SFRH5': -0.8}  # Z-scores
-        """
-        raw_signals = {}
-
-        # Calculate raw mean reversion for each instrument
-        for instrument in instruments:
-            try:
-                # Get price history from market data
-                lookback_date = as_of - timedelta(days=self.lookback_days + 10)  # Extra buffer
-                price_history = market_data.get_price_history(
-                    instrument,
-                    start_date=lookback_date,
-                    end_date=as_of
-                )
-
-                # Calculate raw signal
-                raw_signal = self._calculate_raw_signal(
-                    inst_data=price_history,
-                    market_data=market_data,
-                    as_of=as_of
-                )
-
-                raw_signals[instrument] = raw_signal
-
-            except Exception as e:
-                # Handle errors gracefully
-                print(f"Warning: Error calculating mean reversion for {instrument}: {e}")
-                raw_signals[instrument] = 0.0
-
-        # Standardize to Z-scores if requested
-        if self.standardize:
-            signals = self._standardize_signals(raw_signals)
-        else:
-            signals = raw_signals
-
-        # Track history if enabled
-        if self.track_history:
-            self._update_history(as_of, signals)
-
-        self.last_generated = as_of
-
-        return signals
-
-    def _standardize_signals(self, raw_signals: Dict[str, float]) -> Dict[str, float]:
-        """
-        Standardize raw signals to Z-scores (mean=0, std=1).
-
-        Args:
-            raw_signals: Dict of raw signal values
-
-        Returns:
-            Dict of standardized Z-scores
-
-        Formula:
-            z_i = (x_i - mean(x)) / std(x)
-        """
-        values = list(raw_signals.keys())
-
-        if len(values) == 0:
-            return {}
-
-        if len(values) == 1:
-            # Single instrument: return 0 (no cross-sectional info)
-            return {k: 0.0 for k in raw_signals.keys()}
-
-        # Calculate mean and std
-        signal_array = np.array(list(raw_signals.values()))
-        mean_signal = np.mean(signal_array)
-        std_signal = np.std(signal_array, ddof=1)
-
-        if std_signal < 1e-10:
-            # No variation: return zeros
-            return {k: 0.0 for k in raw_signals.keys()}
-
-        # Standardize
-        standardized = {}
-        for instrument, raw_value in raw_signals.items():
-            z_score = (raw_value - mean_signal) / std_signal
-            standardized[instrument] = float(z_score)
-
-        return standardized
-
-    def _update_history(self, as_of: date, signals: Dict[str, float]):
-        """Update signal history for tracking."""
-        if self.history is None:
-            self.history = {}
-
-        self.history[as_of] = {
-            'signals': signals.copy(),
-            'mean': np.mean(list(signals.values())),
-            'std': np.std(list(signals.values()), ddof=1) if len(signals) > 1 else 0.0
-        }
 
     def __repr__(self) -> str:
         """String representation."""
