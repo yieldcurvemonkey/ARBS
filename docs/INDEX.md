@@ -1,6 +1,6 @@
 # ARBS Documentation Index
 
-**Last Updated**: 2025-11-14
+**Last Updated**: 2025-11-15
 
 ## Quick Start
 
@@ -18,7 +18,7 @@
 - **COMPOSABLE_PORTFOLIO_ARCHITECTURE.md** - Nested portfolio design
 
 ### Backtest System
-- **BACKTEST_UNIFIED_API.md** - Primary backtest API documentation
+- **BACKTEST_API.md** - Primary backtest API documentation
 - **FUTURES_BACKTESTING_GUIDE.md** - Futures-specific backtesting
 - **workflows/ARXIV_TO_CODE_PLAN.md** - Research paper integration workflow
 
@@ -48,15 +48,14 @@
 - **POLARS_MIGRATION_COMPLETE.md** - Pandas→Polars migration complete
 - **NOTEBOOK_VALIDATION.md** - Notebook quality assessment and test results
 - **SECTOR_COVARIANCE_VALIDATION.md** - Sector-based covariance model validation
-- **PHASE_3_COMPLETION_SUMMARY.md** - Sector covariance implementation
-- **PHASE_4_COMPLETION_SUMMARY.md** - Real data validation
+- **SECTOR_COVARIANCE_IMPLEMENTATION.md** - Sector covariance system (Phase 3-4 complete)
 - **PAPER_IMPLEMENTATION_FIDELITY.md** - Research paper implementation verification
 
 ## Design Documents
 
 ### Data Layer
 - **DATA_LAYER_ARCHITECTURE.md** - Market data provider architecture
-- **ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md** - Alpha Vantage integration (40% complete)
+- **ALPHAVANTAGE_DATA_LAYER_PLAN.md** - Alpha Vantage integration (40% complete)
 - **SCHEMA_INDEX.md** - SQLite schema reference
 - **design/YAHOO_FINANCE_MDP_DESIGN.md** - Yahoo Finance integration
 
@@ -64,7 +63,7 @@
 - **STRATEGY_MODULARIZATION_SUMMARY.md** - YAML-based strategy system
 - **MODULARITY_IMPROVEMENTS_PLAN.md** - Factory pattern implementation
 - **design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md** - Equity sector extension (15% complete)
-- **design/AGENT_ORCHESTRATION_UNIFIED.md** - Multi-agent implementation (40% complete)
+- **design/AGENT_ORCHESTRATION.md** - Multi-agent implementation (40% complete)
 - **design/BACKTEST_UNIFICATION_PLAN.md** - Backtest unification proposal (not executed)
 
 ### Asset Abstractions
