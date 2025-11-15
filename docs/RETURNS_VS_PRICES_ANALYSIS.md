@@ -1,12 +1,8 @@
 # Returns vs Prices - Mathematical Foundation
 
-**NOTE**: This analysis led to the returns-first architecture implemented in commit bf818d5 (2025-11-11).
-All recommendations have been implemented. Document retained for architectural rationale.
+**Purpose**: Architectural rationale for returns-first design
 
-**Document Status**: Analysis Complete
-**Date Written**: 2025-11-11
-**Implementation Status**: Phase 1 Complete (Returns infrastructure, AlphaGenerator, VolatilityEstimator)
-**Last Updated**: 2025-11-11
+This document explains why ARBS uses returns as the primary data structure instead of prices.
 
 ---
 
@@ -432,7 +428,7 @@ where:
 
 ---
 
-## Implementation Status (Updated 2025-11-11)
+## Implementation Status
 
 ### Completed
 - ✅ ReturnsCalculator (16 tests)
