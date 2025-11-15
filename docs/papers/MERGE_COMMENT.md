@@ -119,7 +119,7 @@ All formulas match Yang & Shi (2023) exactly:
 ### Implementation Documents
 - `SECTOR_ROTATION_IMPLEMENTATION_PROGRESS.md` - Phase-by-phase progress
 - `FINAL_SECTOR_ROTATION_SUMMARY.md` - Complete implementation summary
-- `COMPREHENSIVE_VERIFICATION.md` - Systematic verification of all components
+- `SECTOR_COVARIANCE_VERIFICATION.md` - Systematic verification of all components
 
 ### Code Documentation
 - Comprehensive module docstrings with usage examples

@@ -23,7 +23,7 @@
 **System architect evaluating design**
 → Start here: `docs/SQLITE_SCHEMA_DESIGN.md`
 → Then: `docs/SCHEMA_IMPLEMENTATION_GUIDE.md`
-→ Reference: `docs/ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md` (context)
+→ Reference: `docs/ALPHAVANTAGE_DATA_LAYER_PLAN.md` (context)
 
 **DevOps managing database**
 → Start here: `Data/Cache/migrations/README.md`
@@ -289,7 +289,7 @@ SELECT ... FROM api_requests WHERE DATE(request_time) = DATE('now')
 
 ```
 ┌─────────────────────────────────────────────┐
-│  ALPHAVANTAGE_DATA_LAYER_PLAN_CORRECTED.md         │ ← Overall context
+│  ALPHAVANTAGE_DATA_LAYER_PLAN.md         │ ← Overall context
 │  (High-level architecture)                  │
 └────────────────┬────────────────────────────┘
                  │

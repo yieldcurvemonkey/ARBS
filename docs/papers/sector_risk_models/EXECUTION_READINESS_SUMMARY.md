@@ -11,7 +11,7 @@
 All planning documents have been created, verified, committed, and pushed:
 
 ### 1. ✅ Complete Task Breakdown
-**File**: `/home/user/ARBS/docs/papers/sector_risk_models/COMPLETE_TASK_BREAKDOWN.md` (960 lines)
+**File**: `/home/user/ARBS/docs/papers/sector_risk_models/TASK_BREAKDOWN.md` (960 lines)
 **Commit**: dfb9492
 
 **Contents**:
@@ -39,7 +39,7 @@ All planning documents have been created, verified, committed, and pushed:
 
 ### 3. ✅ Paper Analysis Documents
 **Files**:
-- `COMPREHENSIVE_ANALYSIS.md` (779 lines)
+- `ANALYSIS.md` (779 lines)
 - `IMPLEMENTATION_PLAN.md` (1,049 lines)
 - `ARBS_INTEGRATION_ROADMAP.md` (879 lines)
 - `EXECUTIVE_SUMMARY.md` (477 lines)

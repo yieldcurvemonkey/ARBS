@@ -12,7 +12,7 @@
 - **EXECUTIVE_SUMMARY.md** - Read this first for high-level overview
 
 ### 📊 Detailed Analysis
-- **COMPREHENSIVE_ANALYSIS.md** - All mathematical formulas, performance comparisons, Grinold-Kahn alignment
+- **ANALYSIS.md** - All mathematical formulas, performance comparisons, Grinold-Kahn alignment
 - **ARBS_INTEGRATION_ROADMAP.md** - Maps papers to existing ARBS components, shows integration points
 - **IMPLEMENTATION_PLAN.md** - TDD-based implementation plan with complete API designs
 
@@ -190,7 +190,7 @@ D_ij = (|Ŝ_ij| / √(θ̂_ij·T^(-1)·log p))^(-1)
 λ_i^s = max{λ̂_i - c·p/T, 0}
 ```
 
-**Full formulas in COMPREHENSIVE_ANALYSIS.md**
+**Full formulas in ANALYSIS.md**
 
 ---
 
@@ -214,7 +214,7 @@ All papers implement the **exact Grinold-Kahn risk model structure** (Chapter 4)
 |------|-------|-------------|
 | README.md | (this) | Navigation guide |
 | EXECUTIVE_SUMMARY.md | 477 | High-level overview |
-| COMPREHENSIVE_ANALYSIS.md | 779 | Mathematical formulas and detailed analysis |
+| ANALYSIS.md | 779 | Mathematical formulas and detailed analysis |
 | IMPLEMENTATION_PLAN.md | 1,049 | TDD-based implementation plan |
 | ARBS_INTEGRATION_ROADMAP.md | 879 | Component mapping and integration |
 | paper_2412.08756.pdf | 18 MB | García-Medina (2024) |
