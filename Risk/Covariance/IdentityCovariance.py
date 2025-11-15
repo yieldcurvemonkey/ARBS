@@ -1,4 +1,4 @@
-# ABOUTME: Identity covariance matrix estimator (diagonal risk model with uniform variance)
+# ABOUTME: Identity covariance matrix estimator (extends BaseCovarianceEstimator, diagonal risk model with uniform variance)
 # ABOUTME: Assumes zero correlation between assets with all variances equal to mean variance: Σ = σ² × I where σ² = mean(var(returns))
 """
 Identity Covariance Estimator

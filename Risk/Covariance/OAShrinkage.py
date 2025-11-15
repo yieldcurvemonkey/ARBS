@@ -1,4 +1,4 @@
-# ABOUTME: Oracle Approximating Shrinkage covariance estimator from sklearn
+# ABOUTME: Oracle Approximating Shrinkage covariance estimator (extends BaseCovarianceEstimator) from sklearn
 # ABOUTME: Implements Chen et al. (2010) OAS for small sample sizes with optimal shrinkage intensity
 """
 OAS (Oracle Approximating Shrinkage) Covariance Estimator

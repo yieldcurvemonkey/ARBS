@@ -1,4 +1,4 @@
-# ABOUTME: Sample covariance matrix estimator (baseline/benchmark method)
+# ABOUTME: Sample covariance matrix estimator (extends BaseCovarianceEstimator, baseline/benchmark method)
 # ABOUTME: Standard unbiased estimator Σ̂ = (1/(T-1)) Σ(r_t - r̄)(r_t - r̄)' for comparison with shrinkage methods
 """
 Sample Covariance Estimator

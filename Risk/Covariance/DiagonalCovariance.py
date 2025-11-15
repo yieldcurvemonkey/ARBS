@@ -1,4 +1,4 @@
-# ABOUTME: Diagonal covariance matrix estimator (zero correlation assumption)
+# ABOUTME: Diagonal covariance matrix estimator (extends BaseCovarianceEstimator, zero correlation assumption)
 # ABOUTME: Assumes zero correlation between assets: Σ_ij = σ_i² if i=j, else 0
 """
 Diagonal Covariance Estimator

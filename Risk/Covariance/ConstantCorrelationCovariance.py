@@ -1,4 +1,4 @@
-# ABOUTME: Constant correlation covariance matrix estimator (equal correlation shrinkage target)
+# ABOUTME: Constant correlation covariance matrix estimator (extends BaseCovarianceEstimator, equal correlation shrinkage target)
 # ABOUTME: Assumes all pairwise correlations equal: Σ = D(ρ11' + (1-ρ)I)D where ρ is mean correlation
 """
 Constant Correlation Covariance Estimator
