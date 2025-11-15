@@ -1,4 +1,4 @@
-# ABOUTME: Futures adapter for converting FuturesQuery results into signal-ready DataFrame
+# ABOUTME: Futures adapter (extends BaseAdapter) for converting FuturesQuery results into signal-ready DataFrame
 # ABOUTME: Extracts prices, calculates next contract prices, and formats roll dates for carry signal consumption
 """
 Futures Adapter
