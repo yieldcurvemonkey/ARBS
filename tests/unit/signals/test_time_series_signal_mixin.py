@@ -105,9 +105,9 @@ class TestTimeSeriesSignalMixin:
         signal = TestSignal(lookback_days=30, standardize=True)
         results = signal.calculate(['INST1'], mdp, base_date)
 
-        # Single instrument → should return 0.0 (no cross-sectional info)
+        # Single instrument → BaseSignal returns raw signal (can't standardize one value)
         assert len(results) == 1
-        assert results['INST1'] == 0.0
+        assert abs(results['INST1'] - 100.0) < 0.01
 
     def test_calculate_with_error(self):
         """Test calculate() handles errors gracefully."""
@@ -121,9 +121,10 @@ class TestTimeSeriesSignalMixin:
         signal = TestSignal(lookback_days=30, standardize=True)
         results = signal.calculate(['INST1', 'INST2'], mdp, base_date)
 
-        # Should handle error and assign 0.0 to failed instrument
-        assert len(results) == 2
-        assert results['INST2'] == 0.0
+        # INST2 should be excluded, not included with 0.0
+        assert len(results) == 1  # Only INST1
+        assert 'INST1' in results
+        assert 'INST2' not in results  # Excluded!
 
     def test_standardize_signals(self):
         """Test _standardize_signals() Z-score calculation."""

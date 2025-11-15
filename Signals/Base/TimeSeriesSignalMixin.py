@@ -3,6 +3,7 @@
 
 from datetime import date, timedelta
 from typing import Dict, List, Any, Optional
+import logging
 import numpy as np
 import polars as pl
 
@@ -31,13 +32,7 @@ class TimeSeriesSignalMixin:
         """
         Calculate signals for multiple instruments.
 
-        Pattern:
-        1. Loop over instruments
-        2. Fetch price history from market_data
-        3. Call _calculate_raw_signal() for each instrument
-        4. Handle errors gracefully
-        5. Standardize to Z-scores if requested
-        6. Track history if enabled
+        Delegates to BaseSignal.generate_batch() to reuse existing infrastructure.
 
         Args:
             instruments: List of instrument identifiers
@@ -46,50 +41,50 @@ class TimeSeriesSignalMixin:
 
         Returns:
             Dict mapping instrument → signal (Z-score if standardize=True, raw if False)
+            Note: Failed instruments are excluded from the result
         """
-        raw_signals = {}
+        # Enforce contract - mixin requires these attributes
+        required_attrs = ['lookback_days', 'standardize', 'track_history', '_calculate_raw_signal']
+        missing = [attr for attr in required_attrs if not hasattr(self, attr)]
 
-        # Get lookback for price history (subclass must define self.lookback_days)
-        lookback_days = getattr(self, 'lookback_days', 60)
+        if missing:
+            raise TypeError(
+                f"{self.__class__.__name__} must define {missing} to use TimeSeriesSignalMixin. "
+                f"Ensure your class extends BaseSignal and defines lookback_days in __init__."
+            )
 
-        # Calculate raw signal for each instrument
+        # Fetch price history for all instruments
+        inst_data_list = []
+        failed_instruments = []
+        lookback_days = self.lookback_days
+
         for instrument in instruments:
             try:
-                # Get price history from market data
-                lookback_date = as_of - timedelta(days=lookback_days + 10)  # Extra buffer
+                lookback_date = as_of - timedelta(days=lookback_days + 10)
                 price_history = market_data.get_price_history(
                     instrument,
                     start_date=lookback_date,
                     end_date=as_of
                 )
-
-                # Calculate raw signal (subclass implements this)
-                raw_signal = self._calculate_raw_signal(
-                    inst_data=price_history,
-                    market_data=market_data,
-                    as_of=as_of
-                )
-
-                raw_signals[instrument] = raw_signal
-
+                inst_data_list.append(price_history)
             except Exception as e:
-                # Handle errors gracefully
-                print(f"Warning: Error calculating {self.name} for {instrument}: {e}")
-                raw_signals[instrument] = 0.0
+                logging.getLogger(__name__).warning(
+                    "Excluding instrument from universe",
+                    extra={'instrument': instrument, 'error': str(e)}
+                )
+                failed_instruments.append(instrument)
 
-        # Standardize to Z-scores if requested
-        if self.standardize:
-            signals = self._standardize_signals(raw_signals)
-        else:
-            signals = raw_signals
+        # Only process instruments that succeeded
+        successful_instruments = [i for i in instruments if i not in failed_instruments]
 
-        # Track history if enabled
-        if self.track_history:
-            self._update_history(as_of, signals)
+        if not successful_instruments:
+            return {}
 
-        self.last_generated = as_of
+        # Delegate to BaseSignal.generate_batch()
+        signals_array = self.generate_batch(inst_data_list, market_data, as_of)
 
-        return signals
+        # Convert array to dict
+        return {inst: float(sig) for inst, sig in zip(successful_instruments, signals_array)}
 
     def _standardize_signals(self, raw_signals: Dict[str, float]) -> Dict[str, float]:
         """
