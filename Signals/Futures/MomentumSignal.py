@@ -1,4 +1,4 @@
-# ABOUTME: Momentum signal calculator for futures using time-series price trends
+# ABOUTME: Momentum signal (extends BaseSignal) calculator for futures using time-series price trends
 # ABOUTME: Measures rate of price change over lookback period and standardizes to Z-scores
 """
 MomentumSignal - Time-series momentum for futures

@@ -1,4 +1,4 @@
-# ABOUTME: Mean reversion signal calculator for futures using Ornstein-Uhlenbeck process
+# ABOUTME: Mean reversion signal (extends BaseSignal) calculator for futures using Ornstein-Uhlenbeck process
 # ABOUTME: Measures deviation from mean and generates signals expecting price reversion
 """
 MeanReversionSignal - Mean reversion signal for futures
