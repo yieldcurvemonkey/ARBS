@@ -1,4 +1,4 @@
-# ABOUTME: Generic backtest supporting all asset classes and signal types
+# ABOUTME: Generic backtest (extends BaseBacktest) supporting all asset classes and signal types
 # ABOUTME: Configurable components via dependency injection, two workflows (query/DataFrame)
 
 """
