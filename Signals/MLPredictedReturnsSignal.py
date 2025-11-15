@@ -1,4 +1,4 @@
-# ABOUTME: ML-enhanced signal using Random Forest to predict returns from engineered features
+# ABOUTME: ML-enhanced signal using Random Forest to predict returns from engineered features (extends BaseSignal)
 # ABOUTME: Implements cross-sectional ML model with time-series cross-validation and IC tracking
 """
 MLPredictedReturnsSignal - Machine learning enhanced factor signal.

@@ -1,4 +1,4 @@
-# ABOUTME: Currency carry signal for fixed income strategies
+# ABOUTME: Currency carry signal for fixed income strategies (extends BaseSignal)
 # ABOUTME: Calculates carry (long_tenor_yield - short_tenor_yield) with z-score normalization
 
 """
