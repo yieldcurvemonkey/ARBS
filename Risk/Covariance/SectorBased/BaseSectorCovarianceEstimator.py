@@ -205,35 +205,6 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
 
         return sector_mapping
 
-    def _ensure_positive_definite(
-        self, cov_matrix: np.ndarray, min_eigenvalue: float = 1e-8
-    ) -> np.ndarray:
-        """
-        Ensure covariance matrix is positive definite.
-
-        Uses eigenvalue clipping: λᵢ → max(λᵢ, ε)
-
-        Args:
-            cov_matrix: Potentially singular covariance matrix
-            min_eigenvalue: Minimum eigenvalue threshold
-
-        Returns:
-            Positive definite covariance matrix
-        """
-        # Eigenvalue decomposition
-        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
-
-        # Clip negative/small eigenvalues
-        eigenvalues = np.maximum(eigenvalues, min_eigenvalue)
-
-        # Reconstruct
-        cov_pd = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
-
-        # Ensure symmetry (numerical stability)
-        cov_pd = (cov_pd + cov_pd.T) / 2
-
-        return cov_pd
-
     def get_sector_mapping(self) -> Dict[str, str]:
         """
         Get ticker → sector mapping after fitting.

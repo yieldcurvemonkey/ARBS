@@ -129,44 +129,6 @@ class OAShrinkage(BaseCovarianceEstimator):
 
         return self.cov_matrix_
 
-    def _validate_covariance_matrix(self, cov_matrix: np.ndarray, tol: float = 1e-10):
-        """
-        Validate covariance matrix properties.
-
-        Checks that the matrix is:
-        1. Square (N×N)
-        2. Symmetric (Σ = Σᵀ)
-        3. Positive semi-definite (all eigenvalues ≥ 0)
-
-        Args:
-            cov_matrix: Covariance matrix to validate
-            tol: Tolerance for symmetry and eigenvalue checks
-
-        Raises:
-            ValueError: If validation fails
-        """
-        # Check square
-        if cov_matrix.ndim != 2 or cov_matrix.shape[0] != cov_matrix.shape[1]:
-            raise ValueError(
-                f"Covariance matrix must be square, got shape {cov_matrix.shape}"
-            )
-
-        # Check symmetric
-        if not np.allclose(cov_matrix, cov_matrix.T, atol=tol):
-            max_diff = np.max(np.abs(cov_matrix - cov_matrix.T))
-            raise ValueError(
-                f"Covariance matrix must be symmetric. Max asymmetry: {max_diff:.2e}"
-            )
-
-        # Check positive semi-definite
-        eigenvalues = np.linalg.eigvalsh(cov_matrix)
-        min_eigenvalue = np.min(eigenvalues)
-        if min_eigenvalue < -tol:
-            raise ValueError(
-                f"Covariance matrix must be positive semi-definite. "
-                f"Minimum eigenvalue: {min_eigenvalue:.2e}"
-            )
-
     def get_shrinkage_coefficient(self) -> float:
         """
         Get the OAS shrinkage coefficient ρ.

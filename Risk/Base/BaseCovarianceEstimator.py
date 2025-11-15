@@ -113,6 +113,109 @@ class BaseCovarianceEstimator(ABC):
         cov = self.get_covariance()
         return np.linalg.cond(cov)
 
+    def _validate_covariance_matrix(
+        self,
+        cov_matrix: np.ndarray,
+        tol: float = 1e-10,
+        check_symmetry: bool = True,
+        check_positive_definite: bool = True
+    ) -> None:
+        """
+        Validate covariance matrix mathematical properties.
+
+        Checks:
+        1. Square matrix (N×N)
+        2. Symmetric (Σ = Σᵀ)
+        3. Positive semi-definite (all eigenvalues ≥ 0)
+
+        Args:
+            cov_matrix: Covariance matrix to validate
+            tol: Tolerance for numerical checks
+            check_symmetry: Whether to check matrix symmetry
+            check_positive_definite: Whether to check positive definiteness
+
+        Raises:
+            ValueError: If validation fails
+        """
+        # Check square
+        if cov_matrix.ndim != 2 or cov_matrix.shape[0] != cov_matrix.shape[1]:
+            raise ValueError(
+                f"Covariance matrix must be square, got shape {cov_matrix.shape}"
+            )
+
+        # Check symmetric
+        if check_symmetry:
+            if not np.allclose(cov_matrix, cov_matrix.T, atol=tol):
+                max_diff = np.max(np.abs(cov_matrix - cov_matrix.T))
+                raise ValueError(
+                    f"Covariance matrix must be symmetric. Max asymmetry: {max_diff:.2e}"
+                )
+
+        # Check positive semi-definite
+        if check_positive_definite:
+            eigenvalues = np.linalg.eigvalsh(cov_matrix)
+            min_eigenvalue = np.min(eigenvalues)
+            if min_eigenvalue < -tol:
+                raise ValueError(
+                    f"Covariance matrix must be positive semi-definite. "
+                    f"Minimum eigenvalue: {min_eigenvalue:.2e}"
+                )
+
+    def _ensure_positive_definite(
+        self,
+        cov_matrix: np.ndarray,
+        min_eigenvalue: float = 1e-8
+    ) -> np.ndarray:
+        """
+        Ensure covariance matrix is positive definite via eigenvalue clipping.
+
+        Method: Eigenvalue decomposition + clipping + reconstruction
+        Formula: Σ_pd = V @ diag(max(λ, ε)) @ V^T
+
+        Args:
+            cov_matrix: Potentially singular covariance matrix
+            min_eigenvalue: Minimum eigenvalue threshold (default: 1e-8)
+
+        Returns:
+            Positive definite covariance matrix
+
+        Note:
+            Also ensures symmetry via (Σ + Σᵀ)/2 for numerical stability
+        """
+        # Eigenvalue decomposition
+        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+
+        # Clip negative/small eigenvalues
+        eigenvalues = np.maximum(eigenvalues, min_eigenvalue)
+
+        # Reconstruct
+        cov_pd = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+
+        # Ensure symmetry (numerical stability)
+        cov_pd = (cov_pd + cov_pd.T) / 2
+
+        return cov_pd
+
+    def _calculate_condition_number(self, cov_matrix: np.ndarray) -> float:
+        """
+        Calculate condition number of covariance matrix.
+
+        Condition number = λ_max / λ_min (ratio of largest to smallest eigenvalue)
+
+        Interpretation:
+        - κ < 100: Well-conditioned (safe for inversion)
+        - κ > 1000: Ill-conditioned (risky for portfolio optimization)
+        - κ > 10000: Severely ill-conditioned (requires regularization)
+
+        Args:
+            cov_matrix: Covariance matrix
+
+        Returns:
+            Condition number
+        """
+        eigenvalues = np.linalg.eigvalsh(cov_matrix)
+        return eigenvalues.max() / eigenvalues.min()
+
     def _handle_missing_data(self, returns: pl.DataFrame) -> pl.DataFrame:
         """
         Handle missing data according to strategy.
