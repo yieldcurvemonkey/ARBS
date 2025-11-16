@@ -115,8 +115,8 @@ class TestSyntheticBacktest:
         )
         alphas = pl.Series('alphas', list(alphas_dict.values()))
 
-        # Estimate covariance (risk_model expects pandas DataFrame)
-        cov_matrix = risk_model.fit(synthetic_returns.to_pandas())
+        # Estimate covariance
+        cov_matrix = risk_model.fit(synthetic_returns)
         cov_df = pl.DataFrame(cov_matrix, schema=synthetic_returns.columns)
 
         # Optimize
@@ -275,7 +275,7 @@ class TestRiskModelComparison:
 
         for model_name in model_names:
             risk_model = risk_model_factory.create(model_name)
-            cov_matrix = risk_model.fit(synthetic_returns.to_pandas())
+            cov_matrix = risk_model.fit(synthetic_returns)
             cov_df = pl.DataFrame(cov_matrix, schema=synthetic_returns.columns)
             weights = optimizer.optimize(alphas, cov_df)
             weights_by_model[model_name] = weights
@@ -364,7 +364,7 @@ class TestRiskModelComparison:
 
         # Diagonal model
         diagonal_model = risk_model_factory.create('diagonal')
-        diag_cov = diagonal_model.fit(synthetic_returns.to_pandas())
+        diag_cov = diagonal_model.fit(synthetic_returns)
 
         # Verify it's truly diagonal
         n = len(diag_cov)
@@ -377,7 +377,7 @@ class TestRiskModelComparison:
     def test_identity_model_equal_variance(self, synthetic_returns):
         """Identity model should have equal variance for all assets."""
         identity_model = risk_model_factory.create('identity')
-        identity_cov = identity_model.fit(synthetic_returns.to_pandas())
+        identity_cov = identity_model.fit(synthetic_returns)
 
         # Check diagonal elements are all equal
         diag_elements = np.diag(identity_cov)
@@ -464,7 +464,7 @@ class TestRiskModelPerformance:
         for model_name in model_names:
             # Get weights from model
             risk_model = risk_model_factory.create(model_name)
-            cov_matrix = risk_model.fit(train_returns.to_pandas())
+            cov_matrix = risk_model.fit(train_returns)
             cov_df = pl.DataFrame(cov_matrix, schema=train_returns.columns)
             weights = optimizer.optimize(alphas, cov_df)
 
@@ -619,7 +619,7 @@ class TestEdgeCases:
 
         for model_name in model_names:
             risk_model = risk_model_factory.create(model_name)
-            cov_matrix = risk_model.fit(returns.to_pandas())
+            cov_matrix = risk_model.fit(returns)
             cov_df = pl.DataFrame(cov_matrix, schema=returns.columns)
             weights = optimizer.optimize(alphas, cov_df)
 
@@ -646,7 +646,7 @@ class TestEdgeCases:
 
         for model_name in model_names:
             risk_model = risk_model_factory.create(model_name)
-            cov_matrix = risk_model.fit(returns.to_pandas())
+            cov_matrix = risk_model.fit(returns)
             cov_df = pl.DataFrame(cov_matrix, schema=returns.columns)
             weights = optimizer.optimize(alphas, cov_df)
 

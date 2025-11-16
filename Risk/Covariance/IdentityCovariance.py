@@ -1,4 +1,4 @@
-# ABOUTME: Identity covariance matrix estimator (diagonal risk model with uniform variance)
+# ABOUTME: Identity covariance matrix estimator (extends BaseCovarianceEstimator, diagonal risk model with uniform variance)
 # ABOUTME: Assumes zero correlation between assets with all variances equal to mean variance: Σ = σ² × I where σ² = mean(var(returns))
 """
 Identity Covariance Estimator
@@ -51,7 +51,7 @@ class IdentityCovariance(BaseCovarianceEstimator):
     correlation information and individual variance differences.
     """
 
-    def __init__(self, handle_missing: str = 'drop'):
+    def __init__(self, handle_missing: str = "drop"):
         """
         Initialize identity covariance estimator.
 
@@ -62,7 +62,7 @@ class IdentityCovariance(BaseCovarianceEstimator):
         """
         super().__init__(handle_missing=handle_missing)
 
-    def fit(self, returns: pl.DataFrame) -> np.ndarray:
+    def _fit_impl(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate identity covariance matrix.
 
@@ -70,31 +70,23 @@ class IdentityCovariance(BaseCovarianceEstimator):
         where σ² = mean(var(returns_i)) for all assets i
 
         Args:
-            returns: DataFrame of returns (T×N)
+            returns: Clean DataFrame of returns (T×N), missing data already handled
 
         Returns:
             Identity covariance matrix (N×N)
         """
-        # Handle missing data
-        returns_clean = self._handle_missing_data(returns)
-
-        # Store asset names
-        self.asset_names_ = list(returns_clean.columns)
-
         # Calculate individual variances for each asset
         # polars.var() returns 1-row DataFrame with variance for each column
-        individual_variances = returns_clean.var()
+        individual_variances = returns.var()
 
         # Calculate mean variance across all assets
         mean_variance = individual_variances.to_numpy().mean()
 
         # Number of assets
-        n_assets = len(self.asset_names_)
+        n_assets = len(returns.columns)
 
         # Create identity matrix scaled by mean variance
-        self.cov_matrix_ = np.eye(n_assets) * mean_variance
-
-        return self.cov_matrix_
+        return np.eye(n_assets) * mean_variance
 
     def __repr__(self) -> str:
         return "IdentityCovariance()"

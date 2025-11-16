@@ -1,6 +1,5 @@
 # ABOUTME: Generic function map that converts value enums to calculation functions
 # ABOUTME: Maps instrument metrics (like NPV, DV01) to their computation implementations
-import QuantLib as ql
 
 from abc import ABC, abstractmethod
 from enum import Enum

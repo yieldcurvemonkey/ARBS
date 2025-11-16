@@ -1,4 +1,4 @@
-# ABOUTME: Generic backtest supporting all asset classes and signal types
+# ABOUTME: Generic backtest (extends BaseBacktest) supporting all asset classes and signal types
 # ABOUTME: Configurable components via dependency injection, two workflows (query/DataFrame)
 
 """
@@ -39,7 +39,10 @@ Usage Patterns:
    ...     mdp=mdp,
    ...     adapter=FuturesAdapter(mdp),
    ...     signals=[CarrySignal(), MomentumSignal()],
-   ...     signal_combiner=SignalCombiner(method='ic_weighted')
+   ...     signal_combiner=SignalCombiner(
+   ...         method='ic_weighted',
+   ...         ic_estimates={'carry': 0.08, 'momentum': 0.05}
+   ...     )
    ... )
    >>> result = backtest.run(contracts=['SFRZ4'], dates=[...])
 
@@ -391,7 +394,7 @@ class Backtest(BaseBacktest):
                         sig.name: sig_values
                         for sig, sig_values in zip(self.signals, individual_signals)
                     }
-                    signals = self.signal_combiner.combine(signals_dict, method='equal')
+                    signals = self.signal_combiner.combine(signals_dict)
                 else:
                     # Fallback: equal weight combination
                     signals = {}
@@ -587,7 +590,7 @@ class Backtest(BaseBacktest):
                         sig.name: sig_values
                         for sig, sig_values in zip(self.signals, individual_signals)
                     }
-                    signals = self.signal_combiner.combine(signals_dict, method='equal')
+                    signals = self.signal_combiner.combine(signals_dict)
                 else:
                     # Fallback: equal weight combination
                     signals = {}

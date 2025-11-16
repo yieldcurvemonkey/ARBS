@@ -1,5 +1,5 @@
-# ABOUTME: Abstract base class for sector-based covariance estimators
-# ABOUTME: Provides common functionality for block-diagonal and clustered covariance models
+# ABOUTME: Sector-based covariance base (extends BaseCovarianceEstimator) with common sector utilities
+# ABOUTME: Provides validation, format conversion, hierarchical clustering, positive definiteness
 """
 SectorBasedCovarianceEstimator
 
@@ -19,17 +19,14 @@ Implementations:
 
 from abc import abstractmethod
 from typing import Dict, List, Literal, Optional
+
 import numpy as np
 import polars as pl
-from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import squareform
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
-from Risk.Covariance.SectorBased.sector_utils import (
-    long_to_wide,
-    extract_sector_mapping,
-    group_tickers_by_sector,
-)
+from Risk.Covariance.SectorBased.sector_utils import extract_sector_mapping, group_tickers_by_sector, long_to_wide
 
 
 class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
@@ -62,12 +59,11 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
         self.sector_mapping_: Optional[Dict[str, str]] = None
         self.correlation_clusters_: Optional[Dict[str, str]] = None
 
-    @abstractmethod
-    def fit(
-        self, returns: pl.DataFrame, sector_col: Optional[str] = "sector"
-    ) -> np.ndarray:
+    def fit(self, returns: pl.DataFrame, sector_col: Optional[str] = "sector") -> np.ndarray:
         """
-        Estimate covariance matrix from returns.
+        Template method that enforces validation for all sector-based estimators.
+
+        Subclasses should implement _fit_impl() instead of overriding this.
 
         Args:
             returns: DataFrame with columns [ticker, date, return, sector]
@@ -77,11 +73,43 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
         Returns:
             Covariance matrix (N×N numpy array)
         """
-        pass
+        # 1. Validate sector input
+        self._validate_sector_input(returns, sector_col)
 
-    def _validate_sector_input(
-        self, returns: pl.DataFrame, sector_col: Optional[str]
-    ) -> None:
+        # 2. Handle missing data
+        returns_clean = self._handle_missing_data(returns)
+
+        # 3. Call subclass implementation
+        cov_matrix = self._fit_impl(returns_clean, sector_col)
+
+        # 4. ALWAYS validate (enforced!)
+        self._validate_covariance_matrix(cov_matrix, check_symmetry=True, check_positive_definite=True)
+
+        # 5. Store result
+        self.cov_matrix_ = cov_matrix
+
+        return cov_matrix
+
+    @abstractmethod
+    def _fit_impl(self, returns: pl.DataFrame, sector_col: Optional[str] = "sector") -> np.ndarray:
+        """
+        Subclasses implement this to calculate covariance matrix.
+
+        Args:
+            returns: Clean returns DataFrame (missing data already handled)
+            sector_col: Name of sector column
+
+        Returns:
+            Covariance matrix (N×N numpy array)
+
+        Note:
+            - Input validation and missing data handling already done
+            - No need to set self.cov_matrix_
+            - Just return the covariance matrix
+            - Validation will be applied automatically
+        """
+
+    def _validate_sector_input(self, returns: pl.DataFrame, sector_col: Optional[str]) -> None:
         """
         Validate input data for sector-based models.
 
@@ -101,17 +129,13 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
 
         # If predefined clustering, sector_col is required
         if self.clustering_method == "predefined" and sector_col is None:
-            raise ValueError(
-                "sector_col must be provided when clustering_method='predefined'"
-            )
+            raise ValueError("sector_col must be provided when clustering_method='predefined'")
 
         # If predefined and sector_col specified, check it exists
         if self.clustering_method == "predefined" and sector_col not in returns.columns:
             raise ValueError(f"Sector column '{sector_col}' not found in DataFrame")
 
-    def _convert_to_wide_format(
-        self, returns: pl.DataFrame
-    ) -> tuple[np.ndarray, List[str]]:
+    def _convert_to_wide_format(self, returns: pl.DataFrame) -> tuple[np.ndarray, List[str]]:
         """
         Convert long format DataFrame to wide format matrix.
 
@@ -159,8 +183,7 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
 
         else:
             raise ValueError(
-                f"Unknown clustering_method: {self.clustering_method}. "
-                f"Must be 'predefined' or 'hierarchical'."
+                f"Unknown clustering_method: {self.clustering_method}. " f"Must be 'predefined' or 'hierarchical'."
             )
 
     def _discover_sectors_hierarchical(
@@ -195,8 +218,8 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
 
         # Hierarchical clustering using scipy
         condensed_dist = squareform(distance_matrix, checks=False)
-        Z = linkage(condensed_dist, method='average')
-        labels = fcluster(Z, n_clusters, criterion='maxclust') - 1  # Make 0-indexed
+        Z = linkage(condensed_dist, method="average")
+        labels = fcluster(Z, n_clusters, criterion="maxclust") - 1  # Make 0-indexed
 
         # Create sector mapping
         sector_mapping = {}
@@ -204,35 +227,6 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
             sector_mapping[ticker] = f"Cluster_{label}"
 
         return sector_mapping
-
-    def _ensure_positive_definite(
-        self, cov_matrix: np.ndarray, min_eigenvalue: float = 1e-8
-    ) -> np.ndarray:
-        """
-        Ensure covariance matrix is positive definite.
-
-        Uses eigenvalue clipping: λᵢ → max(λᵢ, ε)
-
-        Args:
-            cov_matrix: Potentially singular covariance matrix
-            min_eigenvalue: Minimum eigenvalue threshold
-
-        Returns:
-            Positive definite covariance matrix
-        """
-        # Eigenvalue decomposition
-        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
-
-        # Clip negative/small eigenvalues
-        eigenvalues = np.maximum(eigenvalues, min_eigenvalue)
-
-        # Reconstruct
-        cov_pd = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
-
-        # Ensure symmetry (numerical stability)
-        cov_pd = (cov_pd + cov_pd.T) / 2
-
-        return cov_pd
 
     def get_sector_mapping(self) -> Dict[str, str]:
         """
@@ -294,12 +288,12 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
             {'AAPL': 'cluster_0', 'MSFT': 'cluster_0', 'JPM': 'cluster_1'}
         """
         # Check that fit has been called
-        if not hasattr(self, 'asset_names_'):
+        if not hasattr(self, "asset_names_"):
             raise ValueError("Must call fit() before get_correlation_clusters()")
 
         # Get returns matrix (need to reconstruct or store during fit)
         # For now, compute correlation from covariance if available
-        if not hasattr(self, 'cov_matrix_'):
+        if not hasattr(self, "cov_matrix_"):
             raise ValueError("Covariance matrix not available. Call fit() first.")
 
         tickers = self.asset_names_
@@ -345,10 +339,10 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
         condensed_dist = squareform(distance_matrix, checks=False)
 
         # Perform hierarchical clustering
-        Z = linkage(condensed_dist, method='average')
+        Z = linkage(condensed_dist, method="average")
 
         # Cut dendrogram to get cluster labels
-        labels = fcluster(Z, n_clusters, criterion='maxclust') - 1  # Make 0-indexed
+        labels = fcluster(Z, n_clusters, criterion="maxclust") - 1  # Make 0-indexed
 
         # Create initial cluster mapping
         cluster_mapping = {}
@@ -356,9 +350,7 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
             cluster_mapping[ticker] = f"cluster_{label}"
 
         # Enforce max_cluster_size by splitting large clusters
-        cluster_mapping = self._enforce_max_cluster_size(
-            cluster_mapping, distance_matrix, tickers, max_cluster_size
-        )
+        cluster_mapping = self._enforce_max_cluster_size(cluster_mapping, distance_matrix, tickers, max_cluster_size)
 
         # Store for later retrieval
         self.correlation_clusters_ = cluster_mapping
@@ -417,16 +409,13 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
                 if n_subclusters > 1:
                     # Use scipy for sub-clustering
                     sub_condensed = squareform(sub_distance, checks=False)
-                    sub_Z = linkage(sub_condensed, method='average')
-                    sub_labels = fcluster(sub_Z, n_subclusters, criterion='maxclust')
+                    sub_Z = linkage(sub_condensed, method="average")
+                    sub_labels = fcluster(sub_Z, n_subclusters, criterion="maxclust")
 
                     # Map sub-labels to unique cluster IDs
                     # Get unique sub-labels and create mapping
                     unique_sublabels = sorted(set(sub_labels))
-                    label_to_cluster = {
-                        sublabel: cluster_counter + i
-                        for i, sublabel in enumerate(unique_sublabels)
-                    }
+                    label_to_cluster = {sublabel: cluster_counter + i for i, sublabel in enumerate(unique_sublabels)}
 
                     for ticker, sub_label in zip(cluster_tickers, sub_labels):
                         new_mapping[ticker] = f"cluster_{label_to_cluster[sub_label]}"
@@ -449,9 +438,7 @@ class SectorBasedCovarianceEstimator(BaseCovarianceEstimator):
         max_size = max(len(tickers) for tickers in groups.values())
         if max_size > max_cluster_size:
             # Recursively apply constraint
-            return self._enforce_max_cluster_size(
-                new_mapping, distance_matrix, tickers, max_cluster_size
-            )
+            return self._enforce_max_cluster_size(new_mapping, distance_matrix, tickers, max_cluster_size)
 
         return new_mapping
 

@@ -2,10 +2,9 @@
 # ABOUTME: Provides bond pricing, Greeks calculation, and analytics backed by rateslib functionality
 import datetime
 from dataclasses import dataclass
-from typing import Union, Any, Optional
+from typing import Any, Optional, Union
 
 import rateslib as rl
-import numpy as np
 
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 from Query.FixedRateBonds.backends.rateslib.rl_frb_definitions_map import RATESLIB_FRB_DEFINITIONS
@@ -83,7 +82,10 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
 
     def build_schedule(self) -> rl.Schedule:
         return rl.FixedRateBond(
-            self._to_rl_dt(self.issue_date()), self._to_rl_dt(self.maturity_date()), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"], fixed_rate=self.coupon()
+            self._to_rl_dt(self.issue_date()),
+            self._to_rl_dt(self.maturity_date()),
+            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"],
+            fixed_rate=self.coupon(),
         ).kwargs["schedule"]
 
     def coupon(self):
@@ -93,12 +95,16 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         if self._ytm is not None:
             return self._ytm
         return rl.FixedRateBond(
-            self._to_rl_dt(self.issue_date()), self._to_rl_dt(self.maturity_date()), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"], fixed_rate=self.coupon()
+            self._to_rl_dt(self.issue_date()),
+            self._to_rl_dt(self.maturity_date()),
+            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"],
+            fixed_rate=self.coupon(),
         ).ytm(
             price=self.clean_price(),
             dirty=False,
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()),
+                f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B",
             ),
         )
 
@@ -113,7 +119,8 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
             ytm=self.ytm(),
             dirty=True,
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()),
+                f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B",
             ),
         )
 
@@ -127,7 +134,8 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
             ytm=self.ytm(),
             dirty=False,
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()),
+                f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B",
             ),
         )
 
@@ -147,7 +155,8 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         ).duration(
             ytm=self.ytm(),
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()),
+                f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B",
             ),
             metric="risk",
         )
@@ -164,7 +173,8 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         ).duration(
             ytm=self.ytm(),
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()),
+                f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B",
             ),
             metric="modified",
         )
@@ -178,7 +188,8 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         ).convexity(
             ytm=self.ytm(),
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()),
+                f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B",
             ),
         )
 
@@ -212,5 +223,9 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
             notional = bpv / self.bpv(notional=1)
 
         return rl.FixedRateBond(
-            self._to_rl_dt(issue_date), self._to_rl_dt(maturity_date), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"], fixed_rate=coupon, notional=notional
+            self._to_rl_dt(issue_date),
+            self._to_rl_dt(maturity_date),
+            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"],
+            fixed_rate=coupon,
+            notional=notional,
         )

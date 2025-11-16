@@ -125,13 +125,21 @@ from Backtest.Backtest import Backtest
 factory = StrategyFactory()
 strategy = factory.create_from_yaml('my_first_strategy.yaml')
 
+# Extract components from strategy
+signals = strategy.get_signal()
+mdp = strategy.get_mdp()
+adapter = strategy.get_adapter()
+
 # Run backtest
 bt = Backtest(
-    strategy=strategy,
-    start_date='2024-01-01',
-    end_date='2024-12-31'
+    mdp=mdp,
+    adapter=adapter,
+    signals=signals
 )
-results = bt.run()
+results = bt.run(
+    contracts=strategy.universe['instruments'],
+    dates=strategy.get_backtest_dates()
+)
 
 # View results
 print(f"Total Return: {results.total_return:.2%}")
@@ -241,14 +249,20 @@ strategy = factory.create_from_yaml('strategies/my_carry.yaml')
 # Setup market data
 mdp = FuturesMDP(source='live')
 
+# Extract signals from strategy
+signals = strategy.get_signal()
+adapter = strategy.get_adapter() or FuturesAdapter(mdp)
+
 # Run backtest
 bt = Backtest(
-    strategy=strategy,
-    market_data=mdp,
-    start_date='2024-01-01',
-    end_date='2024-12-31'
+    mdp=mdp,
+    adapter=adapter,
+    signals=signals
 )
-results = bt.run()
+results = bt.run(
+    contracts=strategy.universe['instruments'],
+    dates=pd.date_range(start='2024-01-01', end='2024-12-31')
+)
 
 # Display results
 print("\n=== Backtest Results ===")
@@ -277,9 +291,18 @@ python run_backtest.py
 from Strategies.Factory.StrategyFactory import StrategyFactory
 from Backtest.Backtest import Backtest
 
-# Load and run
+# Load strategy and extract components
 strategy = StrategyFactory().create_from_yaml('strategies/my_carry.yaml')
-results = Backtest(strategy=strategy).run()
+signals = strategy.get_signal()
+mdp = strategy.get_mdp()
+adapter = strategy.get_adapter()
+
+# Run backtest
+backtest = Backtest(mdp=mdp, adapter=adapter, signals=signals)
+results = backtest.run(
+    contracts=strategy.universe['instruments'],
+    dates=strategy.get_backtest_dates()
+)
 
 # Visualize
 import matplotlib.pyplot as plt
@@ -957,24 +980,26 @@ from Strategies.Factory.StrategyFactory import StrategyFactory
 from Backtest.Backtest import Backtest
 
 # Strategy without costs
-config_no_costs = {
-    'execution': {'transaction_costs': {'enabled': False}}
-}
-strategy_no_costs = StrategyFactory().create_from_dict(config_no_costs)
-results_no_costs = Backtest(strategy=strategy_no_costs).run()
+backtest_no_costs = Backtest(
+    signals=CarrySignal(),
+    mdp=mdp,
+    adapter=FuturesAdapter(mdp)
+)
+results_no_costs = backtest_no_costs.run(contracts=instruments, dates=dates)
 
-# Strategy with costs
-config_with_costs = {
-    'execution': {
-        'transaction_costs': {
-            'enabled': True,
-            'proportional': 0.0001,
-            'fixed': 5.0
-        }
-    }
-}
-strategy_with_costs = StrategyFactory().create_from_dict(config_with_costs)
-results_with_costs = Backtest(strategy=strategy_with_costs).run()
+# Strategy with costs (pass transaction cost model to backtest)
+from Execution.TransactionCostModel import TransactionCostModel
+cost_model = TransactionCostModel(
+    proportional=0.0001,
+    fixed=5.0
+)
+backtest_with_costs = Backtest(
+    signals=CarrySignal(),
+    mdp=mdp,
+    adapter=FuturesAdapter(mdp),
+    transaction_costs=cost_model
+)
+results_with_costs = backtest_with_costs.run(contracts=instruments, dates=dates)
 
 # Compare
 print(f"Sharpe (no costs): {results_no_costs.sharpe_ratio:.2f}")

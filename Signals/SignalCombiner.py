@@ -64,25 +64,39 @@ class SignalCombiner:
     - Orthogonalization: Remove correlation (best)
 
     Attributes:
-        None (stateless combiner)
+        method: Default combination method
+        ic_estimates: Dict mapping signal_name -> IC estimate
 
     Methods:
         combine: Combine signals using specified method
+        set_ic_estimates: Update IC estimates for online learning
     """
 
-    def __init__(self):
+    def __init__(self, method: str = 'equal', ic_estimates: Optional[Dict[str, float]] = None):
         """
         Initialize SignalCombiner.
 
-        The combiner is stateless and can be reused across multiple
-        signal combination operations.
+        Args:
+            method: Default combination method ('equal', 'ic_weighted', 'orthogonal')
+            ic_estimates: IC estimates for each signal (optional, can be set later)
+                         Example: {'carry': 0.08, 'momentum': 0.05}
         """
-        pass
+        self.method = method
+        self.ic_estimates = ic_estimates or {}
+
+    def set_ic_estimates(self, ic_estimates: Dict[str, float]) -> None:
+        """
+        Update IC estimates (for online learning scenarios).
+
+        Args:
+            ic_estimates: Dict mapping signal_name -> IC estimate
+        """
+        self.ic_estimates = ic_estimates
 
     def combine(
         self,
         signals: Dict[str, Dict[str, float]],
-        method: str = 'equal',
+        method: Optional[str] = None,
         ic_estimates: Optional[Dict[str, float]] = None,
     ) -> Dict[str, float]:
         """
@@ -92,11 +106,11 @@ class SignalCombiner:
             signals: Dict of signal_name -> {instrument -> z_score}
                      Example: {'carry': {'SFRZ4': 1.5, 'SFRH5': -0.5},
                                'momentum': {'SFRZ4': -1.0, 'SFRH5': 2.0}}
-            method: Combination method:
+            method: Override instance method for this call (optional)
                     - 'equal': Equal weight (simple average)
                     - 'ic_weighted': Weight by IC (forecasting skill)
                     - 'orthogonal': Orthogonalization (remove correlation)
-            ic_estimates: Dict of signal_name -> IC (required for ic_weighted)
+            ic_estimates: Override instance IC estimates for this call (optional)
                          Example: {'carry': 0.08, 'momentum': 0.05}
 
         Returns:
@@ -118,6 +132,12 @@ class SignalCombiner:
             >>> combiner.combine(signals, method='ic_weighted', ic_estimates=ic_estimates)
             {'A': 0.667, 'B': -0.667}
         """
+        # Use instance values if not overridden
+        if method is None:
+            method = self.method
+        if ic_estimates is None:
+            ic_estimates = self.ic_estimates
+
         # Handle empty signals
         if not signals:
             return {}
@@ -201,7 +221,7 @@ class SignalCombiner:
             Dict mapping instrument -> combined z_score
 
         Raises:
-            ValueError: If ic_estimates is None
+            ValueError: If ic_estimates is None or empty, or missing signal names
 
         Example:
             >>> signals = {'carry': {'A': 1.0}, 'momentum': {'A': 0.0}}
@@ -209,8 +229,13 @@ class SignalCombiner:
             >>> # Weight: carry = 0.10/0.12 = 0.833, momentum = 0.02/0.12 = 0.167
             >>> # Result: 1.0 * 0.833 + 0.0 * 0.167 = 0.833
         """
-        if ic_estimates is None:
+        if ic_estimates is None or not ic_estimates:
             raise ValueError("ic_estimates required for ic_weighted method")
+
+        # Validate all signal names have IC estimates
+        missing_signals = set(signals.keys()) - set(ic_estimates.keys())
+        if missing_signals:
+            raise ValueError(f"ic_estimates missing for signals: {missing_signals}")
 
         # Calculate weights from ICs
         total_ic = sum(abs(ic_estimates[name]) for name in signals.keys())

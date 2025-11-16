@@ -1,4 +1,4 @@
-# ABOUTME: Sector reversion signal wrapper integrating ReversionFactor with BaseSignal
+# ABOUTME: Sector reversion signal wrapper integrating ReversionFactor (extends BaseSignal)
 # ABOUTME: Implements REV_30D contrarian strategy from Yang & Shi (2023) with IC tracking
 """
 SectorReversionSignal - Short-term reversion signal for sector rotation.

@@ -1,5 +1,5 @@
-# ABOUTME: Constant correlation covariance matrix estimator (equal correlation shrinkage target)
-# ABOUTME: Assumes all pairwise correlations equal: Σ = D(ρ11' + (1-ρ)I)D where ρ is mean correlation
+# ABOUTME: Constant correlation covariance estimator (equal correlation shrinkage target)
+# ABOUTME: All pairwise correlations equal: Σ = D(ρ11' + (1-ρ)I)D where ρ is mean correlation
 """
 Constant Correlation Covariance Estimator
 
@@ -41,7 +41,7 @@ class ConstantCorrelationCovariance(BaseCovarianceEstimator):
     is commonly used as a shrinkage target in covariance estimation.
     """
 
-    def __init__(self, handle_missing: str = 'drop'):
+    def __init__(self, handle_missing: str = "drop"):
         """
         Initialize constant correlation covariance estimator.
 
@@ -51,9 +51,9 @@ class ConstantCorrelationCovariance(BaseCovarianceEstimator):
                 - 'pairwise': Use pairwise complete observations
         """
         super().__init__(handle_missing=handle_missing)
-        self.mean_correlation_: float = None
+        self.mean_correlation_: float | None = None
 
-    def fit(self, returns: pl.DataFrame) -> np.ndarray:
+    def _fit_impl(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate constant correlation covariance matrix.
 
@@ -66,20 +66,14 @@ class ConstantCorrelationCovariance(BaseCovarianceEstimator):
         - I = identity matrix
 
         Args:
-            returns: DataFrame of returns (T×N)
+            returns: Clean DataFrame of returns (T×N), missing data already handled
 
         Returns:
             Constant correlation covariance matrix (N×N)
         """
-        # Handle missing data
-        returns_clean = self._handle_missing_data(returns)
-
-        # Store asset names
-        self.asset_names_ = list(returns_clean.columns)
-
         # Get sample covariance and correlation
         # Convert to numpy for covariance calculation (polars lacks .cov() method)
-        returns_array = returns_clean.to_numpy()
+        returns_array = returns.to_numpy()
         sample_cov = np.cov(returns_array.T)
 
         # Ensure 2D array (np.cov returns scalar for single asset)
@@ -94,8 +88,7 @@ class ConstantCorrelationCovariance(BaseCovarianceEstimator):
         n = len(sample_std)
         if n == 1:
             self.mean_correlation_ = 1.0
-            self.cov_matrix_ = sample_cov
-            return self.cov_matrix_
+            return sample_cov
 
         # Calculate correlation matrix
         sample_corr = sample_cov / np.outer(sample_std, sample_std)
@@ -115,15 +108,13 @@ class ConstantCorrelationCovariance(BaseCovarianceEstimator):
         # Correlation: ρ × 11' + (1-ρ) × I
         rho = self.mean_correlation_
         ones_matrix = np.ones((n, n))
-        I = np.eye(n)
+        identity = np.eye(n)
 
-        corr_matrix = rho * ones_matrix + (1 - rho) * I
+        corr_matrix = rho * ones_matrix + (1 - rho) * identity
 
         # Convert to covariance: Σ = D × Corr × D
         D = np.diag(sample_std)
-        self.cov_matrix_ = D @ corr_matrix @ D
-
-        return self.cov_matrix_
+        return D @ corr_matrix @ D
 
     def get_mean_correlation(self) -> float:
         """

@@ -199,16 +199,11 @@ volatilities = vol_est.estimate(returns_history)
 
 ### Integration Points
 
-**FuturesAdapter** (before ReturnsCalculator):
+**FuturesAdapter** (uses ReturnsCalculator):
 ```python
-class FuturesAdapter:
-    def get_prices(self, as_of: date) -> Dict[str, float]:
-        """Get current prices for all assets."""
-        prices = {}
-        for contract in self.contracts:
-            future = self.query.get_future(contract)
-            prices[contract] = future.get_price(as_of)
-        return prices
+adapter = FuturesAdapter(mdp)
+df = adapter.adapt(queries, as_of)
+# df now has returns column from ReturnsCalculator
 ```
 
 **Backtest** (uses ReturnsCalculator):
@@ -261,7 +256,7 @@ class Backtest:
    - Default method is "percent"
    - Invalid method raises ValueError
 
-**Total**: 17 tests, all passing
+**Total**: 16 tests, all passing
 
 ---
 

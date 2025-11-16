@@ -1,4 +1,4 @@
-# ABOUTME: Futures carry signal calculator using calendar spread pricing
+# ABOUTME: Futures carry signal (extends BaseSignal) calculator using calendar spread pricing
 # ABOUTME: Generates annualized carry alpha (bps/year) from front-back price differential
 """
 CarrySignal - Futures carry alpha signal

@@ -1,5 +1,5 @@
-# ABOUTME: Two-step covariance estimator from García-Medina (2024)
-# ABOUTME: Combines hierarchical clustering with random matrix filtering
+# ABOUTME: Two-step covariance (extends SectorBasedCovarianceEstimator) with RMT filtering
+# ABOUTME: Hierarchical clustering (Step 1) + random matrix filtering per cluster (Step 2)
 """
 Two-Step Covariance Estimator
 
@@ -19,16 +19,15 @@ Reference:
 - Marčenko & Pastur (1967): Random matrix theory
 """
 
+from typing import Literal, Optional
+
 import numpy as np
 import polars as pl
-from typing import Optional, Literal
 
-from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import (
-    SectorBasedCovarianceEstimator,
-)
+from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import SectorBasedCovarianceEstimator
 from Risk.Covariance.SectorBased.BlockDiagonal.HierarchicalSectorClustering import (
-    HierarchicalSectorClustering,
     ClusteringResult,
+    HierarchicalSectorClustering,
 )
 from Risk.Covariance.SectorBased.TwoStep.RandomMatrixFilter import RandomMatrixFilter
 
@@ -76,32 +75,23 @@ class TwoStepCovariance(SectorBasedCovarianceEstimator):
         # Store clustering result
         self.clustering_result_: Optional[ClusteringResult] = None
 
-    def fit(self, returns: pl.DataFrame, sector_col: Optional[str] = None) -> np.ndarray:
+    def _fit_impl(self, returns: pl.DataFrame, sector_col: Optional[str] = None) -> np.ndarray:
         """
         Estimate covariance using two-step procedure.
 
         Args:
-            returns: DataFrame with columns [ticker, date, return]
-                     Long format: each row is (ticker, date, return)
+            returns: Clean DataFrame with columns [ticker, date, return]
+                     Missing data already handled
             sector_col: Ignored (TwoStep always uses hierarchical clustering)
 
         Returns:
             Covariance matrix (N×N numpy array)
 
         Raises:
-            ValueError: If required columns missing or insufficient data
+            ValueError: If insufficient data
         """
-        # Validate input (no sector column required)
-        required_cols = ["ticker", "date", "return"]
-        missing = [col for col in required_cols if col not in returns.columns]
-        if missing:
-            raise ValueError(f"Missing required columns: {missing}")
-
-        # Handle missing data
-        returns_clean = self._handle_missing_data(returns)
-
         # Convert to wide format
-        returns_np, tickers = self._convert_to_wide_format(returns_clean)
+        returns_np, tickers = self._convert_to_wide_format(returns)
         # Sort tickers for consistency with original implementation
         self.asset_names_ = sorted(tickers)
 
@@ -110,9 +100,7 @@ class TwoStepCovariance(SectorBasedCovarianceEstimator):
 
         # Validate sufficient observations
         if T < 10:
-            raise ValueError(
-                f"Insufficient observations: T={T}. Need at least 10 observations."
-            )
+            raise ValueError(f"Insufficient observations: T={T}. Need at least 10 observations.")
 
         # Step 1: Hierarchical clustering
         self.clustering_result_ = self.clusterer.fit(returns_np, tickers)
@@ -121,14 +109,7 @@ class TwoStepCovariance(SectorBasedCovarianceEstimator):
         self.sector_mapping_ = self.clustering_result_.cluster_assignments
 
         # Step 2: Estimate covariance per cluster with RMT filtering
-        cov_matrix = self._estimate_clustered_covariance(
-            returns_np, tickers, self.sector_mapping_, T
-        )
-
-        # Store result
-        self.cov_matrix_ = cov_matrix
-
-        return self.cov_matrix_
+        return self._estimate_clustered_covariance(returns_np, tickers, self.sector_mapping_, T)
 
     def _estimate_clustered_covariance(
         self,
@@ -187,9 +168,7 @@ class TwoStepCovariance(SectorBasedCovarianceEstimator):
             sub_cov = sample_cov[np.ix_(cluster_indices, cluster_indices)]
 
             # Apply RMT filtering to this cluster
-            cleaned_sub_cov = self.rmt_filter_obj.clean_covariance(
-                sub_cov, n_observations
-            )
+            cleaned_sub_cov = self.rmt_filter_obj.clean_covariance(sub_cov, n_observations)
 
             # Place cleaned sub-covariance back into full matrix
             for i, idx_i in enumerate(cluster_indices):

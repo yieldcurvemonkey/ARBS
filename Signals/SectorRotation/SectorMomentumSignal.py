@@ -1,4 +1,4 @@
-# ABOUTME: Sector momentum signal wrapper integrating MomentumFactor with BaseSignal
+# ABOUTME: Sector momentum signal wrapper integrating MomentumFactor (extends BaseSignal)
 # ABOUTME: Implements MOM_7M strategy from Yang & Shi (2023) with IC tracking
 """
 SectorMomentumSignal - Momentum signal for sector rotation strategies.

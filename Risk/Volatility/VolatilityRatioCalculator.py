@@ -85,7 +85,7 @@ class VolatilityRatioCalculator:
         # Group by ticker and calculate std dev
         result = returns.group_by('ticker').agg([
             pl.col('date').last().alias('date'),
-            (pl.col('return').std(ddof=1) * np.sqrt(self.annualization)).alias('RV')
+            (pl.col('return').drop_nans().std(ddof=1) * np.sqrt(self.annualization)).alias('RV')
         ])
 
         return result

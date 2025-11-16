@@ -110,7 +110,7 @@ class TestSectorRotationIntegration:
         )
 
         # 4. Train neural network
-        signal = FundamentalSignal(hidden_layers=(5, 5))
+        signal = FundamentalSignal(hidden_layers=(5, 5), standardize=False)
 
         # Create training data (simplified)
         X_train = np.array([[0.5] * 11, [-0.5] * 11] * 20)

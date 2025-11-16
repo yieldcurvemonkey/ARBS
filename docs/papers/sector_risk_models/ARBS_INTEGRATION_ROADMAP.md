@@ -870,7 +870,7 @@ a4e7476 docs: Add sector risk model research analysis
 - `docs/papers/sector_risk_models/paper_2502.11332.pdf` - Chen et al. (2025)
 
 ### Analysis Documents
-- `docs/papers/sector_risk_models/COMPREHENSIVE_ANALYSIS.md` - Mathematical formulas and insights
+- `docs/papers/sector_risk_models/ANALYSIS.md` - Mathematical formulas and insights
 - `docs/papers/sector_risk_models/IMPLEMENTATION_PLAN.md` - TDD implementation plan
 - `docs/papers/sector_risk_models/ARBS_INTEGRATION_ROADMAP.md` - This document
 

@@ -96,7 +96,7 @@ vol_est = RealizedVolatility(
     annualization_factor=252  # Daily data
 )
 
-returns = pd.DataFrame({
+returns = pl.DataFrame({
     'SFRZ4': [0.01, -0.01, 0.02, ...],  # 60+ daily returns
     'SFRH5': [0.005, -0.005, 0.01, ...]
 })
@@ -163,7 +163,7 @@ vols = vol_est.estimate(returns)
 ```python
 class VolatilityEstimator(ABC):
     @abstractmethod
-    def estimate(self, returns: pd.DataFrame) -> Dict[str, float]:
+    def estimate(self, returns: pl.DataFrame) -> Dict[str, float]:
         """
         Estimate annualized volatility for each asset.
 
@@ -194,13 +194,13 @@ RealizedVolatility(
 
 **Method**:
 ```python
-estimate(returns: pd.DataFrame) -> Dict[str, float]
+estimate(returns: pl.DataFrame) -> Dict[str, float]
 ```
 
 **Example**:
 ```python
 vol_est = RealizedVolatility(lookback=60, annualization_factor=252)
-returns_df = pd.DataFrame(...)  # 100 days × N assets
+returns_df = pl.DataFrame(...)  # 100 days × N assets
 vols = vol_est.estimate(returns_df)  # Uses last 60 days
 ```
 
@@ -221,13 +221,13 @@ EWMAVolatility(
 
 **Method**:
 ```python
-estimate(returns: pd.DataFrame) -> Dict[str, float]
+estimate(returns: pl.DataFrame) -> Dict[str, float]
 ```
 
 **Example**:
 ```python
 vol_est = EWMAVolatility(halflife=30, annualization_factor=252)
-returns_df = pd.DataFrame(...)
+returns_df = pl.DataFrame(...)
 vols = vol_est.estimate(returns_df)  # Uses EWMA
 ```
 
@@ -262,7 +262,7 @@ alpha_gen = AlphaGenerator(IC=0.05, vol_estimator=vol_est)
 
 # Convert signals → alphas (uses Vol internally)
 signals = {'SFRZ4': 2.0, 'SFRH5': -1.0}  # Z-scores
-returns_history = pd.DataFrame(...)
+returns_history = pl.DataFrame(...)
 alphas = alpha_gen.signals_to_alphas(signals, returns_history, as_of)
 
 # Inside: α_i = IC × Vol_i × Z_i
@@ -277,7 +277,7 @@ import numpy as np
 
 # Estimate volatilities
 vol_est = RealizedVolatility(lookback=60)
-returns = pd.DataFrame(...)  # Historical returns
+returns = pl.DataFrame(...)  # Historical returns
 vols = vol_est.estimate(returns)
 
 # Calculate correlation matrix
@@ -319,7 +319,7 @@ cov_matrix = corr_matrix * np.outer(vol_vec, vol_vec)
    - Default lookback = 60
    - Default annualization = 252
 
-**Total**: 20 tests, all passing
+**Total**: 15 tests, all passing
 
 ---
 
@@ -329,7 +329,7 @@ cov_matrix = corr_matrix * np.outer(vol_vec, vol_vec)
 
 ```python
 from Risk.Volatility.RealizedVolatility import RealizedVolatility
-import pandas as pd
+import polars as pl
 import numpy as np
 
 # Create realized volatility estimator
@@ -337,7 +337,7 @@ vol_est = RealizedVolatility(lookback=60, annualization_factor=252)
 
 # Generate sample returns (100 days of daily returns)
 np.random.seed(42)
-returns = pd.DataFrame({
+returns = pl.DataFrame({
     'SFRZ4': np.random.randn(100) * 0.01,  # 1% daily vol
     'SFRH5': np.random.randn(100) * 0.015, # 1.5% daily vol
 })
@@ -354,11 +354,11 @@ print(f"SFRH5 volatility: {vols['SFRH5']:.2%}")  # ~23.8% annual
 ```python
 from Risk.Volatility.RealizedVolatility import RealizedVolatility
 from Risk.Volatility.EWMAVolatility import EWMAVolatility
-import pandas as pd
+import polars as pl
 import numpy as np
 
 # Low vol regime → high vol regime
-returns = pd.DataFrame({
+returns = pl.DataFrame({
     'ASSET': [0.001] * 50 + list(np.random.randn(50) * 0.05)
 })
 
@@ -378,11 +378,11 @@ print(f"EWMA vol:     {vols_ewma['ASSET']:.2%}")      # Higher (weights recent h
 
 ```python
 from Risk.Volatility.RealizedVolatility import RealizedVolatility
-import pandas as pd
+import polars as pl
 import numpy as np
 
 # Weekly returns (52 weeks)
-weekly_returns = pd.DataFrame({
+weekly_returns = pl.DataFrame({
     'SFRZ4': np.random.randn(52) * 0.02,  # 2% weekly vol
 })
 
@@ -400,11 +400,11 @@ print(f"Annual volatility: {vols['SFRZ4']:.2%}")  # ~14.4% annual
 
 ```python
 from Risk.Volatility.EWMAVolatility import EWMAVolatility
-import pandas as pd
+import polars as pl
 import numpy as np
 
 # Create returns with regime change
-returns = pd.DataFrame({
+returns = pl.DataFrame({
     'ASSET': np.concatenate([
         np.random.randn(80) * 0.01,   # Low vol
         np.random.randn(20) * 0.03,   # High vol spike
@@ -427,12 +427,12 @@ print(f"Slow EWMA: {vols_slow['ASSET']:.2%}")  # Still influenced by past
 
 ```python
 from Risk.Volatility.RealizedVolatility import RealizedVolatility
-import pandas as pd
+import polars as pl
 import numpy as np
 
 # Portfolio of 5 futures contracts
 np.random.seed(42)
-returns = pd.DataFrame({
+returns = pl.DataFrame({
     f'SFR{contract}': np.random.randn(100) * vol
     for contract, vol in zip(['Z4', 'H5', 'M5', 'U5', 'Z5'],
                              [0.01, 0.012, 0.011, 0.013, 0.014])
@@ -522,7 +522,7 @@ alpha_gen = AlphaGenerator(IC=0.05, vol_estimator=EWMAVolatility())
 **Example** (EWMA responds to spikes):
 ```python
 # Volatility spike in recent data
-returns = pd.DataFrame({
+returns = pl.DataFrame({
     'ASSET': [0.001] * 90 + [0.05, -0.05, 0.04, -0.04, 0.03]
 })
 

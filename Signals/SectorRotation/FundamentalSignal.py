@@ -1,4 +1,4 @@
-# ABOUTME: Neural network signal for sector rotation using fundamental factors
+# ABOUTME: Neural network signal for sector rotation using fundamental factors (extends BaseSignal)
 # ABOUTME: Implements 2-layer MLP for binary classification (Yang & Shi 2023)
 """
 FundamentalSignal - Neural network predictor for sector returns.

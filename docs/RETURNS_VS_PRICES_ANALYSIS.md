@@ -1,9 +1,8 @@
 # Returns vs Prices - Mathematical Foundation
 
-**Document Status**: Analysis Complete
-**Date Written**: 2025-11-11
-**Implementation Status**: Phase 1 Complete (Returns infrastructure, AlphaGenerator, VolatilityEstimator)
-**Last Updated**: 2025-11-11
+**Purpose**: Architectural rationale for returns-first design
+
+This document explains why ARBS uses returns as the primary data structure instead of prices.
 
 ---
 
@@ -205,7 +204,7 @@ class Portfolio(Asset):
 ### Design 2: Backtest Maintains Returns
 
 ```python
-class MinimalBacktest:
+class Backtest:
     def run(self, contracts, dates):
         # Convert prices to returns ONCE at data layer
         for i, as_of in enumerate(dates):
@@ -429,7 +428,7 @@ where:
 
 ---
 
-## Implementation Status (Updated 2025-11-11)
+## Implementation Status
 
 ### Completed
 - ✅ ReturnsCalculator (16 tests)
@@ -437,7 +436,7 @@ where:
 - ✅ AlphaGenerator (16 tests)
 - ✅ TearSheet (19 tests)
 - ✅ Portfolio.calculate_return() refactored to accept returns
-- ✅ MinimalBacktest uses ReturnsCalculator and AlphaGenerator
+- ✅ Backtest uses ReturnsCalculator and AlphaGenerator
 - ✅ Returns-first data architecture fully implemented
 - ✅ Covariance estimation from returns (not prices)
 - ✅ IC calculation using returns

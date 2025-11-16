@@ -1,4 +1,4 @@
-# ABOUTME: Ledoit-Wolf shrinkage covariance estimator (industry standard, >5000 citations)
+# ABOUTME: Ledoit-Wolf shrinkage covariance estimator (extends BaseCovarianceEstimator, industry standard, >5000 citations)
 # ABOUTME: Implements Σ̂_LW = δ*F + (1-δ)*S with data-driven shrinkage intensity for numerical stability
 """
 Ledoit-Wolf Shrinkage Covariance Estimator
@@ -28,9 +28,10 @@ Advantages over Sample Covariance:
 From 2025 research: Most widely used shrinkage method in practice.
 """
 
+from typing import Optional
+
 import numpy as np
 import polars as pl
-from typing import Optional
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
 
@@ -50,8 +51,8 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
 
     def __init__(
         self,
-        target: str = 'constant_correlation',
-        handle_missing: str = 'drop',
+        target: str = "constant_correlation",
+        handle_missing: str = "drop",
     ):
         """
         Initialize Ledoit-Wolf estimator.
@@ -70,50 +71,38 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         self.sample_cov: Optional[np.ndarray] = None
         self.block_shrinkage_intensities_: Optional[dict] = None
 
-    def fit(self, returns: pl.DataFrame) -> np.ndarray:
+    def _fit_impl(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate Ledoit-Wolf shrinkage covariance matrix.
 
         Args:
-            returns: DataFrame of returns (T×N)
+            returns: Clean DataFrame of returns (T×N), missing data already handled
 
         Returns:
             Shrinkage covariance matrix (N×N)
         """
-        # Handle missing data
-        returns_clean = self._handle_missing_data(returns)
-
-        # Store asset names
-        self.asset_names_ = list(returns_clean.columns)
-
-        # Get dimensions
-        T, N = returns_clean.shape
-
         # Calculate sample covariance
-        returns_np = returns_clean.to_numpy()
+        returns_np = returns.to_numpy()
 
         # Use pairwise computation if requested
-        if self.handle_missing == 'pairwise':
+        if self.handle_missing == "pairwise":
             self.sample_cov = self._pairwise_covariance(returns_np)
         else:
             # Standard covariance (drops rows with any NaN)
-            self.sample_cov = np.cov(returns_np.T)
+            sample_cov = np.cov(returns_np.T)
+            # Ensure covariance is always 2D (np.cov returns scalar for single column)
+            self.sample_cov = np.atleast_2d(sample_cov)
 
         # Calculate shrinkage target
-        self.target_matrix = self._compute_target(returns_clean)
+        self.target_matrix = self._compute_target(returns)
 
         # Calculate optimal shrinkage intensity
         self.shrinkage_intensity = self._compute_shrinkage_intensity(
-            returns_clean.to_numpy(), self.sample_cov, self.target_matrix
+            returns.to_numpy(), self.sample_cov, self.target_matrix
         )
 
         # Apply shrinkage: Σ̂_LW = δ * F + (1-δ) * S
-        self.cov_matrix_ = (
-            self.shrinkage_intensity * self.target_matrix +
-            (1 - self.shrinkage_intensity) * self.sample_cov
-        )
-
-        return self.cov_matrix_
+        return self.shrinkage_intensity * self.target_matrix + (1 - self.shrinkage_intensity) * self.sample_cov
 
     def _pairwise_covariance(self, returns_np: np.ndarray) -> np.ndarray:
         """
@@ -162,9 +151,9 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         """
         N = returns.shape[1]
 
-        if self.target_type == 'diagonal':
+        if self.target_type == "diagonal":
             # Diagonal: var(r_i) on diagonal, zeros off-diagonal
-            if self.handle_missing == 'pairwise':
+            if self.handle_missing == "pairwise":
                 # Compute variances ignoring NaN
                 returns_np = returns.to_numpy()
                 variances = np.nanvar(returns_np, axis=0, ddof=1)
@@ -172,11 +161,11 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
                 variances = returns.var(ddof=1).to_numpy()
             return np.diag(variances)
 
-        elif self.target_type == 'identity':
+        elif self.target_type == "identity":
             # Identity matrix (all assets have unit variance, zero correlation)
             return np.eye(N)
 
-        elif self.target_type == 'constant_correlation':
+        elif self.target_type == "constant_correlation":
             # Constant correlation model (Ledoit-Wolf default)
             return self._constant_correlation_target(returns)
 
@@ -205,7 +194,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         returns_np = returns.to_numpy()
 
         # Use pairwise if needed (to avoid NaN)
-        if self.handle_missing == 'pairwise':
+        if self.handle_missing == "pairwise":
             cov_matrix = self._pairwise_covariance(returns_np)
             # Convert to correlation
             std = np.sqrt(np.diag(cov_matrix))
@@ -216,6 +205,8 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
             np.fill_diagonal(corr_matrix, 1.0)
         else:
             corr_matrix = np.corrcoef(returns_np.T)
+            # Ensure correlation matrix is always 2D (np.corrcoef returns scalar for single column)
+            corr_matrix = np.atleast_2d(corr_matrix)
 
         # Average off-diagonal correlation
         n = corr_matrix.shape[0]
@@ -227,7 +218,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         np.fill_diagonal(target_corr, 1.0)
 
         # Convert to covariance using sample standard deviations
-        if self.handle_missing == 'pairwise':
+        if self.handle_missing == "pairwise":
             std = np.sqrt(np.nanvar(returns_np, axis=0, ddof=1))
         else:
             std = returns.std(ddof=1).to_numpy()
@@ -270,18 +261,17 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         # π̂ = (1/T²) Σ_t [(r_t - r̄)(r_t - r̄)' - S]²
         pi_hat = 0.0
         for t in range(T):
-            r_t = returns_centered[t:t+1, :].T  # Column vector
+            r_t = returns_centered[t : t + 1, :].T  # Column vector
             outer_t = r_t @ r_t.T
             diff = outer_t - sample_cov
-            pi_hat += np.sum(diff ** 2)
-        pi_hat /= T ** 2
+            pi_hat += np.sum(diff**2)
+        pi_hat /= T**2
 
         # Calculate ρ̂: squared Frobenius norm of (S - F)
         rho_hat = np.sum((sample_cov - target) ** 2)
 
         # Calculate γ̂: trace of (S - F)²
         # This is a simplification; full formula is more complex
-        gamma_hat = rho_hat
 
         # Shrinkage intensity: δ* = max(0, min(1, (π̂ - γ̂)/ρ̂))
         # Simplified version: δ* = min(1, pi_hat / (T * rho_hat))
@@ -361,9 +351,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
             target_matrix = self._compute_target_for_block(returns_pl, target)
 
             # Calculate optimal shrinkage intensity for this block
-            alpha = self._compute_shrinkage_intensity(
-                returns, sample_cov, target_matrix
-            )
+            alpha = self._compute_shrinkage_intensity(returns, sample_cov, target_matrix)
 
             # Store shrinkage intensity
             self.block_shrinkage_intensities_[sector_name] = alpha
@@ -413,10 +401,7 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
             ValueError: If apply_per_block_shrinkage() hasn't been called yet
         """
         if self.block_shrinkage_intensities_ is None:
-            raise ValueError(
-                "Must call apply_per_block_shrinkage() before "
-                "get_block_shrinkage_intensities()"
-            )
+            raise ValueError("Must call apply_per_block_shrinkage() before " "get_block_shrinkage_intensities()")
         return self.block_shrinkage_intensities_
 
     def __repr__(self) -> str:

@@ -83,3 +83,49 @@ pip install polars numpy matplotlib seaborn
 - matplotlib (for visualizations)
 - seaborn (for heatmaps)
 
+---
+
+## Research Paper Integration
+
+### download_research_pdfs.sh
+
+Downloads 16 research papers from arXiv for the portfolio management research library.
+
+**Usage**:
+```bash
+./scripts/download_research_pdfs.sh
+```
+
+**Papers downloaded**:
+- Ledoit-Wolf covariance estimators (4 papers)
+- Advanced portfolio optimization methods (5 papers)
+- Multi-asset risk models (4 papers)
+- Performance analysis techniques (3 papers)
+
+Papers are saved to `docs/references/papers/` directory.
+
+**Dependencies**:
+- `curl` or `wget`
+- Internet connection
+
+### convert_grinold_kahn_to_markdown.py
+
+Converts Grinold-Kahn PDF to structured markdown for easier reference.
+
+**Dependencies**:
+- PyMuPDF (`pip install PyMuPDF`)
+
+**Usage**:
+```bash
+python scripts/convert_grinold_kahn_to_markdown.py
+```
+
+**Input**: PDF file in `docs/books/` directory
+**Output**: `docs/references/Grinold-Kahn-Active-Portfolio-Management.md`
+
+**Features**:
+- Extracts text with formatting preserved
+- Creates section headers
+- Maintains table structures
+- Adds navigation links
+

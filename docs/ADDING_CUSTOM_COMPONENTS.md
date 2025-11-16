@@ -34,11 +34,13 @@ SignalFactory.register_signal('my_signal', MySignalClass)
 
 ### Step 1: Implement BaseSignal Interface
 
-All signals must inherit from `BaseSignal` and implement `calculate()`.
+All signals must inherit from `BaseSignal` and implement `_calculate_raw_signal()`.
 
 ```python
 from Signals.Base.BaseSignal import BaseSignal
-import pandas as pd
+from datetime import date
+from typing import Optional, Any
+import polars as pl
 import numpy as np
 
 class BasisSignal(BaseSignal):
@@ -48,35 +50,51 @@ class BasisSignal(BaseSignal):
     Identifies mispricing between futures and swap markets.
     """
 
-    def __init__(self, swap_tenor: str = '3M', standardize: bool = True):
+    def __init__(self, swap_tenor: str = '3M', standardize: bool = True, name: str = 'basis_signal'):
         """
         Args:
             swap_tenor: Swap tenor to compare ('3M', '6M', etc.)
             standardize: Whether to z-score the signal
+            name: Signal name
         """
-        super().__init__(name='basis_signal')
+        super().__init__(name=name, standardize=standardize)
         self.swap_tenor = swap_tenor
-        self.standardize = standardize
 
-    def calculate(self, prices: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.DataFrame:
+    def _calculate_raw_signal(
+        self,
+        inst_data: pl.DataFrame,
+        market_data: Optional[Any],
+        as_of: date,
+    ) -> float:
         """
-        Calculate basis signal.
+        Calculate basis signal for a single instrument.
 
         Args:
-            prices: DataFrame of asset prices
-            dates: DatetimeIndex for signal dates
+            inst_data: Polars DataFrame with instrument data
+                - Should contain price, swap_rate, etc.
+            market_data: Optional market data (swap curves, etc.)
+            as_of: Calculation date
 
         Returns:
-            DataFrame of signal values (same shape as prices)
+            Raw signal value (float)
         """
-        # Your signal logic here
-        # Example: Calculate basis spread
-        basis = prices.diff(1)  # Simple example
+        # Extract data from inst_data
+        try:
+            row_0 = inst_data.row(0, named=True)
+            futures_price = row_0["price"]
+            swap_rate = row_0.get("swap_rate", np.nan)
+        except (KeyError, IndexError):
+            return np.nan
 
-        if self.standardize:
-            basis = (basis - basis.mean()) / basis.std()
+        # Check for missing data
+        if np.isnan(swap_rate):
+            return np.nan
 
-        return basis.reindex(dates).fillna(0)
+        # Calculate basis spread
+        # Example: futures_price - implied_price_from_swap
+        basis = futures_price - (100 - swap_rate)
+
+        return basis
 ```
 
 ### Step 2: Register the Signal
@@ -113,10 +131,10 @@ strategy = quick_strategy(
 ### Signal Requirements
 
 - ✅ Must inherit from `BaseSignal`
-- ✅ Must call `super().__init__(name='your_name')`
-- ✅ Must implement `calculate(prices, dates)` returning DataFrame
-- ✅ Return shape must match `(len(dates), len(prices.columns))`
-- ✅ Should handle missing data gracefully (fillna/ffill)
+- ✅ Must call `super().__init__(name='your_name')` in constructor
+- ✅ Must implement `_calculate_raw_signal(inst_data, market_data, as_of)` returning float
+- ✅ `inst_data` parameter is a Polars DataFrame with instrument-specific data
+- ✅ Should handle missing data gracefully (return `np.nan` for invalid data)
 
 ---
 
@@ -283,11 +301,13 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from datetime import date
+from typing import Optional, Any
 from Signals.Base.BaseSignal import BaseSignal
 from Signals.AlphaGenerator import AlphaGenerator
 from Strategies.Factory import SignalFactory, AlphaFactory
 from Strategies.Registry import quick_strategy
-import pandas as pd
+import polars as pl
 import numpy as np
 
 
@@ -295,23 +315,52 @@ import numpy as np
 class VolatilityBreakoutSignal(BaseSignal):
     """Enters positions when volatility breaks out of recent range."""
 
-    def __init__(self, vol_window: int = 20, breakout_threshold: float = 2.0):
-        super().__init__(name='volatility_breakout')
+    def __init__(self, vol_window: int = 20, breakout_threshold: float = 2.0, name: str = 'volatility_breakout'):
+        super().__init__(name=name)
         self.vol_window = vol_window
         self.breakout_threshold = breakout_threshold
 
-    def calculate(self, prices: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.DataFrame:
-        # Calculate rolling volatility
-        returns = prices.pct_change()
-        vol = returns.rolling(self.vol_window).std()
+    def _calculate_raw_signal(
+        self,
+        inst_data: pl.DataFrame,
+        market_data: Optional[Any],
+        as_of: date,
+    ) -> float:
+        """
+        Calculate volatility breakout signal for a single instrument.
 
-        # Z-score of current vol vs historical
-        vol_zscore = (vol - vol.rolling(60).mean()) / vol.rolling(60).std()
+        Returns positive when recent volatility breaks above historical average,
+        negative when it breaks below.
+        """
+        try:
+            # Extract price history from inst_data
+            prices = inst_data.select("price").to_numpy().flatten()
 
-        # Signal: 1 when vol breaks above threshold, -1 when below
-        signal = np.sign(vol_zscore - self.breakout_threshold)
+            if len(prices) < self.vol_window + 60:  # Need enough data
+                return np.nan
 
-        return signal.reindex(dates).fillna(0)
+            # Calculate returns and rolling volatility
+            returns = np.diff(prices) / prices[:-1]
+            recent_vol = np.std(returns[-self.vol_window:])
+            historical_vol = np.std(returns[-60:])
+            historical_mean = np.mean(np.std(returns[-60:]))
+
+            # Z-score of current vol vs historical
+            if historical_vol < 1e-10:  # Avoid division by zero
+                return 0.0
+
+            vol_zscore = (recent_vol - historical_mean) / historical_vol
+
+            # Signal: positive when vol breaks above threshold
+            if vol_zscore > self.breakout_threshold:
+                return 1.0
+            elif vol_zscore < -self.breakout_threshold:
+                return -1.0
+            else:
+                return 0.0
+
+        except (KeyError, IndexError, ValueError):
+            return np.nan
 
 
 # 2. Define custom alpha method
@@ -383,10 +432,10 @@ config = StrategyConfig.from_dict(config_dict)  # Then create config
 ### Signal Not Producing Expected Output
 
 **Checklist**:
-- ✅ Does `calculate()` return DataFrame with correct shape?
-- ✅ Are dates aligned correctly? Use `.reindex(dates)`
-- ✅ Are NaN values handled? Use `.fillna(0)` or `.ffill()`
-- ✅ Is standardization applied if needed?
+- ✅ Does `_calculate_raw_signal()` return a float value?
+- ✅ Is the `inst_data` parameter being parsed correctly?
+- ✅ Are NaN values handled? Return `np.nan` for invalid data
+- ✅ Is standardization being applied by the base class if `standardize=True`?
 
 ### Covariance Matrix Not Positive Definite
 
@@ -459,16 +508,25 @@ AlphaFactory.register_method('my_method', my_function)  # Too late
 Always write tests for custom components:
 
 ```python
+from datetime import date
+import polars as pl
+import numpy as np
+
 def test_my_custom_signal():
     signal = MyCustomSignal(param=value)
 
-    # Test output shape
-    prices = pd.DataFrame(...)  # Mock prices
-    dates = pd.date_range(...)
-    result = signal.calculate(prices, dates)
+    # Create test data
+    inst_data = pl.DataFrame({
+        'price': [100.0, 101.0, 102.0],
+        'other_field': [1.0, 2.0, 3.0]
+    })
+    as_of = date(2025, 1, 15)
 
-    assert result.shape == (len(dates), len(prices.columns))
-    assert not result.isna().any().any()  # No NaN
+    # Test output
+    result = signal._calculate_raw_signal(inst_data, None, as_of)
+
+    assert isinstance(result, float)
+    assert not np.isnan(result)  # Should produce valid signal
 ```
 
 ---

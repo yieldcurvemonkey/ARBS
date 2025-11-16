@@ -117,7 +117,7 @@ git push -u origin claude/backtest-unification-setup-01CH1WQ6zsBhNHxU8xkhwVkQ
 ```json
 {
   "essential": ["README.md", "CLAUDE.md"],
-  "active_docs": ["docs/BACKTEST_UNIFIED_API.md", ...],
+  "active_docs": ["docs/BACKTEST_API.md", ...],
   "design": ["docs/design/BACKTEST_UNIFICATION_PLAN.md", ...],
   "reference": ["docs/books/GRINOLD_KAHN_EQUITY_SUMMARY.md", ...],
   "completed_task": ["POLARS_MIGRATION_COMPLETE.md", ...],
@@ -144,7 +144,7 @@ git push -u origin claude/backtest-unification-setup-01CH1WQ6zsBhNHxU8xkhwVkQ
    - Target: docs/architecture/grinold-kahn.md
 
 2. **Backtest Documentation** (8 files)
-   - Keep: docs/BACKTEST_UNIFIED_API.md
+   - Keep: docs/BACKTEST_API.md
    - Archive: Planning/progress docs
    - Target history: docs/architecture/backtest-evolution.md
 

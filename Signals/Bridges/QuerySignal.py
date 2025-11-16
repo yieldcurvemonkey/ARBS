@@ -1,4 +1,4 @@
-# ABOUTME: Adapter converting BaseQuery to BaseSignal interface
+# ABOUTME: Adapter converting BaseQuery to BaseSignal interface (extends BaseSignal)
 # ABOUTME: Enables derivative queries to generate signals for portfolio optimization
 
 """

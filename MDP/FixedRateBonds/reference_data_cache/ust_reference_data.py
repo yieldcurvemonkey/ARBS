@@ -1,6 +1,5 @@
 import datetime
 import math
-import os
 from pathlib import Path
 from typing import Iterable, List, Literal, Optional, Union
 
@@ -60,18 +59,18 @@ def _format_coupon_to_eighths(coupon_pct: float) -> str:
 
 
 def _add_label_column(df: pl.DataFrame) -> pl.DataFrame:
-    df = df.with_columns(
-        pl.col("int_rate").cast(pl.Float64, strict=False).alias("int_rate")
-    )
+    df = df.with_columns(pl.col("int_rate").cast(pl.Float64, strict=False).alias("int_rate"))
 
     # Apply coupon formatting
     coup_str = df.select(pl.col("int_rate")).to_series().map_elements(_format_coupon_to_eighths, return_dtype=pl.Utf8)
 
     # Extract month and year from maturity_date
-    df = df.with_columns([
-        pl.col("maturity_date").cast(pl.Date).dt.strftime("%b").alias("month"),
-        pl.col("maturity_date").cast(pl.Date).dt.strftime("%y").alias("yy"),
-    ])
+    df = df.with_columns(
+        [
+            pl.col("maturity_date").cast(pl.Date).dt.strftime("%b").alias("month"),
+            pl.col("maturity_date").cast(pl.Date).dt.strftime("%y").alias("yy"),
+        ]
+    )
 
     # Create label column
     df = df.with_columns(
@@ -79,9 +78,7 @@ def _add_label_column(df: pl.DataFrame) -> pl.DataFrame:
     )
 
     # Clean up double spaces
-    df = df.with_columns(
-        pl.col("label").str.replace_all("T  ", "T ").alias("label")
-    )
+    df = df.with_columns(pl.col("label").str.replace_all("T  ", "T ").alias("label"))
 
     # Drop temporary columns
     df = df.drop(["month", "yy"])
@@ -89,7 +86,9 @@ def _add_label_column(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def _fetch_auctions_raw_fiscaldata(as_of: Union[datetime.date, Literal["all"]], term_strings: List[str]) -> pl.DataFrame:
+def _fetch_auctions_raw_fiscaldata(
+    as_of: Union[datetime.date, Literal["all"]], term_strings: List[str]
+) -> pl.DataFrame:
     base = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query?"
     terms_csv = ",".join(term_strings)
     f_terms = f"original_security_term:in:({terms_csv})"
@@ -118,18 +117,18 @@ def _fetch_auctions_raw_fiscaldata(as_of: Union[datetime.date, Literal["all"]], 
     date_cols = ["record_date", "auction_date", "issue_date", "maturity_date"]
     for col in date_cols:
         if col in df.columns:
-            df = df.with_columns(
-                pl.col(col).str.strptime(pl.Date, "%Y-%m-%d", strict=False).alias(col)
-            )
+            df = df.with_columns(pl.col(col).str.strptime(pl.Date, "%Y-%m-%d", strict=False).alias(col))
     return df
 
 
 def _add_ttm_columns_with_quantlib(df: pl.DataFrame, as_of: datetime.date) -> pl.DataFrame:
     if df.height == 0:
-        return df.with_columns([
-            pl.lit(None).cast(pl.Float64).alias("ttm_y"),
-            pl.lit(None).cast(pl.Int64).alias("ttm_d"),
-        ])
+        return df.with_columns(
+            [
+                pl.lit(None).cast(pl.Float64).alias("ttm_y"),
+                pl.lit(None).cast(pl.Int64).alias("ttm_d"),
+            ]
+        )
 
     dc = ql.ActualActual(ql.ActualActual.Actual365)
     ql_as_of = ql.Date(as_of.day, as_of.month, as_of.year)
@@ -148,18 +147,18 @@ def _add_ttm_columns_with_quantlib(df: pl.DataFrame, as_of: datetime.date) -> pl
         return int(dc.dayCount(ql_as_of, d2))
 
     # Ensure maturity_date is Date type
-    df = df.with_columns(
-        pl.col("maturity_date").cast(pl.Date)
-    )
+    df = df.with_columns(pl.col("maturity_date").cast(pl.Date))
 
     # Apply QuantLib calculations
     ttm_y = df.select(pl.col("maturity_date")).to_series().map_elements(_yf, return_dtype=pl.Float64)
     ttm_d = df.select(pl.col("maturity_date")).to_series().map_elements(_dcnt, return_dtype=pl.Int64)
 
-    df = df.with_columns([
-        ttm_y.alias("ttm_y"),
-        ttm_d.alias("ttm_d"),
-    ])
+    df = df.with_columns(
+        [
+            ttm_y.alias("ttm_y"),
+            ttm_d.alias("ttm_d"),
+        ]
+    )
 
     return df
 
@@ -184,7 +183,9 @@ def _fetch_fiscaldata(
     if fetch_as_of != "all":
         df = df.filter(pl.col("maturity_date") > process_as_of)
         df = df.with_columns(
-            (pl.col("issue_date").rank(method="ordinal", descending=True).over("original_security_term") - 1).cast(pl.Int64).alias("rank")
+            (pl.col("issue_date").rank(method="ordinal", descending=True).over("original_security_term") - 1)
+            .cast(pl.Int64)
+            .alias("rank")
         )
         df = _add_ttm_columns_with_quantlib(df, process_as_of)
 
@@ -192,7 +193,18 @@ def _fetch_fiscaldata(
     df = _add_label_column(df)
     keep = [
         c
-        for c in ["record_date", "label", "cusip", "rank", "original_security_term", "auction_date", "issue_date", "maturity_date", "ttm_y", "int_rate"]
+        for c in [
+            "record_date",
+            "label",
+            "cusip",
+            "rank",
+            "original_security_term",
+            "auction_date",
+            "issue_date",
+            "maturity_date",
+            "ttm_y",
+            "int_rate",
+        ]
         if c in df.columns
     ]
     df = df.select(keep)
@@ -206,14 +218,12 @@ def _fetch_fiscaldata(
     if append_mspd_table3:
         ql_date = ql.Date(fetch_as_of.day, fetch_as_of.month, fetch_as_of.year)
         to_fetch: ql.Date = ql.NullCalendar().endOfMonth(ql_date - ql.Period("1m"))
-        mspd_table3_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_3_market?filter=record_date:eq:{datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth()).strftime("%Y-%m-%d")}&page[size]=10000"
+        mspd_table3_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_3_market?filter=record_date:eq:{datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth()).strftime('%Y-%m-%d')}&page[size]=10000"
         mspd_table3_df = pl.DataFrame(requests.get(mspd_table3_url).json()["data"])
         mspd_table3_df = mspd_table3_df.filter(pl.col("security_class1_desc").is_in(["Notes", "Bonds"]))
         to_numeric = ["issued_amt", "outstanding_amt"]
         for n in to_numeric:
-            mspd_table3_df = mspd_table3_df.with_columns(
-                pl.col(n).cast(pl.Float64, strict=False).alias(n)
-            )
+            mspd_table3_df = mspd_table3_df.with_columns(pl.col(n).cast(pl.Float64, strict=False).alias(n))
 
         mspd_table3_df = mspd_table3_df.rename({"security_class2_desc": "cusip"})
         mspd_table3_df = mspd_table3_df.select(["cusip"] + to_numeric)
@@ -224,14 +234,14 @@ def _fetch_fiscaldata(
         ql_date = ql.Date(fetch_as_of.day, fetch_as_of.month, fetch_as_of.year)
         to_fetch: ql.Date = ql.NullCalendar().endOfMonth(ql_date - ql.Period("1m"))
 
-        mspd_table5_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_5?filter=record_date:eq:{datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth()).strftime("%Y-%m-%d")}&page[size]=10000"
+        mspd_table5_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_5?filter=record_date:eq:{datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth()).strftime('%Y-%m-%d')}&page[size]=10000"
         mspd_table5_df = pl.DataFrame(requests.get(mspd_table5_url).json()["data"])
-        mspd_table5_df = mspd_table5_df.filter(pl.col("security_class1_desc").is_in(["Treasury Bonds", "Treasury Notes"]))
+        mspd_table5_df = mspd_table5_df.filter(
+            pl.col("security_class1_desc").is_in(["Treasury Bonds", "Treasury Notes"])
+        )
         to_numeric = ["outstanding_amt", "portion_unstripped_amt", "portion_stripped_amt", "reconstituted_amt"]
         for n in to_numeric:
-            mspd_table5_df = mspd_table5_df.with_columns(
-                (pl.col(n).cast(pl.Float64, strict=False) * 1000).alias(n)
-            )
+            mspd_table5_df = mspd_table5_df.with_columns((pl.col(n).cast(pl.Float64, strict=False) * 1000).alias(n))
 
         mspd_table5_df = mspd_table5_df.drop("cusip").rename({"security_class2_desc": "cusip"})
         mspd_table5_df = mspd_table5_df.select(["cusip"] + to_numeric)
@@ -239,34 +249,41 @@ def _fetch_fiscaldata(
         df = df.join(mspd_table5_df, on="cusip", how="full", coalesce=True)
 
     if append_soma_holdings:
-        valid_soma_holding_dates_reponse = requests.get("https://markets.newyorkfed.org/api/soma/asofdates/list.json").json()
-        valid_soma_dates_dt = [datetime.datetime.strptime(dt_string, "%Y-%m-%d").date() for dt_string in valid_soma_holding_dates_reponse["soma"]["asOfDates"]]
+        valid_soma_holding_dates_reponse = requests.get(
+            "https://markets.newyorkfed.org/api/soma/asofdates/list.json"
+        ).json()
+        valid_soma_dates_dt = [
+            datetime.datetime.strptime(dt_string, "%Y-%m-%d").date()
+            for dt_string in valid_soma_holding_dates_reponse["soma"]["asOfDates"]
+        ]
         valid_closest_date = min(
             (valid_date for valid_date in valid_soma_dates_dt if valid_date <= fetch_as_of),
             key=lambda valid_date: abs(fetch_as_of - valid_date),
         )
-        soma_url = f'https://markets.newyorkfed.org/api/soma/tsy/get/asof/{valid_closest_date.strftime("%Y-%m-%d")}.json'
+        soma_url = (
+            f'https://markets.newyorkfed.org/api/soma/tsy/get/asof/{valid_closest_date.strftime("%Y-%m-%d")}.json'
+        )
         soma_df = pl.DataFrame(requests.get(soma_url).json()["soma"]["holdings"])
         soma_df = soma_df.filter(pl.col("securityType") == "NotesBonds")
         to_numeric = ["parValue", "percentOutstanding"]
         for n in to_numeric:
-            soma_df = soma_df.with_columns(
-                pl.col(n).cast(pl.Float64, strict=False).alias(n)
-            )
+            soma_df = soma_df.with_columns(pl.col(n).cast(pl.Float64, strict=False).alias(n))
 
-        soma_df = soma_df.with_columns([
-            (pl.col("parValue") / pl.col("percentOutstanding")).alias("outstanding_amt_backed_out_from_soma"),
-            (pl.col("percentOutstanding") * 100).alias("percentOutstanding"),
-        ])
+        soma_df = soma_df.with_columns(
+            [
+                (pl.col("parValue") / pl.col("percentOutstanding")).alias("outstanding_amt_backed_out_from_soma"),
+                (pl.col("percentOutstanding") * 100).alias("percentOutstanding"),
+            ]
+        )
         soma_df = soma_df.select(["cusip"] + to_numeric + ["outstanding_amt_backed_out_from_soma"])
-        soma_df = soma_df.rename({"parValue": "soma_holdings", "percentOutstanding": "soma_holdings_of_pct_outstanding"})
+        soma_df = soma_df.rename(
+            {"parValue": "soma_holdings", "percentOutstanding": "soma_holdings_of_pct_outstanding"}
+        )
         df = df.join(soma_df, on="cusip", how="full", coalesce=True)
 
     if append_free_float:
         fill_cols = ["outstanding_amt", "soma_holdings", "portion_stripped_amt"]
-        df = df.with_columns([
-            pl.col(c).fill_null(0).alias(c) for c in fill_cols
-        ])
+        df = df.with_columns([pl.col(c).fill_null(0).alias(c) for c in fill_cols])
         df = df.with_columns(
             (pl.col("outstanding_amt") - pl.col("soma_holdings") - pl.col("portion_stripped_amt")).alias("free_float")
         )

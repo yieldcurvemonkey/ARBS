@@ -1,5 +1,5 @@
-# ABOUTME: Generate trading signals from correlation-volatility divergence
-# ABOUTME: Exploits IV/RV ratio convergence for highly correlated asset pairs via BaseSignal framework
+# ABOUTME: Generate trading signals from correlation-volatility divergence (extends BaseSignal)
+# ABOUTME: Exploits IV/RV ratio convergence for highly correlated asset pairs
 """
 CorrelationVolatilitySignal - Volatility Dispersion Trading
 

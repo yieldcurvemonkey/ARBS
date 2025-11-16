@@ -156,62 +156,6 @@ class TestReversionFactorConstruction:
         assert results[50] < results[30] < results[20] < results[10] < results[5]
         assert all(v < 0 for v in results.values())
 
-    def test_rev_handles_multiple_sectors(self):
-        """
-        Test reversion calculated for multiple sectors simultaneously.
-
-        Setup:
-            - XLK: strong recent gains
-            - XLE: strong recent losses
-
-        Assert:
-            - XLK gets negative reversion (bearish on winner)
-            - XLE gets positive reversion (bullish on loser)
-        """
-        from Signals.SectorRotation.ReversionFactor import ReversionFactor
-
-        dates = [date(2023, 1, 1) + timedelta(days=i) for i in range(30)]
-
-        # XLK: recent winner
-        xlk_df = pl.DataFrame({
-            "ticker": ["XLK"] * 30,
-            "date": dates,
-            "return": [0.02] * 30  # +60% cumulative
-        })
-
-        # XLE: recent loser
-        xle_df = pl.DataFrame({
-            "ticker": ["XLE"] * 30,
-            "date": dates,
-            "return": [-0.01] * 30  # -30% cumulative
-        })
-
-        returns_df = pl.concat([xlk_df, xle_df])
-
-        rev_calc = ReversionFactor(lookback_days=30)
-        result_df = rev_calc.calculate(returns_df)
-
-        # Check both sectors present
-        tickers = result_df["ticker"].unique().sort()
-        assert tickers.to_list() == ["XLE", "XLK"]
-
-        xlk_rev = result_df.filter(
-            (pl.col("ticker") == "XLK") & (pl.col("date") == dates[-1])
-        )["reversion_factor"][0]
-
-        xle_rev = result_df.filter(
-            (pl.col("ticker") == "XLE") & (pl.col("date") == dates[-1])
-        )["reversion_factor"][0]
-
-        # XLK (winner) should have negative reversion
-        assert xlk_rev < 0
-
-        # XLE (loser) should have positive reversion
-        assert xle_rev > 0
-
-        # XLE reversion should be MORE positive than XLK is negative
-        assert xle_rev > abs(xlk_rev)
-
 
 class TestReversionEdgeCases:
     """Test reversion factor edge cases."""

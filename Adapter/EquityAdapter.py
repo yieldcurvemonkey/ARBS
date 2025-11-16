@@ -1,4 +1,4 @@
-# ABOUTME: Equity adapter for converting EquityQuery/ETFQuery results into signal-ready DataFrame
+# ABOUTME: Equity adapter (extends BaseAdapter) for converting EquityQuery/ETFQuery results into signal-ready DataFrame
 # ABOUTME: Fetches prices, calculates returns, and formats with sector/weight for downstream processing
 """
 Equity Adapter

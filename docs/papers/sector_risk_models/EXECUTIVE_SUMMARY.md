@@ -366,7 +366,7 @@ feat(risk): Integrate BlockDiagonalCovariance end-to-end
 
 All committed and pushed to `claude/sector-risk-model-research-011CV41RojiVnaUFqthNnozq`:
 
-1. **COMPREHENSIVE_ANALYSIS.md** (779 lines)
+1. **ANALYSIS.md** (779 lines)
    - All mathematical formulas from 3 papers
    - Performance comparisons
    - Grinold-Kahn alignment analysis

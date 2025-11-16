@@ -21,10 +21,11 @@ IC decay (halflife):
 - > 60 days: Low frequency
 """
 
+from typing import Tuple
+
 import numpy as np
 import polars as pl
 from scipy import stats
-from typing import Tuple
 
 
 def calculate_ic(forecasts: np.ndarray, actuals: np.ndarray) -> float:
@@ -50,14 +51,14 @@ def calculate_ic(forecasts: np.ndarray, actuals: np.ndarray) -> float:
     # Remove NaN values
     valid_mask = ~(np.isnan(forecasts) | np.isnan(actuals))
     if not np.any(valid_mask):
-        return np.nan
+        return float("nan")
 
     forecasts_clean = forecasts[valid_mask]
     actuals_clean = actuals[valid_mask]
 
     # Need at least 2 points for correlation
     if len(forecasts_clean) < 2:
-        return np.nan
+        return float("nan")
 
     # Check for zero variance (causes NaN in correlation)
     if np.std(forecasts_clean) < 1e-10 or np.std(actuals_clean) < 1e-10:
@@ -71,7 +72,7 @@ def calculate_ic(forecasts: np.ndarray, actuals: np.ndarray) -> float:
     if np.isnan(ic):
         return 0.0
 
-    return ic
+    return float(ic)
 
 
 def calculate_rank_ic(forecasts: np.ndarray, actuals: np.ndarray) -> float:
@@ -100,19 +101,19 @@ def calculate_rank_ic(forecasts: np.ndarray, actuals: np.ndarray) -> float:
     # Remove NaN values
     valid_mask = ~(np.isnan(forecasts) | np.isnan(actuals))
     if not np.any(valid_mask):
-        return np.nan
+        return float("nan")
 
     forecasts_clean = forecasts[valid_mask]
     actuals_clean = actuals[valid_mask]
 
     # Need at least 2 points for correlation
     if len(forecasts_clean) < 2:
-        return np.nan
+        return float("nan")
 
     # Calculate Spearman correlation
     rank_ic, _ = stats.spearmanr(forecasts_clean, actuals_clean)
 
-    return rank_ic
+    return float(rank_ic)
 
 
 def calculate_ic_significance(
@@ -187,10 +188,12 @@ def calculate_ic_time_series(
         >>> print(f"IC stability (std): {ic_series.std():.3f}")
     """
     # Align forecasts and actuals (no index needed - polars is index-free)
-    aligned = pl.DataFrame({
-        'forecast': forecasts,
-        'actual': actuals,
-    }).drop_nulls()
+    aligned = pl.DataFrame(
+        {
+            "forecast": forecasts,
+            "actual": actuals,
+        }
+    ).drop_nulls()
 
     if len(aligned) < window:
         return pl.Series(dtype=pl.Float64)
@@ -199,8 +202,8 @@ def calculate_ic_time_series(
     # Use rolling window to compute correlation at each position
     ic_values = []
     for i in range(len(aligned) - window + 1):
-        window_forecast = aligned['forecast'][i:i+window].to_numpy()
-        window_actual = aligned['actual'][i:i+window].to_numpy()
+        window_forecast = aligned["forecast"][i : i + window].to_numpy()
+        window_actual = aligned["actual"][i : i + window].to_numpy()
         ic = calculate_ic(window_forecast, window_actual)
         ic_values.append(ic)
 
@@ -255,23 +258,23 @@ def calculate_ic_decay(
             ic_at_lags.append((lag, abs(ic)))  # Use absolute IC
 
     if len(ic_at_lags) < 3:
-        return np.nan
+        return float("nan")
 
     # Convert to DataFrame
-    ic_df = pl.DataFrame(ic_at_lags, schema=['lag', 'ic'])
+    ic_df = pl.DataFrame(ic_at_lags, schema=["lag", "ic"])
 
     # Initial IC (at lag 0)
-    ic_0 = ic_df.filter(pl.col('lag') == 0).select('ic')[0, 0]
+    ic_0 = ic_df.filter(pl.col("lag") == 0).select("ic")[0, 0]
 
     if ic_0 < 0.01:
         # IC too small to measure decay
-        return np.nan
+        return float("nan")
 
     # Find halflife: lag where IC drops to 50% of initial
     target_ic = ic_0 * 0.5
 
     # Find first lag where IC < target
-    below_target = ic_df.filter(pl.col('ic') < target_ic)
+    below_target = ic_df.filter(pl.col("ic") < target_ic)
 
     if len(below_target) == 0:
         # IC hasn't decayed to 50% within max_lag
@@ -330,10 +333,10 @@ def calculate_ic_statistics(
     ic_decay = calculate_ic_decay(forecasts, actuals)
 
     return {
-        'ic': ic,
-        'rank_ic': rank_ic,
-        'ic_stability': ic_stability,
-        'ic_decay_halflife': ic_decay,
-        'p_value': p_value,
-        'n_observations': len(forecasts),
+        "ic": ic,
+        "rank_ic": rank_ic,
+        "ic_stability": ic_stability,
+        "ic_decay_halflife": ic_decay,
+        "p_value": p_value,
+        "n_observations": len(forecasts),
     }

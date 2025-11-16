@@ -1,5 +1,5 @@
-# ABOUTME: StochasticBlock covariance estimator with inter-block correlations
-# ABOUTME: MVP implementation using block-diagonal base + regularized off-diagonal blocks
+# ABOUTME: Stochastic block covariance (extends SectorBasedCovarianceEstimator) with inter-block correlations
+# ABOUTME: Blends block-diagonal (within-sector) with full covariance (cross-sector) via sparsity parameter
 """
 StochasticBlockCovariance Estimator
 
@@ -21,15 +21,12 @@ This provides a smooth interpolation between block-diagonal structure
 and full covariance, with α controlling the strength of inter-block correlations.
 """
 
-import polars as pl
-import numpy as np
-from typing import Optional, Dict, List
-from scipy import linalg
-from sklearn.cluster import AgglomerativeClustering
+from typing import Dict, List, Optional
 
-from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import (
-    SectorBasedCovarianceEstimator,
-)
+import numpy as np
+import polars as pl
+
+from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import SectorBasedCovarianceEstimator
 
 
 class StochasticBlockCovariance(SectorBasedCovarianceEstimator):
@@ -57,7 +54,7 @@ class StochasticBlockCovariance(SectorBasedCovarianceEstimator):
         n_clusters: Optional[int] = None,
         shrinkage_per_block: bool = True,
         min_eigenvalue: float = 1e-8,
-        handle_missing: str = 'drop',
+        handle_missing: str = "drop",
     ):
         """
         Initialize StochasticBlockCovariance estimator.
@@ -80,6 +77,7 @@ class StochasticBlockCovariance(SectorBasedCovarianceEstimator):
 
         self.allow_inter_block = allow_inter_block
         self.alpha = alpha
+        self.discover_blocks = discover_blocks
         self.n_clusters = n_clusters
         self.shrinkage_per_block = shrinkage_per_block
         self.min_eigenvalue = min_eigenvalue
@@ -88,36 +86,25 @@ class StochasticBlockCovariance(SectorBasedCovarianceEstimator):
         self.ticker_order_: Optional[List[str]] = None
         self.alpha_: Optional[float] = None  # Fitted alpha value
 
-    def fit(self, returns: pl.DataFrame, sector_col: Optional[str] = "sector") -> np.ndarray:
+    def _fit_impl(self, returns: pl.DataFrame, sector_col: Optional[str] = "sector") -> np.ndarray:
         """
         Estimate covariance matrix from returns.
 
         Args:
-            returns: DataFrame with columns [ticker, date, return, sector]
-                     Long format: Each row is (ticker, date, return, sector)
+            returns: Clean DataFrame with columns [ticker, date, return, sector]
+                     Missing data already handled
             sector_col: Name of sector column (ignored if discover_blocks=True)
 
         Returns:
             Covariance matrix (N×N numpy array)
-
-        Raises:
-            ValueError: If required columns missing or data invalid
         """
-        # Validate input data
-        self._validate_sector_input(returns, sector_col)
-
-        # Handle missing data
-        returns_clean = self._handle_missing_data(returns)
-
         # Convert to wide format (T×N)
-        returns_array, tickers = self._convert_to_wide_format(returns_clean)
+        returns_array, tickers = self._convert_to_wide_format(returns)
         self.ticker_order_ = tickers
         self.asset_names_ = tickers
 
         # Determine sector mapping
-        self.sector_mapping_ = self._determine_sector_assignments(
-            returns_array, tickers, returns_clean, sector_col
-        )
+        self.sector_mapping_ = self._determine_sector_assignments(returns_array, tickers, returns, sector_col)
 
         # Compute full sample covariance (baseline)
         cov_full = np.cov(returns_array, rowvar=False)  # N×N
@@ -141,12 +128,7 @@ class StochasticBlockCovariance(SectorBasedCovarianceEstimator):
             cov_matrix = cov_block
 
         # Ensure positive definiteness (using inherited method)
-        cov_matrix = self._ensure_positive_definite(cov_matrix, min_eigenvalue=self.min_eigenvalue)
-
-        # Store fitted covariance
-        self.cov_matrix_ = cov_matrix
-
-        return cov_matrix
+        return self._ensure_positive_definite(cov_matrix, min_eigenvalue=self.min_eigenvalue)
 
     def _compute_block_diagonal(
         self,
@@ -233,7 +215,7 @@ class StochasticBlockCovariance(SectorBasedCovarianceEstimator):
         # Ledoit-Wolf shrinkage intensity (simplified)
         if T > n:
             # Asymptotic formula
-            alpha = min(1.0, max(0.0, (T - 2) / T * np.trace(S) / np.linalg.norm(S - target, 'fro')**2))
+            alpha = min(1.0, max(0.0, (T - 2) / T * np.trace(S) / np.linalg.norm(S - target, "fro") ** 2))
         else:
             # High-dimensional regime: use heuristic
             alpha = (n - 2) / (T + n - 2) if T > 2 else 0.5
@@ -292,11 +274,13 @@ class StochasticBlockCovariance(SectorBasedCovarianceEstimator):
                     # Average correlation
                     avg_corr = np.mean(cross_block)
 
-                    results.append({
-                        "sector_i": sector_i,
-                        "sector_j": sector_j,
-                        "avg_correlation": avg_corr,
-                    })
+                    results.append(
+                        {
+                            "sector_i": sector_i,
+                            "sector_j": sector_j,
+                            "avg_correlation": avg_corr,
+                        }
+                    )
 
         return pl.DataFrame(results)
 

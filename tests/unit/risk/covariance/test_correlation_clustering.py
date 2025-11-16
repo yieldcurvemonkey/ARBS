@@ -21,25 +21,20 @@ From 2025 Research Consensus:
 - Used to prevent concentration risk in portfolio optimization
 """
 
-import pytest
+
 import numpy as np
 import polars as pl
-from typing import Dict, List
+import pytest
 
-from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import (
-    SectorBasedCovarianceEstimator,
-)
+from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import SectorBasedCovarianceEstimator
 
 
 # Create concrete implementation for testing
 class MockSectorCovariance(SectorBasedCovarianceEstimator):
     """Concrete implementation for testing abstract base class."""
 
-    def fit(self, returns: pl.DataFrame, sector_col=None) -> np.ndarray:
+    def _fit_impl(self, returns: pl.DataFrame, sector_col=None) -> np.ndarray:
         """Mock fit method."""
-        # Handle missing data
-        returns = self._handle_missing_data(returns)
-
         # Convert to wide format
         returns_wide, tickers = self._convert_to_wide_format(returns)
         self.asset_names_ = tickers
@@ -47,13 +42,18 @@ class MockSectorCovariance(SectorBasedCovarianceEstimator):
 
         # Compute actual covariance from returns (not identity matrix!)
         # returns_wide is already a numpy array from _convert_to_wide_format
-        self.cov_matrix_ = np.cov(returns_wide.T)
+        cov_matrix = np.cov(returns_wide.T)
 
         # Handle single asset case: np.cov returns scalar, reshape to 1x1
-        if self.cov_matrix_.ndim == 0:
-            self.cov_matrix_ = self.cov_matrix_.reshape(1, 1)
+        if cov_matrix.ndim == 0:
+            cov_matrix = cov_matrix.reshape(1, 1)
 
-        return self.cov_matrix_
+        # Handle NaN (from constant returns) - replace with identity matrix
+        if np.any(np.isnan(cov_matrix)):
+            n = len(tickers)
+            cov_matrix = np.eye(n) * 0.01  # Small positive variance
+
+        return cov_matrix
 
 
 class TestCorrelationClusteringBasics:
@@ -62,16 +62,18 @@ class TestCorrelationClusteringBasics:
     def test_get_correlation_clusters_method_exists(self):
         """Verify get_correlation_clusters() method exists."""
         estimator = MockSectorCovariance(clustering_method="hierarchical")
-        assert hasattr(estimator, 'get_correlation_clusters')
+        assert hasattr(estimator, "get_correlation_clusters")
 
     def test_get_correlation_clusters_returns_dict(self):
         """Method returns Dict[str, List[str]]."""
         # Create simple 2-asset perfectly correlated data
-        returns = pl.DataFrame({
-            "ticker": ["A", "B"] * 10,
-            "date": [f"2024-01-{i:02d}" for i in range(1, 11)] * 2,
-            "return": [0.01, 0.01] * 10,
-        })
+        returns = pl.DataFrame(
+            {
+                "ticker": ["A", "B"] * 10,
+                "date": [f"2024-01-{i:02d}" for i in range(1, 11)] * 2,
+                "return": [0.01, 0.01] * 10,
+            }
+        )
 
         estimator = MockSectorCovariance(clustering_method="hierarchical")
         estimator.fit(returns)
@@ -125,14 +127,16 @@ class TestPerfectBlockDiagonal:
 
         data = []
         for i, date in enumerate(dates):
-            data.extend([
-                {"ticker": "A", "date": date, "return": returns_A[i]},
-                {"ticker": "B", "date": date, "return": returns_B[i]},
-                {"ticker": "C", "date": date, "return": returns_C[i]},
-                {"ticker": "D", "date": date, "return": returns_D[i]},
-                {"ticker": "E", "date": date, "return": returns_E[i]},
-                {"ticker": "F", "date": date, "return": returns_F[i]},
-            ])
+            data.extend(
+                [
+                    {"ticker": "A", "date": date, "return": returns_A[i]},
+                    {"ticker": "B", "date": date, "return": returns_B[i]},
+                    {"ticker": "C", "date": date, "return": returns_C[i]},
+                    {"ticker": "D", "date": date, "return": returns_D[i]},
+                    {"ticker": "E", "date": date, "return": returns_E[i]},
+                    {"ticker": "F", "date": date, "return": returns_F[i]},
+                ]
+            )
 
         return pl.DataFrame(data)
 
@@ -174,11 +178,9 @@ class TestPerfectBlockDiagonal:
         estimator.fit(perfect_block_returns)
 
         # Get correlation matrix
-        returns_wide = perfect_block_returns.pivot(
-            index="date", columns="ticker", values="return"
-        )
+        returns_wide = perfect_block_returns.pivot(index="date", columns="ticker", values="return")
         # Exclude date column and get only numeric ticker columns
-        tickers = [col for col in returns_wide.columns if col != 'date']
+        tickers = [col for col in returns_wide.columns if col != "date"]
         ticker_idx = {ticker: i for i, ticker in enumerate(tickers)}
         returns_np = returns_wide.select(tickers).to_numpy()
         corr_matrix = np.corrcoef(returns_np.T)
@@ -201,11 +203,9 @@ class TestPerfectBlockDiagonal:
         estimator.fit(perfect_block_returns)
 
         # Get correlation matrix
-        returns_wide = perfect_block_returns.pivot(
-            index="date", columns="ticker", values="return"
-        )
+        returns_wide = perfect_block_returns.pivot(index="date", columns="ticker", values="return")
         # Exclude date column and get only numeric ticker columns
-        tickers = [col for col in returns_wide.columns if col != 'date']
+        tickers = [col for col in returns_wide.columns if col != "date"]
         ticker_idx = {ticker: i for i, ticker in enumerate(tickers)}
         returns_np = returns_wide.select(tickers).to_numpy()
         corr_matrix = np.corrcoef(returns_np.T)
@@ -253,12 +253,14 @@ class TestOverlappingClusters:
 
         data = []
         for i, date in enumerate(dates):
-            data.extend([
-                {"ticker": "A", "date": date, "return": returns_A[i]},
-                {"ticker": "B", "date": date, "return": returns_B[i]},
-                {"ticker": "C", "date": date, "return": returns_C[i]},
-                {"ticker": "D", "date": date, "return": returns_D[i]},
-            ])
+            data.extend(
+                [
+                    {"ticker": "A", "date": date, "return": returns_A[i]},
+                    {"ticker": "B", "date": date, "return": returns_B[i]},
+                    {"ticker": "C", "date": date, "return": returns_C[i]},
+                    {"ticker": "D", "date": date, "return": returns_D[i]},
+                ]
+            )
 
         return pl.DataFrame(data)
 
@@ -289,11 +291,13 @@ class TestEdgeCases:
 
     def test_single_asset_cluster(self):
         """Single asset → single cluster."""
-        returns = pl.DataFrame({
-            "ticker": ["A"] * 10,
-            "date": [f"2024-01-{i:02d}" for i in range(1, 11)],
-            "return": np.random.randn(10).tolist(),
-        })
+        returns = pl.DataFrame(
+            {
+                "ticker": ["A"] * 10,
+                "date": [f"2024-01-{i:02d}" for i in range(1, 11)],
+                "return": np.random.randn(10).tolist(),
+            }
+        )
 
         estimator = MockSectorCovariance(clustering_method="hierarchical")
         estimator.fit(returns)
@@ -312,11 +316,9 @@ class TestEdgeCases:
         for i in range(n_periods):
             date = f"2024-01-{i+1:02d}"
             for ticker in ["A", "B", "C", "D"]:
-                data.append({
-                    "ticker": ticker,
-                    "date": date,
-                    "return": factor[i] + np.random.randn() * 0.01  # Tiny noise
-                })
+                data.append(
+                    {"ticker": ticker, "date": date, "return": factor[i] + np.random.randn() * 0.01}  # Tiny noise
+                )
 
         returns = pl.DataFrame(data)
 
@@ -337,11 +339,7 @@ class TestEdgeCases:
         for i in range(n_periods):
             date = f"2024-01-{i+1:02d}"
             for ticker in ["A", "B", "C", "D"]:
-                data.append({
-                    "ticker": ticker,
-                    "date": date,
-                    "return": np.random.randn()
-                })
+                data.append({"ticker": ticker, "date": date, "return": np.random.randn()})
 
         returns = pl.DataFrame(data)
 
@@ -368,10 +366,12 @@ class TestEdgeCases:
         data = []
         for i in range(n_periods):
             date = f"2024-{i//30+1:02d}-{i%30+1:02d}"
-            data.extend([
-                {"ticker": "A", "date": date, "return": returns_A[i]},
-                {"ticker": "B", "date": date, "return": returns_B[i]},
-            ])
+            data.extend(
+                [
+                    {"ticker": "A", "date": date, "return": returns_A[i]},
+                    {"ticker": "B", "date": date, "return": returns_B[i]},
+                ]
+            )
 
         returns = pl.DataFrame(data)
 
@@ -396,10 +396,12 @@ class TestEdgeCases:
         data = []
         for i in range(n_periods):
             date = f"2024-{i//30+1:02d}-{i%30+1:02d}"
-            data.extend([
-                {"ticker": "A", "date": date, "return": returns_A[i]},
-                {"ticker": "B", "date": date, "return": returns_B[i]},
-            ])
+            data.extend(
+                [
+                    {"ticker": "A", "date": date, "return": returns_A[i]},
+                    {"ticker": "B", "date": date, "return": returns_B[i]},
+                ]
+            )
 
         returns = pl.DataFrame(data)
 
@@ -419,11 +421,13 @@ class TestParameterHandling:
 
     def test_default_threshold(self):
         """Default threshold = 0.85."""
-        returns = pl.DataFrame({
-            "ticker": ["A", "B"] * 10,
-            "date": [f"2024-01-{i:02d}" for i in range(1, 11)] * 2,
-            "return": [0.01] * 20,
-        })
+        returns = pl.DataFrame(
+            {
+                "ticker": ["A", "B"] * 10,
+                "date": [f"2024-01-{i:02d}" for i in range(1, 11)] * 2,
+                "return": [0.01] * 20,
+            }
+        )
 
         estimator = MockSectorCovariance(clustering_method="hierarchical")
         estimator.fit(returns)
@@ -444,11 +448,7 @@ class TestParameterHandling:
             date = f"2024-01-{i+1:02d}"
             for j in range(10):
                 ticker = f"Asset_{j}"
-                data.append({
-                    "ticker": ticker,
-                    "date": date,
-                    "return": factor[i] + np.random.randn() * 0.01
-                })
+                data.append({"ticker": ticker, "date": date, "return": factor[i] + np.random.randn() * 0.01})
 
         returns = pl.DataFrame(data)
 
@@ -456,13 +456,11 @@ class TestParameterHandling:
         estimator.fit(returns)
 
         # With max_cluster_size=3, should split into multiple clusters
-        clusters = estimator.get_correlation_clusters(
-            threshold=0.85,
-            max_cluster_size=3
-        )
+        clusters = estimator.get_correlation_clusters(threshold=0.85, max_cluster_size=3)
 
         # Count assets per cluster
         from collections import Counter
+
         cluster_counts = Counter(clusters.values())
 
         # No cluster should exceed max_cluster_size
@@ -478,11 +476,7 @@ class TestParameterHandling:
             date = f"2024-01-{i+1:02d}"
             for j in range(16):
                 ticker = f"Asset_{j}"
-                data.append({
-                    "ticker": ticker,
-                    "date": date,
-                    "return": np.random.randn()
-                })
+                data.append({"ticker": ticker, "date": date, "return": np.random.randn()})
 
         returns = pl.DataFrame(data)
 
@@ -502,11 +496,13 @@ class TestGetClusterGroups:
 
     def test_get_cluster_groups_returns_inverted_mapping(self):
         """get_cluster_groups() returns cluster_id → list of tickers."""
-        returns = pl.DataFrame({
-            "ticker": ["A", "B", "C", "D"] * 10,
-            "date": [f"2024-01-{i:02d}" for i in range(1, 11)] * 4,
-            "return": np.random.randn(40).tolist(),
-        })
+        returns = pl.DataFrame(
+            {
+                "ticker": ["A", "B", "C", "D"] * 10,
+                "date": [f"2024-01-{i:02d}" for i in range(1, 11)] * 4,
+                "return": np.random.randn(40).tolist(),
+            }
+        )
 
         estimator = MockSectorCovariance(clustering_method="hierarchical")
         estimator.fit(returns)

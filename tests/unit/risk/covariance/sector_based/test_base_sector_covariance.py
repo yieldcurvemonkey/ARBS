@@ -10,41 +10,31 @@ Tests common functionality shared by all sector-based covariance models:
 - Positive definiteness enforcement
 """
 
-import pytest
-import numpy as np
-import polars as pl
 from typing import Optional
 
-from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import (
-    SectorBasedCovarianceEstimator,
-)
+import numpy as np
+import polars as pl
+import pytest
+
+from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import SectorBasedCovarianceEstimator
 
 
 # Create concrete implementation for testing abstract class
 class MockSectorCovariance(SectorBasedCovarianceEstimator):
     """Concrete implementation for testing abstract base class."""
 
-    def fit(
-        self, returns: pl.DataFrame, sector_col: Optional[str] = "sector"
-    ) -> np.ndarray:
+    def _fit_impl(self, returns: pl.DataFrame, sector_col: Optional[str] = "sector") -> np.ndarray:
         """Mock fit method."""
-        # Handle missing data
-        returns = self._handle_missing_data(returns)
-
         # Convert to wide format
         returns_wide, tickers = self._convert_to_wide_format(returns)
         self.asset_names_ = tickers
 
         # Determine sector assignments
-        self.sector_mapping_ = self._determine_sector_assignments(
-            returns_wide, tickers, returns, sector_col
-        )
+        self.sector_mapping_ = self._determine_sector_assignments(returns_wide, tickers, returns, sector_col)
 
         # Create mock covariance (just identity for testing)
         n = len(tickers)
-        self.cov_matrix_ = np.eye(n)
-
-        return self.cov_matrix_
+        return np.eye(n)
 
 
 class TestSectorBasedCovarianceEstimator:
@@ -56,8 +46,7 @@ class TestSectorBasedCovarianceEstimator:
         return pl.DataFrame(
             {
                 "ticker": ["AAPL", "MSFT", "JPM", "AAPL", "MSFT", "JPM"],
-                "date": ["2024-01-01", "2024-01-01", "2024-01-01",
-                        "2024-01-02", "2024-01-02", "2024-01-02"],
+                "date": ["2024-01-01", "2024-01-01", "2024-01-01", "2024-01-02", "2024-01-02", "2024-01-02"],
                 "return": [0.01, 0.02, 0.005, 0.015, -0.01, -0.002],
                 "sector": ["Tech", "Tech", "Finance", "Tech", "Tech", "Finance"],
             }
@@ -79,9 +68,7 @@ class TestSectorBasedCovarianceEstimator:
         # Should not raise
         estimator._validate_sector_input(sample_returns_long, "sector")
 
-    def test_validate_sector_input_missing_sector_col(
-        self, estimator, sample_returns_long
-    ):
+    def test_validate_sector_input_missing_sector_col(self, estimator, sample_returns_long):
         """Test validation fails when sector column missing."""
         with pytest.raises(ValueError, match="sector_col must be provided"):
             estimator._validate_sector_input(sample_returns_long, None)
@@ -114,9 +101,7 @@ class TestSectorBasedCovarianceEstimator:
         # Convert to wide first
         wide, tickers = estimator._convert_to_wide_format(sample_returns_long)
 
-        sector_map = estimator._determine_sector_assignments(
-            wide, tickers, sample_returns_long, "sector"
-        )
+        sector_map = estimator._determine_sector_assignments(wide, tickers, sample_returns_long, "sector")
 
         assert sector_map["AAPL"] == "Tech"
         assert sector_map["MSFT"] == "Tech"
@@ -130,9 +115,7 @@ class TestSectorBasedCovarianceEstimator:
         wide = np.array([[0.01, 0.02, 0.005], [0.015, 0.018, 0.003]])
         tickers = ["AAPL", "MSFT", "JPM"]
 
-        sector_map = est._determine_sector_assignments(
-            wide, tickers, sample_returns_long, None
-        )
+        sector_map = est._determine_sector_assignments(wide, tickers, sample_returns_long, None)
 
         # Should have cluster assignments
         assert len(sector_map) == 3

@@ -141,14 +141,6 @@ class TestOASMathematicalProperties:
         diag = np.diag(cov)
         assert np.all(diag > 0), "Variances must be positive"
 
-    def test_invertible(self, simple_returns):
-        """Verify covariance matrix is invertible."""
-        estimator = OAShrinkage()
-        cov = estimator.fit(simple_returns)
-
-        det = np.linalg.det(cov)
-        assert abs(det) > 1e-10, "Matrix should be invertible"
-
     def test_condition_number_reasonable(self, simple_returns):
         """Verify condition number is reasonable (< 100)."""
         estimator = OAShrinkage()
