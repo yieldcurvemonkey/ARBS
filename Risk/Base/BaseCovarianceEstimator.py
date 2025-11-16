@@ -146,7 +146,7 @@ class BaseCovarianceEstimator(ABC):
             Returns np.inf for singular matrices
         """
         cov = self.get_covariance()
-        return np.linalg.cond(cov)
+        return float(np.linalg.cond(cov))
 
     def _validate_covariance_matrix(
         self,

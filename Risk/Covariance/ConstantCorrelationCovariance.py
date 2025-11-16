@@ -1,5 +1,5 @@
-# ABOUTME: Constant correlation covariance matrix estimator (extends BaseCovarianceEstimator, equal correlation shrinkage target)
-# ABOUTME: Assumes all pairwise correlations equal: Σ = D(ρ11' + (1-ρ)I)D where ρ is mean correlation
+# ABOUTME: Constant correlation covariance estimator (equal correlation shrinkage target)
+# ABOUTME: All pairwise correlations equal: Σ = D(ρ11' + (1-ρ)I)D where ρ is mean correlation
 """
 Constant Correlation Covariance Estimator
 
@@ -51,7 +51,7 @@ class ConstantCorrelationCovariance(BaseCovarianceEstimator):
                 - 'pairwise': Use pairwise complete observations
         """
         super().__init__(handle_missing=handle_missing)
-        self.mean_correlation_: float = None
+        self.mean_correlation_: float | None = None
 
     def _fit_impl(self, returns: pl.DataFrame) -> np.ndarray:
         """
@@ -108,9 +108,9 @@ class ConstantCorrelationCovariance(BaseCovarianceEstimator):
         # Correlation: ρ × 11' + (1-ρ) × I
         rho = self.mean_correlation_
         ones_matrix = np.ones((n, n))
-        I = np.eye(n)
+        identity = np.eye(n)
 
-        corr_matrix = rho * ones_matrix + (1 - rho) * I
+        corr_matrix = rho * ones_matrix + (1 - rho) * identity
 
         # Convert to covariance: Σ = D × Corr × D
         D = np.diag(sample_std)
