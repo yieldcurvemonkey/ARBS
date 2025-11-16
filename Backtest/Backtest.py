@@ -39,7 +39,10 @@ Usage Patterns:
    ...     mdp=mdp,
    ...     adapter=FuturesAdapter(mdp),
    ...     signals=[CarrySignal(), MomentumSignal()],
-   ...     signal_combiner=SignalCombiner(method='ic_weighted')
+   ...     signal_combiner=SignalCombiner(
+   ...         method='ic_weighted',
+   ...         ic_estimates={'carry': 0.08, 'momentum': 0.05}
+   ...     )
    ... )
    >>> result = backtest.run(contracts=['SFRZ4'], dates=[...])
 
