@@ -1,17 +1,13 @@
 import datetime
-import logging
-import re
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-from zoneinfo import ZoneInfo
+from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd  # Keep for compatibility
-import polars as pl
 import plotly.graph_objects as go
-import tqdm
+import polars as pl
 from scipy.stats import tstd, zscore
 
 DateLike = Union[datetime.date, datetime.datetime]
@@ -292,7 +288,7 @@ def timeseries_df_plotter(
         # Prefer DST-aware abbreviation like 'EST'/'EDT'; fall back to UTC offset.
         # Convert to datetime if needed
         if not isinstance(ts, datetime.datetime):
-            if hasattr(ts, 'to_pydatetime'):
+            if hasattr(ts, "to_pydatetime"):
                 ts = ts.to_pydatetime()
             else:
                 ts = datetime.datetime.fromisoformat(str(ts))
@@ -348,9 +344,9 @@ def timeseries_df_plotter(
             title=(
                 custom_title
                 or (
-                    f"{", ".join(cols_to_plot)} (lhs) & {", ".join(cols_to_plot_raxis)} (rhs) Timeseries {"Z-Scores" if plot_zscores else ""}"
+                    f"{', '.join(cols_to_plot)} (lhs) & {', '.join(cols_to_plot_raxis)} (rhs) Timeseries {'Z-Scores' if plot_zscores else ''}"
                     if cols_to_plot_raxis
-                    else f"{", ".join(cols_to_plot)} Timeseries {"Z-Scores" if plot_zscores else ""}"
+                    else f"{', '.join(cols_to_plot)} Timeseries {'Z-Scores' if plot_zscores else ''}"
                 )
             ),
             xaxis_title="Date",
@@ -397,7 +393,7 @@ def timeseries_df_plotter(
             lns += ax_left.plot(
                 df["Date"],
                 df[tenor],
-                label=f"{tenor} (lhs)\nMost Recent: {df["Date"].iloc[-1].date()}, {np.round(df[tenor].iloc[-1], 3)}",
+                label=f"{tenor} (lhs)\nMost Recent: {df['Date'].iloc[-1].date()}, {np.round(df[tenor].iloc[-1], 3)}",
                 color=unique_colors[i],
             )
             i += 1
@@ -447,7 +443,7 @@ def timeseries_df_plotter(
                 lns += ax_right.plot(
                     df["Date"],
                     df[tenor],
-                    label=f"{tenor} (lhs)\nMost Recent: {df["Date"].iloc[-1].date()}, {np.round(df[tenor].iloc[-1], 3)}",
+                    label=f"{tenor} (lhs)\nMost Recent: {df['Date'].iloc[-1].date()}, {np.round(df[tenor].iloc[-1], 3)}",
                     color=unique_colors[i],
                 )
                 i += 1
@@ -455,7 +451,13 @@ def timeseries_df_plotter(
                 if tenor in stds.keys():
                     level_std = tstd(df[tenor])
                     level_mean = np.mean(df[tenor])
-                    lns += ax_right.plot(df["Date"], [level_mean] * len(df["Date"]), linestyle="--", color="red", label=f"Mean: {level_mean}")
+                    lns += ax_right.plot(
+                        df["Date"],
+                        [level_mean] * len(df["Date"]),
+                        linestyle="--",
+                        color="red",
+                        label=f"Mean: {level_mean}",
+                    )
 
                     for std in stds[tenor]:
                         curr_std_level = level_mean + (level_std * std)
@@ -493,7 +495,9 @@ def timeseries_df_plotter(
             plt.title(custom_title)
         else:
             plt.title(
-                f"{' '.join(cols_to_plot)} (lhs) & {' '.join(cols_to_plot_raxis)} (rhs) Timeseries" if cols_to_plot_raxis else f"{' '.join(cols_to_plot)} Timeseries"
+                f"{' '.join(cols_to_plot)} (lhs) & {' '.join(cols_to_plot_raxis)} (rhs) Timeseries"
+                if cols_to_plot_raxis
+                else f"{' '.join(cols_to_plot)} Timeseries"
             )
         ax_left.grid(True)
         plt.xticks(rotation=25)

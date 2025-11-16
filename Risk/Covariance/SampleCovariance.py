@@ -34,7 +34,7 @@ class SampleCovariance(BaseCovarianceEstimator):
     for comparing against shrinkage methods like Ledoit-Wolf.
     """
 
-    def __init__(self, handle_missing: str = 'drop'):
+    def __init__(self, handle_missing: str = "drop"):
         """
         Initialize sample covariance estimator.
 
@@ -45,33 +45,25 @@ class SampleCovariance(BaseCovarianceEstimator):
         """
         super().__init__(handle_missing=handle_missing)
 
-    def fit(self, returns: pl.DataFrame) -> np.ndarray:
+    def _fit_impl(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate sample covariance matrix.
 
         Formula: Σ̂ = (1/(T-1)) Σ(r_t - r̄)(r_t - r̄)'
 
         Args:
-            returns: DataFrame of returns (T×N)
+            returns: Clean DataFrame of returns (T×N), missing data already handled
 
         Returns:
             Sample covariance matrix (N×N)
         """
-        # Handle missing data (returns polars DataFrame)
-        returns_clean = self._handle_missing_data(returns)
-
-        # Store asset names
-        self.asset_names_ = list(returns_clean.columns)
-
         # Calculate covariance matrix using numpy
         # np.cov with ddof=1 (unbiased estimator, same as pandas default)
-        returns_array = returns_clean.to_numpy()
+        returns_array = returns.to_numpy()
         cov = np.cov(returns_array, rowvar=False, ddof=1)
 
         # Ensure covariance is always 2D (np.cov returns scalar for single column)
-        self.cov_matrix_ = np.atleast_2d(cov)
-
-        return self.cov_matrix_
+        return np.atleast_2d(cov)
 
     def __repr__(self) -> str:
         return "SampleCovariance()"

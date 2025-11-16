@@ -38,7 +38,7 @@ class DiagonalCovariance(BaseCovarianceEstimator):
     individual asset variances.
     """
 
-    def __init__(self, handle_missing: str = 'drop'):
+    def __init__(self, handle_missing: str = "drop"):
         """
         Initialize diagonal covariance estimator.
 
@@ -49,7 +49,7 @@ class DiagonalCovariance(BaseCovarianceEstimator):
         """
         super().__init__(handle_missing=handle_missing)
 
-    def fit(self, returns: pl.DataFrame) -> np.ndarray:
+    def _fit_impl(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate diagonal covariance matrix.
 
@@ -58,25 +58,17 @@ class DiagonalCovariance(BaseCovarianceEstimator):
         Where σ_i² is the sample variance of asset i.
 
         Args:
-            returns: DataFrame of returns (T×N)
+            returns: Clean DataFrame of returns (T×N), missing data already handled
 
         Returns:
             Diagonal covariance matrix (N×N)
         """
-        # Handle missing data
-        returns_clean = self._handle_missing_data(returns)
-
-        # Store asset names
-        self.asset_names_ = list(returns_clean.columns)
-
         # Calculate variances (diagonal elements)
         # .var() returns a single-row DataFrame with variance of each column
-        variances = returns_clean.var().to_numpy()[0]
+        variances = returns.var().to_numpy()[0]
 
         # Create diagonal matrix
-        self.cov_matrix_ = np.diag(variances)
-
-        return self.cov_matrix_
+        return np.diag(variances)
 
     def __repr__(self) -> str:
         return "DiagonalCovariance()"

@@ -2,13 +2,13 @@ import asyncio
 import logging
 import warnings
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Literal
+from typing import Dict, List, Literal, Optional, Tuple
 
 import httpx
 import polars as pl
 import requests
 
-warnings.filterwarnings("ignore", category=FutureWarning  # polars equivalent)
+warnings.filterwarnings("ignore", category=FutureWarning)  # polars equivalent
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys
@@ -109,7 +109,7 @@ class PublicDotcomDataFetcher(DataFetcherBase):
         max_retries: Optional[int] = 3,
         backoff_factor: Optional[int] = 1,
         uid: Optional[str | int] = None,
-        span: Optional[Literal["MAX", "1Y", "6M", "3M", "1M"]] = "MAX"
+        span: Optional[Literal["MAX", "1Y", "6M", "3M", "1M"]] = "MAX",
     ):
         cols_to_return = ["Date", "Price", "YTM"]  # YTW is same as YTM for cash USTs
         retries = 0
@@ -148,11 +148,13 @@ class PublicDotcomDataFetcher(DataFetcherBase):
                     response = await client.get(data_url, headers=data_headers)
                     response.raise_for_status()
                     df = pl.DataFrame(response.json()["data"])
-                    df = df.with_columns([
-                        pl.col("timestamp").str.to_datetime(strict=False).alias("Date"),
-                        (pl.col("unitPrice").cast(pl.Float64) * 100).alias("Price"),
-                        (pl.col("yieldToWorst").cast(pl.Float64) * 100).alias("YTM")
-                    ]).select(cols_to_return)
+                    df = df.with_columns(
+                        [
+                            pl.col("timestamp").str.to_datetime(strict=False).alias("Date"),
+                            (pl.col("unitPrice").cast(pl.Float64) * 100).alias("Price"),
+                            (pl.col("yieldToWorst").cast(pl.Float64) * 100).alias("YTM"),
+                        ]
+                    ).select(cols_to_return)
                     if start_date:
                         df = df.filter(pl.col("Date").cast(pl.Date) >= start_date.date())
                     if end_date:
@@ -163,21 +165,27 @@ class PublicDotcomDataFetcher(DataFetcherBase):
 
                 except httpx.HTTPStatusError as e:
                     self._logger.error(f"Public.com - Bad Status for {cusip}: {response.status_code}")
-                    if response.status_code == 404 or response.status_code == 400:  # public.com endpoint doesnt throw a 404 specifically
+                    if (
+                        response.status_code == 404 or response.status_code == 400
+                    ):  # public.com endpoint doesnt throw a 404 specifically
                         if uid:
                             return cusip, pl.DataFrame(schema={col: pl.Utf8 for col in cols_to_return}), uid
                         return cusip, pl.DataFrame(schema={col: pl.Utf8 for col in cols_to_return})
 
                     retries += 1
                     wait_time = backoff_factor * (2 ** (retries - 1))
-                    self._logger.debug(f"Public.com - Throttled for {cusip}. Waiting for {wait_time} seconds before retrying...")
+                    self._logger.debug(
+                        f"Public.com - Throttled for {cusip}. Waiting for {wait_time} seconds before retrying..."
+                    )
                     await asyncio.sleep(wait_time)
 
                 except Exception as e:
                     self._logger.error(f"Public.com - Error: {str(e)}")
                     retries += 1
                     wait_time = backoff_factor * (2 ** (retries - 1))
-                    self._logger.debug(f"Public.com - Throttled for {cusip}. Waiting for {wait_time} seconds before retrying...")
+                    self._logger.debug(
+                        f"Public.com - Throttled for {cusip}. Waiting for {wait_time} seconds before retrying..."
+                    )
                     await asyncio.sleep(wait_time)
 
             raise ValueError(f"Public.com - Max retries exceeded for {cusip}")

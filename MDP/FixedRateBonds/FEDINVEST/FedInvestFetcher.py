@@ -1,10 +1,10 @@
 import asyncio
 import logging
+import threading
 import warnings
 from datetime import datetime
 from typing import Dict, List, Optional
 
-import threading
 import httpx
 import pandas as pd  # Required for pd.read_html() - no polars equivalent for HTML parsing
 import polars as pl
@@ -13,7 +13,7 @@ import tqdm.asyncio
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 
-warnings.filterwarnings("ignore", category=FutureWarning  # polars equivalent)
+warnings.filterwarnings("ignore", category=FutureWarning)  # polars equivalent
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 import sys
@@ -208,7 +208,9 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
                         cusip_set = set(df["CUSIP"].to_list())
                         missing_cusips = [cusip for cusip in cusips if cusip not in cusip_set]
                         if missing_cusips:
-                            self._logger.warning(f"UST Prices Warning - The following CUSIPs are not found in the DataFrame: {missing_cusips}")
+                            self._logger.warning(
+                                f"UST Prices Warning - The following CUSIPs are not found in the DataFrame: {missing_cusips}"
+                            )
                     df = df.filter(pl.col("CUSIP").is_in(cusips)) if cusips else df
                     # Lowercase all column names
                     df = df.rename({col: col.lower() for col in df.columns})
@@ -222,9 +224,7 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
                             "end of day": "eod_price",
                         }
                     )
-                    df = df.with_columns(
-                        pl.col("coupon").str.replace("%", "").cast(pl.Float64)
-                    )
+                    df = df.with_columns(pl.col("coupon").str.replace("%", "").cast(pl.Float64))
 
                     # Convert back to pandas for compatibility with existing consumers
                     result_df = df.select(cols_to_return).to_pandas()
@@ -306,7 +306,9 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
 
         async def run_fetch_all(dates):
             limits = httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_keepalive_connections)
-            async with httpx.AsyncClient(limits=limits, timeout=self._global_timeout, mounts=self._httpx_proxies, verify=False, http2=True) as client:
+            async with httpx.AsyncClient(
+                limits=limits, timeout=self._global_timeout, mounts=self._httpx_proxies, verify=False, http2=True
+            ) as client:
                 all_data = await build_tasks(client=client, dates=dates)
                 return all_data
 

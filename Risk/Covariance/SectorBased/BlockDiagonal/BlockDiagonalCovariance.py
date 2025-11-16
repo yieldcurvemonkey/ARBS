@@ -18,17 +18,14 @@ Components:
 - Support for predefined or hierarchical clustering
 """
 
+from typing import Literal, Optional
+
 import numpy as np
 import polars as pl
-from typing import Optional, Literal
 from sklearn.decomposition import PCA
 
-from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import (
-    SectorBasedCovarianceEstimator,
-)
-from Risk.Covariance.SectorBased.sector_utils import (
-    create_block_diagonal_matrix,
-)
+from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import SectorBasedCovarianceEstimator
+from Risk.Covariance.SectorBased.sector_utils import create_block_diagonal_matrix
 
 
 class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
@@ -67,7 +64,7 @@ class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
         self.shrinkage_method = shrinkage_method
         self.bias_correction = bias_correction
 
-    def fit(
+    def _fit_impl(
         self,
         returns: pl.DataFrame,
         sector_col: Optional[str] = "sector",
@@ -76,24 +73,15 @@ class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
         Estimate block-diagonal covariance matrix.
 
         Args:
-            returns: DataFrame with columns [ticker, date, return, sector]
-                     If clustering_method="hierarchical", sector_col is optional
+            returns: Clean DataFrame with columns [ticker, date, return, sector]
+                     Missing data already handled
             sector_col: Name of sector column (for predefined clustering)
 
         Returns:
             Covariance matrix as numpy array (N×N)
-
-        Raises:
-            ValueError: If required columns missing or data insufficient
         """
-        # Validate data
-        self._validate_sector_input(returns, sector_col)
-
-        # Handle missing data
-        returns_clean = self._handle_missing_data(returns)
-
         # Convert to wide format for computation
-        returns_matrix, tickers = self._convert_to_wide_format(returns_clean)
+        returns_matrix, tickers = self._convert_to_wide_format(returns)
         self.asset_names_ = tickers
 
         # Step 1: Extract common factors and compute residuals
@@ -102,31 +90,21 @@ class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
         # Step 2: Determine sector/cluster assignments
         # Note: BlockDiagonal clusters on residuals, not raw returns (unique feature)
         if self.clustering_method == "predefined":
-            self.sector_mapping_ = self._determine_sector_assignments(
-                returns_matrix, tickers, returns_clean, sector_col
-            )
+            self.sector_mapping_ = self._determine_sector_assignments(returns_matrix, tickers, returns, sector_col)
         else:
             # Cluster on residuals (after factor extraction)
-            self.sector_mapping_ = self._discover_sectors_hierarchical(
-                residuals, tickers, n_clusters=None
-            )
+            self.sector_mapping_ = self._discover_sectors_hierarchical(residuals, tickers, n_clusters=None)
 
         # Step 3: Estimate per-block residual covariances
         sector_groups = self.get_sector_groups()
-        block_covariances = self._estimate_block_covariances(
-            residuals, tickers, sector_groups
-        )
+        block_covariances = self._estimate_block_covariances(residuals, tickers, sector_groups)
 
         # Step 4: Reconstruct full covariance matrix
-        self.cov_matrix_ = self._reconstruct_covariance(
+        return self._reconstruct_covariance(
             factor_loadings, factor_cov, block_covariances, tickers, self.sector_mapping_
         )
 
-        return self.cov_matrix_
-
-    def _extract_factors(
-        self, returns: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _extract_factors(self, returns: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Extract common factors using PCA and compute residuals.
 
@@ -228,9 +206,7 @@ class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
 
         return block_covariances
 
-    def _ledoit_wolf_shrinkage(
-        self, residuals: np.ndarray, sample_cov: np.ndarray
-    ) -> np.ndarray:
+    def _ledoit_wolf_shrinkage(self, residuals: np.ndarray, sample_cov: np.ndarray) -> np.ndarray:
         """
         Apply Ledoit-Wolf shrinkage to block covariance.
 
@@ -264,9 +240,7 @@ class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
 
         return shrunk_cov
 
-    def _compute_shrinkage_intensity(
-        self, residuals: np.ndarray, sample_cov: np.ndarray, target: np.ndarray
-    ) -> float:
+    def _compute_shrinkage_intensity(self, residuals: np.ndarray, sample_cov: np.ndarray, target: np.ndarray) -> float:
         """
         Compute optimal shrinkage intensity (Ledoit-Wolf formula).
 
@@ -286,11 +260,11 @@ class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
         # π̂: sum of asymptotic variances
         pi_hat = 0.0
         for t in range(T):
-            r_t = residuals_centered[t:t+1, :].T
+            r_t = residuals_centered[t : t + 1, :].T
             outer_t = r_t @ r_t.T
             diff = outer_t - sample_cov
-            pi_hat += np.sum(diff ** 2)
-        pi_hat /= T ** 2
+            pi_hat += np.sum(diff**2)
+        pi_hat /= T**2
 
         # ρ̂: squared Frobenius norm of (S - F)
         rho_hat = np.sum((sample_cov - target) ** 2)
@@ -304,9 +278,7 @@ class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
 
         return delta
 
-    def _apply_bias_correction(
-        self, cov: np.ndarray, T: int, p: int
-    ) -> np.ndarray:
+    def _apply_bias_correction(self, cov: np.ndarray, T: int, p: int) -> np.ndarray:
         """
         Apply eigenvalue bias correction when p > T.
 
@@ -355,15 +327,13 @@ class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
         Returns:
             Full covariance matrix (p×p)
         """
-        p = len(tickers)
+        len(tickers)
 
         # Factor component: B·Cov(F)·B^T
         factor_component = factor_loadings @ factor_cov @ factor_loadings.T
 
         # Block-diagonal residual component
-        residual_component = create_block_diagonal_matrix(
-            block_covariances, tickers, ticker_sector_map
-        )
+        residual_component = create_block_diagonal_matrix(block_covariances, tickers, ticker_sector_map)
 
         # Full covariance
         full_cov = factor_component + residual_component

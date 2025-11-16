@@ -14,6 +14,7 @@ Output format:
 
 from abc import ABC, abstractmethod
 from typing import Optional
+
 import numpy as np
 import polars as pl
 
@@ -26,7 +27,7 @@ class BaseCovarianceEstimator(ABC):
     and produces an N×N covariance matrix.
     """
 
-    def __init__(self, handle_missing: str = 'drop'):
+    def __init__(self, handle_missing: str = "drop"):
         """
         Initialize covariance estimator.
 
@@ -39,10 +40,11 @@ class BaseCovarianceEstimator(ABC):
         self.cov_matrix_: Optional[np.ndarray] = None
         self.asset_names_: Optional[list] = None
 
-    @abstractmethod
     def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
-        Estimate covariance matrix from returns.
+        Template method that enforces validation for all estimators.
+
+        Subclasses should implement _fit_impl() instead of overriding this.
 
         Args:
             returns: DataFrame of returns (T×N)
@@ -53,7 +55,38 @@ class BaseCovarianceEstimator(ABC):
         Returns:
             Covariance matrix (N×N numpy array)
         """
-        pass
+        # 1. Handle missing data
+        returns_clean = self._handle_missing_data(returns)
+
+        # 2. Call subclass implementation
+        cov_matrix = self._fit_impl(returns_clean)
+
+        # 3. ALWAYS validate (enforced!)
+        self._validate_covariance_matrix(cov_matrix, check_symmetry=True, check_positive_definite=True)
+
+        # 4. Store result
+        self.cov_matrix_ = cov_matrix
+        self.asset_names_ = list(returns_clean.columns)
+
+        return cov_matrix
+
+    @abstractmethod
+    def _fit_impl(self, returns: pl.DataFrame) -> np.ndarray:
+        """
+        Subclasses implement this to calculate covariance matrix.
+
+        Args:
+            returns: Clean returns DataFrame (missing data already handled)
+
+        Returns:
+            Covariance matrix (N×N numpy array)
+
+        Note:
+            - Missing data has already been handled
+            - No need to set self.cov_matrix_ or self.asset_names_
+            - Just return the covariance matrix
+            - Validation will be applied automatically
+        """
 
     def get_covariance(self) -> np.ndarray:
         """
@@ -120,7 +153,7 @@ class BaseCovarianceEstimator(ABC):
         cov_matrix: np.ndarray,
         tol: float = 1e-10,
         check_symmetry: bool = True,
-        check_positive_definite: bool = True
+        check_positive_definite: bool = True,
     ) -> None:
         """
         Validate covariance matrix mathematical properties.
@@ -141,17 +174,13 @@ class BaseCovarianceEstimator(ABC):
         """
         # Check square
         if cov_matrix.ndim != 2 or cov_matrix.shape[0] != cov_matrix.shape[1]:
-            raise ValueError(
-                f"Covariance matrix must be square, got shape {cov_matrix.shape}"
-            )
+            raise ValueError(f"Covariance matrix must be square, got shape {cov_matrix.shape}")
 
         # Check symmetric
         if check_symmetry:
             if not np.allclose(cov_matrix, cov_matrix.T, atol=tol):
                 max_diff = np.max(np.abs(cov_matrix - cov_matrix.T))
-                raise ValueError(
-                    f"Covariance matrix must be symmetric. Max asymmetry: {max_diff:.2e}"
-                )
+                raise ValueError(f"Covariance matrix must be symmetric. Max asymmetry: {max_diff:.2e}")
 
         # Check positive semi-definite
         if check_positive_definite:
@@ -159,15 +188,10 @@ class BaseCovarianceEstimator(ABC):
             min_eigenvalue = np.min(eigenvalues)
             if min_eigenvalue < -tol:
                 raise ValueError(
-                    f"Covariance matrix must be positive semi-definite. "
-                    f"Minimum eigenvalue: {min_eigenvalue:.2e}"
+                    f"Covariance matrix must be positive semi-definite. " f"Minimum eigenvalue: {min_eigenvalue:.2e}"
                 )
 
-    def _ensure_positive_definite(
-        self,
-        cov_matrix: np.ndarray,
-        min_eigenvalue: float = 1e-8
-    ) -> np.ndarray:
+    def _ensure_positive_definite(self, cov_matrix: np.ndarray, min_eigenvalue: float = 1e-8) -> np.ndarray:
         """
         Ensure covariance matrix is positive definite via eigenvalue clipping.
 
@@ -216,10 +240,10 @@ class BaseCovarianceEstimator(ABC):
                     pl.when(pl.col(col).is_nan()).then(None).otherwise(pl.col(col)).alias(col)
                 )
 
-        if self.handle_missing == 'drop':
+        if self.handle_missing == "drop":
             # Drop rows with any null
             return returns.drop_nulls()
-        elif self.handle_missing == 'pairwise':
+        elif self.handle_missing == "pairwise":
             # Keep all data, use pairwise complete observations
             return returns
         else:
