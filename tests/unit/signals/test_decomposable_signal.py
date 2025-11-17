@@ -59,8 +59,8 @@ class TestDecomposableSignal:
         assert isinstance(components, dict)
         assert 'component_a' in components
         assert 'component_b' in components
-        assert components['component_a'].frame_equal(comp_a)
-        assert components['component_b'].frame_equal(comp_b)
+        assert components['component_a'].equals(comp_a)
+        assert components['component_b'].equals(comp_b)
 
     def test_get_composite_signal(self):
         """get_composite_signal() should combine components using weights"""
@@ -94,7 +94,7 @@ class TestDecomposableSignal:
             }
         )
 
-        assert composite.frame_equal(expected)
+        assert composite.equals(expected)
 
     def test_component_weights_attribute(self):
         """Should be able to set and get component_weights"""
@@ -126,7 +126,7 @@ class TestDecomposableSignal:
         # Expected: (1 + 2 + 3) / 3 = 2.0
         expected = pl.DataFrame({'ES': [2.0]})
 
-        assert composite.frame_equal(expected)
+        assert composite.equals(expected)
 
     def test_custom_weights(self):
         """Should support different weights per component"""
@@ -152,7 +152,7 @@ class TestDecomposableSignal:
         # Expected: 0.1*10 + 0.2*20 + 0.7*30 = 1 + 4 + 21 = 26.0
         expected = pl.DataFrame({'ES': [26.0]})
 
-        assert composite.frame_equal(expected)
+        assert composite.equals(expected)
 
     def test_zero_weight(self):
         """Component with zero weight should be excluded from composite"""
@@ -169,7 +169,7 @@ class TestDecomposableSignal:
         # Expected: 0.0*5 + 1.0*10 = 10.0
         expected = pl.DataFrame({'ES': [10.0]})
 
-        assert composite.frame_equal(expected)
+        assert composite.equals(expected)
 
     def test_single_component(self):
         """Should handle single component edge case"""
@@ -182,7 +182,7 @@ class TestDecomposableSignal:
         # Expected: 1.0 * 7.5 = 7.5
         expected = pl.DataFrame({'ES': [7.5]})
 
-        assert composite.frame_equal(expected)
+        assert composite.equals(expected)
 
     def test_negative_weights(self):
         """Should allow negative weights for inverse positioning"""
@@ -199,7 +199,7 @@ class TestDecomposableSignal:
         # Expected: 1.0*10 + (-0.5)*5 = 10 - 2.5 = 7.5
         expected = pl.DataFrame({'ES': [7.5]})
 
-        assert composite.frame_equal(expected)
+        assert composite.equals(expected)
 
     def test_composite_signal_shape(self):
         """Composite signal should match component shape"""

@@ -114,6 +114,7 @@ class TestFXRateFetching:
             mock_fetch.return_value = mock_df
 
             mdp = AlphaVantageFXMDP(api_key="test_key")
+            mdp.alphavantage_fx_cache = {}  # Mock cache attribute
 
             # Fetch data
             df = mdp.get_fx_rates(
@@ -154,6 +155,7 @@ class TestFXRateFetching:
             mock_fetch.side_effect = mock_fetch_side_effect
 
             mdp = AlphaVantageFXMDP(api_key="test_key")
+            mdp.alphavantage_fx_cache = {}  # Mock cache attribute
 
             df = mdp.get_fx_rates(
                 currencies=["BRL", "TRY", "MXN"],
@@ -175,6 +177,7 @@ class TestInterestRates:
 
         with patch.object(AlphaVantageFXMDP, 'zodb_open_cache'):
             mdp = AlphaVantageFXMDP(api_key="test_key")
+            mdp.alphavantage_fx_cache = {}  # Mock cache attribute
 
             df = mdp.get_interest_rates(currencies=["BRL", "TRY", "MXN"])
 
@@ -198,6 +201,7 @@ class TestInterestRates:
 
         with patch.object(AlphaVantageFXMDP, 'zodb_open_cache'):
             mdp = AlphaVantageFXMDP(api_key="test_key")
+            mdp.alphavantage_fx_cache = {}  # Mock cache attribute
 
             df = mdp.get_interest_rates(currencies=["BRL"])
 

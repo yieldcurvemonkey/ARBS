@@ -201,7 +201,7 @@ class TestEMFXCrossSectional:
         # ARRANGE
         signal = EMFXCarrySignal(
             funding_currency="USD",
-            normalization="rank",
+            standardize=True,  # z-score normalization (similar to rank for cross-sectional)
             risk_adjust=False
         )
 
@@ -456,7 +456,7 @@ class TestEMFXIntegration:
         signal = EMFXCarrySignal(
             funding_currency="USD",
             risk_adjust=True,
-            normalization="z_score"
+            standardize=True  # z-score normalization
         )
 
         # Create realistic EM currency data

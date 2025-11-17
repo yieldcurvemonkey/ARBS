@@ -11,6 +11,13 @@ import polars as pl
 import numpy as np
 from datetime import datetime, timedelta
 
+# Check if yfinance is available
+try:
+    import yfinance
+    HAS_YFINANCE = True
+except ImportError:
+    HAS_YFINANCE = False
+
 
 def load_real_market_data(
     universe: str = "dow30",
@@ -225,6 +232,7 @@ def validate_data_quality(df: pl.DataFrame) -> dict[str, any]:
 # ===== TESTS =====
 
 
+@pytest.mark.skipif(not HAS_YFINANCE, reason="yfinance not installed")
 class TestRealDataLoading:
     """Tests for real market data loading."""
 
@@ -270,6 +278,7 @@ class TestRealDataLoading:
         assert mapping["PG"] in ["Consumer Staples", "Consumer Defensive"]
 
 
+@pytest.mark.skipif(not HAS_YFINANCE, reason="yfinance not installed")
 class TestDataQuality:
     """Tests for data quality validation."""
 

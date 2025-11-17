@@ -25,6 +25,13 @@ import sys
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+# Check if yfinance is available
+try:
+    import yfinance
+    HAS_YFINANCE = True
+except ImportError:
+    HAS_YFINANCE = False
+
 from Risk.Covariance.SectorBased.BlockDiagonal.BlockDiagonalCovariance import (
     BlockDiagonalCovariance,
 )
@@ -94,6 +101,7 @@ def validate_covariance_matrix(cov: np.ndarray, n_assets: int) -> dict:
     return metrics
 
 
+@pytest.mark.skipif(not HAS_YFINANCE, reason="yfinance not installed")
 class TestBlockDiagonalValidation:
     """Tests for BlockDiagonalCovariance on real data."""
 
@@ -152,6 +160,7 @@ class TestBlockDiagonalValidation:
             # More factors should generally improve conditioning
             assert metrics["condition_number"] < 200
 
+@pytest.mark.skipif(not HAS_YFINANCE, reason="yfinance not installed")
 
 class TestTwoStepValidation:
     """Tests for TwoStepCovariance on real data."""
@@ -222,6 +231,7 @@ class TestTwoStepValidation:
         # RMT filtering should generally improve conditioning
         assert metrics_rmt["condition_number"] <= metrics_no_rmt["condition_number"] * 2
 
+@pytest.mark.skipif(not HAS_YFINANCE, reason="yfinance not installed")
 
 class TestStochasticBlockValidation:
     """Tests for StochasticBlockCovariance on real data."""
@@ -312,6 +322,7 @@ class TestStochasticBlockValidation:
         # Should have some cross-sector correlations with alpha < 1
         assert cross_sector_count > 0, "No cross-sector correlations found"
 
+@pytest.mark.skipif(not HAS_YFINANCE, reason="yfinance not installed")
 
 class TestModelComparison:
     """Tests comparing all three models."""

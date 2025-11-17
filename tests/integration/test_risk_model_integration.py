@@ -555,7 +555,7 @@ class TestOptimizerIntegration:
         # Verify valid weights
         assert len(weights) == len(mock_returns.columns)
         assert np.isclose(weights.sum(), 1.0)  # Budget constraint
-        assert all(weights >= 0)  # Long-only
+        assert all(w >= 0 for w in weights.values())  # Long-only
 
     def test_ledoit_wolf_with_optimizer(self, mock_returns):
         """LedoitWolfShrinkage works with optimizer."""
@@ -582,7 +582,7 @@ class TestOptimizerIntegration:
         # Verify valid weights
         assert len(weights) == len(mock_returns.columns)
         assert np.isclose(weights.sum(), 1.0)
-        assert all(weights >= 0)
+        assert all(w >= 0 for w in weights.values())
 
     def test_all_five_models_with_optimizer(self, mock_returns):
         """All 5 risk models work with optimizer."""
@@ -610,7 +610,7 @@ class TestOptimizerIntegration:
             # Verify valid weights
             assert len(weights) == len(mock_returns.columns), f"{name} failed"
             assert np.isclose(weights.sum(), 1.0), f"{name} failed budget constraint"
-            assert all(weights >= 0), f"{name} failed long-only constraint"
+            assert all(w >= 0 for w in weights.values()), f"{name} failed long-only constraint"
 
     def test_different_models_produce_different_weights(self):
         """Different risk models produce different optimal weights."""
@@ -656,7 +656,9 @@ class TestOptimizerIntegration:
         # With correlation structure and balanced alphas, weights should differ
         # Diagonal ignores correlation → may over-diversify
         # Sample considers correlation → may concentrate more
-        max_diff = np.max(np.abs(sample_weights.to_numpy() - diagonal_weights.to_numpy()))
+        sample_arr = np.array(list(sample_weights.values()))
+        diagonal_arr = np.array(list(diagonal_weights.values()))
+        max_diff = np.max(np.abs(sample_arr - diagonal_arr))
         assert max_diff > 0.01  # At least 1% difference in some weight
 
 
