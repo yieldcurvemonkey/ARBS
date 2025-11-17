@@ -1,0 +1,145 @@
+# EM FX Carry Strategy
+# Interest rate differential strategy for emerging market currencies
+# NEW CAPABILITY: Trades EM FX carry based on UIP violations
+
+strategy:
+  name: "EM FX Carry Trade"
+  type: "em_fx_carry"
+  description: "Long high-yield EM currencies, short low-yield (vs USD funding)"
+  mode: "signal"  # Signal-based (Grinold-Kahn framework)
+
+# Instrument universe (EM currencies)
+universe:
+  asset_class: "fx"
+  instruments:
+    - "BRL"  # Brazilian Real (high carry)
+    - "TRY"  # Turkish Lira (high carry)
+    - "ZAR"  # South African Rand (medium carry)
+    - "MXN"  # Mexican Peso (medium carry)
+    - "RUB"  # Russian Ruble (high carry, high risk)
+    - "INR"  # Indian Rupee (medium carry)
+    - "IDR"  # Indonesian Rupiah (medium carry)
+    - "CLP"  # Chilean Peso (medium carry)
+  funding_currency: "USD"  # Borrow in USD (low yield)
+  source: "live"
+
+# Signal configuration
+signals:
+  - name: "em_fx_carry"
+    type: "carry"
+    config:
+      lookback_days: 60         # 60-day window for FX volatility
+      risk_adjust: true         # Adjust carry by FX volatility (carry-to-risk)
+      normalization: "z_score"  # Z-score normalization across currencies
+      long_threshold: 0.5       # Long if z-score > 0.5
+      short_threshold: -0.5     # Short if z-score < -0.5
+      # UIP violation detection
+      check_uip: true           # Check for UIP violations (alpha opportunity)
+      forward_premium_adjust: true  # Adjust for forward premium
+      # Carry calculation
+      interest_differential: true   # Use interest rate differentials
+      annualize: true               # Annualize carry rates
+    weight: 1.0
+
+# Alpha generation
+alpha:
+  IC: 0.10          # Information Coefficient (carry has high IC historically)
+  method: "static"  # Use fixed IC
+  # Carry trade IC is among the highest of factor strategies
+
+# Risk model
+risk:
+  covariance: "ewma"          # EWMA for FX (faster adaptation to regime change)
+  lookback: 60                # 60-day window
+  decay: 0.94                 # EWMA decay factor (6% weight on new data)
+  volatility_target: 0.12     # Target 12% annualized volatility
+  # FX carry has moderate volatility with negative skew (crash risk)
+
+# Portfolio optimizer
+optimizer:
+  type: "mean_variance"  # Mean-variance (Markowitz) optimization
+  risk_aversion: 1.0     # Moderate risk aversion
+  constraints:
+    long_only: false       # Allow long/short (dollar-neutral)
+    max_position: 0.30     # Max 30% in any single currency (diversify)
+    leverage: 2.0          # Allow 200% gross exposure
+    dollar_neutral: true   # Sum of weights = 0 (fund in USD)
+    # EM-specific constraints
+    max_em_high_risk: 0.40  # Max 40% in high-risk EM (TRY, RUB)
+    concentration_limit: 3  # At least 3 currencies with >10% weight
+
+# Execution parameters
+execution:
+  rebalance_frequency: "monthly"  # Rebalance monthly (carry is slow-moving)
+  transaction_costs: 0.0005       # 5 bps transaction cost (FX spreads)
+  calendar: "FX"                  # FX market calendar (24/5)
+  slippage: 0.0010                # 10 bps slippage (EM FX less liquid)
+  # Carry-specific execution
+  roll_days: [1, 2, 3]  # Rebalance on first 3 days of month (spread out)
+
+# Risk management (carry crash protection)
+risk_management:
+  stop_loss: 0.15         # Stop-loss at 15% drawdown (carry crash protection)
+  volatility_scaling: true  # Scale down positions in high-vol regimes
+  vol_threshold: 0.20     # Reduce exposure if realized vol > 20%
+  correlation_limit: 0.70  # Avoid currencies with >0.70 correlation to USD
+  # Carry crash indicators
+  vix_threshold: 25       # Reduce exposure if VIX > 25
+  funding_stress: true    # Monitor USD funding stress (LIBOR-OIS, FRA-OIS)
+
+# Backtest configuration
+backtest:
+  start_date: "2020-01-01"  # Longer backtest for carry (includes COVID crash)
+  end_date: "2024-12-31"
+  initial_capital: 1000000.0  # $1M starting capital
+  currency: "USD"
+
+# Strategy Logic:
+# 1. Borrow in low-yield currency (USD, typically 0-5%)
+# 2. Lend in high-yield EM currency (e.g., BRL 13.75%, TRY 25%)
+# 3. Profit = interest differential - FX depreciation
+# 4. Calculate carry: target_rate - funding_rate
+# 5. Risk-adjust: carry-to-risk = carry / FX_volatility (Sharpe-like)
+# 6. Check UIP violation: carry - forward_premium (alpha exists if positive)
+# 7. Normalize carry signals to z-scores across EM universe
+# 8. Long currencies with z > 0.5, short currencies with z < -0.5
+# 9. Generate alphas: alpha = IC × Vol × z_carry
+# 10. Optimize for dollar-neutral portfolio (fund in USD)
+# 11. Rebalance monthly (carry is slow-moving, minimize transaction costs)
+# 12. Monitor crash risk: VIX, USD stress, realized volatility
+#
+# Academic Foundation:
+# - Lustig, Roussanov, Verdelhan (2011): "Common Risk Factors in Currency Markets"
+# - Burnside, Eichenbaum, Rebelo (2011): "Carry Trade and Momentum in Currency Markets"
+# - Menkhoff, Sarno, Schmeling, Schrimpf (2012): "Carry Trades and Global FX Volatility"
+# - Uncovered Interest Parity (UIP) violation is the foundation of carry alpha
+#
+# Key Concepts:
+# - Carry: Interest rate differential (e.g., BRL 13.75% - USD 5.5% = 8.25%)
+# - Forward Premium: (Forward FX - Spot FX) / Spot FX
+# - UIP Violation: High-yield currencies don't depreciate as much as theory predicts
+# - Carry-to-Risk: carry / FX_vol (risk-adjusted carry, like Sharpe ratio)
+# - Dollar Neutral: Sum of long/short positions = 0 (funded in USD)
+#
+# Expected Performance:
+# - Sharpe Ratio: 0.6-1.0 (high Sharpe in calm markets)
+# - IC: 0.08-0.12 (carry has very high IC)
+# - Turnover: Low (monthly rebalance)
+# - Risk: Negative skew (carry crash risk), fat tails
+# - Carry crashes: Large drawdowns during risk-off events (2008, 2020 COVID)
+# - Best in low-volatility, risk-on regimes
+# - Struggles in risk-off, high-volatility, USD strength regimes
+#
+# Risk Factors:
+# - Negative skew: Small gains most of the time, large losses during crashes
+# - USD strength: When USD rallies, all EM currencies depreciate
+# - Global risk-off: Flight to safety (VIX spike, EM selloff)
+# - Country-specific risk: Political instability, inflation, default risk
+# - Liquidity risk: EM FX can gap wider in stress
+#
+# Mitigation:
+# - Diversification: At least 3-5 EM currencies
+# - Vol targeting: Scale down in high-volatility regimes
+# - Stop-loss: Exit at 15% drawdown to limit crash risk
+# - VIX monitoring: Reduce exposure when VIX > 25
+# - Correlation limits: Avoid highly correlated EM currencies

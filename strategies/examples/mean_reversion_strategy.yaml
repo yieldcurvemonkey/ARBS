@@ -1,0 +1,105 @@
+# Mean Reversion Strategy
+# Contrarian strategy using Bollinger bands and z-score extremes
+
+strategy:
+  name: "Mean Reversion Fade Extremes"
+  type: "mean_reversion"
+  description: "Fade extreme moves using statistical mean reversion"
+  mode: "signal"  # Signal-based (Grinold-Kahn framework)
+
+# Instrument universe
+universe:
+  asset_class: "futures"
+  instruments:
+    - "SFRZ4"  # SOFR Dec 2024
+    - "SFRH5"  # SOFR Mar 2025
+    - "SFRM5"  # SOFR Jun 2025
+    - "SFRU5"  # SOFR Sep 2025
+    - "SFRZ5"  # SOFR Dec 2025
+    - "SFRH6"  # SOFR Mar 2026
+    - "SFRM6"  # SOFR Jun 2026
+    - "SFRU6"  # SOFR Sep 2026
+  source: "live"  # Use live market data
+
+# Signal configuration
+signals:
+  - name: "bollinger_reversion"
+    type: "mean_reversion"
+    config:
+      lookback_days: 60         # 60-day window for mean/std calculation
+      method: "z_score"         # Z-score based signal
+      threshold: 2.0            # Only trigger when |z| > 2.0 (2 std devs)
+      fade_strength: true       # Stronger signal at higher extremes
+      max_signal: 1.0           # Cap signal at ±1.0
+      standardize: true         # Cross-sectional standardization
+      min_observations: 40      # Require at least 40 days of history
+    weight: 1.0
+
+# Alpha generation
+alpha:
+  IC: 0.04          # Information Coefficient (mean reversion typically lower IC)
+  method: "static"  # Use fixed IC
+  # Mean reversion IC is lower than momentum but still positive
+
+# Risk model
+risk:
+  covariance: "ledoit_wolf"   # Ledoit-Wolf shrinkage estimator
+  lookback: 60                # 60-day window for covariance
+  volatility_target: 0.08     # Target 8% annualized volatility (conservative)
+  # Mean reversion benefits from tighter risk control
+
+# Portfolio optimizer
+optimizer:
+  type: "mean_variance"  # Mean-variance (Markowitz) optimization
+  risk_aversion: 2.0     # More risk averse (mean reversion requires patience)
+  constraints:
+    long_only: false     # Allow long/short (dollar-neutral)
+    max_position: 0.25   # Max 25% in any single instrument (diversify)
+    leverage: 1.5        # Allow 150% gross exposure (75% long, 75% short)
+    dollar_neutral: true # Sum of weights = 0 (long/short balance)
+    turnover_limit: 2.0  # Limit annual turnover to 200%
+
+# Execution parameters
+execution:
+  rebalance_frequency: "weekly"  # Rebalance weekly (mean reversion is faster)
+  transaction_costs: 0.0001      # 1 bp transaction cost
+  calendar: "US"                 # US business day calendar
+  slippage: 0.0003               # 3 bps slippage
+  # Mean reversion requires faster execution to capture reversals
+
+# Backtest configuration
+backtest:
+  start_date: "2023-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 1000000.0  # $1M starting capital
+  currency: "USD"
+
+# Strategy Logic:
+# 1. Calculate 60-day rolling mean and standard deviation for each instrument
+# 2. Compute z-score: (current_price - rolling_mean) / rolling_std
+# 3. Generate signal only when |z| > 2.0 (Bollinger band threshold)
+# 4. Signal direction: if z > 2.0 → short (fade high), if z < -2.0 → long (fade low)
+# 5. Signal strength scales with z-score magnitude (stronger at extremes)
+# 6. Standardize signals cross-sectionally across universe
+# 7. Convert to alphas: alpha = IC × Vol × signal
+# 8. Optimize for dollar-neutral portfolio
+# 9. Rebalance weekly to capture quick reversions
+#
+# Academic Foundation:
+# - Avellaneda & Lee (2010): "Statistical Arbitrage in the U.S. Equities Market"
+# - Lo & MacKinlay (1990): "When Are Contrarian Profits Due to Stock Market Overreaction?"
+# - Bollinger Bands (1980s): Standard technical analysis for mean reversion
+# - Z-score threshold of 2.0 = ~95% confidence interval
+#
+# Expected Performance:
+# - Sharpe Ratio: 0.3-0.6 (lower than momentum but more consistent)
+# - IC: 0.02-0.05 (lower IC, higher breadth)
+# - Turnover: Medium-High (weekly rebalance)
+# - Risk: Lower volatility target, negative skew (tail risk from trends)
+# - Best in range-bound/choppy markets, struggles in strong trends
+#
+# Risk Management:
+# - Stop-loss at 3.0 std devs (exit if trend persists)
+# - Position size limits to prevent concentration
+# - Turnover limits to control transaction costs
+# - Weekly rebalancing to exit failed reversions quickly
