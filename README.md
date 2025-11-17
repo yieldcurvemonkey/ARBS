@@ -20,10 +20,17 @@ A modular research codebase for building yield curves, pricing interest rate der
   - Reference when: Setting up environment, adding features, debugging, looking up commands
   - **Keep this updated** when architecture changes, new backends added, or setup process modified
 
+- **[synthesis/](synthesis/)** - CLAUDE.md synthesis process documentation (November 2025)
+  - Complete documentation of parallel decomposition methodology
+  - Planning docs, analysis, validation reports
+  - Read synthesis/README.md for overview
+  - Historical record: how divergent CLAUDE.md files were merged
+
 **Maintenance Notes:**
 - CLAUDE.md changes rarely (universal rules and philosophy)
 - ARBS_ARCHITECTURE.md updates with code changes (architecture, patterns, commands)
 - Both files should cross-reference each other appropriately
+- synthesis/ is historical documentation (no updates needed)
 
 ---
 
@@ -50,8 +57,8 @@ A modular research codebase for building yield curves, pricing interest rate der
 This setup ensures a reproducible environment from scratch on a fresh VM:
 
 ```bash
-# 1. Verify Python version (3.11+ required)
-python --version  # Should show Python 3.11.x or later
+# 1. Verify Python version (3.12+ required)
+python --version  # Should show Python 3.12.x or later
 
 # 2. Clone repository
 git clone https://github.com/pfin/ARBS.git
@@ -63,13 +70,13 @@ pip install -r requirements.txt
 # 4. Verify installation by running tests
 python -m pytest tests/unit/ -v
 
-# 5. Expected result: 582 tests passing (updated 2025-11-14)
+# 5. Expected result: 1214 tests passing (updated 2025-11-17)
 ```
 
 ### Dependency Notes
 
 **Core Dependencies**:
-- Python 3.11+ (tested on 3.11.14)
+- Python 3.12+ (tested on 3.12.9)
 - numpy, scipy, polars (data processing)
 - QuantLib, rateslib (curve building and pricing)
 - ZODB, BTrees (persistent caching)
@@ -115,7 +122,7 @@ pip install -r requirements.txt
 ### 1) Environment
 
 **Prerequisites**:
-- Python 3.11+ (see Development Environment Setup above)
+- Python 3.12+ (see Development Environment Setup above)
 - All dependencies installed via `pip install -r requirements.txt`
 
 Some data builders (e.g., CME/fixings/SDR) may require credentials or local files. See MDP/IRSwaps/* modules
