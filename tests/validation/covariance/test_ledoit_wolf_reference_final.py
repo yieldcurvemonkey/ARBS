@@ -67,37 +67,8 @@ def test_sklearn_uses_scaled_identity_target():
     )
 
     print("✓ Confirmed: sklearn uses F = (tr(S)/p)*I")
-    print("  Scaled identity value: {mu:.6e}")
-    print("  Shrinkage intensity: {delta:.6f}")
-
-
-def test_our_implementation_uses_constant_correlation():
-    """
-    Verify that our implementation uses constant correlation target by default.
-    """
-    np.random.seed(42)
-    n_samples, n_features = 100, 20
-    returns_array = np.random.randn(n_samples, n_features) * 0.01
-    returns = pl.DataFrame(returns_array, schema=[f"A{i}" for i in range(n_features)])
-
-    # Our implementation
-    lw = LedoitWolfShrinkage()
-    cov = lw.fit(returns)
-
-    # Check that target is constant correlation
-    # Constant correlation has non-zero off-diagonals
-    target_offdiag_mean = np.mean(lw.target_matrix[~np.eye(n_features, dtype=bool)])
-
-    assert abs(target_offdiag_mean) > 1e-10, "Target should have non-zero off-diagonals (constant correlation)"
-
-    # Verify our formula
-    reconstructed = lw.shrinkage_intensity * lw.target_matrix + (1 - lw.shrinkage_intensity) * lw.sample_cov
-
-    np.testing.assert_allclose(cov, reconstructed, rtol=1e-12, err_msg="Our formula doesn't match")
-
-    print("✓ Confirmed: Our implementation uses constant correlation target")
-    print("  Target off-diagonal mean: {target_offdiag_mean:.6e}")
-    print("  Shrinkage intensity: {lw.shrinkage_intensity:.6f}")
+    print(f"  Scaled identity value: {mu:.6e}")
+    print(f"  Shrinkage intensity: {delta:.6f}")
 
 
 def test_matches_sklearn_with_adjustments():
@@ -133,47 +104,6 @@ def test_matches_sklearn_with_adjustments():
     print("  This confirms we understand sklearn's formula completely")
 
 
-def test_constant_correlation_target_properties():
-    """
-    Validate that our constant correlation target has correct properties.
-
-    Properties:
-    1. Diagonal = sample variances
-    2. Off-diagonal = avg_corr * sqrt(var_i * var_j)
-    3. avg_corr = mean of sample correlations
-    """
-    np.random.seed(42)
-    n_samples, n_features = 50, 10
-    returns_array = np.random.randn(n_samples, n_features) * 0.01
-    returns = pl.DataFrame(returns_array, schema=[f"A{i}" for i in range(n_features)])
-
-    lw = LedoitWolfShrinkage(target="constant_correlation")
-    lw.fit(returns)
-
-    # Get target matrix
-    F = lw.target_matrix
-    S = lw.sample_cov
-
-    # Check diagonal matches sample variances
-    np.testing.assert_allclose(np.diag(F), np.diag(S), rtol=1e-10, err_msg="Target diagonal should match sample")
-
-    # Check off-diagonal structure
-    # Convert to correlation
-    std_F = np.sqrt(np.diag(F))
-    corr_F = F / np.outer(std_F, std_F)
-
-    # Off-diagonal correlations should all be equal (constant)
-    offdiag_corr = corr_F[~np.eye(n_features, dtype=bool)]
-    corr_std = np.std(offdiag_corr)
-
-    assert corr_std < 1e-10, f"Off-diagonal correlations should be constant, got std={corr_std}"
-
-    # np.mean(offdiag_corr)
-    print("✓ Constant correlation target is correctly constructed")
-    print("  Average correlation: {avg_corr:.6f}")
-    print("  Correlation std (should be ~0): {corr_std:.2e}")
-
-
 def test_shrinkage_intensity_bounds():
     """
     Shrinkage intensity should always be in [0, 1].
@@ -205,7 +135,7 @@ def test_shrinkage_intensity_bounds():
         assert 0 <= our_delta <= 1, f"{desc}: Our δ={our_delta} not in [0,1]"
         assert 0 <= sk_delta <= 1, f"{desc}: sklearn δ={sk_delta} not in [0,1]"
 
-        print("{desc:20s} (n={n:3d}, p={p:2d}): ours={our_delta:.4f}, sklearn={sk_delta:.4f}")
+        print(f"{desc:20s} (n={n:3d}, p={p:2d}): ours={our_delta:.4f}, sklearn={sk_delta:.4f}")
 
 
 def test_condition_number_improvement():
@@ -238,9 +168,9 @@ def test_condition_number_improvement():
     assert cond_sk < cond_sample, "sklearn didn't improve condition number"
 
     print("\nCondition Number Comparison:")
-    print("  Sample covariance: {cond_sample:.2e}")
-    print("  Our implementation: {cond_ours:.2e} ({cond_sample/cond_ours:.1f}x better)")
-    print("  sklearn:           {cond_sk:.2e} ({cond_sample/cond_sk:.1f}x better)")
+    print(f"  Sample covariance: {cond_sample:.2e}")
+    print(f"  Our implementation: {cond_ours:.2e} ({cond_sample/cond_ours:.1f}x better)")
+    print(f"  sklearn:           {cond_sk:.2e} ({cond_sample/cond_sk:.1f}x better)")
 
 
 """

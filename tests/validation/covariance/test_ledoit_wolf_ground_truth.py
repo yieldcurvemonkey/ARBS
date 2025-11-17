@@ -61,20 +61,13 @@ def test_extreme_shrinkage_cases():
     estimator.fit(returns)
     shrinkage_many = estimator.get_shrinkage_intensity()
 
-    # Case 3: Very low noise → minimal shrinkage
-    n_samples, n_features = 100, 10
-    returns_array = np.random.randn(n_samples, n_features) * 0.0001
-    returns = pl.DataFrame(returns_array, schema=[f"A{i}" for i in range(n_features)])
-
-    estimator = LedoitWolfShrinkage()
-    estimator.fit(returns)
-    shrinkage_low_noise = estimator.get_shrinkage_intensity()
-
-    # Verify relationships
+    # Verify relationship: fewer samples → more shrinkage
     assert (
         shrinkage_few > shrinkage_many
     ), f"Few samples ({shrinkage_few:.4f}) should have more shrinkage than many samples ({shrinkage_many:.4f})"
-    assert shrinkage_low_noise < 0.01, f"Low noise should have minimal shrinkage, got {shrinkage_low_noise:.4f}"
+
+    # Note: Shrinkage depends on sample size and dimensionality, not noise level
+    # Low noise doesn't imply low shrinkage if T/N ratio is small
 
 
 def test_shrinkage_improves_condition_number():

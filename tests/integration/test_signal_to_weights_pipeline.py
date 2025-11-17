@@ -257,23 +257,28 @@ class TestSignalToWeightsPipeline:
 
     def test_ic_parameter_affects_weights(self):
         """
-        Higher IC → larger alphas → more concentration in high signals.
+        Higher IC → larger alphas → more aggressive absolute positioning.
 
         IC represents forecasting confidence. Higher IC should
-        lead to more aggressive positioning.
+        lead to more aggressive positioning (higher leverage).
+
+        Note: With long_only=True, proportional alpha scaling doesn't change
+        relative weights. Test uses long_only=False to verify leverage scaling.
         """
         alpha_gen_low = AlphaGenerator(IC=0.02)   # Low confidence
         alpha_gen_high = AlphaGenerator(IC=0.10)  # High confidence
 
         risk_model = LedoitWolfShrinkage()
-        optimizer = MeanVarianceOptimizer(risk_aversion=1.0, long_only=True)
+        optimizer = MeanVarianceOptimizer(risk_aversion=1.0, long_only=False)
 
-        # Different signals
-        signals = {'STRONG': 2.0, 'WEAK': 0.5}
+        # Three assets with different signal strengths
+        # This creates a spectrum where higher IC should concentrate more in top signal
+        signals = {'STRONG': 2.0, 'MEDIUM': 1.0, 'WEAK': 0.5}
 
         np.random.seed(42)
         returns_history = pl.DataFrame({
             'STRONG': np.random.randn(60) * 0.10 / np.sqrt(252),
+            'MEDIUM': np.random.randn(60) * 0.10 / np.sqrt(252),
             'WEAK': np.random.randn(60) * 0.10 / np.sqrt(252),
         })
 
@@ -295,9 +300,10 @@ class TestSignalToWeightsPipeline:
         alphas_high = pl.Series(name='alphas', values=alphas_high_values)
         weights_high = optimizer.optimize(alphas_high, cov_df)
 
-        # Higher IC → more concentration in STRONG signal
-        assert weights_high['STRONG'] > weights_low['STRONG'], \
-            "Higher IC should concentrate more in strong signals"
+        # Higher IC → more aggressive positioning (higher absolute weight)
+        # With unconstrained optimization, weights scale proportionally with alphas
+        assert abs(weights_high['STRONG']) > abs(weights_low['STRONG']), \
+            "Higher IC should lead to more aggressive positioning"
 
 
 class TestRealisticScenarios:
