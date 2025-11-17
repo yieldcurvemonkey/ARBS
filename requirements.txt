@@ -35,6 +35,9 @@ yfinance>=0.2.49
 ujson==5.10.0
 tqdm==4.67.1
 
+# Configuration
+pyyaml==6.0.2
+
 # Visualization
 matplotlib==3.10.5
 plotly==6.3.1
