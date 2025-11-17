@@ -182,6 +182,12 @@ class StochasticBlockCovariance(SectorBasedCovarianceEstimator):
         """
         Apply Ledoit-Wolf shrinkage to covariance matrix.
 
+        NOTE: This uses a simplified Ledoit-Wolf formula different from the canonical
+        implementation in shrinkage_utils.py. The simplified formula:
+        1. Uses mean variance in the target: Ψ = σ̄²·[(1-ρ̄)·I + ρ̄·11ᵀ]
+        2. Uses asymptotic approximation for shrinkage intensity
+        This is intentional for computational efficiency in the stochastic block model.
+
         Args:
             returns: T×n returns matrix for a single sector
 
