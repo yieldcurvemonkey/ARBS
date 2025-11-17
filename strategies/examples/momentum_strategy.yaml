@@ -1,0 +1,92 @@
+# Momentum Strategy
+# Trend-following strategy using 12-month price momentum
+
+strategy:
+  name: "Momentum Trend Following"
+  type: "momentum"
+  description: "Long winners, short losers using 12-month momentum"
+  mode: "signal"  # Signal-based (Grinold-Kahn framework)
+
+# Instrument universe
+universe:
+  asset_class: "futures"
+  instruments:
+    - "SFRZ4"  # SOFR Dec 2024
+    - "SFRH5"  # SOFR Mar 2025
+    - "SFRM5"  # SOFR Jun 2025
+    - "SFRU5"  # SOFR Sep 2025
+    - "SFRZ5"  # SOFR Dec 2025
+    - "SFRH6"  # SOFR Mar 2026
+    - "SFRM6"  # SOFR Jun 2026
+    - "SFRU6"  # SOFR Sep 2026
+  source: "live"  # Use live market data
+
+# Signal configuration
+signals:
+  - name: "price_momentum"
+    type: "momentum"
+    config:
+      lookback_days: 252        # 12-month (252 trading days) momentum
+      method: "log_returns"     # Cumulative log returns
+      skip_recent: 21           # Skip last 21 days (1 month) for reversal
+      standardize: true         # Convert to z-scores
+      min_observations: 200     # Require at least 200 days of history
+    weight: 1.0
+
+# Alpha generation
+alpha:
+  IC: 0.08          # Information Coefficient (momentum typically higher IC)
+  method: "static"  # Use fixed IC
+
+# Risk model
+risk:
+  covariance: "ledoit_wolf"   # Ledoit-Wolf shrinkage estimator
+  lookback: 126               # 6-month window for covariance
+  volatility_target: 0.15     # Target 15% annualized volatility
+  # Momentum can have higher vol targeting
+
+# Portfolio optimizer
+optimizer:
+  type: "mean_variance"  # Mean-variance (Markowitz) optimization
+  risk_aversion: 0.5     # Less risk averse (momentum benefits from conviction)
+  constraints:
+    long_only: false     # Allow long/short (dollar-neutral)
+    max_position: 0.35   # Max 35% in any single instrument
+    leverage: 2.0        # Allow 200% gross exposure (100% long, 100% short)
+    dollar_neutral: true # Sum of weights = 0 (long/short balance)
+
+# Execution parameters
+execution:
+  rebalance_frequency: "monthly"  # Rebalance monthly (momentum is slower)
+  transaction_costs: 0.0001       # 1 bp transaction cost
+  calendar: "US"                  # US business day calendar
+  slippage: 0.0005                # 5 bps slippage for momentum trades
+
+# Backtest configuration
+backtest:
+  start_date: "2023-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 1000000.0  # $1M starting capital
+  currency: "USD"
+
+# Strategy Logic:
+# 1. Calculate 12-month cumulative returns for each instrument
+# 2. Skip last 1 month to avoid short-term reversals
+# 3. Standardize returns to z-scores across the universe
+# 4. Positive z-score → long (winner), negative → short (loser)
+# 5. Convert z-scores to alphas: alpha = IC × Vol × z
+# 6. Optimize for dollar-neutral portfolio with max alpha
+# 7. Rebalance monthly (lower turnover than high-frequency strategies)
+#
+# Academic Foundation:
+# - Jegadeesh & Titman (1993): "Returns to Buying Winners and Selling Losers"
+# - 12-month momentum is one of the strongest documented anomalies
+# - Works across asset classes (equities, bonds, commodities, FX)
+# - Skip recent month to avoid short-term mean reversion
+#
+# Expected Performance:
+# - Sharpe Ratio: 0.5-0.8 (depending on regime)
+# - IC: 0.05-0.10 (momentum has historically high IC)
+# - Turnover: Low (monthly rebalance)
+# - Risk: Higher volatility, positive skew in trends, negative skew in reversals
+# - Best in trending markets, struggles in choppy/range-bound markets
