@@ -26,10 +26,7 @@ from sklearn.decomposition import PCA
 
 from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import SectorBasedCovarianceEstimator
 from Risk.Covariance.SectorBased.sector_utils import create_block_diagonal_matrix
-from Risk.Covariance.shrinkage_utils import (
-    compute_constant_correlation_target,
-    compute_ledoit_wolf_shrinkage_intensity,
-)
+from sklearn.covariance import LedoitWolf
 
 
 class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
@@ -221,16 +218,11 @@ class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
         Returns:
             Shrunk covariance matrix
         """
-        # Compute constant correlation target using utility
-        target = compute_constant_correlation_target(residuals, sample_cov)
+        # Use sklearn's LedoitWolf directly (verified correct)
+        lw = LedoitWolf(store_precision=False, assume_centered=False)
+        lw.fit(residuals)
 
-        # Compute shrinkage intensity using utility
-        delta = compute_ledoit_wolf_shrinkage_intensity(residuals, sample_cov, target)
-
-        # Apply shrinkage
-        shrunk_cov = delta * target + (1 - delta) * sample_cov
-
-        return shrunk_cov
+        return lw.covariance_
 
     def _apply_bias_correction(self, cov: np.ndarray, T: int, p: int) -> np.ndarray:
         """

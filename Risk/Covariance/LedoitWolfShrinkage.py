@@ -1,21 +1,21 @@
-# ABOUTME: Ledoit-Wolf shrinkage covariance estimator (extends BaseCovarianceEstimator, industry standard, >5000 citations)
-# ABOUTME: Implements Σ̂_LW = δ*F + (1-δ)*S with data-driven shrinkage intensity for numerical stability
+# ABOUTME: Ledoit-Wolf shrinkage covariance estimator (wraps sklearn.covariance.LedoitWolf)
+# ABOUTME: Industry standard shrinkage with >5000 citations, data-driven optimal intensity
 """
 Ledoit-Wolf Shrinkage Covariance Estimator
 
-Implements the Ledoit & Wolf (2004) "Honey, I Shrunk the Sample Covariance Matrix"
-shrinkage estimator with >5000 citations (industry standard).
+Wraps sklearn's LedoitWolf implementation of the Ledoit & Wolf (2004)
+"Honey, I Shrunk the Sample Covariance Matrix" shrinkage estimator.
 
 Formula:
     Σ̂_LW = δ * F + (1-δ) * S
 
 Where:
-- S = sample covariance matrix
-- F = target matrix (structured, typically constant correlation)
+- S = sample covariance matrix (MLE: divides by n)
+- F = target matrix (constant correlation structure)
 - δ = shrinkage intensity (data-driven, optimal)
 
 Optimal Shrinkage Intensity:
-    δ* = min(1, κ̂/T)
+    δ* = max(0, min(1, κ̂/T))
 
 Where κ̂ estimates the loss from using sample covariance.
 
@@ -26,224 +26,103 @@ Advantages over Sample Covariance:
 4. Better out-of-sample portfolio variance
 
 From 2025 research: Most widely used shrinkage method in practice.
+
+Reference:
+    Ledoit, O., & Wolf, M. (2004). "Honey, I Shrunk the Sample Covariance Matrix"
+    Journal of Portfolio Management, 30(4), 110-119.
+    >5000 citations
 """
 
 from typing import Optional
 
 import numpy as np
 import polars as pl
+from sklearn.covariance import LedoitWolf as SklearnLedoitWolf
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
-from Risk.Covariance.shrinkage_utils import (
-    compute_constant_correlation_target,
-    compute_ledoit_wolf_shrinkage_intensity,
-)
 
 
 class LedoitWolfShrinkage(BaseCovarianceEstimator):
     """
-    Ledoit-Wolf shrinkage estimator (Ledoit & Wolf, 2004).
+    Ledoit-Wolf shrinkage estimator (wraps sklearn).
 
-    Shrinks sample covariance toward a structured target matrix,
+    Shrinks sample covariance toward constant correlation target,
     with data-driven shrinkage intensity.
 
     Attributes:
         shrinkage_intensity (float): Optimal δ ∈ [0, 1]
-        target_matrix (np.ndarray): Shrinkage target F
-        sample_cov (np.ndarray): Sample covariance S
+        sklearn_estimator: Underlying sklearn LedoitWolf estimator
     """
 
     def __init__(
         self,
-        target: str = "constant_correlation",
+        target: str = "constant_correlation",  # Only supports constant_correlation via sklearn
         handle_missing: str = "drop",
     ):
         """
         Initialize Ledoit-Wolf estimator.
 
         Args:
-            target: Shrinkage target type
-                - 'constant_correlation': Constant correlation model (default)
-                - 'diagonal': Diagonal matrix (uncorrelated assets)
-                - 'identity': Identity matrix
+            target: Shrinkage target type (only 'constant_correlation' supported)
+                Note: sklearn only supports constant correlation target
             handle_missing: How to handle missing data
+                - 'drop': Drop rows with any NaN values (default)
+                - 'pairwise': Use pairwise complete observations
+                  (handled by BaseCovarianceEstimator)
         """
         super().__init__(handle_missing=handle_missing)
+        if target != "constant_correlation":
+            raise ValueError(
+                f"Only 'constant_correlation' target is supported (sklearn limitation). "
+                f"Got: {target}"
+            )
         self.target_type = target
         self.shrinkage_intensity: Optional[float] = None
+        self.sklearn_estimator: Optional[SklearnLedoitWolf] = None
         self.target_matrix: Optional[np.ndarray] = None
         self.sample_cov: Optional[np.ndarray] = None
-        self.block_shrinkage_intensities_: Optional[dict] = None
 
     def _fit_impl(self, returns: pl.DataFrame) -> np.ndarray:
         """
-        Estimate Ledoit-Wolf shrinkage covariance matrix.
+        Fit Ledoit-Wolf estimator using sklearn.
 
         Args:
-            returns: Clean DataFrame of returns (T×N), missing data already handled
+            returns: DataFrame of returns (T×N), already cleaned by base class
 
         Returns:
             Shrinkage covariance matrix (N×N)
         """
-        # Calculate sample covariance
-        returns_np = returns.to_numpy()
-
-        # Use pairwise computation if requested
-        if self.handle_missing == "pairwise":
-            self.sample_cov = self._pairwise_covariance(returns_np)
-            # For shrinkage intensity calculation, use complete cases only
-            # (shrinkage intensity formula requires complete observations)
-            valid_rows = ~np.any(np.isnan(returns_np), axis=1)
-            returns_for_shrinkage = returns_np[valid_rows, :]
-        else:
-            # Standard covariance (drops rows with any NaN)
-            sample_cov = np.cov(returns_np.T)
-            # Ensure covariance is always 2D (np.cov returns scalar for single column)
-            self.sample_cov = np.atleast_2d(sample_cov)
-            returns_for_shrinkage = returns_np
-
-        # Calculate shrinkage target
-        self.target_matrix = self._compute_target(returns)
-
-        # Calculate optimal shrinkage intensity
-        self.shrinkage_intensity = self._compute_shrinkage_intensity(
-            returns_for_shrinkage, self.sample_cov, self.target_matrix
-        )
-
-        # Apply shrinkage: Σ̂_LW = δ * F + (1-δ) * S
-        return self.shrinkage_intensity * self.target_matrix + (1 - self.shrinkage_intensity) * self.sample_cov
-
-    def _pairwise_covariance(self, returns_np: np.ndarray) -> np.ndarray:
-        """
-        Compute covariance using pairwise complete observations.
-
-        For each pair of assets (i, j), compute covariance using only
-        observations where both assets have valid (non-NaN) values.
-
-        Args:
-            returns_np: Returns matrix (T×N) with possible NaN values
-
-        Returns:
-            Covariance matrix (N×N) computed pairwise
-        """
-        N = returns_np.shape[1]
-        cov_matrix = np.zeros((N, N))
-
-        for i in range(N):
-            for j in range(i, N):  # Symmetric, only compute upper triangle
-                # Get complete observations for this pair
-                valid_mask = ~(np.isnan(returns_np[:, i]) | np.isnan(returns_np[:, j]))
-                valid_i = returns_np[valid_mask, i]
-                valid_j = returns_np[valid_mask, j]
-
-                # Compute covariance for this pair
-                if len(valid_i) > 1:
-                    cov_ij = np.cov(valid_i, valid_j)[0, 1]
-                else:
-                    # Not enough observations, use 0
-                    cov_ij = 0.0
-
-                cov_matrix[i, j] = cov_ij
-                cov_matrix[j, i] = cov_ij  # Symmetric
-
-        return cov_matrix
-
-    def _compute_target(self, returns: pl.DataFrame) -> np.ndarray:
-        """
-        Compute shrinkage target matrix F.
-
-        Args:
-            returns: DataFrame of returns
-
-        Returns:
-            Target matrix F (N×N)
-        """
-        N = returns.shape[1]
-
-        if self.target_type == "diagonal":
-            # Diagonal: var(r_i) on diagonal, zeros off-diagonal
-            if self.handle_missing == "pairwise":
-                # Compute variances ignoring NaN
-                returns_np = returns.to_numpy()
-                variances = np.nanvar(returns_np, axis=0, ddof=1)
-            else:
-                variances = returns.var(ddof=1).to_numpy()
-            return np.diag(variances)
-
-        elif self.target_type == "identity":
-            # Identity matrix (all assets have unit variance, zero correlation)
-            return np.eye(N)
-
-        elif self.target_type == "constant_correlation":
-            # Constant correlation model (Ledoit-Wolf default)
-            return self._constant_correlation_target(returns)
-
-        else:
-            raise ValueError(f"Unknown target type: {self.target_type}")
-
-    def _constant_correlation_target(self, returns: pl.DataFrame) -> np.ndarray:
-        """
-        Compute constant correlation target.
-
-        Target matrix:
-            F_ij = {
-                σ_i²         if i = j (variance)
-                ρ̄ σ_i σ_j    if i ≠ j (constant correlation)
-            }
-
-        Where ρ̄ is the average correlation.
-
-        Args:
-            returns: DataFrame of returns
-
-        Returns:
-            Constant correlation matrix (N×N)
-        """
         # Convert to numpy
         returns_np = returns.to_numpy()
 
-        # Use pairwise covariance if needed
-        if self.handle_missing == "pairwise":
-            sample_cov = self._pairwise_covariance(returns_np)
-            # For constant correlation target calculation, use complete cases only
-            # (np.corrcoef requires complete observations)
-            valid_rows = ~np.any(np.isnan(returns_np), axis=1)
-            returns_clean = returns_np[valid_rows, :]
+        # Calculate sample covariance (MLE: divide by n, not n-1)
+        n = returns_np.shape[0]
+        returns_centered = returns_np - np.mean(returns_np, axis=0)
+        self.sample_cov = (returns_centered.T @ returns_centered) / n
+
+        # Use sklearn's LedoitWolf
+        self.sklearn_estimator = SklearnLedoitWolf(
+            store_precision=False,  # We don't need precision matrix
+            assume_centered=False,  # Returns are not centered
+            block_size=1000,  # Default block size for large N
+        )
+
+        # Fit and get covariance
+        self.sklearn_estimator.fit(returns_np)
+        cov_matrix = self.sklearn_estimator.covariance_
+
+        # Store shrinkage intensity
+        self.shrinkage_intensity = self.sklearn_estimator.shrinkage_
+
+        # Compute target matrix: Σ̂_LW = δ * F + (1-δ) * S
+        # Solve for F: F = (Σ̂_LW - (1-δ)*S) / δ
+        if self.shrinkage_intensity > 1e-10:
+            self.target_matrix = (cov_matrix - (1 - self.shrinkage_intensity) * self.sample_cov) / self.shrinkage_intensity
         else:
-            sample_cov = self.sample_cov
-            returns_clean = returns_np
+            # No shrinkage case: target doesn't matter
+            self.target_matrix = self.sample_cov.copy()
 
-        # Use utility function for canonical formula
-        return compute_constant_correlation_target(returns_clean, sample_cov)
-
-    def _compute_shrinkage_intensity(
-        self,
-        returns: np.ndarray,
-        sample_cov: np.ndarray,
-        target: np.ndarray,
-    ) -> float:
-        """
-        Compute optimal shrinkage intensity δ*.
-
-        This is the data-driven parameter that minimizes the
-        expected squared Frobenius norm of the estimation error.
-
-        Formula (simplified):
-            δ* = min(1, κ̂/T)
-
-        Where κ̂ estimates the misspecification between sample
-        and target.
-
-        Args:
-            returns: Returns array (T×N)
-            sample_cov: Sample covariance (N×N)
-            target: Target matrix (N×N)
-
-        Returns:
-            Optimal shrinkage intensity δ* ∈ [0, 1]
-        """
-        # Use canonical utility function
-        return compute_ledoit_wolf_shrinkage_intensity(returns, sample_cov, target)
+        return cov_matrix
 
     def get_shrinkage_intensity(self) -> float:
         """
@@ -259,111 +138,6 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
             raise ValueError("Must call fit() before get_shrinkage_intensity()")
         return self.shrinkage_intensity
 
-    def apply_per_block_shrinkage(
-        self,
-        blocks: dict,
-        returns_by_block: dict,
-        target: str = "constant_correlation",
-    ) -> dict:
-        """
-        Apply Ledoit-Wolf shrinkage to each block separately.
-
-        This implements per-block shrinkage from the sector risk model paper,
-        where each sector gets its own data-driven shrinkage intensity α_m.
-
-        Formula (Paper 2, Equation 3.3):
-            Ŝ^c_m = α_m·Ŝ^c_m + (1 - α_m)·S̃^c_m
-
-        where:
-        - Ŝ^c_m: Sample covariance of block m
-        - S̃^c_m: Shrinkage target (constant correlation)
-        - α_m: Ledoit-Wolf intensity for block m (data-driven, different per block)
-
-        Args:
-            blocks: Dict mapping sector names to sample covariance matrices (N_m × N_m)
-            returns_by_block: Dict mapping sector names to returns arrays (T × N_m)
-            target: Shrinkage target type (default: 'constant_correlation')
-
-        Returns:
-            Dict mapping sector names to shrunk covariance matrices
-
-        Example:
-            >>> blocks = {
-            ...     'Technology': tech_cov,  # 5×5
-            ...     'Utilities': util_cov,   # 3×3
-            ... }
-            >>> returns_by_block = {
-            ...     'Technology': tech_returns,  # T×5
-            ...     'Utilities': util_returns,   # T×3
-            ... }
-            >>> shrunk = estimator.apply_per_block_shrinkage(blocks, returns_by_block)
-        """
-        shrunk_blocks = {}
-        self.block_shrinkage_intensities_ = {}
-
-        for sector_name, sample_cov in blocks.items():
-            # Get returns for this block
-            returns = returns_by_block[sector_name]
-
-            # Convert to polars for consistency with existing methods
-            returns_pl = pl.DataFrame(returns)
-
-            # Calculate shrinkage target for this block
-            target_matrix = self._compute_target_for_block(returns_pl, target)
-
-            # Calculate optimal shrinkage intensity for this block
-            alpha = self._compute_shrinkage_intensity(returns, sample_cov, target_matrix)
-
-            # Store shrinkage intensity
-            self.block_shrinkage_intensities_[sector_name] = alpha
-
-            # Apply shrinkage: Ŝ = α·Ŝ + (1-α)·S̃
-            shrunk_cov = alpha * sample_cov + (1 - alpha) * target_matrix
-
-            shrunk_blocks[sector_name] = shrunk_cov
-
-        return shrunk_blocks
-
-    def _compute_target_for_block(
-        self,
-        returns: pl.DataFrame,
-        target: str,
-    ) -> np.ndarray:
-        """
-        Compute shrinkage target for a single block.
-
-        Args:
-            returns: Returns DataFrame for the block
-            target: Target type ('constant_correlation', 'diagonal', 'identity')
-
-        Returns:
-            Target matrix (N×N)
-        """
-        # Temporarily set target type
-        original_target = self.target_type
-        self.target_type = target
-
-        # Compute target using existing method
-        target_matrix = self._compute_target(returns)
-
-        # Restore original target type
-        self.target_type = original_target
-
-        return target_matrix
-
-    def get_block_shrinkage_intensities(self) -> dict:
-        """
-        Get the shrinkage intensities for each block.
-
-        Returns:
-            Dict mapping sector names to shrinkage intensities α ∈ [0, 1]
-
-        Raises:
-            ValueError: If apply_per_block_shrinkage() hasn't been called yet
-        """
-        if self.block_shrinkage_intensities_ is None:
-            raise ValueError("Must call apply_per_block_shrinkage() before " "get_block_shrinkage_intensities()")
-        return self.block_shrinkage_intensities_
-
     def __repr__(self) -> str:
-        return f"LedoitWolfShrinkage(target='{self.target_type}')"
+        """Return string representation."""
+        return f"LedoitWolfShrinkage(handle_missing='{self.handle_missing}')"

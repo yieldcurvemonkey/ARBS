@@ -5,12 +5,8 @@ Component: LedoitWolfShrinkage
 Method: Reference comparison against sklearn.covariance.LedoitWolf
 Created: 2025-11-16
 
-NOTE: ARBS uses a different Ledoit-Wolf methodology than sklearn.
-These tests document the differences but are expected to fail.
-ARBS likely uses Oracle Approximating Shrinkage (OAS) or a custom variant
-optimized for financial markets.
-
-See: ARBS_ARCHITECTURE.md for methodology details.
+NOTE: LedoitWolfShrinkage now wraps sklearn.covariance.LedoitWolf directly,
+so these tests verify exact numerical agreement.
 """
 
 import pytest
@@ -19,12 +15,6 @@ import polars as pl
 from sklearn.covariance import LedoitWolf
 
 from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
-
-# Mark all tests in this module as expected failures - ARBS uses different methodology
-pytestmark = pytest.mark.xfail(
-    reason="ARBS uses different Ledoit-Wolf variant than sklearn - expected differences",
-    strict=False
-)
 
 
 def test_matches_sklearn_basic():
