@@ -214,7 +214,7 @@ Covariance estimators should have a consistent interface (no strict base class r
 
 ```python
 import numpy as np
-import pandas as pd
+import polars as pl
 
 class RobustCovariance:
     """
@@ -230,30 +230,27 @@ class RobustCovariance:
         """
         self.support_fraction = support_fraction
 
-    def estimate(self, returns: pd.DataFrame) -> pd.DataFrame:
+    def fit(self, returns: pl.DataFrame) -> np.ndarray:
         """
         Estimate covariance matrix.
 
         Args:
-            returns: DataFrame of asset returns
+            returns: DataFrame of asset returns (T×N)
 
         Returns:
-            DataFrame covariance matrix
+            numpy array covariance matrix (N×N)
         """
         from sklearn.covariance import MinCovDet
 
         # Fit robust covariance
         mcd = MinCovDet(support_fraction=self.support_fraction)
-        mcd.fit(returns.values)
+        mcd.fit(returns.to_numpy())
 
-        # Return as DataFrame
-        cov_matrix = pd.DataFrame(
-            mcd.covariance_,
-            index=returns.columns,
-            columns=returns.columns
-        )
+        # Store results
+        self.cov_matrix_ = mcd.covariance_
+        self.asset_names_ = list(returns.columns)
 
-        return cov_matrix
+        return self.cov_matrix_
 ```
 
 ### Step 2: Register the Estimator
@@ -285,7 +282,8 @@ strategy = StrategyFactory().create_from_dict(config_dict)
 ### Covariance Estimator Requirements
 
 - ✅ Constructor should accept configuration parameters
-- ✅ Should have `estimate(returns)` method returning DataFrame
+- ✅ Should have `fit(returns)` method returning numpy array (N×N)
+- ✅ Must set `self.cov_matrix_` and `self.asset_names_` attributes
 - ✅ Return matrix must be symmetric positive semi-definite
 - ✅ Should handle edge cases (insufficient data, singular matrices)
 
@@ -441,11 +439,17 @@ config = StrategyConfig.from_dict(config_dict)  # Then create config
 
 **Solution**: Add regularization:
 ```python
-def estimate(self, returns):
-    cov = returns.cov()
+def fit(self, returns):
+    # Calculate covariance
+    returns_np = returns.to_numpy()
+    cov = np.cov(returns_np.T)
+
     # Add small diagonal term
     cov += np.eye(len(cov)) * 1e-8
-    return cov
+
+    self.cov_matrix_ = cov
+    self.asset_names_ = list(returns.columns)
+    return self.cov_matrix_
 ```
 
 ### Alpha Method Not Being Called

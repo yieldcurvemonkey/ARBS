@@ -327,7 +327,7 @@ print(metrics)
 # Analyze drawdowns
 drawdowns = tear_sheet.calculate_drawdowns()
 print(f"Max Drawdown: {drawdowns.min():.2%}")
-print(f"Current Drawdown: {drawdowns.iloc[-1]:.2%}")
+print(f"Current Drawdown: {drawdowns[-1]:.2%}")
 
 # Time aggregation
 annual_returns = tear_sheet.aggregate_annual_returns()
@@ -416,6 +416,7 @@ from Analysis.TearSheet import TearSheet
 import polars as pl
 import matplotlib.pyplot as plt
 from datetime import date, timedelta
+import numpy as np
 
 # Returns with significant drawdown
 start_date = date(2024, 1, 1)
@@ -445,8 +446,9 @@ ax1.plot(cum_returns.to_numpy() * 100)
 ax1.set_title("Cumulative Returns (%)")
 
 # Drawdowns
-ax2.plot(drawdowns.to_numpy() * 100, color='red')
-ax2.fill_between(range(len(drawdowns)), 0, drawdowns.to_numpy() * 100, color='red', alpha=0.3)
+drawdowns_np = drawdowns.to_numpy()
+ax2.plot(drawdowns_np * 100, color='red')
+ax2.fill_between(range(len(drawdowns)), 0, drawdowns_np * 100, color='red', alpha=0.3)
 ax2.set_title("Drawdown (%)")
 plt.tight_layout()
 plt.show()
@@ -703,8 +705,9 @@ def rolling_sharpe(returns, window=60, periods_per_year=252):
 returns = tear_sheet.returns
 rolling_sr = rolling_sharpe(returns, window=60)
 
+mean_sr = float(rolling_sr.mean())
 print(f"Current Sharpe (60d): {rolling_sr[-1]:.2f}")
-print(f"Average Sharpe (60d): {rolling_sr.mean():.2f}")
+print(f"Average Sharpe (60d): {mean_sr:.2f}")
 ```
 
 ### Benchmark Comparison
@@ -715,6 +718,7 @@ print(f"Average Sharpe (60d): {rolling_sr.mean():.2f}")
 def compare_to_benchmark(strategy_returns, benchmark_returns):
     """Compare strategy to benchmark using TearSheet."""
     from Analysis.TearSheet import TearSheet
+    import numpy as np
 
     # Analyze both
     strategy_ts = TearSheet(strategy_returns, periods_per_year=252)
@@ -727,7 +731,8 @@ def compare_to_benchmark(strategy_returns, benchmark_returns):
     alpha = strat_metrics.annual_return - bench_metrics.annual_return
 
     # Calculate information ratio
-    tracking_error = (strategy_returns - benchmark_returns).std() * np.sqrt(252)
+    excess_returns = strategy_returns - benchmark_returns
+    tracking_error = float(excess_returns.std()) * np.sqrt(252)
     information_ratio = alpha / tracking_error if tracking_error > 0 else np.nan
 
     return {
@@ -813,13 +818,20 @@ max_dd = metrics.max_drawdown  # -15%
 drawdowns = tear_sheet.calculate_drawdowns()
 max_dd = drawdowns.min()
 
-# Calculate recovery time
-dd_start = drawdowns[drawdowns < max_dd * 0.95].index[0]
-dd_end = drawdowns[drawdowns == 0].index[-1] if (drawdowns == 0).any() else None
+# Calculate recovery time (note: this requires dates to be tracked)
+# If using polars, you'll need to work with the dates Series
+# Example assumes you have dates available
+if tear_sheet.dates is not None:
+    # Find when max drawdown occurred
+    max_dd_idx = drawdowns.arg_min()
 
-if dd_end:
-    recovery_days = (dd_end - dd_start).days
-    print(f"Max DD: {max_dd:.2%}, Recovery: {recovery_days} days")
+    # Find when recovered (drawdown back to 0)
+    recovered_mask = drawdowns == 0
+    if recovered_mask.any():
+        recovery_idx = recovered_mask.arg_max()
+        if recovery_idx > max_dd_idx:
+            recovery_days = (tear_sheet.dates[recovery_idx] - tear_sheet.dates[max_dd_idx]).days
+            print(f"Max DD: {max_dd:.2%}, Recovery: {recovery_days} days")
 ```
 
 ---
