@@ -1,4 +1,4 @@
-# ABOUTME: EM FX carry signal for emerging market currency trading (NEW CAPABILITY)
+# ABOUTME: EM FX carry signal for emerging market currency trading (extends BaseSignal)
 # ABOUTME: Interest rate differential carry trades with risk adjustment and UIP violation detection
 
 """
@@ -6,6 +6,12 @@ EM FX Carry Signal
 
 Implements carry trade strategy for emerging market currencies based on
 interest rate differentials and Uncovered Interest Parity (UIP) violations.
+
+Extends BaseSignal for integration with Grinold-Kahn framework:
+- Raw carry calculation per currency (_calculate_raw_signal)
+- Cross-sectional z-score standardization (via BaseSignal)
+- Information Coefficient (IC) tracking
+- Signal history and metadata
 
 Carry Trade Logic:
 ------------------
@@ -40,7 +46,7 @@ Usage:
     ...     risk_adjust=True
     ... )
     >>>
-    >>> # Prepare currency data
+    >>> # Prepare currency data (one per currency)
     >>> brl_data = pl.DataFrame({
     ...     "date": dates,
     ...     "interest_rate": [0.1375] * len(dates),  # 13.75% Brazil
@@ -48,15 +54,19 @@ Usage:
     ...     "usd_rate": [0.055] * len(dates)  # 5.5% USD
     ... })
     >>>
-    >>> # Evaluate multiple EM currencies
-    >>> signals = signal.evaluate_multiple(
-    ...     as_of_date=date(2024, 6, 1),
-    ...     currency_data={"BRL": brl_data, "TRY": try_data, "MXN": mxn_data}
+    >>> # Generate cross-sectional signals (z-scores)
+    >>> currency_data_list = [brl_data, try_data, mxn_data, zar_data]
+    >>> z_scores = signal.generate_batch(
+    ...     inst_data_list=currency_data_list,
+    ...     market_data=None,
+    ...     as_of=date(2024, 6, 1)
     ... )
+    >>> # z_scores: array of z-scores (mean=0, std=1) for each currency
     >>>
     >>> # Generate portfolio weights (long/short)
-    >>> weights = signal.generate_portfolio_weights(signals)
-    >>> # weights: {"BRL": 0.35, "TRY": 0.45, "MXN": -0.15, ...} (dollar-neutral)
+    >>> currency_labels = ["BRL", "TRY", "MXN", "ZAR"]
+    >>> weights = signal.generate_portfolio_weights_from_scores(z_scores, currency_labels)
+    >>> # weights: {"BRL": 0.35, "TRY": 0.45, "MXN": -0.15, "ZAR": 0.10} (dollar-neutral)
 
 References:
 -----------
@@ -65,40 +75,153 @@ References:
 - Menkhoff, Sarno, Schmeling, Schrimpf (2012): "Carry Trades and Global FX Volatility"
 """
 
-from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Literal
+from typing import Dict, List, Optional, Any
 
 import numpy as np
 import polars as pl
 
+from Signals.Base.BaseSignal import BaseSignal
 
-@dataclass
-class EMFXCarrySignal:
+
+class EMFXCarrySignal(BaseSignal):
     """
     EM FX carry signal based on interest rate differentials.
 
-    Generates trading signals for emerging market currencies using:
-    - Interest rate differentials (carry)
-    - FX volatility (risk adjustment)
-    - Cross-sectional ranking
+    Extends BaseSignal to provide:
+    - Interest differential calculation (carry)
+    - FX volatility adjustment (risk-adjusted carry)
+    - Cross-sectional z-score normalization
     - UIP violation detection
+    - IC tracking and signal history
 
     Attributes:
         funding_currency: Low-yield funding currency (default: "USD")
         lookback_days: Historical window for volatility (default: 60)
         risk_adjust: Whether to adjust for FX volatility (default: True)
-        normalization: Signal normalization method ("z_score", "rank", "none")
         long_threshold: Z-score threshold for long positions (default: 0.5)
         short_threshold: Z-score threshold for short positions (default: -0.5)
     """
 
-    funding_currency: str = "USD"
-    lookback_days: int = 60
-    risk_adjust: bool = True
-    normalization: Literal["z_score", "rank", "none"] = "z_score"
-    long_threshold: float = 0.5
-    short_threshold: float = -0.5
+    def __init__(
+        self,
+        funding_currency: str = "USD",
+        lookback_days: int = 60,
+        risk_adjust: bool = True,
+        long_threshold: float = 0.5,
+        short_threshold: float = -0.5,
+        standardize: bool = True,
+        track_history: bool = True,
+    ):
+        """
+        Initialize EM FX carry signal.
+
+        Parameters:
+            funding_currency: Low-yield funding currency (default: "USD")
+            lookback_days: Historical window for volatility calculation (default: 60 days)
+            risk_adjust: If True, adjust carry by FX volatility (default: True)
+            long_threshold: Z-score threshold for long positions (default: 0.5)
+            short_threshold: Z-score threshold for short positions (default: -0.5)
+            standardize: If True, return z-scored alphas (default: True)
+            track_history: If True, store signal generation history (default: True)
+        """
+        # Initialize BaseSignal
+        super().__init__(
+            name="em_fx_carry",
+            standardize=standardize,
+            track_history=track_history,
+        )
+
+        # Store EM FX carry specific parameters
+        self.funding_currency = funding_currency
+        self.lookback_days = lookback_days
+        self.risk_adjust = risk_adjust
+        self.long_threshold = long_threshold
+        self.short_threshold = short_threshold
+
+    def _calculate_raw_signal(
+        self,
+        inst_data: pl.DataFrame,
+        market_data: Optional[Any],
+        as_of: date,
+    ) -> float:
+        """
+        Calculate raw carry signal for a single currency.
+
+        This method is called by BaseSignal.generate() and generate_batch().
+        It computes the carry value (potentially risk-adjusted) for one EM currency.
+
+        Parameters:
+            inst_data: DataFrame with columns: date, interest_rate, fx_rate, usd_rate (optional)
+                      Must contain historical data for lookback window
+            market_data: Not used for EM FX carry (all data is currency-specific)
+            as_of: Calculation date (must be within inst_data date range)
+
+        Returns:
+            Raw carry value (before cross-sectional standardization)
+            If risk_adjust=True: carry-to-risk ratio (carry / FX vol)
+            If risk_adjust=False: simple carry (target rate - funding rate)
+
+        Raises:
+            ValueError: If missing required columns or insufficient data
+        """
+        # Validate columns
+        required_cols = ["date", "interest_rate", "fx_rate"]
+        missing = [col for col in required_cols if col not in inst_data.columns]
+        if missing:
+            raise ValueError(f"Missing required columns: {missing}")
+
+        # Filter to lookback window
+        start_date = as_of - timedelta(days=self.lookback_days)
+        window_data = inst_data.filter(
+            (pl.col("date") >= start_date) & (pl.col("date") <= as_of)
+        )
+
+        if window_data.height < 20:
+            raise ValueError(
+                f"Insufficient data: {window_data.height} observations "
+                f"(need at least 20 for volatility calculation)"
+            )
+
+        # Get current interest rate (as of date)
+        current = window_data.filter(pl.col("date") == as_of)
+        if current.height == 0:
+            # Use most recent if exact date not available
+            current = window_data.sort("date").tail(1)
+
+        target_rate = float(current["interest_rate"][0])
+
+        # Get funding rate
+        if "usd_rate" in current.columns:
+            funding_rate = float(current["usd_rate"][0])
+        else:
+            # Default fallback if not provided
+            funding_rate = 0.055  # 5.5% default USD rate
+
+        # Calculate carry (interest differential)
+        carry = self._calculate_interest_differential(target_rate, funding_rate)
+
+        # Risk adjustment if requested
+        if self.risk_adjust:
+            # Calculate FX returns
+            fx_data = self._calculate_fx_returns(window_data, "fx_rate")
+            fx_data = fx_data.filter(pl.col("fx_return").is_not_nan())
+
+            if fx_data.height < 20:
+                # Not enough data for vol calculation, return raw carry
+                return float(carry)
+
+            # Calculate volatility
+            fx_vol = self._calculate_fx_volatility(fx_data)
+
+            # Risk-adjusted carry (Sharpe-like ratio)
+            carry = self._calculate_carry_to_risk(carry, fx_vol)
+
+        return float(carry)
+
+    # -------------------------------------------------------------------------
+    # Helper Methods (Carry Calculation)
+    # -------------------------------------------------------------------------
 
     def _calculate_interest_differential(
         self,
@@ -259,155 +382,33 @@ class EMFXCarrySignal:
 
         return result
 
-    def evaluate_single(
+    # -------------------------------------------------------------------------
+    # Portfolio Construction Helpers
+    # -------------------------------------------------------------------------
+
+    def generate_portfolio_weights_from_scores(
         self,
-        as_of_date: date,
-        target_data: pl.DataFrame,
-        funding_rate: float
-    ) -> float:
-        """
-        Evaluate carry signal for a single currency.
-
-        Args:
-            as_of_date: Evaluation date
-            target_data: DataFrame with columns: date, interest_rate, fx_rate
-            funding_rate: Funding currency interest rate
-
-        Returns:
-            Carry signal (raw or risk-adjusted)
-
-        Raises:
-            ValueError: If required columns missing or insufficient data
-        """
-        # Validate columns
-        required_cols = ["date", "interest_rate", "fx_rate"]
-        missing = [col for col in required_cols if col not in target_data.columns]
-        if missing:
-            raise ValueError(f"Missing required columns: {missing}")
-
-        # Filter to lookback window
-        start_date = as_of_date - timedelta(days=self.lookback_days)
-        window_data = target_data.filter(
-            (pl.col("date") >= start_date) & (pl.col("date") <= as_of_date)
-        )
-
-        if window_data.height < 20:
-            raise ValueError(f"Insufficient data: {window_data.height} observations")
-
-        # Get current interest rate
-        current = window_data.filter(pl.col("date") == as_of_date)
-        if current.height == 0:
-            # Use most recent
-            current = window_data.sort("date").tail(1)
-
-        target_rate = float(current["interest_rate"][0])
-
-        # Calculate carry
-        carry = self._calculate_interest_differential(target_rate, funding_rate)
-
-        # Risk adjustment if requested
-        if self.risk_adjust:
-            # Calculate FX returns
-            fx_data = self._calculate_fx_returns(window_data, "fx_rate")
-            fx_data = fx_data.filter(pl.col("fx_return").is_not_nan())
-
-            # Calculate volatility
-            fx_vol = self._calculate_fx_volatility(fx_data)
-
-            # Risk-adjusted carry
-            carry = self._calculate_carry_to_risk(carry, fx_vol)
-
-        return float(carry)
-
-    def evaluate_multiple(
-        self,
-        as_of_date: date,
-        currency_data: Dict[str, pl.DataFrame],
-        funding_rate: Optional[float] = None
+        z_scores: np.ndarray,
+        currency_labels: List[str],
+        equal_weight: bool = False
     ) -> Dict[str, float]:
         """
-        Evaluate carry signals across multiple currencies.
+        Generate dollar-neutral portfolio weights from z-scores.
+
+        This is a helper method for portfolio construction after generate_batch().
 
         Args:
-            as_of_date: Evaluation date
-            currency_data: Dict mapping currency code -> DataFrame (date, interest_rate, fx_rate)
-            funding_rate: Funding currency rate (if None, use from data)
+            z_scores: Array of z-scores from generate_batch()
+            currency_labels: List of currency codes (same order as z_scores)
+            equal_weight: If True, equal weight longs/shorts. If False, proportional
 
         Returns:
-            Dict mapping currency code -> signal score
+            Dict of portfolio weights (sum = 0 for dollar neutral)
         """
-        raw_signals = {}
+        # Convert to dict for easier manipulation
+        signals = {currency: float(z_scores[i]) for i, currency in enumerate(currency_labels)}
 
-        for currency, data in currency_data.items():
-            try:
-                # Extract funding rate if not provided
-                if funding_rate is None:
-                    if "usd_rate" in data.columns:
-                        rate_data = data.filter(pl.col("date") == as_of_date)
-                        if rate_data.height > 0:
-                            funding_rate = float(rate_data["usd_rate"][0])
-                        else:
-                            funding_rate = 0.05  # Default fallback
-                    else:
-                        funding_rate = 0.05  # Default fallback
-
-                signal = self.evaluate_single(as_of_date, data, funding_rate)
-                raw_signals[currency] = signal
-
-            except Exception as e:
-                print(f"Warning: Could not evaluate {currency}: {e}")
-                raw_signals[currency] = 0.0
-
-        # Normalize signals
-        if self.normalization != "none":
-            return self._normalize_signals(raw_signals)
-
-        return raw_signals
-
-    def _normalize_signals(
-        self,
-        raw_signals: Dict[str, float]
-    ) -> Dict[str, float]:
-        """
-        Normalize signals using z-score or rank.
-
-        Args:
-            raw_signals: Dict of raw signal values
-
-        Returns:
-            Dict of normalized signal values
-        """
-        if len(raw_signals) == 0:
-            return {}
-
-        values = np.array(list(raw_signals.values()))
-        keys = list(raw_signals.keys())
-
-        if self.normalization == "z_score":
-            # Z-score normalization
-            mean = np.mean(values)
-            std = np.std(values, ddof=1) if len(values) > 1 else 1.0
-
-            if std < 1e-10:
-                std = 1.0
-
-            normalized = (values - mean) / std
-
-        elif self.normalization == "rank":
-            # Rank normalization to [-1, 1]
-            ranks = np.argsort(np.argsort(values))  # Ranks from 0 to N-1
-            n = len(values)
-
-            if n == 1:
-                normalized = np.array([0.0])
-            else:
-                # Scale to [-1, 1]
-                normalized = -1.0 + 2.0 * ranks / (n - 1)
-
-        else:
-            normalized = values
-
-        return {key: float(val) for key, val in zip(keys, normalized)}
+        return self.generate_portfolio_weights(signals, equal_weight)
 
     def generate_portfolio_weights(
         self,
@@ -477,7 +478,7 @@ class EMFXCarrySignal:
         Get top N currencies by carry signal.
 
         Args:
-            signals: Dict of carry signals
+            signals: Dict of carry signals (z-scores)
             top_n: Number of top currencies to return
 
         Returns:
@@ -485,3 +486,15 @@ class EMFXCarrySignal:
         """
         sorted_currencies = sorted(signals.items(), key=lambda x: x[1], reverse=True)
         return [currency for currency, _ in sorted_currencies[:top_n]]
+
+    def __repr__(self) -> str:
+        """Return string representation."""
+        return (
+            f"EMFXCarrySignal("
+            f"name='{self.name}', "
+            f"funding={self.funding_currency}, "
+            f"lookback={self.lookback_days}, "
+            f"risk_adjust={self.risk_adjust}, "
+            f"standardize={self.standardize}"
+            f")"
+        )

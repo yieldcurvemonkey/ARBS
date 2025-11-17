@@ -159,7 +159,6 @@ def example_2_calculate_carry_signals(fx_data: Dict):
     print(f"  Funding currency: {carry_signal.funding_currency}")
     print(f"  Lookback: {carry_signal.lookback_days} days")
     print(f"  Risk adjust: {carry_signal.risk_adjust}")
-    print(f"  Normalization: {carry_signal.normalization}")
     print(f"  Long threshold: {carry_signal.long_threshold}")
     print(f"  Short threshold: {carry_signal.short_threshold}")
     print()
@@ -167,14 +166,14 @@ def example_2_calculate_carry_signals(fx_data: Dict):
     # Prepare data for signal evaluation
     df = fx_data.data
 
-    # Build currency_data dict for evaluate_multiple
+    # Build currency_data list for generate_batch (BaseSignal interface)
     currencies = df["currency"].unique().to_list()
-    currency_data = {}
+    currency_data_list = []
 
     for currency in currencies:
         currency_df = df.filter(pl.col("currency") == currency)
 
-        # Rename columns to match EMFXCarrySignal expectations
+        # Select columns needed for EMFXCarrySignal
         currency_df = currency_df.select([
             pl.col("date"),
             pl.col("fx_rate"),
@@ -182,15 +181,22 @@ def example_2_calculate_carry_signals(fx_data: Dict):
             pl.col("usd_rate").fill_null(0.055),
         ])
 
-        currency_data[currency] = currency_df
+        currency_data_list.append(currency_df)
 
-    # Evaluate signals
+    # Evaluate signals using BaseSignal.generate_batch()
     print("Evaluating carry signals...")
     eval_date = df["date"].max()
-    signals = carry_signal.evaluate_multiple(eval_date, currency_data)
+    z_scores = carry_signal.generate_batch(
+        inst_data_list=currency_data_list,
+        market_data=None,
+        as_of=eval_date
+    )
 
     print(f"✓ Signals calculated as of {eval_date}")
     print()
+
+    # Convert z-scores to dict for easier handling
+    signals = {currency: float(z_scores[i]) for i, currency in enumerate(currencies)}
 
     # Display signals
     print("Carry Signals (z-score normalized):")
@@ -208,6 +214,9 @@ def example_2_calculate_carry_signals(fx_data: Dict):
         print(f"{currency:<10} {signal_value:>8.3f}  {direction:<15} {position}")
 
     print()
+
+    # Store currency_data dict for later use
+    currency_data = {currency: currency_data_list[i] for i, currency in enumerate(currencies)}
 
     return signals, carry_signal, currency_data
 

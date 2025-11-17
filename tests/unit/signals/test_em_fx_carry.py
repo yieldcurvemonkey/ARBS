@@ -50,6 +50,21 @@ class TestEMFXCarrySignal:
         assert signal.funding_currency == "USD"
         assert signal.lookback_days == 60
         assert signal.risk_adjust is True
+        assert signal.name == "em_fx_carry"  # BaseSignal attribute
+
+    def test_signal_extends_base_signal(self):
+        """Test that EMFXCarrySignal properly extends BaseSignal."""
+        from Signals.EMFXCarrySignal import EMFXCarrySignal
+        from Signals.Base.BaseSignal import BaseSignal
+
+        # ARRANGE & ACT
+        signal = EMFXCarrySignal()
+
+        # ASSERT
+        assert isinstance(signal, BaseSignal)
+        assert hasattr(signal, 'generate')
+        assert hasattr(signal, 'generate_batch')
+        assert hasattr(signal, '_calculate_raw_signal')
 
     def test_interest_differential_calculation(self):
         """Test calculation of interest rate differential."""
@@ -223,39 +238,47 @@ class TestEMFXCrossSecti onal:
         # Mock currency data
         dates = [date(2024, 1, 1) + timedelta(days=i) for i in range(60)]
 
-        currency_data = {
-            "BRL": pl.DataFrame({
-                "date": dates,
-                "interest_rate": [0.1375] * 60,
-                "fx_rate": [5.0 + np.random.randn() * 0.1 for _ in range(60)],
-                "usd_rate": [0.055] * 60
-            }),
-            "TRY": pl.DataFrame({
-                "date": dates,
-                "interest_rate": [0.25] * 60,
-                "fx_rate": [32.0 + np.random.randn() * 0.8 for _ in range(60)],
-                "usd_rate": [0.055] * 60
-            }),
-            "MXN": pl.DataFrame({
-                "date": dates,
-                "interest_rate": [0.11] * 60,
-                "fx_rate": [17.0 + np.random.randn() * 0.3 for _ in range(60)],
-                "usd_rate": [0.055] * 60
-            }),
-        }
+        # Prepare currency data (list of DataFrames)
+        brl_data = pl.DataFrame({
+            "date": dates,
+            "interest_rate": [0.1375] * 60,
+            "fx_rate": [5.0 + np.random.randn() * 0.1 for _ in range(60)],
+            "usd_rate": [0.055] * 60
+        })
+
+        try_data = pl.DataFrame({
+            "date": dates,
+            "interest_rate": [0.25] * 60,
+            "fx_rate": [32.0 + np.random.randn() * 0.8 for _ in range(60)],
+            "usd_rate": [0.055] * 60
+        })
+
+        mxn_data = pl.DataFrame({
+            "date": dates,
+            "interest_rate": [0.11] * 60,
+            "fx_rate": [17.0 + np.random.randn() * 0.3 for _ in range(60)],
+            "usd_rate": [0.055] * 60
+        })
+
+        currency_data_list = [brl_data, try_data, mxn_data]
+        currency_labels = ["BRL", "TRY", "MXN"]
 
         # ACT
-        signals = signal.evaluate_multiple(
-            as_of_date=dates[-1],
-            currency_data=currency_data
+        # Use BaseSignal.generate_batch() to get z-scores
+        z_scores = signal.generate_batch(
+            inst_data_list=currency_data_list,
+            market_data=None,
+            as_of=dates[-1]
         )
 
         # ASSERT
-        assert isinstance(signals, dict)
-        assert len(signals) == 3
-        assert all(currency in signals for currency in ["BRL", "TRY", "MXN"])
+        assert isinstance(z_scores, np.ndarray)
+        assert len(z_scores) == 3
 
-        # TRY should have highest raw carry
+        # Z-scores should be standardized (approximately mean=0, std=1)
+        assert abs(np.mean(z_scores)) < 0.5  # Approximately zero mean
+
+        # TRY should have highest raw carry (highest z-score)
         # But after risk adjustment, ordering might change
 
 
