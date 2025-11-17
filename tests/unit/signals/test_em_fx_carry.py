@@ -191,7 +191,7 @@ class TestEMFXVolatilityAdjustment:
         assert high_carry_high_vol["carry"] > low_carry_low_vol["carry"]
 
 
-class TestEMFXCrossSecti onal:
+class TestEMFXCrossSectional:
     """Test cross-sectional EM FX carry ranking."""
 
     def test_cross_sectional_carry_ranking(self):
