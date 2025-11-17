@@ -216,3 +216,4 @@ dump/
 repomix-output.xml
 *.xml.journal
 .journal
+*.xml
