@@ -2,7 +2,7 @@
 # ABOUTME: Used by MomentumSignal, MeanReversionSignal, and other time-series signals to eliminate duplication
 
 from datetime import date, timedelta
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union, Tuple
 import logging
 import numpy as np
 import polars as pl
