@@ -201,29 +201,76 @@ class TestEMFXCrossSectional:
         # ARRANGE
         signal = EMFXCarrySignal(
             funding_currency="USD",
-            standardize=True,  # z-score normalization (similar to rank for cross-sectional)
+            standardize=True,  # z-score normalization
             risk_adjust=False
         )
 
-        # Create carry data for EM currencies
-        em_carry_data = {
-            "BRL": 0.0825,  # Brazil: 13.75% - 5.5% = 8.25%
-            "TRY": 0.1950,  # Turkey: 25% - 5.5% = 19.5%
-            "ZAR": 0.0300,  # South Africa: 8.5% - 5.5% = 3%
-            "MXN": 0.0550,  # Mexico: 11% - 5.5% = 5.5%
-        }
+        # Create DataFrames for EM currencies
+        # Need 60 days of data for signal calculation
+        dates = [date(2024, 1, 1) + timedelta(days=i) for i in range(60)]
 
-        # ACT
-        normalized = signal._normalize_signals(em_carry_data)
+        # Turkey: 25% - 5.5% = 19.5% carry (highest)
+        try_data = pl.DataFrame({
+            "date": dates,
+            "interest_rate": [0.25] * 60,
+            "fx_rate": [32.0] * 60,  # Constant FX rate (no vol)
+            "usd_rate": [0.055] * 60
+        })
+
+        # Brazil: 13.75% - 5.5% = 8.25% carry (second)
+        brl_data = pl.DataFrame({
+            "date": dates,
+            "interest_rate": [0.1375] * 60,
+            "fx_rate": [5.0] * 60,
+            "usd_rate": [0.055] * 60
+        })
+
+        # Mexico: 11% - 5.5% = 5.5% carry (third)
+        mxn_data = pl.DataFrame({
+            "date": dates,
+            "interest_rate": [0.11] * 60,
+            "fx_rate": [17.0] * 60,
+            "usd_rate": [0.055] * 60
+        })
+
+        # South Africa: 8.5% - 5.5% = 3% carry (lowest)
+        zar_data = pl.DataFrame({
+            "date": dates,
+            "interest_rate": [0.085] * 60,
+            "fx_rate": [18.5] * 60,
+            "usd_rate": [0.055] * 60
+        })
+
+        # ACT: Generate z-scores for all currencies
+        # Order: TRY, BRL, MXN, ZAR
+        currency_data_list = [try_data, brl_data, mxn_data, zar_data]
+        z_scores = signal.generate_batch(
+            inst_data_list=currency_data_list,
+            market_data=None,
+            as_of=dates[-1]
+        )
 
         # ASSERT
         # Ranking: TRY > BRL > MXN > ZAR
-        sorted_currencies = sorted(normalized.keys(), key=lambda k: normalized[k], reverse=True)
-        assert sorted_currencies == ["TRY", "BRL", "MXN", "ZAR"]
+        # z_scores[0] = TRY (should be highest)
+        # z_scores[1] = BRL (should be second)
+        # z_scores[2] = MXN (should be third)
+        # z_scores[3] = ZAR (should be lowest)
 
-        # Check range is [-1, 1]
-        assert -1.0 <= min(normalized.values()) <= -0.9
-        assert 0.9 <= max(normalized.values()) <= 1.0
+        assert isinstance(z_scores, np.ndarray)
+        assert len(z_scores) == 4
+
+        # Create ranking by sorting indices
+        ranking_indices = np.argsort(z_scores)[::-1]  # Descending order
+        currency_labels = ["TRY", "BRL", "MXN", "ZAR"]
+        sorted_currencies = [currency_labels[i] for i in ranking_indices]
+
+        assert sorted_currencies == ["TRY", "BRL", "MXN", "ZAR"], \
+            f"Expected ['TRY', 'BRL', 'MXN', 'ZAR'], got {sorted_currencies}"
+
+        # Z-scores should be standardized (mean≈0, std≈1)
+        assert abs(np.mean(z_scores)) < 0.01  # Very close to zero mean
+        assert abs(np.std(z_scores, ddof=1) - 1.0) < 0.01  # Very close to std=1
 
     def test_multiple_currencies_evaluation(self):
         """Test evaluating carry across multiple EM currencies."""

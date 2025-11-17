@@ -91,18 +91,23 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         # Use pairwise computation if requested
         if self.handle_missing == "pairwise":
             self.sample_cov = self._pairwise_covariance(returns_np)
+            # For shrinkage intensity calculation, use complete cases only
+            # (shrinkage intensity formula requires complete observations)
+            valid_rows = ~np.any(np.isnan(returns_np), axis=1)
+            returns_for_shrinkage = returns_np[valid_rows, :]
         else:
             # Standard covariance (drops rows with any NaN)
             sample_cov = np.cov(returns_np.T)
             # Ensure covariance is always 2D (np.cov returns scalar for single column)
             self.sample_cov = np.atleast_2d(sample_cov)
+            returns_for_shrinkage = returns_np
 
         # Calculate shrinkage target
         self.target_matrix = self._compute_target(returns)
 
         # Calculate optimal shrinkage intensity
         self.shrinkage_intensity = self._compute_shrinkage_intensity(
-            returns.to_numpy(), self.sample_cov, self.target_matrix
+            returns_for_shrinkage, self.sample_cov, self.target_matrix
         )
 
         # Apply shrinkage: Σ̂_LW = δ * F + (1-δ) * S
@@ -200,11 +205,16 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         # Use pairwise covariance if needed
         if self.handle_missing == "pairwise":
             sample_cov = self._pairwise_covariance(returns_np)
+            # For constant correlation target calculation, use complete cases only
+            # (np.corrcoef requires complete observations)
+            valid_rows = ~np.any(np.isnan(returns_np), axis=1)
+            returns_clean = returns_np[valid_rows, :]
         else:
             sample_cov = self.sample_cov
+            returns_clean = returns_np
 
         # Use utility function for canonical formula
-        return compute_constant_correlation_target(returns_np, sample_cov)
+        return compute_constant_correlation_target(returns_clean, sample_cov)
 
     def _compute_shrinkage_intensity(
         self,

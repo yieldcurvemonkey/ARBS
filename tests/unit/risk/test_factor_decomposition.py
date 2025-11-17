@@ -155,9 +155,31 @@ class TestPCAFactorDecomposition:
         from Risk.FactorDecomposition import PCAFactorModel
 
         # ARRANGE
+        np.random.seed(42)
         dates = [date(2024, 1, 1) + timedelta(days=i) for i in range(50)]
         tenors = ["1Y", "2Y", "3Y", "5Y", "10Y"]
-        changes_data = {tenor: np.random.randn(50) for tenor in tenors}
+
+        # Create structured data with dominant level factor
+        # Level shifts (parallel movements)
+        level_shifts = np.random.randn(50) * 0.01  # 1bp std dev
+        # Slope shifts (short vs long)
+        slope_shifts = np.random.randn(50) * 0.003  # 0.3bp std dev (smaller)
+        # Curvature shifts (middle vs wings)
+        curve_shifts = np.random.randn(50) * 0.001  # 0.1bp std dev (smallest)
+
+        # Combine into yield curve changes
+        # 1Y gets: level - slope + curve
+        # 2Y gets: level - slope/2
+        # 3Y gets: level + curve
+        # 5Y gets: level + slope/2
+        # 10Y gets: level + slope - curve
+        changes_data = {
+            "1Y": level_shifts - slope_shifts + curve_shifts,
+            "2Y": level_shifts - slope_shifts * 0.5,
+            "3Y": level_shifts + curve_shifts,
+            "5Y": level_shifts + slope_shifts * 0.5,
+            "10Y": level_shifts + slope_shifts - curve_shifts,
+        }
         changes_df = pl.DataFrame(changes_data)
         changes_df = changes_df.with_columns(pl.Series("date", dates))
 
@@ -171,6 +193,7 @@ class TestPCAFactorDecomposition:
         # ASSERT
         assert len(new_factors) == 3
         # For parallel shift, level factor should dominate
+        # (PC1 should capture the level component given our structured training data)
         assert abs(new_factors[0]) > abs(new_factors[1])
         assert abs(new_factors[0]) > abs(new_factors[2])
 
