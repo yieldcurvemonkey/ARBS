@@ -151,7 +151,9 @@ class DateTriggerRequirements(TriggerRequirements):
     calc_type: str = "date"
 
     def has_triggered(self, state: dt.datetime, backtest=None) -> TriggerInfo:
-        return TriggerInfo(state.date() in set(self.dates))
+        # Handle both datetime and date objects defensively
+        check_date = state.date() if isinstance(state, dt.datetime) else state
+        return TriggerInfo(check_date in set(self.dates))
 
 
 # 6) PortfolioTrigger (holdings/order book predicate)

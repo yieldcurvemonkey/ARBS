@@ -16,25 +16,44 @@ def ql_cal_date_range(
     open_time: Optional[datetime.time] = datetime.time(7, 00),
     close_time: Optional[datetime.time] = datetime.time(15, 00),
 ):
-    if type(start) == datetime.datetime and start.tzinfo is not None:
-        assert str(start.tzinfo) == str(end.tzinfo), "must be from same tz!"
-        # assert start.time() == end.time(), "must be same closes!"
+    # Preserve timezone info if present
+    tz_info = None
+    if isinstance(start, datetime.datetime) and start.tzinfo is not None:
+        tz_info = start.tzinfo
+        if isinstance(end, datetime.datetime):
+            assert str(start.tzinfo) == str(end.tzinfo), "must be from same tz!"
 
-    def _to_ql_date(dt: datetime.datetime):
+    def _to_ql_date(dt):
+        """Convert date or datetime to QuantLib Date"""
         return ql.Date(dt.day, dt.month, dt.year)
 
-    # Convert pandas frequency to polars interval format
+    def _to_datetime(d):
+        """Convert date to datetime if needed, preserving timezone"""
+        if isinstance(d, datetime.datetime):
+            return d
+        # Convert date to datetime at specified time
+        dt = datetime.datetime.combine(d, open_time)
+        # Preserve timezone if input had one
+        if tz_info is not None:
+            dt = dt.replace(tzinfo=tz_info)
+        return dt
+
+    # Convert business day frequency to polars interval format
     interval = freq.replace("b", "d").replace("min", "m").replace("hr", "h")
     pl_range = pl.date_range(start, end, interval=interval, eager=True).to_list()
     date_filtered_range = [d for d in pl_range if ql_cal.isBusinessDay(_to_ql_date(d))]
+
+    # Convert dates to datetimes (polars date_range returns dates for daily intervals)
+    datetime_range = [_to_datetime(d) for d in date_filtered_range]
+
     if "min" in freq or "hr" in freq:
         time_filtered_range = []
-        for ts in date_filtered_range:
+        for ts in datetime_range:
             if ts.time() >= open_time and ts.time() <= close_time:
                 time_filtered_range.append(ts)
         return time_filtered_range
 
-    return date_filtered_range
+    return datetime_range
 
 
 def _to_ql(d: datetime.date) -> ql.Date:
