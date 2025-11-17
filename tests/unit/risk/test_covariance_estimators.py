@@ -24,31 +24,43 @@ From 2025 research:
 import pytest
 import numpy as np
 import polars as pl
+from tests.utils import (
+    assert_can_import,
+    assert_can_instantiate,
+    assert_valid_covariance_matrix,
+)
 
 
 class TestCovarianceEstimatorBasics:
     """Test basic covariance estimator functionality."""
 
-    def test_sample_covariance_can_be_imported(self):
-        """Verify SampleCovariance exists."""
-        from Risk.Covariance.SampleCovariance import SampleCovariance
-        assert SampleCovariance is not None
+    # Replaced by parametrized test using tests.utils.assert_can_import()
+    # Old boilerplate tests kept as comments for reference:
+    # def test_sample_covariance_can_be_imported(self):
+    #     from Risk.Covariance.SampleCovariance import SampleCovariance
+    #     assert SampleCovariance is not None
+    #
+    # def test_ledoit_wolf_can_be_imported(self):
+    #     from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
+    #     assert LedoitWolfShrinkage is not None
 
-    def test_ledoit_wolf_can_be_imported(self):
-        """Verify LedoitWolfShrinkage exists."""
-        from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
-        assert LedoitWolfShrinkage is not None
+    @pytest.mark.parametrize("module_path,class_name", [
+        ("Risk.Covariance.SampleCovariance", "SampleCovariance"),
+        ("Risk.Covariance.LedoitWolfShrinkage", "LedoitWolfShrinkage"),
+    ])
+    def test_covariance_estimators_can_be_imported(self, module_path, class_name):
+        """Verify covariance estimators can be imported."""
+        cls = assert_can_import(module_path, class_name)
+        assert cls is not None
 
-    def test_covariance_estimator_can_be_instantiated(self):
-        """Covariance estimators should be instantiable."""
-        from Risk.Covariance.SampleCovariance import SampleCovariance
-        from Risk.Covariance.LedoitWolfShrinkage import LedoitWolfShrinkage
-
-        sample_cov = SampleCovariance()
-        lw_cov = LedoitWolfShrinkage()
-
-        assert sample_cov is not None
-        assert lw_cov is not None
+    @pytest.mark.parametrize("module_path,class_name", [
+        ("Risk.Covariance.SampleCovariance", "SampleCovariance"),
+        ("Risk.Covariance.LedoitWolfShrinkage", "LedoitWolfShrinkage"),
+    ])
+    def test_covariance_estimators_can_be_instantiated(self, module_path, class_name):
+        """Verify covariance estimators can be instantiated."""
+        instance = assert_can_instantiate(module_path, class_name)
+        assert instance is not None
 
 
 class TestSampleCovariance:
@@ -84,20 +96,8 @@ class TestSampleCovariance:
 
         assert cov_matrix.shape == (10, 10)
 
-    def test_sample_covariance_is_symmetric(self):
-        """Covariance matrix should be symmetric."""
-        from Risk.Covariance.SampleCovariance import SampleCovariance
-
-        np.random.seed(42)
-        returns = pl.DataFrame(np.random.randn(50, 5))
-
-        estimator = SampleCovariance()
-        cov_matrix = estimator.fit(returns)
-
-        np.testing.assert_array_almost_equal(cov_matrix, cov_matrix.T)
-
-    def test_sample_covariance_is_positive_semidefinite(self):
-        """Covariance matrix should be positive semidefinite (all eigenvalues ≥ 0)."""
+    def test_sample_covariance_matrix_properties(self):
+        """Covariance matrix should be symmetric and positive semidefinite."""
         from Risk.Covariance.SampleCovariance import SampleCovariance
 
         np.random.seed(42)
@@ -106,9 +106,15 @@ class TestSampleCovariance:
         estimator = SampleCovariance()
         cov_matrix = estimator.fit(returns)
 
-        # Check eigenvalues
-        eigenvalues = np.linalg.eigvalsh(cov_matrix)
-        assert np.all(eigenvalues >= -1e-10)  # Allow small numerical errors
+        # Replaced individual tests with comprehensive validation
+        # Old tests:
+        # - test_sample_covariance_is_symmetric
+        # - test_sample_covariance_is_positive_semidefinite
+        assert_valid_covariance_matrix(
+            cov_matrix,
+            check_symmetric=True,
+            check_positive_semidefinite=True,
+        )
 
 
 class TestLedoitWolfShrinkage:
@@ -183,9 +189,13 @@ class TestLedoitWolfShrinkage:
         estimator = LedoitWolfShrinkage()
         cov_matrix = estimator.fit(returns)
 
-        # Check eigenvalues
-        eigenvalues = np.linalg.eigvalsh(cov_matrix)
-        assert np.all(eigenvalues > 1e-10)  # Strictly positive
+        # Replaced individual eigenvalue check with comprehensive validation
+        assert_valid_covariance_matrix(
+            cov_matrix,
+            check_symmetric=True,
+            check_positive_semidefinite=True,
+            check_invertible=True,
+        )
 
 
 class TestHighDimensionalScenarios:
@@ -518,12 +528,14 @@ class TestPerBlockShrinkage:
         assert shrunk_blocks['Medium'].shape == (5, 5)
 
         # Verify each is symmetric and positive definite
+        # Replaced individual checks with comprehensive validation
         for sector, cov in shrunk_blocks.items():
-            # Symmetric
-            np.testing.assert_array_almost_equal(cov, cov.T)
-            # Positive definite
-            eigenvalues = np.linalg.eigvalsh(cov)
-            assert np.all(eigenvalues > 1e-10)
+            assert_valid_covariance_matrix(
+                cov,
+                check_symmetric=True,
+                check_positive_semidefinite=True,
+                check_invertible=True,
+            )
 
 
 class TestBusinessRequirements:
