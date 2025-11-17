@@ -1,6 +1,29 @@
 # Awesome Rates Backtesting System (ARBS)
 
-A modular research codebase for building yield curves, pricing interest rate derivative, and running event- or query-driven backtests. The design mirrors “adapter”-style patterns so the backtester is **product-agnostic** while product-specific logic lives behind adapters.
+A modular research codebase for building yield curves, pricing interest rate derivatives, and running event- or query-driven backtests. The design mirrors "adapter"-style patterns so the backtester is **product-agnostic** while product-specific logic lives behind adapters.
+
+---
+
+## Documentation Structure
+
+**For Claude Code and Developers:**
+
+- **[CLAUDE.md](CLAUDE.md)** - Universal development rules, MVP philosophy, and ARBS project overview
+  - Read this FIRST to understand how to work with Peter and the project philosophy
+  - Contains Rule #1, Rule #2, TDD workflow, git standards, debugging framework
+  - Quick ARBS architecture overview
+  - Reference when: Starting work, understanding coding standards, need workflow guidance
+
+- **[ARBS_ARCHITECTURE.md](ARBS_ARCHITECTURE.md)** - Complete ARBS technical architecture and reference
+  - Read this for detailed architecture, setup instructions, and troubleshooting
+  - Contains three-layer design, data flow, backend systems, all commands
+  - Reference when: Setting up environment, adding features, debugging, looking up commands
+  - **Keep this updated** when architecture changes, new backends added, or setup process modified
+
+**Maintenance Notes:**
+- CLAUDE.md changes rarely (universal rules and philosophy)
+- ARBS_ARCHITECTURE.md updates with code changes (architecture, patterns, commands)
+- Both files should cross-reference each other appropriately
 
 ---
 
