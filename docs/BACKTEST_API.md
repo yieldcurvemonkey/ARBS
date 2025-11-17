@@ -1,8 +1,8 @@
-# Unified Backtest API Documentation
+# Backtest API Documentation
 
 ## Overview
 
-The unified `Backtest` class provides a single, flexible interface for running backtests across all asset classes and data sources. It supports three workflows:
+The `Backtest` class provides a single, flexible interface for running backtests across all asset classes and data sources. It supports three workflows:
 
 1. **Signal-Based Query Workflow**: Uses MDP + Adapter + Signals for signal-driven strategies (futures, swaps)
 2. **DataFrame-Based Workflow**: Uses pre-computed returns + Signals (equities, ETFs)
@@ -464,7 +464,7 @@ backtest = FuturesBacktest(
 result = backtest.run_backtest(contracts, dates)
 ```
 
-**After (Unified):**
+**After:**
 
 ```python
 from Backtest.Backtest import Backtest
@@ -480,7 +480,7 @@ result = backtest.run(contracts, dates)  # run() not run_backtest()
 
 **Key Changes:**
 
-1. Import from `Backtest.Backtest` (not `Backtest.FuturesBacktest`)
+1. Import from `Backtest.Backtest`
 2. Add `adapter` parameter (e.g., `FuturesAdapter(mdp)`)
 3. Use `signals` parameter (plural, supports list)
 4. Call `run()` method (not `run_backtest()`)
@@ -499,7 +499,7 @@ backtest = EquityBacktest(
 result = backtest.run()
 ```
 
-**After (Unified):**
+**After:**
 
 ```python
 from Backtest.Backtest import Backtest
@@ -512,7 +512,7 @@ result = backtest.run_from_dataframe(returns_df, dates)
 
 **Key Changes:**
 
-1. Import from `Backtest.Backtest` (unified class)
+1. Import from `Backtest.Backtest`
 2. Use `signals` parameter
 3. Call `run_from_dataframe(returns_df, dates)`
 4. Pass `dates` explicitly
@@ -816,7 +816,7 @@ Complete examples available in `examples/`:
 
 ## API Stability
 
-The unified `Backtest` API is stable. Future enhancements will maintain backward compatibility:
+The `Backtest` API is stable. Future enhancements will maintain backward compatibility:
 
 - **Stable**: Constructor signature, `run()`, `run_from_dataframe()`
 - **May Extend**: New optional parameters, new workflows

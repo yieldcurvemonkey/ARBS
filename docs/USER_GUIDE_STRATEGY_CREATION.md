@@ -456,7 +456,7 @@ optimizer:
   risk_aversion: 1.0
   constraints:
     long_only: true
-    max_position: 0.30  # More diversified
+    position_limit: 0.30  # More diversified
 
 execution:
   rebalance_frequency: "weekly"
@@ -689,8 +689,8 @@ optimizer:
 
   constraints:
     long_only: true
-    max_position: 0.15       # Max 15% in any position
-    leverage: 0.8            # Max 80% invested (20% cash)
+    position_limit: 0.15       # Max 15% in any position
+    leverage_limit: 0.8            # Max 80% invested (20% cash)
 
 risk:
   covariance: "ledoit_wolf"
@@ -711,9 +711,8 @@ optimizer:
 
   constraints:
     long_only: false         # Allow shorting
-    max_position: 0.40       # Max 40% long
-    max_short_position: -0.30  # Max 30% short
-    leverage: 2.0            # Up to 200% gross exposure
+    position_limit: 0.40       # Max 40% long or short per position
+    leverage_limit: 2.0            # Up to 200% gross exposure
 
 risk:
   covariance: "sample"       # Simple covariance (less shrinkage)
@@ -1128,16 +1127,8 @@ optimizer:
 
   constraints:
     long_only: true              # No shorting
-    max_position: 0.30           # Max 30% per position
-    max_short_position: -0.20    # Max 20% short (if long_only=false)
-    leverage: 1.5                # Max gross exposure
-    max_turnover: 0.30           # Max turnover per rebalance
-    dv01_limit:                  # Interest rate risk limit
-      enabled: true
-      max_dv01: 500000
-    cardinality:                 # Limit number of positions
-      enabled: true
-      max_positions: 5
+    position_limit: 0.30           # Max 30% per position
+    leverage_limit: 1.5                # Max gross exposure
 ```
 
 ---

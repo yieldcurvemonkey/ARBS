@@ -128,63 +128,28 @@ class MomentumSignal(BaseSignal, TimeSeriesSignalMixin):
             Price went from 100 to 105 over 60 days:
             >>> momentum = 0.05  # 5% gain = positive momentum
         """
-        # Validate input data
-        if inst_data is None or len(inst_data) == 0:
-            return 0.0
-
-        if 'price' not in inst_data.columns:
-            return 0.0
-
-        # Ensure we have date column
-        if 'date' not in inst_data.columns:
-            # Assume index is dates if no date column
-            inst_data = inst_data.clone()
-            inst_data = inst_data.with_row_index('date')
-
-        # Convert date column to datetime if needed
-        if inst_data['date'].dtype != pl.Date and inst_data['date'].dtype != pl.Datetime:
-            inst_data = inst_data.clone()
-            inst_data = inst_data.with_columns(
-                pl.col('date').str.strptime(pl.Date, '%Y-%m-%d').cast(pl.Datetime)
+        # Extract price window using shared helper
+        try:
+            current_price, lookback_price, actual_days = self._get_price_window(
+                inst_data, as_of, self.lookback_days, return_series=False, market_data=market_data
             )
+        except ValueError:
+            # Insufficient data
+            return 0.0
 
-        # Sort by date
-        inst_data = inst_data.sort('date')
-
-        # Get current price
-        current_price = inst_data['price'][-1]
-
-        # Calculate lookback date (convert as_of to datetime for comparison)
-        lookback_date = as_of - timedelta(days=self.lookback_days)
-
-        # Find price at lookback date (or closest available)
-        hist_data = inst_data.filter(pl.col('date') <= lookback_date)
-
-        if len(hist_data) == 0:
-            # Not enough history - use earliest available
-            if len(inst_data) < 2:
-                return 0.0
-            lookback_price = inst_data['price'][0]
-        else:
-            lookback_price = hist_data['price'][-1]
-
-        # Calculate momentum
+        # Validate prices
         if lookback_price <= 0:
             return 0.0
 
+        # Calculate momentum
         if self.method == 'log':
             momentum = np.log(current_price / lookback_price)
         else:  # 'simple'
             momentum = (current_price - lookback_price) / lookback_price
 
         # Annualize if requested
-        if self.annualize:
-            # Calculate actual days used
-            end_date = inst_data['date'][-1]
-            start_date = hist_data['date'][-1] if len(hist_data) > 0 else inst_data['date'][0]
-            actual_days = (end_date - start_date).days
-            if actual_days > 0:
-                momentum = momentum * (self.business_days_per_year / actual_days)
+        if self.annualize and actual_days > 0:
+            momentum = momentum * (self.business_days_per_year / actual_days)
 
         return float(momentum)
 

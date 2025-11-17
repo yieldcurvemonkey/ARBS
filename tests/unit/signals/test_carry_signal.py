@@ -19,21 +19,30 @@ import pytest
 import numpy as np
 import polars as pl
 from datetime import date, timedelta
+from tests.utils import assert_can_import, assert_can_instantiate, assert_valid_signal_distribution
 
 
 class TestCarrySignalBasics:
     """Test basic carry signal functionality."""
 
+    # Replaced by parametrized tests using tests.utils
+    # Old boilerplate:
+    # def test_carry_signal_can_be_imported(self):
+    #     from Signals.Futures.CarrySignal import CarrySignal
+    #     assert CarrySignal is not None
+
     def test_carry_signal_can_be_imported(self):
         """Verify CarrySignal exists and can be imported."""
-        from Signals.Futures.CarrySignal import CarrySignal
-        assert CarrySignal is not None
+        cls = assert_can_import("Signals.Futures.CarrySignal", "CarrySignal")
+        assert cls is not None
 
     def test_carry_signal_can_be_instantiated(self):
         """CarrySignal should be instantiable."""
-        from Signals.Futures.CarrySignal import CarrySignal
-
-        signal = CarrySignal(name="futures_carry")
+        signal = assert_can_instantiate(
+            "Signals.Futures.CarrySignal",
+            "CarrySignal",
+            init_kwargs={"name": "futures_carry"}
+        )
         assert signal is not None
         assert signal.name == "futures_carry"
 
@@ -278,9 +287,15 @@ class TestCarryStandardization:
 
         carries = signal.generate_batch(inst_data_list, None, date(2024, 11, 1))
 
-        # Check z-score properties: mean ≈ 0, std ≈ 1
-        assert abs(np.mean(carries)) < 0.1
-        assert abs(np.std(carries, ddof=1) - 1.0) < 0.2
+        # Replaced individual checks with comprehensive signal validation
+        # Old boilerplate:
+        # assert abs(np.mean(carries)) < 0.1
+        # assert abs(np.std(carries, ddof=1) - 1.0) < 0.2
+        assert_valid_signal_distribution(
+            carries,
+            mean_tolerance=0.1,
+            std_tolerance=0.2,
+        )
 
 
 class TestCarryICBenchmark:

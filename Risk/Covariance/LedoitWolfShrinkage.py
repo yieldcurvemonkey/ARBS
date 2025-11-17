@@ -34,6 +34,10 @@ import numpy as np
 import polars as pl
 
 from Risk.Base.BaseCovarianceEstimator import BaseCovarianceEstimator
+from Risk.Covariance.shrinkage_utils import (
+    compute_constant_correlation_target,
+    compute_ledoit_wolf_shrinkage_intensity,
+)
 
 
 class LedoitWolfShrinkage(BaseCovarianceEstimator):
@@ -190,41 +194,17 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         Returns:
             Constant correlation matrix (N×N)
         """
-        # Calculate sample correlation matrix
+        # Convert to numpy
         returns_np = returns.to_numpy()
 
-        # Use pairwise if needed (to avoid NaN)
+        # Use pairwise covariance if needed
         if self.handle_missing == "pairwise":
-            cov_matrix = self._pairwise_covariance(returns_np)
-            # Convert to correlation
-            std = np.sqrt(np.diag(cov_matrix))
-            std_matrix = np.outer(std, std)
-            std_matrix = np.where(std_matrix > 1e-10, std_matrix, 1.0)
-            corr_matrix = cov_matrix / std_matrix
-            corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
-            np.fill_diagonal(corr_matrix, 1.0)
+            sample_cov = self._pairwise_covariance(returns_np)
         else:
-            corr_matrix = np.corrcoef(returns_np.T)
-            # Ensure correlation matrix is always 2D (np.corrcoef returns scalar for single column)
-            corr_matrix = np.atleast_2d(corr_matrix)
+            sample_cov = self.sample_cov
 
-        # Average off-diagonal correlation
-        n = corr_matrix.shape[0]
-        mask = ~np.eye(n, dtype=bool)  # Off-diagonal mask
-        avg_corr = np.mean(corr_matrix[mask])
-
-        # Create constant correlation matrix
-        target_corr = np.full((n, n), avg_corr)
-        np.fill_diagonal(target_corr, 1.0)
-
-        # Convert to covariance using sample standard deviations
-        if self.handle_missing == "pairwise":
-            std = np.sqrt(np.nanvar(returns_np, axis=0, ddof=1))
-        else:
-            std = returns.std(ddof=1).to_numpy()
-        target_cov = target_corr * np.outer(std, std)
-
-        return target_cov
+        # Use utility function for canonical formula
+        return compute_constant_correlation_target(returns_np, sample_cov)
 
     def _compute_shrinkage_intensity(
         self,
@@ -252,37 +232,8 @@ class LedoitWolfShrinkage(BaseCovarianceEstimator):
         Returns:
             Optimal shrinkage intensity δ* ∈ [0, 1]
         """
-        T, N = returns.shape
-
-        # Demean returns
-        returns_centered = returns - np.mean(returns, axis=0)
-
-        # Calculate π̂: sum of asymptotic variances of sample covariance elements
-        # π̂ = (1/T²) Σ_t [(r_t - r̄)(r_t - r̄)' - S]²
-        pi_hat = 0.0
-        for t in range(T):
-            r_t = returns_centered[t : t + 1, :].T  # Column vector
-            outer_t = r_t @ r_t.T
-            diff = outer_t - sample_cov
-            pi_hat += np.sum(diff**2)
-        pi_hat /= T**2
-
-        # Calculate ρ̂: squared Frobenius norm of (S - F)
-        rho_hat = np.sum((sample_cov - target) ** 2)
-
-        # Calculate γ̂: trace of (S - F)²
-        # This is a simplification; full formula is more complex
-
-        # Shrinkage intensity: δ* = max(0, min(1, (π̂ - γ̂)/ρ̂))
-        # Simplified version: δ* = min(1, pi_hat / (T * rho_hat))
-        if rho_hat < 1e-10:
-            # Target and sample are identical → no shrinkage needed
-            delta = 0.0
-        else:
-            kappa = pi_hat / rho_hat
-            delta = max(0.0, min(1.0, kappa / T))
-
-        return delta
+        # Use canonical utility function
+        return compute_ledoit_wolf_shrinkage_intensity(returns, sample_cov, target)
 
     def get_shrinkage_intensity(self) -> float:
         """

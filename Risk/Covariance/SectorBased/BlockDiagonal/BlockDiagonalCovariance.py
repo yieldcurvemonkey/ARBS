@@ -26,6 +26,10 @@ from sklearn.decomposition import PCA
 
 from Risk.Covariance.SectorBased.BaseSectorCovarianceEstimator import SectorBasedCovarianceEstimator
 from Risk.Covariance.SectorBased.sector_utils import create_block_diagonal_matrix
+from Risk.Covariance.shrinkage_utils import (
+    compute_constant_correlation_target,
+    compute_ledoit_wolf_shrinkage_intensity,
+)
 
 
 class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
@@ -217,66 +221,16 @@ class BlockDiagonalCovariance(SectorBasedCovarianceEstimator):
         Returns:
             Shrunk covariance matrix
         """
-        T, n = residuals.shape
+        # Compute constant correlation target using utility
+        target = compute_constant_correlation_target(residuals, sample_cov)
 
-        # Shrinkage target: constant correlation model
-        std = np.sqrt(np.diag(sample_cov))
-        corr = sample_cov / np.outer(std, std)
-
-        # Average correlation
-        mask = ~np.eye(n, dtype=bool)
-        avg_corr = np.mean(corr[mask]) if n > 1 else 0.0
-
-        # Target matrix
-        target_corr = np.full((n, n), avg_corr)
-        np.fill_diagonal(target_corr, 1.0)
-        target = target_corr * np.outer(std, std)
-
-        # Compute shrinkage intensity
-        delta = self._compute_shrinkage_intensity(residuals, sample_cov, target)
+        # Compute shrinkage intensity using utility
+        delta = compute_ledoit_wolf_shrinkage_intensity(residuals, sample_cov, target)
 
         # Apply shrinkage
         shrunk_cov = delta * target + (1 - delta) * sample_cov
 
         return shrunk_cov
-
-    def _compute_shrinkage_intensity(self, residuals: np.ndarray, sample_cov: np.ndarray, target: np.ndarray) -> float:
-        """
-        Compute optimal shrinkage intensity (Ledoit-Wolf formula).
-
-        Args:
-            residuals: T×n residual matrix
-            sample_cov: n×n sample covariance
-            target: n×n target matrix
-
-        Returns:
-            Shrinkage intensity δ ∈ [0, 1]
-        """
-        T, n = residuals.shape
-
-        # Demean
-        residuals_centered = residuals - np.mean(residuals, axis=0)
-
-        # π̂: sum of asymptotic variances
-        pi_hat = 0.0
-        for t in range(T):
-            r_t = residuals_centered[t : t + 1, :].T
-            outer_t = r_t @ r_t.T
-            diff = outer_t - sample_cov
-            pi_hat += np.sum(diff**2)
-        pi_hat /= T**2
-
-        # ρ̂: squared Frobenius norm of (S - F)
-        rho_hat = np.sum((sample_cov - target) ** 2)
-
-        # Shrinkage intensity
-        if rho_hat < 1e-10:
-            delta = 0.0
-        else:
-            kappa = pi_hat / rho_hat
-            delta = max(0.0, min(1.0, kappa / T))
-
-        return delta
 
     def _apply_bias_correction(self, cov: np.ndarray, T: int, p: int) -> np.ndarray:
         """

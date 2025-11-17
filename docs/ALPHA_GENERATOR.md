@@ -194,7 +194,7 @@ alpha_gen = AlphaGenerator(
 ```python
 signals_to_alphas(
     signals: Dict[str, float],
-    returns_history: pd.DataFrame,
+    returns_history: pl.DataFrame,
     as_of: date
 ) -> Dict[str, float]
 ```
@@ -203,7 +203,7 @@ signals_to_alphas(
 - `signals` (Dict[str, float]): Map from asset → Z-score
   - Z-scores are standardized signals (mean=0, std=1)
   - Positive = bullish, Negative = bearish, Zero = neutral
-- `returns_history` (pd.DataFrame): Historical returns for volatility estimation
+- `returns_history` (pl.DataFrame): Historical returns for volatility estimation
   - Rows = time periods, Columns = assets
   - Values = decimal returns (0.01 = 1%)
 - `as_of` (date): Current date (for potential time-varying IC)
@@ -221,7 +221,7 @@ signals_to_alphas(
 **Example**:
 ```python
 from Signals.AlphaGenerator import AlphaGenerator
-import pandas as pd
+import polars as pl
 from datetime import date
 
 alpha_gen = AlphaGenerator(IC=0.05)
@@ -234,7 +234,7 @@ signals = {
 }
 
 # Historical returns (for volatility estimation)
-returns_history = pd.DataFrame({
+returns_history = pl.DataFrame({
     'SFRZ4': [...],  # 60+ periods of returns
     'SFRH5': [...],
     'SFRM5': [...]
@@ -721,7 +721,7 @@ alphas = alpha_gen.signals_to_alphas(
 
 ```python
 from Signals.AlphaGenerator import AlphaGenerator
-import pandas as pd
+import polars as pl
 import numpy as np
 from datetime import date
 
@@ -732,7 +732,7 @@ alpha_gen = AlphaGenerator(IC=0.05)
 signals = {'SFRZ4': 2.0}  # 2 std devs above mean
 
 # Historical returns (10% annual volatility)
-returns_history = pd.DataFrame({
+returns_history = pl.DataFrame({
     'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252)
 })
 
@@ -754,7 +754,7 @@ print(f"Expected return: {alphas['SFRZ4']:.2%}")
 
 ```python
 from Signals.AlphaGenerator import AlphaGenerator
-import pandas as pd
+import polars as pl
 import numpy as np
 from datetime import date
 
@@ -769,7 +769,7 @@ signals = {
 
 # Different volatilities
 np.random.seed(42)
-returns_history = pd.DataFrame({
+returns_history = pl.DataFrame({
     'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252),  # 10% vol
     'SFRH5': np.random.randn(60) * 0.15 / np.sqrt(252),  # 15% vol
     'SFRM5': np.random.randn(60) * 0.08 / np.sqrt(252),  # 8% vol
@@ -791,14 +791,14 @@ for asset in sorted(alphas.keys()):
 
 ```python
 from Signals.AlphaGenerator import AlphaGenerator
-import pandas as pd
+import polars as pl
 import numpy as np
 from datetime import date
 
 # Same signal, different IC assumptions
 signals = {'SFRZ4': 1.5}
 
-returns_history = pd.DataFrame({
+returns_history = pl.DataFrame({
     'SFRZ4': np.random.randn(60) * 0.10 / np.sqrt(252)
 })
 
@@ -829,7 +829,7 @@ print(f"Alpha (IC=0.10): {alpha_high['SFRZ4']:.2%}")
 ```python
 from Signals.AlphaGenerator import AlphaGenerator
 from Risk.Volatility.EWMAVolatility import EWMAVolatility
-import pandas as pd
+import polars as pl
 import numpy as np
 from datetime import date
 
@@ -840,7 +840,7 @@ alpha_gen = AlphaGenerator(
 )
 
 # Returns with recent volatility spike
-returns_history = pd.DataFrame({
+returns_history = pl.DataFrame({
     'SFRZ4': np.concatenate([
         np.random.randn(80) * 0.01,  # Low vol period
         np.random.randn(20) * 0.05,  # High vol spike

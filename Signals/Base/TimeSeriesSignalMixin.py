@@ -2,7 +2,7 @@
 # ABOUTME: Used by MomentumSignal, MeanReversionSignal, and other time-series signals to eliminate duplication
 
 from datetime import date, timedelta
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union, Tuple
 import logging
 import numpy as np
 import polars as pl
@@ -153,3 +153,145 @@ class TimeSeriesSignalMixin:
             'mean': np.mean(list(signals.values())),
             'std': np.std(list(signals.values()), ddof=1) if len(signals) > 1 else 0.0
         }
+
+    def _get_price_window(
+        self,
+        inst_data: pl.DataFrame,
+        as_of: date,
+        lookback_days: int,
+        return_series: bool = False,
+        market_data: Optional[Any] = None
+    ) -> Union[Tuple[float, float, int], Tuple[float, np.ndarray, int]]:
+        """
+        Extract price window for time-series signal calculations.
+
+        Consolidates common logic for:
+        - DataFrame validation (None, empty, missing columns)
+        - Date column handling (string → datetime conversion)
+        - DataFrame sorting by date
+        - Price window extraction
+
+        Args:
+            inst_data: Price history DataFrame with 'date' and 'price' columns
+            as_of: Calculation date
+            lookback_days: Number of days to look back
+            return_series: If True, return full price series; if False, return endpoints
+            market_data: Market data provider (unused, for signature compatibility)
+
+        Returns:
+            If return_series=False (momentum use case):
+                (current_price, lookback_price, actual_days)
+                - current_price: Most recent price
+                - lookback_price: Price at start of lookback window
+                - actual_days: Actual calendar days in window
+
+            If return_series=True (mean reversion use case):
+                (current_price, past_prices, actual_days)
+                - current_price: Most recent price
+                - past_prices: NumPy array of past prices (excluding current)
+                - actual_days: Actual calendar days in window
+
+        Raises:
+            ValueError: If data is insufficient or invalid
+
+        Edge Cases:
+            - Insufficient history: Uses all available data
+            - Missing date column: Raises ValueError
+            - Zero/negative prices: Handled by caller
+            - Short history (< 2 points): Raises ValueError for mean reversion
+
+        Example (Momentum):
+            >>> current, lookback, days = self._get_price_window(
+            ...     inst_data, date(2024, 11, 1), lookback_days=60
+            ... )
+            >>> momentum = (current - lookback) / lookback
+
+        Example (Mean Reversion):
+            >>> current, past_prices, days = self._get_price_window(
+            ...     inst_data, date(2024, 11, 1), lookback_days=20, return_series=True
+            ... )
+            >>> mean = np.mean(past_prices)
+            >>> std = np.std(past_prices, ddof=1)
+            >>> signal = -1.0 * (current - mean) / std
+        """
+        # Validate input data
+        if inst_data is None or len(inst_data) == 0:
+            raise ValueError("inst_data is None or empty")
+
+        if 'price' not in inst_data.columns:
+            raise ValueError("inst_data missing 'price' column")
+
+        # Ensure we have date column
+        if 'date' not in inst_data.columns:
+            if return_series:
+                # Mean reversion needs proper dates
+                raise ValueError("inst_data missing 'date' column")
+            else:
+                # Momentum can work with indexed data
+                inst_data = inst_data.clone()
+                inst_data = inst_data.with_row_index('date')
+
+        # Convert date column to datetime if needed
+        date_dtype = inst_data['date'].dtype
+        if date_dtype not in [pl.Date, pl.Datetime, pl.Datetime('us'), pl.Datetime('ms'), pl.Datetime('ns')]:
+            inst_data = inst_data.with_columns(
+                pl.col('date').str.strptime(pl.Datetime, '%Y-%m-%d')
+            )
+
+        # Sort by date
+        inst_data = inst_data.sort('date')
+
+        # Get current price
+        current_price = float(inst_data['price'][-1])
+
+        # Calculate lookback date
+        lookback_date = as_of - timedelta(days=lookback_days)
+
+        if return_series:
+            # Mean reversion use case: return full price series in window
+            window_data = inst_data.filter(pl.col('date') >= lookback_date)
+
+            if len(window_data) < 2:
+                raise ValueError("Insufficient history for mean reversion (need at least 2 points)")
+
+            # Extract past prices (excluding current)
+            past_prices = window_data['price'].to_numpy()[:-1]
+
+            if len(past_prices) < 1:
+                raise ValueError("Insufficient past prices (need at least 1)")
+
+            # Calculate actual days
+            end_date = window_data['date'][-1]
+            start_date = window_data['date'][0]
+            if hasattr(end_date, 'date'):
+                end_date = end_date.date()
+            if hasattr(start_date, 'date'):
+                start_date = start_date.date()
+            actual_days = (end_date - start_date).days
+
+            return (current_price, past_prices, actual_days)
+
+        else:
+            # Momentum use case: return current and lookback prices
+            # Find price at or before lookback date
+            hist_data = inst_data.filter(pl.col('date') <= lookback_date)
+
+            if len(hist_data) == 0:
+                # Not enough history - use earliest available
+                if len(inst_data) < 2:
+                    raise ValueError("Insufficient history for momentum (need at least 2 points)")
+                lookback_price = float(inst_data['price'][0])
+                start_date = inst_data['date'][0]
+            else:
+                lookback_price = float(hist_data['price'][-1])
+                start_date = hist_data['date'][-1]
+
+            # Calculate actual days
+            end_date = inst_data['date'][-1]
+            if hasattr(end_date, 'date'):
+                end_date = end_date.date()
+            if hasattr(start_date, 'date'):
+                start_date = start_date.date()
+            actual_days = (end_date - start_date).days
+
+            return (current_price, lookback_price, actual_days)
