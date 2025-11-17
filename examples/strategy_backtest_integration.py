@@ -385,10 +385,21 @@ def example_3_em_fx_carry_strategy():
     print("✓ Data generated")
     print()
 
-    # Evaluate carry signals
+    # Evaluate carry signals using BaseSignal.generate_batch()
     print("Evaluating carry signals...")
     eval_date = date(2024, 6, 1)
-    signals = carry_signal.evaluate_multiple(eval_date, currency_data)
+
+    # Convert currency_data dict to list for BaseSignal.generate_batch()
+    currency_data_list = [currency_data[curr] for curr in currencies]
+
+    z_scores = carry_signal.generate_batch(
+        inst_data_list=currency_data_list,
+        market_data=None,
+        as_of=eval_date
+    )
+
+    # Convert z-scores to dict
+    signals = {currency: float(z_scores[i]) for i, currency in enumerate(currencies)}
 
     print(f"Carry Signals (as of {eval_date}):")
     print("-"*80)
