@@ -20,21 +20,30 @@ import pytest
 import numpy as np
 import polars as pl
 from datetime import date, timedelta
+from tests.utils import assert_can_import, assert_can_instantiate
 
 
 class TestFuturesAdapterBasics:
     """Test basic adapter functionality."""
 
+    # Replaced by tests.utils helpers
+    # Old boilerplate:
+    # def test_adapter_can_be_imported(self):
+    #     from Adapter.FuturesAdapter import FuturesAdapter
+    #     assert FuturesAdapter is not None
+
     def test_adapter_can_be_imported(self):
         """Verify FuturesAdapter exists and can be imported."""
-        from Adapter.FuturesAdapter import FuturesAdapter
-        assert FuturesAdapter is not None
+        cls = assert_can_import("Adapter.FuturesAdapter", "FuturesAdapter")
+        assert cls is not None
 
     def test_adapter_can_be_instantiated(self, mock_mdp):
         """Adapter can be created with market data provider."""
-        from Adapter.FuturesAdapter import FuturesAdapter
-
-        adapter = FuturesAdapter(mock_mdp)
+        adapter = assert_can_instantiate(
+            "Adapter.FuturesAdapter",
+            "FuturesAdapter",
+            init_args=(mock_mdp,)
+        )
 
         assert adapter is not None
         assert adapter.mdp == mock_mdp

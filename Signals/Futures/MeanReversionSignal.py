@@ -129,49 +129,16 @@ class MeanReversionSignal(BaseSignal, TimeSeriesSignalMixin):
             Price is 1 std dev above mean:
             >>> signal = 1.0  # Bearish (expect reversion down)
         """
-        # Validate input data
-        if inst_data is None or len(inst_data) == 0:
-            return 0.0
-
-        if 'price' not in inst_data.columns:
-            return 0.0
-
-        # Ensure we have date column
-        if 'date' not in inst_data.columns:
-            # Polars: handle index differently, assume we need to add date
-            return 0.0
-
-        # Convert date column to datetime if needed
-        date_dtype = inst_data['date'].dtype
-        if date_dtype not in [pl.Date, pl.Datetime, pl.Datetime('us'), pl.Datetime('ms')]:
-            inst_data = inst_data.with_columns(
-                pl.col('date').str.strptime(pl.Datetime, '%Y-%m-%d')
+        # Extract price window using shared helper
+        try:
+            current_price, past_prices, actual_days = self._get_price_window(
+                inst_data, as_of, self.lookback_days, return_series=True, market_data=market_data
             )
-
-        # Sort by date
-        inst_data = inst_data.sort('date')
-
-        # Get current price
-        current_price = inst_data['price'].to_list()[-1]
-
-        # Calculate lookback date
-        lookback_date = as_of - timedelta(days=self.lookback_days)
-
-        # Filter to lookback window (include current date for getting current price)
-        window_data = inst_data.filter(pl.col('date') >= lookback_date)
-
-        if len(window_data) < 2:
-            # Not enough history
+        except ValueError:
+            # Insufficient data
             return 0.0
 
-        # Calculate mean and std from PAST prices (exclude current price)
-        # This is critical for mean reversion: compare current to historical mean
-        past_prices = window_data['price'].to_numpy()[:-1]  # Exclude last (current) price
-
-        if len(past_prices) < 1:
-            # Need at least one historical price
-            return 0.0
-
+        # Calculate mean from past prices
         mean_price = np.mean(past_prices)
 
         # For std, need at least 2 data points
@@ -185,6 +152,7 @@ class MeanReversionSignal(BaseSignal, TimeSeriesSignalMixin):
 
         std_price = np.std(past_prices, ddof=1)
 
+        # Handle zero variance
         if std_price < 1e-10:
             # No variation in past prices
             if abs(current_price - mean_price) < 1e-10:
@@ -194,6 +162,7 @@ class MeanReversionSignal(BaseSignal, TimeSeriesSignalMixin):
             # Return +/-1 based on direction
             return -1.0 if current_price > mean_price else 1.0
 
+        # Calculate signal based on method
         if self.method == 'zscore':
             # Z-score: (current - mean) / std
             # Invert sign: negative deviation (below mean) → positive signal

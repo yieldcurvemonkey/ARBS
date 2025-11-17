@@ -44,8 +44,7 @@
 - **TRADER_REQUIREMENTS.md** - Trader UX requirements (Phases 2-6 pending)
 - **FLAW_REMEDIATION_PLAN.md** - Known issues (75% complete)
 
-### Completion Summaries
-- **POLARS_MIGRATION_COMPLETE.md** - Pandas→Polars migration complete
+### Implementation Status
 - **NOTEBOOK_VALIDATION.md** - Notebook quality assessment and test results
 - **SECTOR_COVARIANCE_VALIDATION.md** - Sector-based covariance model validation
 - **SECTOR_COVARIANCE_IMPLEMENTATION.md** - Sector covariance system (Phase 3-4 complete)
@@ -60,8 +59,8 @@
 - **design/YAHOO_FINANCE_MDP_DESIGN.md** - Yahoo Finance integration
 
 ### Strategy Frameworks
-- **STRATEGY_MODULARIZATION_SUMMARY.md** - YAML-based strategy system
-- **MODULARITY_IMPROVEMENTS_PLAN.md** - Factory pattern implementation
+- **USER_GUIDE_STRATEGY_CREATION.md** - YAML-based strategy creation guide
+- **ADDING_CUSTOM_COMPONENTS.md** - Extending signals, risk models, optimizers
 - **design/EQUITY_SECTOR_IMPLEMENTATION_PLAN.md** - Equity sector extension (15% complete)
 - **design/AGENT_ORCHESTRATION.md** - Multi-agent implementation (40% complete)
 - **design/BACKTEST_UNIFICATION_PLAN.md** - Backtest unification proposal (not executed)
@@ -96,22 +95,25 @@
 ## Archive
 
 Historical documents moved to **docs/archive/**:
-- **completed-tasks/** - Finished work summaries (15 files)
-- **sessions/** - Session handoff notes (2 files)
-- **abandoned-plans/** - Unexecuted plans (6 files)
-- **pending-research/** - Future research directions (1 file)
-- **analysis-process/** - Analysis artifacts (4 files)
+- **completed-tasks/** - Finished work summaries
+- **phase-summaries/** - Phase 3, 4 completion summaries
+- **implementation-plans/** - Modularity and Phase 4 plans
+- **analysis-artifacts/** - Cleanup analysis, review synthesis, ULTRATHINK artifacts
+- **sessions/** - Session handoff notes
+- **abandoned-plans/** - Unexecuted plans
+- **pending-research/** - Future research directions
+- **analysis-process/** - Analysis artifacts
 
 ---
 
 ## Documentation Health
 
-**Last Review**: 2025-11-14
-**Total Active Docs**: 61 files (down from 127)
-**Archived**: 28 files
-**Deleted**: 18 files
-**Critical Bugs Fixed**: 8
-**Quality**: All code references verified
+**Last Review**: 2025-11-17
+**Total Active Docs**: 45 files in docs/ (excluding archive, books, papers, references, research)
+**Archived**: 65+ files in docs/archive/
+**Phase Summaries**: Consolidated into archive/phase-summaries/
+**Analysis Artifacts**: Consolidated into archive/analysis-artifacts/
+**Quality**: Code references verified, temporal markers removed
 
 ---
 

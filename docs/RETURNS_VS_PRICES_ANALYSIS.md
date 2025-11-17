@@ -1,7 +1,5 @@
 # Returns vs Prices - Mathematical Foundation
 
-**Purpose**: Architectural rationale for returns-first design
-
 This document explains why ARBS uses returns as the primary data structure instead of prices.
 
 ---
@@ -428,22 +426,17 @@ where:
 
 ---
 
-## Implementation Status
+## Current Implementation
 
-### Completed
-- ✅ ReturnsCalculator (16 tests)
-- ✅ VolatilityEstimator (18 tests)
-- ✅ AlphaGenerator (16 tests)
-- ✅ TearSheet (19 tests)
-- ✅ Portfolio.calculate_return() refactored to accept returns
-- ✅ Backtest uses ReturnsCalculator and AlphaGenerator
-- ✅ Returns-first data architecture fully implemented
-- ✅ Covariance estimation from returns (not prices)
-- ✅ IC calculation using returns
+The returns-first architecture is implemented throughout ARBS:
 
-### Remaining
-- [ ] Additional validation and edge case testing
-- [ ] Full end-to-end integration verification
-- [ ] Documentation of returns pipeline
+- ReturnsCalculator handles price-to-returns conversion (16 tests)
+- VolatilityEstimator forecasts volatility from returns (18 tests)
+- AlphaGenerator creates scaled alphas from signals (16 tests)
+- TearSheet analyzes portfolio performance (19 tests)
+- Portfolio.calculate_return() accepts returns directly
+- Backtest uses ReturnsCalculator and AlphaGenerator
+- Covariance estimation operates on returns
+- IC calculation uses returns
 
-Total: 502 tests passing
+Total: 582 tests in test suite
