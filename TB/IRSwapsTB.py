@@ -24,7 +24,7 @@ from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapQueryWrapper
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
-from Query.IRSwaps.IRSwapValue import IRSwapValue
+from Query.IRSwaps.IRSwapValue import IRSwapValue, IRSwapValueFunctionMap
 from TB.utils import DateLike, _canonicalize_value, _dt_to_epoch_ns
 from utils.ql_utils import datetime_to_ql_date
 from BT.misc import ql_cal_date_range

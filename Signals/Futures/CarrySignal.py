@@ -24,8 +24,9 @@ Futures-Swap Basis:
 - Can be included via include_basis parameter
 """
 
-from datetime import date
-from typing import Optional, Any
+from datetime import date, timedelta
+from typing import Optional, Any, List, Dict
+import logging
 import numpy as np
 import polars as pl
 
@@ -69,6 +70,105 @@ class CarrySignal(BaseSignal):
         self.annualize = annualize
         self.include_basis = include_basis
         self.business_days_per_year = business_days_per_year
+
+    def calculate(
+        self,
+        instruments: List[str],
+        market_data: Any,
+        as_of: date,
+    ) -> Dict[str, float]:
+        """
+        Calculate carry signals for multiple instruments.
+
+        Args:
+            instruments: List of futures contract identifiers
+            market_data: Market data provider with get_price_history method
+            as_of: Calculation date
+
+        Returns:
+            Dict mapping instrument → carry signal (Z-score if standardize=True)
+            Failed instruments are excluded from result
+        """
+        # Fetch price history for all instruments
+        inst_data_list = []
+        failed_instruments = []
+        lookback_days = 30  # Carry needs minimal history, just recent data
+
+        for instrument in instruments:
+            try:
+                lookback_date = as_of - timedelta(days=lookback_days)
+                price_history = market_data.get_price_history(
+                    instrument,
+                    start_date=lookback_date,
+                    end_date=as_of
+                )
+                inst_data_list.append(price_history)
+            except Exception as e:
+                logging.getLogger(__name__).warning(
+                    "Excluding instrument from carry signal calculation",
+                    extra={'instrument': instrument, 'error': str(e)}
+                )
+                failed_instruments.append(instrument)
+
+        # Only process instruments that succeeded
+        successful_instruments = [i for i in instruments if i not in failed_instruments]
+
+        if not successful_instruments:
+            return {}
+
+        # Calculate raw carry signals for all instruments
+        raw_signals = np.array([
+            self._calculate_raw_signal(inst_data, market_data, as_of)
+            for inst_data in inst_data_list
+        ])
+
+        # Update metadata
+        self.last_generated = as_of
+
+        # Track history if enabled
+        if self.track_history:
+            self.history[as_of] = raw_signals.copy()
+
+        # Standardize if requested
+        if self.standardize:
+            signals_array = self._standardize(raw_signals)
+        else:
+            signals_array = raw_signals
+
+        # Convert array to dict
+        return {inst: float(sig) for inst, sig in zip(successful_instruments, signals_array)}
+
+    def _standardize(self, signals: np.ndarray) -> np.ndarray:
+        """
+        Standardize signals to z-scores (mean=0, std=1).
+
+        Args:
+            signals: Raw signal values
+
+        Returns:
+            Z-scored signals
+        """
+        # Handle edge cases
+        if len(signals) < 2:
+            return signals
+
+        # Remove NaN values for calculation
+        valid_mask = ~np.isnan(signals)
+        if not np.any(valid_mask):
+            return signals  # All NaN
+
+        # Calculate z-scores
+        mean = np.mean(signals[valid_mask])
+        std = np.std(signals[valid_mask], ddof=1)
+
+        if std < 1e-10:
+            # Zero variance → all signals equal → return zeros
+            return np.zeros_like(signals)
+
+        # Standardize: z = (x - mean) / std
+        z_scores = (signals - mean) / std
+
+        return z_scores
 
     def _calculate_raw_signal(
         self,

@@ -15,6 +15,7 @@ import rateslib as rl
 import tqdm
 import tqdm.asyncio
 from dateutil import parser, tz
+from pandas.errors import DtypeWarning
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import get_fomc_meetings_list, get_short_end_curve_tickers
