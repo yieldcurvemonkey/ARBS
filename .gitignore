@@ -215,3 +215,10 @@ dump/
 # repo mix/ai stuff
 repomix-output.xml
 *.xml
+
+# Node / Next.js
+node_modules/
+.next/
+*.log
+frontend/.next/
+frontend/node_modules/
