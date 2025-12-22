@@ -137,13 +137,22 @@ class IRSwapQuery(BaseQuery):
         object.__setattr__(self, "product", "IRS")
         object.__setattr__(self, "structure_id", self.structure)
 
+        skw: Dict[str, Any] = dict(self.structure_kwargs or {})
+        if self.structure == IRSwapStructure.CURVE and "tenors" in skw:
+            tenors = skw.get("tenors") or []
+            if len(tenors) >= 2:
+                skw.setdefault("front_tenor", tenors[0])
+                skw.setdefault("back_tenor", tenors[-1])
+
         # Basic validation by structure
         if self.structure == IRSwapStructure.OUTRIGHT:
             assert (
                 self.tenor or (self.effective_date and self.maturity_date) or self.is_mms
             ), "OUTRIGHT requires tenor OR (effective_date & maturity_date) OR is_mms=True"
+            if "notional" not in skw and "bpv" not in skw:
+                skw.setdefault("notional", 1_000_000)
         elif self.structure == IRSwapStructure.CURVE:
-            assert ("front_tenor" in self.structure_kwargs and "back_tenor" in self.structure_kwargs) or (
+            assert ("front_tenor" in skw and "back_tenor" in skw) or (
                 "front_effective_date" in self.structure_kwargs
                 and "front_maturity_date" in self.structure_kwargs
                 and "back_effective_date" in self.structure_kwargs
@@ -160,7 +169,6 @@ class IRSwapQuery(BaseQuery):
             ), "FLY requires all three leg tenors OR (effective_date & maturity_date) for each leg"
 
         # Build normalized structure kwargs (merge tenor/dates/is_mms flags)
-        skw: Dict[str, Any] = dict(self.structure_kwargs or {})
         if self.tenor is not None and "tenor" not in skw:
             skw["tenor"] = self.tenor
         if self.effective_date is not None and "effective_date" not in skw:
