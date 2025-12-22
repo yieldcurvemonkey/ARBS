@@ -105,15 +105,15 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
             effective_date = self._to_dt(imm_date, current_curve.reference_date())
             maturity_date = self._to_dt(mat_date, effective_date)
             fwd, tenor = None, None
-        elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
-            effective_date = _CENTRAL_BANK_DATES[current_curve.id()][tenor][0]
-            maturity_date = _CENTRAL_BANK_DATES[current_curve.id()][tenor][1]
+        elif isinstance(tenor, str) and tenor.lower() in _CENTRAL_BANK_DATES[current_curve.id()]:
+            effective_date = _CENTRAL_BANK_DATES[current_curve.id()][tenor.lower()][0]
+            maturity_date = _CENTRAL_BANK_DATES[current_curve.id()][tenor.lower()][1]
             fwd, tenor = None, None
+        elif isinstance(tenor, str) and "x" in tenor:
+            fwd, tenor = tenor.split("x")
+            fwd, tenor = fwd, tenor
         else:
-            if tenor and "x" in tenor:
-                fwd, tenor = tenor.split("x")
-                fwd, tenor = fwd, tenor
-            elif tenor:
+            if tenor:
                 fwd, tenor = "0D", tenor if tenor else None
             elif effective_date and maturity_date:
                 fwd, tenor = None, None

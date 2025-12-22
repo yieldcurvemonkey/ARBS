@@ -1,6 +1,6 @@
 import datetime
 from dataclasses import dataclass
-from typing import Union, Any, Optional
+from typing import Union, Any, Optional, Iterable, Dict, List
 
 import QuantLib as ql
 import numpy as np
@@ -240,13 +240,13 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
                 QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["Frequency"],
             ),
         )
-    
+
     def time_to_maturity(self):
         as_of = self.reference_date()
         mat = self.maturity_date()
         dc = ql.ActualActual(ql.ActualActual.Actual365)
         ql_as_of = ql.Date(as_of.day, as_of.month, as_of.year)
-        ql_mat = ql.Date(mat.day, mat.month, mat.year) 
+        ql_mat = ql.Date(mat.day, mat.month, mat.year)
         ql.Settings.instance().evaluationDate = ql_as_of
         return dc.yearFraction(ql_as_of, ql_mat)
 
@@ -292,3 +292,107 @@ class QLFixedRateBondPricer(_FixedRateBondGenericPricer):
             QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["BusinessConvention"],
             QUANTLIB_FRB_DEFINITIONS[self._ql_frb_id]["Redemption"],
         )
+
+    # -----------------------------
+    # Cashflow (coupon) event API
+    # -----------------------------
+    @staticmethod
+    def _as_ql_date(dt: Union[datetime.date, datetime.datetime, ql.Date]) -> ql.Date:
+        # datetime_to_ql_date already handles date/datetime; keep a fast-path for ql.Date
+        if isinstance(dt, ql.Date):
+            return dt
+        return datetime_to_ql_date(dt)
+
+    @staticmethod
+    def _classify_cashflow(cf: Any) -> str:
+        """
+        Best-effort classifier that works with SWIG-wrapped types:
+          - "coupon"      : FixedRateCoupon / Coupon-like
+          - "redemption"  : Redemption-like
+          - "other"
+        """
+        name = getattr(cf, "__class__", type(cf)).__name__.lower()
+        if "redemption" in name:
+            return "redemption"
+        # Coupon heuristics: SWIG can make isinstance checks flaky; prefer attribute-based checks
+        if "coupon" in name or (hasattr(cf, "accrualStartDate") and hasattr(cf, "accrualEndDate")):
+            return "coupon"
+        return "other"
+
+    def cashflows_between(
+        self,
+        frb: ql.FixedRateBond,
+        start: Union[datetime.date, datetime.datetime, ql.Date],
+        end: Union[datetime.date, datetime.datetime, ql.Date],
+        *,
+        include_coupons: bool = True,
+        include_redemption: bool = True,
+        include_end: bool = True,
+    ) -> float:
+        """
+        Sum *realized* bond cashflows (coupons and optionally redemption) with payment dates in:
+            (start, end]  if include_end=True
+            (start, end)  if include_end=False
+
+        Sign follows the bond's faceAmount (negative notionals -> negative coupons/principal).
+        """
+        qs = self._as_ql_date(start)
+        qe = self._as_ql_date(end)
+        if qe <= qs:
+            return 0.0
+
+        total = 0.0
+        for cf in list(frb.cashflows()):
+            d = cf.date()
+            pay_date = cf.date()
+
+            if d <= qs:
+                continue
+            if include_end:
+                if d > qe:
+                    continue
+            else:
+                if d >= qe:
+                    continue
+
+            # kind = self._classify_cashflow(cf)
+            # event_date = self._cashflow_event_date(pay_date, kind)
+
+            # if event_date <= qs:
+            #     continue
+            # if include_end:
+            #     if event_date > qe:
+            #         continue
+            # else:
+            #     if event_date >= qe:
+            #         continue
+
+            total += float(cf.amount())
+
+        return float(total)
+
+    def _cashflow_event_date(self, pay_date: ql.Date, kind: str) -> ql.Date:
+        if kind not in ["coupon", "other"]:
+            return pay_date
+
+        # Prefer the pricer/bond calendar (holidays/weekends) if available.
+        cal = None
+        try:
+            # Common pattern in your codebase
+            cal = (QUANTLIB_FRB_DEFINITIONS.get(self._ql_frb_id, {}) or {}).get("Calendar")
+        except Exception:
+            cal = None
+
+        if cal is None:
+            # Fallback: 1 calendar day earlier
+            try:
+                return pay_date - 1
+            except Exception:
+                return ql.Date(int(pay_date.serialNumber()) - 1)
+
+        # 1 business day earlier
+        try:
+            return cal.advance(pay_date, -1, ql.Days, ql.Preceding)
+        except Exception:
+            # fallback if SWIG/calendar advance fails
+            return pay_date - 1

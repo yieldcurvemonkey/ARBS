@@ -237,9 +237,9 @@ class IRSwapQuery(BaseQuery):
             swap_name = None
 
         structure = self.structure
-        if swap_name.count("/") == 1 and swap_name.count("-") == 0:
+        if structure is None and (swap_name.count("/") == 1 and swap_name.count("-") == 0):
             structure = IRSwapStructure.CURVE
-        elif swap_name.count("/") == 2:
+        elif structure is None and swap_name.count("/") == 2:
             structure = IRSwapStructure.FLY
 
         fmt = _structure_kwargs_formatters[structure](self.structure_kwargs or {})
@@ -261,7 +261,6 @@ class IRSwapQuery(BaseQuery):
                 to_return = f"{prefix}{swap_name} {rws} {suffix}"
 
         if "bpv" in self.structure_kwargs and self.structure_kwargs["bpv"] > 1:
-            print(self.structure_kwargs["bpv"])
             human_format_risk = human_format(abs(self.structure_kwargs["bpv"]))
             verb = f"Paid {human_format_risk}" if self.structure_kwargs["bpv"] < 0 else f"Rec {human_format_risk}"
             to_return = f"{verb} {prefix}{suffix}"

@@ -59,7 +59,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return float(irswap.fixed_rate)
 
     def notional(self, irswap: rl.IRS):
-        return float(irswap.cashflows(curves=self._rl_curve_handle)["Notional"].iloc[-1])
+        return irswap.__dict__["kwargs"]["notional"] 
 
     def fair_rate(self, irswap: rl.IRS):
         return irswap.rate(curves=self._rl_curve_handle).real / 100
@@ -69,10 +69,11 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             rl.IRS(
                 effective=self.effective_date(irswap),
                 termination=self.maturity_date(irswap),
-                fixed_rate=self.fair_rate(irswap) * 100,
+                fixed_rate=irswap.fixed_rate * 100,
                 curves=self._rl_curve_handle,
                 spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
                 notional=self.notional(irswap),
+                leg2_fixings=self._fixings,
             )
             .npv(curves=self._rl_curve_handle)
             .real
@@ -93,9 +94,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         raise NotImplementedError("rateslib not implemented")
 
     def carry_bps_running(self, irswap: rl.IRS, horizon: str):
-        if self.effective_date(irswap=irswap) > self.calendar_advance(
-            self.reference_date(), f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]}b"
-        ):
+        if self.effective_date(irswap=irswap) > self.calendar_advance(self.reference_date(), f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]}b"):
             return 0
         fwd_irs = self.build_irswap(fwd=horizon, maturity_date=self.maturity_date(irswap))
         return (self.fair_rate(fwd_irs) - self.fair_rate(irswap)) * 10_000
@@ -107,23 +106,31 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
 
     def carry_and_roll_bps_running(self, irswap: rl.IRS, horizon: str):
         raise NotImplementedError("rateslib not implemented")
-    
+
     def nodes(self):
         rl_nodes: dict[pd.Timestamp, float] = self.handle().nodes._nodes
         return {ts.date(): df for ts, df in rl_nodes.items()}
 
-    def build_irswap(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None):
+    def build_irswap(
+        self,
+        fwd=None,
+        tenor=None,
+        effective_date=None,
+        maturity_date=None,
+        fixed_rate=-0,
+        notional=None,
+        bpv=None,
+    ):
         if fwd:
             if fwd == "0D":
-                rl_effective = self.calendar_advance(self.reference_date(), f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]}b")
+                rl_effective = self.calendar_advance(
+                    self.reference_date(),
+                    f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]['SettlementDays']}b",
+                )
             else:
                 rl_effective = self.calendar_advance(self.reference_date(), fwd)
         else:
             rl_effective = effective_date
-
-        rl_effective = rl.dt(rl_effective.year, rl_effective.month, rl_effective.day)
-        if type(maturity_date) == datetime.date:
-            maturity_date = rl.dt(maturity_date.year, maturity_date.month, maturity_date.day)
 
         if bpv and not notional:
             unit_delta = rl.IRS(
@@ -132,19 +139,33 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                 spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
                 curves=self._rl_curve_handle,
                 notional=1,
+                leg2_fixings=self._fixings,
             ).analytic_delta(self._rl_curve_handle)
             notional = bpv / unit_delta
 
         if not bpv and not notional:
-            notional = 1
+            notional = 1_000_000
+
+        if fixed_rate == -0:
+            fixed_rate = self.fair_rate(
+                irswap=rl.IRS(
+                    effective=rl_effective,
+                    termination=tenor or maturity_date,
+                    spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
+                    curves=self._rl_curve_handle,
+                    notional=1,
+                    leg2_fixings=self._fixings,
+                )
+            )
 
         return rl.IRS(
             effective=rl_effective,
             termination=tenor or maturity_date,
-            fixed_rate=fixed_rate,
-            curves=self._rl_curve_handle,
             spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
+            curves=self._rl_curve_handle,
+            fixed_rate=fixed_rate,
             notional=notional,
+            leg2_fixings=self._fixings,
         )
 
     def build_pricable(self, /, **kwargs: Any) -> rl.IRS:
@@ -158,12 +179,12 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
 
         return self.build_irswap(fwd=fwd, tenor=tenor, effective_date=eff, maturity_date=mat, fixed_rate=k, notional=notional, bpv=bpv)
 
-    def resolve_pricable(self, irswap: rl.IRS):
+    def resolve_pricable(self, irswap: rl.IRS, risk_weight: Optional[float] = None):
         return self.build_irswap(
             effective_date=self.effective_date(irswap),
             maturity_date=self.maturity_date(irswap),
             fixed_rate=self.fixed_rate(irswap),
-            notional=self.notional(irswap),
+            notional=irswap.__dict__["kwargs"]["notional"] * -1,
         )
 
     def build_stirf(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None, is_ser: Optional[bool] = False):
