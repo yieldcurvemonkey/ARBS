@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional
 import tqdm
 
 import Query.IRSwaps.adapter  # noqa: F401
+import Query.STIRFutures.adapter  # noqa: F401
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from BT.data_handler import TimeGrid
 from BT.execution_engine import ExecutionEngine
