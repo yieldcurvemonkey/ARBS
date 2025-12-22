@@ -264,6 +264,24 @@ class EventTrigger(Trigger):
     pass
 
 
+# 11) Constant Maturity Roll Trigger (emitted by FRB handler)
+@dataclass
+class ConstantMaturityRollTriggerRequirements(TriggerRequirements):
+    timestamp: dt.datetime
+    previous: Dict[str, str]
+    new: Dict[str, str]
+    calc_type: str = "roll_event"
+
+    def has_triggered(self, state: dt.datetime, backtest=None) -> TriggerInfo:
+        # One-shot informational trigger; always true once injected
+        return TriggerInfo(True, {"roll": {"ts": self.timestamp, "previous": self.previous, "new": self.new}})
+
+
+@dataclass
+class ConstantMaturityRollTrigger(Trigger):
+    pass  # requirements: ConstantMaturityRollTriggerRequirements
+
+
 # 10) OrdersGeneratorTrigger (pattern matches GSQuant) :contentReference[oaicite:8]{index=8}
 @dataclass
 class OrdersGeneratorTrigger(Trigger):
