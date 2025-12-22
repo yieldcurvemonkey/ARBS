@@ -24,11 +24,66 @@ class MockPricer:
     as_of_date: datetime.date
     base_rate: float = 0.05  # 5% base rate
 
+    def id(self) -> str:
+        """Return curve identifier to satisfy structure builders."""
+        return self.curve_name
+
+    def handle(self):
+        """Return self to satisfy handle() calls in value maps."""
+        return self
+
+    def reference_date(self) -> datetime.date:
+        """Expose a reference date for date-based builders."""
+        return self.as_of_date
+
+    def build_irswap(
+        self,
+        fwd: str | None = None,
+        tenor: str | None = None,
+        effective_date: datetime.date | None = None,
+        maturity_date: datetime.date | None = None,
+        fixed_rate: float | None = None,
+        notional: float | None = None,
+        bpv: float | None = None,
+    ) -> "MockInstrument":
+        """Return a simple mock IRS instrument."""
+        tenor_label = tenor or "1Y"
+        resolved_notional = notional or (bpv / 0.0001 if bpv is not None else 1_000_000)
+        rate = fixed_rate if fixed_rate is not None else self.par_rate(tenor_label)
+        return MockInstrument(tenor=tenor_label, notional=resolved_notional, rate=rate)
+
+    def build_stirf(
+        self,
+        fwd: str | None = None,
+        tenor: str | None = None,
+        effective_date: datetime.date | None = None,
+        maturity_date: datetime.date | None = None,
+        fixed_rate: float | None = None,
+        notional: float | None = None,
+        bpv: float | None = None,
+        is_ser: bool | None = False,
+    ) -> "MockSTIRFuture":
+        tenor_label = tenor or "3M"
+        resolved_notional = notional or (bpv / 0.0001 if bpv is not None else 1_000_000)
+        rate = fixed_rate if fixed_rate is not None else self.par_rate(tenor_label)
+        return MockSTIRFuture(
+            tenor=tenor_label,
+            notional=resolved_notional,
+            fixed_rate=rate,
+            effective_date=effective_date,
+            maturity_date=maturity_date,
+            is_ser=is_ser or False,
+        )
+
+    def fair_rate(self, instrument: "MockInstrument") -> float:
+        """Return a mock fair rate for value calculations."""
+        return self.par_rate(instrument.tenor)
+
     def par_rate(self, tenor: str) -> float:
         """Return mock par rate based on tenor."""
         tenor_years = self._parse_tenor(tenor)
-        # Simple upward-sloping curve
-        return self.base_rate + (tenor_years * 0.001)
+        # Simple upward-sloping curve with small magnitude (in decimals)
+        return 0.001 + (tenor_years * 0.00001)
 
     def npv(self, instrument: Any) -> float:
         """Return mock NPV."""
@@ -43,6 +98,9 @@ class MockPricer:
         notional = getattr(instrument, 'notional', 1_000_000)
         tenor_years = getattr(instrument, 'tenor_years', 5)
         return notional * tenor_years * 0.0001
+
+    def analytic_delta(self, instrument: Any) -> float:
+        return self.pv01(instrument)
 
     def resolve_pricable(self, pricable: Any, risk_weight: float = 1.0) -> Any:
         """Resolve a generic pricable by scaling."""
@@ -77,6 +135,31 @@ class MockInstrument:
     def tenor_years(self) -> float:
         """Parse tenor to years."""
         return MockPricer._parse_tenor(self.tenor)
+
+
+@dataclass
+class MockSTIRFuture:
+    """Mock STIR future instrument."""
+
+    tenor: str
+    notional: float
+    fixed_rate: float
+    effective_date: datetime.date | None = None
+    maturity_date: datetime.date | None = None
+    is_ser: bool = False
+
+    @property
+    def tenor_years(self) -> float:
+        return MockPricer._parse_tenor(self.tenor)
+
+    def npv(self, curves=None):
+        return self.notional * (self.fixed_rate or 0) * self.tenor_years * 0.01
+
+    def analytic_delta(self, curves=None):
+        return self.notional * self.tenor_years * 0.0001
+
+    def rate(self, curves=None):
+        return self.fixed_rate
 
 
 class MockMDP:
