@@ -137,6 +137,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=fixings_series, meta_data={"timestamp": ts, "id": curve_id})
 
         elif self.source.upper() in ["ERIS_EOD_LIVE-RL_BASIC", "ERIS_EOD_LIVE_RL_BASIC"]:
+            import rateslib as rl
             from rateslib import from_json
 
             from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
@@ -157,9 +158,23 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 )
                 rl_curve_handle = from_json(rl_json)
 
+            curve_def = RATESLIB_CURVE_DEFINITIONS[curve_name]
+            cal = curve_def.get("Calendar", None)
+            if cal is not None:
+                try:
+                    rl_curve_handle.calendar = cal
+                except Exception:
+                    rl_curve_handle = rl.Curve(
+                        nodes=dict(rl_curve_handle.nodes.nodes),
+                        calendar=cal,
+                        id=getattr(rl_curve_handle, "id", None),
+                    )
+
             ref = datetime.date.today() if timestamp == "live" else timestamp
             fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
             fixings_series = fixings_series[fixings_series.index.date < ref]
+            # print(fixings_series)
+            # print(timestamp)
 
             # FIXINGS_TOL = 1
             # if not fixings_series.empty:
@@ -177,9 +192,51 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             return RLIRSwapCurve(
                 rl_curve_id=curve_name,
                 rl_curve_handle=rl_curve_handle,
-                fixings=fixings_series,
+                fixings=fixings_series * 100,
                 meta_data={"timestamp": ts, "id": curve_id},
             )
+
+        elif self.source.upper() in ["ERIS_EOD_LIVE-QL_BASIC", "ERIS_EOD_LIVE_QL_BASIC"]:
+            import QuantLib as ql
+
+            from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.ErisFuturesFetcher import ErisFuturesFetcher
+            from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
+            from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
+            from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
+
+            assert type(timestamp) == datetime.date or timestamp == "live", "CME_NY_EOD ONLY HAS EOD - 'timestamp' must be type 'datetime.date' or Literal['live']"
+            assert curve_name in QUANTLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."
+            ql_curve_def = QUANTLIB_CURVE_DEFINITIONS[curve_name]
+
+            erisf = ErisFuturesFetcher(**self.config)
+
+            ts, ql_curve = next(
+                iter(
+                    erisf.fetch_historical_eod_discount_curves(
+                        ql_dc=ql_curve_def["DayCounter"],
+                        ql_cal=ql_curve_def["Calendar"],
+                        bdates=[timestamp],
+                        enable_extrapolation=True,
+                        show_tqdm=False,
+                        **kwargs,
+                    ).items()
+                )
+            )
+
+            ql_curve_handle = ql.YieldTermStructureHandle(ql_curve)
+            irswap_index: ql.SwapIndex = QUANTLIB_CURVE_DEFINITIONS[curve_name]["ReferenceRate"](ql_curve_handle)
+
+            ref = datetime.date.today() if type(timestamp) == str else timestamp
+            fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            fixings_series: pd.Series = fixings_series[fixings_series.index.date < ref]
+            fixings_dict = fixings_series.to_dict()
+            for d, f in fixings_dict.items():
+                try:
+                    irswap_index.addFixing(fixingDate=datetime_to_ql_date(d), fixing=f, forceOverwrite=True)
+                except:
+                    continue
+
+            return QLIRSwapCurve(ql_curve_id=curve_name, ql_curve_handle=ql_curve_handle, ql_curve_index=irswap_index, meta_data={"timestamp": ts})
 
         elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q12", "SDR_INTRADAY_RL_USD_SOFR_MT_Q12"]:
             assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
@@ -501,7 +558,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             assert curve_name == "USD-SOFR-1D", "SOFR!"
 
             # 3pm close
-            if timestamp.lower() != "live":
+            if str(timestamp).lower() != "live":
                 timestamp = pytz.timezone("America/New_York").localize(datetime.datetime(timestamp.year, timestamp.month, timestamp.day, 15, 00))
 
             from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_mtv2_q12x11.rl_usd_sofr_mtv2_q12x11 import rl_usd_sofr_mt_curve
@@ -855,9 +912,10 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
         # ------- default / not implemented -------
         # Fallback: do one-by-one via existing get_data (still avoids concurrent callers hitting cache separately)
-        for t in timestamps:
-            out[t] = self.get_data({"curve_name": curve_name, "timestamp": t, **request})
-        return out
+        raise "should not be here"
+        # for t in timestamps:
+        #     out[t] = self.get_data({"curve_name": curve_name, "timestamp": t, **request})
+        # return out
 
 
 def _normalize_leg(s: str) -> str:

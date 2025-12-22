@@ -88,17 +88,18 @@ def _build_row_for_query(
         txt = (getattr(q, "tenor", "") or "") or (getattr(q, "node", "") or "") or (getattr(q, "label", "") or "")
         skw = dict(getattr(q, "structure_kwargs", {}) or {})
 
-        x_ct = txt.count("x")
+        # x_ct = txt.count("x")
         slash_ct = txt.count("/")
 
-        if x_ct >= 2 or slash_ct >= 2:
+        # if x_ct >= 2 or slash_ct >= 2:
+        if slash_ct >= 2:
             structure = IRSwapStructure.FLY
             tokens = [_norm(t) for t in re.split(r"\s*/\s*", txt) if t.strip()]
             if len(tokens) != 3:
                 raise ValueError(f"Expected 3 legs for FLY, got {len(tokens)} in '{txt}'")
             skw["front_tenor"], skw["belly_tenor"], skw["back_tenor"] = tokens
 
-        elif x_ct == 1 or slash_ct == 1:
+        elif slash_ct == 1:
             structure = IRSwapStructure.CURVE
             tokens = [_norm(t) for t in re.split(r"\s*/\s*", txt) if t.strip()]
             if len(tokens) == 2:

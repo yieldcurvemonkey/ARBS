@@ -1150,7 +1150,7 @@ class WebullFintechFetcher(BaseFetcher):
         merged.index = merged.index.tz_convert(chi)
 
         grid = pd.date_range(start=start, end=end, freq="1min", tz=chi)
-        pos = grid.indexer_between_time(time(7, 0), time(17, 0))
+        pos = grid.indexer_between_time(start.time(), end.time())
         session_index = grid[pos]
         merged = merged.reindex(session_index).ffill().bfill()
 

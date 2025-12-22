@@ -441,34 +441,36 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
             mt_nodes: List[datetime.datetime] = []
             start_dt = datetime.datetime(tday.year, tday.month, tday.day)
             spot_adj = ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(_datetime_to_ql_date(start_dt), ql.Period("2D"), ql.ModifiedFollowing)
-            for tenor in ["3Y", "4Y", "5Y", "6Y", "7Y", "8Y", "9Y", "10Y", "12Y", "20Y", "25Y", "30Y", "35Y", "40Y", "45Y", "50Y"]:
+            # for tenor in ["3Y", "4Y", "5Y", "6Y", "7Y", "8Y", "9Y", "10Y", "12Y", "20Y", "25Y", "30Y", "35Y", "40Y", "45Y", "50Y"]:
+            for tenor in ["3Y", "5Y", "7Y", "10Y", "20Y", "30Y"]:
                 mt_nodes.append(_ql_date_to_datetime(ql.NullCalendar().advance(spot_adj, ql.Period(tenor))))
 
-            assert len(mt_nodes) >= 15, "medium term nodes not found! - curve health error!"
+            # assert len(mt_nodes) >= 15, "medium term nodes not found! - curve health error!"
 
             discount_curve_se_df = discount_curve_df[discount_curve_df["Date"].isin(st_nodes)]
             discount_curve_mt_df = discount_curve_df[discount_curve_df["Date"].isin(mt_nodes)]
-            discount_curve_filtered_df = pd.concat([discount_curve_se_df, discount_curve_mt_df]).sort_values(by="Date")
+            discount_curve_filtered_df = pd.concat([discount_curve_se_df, discount_curve_mt_df]).sort_values(by="Date").drop_duplicates(subset=["Date"])
 
             mt_dates = discount_curve_filtered_df[discount_curve_filtered_df["Date"] > max(st_nodes)]["Date"].to_list()
             last_mt = mt_dates[-1]
-            tail = _ql_date_to_datetime(
-                ql.NullCalendar().advance(
-                    ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(
-                        _datetime_to_ql_date(datetime.datetime(last_mt.year, last_mt.month, last_mt.day)),
-                        ql.Period("10Y"),
-                        ql.ModifiedFollowing,
-                    ),
-                    ql.Period("10Y"),
-                )
-            )
+            tail = last_mt + datetime.timedelta(days=365 * 20)
+            # tail = _ql_date_to_datetime(
+            #     ql.NullCalendar().advance(
+            #         ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(
+            #             _datetime_to_ql_date(datetime.datetime(last_mt.year, last_mt.month, last_mt.day)),
+            #             ql.Period("10Y"),
+            #             ql.ModifiedFollowing,
+            #         ),
+            #         ql.Period("10Y"),
+            #     )
+            # )
 
             return rl.Curve(
                 nodes=dict(zip(discount_curve_filtered_df["Date"], discount_curve_filtered_df["DiscountFactor"])),
                 id=f"{curve_id_prefix}-{intraday_ts}",
                 convention="act360",
                 calendar="nyc",
-                modifier="MF",
+                # modifier="MF",
                 interpolation="log_linear",
                 t=[st_nodes[-1], st_nodes[-1], st_nodes[-1], st_nodes[-1]] + mt_dates[0:-1] + [tail, tail, tail, tail],
             )
