@@ -217,11 +217,22 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
         front_notional: Optional[float] = None,
         back_notional: Optional[float] = None,
         bpv: Optional[float] = None,
+        is_for_timeseries: Optional[bool] = False,
         risk_weights: Optional[List[float]] = [1, 1],
+        tenors: Optional[List[str]] = None,
         front_fixed_rate: Optional[float] = -0,
         back_fixed_rate: Optional[float] = -0,
-        **_,
+        **kwargs,
     ) -> Tuple[List[_IRSwapGenericObject], List[float]]:
+        if tenors:
+            rw = risk_weights or [1 for _ in tenors]
+            per_leg_bpv = bpv / len(tenors) if bpv is not None else None
+            legs = [
+                self._leg(tenor=t, notional=None, bpv=per_leg_bpv, is_for_timeseries=is_for_timeseries)
+                for t in tenors
+            ]
+            return legs, rw
+
         assert sum(x is not None for x in (front_notional, back_notional, bpv)) == 1, "Exactly one of front_notional, back_notional or bpv must be provided"
         assert len(risk_weights) == 2, "CURVE 2 RISK WEIGHTS"
 

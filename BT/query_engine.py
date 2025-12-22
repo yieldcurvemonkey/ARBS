@@ -7,18 +7,101 @@ from typing import Any, Callable, Dict, List, Optional
 import tqdm
 
 import Query.IRSwaps.adapter  # noqa: F401
+import Query.STIRFutures.adapter  # noqa: F401
+from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from BT.data_handler import TimeGrid
 from BT.execution_engine import ExecutionEngine
 from BT.query_order import QueryOrder, UnwindOrder
 from BT.query_portfolio import QueryPortfolio, ResolvedQueryPosition
 from BT.query_strategy import QueryStrategy
 from MDP.MarketDataProvider import MarketDataProvider
-from Query.Base._GenericPricable import _GenericPricable
 from Query.Base._GenericPricer import _GenericPricer
 from Query.Base.BaseQuery import BaseQuery
 
 # Optional risk function: receives portfolio + a pricer getter for current time
 RiskFn = Callable[[QueryPortfolio, Callable[[BaseQuery], Any]], Dict[str, float]]
+
+
+class PositionHandler:
+    """Responsible for building and valuing positions for a given query type."""
+
+    name: str = "generic"
+
+    def supports(self, query: BaseQuery) -> bool:
+        return True
+
+    def handles(self, position: ResolvedQueryPosition) -> bool:
+        return position.meta.get("handler") == self.name
+
+    def build_position(
+        self,
+        order: QueryOrder,
+        pricer_provider: Callable[[BaseQuery], Any],
+        now: datetime.datetime,
+    ) -> ResolvedQueryPosition:
+        query = order.query
+        pricer_or_curve = pricer_provider(query)
+        package, weights = query.resolve_package(pricer_or_curve=pricer_or_curve)
+        meta = {**(order.meta or {}), "handler": self.name}
+        return ResolvedQueryPosition(
+            package=package,
+            weights=weights,
+            opened=now,
+            source_query=query,
+            meta=meta,
+        )
+
+    def value_position(
+        self,
+        position: ResolvedQueryPosition,
+        pricer_provider: Callable[[BaseQuery], Any],
+        now: datetime.datetime,
+    ) -> float:
+        pricer_or_curve: _GenericPricer = pricer_provider(position.source_query)
+        resolved_package = [
+            pricer_or_curve.resolve_pricable(p, rw)
+            for p, rw in list(zip(position.package, position.weights))
+        ]
+
+        vmap = position.source_query.build_value_map(
+            pricer_or_curve=pricer_or_curve,
+            package=resolved_package,
+            risk_weights=position.weights,
+        )
+
+        value_id = position.source_query.default_mtm_value_id()
+        return float(vmap.apply(value=value_id))
+
+
+class FinancedFixedRateBondHandler(PositionHandler):
+    """Handles FixedRateBond positions with repo/reverse repo financing."""
+
+    name = "financed_frb"
+
+    def supports(self, query: BaseQuery) -> bool:  # type: ignore[override]
+        return isinstance(query, FixedRateBondQuery)
+
+    def _financing_pnl(self, position: ResolvedQueryPosition, now: datetime.datetime) -> float:
+        repo_rate = position.meta.get("financing_rate")
+        financing_notional = position.meta.get("financing_notional")
+        if repo_rate is None or financing_notional is None:
+            return 0.0
+
+        elapsed_days = (now - position.opened).days + (now - position.opened).seconds / 86400
+        year_frac = elapsed_days / 360.0
+
+        # Long positions pay repo (negative carry), shorts receive (positive carry)
+        direction = 1.0 if sum(position.weights) >= 0 else -1.0
+        return -direction * float(financing_notional) * float(repo_rate) * year_frac
+
+    def value_position(
+        self,
+        position: ResolvedQueryPosition,
+        pricer_provider: Callable[[BaseQuery], Any],
+        now: datetime.datetime,
+    ) -> float:
+        base_value = super().value_position(position, pricer_provider, now)
+        return base_value + self._financing_pnl(position, now)
 
 
 @dataclass
@@ -31,6 +114,9 @@ class QueryDrivenBacktest:
     risk_fn: RiskFn = lambda p, g: {}
 
     portfolio: QueryPortfolio = field(default_factory=QueryPortfolio)
+    position_handlers: List[PositionHandler] = field(
+        default_factory=lambda: [FinancedFixedRateBondHandler(), PositionHandler()]
+    )
     _cache: Dict[str, Any] = field(default_factory=dict)
 
     mtm_history: Dict[datetime.datetime, float] = field(default_factory=dict)
@@ -56,6 +142,18 @@ class QueryDrivenBacktest:
         req = q.build_mdp_request(now)
         return self._pricer_for_request(req)
 
+    def _handler_for_query(self, query: BaseQuery) -> PositionHandler:
+        for handler in self.position_handlers:
+            if handler.supports(query):
+                return handler
+        return self.position_handlers[-1]
+
+    def _handler_for_position(self, pos: ResolvedQueryPosition) -> PositionHandler:
+        for handler in self.position_handlers:
+            if handler.handles(pos):
+                return handler
+        return self._handler_for_query(pos.source_query)
+
     # -------- risk API used by triggers --------
     def get_strategy_risk(self, name: str) -> float:
         now = self._now
@@ -75,19 +173,8 @@ class QueryDrivenBacktest:
 
     # -------- P&L / MTM --------
     def _position_value(self, pos: ResolvedQueryPosition, now: datetime.datetime) -> float:
-        pricer_or_curve: _GenericPricer = self._pricer_for_query(pos.source_query, now)
-
-        old_package: List[_GenericPricable] = pos.package
-        resolved_package = [pricer_or_curve.resolve_pricable(p, rw) for p, rw in list(zip(pos.package, pos.weights))]
-
-        vmap = pos.source_query.build_value_map(
-            pricer_or_curve=pricer_or_curve,
-            package=resolved_package,
-            risk_weights=pos.weights,
-        )
-
-        value_id = pos.source_query.default_mtm_value_id()
-        return float(vmap.apply(value=value_id))
+        handler = self._handler_for_position(pos)
+        return handler.value_position(pos, lambda q: self._pricer_for_query(q, now), now)
 
     # -------- unwinds (realize P&L) --------
     def _handle_unwind(self, order: UnwindOrder, now: datetime.datetime) -> None:
@@ -140,18 +227,9 @@ class QueryDrivenBacktest:
             self.portfolio.orders_log.extend(add_orders)
             self.portfolio.trades_log.extend(fills)
             for o in fills:
-                q = o.query
-                pricer_or_curve = self._pricer_for_query(q, now)
-                package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
-                self.portfolio.add(
-                    ResolvedQueryPosition(
-                        package=package,
-                        weights=weights,
-                        opened=now,
-                        source_query=q,
-                        meta=o.meta or {},
-                    )
-                )
+                handler = self._handler_for_query(o.query)
+                pos = handler.build_position(o, lambda q: self._pricer_for_query(q, now), now)
+                self.portfolio.add(pos)
 
             # 2b) process unwinds (realize P&L and remove positions)
             for u in unwind_orders:
