@@ -28,8 +28,13 @@ from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import (
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher  # type: ignore
 
+# --- NEW IMPORTS ---
+from Query.STIRFutures._STIRFutureGenericPricer import _STIRFuturePricer
+from Query.STIRFutures.backends.rateslib.RLSTIRFuturePricer import RLSTIRFuturePricer
+
 DateLike = Union[datetime.date, datetime.datetime, Literal["live"]]
-InstrumentLike = Union[rl.STIRFuture, rl.Spread]
+# --- UPDATED TYPE ---
+InstrumentLike = _STIRFuturePricer
 
 
 # ----------------------------- time helpers ---------------------------------
@@ -168,6 +173,17 @@ def _resolve_aliases_bulk(symbols: Iterable[str], timestamp: DateLike) -> "Order
             # Package colors
             if lower in color_set:
                 aliases[alias] = _package_contracts(lower, as_of)
+                continue
+
+            # X-Year Bundles (e.g., "2-Year", "5-year")
+            # Matches strings like "2-Year", "10-year", "5Y", "2 yr"
+            m_bundle = re.match(r"^(?P<years>\d+)[-\s]?(?:year|yr|y)s?$", lower)
+            if m_bundle:
+                years = int(m_bundle.group("years"))
+                count = years * 4
+
+                contracts = _next_contracts(as_of, prefix="SR3", count=count, valid_months=[3, 6, 9, 12], cutoff_fn=_imm_cutoff)
+                aliases[alias] = contracts
                 continue
 
             # Constant maturity rank: CM1, CM2... Optional root prefix.
@@ -361,11 +377,44 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
 
     # ----------------------------- pricer build ------------------------------
     @staticmethod
-    def _build_pricer_from_args(args: Dict[str, Any]) -> rl.STIRFuture:
+    def _build_pricer_from_args(args: Dict[str, Any]) -> RLSTIRFuturePricer:
+        """
+        Builds a RLSTIRFuturePricer from cached dictionary arguments.
+        Resolves effective/maturity dates using the symbol helper.
+        """
         sym = args["symbol"]
         price = float(args["price"])
-        _, stir = _stir_future_from_symbol(sym, price)
-        return stir
+        timestamp_str = args["timestamp"]
+
+        # Parse timestamp from string (ISO) to date for the pricer
+        if isinstance(timestamp_str, str):
+            try:
+                ref_date = datetime.date.fromisoformat(timestamp_str.split("T")[0])
+            except ValueError:
+                # Fallback for pandas/other string formats
+                ref_date = pd.Timestamp(timestamp_str).date()
+        elif isinstance(timestamp_str, (datetime.date, datetime.datetime)):
+            ref_date = _as_date(timestamp_str)
+        else:
+            ref_date = datetime.date.today()
+
+        # Use helper to get rateslib object just to extract correct dates/spec
+        # This avoids duplicating the logic for IMM vs ZQ dates
+        _, temp_stir = _stir_future_from_symbol(sym, price)
+
+        print(temp_stir.__dict__["kwargs"]["effective"])
+
+        return RLSTIRFuturePricer(
+            rl_stirf_id=sym,
+            reference_date=ref_date,
+            effective_date=temp_stir.__dict__["kwargs"]["effective"].date(),
+            maturity_date=temp_stir.__dict__["kwargs"]["termination"].date(),
+            price=price,
+            rate=100.0 - price,
+            contracts=1,
+            notional=1_000_000,
+            meta_data=args,
+        )
 
     # ----------------------------- webull fetch ------------------------------
     def _fetch_webull_intraday(
@@ -493,6 +542,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                     show_tqdm=show_tqdm,
                     max_concurrent_tasks=min(len(barchart_syms), 36) + 1,
                     max_keepalive_connections=max(36, min(len(barchart_syms), 36)) + 1,
+                    # max_concurrent_tasks=1,
                 )
             except TypeError:
                 return bcf.barchart_timeseries_api(
@@ -559,8 +609,8 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
 
         result: Dict[str, List[InstrumentLike]] = {}
 
-        # For SER-FF spreads, accumulate legs here and only emit rl.Spread
-        spread_legs: Dict[str, Dict[str, rl.STIRFuture]] = defaultdict(dict)
+        # For SER-FF spreads, accumulate legs here
+        spread_legs: Dict[str, Dict[str, InstrumentLike]] = defaultdict(dict)
 
         # ---------- pass 1: cache hit ----------
         to_fetch: "OrderedDict[str, List[str]]" = OrderedDict()
@@ -570,7 +620,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             is_spread = _is_serff_spread_alias(alias)
 
             if not is_spread:
-                insts: List[rl.STIRFuture] = []
+                insts: List[InstrumentLike] = []
                 for t in tickers:
                     cache_key = f"{ts_iso}-{t}-{src}"
                     cached = None if force_refresh else self._threadsafe_cache_get(cache_key)
@@ -599,7 +649,8 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                     to_fetch.setdefault(alias, []).append(t)
 
             if len(spread_legs[alias]) == 2:
-                result[alias] = [rl.Spread(spread_legs[alias][sr1_leg], spread_legs[alias][zq_leg])]
+                # Spreads are now returned as a list of two Pricers [SR1, ZQ]
+                result[alias] = [spread_legs[alias][sr1_leg], spread_legs[alias][zq_leg]]
 
         # ---------- fetch missing ----------
         all_missing = sorted({t for lst in to_fetch.values() for t in lst})
@@ -633,7 +684,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             is_spread = _is_serff_spread_alias(alias)
 
             if not is_spread:
-                insts: List[rl.STIRFuture] = list(result.get(alias, []))  # type: ignore[assignment]
+                insts: List[InstrumentLike] = list(result.get(alias, []))  # type: ignore[assignment]
                 for t in tickers:
                     cache_key = f"{ts_iso}-{t}-{src}"
                     cached = None if force_refresh else self._threadsafe_cache_get(cache_key)
@@ -665,7 +716,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                     result[alias] = insts
                 continue
 
-            # spread alias: fill missing legs then emit rl.Spread
+            # spread alias: fill missing legs then emit list of Pricers
             legs = _serff_spread_legs(alias)
             if legs is None:
                 continue
@@ -700,7 +751,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 spread_legs[alias][t] = self._build_pricer_from_args(cached)
 
             if len(spread_legs[alias]) == 2:
-                result[alias] = [rl.Spread(spread_legs[alias][sr1_leg], spread_legs[alias][zq_leg])]
+                result[alias] = [spread_legs[alias][sr1_leg], spread_legs[alias][zq_leg]]
 
         return result
 

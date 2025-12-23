@@ -88,3 +88,6 @@ class STIRFutureQuery(BaseQuery):
 
     def __rtruediv__(self, scalar: object):
         return NotImplemented
+
+    def default_mtm_value_id(self):
+        return STIRFutureValue.NPV
