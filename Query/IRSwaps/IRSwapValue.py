@@ -38,7 +38,7 @@ class IRSwapValue(Enum):
 _swap_structure_sign_mapper = {
     IRSwapStructure.OUTRIGHT: lambda rws: rws,
     IRSwapStructure.CURVE: lambda rws: rws,
-    IRSwapStructure.FLY: lambda rws: rws,
+    IRSwapStructure.FLY: lambda rws: [-1 * np.abs(rws[0]), 1 * np.abs(rws[1]), -1 * np.abs(rws[2])],  # always keep belly risk weight pos, wings risk weight negative
 }
 
 _swap_structure_legs_mapper = {

@@ -95,8 +95,8 @@ def fetch_historical_usd_stir_curve_instruments_snapshot_barchart(
         ]
 
     def _build_socks5h(host: str) -> dict:
-        user = os.getenv("NORDVPN_USER") or ""
-        pwd = os.getenv("NORDVPN_PASS") or ""
+        user = os.getenv("NORDVPN_USER") or "3G5mmfKXWfCGFGT4yDL34Tzn"
+        pwd = os.getenv("NORDVPN_PASS") or "VN33uViQZp6pXVzdgsGskhNg"
         # MUST be Nord service credentials; URL-encode both
         url = f"socks5h://{quote(user, safe='')}:{quote(pwd, safe='')}@{host}:1080"
         return {"http": url, "https": url}

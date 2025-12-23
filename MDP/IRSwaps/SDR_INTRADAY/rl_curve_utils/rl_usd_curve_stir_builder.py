@@ -271,7 +271,7 @@ def rl_usd_ois_stir_builder(
     )
     fomc_curve_nodes = get_fomc_meetings_list(as_of=datetime.date.today() if type(snap) == str else snap.date(), n_plus_years=n_plus_fomc_years)
     rl_sofr_curve = rl.Curve(
-        nodes=dict(zip(fomc_curve_nodes, [1] * len(fomc_curve_nodes))),
+        nodes=dict(sorted(dict(zip(fomc_curve_nodes, [1] * len(fomc_curve_nodes))).items())),
         id=curve_id,
         convention="act360",
         calendar="nyc",

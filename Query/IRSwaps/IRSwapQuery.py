@@ -137,13 +137,22 @@ class IRSwapQuery(BaseQuery):
         object.__setattr__(self, "product", "IRS")
         object.__setattr__(self, "structure_id", self.structure)
 
+        skw: Dict[str, Any] = dict(self.structure_kwargs or {})
+        if self.structure == IRSwapStructure.CURVE and "tenors" in skw:
+            tenors = skw.get("tenors") or []
+            if len(tenors) >= 2:
+                skw.setdefault("front_tenor", tenors[0])
+                skw.setdefault("back_tenor", tenors[-1])
+
         # Basic validation by structure
         if self.structure == IRSwapStructure.OUTRIGHT:
             assert (
                 self.tenor or (self.effective_date and self.maturity_date) or self.is_mms
             ), "OUTRIGHT requires tenor OR (effective_date & maturity_date) OR is_mms=True"
+            if "notional" not in skw and "bpv" not in skw:
+                skw.setdefault("notional", 1_000_000)
         elif self.structure == IRSwapStructure.CURVE:
-            assert ("front_tenor" in self.structure_kwargs and "back_tenor" in self.structure_kwargs) or (
+            assert ("front_tenor" in skw and "back_tenor" in skw) or (
                 "front_effective_date" in self.structure_kwargs
                 and "front_maturity_date" in self.structure_kwargs
                 and "back_effective_date" in self.structure_kwargs
@@ -160,7 +169,6 @@ class IRSwapQuery(BaseQuery):
             ), "FLY requires all three leg tenors OR (effective_date & maturity_date) for each leg"
 
         # Build normalized structure kwargs (merge tenor/dates/is_mms flags)
-        skw: Dict[str, Any] = dict(self.structure_kwargs or {})
         if self.tenor is not None and "tenor" not in skw:
             skw["tenor"] = self.tenor
         if self.effective_date is not None and "effective_date" not in skw:
@@ -237,9 +245,9 @@ class IRSwapQuery(BaseQuery):
             swap_name = None
 
         structure = self.structure
-        if swap_name.count("/") == 1 and swap_name.count("-") == 0:
+        if structure is None and (swap_name.count("/") == 1 and swap_name.count("-") == 0):
             structure = IRSwapStructure.CURVE
-        elif swap_name.count("/") == 2:
+        elif structure is None and swap_name.count("/") == 2:
             structure = IRSwapStructure.FLY
 
         fmt = _structure_kwargs_formatters[structure](self.structure_kwargs or {})
@@ -261,7 +269,6 @@ class IRSwapQuery(BaseQuery):
                 to_return = f"{prefix}{swap_name} {rws} {suffix}"
 
         if "bpv" in self.structure_kwargs and self.structure_kwargs["bpv"] > 1:
-            print(self.structure_kwargs["bpv"])
             human_format_risk = human_format(abs(self.structure_kwargs["bpv"]))
             verb = f"Paid {human_format_risk}" if self.structure_kwargs["bpv"] < 0 else f"Rec {human_format_risk}"
             to_return = f"{verb} {prefix}{suffix}"
@@ -387,6 +394,9 @@ class IRSwapQuery(BaseQuery):
 
     def __rtruediv__(self, scalar: object) -> List["IRSwapQuery"]:
         return NotImplemented  # type: ignore[return-value]
+
+    def default_mtm_value_id(self) -> Any:
+        return IRSwapValue.NPV
 
 
 @dataclass

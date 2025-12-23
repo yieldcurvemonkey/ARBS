@@ -105,15 +105,15 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
             effective_date = self._to_dt(imm_date, current_curve.reference_date())
             maturity_date = self._to_dt(mat_date, effective_date)
             fwd, tenor = None, None
-        elif isinstance(tenor, str) and tenor in _CENTRAL_BANK_DATES[current_curve.id()]:
-            effective_date = _CENTRAL_BANK_DATES[current_curve.id()][tenor][0]
-            maturity_date = _CENTRAL_BANK_DATES[current_curve.id()][tenor][1]
+        elif isinstance(tenor, str) and tenor.lower() in _CENTRAL_BANK_DATES[current_curve.id()]:
+            effective_date = _CENTRAL_BANK_DATES[current_curve.id()][tenor.lower()][0]
+            maturity_date = _CENTRAL_BANK_DATES[current_curve.id()][tenor.lower()][1]
             fwd, tenor = None, None
+        elif isinstance(tenor, str) and "x" in tenor:
+            fwd, tenor = tenor.split("x")
+            fwd, tenor = fwd, tenor
         else:
-            if tenor and "x" in tenor:
-                fwd, tenor = tenor.split("x")
-                fwd, tenor = fwd, tenor
-            elif tenor:
+            if tenor:
                 fwd, tenor = "0D", tenor if tenor else None
             elif effective_date and maturity_date:
                 fwd, tenor = None, None
@@ -217,11 +217,22 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
         front_notional: Optional[float] = None,
         back_notional: Optional[float] = None,
         bpv: Optional[float] = None,
+        is_for_timeseries: Optional[bool] = False,
         risk_weights: Optional[List[float]] = [1, 1],
+        tenors: Optional[List[str]] = None,
         front_fixed_rate: Optional[float] = -0,
         back_fixed_rate: Optional[float] = -0,
-        **_,
+        **kwargs,
     ) -> Tuple[List[_IRSwapGenericObject], List[float]]:
+        if tenors:
+            rw = risk_weights or [1 for _ in tenors]
+            per_leg_bpv = bpv / len(tenors) if bpv is not None else None
+            legs = [
+                self._leg(tenor=t, notional=None, bpv=per_leg_bpv, is_for_timeseries=is_for_timeseries)
+                for t in tenors
+            ]
+            return legs, rw
+
         assert sum(x is not None for x in (front_notional, back_notional, bpv)) == 1, "Exactly one of front_notional, back_notional or bpv must be provided"
         assert len(risk_weights) == 2, "CURVE 2 RISK WEIGHTS"
 

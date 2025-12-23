@@ -126,7 +126,7 @@ class ZODBCacheMixin:
             handle = cls._DB_REGISTRY.get(path)
             if handle is None:
                 storage = cls._open_filestorage(path)
-                db = DB(storage, pool_size=32)
+                db = DB(storage, pool_size=32, large_record_size=1<<30)
                 handle = _DBHandle(db, storage)
                 cls._DB_REGISTRY[path] = handle
             handle.incref()
