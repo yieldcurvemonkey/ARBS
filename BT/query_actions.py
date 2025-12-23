@@ -1,6 +1,6 @@
 # BT/query_actions.py
 from __future__ import annotations
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
 from typing import Any, Dict, List, Optional, Protocol, Type, Callable
 
 from BT.query_order import QueryOrder, UnwindOrder
@@ -9,22 +9,26 @@ from Query.Base.BaseQuery import BaseQuery
 
 class QAction(Protocol):
     risk: Optional[str]
+
     def __call__(self, *, now, backtest, info: Dict[Type, Any]) -> List[QueryOrder]: ...
 
 
 @dataclass
 class AddQueryAction:
     """Submit a fully-specified BaseQuery as an order."""
+
     query: BaseQuery
     risk: Optional[str] = None
+    meta: Dict[str, Any] = field(default_factory=dict)
 
     def __call__(self, *, now, backtest, info) -> List[QueryOrder]:
-        return [QueryOrder(timestamp=now, query=self.query, meta={"action": "add_query"})]
+        return [QueryOrder(timestamp=now, query=self.query, meta={"action": "add_query"} | self.meta)]
 
 
 @dataclass
 class AddScaledQueryAction:
     """Scale a numeric field inside query.structure_kwargs (e.g., 'bpv' or 'notional')."""
+
     query: BaseQuery
     target_key: str = "bpv"
     scale_key: str = "scaling"
@@ -42,10 +46,10 @@ class AddScaledQueryAction:
 
 @dataclass
 class UnwindPositionsAction:
-    selector: Optional[Callable[[Any], bool]] = None   # ResolvedQueryPosition -> bool
+    selector: Optional[Callable[[Any], bool]] = None  # ResolvedQueryPosition -> bool
     match_all: bool = False
-    match_tag: Optional[str] = None                    # look in pos.meta["tags"] or query.tags
-    fee: float = 0.0                                   # flat fee to subtract from realized P&L
+    match_tag: Optional[str] = None  # look in pos.meta["tags"] or query.tags
+    fee: float = 0.0  # flat fee to subtract from realized P&L
     risk: Optional[str] = None
 
     def __call__(self, *, now, backtest, info) -> List[UnwindOrder]:
@@ -53,11 +57,13 @@ class UnwindPositionsAction:
             pred = lambda p: True
         elif self.match_tag is not None:
             tag = self.match_tag
+
             def pred(p):
                 tags = set()
                 tags.update(p.meta.get("tags", []))
                 tags.update(getattr(p.source_query, "tags", ()) or ())
                 return tag in tags
+
         elif self.selector is not None:
             pred = self.selector
         else:

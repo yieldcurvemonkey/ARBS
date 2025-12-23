@@ -92,6 +92,7 @@ class PositionHandler:
         pricer_provider: Callable[[BaseQuery], Any],
         now: datetime.datetime,
         backtest: "QueryDrivenBacktest",
+        auto_roll: Optional[bool] = False,
     ) -> tuple[ResolvedQueryPosition, float, List[Trigger]]:
         return position, 0.0, []
 
@@ -238,7 +239,11 @@ class FinancedFixedRateBondHandler(PositionHandler):
         pricer_provider: Callable[[BaseQuery], Any],
         now: datetime.datetime,
         backtest: "QueryDrivenBacktest",
+        auto_roll: Optional[bool] = False,
     ) -> tuple[ResolvedQueryPosition, float, List[Trigger]]:
+        if not pos.meta.get("auto_roll", False):
+            return pos, 0.0, []
+
         q0 = pos.source_query
         cusip_txt = str(getattr(q0, "cusip", "") or "")
         if not self._is_constant_maturity(cusip_txt):
@@ -351,9 +356,10 @@ class FinancedFixedRateBondHandler(PositionHandler):
         pricer_provider: Callable[[BaseQuery], Any],
         now: datetime.datetime,
         backtest: "QueryDrivenBacktest",
+        auto_roll: Optional[bool] = False,
     ) -> tuple[ResolvedQueryPosition, float, List[Trigger]]:
         pos1, cf_realized = self._apply_cashflows(position, pricer_provider=pricer_provider, now=now, backtest=backtest)
-        pos2, roll_realized, triggers = self._maybe_roll_position(pos1, pricer_provider=pricer_provider, now=now, backtest=backtest)
+        pos2, roll_realized, triggers = self._maybe_roll_position(pos1, pricer_provider=pricer_provider, now=now, backtest=backtest, auto_roll=auto_roll)
         return pos2, float(cf_realized + roll_realized), triggers
 
     def on_unwind(
@@ -566,7 +572,7 @@ class QueryDrivenBacktest:
         new_positions: List[ResolvedQueryPosition] = []
         for p in self.portfolio.iter_positions():
             handler = self._handler_for_position(p)
-            p1, realized_delta, triggers = handler.on_mark(p, lambda q: self._pricer_for_query(q, now), now, self)
+            p1, realized_delta, triggers = handler.on_mark(p, lambda q: self._pricer_for_query(q, now), now, self, auto_roll=p.meta.get("auto_roll", False))
 
             if realized_delta:
                 self.realized_pnl += float(realized_delta)
