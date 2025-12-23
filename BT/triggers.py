@@ -281,3 +281,20 @@ class OrdersGeneratorTrigger(Trigger):
         orders = self.generate_orders(state, backtest)
         info = {type(a): orders for a in (self.actions or [])} if orders else {}
         return TriggerInfo(bool(orders), info)
+
+
+@dataclass
+class ConstantMaturityRollTriggerRequirements(TriggerRequirements):
+    timestamp: dt.datetime
+    previous: Dict[str, str]
+    new: Dict[str, str]
+    calc_type: str = "roll_event"
+
+    def has_triggered(self, state: dt.datetime, backtest=None) -> TriggerInfo:
+        # One-shot informational trigger; always true once injected
+        return TriggerInfo(True, {"roll": {"ts": self.timestamp, "previous": self.previous, "new": self.new}})
+
+
+@dataclass
+class ConstantMaturityRollTrigger(Trigger):
+    pass  # requirements: ConstantMaturityRollTriggerRequirements

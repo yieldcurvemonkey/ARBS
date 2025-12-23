@@ -97,3 +97,26 @@ class FixedRateBondQuery(BaseQuery):
         if not isinstance(scalar, (int, float)):
             return NotImplemented
         return self * (1.0 / float(scalar))
+
+    def build_mdp_request(self, now) -> Dict[str, Any]:
+        """
+        Build the request dict for MDP.get_pricer(request) at time 'now'.
+        Policy:
+          - If mdp_time_key missing -> inject 'now.date()'
+          - If mdp_time_key == "live" or already set -> pass through unchanged
+          - If mdp_time_key == "now" -> inject full datetime
+        """
+        req = dict(self.market_request or {})
+        if self.mdp_time_key not in req:
+            req[self.mdp_time_key] = now.date()
+        else:
+            v = req[self.mdp_time_key]
+            if v == "now":
+                req[self.mdp_time_key] = now
+            # "live" or concrete value: leave as-is
+        
+        req["cusips"] = [self.cusip]
+        return req
+    
+    def default_mtm_value_id(self) -> Any:
+        return FixedRateBondValue.NPV

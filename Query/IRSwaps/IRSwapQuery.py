@@ -395,6 +395,9 @@ class IRSwapQuery(BaseQuery):
     def __rtruediv__(self, scalar: object) -> List["IRSwapQuery"]:
         return NotImplemented  # type: ignore[return-value]
 
+    def default_mtm_value_id(self) -> Any:
+        return IRSwapValue.NPV
+
 
 @dataclass
 class IRSwapQueryWrapper:
