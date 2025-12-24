@@ -88,3 +88,39 @@ class STIRFutureQuery(BaseQuery):
 
     def __rtruediv__(self, scalar: object):
         return NotImplemented
+
+    def build_mdp_request(self, now: datetime.datetime) -> Dict[str, Any]:
+        """
+        Build the request dict for STIRFutureMDP.get_pricer(request) at time 'now'.
+
+        Includes 'symbols' derived from tenor and structure_kwargs.
+        """
+        req = dict(self.market_request or {})
+
+        # Set timestamp
+        if self.mdp_time_key not in req:
+            req[self.mdp_time_key] = now.date()
+        else:
+            v = req[self.mdp_time_key]
+            if v == "now":
+                req[self.mdp_time_key] = now
+
+        # Build symbols list from tenor and structure_kwargs
+        symbols = []
+        if self.tenor:
+            symbols.append(self.tenor)
+
+        # Check structure_kwargs for additional symbols
+        skw = self.structure_kwargs or {}
+        for key in ("front_tenor", "back_tenor", "belly_tenor", "symbol", "symbols", "tickers"):
+            val = skw.get(key)
+            if val:
+                if isinstance(val, (list, tuple)):
+                    symbols.extend(val)
+                else:
+                    symbols.append(val)
+
+        if symbols:
+            req["symbols"] = symbols
+
+        return req
