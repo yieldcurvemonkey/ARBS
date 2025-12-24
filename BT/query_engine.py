@@ -536,6 +536,18 @@ class QueryDrivenBacktest:
                     req = dict(req)
                     req["cusips"] = parts
 
+        if isinstance(q_norm, STIRFutureQuery):
+            if not any(key in req for key in ("symbols", "tickers")):
+                skw = dict(getattr(q_norm, "structure_kwargs", None) or {})
+                symbols: List[str] = []
+                for key in ("symbol", "front_symbol", "back_symbol"):
+                    val = skw.get(key)
+                    if isinstance(val, str) and val.strip():
+                        symbols.append(val.strip())
+                if symbols:
+                    req = dict(req)
+                    req["symbols"] = symbols
+
         return self._pricer_for_request(req)
 
     def _handler_for_query(self, query: BaseQuery) -> PositionHandler:
