@@ -15,6 +15,7 @@ from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 from Query.FixedRateBonds.FixedRateBondStructure import FixedRateBondStructure
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapValue
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
+from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
 from BT.data_handler import TimeGrid
 from BT.execution_engine import ExecutionEngine
 from BT.query_order import QueryOrder, UnwindOrder
@@ -380,6 +381,64 @@ class FinancedFixedRateBondHandler(PositionHandler):
         return float(cf + mtm), []
 
 
+class STIRFutureHandler(PositionHandler):
+    """Handles STIR future positions using change in price."""
+
+    name = "stir_future"
+
+    def supports(self, query: BaseQuery) -> bool:  # type: ignore[override]
+        return isinstance(query, STIRFutureQuery)
+
+    def _mtm_value(self, position: ResolvedQueryPosition, pricer_provider: Callable[[BaseQuery], Any]) -> float:
+        pricer_or_curve: _GenericPricer | Dict[str, _GenericPricer] = pricer_provider(position.source_query)
+
+        if isinstance(pricer_or_curve, Mapping):
+            resolved_package = position.package
+        else:
+            resolved_package = [pricer_or_curve.resolve_pricable(p, rw) for p, rw in list(zip(position.package, position.weights))]
+
+        vmap = position.source_query.build_value_map(
+            pricer_or_curve=pricer_or_curve,
+            package=resolved_package,
+            risk_weights=position.weights,
+        )
+        value_id = position.source_query.default_mtm_value_id()
+        return float(vmap.apply(value=value_id))
+
+    def build_position(
+        self,
+        order: QueryOrder,
+        pricer_provider: Callable[[BaseQuery], Any],
+        now: datetime.datetime,
+        backtest: "QueryDrivenBacktest",
+    ) -> ResolvedQueryPosition:
+        query = order.query
+        pricer_or_curve = pricer_provider(query)
+        package, weights = query.resolve_package(pricer_or_curve=pricer_or_curve)
+
+        meta = {**(order.meta or {}), "handler": self.name}
+        position = ResolvedQueryPosition(
+            package=package,
+            weights=weights,
+            opened=now,
+            source_query=query,
+            meta=meta,
+        )
+        entry_price = self._mtm_value(position, pricer_provider)
+        meta["entry_price"] = float(entry_price)
+        return replace(position, meta=meta)
+
+    def value_position(
+        self,
+        position: ResolvedQueryPosition,
+        pricer_provider: Callable[[BaseQuery], Any],
+        now: datetime.datetime,
+        backtest: "QueryDrivenBacktest",
+    ) -> float:
+        entry_price = float((position.meta or {}).get("entry_price", 0.0))
+        return self._mtm_value(position, pricer_provider) - entry_price
+
+
 @dataclass
 class QueryDrivenBacktest:
     time_grid: TimeGrid
@@ -390,7 +449,7 @@ class QueryDrivenBacktest:
     risk_fn: RiskFn = lambda p, g: {}
 
     portfolio: QueryPortfolio = field(default_factory=QueryPortfolio)
-    position_handlers: List[PositionHandler] = field(default_factory=lambda: [FinancedFixedRateBondHandler(), PositionHandler()])
+    position_handlers: List[PositionHandler] = field(default_factory=lambda: [FinancedFixedRateBondHandler(), STIRFutureHandler(), PositionHandler()])
     dynamic_triggers: List[Trigger] = field(default_factory=list)
     _cache: Dict[Any, Any] = field(default_factory=dict)
 
