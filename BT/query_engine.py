@@ -442,22 +442,25 @@ class STIRFutureHandler(PositionHandler):
             return 41.6666666667  # common Fed Funds 30-day style; change if your spec differs
         return 25.0
 
-    def _position_pv01_quote(self, position: ResolvedQueryPosition, pricer_map: Mapping[str, Any]) -> float:
-        """
-        Returns sized PV01 of the *quoted structure* in $/bp.
-        For outrights: pv01 = contracts * pv01_per_contract
-        For spreads:   pv01 = +pv01(legA) - pv01(legB) using risk_weights
-        """
+    def _position_pv01_quote(
+        self, position: ResolvedQueryPosition, pricer_provider: Optional[Callable[[BaseQuery], Any]] = None, pricer_or_curve: Optional[Any] = None
+    ) -> float:
+        assert pricer_provider is not None or pricer_or_curve is not None, "one of 'pricer_provider' or 'pricer_or_curve' must be passed in"
+        if pricer_provider is not None and pricer_or_curve is None:
+            pricer_or_curve: _GenericPricer | Dict[str, _GenericPricer] = pricer_provider(position.source_query)
 
-        pricers = pricer_map[position.source_query.symbol]
-        pv01_total = 0.0
-        for i, (pk, rw) in enumerate(zip(position.package, position.weights)):
-            pv01_1 = float(pricers[i].pv01(stirf=pk))
-            pv01_total += float(rw) * float(pv01_1)
+        if isinstance(pricer_or_curve, Mapping):
+            resolved_package = position.package
+        else:
+            resolved_package = [pricer_or_curve.resolve_pricable(p, rw) for p, rw in list(zip(position.package, position.weights))]
 
-        return float(pv01_total)
+        vmap = position.source_query.build_value_map(
+            pricer_or_curve=pricer_or_curve,
+            package=resolved_package,
+            risk_weights=position.weights,
+        )
+        return float(vmap.apply(value=STIRFutureValue.PV01))
 
-    # --- existing _mtm_value unchanged ---
     def _mtm_value(
         self, position: ResolvedQueryPosition, pricer_provider: Optional[Callable[[BaseQuery], Any]] = None, pricer_or_curve: Optional[Any] = None
     ) -> float:
@@ -497,8 +500,7 @@ class STIRFutureHandler(PositionHandler):
         pricer_map = pricer_provider(position.source_query)
         current_price = self._mtm_value(position, pricer_provider=None, pricer_or_curve=pricer_map)
         dprice = float(current_price - entry_price)  # price points
-        pv01_quote = self._position_pv01_quote(position, pricer_map)
-        print(pv01_quote) 
+        pv01_quote = self._position_pv01_quote(position, pricer_provider=None, pricer_or_curve=pricer_map)
         pnl = (dprice / 0.01) * pv01_quote
         return float(pnl)
 
