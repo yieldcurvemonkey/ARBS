@@ -537,9 +537,13 @@ class QueryDrivenBacktest:
                     req["cusips"] = parts
 
         if isinstance(q_norm, STIRFutureQuery):
-            if not any(key in req for key in ("symbols", "tickers")):
+            has_symbols = bool(req.get("symbols")) or bool(req.get("tickers"))
+            if not has_symbols:
                 skw = dict(getattr(q_norm, "structure_kwargs", None) or {})
                 symbols: List[str] = []
+                raw_symbols = skw.get("symbols")
+                if isinstance(raw_symbols, (list, tuple)):
+                    symbols.extend([str(s).strip() for s in raw_symbols if str(s).strip()])
                 for key in ("symbol", "front_symbol", "back_symbol"):
                     val = skw.get(key)
                     if isinstance(val, str) and val.strip():
