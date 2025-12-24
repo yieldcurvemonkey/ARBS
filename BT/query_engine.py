@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import re
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 from collections.abc import Mapping
 
 import tqdm
@@ -26,6 +26,7 @@ from BT.triggers import (
     ConstantMaturityRollTriggerRequirements,
 )
 from MDP.MarketDataProvider import MarketDataProvider
+from MDP.MultiProductMDP import MultiProductMDP, MDPLike, ensure_multi_mdp
 from Query.Base._GenericPricer import _GenericPricer
 from Query.Base.BaseQuery import BaseQuery
 
@@ -376,8 +377,43 @@ class FinancedFixedRateBondHandler(PositionHandler):
 
 @dataclass
 class QueryDrivenBacktest:
+    """
+    Query-driven backtesting engine with support for cross-product strategies.
+
+    Parameters
+    ----------
+    time_grid : TimeGrid
+        The time grid defining simulation timesteps.
+    mdp : MDPLike
+        Market data provider(s). Can be:
+        - A single MarketDataProvider (legacy, single-product)
+        - A dict mapping product names to MDPs (multi-product)
+        - A MultiProductMDP instance
+    strategy : QueryStrategy
+        The strategy containing triggers and actions.
+
+    Examples
+    --------
+    Single-product backtest (legacy):
+    >>> bt = QueryDrivenBacktest(
+    ...     time_grid=my_grid,
+    ...     mdp=IRSwapsMDP("SDR_INTRADAY-RL"),
+    ...     strategy=my_strategy,
+    ... )
+
+    Cross-product backtest:
+    >>> bt = QueryDrivenBacktest(
+    ...     time_grid=my_grid,
+    ...     mdp={
+    ...         "IRS": IRSwapsMDP("SDR_INTRADAY-RL"),
+    ...         "STIRFUTURE": STIRFutureMDP("BARCHART_STIRF-RL"),
+    ...     },
+    ...     strategy=cross_product_strategy,
+    ... )
+    """
+
     time_grid: TimeGrid
-    mdp: MarketDataProvider
+    mdp: MDPLike  # Single MDP, dict of MDPs, or MultiProductMDP
     strategy: QueryStrategy
 
     exec_engine: ExecutionEngine = field(default_factory=ExecutionEngine)
@@ -393,18 +429,76 @@ class QueryDrivenBacktest:
     realized_pnl_history: Dict[datetime.datetime, float] = field(default_factory=dict)
 
     _now: Optional[datetime.datetime] = None  # current clock
+    _multi_mdp: Optional[MultiProductMDP] = field(default=None, repr=False)
 
     show_progress: bool = True
     progress_desc: str = "BACKTESTING..."
 
+    def __post_init__(self):
+        """Normalize MDP to MultiProductMDP for unified handling."""
+        if self._multi_mdp is None:
+            object.__setattr__(self, "_multi_mdp", ensure_multi_mdp(self.mdp))
+
+    # -------- multi-product helpers --------
+    @property
+    def products(self) -> List[str]:
+        """Return list of supported product identifiers."""
+        return self._multi_mdp.products
+
+    @property
+    def is_multi_product(self) -> bool:
+        """Return True if this backtest uses multiple products."""
+        return len(self._multi_mdp.products) > 1
+
+    def get_mdp_for_product(self, product: str) -> MarketDataProvider:
+        """
+        Get the MDP for a specific product.
+
+        Parameters
+        ----------
+        product : str
+            Product identifier (e.g., "IRS", "STIRFUTURE", "FRB")
+
+        Returns
+        -------
+        MarketDataProvider
+            The MDP configured for this product
+        """
+        return self._multi_mdp.get_mdp_for_product(product)
+
     # -------- pricer resolution (cached per request signature) --------
-    def _pricer_for_request(self, req: Dict[str, Any]) -> Any:
-        sig = repr(sorted(req.items()))
-        hit = self._cache.get(("pricer", sig))
+    def _pricer_for_request(self, req: Dict[str, Any], product: Optional[str] = None) -> Any:
+        """
+        Get a pricer for the given request, routing to the correct MDP.
+
+        Parameters
+        ----------
+        req : Dict[str, Any]
+            The MDP request dict.
+        product : str, optional
+            Product identifier for MDP routing. If not provided, uses the
+            default product from the MultiProductMDP.
+
+        Returns
+        -------
+        Any
+            The pricer from the appropriate MDP.
+        """
+        # Include product in cache signature for multi-product support
+        cache_key = ("pricer", product, repr(sorted(req.items())))
+        hit = self._cache.get(cache_key)
         if hit is not None:
             return hit
-        pricer = self.mdp.get_pricer(req)
-        self._cache[("pricer", sig)] = pricer
+
+        # Route to the appropriate MDP based on product
+        if product is not None:
+            mdp = self._multi_mdp.get_mdp_for_product(product)
+            pricer = mdp.get_pricer(req)
+        else:
+            # Fallback to multi_mdp routing (uses default product)
+            pricer = self._multi_mdp.get_pricer({**req, "product": self._multi_mdp.default_product})
+
+        self._cache[cache_key] = pricer
         return pricer
 
     def _frb_split_components(self, txt: str) -> List[str]:
@@ -461,6 +555,23 @@ class QueryDrivenBacktest:
         return replace(q, value=IRSwapValue.NPV, structure=structure, structure_kwargs=skw)
 
     def _pricer_for_query(self, q: BaseQuery, now: datetime.datetime) -> Any:
+        """
+        Get a pricer for the given query at the specified time.
+
+        Routes to the appropriate MDP based on the query's product field.
+
+        Parameters
+        ----------
+        q : BaseQuery
+            The query to get a pricer for.
+        now : datetime.datetime
+            The current simulation time.
+
+        Returns
+        -------
+        Any
+            The pricer from the appropriate MDP.
+        """
         q_norm = self._normalize_query_for_resolution(q)
         req = q_norm.build_mdp_request(now)
 
@@ -471,7 +582,9 @@ class QueryDrivenBacktest:
                     req = dict(req)
                     req["cusips"] = parts
 
-        return self._pricer_for_request(req)
+        # Extract product from query for MDP routing
+        product = getattr(q_norm, "product", None)
+        return self._pricer_for_request(req, product=product)
 
     def _handler_for_query(self, query: BaseQuery) -> PositionHandler:
         for handler in self.position_handlers:
