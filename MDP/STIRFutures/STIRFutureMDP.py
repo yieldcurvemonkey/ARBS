@@ -37,9 +37,11 @@ def _as_datetime(ts: DateLike) -> datetime.datetime:
         if ts.tzinfo is None:
             return pytz.timezone("America/New_York").localize(ts)
         return ts
+    
+    # NY close 3pm
     if type(ts) == datetime.date:
         # return datetime.datetime(ts.year, ts.month, ts.day)
-        return pytz.timezone("America/New_York").localize(datetime.datetime.combine(ts, datetime.time(hour=12)))
+        return pytz.timezone("America/New_York").localize(datetime.datetime.combine(ts, datetime.time(hour=15, minute=00)))
     raise TypeError("timestamp must be date, datetime, or 'live'")
 
 
@@ -654,6 +656,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 interval = None if want_eod else 1
                 price_df = self._fetch_barchart_timeseries(all_missing, ts_dt, show_tqdm=show_tqdm, interval=interval)
 
+            price_df = price_df.ffill().bfill()
             if price_df.empty:
                 raise RuntimeError(f"{src} returned no data for requested STIR futures.")
 

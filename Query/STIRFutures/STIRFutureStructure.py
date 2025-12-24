@@ -243,7 +243,6 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
         )
 
         rw = risk_weights[0] if risk_weights else 1.0
-        print(contracts, notional)
         if (contracts is not None and contracts < 0) or (notional is not None and notional < 0):
             rw = -abs(float(rw))
 

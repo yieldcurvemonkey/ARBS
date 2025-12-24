@@ -448,36 +448,11 @@ class STIRFutureHandler(PositionHandler):
         For outrights: pv01 = contracts * pv01_per_contract
         For spreads:   pv01 = +pv01(legA) - pv01(legB) using risk_weights
         """
+
+        pricers = pricer_map[position.source_query.symbol]
         pv01_total = 0.0
-
-        for pk, rw in zip(position.package, position.weights):
-            key = str(pk)
-            pr = pricer_map.get(key)
-
-            if pr is None:
-                # If keys don't match exactly, try a relaxed match
-                pr = pricer_map.get(str(key).upper()) or pricer_map.get(str(key).strip())
-
-            pv01_1 = None
-
-            if pr is not None:
-                # Try pv01(pk) then pv01()
-                if hasattr(pr, "pv01"):
-                    try:
-                        pv01_1 = float(pr.pv01(pk))
-                    except TypeError:
-                        pv01_1 = float(pr.pv01())
-
-                # Or: dollar value per 1.00 price point (rare) -> convert to $/bp
-                elif hasattr(pr, "dv01"):
-                    try:
-                        pv01_1 = float(pr.dv01(pk))
-                    except TypeError:
-                        pv01_1 = float(pr.dv01())
-
-            if pv01_1 is None:
-                pv01_1 = self._pv01_per_contract_fallback(key)
-
+        for i, (pk, rw) in enumerate(zip(position.package, position.weights)):
+            pv01_1 = float(pricers[i].pv01(stirf=pk))
             pv01_total += float(rw) * float(pv01_1)
 
         return float(pv01_total)
@@ -501,9 +476,6 @@ class STIRFutureHandler(PositionHandler):
             risk_weights=position.weights,
         )
         value_id = position.source_query.default_mtm_value_id()
-
-        print(float(vmap.apply(value=STIRFutureValue.PV01)))
-
         return float(vmap.apply(value=value_id))
 
     def value_position(
@@ -525,7 +497,8 @@ class STIRFutureHandler(PositionHandler):
         pricer_map = pricer_provider(position.source_query)
         current_price = self._mtm_value(position, pricer_provider=None, pricer_or_curve=pricer_map)
         dprice = float(current_price - entry_price)  # price points
-        pv01_quote = self._position_pv01_quote(position, pricer_map)  # $/bp (already sized by contracts)
+        pv01_quote = self._position_pv01_quote(position, pricer_map)
+        print(pv01_quote) 
         pnl = (dprice / 0.01) * pv01_quote
         return float(pnl)
 
@@ -533,7 +506,6 @@ class STIRFutureHandler(PositionHandler):
 @dataclass
 class QueryDrivenBacktest:
     time_grid: TimeGrid
-    mdp: MarketDataProvider
     strategy: QueryStrategy
 
     exec_engine: ExecutionEngine = field(default_factory=ExecutionEngine)
@@ -554,13 +526,14 @@ class QueryDrivenBacktest:
     progress_desc: str = "BACKTESTING..."
 
     # -------- pricer resolution (cached per request signature) --------
-    def _pricer_for_request(self, req: Dict[str, Any]) -> Any:
+    def _pricer_for_request(self, req: Dict[str, Any], mdp: MarketDataProvider) -> Any:
         sig = repr(sorted(req.items()))
-        hit = self._cache.get(("pricer", sig))
+        cache_key = ("pricer", id(mdp), sig)
+        hit = self._cache.get(cache_key)
         if hit is not None:
             return hit
-        pricer = self.mdp.get_pricer(req)
-        self._cache[("pricer", sig)] = pricer
+        pricer = mdp.get_pricer(req)
+        self._cache[cache_key] = pricer
         return pricer
 
     def _frb_split_components(self, txt: str) -> List[str]:
@@ -616,6 +589,16 @@ class QueryDrivenBacktest:
 
         return replace(q, value=IRSwapValue.NPV, structure=structure, structure_kwargs=skw)
 
+    def _mdp_for_query(self, q: BaseQuery) -> MarketDataProvider:
+        mdp = None
+        if hasattr(self.strategy, "mdp_for_query"):
+            mdp = self.strategy.mdp_for_query(q)
+        if mdp is None:
+            mdp = self.strategy.mdps
+        if mdp is None:
+            raise RuntimeError("No MarketDataProvider available for query.")
+        return mdp
+
     def _pricer_for_query(self, q: BaseQuery, now: datetime.datetime) -> Any:
         q_norm = self._normalize_query_for_resolution(q)
         req = q_norm.build_mdp_request(now)
@@ -667,9 +650,17 @@ class QueryDrivenBacktest:
                     req = dict(req)
                     req["symbols"] = expanded
 
-        return self._pricer_for_request(req)
+        mdp = self._mdp_for_query(q_norm)
+        return self._pricer_for_request(req, mdp)
 
     def _handler_for_query(self, query: BaseQuery) -> PositionHandler:
+        handler_name = None
+        if hasattr(self.strategy, "mtm_handler_name_for_query"):
+            handler_name = self.strategy.mtm_handler_name_for_query(query)
+        if handler_name:
+            for handler in self.position_handlers:
+                if handler.name == handler_name:
+                    return handler
         for handler in self.position_handlers:
             if handler.supports(query):
                 return handler
