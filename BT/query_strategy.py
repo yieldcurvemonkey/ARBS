@@ -2,7 +2,7 @@
 from __future__ import annotations
 import datetime
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Type
 
 from BT.triggers import Trigger
 from BT.query_order import QueryOrder
@@ -15,6 +15,7 @@ class QueryStrategy:
     name: str
     triggers: Iterable[Trigger]
     mdps: Dict[str, MarketDataProvider] = field(default_factory=dict)
+    mdps_by_query_type: Dict[Type[BaseQuery], MarketDataProvider] = field(default_factory=dict)
     mtm_handlers: Dict[str, str] = field(default_factory=dict)
 
     def evaluate(self, now: datetime.datetime, backtest) -> List[QueryOrder]:
@@ -30,6 +31,9 @@ class QueryStrategy:
         return orders
 
     def mdp_for_query(self, query: BaseQuery, default: Optional[MarketDataProvider]) -> MarketDataProvider:
+        for query_type, mdp in self.mdps_by_query_type.items():
+            if isinstance(query, query_type):
+                return mdp
         mdp = self.mdps.get(query.product)
         if mdp is not None:
             return mdp
