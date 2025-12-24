@@ -123,7 +123,7 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
         """
         pr = self.common_kwargs["pricer"][key]
         one = self._build_leg(key=key, contracts=1, is_ser=is_ser)
-        return float(pr.pv01(one))
+        return float(pr.pv01(stirf=one))
 
     def _solve_contracts_from_risk_weights(
         self,
@@ -225,6 +225,7 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
 
         if bpv is not None:
             pv01_1 = self._pv01_per_contract(key=key, is_ser=bool(is_ser))
+            print(pv01_1, "jehrehe") 
             contracts = int(round(float(bpv) / pv01_1))
 
         if contracts is None and notional is None and bpv is None:
@@ -242,6 +243,7 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
         )
 
         rw = risk_weights[0] if risk_weights else 1.0
+        print(contracts, notional)
         if (contracts is not None and contracts < 0) or (notional is not None and notional < 0):
             rw = -abs(float(rw))
 

@@ -65,10 +65,11 @@ class STIRFutureValueFunctionMap(BaseValueFunctionMap[STIRFutureValue, float]):
         return calc_spread_rate(kwargs["pricer"], kwargs["package"], kwargs["risk_weights"]) * _stir_structure_legs_mapper[len(kwargs["package"])][1]
 
     def _npv(self, **kwargs: Any) -> float:
-        return sum(pr.npv(pk) for pr, pk in zip(kwargs["pricer"].values(), kwargs["package"]))
+        # return sum(pr.npv(pk) for pr, pk in zip(kwargs["pricer"].values(), kwargs["package"]))
+        return sum(rw * pr.npv() for rw, pr in zip(kwargs["risk_weights"], kwargs["pricer"].values()))
 
     def _pv01(self, **kwargs: Any) -> float:
-        return sum(pr.pv01(pk) for pr, pk in zip(kwargs["pricer"].values(), kwargs["package"]))
+        return sum(pr.pv01(stirf=pk) for pr, pk in zip(kwargs["pricer"].values(), kwargs["package"]))
 
     def _dv01(self, **kwargs: Any) -> float:
         return self._pv01(**kwargs)
@@ -77,4 +78,5 @@ class STIRFutureValueFunctionMap(BaseValueFunctionMap[STIRFutureValue, float]):
         # Unlike bonds where sum(clean_price) implies portfolio cost, 
         # STIR structures (spreads) are quoted as Price A - Price B.
         # We use risk_weights to handle the direction (Buy A / Sell B).
-        return sum(rw * pr.price(pk) for rw, pr, pk in zip(kwargs["risk_weights"], kwargs["pricer"].values(), kwargs["package"]))
+        # return sum(rw * pr.price(pk) for rw, pr, pk in zip(kwargs["risk_weights"], kwargs["pricer"].values(), kwargs["package"]))
+        return sum(rw * pr.price() for rw, pr in zip(kwargs["risk_weights"], kwargs["pricer"].values()))

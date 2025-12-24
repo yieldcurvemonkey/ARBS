@@ -41,8 +41,6 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
         assert price is not None or rate is not None, "must pass in price or rate to price STIR future"
         self._rl_stirf_id = rl_stirf_id
 
-        print(rl_stirf_id)
-        
         known_id_to_curve_map = {
             "SFR": "USD-SOFR-1D",
             "SR3": "USD-SOFR-1D",
@@ -54,7 +52,7 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
         if self._rl_stirf_id[:-3] in known_id_to_curve_map:
             self._curve = known_id_to_curve_map[self._rl_stirf_id[:-3]]
         else:
-            self._curve = curve 
+            self._curve = curve
 
         self._reference_date = reference_date
         self._effective_date = effective_date
@@ -147,14 +145,15 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
         return self._price
 
     def npv(self) -> float:
-        # Mirroring RLFixedRateBondPricer which raises NotImplementedError
-        # As this is a traded product without a funding curve attached, NPV is ambiguous
-        # (could be 0 if marked to market, or PnL if compared to a trade price).
-        raise NotImplementedError()
+        return self.price() * self.pv01(contracts=self._contracts, notional=self._notional)
 
-    def pv01(self) -> float:
+    def pv01(self, contracts=None, notional=None, stirf: rl.STIRFuture = None) -> float:
+        if stirf is not None:
+            unit_bpv = -float(self.build_stirf().analytic_delta().real) 
+            return stirf.__dict__["kwargs"]["contracts"] * unit_bpv
+
         # Use analytic_delta which for STIRFuture requires no arguments (based on docs)
-        return float(self.build_stirf().analytic_delta().real)
+        return -float(self.build_stirf(contracts=contracts or self._contracts, notional=notional or self._notional).analytic_delta().real)
 
     def dv01(self, shift: float = 1e-4) -> float:
         return self.pv01()
@@ -214,6 +213,7 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
         rate: Optional[float] = None,
         contracts: Optional[int] = None,
         notional: Optional[float] = None,
+        bpv: Optional[float] = None,
         is_ser: Optional[bool] = False,
         **kwargs,
     ) -> rl.STIRFuture:
@@ -223,21 +223,50 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
 
         p = price if price is not None else (self._price if rate is None else (100.0 - rate))
 
-        # Resolve contracts/notional
-        # Prioritize explicit args, then self._contracts, then derivation
-        c = contracts if contracts is not None else self._contracts
+        c: Optional[int] = contracts
 
-        if c is None and (notional or self._notional):
-            # We need to approximate contracts from notional if contracts missing
-            # Assuming 1MM face for standard STIRs if not known
+        if c is None and bpv is not None:
+            spec_key = "ReferenceRate3" if is_ser else "ReferenceRate2"
+            spec = RATESLIB_CURVE_DEFINITIONS[self._curve].get(
+                spec_key,
+                RATESLIB_CURVE_DEFINITIONS[self._curve]["ReferenceRate"],
+            )
+
+            one_contract = rl.STIRFuture(
+                effective=self._to_rl_dt(eff),
+                termination=self._to_rl_dt(mat),
+                spec=spec,
+                price=p,
+                contracts=1,
+            )
+
+            pv01_per_contract = abs(one_contract.pv01)
+            if pv01_per_contract <= 0:
+                raise ValueError("Computed pv01_per_contract is zero or invalid")
+
+            c = int(round(bpv / pv01_per_contract))
+
+        if c is None and (notional is not None or self._notional is not None):
             n = notional if notional is not None else self._notional
-            c = int(n / 1_000_000)
+            # Standard STIR assumption: 1mm face per contract
+            c = int(round(n / 1_000_000))
+
+        if c is None:
+            c = self._contracts
 
         if c is None:
             c = 1
 
         spec_key = "ReferenceRate3" if is_ser else "ReferenceRate2"
-        # Fallback to base ReferenceRate if specific STIR spec not defined
-        spec = RATESLIB_CURVE_DEFINITIONS[self._curve].get(spec_key, RATESLIB_CURVE_DEFINITIONS[self._curve]["ReferenceRate"])
+        spec = RATESLIB_CURVE_DEFINITIONS[self._curve].get(
+            spec_key,
+            RATESLIB_CURVE_DEFINITIONS[self._curve]["ReferenceRate"],
+        )
 
-        return rl.STIRFuture(effective=self._to_rl_dt(eff), termination=self._to_rl_dt(mat), spec=spec, price=p, contracts=c)
+        return rl.STIRFuture(
+            effective=self._to_rl_dt(eff),
+            termination=self._to_rl_dt(mat),
+            spec=spec,
+            price=p,
+            contracts=int(c),
+        )

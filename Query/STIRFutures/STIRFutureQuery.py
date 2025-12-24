@@ -66,7 +66,7 @@ class STIRFutureQuery(BaseQuery):
     """
 
     structure: STIRFutureStructure = STIRFutureStructure.OUTRIGHT
-    value: Union[STIRFutureValue, List[STIRFutureValue]] = STIRFutureValue.NPV
+    value: Union[STIRFutureValue, List[STIRFutureValue]] = STIRFutureValue.PRICE
 
     symbol: Optional[str] = None
     effective_date: Optional[datetime.date] = None
@@ -106,7 +106,10 @@ class STIRFutureQuery(BaseQuery):
             assert skw.get("symbol") is not None or (
                 skw.get("effective_date") is not None and skw.get("maturity_date") is not None
             ), "OUTRIGHT requires symbol OR (effective_date & maturity_date)"
-            if "notional" not in skw and "bpv" not in skw:
+            # if "notional" not in skw and "bpv" not in skw:
+            #     skw.setdefault("notional", 1_000_000)
+            # Only default notional if *no* sizing was provided.
+            if skw.get("contracts") is None and "notional" not in skw and "bpv" not in skw:
                 skw.setdefault("notional", 1_000_000)
 
         elif self.structure in {getattr(STIRFutureStructure, "CURVE", STIRFutureStructure.SPREAD), STIRFutureStructure.SPREAD}:
@@ -186,12 +189,12 @@ class STIRFutureQuery(BaseQuery):
             fc = _norm_curve_name(skw.get("front_curve"))
             bc = _norm_curve_name(skw.get("back_curve"))
             ten = (skw.get("symbol") or "").strip()
-            base = f"stirf {ten} BASIS {fc}~{bc} {val}".strip()
+            base = f"{ten} BASIS {fc}~{bc} {val}".strip()
             return re.sub(r"\s\s+", " ", base)
 
         if self.structure == STIRFutureStructure.OUTRIGHT:
             ten = (skw.get("symbol") or "").strip()
-            base = f"stirf {curve_label} {ten} {struct} {val}".strip()
+            base = f"{curve_label} {ten} {struct} {val}".strip()
             return re.sub(r"\s\s+", " ", base)
 
         # CURVE/SPREAD
@@ -199,7 +202,7 @@ class STIRFutureQuery(BaseQuery):
         bt = (skw.get("back_symbol") or "").strip()
         rws = skw.get("risk_weights") or []
         rw_str = "/".join(str(x) for x in rws) if rws else ""
-        base = f"stirf {curve_label} {ft}v{bt} {struct} {val} {rw_str}".strip()
+        base = f"{curve_label} {ft}v{bt} {struct} {val} {rw_str}".strip()
         return re.sub(r"\s\s+", " ", base)
 
     def eval_expression(self, cube_name: Optional[str] = None) -> str:
@@ -230,4 +233,5 @@ class STIRFutureQuery(BaseQuery):
         return NotImplemented
 
     def default_mtm_value_id(self):
+        # return STIRFutureValue.NPV
         return STIRFutureValue.PRICE

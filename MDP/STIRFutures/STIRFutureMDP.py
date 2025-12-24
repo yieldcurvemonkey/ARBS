@@ -22,22 +22,23 @@ from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contracts, cme_code_effective_date, first_business_day_next_month
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher
-from Query.STIRFutures._STIRFutureGenericPricer import _STIRFutureGenericPricer 
+from Query.STIRFutures._STIRFutureGenericPricer import _STIRFutureGenericPricer
 from Query.STIRFutures.backends.rateslib.RLSTIRFuturePricer import RLSTIRFuturePricer
 
 DateLike = Union[datetime.date, datetime.datetime, Literal["live"]]
-InstrumentLike = _STIRFutureGenericPricer 
+InstrumentLike = _STIRFutureGenericPricer
 
 
 # ----------------------------- time helpers ---------------------------------
 def _as_datetime(ts: DateLike) -> datetime.datetime:
     if ts == "live":
         return datetime.datetime.now(pytz.UTC)
-    if isinstance(ts, datetime.datetime):
+    if type(ts) == datetime.datetime:
         if ts.tzinfo is None:
             return pytz.timezone("America/New_York").localize(ts)
         return ts
-    if isinstance(ts, datetime.date):
+    if type(ts) == datetime.date:
+        # return datetime.datetime(ts.year, ts.month, ts.day)
         return pytz.timezone("America/New_York").localize(datetime.datetime.combine(ts, datetime.time(hour=12)))
     raise TypeError("timestamp must be date, datetime, or 'live'")
 
@@ -394,8 +395,6 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         # This avoids duplicating the logic for IMM vs ZQ dates
         _, temp_stir = _stir_future_from_symbol(sym, price)
 
-        print(temp_stir.__dict__["kwargs"]["effective"])
-
         return RLSTIRFuturePricer(
             rl_stirf_id=sym,
             reference_date=ref_date,
@@ -514,7 +513,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         ts_chi = ts_dt.astimezone(chi)
 
         if interval is None:
-            start = chi.localize(datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day, 0, 0))
+            start = chi.localize(datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day, 0, 1))
             end = chi.localize(datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day, 23, 59))
         else:
             start = ts_chi - datetime.timedelta(minutes=window_minutes)
@@ -529,7 +528,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                     barchart_symbols=barchart_syms,
                     start_date=start,
                     end_date=end,
-                    interval=interval,
+                    interval=1,
                     one_df=True,
                     show_tqdm=show_tqdm,
                     max_concurrent_tasks=min(len(barchart_syms), 36) + 1,
@@ -606,7 +605,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
 
         # ---------- pass 1: cache hit ----------
         to_fetch: "OrderedDict[str, List[str]]" = OrderedDict()
-        ts_iso = ts_dt.isoformat()
+        ts_iso = pd.Timestamp(ts_dt).isoformat()
 
         for alias, tickers in alias_map.items():
             is_spread = _is_serff_spread_alias(alias)
@@ -695,8 +694,14 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                             "timestamp": idx.isoformat() if hasattr(idx, "isoformat") else str(idx),
                             "schema": 1,
                         }
-                        cache_key2 = f"{idx.isoformat()}-{t}-{src}"
+
+                        idx_iso = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)
+                        cache_key2 = f"{idx_iso}-{t}-{src}"
                         self._threadsafe_cache_put(cache_key2, args)
+
+                        cache_key_req = f"{ts_iso}-{t}-{src}"
+                        self._threadsafe_cache_put(cache_key_req, args)
+
                         cached = args
 
                     if cached is None:
@@ -760,7 +765,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         if not symbols:
             raise ValueError("Request must include 'symbols' or 'tickers'.")
 
-        with self.__open__():
+        with self:
             return self._get_data_for_timestamp(
                 symbols,
                 timestamp,
@@ -784,7 +789,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
 
         results: List[Tuple[DateLike, Dict[str, List[InstrumentLike]]]] = []
 
-        with self.__open__():
+        with self:
 
             def _process_one(ts: DateLike, syms: List[str]):
                 return ts, self._get_data_for_timestamp(syms, ts, show_tqdm=show_tqdm, force_refresh=force_refresh)
@@ -838,7 +843,8 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                         self._cache_ready = False
 
     def __enter__(self):
-        return self.__open__()
+        self.__open__()
+        return self
 
     def __exit__(self, exc_type, exc, tb):
         self.__close__(commit=(exc_type is None))

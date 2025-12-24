@@ -15,6 +15,7 @@ from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 from Query.FixedRateBonds.FixedRateBondStructure import FixedRateBondStructure
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapValue
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
+from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
 from BT.data_handler import TimeGrid
 from BT.execution_engine import ExecutionEngine
 from BT.query_order import QueryOrder, UnwindOrder
@@ -28,6 +29,8 @@ from BT.triggers import (
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base._GenericPricer import _GenericPricer
 from Query.Base.BaseQuery import BaseQuery
+
+from Query.STIRFutures.STIRFutureValue import STIRFutureValue
 
 # Optional risk function: receives portfolio + a pricer getter for current time
 RiskFn = Callable[[QueryPortfolio, Callable[[BaseQuery], Any]], Dict[str, float]]
@@ -380,6 +383,153 @@ class FinancedFixedRateBondHandler(PositionHandler):
         return float(cf + mtm), []
 
 
+class STIRFutureHandler(PositionHandler):
+    """Handles STIR future positions using change in price."""
+
+    name = "stir_future"
+
+    def supports(self, query: BaseQuery) -> bool:  # type: ignore[override]
+        return isinstance(query, STIRFutureQuery)
+
+    def build_position(
+        self,
+        order: QueryOrder,
+        pricer_provider: Callable[[BaseQuery], Any],
+        now: datetime.datetime,
+        backtest: "QueryDrivenBacktest",
+    ) -> ResolvedQueryPosition:
+        q = order.query
+        pricer_or_curve = pricer_provider(q)
+        package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+
+        # compute entry price directly (do NOT rely on replace/mutation)
+        if isinstance(pricer_or_curve, Mapping):
+            resolved_package = package
+        else:
+            resolved_package = [pricer_or_curve.resolve_pricable(p, rw) for p, rw in zip(package, weights)]
+
+        vmap = q.build_value_map(
+            pricer_or_curve=pricer_or_curve,
+            package=resolved_package,
+            risk_weights=weights,
+        )
+        entry_price = float(vmap.apply(value=q.default_mtm_value_id()))
+
+        meta = {**(order.meta or {}), "handler": self.name, "entry_price": entry_price}
+
+        return ResolvedQueryPosition(
+            package=package,
+            weights=weights,
+            opened=now,
+            source_query=q,
+            meta=meta,
+        )
+
+    # --- helpers ---
+    @staticmethod
+    def _pv01_per_contract_fallback(sym: str) -> float:
+        """
+        Fallback $PV01 per 1bp per contract when pricer doesn't expose pv01().
+        - SR3 (3M SOFR) is typically $25/bp/contract.
+        - SR1 (1M SOFR) and ZQ (Fed Funds) differ by spec; adjust if your specs differ.
+        """
+        s = (sym or "").upper()
+        if s.startswith("SR3") or s.startswith("SFR") or s.startswith("SQ"):
+            return 25.0
+        if s.startswith("SR1") or s.startswith("SER") or s.startswith("SL"):
+            return 25.0  # change if your SR1 spec differs
+        if s.startswith("ZQ") or s.startswith("FF"):
+            return 41.6666666667  # common Fed Funds 30-day style; change if your spec differs
+        return 25.0
+
+    def _position_pv01_quote(self, position: ResolvedQueryPosition, pricer_map: Mapping[str, Any]) -> float:
+        """
+        Returns sized PV01 of the *quoted structure* in $/bp.
+        For outrights: pv01 = contracts * pv01_per_contract
+        For spreads:   pv01 = +pv01(legA) - pv01(legB) using risk_weights
+        """
+        pv01_total = 0.0
+
+        for pk, rw in zip(position.package, position.weights):
+            key = str(pk)
+            pr = pricer_map.get(key)
+
+            if pr is None:
+                # If keys don't match exactly, try a relaxed match
+                pr = pricer_map.get(str(key).upper()) or pricer_map.get(str(key).strip())
+
+            pv01_1 = None
+
+            if pr is not None:
+                # Try pv01(pk) then pv01()
+                if hasattr(pr, "pv01"):
+                    try:
+                        pv01_1 = float(pr.pv01(pk))
+                    except TypeError:
+                        pv01_1 = float(pr.pv01())
+
+                # Or: dollar value per 1.00 price point (rare) -> convert to $/bp
+                elif hasattr(pr, "dv01"):
+                    try:
+                        pv01_1 = float(pr.dv01(pk))
+                    except TypeError:
+                        pv01_1 = float(pr.dv01())
+
+            if pv01_1 is None:
+                pv01_1 = self._pv01_per_contract_fallback(key)
+
+            pv01_total += float(rw) * float(pv01_1)
+
+        return float(pv01_total)
+
+    # --- existing _mtm_value unchanged ---
+    def _mtm_value(
+        self, position: ResolvedQueryPosition, pricer_provider: Optional[Callable[[BaseQuery], Any]] = None, pricer_or_curve: Optional[Any] = None
+    ) -> float:
+        assert pricer_provider is not None or pricer_or_curve is not None, "one of 'pricer_provider' or 'pricer_or_curve' must be passed in"
+        if pricer_provider is not None and pricer_or_curve is None:
+            pricer_or_curve: _GenericPricer | Dict[str, _GenericPricer] = pricer_provider(position.source_query)
+
+        if isinstance(pricer_or_curve, Mapping):
+            resolved_package = position.package
+        else:
+            resolved_package = [pricer_or_curve.resolve_pricable(p, rw) for p, rw in list(zip(position.package, position.weights))]
+
+        vmap = position.source_query.build_value_map(
+            pricer_or_curve=pricer_or_curve,
+            package=resolved_package,
+            risk_weights=position.weights,
+        )
+        value_id = position.source_query.default_mtm_value_id()
+
+        print(float(vmap.apply(value=STIRFutureValue.PV01)))
+
+        return float(vmap.apply(value=value_id))
+
+    def value_position(
+        self,
+        position: ResolvedQueryPosition,
+        pricer_provider: Callable[[BaseQuery], Any],
+        now: datetime.datetime,
+        backtest: "QueryDrivenBacktest",
+    ) -> float:
+        """
+        Return MTM PnL in dollars:
+          PnL($) = (ΔPrice / 0.01) * PV01_quote($/bp)
+
+        where ΔPrice is the change in the quoted structure price (outright: price;
+        spread: priceA - priceB), and PV01_quote is sized by risk_weights (contracts).
+        """
+        entry_price = float((position.meta or {}).get("entry_price", 0.0))
+
+        pricer_map = pricer_provider(position.source_query)
+        current_price = self._mtm_value(position, pricer_provider=None, pricer_or_curve=pricer_map)
+        dprice = float(current_price - entry_price)  # price points
+        pv01_quote = self._position_pv01_quote(position, pricer_map)  # $/bp (already sized by contracts)
+        pnl = (dprice / 0.01) * pv01_quote
+        return float(pnl)
+
+
 @dataclass
 class QueryDrivenBacktest:
     time_grid: TimeGrid
@@ -390,7 +540,7 @@ class QueryDrivenBacktest:
     risk_fn: RiskFn = lambda p, g: {}
 
     portfolio: QueryPortfolio = field(default_factory=QueryPortfolio)
-    position_handlers: List[PositionHandler] = field(default_factory=lambda: [FinancedFixedRateBondHandler(), PositionHandler()])
+    position_handlers: List[PositionHandler] = field(default_factory=lambda: [FinancedFixedRateBondHandler(), STIRFutureHandler(), PositionHandler()])
     dynamic_triggers: List[Trigger] = field(default_factory=list)
     _cache: Dict[Any, Any] = field(default_factory=dict)
 
@@ -476,6 +626,46 @@ class QueryDrivenBacktest:
                 if parts:
                     req = dict(req)
                     req["cusips"] = parts
+
+        if isinstance(q_norm, STIRFutureQuery):
+            has_symbols = bool(req.get("symbols")) or bool(req.get("tickers"))
+            if not has_symbols:
+                skw = dict(getattr(q_norm, "structure_kwargs", None) or {})
+                symbols: List[str] = []
+
+                # 1) structure_kwargs["symbols"]
+                raw_symbols = skw.get("symbols")
+                if isinstance(raw_symbols, (list, tuple)):
+                    symbols.extend([str(s).strip() for s in raw_symbols if str(s).strip()])
+
+                # 2) structure_kwargs leg fields
+                for key in ("symbol", "front_symbol", "back_symbol"):
+                    val = skw.get(key)
+                    if isinstance(val, str) and val.strip():
+                        symbols.append(val.strip())
+
+                # 3) top-level query.symbol (THIS is what you're using)
+                qsym = getattr(q_norm, "symbol", None)
+                if isinstance(qsym, str) and qsym.strip():
+                    symbols.append(qsym.strip())
+
+                # Split spreads like "SFRZ26/SFRZ27" or "SFRZ26xSFRZ27"
+                expanded: List[str] = []
+                for s in symbols:
+                    if "x" in s:
+                        expanded.extend([p for p in s.split("x") if p.strip()])
+                    elif "/" in s:
+                        expanded.extend([p for p in s.split("/") if p.strip()])
+                    else:
+                        expanded.append(s)
+
+                # de-dupe preserve order
+                seen = set()
+                expanded = [s for s in expanded if not (s in seen or seen.add(s))]
+
+                if expanded:
+                    req = dict(req)
+                    req["symbols"] = expanded
 
         return self._pricer_for_request(req)
 
