@@ -7,7 +7,9 @@ from typing import Dict, Iterable, List, Optional, Type
 from BT.triggers import Trigger
 from BT.query_order import QueryOrder
 from MDP.MarketDataProvider import MarketDataProvider
+from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
 from Query.Base.BaseQuery import BaseQuery
+from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
 
 
 @dataclass
@@ -17,6 +19,7 @@ class QueryStrategy:
     mdps: Dict[str, MarketDataProvider] = field(default_factory=dict)
     mdps_by_query_type: Dict[Type[BaseQuery], MarketDataProvider] = field(default_factory=dict)
     mtm_handlers: Dict[str, str] = field(default_factory=dict)
+    stir_future_mdp: Optional[STIRFutureMDP] = None
 
     def evaluate(self, now: datetime.datetime, backtest) -> List[QueryOrder]:
         orders: List[QueryOrder] = []
@@ -31,6 +34,8 @@ class QueryStrategy:
         return orders
 
     def mdp_for_query(self, query: BaseQuery, default: Optional[MarketDataProvider]) -> MarketDataProvider:
+        if isinstance(query, STIRFutureQuery) and self.stir_future_mdp is not None:
+            return self.stir_future_mdp
         for query_type, mdp in self.mdps_by_query_type.items():
             if isinstance(query, query_type):
                 return mdp
