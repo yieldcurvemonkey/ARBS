@@ -533,7 +533,7 @@ class STIRFutureHandler(PositionHandler):
 @dataclass
 class QueryDrivenBacktest:
     time_grid: TimeGrid
-    mdp: MarketDataProvider
+    mdp: Optional[MarketDataProvider]
     strategy: QueryStrategy
 
     exec_engine: ExecutionEngine = field(default_factory=ExecutionEngine)
@@ -554,13 +554,14 @@ class QueryDrivenBacktest:
     progress_desc: str = "BACKTESTING..."
 
     # -------- pricer resolution (cached per request signature) --------
-    def _pricer_for_request(self, req: Dict[str, Any]) -> Any:
+    def _pricer_for_request(self, req: Dict[str, Any], mdp: MarketDataProvider) -> Any:
         sig = repr(sorted(req.items()))
-        hit = self._cache.get(("pricer", sig))
+        cache_key = ("pricer", id(mdp), sig)
+        hit = self._cache.get(cache_key)
         if hit is not None:
             return hit
-        pricer = self.mdp.get_pricer(req)
-        self._cache[("pricer", sig)] = pricer
+        pricer = mdp.get_pricer(req)
+        self._cache[cache_key] = pricer
         return pricer
 
     def _frb_split_components(self, txt: str) -> List[str]:
@@ -616,6 +617,16 @@ class QueryDrivenBacktest:
 
         return replace(q, value=IRSwapValue.NPV, structure=structure, structure_kwargs=skw)
 
+    def _mdp_for_query(self, q: BaseQuery) -> MarketDataProvider:
+        mdp = None
+        if hasattr(self.strategy, "mdp_for_query"):
+            mdp = self.strategy.mdp_for_query(q)
+        if mdp is None:
+            mdp = self.mdp
+        if mdp is None:
+            raise RuntimeError("No MarketDataProvider available for query.")
+        return mdp
+
     def _pricer_for_query(self, q: BaseQuery, now: datetime.datetime) -> Any:
         q_norm = self._normalize_query_for_resolution(q)
         req = q_norm.build_mdp_request(now)
@@ -667,9 +678,17 @@ class QueryDrivenBacktest:
                     req = dict(req)
                     req["symbols"] = expanded
 
-        return self._pricer_for_request(req)
+        mdp = self._mdp_for_query(q_norm)
+        return self._pricer_for_request(req, mdp)
 
     def _handler_for_query(self, query: BaseQuery) -> PositionHandler:
+        handler_name = None
+        if hasattr(self.strategy, "mtm_handler_name_for_query"):
+            handler_name = self.strategy.mtm_handler_name_for_query(query)
+        if handler_name:
+            for handler in self.position_handlers:
+                if handler.name == handler_name:
+                    return handler
         for handler in self.position_handlers:
             if handler.supports(query):
                 return handler
