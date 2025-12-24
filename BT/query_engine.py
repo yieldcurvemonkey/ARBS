@@ -554,13 +554,14 @@ class QueryDrivenBacktest:
     progress_desc: str = "BACKTESTING..."
 
     # -------- pricer resolution (cached per request signature) --------
-    def _pricer_for_request(self, req: Dict[str, Any]) -> Any:
+    def _pricer_for_request(self, mdp: MarketDataProvider, req: Dict[str, Any]) -> Any:
         sig = repr(sorted(req.items()))
-        hit = self._cache.get(("pricer", sig))
+        mdp_key = id(mdp)
+        hit = self._cache.get(("pricer", mdp_key, sig))
         if hit is not None:
             return hit
-        pricer = self.mdp.get_pricer(req)
-        self._cache[("pricer", sig)] = pricer
+        pricer = mdp.get_pricer(req)
+        self._cache[("pricer", mdp_key, sig)] = pricer
         return pricer
 
     def _frb_split_components(self, txt: str) -> List[str]:
@@ -619,6 +620,7 @@ class QueryDrivenBacktest:
     def _pricer_for_query(self, q: BaseQuery, now: datetime.datetime) -> Any:
         q_norm = self._normalize_query_for_resolution(q)
         req = q_norm.build_mdp_request(now)
+        mdp = self.strategy.mdp_for_query(q_norm, self.mdp)
 
         if FixedRateBondQuery is not None and isinstance(q_norm, FixedRateBondQuery):
             if "cusips" not in req:
@@ -667,9 +669,15 @@ class QueryDrivenBacktest:
                     req = dict(req)
                     req["symbols"] = expanded
 
-        return self._pricer_for_request(req)
+        return self._pricer_for_request(mdp, req)
 
     def _handler_for_query(self, query: BaseQuery) -> PositionHandler:
+        handler_name = self.strategy.mtm_handler_for_query(query)
+        if handler_name:
+            for handler in self.position_handlers:
+                if handler.name == handler_name:
+                    return handler
+            raise KeyError(f"Unknown MTM handler '{handler_name}' for product={query.product!r}")
         for handler in self.position_handlers:
             if handler.supports(query):
                 return handler
