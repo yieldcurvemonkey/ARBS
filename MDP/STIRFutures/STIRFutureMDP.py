@@ -19,22 +19,14 @@ import requests
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
-from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import (
-    _imm_cutoff,
-    _next_contracts,
-    cme_code_effective_date,
-    first_business_day_next_month,
-)
+from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contracts, cme_code_effective_date, first_business_day_next_month
 from MDP.MarketDataProvider import MarketDataProvider
-from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher  # type: ignore
-
-# --- NEW IMPORTS ---
-from Query.STIRFutures._STIRFutureGenericPricer import _STIRFuturePricer
+from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher
+from Query.STIRFutures._STIRFutureGenericPricer import _STIRFutureGenericPricer 
 from Query.STIRFutures.backends.rateslib.RLSTIRFuturePricer import RLSTIRFuturePricer
 
 DateLike = Union[datetime.date, datetime.datetime, Literal["live"]]
-# --- UPDATED TYPE ---
-InstrumentLike = _STIRFuturePricer
+InstrumentLike = _STIRFutureGenericPricer 
 
 
 # ----------------------------- time helpers ---------------------------------

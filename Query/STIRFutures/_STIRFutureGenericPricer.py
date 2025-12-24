@@ -8,7 +8,7 @@ from Query.Base._GenericPricer import _GenericPricer
 from Query.STIRFutures._STIRFutureGenericPricable import _STIRFutureGenericPricable
 
 
-class _STIRFuturePricer(_GenericPricer[_GenericPricable], ABC):
+class _STIRFutureGenericPricer(_GenericPricer[_GenericPricable], ABC):
 
     def id(self) -> str: ...
     def reference_date(self) -> datetime.date: ...

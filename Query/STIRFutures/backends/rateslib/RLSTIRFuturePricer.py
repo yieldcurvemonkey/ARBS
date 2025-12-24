@@ -5,12 +5,13 @@ from typing import Union, Any, Optional
 import rateslib as rl
 import numpy as np
 
-from Query.STIRFutures._STIRFutureGenericPricer import _STIRFuturePricer
+from Query.STIRFutures._STIRFutureGenericPricer import _STIRFutureGenericPricer
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
 
 
 @dataclass
-class RLSTIRFuturePricer(_STIRFuturePricer):
+class RLSTIRFuturePricer(_STIRFutureGenericPricer):
+    _curve: str
     _rl_stirf_id: str
 
     _reference_date: datetime.date
@@ -30,6 +31,7 @@ class RLSTIRFuturePricer(_STIRFuturePricer):
         reference_date: Union[datetime.datetime, datetime.date],
         effective_date: Union[datetime.datetime, datetime.date],
         maturity_date: Union[datetime.datetime, datetime.date],
+        curve: Optional[str] = None,
         price: Optional[float] = None,
         rate: Optional[float] = None,
         contracts: Optional[int] = None,
@@ -38,6 +40,21 @@ class RLSTIRFuturePricer(_STIRFuturePricer):
     ):
         assert price is not None or rate is not None, "must pass in price or rate to price STIR future"
         self._rl_stirf_id = rl_stirf_id
+
+        print(rl_stirf_id)
+        
+        known_id_to_curve_map = {
+            "SFR": "USD-SOFR-1D",
+            "SR3": "USD-SOFR-1D",
+            "SER": "USD-SOFR-1D",
+            "SR1": "USD-SOFR-1D",
+            "FF": "USD-FEDFUNDS",
+            "ZQ": "USD-FEDFUNDS",
+        }
+        if self._rl_stirf_id[:-3] in known_id_to_curve_map:
+            self._curve = known_id_to_curve_map[self._rl_stirf_id[:-3]]
+        else:
+            self._curve = curve 
 
         self._reference_date = reference_date
         self._effective_date = effective_date
@@ -87,15 +104,15 @@ class RLSTIRFuturePricer(_STIRFuturePricer):
     def calendar(self) -> rl.Cal:
         # Assuming we look up the calendar from the definitions map used for curves/IRSwaps
         # This matches how FRB looked up 'spec' then got 'calendar'
-        return rl.defaults.spec[RATESLIB_CURVE_DEFINITIONS[self._rl_stirf_id]["ReferenceRate2"]]["calendar"]
+        return rl.defaults.spec[RATESLIB_CURVE_DEFINITIONS[self._curve]["ReferenceRate2"]]["calendar"]
 
     def calendar_advance(self, dt1: Union[datetime.date, rl.dt], dt2: str):
         # Using the BusinessConvention from definitions
         return rl.add_tenor(
             self._to_rl_dt(dt1),
             tenor=str(dt2),
-            modifier=RATESLIB_CURVE_DEFINITIONS[self._rl_stirf_id]["BusinessConvention"],
-            calendar=RATESLIB_CURVE_DEFINITIONS[self._rl_stirf_id]["Calendar"],
+            modifier=RATESLIB_CURVE_DEFINITIONS[self._curve]["BusinessConvention"],
+            calendar=RATESLIB_CURVE_DEFINITIONS[self._curve]["Calendar"],
         )
 
     def handle(self) -> Any:
@@ -125,6 +142,9 @@ class RLSTIRFuturePricer(_STIRFuturePricer):
         temp = self.build_stirf(contracts=self._contracts)
         # rateslib STIRFuture 'nominal' is usually per-contract
         return float(temp.contracts * temp.nominal)
+
+    def price(self) -> float:
+        return self._price
 
     def npv(self) -> float:
         # Mirroring RLFixedRateBondPricer which raises NotImplementedError
@@ -218,6 +238,6 @@ class RLSTIRFuturePricer(_STIRFuturePricer):
 
         spec_key = "ReferenceRate3" if is_ser else "ReferenceRate2"
         # Fallback to base ReferenceRate if specific STIR spec not defined
-        spec = RATESLIB_CURVE_DEFINITIONS[self._rl_stirf_id].get(spec_key, RATESLIB_CURVE_DEFINITIONS[self._rl_stirf_id]["ReferenceRate"])
+        spec = RATESLIB_CURVE_DEFINITIONS[self._curve].get(spec_key, RATESLIB_CURVE_DEFINITIONS[self._curve]["ReferenceRate"])
 
         return rl.STIRFuture(effective=self._to_rl_dt(eff), termination=self._to_rl_dt(mat), spec=spec, price=p, contracts=c)

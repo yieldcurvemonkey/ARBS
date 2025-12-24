@@ -11,6 +11,9 @@ class _STIRFutureGenericPricable(_GenericPricable, ABC):
 
     @abstractmethod
     def maturity_date(self) -> datetime.date: ...
+    
+    @abstractmethod
+    def price(self) -> float: ...
 
     @abstractmethod
     def fixed_rate(self) -> float: ...
