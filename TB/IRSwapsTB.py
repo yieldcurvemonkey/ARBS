@@ -5,7 +5,6 @@ import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
-from dataclasses import replace
 
 import re
 import pandas as pd
@@ -23,6 +22,7 @@ from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapQueryWrapper
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 from Query.IRSwaps.IRSwapValue import IRSwapValue
+from Query.Base.query_resolution import resolve_query
 from TB.utils import DateLike, _canonicalize_value, _dt_to_epoch_ns
 from utils.ql_utils import datetime_to_ql_date
 from BT.misc import ql_cal_date_range
@@ -74,59 +74,8 @@ def _build_row_for_query(
     ref_dt: DateLike,
     date_col: str,
 ) -> Tuple[DateLike, str, float]:
-
-    def _norm(tok: str) -> str:
-        t = (tok or "").strip().upper().replace(" ", "")
-        t = t.replace("X", "x")
-        m = re.match(r"^(\d+[DWMY])(\d+[DWMY])$", t)
-        if m:
-            return f"{m.group(1)}x{m.group(2)}"
-        return t
-
-    if q.tenor is not None:
-        structure = getattr(q, "structure", None)
-        txt = (getattr(q, "tenor", "") or "") or (getattr(q, "node", "") or "") or (getattr(q, "label", "") or "")
-        skw = dict(getattr(q, "structure_kwargs", {}) or {})
-
-        # x_ct = txt.count("x")
-        slash_ct = txt.count("/")
-
-        # if x_ct >= 2 or slash_ct >= 2:
-        if slash_ct >= 2:
-            structure = IRSwapStructure.FLY
-            tokens = [_norm(t) for t in re.split(r"\s*/\s*", txt) if t.strip()]
-            if len(tokens) != 3:
-                raise ValueError(f"Expected 3 legs for FLY, got {len(tokens)} in '{txt}'")
-            skw["front_tenor"], skw["belly_tenor"], skw["back_tenor"] = tokens
-
-        elif slash_ct == 1:
-            structure = IRSwapStructure.CURVE
-            tokens = [_norm(t) for t in re.split(r"\s*/\s*", txt) if t.strip()]
-            if len(tokens) == 2:
-                skw["front_tenor"], skw["back_tenor"] = tokens
-            else:
-                structure = IRSwapStructure.OUTRIGHT if structure is None else structure
-                skw["tenor"] = _norm(txt)
-
-        else:
-            structure = IRSwapStructure.OUTRIGHT if structure is None else structure
-            skw["tenor"] = _norm(q.tenor)
-
-        skw.setdefault("bpv", 1)
-        try:
-            q_eff = replace(q, structure=structure, structure_kwargs=skw)
-        except TypeError:
-            q_eff = replace(q, structure=structure, structure_id=structure, structure_kwargs=skw)
-
-        col_name = q_eff.col_name(curve.id())
-
-        mr = dict(q_eff.market_request or {})
-        mr[q_eff.mdp_time_key] = getattr(curve, "meta_data", {}).get("timestamp", ref_dt)
-        q_eff = replace(q_eff, market_request=mr)
-        q_eff = q_eff._edited(curve)
-    else:
-        q_eff = q
-        col_name = q_eff.col_name(curve.id())
+    q_eff = resolve_query(q, timestamp=ref_dt, pricer_or_curve=curve)
+    col_name = q_eff.col_name(curve.id())
 
     pkg, rw = q_eff.resolve_package(pricer_or_curve=curve, is_for_timeseries=True)
     val_map = q_eff.build_value_map(pricer_or_curve=curve, package=pkg, risk_weights=rw)

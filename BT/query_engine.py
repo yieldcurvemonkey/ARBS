@@ -17,10 +17,10 @@ from BT.triggers import Trigger
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base._GenericPricer import _GenericPricer
 from Query.Base.BaseQuery import BaseQuery
+from Query.Base.query_resolution import resolve_for_request, resolve_query
 
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
-from Query.FixedRateBonds.FixedRateBondStructure import FixedRateBondStructure
 
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapValue
 from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
@@ -30,49 +30,6 @@ from Query.STIRFutures.STIRFutureValue import STIRFutureValue
 RiskFn = Callable[[QueryPortfolio, Callable[[BaseQuery], Any]], Dict[str, float]]
 
 
-# -----------------------------
-# Query resolution helpers
-# -----------------------------
-def _resolve_query(
-    q: BaseQuery,
-    *,
-    timestamp: datetime.datetime,
-    pricer_or_curve: Any,
-) -> BaseQuery:
-    """
-    Centralize resolution behind BaseQuery.resolve_query().
-
-    Contract (as per your note):
-      - resolve_query returns a Query (BaseQuery) instance
-      - it "cleans up/hydrates" the user-supplied query
-
-    If resolve_query isn't implemented, returns q unchanged.
-    """
-    if not hasattr(q, "resolve_query"):
-        return q
-    q2 = q.resolve_query(timestamp, pricer_or_curve=pricer_or_curve)
-    if not isinstance(q2, BaseQuery):
-        raise TypeError(f"{type(q).__name__}.resolve_query must return BaseQuery, got {type(q2)}")
-    return q2
-
-
-def _resolve_for_request(q: BaseQuery, *, timestamp: datetime.datetime) -> BaseQuery:
-    """
-    Used by _pricer_for_query() to build MDP requests.
-
-    If your resolve_query does not require market data, it should tolerate pricer_or_curve=None.
-    We provide a fallback value if None is not accepted.
-    """
-    try:
-        return _resolve_query(q, timestamp=timestamp, pricer_or_curve=None)
-    except Exception:
-        # fallback: some implementations require a non-None object
-        return _resolve_query(q, timestamp=timestamp, pricer_or_curve={})
-
-
-# -----------------------------
-# Position Handlers
-# -----------------------------
 class PositionHandler:
     """Builds, updates, and values positions for a given query type."""
 
@@ -100,7 +57,7 @@ class PositionHandler:
         q0 = order.query
         pr = pricer_provider(q0)
 
-        q = _resolve_query(q0, timestamp=now, pricer_or_curve=pr)
+        q = resolve_query(q0, timestamp=now, pricer_or_curve=pr)
         package, weights = q.resolve_package(pricer_or_curve=pr)
 
         meta = {**(order.meta or {}), "handler": self.name}
@@ -122,7 +79,7 @@ class PositionHandler:
         pr = pricer_provider(position.source_query)
 
         # Optionally refresh hydration (no mutation; just use the hydrated view for valuation)
-        q = _resolve_query(position.source_query, timestamp=now, pricer_or_curve=pr)
+        q = resolve_query(position.source_query, timestamp=now, pricer_or_curve=pr)
 
         resolved_package = self._resolved_pricables(pr, position.package, position.weights)
         vmap = q.build_value_map(
@@ -165,6 +122,20 @@ class SwapPositionHandler(PositionHandler):
 
     name = "swap"
 
+    @staticmethod
+    def _refresh_mms_market_request(q: BaseQuery, now: datetime.datetime) -> BaseQuery:
+        if not isinstance(q, IRSwapQuery):
+            return q
+        if not q.is_mms:
+            return q
+        if q.tenor is not None:
+            return q
+        mr = dict(q.market_request or {})
+        ts = now.date() if isinstance(now, datetime.datetime) else now
+        if mr.get(q.mdp_time_key) == ts:
+            return q
+        return replace(q, market_request={**mr, q.mdp_time_key: ts})
+
     def supports(self, query: BaseQuery) -> bool:  # type: ignore[override]
         return isinstance(query, IRSwapQuery)
 
@@ -176,9 +147,10 @@ class SwapPositionHandler(PositionHandler):
         backtest: "QueryDrivenBacktest",
     ) -> ResolvedQueryPosition:
         q0: IRSwapQuery = order.query  # type: ignore[assignment]
+        q0 = self._refresh_mms_market_request(q0, now)
         pr = pricer_provider(q0)
 
-        q = _resolve_query(q0, timestamp=now, pricer_or_curve=pr)
+        q = resolve_query(q0, timestamp=now, pricer_or_curve=pr)
         if isinstance(q, IRSwapQuery) and getattr(q, "value", None) != IRSwapValue.NPV:
             q = replace(q, value=IRSwapValue.NPV)
 
@@ -204,8 +176,9 @@ class SwapPositionHandler(PositionHandler):
         now: datetime.datetime,
         backtest: "QueryDrivenBacktest",
     ) -> float:
-        pr = pricer_provider(position.source_query)
-        q = _resolve_query(position.source_query, timestamp=now, pricer_or_curve=pr)
+        q0 = self._refresh_mms_market_request(position.source_query, now)
+        pr = pricer_provider(q0)
+        q = resolve_query(q0, timestamp=now, pricer_or_curve=pr)
 
         if isinstance(q, IRSwapQuery) and getattr(q, "value", None) != IRSwapValue.NPV:
             q = replace(q, value=IRSwapValue.NPV)
@@ -232,29 +205,6 @@ class FinancedFixedRateBondHandler(PositionHandler):
         import re
 
         return bool(re.search(r"(?i)\bCT\d+\b", txt or ""))
-
-    def _normalize_query_for_resolution(self, q: FixedRateBondQuery) -> FixedRateBondQuery:
-        # Keep this until FixedRateBondQuery.resolve_query() fully owns it.
-        cusip_txt = str(getattr(q, "cusip", "") or "").strip()
-        structure = getattr(q, "structure", None)
-
-        if ("x" in cusip_txt) or ("/" in cusip_txt):
-            if cusip_txt.count("x") == 1 or cusip_txt.count("/") == 1:
-                structure = FixedRateBondStructure.CURVE
-            elif cusip_txt.count("x") == 2 or cusip_txt.count("/") == 2:
-                structure = FixedRateBondStructure.FLY
-
-        skw = dict(getattr(q, "structure_kwargs", None) or {})
-        skw.setdefault("cusip", cusip_txt)
-
-        if structure == FixedRateBondStructure.OUTRIGHT:
-            if all(skw.get(k) is None for k in ("notional", "bpv")):
-                skw["bpv"] = 1.0
-        else:
-            if all(skw.get(k) is None for k in ("front_notional", "belly_notional", "back_notional", "bpv")):
-                skw["bpv"] = 1.0
-
-        return replace(q, value=FixedRateBondValue.NPV, structure=structure, structure_kwargs=skw)
 
     def _financing_pnl(self, position: ResolvedQueryPosition, now: datetime.datetime) -> float:
         repo_rate = position.meta.get("financing_rate")
@@ -333,10 +283,10 @@ class FinancedFixedRateBondHandler(PositionHandler):
         backtest: "QueryDrivenBacktest",
     ) -> ResolvedQueryPosition:
         q0: FixedRateBondQuery = order.query  # type: ignore[assignment]
-        q1 = self._normalize_query_for_resolution(q0)
-
-        pr = pricer_provider(q1)
-        q = _resolve_query(q1, timestamp=now, pricer_or_curve=pr)
+        pr = pricer_provider(q0)
+        q = resolve_query(q0, timestamp=now, pricer_or_curve=pr)
+        if isinstance(q, FixedRateBondQuery) and getattr(q, "value", None) != FixedRateBondValue.NPV:
+            q = replace(q, value=FixedRateBondValue.NPV)
 
         package, weights = q.resolve_package(pricer_or_curve=pr)
         resolved_package = self._resolved_pricables(pr, package, weights)
@@ -352,7 +302,8 @@ class FinancedFixedRateBondHandler(PositionHandler):
 
         cusip_txt = str(getattr(order.query, "cusip", "") or "")
         if self._is_constant_maturity(cusip_txt):
-            meta.setdefault("resolved_cusips", None)
+            resolved_cusip = getattr(q, "cusip", None)
+            meta.setdefault("resolved_cusips", resolved_cusip)
             meta.setdefault("rolls", [])
 
         return ResolvedQueryPosition(
@@ -371,7 +322,7 @@ class FinancedFixedRateBondHandler(PositionHandler):
         backtest: "QueryDrivenBacktest",
     ) -> float:
         pr = pricer_provider(position.source_query)
-        q = _resolve_query(position.source_query, timestamp=now, pricer_or_curve=pr)
+        q = resolve_query(position.source_query, timestamp=now, pricer_or_curve=pr)
 
         resolved_package = self._resolved_pricables(pr, position.package, position.weights)
         vmap = q.build_value_map(pricer_or_curve=pr, package=resolved_package, risk_weights=position.weights)
@@ -432,7 +383,7 @@ class STIRFutureHandler(PositionHandler):
         q0 = order.query
         pr = pricer_provider(q0)
 
-        q = _resolve_query(q0, timestamp=now, pricer_or_curve=pr)
+        q = resolve_query(q0, timestamp=now, pricer_or_curve=pr)
         package, weights = q.resolve_package(pricer_or_curve=pr)
 
         resolved_package = self._resolved_pricables(pr, package, weights)
@@ -467,7 +418,7 @@ class STIRFutureHandler(PositionHandler):
     ) -> float:
         entry_price = float((position.meta or {}).get("entry_price", 0.0))
         pr = pricer_provider(position.source_query)
-        q = _resolve_query(position.source_query, timestamp=now, pricer_or_curve=pr)
+        q = resolve_query(position.source_query, timestamp=now, pricer_or_curve=pr)
 
         current_price = self._price(position, pr, q)
         dprice = float(current_price - entry_price)  # price points
@@ -529,11 +480,14 @@ class QueryDrivenBacktest:
         return mdp
 
     def _pricer_for_query(self, q: BaseQuery, now: datetime.datetime) -> Any:
-        # Build request from a hydrated query view, without needing a pricer.
-        q_req = _resolve_for_request(q, timestamp=now)
-        req = q_req.build_mdp_request(now)
+        mdp = self._mdp_for_query(q)
+        seed_req = q.build_mdp_request(now)
+        pr = self._pricer_for_request(seed_req, mdp)
 
-        mdp = self._mdp_for_query(q_req)
+        q_req = resolve_for_request(q, timestamp=now, pricer_or_curve=pr)
+        req = q_req.build_mdp_request(now)
+        if req == seed_req:
+            return pr
         return self._pricer_for_request(req, mdp)
 
     def _handler_for_query(self, query: BaseQuery) -> PositionHandler:
