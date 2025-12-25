@@ -91,6 +91,39 @@ class FixedRateBondQuery(BaseQuery):
             return f"{self.risk_weight} * `{col}`"
         return f"`{col}`"
 
+    def resolve_query(self, ref_dt, pricer_or_curve):  # noqa: ARG002 - kept for API symmetry
+        import copy
+
+        q = copy.deepcopy(self)
+
+        cusip_txt = str(getattr(q, "cusip", "") or "").strip()
+        structure = getattr(q, "structure", None)
+
+        if ("x" in cusip_txt) or ("/" in cusip_txt):
+            if cusip_txt.count("x") == 1 or cusip_txt.count("/") == 1:
+                structure = FixedRateBondStructure.CURVE
+            elif cusip_txt.count("x") == 2 or cusip_txt.count("/") == 2:
+                structure = FixedRateBondStructure.FLY
+        else:
+            structure = FixedRateBondStructure.OUTRIGHT if structure is None else structure
+
+        skw = dict(getattr(q, "structure_kwargs", None) or {})
+        skw.setdefault("cusip", cusip_txt)
+
+        if structure == FixedRateBondStructure.OUTRIGHT:
+            if all(skw.get(k) is None for k in ("notional", "bpv")):
+                skw["bpv"] = 1.0
+        else:
+            if all(skw.get(k) is None for k in ("front_notional", "belly_notional", "back_notional", "bpv")):
+                skw["bpv"] = 1.0
+
+        try:
+            q_eff = replace(q, structure=structure, structure_kwargs=skw)
+        except TypeError:
+            q_eff = replace(q, structure=structure, structure_id=structure, structure_kwargs=skw)
+
+        return q_eff
+
     # --- Arithmetic ---
     def __pos__(self) -> "FixedRateBondQuery":
         return self
