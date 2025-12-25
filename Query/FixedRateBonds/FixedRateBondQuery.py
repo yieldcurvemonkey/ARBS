@@ -1,3 +1,4 @@
+import datetime
 import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -97,6 +98,56 @@ class FixedRateBondQuery(BaseQuery):
         q = copy.deepcopy(self)
 
         cusip_txt = str(getattr(q, "cusip", "") or "").strip()
+
+        def _as_of_date() -> Optional[datetime.date]:
+            if isinstance(ref_dt, datetime.datetime):
+                return ref_dt.date()
+            if isinstance(ref_dt, datetime.date):
+                return ref_dt
+            return None
+
+        def _resolve_on_the_run_token(token: str, as_of: datetime.date) -> str:
+            from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
+
+            m_ct = re.match(r"^CT(\d+)$", token, re.IGNORECASE)
+            m_o = re.match(r"^(O{1,3})(\d+)$", token, re.IGNORECASE)
+            m_ox = re.match(r"^Ox(?P<rank>\d+)(?P<tenor>10|20|25|30|7|5|3|2)$", token, re.IGNORECASE)
+
+            if not (m_ct or m_o or m_ox):
+                return token
+
+            ref_df = update_reference_data(source="fiscaldata", force_refresh=False)
+            ref_df = ref_df[(ref_df["issue_date"] <= as_of) & (ref_df["maturity_date"] >= as_of)].copy()
+            if ref_df.empty:
+                raise KeyError(f"No UST reference data available for {as_of.isoformat()}")
+
+            ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+
+            if m_ct:
+                rank, tenor = 0, int(m_ct.group(1))
+            elif m_o:
+                rank, tenor = len(m_o.group(1)), int(m_o.group(2))
+            else:
+                rank, tenor = int(m_ox.group("rank")), int(m_ox.group("tenor"))
+
+            oi_str = f"{tenor}-Year"
+            target = ref_df[(ref_df["oi"] == oi_str) & (ref_df["rank"] == rank)]
+            if target.empty:
+                raise KeyError(f"Could not resolve constant maturity alias '{token}' for {as_of.isoformat()}")
+            return str(target.iloc[0]["cusip"])
+
+        def _resolve_cusip_aliases(txt: str) -> str:
+            as_of = _as_of_date()
+            if not as_of:
+                return txt
+            tokens = re.split(r"([/x])", txt)
+            resolved = []
+            for tok in tokens:
+                if tok in ["/", "x"]:
+                    resolved.append(tok)
+                else:
+                    resolved.append(_resolve_on_the_run_token(tok.strip(), as_of) if tok.strip() else tok)
+            return "".join(resolved)
         structure = getattr(q, "structure", None)
 
         if ("x" in cusip_txt) or ("/" in cusip_txt):
@@ -107,8 +158,10 @@ class FixedRateBondQuery(BaseQuery):
         else:
             structure = FixedRateBondStructure.OUTRIGHT if structure is None else structure
 
+        resolved_cusip_txt = _resolve_cusip_aliases(cusip_txt)
+
         skw = dict(getattr(q, "structure_kwargs", None) or {})
-        skw.setdefault("cusip", cusip_txt)
+        skw.setdefault("cusip", resolved_cusip_txt)
 
         if structure == FixedRateBondStructure.OUTRIGHT:
             if all(skw.get(k) is None for k in ("notional", "bpv")):
@@ -118,9 +171,9 @@ class FixedRateBondQuery(BaseQuery):
                 skw["bpv"] = 1.0
 
         try:
-            q_eff = replace(q, structure=structure, structure_kwargs=skw)
+            q_eff = replace(q, cusip=resolved_cusip_txt, structure=structure, structure_kwargs=skw)
         except TypeError:
-            q_eff = replace(q, structure=structure, structure_id=structure, structure_kwargs=skw)
+            q_eff = replace(q, cusip=resolved_cusip_txt, structure=structure, structure_id=structure, structure_kwargs=skw)
 
         return q_eff
 

@@ -289,7 +289,8 @@ class FinancedFixedRateBondHandler(PositionHandler):
 
         cusip_txt = str(getattr(order.query, "cusip", "") or "")
         if self._is_constant_maturity(cusip_txt):
-            meta.setdefault("resolved_cusips", None)
+            resolved_cusip = getattr(q, "cusip", None)
+            meta.setdefault("resolved_cusips", resolved_cusip)
             meta.setdefault("rolls", [])
 
         return ResolvedQueryPosition(
