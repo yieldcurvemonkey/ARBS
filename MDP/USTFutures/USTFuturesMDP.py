@@ -1,5 +1,6 @@
 import datetime
 import re
+import threading
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import pandas as pd
@@ -82,10 +83,34 @@ def _clean_symbols(symbols: Sequence[str]) -> List[str]:
 
 
 class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
+    _UST_PRICER_CACHE = "USTFuturePricer_Cache"
+
     def __init__(self, source: str = "BARCHART_USTF-RL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
         ZODBCacheMixin.__init__(self)
         self._fetcher = None
+        self._open_lock = threading.RLock()
+        self._open_count = 0
+        self._cache_ready = False
+
+    def _ensure_pricer_cache(self) -> None:
+        if self._cache_ready and hasattr(self, self._UST_PRICER_CACHE):
+            return
+        cache_path = ZODBCacheMixin.default_cache_path("USTFuturePricer_Cache")
+        self.zodb_open_cache(cache_attr=self._UST_PRICER_CACHE, path=cache_path, encode=None, decode=None)
+        self._cache_ready = True
+
+    def _threadsafe_cache_put(self, key: str, value: dict) -> None:
+        with self._open_lock:
+            self._ensure_pricer_cache()
+            cache = getattr(self, self._UST_PRICER_CACHE)
+            cache[key] = value
+
+    def _threadsafe_cache_get(self, key: str):
+        with self._open_lock:
+            self._ensure_pricer_cache()
+            cache = getattr(self, self._UST_PRICER_CACHE)
+            return cache.get(key)
 
     def _get_fetcher(self) -> BarchartFetcher:
         if self._fetcher is None:
@@ -115,6 +140,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             interval=interval,
             one_df=True,
             show_tqdm=show_tqdm,
+            max_concurrent_tasks=len(barchart_syms) + 1,
         )
 
     def _build_pricer(self, symbol: str, price: float, ts_dt: datetime.datetime) -> RLUSTFuturePricer:
@@ -124,35 +150,78 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             price=float(price),
         )
 
+    @staticmethod
+    def _build_pricer_from_args(args: Dict[str, Any]) -> RLUSTFuturePricer:
+        symbol = args["symbol"]
+        price = float(args["price"])
+        timestamp_str = args["timestamp"]
+
+        if isinstance(timestamp_str, str):
+            try:
+                ref_date = datetime.date.fromisoformat(timestamp_str.split("T")[0])
+            except ValueError:
+                ref_date = pd.Timestamp(timestamp_str).date()
+        elif isinstance(timestamp_str, (datetime.date, datetime.datetime)):
+            ref_date = _as_datetime(timestamp_str).date()
+        else:
+            ref_date = datetime.date.today()
+
+        return RLUSTFuturePricer(
+            symbol=symbol,
+            reference_date=ref_date,
+            price=price,
+            meta_data=args,
+        )
+
     def get_pricer(self, request: Dict[str, Any]) -> Dict[str, InstrumentLike]:
         symbols = _clean_symbols(request.get("symbols") or request.get("tickers") or [])
         timestamp: DateLike = request.get("timestamp", "live")
         show_tqdm = bool(request.get("show_tqdm", False))
         interval = request.get("interval")
+        force_refresh = bool(request.get("force_refresh", False))
 
         if not symbols:
             raise ValueError("Request must include 'symbols' or 'tickers'.")
 
         ts_dt = _as_datetime(timestamp)
-        df = self._fetch_barchart_timeseries(symbols, ts_dt, show_tqdm=show_tqdm, interval=interval)
+        ts_iso = ts_dt.isoformat()
 
-        if df.empty:
-            raise ValueError("No data returned from Barchart for requested UST futures.")
+        with self:
+            out: Dict[str, InstrumentLike] = {}
+            missing: List[str] = []
 
-        df = df.rename(columns={c: _from_barchart_symbol(str(c)) for c in df.columns})
-        if isinstance(df.index, pd.DatetimeIndex):
-            latest = df.iloc[-1]
-        else:
-            latest = df.iloc[-1]
+            for sym in symbols:
+                cache_key = f"{ts_iso}-{sym}-{self.source}"
+                cached = None if force_refresh else self._threadsafe_cache_get(cache_key)
+                if cached is not None:
+                    out[sym] = self._build_pricer_from_args(cached)
+                else:
+                    missing.append(sym)
 
-        out: Dict[str, InstrumentLike] = {}
-        for sym in symbols:
-            if sym not in latest:
-                continue
-            out[sym] = self._build_pricer(sym, float(latest[sym]), ts_dt)
-        if not out:
-            raise ValueError("No matching UST futures prices for requested symbols.")
-        return out
+            if missing:
+                df = self._fetch_barchart_timeseries(missing, ts_dt, show_tqdm=show_tqdm, interval=interval)
+                if df.empty:
+                    raise ValueError("No data returned from Barchart for requested UST futures.")
+
+                df = df.rename(columns={c: _from_barchart_symbol(str(c)) for c in df.columns})
+                latest = df.iloc[-1]
+
+                for sym in missing:
+                    if sym not in latest:
+                        continue
+                    args = {
+                        "symbol": sym,
+                        "price": float(latest[sym]),
+                        "timestamp": ts_iso,
+                        "schema": 1,
+                    }
+                    out[sym] = self._build_pricer_from_args(args)
+                    cache_key = f"{ts_iso}-{sym}-{self.source}"
+                    self._threadsafe_cache_put(cache_key, args)
+
+            if not out:
+                raise ValueError("No matching UST futures prices for requested symbols.")
+            return out
 
     def bulk_get_data(
         self,
@@ -165,3 +234,37 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         for ts in timestamps:
             out[ts] = self.get_pricer({"symbols": symbols, "timestamp": ts, "show_tqdm": show_tqdm})
         return out
+
+    def __open__(self):
+        with self._open_lock:
+            if self._open_count == 0:
+                self._ensure_pricer_cache()
+            self._open_count += 1
+        return self
+
+    def __close__(self, *, commit: bool = True):
+        with self._open_lock:
+            if self._open_count <= 0:
+                return
+            self._open_count -= 1
+            if self._open_count == 0:
+                try:
+                    if commit:
+                        self.zodb_commit()
+                finally:
+                    try:
+                        self.close_zodb()
+                    finally:
+                        self._cache_ready = False
+
+    def __enter__(self):
+        return self.__open__()
+
+    def __exit__(self, exc_type, exc, tb):
+        self.__close__(commit=(exc_type is None))
+
+    async def __aenter__(self):
+        return self.__open__()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.__close__(commit=(exc_type is None))
