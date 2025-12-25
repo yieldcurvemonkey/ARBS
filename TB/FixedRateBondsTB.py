@@ -6,7 +6,6 @@ import logging
 import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import replace
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -20,9 +19,9 @@ import Query.FixedRateBonds.adapter  # noqa: F401  # ensure pricer adapters are 
 from Caching.timeseries_cache import WriteOptions, append_timeseries, read_timeseries
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
+from Query.Base.query_resolution import resolve_query
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
-from Query.FixedRateBonds.FixedRateBondStructure import FixedRateBondStructure
 from TB.utils import DateLike, _canonicalize_value, _dt_to_epoch_ns
 from utils.ql_utils import datetime_to_ql_date
 
@@ -77,27 +76,10 @@ def _build_row_for_query(
     ref_dt: DateLike,
     date_col: str,
 ) -> Tuple[DateLike, str, float]:
-    structure = q.structure
-    txt = q.cusip or ""
-    if "x" in txt or "/" in txt:
-        if txt.count("x") == 1 or txt.count("/") == 1:
-            structure = FixedRateBondStructure.CURVE
-        elif txt.count("x") == 2 or txt.count("/") == 2:
-            structure = FixedRateBondStructure.FLY
-    else:
-        structure = FixedRateBondStructure.OUTRIGHT
-
-    skw = dict(getattr(q, "structure_kwargs", {}) or {})
-    skw.setdefault("cusip", q.cusip)
-    skw.setdefault("bpv", 1)
-
+    q_eff = resolve_query(q, timestamp=ref_dt, pricer_or_curve=pricer_for_cusip)
+    skw = dict(getattr(q_eff, "structure_kwargs", {}) or {})
     user_passed_rws = _clone_risk_weights(skw.get("risk_weights", None))
-    user_passed_col_name = q.col_name()
-
-    try:
-        q_eff = replace(q, structure=structure, structure_kwargs=skw)
-    except TypeError:
-        q_eff = replace(q, structure=structure, structure_id=structure, structure_kwargs=skw)
+    user_passed_col_name = q_eff.col_name()
 
     pkg, rw = q_eff.resolve_package(pricer_or_curve=pricer_for_cusip, is_for_timeseries=True)
 

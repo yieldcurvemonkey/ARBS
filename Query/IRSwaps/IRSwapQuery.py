@@ -201,6 +201,18 @@ class IRSwapQuery(BaseQuery):
             if "ct" in self.tenor or "9128" in self.tenor:
                 skw["is_mms"] = True
 
+        tenor_str = self.structure_kwargs.get("tenor") or self.tenor or ""
+        slash_count = tenor_str.count("/")
+        if slash_count == 1:
+            object.__setattr__(self, "structure", IRSwapStructure.CURVE)
+            object.__setattr__(self, "structure_id", IRSwapStructure.CURVE)
+        elif slash_count == 2:
+            object.__setattr__(self, "structure", IRSwapStructure.FLY)
+            object.__setattr__(self, "structure_id", IRSwapStructure.FLY)
+        else:
+            object.__setattr__(self, "structure", IRSwapStructure.OUTRIGHT)
+            object.__setattr__(self, "structure_id", IRSwapStructure.OUTRIGHT)
+
     # ---- BaseQuery abstract hooks adapted to IRS ----
 
     def return_query(self) -> List["IRSwapQuery"]:

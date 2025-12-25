@@ -61,7 +61,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
 
         assert not QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"].isHoliday(
-            datetime_to_ql_date(timestamp if type(timestamp) == datetime.datetime or type(timestamp) == datetime.date else datetime.date.today())
+            datetime_to_ql_date(
+                timestamp if type(timestamp) == datetime.datetime or type(timestamp) == datetime.date or hasattr(timestamp, "date") else datetime.date.today()
+            )
         ), f"{timestamp} is a holiday in the {QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"]}!"
 
         if self.source.upper() in ["CME_NY_EOD_LIVE-QL_BASIC", "CME_NY_EOD_LIVE_QL_BASIC"]:
@@ -203,6 +205,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
             from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
             from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
+
+            if type(timestamp) == datetime.datetime or hasattr(timestamp, "date"):
+                timestamp = timestamp.date()
 
             assert type(timestamp) == datetime.date or timestamp == "live", "CME_NY_EOD ONLY HAS EOD - 'timestamp' must be type 'datetime.date' or Literal['live']"
             assert curve_name in QUANTLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."
