@@ -467,11 +467,14 @@ class QueryDrivenBacktest:
         return mdp
 
     def _pricer_for_query(self, q: BaseQuery, now: datetime.datetime) -> Any:
-        # Build request from a hydrated query view, without needing a pricer.
-        q_req = resolve_for_request(q, timestamp=now)
-        req = q_req.build_mdp_request(now)
+        mdp = self._mdp_for_query(q)
+        seed_req = q.build_mdp_request(now)
+        pr = self._pricer_for_request(seed_req, mdp)
 
-        mdp = self._mdp_for_query(q_req)
+        q_req = resolve_for_request(q, timestamp=now, pricer_or_curve=pr)
+        req = q_req.build_mdp_request(now)
+        if req == seed_req:
+            return pr
         return self._pricer_for_request(req, mdp)
 
     def _handler_for_query(self, query: BaseQuery) -> PositionHandler:

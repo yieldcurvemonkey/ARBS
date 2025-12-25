@@ -29,15 +29,8 @@ def resolve_query(
     return q2
 
 
-def resolve_for_request(q: BaseQuery, *, timestamp: datetime.datetime) -> BaseQuery:
+def resolve_for_request(q: BaseQuery, *, timestamp: datetime.datetime, pricer_or_curve: Any) -> BaseQuery:
     """
     Used by request builders to build MDP requests.
-
-    If resolve_query does not require market data, it should tolerate pricer_or_curve=None.
-    We provide a fallback value if None is not accepted.
     """
-    try:
-        return resolve_query(q, timestamp=timestamp, pricer_or_curve=None)
-    except Exception:
-        # fallback: some implementations require a non-None object
-        return resolve_query(q, timestamp=timestamp, pricer_or_curve={})
+    return resolve_query(q, timestamp=timestamp, pricer_or_curve=pricer_or_curve)
