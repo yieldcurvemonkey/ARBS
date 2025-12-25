@@ -125,6 +125,20 @@ class SwapPositionHandler(PositionHandler):
 
     name = "swap"
 
+    @staticmethod
+    def _refresh_mms_market_request(q: BaseQuery, now: datetime.datetime) -> BaseQuery:
+        if not isinstance(q, IRSwapQuery):
+            return q
+        if not q.is_mms:
+            return q
+        if q.tenor is not None:
+            return q
+        mr = dict(q.market_request or {})
+        ts = now.date() if isinstance(now, datetime.datetime) else now
+        if mr.get(q.mdp_time_key) == ts:
+            return q
+        return replace(q, market_request={**mr, q.mdp_time_key: ts})
+
     def supports(self, query: BaseQuery) -> bool:  # type: ignore[override]
         return isinstance(query, IRSwapQuery)
 
@@ -136,6 +150,7 @@ class SwapPositionHandler(PositionHandler):
         backtest: "QueryDrivenBacktest",
     ) -> ResolvedQueryPosition:
         q0: IRSwapQuery = order.query  # type: ignore[assignment]
+        q0 = self._refresh_mms_market_request(q0, now)
         pr = pricer_provider(q0)
 
         q = resolve_query(q0, timestamp=now, pricer_or_curve=pr)
@@ -164,8 +179,9 @@ class SwapPositionHandler(PositionHandler):
         now: datetime.datetime,
         backtest: "QueryDrivenBacktest",
     ) -> float:
-        pr = pricer_provider(position.source_query)
-        q = resolve_query(position.source_query, timestamp=now, pricer_or_curve=pr)
+        q0 = self._refresh_mms_market_request(position.source_query, now)
+        pr = pricer_provider(q0)
+        q = resolve_query(q0, timestamp=now, pricer_or_curve=pr)
 
         if isinstance(q, IRSwapQuery) and getattr(q, "value", None) != IRSwapValue.NPV:
             q = replace(q, value=IRSwapValue.NPV)
