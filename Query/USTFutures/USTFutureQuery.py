@@ -9,6 +9,7 @@ from definitions.USTFutures import normalize_root
 from Query.Base.BaseQuery import BaseQuery
 from Query.USTFutures.USTFutureStructure import USTFutureStructure
 from Query.USTFutures.USTFutureValue import USTFutureValue
+from Query.USTFutures import adapter as _ust_adapter  # noqa: F401
 
 
 def _norm_curve_name(s: Optional[str]) -> str:
