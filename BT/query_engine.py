@@ -25,6 +25,8 @@ from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapValue
 from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
 from Query.STIRFutures.STIRFutureValue import STIRFutureValue
+from Query.USTFutures.USTFutureQuery import USTFutureQuery
+from Query.USTFutures.USTFutureValue import USTFutureValue
 
 
 RiskFn = Callable[[QueryPortfolio, Callable[[BaseQuery], Any]], Dict[str, float]]
@@ -427,6 +429,68 @@ class STIRFutureHandler(PositionHandler):
         return float((dprice / 0.01) * pv01_quote)
 
 
+class USTFutureHandler(PositionHandler):
+    """UST futures: PnL($) = (ΔPrice / 0.01) * PV01_quote($/bp)."""
+
+    name = "ust_future"
+
+    def supports(self, query: BaseQuery) -> bool:  # type: ignore[override]
+        return isinstance(query, USTFutureQuery)
+
+    def build_position(
+        self,
+        order: QueryOrder,
+        pricer_provider: Callable[[BaseQuery], Any],
+        now: datetime.datetime,
+        backtest: "QueryDrivenBacktest",
+    ) -> ResolvedQueryPosition:
+        q0 = order.query
+        pr = pricer_provider(q0)
+
+        q = resolve_query(q0, timestamp=now, pricer_or_curve=pr)
+        package, weights = q.resolve_package(pricer_or_curve=pr)
+
+        resolved_package = self._resolved_pricables(pr, package, weights)
+        vmap = q.build_value_map(pricer_or_curve=pr, package=resolved_package, risk_weights=weights)
+        entry_price = float(vmap.apply(value=q.default_mtm_value_id()))
+
+        meta = {**(order.meta or {}), "handler": self.name, "entry_price": entry_price}
+        return ResolvedQueryPosition(
+            package=package,
+            weights=weights,
+            opened=now,
+            source_query=q,
+            meta=meta,
+        )
+
+    def _pv01_quote(self, position: ResolvedQueryPosition, pr: Any, q: BaseQuery) -> float:
+        resolved_package = self._resolved_pricables(pr, position.package, position.weights)
+        vmap = q.build_value_map(pricer_or_curve=pr, package=resolved_package, risk_weights=position.weights)
+        return float(vmap.apply(value=USTFutureValue.PV01))
+
+    def _price(self, position: ResolvedQueryPosition, pr: Any, q: BaseQuery) -> float:
+        resolved_package = self._resolved_pricables(pr, position.package, position.weights)
+        vmap = q.build_value_map(pricer_or_curve=pr, package=resolved_package, risk_weights=position.weights)
+        return float(vmap.apply(value=q.default_mtm_value_id()))
+
+    def value_position(
+        self,
+        position: ResolvedQueryPosition,
+        pricer_provider: Callable[[BaseQuery], Any],
+        now: datetime.datetime,
+        backtest: "QueryDrivenBacktest",
+    ) -> float:
+        entry_price = float((position.meta or {}).get("entry_price", 0.0))
+        pr = pricer_provider(position.source_query)
+        q = resolve_query(position.source_query, timestamp=now, pricer_or_curve=pr)
+
+        current_price = self._price(position, pr, q)
+        dprice = float(current_price - entry_price)
+        pv01_quote = self._pv01_quote(position, pr, q)
+
+        return float((dprice / 0.01) * pv01_quote)
+
+
 # -----------------------------
 # Backtest
 # -----------------------------
@@ -434,6 +498,7 @@ class STIRFutureHandler(PositionHandler):
 class QueryDrivenBacktest:
     time_grid: TimeGrid
     strategy: QueryStrategy
+    mdp: Optional[MarketDataProvider] = None
 
     exec_engine: ExecutionEngine = field(default_factory=ExecutionEngine)
     risk_fn: RiskFn = lambda p, g: {}
@@ -443,6 +508,7 @@ class QueryDrivenBacktest:
         default_factory=lambda: [
             FinancedFixedRateBondHandler(),
             STIRFutureHandler(),
+            USTFutureHandler(),
             SwapPositionHandler(),
             PositionHandler(),  # fallback
         ]
@@ -458,6 +524,10 @@ class QueryDrivenBacktest:
 
     show_progress: bool = True
     progress_desc: str = "BACKTESTING..."
+
+    def __post_init__(self):
+        if self.mdp is not None and self.strategy.default_mdp is None:
+            self.strategy.default_mdp = self.mdp
 
     # -------- pricer resolution (cached per request signature) --------
     def _pricer_for_request(self, req: Dict[str, Any], mdp: MarketDataProvider) -> Any:
