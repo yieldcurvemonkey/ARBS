@@ -1,10 +1,16 @@
 import datetime
+import itertools
+import os
+import random
 import re
 import threading
+import time
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from urllib.parse import quote
 
 import pandas as pd
 import pytz
+import requests
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
@@ -82,16 +88,93 @@ def _clean_symbols(symbols: Sequence[str]) -> List[str]:
     return out
 
 
+def _build_socks5h(host: str) -> dict:
+    user = os.getenv("NORDVPN_USER", "")
+    pwd = os.getenv("NORDVPN_PASS", "")
+    if not user or not pwd:
+        raise ValueError("Missing NORDVPN_USER/NORDVPN_PASS in environment.")
+    url = f"socks5h://{quote(user, safe='')}:{quote(pwd, safe='')}@{host}:1080"
+    return {"http": url, "https": url}
+
+
+def _preflight_proxy(proxies: dict | None, timeout: int = 6) -> bool:
+    try:
+        r = requests.get(
+            "https://api.ipify.org?format=json",
+            proxies=proxies,
+            timeout=timeout,
+            headers={"Connection": "close"},
+        )
+        r.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
+class _ProxyGuard:
+    """Force chosen proxies + Connection: close for token fetches (reduce WAF flakiness)."""
+
+    def __init__(self, proxies: dict | None):
+        self.proxies = proxies
+
+    def __enter__(self):
+        self._orig_get = requests.get
+
+        def _patched_get(url, *args, **kwargs):
+            hdrs = kwargs.pop("headers", {}) or {}
+            title_map = {k.title(): v for k, v in hdrs.items()}
+            if "Connection" not in title_map:
+                hdrs["Connection"] = "close"
+            kwargs["headers"] = hdrs
+            if self.proxies is not None:
+                kwargs["proxies"] = self.proxies
+            else:
+                kwargs.pop("proxies", None)
+            return self._orig_get(url, *args, **kwargs)
+
+        requests.get = _patched_get
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        requests.get = self._orig_get
+
+
 class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
     _UST_PRICER_CACHE = "USTFuturePricer_Cache"
+    _BARCHART_STATE: Dict[str, Any] = {}
 
     def __init__(self, source: str = "BARCHART_USTF-RL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
         ZODBCacheMixin.__init__(self)
-        self._fetcher = None
         self._open_lock = threading.RLock()
         self._open_count = 0
         self._cache_ready = False
+
+        default_hosts = [
+            "atlanta.us.socks.nordhold.net",
+            "chicago.us.socks.nordhold.net",
+            "dallas.us.socks.nordhold.net",
+            "los-angeles.us.socks.nordhold.net",
+            "new-york.us.socks.nordhold.net",
+            "phoenix.us.socks.nordhold.net",
+            "san-francisco.us.socks.nordhold.net",
+            "us.socks.nordhold.net",
+            None,
+        ]
+        self._barchart_proxy_hosts: List[Optional[str]] = list(kwargs.get("barchart_proxy_hosts", default_hosts))
+        random.shuffle(self._barchart_proxy_hosts)
+        self._barchart_proxy_ttl: int = int(kwargs.get("barchart_proxy_ttl", 60))
+
+        if not USTFuturesMDP._BARCHART_STATE:
+            USTFuturesMDP._BARCHART_STATE = {
+                "proxies": None,
+                "host": None,
+                "chosen_at": 0.0,
+                "ttl": self._barchart_proxy_ttl,
+                "fetcher": None,
+                "cycler": itertools.cycle(self._barchart_proxy_hosts),
+                "lock": threading.RLock(),
+            }
 
     def _ensure_pricer_cache(self) -> None:
         if self._cache_ready and hasattr(self, self._UST_PRICER_CACHE):
@@ -112,10 +195,55 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             cache = getattr(self, self._UST_PRICER_CACHE)
             return cache.get(key)
 
-    def _get_fetcher(self) -> BarchartFetcher:
-        if self._fetcher is None:
-            self._fetcher = BarchartFetcher()
-        return self._fetcher
+    def _get_cached_barchart_proxy(self) -> tuple[dict | None, str | None]:
+        S = USTFuturesMDP._BARCHART_STATE
+        if time.time() - float(S["chosen_at"]) < float(S["ttl"]):
+            return S["proxies"], S["host"]
+        return None, None
+
+    def _choose_barchart_proxy(self) -> tuple[dict | None, str | None]:
+        S = USTFuturesMDP._BARCHART_STATE
+        cycler = S["cycler"]
+
+        for _ in range(len(self._barchart_proxy_hosts)):
+            host = next(cycler)
+            if host is None:
+                return None, None
+            try:
+                proxies = _build_socks5h(host)
+            except Exception:
+                continue
+            if _preflight_proxy(proxies):
+                return proxies, host
+
+        return None, None
+
+    def _get_barchart_fetcher(self) -> BarchartFetcher:
+        S = USTFuturesMDP._BARCHART_STATE
+        with S["lock"]:
+            proxies, host = self._get_cached_barchart_proxy()
+            if proxies is None and host is None:
+                proxies, host = self._choose_barchart_proxy()
+                S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
+                S["fetcher"] = None
+
+            bcf = S["fetcher"]
+            if bcf is None:
+                bcf = BarchartFetcher(proxies=proxies, debug_verbose=False, error_verbose=True)
+                S["fetcher"] = bcf
+
+            try:
+                with _ProxyGuard(proxies):
+                    bcf._fetch_session_tokens(dummy_symbol="BTC")
+            except Exception:
+                proxies, host = self._choose_barchart_proxy()
+                S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
+                bcf = BarchartFetcher(proxies=proxies, debug_verbose=False, error_verbose=True)
+                S["fetcher"] = bcf
+                with _ProxyGuard(proxies):
+                    bcf._fetch_session_tokens(dummy_symbol="BTC")
+
+            return bcf
 
     def _fetch_barchart_timeseries(
         self,
@@ -132,7 +260,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         end = chi.localize(datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day, 23, 59))
 
         barchart_syms = [_to_barchart_symbol(t) for t in tickers]
-        bcf = self._get_fetcher()
+        bcf = self._get_barchart_fetcher()
         return bcf.barchart_timeseries_api(
             barchart_symbols=barchart_syms,
             start_date=start,
@@ -207,17 +335,29 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 latest = df.iloc[-1]
 
                 for sym in missing:
-                    if sym not in latest:
+                    if sym not in df:
                         continue
+                    series = df[sym].dropna()
+                    if series.empty:
+                        continue
+                    if isinstance(series.index, pd.DatetimeIndex):
+                        pos = series.index.get_indexer([ts_dt], method="nearest")
+                        idx = series.index[pos[0]] if pos.size and pos[0] != -1 else series.index[-1]
+                        ts_stamp = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)
+                    else:
+                        idx = series.index[-1]
+                        ts_stamp = ts_iso
                     args = {
                         "symbol": sym,
-                        "price": float(latest[sym]),
-                        "timestamp": ts_iso,
+                        "price": float(series.loc[idx]),
+                        "timestamp": ts_stamp,
                         "schema": 1,
                     }
                     out[sym] = self._build_pricer_from_args(args)
                     cache_key = f"{ts_iso}-{sym}-{self.source}"
+                    cache_key2 = f"{args['timestamp']}-{sym}-{self.source}"
                     self._threadsafe_cache_put(cache_key, args)
+                    self._threadsafe_cache_put(cache_key2, args)
 
             if not out:
                 raise ValueError("No matching UST futures prices for requested symbols.")
