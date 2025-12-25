@@ -42,6 +42,19 @@ class FixedRateBondQuery(BaseQuery):
             object.__setattr__(self, "value_id", self.value)
             object.__setattr__(self, "value_ids", tuple())
 
+        cusip_str = self.structure_kwargs.get("cusip") or self.cusip or ""
+        slash_count = cusip_str.count("/")
+
+        if slash_count == 1:
+            object.__setattr__(self, "structure", FixedRateBondStructure.CURVE)
+            object.__setattr__(self, "structure_id", FixedRateBondStructure.CURVE)
+        elif slash_count == 2:
+            object.__setattr__(self, "structure", FixedRateBondStructure.FLY)
+            object.__setattr__(self, "structure_id", FixedRateBondStructure.FLY)
+        else:
+            object.__setattr__(self, "structure", FixedRateBondStructure.OUTRIGHT)
+            object.__setattr__(self, "structure_id", FixedRateBondStructure.OUTRIGHT)
+
     def return_query(self) -> List["FixedRateBondQuery"]:
         if isinstance(self.value, list):
             return [replace(self, value=v) for v in self.value]
@@ -65,12 +78,12 @@ class FixedRateBondQuery(BaseQuery):
             struct_name = FixedRateBondStructure.FLY.name
 
         if curve_label.strip() == cusip_str.strip():
-            return re.sub(r'\s\s+', " ", f"{cusip_str} {struct_name} {val_name}".strip())
+            return re.sub(r"\s\s+", " ", f"{cusip_str} {struct_name} {val_name}".strip())
 
         if rws not in ["1/-1", "0.5/-0.5", "0.50/-0.50", "-1/2/-1", "-0.50/1.00/-0.50", "-0.5/1/-0.5"]:
-            return re.sub(r'\s\s+', " ", f"{curve_label} {cusip_str} {rws} {struct_name} {val_name}".strip())
+            return re.sub(r"\s\s+", " ", f"{curve_label} {cusip_str} {rws} {struct_name} {val_name}".strip())
 
-        return re.sub(r'\s\s+', " ", f"{curve_label} {cusip_str} {struct_name} {val_name}".strip())
+        return re.sub(r"\s\s+", " ", f"{curve_label} {cusip_str} {struct_name} {val_name}".strip())
 
     def eval_expression(self, cube_name: Optional[str] = None, ignore_risk_weight: bool = False) -> str:
         col = self.col_name(cube_name=cube_name)
@@ -114,9 +127,9 @@ class FixedRateBondQuery(BaseQuery):
             if v == "now":
                 req[self.mdp_time_key] = now
             # "live" or concrete value: leave as-is
-        
+
         req["cusips"] = [self.cusip]
         return req
-    
+
     def default_mtm_value_id(self) -> Any:
         return FixedRateBondValue.NPV

@@ -204,6 +204,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
             from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
 
+            if type(timestamp) == datetime.datetime or hasattr(timestamp, "date"):
+                timestamp = timestamp.date()
+
             assert type(timestamp) == datetime.date or timestamp == "live", "CME_NY_EOD ONLY HAS EOD - 'timestamp' must be type 'datetime.date' or Literal['live']"
             assert curve_name in QUANTLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."
             ql_curve_def = QUANTLIB_CURVE_DEFINITIONS[curve_name]

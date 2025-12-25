@@ -102,7 +102,7 @@ class STIRFutureQuery(BaseQuery):
             #     self.structure = STIRFutureStructure.BASIS
 
         # ---- structure-specific normalization + validation ----
-        if self.structure == STIRFutureStructure.OUTRIGHT:
+        if self.structure == STIRFutureStructure.OUTRIGHT and not "/" in self.symbol:
             assert skw.get("symbol") is not None or (
                 skw.get("effective_date") is not None and skw.get("maturity_date") is not None
             ), "OUTRIGHT requires symbol OR (effective_date & maturity_date)"
@@ -112,7 +112,7 @@ class STIRFutureQuery(BaseQuery):
             if skw.get("contracts") is None and "notional" not in skw and "bpv" not in skw:
                 skw.setdefault("notional", 1_000_000)
 
-        elif self.structure in {getattr(STIRFutureStructure, "CURVE", STIRFutureStructure.SPREAD), STIRFutureStructure.SPREAD}:
+        elif "/" in self.symbol or self.structure in {getattr(STIRFutureStructure.CURVE, STIRFutureStructure.SPREAD), STIRFutureStructure.SPREAD}:
             # accept symbols=[...] as a convenience
             symbols = skw.get("symbols")
             if isinstance(symbols, (list, tuple)) and len(symbols) >= 2:
@@ -171,6 +171,18 @@ class STIRFutureQuery(BaseQuery):
         else:
             object.__setattr__(self, "value_id", self.value)
             object.__setattr__(self, "value_ids", tuple())
+
+        symbol_str = self.structure_kwargs.get("symbol") or self.symbol or ""
+        slash_count = symbol_str.count("/")
+        if slash_count == 1:
+            object.__setattr__(self, "structure", STIRFutureStructure.CURVE)
+            object.__setattr__(self, "structure_id", STIRFutureStructure.CURVE)
+        elif slash_count == 2:
+            object.__setattr__(self, "structure", STIRFutureStructure.FLY)
+            object.__setattr__(self, "structure_id", STIRFutureStructure.FLY)
+        else:
+            object.__setattr__(self, "structure", STIRFutureStructure.OUTRIGHT)
+            object.__setattr__(self, "structure_id", STIRFutureStructure.OUTRIGHT)
 
     def return_query(self) -> List["STIRFutureQuery"]:
         if isinstance(self.value, list):
