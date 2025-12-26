@@ -60,7 +60,7 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         return datetime.date(self._reference_date.year, self._reference_date.month, self._reference_date.day)
 
     def settlement_date(self):
-        return self.calendar_advance(self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B")
+        return self.calendar_advance(self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B")
 
     def issue_date(self):
         return datetime.date(self._issue_date.year, self._issue_date.month, self._issue_date.day)
@@ -69,14 +69,14 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         return datetime.date(self._maturity_date.year, self._maturity_date.month, self._maturity_date.day)
 
     def calendar(self) -> rl.NamedCal:
-        return rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["calendar"]
+        return rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['calendar']
 
     def calendar_advance(self, dt1: Union[datetime.date, rl.dt], dt2: str):
         return rl.add_tenor(
             self._to_rl_dt(dt1),
             tenor=str(dt2),
-            modifier=rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["modifier"],
-            calendar=rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["calendar"],
+            modifier=rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['modifier'],
+            calendar=rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['calendar'],
         )
 
     def meta(self):
@@ -84,7 +84,7 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
 
     def build_schedule(self) -> rl.Schedule:
         return rl.FixedRateBond(
-            self._to_rl_dt(self.issue_date()), self._to_rl_dt(self.maturity_date()), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"], fixed_rate=self.coupon()
+            self._to_rl_dt(self.issue_date()), self._to_rl_dt(self.maturity_date()), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec'], fixed_rate=self.coupon()
         ).kwargs["schedule"]
 
     def coupon(self):
@@ -94,12 +94,12 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         if self._ytm is not None:
             return self._ytm
         return rl.FixedRateBond(
-            self._to_rl_dt(self.issue_date()), self._to_rl_dt(self.maturity_date()), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"], fixed_rate=self.coupon()
+            self._to_rl_dt(self.issue_date()), self._to_rl_dt(self.maturity_date()), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec'], fixed_rate=self.coupon()
         ).ytm(
             price=self.clean_price(),
             dirty=False,
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B"
             ),
         )
 
@@ -107,14 +107,14 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         return rl.FixedRateBond(
             self._to_rl_dt(self.issue_date()),
             self._to_rl_dt(self.maturity_date()),
-            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"],
+            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec'],
             fixed_rate=self.coupon(),
             notional=notional,
         ).price(
             ytm=self.ytm(),
             dirty=True,
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B"
             ),
         )
 
@@ -124,13 +124,13 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         return rl.FixedRateBond(
             self._to_rl_dt(self.issue_date()),
             self._to_rl_dt(self.maturity_date()),
-            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"],
+            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec'],
             fixed_rate=self.coupon(),
         ).price(
             ytm=self.ytm(),
             dirty=False,
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B"
             ),
         )
 
@@ -144,13 +144,13 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         return rl.FixedRateBond(
             self._to_rl_dt(self.issue_date()),
             self._to_rl_dt(self.maturity_date()),
-            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"],
+            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec'],
             fixed_rate=self.coupon(),
             notional=notional,
         ).duration(
             ytm=self.ytm(),
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B"
             ),
             metric="risk",
         )
@@ -162,12 +162,12 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         return rl.FixedRateBond(
             self._to_rl_dt(self.issue_date()),
             self._to_rl_dt(self.maturity_date()),
-            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"],
+            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec'],
             fixed_rate=self.coupon(),
         ).duration(
             ytm=self.ytm(),
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B"
             ),
             metric="modified",
         )
@@ -176,12 +176,12 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         return rl.FixedRateBond(
             self._to_rl_dt(self.issue_date()),
             self._to_rl_dt(self.maturity_date()),
-            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"],
+            spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec'],
             fixed_rate=self.coupon(),
         ).convexity(
             ytm=self.ytm(),
             settlement=self.calendar_advance(
-                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B"
+                self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['settle']}B"
             ),
         )
 
@@ -189,7 +189,7 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         return rl.dcf(
             self._to_rl_dt(self.reference_date()),
             self._to_rl_dt(self.maturity_date()),
-            rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["convention"],
+            rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec']]['convention'],
         )
 
     def zspread(self):
@@ -217,5 +217,5 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
             notional = 1_000_000
 
         return rl.FixedRateBond(
-            self._to_rl_dt(issue_date), self._to_rl_dt(maturity_date), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"], fixed_rate=coupon, notional=notional
+            self._to_rl_dt(issue_date), self._to_rl_dt(maturity_date), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]['spec'], fixed_rate=coupon, notional=notional
         )

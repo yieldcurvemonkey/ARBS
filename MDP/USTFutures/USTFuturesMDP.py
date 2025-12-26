@@ -91,13 +91,8 @@ def _clean_symbols(symbols: Sequence[str]) -> List[str]:
 
 
 def _build_socks5h(host: str) -> dict:
-<<<<<<< Updated upstream
     user = os.getenv("NORDVPN_USER", "")
     pwd = os.getenv("NORDVPN_PASS", "")
-=======
-    user = os.getenv("NORDVPN_USER", "3G5mmfKXWfCGFGT4yDL34Tzn")
-    pwd = os.getenv("NORDVPN_PASS", "VN33uViQZp6pXVzdgsGskhNg")
->>>>>>> Stashed changes
     if not user or not pwd:
         raise ValueError("Missing NORDVPN_USER/NORDVPN_PASS in environment.")
     url = f"socks5h://{quote(user, safe='')}:{quote(pwd, safe='')}@{host}:1080"
@@ -278,11 +273,51 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             max_concurrent_tasks=len(barchart_syms) + 1,
         )
 
-    def _build_pricer(self, symbol: str, price: float, ts_dt: datetime.datetime) -> RLUSTFuturePricer:
+    @staticmethod
+    def _parse_contract_symbol(symbol: str) -> Tuple[str, str]:
+        match = re.match(r"^(?P<root>[A-Z]{1,3})(?P<code>[FGHJKMNQUVXZ]\\d{1,2})$", symbol)
+        if not match:
+            raise ValueError(f"Could not parse UST futures symbol: {symbol}")
+        return match.group("root"), match.group("code")
+
+    @staticmethod
+    def _parse_reference_date(timestamp: Any) -> datetime.date:
+        if isinstance(timestamp, str):
+            try:
+                return datetime.date.fromisoformat(timestamp.split("T")[0])
+            except ValueError:
+                return pd.Timestamp(timestamp).date()
+        if isinstance(timestamp, (datetime.date, datetime.datetime)):
+            return _as_datetime(timestamp).date()
+        return datetime.date.today()
+
+    def _build_pricer(
+        self,
+        symbol: str,
+        price: float,
+        ts_dt: datetime.datetime,
+        *,
+        delivery: Optional[Tuple[datetime.date, datetime.date]] = None,
+        basket_pricers: Optional[List[Any]] = None,
+        conversion_factors: Optional[List[float]] = None,
+        contract_coupon: Optional[float] = None,
+        currency: str = "USD",
+        curve_id: str = "USD-SOFR-1D",
+        calc_mode: Optional[str] = None,
+        meta_data: Optional[Any] = None,
+    ) -> RLUSTFuturePricer:
         return RLUSTFuturePricer(
             symbol=symbol,
             reference_date=ts_dt,
             price=float(price),
+            delivery=delivery,
+            basket=basket_pricers,
+            conversion_factors=conversion_factors,
+            coupon=contract_coupon or 6.0,
+            currency=currency,
+            curve_id=curve_id,
+            calc_mode=calc_mode,
+            meta_data=meta_data,
         )
 
     @staticmethod
@@ -305,6 +340,13 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             symbol=symbol,
             reference_date=ref_date,
             price=price,
+            delivery=args.get("delivery"),
+            basket=args.get("basket_pricers"),
+            conversion_factors=args.get("conversion_factors"),
+            coupon=args.get("contract_coupon", 6.0),
+            currency=args.get("currency", "USD"),
+            curve_id=args.get("curve_id", "USD-SOFR-1D"),
+            calc_mode=args.get("calc_mode"),
             meta_data=args,
         )
 
@@ -312,12 +354,14 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         symbols = _clean_symbols(request.get("symbols") or request.get("tickers") or [])
         timestamp: DateLike = request.get("timestamp", "live")
         show_tqdm = bool(request.get("show_tqdm", False))
-<<<<<<< Updated upstream
-        interval = request.get("interval")
-=======
         interval = request.get("interval", 1)
->>>>>>> Stashed changes
         force_refresh = bool(request.get("force_refresh", False))
+        include_basket = bool(request.get("include_basket", False))
+        basket_source = request.get("basket_source", "RL_CME_TCF")
+        curve_id = request.get("curve_id", "USD-SOFR-1D")
+        currency = request.get("currency", "USD")
+        contract_coupon = request.get("contract_coupon")
+        usts_mdp = request.get("usts_mdp")
 
         if not symbols:
             raise ValueError("Request must include 'symbols' or 'tickers'.")
@@ -333,7 +377,28 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 cache_key = f"{ts_iso}-{sym}-{self.source}"
                 cached = None if force_refresh else self._threadsafe_cache_get(cache_key)
                 if cached is not None:
-                    out[sym] = self._build_pricer_from_args(cached)
+                    ref_dt = self._parse_reference_date(cached.get("timestamp"))
+                    basket_data = None
+                    if include_basket:
+                        basket_data = self.get_delivery_basket(
+                            as_of=ts_dt.date(),
+                            symbol=sym,
+                            usts_mdp=usts_mdp,
+                            source=basket_source,
+                        )
+                    out[sym] = self._build_pricer(
+                        symbol=sym,
+                        price=float(cached["price"]),
+                        ts_dt=ref_dt,
+                        delivery=basket_data["delivery"] if basket_data else None,
+                        basket_pricers=basket_data["basket_pricers"] if basket_data else None,
+                        conversion_factors=basket_data["conversion_factors"] if basket_data else None,
+                        contract_coupon=basket_data.get("contract_coupon") if basket_data else contract_coupon,
+                        currency=currency,
+                        curve_id=curve_id,
+                        calc_mode=basket_data.get("calc_mode") if basket_data else None,
+                        meta_data=cached,
+                    )
                 else:
                     missing.append(sym)
 
@@ -358,13 +423,34 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                     else:
                         idx = series.index[-1]
                         ts_stamp = ts_iso
+                    ref_dt = self._parse_reference_date(ts_stamp)
                     args = {
                         "symbol": sym,
                         "price": float(series.loc[idx]),
                         "timestamp": ts_stamp,
                         "schema": 1,
                     }
-                    out[sym] = self._build_pricer_from_args(args)
+                    basket_data = None
+                    if include_basket:
+                        basket_data = self.get_delivery_basket(
+                            as_of=ts_dt.date(),
+                            symbol=sym,
+                            usts_mdp=usts_mdp,
+                            source=basket_source,
+                        )
+                    out[sym] = self._build_pricer(
+                        symbol=sym,
+                        price=float(series.loc[idx]),
+                        ts_dt=ref_dt,
+                        delivery=basket_data["delivery"] if basket_data else None,
+                        basket_pricers=basket_data["basket_pricers"] if basket_data else None,
+                        conversion_factors=basket_data["conversion_factors"] if basket_data else None,
+                        contract_coupon=basket_data.get("contract_coupon") if basket_data else contract_coupon,
+                        currency=currency,
+                        curve_id=curve_id,
+                        calc_mode=basket_data.get("calc_mode") if basket_data else None,
+                        meta_data=args,
+                    )
                     cache_key = f"{ts_iso}-{sym}-{self.source}"
                     cache_key2 = f"{args['timestamp']}-{sym}-{self.source}"
                     self._threadsafe_cache_put(cache_key, args)
@@ -386,95 +472,69 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             out[ts] = self.get_pricer({"symbols": symbols, "timestamp": ts, "show_tqdm": show_tqdm})
         return out
 
-<<<<<<< Updated upstream
-=======
     def get_delivery_basket(
-        self, as_of: datetime.date, symbol: str, usts_mdp: Optional[FixedRateBondsMDP] = None, repo: Optional[float] = None, source: Optional[str] = "RL_CME_TCF"
-    ):
-        cme_quaterly_month_code = {
-            "H": [1, 2, 3],
-            "M": [4, 5, 6],
-            "U": [7, 8, 9],
-            "Z": [10, 11, 12],
+        self,
+        *,
+        as_of: datetime.date,
+        symbol: str,
+        usts_mdp: Optional[FixedRateBondsMDP] = None,
+        source: str = "RL_CME_TCF",
+    ) -> Dict[str, Any]:
+        if source != "RL_CME_TCF":
+            raise ValueError(f"Unsupported delivery basket source: {source}")
+
+        import rateslib as rl
+        from pandas.tseries.offsets import BMonthBegin, BMonthEnd
+
+        from MDP.FixedRateBonds.reference_data_cache.cme_tcf import read_cme_tcf_with_headers
+
+        if usts_mdp is None:
+            usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
+
+        root, month_code = self._parse_contract_symbol(symbol)
+        contract_imm = rl.scheduling.get_imm(code=month_code)
+        contract_month = datetime.date(contract_imm.year, contract_imm.month, contract_imm.day)
+        tcf_period = int(contract_month.strftime("%Y%m"))
+
+        cme_tcf_df = read_cme_tcf_with_headers(as_of=as_of)
+        cme_tcf_df = cme_tcf_df[(cme_tcf_df["ticker"] == root) & (cme_tcf_df["period"] == tcf_period)].copy()
+
+        if cme_tcf_df.empty:
+            raise ValueError(f"No CME TCF deliverables found for {symbol} at period {tcf_period}.")
+
+        close_2pm = pytz.timezone("America/Chicago").localize(datetime.datetime(as_of.year, as_of.month, as_of.day, 14, 0))
+        cash_pricers = usts_mdp.get_data({"cusips": cme_tcf_df["cusip"].unique().tolist(), "timestamp": close_2pm})
+
+        basket_pricers: List[Any] = []
+        conversion_factors: List[float] = []
+        for _, row in cme_tcf_df.iterrows():
+            pricer = cash_pricers.get(row["cusip"])
+            if pricer is None:
+                continue
+            basket_pricers.append(pricer)
+            conversion_factors.append(float(row["invoice_conversion_factor"]))
+
+        if not basket_pricers:
+            raise ValueError(f"No deliverable bond pricers resolved for {symbol}.")
+
+        mb_offset = BMonthBegin()
+        me_offset = BMonthEnd()
+        delivery_start = mb_offset.rollback(pd.Timestamp(contract_month))
+        delivery_end = me_offset.rollforward(pd.Timestamp(contract_month))
+
+        contract_coupon = 6.0
+        if "futures_coupon" in cme_tcf_df.columns:
+            contract_coupon = float(cme_tcf_df["futures_coupon"].iloc[0])
+
+        calc_mode = "ust_long" if root in {"WN", "US", "UXY", "TY"} else "ust_short"
+
+        return {
+            "delivery": (delivery_start.date(), delivery_end.date()),
+            "basket_pricers": basket_pricers,
+            "conversion_factors": conversion_factors,
+            "contract_coupon": contract_coupon,
+            "calc_mode": calc_mode,
         }
-        symbol_to_rl_spec = {
-            "TU": "us_gb_2y",
-            "3Y": "us_gb_3y",
-            "FV": "us_gb_5y",
-            "TY": "us_gb_10y",
-            "UXY": "us_gb_10y",
-            "US": "us_gb_30y",
-            "TWE": "us_gb_30y",
-            "WN": "us_gb_30y",
-        }
-
-        if source == "RL_CME_TCF":
-            import rateslib as rl
-            from MDP.FixedRateBonds.reference_data_cache.cme_tcf import read_cme_tcf_with_headers
-            from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
-
-            from pandas.tseries.offsets import BMonthEnd, BMonthBegin
-
-            if usts_mdp is None:
-                usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
-
-            contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
-
-            for m_code, month_nums in cme_quaterly_month_code.items():
-                if as_of.month in month_nums:
-                    full_symbol = f"{symbol}{m_code}{int(as_of.strftime("%y"))}"
-                    tcf_period = int(contract_imm_date.strftime("%Y%m"))
-                    break
-
-            cme_tcf_df = read_cme_tcf_with_headers(as_of=as_of)
-            cme_tcf_df = cme_tcf_df[(cme_tcf_df["ticker"] == symbol) & (cme_tcf_df["period"] == tcf_period)]
-
-            close_2pm = pytz.timezone("America/Chicago").localize(datetime.datetime(as_of.year, as_of.month, as_of.day, 14, 00))
-            ustf_pricer = self.get_pricer(request=dict(symbols=[full_symbol], timestamp=close_2pm))
-            cash_pricers = usts_mdp.get_data(dict(cusips=cme_tcf_df["cusip"].unique().tolist(), timestamp=close_2pm))
-
-            cme_tcf_df["rl_objs"] = cme_tcf_df["cusip"].map({c: pr.build_pricable() for c, pr in cash_pricers.items()})
-            cme_tcf_df["label"] = cme_tcf_df["cusip"].map({c: pr._meta_data["label"] for c, pr in cash_pricers.items()})
-            cme_tcf_df["coupon"] = cme_tcf_df["cusip"].map({c: pr._cpn for c, pr in cash_pricers.items()})
-            cme_tcf_df["clean_price"] = cme_tcf_df["cusip"].map({c: pr.clean_price() for c, pr in cash_pricers.items()})
-            cme_tcf_df["futures_price"] = ustf_pricer[full_symbol]._price
-            cme_tcf_df["gross_basis"] = cme_tcf_df["clean_price"] - (cme_tcf_df["futures_price"] * cme_tcf_df["invoice_conversion_factor"])
-
-            me_offset = BMonthEnd()
-            mb_offset = BMonthBegin()
-
-            rl_ust_future = rl.BondFuture(
-                delivery=(mb_offset.rollback(contract_imm_date), me_offset.rollforward(contract_imm_date)),
-                basket=cme_tcf_df["rl_objs"].to_list(),
-                # spec=symbol_to_rl_spec[symbol],
-                coupon=6.0,
-                currency="usd",
-                calc_mode="ust_long" if symbol in ["WN", "TWE", "US", "UXY", "TY"] else "ust_short",
-            )
-
-            cme_tcf_df["gross_basis_rl"] = rl_ust_future.gross_basis(future_price=ustf_pricer[full_symbol]._price, prices=cme_tcf_df["clean_price"].to_list())
-
-            if repo is None:
-                repo = _fetch_fixings(as_of_date=as_of, curve_name="USD-SOFR-1D").sort_index().tail(1).iloc[0] * 100
-
-            cme_tcf_df["bnoc"] = rl_ust_future.net_basis(
-                future_price=ustf_pricer[full_symbol]._price,
-                prices=cme_tcf_df["clean_price"].to_list(),
-                repo_rate=repo,
-                settlement=next(iter(cash_pricers.values())).settlement_date(),
-                delivery=rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day)),
-                convention="ActAct",
-            )
-
-            cme_tcf_df["irr"] = rl_ust_future.implied_repo(
-                future_price=ustf_pricer[full_symbol]._price,
-                prices=cme_tcf_df["clean_price"].to_list(),
-                settlement=next(iter(cash_pricers.values())).settlement_date(),
-            )
-
-            return cme_tcf_df.sort_values(by="irr", ascending=False).reset_index(drop=True)
-
->>>>>>> Stashed changes
     def __open__(self):
         with self._open_lock:
             if self._open_count == 0:
