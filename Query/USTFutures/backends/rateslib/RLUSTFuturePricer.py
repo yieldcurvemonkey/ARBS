@@ -181,7 +181,17 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         return float((bumped - base) / shift)
 
     def pv01(self, ustf: RLUSTFuturePricable, curves: Optional[Any] = None) -> float:
-        return self.analytic_delta(curves=curves)
+        if not self._basket_pricers:
+            raise ValueError("Cannot compute pv01 without a deliverable basket")
+        bf = self.build_rateslib_object(curves=self._resolve_curves(curves))
+        risk = bf.duration(future_price=ustf.price(), metric="risk")
+        idx = bf.ctd_index(
+            future_price=ustf.price(),
+            prices=self._basket_prices(),
+            settlement=self._basket_settlement(),
+        )
+        ctd_risk = float(risk[int(idx)])
+        return ctd_risk * (ustf.notional() / 10_000.0) * ustf.contracts()
 
     def dv01(self, ustf: RLUSTFuturePricable, curves: Optional[Any] = None) -> float:
         return self.pv01(ustf, curves=curves)
