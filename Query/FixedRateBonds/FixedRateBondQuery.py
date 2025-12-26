@@ -118,7 +118,7 @@ class FixedRateBondQuery(BaseQuery):
                     from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
 
                     ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
-                    return ustf_mdp.get_delivery_basket(as_of=as_of, symbol=token.split("CTD_")[1]).head(1).iloc[0]["cusip"]
+                    return ustf_mdp.get_ctd(as_of=as_of, symbol=token.split("CTD_")[1]).head(1).iloc[0]["cusip"]
 
                 return token
 

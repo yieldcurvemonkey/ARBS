@@ -337,6 +337,8 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
 
             force_refresh = bool(kwargs.get("force_refresh", False))
             as_of_ref = datetime.date.today() if timestamp == "live" else timestamp
+            if hasattr(as_of_ref, "date"):
+                as_of_ref = as_of_ref.date()
             ref_df = update_reference_data(
                 source="fiscaldata",
                 force_refresh=force_refresh,
