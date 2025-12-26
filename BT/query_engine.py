@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import datetime
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, Iterable, List, Optional
-from collections.abc import Mapping
 
 import tqdm
 
@@ -13,21 +13,17 @@ from BT.query_order import QueryOrder, UnwindOrder
 from BT.query_portfolio import QueryPortfolio, ResolvedQueryPosition
 from BT.query_strategy import QueryStrategy
 from BT.triggers import Trigger
-
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base._GenericPricer import _GenericPricer
 from Query.Base.BaseQuery import BaseQuery
 from Query.Base.query_resolution import resolve_for_request, resolve_query
-
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
-
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapValue
 from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
 from Query.STIRFutures.STIRFutureValue import STIRFutureValue
 from Query.USTFutures.USTFutureQuery import USTFutureQuery
 from Query.USTFutures.USTFutureValue import USTFutureValue
-
 
 RiskFn = Callable[[QueryPortfolio, Callable[[BaseQuery], Any]], Dict[str, float]]
 

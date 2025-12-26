@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from definitions.USTFutures import normalize_root
 from Query.Base.BaseQuery import BaseQuery
+from Query.USTFutures import adapter as _ust_adapter  # noqa: F401
 from Query.USTFutures.USTFutureStructure import USTFutureStructure
 from Query.USTFutures.USTFutureValue import USTFutureValue
 from Query.USTFutures import adapter as _ust_adapter  # noqa: F401

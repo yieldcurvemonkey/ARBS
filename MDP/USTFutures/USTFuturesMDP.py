@@ -19,6 +19,8 @@ from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
 from Query.USTFutures.backends.rateslib.RLUSTFuturePricer import RLUSTFuturePricer
 from definitions.USTFutures import to_barchart_root
 
+from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
+
 DateLike = Union[datetime.date, datetime.datetime, Literal["live"]]
 InstrumentLike = _USTFutureGenericPricer
 
@@ -89,8 +91,13 @@ def _clean_symbols(symbols: Sequence[str]) -> List[str]:
 
 
 def _build_socks5h(host: str) -> dict:
+<<<<<<< Updated upstream
     user = os.getenv("NORDVPN_USER", "")
     pwd = os.getenv("NORDVPN_PASS", "")
+=======
+    user = os.getenv("NORDVPN_USER", "3G5mmfKXWfCGFGT4yDL34Tzn")
+    pwd = os.getenv("NORDVPN_PASS", "VN33uViQZp6pXVzdgsGskhNg")
+>>>>>>> Stashed changes
     if not user or not pwd:
         raise ValueError("Missing NORDVPN_USER/NORDVPN_PASS in environment.")
     url = f"socks5h://{quote(user, safe='')}:{quote(pwd, safe='')}@{host}:1080"
@@ -305,7 +312,11 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         symbols = _clean_symbols(request.get("symbols") or request.get("tickers") or [])
         timestamp: DateLike = request.get("timestamp", "live")
         show_tqdm = bool(request.get("show_tqdm", False))
+<<<<<<< Updated upstream
         interval = request.get("interval")
+=======
+        interval = request.get("interval", 1)
+>>>>>>> Stashed changes
         force_refresh = bool(request.get("force_refresh", False))
 
         if not symbols:
@@ -375,6 +386,95 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             out[ts] = self.get_pricer({"symbols": symbols, "timestamp": ts, "show_tqdm": show_tqdm})
         return out
 
+<<<<<<< Updated upstream
+=======
+    def get_delivery_basket(
+        self, as_of: datetime.date, symbol: str, usts_mdp: Optional[FixedRateBondsMDP] = None, repo: Optional[float] = None, source: Optional[str] = "RL_CME_TCF"
+    ):
+        cme_quaterly_month_code = {
+            "H": [1, 2, 3],
+            "M": [4, 5, 6],
+            "U": [7, 8, 9],
+            "Z": [10, 11, 12],
+        }
+        symbol_to_rl_spec = {
+            "TU": "us_gb_2y",
+            "3Y": "us_gb_3y",
+            "FV": "us_gb_5y",
+            "TY": "us_gb_10y",
+            "UXY": "us_gb_10y",
+            "US": "us_gb_30y",
+            "TWE": "us_gb_30y",
+            "WN": "us_gb_30y",
+        }
+
+        if source == "RL_CME_TCF":
+            import rateslib as rl
+            from MDP.FixedRateBonds.reference_data_cache.cme_tcf import read_cme_tcf_with_headers
+            from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
+
+            from pandas.tseries.offsets import BMonthEnd, BMonthBegin
+
+            if usts_mdp is None:
+                usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
+
+            contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
+
+            for m_code, month_nums in cme_quaterly_month_code.items():
+                if as_of.month in month_nums:
+                    full_symbol = f"{symbol}{m_code}{int(as_of.strftime("%y"))}"
+                    tcf_period = int(contract_imm_date.strftime("%Y%m"))
+                    break
+
+            cme_tcf_df = read_cme_tcf_with_headers(as_of=as_of)
+            cme_tcf_df = cme_tcf_df[(cme_tcf_df["ticker"] == symbol) & (cme_tcf_df["period"] == tcf_period)]
+
+            close_2pm = pytz.timezone("America/Chicago").localize(datetime.datetime(as_of.year, as_of.month, as_of.day, 14, 00))
+            ustf_pricer = self.get_pricer(request=dict(symbols=[full_symbol], timestamp=close_2pm))
+            cash_pricers = usts_mdp.get_data(dict(cusips=cme_tcf_df["cusip"].unique().tolist(), timestamp=close_2pm))
+
+            cme_tcf_df["rl_objs"] = cme_tcf_df["cusip"].map({c: pr.build_pricable() for c, pr in cash_pricers.items()})
+            cme_tcf_df["label"] = cme_tcf_df["cusip"].map({c: pr._meta_data["label"] for c, pr in cash_pricers.items()})
+            cme_tcf_df["coupon"] = cme_tcf_df["cusip"].map({c: pr._cpn for c, pr in cash_pricers.items()})
+            cme_tcf_df["clean_price"] = cme_tcf_df["cusip"].map({c: pr.clean_price() for c, pr in cash_pricers.items()})
+            cme_tcf_df["futures_price"] = ustf_pricer[full_symbol]._price
+            cme_tcf_df["gross_basis"] = cme_tcf_df["clean_price"] - (cme_tcf_df["futures_price"] * cme_tcf_df["invoice_conversion_factor"])
+
+            me_offset = BMonthEnd()
+            mb_offset = BMonthBegin()
+
+            rl_ust_future = rl.BondFuture(
+                delivery=(mb_offset.rollback(contract_imm_date), me_offset.rollforward(contract_imm_date)),
+                basket=cme_tcf_df["rl_objs"].to_list(),
+                # spec=symbol_to_rl_spec[symbol],
+                coupon=6.0,
+                currency="usd",
+                calc_mode="ust_long" if symbol in ["WN", "TWE", "US", "UXY", "TY"] else "ust_short",
+            )
+
+            cme_tcf_df["gross_basis_rl"] = rl_ust_future.gross_basis(future_price=ustf_pricer[full_symbol]._price, prices=cme_tcf_df["clean_price"].to_list())
+
+            if repo is None:
+                repo = _fetch_fixings(as_of_date=as_of, curve_name="USD-SOFR-1D").sort_index().tail(1).iloc[0] * 100
+
+            cme_tcf_df["bnoc"] = rl_ust_future.net_basis(
+                future_price=ustf_pricer[full_symbol]._price,
+                prices=cme_tcf_df["clean_price"].to_list(),
+                repo_rate=repo,
+                settlement=next(iter(cash_pricers.values())).settlement_date(),
+                delivery=rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day)),
+                convention="ActAct",
+            )
+
+            cme_tcf_df["irr"] = rl_ust_future.implied_repo(
+                future_price=ustf_pricer[full_symbol]._price,
+                prices=cme_tcf_df["clean_price"].to_list(),
+                settlement=next(iter(cash_pricers.values())).settlement_date(),
+            )
+
+            return cme_tcf_df.sort_values(by="irr", ascending=False).reset_index(drop=True)
+
+>>>>>>> Stashed changes
     def __open__(self):
         with self._open_lock:
             if self._open_count == 0:

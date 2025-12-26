@@ -256,10 +256,9 @@ def _stir_future_from_symbol(sym: str, price: float) -> Tuple[str, rl.STIRFuture
     return norm, stir
 
 
-# ----------------------------- barchart proxy plumbing -----------------------
 def _build_socks5h(host: str) -> dict:
-    user = os.getenv("NORDVPN_USER", "")
-    pwd = os.getenv("NORDVPN_PASS", "")
+    user = os.getenv("NORDVPN_USER", "3G5mmfKXWfCGFGT4yDL34Tzn") 
+    pwd = os.getenv("NORDVPN_PASS", "VN33uViQZp6pXVzdgsGskhNg") 
     if not user or not pwd:
         raise ValueError("Missing NORDVPN_USER/NORDVPN_PASS in environment.")
     url = f"socks5h://{quote(user, safe='')}:{quote(pwd, safe='')}@{host}:1080"
