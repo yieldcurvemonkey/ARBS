@@ -2,15 +2,33 @@ import datetime
 import io
 import gzip
 import zlib
+import ujson as json
 from typing import Optional, Dict
 
 import pandas as pd
 import requests
 
+
+CME_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJsYXN0TmFtZSI6IkxlZSIsImNyZWF0ZWREYXRlIjoxNzY1MTI5NjI0LCJmaXN0TmFtZSI6IkNocmlzdG9waGVyIiwidW5vSWQiOiJVUjAwMDU1MjgzMiIsInVzZXJGaW5nZXJwcmludCI6IjE0OUYxMUM1MDM2ODU5NjJCMkY5MzkzMzA3RTJDMkJFOUMyQ0Y3MERGOTlDMEUxNkY2OEU5ODZFRDA4MzQ5QUQiLCJpc3MiOiJhdXRoMCIsInVzZXJUeXBlIjoiQiIsImV4cCI6MTc5NjY2NTYyNCwidXNlcklkIjoiNDIzMTgxIiwiZW1haWwiOiJjbDExNEBpbGxpbm9pcy5lZHUifQ.m-V5JPtYuTigqikPypbShQoJzYnHjsUJ5RiOdV5OEJE"
+CME_USERID = "423181"
+
+COOKIES_USERINFO = {
+    "token": CME_TOKEN,
+    "userId": CME_USERID,
+}
+
+COOKIES_DICT = {
+    "userId": CME_USERID,
+    "cmeToken": CME_TOKEN,
+    "userinfo": json.dumps(COOKIES_USERINFO, separators=(",", ":")),
+}
+
+
 DEFAULT_CME_HEADERS: Dict[str, str] = {
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "accept-encoding": "gzip, deflate, br, zstd",
     "accept-language": "en-US,en;q=0.9",
+    "cookie": "; ".join(f"{k}={v}" for k, v in COOKIES_DICT.items()),
     "dnt": "1",
     "priority": "u=0, i",
     "referer": "https://www.cmegroup.com/ftp/settle/TCF/",

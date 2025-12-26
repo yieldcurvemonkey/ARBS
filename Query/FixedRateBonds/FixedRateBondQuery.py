@@ -114,6 +114,12 @@ class FixedRateBondQuery(BaseQuery):
             m_ox = re.match(r"^Ox(?P<rank>\d+)(?P<tenor>10|20|25|30|7|5|3|2)$", token, re.IGNORECASE)
 
             if not (m_ct or m_o or m_ox):
+                if "CTD_" in token:
+                    from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
+
+                    ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
+                    return ustf_mdp.get_delivery_basket(as_of=as_of, symbol=token.split("CTD_")[1]).head(1).iloc[0]["cusip"]
+
                 return token
 
             ref_df = update_reference_data(source="fiscaldata", force_refresh=False)

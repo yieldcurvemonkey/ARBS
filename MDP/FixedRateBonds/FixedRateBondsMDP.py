@@ -125,7 +125,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
         self._open_lock = threading.RLock()
         self._cache_ready = False
 
-        if source == "USTS_FEDINVEST_WSJ_LIVE-QL":
+        if source == "USTS_FEDINVEST_WSJ_LIVE-QL" or source == "USTS_FEDINVEST_WSJ_LIVE-RL":
             from MDP.FixedRateBonds.FEDINVEST.FedInvestFetcher import FedInvestDataFetcher
 
             self.fi = FedInvestDataFetcher()
@@ -232,7 +232,10 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             # attach meta (first row for that cusip)
             row = ref_df[ref_df["cusip"] == cusip]
             if row.empty:
-                raise KeyError(f"CUSIP {cusip} not present in reference set for {timestamp}")
+                # TODO handle missing cusips in reference data (most likely between auction date and issue date)
+                # raise KeyError(f"CUSIP {cusip} not present in reference set for {timestamp}")
+                continue
+
             meta_by_cusip[cusip] = row.iloc[0].to_dict()
             alias_to_cusip[raw] = cusip
 
@@ -240,13 +243,19 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
 
     @staticmethod
     def _build_pricer_from_args(args: Dict[str, Any], issue_date_key: str, maturity_date_key: str, cpn_key: str) -> _FixedRateBondGenericPricer:
+        def _iso_to_date(s: str) -> datetime.date:
+            try:
+                return datetime.date.fromisoformat(s)
+            except ValueError:
+                return datetime.datetime.fromisoformat(s).date()
+
         if "ql_frb_id" in args:
             from Query.FixedRateBonds.backends.quantlib.QLFixedRateBondPricer import QLFixedRateBondPricer
 
             meta = args.get("meta_data") or {}
             kwargs = dict(
                 ql_frb_id=args["ql_frb_id"],
-                reference_date=datetime.date.fromisoformat(args["reference_date"]),
+                reference_date=_iso_to_date(args["reference_date"]),
                 issue_date=datetime.date.fromisoformat(meta[issue_date_key]),
                 maturity_date=datetime.date.fromisoformat(meta[maturity_date_key]),
                 cpn=meta[cpn_key],
@@ -267,7 +276,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             meta = args.get("meta_data") or {}
             kwargs = dict(
                 rl_frb_id=args["rl_frb_id"],
-                reference_date=datetime.date.fromisoformat(args["reference_date"]),
+                reference_date=_iso_to_date(args["reference_date"]),
                 issue_date=datetime.date.fromisoformat(meta[issue_date_key]),
                 maturity_date=datetime.date.fromisoformat(meta[maturity_date_key]),
                 cpn=meta[cpn_key],
@@ -319,10 +328,12 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
         wsj_buffer = self._wsj_buffer_date()
         ts_qldate = ql.Date(timestamp.day, timestamp.month, timestamp.year) if hasattr(timestamp, "day") else ql.Date.todaysDate()
         is_in_wsj_buffer = ts_qldate > wsj_buffer
-        if self.source.upper() == "USTS_FEDINVEST_WSJ_LIVE-QL" and (is_live or is_in_wsj_buffer):
+
+        if self.source.upper() in ["USTS_FEDINVEST_WSJ_LIVE-QL", "USTS_FEDINVEST_WSJ_LIVE-RL"] and (is_live or is_in_wsj_buffer):
             from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
             from MDP.FixedRateBonds.WSJ.WSJFetcher import WSJFetcher, get_isin_from_cusip
             from Query.FixedRateBonds.backends.quantlib.QLFixedRateBondPricer import QLFixedRateBondPricer
+            from Query.FixedRateBonds.backends.rateslib.RLFixedRateBondPricer import RLFixedRateBondPricer
 
             force_refresh = bool(kwargs.get("force_refresh", False))
             as_of_ref = datetime.date.today() if timestamp == "live" else timestamp
@@ -343,15 +354,26 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                     try:
                         meta = dict(meta_by_cusip[cusip])
                         meta["timestamp"] = live_data[cusip]["timestamp"]
-                        out[original] = QLFixedRateBondPricer(
-                            ql_frb_id="USTS",
-                            reference_date=live_data[cusip]["timestamp"].date(),
-                            issue_date=meta["issue_date"],
-                            maturity_date=meta["maturity_date"],
-                            cpn=meta["cpn"],
-                            ytm=float(live_data[cusip]["ytm"]),
-                            meta_data=meta,
-                        )
+                        if self.source.upper() == "USTS_FEDINVEST_WSJ_LIVE-RL":
+                            out[original] = RLFixedRateBondPricer(
+                                rl_frb_id="USTS",
+                                reference_date=live_data[cusip]["timestamp"].date(),
+                                issue_date=meta["issue_date"],
+                                maturity_date=meta["maturity_date"],
+                                cpn=meta["cpn"],
+                                ytm=float(live_data[cusip]["ytm"]),
+                                meta_data=meta,
+                            )
+                        else:
+                            out[original] = QLFixedRateBondPricer(
+                                ql_frb_id="USTS",
+                                reference_date=live_data[cusip]["timestamp"].date(),
+                                issue_date=meta["issue_date"],
+                                maturity_date=meta["maturity_date"],
+                                cpn=meta["cpn"],
+                                ytm=float(live_data[cusip]["ytm"]),
+                                meta_data=meta,
+                            )
                     except:
                         # TODO handle errors
                         pass
@@ -367,8 +389,8 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 idx = wide.index
                 pos = idx.get_indexer([t_3pm], method="nearest")[0]
                 nearest_ts = idx[pos]
-                if abs(nearest_ts - t_3pm) > pd.Timedelta("60min"):
-                    raise ValueError("No intraday snapshot within 60min of 3pm ET")
+                if abs(nearest_ts - t_3pm) > pd.Timedelta("360min"):
+                    raise ValueError(f"No intraday snapshot within 60min of 3pm ET. Nearest: {nearest_ts}")
 
                 for original, cusip in alias_to_cusip.items():
                     try:
@@ -382,15 +404,26 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
 
                         meta = dict(meta_by_cusip[cusip])
                         meta["timestamp"] = nearest_ts
-                        out[original] = QLFixedRateBondPricer(
-                            ql_frb_id="USTS",
-                            reference_date=nearest_ts.date(),
-                            issue_date=meta["issue_date"],
-                            maturity_date=meta["maturity_date"],
-                            cpn=meta["cpn"],
-                            ytm=float(y),
-                            meta_data=meta,
-                        )
+                        if self.source.upper() == "USTS_FEDINVEST_WSJ_LIVE-RL":
+                            out[original] = RLFixedRateBondPricer(
+                                rl_frb_id="USTS",
+                                reference_date=nearest_ts.date(),
+                                issue_date=meta["issue_date"],
+                                maturity_date=meta["maturity_date"],
+                                cpn=meta["cpn"],
+                                ytm=float(y),
+                                meta_data=meta,
+                            )
+                        else:
+                            out[original] = QLFixedRateBondPricer(
+                                ql_frb_id="USTS",
+                                reference_date=nearest_ts.date(),
+                                issue_date=meta["issue_date"],
+                                maturity_date=meta["maturity_date"],
+                                cpn=meta["cpn"],
+                                ytm=float(y),
+                                meta_data=meta,
+                            )
                     except:
                         # TODO handle errors
                         pass
@@ -442,7 +475,9 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 cached = cache.get(cache_key)
                 if cached is not None and not kwargs.get("force_refresh", False):
                     if hasattr(cached, "__class__") and cached.__class__.__name__ == "RLFixedRateBondPricer":
-                        return cached
+                        out[original] = cached
+                        continue
+
                     out[original] = self._build_pricer_from_args(cached, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
                     continue
 
@@ -486,12 +521,12 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
         pricers = {}
         clean_cusips_iter = tqdm.tqdm(clean_cusips, desc="FETCHING CUSIPS...") if show_tqdm else clean_cusips
         for c in clean_cusips_iter:
-            try:
-                pricers[c] = self._get_single_pricer(cusip=c, timestamp=timestamp, kwargs=kwargs)
-            except Exception as e:
-                # TODO handle errros
-                pass
-                # print(f"Failed to fetch {c}", e)
+            pricers[c] = self._get_single_pricer(cusip=c, timestamp=timestamp, kwargs=kwargs)
+            # try:
+            # except Exception as e:
+            #     # TODO handle errros
+            #     pass
+            #     # print(f"Failed to fetch {c}", e)
 
         return pricers
 
@@ -630,14 +665,16 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
 
                 return self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
 
-        if self.source.upper() in ["USTS_FEDINVEST_WSJ_LIVE-QL"]:
-
+        if self.source.upper() in ["USTS_FEDINVEST_WSJ_LIVE-QL", "USTS_FEDINVEST_WSJ_LIVE-RL"]:
             from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
             from MDP.FixedRateBonds.WSJ.WSJFetcher import WSJFetcher, get_isin_from_cusip
             from Query.FixedRateBonds.backends.quantlib.QLFixedRateBondPricer import QLFixedRateBondPricer
+            from Query.FixedRateBonds.backends.rateslib.RLFixedRateBondPricer import RLFixedRateBondPricer
 
             ref_df = update_reference_data(source="fiscaldata", force_refresh=kwargs.get("force_refresh", False))
             as_of_ref = datetime.date.today() if timestamp == "live" else timestamp
+            if hasattr(as_of_ref, "date"):
+                as_of_ref = as_of_ref.date()
             ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)]
             ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
 
@@ -676,6 +713,12 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                     # Not an alias we handle (fall through to treat input as CUSIP)
                     pass
 
+                if "CTD_" in cusip:
+                    from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
+
+                    ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
+                    cusip = ustf_mdp.get_delivery_basket(as_of=as_of_ref, symbol=cusip.split("CTD_")[1]).head(1).iloc[0]["cusip"]
+
             ref_df = ref_df[ref_df["cusip"] == cusip]
 
             if timestamp == "live" or timestamp == datetime.date.today():
@@ -683,15 +726,26 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 live_ytm_quote = WSJFetcher().wsj_timeseries_api(wsj_ticker_keys=[wsj_key], append_most_recent_last=True)[wsj_key]
                 meta_data = ref_df.iloc[0].to_dict()
                 meta_data["timestamp"] = live_ytm_quote.iloc[0, 0]
-                return QLFixedRateBondPricer(
-                    ql_frb_id="USTS",
-                    reference_date=live_ytm_quote.iloc[0, 0].date(),
-                    issue_date=meta_data["issue_date"],
-                    maturity_date=meta_data["maturity_date"],
-                    cpn=meta_data["cpn"],
-                    ytm=live_ytm_quote.iloc[0, 1],
-                    meta_data=meta_data,
-                )
+                if self.source.upper() == "USTS_FEDINVEST_WSJ_LIVE-RL":
+                    return RLFixedRateBondPricer(
+                        rl_frb_id="USTS",
+                        reference_date=live_ytm_quote.iloc[0, 0].date(),
+                        issue_date=meta_data["issue_date"],
+                        maturity_date=meta_data["maturity_date"],
+                        cpn=meta_data["cpn"],
+                        ytm=live_ytm_quote.iloc[0, 1],
+                        meta_data=meta_data,
+                    )
+                else:
+                    return QLFixedRateBondPricer(
+                        ql_frb_id="USTS",
+                        reference_date=live_ytm_quote.iloc[0, 0].date(),
+                        issue_date=meta_data["issue_date"],
+                        maturity_date=meta_data["maturity_date"],
+                        cpn=meta_data["cpn"],
+                        ytm=live_ytm_quote.iloc[0, 1],
+                        meta_data=meta_data,
+                    )
 
             wsj_buffer = ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(ql.Date.todaysDate(), ql.Period("-3D"))
             if ql.Date(timestamp.day, timestamp.month, timestamp.year) > wsj_buffer:
@@ -717,15 +771,26 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 closest_snapshot = intraday_df.loc[nearest_ts]
                 meta_data = ref_df.iloc[0].to_dict()
                 meta_data["timestamp"] = closest_snapshot_time
-                return QLFixedRateBondPricer(
-                    ql_frb_id="USTS",
-                    reference_date=closest_snapshot_time.date(),
-                    issue_date=meta_data["issue_date"],
-                    maturity_date=meta_data["maturity_date"],
-                    cpn=meta_data["cpn"],
-                    ytm=closest_snapshot,
-                    meta_data=meta_data,
-                )
+                if self.source.upper() == "USTS_FEDINVEST_WSJ_LIVE-RL":
+                    return RLFixedRateBondPricer(
+                        rl_frb_id="USTS",
+                        reference_date=closest_snapshot_time.date(),
+                        issue_date=meta_data["issue_date"],
+                        maturity_date=meta_data["maturity_date"],
+                        cpn=meta_data["cpn"],
+                        ytm=closest_snapshot,
+                        meta_data=meta_data,
+                    )
+                else:
+                    return QLFixedRateBondPricer(
+                        ql_frb_id="USTS",
+                        reference_date=closest_snapshot_time.date(),
+                        issue_date=meta_data["issue_date"],
+                        maturity_date=meta_data["maturity_date"],
+                        cpn=meta_data["cpn"],
+                        ytm=closest_snapshot,
+                        meta_data=meta_data,
+                    )
 
             timestamp_dt = datetime.datetime(timestamp.year, timestamp.month, timestamp.day)
 
@@ -751,14 +816,24 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             clean_price = float(fi_df.loc[cusip]["eod_price"])
             meta_data = self._pyify_meta(ref_df.iloc[0].to_dict())
 
-            args = {
-                "ql_frb_id": "USTS",
-                "reference_date": timestamp.isoformat(),
-                "clean_price": clean_price,
-                "meta_data": meta_data,
-                "schema": 1,
-                "source": "fedinvest",
-            }
+            if self.source.upper() == "USTS_FEDINVEST_WSJ_LIVE-RL":
+                args = {
+                    "rl_frb_id": "USTS",
+                    "reference_date": timestamp.isoformat(),
+                    "clean_price": clean_price,
+                    "meta_data": meta_data,
+                    "schema": 2,
+                    "source": "fedinvest",
+                }
+            else:
+                args = {
+                    "ql_frb_id": "USTS",
+                    "reference_date": timestamp.isoformat(),
+                    "clean_price": clean_price,
+                    "meta_data": meta_data,
+                    "schema": 1,
+                    "source": "fedinvest",
+                }
 
             cache[cache_key] = args
             self.zodb_commit()
@@ -916,7 +991,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             return ql.Date(d.day, d.month, d.year)
 
         # Use your existing ZODB open/commit lifecycle.
-        with self.__open__():
+        with self:
             out: _BulkOut = defaultdict(dict)
 
             # Pre-prepare per-timestamp jobs

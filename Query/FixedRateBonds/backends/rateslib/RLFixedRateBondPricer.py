@@ -59,6 +59,9 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
     def reference_date(self) -> datetime.date:
         return datetime.date(self._reference_date.year, self._reference_date.month, self._reference_date.day)
 
+    def settlement_date(self):
+        return self.calendar_advance(self._to_rl_dt(self.reference_date()), f"{rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["settle"]}B")
+
     def issue_date(self):
         return datetime.date(self._issue_date.year, self._issue_date.month, self._issue_date.day)
 
@@ -116,6 +119,8 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         )
 
     def clean_price(self):
+        if self._clean_price is not None:
+            return self._clean_price
         return rl.FixedRateBond(
             self._to_rl_dt(self.issue_date()),
             self._to_rl_dt(self.maturity_date()),
@@ -198,16 +203,18 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
 
     def build_pricable(self, /, **kwargs):
         return self.build_fixed_rate_bond(
-            issue_date=kwargs.get("issue_date"),
-            maturity_date=kwargs.get("maturity_date"),
-            coupon=kwargs.get("coupon") or kwargs.get("cpn"),
-            notional=kwargs.get("notional"),
+            issue_date=kwargs.get("issue_date", self._issue_date),
+            maturity_date=kwargs.get("maturity_date", self._maturity_date),
+            coupon=kwargs.get("coupon") or kwargs.get("cpn", self._cpn),
+            notional=kwargs.get("notional", self._notional),
             bpv=kwargs.get("bpv") or kwargs.get("risk"),
         )
 
     def build_fixed_rate_bond(self, issue_date=None, maturity_date=None, coupon=None, notional=None, bpv=None):
         if notional is None and bpv is not None:
             notional = bpv / self.bpv(notional=1)
+        if notional is None:
+            notional = 1_000_000
 
         return rl.FixedRateBond(
             self._to_rl_dt(issue_date), self._to_rl_dt(maturity_date), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"], fixed_rate=coupon, notional=notional
