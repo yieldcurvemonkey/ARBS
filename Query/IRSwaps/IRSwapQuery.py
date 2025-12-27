@@ -300,6 +300,56 @@ class IRSwapQuery(BaseQuery):
 
         q = copy.deepcopy(self)
 
+        def _as_of_date() -> Optional[datetime.date]:
+            if isinstance(ref_dt, datetime.datetime):
+                return ref_dt.date()
+            if isinstance(ref_dt, datetime.date):
+                return ref_dt
+            return None
+
+        def _invoice_swap_spec(token: str) -> Optional[Dict[str, str]]:
+            key = (token or "").strip().upper()
+            if not key:
+                return None
+            mapping = {
+                # 2Y
+                "TVA": {"root": "TU", "delivery": "last"},
+                "TVB": {"root": "TU", "delivery": "last"},
+                "TVC": {"root": "TU", "delivery": "last"},
+                "TVD": {"root": "TU", "delivery": "first"},
+                "TVE": {"root": "TU", "delivery": "first"},
+                "TVF": {"root": "TU", "delivery": "first"},
+                # 5Y
+                "FYA": {"root": "FV", "delivery": "last"},
+                "FYB": {"root": "FV", "delivery": "last"},
+                "FYC": {"root": "FV", "delivery": "last"},
+                "FYD": {"root": "FV", "delivery": "first"},
+                "FYE": {"root": "FV", "delivery": "first"},
+                "FYF": {"root": "FV", "delivery": "first"},
+                # 10Y
+                "TYA": {"root": "TY", "delivery": "last"},
+                "TYB": {"root": "TY", "delivery": "last"},
+                "TYC": {"root": "TY", "delivery": "last"},
+                "TYD": {"root": "TY", "delivery": "first"},
+                "TAY": {"root": "TY", "delivery": "first"},
+                "TAB": {"root": "TY", "delivery": "first"},
+                # 30Y
+                "UTA": {"root": "US", "delivery": "last"},
+                "UTB": {"root": "US", "delivery": "last"},
+                "UTC": {"root": "US", "delivery": "last"},
+                "UTD": {"root": "US", "delivery": "first"},
+                "UTE": {"root": "US", "delivery": "first"},
+                "UET": {"root": "US", "delivery": "first"},
+                # Ultra
+                "UBA": {"root": "WN", "delivery": "last"},
+                "UBB": {"root": "WN", "delivery": "last"},
+                "UBC": {"root": "WN", "delivery": "last"},
+                "UBI": {"root": "WN", "delivery": "first"},
+                "UBP": {"root": "WN", "delivery": "first"},
+                "UBF": {"root": "WN", "delivery": "first"},
+            }
+            return mapping.get(key)
+
         def _norm(tok: str) -> str:
             t = (tok or "").strip().upper().replace(" ", "")
             t = t.replace("X", "x")
@@ -312,6 +362,78 @@ class IRSwapQuery(BaseQuery):
             structure = getattr(q, "structure", None)
             txt = (getattr(q, "tenor", "") or "") or (getattr(q, "node", "") or "") or (getattr(q, "label", "") or "")
             skw = dict(getattr(q, "structure_kwargs", {}) or {})
+
+            invoice_spec = _invoice_swap_spec(txt)
+            if invoice_spec is not None:
+                as_of = _as_of_date()
+                if as_of is None:
+                    return q
+                from definitions.USTFutures import front_month
+                from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
+
+                root = invoice_spec["root"]
+                contract = front_month(as_of, root)
+                ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
+                basket_data = ustf_mdp.get_delivery_basket(as_of=as_of, symbol=contract, source="RL_CME_TCF")
+                delivery_start, delivery_end = basket_data["delivery"]
+                delivery_date = delivery_start if invoice_spec["delivery"] == "first" else delivery_end
+
+                pricers = ustf_mdp.get_pricer(
+                    {
+                        "symbols": [contract],
+                        "timestamp": as_of,
+                        "include_basket": True,
+                        "basket_source": "RL_CME_TCF",
+                    }
+                )
+                pricer = pricers[contract]
+                ctd_pricer = pricer.ctd(txt[-1])
+                if ctd_pricer is None:
+                    raise ValueError(f"Unable to resolve CTD for {txt} ({contract}).")
+                maturity_date = ctd_pricer.maturity_date()
+
+                try:
+                    pv01_per_contract = float(pricer.pv01(pricer.build_ustf(contracts=1)))
+                except Exception:
+                    pv01_per_contract = 0.0
+
+                skw.pop("tenor", None)
+                contracts = skw.get("contracts")
+                if contracts is not None:
+                    contract_qty = int(round(float(contracts)))
+                    pv01_total = pricer.pv01(pricer.build_ustf(contracts=contract_qty))
+                    skw["bpv"] = -float(pv01_total)
+                elif skw.get("bpv") is not None and pv01_per_contract:
+                    skw.setdefault("contracts", -float(skw["bpv"]) / pv01_per_contract)
+
+                skw["effective_date"] = delivery_date
+                skw["maturity_date"] = maturity_date
+
+                try:
+                    q_eff = replace(
+                        q,
+                        tenor=None,
+                        effective_date=delivery_date,
+                        maturity_date=maturity_date,
+                        structure=IRSwapStructure.OUTRIGHT,
+                        structure_kwargs=skw,
+                    )
+                except TypeError:
+                    q_eff = replace(
+                        q,
+                        tenor=None,
+                        effective_date=delivery_date,
+                        maturity_date=maturity_date,
+                        structure=IRSwapStructure.OUTRIGHT,
+                        structure_id=IRSwapStructure.OUTRIGHT,
+                        structure_kwargs=skw,
+                    )
+
+                mr = dict(q_eff.market_request or {})
+                mr[q_eff.mdp_time_key] = getattr(self.curve, "meta_data", {}).get("timestamp", ref_dt)
+                q_eff = replace(q_eff, market_request=mr)
+                q_eff = q_eff._edited(pricer_or_curve)
+                return q_eff
 
             x_ct = txt.count("x")
             slash_ct = txt.count("/")

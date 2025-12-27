@@ -1,7 +1,8 @@
 import datetime
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Iterable, List, Optional, Sequence, Tuple, Union, Literal
 
+import string
 import rateslib as rl
 
 from Query.FixedRateBonds.backends.rateslib.RLFixedRateBondPricer import RLFixedRateBondPricer
@@ -110,9 +111,13 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
             raise ValueError("No deliverable basket configured for this future")
         return [pricer.build_pricable() for pricer in self._basket_pricers]
 
-    def build_rateslib_object(self, curves: Optional[Any] = None) -> rl.BondFuture:
+    def build_rateslib_object(self, curves: Optional[Any] = None, early_or_late_delivery: Optional[Literal["early", "late"]] = None) -> rl.BondFuture:
         delivery_start, delivery_end = self._delivery_dates
-        delivery = (self._to_rl_dt(delivery_start), self._to_rl_dt(delivery_end))
+        delivery = (
+            self._to_rl_dt(delivery_start)
+            if early_or_late_delivery == "early"
+            else self._to_rl_dt(delivery_end) if early_or_late_delivery == "late" else (self._to_rl_dt(delivery_start), self._to_rl_dt(delivery_end))
+        )
         rl_basket = self._build_rl_basket()
         return rl.BondFuture(
             delivery=delivery,
@@ -209,10 +214,10 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         bf = self.build_rateslib_object(curves=curves)
         return float(bf.npv(curves=curves, **{k: v for k, v in kwargs.items() if k != "curves"}))
 
-    def ctd_index(self, ordered: bool = False) -> int | List[int]:
+    def ctd_index(self, ordered: bool = False, early_or_late_delivery: Optional[Literal["early", "late"]] = None) -> int | List[int]:
         if not self._basket_pricers:
             raise ValueError("Cannot compute CTD without a deliverable basket")
-        bf = self.build_rateslib_object(curves=self._curve_id)
+        bf = self.build_rateslib_object(curves=self._curve_id, early_or_late_delivery=early_or_late_delivery)
         prices = self._basket_prices()
         settlement = self._basket_settlement()
         return bf.ctd_index(
@@ -222,11 +227,21 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
             ordered=ordered,
         )
 
-    def ctd(self) -> Optional[RLFixedRateBondPricer]:
+    def ctd(self, contract_delivery_indicator: Optional[Literal["A", "B", "C", "D", "E", "F"]] = None) -> Optional[RLFixedRateBondPricer]:
         if not self._basket_pricers:
             return None
-        idx = self.ctd_index(ordered=False)
-        return self._basket_pricers[int(idx)]
+        if contract_delivery_indicator is not None:
+            if contract_delivery_indicator.upper() in ["A", "B", "C"]:
+                early_or_late_delivery = "late"
+            else:
+                early_or_late_delivery = "early"
+
+            idxs = self.ctd_index(ordered=True, early_or_late_delivery=early_or_late_delivery)
+            offset = 3 if contract_delivery_indicator in ["D", "E", "F"] else 0
+            return self._basket_pricers[idxs[string.ascii_uppercase.index(contract_delivery_indicator) - offset]]
+        else:
+            idx = self.ctd_index(ordered=False)
+            return self._basket_pricers[int(idx)]
 
     def implied_repo(self) -> Tuple[float, ...]:
         if not self._basket_pricers:
