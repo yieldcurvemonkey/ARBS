@@ -122,15 +122,11 @@ class SwapPositionHandler(PositionHandler):
     name = "swap"
 
     @staticmethod
-    def _refresh_mms_market_request(q: BaseQuery, now: datetime.datetime) -> BaseQuery:
+    def _refresh_market_request(q: BaseQuery, now: datetime.datetime) -> BaseQuery:
         if not isinstance(q, IRSwapQuery):
             return q
-        if not q.is_mms:
-            return q
-        if q.tenor is not None:
-            return q
         mr = dict(q.market_request or {})
-        ts = now.date() if isinstance(now, datetime.datetime) else now
+        ts = now if isinstance(now, datetime.datetime) else datetime.datetime(now.year, now.month, now.day)
         if mr.get(q.mdp_time_key) == ts:
             return q
         return replace(q, market_request={**mr, q.mdp_time_key: ts})
@@ -146,7 +142,7 @@ class SwapPositionHandler(PositionHandler):
         backtest: "QueryDrivenBacktest",
     ) -> ResolvedQueryPosition:
         q0: IRSwapQuery = order.query  # type: ignore[assignment]
-        q0 = self._refresh_mms_market_request(q0, now)
+        q0 = self._refresh_market_request(q0, now)
         pr = pricer_provider(q0)
 
         q = resolve_query(q0, timestamp=now, pricer_or_curve=pr)
@@ -175,7 +171,7 @@ class SwapPositionHandler(PositionHandler):
         now: datetime.datetime,
         backtest: "QueryDrivenBacktest",
     ) -> float:
-        q0 = self._refresh_mms_market_request(position.source_query, now)
+        q0 = self._refresh_market_request(position.source_query, now)
         pr = pricer_provider(q0)
         q = resolve_query(q0, timestamp=now, pricer_or_curve=pr)
 
