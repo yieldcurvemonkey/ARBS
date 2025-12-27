@@ -716,10 +716,26 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                     pass
 
                 if "CTD_" in cusip:
+                    import pytz
                     from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
 
+                    delivery = "A" if "CTD_LD_" in cusip else "D"
+                    token_substr = "CTD_LD_" if "CTD_LD_" in cusip else "CTD_ED_"
+
+                    for m_code, month_nums in {
+                        "H": [1, 2, 3],
+                        "M": [4, 5, 6],
+                        "U": [7, 8, 9],
+                        "Z": [10, 11, 12],
+                    }.items():
+                        if as_of_ref.month in month_nums:
+                            full_symbol = f"{cusip.split(token_substr)[1]}{m_code}{int(as_of_ref.strftime("%y"))}"
+
                     ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
-                    cusip = ustf_mdp.get_delivery_basket(as_of=as_of_ref, symbol=cusip.split("CTD_")[1]).head(1).iloc[0]["cusip"]
+                    close_2pm = pytz.timezone("America/Chicago").localize(datetime.datetime(as_of_ref.year, as_of_ref.month, as_of_ref.day, 14, 00))
+                    ustf_pricer = ustf_mdp.get_pricer(request=dict(symbols=[full_symbol], timestamp=close_2pm, include_basket=True))
+                    ctd_pricer = ustf_pricer[full_symbol].ctd(delivery)
+                    cusip = ctd_pricer._meta_data["cusip"]
 
             ref_df = ref_df[ref_df["cusip"] == cusip]
 

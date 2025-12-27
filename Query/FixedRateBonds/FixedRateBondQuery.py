@@ -114,11 +114,28 @@ class FixedRateBondQuery(BaseQuery):
             m_ox = re.match(r"^Ox(?P<rank>\d+)(?P<tenor>10|20|25|30|7|5|3|2)$", token, re.IGNORECASE)
 
             if not (m_ct or m_o or m_ox):
+                # "CTD_LD_US" or "CTD_ED_US"
                 if "CTD_" in token:
+                    import pytz
                     from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
 
+                    delivery = "A" if "CTD_LD_" in token else "D"
+                    token_substr = "CTD_LD_" if "CTD_LD_" in token else "CTD_ED_"
+
+                    for m_code, month_nums in {
+                        "H": [1, 2, 3],
+                        "M": [4, 5, 6],
+                        "U": [7, 8, 9],
+                        "Z": [10, 11, 12],
+                    }.items():
+                        if as_of.month in month_nums:
+                            full_symbol = f"{token.split(token_substr)[1]}{m_code}{int(as_of.strftime("%y"))}"
+
                     ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
-                    return ustf_mdp.get_ctd(as_of=as_of, symbol=token.split("CTD_")[1]).head(1).iloc[0]["cusip"]
+                    close_2pm = pytz.timezone("America/Chicago").localize(datetime.datetime(as_of.year, as_of.month, as_of.day, 14, 00))
+                    ustf_pricer = ustf_mdp.get_pricer(request=dict(symbols=[full_symbol], timestamp=close_2pm, include_basket=True))
+                    ctd_pricer = ustf_pricer[full_symbol].ctd(delivery)
+                    return ctd_pricer._meta_data["cusip"]
 
                 return token
 

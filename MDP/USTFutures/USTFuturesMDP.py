@@ -143,6 +143,7 @@ class _ProxyGuard:
 
 class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
     _UST_PRICER_CACHE = "USTFuturePricer_Cache"
+    _UST_BASKET_CACHE = "USTFutureDeliveryBasket_Cache"
     _BARCHART_STATE: Dict[str, Any] = {}
 
     def __init__(self, source: str = "BARCHART_USTF-RL", **kwargs: Any):
@@ -151,6 +152,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         self._open_lock = threading.RLock()
         self._open_count = 0
         self._cache_ready = False
+        self._basket_cache_ready = False
 
         default_hosts = [
             "atlanta.us.socks.nordhold.net",
@@ -196,6 +198,25 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             self._ensure_pricer_cache()
             cache = getattr(self, self._UST_PRICER_CACHE)
             return cache.get(key)
+
+    def _ensure_basket_cache(self) -> None:
+        if self._basket_cache_ready and hasattr(self, self._UST_BASKET_CACHE):
+            return
+        cache_path = ZODBCacheMixin.default_cache_path("USTFutureDeliveryBasket_Cache")
+        self.zodb_open_cache(cache_attr=self._UST_BASKET_CACHE, path=cache_path, encode=None, decode=None)
+        self._basket_cache_ready = True
+
+    def _threadsafe_basket_cache_get(self, key: str):
+        with self._open_lock:
+            self._ensure_basket_cache()
+            cache = getattr(self, self._UST_BASKET_CACHE)
+            return cache.get(key)
+
+    def _threadsafe_basket_cache_put(self, key: str, value: dict) -> None:
+        with self._open_lock:
+            self._ensure_basket_cache()
+            cache = getattr(self, self._UST_BASKET_CACHE)
+            cache[key] = value
 
     def _get_cached_barchart_proxy(self) -> tuple[dict | None, str | None]:
         S = USTFuturesMDP._BARCHART_STATE
@@ -478,54 +499,82 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
 
         import rateslib as rl
         from pandas.tseries.offsets import BMonthBegin, BMonthEnd
-
         from MDP.FixedRateBonds.reference_data_cache.cme_tcf import read_cme_tcf_with_headers
 
         if usts_mdp is None:
             usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
 
-        root = symbol[:-3]
-        contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
-        tcf_period = int(contract_imm_date.strftime("%Y%m"))
+        # cache only the *reference* basket definition (cusips/cfs/delivery window/etc),
+        # NOT the live cash pricers (they depend on usts_mdp + timestamp).
+        cache_key = f"{source}|{symbol}|{as_of.isoformat()}"
+        with self:
+            cached = self._threadsafe_basket_cache_get(cache_key)
 
-        cme_tcf_df = read_cme_tcf_with_headers(as_of=as_of)
-        cme_tcf_df = cme_tcf_df[(cme_tcf_df["ticker"] == root) & (cme_tcf_df["period"] == tcf_period)].copy()
+        if cached is None:
+            root = symbol[:-3]
+            contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
+            tcf_period = int(contract_imm_date.strftime("%Y%m"))
 
-        if cme_tcf_df.empty:
-            raise ValueError(f"No CME TCF deliverables found for {symbol} at period {tcf_period}.")
+            cme_tcf_df = read_cme_tcf_with_headers(as_of=as_of)
+            cme_tcf_df = cme_tcf_df[(cme_tcf_df["ticker"] == root) & (cme_tcf_df["period"] == tcf_period)].copy()
 
+            if cme_tcf_df.empty:
+                raise ValueError(f"No CME TCF deliverables found for {symbol} at period {tcf_period}.")
+
+            mb_offset = BMonthBegin()
+            me_offset = BMonthEnd()
+            delivery_start = mb_offset.rollback(contract_imm_date)
+            delivery_end = me_offset.rollforward(contract_imm_date)
+
+            contract_coupon = 6.0
+            if "futures_coupon" in cme_tcf_df.columns:
+                contract_coupon = float(cme_tcf_df["futures_coupon"].iloc[0])
+
+            calc_mode = "ust_long" if root in {"WN", "US", "UXY", "TY"} else "ust_short"
+
+            # preserve row-order to keep conversion factors aligned with basket_pricers
+            cached = {
+                "schema": 1,
+                "source": source,
+                "as_of": as_of.isoformat(),
+                "symbol": symbol,
+                "root": root,
+                "period": int(tcf_period),
+                "delivery": (delivery_start.date().isoformat(), delivery_end.date().isoformat()),
+                "cusips": cme_tcf_df["cusip"].tolist(),
+                "conversion_factors": [float(x) for x in cme_tcf_df["invoice_conversion_factor"].tolist()],
+                "contract_coupon": float(contract_coupon),
+                "calc_mode": calc_mode,
+            }
+
+            with self:
+                self._threadsafe_basket_cache_put(cache_key, cached)
+
+        # hydrate cached definition -> live cash pricers for this as_of close
         close_2pm = pytz.timezone("America/Chicago").localize(datetime.datetime(as_of.year, as_of.month, as_of.day, 14, 0))
-        cash_pricers = usts_mdp.get_data({"cusips": cme_tcf_df["cusip"].unique().tolist(), "timestamp": close_2pm})
+
+        cusips: List[str] = list(cached["cusips"])
+        cash_pricers = usts_mdp.get_data({"cusips": list(set(cusips)), "timestamp": close_2pm})
 
         basket_pricers: List[Any] = []
         conversion_factors: List[float] = []
-        for _, row in cme_tcf_df.iterrows():
-            pricer = cash_pricers.get(row["cusip"])
-            if pricer is None:
+        for cusip, cf in zip(cusips, cached["conversion_factors"]):
+            pr = cash_pricers.get(cusip)
+            if pr is None:
                 continue
-            basket_pricers.append(pricer)
-            conversion_factors.append(float(row["invoice_conversion_factor"]))
+            basket_pricers.append(pr)
+            conversion_factors.append(float(cf))
 
         if not basket_pricers:
             raise ValueError(f"No deliverable bond pricers resolved for {symbol}.")
 
-        mb_offset = BMonthBegin()
-        me_offset = BMonthEnd()
-        delivery_start = mb_offset.rollback(contract_imm_date)
-        delivery_end = me_offset.rollforward(contract_imm_date)
-
-        contract_coupon = 6.0
-        if "futures_coupon" in cme_tcf_df.columns:
-            contract_coupon = float(cme_tcf_df["futures_coupon"].iloc[0])
-
-        calc_mode = "ust_long" if root in {"WN", "US", "UXY", "TY"} else "ust_short"
-
+        d0, d1 = cached["delivery"]
         return {
-            "delivery": (delivery_start.date(), delivery_end.date()),
+            "delivery": (datetime.date.fromisoformat(d0), datetime.date.fromisoformat(d1)),
             "basket_pricers": basket_pricers,
             "conversion_factors": conversion_factors,
-            "contract_coupon": contract_coupon,
-            "calc_mode": calc_mode,
+            "contract_coupon": float(cached["contract_coupon"]),
+            "calc_mode": cached["calc_mode"],
         }
 
     def get_ctd(
@@ -619,6 +668,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         with self._open_lock:
             if self._open_count == 0:
                 self._ensure_pricer_cache()
+                self._ensure_basket_cache()
             self._open_count += 1
         return self
 
@@ -636,6 +686,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                         self.close_zodb()
                     finally:
                         self._cache_ready = False
+                        self._basket_cache_ready = False
 
     def __enter__(self):
         return self.__open__()
