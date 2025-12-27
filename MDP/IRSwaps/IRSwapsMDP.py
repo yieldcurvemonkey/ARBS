@@ -114,6 +114,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
+            if type(timestamp) == datetime.datetime or hasattr(timestamp, "date"):
+                timestamp = timestamp.date()
+            
             assert type(timestamp) == datetime.date or timestamp == "live", "CME_NY_EOD ONLY HAS EOD - 'timestamp' must be type 'datetime.date' or Literal['live']"
             assert curve_name in RATESLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."
 
@@ -145,6 +148,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
             from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+            
+            if type(timestamp) == datetime.datetime or hasattr(timestamp, "date"):
+                timestamp = timestamp.date()
 
             assert type(timestamp) == datetime.date or timestamp == "live", "CME_NY_EOD ONLY HAS EOD - 'timestamp' must be type 'datetime.date' or Literal['live']"
             assert curve_name in RATESLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."

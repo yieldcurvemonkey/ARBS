@@ -134,8 +134,8 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
 
         if bpv and not notional:
             unit_delta = rl.IRS(
-                effective=rl_effective,
-                termination=tenor or maturity_date,
+                effective=rl.dt(rl_effective.year, rl_effective.month, rl_effective.day),
+                termination=tenor or rl.dt(maturity_date.year, maturity_date.month, maturity_date.day),
                 spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
                 curves=self._rl_curve_handle,
                 notional=1,
@@ -149,8 +149,8 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         if fixed_rate == -0:
             fixed_rate = self.fair_rate(
                 irswap=rl.IRS(
-                    effective=rl_effective,
-                    termination=tenor or maturity_date,
+                    effective=rl.dt(rl_effective.year, rl_effective.month, rl_effective.day),
+                    termination=tenor or rl.dt(maturity_date.year, maturity_date.month, maturity_date.day),
                     spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
                     curves=self._rl_curve_handle,
                     notional=1,
@@ -159,8 +159,8 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             )
 
         return rl.IRS(
-            effective=rl_effective,
-            termination=tenor or maturity_date,
+            effective=rl.dt(rl_effective.year, rl_effective.month, rl_effective.day),
+            termination=tenor or rl.dt(maturity_date.year, maturity_date.month, maturity_date.day),
             spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
             curves=self._rl_curve_handle,
             fixed_rate=fixed_rate,
