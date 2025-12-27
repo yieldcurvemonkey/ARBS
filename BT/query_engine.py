@@ -537,7 +537,8 @@ class USTFutureHandler(PositionHandler):
             pv01_quote = self._pv01_quote(position, pr, q)
             return float((dprice / 0.01) * pv01_quote)
 
-        resolved_package = self._resolved_pricables(pr, position.package, position.weights)
+        current_package, _ = q.resolve_package(pricer_or_curve=pr)
+        resolved_package = self._resolved_pricables(pr, current_package, position.weights)
         current_leg_prices = self._leg_prices(pr, resolved_package)
         weights = position.weights or [1.0] * len(current_leg_prices)
 
