@@ -361,20 +361,33 @@ class IRSwapQuery(BaseQuery):
         if q.tenor is not None:
             structure = getattr(q, "structure", None)
             txt = (getattr(q, "tenor", "") or "") or (getattr(q, "node", "") or "") or (getattr(q, "label", "") or "")
+            
+            if len(txt) > 3:
+                invoice_swap_code = txt[:-3]
+                month_code = txt[-3:]
+                invoice_spec = _invoice_swap_spec(invoice_swap_code)
+            else:
+                from definitions.USTFutures import front_month
+
+                invoice_spec = _invoice_swap_spec(txt)
+                root = invoice_spec["root"]
+                contract = front_month(as_of, root)
+
             skw = dict(getattr(q, "structure_kwargs", {}) or {})
 
-            invoice_spec = _invoice_swap_spec(txt)
             if invoice_spec is not None:
+                from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
+
                 as_of = _as_of_date()
                 if as_of is None:
                     return q
-                from definitions.USTFutures import front_month
-                from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
 
                 root = invoice_spec["root"]
-                contract = front_month(as_of, root)
+                contract = f"{root}{month_code}"
                 ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
-                basket_data = ustf_mdp.get_delivery_basket(as_of=as_of, symbol=contract, source="RL_CME_TCF")
+                basket_data = ustf_mdp.get_delivery_basket(
+                    as_of=as_of, symbol=contract, source="RL_CME_TCF", ignore_cache=self.structure_kwargs.get("ignore_cache", False)
+                )
                 delivery_start, delivery_end = basket_data["delivery"]
                 delivery_date = delivery_start if invoice_spec["delivery"] == "first" else delivery_end
 
@@ -387,7 +400,7 @@ class IRSwapQuery(BaseQuery):
                     }
                 )
                 pricer = pricers[contract]
-                ctd_pricer = pricer.ctd(txt[-1])
+                ctd_pricer = pricer.ctd(invoice_swap_code[-1])
                 if ctd_pricer is None:
                     raise ValueError(f"Unable to resolve CTD for {txt} ({contract}).")
                 maturity_date = ctd_pricer.maturity_date()
@@ -408,6 +421,7 @@ class IRSwapQuery(BaseQuery):
 
                 skw["effective_date"] = delivery_date
                 skw["maturity_date"] = maturity_date
+                skw.pop("notional", None)
 
                 try:
                     q_eff = replace(
@@ -417,6 +431,7 @@ class IRSwapQuery(BaseQuery):
                         maturity_date=maturity_date,
                         structure=IRSwapStructure.OUTRIGHT,
                         structure_kwargs=skw,
+                        is_mms=True,
                     )
                 except TypeError:
                     q_eff = replace(
@@ -427,6 +442,7 @@ class IRSwapQuery(BaseQuery):
                         structure=IRSwapStructure.OUTRIGHT,
                         structure_id=IRSwapStructure.OUTRIGHT,
                         structure_kwargs=skw,
+                        is_mms=True,
                     )
 
                 mr = dict(q_eff.market_request or {})

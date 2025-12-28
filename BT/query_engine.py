@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, Iterable, List, Optional
@@ -426,12 +427,62 @@ class STIRFutureHandler(PositionHandler):
 
 
 class USTFutureHandler(PositionHandler):
-    """UST futures: PnL($) = (ΔPrice / 0.01) * PV01_quote($/bp)."""
+    """UST futures: PnL($) = ticks * tick_value * contracts (per leg)."""
 
     name = "ust_future"
 
+    _TICK_SPECS = {
+        "TU": (1.0 / 256.0, 7.8125),
+        "Z3N": (1.0 / 256.0, 7.8125),
+        "FV": (1.0 / 128.0, 7.8125),
+        "TY": (1.0 / 64.0, 15.625),
+        "UXY": (1.0 / 64.0, 15.625),
+        "US": (1.0 / 32.0, 31.25),
+        "WN": (1.0 / 32.0, 31.25),
+        "TWE": (1.0 / 32.0, 31.25),
+    }
+
+    _BARCHART_TO_INTERNAL = {
+        "ZT": "TU",
+        "ZF": "FV",
+        "ZN": "TY",
+        "ZB": "US",
+        "UB": "WN",
+        "TN": "UXY",
+    }
+
     def supports(self, query: BaseQuery) -> bool:  # type: ignore[override]
         return isinstance(query, USTFutureQuery)
+
+    @classmethod
+    def _root_from_symbol(cls, symbol: Optional[str]) -> str:
+        if not symbol:
+            return ""
+        sym = symbol.strip().upper().replace("/", "")
+        if sym.startswith("Z3N"):
+            return "Z3N"
+        if sym.startswith("TWE"):
+            return "TWE"
+        match = re.match(r"^(?P<root>[A-Z]{1,3})(?P<code>[FGHJKMNQUVXZ]\\d{1,2})$", sym)
+        root = match.group("root") if match else sym
+        return cls._BARCHART_TO_INTERNAL.get(root, root)
+
+    @classmethod
+    def _tick_spec(cls, symbol: Optional[str]) -> Optional[tuple[float, float]]:
+        root = cls._root_from_symbol(symbol)
+        return cls._TICK_SPECS.get(root)
+
+    @staticmethod
+    def _contracts_for_leg(leg: Any) -> int:
+        if hasattr(leg, "contracts") and callable(leg.contracts):
+            return int(leg.contracts())
+        return 1
+
+    @staticmethod
+    def _leg_prices(pr: Any, package: list[Any]) -> list[float]:
+        if isinstance(pr, Mapping):
+            return [float(p.price(pk)) for p, pk in zip(pr.values(), package)]
+        return [float(pr.price(pk)) for pk in package]
 
     def build_position(
         self,
@@ -441,16 +492,17 @@ class USTFutureHandler(PositionHandler):
         backtest: "QueryDrivenBacktest",
     ) -> ResolvedQueryPosition:
         q0 = order.query
+        print('1')
         pr = pricer_provider(q0)
+        print('2')
 
         q = resolve_query(q0, timestamp=now, pricer_or_curve=pr)
         package, weights = q.resolve_package(pricer_or_curve=pr)
 
         resolved_package = self._resolved_pricables(pr, package, weights)
-        vmap = q.build_value_map(pricer_or_curve=pr, package=resolved_package, risk_weights=weights)
-        entry_price = float(vmap.apply(value=q.default_mtm_value_id()))
+        entry_leg_prices = self._leg_prices(pr, resolved_package)
 
-        meta = {**(order.meta or {}), "handler": self.name, "entry_price": entry_price}
+        meta = {**(order.meta or {}), "handler": self.name, "entry_leg_prices": entry_leg_prices}
         return ResolvedQueryPosition(
             package=package,
             weights=weights,
@@ -476,15 +528,42 @@ class USTFutureHandler(PositionHandler):
         now: datetime.datetime,
         backtest: "QueryDrivenBacktest",
     ) -> float:
-        entry_price = float((position.meta or {}).get("entry_price", 0.0))
+        entry_leg_prices = (position.meta or {}).get("entry_leg_prices")
         pr = pricer_provider(position.source_query)
         q = resolve_query(position.source_query, timestamp=now, pricer_or_curve=pr)
 
-        current_price = self._price(position, pr, q)
-        dprice = float(current_price - entry_price)
-        pv01_quote = self._pv01_quote(position, pr, q)
+        if not entry_leg_prices:
+            current_price = self._price(position, pr, q)
+            entry_price = float((position.meta or {}).get("entry_price", current_price))
+            dprice = float(current_price - entry_price)
+            pv01_quote = self._pv01_quote(position, pr, q)
+            return float((dprice / 0.01) * pv01_quote)
 
-        return float((dprice / 0.01) * pv01_quote)
+        current_package, _ = q.resolve_package(pricer_or_curve=pr)
+        resolved_package = self._resolved_pricables(pr, current_package, position.weights)
+        current_leg_prices = self._leg_prices(pr, resolved_package)
+        weights = position.weights or [1.0] * len(current_leg_prices)
+
+        pnl = 0.0
+        if isinstance(pr, Mapping):
+            leg_symbols = list(pr.keys())
+        else:
+            leg_symbols = [getattr(leg, "contract_code", lambda: None)() for leg in resolved_package]
+
+        for idx, (entry_price, current_price, weight, leg) in enumerate(zip(entry_leg_prices, current_leg_prices, weights, resolved_package)):
+            symbol = leg_symbols[idx] if idx < len(leg_symbols) else None
+            tick_spec = self._tick_spec(symbol[:-3])
+            assert tick_spec is not None, f"{symbol[:-3]} not valid symbol"
+            # if not tick_spec:
+            #     dprice = float(current_price - entry_price)
+            #     pv01_quote = self._pv01_quote(position, pr, q)
+            #     return float((dprice / 0.01) * pv01_quote)
+            tick_size, tick_value = tick_spec
+            contracts = self._contracts_for_leg(leg)
+            dprice = float(current_price - entry_price)
+            pnl += float((dprice / tick_size) * tick_value * contracts * weight)
+
+        return float(pnl)
 
 
 # -----------------------------
@@ -701,22 +780,27 @@ class QueryDrivenBacktest:
             total=len(states),
             unit="step",
         ):
-            self._now = now
+            try:
+                self._now = now
 
-            new_orders = self._evaluate_triggers(now)
-            add_orders = [o for o in new_orders if isinstance(o, QueryOrder)]
-            unwind_orders = [o for o in new_orders if isinstance(o, UnwindOrder)]
+                new_orders = self._evaluate_triggers(now)
+                add_orders = [o for o in new_orders if isinstance(o, QueryOrder)]
+                unwind_orders = [o for o in new_orders if isinstance(o, UnwindOrder)]
 
-            fills = self.exec_engine.execute(add_orders)
-            self.portfolio.orders_log.extend(add_orders)
-            self.portfolio.trades_log.extend(fills)
+                fills = self.exec_engine.execute(add_orders)
+                self.portfolio.orders_log.extend(add_orders)
+                self.portfolio.trades_log.extend(fills)
 
-            for o in fills:
-                h = self._handler_for_query(o.query)
-                pos = h.build_position(o, lambda q: self._pricer_for_query(q, now), now, self)
-                self.portfolio.add(pos)
+                for o in fills:
+                    h = self._handler_for_query(o.query)
+                    pos = h.build_position(o, lambda q: self._pricer_for_query(q, now), now, self)
+                    self.portfolio.add(pos)
 
-            for u in unwind_orders:
-                self._handle_unwind(u, now)
+                for u in unwind_orders:
+                    self._handle_unwind(u, now)
 
-            self.mark_to_market(now)
+                self.mark_to_market(now)
+            
+            # TODO handle errors
+            except Exception as e:
+                print(e)

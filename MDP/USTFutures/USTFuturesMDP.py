@@ -30,13 +30,22 @@ def _as_datetime(ts: DateLike) -> datetime.datetime:
         return datetime.datetime.now(pytz.UTC)
     if isinstance(ts, datetime.datetime):
         return ts
+
+    # 2pm chicago close
     if isinstance(ts, datetime.date):
-        return datetime.datetime(ts.year, ts.month, ts.day, tzinfo=pytz.UTC)
+        return pytz.timezone("America/Chicago").localize(datetime.datetime(ts.year, ts.month, ts.day, 14, 0))
+
     raise TypeError("timestamp must be date, datetime, or 'live'")
 
 
 _INTERNAL_ROOTS = {"TU", "FV", "TY", "US", "WN", "UXY"}
 _BARCHART_ROOTS = {to_barchart_root(k): k for k in _INTERNAL_ROOTS}
+_CME_QUARTERLY_MONTH_CODES = {
+    "H": [1, 2, 3],
+    "M": [4, 5, 6],
+    "U": [7, 8, 9],
+    "Z": [10, 11, 12],
+}
 
 
 def _normalize_symbol(sym: str) -> Optional[str]:
@@ -370,11 +379,11 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         show_tqdm = bool(request.get("show_tqdm", False))
         interval = request.get("interval", 1)
         force_refresh = bool(request.get("force_refresh", False))
-        include_basket = bool(request.get("include_basket", False))
+        include_basket = bool(request.get("include_basket", True))
         basket_source = request.get("basket_source", "RL_CME_TCF")
         curve_id = request.get("curve_id", "USD-SOFR-1D")
         currency = request.get("currency", "USD")
-        contract_coupon = request.get("contract_coupon")
+        contract_coupon = request.get("contract_coupon", 6)
         usts_mdp = request.get("usts_mdp")
 
         if not symbols:
@@ -388,6 +397,25 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             missing: List[str] = []
 
             for sym in symbols:
+                if len(sym) <= 3:
+                    import rateslib as rl
+
+                    if rl.dt(timestamp.year, timestamp.month, timestamp.day) >= rl.get_imm(year=timestamp.year, month=timestamp.month):
+                        contract_imm_date = rl.next_imm(start=rl.dt(timestamp.year, timestamp.month, timestamp.day))
+                        if contract_imm_date.month == 3:
+                            sym = f"{sym}{'H'}{int(contract_imm_date.strftime("%y"))}"
+                        elif contract_imm_date.month == 6:
+                            sym = f"{sym}{'M'}{int(contract_imm_date.strftime("%y"))}"
+                        elif contract_imm_date.month == 9:
+                            sym = f"{sym}{'U'}{int(contract_imm_date.strftime("%y"))}"
+                        elif contract_imm_date.month == 12:
+                            sym = f"{sym}{'Z'}{int(contract_imm_date.strftime("%y"))}"
+                    else:
+                        for m_code, month_nums in _CME_QUARTERLY_MONTH_CODES.items():
+                            if timestamp.month in month_nums:
+                                sym = f"{sym}{m_code}{int(timestamp.strftime("%y"))}"
+                                break
+                
                 cache_key = f"{ts_iso}-{sym}-{self.source}"
                 cached = None if force_refresh else self._threadsafe_cache_get(cache_key)
                 if cached is not None:
@@ -493,6 +521,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         symbol: str,
         usts_mdp: Optional[FixedRateBondsMDP] = None,
         source: str = "RL_CME_TCF",
+        ignore_cache: Optional[bool] = False,
     ) -> Dict[str, Any]:
         if source != "RL_CME_TCF":
             raise ValueError(f"Unsupported delivery basket source: {source}")
@@ -510,9 +539,16 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         with self:
             cached = self._threadsafe_basket_cache_get(cache_key)
 
-        if cached is None:
-            root = symbol[:-3]
-            contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
+        if cached is None or ignore_cache:
+            # explict ticker passed in e.g. USH26
+            if len(symbol) > 3:
+                root = symbol[:-3]
+                contract_imm_date = rl.get_imm(code=symbol[-3:])
+            else:
+                # constant maturity passed in e.g. US
+                root = symbol
+                contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
+
             tcf_period = int(contract_imm_date.strftime("%Y%m"))
 
             cme_tcf_df = read_cme_tcf_with_headers(as_of=as_of)
@@ -545,6 +581,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 "conversion_factors": [float(x) for x in cme_tcf_df["invoice_conversion_factor"].tolist()],
                 "contract_coupon": float(contract_coupon),
                 "calc_mode": calc_mode,
+                "contract_imm_date": contract_imm_date,
             }
 
             with self:
@@ -580,22 +617,16 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
     def get_ctd(
         self, as_of: datetime.date, symbol: str, usts_mdp: Optional[FixedRateBondsMDP] = None, repo: Optional[float] = None, source: Optional[str] = "RL_CME_TCF"
     ):
-        cme_quaterly_month_code = {
-            "H": [1, 2, 3],
-            "M": [4, 5, 6],
-            "U": [7, 8, 9],
-            "Z": [10, 11, 12],
-        }
-        symbol_to_rl_spec = {
-            "TU": "us_gb_2y",
-            "3Y": "us_gb_3y",
-            "FV": "us_gb_5y",
-            "TY": "us_gb_10y",
-            "UXY": "us_gb_10y",
-            "US": "us_gb_30y",
-            "TWE": "us_gb_30y",
-            "WN": "us_gb_30y",
-        }
+        # symbol_to_rl_spec = {
+        #     "TU": "us_gb_2y",
+        #     "3Y": "us_gb_3y",
+        #     "FV": "us_gb_5y",
+        #     "TY": "us_gb_10y",
+        #     "UXY": "us_gb_10y",
+        #     "US": "us_gb_30y",
+        #     "TWE": "us_gb_30y",
+        #     "WN": "us_gb_30y",
+        # }
 
         if source == "RL_CME_TCF":
             import rateslib as rl
@@ -609,7 +640,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
 
             contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
 
-            for m_code, month_nums in cme_quaterly_month_code.items():
+            for m_code, month_nums in _CME_QUARTERLY_MONTH_CODES.items():
                 if as_of.month in month_nums:
                     full_symbol = f"{symbol}{m_code}{int(as_of.strftime("%y"))}"
                     tcf_period = int(contract_imm_date.strftime("%Y%m"))
