@@ -128,6 +128,21 @@ def _ts_to_ql_date(ts: pd.Timestamp) -> ql.Date:
     return ql.Date(int(ts.day), int(ts.month), int(ts.year))
 
 
+def _to_ql_date(value) -> Optional[ql.Date]:
+    if isinstance(value, ql.Date):
+        return value
+    ts = _to_naive_timestamp(value)
+    if pd.isna(ts):
+        return None
+    return _ts_to_ql_date(ts)
+
+
+def _adjust_ql_date(ql_date: ql.Date, calendar: ql.Calendar, bdc: int) -> ql.Date:
+    if not calendar.isBusinessDay(ql_date):
+        return calendar.adjust(ql_date, bdc)
+    return ql_date
+
+
 def calculate_tenor_years(
     effective_date: pd.Timestamp,
     expiration_date: pd.Timestamp,
@@ -142,21 +157,15 @@ def calculate_tenor_years(
 
     Defaults: ACT/360 with USD GovBond calendar and Modified Following adjustment.
     """
-    eff = _to_naive_timestamp(effective_date)
-    exp = _to_naive_timestamp(expiration_date)
-    if pd.isna(eff) or pd.isna(exp):
+    ql_eff = _to_ql_date(effective_date)
+    ql_exp = _to_ql_date(expiration_date)
+    if ql_eff is None or ql_exp is None:
         return 0.0
 
-    ql_eff = _ts_to_ql_date(eff)
-    ql_exp = _ts_to_ql_date(exp)
-
     if adjust_to_business_day:
-        if not calendar.isBusinessDay(ql_eff):
-            ql_eff = calendar.adjust(ql_eff, bdc)
-        if not calendar.isBusinessDay(ql_exp):
-            ql_exp = calendar.adjust(ql_exp, bdc)
+        ql_eff = _adjust_ql_date(ql_eff, calendar, bdc)
+        ql_exp = _adjust_ql_date(ql_exp, calendar, bdc)
 
-    # Defensive: negative/zero tenors -> 0
     if ql_exp <= ql_eff:
         return 0.0
 
@@ -182,21 +191,20 @@ def calculate_forward_start_years(
       - adjust_to_business_day=False: leaves dates as-reported (toggle if you want calendar adjustment)
     """
     exec_ts = _to_naive_timestamp(execution_timestamp)
-    eff_ts = _to_naive_timestamp(effective_date)
-    if pd.isna(exec_ts) or pd.isna(eff_ts):
+    if pd.isna(exec_ts):
         return 0.0
 
     if use_execution_date_only:
         exec_ts = exec_ts.normalize()
 
-    ql_exec = _ts_to_ql_date(exec_ts)
-    ql_eff = _ts_to_ql_date(eff_ts)
+    ql_exec = _to_ql_date(exec_ts)
+    ql_eff = _to_ql_date(effective_date)
+    if ql_exec is None or ql_eff is None:
+        return 0.0
 
     if adjust_to_business_day:
-        if not calendar.isBusinessDay(ql_exec):
-            ql_exec = calendar.adjust(ql_exec, bdc)
-        if not calendar.isBusinessDay(ql_eff):
-            ql_eff = calendar.adjust(ql_eff, bdc)
+        ql_exec = _adjust_ql_date(ql_exec, calendar, bdc)
+        ql_eff = _adjust_ql_date(ql_eff, calendar, bdc)
 
     if ql_eff <= ql_exec:
         return 0.0
@@ -209,35 +217,24 @@ def tenor_to_label(years: float) -> str:
     if years <= 0:
         return "0D"
 
-    # Common tenors
-    tenor_map = {
-        0.25: "3M",
-        0.5: "6M",
-        0.75: "9M",
-        1.0: "1Y",
-        1.5: "18M",
-        2.0: "2Y",
-        3.0: "3Y",
-        4.0: "4Y",
-        5.0: "5Y",
-        6.0: "6Y",
-        7.0: "7Y",
-        8.0: "8Y",
-        9.0: "9Y",
-        10.0: "10Y",
-        12.0: "12Y",
-        15.0: "15Y",
-        20.0: "20Y",
-        25.0: "25Y",
-        30.0: "30Y",
-        40.0: "40Y",
-        50.0: "50Y",
-    }
+    days = years * 360.0
 
-    # Find closest match
-    closest = min(tenor_map.keys(), key=lambda x: abs(x - years))
-    if abs(closest - years) < 0.15:  # Within ~2 months
-        return tenor_map[closest]
+    tenor_days = {}
+    for weeks in range(1, 5):
+        tenor_days[7 * weeks] = f"{weeks}W"
+    for months in range(1, 12):
+        tenor_days[30 * months] = f"{months}M"
+    for months in (15, 18, 21):
+        tenor_days[30 * months] = f"{months}M"
+    for yrs in range(1, 31):
+        tenor_days[360 * yrs] = f"{yrs}Y"
+    for yrs in (35, 40, 50):
+        tenor_days[360 * yrs] = f"{yrs}Y"
+
+    closest_days = min(tenor_days.keys(), key=lambda x: abs(x - days))
+    tolerance_days = 5 if days <= 360 else 10
+    if abs(closest_days - days) <= tolerance_days:
+        return tenor_days[closest_days]
 
     # Otherwise, return rounded year
     if years < 1:
@@ -247,10 +244,50 @@ def tenor_to_label(years: float) -> str:
         return f"{int(round(years))}Y"
 
 
-def forward_to_label(years: float) -> str:
+def _get_imm_label(effective_date: pd.Timestamp) -> Optional[str]:
+    ql_date = _to_ql_date(effective_date)
+    if ql_date is None:
+        return None
+    try:
+        if ql.IMM.isIMMdate(ql_date):
+            code = ql.IMM.code(ql_date)
+            return f"IMM_{code[0]}{ql_date.year()}"
+    except Exception:
+        return None
+    return None
+
+
+def _get_fomc_label(effective_date: pd.Timestamp) -> Optional[str]:
+    ts = _to_naive_timestamp(effective_date)
+    if pd.isna(ts):
+        return None
+    try:
+        from Query.IRSwaps._CENTRAL_BANK_DATES import _CENTRAL_BANK_DATES
+
+        fomc_dates = {m[0] for m in _CENTRAL_BANK_DATES["USD-FEDFUNDS"].values()}
+    except Exception:
+        return None
+
+    if ts.date() in fomc_dates:
+        return f"FOMC_{ts.strftime('%Y%m%d')}"
+    return None
+
+
+def _special_forward_label(effective_date: pd.Timestamp) -> Optional[str]:
+    imm_label = _get_imm_label(effective_date)
+    if imm_label:
+        return imm_label
+    return _get_fomc_label(effective_date)
+
+
+def forward_to_label(years: float, effective_date: Optional[pd.Timestamp] = None) -> str:
     """Convert forward start in years to label"""
     if years < 0.05:  # Less than ~2 weeks
         return "spot"
+    if effective_date is not None:
+        special_label = _special_forward_label(effective_date)
+        if special_label:
+            return special_label
     return tenor_to_label(years)
 
 
@@ -291,7 +328,7 @@ def classify_trade(row: pd.Series, trade_id: int) -> TradeClassification:
 
     forward_years = calculate_forward_start_years(execution_ts, effective_date)
     is_forward = forward_years > 0.05  # More than ~2 weeks
-    forward_label = forward_to_label(forward_years)
+    forward_label = forward_to_label(forward_years, effective_date=effective_date)
 
     # Build trade label
     if is_forward:
