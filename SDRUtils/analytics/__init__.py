@@ -1,11 +1,11 @@
 """
-Event-based seasonality analysis.
+Analytics module for SDR trade analysis.
 
-DEPRECATED: This module is maintained for backward compatibility.
-New code should import from SDRUtils.analytics.seasonality.
+This package provides analytical tools for SDR trade data:
+- Seasonality: Event-based analysis (FOMC, month-end, quarter-end)
+- Flow Analysis: Trade flow aggregation and pattern detection
 """
 
-# Re-export from analytics module for backward compatibility
 from SDRUtils.analytics.seasonality import (
     get_fomc_dates,
     get_month_end_dates,
@@ -14,10 +14,10 @@ from SDRUtils.analytics.seasonality import (
     add_event_classifications,
     aggregate_flows_by_label,
     analyze_seasonality_by_event,
-    get_imm_dates,
 )
 
 __all__ = [
+    # Seasonality
     "get_fomc_dates",
     "get_month_end_dates",
     "get_quarter_end_dates",
@@ -25,5 +25,4 @@ __all__ = [
     "add_event_classifications",
     "aggregate_flows_by_label",
     "analyze_seasonality_by_event",
-    "get_imm_dates",
 ]
