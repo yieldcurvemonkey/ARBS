@@ -29,6 +29,7 @@ def detect_curve_trades_df(
     forward_label_col: str = "forward_label",
     forward_years_col: str = "forward_start_years",
     forward_years_tol: float = 0.05,  # used if forward_label_col missing
+    allow_gap_curves: bool = True,
     require_same_underlier: bool = True,
     underlier_col: str = "UPI Underlier Name",
     require_same_platform: bool = True,
@@ -67,8 +68,8 @@ def detect_curve_trades_df(
         cols.append(effective_date_col)
 
     # forward key (prefer label)
-    _use_fwd_label = require_same_forward and (forward_label_col in out.columns)
-    _use_fwd_years = require_same_forward and (not _use_fwd_label) and (forward_years_col in out.columns)
+    _use_fwd_label = (require_same_forward or allow_gap_curves) and (forward_label_col in out.columns)
+    _use_fwd_years = (require_same_forward or allow_gap_curves) and (not _use_fwd_label) and (forward_years_col in out.columns)
     if _use_fwd_label:
         cols.append(forward_label_col)
     elif _use_fwd_years:
@@ -119,9 +120,11 @@ def detect_curve_trades_df(
         if eff is not None and eff[i] != eff[j]:
             return False
         if fwd_label is not None and fwd_label[i] != fwd_label[j]:
-            return False
+            if not (allow_gap_curves and tenor[i] == tenor[j]):
+                return False
         if fwd_years is not None and abs(fwd_years[i] - fwd_years[j]) > forward_years_tol:
-            return False
+            if not (allow_gap_curves and tenor[i] == tenor[j]):
+                return False
         if und is not None and und[i] != und[j]:
             return False
         if plat is not None and plat[i] != plat[j]:
@@ -129,6 +132,13 @@ def detect_curve_trades_df(
         if clr is not None and clr[i] != clr[j]:
             return False
         return True
+
+    def _forward_diff(i: int, j: int) -> bool:
+        if fwd_label is not None:
+            return fwd_label[i] != fwd_label[j]
+        if fwd_years is not None:
+            return abs(fwd_years[i] - fwd_years[j]) > forward_years_tol
+        return False
 
     # PV01 bucket index
     b = _pv01_bucket(pv01, pv01_tolerance)
@@ -181,7 +191,8 @@ def detect_curve_trades_df(
                     continue
 
                 if require_different_tenor and tenor[i] == tenor[j]:
-                    continue
+                    if not (allow_gap_curves and _forward_diff(i, j)):
+                        continue
 
                 if dirv is not None:
                     si = np.sign(dirv[i])
@@ -245,4 +256,3 @@ class CurvePackageDetector(PackageDetector):
 
     def detect(self, df: pd.DataFrame, **kwargs: object) -> pd.DataFrame:
         return detect_curve_trades_df(df, **kwargs)
-
