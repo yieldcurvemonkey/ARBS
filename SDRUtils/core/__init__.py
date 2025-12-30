@@ -1,25 +1,88 @@
-"""Core SDR utilities."""
+"""
+Core SDR utilities.
 
-from SDRUtils.core.classification import TradeClassification, classify_product_type, classifications_to_dataframe
+This module provides the fundamental building blocks for SDR analytics:
+- Classification: Trade classification dataclass and functions
+- Dates: Date/time conversion and year fraction calculations
+- Tenors: Tenor labeling and special date detection (IMM/FOMC)
+- Parsing: Data parsing utilities for SDR fields
+"""
+
+# Classification
+from SDRUtils.core.classification import (
+    TradeClassification,
+    classify_product_type,
+    classifications_to_dataframe,
+)
+
+# Dates
+from SDRUtils.core.dates import (
+    NY_tz,
+    UTC_tz,
+    to_ql_date,
+    to_naive_timestamp,
+    calculate_tenor_years,
+    calculate_forward_start_years,
+    is_forward_starting,
+)
+
+# Tenors
+from SDRUtils.core.tenors import (
+    tenor_to_label,
+    forward_to_label,
+    build_trade_label,
+    get_imm_label,
+    get_fomc_label,
+)
+
+# Parsing
+from SDRUtils.core.parsing import (
+    parse_notional,
+    to_float,
+    pv01_bucket,
+)
+
+# Backward compatibility - re-export legacy names
 from SDRUtils.core.utils import (
     _USD_OIS_BDC,
     _USD_OIS_CAL,
     _USD_OIS_DC,
-    calculate_forward_start_years,
-    calculate_tenor_years,
-    forward_to_label,
-    tenor_to_label,
+    _to_float,
+    _parse_notional,
+    _pv01_bucket,
+    _ensure_int64_epoch_seconds,
 )
 
+
 __all__ = [
+    # Classification
     "TradeClassification",
     "classify_product_type",
     "classifications_to_dataframe",
+    # Dates
+    "NY_tz",
+    "UTC_tz",
+    "to_ql_date",
+    "to_naive_timestamp",
+    "calculate_tenor_years",
+    "calculate_forward_start_years",
+    "is_forward_starting",
+    # Tenors
+    "tenor_to_label",
+    "forward_to_label",
+    "build_trade_label",
+    "get_imm_label",
+    "get_fomc_label",
+    # Parsing
+    "parse_notional",
+    "to_float",
+    "pv01_bucket",
+    # Legacy
     "_USD_OIS_BDC",
     "_USD_OIS_CAL",
     "_USD_OIS_DC",
-    "calculate_forward_start_years",
-    "calculate_tenor_years",
-    "forward_to_label",
-    "tenor_to_label",
+    "_to_float",
+    "_parse_notional",
+    "_pv01_bucket",
+    "_ensure_int64_epoch_seconds",
 ]

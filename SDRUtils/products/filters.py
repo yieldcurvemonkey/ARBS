@@ -1,20 +1,26 @@
-import pandas as pd
+"""
+Product filtering utilities for SDR data.
 
+This module re-exports product filters for backward compatibility.
+New code should import directly from the currency-specific modules
+(e.g., SDRUtils.products.usd.filters).
+"""
 
-def new_sofr_swap_trades(df: pd.DataFrame, include_misc=False):
-    upi_underlier_names = [
-        "USD-SOFR-COMPOUND",
-        "USD-SOFR-OIS Compound",
-    ]
-    upi_underlier_names_misc = [
-        "USD-SOFR CME Term",
-        "USD-SOFR",
-        "USD-SOFR ICE Swap Rate",
-        "USD-SOFR Average 30D ",
-    ]
-    if include_misc:
-        upi_underlier_names = upi_underlier_names + upi_underlier_names_misc
-    upi_fisn = ["NA/Swap OIS USD", "NA/Swap Fxd Flt USD"]
+# Re-export USD filters for backward compatibility
+from SDRUtils.products.usd.filters import (
+    new_sofr_swap_trades,
+    is_sofr_swap,
+    sofr_swaption_trades,
+    sofr_cap_floor_trades,
+    SOFR_UNDERLIER_NAMES,
+    SOFR_FISN_VALUES,
+)
 
-    df = df.copy()
-    return df[(df["UPI Underlier Name"].isin(upi_underlier_names)) & (df["UPI FISN"].isin(upi_fisn)) & (df["Action type"] == "NEWT")]
+__all__ = [
+    "new_sofr_swap_trades",
+    "is_sofr_swap",
+    "sofr_swaption_trades",
+    "sofr_cap_floor_trades",
+    "SOFR_UNDERLIER_NAMES",
+    "SOFR_FISN_VALUES",
+]

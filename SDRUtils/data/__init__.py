@@ -1,5 +1,21 @@
-"""SDR data access helpers."""
+"""
+SDR data access module.
 
-from SDRUtils.data.builder import DTCCFetcher, BaseFetcher, datetime_today_utc
+This module provides tools for fetching and caching SDR data from DTCC:
+- DTCCFetcher: Low-level async data fetcher
+- SDRDataBuilder: High-level data access with caching
+"""
 
-__all__ = ["DTCCFetcher", "BaseFetcher", "datetime_today_utc"]
+from SDRUtils.data.builder import (
+    DTCCFetcher,
+    SDRDataBuilder,
+    BaseFetcher,
+    datetime_today_utc,
+)
+
+__all__ = [
+    "DTCCFetcher",
+    "SDRDataBuilder",
+    "BaseFetcher",
+    "datetime_today_utc",
+]
