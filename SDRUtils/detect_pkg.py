@@ -1,5 +1,4 @@
-from collections import defaultdict, deque
-from typing import Dict, List, Optional, Tuple, Sequence
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -13,15 +12,14 @@ def detect_curve_trades_df(
     time_window_seconds: int = 60,
     pv01_tolerance: float = 0.10,
     require_different_tenor: bool = True,
-    require_opposite_direction: bool = False,  # set True if you have/pay-receive direction info
-    direction_col: Optional[str] = None,  # e.g. +1 receive fixed, -1 pay fixed
+    require_opposite_direction: bool = False,
+    direction_col: Optional[str] = None,
     product_col: str = "product_type",
     package_col: str = "package_type",
     exec_col: str = "execution_timestamp",
     pv01_col: str = "estimated_pv01",
     tenor_col: str = "tenor_label",
     trade_id_col: str = "trade_id",
-    # ------------------ economic match filters (NEW) ------------------
     require_same_currency: bool = True,
     currency_col: str = "notional_currency",
     require_same_effective_date: bool = True,
@@ -252,7 +250,6 @@ def detect_fly_trades_df(
     pv01_col: str = "estimated_pv01",
     tenor_years_col: str = "tenor_years",
     trade_id_col: str = "trade_id",
-    # ------------------ economic match filters (NEW) ------------------
     require_same_currency: bool = True,
     currency_col: str = "notional_currency",
     require_same_effective_date: bool = True,
@@ -481,240 +478,4 @@ def detect_fly_trades_df(
     out.loc[m2, "package_legs"] = out.loc[m2, "_pkg_legs"].values
 
     out.drop(columns=["_pkg_type", "_pkg_id", "_pkg_legs"], inplace=True)
-    return out
-
-
-def _load_ust_reference_data(
-    *,
-    source: str = "fiscaldata",
-    force_refresh: bool = False,
-) -> pd.DataFrame:
-    # Repo pattern: FixedRateBondQuery.resolve_query -> update_reference_data(...)
-    from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
-
-    ref = update_reference_data(source=source, force_refresh=force_refresh).copy()
-
-    # normalize key fields
-    if "maturity_date" in ref.columns:
-        ref["maturity_date"] = pd.to_datetime(ref["maturity_date"], errors="coerce").dt.date
-    if "issue_date" in ref.columns:
-        ref["issue_date"] = pd.to_datetime(ref["issue_date"], errors="coerce").dt.date
-
-    return ref
-
-
-def _build_maturity_to_ust_map(
-    ust_ref: pd.DataFrame,
-    *,
-    prefer_oi: Optional[Sequence[str]] = None,  # e.g. ("2-Year","3-Year","5-Year","7-Year","10-Year","20-Year","30-Year")
-) -> pd.DataFrame:
-    """
-    Returns 1 row per maturity_date, choosing a "best" CUSIP:
-      - prefer latest issue_date (reopenings share maturity)
-      - deterministic tie-breaks
-    """
-    ref = ust_ref.copy()
-
-    if prefer_oi is not None and "oi" in ref.columns:
-        ref = ref[ref["oi"].isin(list(prefer_oi))].copy()
-
-    if "maturity_date" not in ref.columns or "cusip" not in ref.columns:
-        raise KeyError("UST reference data must include columns: 'maturity_date', 'cusip'")
-
-    ref = ref.dropna(subset=["maturity_date", "cusip"]).copy()
-
-    # Sort so "best" is last, then drop_duplicates(keep="last")
-    sort_cols = []
-    asc = []
-    if "issue_date" in ref.columns:
-        sort_cols.append("issue_date")
-        asc.append(True)  # older -> newer
-    # deterministic tie-breakers
-    sort_cols.append("cusip")
-    asc.append(True)
-
-    ref = ref.sort_values(sort_cols, ascending=asc, kind="mergesort")
-
-    keep_cols = [
-        c
-        for c in [
-            "maturity_date",
-            "cusip",
-            "oi",
-            "security_type",
-            "security_term",
-            "issue_date",
-            "original_security_term",
-            "interest_rate",
-        ]
-        if c in ref.columns
-    ]
-
-    best = ref[keep_cols].drop_duplicates(subset=["maturity_date"], keep="last").copy()
-    best = best.rename(
-        columns={
-            "cusip": "ust_cusip",
-            "oi": "ust_oi",
-            "security_type": "ust_security_type",
-            "security_term": "ust_security_term",
-            "issue_date": "ust_issue_date",
-            "original_security_term": "ust_original_security_term",
-            "interest_rate": "ust_coupon",
-        }
-    )
-    return best
-
-
-def match_swaps_to_ust_by_maturity(
-    df: pd.DataFrame,
-    *,
-    swap_maturity_col: str = "expiration_date",
-    product_col: str = "product_type",
-    product_values: Sequence[str] = ("OIS_SWAP",),
-    currency_col: str = "notional_currency",
-    require_usd: bool = True,
-    usd_value: str = "USD",
-    ust_ref_source: str = "fiscaldata",
-    ust_force_refresh: bool = False,
-) -> pd.DataFrame:
-    """
-    Adds UST reference fields to swaps whose maturity date exactly matches a UST maturity_date.
-
-    Output columns (if matched):
-      - ust_cusip, ust_oi, ust_security_type, ust_issue_date, ust_coupon, ...
-      - matched_ust_maturity (bool)
-
-    This is a *matched maturity* join. It does NOT attempt “nearest on-the-run” mapping.
-    """
-    if df.empty:
-        return df
-
-    out = df.copy()
-
-    # candidate swaps
-    m = out[product_col].isin(list(product_values)).values
-    if require_usd and currency_col in out.columns:
-        m &= out[currency_col].astype("string").values == usd_value
-
-    if not m.any():
-        # still ensure columns exist for downstream code
-        out["matched_ust_maturity"] = False
-        return out
-
-    # load + build maturity map
-    ust_ref = _load_ust_reference_data(source=ust_ref_source, force_refresh=ust_force_refresh)
-    maturity_map = _build_maturity_to_ust_map(ust_ref)
-
-    def _to_date_series(x: pd.Series) -> pd.Series:
-        # Works for datetime64[ns], Timestamp w/ tz, python date, strings
-        return pd.to_datetime(x, errors="coerce", utc=True).dt.date
-
-    # normalize swap maturity date
-    swap_mat = _to_date_series(out.loc[m, swap_maturity_col])
-    tmp = out.loc[m, ["trade_id"]].copy() if "trade_id" in out.columns else out.loc[m, []].copy()
-    tmp["_swap_maturity_date"] = swap_mat.values
-
-    # merge
-    tmp = tmp.merge(
-        maturity_map,
-        left_on="_swap_maturity_date",
-        right_on="maturity_date",
-        how="left",
-    )
-
-    # write back (vectorized)
-    out["matched_ust_maturity"] = False
-    matched = tmp["ust_cusip"].notna().values
-
-    # align index positions of m==True rows
-    idx = out.index[m]
-    out.loc[idx, "matched_ust_maturity"] = matched
-
-    # bring UST fields back
-    for c in [c for c in tmp.columns if c.startswith("ust_")]:
-        out.loc[idx, c] = tmp[c].values
-
-    # optional: also record the swap maturity date used for join
-    out.loc[idx, "swap_maturity_date"] = tmp["_swap_maturity_date"].values
-
-    return out
-
-
-def detect_spreadover_trades_df(
-    df: pd.DataFrame,
-    *,
-    # swap columns
-    product_col: str = "product_type",
-    product_values: Sequence[str] = ("OIS_SWAP",),
-    package_col: str = "package_type",
-    trade_id_col: str = "trade_id",
-    swap_maturity_col: str = "expiration_date",
-    currency_col: str = "notional_currency",
-    require_usd: bool = True,
-    usd_value: str = "USD",
-    # ust ref
-    ust_ref_source: str = "fiscaldata",
-    ust_force_refresh: bool = False,
-    # tagging
-    spreadover_package_type: str = "SPREADOVER",
-    only_tag_outrights: bool = True,
-) -> pd.DataFrame:
-    """
-    Practical “step back” detector:
-      - identifies swaps whose *maturity date exactly matches* a UST maturity_date
-      - tags those swaps as SPREADOVER (swap leg only) and attaches ust_* fields
-
-    This is NOT the full Clarus “on-the-run vs spot-starting swap” logic.
-    It’s the strict matched-maturity screen you asked for.
-    """
-    if df.empty:
-        return df
-
-    out = df.copy()
-
-    # optional: only re-tag OUTRIGHT rows
-    if only_tag_outrights and package_col in out.columns:
-        outright_mask = out[package_col].fillna("OUTRIGHT").astype("string").values == "OUTRIGHT"
-    else:
-        outright_mask = np.ones(len(out), dtype=bool)
-
-    # match to UST by maturity (adds matched_ust_maturity + ust_* fields)
-    out = match_swaps_to_ust_by_maturity(
-        out,
-        swap_maturity_col=swap_maturity_col,
-        product_col=product_col,
-        product_values=product_values,
-        currency_col=currency_col,
-        require_usd=require_usd,
-        usd_value=usd_value,
-        ust_ref_source=ust_ref_source,
-        ust_force_refresh=ust_force_refresh,
-    )
-
-    # tag
-    can_tag = out["matched_ust_maturity"].fillna(False).values & outright_mask
-    if can_tag.any():
-        if package_col not in out.columns:
-            out[package_col] = "OUTRIGHT"
-        if "package_id" not in out.columns:
-            out["package_id"] = None
-        if "package_legs" not in out.columns:
-            out["package_legs"] = None
-
-        # package_id: deterministic, no loops
-        # If trade_id missing, fall back to index
-        if trade_id_col in out.columns:
-            pid = out.loc[can_tag, trade_id_col].astype("string").radd("SPREADOVER_")
-        else:
-            pid = pd.Series(out.index[can_tag], index=out.index[can_tag]).astype("string").radd("SPREADOVER_")
-
-        out.loc[can_tag, package_col] = spreadover_package_type
-        out.loc[can_tag, "package_id"] = pid.values
-
-        # package_legs: swap leg only (bond leg is not in SDR swaps df)
-        if trade_id_col in out.columns:
-            out.loc[can_tag, "package_legs"] = out.loc[can_tag, trade_id_col].apply(lambda x: [int(x)] if pd.notna(x) else None).values
-        else:
-            out.loc[can_tag, "package_legs"] = out.index[can_tag].to_series().apply(lambda x: [int(x)]).values
-
     return out
