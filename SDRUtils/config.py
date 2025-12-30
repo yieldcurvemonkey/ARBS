@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import QuantLib as ql
 
+TRADE_ID = "Dissemination Identifier"
 
 @dataclass(frozen=True)
 class CurrencyConventions:

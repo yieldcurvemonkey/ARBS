@@ -809,7 +809,7 @@ def _concat_dfs(
         #     dynamic_ncols=True,
         #     leave=True,  # keep final bar visible
         # )
-        iterator = tqdm(frames_list, total=len(frames_list), desc=tqdm_desc or "CONCAT...")
+        iterator = tqdm(frames_list, total=len(frames_list), desc=tqdm_desc or "MERGING SLICES...")
     else:
         iterator = frames_list
 
@@ -1069,7 +1069,7 @@ class SDRDataBuilder:
                 use_polars=True,
                 # show_tqdm=False,
                 show_tqdm=self._show_tqdm,
-                tqdm_desc="MERGING REPORTS...",
+                tqdm_desc="MERGING SLICES...",
                 # unique_subset=["report_slice", "Event timestamp"],
                 unique_subset=["Dissemination Identifier"],
                 sort_by="Event timestamp",
@@ -1130,7 +1130,7 @@ class SDRDataBuilder:
             dfs,
             use_polars=True,
             # show_tqdm=self._show_tqdm,
-            # tqdm_desc="MERGING REPORTS...",
+            tqdm_desc="MERGING SLICES...",
             show_tqdm=True,
             # unique_subset=["report_slice", "Event timestamp"],
             unique_subset=["Dissemination Identifier"],

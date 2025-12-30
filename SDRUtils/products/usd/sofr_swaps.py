@@ -7,14 +7,16 @@ reported to the DTCC SDR.
 
 from __future__ import annotations
 
+import datetime
 from typing import Any, Optional
 
 import pandas as pd
 import QuantLib as ql
+from tqdm import tqdm
 
-# Import curve dependencies (optional - for PV01 calculation)
 try:
     import Query.IRSwaps.adapter  # noqa: F401
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
     from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
     from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 
@@ -23,17 +25,16 @@ except ImportError:
     HAS_CURVE_DEPS = False
     _IRSwapGenericCurve = None
 
-from SDRUtils.config import USD_CONVENTIONS, PRODUCT_TYPES
-from SDRUtils.core.classification import TradeClassification, classify_product_type
-from SDRUtils.core.dates import (
-    to_ql_date,
-    calculate_tenor_years,
-    calculate_forward_start_years,
-)
-from SDRUtils.core.tenors import tenor_to_label, forward_to_label, build_trade_label
+
+from SDRUtils.config import PRODUCT_TYPES, TRADE_ID, USD_CONVENTIONS
+from SDRUtils.core.classification import TradeClassification, classifications_to_dataframe, classify_product_type
+from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
 from SDRUtils.core.parsing import parse_notional
+from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_to_label
+from SDRUtils.data.builder import SDRDataBuilder
+from SDRUtils.packages import detect_curve_trades_df, detect_fly_trades_df, detect_mms_trades_df, merge_package_legs_to_one_row
 from SDRUtils.products.usd.base import USDProductBase
-from SDRUtils.registry import registry
+from SDRUtils.products.usd.filters import new_sofr_swap_trades
 
 
 def classify_sofr_swap_trade(
@@ -172,6 +173,46 @@ class USD_SOFR_SwapProduct(USDProductBase):
         """Infer product type from SDR row."""
         return classify_product_type(row)
 
+    def build_classification_dataframe(
+        self, start: datetime.datetime, end: datetime.datetime, cache_path: str, detect_curve=True, detect_fly=True, detect_mms=True, **kwargs: Any
+    ):
+        sdr = SDRDataBuilder(cache_path=cache_path, show_tqdm=True)
+        raw_sdr_trades_df = sdr.grab_sdr_trades(
+            start_timestamp=start,
+            end_timestamp=end,
+            agency="CFTC",
+            asset_class="RATES",
+            filter_func=new_sofr_swap_trades,
+        )
 
-# Register product with global registry
-registry.register_product(USD_SOFR_SwapProduct())
+        as_of_date = pd.to_datetime(raw_sdr_trades_df["Execution Timestamp"]).dt.date.value_counts().index[0]
+        curve = IRSwapsMDP(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).get_pricer(request=dict(curve_name="USD-SOFR-1D", timestamp=as_of_date))
+
+        classifications = [
+            self.classify_trade(row, trade_id=row.get(TRADE_ID), kwargs={"curve": curve})
+            for _, row in tqdm(raw_sdr_trades_df.iterrows(), total=raw_sdr_trades_df.shape[0], desc="Classifying Trades")
+        ]
+        classifications_df = classifications_to_dataframe(classifications)
+
+        package_df = classifications_df.merge(
+            raw_sdr_trades_df[
+                [
+                    TRADE_ID,
+                    "UPI Underlier Name",
+                    "Platform identifier",
+                    "Cleared",
+                ]
+            ],
+            on=TRADE_ID,
+            how="left",
+        )
+        package_df = package_df.drop(columns=[TRADE_ID])
+
+        if detect_fly:
+            package_df = detect_fly_trades_df(package_df)
+        if detect_curve:
+            package_df = detect_curve_trades_df(package_df)
+        if detect_mms:
+            package_df = detect_mms_trades_df(package_df)
+
+        return merge_package_legs_to_one_row(package_df)

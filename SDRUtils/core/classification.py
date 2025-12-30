@@ -94,6 +94,7 @@ def classifications_to_dataframe(classifications: List[TradeClassification]) -> 
     for c in classifications:
         records.append(
             {
+                "Dissemination Identifier": c.trade_id,
                 "trade_id": c.trade_id,
                 "execution_timestamp": c.execution_timestamp,
                 "effective_date": c.effective_date,
