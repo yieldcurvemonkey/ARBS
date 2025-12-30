@@ -1,18 +1,7 @@
 """
-DEPRECATED: This module is maintained for backward compatibility.
-Please import from SDRUtils.analysis.seasonality instead.
-
-Example:
-    # Old way (deprecated)
-    from SDRUtils.seasonality import add_event_classifications
-
-    # New way (recommended)
-    from SDRUtils.analysis.seasonality import add_event_classifications
-    # or
-    from SDRUtils import add_event_classifications
+SDRUtils Analysis - Analysis utilities for SDR trade data.
 """
 
-# Re-export everything from the new location
 from SDRUtils.analysis.seasonality import (
     get_fomc_dates,
     get_month_end_dates,
