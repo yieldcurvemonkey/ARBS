@@ -16,10 +16,9 @@ from SDRUtils.packages.base import PackageDetector
 # Package detectors
 from SDRUtils.packages.curve import CurvePackageDetector, detect_curve_trades_df
 from SDRUtils.packages.fly import FlyPackageDetector, detect_fly_trades_df
-from SDRUtils.packages.spreadover import (
-    SpreadoverPackageDetector,
-    detect_spreadover_trades_df,
-    detect_ust_mms_trades_df,  # Backward compatibility alias
+from SDRUtils.packages.mms import (
+    MatchedMaturityPackageDetector,
+    detect_mms_trades_df,
 )
 
 # Utilities
@@ -32,12 +31,10 @@ __all__ = [
     # Detectors
     "CurvePackageDetector",
     "FlyPackageDetector",
-    "SpreadoverPackageDetector",
+    "MatchedMaturityPackageDetector",
     # Detection functions
     "detect_curve_trades_df",
     "detect_fly_trades_df",
-    "detect_spreadover_trades_df",
-    "detect_ust_mms_trades_df",  # Backward compatibility
-    # Utilities
+    "detect_mms_trades_df",
     "merge_package_legs_to_one_row",
 ]

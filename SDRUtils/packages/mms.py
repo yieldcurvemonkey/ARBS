@@ -1,20 +1,11 @@
-"""
-SPREADOVER package detection for swap/UST matched maturity spreads.
-
-This module identifies swaps that match UST maturity dates, indicating
-potential spread-over-treasury trades.
-"""
-
-from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 
-from SDRUtils.config import DEFAULT_COLUMNS, PACKAGE_TYPES
+from SDRUtils.config import PACKAGE_TYPES
 from SDRUtils.packages.base import PackageDetector
-from SDRUtils.registry import registry
 
 
 def _load_ust_reference_data(
@@ -121,7 +112,7 @@ def _to_date_series(x: pd.Series) -> pd.Series:
     return pd.to_datetime(x, errors="coerce", utc=True).dt.date
 
 
-def detect_spreadover_trades_df(
+def detect_mms_trades_df(
     df: pd.DataFrame,
     *,
     # Swap columns
@@ -140,30 +131,6 @@ def detect_spreadover_trades_df(
     spreadover_package_type: str = "SPREADOVER",
     only_tag_outrights: bool = True,
 ) -> pd.DataFrame:
-    """
-    Detect swap/UST matched maturity spreads (SPREADOVER packages).
-
-    This function identifies swaps whose maturity date exactly matches
-    a UST maturity date, indicating a potential spread-over-treasury trade.
-
-    Args:
-        df: Classified trades DataFrame
-        product_col: Column containing product type
-        product_values: Product types to consider
-        package_col: Column containing package type
-        trade_id_col: Column containing trade ID
-        swap_maturity_col: Column containing swap maturity date
-        currency_col: Column containing currency
-        require_usd: Only match USD swaps
-        usd_value: Value indicating USD currency
-        ust_ref_source: Source for UST reference data
-        ust_force_refresh: Force refresh of UST data
-        spreadover_package_type: Package type label for matches
-        only_tag_outrights: Only tag OUTRIGHT trades
-
-    Returns:
-        DataFrame with SPREADOVER package annotations
-    """
     if df.empty:
         return df
 
@@ -301,23 +268,15 @@ def _match_swaps_to_ust_by_maturity(
     return out
 
 
-class SpreadoverPackageDetector(PackageDetector):
+class MatchedMaturityPackageDetector(PackageDetector):
     """
     Package detector for swap/UST matched maturity spreads.
 
     Identifies swaps that mature on UST maturity dates,
-    indicating potential spread-over-treasury trades.
     """
 
-    package_type = PACKAGE_TYPES.SPREADOVER
+    package_type = PACKAGE_TYPES.MMS
 
     def detect(self, df: pd.DataFrame, **kwargs: Any) -> pd.DataFrame:
-        """Detect SPREADOVER packages in the DataFrame."""
-        return detect_spreadover_trades_df(df, **kwargs)
-
-
-# Backward compatibility alias
-detect_ust_mms_trades_df = detect_spreadover_trades_df
-
-# Register package detector
-registry.register_package(SpreadoverPackageDetector())
+        """Detect MMS packages in the DataFrame."""
+        return detect_mms_trades_df(df, **kwargs)

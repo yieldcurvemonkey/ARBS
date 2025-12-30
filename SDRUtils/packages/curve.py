@@ -247,7 +247,3 @@ class CurvePackageDetector(PackageDetector):
     def detect(self, df: pd.DataFrame, **kwargs: object) -> pd.DataFrame:
         return detect_curve_trades_df(df, **kwargs)
 
-
-registry.register_package(CurvePackageDetector())
-
-

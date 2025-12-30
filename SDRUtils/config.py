@@ -203,7 +203,7 @@ class PackageTypeMapping:
     OUTRIGHT: str = "OUTRIGHT"
     CURVE: str = "CURVE"
     FLY: str = "FLY"
-    SPREADOVER: str = "SPREADOVER"
+    MMS: str = "MATCHEDMATURITY"
     STRADDLE: str = "STRADDLE"
     STRANGLE: str = "STRANGLE"
 

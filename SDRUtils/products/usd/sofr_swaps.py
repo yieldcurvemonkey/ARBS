@@ -17,6 +17,7 @@ try:
     import Query.IRSwaps.adapter  # noqa: F401
     from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
     from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+
     HAS_CURVE_DEPS = True
 except ImportError:
     HAS_CURVE_DEPS = False
@@ -70,14 +71,16 @@ def classify_sofr_swap_trade(
 
     # Calculate tenor
     tenor_years = calculate_tenor_years(
-        effective_date, expiration_date,
+        effective_date,
+        expiration_date,
         conventions=USD_CONVENTIONS,
     )
     tenor_label = tenor_to_label(tenor_years, expiration_date=expiration_date)
 
     # Calculate forward start
     forward_years = calculate_forward_start_years(
-        execution_ts, effective_date,
+        execution_ts,
+        effective_date,
         conventions=USD_CONVENTIONS,
     )
 
@@ -106,10 +109,7 @@ def classify_sofr_swap_trade(
     if calculate_pv01 and curve is not None and HAS_CURVE_DEPS:
         try:
             pkg, _ = IRSwapQuery(
-                curve="USD-SOFR-1D",
-                effective_date=effective_date.date(),
-                maturity_date=expiration_date.date(),
-                structure_kwargs={"notional": notional}
+                curve="USD-SOFR-1D", effective_date=effective_date.date(), maturity_date=expiration_date.date(), structure_kwargs={"notional": notional}
             ).resolve_package(pricer_or_curve=curve)
             pv01 = curve.pv01(pkg[0])
         except Exception:
@@ -147,9 +147,7 @@ class USD_SOFR_SwapProduct(USDProductBase):
     name = "USD-SOFR-OIS"
     product_type = PRODUCT_TYPES.OIS_SWAP
 
-    def classify_trade(
-        self, row: pd.Series, trade_id: int, **kwargs: Any
-    ) -> TradeClassification:
+    def classify_trade(self, row: pd.Series, trade_id: int, **kwargs: Any) -> TradeClassification:
         """
         Classify a single USD SOFR swap trade.
 
@@ -164,7 +162,9 @@ class USD_SOFR_SwapProduct(USDProductBase):
         curve = kwargs.get("curve")
         calculate_pv01 = kwargs.get("calculate_pv01", True)
         return classify_sofr_swap_trade(
-            row, trade_id, curve,
+            row,
+            trade_id,
+            curve,
             calculate_pv01=calculate_pv01,
         )
 
