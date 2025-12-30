@@ -14,17 +14,10 @@ import pandas as pd
 import QuantLib as ql
 from tqdm import tqdm
 
-try:
-    import Query.IRSwaps.adapter  # noqa: F401
-    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
-    from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
-    from Query.IRSwaps.IRSwapQuery import IRSwapQuery
-
-    HAS_CURVE_DEPS = True
-except ImportError:
-    HAS_CURVE_DEPS = False
-    _IRSwapGenericCurve = None
-
+import Query.IRSwaps.adapter  # noqa: F401
+from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
+from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 
 from SDRUtils.config import PRODUCT_TYPES, TRADE_ID, USD_CONVENTIONS
 from SDRUtils.core.classification import TradeClassification, classifications_to_dataframe, classify_product_type
@@ -40,9 +33,7 @@ from SDRUtils.products.usd.filters import new_sofr_swap_trades
 def classify_sofr_swap_trade(
     row: pd.Series,
     trade_id: int,
-    curve: Optional[Any] = None,
-    *,
-    calculate_pv01: bool = True,
+    curve: _IRSwapGenericCurve,
 ) -> TradeClassification:
     """
     Classify a single USD SOFR OIS swap from SDR data.
@@ -106,15 +97,10 @@ def classify_sofr_swap_trade(
     strike = row.get("Strike Price")
 
     # Calculate PV01 if curve provided
-    pv01 = 0.0
-    if calculate_pv01 and curve is not None and HAS_CURVE_DEPS:
-        try:
-            pkg, _ = IRSwapQuery(
-                curve="USD-SOFR-1D", effective_date=effective_date.date(), maturity_date=expiration_date.date(), structure_kwargs={"notional": notional}
-            ).resolve_package(pricer_or_curve=curve)
-            pv01 = curve.pv01(pkg[0])
-        except Exception:
-            pv01 = 0.0
+    pkg, _ = IRSwapQuery(
+        curve="USD-SOFR-1D", effective_date=effective_date.date(), maturity_date=expiration_date.date(), structure_kwargs={"notional": notional}
+    ).resolve_package(pricer_or_curve=curve)
+    pv01 = curve.pv01(pkg[0])
 
     return TradeClassification(
         trade_id=trade_id,
@@ -148,7 +134,7 @@ class USD_SOFR_SwapProduct(USDProductBase):
     name = "USD-SOFR-OIS"
     product_type = PRODUCT_TYPES.OIS_SWAP
 
-    def classify_trade(self, row: pd.Series, trade_id: int, **kwargs: Any) -> TradeClassification:
+    def classify_trade(self, row: pd.Series, trade_id: int, curve: _IRSwapGenericCurve) -> TradeClassification:
         """
         Classify a single USD SOFR swap trade.
 
@@ -160,13 +146,10 @@ class USD_SOFR_SwapProduct(USDProductBase):
         Returns:
             TradeClassification object
         """
-        curve = kwargs.get("curve")
-        calculate_pv01 = kwargs.get("calculate_pv01", True)
         return classify_sofr_swap_trade(
             row,
             trade_id,
             curve,
-            calculate_pv01=calculate_pv01,
         )
 
     def classify_product_type(self, row: pd.Series) -> str:
@@ -189,7 +172,7 @@ class USD_SOFR_SwapProduct(USDProductBase):
         curve = IRSwapsMDP(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).get_pricer(request=dict(curve_name="USD-SOFR-1D", timestamp=as_of_date))
 
         classifications = [
-            self.classify_trade(row, trade_id=row.get(TRADE_ID), kwargs={"curve": curve})
+            self.classify_trade(row, trade_id=row.get(TRADE_ID), curve=curve)
             for _, row in tqdm(raw_sdr_trades_df.iterrows(), total=raw_sdr_trades_df.shape[0], desc="Classifying Trades")
         ]
         classifications_df = classifications_to_dataframe(classifications)
