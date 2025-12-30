@@ -10,8 +10,8 @@ import Query.IRSwaps.adapter  # noqa: F401
 
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
-from SDRUtils.classification import TradeClassification, classify_product_type
-from SDRUtils.utils import (
+from SDRUtils.core.classification import TradeClassification, classify_product_type
+from SDRUtils.core.utils import (
     _ensure_int64_epoch_seconds,
     _parse_notional,
     _pv01_bucket,
@@ -22,6 +22,8 @@ from SDRUtils.utils import (
     tenor_to_label,
     _USD_OIS_CAL,
 )
+from SDRUtils.products.base import ProductModule
+from SDRUtils.registry import registry
 
 
 def classify_sofr_swap_trade(row: pd.Series, trade_id: int, curve: _IRSwapGenericCurve) -> TradeClassification:
@@ -90,6 +92,23 @@ def classify_sofr_swap_trade(row: pd.Series, trade_id: int, curve: _IRSwapGeneri
         estimated_pv01=pv01,
         package_type="OUTRIGHT",
     )
+
+
+class USD_SOFR_SwapProduct(ProductModule):
+    name = "USD-SOFR-OIS"
+    product_type = "OIS_SWAP"
+
+    def classify_trade(self, row: pd.Series, trade_id: int, **kwargs) -> TradeClassification:
+        curve = kwargs.get("curve")
+        if curve is None:
+            raise ValueError("USD_SOFR_SwapProduct requires a 'curve' keyword argument.")
+        return classify_sofr_swap_trade(row, trade_id, curve)
+
+    def classify_product_type(self, row: pd.Series) -> str:
+        return classify_product_type(row)
+
+
+registry.register_product(USD_SOFR_SwapProduct())
 
 
 def detect_ust_mms_trades_df(
