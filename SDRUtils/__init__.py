@@ -19,7 +19,7 @@ Quick Start:
     from SDRUtils.packages import detect_fly_trades_df, detect_curve_trades_df
 """
 
-# Registry
+# Registry (import first, before other modules that might depend on it)
 from SDRUtils.registry import registry, get_registry
 
 # Configuration
@@ -43,6 +43,20 @@ from SDRUtils.core.classification import (
 
 # Data builder
 from SDRUtils.data.builder import SDRDataBuilder
+
+
+# Perform deferred registration after all modules are loaded
+def _register_all() -> None:
+    """Register all products and packages with the registry."""
+    from SDRUtils.packages import _register_package_detectors
+    from SDRUtils.products.usd import _register_usd_products
+
+    _register_package_detectors()
+    _register_usd_products()
+
+
+_register_all()
+
 
 # Version info
 __version__ = "2.0.0"

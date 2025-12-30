@@ -26,6 +26,18 @@ from SDRUtils.packages.spreadover import (
 from SDRUtils.packages.utils import merge_package_legs_to_one_row
 
 
+def _register_package_detectors() -> None:
+    """Register all package detectors with the global registry.
+
+    This function is called by SDRUtils.__init__ after the registry is loaded.
+    """
+    from SDRUtils.registry import registry
+
+    registry.register_package(FlyPackageDetector())
+    registry.register_package(CurvePackageDetector())
+    registry.register_package(SpreadoverPackageDetector())
+
+
 __all__ = [
     # Base
     "PackageDetector",

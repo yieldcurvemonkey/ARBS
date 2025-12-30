@@ -14,7 +14,6 @@ import pandas as pd
 
 from SDRUtils.config import DEFAULT_COLUMNS, PACKAGE_TYPES
 from SDRUtils.packages.base import PackageDetector
-from SDRUtils.registry import registry
 
 
 def _load_ust_reference_data(
@@ -318,6 +317,3 @@ class SpreadoverPackageDetector(PackageDetector):
 
 # Backward compatibility alias
 detect_ust_mms_trades_df = detect_spreadover_trades_df
-
-# Register package detector
-registry.register_package(SpreadoverPackageDetector())

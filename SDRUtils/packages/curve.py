@@ -5,7 +5,6 @@ import pandas as pd
 
 from SDRUtils.core.utils import _ensure_int64_epoch_seconds, _pv01_bucket
 from SDRUtils.packages.base import PackageDetector
-from SDRUtils.registry import registry
 
 
 def detect_curve_trades_df(
@@ -246,8 +245,3 @@ class CurvePackageDetector(PackageDetector):
 
     def detect(self, df: pd.DataFrame, **kwargs: object) -> pd.DataFrame:
         return detect_curve_trades_df(df, **kwargs)
-
-
-registry.register_package(CurvePackageDetector())
-
-

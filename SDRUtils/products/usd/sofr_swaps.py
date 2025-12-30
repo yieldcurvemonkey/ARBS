@@ -32,7 +32,6 @@ from SDRUtils.core.dates import (
 from SDRUtils.core.tenors import tenor_to_label, forward_to_label, build_trade_label
 from SDRUtils.core.parsing import parse_notional
 from SDRUtils.products.usd.base import USDProductBase
-from SDRUtils.registry import registry
 
 
 def classify_sofr_swap_trade(
@@ -171,7 +170,3 @@ class USD_SOFR_SwapProduct(USDProductBase):
     def classify_product_type(self, row: pd.Series) -> str:
         """Infer product type from SDR row."""
         return classify_product_type(row)
-
-
-# Register product with global registry
-registry.register_product(USD_SOFR_SwapProduct())
