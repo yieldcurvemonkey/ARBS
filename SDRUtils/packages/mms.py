@@ -1,8 +1,12 @@
-
 from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+
+import re
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
+
 
 from SDRUtils.config import PACKAGE_TYPES
 from SDRUtils.packages.base import PackageDetector
@@ -128,7 +132,7 @@ def detect_mms_trades_df(
     ust_ref_source: str = "fiscaldata",
     ust_force_refresh: bool = False,
     # Tagging
-    spreadover_package_type: str = "SPREADOVER",
+    spreadover_package_type: str = "MATCHED_MATURITY",
     only_tag_outrights: bool = True,
 ) -> pd.DataFrame:
     if df.empty:
@@ -138,9 +142,7 @@ def detect_mms_trades_df(
 
     # Apply outright mask if requested
     if only_tag_outrights and package_col in out.columns:
-        outright_mask = (
-            out[package_col].fillna("OUTRIGHT").astype("string").values == "OUTRIGHT"
-        )
+        outright_mask = out[package_col].fillna("OUTRIGHT").astype("string").values == "OUTRIGHT"
     else:
         outright_mask = np.ones(len(out), dtype=bool)
 
@@ -169,32 +171,104 @@ def detect_mms_trades_df(
 
         # Generate package IDs
         if trade_id_col in out.columns:
-            pid = (
-                out.loc[can_tag, trade_id_col]
-                .astype("string")
-                .radd("SPREADOVER_")
-            )
+            pid = out.loc[can_tag, trade_id_col].astype("string").radd(f"{spreadover_package_type}_")
         else:
-            pid = (
-                pd.Series(out.index[can_tag], index=out.index[can_tag])
-                .astype("string")
-                .radd("SPREADOVER_")
-            )
+            pid = pd.Series(out.index[can_tag], index=out.index[can_tag]).astype("string").radd(f"{spreadover_package_type}_")
 
         out.loc[can_tag, package_col] = spreadover_package_type
         out.loc[can_tag, "package_id"] = pid.values
 
         # Package legs (swap leg only - bond leg is not in SDR)
         if trade_id_col in out.columns:
-            out.loc[can_tag, "package_legs"] = (
-                out.loc[can_tag, trade_id_col]
-                .apply(lambda x: [int(x)] if pd.notna(x) else None)
-                .values
-            )
+            out.loc[can_tag, "package_legs"] = out.loc[can_tag, trade_id_col].apply(lambda x: [int(x)] if pd.notna(x) else None).values
         else:
-            out.loc[can_tag, "package_legs"] = (
-                out.index[can_tag].to_series().apply(lambda x: [int(x)]).values
-            )
+            out.loc[can_tag, "package_legs"] = out.index[can_tag].to_series().apply(lambda x: [int(x)]).values
+
+    def _to_bool(x) -> bool:
+        if isinstance(x, bool):
+            return x
+        if x is None or (isinstance(x, float) and np.isnan(x)):
+            return False
+        return str(x).strip().lower() in {"true", "t", "1", "yes", "y"}
+
+    def _split_parts(x):
+        if x is None or (isinstance(x, float) and np.isnan(x)):
+            return []
+        return [p.strip() for p in re.split(r"\s*/\s*", str(x).strip()) if p.strip()]
+
+    def _mmdd(x):
+        t = pd.to_datetime(x, errors="coerce")
+        if pd.isna(t):
+            return None
+        return int(t.month), int(t.day)
+
+    def _all_exp_same_mmdd(expiration_val, effective_val) -> bool:
+        """
+        True if ALL expiration dates (supports scalar Timestamp/date or 'a / b / c' string)
+        have the same (month, day) as the effective date.
+        """
+        eff_md = _mmdd(effective_val)
+        if eff_md is None:
+            return False
+
+        # scalar timestamp/date
+        if isinstance(expiration_val, (pd.Timestamp, np.datetime64)) or hasattr(expiration_val, "year"):
+            exp_mds = [_mmdd(expiration_val)]
+        else:
+            parts = _split_parts(expiration_val)
+            exp_mds = [_mmdd(p) for p in parts] if parts else [_mmdd(expiration_val)]
+
+        exp_mds = [md for md in exp_mds if md is not None]
+        return bool(exp_mds) and all(md == eff_md for md in exp_mds)
+
+    matched = out["matched_ust_maturity"].map(_to_bool)
+
+    # Spot detection (T+2 busdays, vectorized)
+    exec_ts = pd.to_datetime(out["execution_timestamp"], utc=True, errors="coerce").dt.tz_convert(None).dt.normalize()
+    eff_ts = pd.to_datetime(out["effective_date"], errors="coerce").dt.normalize()
+    m = exec_ts.notna() & eff_ts.notna()
+
+    cal = USFederalHolidayCalendar()
+    hol = cal.holidays(
+        start=(exec_ts[m].min() - pd.Timedelta(days=10)),
+        end=(exec_ts[m].max() + pd.Timedelta(days=30)),
+    ).to_numpy(dtype="datetime64[D]")
+
+    bdcal = np.busdaycalendar(holidays=hol)
+    exec_days = exec_ts[m].to_numpy(dtype="datetime64[D]")
+    spot_days = np.busday_offset(exec_days, 2, roll="forward", busdaycal=bdcal)
+    spot_dt = pd.to_datetime(spot_days).normalize()
+
+    spot_from_dates = pd.Series(False, index=out.index)
+    spot_from_dates.loc[m] = eff_ts[m].to_numpy() == spot_dt.to_numpy()
+
+    fwd = out["forward_label"] if "forward_label" in out.columns else pd.Series("", index=out.index)
+    spot_from_label = fwd.astype(str).str.lower().eq("spot")
+    is_spot = spot_from_dates | spot_from_label
+
+    # Coincidental month/day roll (spot start + same MM-DD)
+    same_mmdd = out.apply(
+        lambda r: _all_exp_same_mmdd(r.get(swap_maturity_col), r.get("effective_date")),
+        axis=1,
+    )
+
+    # NEW: short-dated swaps (< 1Y) are almost surely just spot-starting swaps, not matched-maturity spread trades
+    ten_y = pd.to_numeric(out.get("tenor_years"), errors="coerce")
+    short_by_tenor = ten_y.notna() & (ten_y < 1.0)
+
+    # fallback if tenor_years missing: use date difference
+    exp_ts = pd.to_datetime(out.get(swap_maturity_col), errors="coerce")
+    short_by_dates = exp_ts.notna() & eff_ts.notna() & ((exp_ts.dt.normalize() - eff_ts).dt.days < 370)
+
+    short_expiration = short_by_tenor | short_by_dates
+
+    # LOW if matched + spot + (same MM-DD OR short expiration)
+    low_conf = matched & is_spot & (same_mmdd | short_expiration)
+
+    conf = pd.Series(pd.NA, index=out.index, dtype="string")
+    conf.loc[matched] = "high"
+    conf.loc[low_conf] = "low"
+    out["matched_ust_maturity_trade_confidence"] = conf
 
     return out
 

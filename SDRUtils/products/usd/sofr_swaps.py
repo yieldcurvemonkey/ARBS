@@ -12,7 +12,9 @@ from typing import Any, Optional
 
 import pandas as pd
 import QuantLib as ql
+import rateslib as rl
 from tqdm import tqdm
+from pandas.tseries.offsets import BMonthBegin, BMonthEnd
 
 import Query.IRSwaps.adapter  # noqa: F401
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
@@ -123,6 +125,33 @@ def classify_sofr_swap_trade(
     )
 
 
+def flag_invoice_swaps(package_df: pd.DataFrame):
+    as_of = pd.to_datetime(package_df["execution_timestamp"], errors="coerce").dt.date.value_counts().index[0]
+
+    contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
+
+    mb_offset = BMonthBegin()
+    me_offset = BMonthEnd()
+    delivery_start = mb_offset.rollback(contract_imm_date)
+    delivery_end = me_offset.rollforward(contract_imm_date)
+
+    from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
+
+    ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
+
+    contracts = ["TU", "FV", "TY", "US", "WN"]
+    delivery_baskets = {
+        "TU": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="TU"),
+        "FV": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="FV"),
+        "TY": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="TY"),
+        "UXY": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="UXY"),
+        "US": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="US"),
+        "WN": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="WN"),
+    }
+
+    return delivery_baskets
+
+
 class USD_SOFR_SwapProduct(USDProductBase):
     """
     USD SOFR OIS Swap product implementation.
@@ -198,4 +227,13 @@ class USD_SOFR_SwapProduct(USDProductBase):
         if detect_mms:
             package_df = detect_mms_trades_df(package_df)
 
-        return merge_package_legs_to_one_row(package_df)
+        """
+        TODO
+        - invoice swaps
+
+        """
+
+        package_df = merge_package_legs_to_one_row(package_df)
+        package_df["risk"] = package_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))
+
+        return package_df

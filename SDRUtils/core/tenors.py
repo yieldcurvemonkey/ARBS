@@ -15,7 +15,7 @@ import QuantLib as ql
 from SDRUtils.core.dates import to_ql_date, to_naive_timestamp
 
 
-def get_imm_label(effective_date: pd.Timestamp, tolerance_days: int = 7) -> Optional[str]:
+def get_imm_label(effective_date: pd.Timestamp, tolerance_days: int = 3) -> Optional[str]:
     """
     Get IMM label (e.g., 'IMM_Z2025') with tolerance for unadjusted dates.
 

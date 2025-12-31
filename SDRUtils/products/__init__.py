@@ -24,7 +24,6 @@ from SDRUtils.products.usd import (
 # Filters (re-exported for backward compatibility)
 from SDRUtils.products.filters import new_sofr_swap_trades
 
-
 __all__ = [
     # Base
     "ProductModule",
