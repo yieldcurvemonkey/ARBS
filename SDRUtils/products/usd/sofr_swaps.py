@@ -150,9 +150,55 @@ def flag_invoice_swaps(
     from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
     from definitions.USTFutures import front_month
 
+    invoice_mapping = {
+        # 2Y
+        "TVA": {"root": "TU", "delivery": "last"},
+        "TVB": {"root": "TU", "delivery": "last"},
+        "TVC": {"root": "TU", "delivery": "last"},
+        "TVD": {"root": "TU", "delivery": "first"},
+        "TVE": {"root": "TU", "delivery": "first"},
+        "TVF": {"root": "TU", "delivery": "first"},
+        # 5Y
+        "FYA": {"root": "FV", "delivery": "last"},
+        "FYB": {"root": "FV", "delivery": "last"},
+        "FYC": {"root": "FV", "delivery": "last"},
+        "FYD": {"root": "FV", "delivery": "first"},
+        "FYE": {"root": "FV", "delivery": "first"},
+        "FYF": {"root": "FV", "delivery": "first"},
+        # 10Y
+        "TYA": {"root": "TY", "delivery": "last"},
+        "TYB": {"root": "TY", "delivery": "last"},
+        "TYC": {"root": "TY", "delivery": "last"},
+        "TYD": {"root": "TY", "delivery": "first"},
+        "TAY": {"root": "TY", "delivery": "first"},
+        "TAB": {"root": "TY", "delivery": "first"},
+        # 30Y
+        "UTA": {"root": "US", "delivery": "last"},
+        "UTB": {"root": "US", "delivery": "last"},
+        "UTC": {"root": "US", "delivery": "last"},
+        "UTD": {"root": "US", "delivery": "first"},
+        "UTE": {"root": "US", "delivery": "first"},
+        "UET": {"root": "US", "delivery": "first"},
+        # Ultra
+        "UBA": {"root": "WN", "delivery": "last"},
+        "UBB": {"root": "WN", "delivery": "last"},
+        "UBC": {"root": "WN", "delivery": "last"},
+        "UBI": {"root": "WN", "delivery": "first"},
+        "UBP": {"root": "WN", "delivery": "first"},
+        "UBF": {"root": "WN", "delivery": "first"},
+    }
+
+    indicator_to_ticker = {
+        "TU": {"A": "TVA", "B": "TVB", "C": "TVC", "D": "TVD", "E": "TVE", "F": "TVF"},
+        "FV": {"A": "FYA", "B": "FYB", "C": "FYC", "D": "FYD", "E": "FYE", "F": "FYF"},
+        "TY": {"A": "TYA", "B": "TYB", "C": "TYC", "D": "TYD", "E": "TAY", "F": "TAB"},
+        "US": {"A": "UTA", "B": "UTB", "C": "UTC", "D": "UTD", "E": "UTE", "F": "UET"},
+        "WN": {"A": "UBA", "B": "UBB", "C": "UBC", "D": "UBI", "E": "UBP", "F": "UBF"},
+    }
+
     try:
         ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
-        roots = ["TU", "FV", "TY", "UXY", "US", "WN"]
+        roots = sorted({spec["root"] for spec in invoice_mapping.values()})
         invoice_specs = []
         for root in roots:
             contract = front_month(as_of, root)
@@ -160,26 +206,25 @@ def flag_invoice_swaps(
             delivery_start, delivery_end = basket["delivery"]
             pricer = ustf_mdp.get_pricer(request={"symbols": [contract], "timestamp": as_of})[contract]
             for indicator in "ABCDEF":
-                delivery_date = delivery_end if indicator in "ABC" else delivery_start
+                ticker = indicator_to_ticker.get(root, {}).get(indicator)
+                if not ticker:
+                    continue
+                delivery_date = delivery_end if invoice_mapping[ticker]["delivery"] == "last" else delivery_start
                 ctd_pricer = pricer.ctd(indicator)
                 if ctd_pricer is None:
                     continue
-                meta = getattr(ctd_pricer, "_meta_data", {}) or {}
                 invoice_specs.append(
                     {
-                        "invoice_swap_root": root,
-                        "invoice_swap_contract": contract,
-                        "invoice_swap_indicator": indicator,
                         "invoice_swap_delivery_date": delivery_date,
                         "invoice_swap_ctd_maturity": ctd_pricer.maturity_date(),
-                        "invoice_swap_ctd_cusip": meta.get("cusip"),
+                        "invoice_swap_ticker": ticker,
                     }
                 )
     except Exception:
         return out
 
     if not invoice_specs:
-        out["invoice_swap"] = False
+        out["invoice_swap_ticker"] = None
         return out
 
     lookup = pd.DataFrame(invoice_specs).drop_duplicates(
@@ -198,7 +243,7 @@ def flag_invoice_swaps(
         how="left",
     )
 
-    match_mask = out["invoice_swap_contract"].notna()
+    match_mask = out["invoice_swap_ticker"].notna()
     if product_col in out.columns:
         match_mask &= out[product_col].isin(product_values)
     if require_usd and currency_col in out.columns:
@@ -206,14 +251,7 @@ def flag_invoice_swaps(
     if only_tag_outrights and package_col in out.columns:
         match_mask &= out[package_col].fillna("OUTRIGHT").eq("OUTRIGHT")
 
-    out["invoice_swap"] = match_mask
-    for col in [
-        "invoice_swap_root",
-        "invoice_swap_contract",
-        "invoice_swap_indicator",
-        "invoice_swap_ctd_cusip",
-    ]:
-        out.loc[~match_mask, col] = None
+    out.loc[~match_mask, "invoice_swap_ticker"] = None
 
     out = out.drop(columns=["_invoice_effective_date", "_invoice_expiration_date"])
     return out
