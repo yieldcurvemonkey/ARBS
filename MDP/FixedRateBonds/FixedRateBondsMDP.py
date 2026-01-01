@@ -716,7 +716,6 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                     pass
 
                 if "CTD_" in cusip:
-                    import pytz
                     from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
 
                     delivery = "A" if "CTD_LD_" in cusip else "D"

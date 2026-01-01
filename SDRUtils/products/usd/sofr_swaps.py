@@ -12,14 +12,13 @@ from typing import Any, Optional
 
 import pandas as pd
 import QuantLib as ql
-import rateslib as rl
 from tqdm import tqdm
-from pandas.tseries.offsets import BMonthBegin, BMonthEnd
 
 import Query.IRSwaps.adapter  # noqa: F401
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+from Query.IRSwaps._CME_INVOICE_SWAP_TICKERS import _CME_INVOICE_SWAP_TICKERS, _INDICATOR_TO_TICKER
 
 from SDRUtils.config import PRODUCT_TYPES, TRADE_ID, USD_CONVENTIONS
 from SDRUtils.core.classification import TradeClassification, classifications_to_dataframe, classify_product_type
@@ -125,31 +124,92 @@ def classify_sofr_swap_trade(
     )
 
 
-def flag_invoice_swaps(package_df: pd.DataFrame):
-    as_of = pd.to_datetime(package_df["execution_timestamp"], errors="coerce").dt.date.value_counts().index[0]
+def flag_invoice_swaps(
+    package_df: pd.DataFrame,
+    *,
+    effective_col: str = "effective_date",
+    expiration_col: str = "expiration_date",
+    execution_col: str = "execution_timestamp",
+    product_col: str = "product_type",
+    product_values: tuple[str, ...] = ("OIS_SWAP",),
+    currency_col: str = "notional_currency",
+    require_usd: bool = True,
+    usd_value: str = "USD",
+    package_col: str = "package_type",
+    only_tag_outrights: bool = True,
+    show_tqdm: bool = True,
+) -> pd.DataFrame:
+    if package_df.empty:
+        return package_df
 
-    contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
+    out = package_df.copy()
+    exec_dates = pd.to_datetime(out.get(execution_col), errors="coerce")
+    if exec_dates.isna().all():
+        return out
 
-    mb_offset = BMonthBegin()
-    me_offset = BMonthEnd()
-    delivery_start = mb_offset.rollback(contract_imm_date)
-    delivery_end = me_offset.rollforward(contract_imm_date)
+    as_of = exec_dates.dt.date.value_counts().index[0]
 
+    from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
     from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
+    from definitions.USTFutures import front_month
 
+
+    usts_mdp = FixedRateBondsMDP(source="USTS_WEBULL_WSJ_LIVE-RL")
+    # usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
     ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
+    roots = sorted({spec["root"] for spec in _CME_INVOICE_SWAP_TICKERS.values()})
+    invoice_specs = []
+    iterator = tqdm(roots, desc="FETCHING DELIVERY BASKETS...") if show_tqdm else roots
+    for root in iterator:
+        contract = front_month(as_of, root)
+        basket = ustf_mdp.get_delivery_basket(as_of=as_of, symbol=contract, usts_mdp=usts_mdp)
+        delivery_start, delivery_end = basket["delivery"]
+        pricer = ustf_mdp.get_pricer(request={"symbols": [contract], "timestamp": as_of})[contract]
+        for indicator in "ABCDEF":
+            ticker = _INDICATOR_TO_TICKER.get(root, {}).get(indicator)
+            if not ticker:
+                continue
+            delivery_date = delivery_end if _CME_INVOICE_SWAP_TICKERS[ticker]["delivery"] == "last" else delivery_start
+            ctd_pricer = pricer.ctd(indicator)
+            if ctd_pricer is None:
+                continue
+            invoice_specs.append(
+                {
+                    "invoice_swap_delivery_date": delivery_date,
+                    "invoice_swap_ctd_maturity": ctd_pricer.maturity_date(),
+                    "invoice_swap_ticker": ticker,
+                }
+            )
 
-    contracts = ["TU", "FV", "TY", "US", "WN"]
-    delivery_baskets = {
-        "TU": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="TU"),
-        "FV": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="FV"),
-        "TY": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="TY"),
-        "UXY": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="UXY"),
-        "US": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="US"),
-        "WN": ustf_mdp.get_delivery_basket(as_of=as_of, symbol="WN"),
-    }
+    if not invoice_specs:
+        out["invoice_swap_ticker"] = None
+        return out
 
-    return delivery_baskets
+    lookup = pd.DataFrame(invoice_specs).drop_duplicates(subset=["invoice_swap_delivery_date", "invoice_swap_ctd_maturity"], keep="first")
+    lookup["invoice_swap_delivery_date"] = pd.to_datetime(lookup["invoice_swap_delivery_date"])
+    lookup["invoice_swap_ctd_maturity"] = pd.to_datetime(lookup["invoice_swap_ctd_maturity"])
+
+    package_df["effective_date"] = pd.to_datetime(package_df["effective_date"])
+    package_df["expiration_date"] = pd.to_datetime(package_df["expiration_date"])
+    package_df["expiration_date_norm"] = package_df["expiration_date"].dt.normalize()
+
+    df_invoice_subset = lookup[["invoice_swap_delivery_date", "invoice_swap_ctd_maturity", "invoice_swap_ticker"]].rename(
+        columns={"invoice_swap_ticker": "invoice_swap_ticker_new"}
+    )
+    df_merged = package_df.merge(
+        df_invoice_subset, left_on=["effective_date", "expiration_date_norm"], right_on=["invoice_swap_delivery_date", "invoice_swap_ctd_maturity"], how="left"
+    )
+
+    condition = (df_merged["matched_ust_maturity_trade_confidence"] == "high") & (df_merged["invoice_swap_ticker_new"].notna())
+    df_merged.loc[condition, "invoice_swap_ticker"] = df_merged.loc[condition, "invoice_swap_ticker_new"]
+    cols_to_drop = [
+        "expiration_date_norm",
+        "invoice_swap_ticker_new",
+        "invoice_swap_delivery_date_y",  # If column existed in both, suffix might be applied
+        "invoice_swap_ctd_maturity_y",
+    ]
+    existing_cols_to_drop = [c for c in df_merged.columns if c in cols_to_drop or c in df_invoice_subset.columns[:-1]]
+    return df_merged.drop(columns=existing_cols_to_drop, errors="ignore")
 
 
 class USD_SOFR_SwapProduct(USDProductBase):
@@ -186,7 +246,15 @@ class USD_SOFR_SwapProduct(USDProductBase):
         return classify_product_type(row)
 
     def build_classification_dataframe(
-        self, start: datetime.datetime, end: datetime.datetime, cache_path: str, detect_curve=True, detect_fly=True, detect_mms=True, **kwargs: Any
+        self,
+        start: datetime.datetime,
+        end: datetime.datetime,
+        cache_path: str,
+        detect_curve=True,
+        detect_fly=True,
+        detect_mms=True,
+        detect_invoice=True,
+        **kwargs: Any,
     ):
         sdr = SDRDataBuilder(cache_path=cache_path, show_tqdm=True)
         raw_sdr_trades_df = sdr.grab_sdr_trades(
@@ -226,12 +294,8 @@ class USD_SOFR_SwapProduct(USDProductBase):
             package_df = detect_curve_trades_df(package_df)
         if detect_mms:
             package_df = detect_mms_trades_df(package_df)
-
-        """
-        TODO
-        - invoice swaps
-
-        """
+        if detect_invoice:
+            package_df = flag_invoice_swaps(package_df)
 
         package_df = merge_package_legs_to_one_row(package_df)
         package_df["risk"] = package_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))

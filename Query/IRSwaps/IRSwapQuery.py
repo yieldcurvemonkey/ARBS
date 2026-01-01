@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from Query.Base.BaseQuery import BaseQuery
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 from Query.IRSwaps.IRSwapValue import IRSwapValue
+from Query.IRSwaps._CME_INVOICE_SWAP_TICKERS import _CME_INVOICE_SWAP_TICKERS
 from utils.misc import human_format
 
 
@@ -311,44 +312,7 @@ class IRSwapQuery(BaseQuery):
             key = (token or "").strip().upper()
             if not key:
                 return None
-            mapping = {
-                # 2Y
-                "TVA": {"root": "TU", "delivery": "last"},
-                "TVB": {"root": "TU", "delivery": "last"},
-                "TVC": {"root": "TU", "delivery": "last"},
-                "TVD": {"root": "TU", "delivery": "first"},
-                "TVE": {"root": "TU", "delivery": "first"},
-                "TVF": {"root": "TU", "delivery": "first"},
-                # 5Y
-                "FYA": {"root": "FV", "delivery": "last"},
-                "FYB": {"root": "FV", "delivery": "last"},
-                "FYC": {"root": "FV", "delivery": "last"},
-                "FYD": {"root": "FV", "delivery": "first"},
-                "FYE": {"root": "FV", "delivery": "first"},
-                "FYF": {"root": "FV", "delivery": "first"},
-                # 10Y
-                "TYA": {"root": "TY", "delivery": "last"},
-                "TYB": {"root": "TY", "delivery": "last"},
-                "TYC": {"root": "TY", "delivery": "last"},
-                "TYD": {"root": "TY", "delivery": "first"},
-                "TAY": {"root": "TY", "delivery": "first"},
-                "TAB": {"root": "TY", "delivery": "first"},
-                # 30Y
-                "UTA": {"root": "US", "delivery": "last"},
-                "UTB": {"root": "US", "delivery": "last"},
-                "UTC": {"root": "US", "delivery": "last"},
-                "UTD": {"root": "US", "delivery": "first"},
-                "UTE": {"root": "US", "delivery": "first"},
-                "UET": {"root": "US", "delivery": "first"},
-                # Ultra
-                "UBA": {"root": "WN", "delivery": "last"},
-                "UBB": {"root": "WN", "delivery": "last"},
-                "UBC": {"root": "WN", "delivery": "last"},
-                "UBI": {"root": "WN", "delivery": "first"},
-                "UBP": {"root": "WN", "delivery": "first"},
-                "UBF": {"root": "WN", "delivery": "first"},
-            }
-            return mapping.get(key)
+            return _CME_INVOICE_SWAP_TICKERS.get(key)
 
         def _norm(tok: str) -> str:
             t = (tok or "").strip().upper().replace(" ", "")
@@ -361,7 +325,7 @@ class IRSwapQuery(BaseQuery):
         if q.tenor is not None:
             structure = getattr(q, "structure", None)
             txt = (getattr(q, "tenor", "") or "") or (getattr(q, "node", "") or "") or (getattr(q, "label", "") or "")
-            
+
             if len(txt) > 3:
                 invoice_swap_code = txt[:-3]
                 month_code = txt[-3:]
