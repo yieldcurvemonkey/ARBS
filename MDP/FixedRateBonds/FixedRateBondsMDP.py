@@ -431,6 +431,94 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                         pass
                 return out
 
+        elif self.source.upper() == "USTS_TRADINGVIEW_LIVE-RL":
+            from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
+            from MDP.FixedRateBonds.TRADINGVIEW.TradingViewFetcher import (
+                fetch_cusip_prices_eod_timeseries_parallel as fetch_cusip_eod_timeseries_parallel,
+            )
+            from Query.FixedRateBonds.backends.rateslib.RLFixedRateBondPricer import RLFixedRateBondPricer
+
+            force_refresh = bool(kwargs.get("force_refresh", False))
+            today = datetime.date.today()
+
+            if timestamp == "live":
+                as_of_date = today
+                is_live_request = True
+            elif isinstance(timestamp, datetime.datetime):
+                as_of_date = timestamp.date()
+                is_live_request = as_of_date == today
+            elif isinstance(timestamp, datetime.date):
+                as_of_date = timestamp
+                is_live_request = as_of_date == today
+            else:
+                raise TypeError("timestamp must be 'live', datetime.date, or datetime.datetime")
+
+            ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
+            ref_df = ref_df[(ref_df["issue_date"] <= as_of_date) & (ref_df["maturity_date"] >= as_of_date)].copy()
+            ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+            alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(clean_cusips, timestamp, ref_df=ref_df)
+
+            out: Dict[str, _FixedRateBondGenericPricer] = {}
+            self._ensure_pricer_cache()
+            cache = getattr(self, self._FRB_PRICER_CACHE)
+
+            cache_ts = timestamp if isinstance(timestamp, datetime.datetime) else as_of_date
+            alias_to_cusip_to_fetch = {}
+            for original, cusip in alias_to_cusip.items():
+                cache_key = f"{cache_ts.isoformat()}-{cusip}-{self.source.upper()}"
+                cached = cache.get(cache_key)
+                if cached is not None and not force_refresh:
+                    if hasattr(cached, "__class__") and cached.__class__.__name__ == "RLFixedRateBondPricer":
+                        out[original] = cached
+                        continue
+                    out[original] = self._build_pricer_from_args(cached, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
+                    continue
+                alias_to_cusip_to_fetch[original] = cusip
+
+            if alias_to_cusip_to_fetch:
+                tv_df = fetch_cusip_eod_timeseries_parallel(
+                    cusips=list(alias_to_cusip_to_fetch.values()),
+                    start=as_of_date,
+                    end=as_of_date,
+                    val_to_return="close",
+                )
+                for original, cusip in alias_to_cusip_to_fetch.items():
+                    try:
+                        series = tv_df[cusip].dropna()
+                        if series.empty:
+                            raise KeyError(f"No TradingView data for {cusip} on {as_of_date}")
+
+                        if is_live_request:
+                            ts = series.index[-1]
+                            price = float(series.iloc[-1])
+                        else:
+                            idx = series.index
+                            day_rows = series[idx.date == as_of_date]
+                            if day_rows.empty:
+                                raise KeyError(f"No TradingView snapshot for {cusip} on {as_of_date}")
+                            ts = day_rows.index[-1]
+                            price = float(day_rows.iloc[-1])
+
+                        meta = dict(meta_by_cusip[cusip])
+                        meta["timestamp"] = ts
+                        args = {
+                            "rl_frb_id": "USTS",
+                            "reference_date": ts.date().isoformat(),
+                            "clean_price": price,
+                            "meta_data": self._pyify_meta(meta),
+                            "schema": 2,
+                            "source": "tradingview",
+                        }
+                        cache_key = f"{cache_ts.isoformat()}-{cusip}-{self.source.upper()}"
+                        cache[cache_key] = args
+                        out[original] = self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
+                    except Exception:
+                        continue
+
+                self.zodb_commit()
+
+            return out
+
         elif self.source.upper() == "USTS_WEBULL_WSJ_LIVE-RL":
             from pandas.tseries.offsets import BDay
 
@@ -535,6 +623,12 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
     def _get_single_pricer(
         self, cusip: str, timestamp: Union[datetime.datetime, datetime.date, Literal["live"]], kwargs: Optional[Dict[str, Any]] = {}
     ) -> Optional[_FixedRateBondGenericPricer]:
+
+        if self.source.upper() == "USTS_TRADINGVIEW_LIVE-RL":
+            pricers = self._get_multi_pricers([cusip], timestamp, kwargs)
+            if not pricers:
+                return None
+            return pricers.get(cusip)
 
         if self.source.upper() in ["USTS_PUBLICDOTCOM_WSJ_LIVE-QL"]:
             from MDP.FixedRateBonds.PUBLICDOTCOM.PublicDotcomDataFetcher import PublicDotcomDataFetcher
