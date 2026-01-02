@@ -19,7 +19,13 @@ import requests
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
-from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contracts, cme_code_effective_date, first_business_day_next_month
+from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import (
+    _imm_cutoff,
+    _next_contracts,
+    cme_code_effective_date,
+    first_business_day_next_month,
+    get_quotes,
+)
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher
 from Query.STIRFutures._STIRFutureGenericPricer import _STIRFutureGenericPricer
@@ -97,6 +103,35 @@ def _normalize_symbol(sym: str) -> Optional[str]:
         return f"{root}{code}"
 
     return WebullFintechFetcher._normalize_future_symbol(s)
+
+
+def _to_tos_symbol(sym: str) -> str:
+    norm = _normalize_symbol(sym) or sym
+    m = re.match(r"^(?P<root>SR[13]|ZQ)(?P<code>[FGHJKMNQUVXZ]\d{2})$", norm)
+    if not m:
+        return sym
+    root = m.group("root")
+    code = m.group("code")
+    return f"/{root}{code}"
+
+
+def _from_tos_symbol(sym: str) -> str:
+    s = (sym or "").strip().upper()
+    if s.startswith("/"):
+        s = s[1:]
+    return s
+
+
+def _should_use_live_quotes(timestamp: DateLike) -> bool:
+    if timestamp == "live":
+        return True
+    if isinstance(timestamp, datetime.date) and not isinstance(timestamp, datetime.datetime):
+        return timestamp == datetime.date.today()
+    if isinstance(timestamp, datetime.datetime):
+        ts_dt = _as_datetime(timestamp)
+        now = datetime.datetime.now(pytz.UTC)
+        return abs((ts_dt.astimezone(pytz.UTC) - now).total_seconds()) <= 15 * 60
+    return False
 
 
 # ----------------------------- SER-FF (SOFR-Feds) spread helpers -------------
@@ -577,6 +612,46 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         df.columns = [_from_barchart_symbol(c) for c in df.columns]
         return df
 
+    def _fetch_tos_live_quotes(self, tickers: List[str], ts_dt: datetime.datetime) -> pd.DataFrame:
+        tos_map = {t: _to_tos_symbol(t) for t in tickers}
+        quotes = get_quotes(symbols=list(tos_map.values()))
+        if not quotes:
+            return pd.DataFrame()
+
+        rows: Dict[str, Tuple[datetime.datetime, float]] = {}
+        for orig_sym, tos_sym in tos_map.items():
+            q = quotes.get(tos_sym)
+            if not q:
+                q = quotes.get(_from_tos_symbol(tos_sym))
+            if not q:
+                continue
+            price = q.get("last")
+            if price is None:
+                price = q.get("mid")
+            if price is None:
+                price = q.get("mark")
+            if price is None:
+                price = q.get("bid")
+            if price is None:
+                price = q.get("ask")
+            if price is None:
+                continue
+
+            quote_time = q.get("quoteTime")
+            if quote_time is None:
+                quote_ts = ts_dt
+            else:
+                quote_ts = pd.to_datetime(quote_time, unit="ms", utc=True).tz_convert(ts_dt.tzinfo)
+            rows[orig_sym] = (quote_ts, float(price))
+
+        if not rows:
+            return pd.DataFrame()
+
+        latest_ts = max(ts for ts, _ in rows.values())
+        df = pd.DataFrame({sym: [px] for sym, (_, px) in rows.items()}, index=[latest_ts])
+        df.columns = [_from_tos_symbol(c) for c in df.columns]
+        return df
+
     # ----------------------------- core fetch --------------------------------
     def _get_data_for_timestamp(
         self,
@@ -592,7 +667,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             raise ValueError("No valid symbols resolved from request.")
 
         src = self.source.upper()
-        if src not in {"WEBULL_STIRF-RL", "BARCHART_STIRF-RL"}:
+        if src not in {"WEBULL_STIRF-RL", "BARCHART_STIRF-RL", "BARCHART_TOS_LIVE_STIRF-RL"}:
             raise NotImplementedError(f"Unsupported source {self.source}")
 
         want_eod = isinstance(timestamp, datetime.date) and not isinstance(timestamp, datetime.datetime)
@@ -649,8 +724,12 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         price_df = pd.DataFrame()
 
         if all_missing:
+            use_live = src == "BARCHART_TOS_LIVE_STIRF-RL" and _should_use_live_quotes(timestamp)
+
             if src == "WEBULL_STIRF-RL":
                 price_df = self._fetch_webull_intraday(all_missing, ts_dt, show_tqdm=show_tqdm)
+            elif use_live:
+                price_df = self._fetch_tos_live_quotes(all_missing, ts_dt)
             else:
                 interval = None if want_eod else 1
                 price_df = self._fetch_barchart_timeseries(all_missing, ts_dt, show_tqdm=show_tqdm, interval=interval)
