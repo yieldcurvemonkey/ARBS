@@ -671,6 +671,8 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             raise NotImplementedError(f"Unsupported source {self.source}")
 
         want_eod = isinstance(timestamp, datetime.date) and not isinstance(timestamp, datetime.datetime)
+        use_live = src == "BARCHART_TOS_LIVE_STIRF-RL" and _should_use_live_quotes(timestamp)
+        read_cache = not force_refresh and not use_live
 
         self._ensure_pricer_cache()
 
@@ -690,7 +692,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 insts: List[InstrumentLike] = []
                 for t in tickers:
                     cache_key = f"{ts_iso}-{t}-{src}"
-                    cached = None if force_refresh else self._threadsafe_cache_get(cache_key)
+                    cached = None if not read_cache else self._threadsafe_cache_get(cache_key)
                     if cached is not None:
                         insts.append(self._build_pricer_from_args(cached))
                     else:
@@ -709,7 +711,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             sr1_leg, zq_leg = legs
             for t in [sr1_leg, zq_leg]:
                 cache_key = f"{ts_iso}-{t}-{src}"
-                cached = None if force_refresh else self._threadsafe_cache_get(cache_key)
+                cached = None if not read_cache else self._threadsafe_cache_get(cache_key)
                 if cached is not None:
                     spread_legs[alias][t] = self._build_pricer_from_args(cached)
                 else:
@@ -724,8 +726,6 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         price_df = pd.DataFrame()
 
         if all_missing:
-            use_live = src == "BARCHART_TOS_LIVE_STIRF-RL" and _should_use_live_quotes(timestamp)
-
             if src == "WEBULL_STIRF-RL":
                 price_df = self._fetch_webull_intraday(all_missing, ts_dt, show_tqdm=show_tqdm)
             elif use_live:
@@ -739,17 +739,18 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 raise RuntimeError(f"{src} returned no data for requested STIR futures.")
 
             # Persist all slices for future reuse
-            for t in price_df.columns:
-                series = price_df[t].dropna()
-                for curr_ts, px in series.items():
-                    args = {
-                        "symbol": t,
-                        "price": float(px),
-                        "timestamp": curr_ts.isoformat() if hasattr(curr_ts, "isoformat") else str(curr_ts),
-                        "schema": 1,
-                    }
-                    cache_key = f"{curr_ts.isoformat()}-{t}-{src}"
-                    self._threadsafe_cache_put(cache_key, args)
+            if not use_live:
+                for t in price_df.columns:
+                    series = price_df[t].dropna()
+                    for curr_ts, px in series.items():
+                        args = {
+                            "symbol": t,
+                            "price": float(px),
+                            "timestamp": curr_ts.isoformat() if hasattr(curr_ts, "isoformat") else str(curr_ts),
+                            "schema": 1,
+                        }
+                        cache_key = f"{curr_ts.isoformat()}-{t}-{src}"
+                        self._threadsafe_cache_put(cache_key, args)
 
         # ---------- pass 2: build outputs from cache / fetched ----------
         for alias, tickers in to_fetch.items():
@@ -759,7 +760,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 insts: List[InstrumentLike] = list(result.get(alias, []))  # type: ignore[assignment]
                 for t in tickers:
                     cache_key = f"{ts_iso}-{t}-{src}"
-                    cached = None if force_refresh else self._threadsafe_cache_get(cache_key)
+                    cached = None if not read_cache else self._threadsafe_cache_get(cache_key)
 
                     if cached is None and not price_df.empty and t in price_df:
                         series = price_df[t].dropna()
@@ -777,11 +778,12 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                         }
 
                         idx_iso = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)
-                        cache_key2 = f"{idx_iso}-{t}-{src}"
-                        self._threadsafe_cache_put(cache_key2, args)
+                        if not use_live:
+                            cache_key2 = f"{idx_iso}-{t}-{src}"
+                            self._threadsafe_cache_put(cache_key2, args)
 
-                        cache_key_req = f"{ts_iso}-{t}-{src}"
-                        self._threadsafe_cache_put(cache_key_req, args)
+                            cache_key_req = f"{ts_iso}-{t}-{src}"
+                            self._threadsafe_cache_put(cache_key_req, args)
 
                         cached = args
 
@@ -805,7 +807,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                     continue
 
                 cache_key = f"{ts_iso}-{t}-{src}"
-                cached = None if force_refresh else self._threadsafe_cache_get(cache_key)
+                cached = None if not read_cache else self._threadsafe_cache_get(cache_key)
 
                 if cached is None and not price_df.empty and t in price_df:
                     series = price_df[t].dropna()
@@ -819,8 +821,9 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                         "timestamp": idx.isoformat() if hasattr(idx, "isoformat") else str(idx),
                         "schema": 1,
                     }
-                    cache_key2 = f"{idx.isoformat()}-{t}-{src}"
-                    self._threadsafe_cache_put(cache_key2, args)
+                    if not use_live:
+                        cache_key2 = f"{idx.isoformat()}-{t}-{src}"
+                        self._threadsafe_cache_put(cache_key2, args)
                     cached = args
 
                 if cached is None:
