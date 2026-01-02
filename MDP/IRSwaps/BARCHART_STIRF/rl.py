@@ -1,16 +1,16 @@
 import datetime
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
+
 import pandas as pd
-from typing import Dict, List
+import pytz
+import rateslib as rl
+from pandas.tseries.offsets import DateOffset
+from itertools import islice
 
 from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
-from Query.STIRFutures.backends.rateslib.RLSTIRFuturePricer import RLSTIRFuturePricer
 from Query.IRSwaps._CENTRAL_BANK_DATES import _CENTRAL_BANK_DATES
-
-
-import datetime
-import pandas as pd
-from pandas.tseries.offsets import DateOffset
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
+from Query.STIRFutures.backends.rateslib.RLSTIRFuturePricer import RLSTIRFuturePricer
 
 
 def _flatten_pricers(pricers: Dict[str, List["RLSTIRFuturePricer"]]) -> List["RLSTIRFuturePricer"]:
@@ -27,12 +27,13 @@ def _as_node_ts(d: datetime.date, *, base_ts: pd.Timestamp) -> pd.Timestamp:
     Create a timezone-aware pd.Timestamp for date `d` using the SAME time-of-day + tz as `base_ts`.
     """
     tod = base_ts.to_pydatetime().timetz()
-    naive = datetime.datetime(d.year, d.month, d.day, tod.hour, tod.minute, tod.second, tod.microsecond)
-    ts = pd.Timestamp(naive)
-    # localize to base tz (works for pytz/dateutil tz and tz strings)
-    if ts.tzinfo is None:
-        return ts.tz_localize(base_ts.tz)
-    return ts.tz_convert(base_ts.tz)
+    naive = rl.dt(d.year, d.month, d.day, tod.hour, tod.minute, tod.second, tod.microsecond)
+    return naive
+    # ts = pd.Timestamp(naive)
+    # # localize to base tz (works for pytz/dateutil tz and tz strings)
+    # if ts.tzinfo is None:
+    #     return ts.tz_localize(base_ts.tz)
+    # return ts.tz_convert(base_ts.tz)
 
 
 def _build_stirf_nodes(
@@ -89,23 +90,47 @@ def _build_stirf_nodes(
     node_dates = sorted(set(node_dates))
 
     # build nodes dict (values are placeholders / initial guesses)
-    nodes: Dict[pd.Timestamp, float] = {base_ts: 1.0}
+    nodes: Dict[pd.Timestamp, float] = {_as_node_ts(base_ts, base_ts=base_ts): 1.0}
     for d in node_dates:
         nodes[_as_node_ts(d, base_ts=base_ts)] = 1.0
 
     return nodes
 
 
+def build_rl_stirf_turn_flies(
+    turn_nodes: List[Union[datetime.date, datetime.datetime]], curve_id: str, spec: str, one_step: Optional[bool] = False
+) -> Dict[str, rl.Fly]:
+    args = {"termination": "1d", "spec": spec, "curves": curve_id}
+
+    rl_irs = [rl.IRS(effective=node, **args) for node in turn_nodes]
+    flies = {}
+    if len(rl_irs) < 3:
+        return flies
+
+    if one_step:
+        for i in range(0, len(rl_irs) - 2):
+            fly = rl.Fly(rl_irs[i], rl_irs[i + 1], rl_irs[i + 2])
+            flies[f"{i}/{i+1}/{i+2}"] = fly
+    else:
+        for i in range(3, len(rl_irs) - 2, 2):
+            fly = rl.Fly(rl_irs[i], rl_irs[i + 1], rl_irs[i + 2])
+            flies[f"{i}/{i+1}/{i+2}"] = fly
+
+    return flies
+
+
 class BARCHART_STIRF_CURVE:
 
     def __init__(self):
-        self.stirf_mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
+        self.stirf_mdp = STIRFutureMDP(source="BARCHART_TOS_LIVE_STIRF-RL")
 
         self._STIRF_CURVE_CONFIGS = {
             "USD-SOFR-1D-Q12": {
                 "fetch_pricers_func": self._usd_sofr_1d_q12,
                 "reference_key": "USD-SOFR-1D",
                 "max_tenor_from_timestamp_months": 360,
+                "n_meeting_turn_flies": 12,
+                "rl_irs_spec": "usd_irs_lt_2y",
             },
         }
 
@@ -133,16 +158,49 @@ class BARCHART_STIRF_CURVE:
         return pricers
 
     def build_curve(self, curve_name: str, timestamp: datetime.datetime, kwargs={}):
-        assert type(timestamp) == datetime.datetime, "timestamp must be am actually timestamp with defined hour, minute"
-        assert timestamp.tzinfo is not None and timestamp.tzinfo.utcoffset(timestamp) is not None, "timestamp must be timezone aware"
+        if type(timestamp) == str and timestamp.lower() == "live":
+            timestamp = datetime.datetime.now(tz=pytz.timezone("America/New_York"))
+        else:
+            assert type(timestamp) == datetime.datetime, "timestamp must be am actually timestamp with defined hour, minute"
+            assert timestamp.tzinfo is not None and timestamp.tzinfo.utcoffset(timestamp) is not None, "timestamp must be timezone aware"
+            assert timestamp.astimezone(pytz.utc) < datetime.datetime.now(tz=pytz.utc), "in the future"
+
         assert curve_name in self._STIRF_CURVE_CONFIGS, f"{curve_name} not defined in configs"
 
         pricers: Dict[str, List[RLSTIRFuturePricer]] = self._STIRF_CURVE_CONFIGS[curve_name]["fetch_pricers_func"](timestamp=timestamp, kwargs=kwargs)
-
-        return _build_stirf_nodes(
+        nodes = _build_stirf_nodes(
             timestamp=timestamp,
             pricers=pricers,
             central_bank_dates=_CENTRAL_BANK_DATES,
             reference_key=self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"],
             max_tenor_from_timestamp_months=self._STIRF_CURVE_CONFIGS[curve_name]["max_tenor_from_timestamp_months"],
         )
+        nodes = dict(sorted(nodes.items()))
+
+        rl_curve = rl.Curve(
+            nodes=nodes,
+            id=self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"],
+            convention=RATESLIB_CURVE_DEFINITIONS[self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"]]["DayCounter"],
+            calendar=RATESLIB_CURVE_DEFINITIONS[self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"]]["Calendar"],
+            modifier=RATESLIB_CURVE_DEFINITIONS[self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"]]["BusinessConvention"],
+        )
+
+        rl_meeting_turn_flies = build_rl_stirf_turn_flies(
+            turn_nodes=list(islice(nodes.keys(), self._STIRF_CURVE_CONFIGS[curve_name]["n_meeting_turn_flies"])),
+            spec=self._STIRF_CURVE_CONFIGS[curve_name]["rl_irs_spec"],
+            curve_id=self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"],
+            one_step=True,
+        )
+
+        rl_stirf_weights = [1] * len(pricers)
+        rl_meeting_turn_flies_weights = [1e-8] * len(rl_meeting_turn_flies)
+
+        rl_solver = rl.Solver(
+            curves=[rl_curve],
+            instruments=[p[0].build_pricable() for p in pricers.values()] + [v for _, v in sorted(rl_meeting_turn_flies.items(), key=lambda kv: kv[0])],
+            s=[p[0]._rate for p in pricers.values()] + [0] * len(rl_meeting_turn_flies),
+            id=curve_name,
+            weights=rl_stirf_weights + rl_meeting_turn_flies_weights,
+        )
+
+        return rl_curve, rl_solver

@@ -80,7 +80,6 @@ RATESLIB_CURVE_DEFINITIONS: Dict[str, Dict[str, str]] = {
         "SettlementDays": 2,
         "SDR_UPIs": ["QZFF9TXNNM7X", "QZ7HZS5V2LQS"],
     },
-
     "CAD-CORRA": {
         "UseCase": "Fixed_Float_OIS",
         "SingleorMultiCurrency": "Single Currency",
@@ -98,7 +97,6 @@ RATESLIB_CURVE_DEFINITIONS: Dict[str, Dict[str, str]] = {
         "SettlementDays": 2,
         "SDR_UPIs": [],
     },
-
     "EUR-ESTR": {
         "UseCase": "Fixed_Float_OIS",
         "SingleorMultiCurrency": "Single Currency",
@@ -116,7 +114,6 @@ RATESLIB_CURVE_DEFINITIONS: Dict[str, Dict[str, str]] = {
         "SettlementDays": 2,
         "SDR_UPIs": [],
     },
-
     "JPY-TONAR": {
         "UseCase": "Fixed_Float_OIS",
         "SingleorMultiCurrency": "Single Currency",
@@ -134,8 +131,4 @@ RATESLIB_CURVE_DEFINITIONS: Dict[str, Dict[str, str]] = {
         "SettlementDays": 2,
         "SDR_UPIs": [],
     },
-    
 }
-
-for k in RATESLIB_CURVE_DEFINITIONS.keys():
-    assert k in CURVE_DEFINITIONS, f"key {k} in 'RATESLIB_CURVE_DEFINITIONS' must exist in global 'CURVE_DEFINITIONS'"

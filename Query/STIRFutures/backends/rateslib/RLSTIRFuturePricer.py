@@ -238,6 +238,7 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
                 spec=spec,
                 price=p,
                 contracts=1,
+                curves=self._curve
             )
 
             pv01_per_contract = abs(one_contract.pv01)
@@ -269,4 +270,5 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
             spec=spec,
             price=p,
             contracts=int(c),
+            curves=self._curve
         )
