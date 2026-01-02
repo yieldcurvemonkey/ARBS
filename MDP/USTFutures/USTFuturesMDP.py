@@ -384,7 +384,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         curve_id = request.get("curve_id", "USD-SOFR-1D")
         currency = request.get("currency", "USD")
         contract_coupon = request.get("contract_coupon", 6)
-        usts_mdp = request.get("usts_mdp")
+        usts_mdp_source = request.get("usts_mdp_source")
 
         if not symbols:
             raise ValueError("Request must include 'symbols' or 'tickers'.")
@@ -425,7 +425,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                         basket_data = self.get_delivery_basket(
                             as_of=ts_dt.date(),
                             symbol=sym,
-                            usts_mdp=usts_mdp,
+                            usts_mdp_source=usts_mdp_source,
                             source=basket_source,
                         )
                     out[sym] = self._build_pricer(
@@ -477,7 +477,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                         basket_data = self.get_delivery_basket(
                             as_of=ts_dt.date(),
                             symbol=sym,
-                            usts_mdp=usts_mdp,
+                            usts_mdp_source=usts_mdp_source,
                             source=basket_source,
                         )
                     out[sym] = self._build_pricer(
@@ -519,7 +519,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         *,
         as_of: datetime.date,
         symbol: str,
-        usts_mdp: Optional[FixedRateBondsMDP] = None,
+        usts_mdp_source: Optional[str] = "USTS_FEDINVEST_WSJ_LIVE-RL",
         source: str = "RL_CME_TCF",
         ignore_cache: Optional[bool] = False,
     ) -> Dict[str, Any]:
@@ -530,8 +530,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         from pandas.tseries.offsets import BMonthBegin, BMonthEnd
         from MDP.FixedRateBonds.reference_data_cache.cme_tcf import read_cme_tcf_with_headers
 
-        if usts_mdp is None:
-            usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
+        usts_mdp = FixedRateBondsMDP(source=usts_mdp_source)
 
         # cache only the *reference* basket definition (cusips/cfs/delivery window/etc),
         # NOT the live cash pricers (they depend on usts_mdp + timestamp).

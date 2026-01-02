@@ -126,17 +126,7 @@ def classify_sofr_swap_trade(
 
 def flag_invoice_swaps(
     package_df: pd.DataFrame,
-    *,
-    effective_col: str = "effective_date",
-    expiration_col: str = "expiration_date",
     execution_col: str = "execution_timestamp",
-    product_col: str = "product_type",
-    product_values: tuple[str, ...] = ("OIS_SWAP",),
-    currency_col: str = "notional_currency",
-    require_usd: bool = True,
-    usd_value: str = "USD",
-    package_col: str = "package_type",
-    only_tag_outrights: bool = True,
     show_tqdm: bool = True,
 ) -> pd.DataFrame:
     if package_df.empty:
@@ -149,22 +139,28 @@ def flag_invoice_swaps(
 
     as_of = exec_dates.dt.date.value_counts().index[0]
 
-    from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
     from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
     from definitions.USTFutures import front_month
 
-
-    usts_mdp = FixedRateBondsMDP(source="USTS_WEBULL_WSJ_LIVE-RL")
-    # usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
     ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
     roots = sorted({spec["root"] for spec in _CME_INVOICE_SWAP_TICKERS.values()})
     invoice_specs = []
     iterator = tqdm(roots, desc="FETCHING DELIVERY BASKETS...") if show_tqdm else roots
     for root in iterator:
         contract = front_month(as_of, root)
-        basket = ustf_mdp.get_delivery_basket(as_of=as_of, symbol=contract, usts_mdp=usts_mdp)
+
+        try:
+            basket = ustf_mdp.get_delivery_basket(as_of=as_of, symbol=contract, usts_mdp_source="USTS_FEDINVEST_WSJ_LIVE-RL")
+        except:
+            basket = ustf_mdp.get_delivery_basket(as_of=as_of, symbol=contract, usts_mdp_source="USTS_TRADINGVIEW_LIVE-RL")
+
         delivery_start, delivery_end = basket["delivery"]
-        pricer = ustf_mdp.get_pricer(request={"symbols": [contract], "timestamp": as_of})[contract]
+
+        try:
+            pricer = ustf_mdp.get_pricer(request={"symbols": [contract], "timestamp": as_of, "usts_mdp_source": "USTS_FEDINVEST_WSJ_LIVE-RL"})[contract]
+        except:
+            pricer = ustf_mdp.get_pricer(request={"symbols": [contract], "timestamp": as_of, "usts_mdp_source": "USTS_TRADINGVIEW_LIVE-RL"})[contract]
+
         for indicator in "ABCDEF":
             ticker = _INDICATOR_TO_TICKER.get(root, {}).get(indicator)
             if not ticker:
@@ -299,5 +295,6 @@ class USD_SOFR_SwapProduct(USDProductBase):
 
         package_df = merge_package_legs_to_one_row(package_df)
         package_df["risk"] = package_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))
+        package_df["risk"] = (package_df["risk"] / 2500).round().mul(2500)
 
         return package_df
