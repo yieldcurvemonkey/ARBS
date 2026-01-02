@@ -255,20 +255,6 @@ class USD_SOFR_SwapProduct(USDProductBase):
         detect_invoice=True,
         **kwargs: Any,
     ):
-        cache_dir = Path(cache_path) / "classification_cache" / "usd_sofr_swaps"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        start_ts = pd.to_datetime(start).strftime("%Y%m%dT%H%M%S")
-        end_ts = pd.to_datetime(end).strftime("%Y%m%dT%H%M%S")
-        curve_source = str(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).replace("/", "_")
-        cache_flags = f"curve{int(detect_curve)}_fly{int(detect_fly)}_mms{int(detect_mms)}_invoice{int(detect_invoice)}"
-        cache_fp = cache_dir / f"{start_ts}_{end_ts}_{curve_source}_{cache_flags}.parquet"
-
-        if cache_fp.exists():
-            try:
-                return pd.read_parquet(cache_fp, engine="pyarrow")
-            except Exception:
-                cache_fp.unlink(missing_ok=True)
-
         sdr = SDRDataBuilder(cache_path=cache_path, show_tqdm=True)
         raw_sdr_trades_df = sdr.grab_sdr_trades(
             start_timestamp=start,
@@ -278,43 +264,88 @@ class USD_SOFR_SwapProduct(USDProductBase):
             filter_func=new_sofr_swap_trades,
         )
 
-        as_of_date = pd.to_datetime(raw_sdr_trades_df["Execution Timestamp"]).dt.date.value_counts().index[0]
-        curve = IRSwapsMDP(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).get_pricer(request=dict(curve_name="USD-SOFR-1D", timestamp=as_of_date))
+        if raw_sdr_trades_df.empty:
+            return raw_sdr_trades_df
 
-        classifications = [
-            self.classify_trade(row, trade_id=row.get(TRADE_ID), curve=curve)
-            for _, row in tqdm(raw_sdr_trades_df.iterrows(), total=raw_sdr_trades_df.shape[0], desc="Classifying Trades")
-        ]
-        classifications_df = classifications_to_dataframe(classifications)
+        exec_dates = pd.to_datetime(raw_sdr_trades_df["Execution Timestamp"], errors="coerce").dt.date
+        raw_sdr_trades_df = raw_sdr_trades_df.assign(_execution_date=exec_dates)
+        curve_source = str(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).replace("/", "_")
+        cache_flags = f"curve{int(detect_curve)}_fly{int(detect_fly)}_mms{int(detect_mms)}_invoice{int(detect_invoice)}"
+        cache_base = Path(cache_path) / "classification_cache" / "usd_sofr_swaps" / curve_source / cache_flags
+        cache_base.mkdir(parents=True, exist_ok=True)
 
-        package_df = classifications_df.merge(
-            raw_sdr_trades_df[
-                [
-                    TRADE_ID,
-                    "UPI Underlier Name",
-                    "Platform identifier",
-                    "Cleared",
-                ]
-            ],
-            on=TRADE_ID,
-            how="left",
-        )
-        package_df = package_df.drop(columns=[TRADE_ID])
+        cached_frames = []
+        missing_dates = []
+        for exec_date, count in raw_sdr_trades_df["_execution_date"].value_counts().items():
+            if pd.isna(exec_date):
+                continue
+            date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
+            cache_fp = date_dir / f"{count}.parquet"
+            if cache_fp.exists():
+                try:
+                    cached_frames.append(pd.read_parquet(cache_fp, engine="pyarrow"))
+                    continue
+                except Exception:
+                    cache_fp.unlink(missing_ok=True)
+            missing_dates.append(exec_date)
 
-        if detect_fly:
-            package_df = detect_fly_trades_df(package_df)
-        if detect_curve:
-            package_df = detect_curve_trades_df(package_df)
-        if detect_mms:
-            package_df = detect_mms_trades_df(package_df)
-        if detect_invoice:
-            package_df = flag_invoice_swaps(package_df)
+        if not missing_dates:
+            if cached_frames:
+                return pd.concat(cached_frames, ignore_index=True)
+            return pd.DataFrame()
 
-        package_df = merge_package_legs_to_one_row(package_df)
-        package_df["risk"] = package_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))
-        package_df["risk"] = (package_df["risk"] / 2500).round().mul(2500)
+        built_frames = []
+        for exec_date in missing_dates:
+            day_df = raw_sdr_trades_df[raw_sdr_trades_df["_execution_date"] == exec_date]
+            curve = IRSwapsMDP(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).get_pricer(
+                request=dict(curve_name="USD-SOFR-1D", timestamp=exec_date)
+            )
 
-        table = pa.Table.from_pandas(package_df, preserve_index=False)
-        pq.write_table(table, cache_fp, compression="zstd")
+            classifications = [
+                self.classify_trade(row, trade_id=row.get(TRADE_ID), curve=curve)
+                for _, row in tqdm(day_df.iterrows(), total=day_df.shape[0], desc=f"Classifying Trades {exec_date}")
+            ]
+            classifications_df = classifications_to_dataframe(classifications)
 
-        return package_df
+            package_df = classifications_df.merge(
+                day_df[
+                    [
+                        TRADE_ID,
+                        "UPI Underlier Name",
+                        "Platform identifier",
+                        "Cleared",
+                    ]
+                ],
+                on=TRADE_ID,
+                how="left",
+            )
+            package_df = package_df.drop(columns=[TRADE_ID])
+
+            if detect_fly:
+                package_df = detect_fly_trades_df(package_df)
+            if detect_curve:
+                package_df = detect_curve_trades_df(package_df)
+            if detect_mms:
+                package_df = detect_mms_trades_df(package_df)
+            if detect_invoice:
+                package_df = flag_invoice_swaps(package_df)
+
+            package_df = merge_package_legs_to_one_row(package_df)
+            package_df["risk"] = package_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))
+            package_df["risk"] = (package_df["risk"] / 2500).round().mul(2500)
+
+            count = len(day_df)
+            date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
+            date_dir.mkdir(parents=True, exist_ok=True)
+            cache_fp = date_dir / f"{count}.parquet"
+            tmp_fp = cache_fp.with_suffix(".parquet.tmp")
+            table = pa.Table.from_pandas(package_df, preserve_index=False)
+            pq.write_table(table, tmp_fp, compression="zstd")
+            tmp_fp.replace(cache_fp)
+
+            built_frames.append(package_df)
+
+        all_frames = [*cached_frames, *built_frames]
+        if not all_frames:
+            return pd.DataFrame()
+        return pd.concat(all_frames, ignore_index=True)
