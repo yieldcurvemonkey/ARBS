@@ -84,7 +84,7 @@ class FixingsFetcher(BaseFetcher):
         )
 
         self.fred_api_key = fred_api_key
-        if self.fred_api_key is not None: 
+        if self.fred_api_key is not None:
             self._fred_fetcher = FredFetcher(
                 fred_api_key=fred_api_key,
                 global_timeout=global_timeout,
@@ -98,6 +98,8 @@ class FixingsFetcher(BaseFetcher):
             "USD-SOFR-1D_FRED": functools.partial(self._fetch_fred_series, series_id="SOFR"),
             "USD-FEDFUNDS": self._effr_nyfrb,
             "USD-FEDFUNDS_FRED": functools.partial(self._fetch_fred_series, series_id="EFFR"),
+            "USD-OIS": self._effr_nyfrb,
+            "USD-OIS_FRED": functools.partial(self._fetch_fred_series, series_id="EFFR"),
             "CAD-CORRA": self._corra_boc,
             "GBP-SONIA": functools.partial(self._fetch_fred_series, series_id="IUDSOIA"),
             "EUR-ESTR": functools.partial(self._fetch_fred_series, series_id="ECBESTRVOLWGTTRMDMNRT"),
@@ -108,6 +110,10 @@ class FixingsFetcher(BaseFetcher):
         }
 
     def get_fixings(self, curve: str, use_fred: Optional[bool] = False) -> Dict[datetime, float]:
+        # hard code alias
+        if "USD-OIS" in curve:
+            curve = "USD-OIS"
+
         if use_fred:
             curve = f"{curve}_FRED"
         if curve not in self._func_map:

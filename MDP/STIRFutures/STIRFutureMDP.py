@@ -38,10 +38,10 @@ def _as_datetime(ts: DateLike) -> datetime.datetime:
             return pytz.timezone("America/New_York").localize(ts)
         return ts
     
-    # NY close 3pm
+    # NY close 5pm
     if type(ts) == datetime.date:
         # return datetime.datetime(ts.year, ts.month, ts.day)
-        return pytz.timezone("America/New_York").localize(datetime.datetime.combine(ts, datetime.time(hour=15, minute=00)))
+        return pytz.timezone("America/New_York").localize(datetime.datetime.combine(ts, datetime.time(hour=17, minute=00)))
     raise TypeError("timestamp must be date, datetime, or 'live'")
 
 

@@ -59,12 +59,21 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
     ) -> Optional[_IRSwapGenericCurve]:
         from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
         from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
-
-        assert not QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"].isHoliday(
-            datetime_to_ql_date(
-                timestamp if type(timestamp) == datetime.datetime or type(timestamp) == datetime.date or hasattr(timestamp, "date") else datetime.date.today()
-            )
-        ), f"{timestamp} is a holiday in the {QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"]}!"
+        
+        try:
+            assert not QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"].isHoliday(
+                datetime_to_ql_date(
+                    timestamp if type(timestamp) == datetime.datetime or type(timestamp) == datetime.date or hasattr(timestamp, "date") else datetime.date.today()
+                )
+            ), f"{timestamp} is a holiday in the {QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"]}!"
+        except:
+            if "USD" in curve_name:
+                curve_name_check = "USD-OIS"
+                assert not QUANTLIB_CURVE_DEFINITIONS[curve_name_check]["Calendar"].isHoliday(
+                    datetime_to_ql_date(
+                        timestamp if type(timestamp) == datetime.datetime or type(timestamp) == datetime.date or hasattr(timestamp, "date") else datetime.date.today()
+                    )
+                ), f"{timestamp} is a holiday in the {QUANTLIB_CURVE_DEFINITIONS[curve_name_check]["Calendar"]}!"
 
         if self.source.upper() in ["CME_NY_EOD_LIVE-QL_BASIC", "CME_NY_EOD_LIVE_QL_BASIC"]:
             import QuantLib as ql

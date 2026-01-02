@@ -28,8 +28,8 @@ def rl_usd_sofr_stir_builder(
     n_plus_fomc_years: int,
     live_side: Literal["bid", "mid", "ask"] = "mid",
     use_globex: Optional[bool] = False,
-    schwab_app_key: Optional[str] = None,
-    schwab_app_secret: Optional[str] = None,
+    schwab_app_key: Optional[str] = "zm3GYiQREbtrpBHACURcNzFJIObUq2aX",
+    schwab_app_secret: Optional[str] = "SznUHXvKPZUnmxG9",
 ) -> RLCurveSTIR:
     import warnings
 
@@ -176,8 +176,8 @@ def rl_usd_ois_stir_builder(
     n_plus_fomc_years: int,
     live_side: Literal["bid", "mid", "ask"] = "mid",
     use_globex: Optional[bool] = False,
-    schwab_app_key: Optional[str] = None,
-    schwab_app_secret: Optional[str] = None,
+    schwab_app_key: Optional[str] = "zm3GYiQREbtrpBHACURcNzFJIObUq2aX",
+    schwab_app_secret: Optional[str] = "SznUHXvKPZUnmxG9",
 ) -> Tuple[datetime.datetime, rl.Curve]:
     import warnings
 
@@ -308,7 +308,8 @@ def rl_usd_ois_stir_builder(
         else:
             rl_stirf_serff_skew_s.append(_safe_fixed_rate(f))
             rl_stirf_serff_skew_w.append(1)
-
+    
+    print(dict(zip(fomc_curve_nodes, [1] * len(fomc_curve_nodes))))
     rl_ois_curve = rl.Curve(
         nodes=dict(zip(fomc_curve_nodes, [1] * len(fomc_curve_nodes))),
         id=curve_id,

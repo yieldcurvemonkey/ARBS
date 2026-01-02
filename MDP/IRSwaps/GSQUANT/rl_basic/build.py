@@ -63,6 +63,7 @@ GSQUANT_CURVE_MAP = {
                 "USD Swap SOFR 1y ATM 0b to 30y LCH Cleared",
             ],
             "extrapolation": datetime.timedelta(days=365 * 20),
+            "reference_key": "USD-SOFR-1D",
         }
     },
     "USD-OIS": {
@@ -117,8 +118,48 @@ GSQUANT_CURVE_MAP = {
                 "USD Swap OIS 1y ATM 0b to 30y LCH Cleared",
             ],
             "extrapolation": datetime.timedelta(days=365 * 20),
+            "reference_key": "USD-OIS",
         }
-    }, 
+    },
+    "USD-OIS-STIR-LCH": {
+        "rl_basic": {
+            "base_tenors": [
+                "USD Swap OIS ATM frb1 to frb2 LCH Cleared",
+                "USD Swap OIS ATM frb2 to frb3 LCH Cleared",
+                "USD Swap OIS ATM frb3 to frb4 LCH Cleared",
+                "USD Swap OIS ATM frb4 to frb5 LCH Cleared",
+                "USD Swap OIS ATM frb5 to frb6 LCH Cleared",
+                "USD Swap OIS ATM frb6 to frb7 LCH Cleared",
+                
+                "USD Swap OIS 3m ATM imm1 to 3m LCH Cleared",
+                "USD Swap OIS 3m ATM imm2 to 3m LCH Cleared",
+                "USD Swap OIS 3m ATM imm3 to 3m LCH Cleared",
+                "USD Swap OIS 3m ATM imm4 to 3m LCH Cleared",
+
+                "USD Swap OIS 6m ATM imm1 to 6m LCH Cleared",
+                "USD Swap OIS 6m ATM imm2 to 6m LCH Cleared",
+                "USD Swap OIS 6m ATM imm3 to 6m LCH Cleared",
+                "USD Swap OIS 6m ATM imm4 to 6m LCH Cleared",
+                
+                # "USD Swap OIS 1y ATM 0b to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM 1y to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM 2y to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM 3y to 1y LCH Cleared",
+            ],
+            "knots": [
+                # "USD Swap OIS 6m ATM imm2 to 6m LCH Cleared",
+                "USD Swap OIS 6m ATM imm3 to 6m LCH Cleared",
+                "USD Swap OIS 6m ATM imm4 to 6m LCH Cleared",
+                
+                # "USD Swap OIS 1y ATM 0b to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM 1y to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM 2y to 1y LCH Cleared",
+                "USD Swap OIS 1y ATM 3y to 1y LCH Cleared",
+            ],
+            "extrapolation": datetime.timedelta(days=360 * 1.25),
+            "reference_key": "USD-OIS-STIR"
+        }
+    },  
     "EUR-ESTR": {
         "rl_basic": {
             "base_tenors": [
@@ -155,6 +196,7 @@ GSQUANT_CURVE_MAP = {
                 "EUR Swap EuroSTR 1y ATM 0b to 50y LCH Cleared",
             ],
             "extrapolation": datetime.timedelta(days=30),
+            "reference_key": "EUR-ESTR"
         }
     },
     "JPY-TONAR": {
@@ -184,6 +226,7 @@ GSQUANT_CURVE_MAP = {
                 "JPY Swap JPY-TONA-OIS-COMPOUND 1y ATM 0b to 30y LCH Cleared",
             ],
             "extrapolation": datetime.timedelta(days=365 * 10),
+            "reference_key": "JPY-TONAR"
         }
     }
 }
@@ -191,7 +234,7 @@ GSQUANT_CURVE_MAP = {
 
 
 def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
-    assert curve in RATESLIB_CURVE_DEFINITIONS, f"{curve} not defined in 'RATESLIB_CURVE_DEFINITIONS'"
+    assert GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"] in RATESLIB_CURVE_DEFINITIONS, f"{curve} not defined in 'RATESLIB_CURVE_DEFINITIONS'"
 
     if curve == "USD-FEDFUNDS":
         curve = "USD-OIS"
@@ -219,7 +262,7 @@ def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
             termination=row["terminationDate"],
             fixed_rate=row["rate"],
             curves=curve_id,
-            spec=RATESLIB_CURVE_DEFINITIONS[curve]["ReferenceRate"],
+            spec=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["ReferenceRate"],
         )
 
     df["instruments"] = df.apply(make_swap, axis=1)
@@ -228,40 +271,47 @@ def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
     nodes.update(dict(zip(df["terminationDate"], [1.0] * len(df))))
     nodes = dict(sorted(nodes.items()))
 
-    knots = GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"].copy()[1:-1]
-    knots = [df.loc[i]["terminationDate"] for i in knots]
-
-    extrapolated = df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][-1]]["terminationDate"] + GSQUANT_CURVE_MAP[curve]["rl_basic"]["extrapolation"]
-
-    rl_curve = rl.Curve(
-        nodes=nodes,
-        id=curve_id,
-        convention=RATESLIB_CURVE_DEFINITIONS[curve]["DayCounter"],
-        calendar=RATESLIB_CURVE_DEFINITIONS[curve]["Calendar"],
-        modifier=RATESLIB_CURVE_DEFINITIONS[curve]["BusinessConvention"],
-        interpolation="log_linear",
-        # fmt: off
-        t=[
-            df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
-            df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
-            df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
-            df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
-        ]
-        + knots
-        + [
-            extrapolated, extrapolated, extrapolated, extrapolated
-        ],
-        # fmt: on
-        endpoints=("natural", "natural"),
-    )
+    if "extrapolation" in GSQUANT_CURVE_MAP[curve]["rl_basic"] and GSQUANT_CURVE_MAP[curve]["rl_basic"]["extrapolation"]:
+        knots = [df.loc[i]["terminationDate"] for i in GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"].copy()[1:-1]]
+        extrapolated = df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][-2]]["terminationDate"] + GSQUANT_CURVE_MAP[curve]["rl_basic"]["extrapolation"]
+        rl_curve = rl.Curve(
+            nodes=nodes,
+            id=curve_id,
+            convention=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["DayCounter"],
+            calendar=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["Calendar"],
+            modifier=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["BusinessConvention"],
+            interpolation="log_linear",
+            # fmt: off
+            t=[
+                df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
+                df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
+                df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
+                df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
+            ]
+            + knots
+            + [
+                extrapolated, extrapolated, extrapolated, extrapolated
+            ],
+            # fmt: on
+            endpoints=("natural", "natural"),
+        )
+    else:
+        rl_curve = rl.Curve(
+            nodes=nodes,
+            id=curve_id,
+            convention=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["DayCounter"],
+            calendar=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["Calendar"],
+            modifier=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["BusinessConvention"],
+        )
 
     rl_solver = rl.Solver(
         curves=[rl_curve],
         instruments=df["instruments"],
         s=df["rate"],
         id=curve_id,
-        func_tol=1e-8,
-        conv_tol=1e-8,
+        func_tol=1e-9,
+        conv_tol=1e-9,
+        max_iter=100,
         weights=[1] * len(df["instruments"]),
     )
 

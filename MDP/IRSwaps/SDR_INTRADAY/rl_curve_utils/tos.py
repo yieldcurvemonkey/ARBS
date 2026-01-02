@@ -467,8 +467,8 @@ async def _fetch_one(
 async def _get_price_histories_async(
     symbols: Iterable[str],
     *,
-    app_key: Optional[str] = None,
-    app_secret: Optional[str] = None,
+    app_key: Optional[str] = "zm3GYiQREbtrpBHACURcNzFJIObUq2aX",
+    app_secret: Optional[str] = "SznUHXvKPZUnmxG9",
     period_type: str = "ytd",
     period: int = 1,
     frequency_type: str = "daily",
@@ -596,8 +596,8 @@ def get_price_history(
     start: datetime.datetime,
     end: datetime.datetime,
     *,
-    app_key: Optional[str] = None,
-    app_secret: Optional[str] = None,
+    app_key: Optional[str] = "zm3GYiQREbtrpBHACURcNzFJIObUq2aX",
+    app_secret: Optional[str] = "SznUHXvKPZUnmxG9",
     period_type: str = "ytd",  # one of: day, month, year, ytd
     period: int = 1,
     frequency_type: str = "daily",  # one of: minute, daily, weekly, monthly
@@ -699,8 +699,8 @@ def get_quotes(
     *,
     fields: Optional[Iterable[str] | str] = None,  # e.g. "all", "quote", "fundamental"
     indicative: Optional[bool] = None,  # True->indicative quotes
-    app_key: Optional[str] = None,
-    app_secret: Optional[str] = None,
+    app_key: Optional[str] = "zm3GYiQREbtrpBHACURcNzFJIObUq2aX",
+    app_secret: Optional[str] = "SznUHXvKPZUnmxG9",
     scope: str = "pystonk",
     session: Optional[requests.Session] = None,
 ) -> pd.DataFrame:

@@ -249,8 +249,6 @@ def get_fomc_meetings_list(as_of: Optional[Union[datetime.date, datetime.datetim
 
         curr_sch_fomc_meeting_dates = [
             rl.dt(as_of.year, as_of.month, as_of.day),
-            rl.dt(2025, 10, 29),
-            rl.dt(2025, 12, 10),
             rl.dt(2026, 1, 28),
             rl.dt(2026, 3, 18),
             rl.dt(2026, 4, 29),
