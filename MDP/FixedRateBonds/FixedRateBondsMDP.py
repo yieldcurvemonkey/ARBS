@@ -480,7 +480,6 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                     end=as_of_date,
                     val_to_return="close",
                 )
-                print(tv_df)
                 for original, cusip in alias_to_cusip_to_fetch.items():
                     series = tv_df[cusip].dropna()
                     if series.empty:

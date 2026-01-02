@@ -3,14 +3,28 @@ import logging
 import random
 import time
 import warnings
-import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from queue import Queue
 from typing import Dict, Iterable, Iterator, Optional, Sequence, Tuple
 
 import pandas as pd
+import QuantLib as ql
+import tqdm
 from tvDatafeed import Interval, TvDatafeed
+
+
+def _us_gov_bizday_index(start: datetime.date, end: datetime.date) -> pd.DatetimeIndex:
+    cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    d = start
+    out = []
+    one = datetime.timedelta(days=1)
+    while d <= end:
+        qd = ql.Date(d.day, d.month, d.year)
+        if cal.isBusinessDay(qd):
+            out.append(pd.Timestamp(d))  # midnight
+        d += one
+    return pd.DatetimeIndex(out)
 
 
 def fetch_cusip_prices_eod_timeseries(
@@ -33,9 +47,12 @@ def fetch_cusip_prices_eod_timeseries(
         if df is None or df.empty:
             return pd.Series(name=cusip, dtype="float64")
 
+        start = start - datetime.timedelta(days=3)
+        end = end + datetime.timedelta(days=3)
         ts = df.loc[(df.index.date >= start) & (df.index.date <= end), val_to_return].copy()
         ts.name = cusip
 
+        live_val = None
         if end == datetime.date.today():
             live = local_tv.get_hist(
                 symbol=cusip,
@@ -44,9 +61,19 @@ def fetch_cusip_prices_eod_timeseries(
                 n_bars=1,
             )
             if live is not None and not live.empty and val_to_return in live.columns:
-                live_s = live[val_to_return].copy()
-                live_s.name = cusip
-                ts = pd.concat([ts, live_s])
+                live_val = float(live[val_to_return].iloc[-1])
+
+        # --- forward-fill to QuantLib US Gov business days ---
+        ts.index = pd.to_datetime(ts.index).normalize()
+        ts = ts.groupby(level=0).last()  # de-dupe if needed
+
+        idx = _us_gov_bizday_index(start, end)
+        ts = ts.reindex(idx).ffill()
+        ts.name = cusip
+
+        # if you pulled a live point for today, pin it to today's business-day slot
+        if live_val is not None:
+            ts.loc[pd.Timestamp(end)] = live_val
 
         return ts
 
@@ -192,4 +219,4 @@ def fetch_cusip_prices_eod_timeseries_parallel(
     if not df.empty:
         df = df.sort_index()
 
-    return df
+    return df[(df.index.date >= start) & (df.index.date <= end)]
