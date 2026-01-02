@@ -8,9 +8,12 @@ reported to the DTCC SDR.
 from __future__ import annotations
 
 import datetime
+from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import QuantLib as ql
 from tqdm import tqdm
 
@@ -252,6 +255,20 @@ class USD_SOFR_SwapProduct(USDProductBase):
         detect_invoice=True,
         **kwargs: Any,
     ):
+        cache_dir = Path(cache_path) / "classification_cache" / "usd_sofr_swaps"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        start_ts = pd.to_datetime(start).strftime("%Y%m%dT%H%M%S")
+        end_ts = pd.to_datetime(end).strftime("%Y%m%dT%H%M%S")
+        curve_source = str(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).replace("/", "_")
+        cache_flags = f"curve{int(detect_curve)}_fly{int(detect_fly)}_mms{int(detect_mms)}_invoice{int(detect_invoice)}"
+        cache_fp = cache_dir / f"{start_ts}_{end_ts}_{curve_source}_{cache_flags}.parquet"
+
+        if cache_fp.exists():
+            try:
+                return pd.read_parquet(cache_fp, engine="pyarrow")
+            except Exception:
+                cache_fp.unlink(missing_ok=True)
+
         sdr = SDRDataBuilder(cache_path=cache_path, show_tqdm=True)
         raw_sdr_trades_df = sdr.grab_sdr_trades(
             start_timestamp=start,
@@ -296,5 +313,8 @@ class USD_SOFR_SwapProduct(USDProductBase):
         package_df = merge_package_legs_to_one_row(package_df)
         package_df["risk"] = package_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))
         package_df["risk"] = (package_df["risk"] / 2500).round().mul(2500)
+
+        table = pa.Table.from_pandas(package_df, preserve_index=False)
+        pq.write_table(table, cache_fp, compression="zstd")
 
         return package_df
