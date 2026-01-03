@@ -32,7 +32,10 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         if "ERIS_EOD_LIVE-RL_BASIC" in source.upper() or "ERIS_EOD_LIVE_RL_BASIC" in source.upper():
             from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
 
-            self._rl_curve_cache = _RLCurveCache(cache_name="ERIS_EOD_LIVE-RL_BASIC")
+        if "ERIS_EOD_LIVE-RL_BASIC-NOJUMPS" in source.upper() or "ERIS_EOD_LIVE-RL_BASIC-NOJUMPS" in source.upper():
+            from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
+
+            self._rl_curve_cache = _RLCurveCache(cache_name="ERIS_EOD_LIVE-RL_BASIC-NOJUMPS")
 
         if "GSQUANT-RL" in source.upper() or "GSQUANT_RL" in source.upper():
             from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
@@ -59,7 +62,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
     ) -> Optional[_IRSwapGenericCurve]:
         from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
         from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
-        
+
         try:
             assert not QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"].isHoliday(
                 datetime_to_ql_date(
@@ -71,7 +74,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 curve_name_check = "USD-OIS"
                 assert not QUANTLIB_CURVE_DEFINITIONS[curve_name_check]["Calendar"].isHoliday(
                     datetime_to_ql_date(
-                        timestamp if type(timestamp) == datetime.datetime or type(timestamp) == datetime.date or hasattr(timestamp, "date") else datetime.date.today()
+                        timestamp
+                        if type(timestamp) == datetime.datetime or type(timestamp) == datetime.date or hasattr(timestamp, "date")
+                        else datetime.date.today()
                     )
                 ), f"{timestamp} is a holiday in the {QUANTLIB_CURVE_DEFINITIONS[curve_name_check]["Calendar"]}!"
 
@@ -125,7 +130,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             if type(timestamp) == datetime.datetime or hasattr(timestamp, "date"):
                 timestamp = timestamp.date()
-            
+
             assert type(timestamp) == datetime.date or timestamp == "live", "CME_NY_EOD ONLY HAS EOD - 'timestamp' must be type 'datetime.date' or Literal['live']"
             assert curve_name in RATESLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."
 
@@ -157,7 +162,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
             from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
-            
+
             if type(timestamp) == datetime.datetime or hasattr(timestamp, "date"):
                 timestamp = timestamp.date()
 
@@ -205,6 +210,60 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             #         last_val = fixings_series.iloc[-1]
             #         fixings_series.loc[target_dt] = float(last_val)
             #         fixings_series = fixings_series.sort_index()
+
+            return RLIRSwapCurve(
+                rl_curve_id=curve_name,
+                rl_curve_handle=rl_curve_handle,
+                fixings=fixings_series * 100,
+                meta_data={"timestamp": ts, "id": curve_id},
+            )
+
+        elif self.source.upper() in ["ERIS_EOD_LIVE-RL_BASIC-NOJUMPS"]:
+            import rateslib as rl
+            from rateslib import from_json
+
+            from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
+            from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            if type(timestamp) == datetime.datetime or hasattr(timestamp, "date"):
+                timestamp = timestamp.date()
+
+            assert type(timestamp) == datetime.date or timestamp == "live", "CME_NY_EOD ONLY HAS EOD - 'timestamp' must be type 'datetime.date' or Literal['live']"
+            assert curve_name in RATESLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."
+
+            curve_id = f"{self.source.upper()}-{curve_name}-{timestamp}"
+
+            if timestamp == "live":
+                eff = ErisFuturesFetcher(**self.config)
+                rl_curve_handle, ts = eff.fetch_intraday_discount_curve(
+                    curve_id=curve_id, date=None, show_tqdm=True, return_intraday_timestamp=True, no_jumps_just_interp=True, **kwargs
+                )
+            else:
+                _, rl_json, ts = self._rl_curve_cache.get_eris_eod_live_rl_basic(
+                    curve_id=curve_id,
+                    as_of=timestamp,
+                    force_refresh=kwargs.get("force_refresh", False),
+                    no_jumps_just_interp=True,
+                    fetcher_kwargs={"show_tqdm": False},
+                )
+                rl_curve_handle = from_json(rl_json)
+
+            curve_def = RATESLIB_CURVE_DEFINITIONS[curve_name]
+            cal = curve_def.get("Calendar", None)
+            if cal is not None:
+                try:
+                    rl_curve_handle.calendar = cal
+                except Exception:
+                    rl_curve_handle = rl.Curve(
+                        nodes=dict(rl_curve_handle.nodes.nodes),
+                        calendar=cal,
+                        id=getattr(rl_curve_handle, "id", None),
+                    )
+
+            ref = datetime.date.today() if timestamp == "live" else timestamp
+            fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            fixings_series = fixings_series[fixings_series.index.date < ref]
 
             return RLIRSwapCurve(
                 rl_curve_id=curve_name,

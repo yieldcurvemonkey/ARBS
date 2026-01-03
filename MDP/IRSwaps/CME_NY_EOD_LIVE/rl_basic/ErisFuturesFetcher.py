@@ -391,6 +391,7 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
         return_intraday_timestamp: Optional[bool] = True,
         max_concurrent_tasks: int = 64,
         max_keepalive_connections: int = 5,
+        no_jumps_just_interp: Optional[bool] = False,
     ) -> Union[
         rl.Curve,
         Tuple[rl.Curve, datetime.datetime],
@@ -425,6 +426,16 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
             discount_curve_df = discount_curve_df.copy()
             discount_curve_df["Date"] = pd.to_datetime(discount_curve_df["Date"], errors="coerce")
             discount_curve_df["DiscountFactor"] = pd.to_numeric(discount_curve_df["DiscountFactor"], errors="coerce")
+
+            if no_jumps_just_interp:
+                return rl.Curve(
+                    nodes=dict(zip(discount_curve_df["Date"], discount_curve_df["DiscountFactor"])),
+                    id=f"{curve_id_prefix}_nojumps-{intraday_ts}",
+                    convention="act360",
+                    calendar="nyc",
+                    modifier="MF",
+                    interpolation="log_linear",
+                )
 
             fomc_curve_nodes = get_fomc_meetings_list(as_of=tday, n_plus_years=1)
             sfr_tickers = get_short_end_curve_tickers(as_of=tday, first_n_sr1=0, first_n_sr3=12, use_globex=False)

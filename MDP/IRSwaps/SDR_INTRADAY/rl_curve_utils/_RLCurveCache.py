@@ -205,6 +205,7 @@ class _RLCurveCache(ZODBCacheMixin):
         curve_id: str,
         as_of: Union[datetime.date, Literal["live"]],
         force_refresh: bool = False,
+        no_jumps_just_interp: bool = False,
         fetcher_kwargs: Optional[dict] = None,
     ) -> Tuple[str, str, Union[datetime.date, datetime.datetime]]:
         from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
@@ -225,6 +226,7 @@ class _RLCurveCache(ZODBCacheMixin):
         rl_curve, ts = eff.fetch_intraday_discount_curve(
             curve_id=curve_id,
             date=None if as_of == "live" else as_of,
+            no_jumps_just_interp=no_jumps_just_interp,
             **kwargs,
         )
         result_json = rl_curve.to_json()
