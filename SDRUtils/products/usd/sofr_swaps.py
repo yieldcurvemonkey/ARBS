@@ -150,12 +150,16 @@ def flag_invoice_swaps(
     invoice_specs = []
     iterator = tqdm(roots, desc="FETCHING DELIVERY BASKETS...") if show_tqdm else roots
     for root in iterator:
-        contract = front_month(as_of, root)
+        # contract = front_month(as_of, root)
+        contract = root 
 
         try:
             basket = ustf_mdp.get_delivery_basket(as_of=as_of, symbol=contract, usts_mdp_source="USTS_FEDINVEST_WSJ_LIVE-RL")
         except:
             basket = ustf_mdp.get_delivery_basket(as_of=as_of, symbol=contract, usts_mdp_source="USTS_TRADINGVIEW_LIVE-RL")
+
+        if contract == "US":
+            print(basket)
 
         delivery_start, delivery_end = basket["delivery"]
 
@@ -253,6 +257,7 @@ class USD_SOFR_SwapProduct(USDProductBase):
         detect_fly=True,
         detect_mms=True,
         detect_invoice=True,
+        ignore_cache: bool = False, 
         **kwargs: Any,
     ):
         sdr = SDRDataBuilder(cache_path=cache_path, show_tqdm=True)
@@ -281,7 +286,7 @@ class USD_SOFR_SwapProduct(USDProductBase):
                 continue
             date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
             cache_fp = date_dir / f"{count}.parquet"
-            if cache_fp.exists():
+            if cache_fp.exists() and (ignore_cache == False):
                 try:
                     cached_frames.append(pd.read_parquet(cache_fp, engine="pyarrow"))
                     continue

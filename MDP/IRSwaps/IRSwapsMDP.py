@@ -32,6 +32,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         if "ERIS_EOD_LIVE-RL_BASIC" in source.upper() or "ERIS_EOD_LIVE_RL_BASIC" in source.upper():
             from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
 
+            self._rl_curve_cache = _RLCurveCache(cache_name="ERIS_EOD_LIVE-RL_BASIC")
+
         if "ERIS_EOD_LIVE-RL_BASIC-NOJUMPS" in source.upper() or "ERIS_EOD_LIVE-RL_BASIC-NOJUMPS" in source.upper():
             from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
 
