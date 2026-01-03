@@ -22,6 +22,31 @@ def _flatten_pricers(pricers: Dict[str, List["RLSTIRFuturePricer"]]) -> List["RL
     return out
 
 
+def _sort_pricers_for_solver(
+    pricers: Dict[str, List["RLSTIRFuturePricer"]],
+) -> List["RLSTIRFuturePricer"]:
+    """
+    Deterministic ordering for solver:
+      1) by effective date
+      2) then by maturity date
+      3) then by rl_stirf_id (or symbol) as a stable tie-breaker
+    """
+    flat = _flatten_pricers(pricers)
+    return sorted(
+        flat,
+        key=lambda p: (
+            getattr(p, "_effective_date", None),
+            getattr(p, "_maturity_date", None),
+            getattr(p, "_rl_stirf_id", None) or getattr(p, "_meta_data", {}).get("symbol", ""),
+        ),
+    )
+
+
+def _sort_nodes(nodes: Dict) -> Dict:
+    # nodes keys are rateslib dt (datetime-like); dict insertion order matters
+    return dict(sorted(nodes.items(), key=lambda kv: kv[0]))
+
+
 def _as_node_ts(d: datetime.date, *, base_ts: pd.Timestamp) -> pd.Timestamp:
     """
     Create a timezone-aware pd.Timestamp for date `d` using the SAME time-of-day + tz as `base_ts`.
@@ -44,14 +69,6 @@ def _build_stirf_nodes(
     reference_key: str,
     max_tenor_from_timestamp_months: int,
 ) -> Dict[pd.Timestamp, float]:
-    """
-    Nodes rule (as per your comments):
-      1) nodes anchored at timestamp
-      2) nodes should be from _CENTRAL_BANK_DATES up to horizon
-         - if CB schedule extends beyond horizon, STOP at max CB date <= horizon
-      3) if CB schedule does NOT extend beyond horizon (i.e. all CB dates < horizon),
-         then append pricer maturity dates to extend nodes (up to horizon).
-    """
     assert isinstance(timestamp, datetime.datetime)
     assert timestamp.tzinfo is not None and timestamp.tzinfo.utcoffset(timestamp) is not None
 
@@ -125,16 +142,21 @@ class BARCHART_STIRF_CURVE:
         self.stirf_mdp = STIRFutureMDP(source="BARCHART_TOS_LIVE_STIRF-RL")
 
         self._STIRF_CURVE_CONFIGS = {
-            "USD-SOFR-1D-Q12": {
-                "fetch_pricers_func": self._usd_sofr_1d_q12,
+            "USD-SOFR-1D-Q8": {
+                "fetch_pricers_func": self._usd_sofr_1d_q8,
                 "reference_key": "USD-SOFR-1D",
-                "max_tenor_from_timestamp_months": 360,
-                "n_meeting_turn_flies": 12,
+                "max_tenor_from_timestamp_months": 24,
+                "rl_irs_spec": "usd_irs_lt_2y",
+            },
+            "USD-SOFR-1D-Q12x3": {
+                "fetch_pricers_func": self._usd_sofr_1d_q12x3,
+                "reference_key": "USD-SOFR-1D",
+                "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "usd_irs_lt_2y",
             },
         }
 
-    def _usd_sofr_1d_q12(self, timestamp: datetime.datetime, kwargs={}):
+    def _usd_sofr_1d_q8(self, timestamp: datetime.datetime, kwargs={}):
         pricers: Dict[str, List[RLSTIRFuturePricer]] = self.stirf_mdp.get_data(
             {
                 "symbols": [
@@ -157,6 +179,34 @@ class BARCHART_STIRF_CURVE:
         )
         return pricers
 
+    def _usd_sofr_1d_q12x3(self, timestamp: datetime.datetime, kwargs={}):
+        pricers: Dict[str, List[RLSTIRFuturePricer]] = self.stirf_mdp.get_data(
+            {
+                "symbols": [
+                    # "SERCM1",
+                    "SERCM2",
+                    "SERCM3",
+                    "SERCM4",
+
+                    "SFRCM1",
+                    "SFRCM2",
+                    "SFRCM3",
+                    "SFRCM4",
+                    "SFRCM5",
+                    "SFRCM6",
+                    "SFRCM7",
+                    "SFRCM8",
+                    # "SFRCM9",
+                    # "SFRCM10",
+                    # "SFRCM11",
+                    # "SFRCM12",
+                ],
+                "timestamp": timestamp,
+            }
+            | kwargs
+        )
+        return pricers
+
     def build_curve(self, curve_name: str, timestamp: datetime.datetime, kwargs={}):
         if type(timestamp) == str and timestamp.lower() == "live":
             timestamp = datetime.datetime.now(tz=pytz.timezone("America/New_York"))
@@ -168,39 +218,63 @@ class BARCHART_STIRF_CURVE:
         assert curve_name in self._STIRF_CURVE_CONFIGS, f"{curve_name} not defined in configs"
 
         pricers: Dict[str, List[RLSTIRFuturePricer]] = self._STIRF_CURVE_CONFIGS[curve_name]["fetch_pricers_func"](timestamp=timestamp, kwargs=kwargs)
+        cfg = self._STIRF_CURVE_CONFIGS[curve_name]
+
+        pricers: Dict[str, List[RLSTIRFuturePricer]] = cfg["fetch_pricers_func"](timestamp=timestamp, kwargs=kwargs)
+
         nodes = _build_stirf_nodes(
             timestamp=timestamp,
             pricers=pricers,
             central_bank_dates=_CENTRAL_BANK_DATES,
-            reference_key=self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"],
-            max_tenor_from_timestamp_months=self._STIRF_CURVE_CONFIGS[curve_name]["max_tenor_from_timestamp_months"],
+            reference_key=cfg["reference_key"],
+            max_tenor_from_timestamp_months=cfg["max_tenor_from_timestamp_months"],
         )
-        nodes = dict(sorted(nodes.items()))
+        nodes = _sort_nodes(nodes)
 
         rl_curve = rl.Curve(
             nodes=nodes,
-            id=self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"],
-            convention=RATESLIB_CURVE_DEFINITIONS[self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"]]["DayCounter"],
-            calendar=RATESLIB_CURVE_DEFINITIONS[self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"]]["Calendar"],
-            modifier=RATESLIB_CURVE_DEFINITIONS[self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"]]["BusinessConvention"],
+            id=cfg["reference_key"],
+            convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
+            calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
+            modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
+            interpolation="log_linear",
         )
 
-        rl_meeting_turn_flies = build_rl_stirf_turn_flies(
-            turn_nodes=list(islice(nodes.keys(), self._STIRF_CURVE_CONFIGS[curve_name]["n_meeting_turn_flies"])),
-            spec=self._STIRF_CURVE_CONFIGS[curve_name]["rl_irs_spec"],
-            curve_id=self._STIRF_CURVE_CONFIGS[curve_name]["reference_key"],
-            one_step=True,
-        )
+        sorted_pricers = _sort_pricers_for_solver(pricers)
+        instruments = [p.build_pricable() for p in sorted_pricers]
+        s = [p._rate for p in sorted_pricers]
+        weights = [1.0] * len(sorted_pricers)
 
-        rl_stirf_weights = [1] * len(pricers)
-        rl_meeting_turn_flies_weights = [1e-8] * len(rl_meeting_turn_flies)
+        def one_day_irs(eff_date):
+            return rl.IRS(
+                effective=eff_date,
+                termination="1b",
+                spec=cfg["rl_irs_spec"],
+                curves=cfg["reference_key"],
+            )
+
+        def butterfly(d0, d1, d2):
+            return rl.Spread(
+                rl.Spread(one_day_irs(d0), one_day_irs(d1)),
+                rl.Spread(one_day_irs(d1), one_day_irs(d2)),
+            )
+
+        meeting_dates = sorted(k for k in nodes.keys())
+        bflies = [butterfly(meeting_dates[i - 1], meeting_dates[i], meeting_dates[i + 1]) for i in range(1, len(meeting_dates) - 1)]
+        pseudo_targets = [0.0] * len(bflies)
+
+        instruments = instruments + bflies
+        s = s + pseudo_targets
+        weights = [1.0] * len(pricers) + [1e-8] * len(bflies)
 
         rl_solver = rl.Solver(
             curves=[rl_curve],
-            instruments=[p[0].build_pricable() for p in pricers.values()] + [v for _, v in sorted(rl_meeting_turn_flies.items(), key=lambda kv: kv[0])],
-            s=[p[0]._rate for p in pricers.values()] + [0] * len(rl_meeting_turn_flies),
+            instruments=instruments,
+            s=s,
             id=curve_name,
-            weights=rl_stirf_weights + rl_meeting_turn_flies_weights,
+            weights=weights,
+            func_tol=1e-5,
+            conv_tol=1e-5,
         )
 
         return rl_curve, rl_solver

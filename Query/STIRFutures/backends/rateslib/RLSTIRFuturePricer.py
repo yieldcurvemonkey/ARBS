@@ -217,6 +217,8 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
         is_ser: Optional[bool] = False,
         **kwargs,
     ) -> rl.STIRFuture:
+        if "SR1" in self._rl_stirf_id or "SER" in self._rl_stirf_id: 
+            is_ser = True
 
         eff = effective_date or self.effective_date()
         mat = maturity_date or self.maturity_date()

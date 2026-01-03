@@ -304,6 +304,8 @@ def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
             modifier=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["BusinessConvention"],
         )
 
+    print(df["rate"])
+
     rl_solver = rl.Solver(
         curves=[rl_curve],
         instruments=df["instruments"],
