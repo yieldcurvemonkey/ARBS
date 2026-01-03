@@ -413,6 +413,9 @@ def fetch_ust_refdata_treasurydirect(
     df = df[df["maturity_date"].dt.date >= as_of_date]
     df = df[df["auction_date"].dt.date <= as_of_date]
 
+    df["maturity_date"] = pd.to_datetime(df["maturity_date"], errors="coerce").dt.date
+    df["issue_date"] = pd.to_datetime(df["issue_date"], errors="coerce").dt.date
+
     df = df.sort_values(["cusip", "issue_date"]).drop_duplicates(subset=["cusip"], keep="first")
     df["rank"] = df.groupby("original_security_term")["auction_date"].rank(method="first", ascending=False).astype(int) - 1
 

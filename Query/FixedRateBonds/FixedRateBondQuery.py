@@ -139,7 +139,7 @@ class FixedRateBondQuery(BaseQuery):
 
                 return token
 
-            ref_df = update_reference_data(source="fiscaldata", force_refresh=False)
+            ref_df = update_reference_data(source="treasurydirect", force_refresh=False)
             ref_df = ref_df[(ref_df["issue_date"] <= as_of) & (ref_df["maturity_date"] >= as_of)].copy()
             if ref_df.empty:
                 raise KeyError(f"No UST reference data available for {as_of.isoformat()}")

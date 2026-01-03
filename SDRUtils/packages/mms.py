@@ -14,19 +14,9 @@ from SDRUtils.packages.base import PackageDetector
 
 def _load_ust_reference_data(
     *,
-    source: str = "fiscaldata",
+    source: str = "treasurydirect",
     force_refresh: bool = False,
 ) -> pd.DataFrame:
-    """
-    Load UST reference data from the specified source.
-
-    Args:
-        source: Data source (currently supports "fiscaldata")
-        force_refresh: Force refresh from source
-
-    Returns:
-        DataFrame with UST reference data
-    """
     from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
 
     ref = update_reference_data(source=source, force_refresh=force_refresh).copy()
@@ -129,7 +119,7 @@ def detect_mms_trades_df(
     require_usd: bool = True,
     usd_value: str = "USD",
     # UST reference
-    ust_ref_source: str = "fiscaldata",
+    ust_ref_source: str = "treasurydirect",
     ust_force_refresh: bool = False,
     # Tagging
     spreadover_package_type: str = "MATCHED_MATURITY",
@@ -282,7 +272,7 @@ def _match_swaps_to_ust_by_maturity(
     currency_col: str = "notional_currency",
     require_usd: bool = True,
     usd_value: str = "USD",
-    ust_ref_source: str = "fiscaldata",
+    ust_ref_source: str = "treasurydirect",
     ust_force_refresh: bool = False,
 ) -> pd.DataFrame:
     """
