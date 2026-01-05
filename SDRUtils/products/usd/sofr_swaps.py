@@ -8,6 +8,8 @@ reported to the DTCC SDR.
 from __future__ import annotations
 
 import datetime
+import re
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,6 +17,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import QuantLib as ql
+import requests
 from tqdm import tqdm
 
 import Query.IRSwaps.adapter  # noqa: F401
@@ -221,6 +224,20 @@ class USD_SOFR_SwapProduct(USDProductBase):
 
     name = "USD-SOFR-OIS"
     product_type = PRODUCT_TYPES.OIS_SWAP
+    _IMM_MONTH_CODES = {
+        "F": 1,
+        "G": 2,
+        "H": 3,
+        "J": 4,
+        "K": 5,
+        "M": 6,
+        "N": 7,
+        "Q": 8,
+        "U": 9,
+        "V": 10,
+        "X": 11,
+        "Z": 12,
+    }
 
     def classify_trade(self, row: pd.Series, trade_id: int, curve: _IRSwapGenericCurve) -> TradeClassification:
         """
@@ -239,6 +256,56 @@ class USD_SOFR_SwapProduct(USDProductBase):
             trade_id,
             curve,
         )
+
+    def detect_mac(
+        self,
+        effective_date: Optional[datetime.date | datetime.datetime | str] = None,
+        imm_code: Optional[str] = None,
+        timeout: int = 10,
+    ) -> pd.DataFrame:
+        """
+        Fetch CME MAC Standard reference data for the given effective date or IMM code.
+
+        Args:
+            effective_date: Effective date (datetime/date) or a string parseable as a date.
+            imm_code: IMM code like "U2026" (optional; used if effective_date is not set).
+            timeout: Request timeout in seconds.
+
+        Returns:
+            DataFrame containing the MAC reference CSV.
+        """
+        date_source = imm_code or effective_date
+        if date_source is None:
+            raise ValueError("detect_mac requires an effective_date or imm_code.")
+
+        year: int
+        month: int
+
+        if isinstance(date_source, str):
+            match = re.fullmatch(r"([FGHJKMNQUVXZ])(\d{2}|\d{4})", date_source.strip().upper())
+            if match:
+                month = self._IMM_MONTH_CODES[match.group(1)]
+                year_part = match.group(2)
+                year = int(year_part) if len(year_part) == 4 else 2000 + int(year_part)
+            else:
+                parsed = pd.to_datetime(date_source, errors="raise")
+                year = int(parsed.year)
+                month = int(parsed.month)
+        elif isinstance(date_source, (datetime.date, datetime.datetime)):
+            year = int(date_source.year)
+            month = int(date_source.month)
+        else:
+            parsed = pd.to_datetime(date_source, errors="raise")
+            year = int(parsed.year)
+            month = int(parsed.month)
+
+        url = f"https://www.cmegroup.com/trading/interest-rates/files/sifma-mac-coupons-cusips-{year:04d}-{month:02d}.csv"
+        response = requests.get(url, timeout=timeout)
+        response.raise_for_status()
+
+        df = pd.read_csv(BytesIO(response.content))
+        df.columns = [col.strip() for col in df.columns]
+        return df
 
     def classify_product_type(self, row: pd.Series) -> str:
         """Infer product type from SDR row."""
