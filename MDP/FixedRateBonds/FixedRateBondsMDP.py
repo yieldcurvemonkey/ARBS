@@ -1158,8 +1158,8 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                         idx = wide.index
                         pos = idx.get_indexer([t_3pm], method="nearest")[0]
                         nearest_ts = idx[pos]
-                        if abs(nearest_ts - t_3pm) > pd.Timedelta("30min"):
-                            raise ValueError("No intraday snapshot within 30min of 3pm ET")
+                        if abs(nearest_ts - t_3pm) > pd.Timedelta("120min"):
+                            raise ValueError("No intraday snapshot within 120min of 3pm ET")
 
                         for original, cusip in alias_to_cusip.items():
                             try:

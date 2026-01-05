@@ -288,7 +288,7 @@ class IRSwapQuery(BaseQuery):
 
         # TODO add value_kwargs
 
-        return re.sub(r"\s\s+", " ", to_return)
+        return re.sub(r"\s\s+", " ", to_return).replace("REC 0.0k/bp", "").replace("PAID 0.0k/bp", "")
 
     def eval_expression(self, cube_name: Optional[str] = None, ignore_risk_weight: bool = False) -> str:
         col = self.col_name(cube_name=cube_name)
@@ -333,9 +333,12 @@ class IRSwapQuery(BaseQuery):
             else:
                 from definitions.USTFutures import front_month
 
-                invoice_spec = _invoice_swap_spec(txt)
-                root = invoice_spec["root"]
-                contract = front_month(as_of, root)
+                try:
+                    invoice_spec = _invoice_swap_spec(txt)
+                    root = invoice_spec["root"]
+                    contract = front_month(as_of, root)
+                except:
+                    invoice_spec = None
 
             skw = dict(getattr(q, "structure_kwargs", {}) or {})
 

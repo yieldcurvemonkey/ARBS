@@ -7,6 +7,24 @@ import QuantLib as ql
 
 from SDRUtils.core.utils import _to_float
 
+"""
+TODO
+
+additional fields to TradeClassification
+
+'Cleared': 'I',
+'Platform identifier': 'BGCD',
+'Prime brokerage transaction indicator': False,
+'Block trade election indicator': False,
+'Large notional off-facility swap election indicator': None,
+
+'Package indicator': False,
+'Package transaction price': '',
+
+'Unique Product Identifier': 'QZF08M5TR8H3',
+'UPI Underlier Name': 'JPY-TONA-OIS Compound'
+
+"""
 
 @dataclass
 class TradeClassification:

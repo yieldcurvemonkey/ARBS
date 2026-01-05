@@ -8,6 +8,8 @@ reported to the DTCC SDR.
 from __future__ import annotations
 
 import datetime
+import re
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,6 +17,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import QuantLib as ql
+import requests
 from tqdm import tqdm
 
 import Query.IRSwaps.adapter  # noqa: F401
@@ -32,6 +35,7 @@ from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.packages import detect_curve_trades_df, detect_fly_trades_df, detect_mms_trades_df, merge_package_legs_to_one_row
 from SDRUtils.products.usd.base import USDProductBase
 from SDRUtils.products.usd.filters import new_sofr_swap_trades
+from SDRUtils.products.usd._cme_mac import fetch_mac_ref_data
 
 
 def classify_sofr_swap_trade(
@@ -96,8 +100,8 @@ def classify_sofr_swap_trade(
     trade_label = build_trade_label(forward_label, tenor_label, is_forward)
 
     # Extract notional and rate
-    notional = parse_notional(row.get("Notional amount-Leg 1", 0))
-    fixed_rate = row.get("Fixed rate-Leg 1")
+    notional = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
+    fixed_rate = row.get("Fixed rate-Leg 1", row.get("Fixed rate-Leg 2"))
     strike = row.get("Strike Price")
 
     # Calculate PV01 if curve provided
@@ -127,7 +131,7 @@ def classify_sofr_swap_trade(
     )
 
 
-def flag_invoice_swaps(
+def detect_invoice_swaps(
     package_df: pd.DataFrame,
     execution_col: str = "execution_timestamp",
     show_tqdm: bool = True,
@@ -211,6 +215,70 @@ def flag_invoice_swaps(
     return df_merged.drop(columns=existing_cols_to_drop, errors="ignore")
 
 
+def detect_mac_swaps(package_df: pd.DataFrame) -> pd.DataFrame:
+    out = package_df.copy()
+
+    out["_mac_eff"] = pd.to_datetime(out.get("effective_date"), errors="coerce").dt.normalize()
+    out["_mac_exp"] = pd.to_datetime(out.get("expiration_date"), errors="coerce").dt.normalize()
+    out["_fixed_rate"] = pd.to_numeric(out.get("fixed_rate"), errors="coerce")
+    out["_fixed_rate_bp"] = (out["_fixed_rate"] * 10000).round().astype("Int64")
+
+    mac_lookup_frames: list[pd.DataFrame] = []
+    mac_cache: dict[tuple[int, int], pd.DataFrame] = {}
+
+    for eff in out["_mac_eff"].dropna().unique():
+        key = (int(eff.year), int(eff.month))
+        if key not in mac_cache:
+            try:
+                mac_cache[key] = fetch_mac_ref_data(effective_date=eff)
+            except Exception:
+                mac_cache[key] = pd.DataFrame()
+        if not mac_cache[key].empty:
+            mac_lookup_frames.append(mac_cache[key])
+
+    if not mac_lookup_frames:
+        out["is_mac"] = False
+        return out.drop(columns=["_mac_eff", "_mac_exp", "_fixed_rate", "_fixed_rate_bp"], errors="ignore")
+
+    mac_lookup = pd.concat(mac_lookup_frames, ignore_index=True)
+    mac_lookup = mac_lookup.dropna(subset=["imm_start_date", "expiration_date", "coupon"]).copy()
+
+    mac_lookup["_mac_eff"] = pd.to_datetime(mac_lookup["imm_start_date"], errors="coerce").dt.normalize()
+    mac_lookup["_mac_exp"] = pd.to_datetime(mac_lookup["expiration_date"], errors="coerce").dt.normalize()
+    mac_lookup["_mac_coupon"] = pd.to_numeric(mac_lookup["coupon"], errors="coerce") / 100.0
+    mac_lookup["_mac_coupon_bp"] = (mac_lookup["_mac_coupon"] * 10000).round().astype("Int64")
+
+    mac_lookup = mac_lookup[["_mac_eff", "_mac_exp", "_mac_coupon_bp"]].drop_duplicates()
+
+    tol_days = 5
+    exp_lists = mac_lookup.groupby(["_mac_eff", "_mac_coupon_bp"])["_mac_exp"].apply(lambda s: tuple(pd.Series(s).dropna().unique())).to_dict()
+
+    def _row_is_mac(eff, exp, coupon_bp) -> bool:
+        if pd.isna(eff) or pd.isna(exp) or pd.isna(coupon_bp):
+            return False
+        exps = exp_lists.get((eff, int(coupon_bp)))
+        if not exps:
+            return False
+        exp = pd.Timestamp(exp)
+        for mexp in exps:
+            if abs((exp - pd.Timestamp(mexp)).days) <= tol_days:
+                return True
+        return False
+
+    # out["is_mac"] = [_row_is_mac(eff, exp, cpn) for eff, exp, cpn in zip(out["_mac_eff"].values, out["_mac_exp"].values, out["_fixed_rate_bp"].values)]
+    out["is_mac"] = [
+        _row_is_mac(eff, exp, cpn)
+        for eff, exp, cpn in tqdm(
+            zip(out["_mac_eff"].values, out["_mac_exp"].values, out["_fixed_rate_bp"].values),
+            total=len(out),
+            desc="Detecting MAC swaps",
+            leave=False,
+        )
+    ]
+
+    return out.drop(columns=["_mac_eff", "_mac_exp", "_fixed_rate", "_fixed_rate_bp"], errors="ignore")
+
+
 class USD_SOFR_SwapProduct(USDProductBase):
     """
     USD SOFR OIS Swap product implementation.
@@ -253,6 +321,7 @@ class USD_SOFR_SwapProduct(USDProductBase):
         detect_fly=True,
         detect_mms=True,
         detect_invoice=True,
+        detect_mac=True,
         ignore_cache: bool = False,
         **kwargs: Any,
     ):
@@ -312,11 +381,20 @@ class USD_SOFR_SwapProduct(USDProductBase):
 
             package_df = classifications_df.merge(
                 day_df[
+                    # this is temp
                     [
                         TRADE_ID,
                         "UPI Underlier Name",
+                        "Unique Product Identifier",
                         "Platform identifier",
                         "Cleared",
+                        "Prime brokerage transaction indicator",
+                        "Block trade election indicator",
+                        "Large notional off-facility swap election indicator",
+                        "Other payment type",  # non-par
+                        "Other payment amount",
+                        "Package indicator",
+                        "Package transaction spread",
                     ]
                 ],
                 on=TRADE_ID,
@@ -331,7 +409,9 @@ class USD_SOFR_SwapProduct(USDProductBase):
             if detect_mms:
                 package_df = detect_mms_trades_df(package_df)
             if detect_invoice:
-                package_df = flag_invoice_swaps(package_df)
+                package_df = detect_invoice_swaps(package_df)
+            if detect_mac:
+                package_df = detect_mac_swaps(package_df)
 
             count = len(day_df)
             date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
@@ -351,6 +431,6 @@ class USD_SOFR_SwapProduct(USDProductBase):
         final_df = pd.concat(all_frames, ignore_index=True)
         final_df = merge_package_legs_to_one_row(final_df)
         final_df["risk"] = final_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))
-        final_df["risk"] = (final_df["risk"] / 2500).round().mul(2500)
+        final_df["risk"] = (final_df["risk"] / 100).round().mul(100)
 
         return final_df

@@ -126,7 +126,7 @@ class ZODBCacheMixin:
             handle = cls._DB_REGISTRY.get(path)
             if handle is None:
                 storage = cls._open_filestorage(path)
-                db = DB(storage, pool_size=32, large_record_size=1<<30)
+                db = DB(storage, pool_size=32, large_record_size=1 << 30)
                 handle = _DBHandle(db, storage)
                 cls._DB_REGISTRY[path] = handle
             handle.incref()
@@ -204,6 +204,9 @@ class ZODBCacheMixin:
         transaction.commit()
 
     def close_zodb(self: T) -> None:
+        with contextlib.suppress(Exception):
+            transaction.abort()
+
         for attr, (conn, handle) in list(self._z_conns.items()):
             handle.release_conn(conn)
 

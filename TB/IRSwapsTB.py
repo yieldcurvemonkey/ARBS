@@ -76,7 +76,7 @@ def _build_row_for_query(
 ) -> Tuple[DateLike, str, float]:
     q_eff = resolve_query(q, timestamp=ref_dt, pricer_or_curve=curve)
     col_name = q_eff.col_name(curve.id())
-
+    col_name = q.col_name() if ("CT" in q.tenor or "9128" in q.tenor) else col_name
     pkg, rw = q_eff.resolve_package(pricer_or_curve=curve, is_for_timeseries=True)
     val_map = q_eff.build_value_map(pricer_or_curve=curve, package=pkg, risk_weights=rw)
     value = val_map.apply(value=q_eff.value, **q.value_kwargs)
