@@ -305,7 +305,51 @@ class USD_SOFR_SwapProduct(USDProductBase):
 
         df = pd.read_csv(BytesIO(response.content))
         df.columns = [col.strip() for col in df.columns]
+        df = df.rename(
+            columns={
+                "IMM Start Date": "imm_start_date",
+                "Tenor Designation": "tenor_designation",
+                "Coupon": "coupon",
+            }
+        )
+        df["imm_start_date"] = pd.to_datetime(df.get("imm_start_date"), errors="coerce").dt.normalize()
+        df["coupon"] = pd.to_numeric(df.get("coupon"), errors="coerce")
+        df["tenor_years"] = df["tenor_designation"].apply(self._parse_mac_tenor_years)
+        df["expiration_date"] = df.apply(self._calculate_mac_expiration_date, axis=1)
         return df
+
+    @staticmethod
+    def _parse_mac_tenor_years(tenor: Any) -> Optional[float]:
+        if tenor is None or pd.isna(tenor):
+            return None
+        match = re.search(r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>YR|YEAR|YEARS|MO|MON|MONTHS)", str(tenor).strip().upper())
+        if not match:
+            return None
+        value = float(match.group("value"))
+        unit = match.group("unit")
+        if unit.startswith("Y"):
+            return value
+        if unit.startswith("M"):
+            return value / 12.0
+        return None
+
+    @staticmethod
+    def _calculate_mac_expiration_date(row: pd.Series) -> Optional[pd.Timestamp]:
+        start_date = row.get("imm_start_date")
+        tenor = row.get("tenor_designation")
+        if pd.isna(start_date) or tenor is None or pd.isna(tenor):
+            return None
+        tenor_str = str(tenor).strip().upper()
+        match = re.search(r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>YR|YEAR|YEARS|MO|MON|MONTHS)", tenor_str)
+        if not match:
+            return None
+        value = float(match.group("value"))
+        unit = match.group("unit")
+        if unit.startswith("Y"):
+            return pd.to_datetime(start_date) + pd.DateOffset(years=int(value))
+        if unit.startswith("M"):
+            return pd.to_datetime(start_date) + pd.DateOffset(months=int(value))
+        return None
 
     def classify_product_type(self, row: pd.Series) -> str:
         """Infer product type from SDR row."""
@@ -390,6 +434,43 @@ class USD_SOFR_SwapProduct(USDProductBase):
                 how="left",
             )
             package_df = package_df.drop(columns=[TRADE_ID])
+
+            mac_lookup_frames = []
+            mac_cache: dict[tuple[int, int], pd.DataFrame] = {}
+            effective_dates = pd.to_datetime(package_df.get("effective_date"), errors="coerce").dt.normalize()
+            for eff_date in effective_dates.dropna().unique():
+                key = (eff_date.year, eff_date.month)
+                if key not in mac_cache:
+                    try:
+                        mac_cache[key] = self.detect_mac(effective_date=eff_date)
+                    except Exception:
+                        mac_cache[key] = pd.DataFrame()
+                if not mac_cache[key].empty:
+                    mac_lookup_frames.append(mac_cache[key])
+
+            if mac_lookup_frames:
+                mac_lookup = pd.concat(mac_lookup_frames, ignore_index=True)
+                mac_lookup = mac_lookup.dropna(subset=["imm_start_date", "expiration_date", "coupon"])
+                mac_lookup = mac_lookup.rename(columns={"imm_start_date": "mac_effective_date", "coupon": "mac_coupon"})
+                mac_lookup["mac_effective_date"] = pd.to_datetime(mac_lookup["mac_effective_date"], errors="coerce").dt.normalize()
+                mac_lookup["expiration_date"] = pd.to_datetime(mac_lookup["expiration_date"], errors="coerce").dt.normalize()
+                mac_lookup = mac_lookup[["mac_effective_date", "expiration_date", "mac_coupon"]].drop_duplicates()
+                package_df["effective_date"] = pd.to_datetime(package_df["effective_date"], errors="coerce").dt.normalize()
+                package_df["expiration_date"] = pd.to_datetime(package_df["expiration_date"], errors="coerce").dt.normalize()
+                package_df = package_df.merge(
+                    mac_lookup,
+                    left_on=["effective_date", "expiration_date"],
+                    right_on=["mac_effective_date", "expiration_date"],
+                    how="left",
+                )
+                package_df["is_mac"] = package_df["mac_coupon"].notna() & package_df["fixed_rate"].notna()
+                package_df.loc[package_df["is_mac"], "is_mac"] = (
+                    (package_df.loc[package_df["is_mac"], "fixed_rate"].astype(float)
+                    - package_df.loc[package_df["is_mac"], "mac_coupon"].astype(float)).abs()
+                    <= 1e-8
+                )
+            else:
+                package_df["is_mac"] = False
 
             if detect_fly:
                 package_df = detect_fly_trades_df(package_df)
