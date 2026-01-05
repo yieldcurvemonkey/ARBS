@@ -279,6 +279,32 @@ def detect_mac_swaps(package_df: pd.DataFrame) -> pd.DataFrame:
     return out.drop(columns=["_mac_eff", "_mac_exp", "_fixed_rate", "_fixed_rate_bp"], errors="ignore")
 
 
+def detect_spreadovers(package_df: pd.DataFrame):
+    copy_df = package_df.copy()
+
+    broker_spreadover_mask = (
+        (copy_df["package_legs"].isna())
+        & (copy_df["package_indicator"] == True)
+        & (copy_df["package_transaction_spread"].notna())
+        # & (copy_df["package_transaction_spread"] != "")
+        & (copy_df["forward_label"] == "spot")
+    )
+    copy_df["is_spreadover"] = False
+    copy_df.loc[broker_spreadover_mask, "is_spreadover"] = True
+
+    asset_swap_mask = (
+        (copy_df["package_legs"].isna())
+        & (copy_df["package_indicator"] == True)
+        & (copy_df["package_transaction_spread"].notna())
+        & (copy_df["other_payment_type"] == "UFRO")
+        & (copy_df["forward_label"] == "spot")
+    )
+    copy_df["is_asset_swap"] = False
+    copy_df.loc[asset_swap_mask, "is_asset_swap"] = True
+
+    return copy_df
+
+
 class USD_SOFR_SwapProduct(USDProductBase):
     """
     USD SOFR OIS Swap product implementation.
@@ -322,6 +348,7 @@ class USD_SOFR_SwapProduct(USDProductBase):
         detect_mms=True,
         detect_invoice=True,
         detect_mac=True,
+        detect_spreadover=True,
         ignore_cache: bool = False,
         **kwargs: Any,
     ):
@@ -400,7 +427,9 @@ class USD_SOFR_SwapProduct(USDProductBase):
                 on=TRADE_ID,
                 how="left",
             )
+
             package_df = package_df.drop(columns=[TRADE_ID])
+            package_df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", col.lower()).lower().replace(" ", "_") for col in package_df.columns]
 
             if detect_fly:
                 package_df = detect_fly_trades_df(package_df)
@@ -412,6 +441,8 @@ class USD_SOFR_SwapProduct(USDProductBase):
                 package_df = detect_invoice_swaps(package_df)
             if detect_mac:
                 package_df = detect_mac_swaps(package_df)
+            if detect_spreadover:
+                package_df = detect_spreadovers(package_df)
 
             count = len(day_df)
             date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
