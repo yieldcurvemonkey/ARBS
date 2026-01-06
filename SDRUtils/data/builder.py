@@ -986,19 +986,41 @@ class SDRDataBuilder:
         end_timestamp: datetime,
         agency: Literal["CFTC", "SEC"],
         asset_class: Literal["COMMODITIES", "CREDITS", "EQUITIES", "FOREX", "RATES"],
+        *,
+        ignore_cache: bool = False,
     ) -> pd.DataFrame:
         start_timestamp = pd.to_datetime(start_timestamp, utc=True)
         end_timestamp = pd.to_datetime(end_timestamp, utc=True)
 
         cache_fp = self._parquet_cache_dir / "intraday.csv"
-        cache_df = _read_intraday_cache(cache_fp)
         ts_col = "Event timestamp"
+
+        # If ignoring cache, fetch exactly requested window and do not read/write intraday.csv
+        if ignore_cache:
+            new_df = self.dtcc_sdr_fetcher.fetch_intraday_reports(
+                agency=agency,
+                asset_class=asset_class,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp,
+                max_concurrent_tasks=self._max_concurrent_tasks,
+                max_keepalive_connections=self._max_keepalive_connections,
+                max_extraction_workers=self._max_extraction_workers,
+                use_pyarrow=True,
+                show_tqdm=self._show_tqdm,
+                ts_col=ts_col,
+            )
+            if new_df.empty:
+                return pd.DataFrame()
+            new_df = new_df.sort_values(by=ts_col)
+            return new_df[(new_df[ts_col] >= start_timestamp) & (new_df[ts_col] <= end_timestamp)].reset_index(drop=True)
+
+        # --- existing cache-aware path ---
+        cache_df = _read_intraday_cache(cache_fp)
 
         if not cache_df.empty and self._intraday_cache_ttl is not None:
             try:
                 last_cached = pd.to_datetime(cache_df[ts_col]).max()
             except Exception:
-                # If the column is missing or unparsable, nuke the cache
                 _clear_file(cache_fp)
                 cache_df = pd.DataFrame()
             else:
@@ -1011,7 +1033,6 @@ class SDRDataBuilder:
             fetch_from = start_timestamp
         else:
             last_cached = cache_df[ts_col].max()
-
             today_utc_midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
             if last_cached < today_utc_midnight:
@@ -1050,13 +1071,29 @@ class SDRDataBuilder:
         agency: Literal["CFTC", "SEC"],
         asset_class: Literal["COMMODITIES", "CREDITS", "EQUITIES", "FOREX", "RATES"],
         one_df: Optional[bool] = True,
+        *,
+        ignore_cache: bool = False,
     ):
-        all_days = list(pd.date_range(start=start_date, end=end_date, freq=CustomBusinessDay(calendar=USFederalHolidayCalendar())).date)
+        all_days = list(
+            pd.date_range(
+                start=start_date,
+                end=end_date,
+                freq=CustomBusinessDay(calendar=USFederalHolidayCalendar()),
+            ).date
+        )
+
         cached_days: Dict[date, pd.DataFrame] = {}
         to_fetch = all_days
 
-        cached_days = _load_daily_dict(all_days, self._parquet_cache_dir, agency=agency, asset_class=asset_class, show_tqdm=self._show_tqdm)
-        to_fetch = [d for d in all_days if d not in cached_days]
+        if not ignore_cache:
+            cached_days = _load_daily_dict(
+                all_days,
+                self._parquet_cache_dir,
+                agency=agency,
+                asset_class=asset_class,
+                show_tqdm=self._show_tqdm,
+            )
+            to_fetch = [d for d in all_days if d not in cached_days]
 
         fresh: Dict[date, pd.DataFrame] | pd.DataFrame = {}
         if to_fetch:
@@ -1072,20 +1109,18 @@ class SDRDataBuilder:
                 one_df=False,
                 show_tqdm=self._show_tqdm,
             )
-            _save_daily_dict(fresh, self._parquet_cache_dir, agency=agency, asset_class=asset_class)
+            # Only persist when using cache
+            if not ignore_cache:
+                _save_daily_dict(fresh, self._parquet_cache_dir, agency=agency, asset_class=asset_class)
 
-        merged = {**cached_days, **fresh}
+        merged = {**cached_days, **fresh} if not ignore_cache else (fresh if isinstance(fresh, dict) else {})
 
         if one_df:
-            # return pd.concat(merged.values(), copy=False)
-            # return _concat_dfs(list(merged.values()), use_polars=self._use_polars)
             return _concat_dfs(
                 merged.values(),
                 use_polars=True,
-                # show_tqdm=False,
                 show_tqdm=self._show_tqdm,
                 tqdm_desc="MERGING SLICES...",
-                # unique_subset=["report_slice", "Event timestamp"],
                 unique_subset=["Dissemination Identifier"],
                 sort_by="Event timestamp",
                 chunk_size=1000,
@@ -1102,8 +1137,8 @@ class SDRDataBuilder:
         *,
         ts_col: Literal["Event timestamp", "Execution Timestamp"] = "Event timestamp",
         filter_func: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = lambda df: df,
+        ignore_cache: bool = False,
     ) -> pd.DataFrame:
-        # TODO convert this to utc
         start_ts = pd.to_datetime(start_timestamp, utc=True)
         end_ts = pd.to_datetime(end_timestamp, utc=True)
 
@@ -1112,7 +1147,7 @@ class SDRDataBuilder:
         hist_start_date = start_ts.date()
         hist_end_date = min(end_ts.date(), today_utc - timedelta(days=1))
 
-        dfs = []
+        dfs: List[pd.DataFrame] = []
 
         if hist_start_date <= hist_end_date:
             hist_df = self.grab_historical_sdr_trades(
@@ -1121,6 +1156,7 @@ class SDRDataBuilder:
                 agency=agency,
                 asset_class=asset_class,
                 one_df=True,
+                ignore_cache=ignore_cache,
             )
             if not hist_df.empty:
                 mask = (hist_df[ts_col] >= start_ts) & (hist_df[ts_col] <= end_ts)
@@ -1133,21 +1169,19 @@ class SDRDataBuilder:
                 end_timestamp=end_ts,
                 agency=agency,
                 asset_class=asset_class,
+                ignore_cache=ignore_cache,
             )
-            dfs.append(intra_df)
+            if not intra_df.empty:
+                dfs.append(intra_df)
 
         if not dfs:
             return pd.DataFrame()
 
-        # out = pd.concat(dfs, ignore_index=True).sort_values(by=ts_col).reset_index(drop=True)
-        # out = _concat_dfs(dfs, sort_by=ts_col, use_polars=self._use_polars)
         out = _concat_dfs(
             dfs,
             use_polars=True,
-            # show_tqdm=self._show_tqdm,
             tqdm_desc="MERGING SLICES...",
             show_tqdm=True,
-            # unique_subset=["report_slice", "Event timestamp"],
             unique_subset=["Dissemination Identifier"],
             sort_by="Event timestamp",
             chunk_size=2500,

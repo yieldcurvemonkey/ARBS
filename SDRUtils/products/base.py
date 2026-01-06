@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+from tqdm import tqdm
 
 from SDRUtils.core.classification import TradeClassification
 from SDRUtils.core.graph_resolver import assign_synthetic_uti
@@ -35,9 +36,7 @@ class ProductModule(ABC):
     currency: Optional[str] = None
 
     @abstractmethod
-    def classify_trade(
-        self, row: pd.Series, trade_id: int, **kwargs: Any
-    ) -> TradeClassification:
+    def classify_trade(self, row: pd.Series, trade_id: int, **kwargs: Any) -> TradeClassification:
         """
         Classify a single SDR trade row.
 
@@ -120,7 +119,9 @@ class ProductModule(ABC):
         )
 
         classifications: List[TradeClassification] = []
-        for _, group in resolved.groupby(synthetic_col, dropna=False):
+        groups = resolved.groupby(synthetic_col, dropna=False)
+        # for _, group in resolved.groupby(synthetic_col, dropna=False):
+        for _, group in tqdm(groups, desc="Classifying Trades", unit="trade"):
             state, _ = replay_lifecycle(group, action_col=action_col, event_timestamp_col=event_timestamp_col)
             if state is None:
                 continue

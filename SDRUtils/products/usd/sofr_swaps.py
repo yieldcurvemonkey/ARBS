@@ -34,7 +34,7 @@ from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_to_l
 from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.packages import detect_curve_trades_df, detect_fly_trades_df, detect_mms_trades_df, merge_package_legs_to_one_row
 from SDRUtils.products.usd.base import USDProductBase
-from SDRUtils.products.usd.filters import new_sofr_swap_trades
+from SDRUtils.products.usd.filters import sofr_swap_trades
 from SDRUtils.products.usd._cme_mac import fetch_mac_ref_data
 
 
@@ -358,7 +358,8 @@ class USD_SOFR_SwapProduct(USDProductBase):
             end_timestamp=end,
             agency="CFTC",
             asset_class="RATES",
-            filter_func=new_sofr_swap_trades,
+            filter_func=sofr_swap_trades,
+            ignore_cache=ignore_cache,
         )
 
         if raw_sdr_trades_df.empty:
@@ -400,11 +401,20 @@ class USD_SOFR_SwapProduct(USDProductBase):
             day_df = raw_sdr_trades_df[raw_sdr_trades_df["_execution_date"] == exec_date]
             curve = IRSwapsMDP(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).get_pricer(request=dict(curve_name="USD-SOFR-1D", timestamp=exec_date))
 
-            classifications = [
-                self.classify_trade(row, trade_id=row.get(TRADE_ID), curve=curve)
-                for _, row in tqdm(day_df.iterrows(), total=day_df.shape[0], desc=f"Classifying Trades {exec_date}")
-            ]
+            # classifications = [
+            #     self.classify_trade(row, trade_id=row.get(TRADE_ID), curve=curve)
+            #     for _, row in tqdm(day_df.iterrows(), total=day_df.shape[0], desc=f"Classifying Trades {exec_date}")
+            # ]
+            classifications = self.classify_messages(
+                day_df,
+                curve=curve,
+            )
             classifications_df = classifications_to_dataframe(classifications)
+            if not classifications_df.empty:
+                classifications_df[TRADE_ID] = classifications_df[TRADE_ID].astype("string")
+                day_df = day_df.copy()
+                day_df[TRADE_ID] = day_df[TRADE_ID].astype("string")
+
 
             package_df = classifications_df.merge(
                 day_df[
