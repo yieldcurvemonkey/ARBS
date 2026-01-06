@@ -8,11 +8,13 @@ must inherit from. Products are organized by currency and product type.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
 from SDRUtils.core.classification import TradeClassification
+from SDRUtils.core.graph_resolver import assign_synthetic_uti
+from SDRUtils.core.lifecycle import replay_lifecycle
 
 
 class ProductModule(ABC):
@@ -80,6 +82,55 @@ class ProductModule(ABC):
             True if row can be classified, False otherwise
         """
         return True
+
+    def classify_messages(
+        self,
+        messages: pd.DataFrame,
+        *,
+        dissemination_col: str = "Dissemination Identifier",
+        original_col: str = "Original Dissemination Identifier",
+        synthetic_col: str = "Synthetic UTI",
+        action_col: str = "Action type",
+        event_timestamp_col: str = "Event timestamp",
+        **kwargs: Any,
+    ) -> List[TradeClassification]:
+        """
+        Classify a set of SDR messages by resolving lifecycle state.
+
+        Args:
+            messages: SDR message DataFrame containing lifecycle updates.
+            dissemination_col: Column with dissemination identifiers.
+            original_col: Column with original dissemination identifiers.
+            synthetic_col: Column name for resolved synthetic UTI.
+            action_col: Column name for action type.
+            event_timestamp_col: Column name for event timestamp.
+            **kwargs: Additional arguments passed to classify_trade.
+
+        Returns:
+            List of TradeClassification objects for active trades.
+        """
+        if messages.empty:
+            return []
+
+        resolved = assign_synthetic_uti(
+            messages,
+            dissemination_col=dissemination_col,
+            original_col=original_col,
+            synthetic_col=synthetic_col,
+        )
+
+        classifications: List[TradeClassification] = []
+        for _, group in resolved.groupby(synthetic_col, dropna=False):
+            state, _ = replay_lifecycle(group, action_col=action_col, event_timestamp_col=event_timestamp_col)
+            if state is None:
+                continue
+            row = pd.Series(state)
+            if not self.validate_row(row):
+                continue
+            trade_id = row.get(dissemination_col) or row.get(synthetic_col)
+            classifications.append(self.classify_trade(row, trade_id=trade_id, **kwargs))
+
+        return classifications
 
     def metadata(self) -> Dict[str, Any]:
         """

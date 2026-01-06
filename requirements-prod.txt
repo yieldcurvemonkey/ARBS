@@ -30,6 +30,7 @@ requests==2.32.4
 ujson==5.10.0
 tqdm==4.67.1
 scikit-learn==1.7.2
+networkx==3.4.2
 
 # Optional: Visualization (remove if not needed)
 matplotlib==3.10.5
@@ -44,4 +45,3 @@ nest-asyncio==1.6.0
 # supervisor==4.2.5  # For process management
 # prometheus-client==0.21.0  # For metrics
 # python-dotenv==1.0.0  # For .env files
-

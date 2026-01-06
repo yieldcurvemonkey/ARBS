@@ -42,6 +42,14 @@ from SDRUtils.core.parsing import (
     pv01_bucket,
 )
 
+# Graph resolution
+from SDRUtils.core.graph_resolver import (
+    assign_synthetic_uti,
+    build_synthetic_uti_mapping,
+)
+
+# Lifecycle state machine
+from SDRUtils.core.lifecycle import replay_lifecycle
 # Backward compatibility - re-export legacy names
 from SDRUtils.core.utils import (
     _USD_OIS_BDC,
@@ -77,6 +85,11 @@ __all__ = [
     "parse_notional",
     "to_float",
     "pv01_bucket",
+    # Graph resolution
+    "assign_synthetic_uti",
+    "build_synthetic_uti_mapping",
+    # Lifecycle
+    "replay_lifecycle",
     # Legacy
     "_USD_OIS_BDC",
     "_USD_OIS_CAL",

@@ -77,6 +77,13 @@ def datetime_today_utc():
     )
 
 
+_SDR_ID_COLUMNS = ("Dissemination Identifier", "Original Dissemination Identifier")
+
+
+def _build_id_dtype_map(columns: Iterable[str]) -> Dict[str, str]:
+    return {col: "string" for col in _SDR_ID_COLUMNS if col in columns}
+
+
 class DTCCFetcher(BaseFetcher):
     pddata_dtcc_base_url = "https://pddata.dtcc.com/ppd"
 
@@ -214,14 +221,19 @@ class DTCCFetcher(BaseFetcher):
             if extension == "excel":
                 df = pd.read_excel(buffer_io)
             else:  # csv
+                buffer_io.seek(0)
+                header = pd.read_csv(buffer_io, nrows=0)
+                dtype_map = _build_id_dtype_map(header.columns)
+                buffer_io.seek(0)
                 if use_pyarrow:
                     try:
-                        table = pacsv.read_csv(buffer_io)
+                        convert_options = pacsv.ConvertOptions(column_types={col: pa.string() for col in dtype_map})
+                        table = pacsv.read_csv(buffer_io, convert_options=convert_options)
                         df = table.to_pandas()
                     except ImportError:
-                        df = pd.read_csv(buffer_io, low_memory=False)
+                        df = pd.read_csv(buffer_io, low_memory=False, dtype=dtype_map)
                 else:
-                    df = pd.read_csv(buffer_io, low_memory=False)
+                    df = pd.read_csv(buffer_io, low_memory=False, dtype=dtype_map)
 
         key = file_name
         if convert_key_into_dt:
@@ -637,6 +649,8 @@ def _read_intraday_cache(fp: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
     try:
+        header = pd.read_csv(fp, nrows=0)
+        dtype_map = _build_id_dtype_map(header.columns)
         return pd.read_csv(
             fp,
             parse_dates=[
@@ -647,6 +661,7 @@ def _read_intraday_cache(fp: Path) -> pd.DataFrame:
             ],
             infer_datetime_format=True,
             low_memory=False,
+            dtype=dtype_map,
         )
     except Exception:
         _clear_file(fp)
