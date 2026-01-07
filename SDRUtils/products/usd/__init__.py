@@ -12,7 +12,7 @@ from SDRUtils.products.usd.sofr_swaps import (
     USD_SOFR_SwapProduct,
     classify_sofr_swap_trade,
 )
-from SDRUtils.products.usd.filters import (
+from SDRUtils.products._swaps.filters import (
     new_sofr_swap_trades,
     is_sofr_swap,
 )

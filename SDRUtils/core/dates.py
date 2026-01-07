@@ -14,7 +14,7 @@ import pandas as pd
 import QuantLib as ql
 import pytz
 
-from SDRUtils.config import USD_CONVENTIONS, CurrencyConventions, get_conventions
+from SDRUtils.config import USD_CONVENTIONS, CurrencyConventions 
 
 
 NY_tz = pytz.timezone("America/New_York")

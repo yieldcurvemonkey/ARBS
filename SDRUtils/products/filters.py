@@ -7,7 +7,7 @@ New code should import directly from the currency-specific modules
 """
 
 # Re-export USD filters for backward compatibility
-from SDRUtils.products.usd.filters import (
+from SDRUtils.products._swaps.filters import (
     new_sofr_swap_trades,
     is_sofr_swap,
     sofr_swaption_trades,

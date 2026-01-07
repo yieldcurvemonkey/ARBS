@@ -34,8 +34,8 @@ from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_to_l
 from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.packages import detect_curve_trades_df, detect_fly_trades_df, detect_mms_trades_df, merge_package_legs_to_one_row
 from SDRUtils.products.usd.base import USDProductBase
-from SDRUtils.products.usd.filters import sofr_swap_trades
-from SDRUtils.products.usd._cme_mac import fetch_mac_ref_data
+from SDRUtils.products._swaps.filters import sofr_swap_trades
+from SDRUtils.products._swaps._cme_mac import fetch_mac_ref_data
 
 
 def classify_sofr_swap_trade(

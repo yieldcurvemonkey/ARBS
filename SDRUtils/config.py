@@ -14,6 +14,7 @@ import QuantLib as ql
 
 TRADE_ID = "Dissemination Identifier"
 
+
 @dataclass(frozen=True)
 class CurrencyConventions:
     """Trading conventions for a specific currency."""
@@ -26,10 +27,57 @@ class CurrencyConventions:
 
     # Standard tenors for this currency
     standard_tenors: Tuple[str, ...] = (
-        "1D", "1W", "2W", "3W",
-        "1M", "2M", "3M", "4M", "5M", "6M", "7M", "8M", "9M", "10M", "11M",
-        "1Y", "2Y", "3Y", "4Y", "5Y", "6Y", "7Y", "8Y", "9Y", "10Y",
-        "12Y", "15Y", "20Y", "25Y", "30Y", "40Y", "50Y",
+        "1D",
+        "1W",
+        "2W",
+        "3W",
+        "1M",
+        "2M",
+        "3M",
+        "4M",
+        "5M",
+        "6M",
+        "7M",
+        "8M",
+        "9M",
+        "10M",
+        "11M",
+        "1Y",
+        "15M",
+        "18M",
+        "21M",
+        "22M",
+        "2Y",
+        "3Y",
+        "4Y",
+        "5Y",
+        "6Y",
+        "7Y",
+        "8Y",
+        "9Y",
+        "10Y",
+        "11Y",
+        "12Y",
+        "13Y",
+        "14Y",
+        "15Y",
+        "16Y",
+        "17Y",
+        "18Y",
+        "19Y",
+        "20Y",
+        "21Y",
+        "22Y",
+        "23Y",
+        "24Y",
+        "25Y",
+        "26Y",
+        "27Y",
+        "28Y",
+        "29Y",
+        "30Y",
+        "40Y",
+        "50Y",
     )
 
 
