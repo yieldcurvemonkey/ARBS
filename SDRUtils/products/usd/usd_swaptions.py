@@ -13,7 +13,8 @@ import pandas as pd
 import QuantLib as ql
 
 from SDRUtils.config import PRODUCT_TYPES
-from SDRUtils.core.classification import TradeClassification, classify_product_type
+from SDRUtils.core.classification import TradeClassification, classifications_to_dataframe, classify_product_type
+from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
 from SDRUtils.core.parsing import parse_notional
 from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_to_label
@@ -151,6 +152,35 @@ class USD_Swaptions(USDProductBase):
             estimated_pv01=0.0,
             package_type=self.package_type,
         )
+
+    def build_classification_dataframe(
+        self,
+        start: pd.Timestamp,
+        end: pd.Timestamp,
+        cache_path: str,
+        ignore_cache: bool = False,
+        **kwargs: Any,
+    ) -> pd.DataFrame:
+        """
+        Build a classification dataframe from SDR messages.
+
+        Uses ProductModule.classify_messages to resolve lifecycle events.
+        """
+        sdr = SDRDataBuilder(cache_path=cache_path, show_tqdm=True)
+        raw_sdr_trades_df = sdr.grab_sdr_trades(
+            start_timestamp=start,
+            end_timestamp=end,
+            agency="CFTC",
+            asset_class="RATES",
+            filter_func=self.detect,
+            ignore_cache=ignore_cache,
+        )
+
+        if raw_sdr_trades_df.empty:
+            return raw_sdr_trades_df
+
+        classifications = self.classify_messages(raw_sdr_trades_df, **kwargs)
+        return classifications_to_dataframe(classifications)
 
     def metadata(self) -> Dict[str, str]:
         return {
