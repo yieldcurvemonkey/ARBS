@@ -1,0 +1,440 @@
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Optional
+from dataclasses import dataclass
+from datetime import date, datetime
+from typing import Optional
+
+import pandas as pd
+import QuantLib as ql
+import pandas as pd
+
+
+# ----------------------------- normalization --------------------------------
+
+
+def _norm_upi(x: object) -> str:
+    return str(x).strip().strip("'").strip('"').upper()
+
+
+def _tenor(value: object, unit: object) -> Optional[str]:
+    if value is None or unit is None or pd.isna(value) or pd.isna(unit):
+        return None
+    s_unit = str(unit).strip().upper()
+    try:
+        v = float(str(value).strip())
+    except Exception:
+        return None
+
+    if abs(v - round(v)) < 1e-9:
+        sval = str(int(round(v)))
+    else:
+        sval = str(v).rstrip("0").rstrip(".")
+
+    if s_unit.startswith("DAY"):
+        suf = "D"
+    elif s_unit.startswith("WEEK"):
+        suf = "W"
+    elif s_unit.startswith("MNTH"):
+        suf = "M"
+    elif s_unit.startswith("MONTH"):
+        suf = "M"
+    elif s_unit.startswith("YEAR"):
+        suf = "Y"
+    else:
+        return None
+    return f"{sval}{suf}"
+
+
+def _clean_ref_rate(x: object) -> Optional[str]:
+    if x is None or pd.isna(x):
+        return None
+    return " ".join(str(x).strip().split())
+
+
+def _exercise_style_short(code: object) -> Optional[str]:
+    if code is None or pd.isna(code):
+        return None
+    c = str(code).strip().upper()
+    return {"EURO": "EURO", "BERM": "BERM", "AMER": "AMER"}.get(c, c)
+
+
+def _settlement_short(x: object) -> Optional[str]:
+    if x is None or pd.isna(x):
+        return None
+    s = str(x).strip().upper()
+    if s in {"PHYS", "PHYSICAL"}:
+        return "PHYS"
+    if s == "CASH":
+        return "CASH"
+    return s
+
+
+def _option_role_short(option_type: object) -> Optional[str]:
+    if option_type is None or pd.isna(option_type):
+        return None
+    t = str(option_type).strip().upper()
+    return {"CALL": "PAYER", "PUTO": "RECEIVER", "OPTL": "CHOOSER"}.get(t, t)
+
+
+def _title_ccy(x: object) -> Optional[str]:
+    if x is None or pd.isna(x):
+        return None
+    return str(x).strip().upper()
+
+
+def _vanilla_short(row: pd.Series) -> str:
+    """
+    Derive VANILLA/other using only CSV fields.
+    Preference order:
+      - DSB "OptionStyle"/"OptionType" style fields if present
+      - else infer from exercise style only (EURO/BERM/AMER) => treat as VANILLA by default
+    """
+    # Common DSB column names vary. We use your existing names if present; else degrade gracefully.
+    # If you have a specific field like swaption_Attributes_OptionStyle, add it here.
+    # For now, your sample outputs imply "Vanilla" most of the time.
+    return "VANILLA"
+
+
+def _underlying_compact(row: pd.Series) -> str:
+    rr = _clean_ref_rate(row.get("swap_Attributes_ReferenceRate"))
+    term = _tenor(
+        row.get("swap_Attributes_ReferenceRateTermValue"),
+        row.get("swap_Attributes_ReferenceRateTermUnit"),
+    )
+    sched = row.get("swap_Attributes_NotionalSchedule")
+    sched_s = None if sched is None or pd.isna(sched) else str(sched).strip().upper()
+    # swap delivery type is redundant vs swaption settlement in your desired compact format,
+    # so we intentionally do NOT include swap_Attributes_DeliveryType here.
+    parts = [p for p in [rr, term, sched_s] if p]
+    return " ".join(parts) if parts else "UNKNOWN_UNDERLYING"
+
+
+# ----------------------------- paths / loading ------------------------------
+
+
+def build_upi_path(product: str, base_dir: str | Path | None = None) -> Path:
+    base = Path(base_dir).resolve() if base_dir is not None else Path(__file__).resolve().parent
+    return base.parent.parent / "anna_dsb_upis" / product
+
+
+def _read_csv_safely(path: Path) -> pd.DataFrame:
+    return pd.read_csv(path, dtype=str)
+
+
+@lru_cache(maxsize=8)
+def _load_swaptions_df(base_dir: str | Path | None) -> pd.DataFrame:
+    df = _read_csv_safely(build_upi_path("Rates-Option-Swaption.csv", base_dir=base_dir))
+    df.columns = ["swaption_" + c for c in df.columns]
+    df["swaption_Identifier_UPI"] = df["swaption_Identifier_UPI"].map(_norm_upi)
+    df["swaption_Attributes_UnderlyingInstrumentUPI"] = df["swaption_Attributes_UnderlyingInstrumentUPI"].map(_norm_upi)
+    return df
+
+
+@lru_cache(maxsize=8)
+def _load_swaps_df(base_dir: str | Path | None) -> pd.DataFrame:
+    files = [
+        "Rates-Swap-Fixed_Float_OIS.csv",
+        "Rates-Swap-Fixed_Float.csv",
+        "Rates-Swap-Fixed_Float_Zero_Coupon.csv",
+        "Rates-Swap-Fixed_Fixed.csv",
+        "Rates-Swap-Basis.csv",
+        "Rates-Swap-Basis_OIS.csv",
+        "Rates-Swap-Cross_Currency_Fixed_Float.csv",
+        "Rates-Swap-Cross_Currency_Fixed_Float_NDS.csv",
+        "Rates-Swap-Cross_Currency_Basis.csv",
+        "Rates-Swap-Non_Standard.csv",
+        "Rates-Swap-Cross_Currency_Fixed_Fixed.csv",
+        "Rates-Swap-Cross_Currency_Zero_Coupon.csv",
+        "Rates-Swap-Inflation_Swap.csv",
+        "Rates-Swap-Inflation_Fixed_Float_YoY.csv",
+    ]
+
+    frames: list[pd.DataFrame] = []
+    for fn in files:
+        p = build_upi_path(fn, base_dir=base_dir)
+        if p.exists():
+            frames.append(_read_csv_safely(p))
+
+    if not frames:
+        return pd.DataFrame()
+
+    df = pd.concat(frames, ignore_index=True)
+    df.columns = ["swap_" + c for c in df.columns]
+    df["swap_Identifier_UPI"] = df["swap_Identifier_UPI"].map(_norm_upi)
+    return df
+
+
+@lru_cache(maxsize=8)
+def _build_upi_df(base_dir: str | Path | None = None) -> pd.DataFrame:
+    swaption_df = _load_swaptions_df(base_dir)
+    swap_df = _load_swaps_df(base_dir)
+
+    if swap_df.empty:
+        return swaption_df.copy()
+
+    return swaption_df.merge(
+        swap_df,
+        left_on="swaption_Attributes_UnderlyingInstrumentUPI",
+        right_on="swap_Identifier_UPI",
+        how="left",
+    )
+
+
+# ------------------------------ public API ----------------------------------
+
+
+def swaption_upi_description(
+    swaption_upi: str,
+    *,
+    base_dir: str | Path | None = None,
+) -> str:
+    """
+    Compact, non-redundant desk string.
+
+    Example:
+      "USD-SOFR-OIS Compound 1D Constant PAYER EURO VANILLA PHYS"
+    """
+    upi = _norm_upi(swaption_upi)
+    df = _build_upi_df(base_dir)
+    if df.empty:
+        return f"{upi}: reference data not available"
+
+    idx = getattr(df, "_upi_idx", None)
+    if idx is None:
+        df._upi_idx = {k: i for i, k in enumerate(df["swaption_Identifier_UPI"].astype(str))}
+        idx = df._upi_idx
+
+    i = idx.get(upi)
+    if i is None:
+        return f"{upi}: not found"
+
+    row = df.iloc[i]
+
+    # Core underlier description (already implies USD if the ref rate string is USD-*)
+    under = _underlying_compact(row)
+
+    # Currency only if not already embedded
+    ccy = _title_ccy(row.get("swaption_Attributes_NotionalCurrency"))
+    if ccy and not under.upper().startswith(f"{ccy}-"):
+        under = f"{ccy} {under}"
+
+    role = _option_role_short(row.get("swaption_Attributes_OptionType")) or "UNKNOWN"
+    ex = _exercise_style_short(row.get("swaption_Attributes_OptionExerciseStyle")) or "UNK"
+    style = _vanilla_short(row)  # currently defaults to VANILLA using only CSV fields
+    settle = _settlement_short(row.get("swaption_Derived_CFIDeliveryType")) or "UNK"
+
+    # Final compact string
+    return f"{under} {role} {ex} {style} {settle}"
+
+
+def _ql_calendar(ccy: str) -> ql.Calendar:
+    c = str(ccy).strip().upper()
+    if c == "USD":
+        return ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    if c == "EUR":
+        return ql.TARGET()
+    if c == "GBP":
+        return ql.UnitedKingdom(ql.UnitedKingdom.Exchange)
+    if c == "JPY":
+        return ql.Japan()
+    if c == "CHF":
+        return ql.Switzerland()
+    if c == "CAD":
+        return ql.Canada()
+    if c == "AUD":
+        return ql.Australia()
+    if c == "NZD":
+        return ql.NewZealand()
+    if c == "SEK":
+        return ql.Sweden()
+    if c == "NOK":
+        return ql.Norway()
+    if c == "DKK":
+        return ql.Denmark()
+    # fallback: no holidays/weekends only
+    return ql.WeekendsOnly()
+
+
+def _to_pydate(x: object) -> Optional[date]:
+    if x is None or pd.isna(x):
+        return None
+    if isinstance(x, date) and not isinstance(x, datetime):
+        return x
+    if isinstance(x, datetime):
+        return x.date()
+    # handles strings + pandas timestamps
+    # try:
+    return pd.to_datetime(x).date()
+    # except Exception:
+    #     return None
+
+
+def _to_qldate(d: date) -> ql.Date:
+    return ql.Date(d.day, d.month, d.year)
+
+
+# --------------------------- Tenor formatting --------------------------------
+# Goal: desk-style "1Y10Y" for vanilla, "1Y1Y1Y" for midcurve.
+# Uses QuantLib calendars for business-day adjustment and advancing.
+
+
+def _tenor_ymwd(start: date, end: date, cal: ql.Calendar) -> str:
+    """
+    Calendar-aware tenor string from start -> end using the largest (Y, M, W, D) units.
+    Assumes end >= start.
+    """
+    s = cal.adjust(_to_qldate(start), ql.Following)
+    e = cal.adjust(_to_qldate(end), ql.Following)
+
+    if e < s:
+        return "0D"
+
+    # Years
+    years = 0
+    tmp = s
+    while cal.advance(tmp, ql.Period(1, ql.Years), ql.Following) <= e:
+        tmp = cal.advance(tmp, ql.Period(1, ql.Years), ql.Following)
+        years += 1
+
+    # Months
+    months = 0
+    while cal.advance(tmp, ql.Period(1, ql.Months), ql.Following) <= e:
+        tmp = cal.advance(tmp, ql.Period(1, ql.Months), ql.Following)
+        months += 1
+
+    # Remaining days (calendar days between adjusted ql.Dates)
+    rem_days = int(e - tmp)
+    weeks, days = divmod(rem_days, 7)
+
+    parts = []
+    if years:
+        parts.append(f"{years}Y")
+    if months:
+        parts.append(f"{months}M")
+    if weeks:
+        parts.append(f"{weeks}W")
+    if days:
+        parts.append(f"{days}D")
+
+    return "".join(parts) if parts else "0D"
+
+
+def _swaption_tenor_string(
+    *,
+    ccy: str,
+    asof_date: date,
+    effective_date: date,
+    expiration_date: date,
+    maturity_date: date,
+) -> str:
+    """
+    Vanilla (spot-starting per your definition): Effective == asof (or near), Expiration is option expiry,
+    Maturity is swap tail => "EXPIRYTAIL" e.g. "1Y10Y"
+
+    Midcurve: Effective > Expiration => "EXPIRYFORWARDTAIL" e.g. "1Y1Y1Y"
+      - expiry  = asof -> expiration
+      - forward = expiration -> effective
+      - tail    = effective -> maturity
+    """
+    cal = _ql_calendar(ccy)
+
+    # always compute expiry off asof -> expiration
+    expiry = _tenor_ymwd(asof_date, expiration_date, cal)
+
+    if effective_date <= expiration_date:
+        # your desk convention for "vanilla" in this dataset
+        tail = _tenor_ymwd(effective_date, maturity_date, cal)
+        return f"{expiry}{tail}"
+
+    # midcurve
+    fwd = _tenor_ymwd(expiration_date, effective_date, cal)
+    tail = _tenor_ymwd(effective_date, maturity_date, cal)
+    return f"{expiry}{fwd}{tail}"
+
+
+def make_swaption_desc_func(
+    *,
+    base_dir=None,
+    # these are columns from YOUR TRADES DF (not the DSB reference)
+    trade_ccy_col: str = "Notional currency-Leg 1",
+    trade_asof_col: str = "Execution Timestamp",  # your statement: vanilla effective == today
+    trade_eff_col: str = "Effective Date",
+    trade_exp_col: str = "Expiration Date",
+    trade_mat_col: str = "Maturity date of the underlier",
+):
+    """
+    Returns a function that can be applied row-wise to a trades df to produce a compact description
+    including tenor (1Y10Y or 1Y1Y1Y for midcurves).
+
+    IMPORTANT: This function is meant for:
+      df.apply(desc_fn, axis=1)
+    because tenor uses trade dates.
+    """
+
+    ref = _build_upi_df(base_dir)
+    if ref.empty:
+        raise RuntimeError("UPI reference data not available")
+
+    # reduce columns for speed
+    ref_cols = [
+        "swaption_Identifier_UPI",
+        "swaption_Attributes_OptionType",
+        "swaption_Attributes_OptionExerciseStyle",
+        "swaption_Derived_CFIDeliveryType",
+        "swap_Attributes_ReferenceRate",
+        "swap_Attributes_ReferenceRateTermValue",
+        "swap_Attributes_ReferenceRateTermUnit",
+        "swap_Attributes_NotionalSchedule",
+    ]
+    ref2 = ref.loc[:, [c for c in ref_cols if c in ref.columns]].copy()
+
+    upis = ref2["swaption_Identifier_UPI"].astype(str)
+    upi_to_pos = dict(zip(upis, range(len(ref2))))
+
+    def desc_row(trade_row: pd.Series) -> str:
+        upi = _norm_upi(trade_row.get("Unique Product Identifier"))
+        pos = upi_to_pos.get(upi)
+        if pos is None:
+            return f"{upi}: not found"
+
+        r = ref2.iloc[pos]
+
+        # Underlier compact
+        under = _underlying_compact(r)
+
+        # Role/exercise/settle/style from reference (CSV-only)
+        role = _option_role_short(r.get("swaption_Attributes_OptionType")) or "UNKNOWN"
+        ex = _exercise_style_short(r.get("swaption_Attributes_OptionExerciseStyle")) or "UNK"
+        style = _vanilla_short(r)  # currently "VANILLA"
+        settle = _settlement_short(r.get("swaption_Derived_CFIDeliveryType")) or "UNK"
+
+        print("here", _to_pydate(trade_row.get(trade_mat_col)))
+
+        ccy = str(trade_row.get(trade_ccy_col)).strip().upper()
+        asof = _to_pydate(trade_row.get(trade_asof_col))
+        eff = _to_pydate(trade_row.get(trade_eff_col))
+        exp = _to_pydate(trade_row.get(trade_exp_col))
+        mat = _to_pydate(trade_row.get(trade_mat_col))
+
+        print(ccy, asof, eff, exp, mat)
+
+        tenor = None
+        if ccy and asof and eff and exp and mat:
+            tenor = _swaption_tenor_string(
+                ccy=ccy,
+                asof_date=asof,
+                effective_date=eff,
+                expiration_date=exp,
+                maturity_date=mat,
+            )
+
+        # FINAL compact string: include tenor once
+        # Example: "USD-SOFR-OIS Compound 1D Constant 1Y10Y PAYER EURO VANILLA PHYS"
+        # if tenor:
+        return f"{under} {tenor} {role} {ex} {style} {settle}"
+        # return f"{under} {role} {ex} {style} {settle}"
+
+    return desc_row
