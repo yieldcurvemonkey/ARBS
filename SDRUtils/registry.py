@@ -9,10 +9,12 @@ by name and can also be looked up by currency.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Type
+from typing import Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from SDRUtils.packages.base import PackageDetector
-from SDRUtils.products.base import ProductModule
+
+if TYPE_CHECKING:
+    from SDRUtils.products.base import ProductModule
 
 
 @dataclass
