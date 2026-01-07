@@ -234,6 +234,7 @@ class ProductTypeMapping:
     OIS_SWAP: str = "OIS_SWAP"
     SWAPTION_CALL: str = "SWAPTION_CALL"
     SWAPTION_PUT: str = "SWAPTION_PUT"
+    SWAPTION: str = "SWAPTION_PUT"
     CAP: str = "CAP"
     FLOOR: str = "FLOOR"
     XCCY_SWAP: str = "XCCY_SWAP"

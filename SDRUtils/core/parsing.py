@@ -32,6 +32,11 @@ def parse_notional(notional_str: Union[str, float, int]) -> float:
         return 0.0
     if isinstance(notional_str, (int, float)):
         return float(notional_str)
+    
+    # capped notionals
+    if "+" in notional_str:
+        return float(str(notional_str).replace(",", "").replace("+", "").strip()), True
+    
     # Remove commas and convert
     try:
         return float(str(notional_str).replace(",", "").strip())

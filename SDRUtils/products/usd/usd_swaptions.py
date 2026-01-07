@@ -11,9 +11,10 @@ from typing import Any, Dict
 
 import pandas as pd
 import QuantLib as ql
+from collections.abc import Iterable, Sequence
 
 from SDRUtils.config import PRODUCT_TYPES
-from SDRUtils.core.classification import USDSwaptionTradeClassification, classifications_to_dataframe, classify_product_type
+from SDRUtils.core.classification import SwaptionTradeClassification, classifications_to_dataframe, classify_product_type
 from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
 from SDRUtils.core.parsing import parse_notional
@@ -31,7 +32,7 @@ class USD_Swaptions(USDProductBase):
     """
 
     name = "USD-SWAPTIONS"
-    product_type = PRODUCT_TYPES.SWAPTION_CALL
+    product_type = PRODUCT_TYPES.SWAPTION
     package_type = "SWAPTION"
 
     def detect(self, df: pd.DataFrame, **kwargs: Any) -> pd.DataFrame:
@@ -40,22 +41,13 @@ class USD_Swaptions(USDProductBase):
         swaption_trades_df = df.loc[mask].copy()
         desc_fn = make_swaption_desc_func()
         swaption_trades_df.loc[:, "description"] = swaption_trades_df.apply(desc_fn, axis=1)
-        swaption_trades_df = swaption_trades_df[swaption_trades_df["description"].str.contains("USD")]
+        swaption_trades_df = swaption_trades_df[
+            (swaption_trades_df["description"].str.contains("USD")) & (swaption_trades_df["Maturity date of the underlier"].notna())
+        ]
         return swaption_trades_df
 
-    def classify_trade(self, row: pd.Series, trade_id: int, **kwargs: Any) -> USDSwaptionTradeClassification:
-        """
-        Classify a single USD swaption trade.
-
-        Args:
-            row: SDR data row
-            trade_id: Trade identifier
-            **kwargs: Additional arguments
-
-        Returns:
-            USDSwaptionTradeClassification object
-        """
-        execution_ts = pd.to_datetime(row.get("Execution Timestamp"))
+    def classify_trade(self, row: pd.Series, trade_id: int, **kwargs: Any) -> SwaptionTradeClassification:
+        execution_ts = pd.to_datetime(row.get("Event timestamp"))
         effective_date = pd.to_datetime(row.get("Effective Date"))
         expiration_date = pd.to_datetime(row.get("Expiration Date"))
         underlying_expiration_date = pd.to_datetime(row.get("Maturity date of the underlier"))
@@ -63,55 +55,52 @@ class USD_Swaptions(USDProductBase):
         product_type = classify_product_type(row)
 
         tenor_years = calculate_tenor_years(
+            expiration_date,
+            underlying_expiration_date,
+            conventions=self.conventions,
+        )
+        tenor_label = tenor_to_label(tenor_years, expiration_date=underlying_expiration_date)
+
+        forward_years = calculate_forward_start_years(
             effective_date,
             expiration_date,
             conventions=self.conventions,
         )
-        tenor_label = tenor_to_label(tenor_years, expiration_date=expiration_date)
 
-        forward_years = calculate_forward_start_years(
-            execution_ts,
-            effective_date,
-            conventions=self.conventions,
-        )
-
-        ql_exec = to_ql_date(execution_ts)
-        ql_eff = to_ql_date(effective_date)
-
-        is_forward = False
-        if ql_exec and ql_eff:
-            t_plus_2 = self.conventions.calendar.advance(ql_exec, 2, ql.Days)
-            if ql_eff > t_plus_2:
-                is_forward = True
-
-        forward_label = forward_to_label(forward_years, effective_date=effective_date)
-        trade_label = build_trade_label(forward_label, tenor_label, is_forward)
+        forward_label = forward_to_label(forward_years, effective_date=expiration_date)
 
         notional = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
+        if isinstance(notional, Sequence):
+            is_capped = notional[1]
+            notional = notional[0]
+        else:
+            is_capped = False
+
         strike = row.get("Strike Price")
 
-        return USDSwaptionTradeClassification(
+        return SwaptionTradeClassification(
+            event_action=f"{row["Action type"]}-{row["Event type"]}",
             trade_id=trade_id,
             execution_timestamp=execution_ts,
             effective_date=effective_date,
             expiration_date=expiration_date,
             underlying_expiration_date=underlying_expiration_date,
-            product_type=row["description"],
-            trade_label=trade_label,
+            product_type=product_type,
+            trade_label=row["description"],
             tenor_years=tenor_years,
             tenor_label=tenor_label,
-            is_forward=is_forward,
-            forward_start_years=forward_years,
             forward_label=forward_label,
+            forward_start_years=forward_years,
             notional=notional,
             notional_currency=row.get("Notional currency-Leg 1", "USD"),
             strike=strike if pd.notna(strike) else None,
             premium=None,
-            premium_currency=None,
-            option_type=None,
-            exercise_style=None,
+            exercise_style=(
+                "EUROPEAN" if "epn" in str(row.get("UPI FISN", "")).lower() else "BERMUDAN" if "brm" in str(row.get("UPI FISN", "")).lower() else "AMERICAN"
+            ),
             estimated_pv01=0.0,
             package_type=self.package_type,
+            is_capped=is_capped,
         )
 
     def build_classification_dataframe(
@@ -141,7 +130,7 @@ class USD_Swaptions(USDProductBase):
             return raw_sdr_trades_df
 
         classifications = self.classify_messages(raw_sdr_trades_df, **kwargs)
-        return classifications_to_dataframe(classifications)
+        return classifications_to_dataframe(classifications).sort_values(by="execution_timestamp")
 
     def metadata(self) -> Dict[str, str]:
         return {

@@ -295,7 +295,7 @@ def make_swaption_desc_func(
         if pd.notna(asof) and pd.notna(eff) and pd.notna(exp) and pd.notna(mat):
 
             expiry_years = calculate_tenor_years(asof, exp, conventions=conventions)
-            tail_years = calculate_tenor_years(eff, mat, conventions=conventions)
+            tail_years = calculate_tenor_years(exp, mat, conventions=conventions)
             expiry_label = tenor_to_label(expiry_years, expiration_date=exp)
             tail_label = tenor_to_label(tail_years, expiration_date=mat)
 

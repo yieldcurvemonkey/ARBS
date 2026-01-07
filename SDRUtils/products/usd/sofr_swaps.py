@@ -109,6 +109,7 @@ def classify_sofr_swap_trade(
     pv01 = curve.pv01(pkg[0])
 
     return SwapTradeClassification(
+        event_action=f"{row["Action type"]}-{row["Event type"]}",
         trade_id=trade_id,
         execution_timestamp=execution_ts,
         effective_date=effective_date,

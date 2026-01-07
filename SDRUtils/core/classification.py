@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import List, Literal, Optional
+from dataclasses import asdict, dataclass, field, is_dataclass
+from typing import Any, List, Literal, Optional
 
 import numpy as np
 import pandas as pd
@@ -32,6 +32,7 @@ ProductType = Literal[
     "SWAPTION_PUT",
     "SWAPTION_PAYER",
     "SWAPTION_RECEIVER",
+    "SWAPTION",
     "CAP",
     "FLOOR",
     "OTHER_FXD_FLT_SWAP",
@@ -46,6 +47,7 @@ ExerciseStyle = Literal["EUROPEAN", "AMERICAN", "BERMUDAN"]
 class TradeClassification:
     """Classification of an SDR trade."""
 
+    event_action: str
     trade_id: int
     execution_timestamp: pd.Timestamp
     effective_date: pd.Timestamp
@@ -66,10 +68,10 @@ class TradeClassification:
 
     # TODO support more packages
     # Package info
-    package_type: Optional[Literal["CURVE", "FLY", "STRADDLE", "STRANGLE", "OUTRIGHT"]] = None
-    package_id: Optional[str] = None
-    package_legs: Optional[List[int]] = None
-    underlying_expiration_date: Optional[pd.Timestamp] = None
+    package_type: Optional[Literal["CURVE", "FLY", "STRADDLE", "STRANGLE", "OUTRIGHT"]] = field(default=None, kw_only=True)
+    package_id: Optional[str] = field(default=None, kw_only=True)
+    package_legs: Optional[List[int]] = field(default=None, kw_only=True)
+    underlying_expiration_date: Optional[pd.Timestamp] = field(default=None, kw_only=True)
 
 
 @dataclass
@@ -96,24 +98,16 @@ class SwaptionTradeClassification(TradeClassification):
     # Underlying swap characteristics
     tenor_years: float
     tenor_label: str
-    is_forward: bool
     forward_start_years: float
     forward_label: str
 
     # Option characteristics
     premium: Optional[float]
-    premium_currency: Optional[str]
-    option_type: Optional[OptionType]
     exercise_style: Optional[ExerciseStyle]
     strike: Optional[float]
 
-
-@dataclass
-class USDSwaptionTradeClassification(SwaptionTradeClassification):
-    """USD swaption-specific classification details."""
-
-    underlying_swap_tenor: Optional[str] = None
-    settlement_type: Optional[str] = None
+    # misc
+    is_capped: Optional[bool]
 
 
 def classify_product_type(row: pd.Series) -> ProductType:
@@ -149,7 +143,7 @@ def classify_product_type(row: pd.Series) -> ProductType:
         return "OIS_SWAP"
 
     if "Swap Fxd Flt" in upi_fisn:
-        return "OTHER_FXD_FLT_SWAP" 
+        return "OTHER_FXD_FLT_SWAP"
 
     # Fixed rate inference (now safe)
     if pd.notna(fixed_rate) and fixed_rate > 0:
@@ -158,39 +152,57 @@ def classify_product_type(row: pd.Series) -> ProductType:
     return "UNKNOWN"
 
 
-def classifications_to_dataframe(classifications: List[TradeClassification]) -> pd.DataFrame:
-    """Convert list of classifications to DataFrame"""
-    records = []
-    for c in classifications:
-        records.append(
-            {
-                "Dissemination Identifier": c.trade_id,
-                "trade_id": c.trade_id,
-                "execution_timestamp": c.execution_timestamp,
-                "effective_date": c.effective_date,
-                "expiration_date": c.expiration_date,
-                "product_type": c.product_type,
-                "trade_label": c.trade_label,
-                "notional": c.notional,
-                "notional_currency": c.notional_currency,
-                "estimated_pv01": c.estimated_pv01,
-                "package_type": c.package_type,
-                "package_id": c.package_id,
-                "underlying_expiration_date": c.underlying_expiration_date,
-                "tenor_years": getattr(c, "tenor_years", None),
-                "tenor_label": getattr(c, "tenor_label", None),
-                "is_forward": getattr(c, "is_forward", None),
-                "forward_start_years": getattr(c, "forward_start_years", None),
-                "forward_label": getattr(c, "forward_label", None),
-                "fixed_rate": getattr(c, "fixed_rate", None),
-                "strike": getattr(c, "strike", None),
-                "premium": getattr(c, "premium", None),
-                "premium_currency": getattr(c, "premium_currency", None),
-                "option_type": getattr(c, "option_type", None),
-                "exercise_style": getattr(c, "exercise_style", None),
-                "underlying_swap_tenor": getattr(c, "underlying_swap_tenor", None),
-                "settlement_type": getattr(c, "settlement_type", None),
-            }
-        )
+def classifications_to_dataframe(classifications: List["TradeClassification"]) -> pd.DataFrame:
+    """
+    Convert list of classifications to DataFrame dynamically.
 
+    This function detects attributes automatically, allowing for polymorphic
+    inputs (e.g., specific Swap vs Swaption fields) without manual mapping.
+    It creates a union of all attributes found across the list.
+    """
+    if not classifications:
+        return pd.DataFrame()
+
+    records = []
+
+    for c in classifications:
+        # 1. Extract base attributes dynamically
+        record = _object_to_dict(c)
+
+        # 2. Apply specific overrides/mappings required by your pipeline
+        # (The original code mapped 'trade_id' to 'Dissemination Identifier')
+        if "trade_id" in record:
+            record["Dissemination Identifier"] = record["trade_id"]
+
+        records.append(record)
+
+    # Pandas handles the alignment of different schemas (keys) automatically,
+    # filling missing fields with NaN (None).
     return pd.DataFrame(records)
+
+
+def _object_to_dict(obj: Any) -> dict:
+    """Helper to safely convert various object types to a dictionary."""
+    # 1. Handle Python DataClasses
+    if is_dataclass(obj):
+        return asdict(obj)
+
+    # 2. Handle Pydantic Models (v1 and v2 compat)
+    if hasattr(obj, "model_dump"):  # Pydantic v2
+        return obj.model_dump()
+    if hasattr(obj, "dict") and callable(obj.dict):  # Pydantic v1
+        return obj.dict()
+
+    # 3. Handle standard classes with __dict__
+    if hasattr(obj, "__dict__"):
+        return vars(obj).copy()
+
+    # 4. Handle classes using __slots__ (memory optimized classes)
+    if hasattr(obj, "__slots__"):
+        return {s: getattr(obj, s) for s in obj.__slots__ if hasattr(obj, s)}
+
+    # 5. Fallback: try casting directly if it mimics a dict
+    try:
+        return dict(obj)
+    except (ValueError, TypeError):
+        return {}
