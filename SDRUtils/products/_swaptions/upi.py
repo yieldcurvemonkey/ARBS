@@ -3,13 +3,12 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass
-from datetime import date, datetime
-from typing import Optional
 
 import pandas as pd
-import QuantLib as ql
-import pandas as pd
+
+from SDRUtils.config import USD_CONVENTIONS, get_conventions
+from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years
+from SDRUtils.core.tenors import forward_to_label, tenor_to_label
 
 
 # ----------------------------- normalization --------------------------------
@@ -230,131 +229,6 @@ def swaption_upi_description(
     return f"{under} {role} {ex} {style} {settle}"
 
 
-def _ql_calendar(ccy: str) -> ql.Calendar:
-    c = str(ccy).strip().upper()
-    if c == "USD":
-        return ql.UnitedStates(ql.UnitedStates.GovernmentBond)
-    if c == "EUR":
-        return ql.TARGET()
-    if c == "GBP":
-        return ql.UnitedKingdom(ql.UnitedKingdom.Exchange)
-    if c == "JPY":
-        return ql.Japan()
-    if c == "CHF":
-        return ql.Switzerland()
-    if c == "CAD":
-        return ql.Canada()
-    if c == "AUD":
-        return ql.Australia()
-    if c == "NZD":
-        return ql.NewZealand()
-    if c == "SEK":
-        return ql.Sweden()
-    if c == "NOK":
-        return ql.Norway()
-    if c == "DKK":
-        return ql.Denmark()
-    # fallback: no holidays/weekends only
-    return ql.WeekendsOnly()
-
-
-def _to_pydate(x: object) -> Optional[date]:
-    if x is None or pd.isna(x):
-        return None
-    if isinstance(x, date) and not isinstance(x, datetime):
-        return x
-    if isinstance(x, datetime):
-        return x.date()
-    # handles strings + pandas timestamps
-    # try:
-    return pd.to_datetime(x).date()
-    # except Exception:
-    #     return None
-
-
-def _to_qldate(d: date) -> ql.Date:
-    return ql.Date(d.day, d.month, d.year)
-
-
-# --------------------------- Tenor formatting --------------------------------
-# Goal: desk-style "1Y10Y" for vanilla, "1Y1Y1Y" for midcurve.
-# Uses QuantLib calendars for business-day adjustment and advancing.
-
-
-def _tenor_ymwd(start: date, end: date, cal: ql.Calendar) -> str:
-    """
-    Calendar-aware tenor string from start -> end using the largest (Y, M, W, D) units.
-    Assumes end >= start.
-    """
-    s = cal.adjust(_to_qldate(start), ql.Following)
-    e = cal.adjust(_to_qldate(end), ql.Following)
-
-    if e < s:
-        return "0D"
-
-    # Years
-    years = 0
-    tmp = s
-    while cal.advance(tmp, ql.Period(1, ql.Years), ql.Following) <= e:
-        tmp = cal.advance(tmp, ql.Period(1, ql.Years), ql.Following)
-        years += 1
-
-    # Months
-    months = 0
-    while cal.advance(tmp, ql.Period(1, ql.Months), ql.Following) <= e:
-        tmp = cal.advance(tmp, ql.Period(1, ql.Months), ql.Following)
-        months += 1
-
-    # Remaining days (calendar days between adjusted ql.Dates)
-    rem_days = int(e - tmp)
-    weeks, days = divmod(rem_days, 7)
-
-    parts = []
-    if years:
-        parts.append(f"{years}Y")
-    if months:
-        parts.append(f"{months}M")
-    if weeks:
-        parts.append(f"{weeks}W")
-    if days:
-        parts.append(f"{days}D")
-
-    return "".join(parts) if parts else "0D"
-
-
-def _swaption_tenor_string(
-    *,
-    ccy: str,
-    asof_date: date,
-    effective_date: date,
-    expiration_date: date,
-    maturity_date: date,
-) -> str:
-    """
-    Vanilla (spot-starting per your definition): Effective == asof (or near), Expiration is option expiry,
-    Maturity is swap tail => "EXPIRYTAIL" e.g. "1Y10Y"
-
-    Midcurve: Effective > Expiration => "EXPIRYFORWARDTAIL" e.g. "1Y1Y1Y"
-      - expiry  = asof -> expiration
-      - forward = expiration -> effective
-      - tail    = effective -> maturity
-    """
-    cal = _ql_calendar(ccy)
-
-    # always compute expiry off asof -> expiration
-    expiry = _tenor_ymwd(asof_date, expiration_date, cal)
-
-    if effective_date <= expiration_date:
-        # your desk convention for "vanilla" in this dataset
-        tail = _tenor_ymwd(effective_date, maturity_date, cal)
-        return f"{expiry}{tail}"
-
-    # midcurve
-    fwd = _tenor_ymwd(expiration_date, effective_date, cal)
-    tail = _tenor_ymwd(effective_date, maturity_date, cal)
-    return f"{expiry}{fwd}{tail}"
-
-
 def make_swaption_desc_func(
     *,
     base_dir=None,
@@ -411,25 +285,37 @@ def make_swaption_desc_func(
         style = _vanilla_short(r)  # currently "VANILLA"
         settle = _settlement_short(r.get("swaption_Derived_CFIDeliveryType")) or "UNK"
 
-        print("here", _to_pydate(trade_row.get(trade_mat_col)))
+        raw_ccy = trade_row.get(trade_ccy_col)
+        ccy = None if raw_ccy is None or pd.isna(raw_ccy) else str(raw_ccy).strip().upper()
 
-        ccy = str(trade_row.get(trade_ccy_col)).strip().upper()
-        asof = _to_pydate(trade_row.get(trade_asof_col))
-        eff = _to_pydate(trade_row.get(trade_eff_col))
-        exp = _to_pydate(trade_row.get(trade_exp_col))
-        mat = _to_pydate(trade_row.get(trade_mat_col))
-
-        print(ccy, asof, eff, exp, mat)
+        asof = pd.to_datetime(trade_row.get(trade_asof_col), errors="coerce")
+        eff = pd.to_datetime(trade_row.get(trade_eff_col), errors="coerce")
+        exp = pd.to_datetime(trade_row.get(trade_exp_col), errors="coerce")
+        mat = pd.to_datetime(trade_row.get(trade_mat_col), errors="coerce")
 
         tenor = None
-        if ccy and asof and eff and exp and mat:
-            tenor = _swaption_tenor_string(
-                ccy=ccy,
-                asof_date=asof,
-                effective_date=eff,
-                expiration_date=exp,
-                maturity_date=mat,
-            )
+        if ccy and pd.notna(asof) and pd.notna(eff) and pd.notna(exp) and pd.notna(mat):
+            try:
+                conventions = get_conventions(ccy)
+            except ValueError:
+                conventions = USD_CONVENTIONS
+
+            expiry_years = calculate_tenor_years(asof, exp, conventions=conventions)
+            tail_years = calculate_tenor_years(eff, mat, conventions=conventions)
+            expiry_label = tenor_to_label(expiry_years, expiration_date=exp)
+            tail_label = tenor_to_label(tail_years, expiration_date=mat)
+
+            if eff <= exp:
+                tenor = f"{expiry_label}{tail_label}"
+            else:
+                forward_years = calculate_forward_start_years(
+                    exp,
+                    eff,
+                    conventions=conventions,
+                    use_execution_date_only=True,
+                )
+                forward_label = forward_to_label(forward_years, effective_date=eff)
+                tenor = f"{expiry_label}{forward_label}{tail_label}"
 
         # FINAL compact string: include tenor once
         # Example: "USD-SOFR-OIS Compound 1D Constant 1Y10Y PAYER EURO VANILLA PHYS"
