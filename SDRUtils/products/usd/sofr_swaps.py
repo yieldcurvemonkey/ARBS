@@ -27,7 +27,7 @@ from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 from Query.IRSwaps._CME_INVOICE_SWAP_TICKERS import _CME_INVOICE_SWAP_TICKERS, _INDICATOR_TO_TICKER
 
 from SDRUtils.config import PRODUCT_TYPES, TRADE_ID, USD_CONVENTIONS
-from SDRUtils.core.classification import TradeClassification, classifications_to_dataframe, classify_product_type
+from SDRUtils.core.classification import SwapTradeClassification, classifications_to_dataframe, classify_product_type
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
 from SDRUtils.core.parsing import parse_notional
 from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_to_label
@@ -42,7 +42,7 @@ def classify_sofr_swap_trade(
     row: pd.Series,
     trade_id: int,
     curve: _IRSwapGenericCurve,
-) -> TradeClassification:
+) -> SwapTradeClassification:
     """
     Classify a single USD SOFR OIS swap from SDR data.
 
@@ -59,7 +59,7 @@ def classify_sofr_swap_trade(
         calculate_pv01: Whether to calculate PV01 (requires curve)
 
     Returns:
-        TradeClassification object with all trade details
+        SwapTradeClassification object with all trade details
     """
     # Extract dates
     execution_ts = pd.to_datetime(row.get("Execution Timestamp"))
@@ -102,30 +102,27 @@ def classify_sofr_swap_trade(
     # Extract notional and rate
     notional = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
     fixed_rate = row.get("Fixed rate-Leg 1", row.get("Fixed rate-Leg 2"))
-    strike = row.get("Strike Price")
-
     # Calculate PV01 if curve provided
     pkg, _ = IRSwapQuery(
         curve="USD-SOFR-1D", effective_date=effective_date.date(), maturity_date=expiration_date.date(), structure_kwargs={"notional": notional}
     ).resolve_package(pricer_or_curve=curve)
     pv01 = curve.pv01(pkg[0])
 
-    return TradeClassification(
+    return SwapTradeClassification(
         trade_id=trade_id,
         execution_timestamp=execution_ts,
         effective_date=effective_date,
         expiration_date=expiration_date,
         product_type=product_type,
+        trade_label=trade_label,
         tenor_years=tenor_years,
         tenor_label=tenor_label,
         is_forward=is_forward,
         forward_start_years=forward_years,
         forward_label=forward_label,
-        trade_label=trade_label,
         notional=notional,
         notional_currency=row.get("Notional currency-Leg 1", "USD"),
         fixed_rate=fixed_rate if pd.notna(fixed_rate) else None,
-        strike=strike if pd.notna(strike) else None,
         estimated_pv01=pv01,
         package_type="OUTRIGHT",
     )
@@ -316,7 +313,7 @@ class USD_SOFR_SwapProduct(USDProductBase):
     name = "USD-SOFR-OIS"
     product_type = PRODUCT_TYPES.OIS_SWAP
 
-    def classify_trade(self, row: pd.Series, trade_id: int, curve: _IRSwapGenericCurve) -> TradeClassification:
+    def classify_trade(self, row: pd.Series, trade_id: int, curve: _IRSwapGenericCurve) -> SwapTradeClassification:
         """
         Classify a single USD SOFR swap trade.
 
@@ -326,7 +323,7 @@ class USD_SOFR_SwapProduct(USDProductBase):
             **kwargs: Additional arguments, including 'curve' for PV01
 
         Returns:
-            TradeClassification object
+            SwapTradeClassification object
         """
         return classify_sofr_swap_trade(
             row,

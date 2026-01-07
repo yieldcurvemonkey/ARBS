@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Union, Callable
+from typing import List, Literal, Optional
 
 import numpy as np
 import pandas as pd
@@ -26,27 +26,33 @@ additional fields to TradeClassification
 
 """
 
+ProductType = Literal[
+    "OIS_SWAP",
+    "SWAPTION_CALL",
+    "SWAPTION_PUT",
+    "SWAPTION_PAYER",
+    "SWAPTION_RECEIVER",
+    "CAP",
+    "FLOOR",
+    "OTHER_FXD_FLT_SWAP",
+    "UNKNOWN",
+]
+
+OptionType = Literal["CALL", "PUT"]
+ExerciseStyle = Literal["EUROPEAN", "AMERICAN", "BERMUDAN"]
+
+
 @dataclass
 class TradeClassification:
-    """Classification of an SDR trade"""
+    """Classification of an SDR trade."""
 
     trade_id: int
     execution_timestamp: pd.Timestamp
     effective_date: pd.Timestamp
     expiration_date: pd.Timestamp
 
-    # TODO support more products
     # Product type
-    product_type: Literal["OIS_SWAP", "SWAPTION_CALL", "SWAPTION_PUT", "CAP", "FLOOR", "UNKNOWN"]
-
-    # Tenor information
-    tenor_years: float
-    tenor_label: str  # e.g., "2Y", "5Y", "10Y"
-
-    # Forward start info (for forward swaps/swaptions)
-    is_forward: bool
-    forward_start_years: float
-    forward_label: str  # e.g., "spot", "1Y", "5Y"
+    product_type: ProductType
 
     # Full trade label e.g., "spot 10Y", "5Y10Y", "1Y1Y"
     trade_label: str
@@ -54,8 +60,6 @@ class TradeClassification:
     # Notional and risk
     notional: float
     notional_currency: str
-    fixed_rate: Optional[float]
-    strike: Optional[float]
 
     # Estimated PV01 (per 1bp)
     estimated_pv01: float
@@ -68,7 +72,51 @@ class TradeClassification:
     underlying_expiration_date: Optional[pd.Timestamp] = None
 
 
-def classify_product_type(row: pd.Series) -> Literal["OIS_SWAP", "SWAPTION_CALL", "SWAPTION_PUT", "CAP", "FLOOR", "UNKNOWN"]:
+@dataclass
+class SwapTradeClassification(TradeClassification):
+    """Swap-specific classification details."""
+
+    # Tenor information
+    tenor_years: float
+    tenor_label: str  # e.g., "2Y", "5Y", "10Y"
+
+    # Forward start info (for forward swaps)
+    is_forward: bool
+    forward_start_years: float
+    forward_label: str  # e.g., "spot", "1Y", "5Y"
+
+    # Rates
+    fixed_rate: Optional[float]
+
+
+@dataclass
+class SwaptionTradeClassification(TradeClassification):
+    """Swaption-specific classification details."""
+
+    # Underlying swap characteristics
+    tenor_years: float
+    tenor_label: str
+    is_forward: bool
+    forward_start_years: float
+    forward_label: str
+
+    # Option characteristics
+    premium: Optional[float]
+    premium_currency: Optional[str]
+    option_type: Optional[OptionType]
+    exercise_style: Optional[ExerciseStyle]
+    strike: Optional[float]
+
+
+@dataclass
+class USDSwaptionTradeClassification(SwaptionTradeClassification):
+    """USD swaption-specific classification details."""
+
+    underlying_swap_tenor: Optional[str] = None
+    settlement_type: Optional[str] = None
+
+
+def classify_product_type(row: pd.Series) -> ProductType:
     upi_fisn = str(row.get("UPI FISN", "")).upper()
     upi_underlier = str(row.get("UPI Underlier Name", "")).upper()
 
@@ -122,20 +170,26 @@ def classifications_to_dataframe(classifications: List[TradeClassification]) -> 
                 "effective_date": c.effective_date,
                 "expiration_date": c.expiration_date,
                 "product_type": c.product_type,
-                "tenor_years": c.tenor_years,
-                "tenor_label": c.tenor_label,
-                "is_forward": c.is_forward,
-                "forward_start_years": c.forward_start_years,
-                "forward_label": c.forward_label,
                 "trade_label": c.trade_label,
                 "notional": c.notional,
                 "notional_currency": c.notional_currency,
-                "fixed_rate": c.fixed_rate,
-                "strike": c.strike,
                 "estimated_pv01": c.estimated_pv01,
                 "package_type": c.package_type,
                 "package_id": c.package_id,
                 "underlying_expiration_date": c.underlying_expiration_date,
+                "tenor_years": getattr(c, "tenor_years", None),
+                "tenor_label": getattr(c, "tenor_label", None),
+                "is_forward": getattr(c, "is_forward", None),
+                "forward_start_years": getattr(c, "forward_start_years", None),
+                "forward_label": getattr(c, "forward_label", None),
+                "fixed_rate": getattr(c, "fixed_rate", None),
+                "strike": getattr(c, "strike", None),
+                "premium": getattr(c, "premium", None),
+                "premium_currency": getattr(c, "premium_currency", None),
+                "option_type": getattr(c, "option_type", None),
+                "exercise_style": getattr(c, "exercise_style", None),
+                "underlying_swap_tenor": getattr(c, "underlying_swap_tenor", None),
+                "settlement_type": getattr(c, "settlement_type", None),
             }
         )
 

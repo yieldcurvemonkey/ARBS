@@ -13,7 +13,7 @@ import pandas as pd
 import QuantLib as ql
 
 from SDRUtils.config import PRODUCT_TYPES
-from SDRUtils.core.classification import TradeClassification, classifications_to_dataframe, classify_product_type
+from SDRUtils.core.classification import USDSwaptionTradeClassification, classifications_to_dataframe, classify_product_type
 from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
 from SDRUtils.core.parsing import parse_notional
@@ -43,7 +43,7 @@ class USD_Swaptions(USDProductBase):
         swaption_trades_df = swaption_trades_df[swaption_trades_df["description"].str.contains("USD")]
         return swaption_trades_df
 
-    def classify_trade(self, row: pd.Series, trade_id: int, **kwargs: Any) -> TradeClassification:
+    def classify_trade(self, row: pd.Series, trade_id: int, **kwargs: Any) -> USDSwaptionTradeClassification:
         """
         Classify a single USD swaption trade.
 
@@ -53,7 +53,7 @@ class USD_Swaptions(USDProductBase):
             **kwargs: Additional arguments
 
         Returns:
-            TradeClassification object
+            USDSwaptionTradeClassification object
         """
         execution_ts = pd.to_datetime(row.get("Execution Timestamp"))
         effective_date = pd.to_datetime(row.get("Effective Date"))
@@ -88,26 +88,28 @@ class USD_Swaptions(USDProductBase):
         trade_label = build_trade_label(forward_label, tenor_label, is_forward)
 
         notional = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
-        fixed_rate = row.get("Fixed rate-Leg 1", row.get("Fixed rate-Leg 2"))
         strike = row.get("Strike Price")
 
-        return TradeClassification(
+        return USDSwaptionTradeClassification(
             trade_id=trade_id,
             execution_timestamp=execution_ts,
             effective_date=effective_date,
             expiration_date=expiration_date,
             underlying_expiration_date=underlying_expiration_date,
             product_type=row["description"],
+            trade_label=trade_label,
             tenor_years=tenor_years,
             tenor_label=tenor_label,
-            is_forward=None,
+            is_forward=is_forward,
             forward_start_years=forward_years,
             forward_label=forward_label,
-            trade_label=trade_label,
             notional=notional,
             notional_currency=row.get("Notional currency-Leg 1", "USD"),
-            fixed_rate=fixed_rate if pd.notna(fixed_rate) else None,
             strike=strike if pd.notna(strike) else None,
+            premium=None,
+            premium_currency=None,
+            option_type=None,
+            exercise_style=None,
             estimated_pv01=0.0,
             package_type=self.package_type,
         )
