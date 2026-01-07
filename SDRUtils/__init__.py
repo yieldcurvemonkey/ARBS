@@ -37,6 +37,9 @@ from SDRUtils.config import (
 # Core classification
 from SDRUtils.core.classification import (
     TradeClassification,
+    SwapTradeClassification,
+    SwaptionTradeClassification,
+    USDSwaptionTradeClassification,
     classify_product_type,
     classifications_to_dataframe,
 )
@@ -62,6 +65,9 @@ __all__ = [
     "PACKAGE_TYPES",
     # Core
     "TradeClassification",
+    "SwapTradeClassification",
+    "SwaptionTradeClassification",
+    "USDSwaptionTradeClassification",
     "classify_product_type",
     "classifications_to_dataframe",
     # Data

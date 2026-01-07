@@ -11,6 +11,9 @@ This module provides the fundamental building blocks for SDR analytics:
 # Classification
 from SDRUtils.core.classification import (
     TradeClassification,
+    SwapTradeClassification,
+    SwaptionTradeClassification,
+    USDSwaptionTradeClassification,
     classify_product_type,
     classifications_to_dataframe,
 )
@@ -65,6 +68,9 @@ from SDRUtils.core.utils import (
 __all__ = [
     # Classification
     "TradeClassification",
+    "SwapTradeClassification",
+    "SwaptionTradeClassification",
+    "USDSwaptionTradeClassification",
     "classify_product_type",
     "classifications_to_dataframe",
     # Dates
