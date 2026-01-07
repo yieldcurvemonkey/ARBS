@@ -293,12 +293,15 @@ def make_swaption_desc_func(
         exp = pd.to_datetime(trade_row.get(trade_exp_col), errors="coerce")
         mat = pd.to_datetime(trade_row.get(trade_mat_col), errors="coerce")
 
-        tenor = None
-        if ccy and pd.notna(asof) and pd.notna(eff) and pd.notna(exp) and pd.notna(mat):
+        conventions = USD_CONVENTIONS
+        if ccy:
             try:
                 conventions = get_conventions(ccy)
             except ValueError:
                 conventions = USD_CONVENTIONS
+
+        tenor = None
+        if pd.notna(asof) and pd.notna(eff) and pd.notna(exp) and pd.notna(mat):
 
             expiry_years = calculate_tenor_years(asof, exp, conventions=conventions)
             tail_years = calculate_tenor_years(eff, mat, conventions=conventions)
@@ -316,6 +319,8 @@ def make_swaption_desc_func(
                 )
                 forward_label = forward_to_label(forward_years, effective_date=eff)
                 tenor = f"{expiry_label}{forward_label}{tail_label}"
+        else:
+            tenor = "UNK"
 
         # FINAL compact string: include tenor once
         # Example: "USD-SOFR-OIS Compound 1D Constant 1Y10Y PAYER EURO VANILLA PHYS"
