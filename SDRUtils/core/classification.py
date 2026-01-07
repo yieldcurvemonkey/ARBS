@@ -65,6 +65,7 @@ class TradeClassification:
     package_type: Optional[Literal["CURVE", "FLY", "STRADDLE", "STRANGLE", "OUTRIGHT"]] = None
     package_id: Optional[str] = None
     package_legs: Optional[List[int]] = None
+    underlying_expiration_date: Optional[pd.Timestamp] = None
 
 
 def classify_product_type(row: pd.Series) -> Literal["OIS_SWAP", "SWAPTION_CALL", "SWAPTION_PUT", "CAP", "FLOOR", "UNKNOWN"]:
@@ -80,18 +81,18 @@ def classify_product_type(row: pd.Series) -> Literal["OIS_SWAP", "SWAPTION_CALL"
 
     # Explicit option labeling from FISN first
     if "NA/O Call" in upi_fisn or "CALL" in upi_fisn:
-        return "SWAPTION_CALL"
+        return "SWAPTION_PAYER"
     if "NA/O P Epn" in upi_fisn or "PUT" in upi_fisn or "O P" in upi_fisn:
-        return "SWAPTION_PUT"
+        return "SWAPTION_RECEIVER"
     if "CAP" in upi_fisn:
         return "CAP"
     if "FLOOR" in upi_fisn:
         return "FLOOR"
 
     # Strike-based option inference (now safe)
-    if pd.notna(strike) and strike > 0:
-        if pd.notna(first_exercise):
-            return "SWAPTION_CALL"  # default if unclear
+    # if pd.notna(strike) and strike > 0:
+    #     if pd.notna(first_exercise):
+    #         return "SWAPTION_CALL"  # default if unclear
 
     # OIS swap inference
     if "SWAP" in upi_fisn and "OIS" in upi_fisn:
@@ -134,6 +135,7 @@ def classifications_to_dataframe(classifications: List[TradeClassification]) -> 
                 "estimated_pv01": c.estimated_pv01,
                 "package_type": c.package_type,
                 "package_id": c.package_id,
+                "underlying_expiration_date": c.underlying_expiration_date,
             }
         )
 

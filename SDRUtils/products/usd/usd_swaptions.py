@@ -18,8 +18,8 @@ from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
 from SDRUtils.core.parsing import parse_notional
 from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_to_label
-from SDRUtils.products._swaps.filters import sofr_swaption_trades
 from SDRUtils.products.usd.base import USDProductBase
+from SDRUtils.products._swaptions.upi import make_swaption_desc_func, _build_upi_df
 
 
 class USD_Swaptions(USDProductBase):
@@ -35,56 +35,13 @@ class USD_Swaptions(USDProductBase):
     package_type = "SWAPTION"
 
     def detect(self, df: pd.DataFrame, **kwargs: Any) -> pd.DataFrame:
-        """
-        Identify USD Swaption rows.
-
-        Args:
-            df: SDR trades DataFrame.
-            **kwargs: Optional filters like action_types.
-
-        Returns:
-            Filtered DataFrame containing USD swaption trades.
-        """
-        if df.empty:
-            return df.copy()
-
-        mask = pd.Series(True, index=df.index)
-
-        currency_mask = None
-        for col in ("Notional currency-Leg 1", "Notional currency-Leg 2", "Notional currency"):
-            if col in df.columns:
-                col_mask = df[col].astype(str).str.upper().eq(self.currency)
-                currency_mask = col_mask if currency_mask is None else (currency_mask | col_mask)
-        if currency_mask is not None:
-            mask &= currency_mask
-
-        if "Asset class" in df.columns:
-            asset_mask = df["Asset class"].astype(str).str.upper().isin({"RATES", "INTEREST RATE", "INTERESTRATE"})
-            mask &= asset_mask
-
-        option_mask = pd.Series(False, index=df.index)
-        if "Product name" in df.columns:
-            option_mask |= df["Product name"].astype(str).str.contains("Swaption", case=False, na=False)
-        if "Taxonomy" in df.columns:
-            option_mask |= df["Taxonomy"].astype(str).str.contains("Swaption|Option", case=False, na=False)
-        if "UPI FISN" in df.columns:
-            fisn = df["UPI FISN"].astype(str)
-            option_mask |= (
-                fisn.str.contains("CALL", case=False, na=False)
-                | fisn.str.contains("PUT", case=False, na=False)
-                | fisn.str.contains("NA/O", case=False, na=False)
-                | fisn.str.contains("O P", case=False, na=False)
-            )
-
-        if {"UPI FISN", "UPI Underlier Name", "Action type"}.issubset(df.columns):
-            action_types = kwargs.get("action_types")
-            if action_types is not None:
-                sofr_subset = sofr_swaption_trades(df, action_types=action_types)
-            else:
-                sofr_subset = sofr_swaption_trades(df, action_types=tuple(df["Action type"].dropna().unique()))
-            option_mask |= df.index.isin(sofr_subset.index)
-
-        return df[mask & option_mask].copy()
+        swaption_upis = _build_upi_df(kwargs.get("base_dir"))
+        mask = df["Unique Product Identifier"].isin(swaption_upis["swaption_Identifier_UPI"])
+        swaption_trades_df = df.loc[mask].copy()
+        desc_fn = make_swaption_desc_func()
+        swaption_trades_df.loc[:, "description"] = swaption_trades_df.apply(desc_fn, axis=1)
+        swaption_trades_df = swaption_trades_df[swaption_trades_df["description"].str.contains("USD")]
+        return swaption_trades_df
 
     def classify_trade(self, row: pd.Series, trade_id: int, **kwargs: Any) -> TradeClassification:
         """
@@ -101,6 +58,7 @@ class USD_Swaptions(USDProductBase):
         execution_ts = pd.to_datetime(row.get("Execution Timestamp"))
         effective_date = pd.to_datetime(row.get("Effective Date"))
         expiration_date = pd.to_datetime(row.get("Expiration Date"))
+        underlying_expiration_date = pd.to_datetime(row.get("Maturity date of the underlier"))
 
         product_type = classify_product_type(row)
 
@@ -138,7 +96,9 @@ class USD_Swaptions(USDProductBase):
             execution_timestamp=execution_ts,
             effective_date=effective_date,
             expiration_date=expiration_date,
-            product_type=product_type,
+            underlying_expiration_date=underlying_expiration_date,
+            # product_type=product_type,
+            product_type=row["description"],
             tenor_years=tenor_years,
             tenor_label=tenor_label,
             is_forward=is_forward,
