@@ -211,7 +211,7 @@ def detect_curve_trades_df(
         if best_j >= 0:
             pkg_counter += 1
             pid = f"CURVE_{pkg_counter}"
-            legs = [int(trade_ids[best_j]), int(trade_ids[i])]
+            legs = [str(trade_ids[best_j]), str(trade_ids[i])]
 
             matched[best_j] = True
             matched[i] = True

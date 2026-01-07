@@ -99,6 +99,9 @@ def classify_product_type(row: pd.Series) -> Literal["OIS_SWAP", "SWAPTION_CALL"
     if "SOFR" in upi_underlier and ("COMPOUND" in upi_underlier or "OIS" in upi_underlier):
         return "OIS_SWAP"
 
+    if "Swap Fxd Flt" in upi_fisn:
+        return "OTHER_FXD_FLT_SWAP" 
+
     # Fixed rate inference (now safe)
     if pd.notna(fixed_rate) and fixed_rate > 0:
         return "OIS_SWAP"

@@ -103,7 +103,7 @@ def detect_fly_trades_df(
         tsec = cand["_t"].to_numpy(dtype=np.int64)
         ten_axis = pd.to_numeric(cand[ten_axis_col], errors="coerce").to_numpy(dtype=np.float64)
         tenor_years = pd.to_numeric(cand[tenor_years_col], errors="coerce").to_numpy(dtype=np.float64)
-        trade_ids = cand[trade_id_col].to_numpy(dtype=np.int64)
+        trade_ids = cand[trade_id_col].to_numpy()
 
         # Precompute economic keys as fast arrays (or None)
         ccy = cand[currency_col].astype("string").to_numpy() if (require_same_currency and currency_col in cand.columns) else None
@@ -236,7 +236,7 @@ def detect_fly_trades_df(
                         if belly_rel <= belly_ratio_tolerance and wings_rel <= belly_ratio_tolerance:
                             pkg_counter += 1
                             pid = f"FLY_{pkg_counter}"
-                            legs = [int(trade_ids[j]), int(trade_ids[i]), int(trade_ids[k])]
+                            legs = [str(trade_ids[j]), str(trade_ids[i]), str(trade_ids[k])]
 
                             for idx in (j, i, k):
                                 matched[idx] = True

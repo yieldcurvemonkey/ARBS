@@ -170,9 +170,9 @@ def detect_mms_trades_df(
 
         # Package legs (swap leg only - bond leg is not in SDR)
         if trade_id_col in out.columns:
-            out.loc[can_tag, "package_legs"] = out.loc[can_tag, trade_id_col].apply(lambda x: [int(x)] if pd.notna(x) else None).values
+            out.loc[can_tag, "package_legs"] = out.loc[can_tag, trade_id_col].apply(lambda x: [str(x)] if pd.notna(x) else None).values
         else:
-            out.loc[can_tag, "package_legs"] = out.index[can_tag].to_series().apply(lambda x: [int(x)]).values
+            out.loc[can_tag, "package_legs"] = out.index[can_tag].to_series().apply(lambda x: [str(x)]).values
 
     def _to_bool(x) -> bool:
         if isinstance(x, bool):

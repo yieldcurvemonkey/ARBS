@@ -365,7 +365,11 @@ class USD_SOFR_SwapProduct(USDProductBase):
         if raw_sdr_trades_df.empty:
             return raw_sdr_trades_df
 
-        exec_dates = pd.to_datetime(raw_sdr_trades_df["Execution Timestamp"], errors="coerce").dt.date
+        # TODO review needed
+        # Execution Timestamp = Date and time a transaction was originally executed, resulting in the generation of a new UTI. This data element remains unchanged throughout the life of the UTI.
+        # Event Timestamp = Date and time of occurrence of the event as determined by the reporting counterparty or a service provider
+        # exec_dates = pd.to_datetime(raw_sdr_trades_df["Execution Timestamp"], errors="coerce").dt.date
+        exec_dates = pd.to_datetime(raw_sdr_trades_df["Event timestamp"], errors="coerce").dt.date
         raw_sdr_trades_df = raw_sdr_trades_df.assign(_execution_date=exec_dates)
         curve_source = str(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).replace("/", "_")
         cache_flags = f"curve{int(detect_curve)}_fly{int(detect_fly)}_mms{int(detect_mms)}_invoice{int(detect_invoice)}"
@@ -398,6 +402,11 @@ class USD_SOFR_SwapProduct(USDProductBase):
 
         built_frames = []
         for exec_date in missing_dates:
+            # ignore dates falling outside of execution
+            # consequence: will drop modifications
+            if exec_date > end.date() or exec_date < start.date():
+                continue
+
             day_df = raw_sdr_trades_df[raw_sdr_trades_df["_execution_date"] == exec_date]
             curve = IRSwapsMDP(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).get_pricer(request=dict(curve_name="USD-SOFR-1D", timestamp=exec_date))
 
@@ -414,7 +423,6 @@ class USD_SOFR_SwapProduct(USDProductBase):
                 classifications_df[TRADE_ID] = classifications_df[TRADE_ID].astype("string")
                 day_df = day_df.copy()
                 day_df[TRADE_ID] = day_df[TRADE_ID].astype("string")
-
 
             package_df = classifications_df.merge(
                 day_df[

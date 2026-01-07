@@ -10,6 +10,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple, Union
 
+import pytz
 import httpx
 import numpy as np
 import pandas as pd
@@ -1190,4 +1191,6 @@ class SDRDataBuilder:
 
         if "report_slice" in out.columns:
             out = out.drop(columns=["report_slice"])
+
+        out = out[(out["Event timestamp"] >= start_timestamp.astimezone(pytz.utc)) & (out["Event timestamp"] <= end_timestamp.astimezone(pytz.utc))]
         return out
