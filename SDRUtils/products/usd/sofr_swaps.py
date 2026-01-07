@@ -408,7 +408,6 @@ class USD_SOFR_SwapProduct(USDProductBase):
                 continue
 
             day_df = raw_sdr_trades_df[raw_sdr_trades_df["_execution_date"] == exec_date]
-            curve = IRSwapsMDP(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).get_pricer(request=dict(curve_name="USD-SOFR-1D", timestamp=exec_date))
 
             # classifications = [
             #     self.classify_trade(row, trade_id=row.get(TRADE_ID), curve=curve)
@@ -416,7 +415,6 @@ class USD_SOFR_SwapProduct(USDProductBase):
             # ]
             classifications = self.classify_messages(
                 day_df,
-                curve=curve,
             )
             classifications_df = classifications_to_dataframe(classifications)
             if not classifications_df.empty:
