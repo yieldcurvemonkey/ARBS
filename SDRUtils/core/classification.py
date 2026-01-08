@@ -107,19 +107,14 @@ class SwaptionTradeClassification(TradeClassification):
     strike: Optional[float]
 
     # misc
+    # is_midcurve: Optional[bool]
+    # option_start_years
     is_capped: Optional[bool]
 
 
 def classify_product_type(row: pd.Series) -> ProductType:
     upi_fisn = str(row.get("UPI FISN", "")).upper()
     upi_underlier = str(row.get("UPI Underlier Name", "")).upper()
-
-    strike = _to_float(row.get("Strike Price"))
-    fixed_rate = _to_float(row.get("Fixed rate-Leg 1"))
-
-    first_exercise = row.get("First exercise date")
-    # normalize if you want:
-    first_exercise = pd.to_datetime(first_exercise, errors="coerce") if not isinstance(first_exercise, pd.Timestamp) else first_exercise
 
     # Explicit option labeling from FISN first
     if "NA/O Call" in upi_fisn or "CALL" in upi_fisn:
@@ -131,6 +126,10 @@ def classify_product_type(row: pd.Series) -> ProductType:
     if "FLOOR" in upi_fisn:
         return "FLOOR"
 
+    # strike = _to_float(row.get("Strike Price"))
+    # first_exercise = row.get("First exercise date")
+    # normalize if you want:
+    # first_exercise = pd.to_datetime(first_exercise, errors="coerce") if not isinstance(first_exercise, pd.Timestamp) else first_exercise
     # Strike-based option inference (now safe)
     # if pd.notna(strike) and strike > 0:
     #     if pd.notna(first_exercise):
@@ -146,6 +145,7 @@ def classify_product_type(row: pd.Series) -> ProductType:
         return "OTHER_FXD_FLT_SWAP"
 
     # Fixed rate inference (now safe)
+    fixed_rate = _to_float(row.get("Fixed rate-Leg 1"))
     if pd.notna(fixed_rate) and fixed_rate > 0:
         return "OIS_SWAP"
 

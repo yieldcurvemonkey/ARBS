@@ -73,6 +73,7 @@ def get_fomc_label(effective_date: pd.Timestamp) -> Optional[str]:
 
     try:
         from Query.IRSwaps._CENTRAL_BANK_DATES import _CENTRAL_BANK_DATES
+
         fomc_dates = {m[0] for m in _CENTRAL_BANK_DATES["USD-FEDFUNDS"].values()}
     except Exception:
         return None
@@ -195,7 +196,18 @@ def forward_to_label(years: float, effective_date: Optional[pd.Timestamp] = None
     if years <= 0.009:  # Effectively Spot or Past
         return "spot"
 
-    return tenor_to_label(years)
+    # return tenor_to_label(years)
+    if years < 1:
+        return tenor_to_label(years)
+
+    total_months = int(round(years * 12))
+    years_part, months_part = divmod(total_months, 12)
+
+    if months_part == 0:
+        return f"{years_part}Y"
+    if years_part == 0:
+        return f"{months_part}M"
+    return f"{years_part}Y{months_part}M"
 
 
 def build_trade_label(

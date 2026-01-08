@@ -296,8 +296,8 @@ def make_swaption_desc_func(
 
             expiry_years = calculate_tenor_years(asof, exp, conventions=conventions)
             tail_years = calculate_tenor_years(exp, mat, conventions=conventions)
-            expiry_label = tenor_to_label(expiry_years, expiration_date=exp)
-            tail_label = tenor_to_label(tail_years, expiration_date=mat)
+            expiry_label = forward_to_label(expiry_years, exp)
+            tail_label = tenor_to_label(tail_years, mat)
 
             if eff <= exp:
                 tenor = f"{expiry_label}{tail_label}"

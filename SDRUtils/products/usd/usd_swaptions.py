@@ -94,7 +94,7 @@ class USD_Swaptions(USDProductBase):
             notional=notional,
             notional_currency=row.get("Notional currency-Leg 1", "USD"),
             strike=strike if pd.notna(strike) else None,
-            premium=None,
+            premium=float(str(row.get("Option Premium Amount", "").replace(",", ""))),
             exercise_style=(
                 "EUROPEAN" if "epn" in str(row.get("UPI FISN", "")).lower() else "BERMUDAN" if "brm" in str(row.get("UPI FISN", "")).lower() else "AMERICAN"
             ),
