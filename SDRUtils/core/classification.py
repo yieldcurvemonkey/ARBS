@@ -62,6 +62,7 @@ class TradeClassification:
     # Notional and risk
     notional: float
     notional_currency: str
+    is_notional_capped: bool
 
     # Estimated PV01 (per 1bp)
     estimated_pv01: float
@@ -109,7 +110,6 @@ class SwaptionTradeClassification(TradeClassification):
     # misc
     # is_midcurve: Optional[bool]
     # option_start_years
-    is_capped: Optional[bool]
 
 
 def classify_product_type(row: pd.Series) -> ProductType:

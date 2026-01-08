@@ -7,31 +7,18 @@ like notional amounts, rates, and other numeric values.
 
 from __future__ import annotations
 
-from typing import Union
+from typing import Union, Tuple
 
 import numpy as np
 import pandas as pd
 
 
-def parse_notional(notional_str: Union[str, float, int]) -> float:
-    """
-    Parse notional string like '31,000,000' to float.
-
-    Handles various formats including:
-    - Comma-separated numbers: "31,000,000"
-    - Plain numbers: 31000000
-    - Already float/int values
-
-    Args:
-        notional_str: Notional value in string or numeric format
-
-    Returns:
-        Parsed notional as float, or 0.0 if parsing fails
-    """
+def parse_notional(notional_str: Union[str, float, int]) -> Tuple[float, bool]:
+    # parsed notional as type float, boolean is capped notional reported
     if pd.isna(notional_str) or notional_str == "":
-        return 0.0
+        return 0.0, False
     if isinstance(notional_str, (int, float)):
-        return float(notional_str)
+        return float(notional_str), False
     
     # capped notionals
     if "+" in notional_str:
@@ -39,9 +26,9 @@ def parse_notional(notional_str: Union[str, float, int]) -> float:
     
     # Remove commas and convert
     try:
-        return float(str(notional_str).replace(",", "").strip())
+        return float(str(notional_str).replace(",", "").strip()), False
     except Exception:
-        return 0.0
+        return 0.0, False
 
 
 def to_float(x) -> float:
