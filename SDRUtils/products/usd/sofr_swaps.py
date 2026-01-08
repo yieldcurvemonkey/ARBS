@@ -492,9 +492,8 @@ class USD_SOFR_SwapProduct(USDProductBase):
             return pd.DataFrame()
 
         final_df = pd.concat(all_frames, ignore_index=True)
+        final_df = final_df[(final_df["execution_timestamp"] >= start.astimezone(pytz.utc)) & (final_df["execution_timestamp"] <= end.astimezone(pytz.utc))]
         final_df = merge_package_legs_to_one_row(final_df)
         final_df["risk"] = final_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))
         final_df["risk"] = (final_df["risk"] / 100).round().mul(100)
-
-        final_df = final_df[(final_df["execution_timestamp"] >= start.astimezone(pytz.utc)) & (final_df["execution_timestamp"] <= end.astimezone(pytz.utc))]
         return final_df

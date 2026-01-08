@@ -122,14 +122,18 @@ class ProductModule(ABC):
         groups = resolved.groupby(synthetic_col, dropna=False)
         # for _, group in resolved.groupby(synthetic_col, dropna=False):
         for _, group in tqdm(groups, desc="Classifying Trades", unit="trade"):
-            state, _ = replay_lifecycle(group, action_col=action_col, event_timestamp_col=event_timestamp_col)
-            if state is None:
-                continue
-            row = pd.Series(state)
-            if not self.validate_row(row):
-                continue
-            trade_id = row.get(dissemination_col) or row.get(synthetic_col)
-            classifications.append(self.classify_trade(row, trade_id=trade_id, **kwargs))
+            try:
+                state, _ = replay_lifecycle(group, action_col=action_col, event_timestamp_col=event_timestamp_col)
+                if state is None:
+                    continue
+                row = pd.Series(state)
+                if not self.validate_row(row):
+                    continue
+                trade_id = row.get(dissemination_col) or row.get(synthetic_col)
+                classifications.append(self.classify_trade(row, trade_id=trade_id, **kwargs))
+            except Exception as e:
+                # TODO handle errors
+                pass
 
         return classifications
 
