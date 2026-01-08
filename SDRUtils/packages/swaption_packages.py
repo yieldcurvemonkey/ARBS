@@ -2,6 +2,7 @@
 Swaption package detection module.
 
 Detects multi-leg swaption packages including:
+- STRADDLE: Payer + Receiver swaptions with same strike/expiry/tenor
 - VEGA_BUCKETED_PACKAGE: Trades with similar vega within time proximity
 - IMPLIED_PACKAGE_SAME_TIMESTAMP: Trades with identical timestamps (BILT pattern)
 - LINKED_PACKAGES_TIME_PROXIMITY: Separate packages linked by time and vega overlap
@@ -12,6 +13,7 @@ curve.py and fly.py for linear trades.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple
@@ -297,6 +299,240 @@ def _estimate_swaption_vega(
     # Rough vega approximation: notional * sqrt(T) * 0.01
     # This gives vega in notional terms per 1% vol move
     return abs(notional) * np.sqrt(expiry) * 0.01
+
+
+# =============================================================================
+# Straddle Detection
+# =============================================================================
+
+
+def detect_swaption_straddles_df(
+    df: pd.DataFrame,
+    *,
+    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=60),
+    strike_tolerance: float = 0.0001,  # Tolerance for strike matching (absolute)
+    notional_tolerance_pct: float = 0.05,  # 5% tolerance for notional matching
+    config: Optional["SwaptionPackageDetectionConfig"] = None,
+    product_col: str = "product_type",
+    package_col: str = "package_type",
+) -> pd.DataFrame:
+    """
+    Detect swaption straddles (payer + receiver with same strike/expiry/tenor).
+
+    A straddle consists of:
+    - One PAYER swaption and one RECEIVER swaption
+    - Same strike price (within tolerance)
+    - Same option expiration date
+    - Same underlying tenor
+    - Same notional (within tolerance)
+    - Execution timestamps within the specified tolerance
+
+    Args:
+        df: Classifications dataframe with swaption trades
+        straddle_timestamp_tolerance: Maximum time difference between payer and
+            receiver legs for them to be considered a straddle. Pass as
+            datetime.timedelta (e.g., timedelta(seconds=60) for 1 minute).
+        strike_tolerance: Absolute tolerance for strike price matching
+        notional_tolerance_pct: Percentage tolerance for notional matching (0.05 = 5%)
+        config: Detection configuration (uses default if None)
+        product_col: Column name for product type
+        package_col: Column name for package type
+
+    Returns:
+        DataFrame with straddle annotations:
+        - package_type: "STRADDLE" for detected straddles
+        - package_id: Deterministic package identifier
+        - package_legs: List of trade IDs in the straddle
+        - package_confidence: Confidence score 0-1
+        - package_reason: Structured explanation string
+        - package_legs_count: Always 2 for straddles
+    """
+    if df.empty:
+        return df
+
+    if config is None:
+        config = DEFAULT_SWAPTION_PACKAGE_CONFIG
+
+    out = df.copy()
+
+    # Initialize output columns if not present
+    for col, default in [
+        (package_col, "SWAPTION"),
+        ("package_id", None),
+        ("package_legs", None),
+        ("package_confidence", None),
+        ("package_reason", None),
+        ("package_legs_count", None),
+    ]:
+        if col not in out.columns:
+            out[col] = default
+
+    # Convert timedelta to seconds for comparison
+    tolerance_seconds = straddle_timestamp_tolerance.total_seconds()
+
+    # Filter to swaption candidates not already in a package
+    is_swaption = out[product_col].astype(str).str.contains("SWAPTION", case=False, na=False)
+    not_packaged = out["package_id"].isna() | (out["package_id"] == "")
+    candidate_mask = is_swaption & not_packaged
+
+    # Separate payers and receivers
+    is_payer = out[product_col].astype(str).str.contains("PAYER|CALL", case=False, na=False)
+    is_receiver = out[product_col].astype(str).str.contains("RECEIVER|PUT", case=False, na=False)
+
+    payer_mask = candidate_mask & is_payer
+    receiver_mask = candidate_mask & is_receiver
+
+    payers = out.loc[payer_mask].copy()
+    receivers = out.loc[receiver_mask].copy()
+
+    if payers.empty or receivers.empty:
+        return out
+
+    # Ensure execution timestamp is epoch seconds
+    payers["_t"] = _ensure_int64_epoch_seconds(payers[config.exec_col])
+    receivers["_t"] = _ensure_int64_epoch_seconds(receivers[config.exec_col])
+
+    # Extract arrays for matching
+    payer_idx = payers.index.tolist()
+    receiver_idx = receivers.index.tolist()
+
+    # Track matched indices
+    matched_payers: Set[int] = set()
+    matched_receivers: Set[int] = set()
+
+    straddle_counter = 0
+
+    # Match payers with receivers
+    for p_idx in payer_idx:
+        if p_idx in matched_payers:
+            continue
+
+        p_row = payers.loc[p_idx]
+        p_t = p_row["_t"]
+        p_strike = _safe_float(p_row.get(config.strike_col))
+        p_expiry = p_row.get(config.expiration_col)
+        p_tenor = _safe_float(p_row.get(config.tenor_col))
+        p_notional = _safe_float(p_row.get(config.notional_col))
+        p_platform = p_row.get(config.platform_col, "")
+        p_currency = p_row.get(config.currency_col, "")
+        p_underlier = p_row.get(config.underlier_col, "")
+        p_trade_id = str(p_row.get(config.trade_id_col, ""))
+
+        # Skip if missing critical fields
+        if pd.isna(p_strike) or pd.isna(p_tenor) or pd.isna(p_notional):
+            continue
+
+        best_match = None
+        best_time_diff = float("inf")
+
+        for r_idx in receiver_idx:
+            if r_idx in matched_receivers:
+                continue
+
+            r_row = receivers.loc[r_idx]
+            r_t = r_row["_t"]
+
+            # Check timestamp tolerance
+            time_diff = abs(p_t - r_t)
+            if time_diff > tolerance_seconds:
+                continue
+
+            r_strike = _safe_float(r_row.get(config.strike_col))
+            r_expiry = r_row.get(config.expiration_col)
+            r_tenor = _safe_float(r_row.get(config.tenor_col))
+            r_notional = _safe_float(r_row.get(config.notional_col))
+            r_platform = r_row.get(config.platform_col, "")
+            r_currency = r_row.get(config.currency_col, "")
+            r_underlier = r_row.get(config.underlier_col, "")
+
+            # Skip if missing critical fields
+            if pd.isna(r_strike) or pd.isna(r_tenor) or pd.isna(r_notional):
+                continue
+
+            # Check strike match
+            if abs(p_strike - r_strike) > strike_tolerance:
+                continue
+
+            # Check expiry match (if both are valid)
+            if pd.notna(p_expiry) and pd.notna(r_expiry):
+                p_exp_date = pd.to_datetime(p_expiry)
+                r_exp_date = pd.to_datetime(r_expiry)
+                if p_exp_date != r_exp_date:
+                    continue
+
+            # Check tenor match
+            if abs(p_tenor - r_tenor) > 0.01:  # 0.01 year tolerance
+                continue
+
+            # Check notional match
+            avg_notional = 0.5 * (p_notional + r_notional)
+            if avg_notional > 0:
+                notional_diff = abs(p_notional - r_notional) / avg_notional
+                if notional_diff > notional_tolerance_pct:
+                    continue
+
+            # Check economic filters
+            if config.require_same_platform and p_platform != r_platform:
+                continue
+            if config.require_same_currency and p_currency != r_currency:
+                continue
+            if config.require_same_underlier and p_underlier != r_underlier:
+                continue
+
+            # This is a valid match - track the best one (closest in time)
+            if time_diff < best_time_diff:
+                best_time_diff = time_diff
+                best_match = r_idx
+
+        # If we found a match, create the straddle
+        if best_match is not None:
+            r_idx = best_match
+            r_row = receivers.loc[r_idx]
+            r_trade_id = str(r_row.get(config.trade_id_col, ""))
+
+            matched_payers.add(p_idx)
+            matched_receivers.add(r_idx)
+            straddle_counter += 1
+
+            # Generate package ID
+            pid = _compute_package_id(
+                [p_trade_id, r_trade_id],
+                p_platform,
+                int(p_t // 30),  # Time bucket
+                "STRADDLE",
+            )
+
+            # Compute confidence
+            confidence = 0.8  # High base confidence for straddles
+            if best_time_diff < 5:  # Within 5 seconds
+                confidence += 0.1
+            if abs(_safe_float(p_row.get(config.strike_col)) - _safe_float(r_row.get(config.strike_col))) < 0.00001:
+                confidence += 0.1
+            confidence = min(confidence, 1.0)
+
+            # Build reason
+            reason = _build_package_reason(
+                platform=p_platform,
+                time_delta_max_seconds=best_time_diff,
+                vega_cluster_spread_pct=0.0,  # N/A for straddles
+                premium_mode="STRADDLE",
+                num_legs=2,
+                identical_timestamps=(best_time_diff < 1),
+                extra_info=f"strike={p_strike:.4f}; tenor={p_tenor:.1f}Y",
+            )
+
+            legs_list = [p_trade_id, r_trade_id]
+
+            # Update both legs
+            for idx in [p_idx, r_idx]:
+                out.loc[idx, package_col] = "STRADDLE"
+                out.loc[idx, "package_id"] = pid
+                out.loc[idx, "package_legs"] = legs_list
+                out.loc[idx, "package_confidence"] = confidence
+                out.loc[idx, "package_reason"] = reason
+                out.loc[idx, "package_legs_count"] = 2
+
+    return out
 
 
 # =============================================================================
@@ -824,11 +1060,21 @@ def detect_and_link_swaption_packages_df(
     vega_estimator: Optional[Callable[[pd.Series], float]] = None,
     product_col: str = "product_type",
     package_col: str = "package_type",
+    detect_straddles: bool = True,
+    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=60),
+    straddle_strike_tolerance: float = 0.0001,
+    straddle_notional_tolerance_pct: float = 0.05,
 ) -> pd.DataFrame:
     """
     Combined detection and linking of swaption packages.
 
-    Convenience function that runs both detection and linking passes.
+    Convenience function that runs straddle detection, vega-based detection,
+    and package linking in sequence.
+
+    Detection order:
+    1. Straddles (payer + receiver with same strike/expiry/tenor)
+    2. Vega-bucketed packages (similar vega within time window)
+    3. Package linking (link related packages by time/vega)
 
     Args:
         df: Classifications dataframe with swaption trades
@@ -836,18 +1082,39 @@ def detect_and_link_swaption_packages_df(
         vega_estimator: Optional custom vega estimation function
         product_col: Column name for product type
         package_col: Column name for package type
+        detect_straddles: Whether to detect straddles (default True)
+        straddle_timestamp_tolerance: Max time between payer and receiver legs
+            for straddle detection. Pass as datetime.timedelta.
+        straddle_strike_tolerance: Absolute tolerance for strike matching
+        straddle_notional_tolerance_pct: Percentage tolerance for notional matching
 
     Returns:
         DataFrame with full package annotations including links
     """
+    out = df.copy()
+
+    # Phase 1: Detect straddles first (highest priority)
+    if detect_straddles:
+        out = detect_swaption_straddles_df(
+            out,
+            straddle_timestamp_tolerance=straddle_timestamp_tolerance,
+            strike_tolerance=straddle_strike_tolerance,
+            notional_tolerance_pct=straddle_notional_tolerance_pct,
+            config=config,
+            product_col=product_col,
+            package_col=package_col,
+        )
+
+    # Phase 2: Detect vega-bucketed packages (remaining trades)
     out = detect_swaption_packages_df(
-        df,
+        out,
         config=config,
         vega_estimator=vega_estimator,
         product_col=product_col,
         package_col=package_col,
     )
 
+    # Phase 3: Link related packages
     out = link_swaption_packages(
         out,
         config=config,

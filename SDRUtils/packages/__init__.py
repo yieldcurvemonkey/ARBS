@@ -6,6 +6,7 @@ This package provides algorithms for detecting multi-leg trade packages:
 - CURVE: Curve spread detection (2 legs)
 - SPREADOVER: Swap/UST matched maturity detection
 - SWAPTION_PACKAGE: Vega-based swaption package detection
+- STRADDLE: Payer + Receiver swaption package detection
 
 Each detector implements the PackageDetector interface and is registered
 with the global registry.
@@ -25,6 +26,7 @@ from SDRUtils.packages.swaption_packages import (
     SwaptionPackageDetector,
     SwaptionPackageDetectionConfig,
     detect_swaption_packages_df,
+    detect_swaption_straddles_df,
     detect_and_link_swaption_packages_df,
     link_swaption_packages,
 )
@@ -46,6 +48,7 @@ __all__ = [
     "detect_fly_trades_df",
     "detect_mms_trades_df",
     "detect_swaption_packages_df",
+    "detect_swaption_straddles_df",
     "detect_and_link_swaption_packages_df",
     "link_swaption_packages",
     "merge_package_legs_to_one_row",

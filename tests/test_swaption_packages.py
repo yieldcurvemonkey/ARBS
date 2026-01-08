@@ -16,6 +16,7 @@ import numpy as np
 from SDRUtils.packages.swaption_packages import (
     SwaptionPackageDetectionConfig,
     detect_swaption_packages_df,
+    detect_swaption_straddles_df,
     detect_and_link_swaption_packages_df,
     link_swaption_packages,
     _vega_bucket,
@@ -686,6 +687,269 @@ class TestGoldenSnapshots:
         # Should have either 1 package (all 4 grouped) or 2 packages (2+2)
         num_packages = packaged["package_id"].nunique()
         assert num_packages in [1, 2], f"Expected 1 or 2 packages, got {num_packages}"
+
+
+# =============================================================================
+# Straddle Detection Tests
+# =============================================================================
+
+
+@pytest.fixture
+def straddle_df():
+    """
+    Example straddle: payer + receiver with same strike/expiry/tenor.
+    """
+    base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+    return pd.DataFrame([
+        {
+            "trade_id": "S001",
+            "product_type": "SWAPTION_PAYER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,
+            "strike": 4.50,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 5.0,
+            "forward_start_years": 1.0,
+            "premium": 125000.0,
+            "Package indicator": False,
+        },
+        {
+            "trade_id": "S002",
+            "product_type": "SWAPTION_RECEIVER",
+            "execution_timestamp": base_ts + pd.Timedelta(seconds=30),  # 30 seconds later
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,
+            "strike": 4.50,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 5.0,
+            "forward_start_years": 1.0,
+            "premium": 125000.0,
+            "Package indicator": False,
+        },
+    ])
+
+
+@pytest.fixture
+def straddle_with_tolerance_df():
+    """
+    Straddle with legs further apart in time.
+    """
+    base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+    return pd.DataFrame([
+        {
+            "trade_id": "ST001",
+            "product_type": "SWAPTION_PAYER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,
+            "strike": 4.50,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 5.0,
+            "forward_start_years": 1.0,
+            "premium": 125000.0,
+        },
+        {
+            "trade_id": "ST002",
+            "product_type": "SWAPTION_RECEIVER",
+            "execution_timestamp": base_ts + pd.Timedelta(seconds=90),  # 90 seconds later
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,
+            "strike": 4.50,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 5.0,
+            "forward_start_years": 1.0,
+            "premium": 125000.0,
+        },
+    ])
+
+
+class TestStraddleDetection:
+    """Tests for straddle detection functionality."""
+
+    def test_basic_straddle_detection(self, straddle_df, config):
+        """Test basic straddle detection with default tolerance."""
+        result = detect_swaption_straddles_df(
+            straddle_df,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+            config=config,
+        )
+
+        # Both legs should be detected as straddle
+        packaged = result[result["package_id"].notna()]
+        assert len(packaged) == 2, "Both legs should be in straddle"
+
+        # Should be labeled as STRADDLE
+        assert (packaged["package_type"] == "STRADDLE").all()
+
+        # Should have same package_id
+        assert packaged["package_id"].nunique() == 1
+
+        # Should have 2 legs
+        assert (packaged["package_legs_count"] == 2).all()
+
+    def test_straddle_timestamp_tolerance(self, straddle_with_tolerance_df, config):
+        """Test straddle detection with custom timestamp tolerance."""
+        # With 60 second tolerance, should NOT detect (legs are 90s apart)
+        result_60s = detect_swaption_straddles_df(
+            straddle_with_tolerance_df,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+            config=config,
+        )
+        packaged_60s = result_60s[result_60s["package_id"].notna()]
+        assert len(packaged_60s) == 0, "Should not detect straddle with 60s tolerance"
+
+        # With 120 second tolerance, should detect
+        result_120s = detect_swaption_straddles_df(
+            straddle_with_tolerance_df,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=120),
+            config=config,
+        )
+        packaged_120s = result_120s[result_120s["package_id"].notna()]
+        assert len(packaged_120s) == 2, "Should detect straddle with 120s tolerance"
+
+    def test_straddle_strike_mismatch(self, config):
+        """Test that different strikes don't form straddle."""
+        base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+        df = pd.DataFrame([
+            {
+                "trade_id": "SM001",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 100_000_000,
+                "strike": 4.50,
+                "tenor_years": 5.0,
+            },
+            {
+                "trade_id": "SM002",
+                "product_type": "SWAPTION_RECEIVER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 100_000_000,
+                "strike": 4.75,  # Different strike
+                "tenor_years": 5.0,
+            },
+        ])
+
+        result = detect_swaption_straddles_df(
+            df,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+            config=config,
+        )
+
+        packaged = result[result["package_id"].notna()]
+        assert len(packaged) == 0, "Different strikes should not form straddle"
+
+    def test_straddle_notional_mismatch(self, config):
+        """Test that very different notionals don't form straddle."""
+        base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+        df = pd.DataFrame([
+            {
+                "trade_id": "NM001",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 100_000_000,
+                "strike": 4.50,
+                "tenor_years": 5.0,
+            },
+            {
+                "trade_id": "NM002",
+                "product_type": "SWAPTION_RECEIVER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 200_000_000,  # 2x different notional
+                "strike": 4.50,
+                "tenor_years": 5.0,
+            },
+        ])
+
+        result = detect_swaption_straddles_df(
+            df,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+            notional_tolerance_pct=0.05,  # 5% tolerance
+            config=config,
+        )
+
+        packaged = result[result["package_id"].notna()]
+        assert len(packaged) == 0, "Very different notionals should not form straddle"
+
+    def test_straddle_confidence_scoring(self, straddle_df, config):
+        """Test straddle confidence scoring."""
+        result = detect_swaption_straddles_df(
+            straddle_df,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+            config=config,
+        )
+
+        packaged = result[result["package_id"].notna()]
+        assert len(packaged) == 2
+
+        # Confidence should be high for straddles
+        assert packaged["package_confidence"].min() >= 0.8
+
+    def test_straddle_reason_format(self, straddle_df, config):
+        """Test straddle package reason format."""
+        result = detect_swaption_straddles_df(
+            straddle_df,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+            config=config,
+        )
+
+        packaged = result[result["package_id"].notna()]
+        reason = packaged["package_reason"].iloc[0]
+
+        # Should contain strike and tenor info
+        assert "strike=" in reason
+        assert "tenor=" in reason
+        assert "platform=" in reason
+
+    def test_straddle_in_combined_detection(self, straddle_df, config):
+        """Test that straddles are detected in combined detection."""
+        result = detect_and_link_swaption_packages_df(
+            straddle_df,
+            config=config,
+            detect_straddles=True,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+        )
+
+        packaged = result[result["package_id"].notna()]
+        assert len(packaged) == 2
+
+        # Should be STRADDLE type (detected first before vega bucketing)
+        assert (packaged["package_type"] == "STRADDLE").all()
+
+    def test_straddle_detection_disabled(self, straddle_df, config):
+        """Test that straddles can be disabled in combined detection."""
+        result = detect_and_link_swaption_packages_df(
+            straddle_df,
+            config=config,
+            detect_straddles=False,
+        )
+
+        packaged = result[result["package_id"].notna()]
+
+        # Straddle detection disabled - may or may not be detected by vega bucketing
+        # But if detected, should NOT be STRADDLE type
+        if len(packaged) > 0:
+            assert not (packaged["package_type"] == "STRADDLE").any()
 
 
 if __name__ == "__main__":
