@@ -71,13 +71,7 @@ class USD_Swaptions(USDProductBase):
 
         forward_label = forward_to_label(forward_years, effective_date=expiration_date)
 
-        notional = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
-        if isinstance(notional, Sequence):
-            is_capped = notional[1]
-            notional = notional[0]
-        else:
-            is_capped = False
-
+        notional, is_notional_capped = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
         strike = row.get("Strike Price")
 
         return SwaptionTradeClassification(
@@ -95,6 +89,7 @@ class USD_Swaptions(USDProductBase):
             forward_start_years=forward_years,
             notional=notional,
             notional_currency=row.get("Notional currency-Leg 1", "USD"),
+            is_notional_capped=is_notional_capped,
             strike=strike if pd.notna(strike) else None,
             premium=float(str(row.get("Option Premium Amount", "").replace(",", ""))),
             exercise_style=(
@@ -102,7 +97,6 @@ class USD_Swaptions(USDProductBase):
             ),
             estimated_pv01=0.0,
             package_type=self.package_type,
-            is_capped=is_capped,
         )
 
     def build_classification_dataframe(
@@ -180,10 +174,7 @@ class USD_Swaptions(USDProductBase):
 
         # Normalize column names (convert CamelCase and spaces to snake_case)
         package_df = package_df.drop(columns=[TRADE_ID], errors="ignore")
-        package_df.columns = [
-            re.sub(r"(?<!^)(?=[A-Z])", "_", col.lower()).lower().replace(" ", "_")
-            for col in package_df.columns
-        ]
+        package_df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", col.lower()).lower().replace(" ", "_") for col in package_df.columns]
 
         # Detect swaption packages
         if detect_swaption_packages:

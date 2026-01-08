@@ -16,16 +16,16 @@ from typing import Any, Optional
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytz
 import QuantLib as ql
 import requests
 from tqdm import tqdm
 
 import Query.IRSwaps.adapter  # noqa: F401
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+from Query.IRSwaps._CME_INVOICE_SWAP_TICKERS import _CME_INVOICE_SWAP_TICKERS, _INDICATOR_TO_TICKER
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
-from Query.IRSwaps._CME_INVOICE_SWAP_TICKERS import _CME_INVOICE_SWAP_TICKERS, _INDICATOR_TO_TICKER
-
 from SDRUtils.config import PRODUCT_TYPES, TRADE_ID, USD_CONVENTIONS
 from SDRUtils.core.classification import SwapTradeClassification, classifications_to_dataframe, classify_product_type
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
@@ -33,9 +33,9 @@ from SDRUtils.core.parsing import parse_notional
 from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_to_label
 from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.packages import detect_curve_trades_df, detect_fly_trades_df, detect_mms_trades_df, merge_package_legs_to_one_row
-from SDRUtils.products.usd.base import USDProductBase
-from SDRUtils.products._swaps.filters import sofr_swap_trades
 from SDRUtils.products._swaps._cme_mac import fetch_mac_ref_data
+from SDRUtils.products._swaps.filters import sofr_swap_trades
+from SDRUtils.products.usd.base import USDProductBase
 
 
 def classify_sofr_swap_trade(
@@ -100,7 +100,7 @@ def classify_sofr_swap_trade(
     trade_label = build_trade_label(forward_label, tenor_label, is_forward)
 
     # Extract notional and rate
-    notional = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
+    notional, is_notional_capped = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
     fixed_rate = row.get("Fixed rate-Leg 1", row.get("Fixed rate-Leg 2"))
     # Calculate PV01 if curve provided
     pkg, _ = IRSwapQuery(
@@ -123,6 +123,7 @@ def classify_sofr_swap_trade(
         forward_label=forward_label,
         notional=notional,
         notional_currency=row.get("Notional currency-Leg 1", "USD"),
+        is_notional_capped=is_notional_capped,
         fixed_rate=fixed_rate if pd.notna(fixed_rate) else None,
         estimated_pv01=pv01,
         package_type="OUTRIGHT",
@@ -144,8 +145,8 @@ def detect_invoice_swaps(
 
     as_of = exec_dates.dt.date.value_counts().index[0]
 
-    from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
     from definitions.USTFutures import front_month
+    from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
 
     ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
     roots = sorted({spec["root"] for spec in _CME_INVOICE_SWAP_TICKERS.values()})
@@ -369,8 +370,11 @@ class USD_SOFR_SwapProduct(USDProductBase):
         # exec_dates = pd.to_datetime(raw_sdr_trades_df["Execution Timestamp"], errors="coerce").dt.date
         exec_dates = pd.to_datetime(raw_sdr_trades_df["Event timestamp"], errors="coerce").dt.date
         raw_sdr_trades_df = raw_sdr_trades_df.assign(_execution_date=exec_dates)
+
         curve_source = str(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).replace("/", "_")
-        cache_flags = f"curve{int(detect_curve)}_fly{int(detect_fly)}_mms{int(detect_mms)}_invoice{int(detect_invoice)}"
+        mdp = IRSwapsMDP(source=curve_source)
+
+        cache_flags = f"curve{int(detect_curve)}_fly{int(detect_fly)}_mms{int(detect_mms)}_invoice{int(detect_invoice)}_mac{int(detect_mac)}_spreadover{int(detect_spreadover)}"
         cache_base = Path(cache_path) / "classification_cache" / "usd_sofr_swaps" / curve_source / cache_flags
         cache_base.mkdir(parents=True, exist_ok=True)
 
@@ -380,22 +384,35 @@ class USD_SOFR_SwapProduct(USDProductBase):
             if pd.isna(exec_date):
                 continue
             date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
-            cache_fp = date_dir / f"{count}.parquet"
-            if cache_fp.exists() and (ignore_cache == False):
-                try:
-                    cached_frames.append(pd.read_parquet(cache_fp, engine="pyarrow"))
-                    continue
-                except Exception:
-                    cache_fp.unlink(missing_ok=True)
-            missing_dates.append(exec_date)
+
+            found_cache = False
+            if date_dir.exists() and (ignore_cache is False):
+                cache_candidates = []
+                for fp in date_dir.glob("*.parquet"):
+                    if fp.stem.isdigit():
+                        cache_candidates.append((int(fp.stem), fp))
+
+                if cache_candidates:
+                    max_cached_count, best_cache_fp = max(cache_candidates, key=lambda x: x[0])
+                    if max_cached_count >= count:
+                        try:
+                            cached_frames.append(pd.read_parquet(best_cache_fp, engine="pyarrow"))
+                            found_cache = True
+                        except Exception:
+                            best_cache_fp.unlink(missing_ok=True)
+
+            if not found_cache:
+                missing_dates.append(exec_date)
 
         if not missing_dates:
             if cached_frames:
                 final_df = pd.concat(cached_frames, ignore_index=True)
+                final_df = final_df[(final_df["execution_timestamp"] >= start.astimezone(pytz.utc)) & (final_df["execution_timestamp"] <= end.astimezone(pytz.utc))]
                 final_df = merge_package_legs_to_one_row(final_df)
                 final_df["risk"] = final_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))
-                final_df["risk"] = (final_df["risk"] / 2500).round().mul(2500)
+                final_df["risk"] = (final_df["risk"] / 100).round().mul(100)
                 return final_df
+
             return pd.DataFrame()
 
         built_frames = []
@@ -413,6 +430,7 @@ class USD_SOFR_SwapProduct(USDProductBase):
             # ]
             classifications = self.classify_messages(
                 day_df,
+                curve=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date)),
             )
             classifications_df = classifications_to_dataframe(classifications)
             if not classifications_df.empty:
@@ -478,4 +496,5 @@ class USD_SOFR_SwapProduct(USDProductBase):
         final_df["risk"] = final_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))
         final_df["risk"] = (final_df["risk"] / 100).round().mul(100)
 
+        final_df = final_df[(final_df["execution_timestamp"] >= start.astimezone(pytz.utc)) & (final_df["execution_timestamp"] <= end.astimezone(pytz.utc))]
         return final_df
