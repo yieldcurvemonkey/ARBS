@@ -24,6 +24,45 @@ from SDRUtils.packages import detect_and_link_swaption_packages_df, SwaptionPack
 from SDRUtils.products.usd.base import USDProductBase
 from SDRUtils.products._swaptions.upi import make_swaption_desc_func, _build_upi_df
 
+from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
+from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+
+
+def straddle_pricer_from_row(classification_row: pd.Series, pricer: QLIRSwapCurve):
+
+    q = IRSwapQuery(
+        curve="USD-SOFR-1D",
+        effective_date=classification_row["expiration_date"],
+        maturity_date=classification_row["underlying_expiration_date"],
+        structure_kwargs={"notional": classification_row["notional"]},
+    )
+    pkg, _ = q.resolve_package(pricer_or_curve=pricer)
+
+    underlying: ql.OvernightIndexedSwap = pkg[0]
+    underlying_swap_pricing_engine = ql.DiscountingSwapEngine(pricer.handle())
+    underlying.setPricingEngine(underlying_swap_pricing_engine)
+    observed_ql_swaption_pricing_engine = ql.BachelierSwaptionEngine(pricer.handle(), ql.QuoteHandle(ql.SimpleQuote(0.0)), pricer.daycounter())
+    observed_ql_swaption = ql.Swaption(underlying, ql.EuropeanExercise(underlying.startDate()))
+    observed_ql_swaption.setPricingEngine(observed_ql_swaption_pricing_engine)
+    iv = (
+        observed_ql_swaption.impliedVolatility(
+            price=classification_row["premium"],
+            discountCurve=pricer.handle(),
+            guess=0.01,
+            accuracy=1e-5,
+            maxEvaluations=1000,
+            minVol=0,
+            maxVol=0.1,
+            type=ql.Normal,
+            displacement=0,
+            priceType=ql.Swaption.Forward,
+        )
+        / 2
+        * 10_000
+    )
+
+    return observed_ql_swaption, iv
+
 
 class USD_Swaptions(USDProductBase):
     """
@@ -74,6 +113,12 @@ class USD_Swaptions(USDProductBase):
         notional, is_notional_capped = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
         strike = row.get("Strike Price")
 
+        def _extract_prem(row):
+            opa = float(str(row.get("Option Premium Amount", "").replace(",", "")))
+            if opa == 0:
+                opa = float(str(row.get("Package transaction price", "").replace(",", "")))
+            return opa
+
         return SwaptionTradeClassification(
             event_action=f"{row['Action type']}-{row['Event type']}",
             trade_id=trade_id,
@@ -91,7 +136,7 @@ class USD_Swaptions(USDProductBase):
             notional_currency=row.get("Notional currency-Leg 1", "USD"),
             is_notional_capped=is_notional_capped,
             strike=strike if pd.notna(strike) else None,
-            premium=float(str(row.get("Option Premium Amount", "").replace(",", ""))),
+            premium=_extract_prem(row),
             exercise_style=(
                 "EUROPEAN" if "epn" in str(row.get("UPI FISN", "")).lower() else "BERMUDAN" if "brm" in str(row.get("UPI FISN", "")).lower() else "AMERICAN"
             ),

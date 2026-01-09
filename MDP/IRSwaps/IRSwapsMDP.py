@@ -319,6 +319,51 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             return QLIRSwapCurve(ql_curve_id=curve_name, ql_curve_handle=ql_curve_handle, ql_curve_index=irswap_index, meta_data={"timestamp": ts})
 
+        elif self.source.upper() in ["ERIS_EOD_LIVE-QL_BASIC-NOJUMPS", "ERIS_EOD_LIVE_QL_BASIC-NOJUMPS"]:
+            import QuantLib as ql
+
+            from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.ErisFuturesFetcher import ErisFuturesFetcher
+            from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
+            from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
+            from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
+
+            if type(timestamp) == datetime.datetime or hasattr(timestamp, "date"):
+                timestamp = timestamp.date()
+
+            assert type(timestamp) == datetime.date or timestamp == "live", "CME_NY_EOD ONLY HAS EOD - 'timestamp' must be type 'datetime.date' or Literal['live']"
+            assert curve_name in QUANTLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."
+            ql_curve_def = QUANTLIB_CURVE_DEFINITIONS[curve_name]
+
+            erisf = ErisFuturesFetcher(**self.config)
+
+            ts, ql_curve = next(
+                iter(
+                    erisf.fetch_historical_eod_discount_curves(
+                        ql_dc=ql_curve_def["DayCounter"],
+                        ql_cal=ql_curve_def["Calendar"],
+                        bdates=[timestamp],
+                        enable_extrapolation=True,
+                        show_tqdm=False,
+                        **kwargs,
+                    ).items()
+                )
+            )
+
+            ql_curve_handle = ql.YieldTermStructureHandle(ql_curve)
+            irswap_index: ql.SwapIndex = QUANTLIB_CURVE_DEFINITIONS[curve_name]["ReferenceRate"](ql_curve_handle)
+
+            ref = datetime.date.today() if type(timestamp) == str else timestamp
+            fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            fixings_series: pd.Series = fixings_series[fixings_series.index.date < ref]
+            fixings_dict = fixings_series.to_dict()
+            for d, f in fixings_dict.items():
+                try:
+                    irswap_index.addFixing(fixingDate=datetime_to_ql_date(d), fixing=f, forceOverwrite=True)
+                except:
+                    continue
+
+            return QLIRSwapCurve(ql_curve_id=curve_name, ql_curve_handle=ql_curve_handle, ql_curve_index=irswap_index, meta_data={"timestamp": ts})
+
         elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_MT_Q12", "SDR_INTRADAY_RL_USD_SOFR_MT_Q12"]:
             assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
             assert curve_name == "USD-SOFR-1D", "SOFR!"

@@ -240,7 +240,7 @@ def _build_package_reason(
     parts = [
         f"platform={platform}",
         f"time_delta_max={time_delta_max_seconds:.1f}s",
-        f"vega_cluster_spread={vega_cluster_spread_pct:.1f}%",
+        # f"vega_cluster_spread={vega_cluster_spread_pct:.1f}%",
         f"premium_mode={premium_mode}",
         f"legs={num_legs}",
     ]

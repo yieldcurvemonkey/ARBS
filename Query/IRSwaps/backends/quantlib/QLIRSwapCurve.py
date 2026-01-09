@@ -40,6 +40,9 @@ class QLIRSwapCurve(_IRSwapGenericCurve):
             )
         )
 
+    def daycounter(self):
+        return QUANTLIB_CURVE_DEFINITIONS[self._ql_curve_id]["DayCounter"] 
+    
     def handle(self) -> ql.YieldTermStructureHandle:
         return self._ql_curve_handle
 
