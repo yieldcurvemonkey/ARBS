@@ -8,9 +8,13 @@ reported to the DTCC SDR.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytz
 import QuantLib as ql
 from collections.abc import Iterable, Sequence
 
@@ -186,54 +190,130 @@ class USD_Swaptions(USDProductBase):
         if raw_sdr_trades_df.empty:
             return raw_sdr_trades_df
 
-        classifications = self.classify_messages(raw_sdr_trades_df, **kwargs)
-        classifications_df = classifications_to_dataframe(classifications)
+        exec_dates = pd.to_datetime(raw_sdr_trades_df["Event timestamp"], errors="coerce").dt.date
+        raw_sdr_trades_df = raw_sdr_trades_df.assign(_execution_date=exec_dates)
 
-        if classifications_df.empty:
-            return classifications_df
+        cache_flags = f"swaption_pkgs{int(detect_swaption_packages)}_merge{int(merge_package_legs)}"
+        cache_base = Path(cache_path) / "classification_cache" / "usd_swaptions" / cache_flags
+        cache_base.mkdir(parents=True, exist_ok=True)
 
-        # Merge with raw SDR columns needed for package detection
-        classifications_df[TRADE_ID] = classifications_df[TRADE_ID].astype("string")
-        raw_sdr_trades_df = raw_sdr_trades_df.copy()
-        raw_sdr_trades_df[TRADE_ID] = raw_sdr_trades_df[TRADE_ID].astype("string")
+        cached_frames = []
+        missing_dates = []
+        for exec_date, count in raw_sdr_trades_df["_execution_date"].value_counts().items():
+            if pd.isna(exec_date):
+                continue
+            date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
 
-        # Columns needed for package detection
-        package_cols = [
-            TRADE_ID,
-            "UPI Underlier Name",
-            "Unique Product Identifier",
-            "Platform identifier",
-            "Cleared",
-            "Package indicator",
-            "Package transaction price",
-            "Option Premium Amount",
-        ]
-        # Only include columns that exist
-        package_cols = [c for c in package_cols if c in raw_sdr_trades_df.columns]
+            found_cache = False
+            if date_dir.exists() and (ignore_cache is False):
+                cache_candidates = []
+                for fp in date_dir.glob("*.parquet"):
+                    if fp.stem.isdigit():
+                        cache_candidates.append((int(fp.stem), fp))
 
-        package_df = classifications_df.merge(
-            raw_sdr_trades_df[package_cols],
-            on=TRADE_ID,
-            how="left",
-        )
+                if cache_candidates:
+                    max_cached_count, best_cache_fp = max(cache_candidates, key=lambda x: x[0])
+                    if max_cached_count >= count:
+                        try:
+                            cached_frames.append(pd.read_parquet(best_cache_fp, engine="pyarrow"))
+                            found_cache = True
+                        except Exception:
+                            best_cache_fp.unlink(missing_ok=True)
 
-        # Normalize column names (convert CamelCase and spaces to snake_case)
-        package_df = package_df.drop(columns=[TRADE_ID], errors="ignore")
-        package_df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", col.lower()).lower().replace(" ", "_") for col in package_df.columns]
+            if not found_cache:
+                missing_dates.append(exec_date)
 
-        # Detect swaption packages
-        if detect_swaption_packages:
-            package_df = detect_and_link_swaption_packages_df(
-                package_df,
-                config=swaption_package_config,
+        def _to_utc(ts: pd.Timestamp) -> pd.Timestamp:
+            timestamp = pd.Timestamp(ts)
+            if timestamp.tzinfo is None:
+                return timestamp.tz_localize(pytz.utc)
+            return timestamp.tz_convert(pytz.utc)
+
+        if not missing_dates:
+            if cached_frames:
+                final_df = pd.concat(cached_frames, ignore_index=True)
+                start_ts = _to_utc(start)
+                end_ts = _to_utc(end)
+                final_df = final_df[(final_df["execution_timestamp"] >= start_ts) & (final_df["execution_timestamp"] <= end_ts)]
+                final_df = final_df.sort_values(by="execution_timestamp")
+                if merge_package_legs:
+                    final_df = merge_package_legs_to_one_row(final_df)
+                return final_df
+
+            return pd.DataFrame()
+
+        built_frames = []
+        for exec_date in missing_dates:
+            if exec_date > end.date() or exec_date < start.date():
+                continue
+
+            day_df = raw_sdr_trades_df[raw_sdr_trades_df["_execution_date"] == exec_date]
+            classifications = self.classify_messages(day_df, **kwargs)
+            classifications_df = classifications_to_dataframe(classifications)
+
+            if classifications_df.empty:
+                continue
+
+            # Merge with raw SDR columns needed for package detection
+            classifications_df[TRADE_ID] = classifications_df[TRADE_ID].astype("string")
+            day_df = day_df.copy()
+            day_df[TRADE_ID] = day_df[TRADE_ID].astype("string")
+
+            # Columns needed for package detection
+            package_cols = [
+                TRADE_ID,
+                "UPI Underlier Name",
+                "Unique Product Identifier",
+                "Platform identifier",
+                "Cleared",
+                "Package indicator",
+                "Package transaction price",
+                "Option Premium Amount",
+            ]
+            # Only include columns that exist
+            package_cols = [c for c in package_cols if c in day_df.columns]
+
+            package_df = classifications_df.merge(
+                day_df[package_cols],
+                on=TRADE_ID,
+                how="left",
             )
 
-        # Optionally merge package legs into single rows
-        package_df = package_df.sort_values(by="execution_timestamp")
-        if merge_package_legs:
-            package_df = merge_package_legs_to_one_row(package_df)
+            # Normalize column names (convert CamelCase and spaces to snake_case)
+            package_df = package_df.drop(columns=[TRADE_ID], errors="ignore")
+            package_df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", col.lower()).lower().replace(" ", "_") for col in package_df.columns]
 
-        return package_df
+            # Detect swaption packages
+            if detect_swaption_packages:
+                package_df = detect_and_link_swaption_packages_df(
+                    package_df,
+                    config=swaption_package_config,
+                )
+
+            count = len(day_df)
+            date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
+            date_dir.mkdir(parents=True, exist_ok=True)
+            cache_fp = date_dir / f"{count}.parquet"
+            tmp_fp = cache_fp.with_suffix(".parquet.tmp")
+            table = pa.Table.from_pandas(package_df, preserve_index=False)
+            pq.write_table(table, tmp_fp, compression="zstd")
+            tmp_fp.replace(cache_fp)
+
+            built_frames.append(package_df)
+
+        all_frames = [*cached_frames, *built_frames]
+        if not all_frames:
+            return pd.DataFrame()
+
+        final_df = pd.concat(all_frames, ignore_index=True)
+        start_ts = _to_utc(start)
+        end_ts = _to_utc(end)
+        final_df = final_df[(final_df["execution_timestamp"] >= start_ts) & (final_df["execution_timestamp"] <= end_ts)]
+        final_df = final_df.sort_values(by="execution_timestamp")
+        if merge_package_legs:
+            final_df = merge_package_legs_to_one_row(final_df)
+
+        return final_df
 
     def metadata(self) -> Dict[str, str]:
         return {
