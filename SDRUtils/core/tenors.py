@@ -108,7 +108,7 @@ def get_special_label(date_ts: pd.Timestamp) -> Optional[str]:
     return None
 
 
-def tenor_to_label(years: float, expiration_date: Optional[pd.Timestamp] = None) -> str:
+def tenor_to_label(years: float, expiration_date: Optional[pd.Timestamp] = None, is_swaptions=False) -> str:
     """
     Convert tenor in years to label like '1D', '2W', '3M', '10Y'.
 
@@ -156,7 +156,7 @@ def tenor_to_label(years: float, expiration_date: Optional[pd.Timestamp] = None)
     tolerance_days = 2 if days < 30 else (5 if days <= 360 else 10)
 
     if abs(closest_days - days) <= tolerance_days:
-        if tenor_days[closest_days] == "2D":
+        if tenor_days[closest_days] == "2D" and not is_swaptions:
             return "spot"
         return tenor_days[closest_days]
 
@@ -170,7 +170,7 @@ def tenor_to_label(years: float, expiration_date: Optional[pd.Timestamp] = None)
         return f"{int(round(years))}Y"
 
 
-def forward_to_label(years: float, effective_date: Optional[pd.Timestamp] = None) -> str:
+def forward_to_label(years: float, effective_date: Optional[pd.Timestamp] = None, is_swaptions=False) -> str:
     """
     Convert forward start in years to label, prioritizing IMM/FOMC dates.
 
@@ -193,12 +193,12 @@ def forward_to_label(years: float, effective_date: Optional[pd.Timestamp] = None
             return fomc_label
 
     # If no special label, apply standard spot/forward logic
-    if years <= 0.009:  # Effectively Spot or Past
+    if years <= 0.009 and not is_swaptions:  # Effectively Spot or Past
         return "spot"
 
     # return tenor_to_label(years)
     if years < 1:
-        return tenor_to_label(years)
+        return tenor_to_label(years, is_swaptions=is_swaptions)
 
     total_months = int(round(years * 12))
     years_part, months_part = divmod(total_months, 12)

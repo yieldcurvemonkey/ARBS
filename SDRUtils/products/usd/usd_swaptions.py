@@ -32,13 +32,12 @@ from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 
 
-def straddle_pricer_from_row(classification_row: pd.Series, pricer: QLIRSwapCurve):
-
+def straddle_pricer_from_row(final_classification_row: pd.Series, pricer: QLIRSwapCurve):
     q = IRSwapQuery(
         curve="USD-SOFR-1D",
-        effective_date=classification_row["expiration_date"],
-        maturity_date=classification_row["underlying_expiration_date"],
-        structure_kwargs={"notional": classification_row["notional"]},
+        effective_date=final_classification_row["expiration_date"],
+        maturity_date=final_classification_row["underlying_expiration_date"],
+        structure_kwargs={"notional": final_classification_row["notional"]},
     )
     pkg, _ = q.resolve_package(pricer_or_curve=pricer)
 
@@ -50,7 +49,7 @@ def straddle_pricer_from_row(classification_row: pd.Series, pricer: QLIRSwapCurv
     observed_ql_swaption.setPricingEngine(observed_ql_swaption_pricing_engine)
     iv = (
         observed_ql_swaption.impliedVolatility(
-            price=classification_row["premium"],
+            price=final_classification_row["premium"],
             discountCurve=pricer.handle(),
             guess=0.01,
             accuracy=1e-5,
@@ -61,9 +60,8 @@ def straddle_pricer_from_row(classification_row: pd.Series, pricer: QLIRSwapCurv
             displacement=0,
             priceType=ql.Swaption.Forward,
         )
-        / 2
         * 10_000
-    )
+    ) / 2
 
     return observed_ql_swaption, iv
 

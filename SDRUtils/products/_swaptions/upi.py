@@ -296,11 +296,11 @@ def make_swaption_desc_func(
 
             expiry_years = calculate_tenor_years(asof, exp, conventions=conventions)
             tail_years = calculate_tenor_years(exp, mat, conventions=conventions)
-            expiry_label = forward_to_label(expiry_years, exp)
+            expiry_label = forward_to_label(expiry_years, exp, True)
             tail_label = tenor_to_label(tail_years, mat)
 
             if eff <= exp:
-                tenor = f"{expiry_label}{tail_label}"
+                tenor = f"{expiry_label}x{tail_label}"
             else:
                 forward_years = calculate_forward_start_years(
                     exp,
@@ -309,7 +309,7 @@ def make_swaption_desc_func(
                     use_execution_date_only=True,
                 )
                 forward_label = forward_to_label(forward_years, effective_date=eff)
-                tenor = f"{expiry_label}{forward_label}{tail_label}"
+                tenor = f"{expiry_label}{forward_label}x{tail_label}"
         else:
             tenor = "UNK"
 

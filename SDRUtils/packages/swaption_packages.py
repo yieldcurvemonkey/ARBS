@@ -43,7 +43,7 @@ class SwaptionPackageDetectionConfig:
     time_window_link_seconds: int = 600  # 10 minutes for linking separate packages
 
     # Vega tolerance for matching legs
-    vega_tolerance_pct: float = 0.05  # 5% tolerance
+    vega_tolerance_pct: float = 0.00  # 5% tolerance
 
     # Minimum legs for a package
     min_legs: int = 2
@@ -1043,11 +1043,10 @@ def detect_and_link_swaption_packages_df(
     df: pd.DataFrame,
     *,
     config: Optional[SwaptionPackageDetectionConfig] = None,
-    vega_estimator: Optional[Callable[[pd.Series], float]] = None,
     product_col: str = "product_type",
     package_col: str = "package_type",
     detect_straddles: bool = True,
-    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=61),
+    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=0),
     straddle_strike_tolerance: float = 0.0000,
     straddle_notional_tolerance_pct: float = 0.00,
 ) -> pd.DataFrame:
