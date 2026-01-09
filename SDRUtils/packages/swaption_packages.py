@@ -313,8 +313,8 @@ def detect_swaption_straddles_df(
     df: pd.DataFrame,
     *,
     straddle_timestamp_tolerance: datetime.timedelta,
-    strike_tolerance: float,  
-    notional_tolerance_pct: float,  
+    strike_tolerance: float,
+    notional_tolerance_pct: float,
     config: Optional["SwaptionPackageDetectionConfig"] = None,
     product_col: str = "product_type",
     package_col: str = "package_type",
@@ -550,6 +550,7 @@ def detect_swaption_risk_reversals_df(
     require_same_expiration: bool = True,
     require_same_tenor: bool = True,
     require_same_forward: bool = True,
+    require_directional_structure: bool = True,
     config: Optional["SwaptionPackageDetectionConfig"] = None,
     product_col: str = "product_type",
     package_col: str = "package_type",
@@ -571,6 +572,7 @@ def detect_swaption_risk_reversals_df(
         require_same_expiration: Require same expiration_date across legs
         require_same_tenor: Require same tenor_years across legs
         require_same_forward: Require same forward_start_years across legs
+        require_directional_structure: Require payer/receiver direction alignment
         config: Detection configuration (uses default if None)
         product_col: Column name for product type
         package_col: Column name for package type
@@ -629,6 +631,7 @@ def detect_swaption_risk_reversals_df(
     expirations = cand[config.expiration_col].astype("string").to_numpy() if config.expiration_col in cand.columns else None
     tenors = pd.to_numeric(cand[config.tenor_col], errors="coerce").to_numpy(dtype=np.float64) if config.tenor_col in cand.columns else None
     forwards = pd.to_numeric(cand[config.forward_col], errors="coerce").to_numpy(dtype=np.float64) if config.forward_col in cand.columns else None
+    product_labels = cand[product_col].astype(str).to_numpy()
 
     matched = np.zeros(len(cand), dtype=bool)
     pkg_ids = np.full(len(cand), "", dtype=object)
@@ -667,6 +670,37 @@ def detect_swaption_risk_reversals_df(
             buckets.setdefault(bucket, []).append(idx)
         return list(buckets.values())
 
+    def _direction(label: str) -> int:
+        upper = label.upper()
+        if "PAYER" in upper or "CALL" in upper:
+            return 1
+        if "RECEIVER" in upper or "PUT" in upper:
+            return -1
+        return 0
+
+    def _directional_ok(indices: List[int], ordered_groups: List[Tuple[float, List[int]]]) -> bool:
+        if not require_directional_structure:
+            return True
+
+        directions = np.array([_direction(product_labels[i]) for i in indices], dtype=int)
+        if np.any(directions == 0):
+            return False
+
+        low_group = ordered_groups[0][1]
+        mid_group = ordered_groups[1][1]
+        high_group = ordered_groups[2][1]
+
+        low_dir = _direction(product_labels[indices[low_group[0]]])
+        high_dir = _direction(product_labels[indices[high_group[0]]])
+
+        if low_dir != -1:
+            return False
+        if high_dir != 1:
+            return False
+
+        mid_dirs = [_direction(product_labels[indices[idx]]) for idx in mid_group]
+        return len(set(mid_dirs)) == 2
+
     def _is_risk_reversal(indices: List[int]) -> bool:
         strikes = strike_vals[indices]
         notionals = np.abs(notional_vals[indices])
@@ -686,6 +720,9 @@ def detect_swaption_risk_reversals_df(
         ordered = sorted(zip(strike_levels, strike_groups), key=lambda x: x[0])
         middle_group = ordered[1][1]
         if len(middle_group) != 2:
+            return False
+
+        if not _directional_ok(indices, ordered):
             return False
 
         notional_groups = _cluster_values(notionals, notional_tolerance_pct)
@@ -1351,6 +1388,7 @@ def detect_and_link_swaption_packages_df(
     risk_reversal_require_same_expiration: bool = True,
     risk_reversal_require_same_tenor: bool = True,
     risk_reversal_require_same_forward: bool = True,
+    risk_reversal_require_directional_structure: bool = True,
 ) -> pd.DataFrame:
     """
     Combined detection and linking of swaption packages.
@@ -1359,8 +1397,8 @@ def detect_and_link_swaption_packages_df(
     and package linking in sequence.
 
     Detection order:
-    1. Straddles (payer + receiver with same strike/expiry/tenor)
-    2. Risk reversals (4 legs / 3 strikes / 2 notionals)
+    1. Risk reversals (4 legs / 3 strikes / 2 notionals)
+    2. Straddles (payer + receiver with same strike/expiry/tenor)
     3. Vega-bucketed packages (similar vega within time window)
     4. Package linking (link related packages by time/vega)
 
@@ -1383,24 +1421,14 @@ def detect_and_link_swaption_packages_df(
         risk_reversal_require_same_expiration: Require same expiration_date across legs
         risk_reversal_require_same_tenor: Require same tenor_years across legs
         risk_reversal_require_same_forward: Require same forward_start_years across legs
+        risk_reversal_require_directional_structure: Require payer/receiver alignment
 
     Returns:
         DataFrame with full package annotations including links
     """
     out = df.copy()
 
-    # Phase 1: Detect straddles first (highest priority)
-    if detect_straddles:
-        out = detect_swaption_straddles_df(
-            out,
-            straddle_timestamp_tolerance=straddle_timestamp_tolerance,
-            strike_tolerance=straddle_strike_tolerance,
-            notional_tolerance_pct=straddle_notional_tolerance_pct,
-            config=config,
-            product_col=product_col,
-            package_col=package_col,
-        )
-
+    # Phase 1: Detect risk reversals first (highest priority)
     if detect_risk_reversals:
         out = detect_swaption_risk_reversals_df(
             out,
@@ -1411,6 +1439,19 @@ def detect_and_link_swaption_packages_df(
             require_same_expiration=risk_reversal_require_same_expiration,
             require_same_tenor=risk_reversal_require_same_tenor,
             require_same_forward=risk_reversal_require_same_forward,
+            require_directional_structure=risk_reversal_require_directional_structure,
+            config=config,
+            product_col=product_col,
+            package_col=package_col,
+        )
+
+    # Phase 2: Detect straddles next
+    if detect_straddles:
+        out = detect_swaption_straddles_df(
+            out,
+            straddle_timestamp_tolerance=straddle_timestamp_tolerance,
+            strike_tolerance=straddle_strike_tolerance,
+            notional_tolerance_pct=straddle_notional_tolerance_pct,
             config=config,
             product_col=product_col,
             package_col=package_col,
