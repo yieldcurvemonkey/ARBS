@@ -1340,9 +1340,17 @@ def detect_and_link_swaption_packages_df(
     product_col: str = "product_type",
     package_col: str = "package_type",
     detect_straddles: bool = True,
+    detect_risk_reversals: bool = True,
     straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=0),
     straddle_strike_tolerance: float = 0.0000,
     straddle_notional_tolerance_pct: float = 0.00,
+    risk_reversal_time_window_seconds: int = 60,
+    risk_reversal_strike_tolerance: float = 0.0001,
+    risk_reversal_notional_tolerance_pct: float = 0.05,
+    risk_reversal_middle_notional_max_ratio: float = 0.5,
+    risk_reversal_require_same_expiration: bool = True,
+    risk_reversal_require_same_tenor: bool = True,
+    risk_reversal_require_same_forward: bool = True,
 ) -> pd.DataFrame:
     """
     Combined detection and linking of swaption packages.
@@ -1352,8 +1360,9 @@ def detect_and_link_swaption_packages_df(
 
     Detection order:
     1. Straddles (payer + receiver with same strike/expiry/tenor)
-    2. Vega-bucketed packages (similar vega within time window)
-    3. Package linking (link related packages by time/vega)
+    2. Risk reversals (4 legs / 3 strikes / 2 notionals)
+    3. Vega-bucketed packages (similar vega within time window)
+    4. Package linking (link related packages by time/vega)
 
     Args:
         df: Classifications dataframe with swaption trades
@@ -1362,10 +1371,18 @@ def detect_and_link_swaption_packages_df(
         product_col: Column name for product type
         package_col: Column name for package type
         detect_straddles: Whether to detect straddles (default True)
+        detect_risk_reversals: Whether to detect risk reversals (default True)
         straddle_timestamp_tolerance: Max time between payer and receiver legs
             for straddle detection. Pass as datetime.timedelta.
         straddle_strike_tolerance: Absolute tolerance for strike matching
         straddle_notional_tolerance_pct: Percentage tolerance for notional matching
+        risk_reversal_time_window_seconds: Max time gap between risk reversal legs
+        risk_reversal_strike_tolerance: Absolute strike tolerance for risk reversal matching
+        risk_reversal_notional_tolerance_pct: Relative notional tolerance for grouping
+        risk_reversal_middle_notional_max_ratio: Max ratio of middle to wing notional
+        risk_reversal_require_same_expiration: Require same expiration_date across legs
+        risk_reversal_require_same_tenor: Require same tenor_years across legs
+        risk_reversal_require_same_forward: Require same forward_start_years across legs
 
     Returns:
         DataFrame with full package annotations including links
@@ -1379,6 +1396,21 @@ def detect_and_link_swaption_packages_df(
             straddle_timestamp_tolerance=straddle_timestamp_tolerance,
             strike_tolerance=straddle_strike_tolerance,
             notional_tolerance_pct=straddle_notional_tolerance_pct,
+            config=config,
+            product_col=product_col,
+            package_col=package_col,
+        )
+
+    if detect_risk_reversals:
+        out = detect_swaption_risk_reversals_df(
+            out,
+            time_window_seconds=risk_reversal_time_window_seconds,
+            strike_tolerance=risk_reversal_strike_tolerance,
+            notional_tolerance_pct=risk_reversal_notional_tolerance_pct,
+            middle_notional_max_ratio=risk_reversal_middle_notional_max_ratio,
+            require_same_expiration=risk_reversal_require_same_expiration,
+            require_same_tenor=risk_reversal_require_same_tenor,
+            require_same_forward=risk_reversal_require_same_forward,
             config=config,
             product_col=product_col,
             package_col=package_col,
