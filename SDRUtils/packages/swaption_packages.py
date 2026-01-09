@@ -88,13 +88,15 @@ class SwaptionPackageDetectionConfig:
     forward_col: str = "forward_start_years"
 
     # Confidence scoring weights
-    confidence_weights: Dict[str, float] = field(default_factory=lambda: {
-        "identical_timestamp": 0.3,
-        "vega_similarity": 0.25,
-        "package_indicator": 0.15,
-        "premium_anomaly": 0.15,  # Premium zero but package_price non-zero
-        "platform_match": 0.15,
-    })
+    confidence_weights: Dict[str, float] = field(
+        default_factory=lambda: {
+            "identical_timestamp": 0.3,
+            "vega_similarity": 0.25,
+            "package_indicator": 0.15,
+            "premium_anomaly": 0.15,  # Premium zero but package_price non-zero
+            "platform_match": 0.15,
+        }
+    )
 
 
 # Default config instance
@@ -309,9 +311,9 @@ def _estimate_swaption_vega(
 def detect_swaption_straddles_df(
     df: pd.DataFrame,
     *,
-    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=60),
-    strike_tolerance: float = 0.0001,  # Tolerance for strike matching (absolute)
-    notional_tolerance_pct: float = 0.05,  # 5% tolerance for notional matching
+    straddle_timestamp_tolerance: datetime.timedelta,
+    strike_tolerance: float,  
+    notional_tolerance_pct: float,  
     config: Optional["SwaptionPackageDetectionConfig"] = None,
     product_col: str = "product_type",
     package_col: str = "package_type",
@@ -355,7 +357,6 @@ def detect_swaption_straddles_df(
 
     out = df.copy()
 
-    # Initialize output columns if not present
     for col, default in [
         (package_col, "SWAPTION"),
         ("package_id", None),
@@ -367,15 +368,12 @@ def detect_swaption_straddles_df(
         if col not in out.columns:
             out[col] = default
 
-    # Convert timedelta to seconds for comparison
     tolerance_seconds = straddle_timestamp_tolerance.total_seconds()
 
-    # Filter to swaption candidates not already in a package
     is_swaption = out[product_col].astype(str).str.contains("SWAPTION", case=False, na=False)
     not_packaged = out["package_id"].isna() | (out["package_id"] == "")
     candidate_mask = is_swaption & not_packaged
 
-    # Separate payers and receivers
     is_payer = out[product_col].astype(str).str.contains("PAYER|CALL", case=False, na=False)
     is_receiver = out[product_col].astype(str).str.contains("RECEIVER|PUT", case=False, na=False)
 
@@ -388,21 +386,17 @@ def detect_swaption_straddles_df(
     if payers.empty or receivers.empty:
         return out
 
-    # Ensure execution timestamp is epoch seconds
     payers["_t"] = _ensure_int64_epoch_seconds(payers[config.exec_col])
     receivers["_t"] = _ensure_int64_epoch_seconds(receivers[config.exec_col])
 
-    # Extract arrays for matching
     payer_idx = payers.index.tolist()
     receiver_idx = receivers.index.tolist()
 
-    # Track matched indices
     matched_payers: Set[int] = set()
     matched_receivers: Set[int] = set()
 
     straddle_counter = 0
 
-    # Match payers with receivers
     for p_idx in payer_idx:
         if p_idx in matched_payers:
             continue
@@ -514,7 +508,7 @@ def detect_swaption_straddles_df(
             reason = _build_package_reason(
                 platform=p_platform,
                 time_delta_max_seconds=best_time_diff,
-                vega_cluster_spread_pct=0.0,  # N/A for straddles
+                vega_cluster_spread_pct=None,  # N/A for straddles
                 premium_mode="STRADDLE",
                 num_legs=2,
                 identical_timestamps=(best_time_diff < 1),
@@ -525,12 +519,17 @@ def detect_swaption_straddles_df(
 
             # Update both legs
             for idx in [p_idx, r_idx]:
-                out.loc[idx, package_col] = "STRADDLE"
-                out.loc[idx, "package_id"] = pid
-                out.loc[idx, "package_legs"] = legs_list
-                out.loc[idx, "package_confidence"] = confidence
-                out.loc[idx, "package_reason"] = reason
-                out.loc[idx, "package_legs_count"] = 2
+                idx_mask = out.index == idx
+                out.loc[idx_mask, package_col] = "STRADDLE"
+                out.loc[idx_mask, "package_id"] = pid
+                legs_count = int(idx_mask.sum())
+                out.loc[idx_mask, "package_legs"] = pd.Series(
+                    [legs_list] * legs_count,
+                    index=out.index[idx_mask],
+                )
+                out.loc[idx_mask, "package_confidence"] = confidence
+                out.loc[idx_mask, "package_reason"] = reason
+                out.loc[idx_mask, "package_legs_count"] = 2
 
     return out
 
@@ -605,6 +604,7 @@ def detect_swaption_packages_df(
 
     # Determine vega estimator
     if vega_estimator is None:
+
         def _default_vega_estimator(row: pd.Series) -> float:
             return _estimate_swaption_vega(
                 row,
@@ -613,6 +613,7 @@ def detect_swaption_packages_df(
                 tenor_col=config.tenor_col,
                 forward_col=config.forward_col,
             )
+
         vega_estimator = _default_vega_estimator
 
     # Filter to swaption candidates not already in a package
@@ -641,9 +642,7 @@ def detect_swaption_packages_df(
     cand["_vega"] = cand.apply(vega_estimator, axis=1)
 
     # Extract effective premium
-    premium_results = cand.apply(
-        lambda row: _extract_effective_premium(row, config), axis=1
-    )
+    premium_results = cand.apply(lambda row: _extract_effective_premium(row, config), axis=1)
     cand["_eff_premium"] = premium_results.apply(lambda x: x[0])
     cand["_eff_premium_src"] = premium_results.apply(lambda x: x[1])
 
@@ -658,21 +657,9 @@ def detect_swaption_packages_df(
     trade_ids = cand[config.trade_id_col].astype(str).to_numpy()
 
     # Precompute economic key arrays
-    plat = (
-        cand[config.platform_col].astype("string").to_numpy()
-        if (config.require_same_platform and config.platform_col in cand.columns)
-        else None
-    )
-    ccy = (
-        cand[config.currency_col].astype("string").to_numpy()
-        if (config.require_same_currency and config.currency_col in cand.columns)
-        else None
-    )
-    und = (
-        cand[config.underlier_col].astype("string").to_numpy()
-        if (config.require_same_underlier and config.underlier_col in cand.columns)
-        else None
-    )
+    plat = cand[config.platform_col].astype("string").to_numpy() if (config.require_same_platform and config.platform_col in cand.columns) else None
+    ccy = cand[config.currency_col].astype("string").to_numpy() if (config.require_same_currency and config.currency_col in cand.columns) else None
+    und = cand[config.underlier_col].astype("string").to_numpy() if (config.require_same_underlier and config.underlier_col in cand.columns) else None
 
     # Package indicator and premium arrays for confidence scoring
     pkg_ind = cand[config.package_indicator_col].to_numpy() if config.package_indicator_col in cand.columns else None
@@ -818,10 +805,7 @@ def detect_swaption_packages_df(
             # Compute vega spread
             package_vegas = vega[valid_candidates]
             vega_mean = np.nanmean(package_vegas)
-            vega_spread_pct = (
-                100.0 * (np.nanmax(package_vegas) - np.nanmin(package_vegas)) / max(vega_mean, 1e-12)
-                if vega_mean > 0 else 0.0
-            )
+            vega_spread_pct = 100.0 * (np.nanmax(package_vegas) - np.nanmin(package_vegas)) / max(vega_mean, 1e-12) if vega_mean > 0 else 0.0
 
             # Determine premium mode
             prem_modes = [eff_prem_src[idx] for idx in valid_candidates]
@@ -869,21 +853,25 @@ def detect_swaption_packages_df(
         store.setdefault(key_i, []).append(i)
 
     # Build result dataframe and merge back
-    res = pd.DataFrame({
-        config.trade_id_col: trade_ids,
-        "_pkg_type": pkg_type,
-        "_pkg_id": pkg_ids,
-        "_pkg_legs": pkg_legs,
-        "_pkg_conf": pkg_conf,
-        "_pkg_reason": pkg_reason,
-        "_pkg_legs_count": pkg_legs_count,
-    })
+    res = pd.DataFrame(
+        {
+            config.trade_id_col: trade_ids,
+            "_pkg_type": pkg_type,
+            "_pkg_id": pkg_ids,
+            "_pkg_legs": pkg_legs,
+            "_pkg_conf": pkg_conf,
+            "_pkg_reason": pkg_reason,
+            "_pkg_legs_count": pkg_legs_count,
+        }
+    )
 
     # Also include effective premium columns from cand
     cand_result = cand[[config.trade_id_col, "_eff_premium", "_eff_premium_src"]].copy()
+    cand_result[config.trade_id_col] = cand_result[config.trade_id_col].astype(str)
     res = res.merge(cand_result, on=config.trade_id_col, how="left")
 
     # Merge back to output
+    out[config.trade_id_col] = out[config.trade_id_col].astype(str)
     out = out.merge(
         res[[config.trade_id_col, "_pkg_type", "_pkg_id", "_pkg_legs", "_pkg_conf", "_pkg_reason", "_pkg_legs_count", "_eff_premium", "_eff_premium_src"]],
         on=config.trade_id_col,
@@ -953,10 +941,7 @@ def link_swaption_packages(
 
     # Find detected packages (non-null package_id with SWAPTION-related types)
     swaption_package_types = ["VEGA_BUCKETED_PACKAGE", "IMPLIED_PACKAGE_SAME_TIMESTAMP"]
-    has_package = (
-        out["package_id"].notna() &
-        out[package_col].isin(swaption_package_types)
-    )
+    has_package = out["package_id"].notna() & out[package_col].isin(swaption_package_types)
 
     if not has_package.any():
         return out
@@ -965,16 +950,17 @@ def link_swaption_packages(
     packaged_df = out.loc[has_package].copy()
 
     # Aggregate package info
-    package_info = packaged_df.groupby("package_id").agg({
-        config.exec_col: ["min", "max"],
-        config.platform_col: "first",
-        config.currency_col: "first",
-        "package_confidence": "first",
-    })
+    package_info = packaged_df.groupby("package_id").agg(
+        {
+            config.exec_col: ["min", "max"],
+            config.platform_col: "first",
+            config.currency_col: "first",
+            "package_confidence": "first",
+        }
+    )
     package_info.columns = ["time_min", "time_max", "platform", "currency", "confidence"]
     package_info["time_mid"] = (
-        pd.to_datetime(package_info["time_min"]).astype(np.int64) // 10**9 +
-        pd.to_datetime(package_info["time_max"]).astype(np.int64) // 10**9
+        pd.to_datetime(package_info["time_min"]).astype(np.int64) // 10**9 + pd.to_datetime(package_info["time_max"]).astype(np.int64) // 10**9
     ) // 2
 
     # Compute package-level vega (sum of leg vegas)
@@ -1061,9 +1047,9 @@ def detect_and_link_swaption_packages_df(
     product_col: str = "product_type",
     package_col: str = "package_type",
     detect_straddles: bool = True,
-    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=60),
-    straddle_strike_tolerance: float = 0.0001,
-    straddle_notional_tolerance_pct: float = 0.05,
+    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=61),
+    straddle_strike_tolerance: float = 0.0000,
+    straddle_notional_tolerance_pct: float = 0.00,
 ) -> pd.DataFrame:
     """
     Combined detection and linking of swaption packages.
@@ -1105,21 +1091,21 @@ def detect_and_link_swaption_packages_df(
             package_col=package_col,
         )
 
-    # Phase 2: Detect vega-bucketed packages (remaining trades)
-    out = detect_swaption_packages_df(
-        out,
-        config=config,
-        vega_estimator=vega_estimator,
-        product_col=product_col,
-        package_col=package_col,
-    )
+    # # Phase 2: Detect vega-bucketed packages (remaining trades)
+    # out = detect_swaption_packages_df(
+    #     out,
+    #     config=config,
+    #     vega_estimator=vega_estimator,
+    #     product_col=product_col,
+    #     package_col=package_col,
+    # )
 
-    # Phase 3: Link related packages
-    out = link_swaption_packages(
-        out,
-        config=config,
-        package_col=package_col,
-    )
+    # # Phase 3: Link related packages
+    # out = link_swaption_packages(
+    #     out,
+    #     config=config,
+    #     package_col=package_col,
+    # )
 
     return out
 

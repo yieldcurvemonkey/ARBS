@@ -41,9 +41,12 @@ class _DBHandle:
         return self.db.open(transaction_manager=transaction.manager)  # type: ignore[arg‑type]
 
     def release_conn(self, conn: Connection) -> None:
+        with contextlib.suppress(Exception):
+            conn.abort()
         with self._lock:
             if len(self._conns) >= self._pool_cap:
-                conn.close()
+                with contextlib.suppress(Exception):
+                    conn.close()
             else:
                 self._conns.append(conn)
 
@@ -55,7 +58,11 @@ class _DBHandle:
         self.refcnt -= 1
         if self.refcnt == 0:
             while self._conns:
-                self._conns.pop().close()
+                conn = self._conns.pop()
+                with contextlib.suppress(Exception):
+                    conn.abort()
+                with contextlib.suppress(Exception):
+                    conn.close()
             self.db.close()
             self.storage.close()
 

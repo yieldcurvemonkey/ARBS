@@ -184,10 +184,11 @@ class USD_Swaptions(USDProductBase):
             )
 
         # Optionally merge package legs into single rows
+        package_df = package_df.sort_values(by="execution_timestamp")
         if merge_package_legs:
             package_df = merge_package_legs_to_one_row(package_df)
 
-        return package_df.sort_values(by="execution_timestamp")
+        return package_df
 
     def metadata(self) -> Dict[str, str]:
         return {

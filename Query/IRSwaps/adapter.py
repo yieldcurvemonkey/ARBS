@@ -43,7 +43,7 @@ def _resolve_cusip_or_alias(
       - CUSIP (9-char): verify & read its maturity
       - Alias: CTN / O... / Ox.. / MMYY[-OI]
     """
-    ref = update_reference_data(source="treasurydirect", force_refresh=False)
+    ref = update_reference_data(source="fiscaldata", force_refresh=False)
     # Keep currently outstanding around 'as_of'
     ref = ref[(ref["issue_date"] <= as_of) & (ref["maturity_date"] >= as_of)].copy()
 
@@ -87,7 +87,7 @@ def _resolve_cusip_or_alias(
     row = ref[ref["cusip"].str.upper() == resolved.upper()]
     if row.empty:
         # If _alias_to_cusip found an historical CUSIP that is not active 'as_of', fall back to any ref row
-        row = update_reference_data(source="treasurydirect", force_refresh=False)
+        row = update_reference_data(source="fiscaldata", force_refresh=False)
         row = row[row["cusip"].str.upper() == resolved.upper()]
         if row.empty:
             raise KeyError(f"Resolved alias '{tok}' -> '{resolved}', but CUSIP not found in reference data table")

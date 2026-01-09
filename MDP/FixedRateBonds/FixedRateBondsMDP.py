@@ -340,7 +340,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             if hasattr(as_of_ref, "date"):
                 as_of_ref = as_of_ref.date()
             ref_df = update_reference_data(
-                source="treasurydirect",
+                source="fiscaldata",
                 force_refresh=force_refresh,
             )
             ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)].copy()
@@ -581,6 +581,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             start_ny = ny.localize(datetime.datetime(t.year, t.month, t.day, 7, 0, 0)) - BDay(1)
             end_ny = ny.localize(datetime.datetime(t.year, t.month, t.day, 17, 0, 0)) + BDay(1)
             wide = wb.intraday_by_cusips(cusips=list(alias_to_cusip_to_fetch.values()), start=start_ny, end=end_ny, show_tqdm=bool(kwargs.get("show_tqdm", True)))
+            print(wide)
             for original, cusip in alias_to_cusip_to_fetch.items():
                 for curr_ts, ytm in wide[cusip].items():
                     cache_key = f"{curr_ts.isoformat()}-{cusip}-{self.source.upper()}"
@@ -760,10 +761,11 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             from Query.FixedRateBonds.backends.quantlib.QLFixedRateBondPricer import QLFixedRateBondPricer
             from Query.FixedRateBonds.backends.rateslib.RLFixedRateBondPricer import RLFixedRateBondPricer
 
-            ref_df = update_reference_data(source="treasurydirect", force_refresh=kwargs.get("force_refresh", False))
             as_of_ref = datetime.date.today() if timestamp == "live" else timestamp
             if hasattr(as_of_ref, "date"):
                 as_of_ref = as_of_ref.date()
+            # ref_df = update_reference_data(source="treasurydirect", source_kwargs={"as_of": as_of_ref}, force_refresh=kwargs.get("force_refresh", False))
+            ref_df = update_reference_data(source="fiscaldata", force_refresh=kwargs.get("force_refresh", False))
             ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)]
             ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
 
@@ -1109,7 +1111,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
 
                 as_of_ref = _as_of_ref(ts)
-                ref_df = update_reference_data(source="treasurydirect", force_refresh=force_refresh)
+                ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
                 ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)].copy()
                 ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
 

@@ -121,6 +121,8 @@ def classify_product_type(row: pd.Series) -> ProductType:
         return "SWAPTION_PAYER"
     if "NA/O P Epn" in upi_fisn or "PUT" in upi_fisn or "O P" in upi_fisn:
         return "SWAPTION_RECEIVER"
+    if "NA/O Opt Epn" in upi_fisn or "OPT" in upi_fisn or "Opt" in upi_fisn:
+        return "SWAPTION_CHOOSER"
     if "CAP" in upi_fisn:
         return "CAP"
     if "FLOOR" in upi_fisn:

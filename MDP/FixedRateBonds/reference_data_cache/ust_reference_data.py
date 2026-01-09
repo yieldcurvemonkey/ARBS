@@ -44,39 +44,41 @@ def update_reference_data(
     force_refresh: bool = False,
 ) -> pd.DataFrame:
 
-    def _last_ust_govt_business_day(d: datetime.date) -> datetime.date:
-        cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
-        qd = ql.Date(d.day, d.month, d.year)
-        qd_adj = cal.adjust(qd, ql.Preceding)
-        return datetime.date(qd_adj.year(), qd_adj.month(), qd_adj.dayOfMonth())
-
-    as_of = _last_ust_govt_business_day(datetime.date.today())
     cache_dir = _resolve_ust_cache_dir(source)
 
-    today_dir = cache_dir / as_of.strftime("%Y-%m-%d")
-    today_dir.mkdir(parents=True, exist_ok=True)
-
-    file_path = today_dir / f"{as_of.strftime('%Y-%m-%d')}.parquet"
-
-    if not force_refresh and file_path.exists():
-        try:
-            return pd.read_parquet(file_path)
-        except Exception:
-            pass
-
     if source == "fiscaldata":
+
+        def _last_ust_govt_business_day(d: datetime.date) -> datetime.date:
+            cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+            qd = ql.Date(d.day, d.month, d.year)
+            qd_adj = cal.adjust(qd, ql.Preceding)
+            return datetime.date(qd_adj.year(), qd_adj.month(), qd_adj.dayOfMonth())
+
+        as_of = _last_ust_govt_business_day(datetime.date.today())
+
+        today_dir = cache_dir / as_of.strftime("%Y-%m-%d")
+        today_dir.mkdir(parents=True, exist_ok=True)
+
+        file_path = today_dir / f"{as_of.strftime('%Y-%m-%d')}.parquet"
+
+        if not force_refresh and file_path.exists():
+            try:
+                return pd.read_parquet(file_path)
+            except Exception:
+                pass
+
         df = _fetch_fiscaldata(
             fetch_as_of="all",
             process_as_of=as_of,
             source_kwargs=source_kwargs,
-            append_mspd_table3=True,
-            append_mspd_table5=True,
-            append_free_float=True,
-            append_soma_holdings=True,
+            append_mspd_table3=False,
+            append_mspd_table5=False,
+            append_free_float=False,
+            append_soma_holdings=False,
         )
     elif source == "treasurydirect":
         df = fetch_ust_refdata_treasurydirect(
-            as_of_date=as_of,
+            as_of_date=source_kwargs["as_of"],
             max_workers=12,
         )
     else:
