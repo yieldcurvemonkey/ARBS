@@ -1,3 +1,8 @@
+import warnings
+
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+
 import asyncio
 import logging
 import re
@@ -10,13 +15,13 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple, Union
 
-import pytz
 import httpx
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
+import pytz
 import pyzipper
 import requests
 import tqdm
@@ -660,7 +665,7 @@ def _read_intraday_cache(fp: Path) -> pd.DataFrame:
                 "Effective Date",
                 "Expiration Date",
             ],
-            infer_datetime_format=True,
+            # infer_datetime_format=True,
             low_memory=False,
             dtype=dtype_map,
         )
