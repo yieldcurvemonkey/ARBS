@@ -85,13 +85,13 @@ class SwaptionPackageDetectionConfig:
 
     # Column names (SDR raw columns)
     exec_col: str = "execution_timestamp"
-    platform_col: str = "Platform identifier"
+    platform_col: str = "platform_identifier"
     currency_col: str = "notional_currency"
-    underlier_col: str = "UPI Underlier Name"
+    underlier_col: str = "upi_underlier_name"
     trade_id_col: str = "trade_id"
     premium_col: str = "premium"
-    package_price_col: str = "Package transaction price"
-    package_indicator_col: str = "Package indicator"
+    package_price_col: str = "package_transaction_price"
+    package_indicator_col: str = "package_indicator"
     vega_col: str = "estimated_vega"
     notional_col: str = "notional"
     strike_col: str = "strike"
@@ -119,10 +119,11 @@ class SwaptionPackageDetectionConfig:
     # e.g., (2.0, "1x2", 0.1) means ratio 2.0 ± 10%
     spread_ratios: List[Tuple[float, str, float]] = field(
         default_factory=lambda: [
-            (1.0, "1x1", 0.10),   # 1x1 spread (same notional)
+            (1.0, "1x1", 0.10),  # 1x1 spread (same notional)
             (1.5, "1x1.5", 0.10),  # 1x1.5 spread
-            (2.0, "1x2", 0.10),   # 1x2 spread
-            (3.0, "1x3", 0.10),   # 1x3 spread
+            (2.0, "1x2", 0.10),  # 1x2 spread
+            (2.5, "1x2.5", 0.10),  # 1x2.5 spread
+            (3.0, "1x3", 0.10),  # 1x3 spread
         ]
     )
 
@@ -153,14 +154,10 @@ class SwaptionPackageDetectionConfig:
     # ==========================================================================
 
     # Inter-dealer broker platforms (golden data sources)
-    idb_platforms: List[str] = field(
-        default_factory=lambda: ["BGCD", "ISWV", "TPSE"]
-    )
+    idb_platforms: List[str] = field(default_factory=lambda: ["BGCD", "ISWV", "TPSE"])
 
     # Customer-facing platforms (variable reliability)
-    customer_platforms: List[str] = field(
-        default_factory=lambda: ["BILT", "XXXX", "TWSF", "BBSF", "XOFF"]
-    )
+    customer_platforms: List[str] = field(default_factory=lambda: ["BILT", "XXXX", "TWSF", "BBSF", "XOFF"])
 
 
 # Default config instance
@@ -745,24 +742,28 @@ def detect_swaption_risk_reversals_df(
         if not require_directional_structure:
             return True
 
-        directions = np.array([_direction(product_labels[i]) for i in indices], dtype=int)
-        if np.any(directions == 0):
-            return False
+        # [FIX] Relaxed check: Simply ensure Low and High wings are opposite types.
+        # This supports both (Low=Rec, High=Pay) AND (Low=Pay, High=Rec)
 
         low_group = ordered_groups[0][1]
-        mid_group = ordered_groups[1][1]
         high_group = ordered_groups[2][1]
 
+        # Directions of the wings
         low_dir = _direction(product_labels[indices[low_group[0]]])
         high_dir = _direction(product_labels[indices[high_group[0]]])
 
-        if low_dir != -1:
-            return False
-        if high_dir != 1:
+        # Must have valid directions (not unknown)
+        if low_dir == 0 or high_dir == 0:
             return False
 
-        mid_dirs = [_direction(product_labels[indices[idx]]) for idx in mid_group]
-        return len(set(mid_dirs)) == 2
+        # Wings must be opposite (one Payer, one Receiver)
+        if low_dir == high_dir:
+            return False
+
+        # [FIX] Removed strict check on middle legs direction.
+        # Reference script only requires 2 trades at ATM, not necessarily a perfect Payer/Receiver pair.
+
+        return True
 
     def _is_risk_reversal(indices: List[int]) -> bool:
         strikes = strike_vals[indices]
@@ -772,6 +773,7 @@ def detect_swaption_risk_reversals_df(
             return False
 
         strike_groups = _strike_groups(strikes)
+        # Classic 3-strike only for now (reference logic flow)
         if len(strike_groups) != 3:
             return False
 
@@ -782,6 +784,8 @@ def detect_swaption_risk_reversals_df(
         strike_levels = [float(np.nanmean(strikes[group])) for group in strike_groups]
         ordered = sorted(zip(strike_levels, strike_groups), key=lambda x: x[0])
         middle_group = ordered[1][1]
+
+        # ATM must have 2 legs
         if len(middle_group) != 2:
             return False
 
@@ -793,19 +797,25 @@ def detect_swaption_risk_reversals_df(
             return False
 
         group_means = [float(np.nanmean(notionals[group])) for group in notional_groups]
-        low_idx = int(np.argmin(group_means))
-        high_idx = int(np.argmax(group_means))
+        low_idx = int(np.argmin(group_means))  # Small notional group index
+        high_idx = int(np.argmax(group_means))  # Large notional group index
         low_mean = group_means[low_idx]
         high_mean = group_means[high_idx]
 
         if low_mean <= 0 or high_mean <= 0:
             return False
 
-        if low_mean > high_mean * middle_notional_max_ratio:
+        # [FIX] Relaxed notional ratio check.
+        # Reference script implies ATM < Wing is sufficient.
+        # Enforcing <= 0.5 ratio kills valid trades like 80M ATM / 100M Wing.
+        # We assume 0.95 to ensure they are distinct and smaller.
+        if low_mean > high_mean * 0.95:
             return False
 
         low_group_indices = set(notional_groups[low_idx])
         middle_indices = {indices[idx] for idx in middle_group}
+
+        # The Middle Strike trades MUST be the ones with the Smaller Notional
         if not middle_indices.issubset({indices[idx] for idx in low_group_indices}):
             return False
 
@@ -1157,9 +1167,7 @@ def detect_swaption_vertical_spreads_df(
                 continue
 
             # Check notional ratio
-            ratio_match = _match_spread_ratio(
-                abs(notional_vals[idx]), abs(notional_vals[other_idx])
-            )
+            ratio_match = _match_spread_ratio(abs(notional_vals[idx]), abs(notional_vals[other_idx]))
             if ratio_match is None:
                 continue
 
@@ -1196,10 +1204,7 @@ def detect_swaption_vertical_spreads_df(
                 premium_mode=f"VERTICAL_{ratio_name}",
                 num_legs=2,
                 identical_timestamps=(time_delta < 1),
-                extra_info=f"strikes={strikes[0]:.4f}/{strikes[1]:.4f}; "
-                           f"ratio={actual_ratio:.2f}; "
-                           f"type={opt_type}; "
-                           f"direction={direction}",
+                extra_info=f"strikes={strikes[0]:.4f}/{strikes[1]:.4f}; " f"ratio={actual_ratio:.2f}; " f"type={opt_type}; " f"direction={direction}",
             )
 
             legs_list = [str(trade_ids[i]) for i in combo]
@@ -1217,15 +1222,17 @@ def detect_swaption_vertical_spreads_df(
             break  # Move to next trade
 
     # Build result and merge back
-    res = pd.DataFrame({
-        config.trade_id_col: trade_ids,
-        "_pkg_type": pkg_type,
-        "_pkg_id": pkg_ids,
-        "_pkg_legs": pkg_legs,
-        "_pkg_conf": pkg_conf,
-        "_pkg_reason": pkg_reason,
-        "_pkg_legs_count": pkg_legs_count,
-    })
+    res = pd.DataFrame(
+        {
+            config.trade_id_col: trade_ids,
+            "_pkg_type": pkg_type,
+            "_pkg_id": pkg_ids,
+            "_pkg_legs": pkg_legs,
+            "_pkg_conf": pkg_conf,
+            "_pkg_reason": pkg_reason,
+            "_pkg_legs_count": pkg_legs_count,
+        }
+    )
 
     out[config.trade_id_col] = out[config.trade_id_col].astype(str)
     out = out.merge(
@@ -1503,10 +1510,7 @@ def detect_swaption_conditional_curve_df(
                 premium_mode="CONDITIONAL_CURVE",
                 num_legs=2,
                 identical_timestamps=(time_delta < 1),
-                extra_info=f"expiry={expiry:.2f}Y; "
-                           f"tails={short_tail:.0f}Y/{long_tail:.0f}Y; "
-                           f"type={opt_type}; "
-                           f"direction={direction}",
+                extra_info=f"expiry={expiry:.2f}Y; " f"tails={short_tail:.0f}Y/{long_tail:.0f}Y; " f"type={opt_type}; " f"direction={direction}",
             )
 
             legs_list = [str(trade_ids[i]) for i in combo]
@@ -1523,15 +1527,17 @@ def detect_swaption_conditional_curve_df(
             break
 
     # Merge back
-    res = pd.DataFrame({
-        config.trade_id_col: trade_ids,
-        "_pkg_type": pkg_type,
-        "_pkg_id": pkg_ids,
-        "_pkg_legs": pkg_legs,
-        "_pkg_conf": pkg_conf,
-        "_pkg_reason": pkg_reason,
-        "_pkg_legs_count": pkg_legs_count,
-    })
+    res = pd.DataFrame(
+        {
+            config.trade_id_col: trade_ids,
+            "_pkg_type": pkg_type,
+            "_pkg_id": pkg_ids,
+            "_pkg_legs": pkg_legs,
+            "_pkg_conf": pkg_conf,
+            "_pkg_reason": pkg_reason,
+            "_pkg_legs_count": pkg_legs_count,
+        }
+    )
 
     out[config.trade_id_col] = out[config.trade_id_col].astype(str)
     out = out.merge(
@@ -1619,16 +1625,22 @@ def detect_swaption_vega_curve_df(
     straddles = out.loc[straddle_mask].copy()
 
     # Group by package_id to get straddle characteristics
-    straddle_groups = straddles.groupby("package_id").agg({
-        config.exec_col: "first",
-        config.platform_col: "first",
-        config.currency_col: "first",
-        config.tenor_col: "first",  # Tail
-        config.forward_col: "first",  # Expiry
-        config.notional_col: "sum",  # Total notional
-        config.premium_col: "sum",  # Total premium (vega proxy)
-        config.trade_id_col: list,
-    }).reset_index()
+    straddle_groups = (
+        straddles.groupby("package_id")
+        .agg(
+            {
+                config.exec_col: "first",
+                config.platform_col: "first",
+                config.currency_col: "first",
+                config.tenor_col: "first",  # Tail
+                config.forward_col: "first",  # Expiry
+                config.notional_col: "sum",  # Total notional
+                config.premium_col: "sum",  # Total premium (vega proxy)
+                config.trade_id_col: list,
+            }
+        )
+        .reset_index()
+    )
 
     if len(straddle_groups) < 2:
         return out
@@ -1725,9 +1737,7 @@ def detect_swaption_vega_curve_df(
                 mask = out["package_id"] == pid
                 out.loc[mask, "vega_curve_type"] = curve_type
                 out.loc[mask, "vega_curve_id"] = curve_id
-                out.loc[mask, "vega_curve_legs"] = pd.Series(
-                    [all_trades] * mask.sum(), index=out.index[mask]
-                )
+                out.loc[mask, "vega_curve_legs"] = pd.Series([all_trades] * mask.sum(), index=out.index[mask])
 
             break  # Move to next straddle
 
@@ -2324,6 +2334,10 @@ def detect_and_link_swaption_packages_df(
     """
     out = df.copy()
 
+    temp = out.copy()
+    temp["execution_timestamp"] = temp["execution_timestamp"].astype(str)
+    temp.to_excel("temp_out.xlsx")
+
     # Phase 1: Detect risk reversals first (highest priority - IDB structures)
     if detect_risk_reversals:
         out = detect_swaption_risk_reversals_df(
@@ -2353,35 +2367,35 @@ def detect_and_link_swaption_packages_df(
             package_col=package_col,
         )
 
-    # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
-    if detect_vertical_spreads:
-        out = detect_swaption_vertical_spreads_df(
-            out,
-            time_window_seconds=vertical_spread_time_window_seconds,
-            config=config,
-            product_col=product_col,
-            package_col=package_col,
-        )
+    # # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
+    # if detect_vertical_spreads:
+    #     out = detect_swaption_vertical_spreads_df(
+    #         out,
+    #         time_window_seconds=vertical_spread_time_window_seconds,
+    #         config=config,
+    #         product_col=product_col,
+    #         package_col=package_col,
+    #     )
 
-    # Phase 4: Detect conditional curve trades (same expiry, different tails)
-    if detect_conditional_curve:
-        out = detect_swaption_conditional_curve_df(
-            out,
-            time_window_seconds=conditional_curve_time_window_seconds,
-            config=config,
-            product_col=product_col,
-            package_col=package_col,
-        )
+    # # Phase 4: Detect conditional curve trades (same expiry, different tails)
+    # if detect_conditional_curve:
+    #     out = detect_swaption_conditional_curve_df(
+    #         out,
+    #         time_window_seconds=conditional_curve_time_window_seconds,
+    #         config=config,
+    #         product_col=product_col,
+    #         package_col=package_col,
+    #     )
 
-    # Phase 5: Detect vega curve trades (requires straddles to be detected first)
-    if detect_vega_curve and detect_straddles:
-        out = detect_swaption_vega_curve_df(
-            out,
-            time_window_seconds=vega_curve_time_window_seconds,
-            config=config,
-            product_col=product_col,
-            package_col=package_col,
-        )
+    # # Phase 5: Detect vega curve trades (requires straddles to be detected first)
+    # if detect_vega_curve and detect_straddles:
+    #     out = detect_swaption_vega_curve_df(
+    #         out,
+    #         time_window_seconds=vega_curve_time_window_seconds,
+    #         config=config,
+    #         product_col=product_col,
+    #         package_col=package_col,
+    #     )
 
     return out
 

@@ -182,7 +182,7 @@ class USD_Swaptions(USDProductBase):
             agency="CFTC",
             asset_class="RATES",
             filter_func=self.detect,
-            ignore_cache=ignore_cache,
+            # ignore_cache=ignore_cache,
         )
 
         if raw_sdr_trades_df.empty:

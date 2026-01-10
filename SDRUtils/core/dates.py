@@ -15,7 +15,7 @@ import QuantLib as ql
 import pytz
 from dateutil.relativedelta import relativedelta
 
-from SDRUtils.config import USD_CONVENTIONS, CurrencyConventions 
+from SDRUtils.config import USD_CONVENTIONS, CurrencyConventions
 
 
 NY_tz = pytz.timezone("America/New_York")
@@ -121,34 +121,37 @@ def calculate_tenor_years(
     conventions: Optional[CurrencyConventions] = None,
     adjust_to_business_day: bool = True,
 ) -> float:
-    """
-    Calculate year fraction for tenor between effective and expiration dates.
+    # """
+    # Calculate year fraction for tenor between effective and expiration dates.
 
-    Args:
-        effective_date: Start date of the swap
-        expiration_date: End date of the swap
-        conventions: Currency conventions to use (defaults to USD)
-        adjust_to_business_day: Whether to adjust dates to business days
+    # Args:
+    #     effective_date: Start date of the swap
+    #     expiration_date: End date of the swap
+    #     conventions: Currency conventions to use (defaults to USD)
+    #     adjust_to_business_day: Whether to adjust dates to business days
 
-    Returns:
-        Year fraction using the specified day counter
-    """
-    if conventions is None:
-        conventions = USD_CONVENTIONS
+    # Returns:
+    #     Year fraction using the specified day counter
+    # """
+    # if conventions is None:
+    #     conventions = USD_CONVENTIONS
 
-    ql_eff = to_ql_date(effective_date)
-    ql_exp = to_ql_date(expiration_date)
-    if ql_eff is None or ql_exp is None:
-        return 0.0
+    # ql_eff = to_ql_date(effective_date)
+    # ql_exp = to_ql_date(expiration_date)
+    # if ql_eff is None or ql_exp is None:
+    #     return 0.0
 
-    if adjust_to_business_day:
-        ql_eff = adjust_ql_date(ql_eff, conventions.calendar, conventions.business_day_convention)
-        ql_exp = adjust_ql_date(ql_exp, conventions.calendar, conventions.business_day_convention)
+    # if adjust_to_business_day:
+    #     ql_eff = adjust_ql_date(ql_eff, conventions.calendar, conventions.business_day_convention)
+    #     ql_exp = adjust_ql_date(ql_exp, conventions.calendar, conventions.business_day_convention)
 
-    if ql_exp <= ql_eff:
-        return 0.0
+    # if ql_exp <= ql_eff:
+    #     return 0.0
 
-    return float(conventions.day_counter.yearFraction(ql_eff, ql_exp))
+    # return float(conventions.day_counter.yearFraction(ql_eff, ql_exp))
+
+    td = to_naive_timestamp(effective_date) - to_naive_timestamp(expiration_date)
+    return abs(td.days) / 365
 
 
 def calculate_forward_start_years(
