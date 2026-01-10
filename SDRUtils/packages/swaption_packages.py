@@ -750,7 +750,6 @@ def detect_swaption_risk_reversals_df(
             return False
 
         low_group = ordered_groups[0][1]
-        mid_group = ordered_groups[1][1]
         high_group = ordered_groups[2][1]
 
         low_dir = _direction(product_labels[indices[low_group[0]]])
@@ -761,8 +760,7 @@ def detect_swaption_risk_reversals_df(
         if high_dir != 1:
             return False
 
-        mid_dirs = [_direction(product_labels[indices[idx]]) for idx in mid_group]
-        return len(set(mid_dirs)) == 2
+        return True
 
     def _is_risk_reversal(indices: List[int]) -> bool:
         strikes = strike_vals[indices]
@@ -815,20 +813,29 @@ def detect_swaption_risk_reversals_df(
 
         return True
 
+    def _normalize_key_value(value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, float) and np.isnan(value):
+            return None
+        if pd.isna(value):
+            return None
+        return value
+
     def _econ_key(i: int) -> Tuple[Any, ...]:
         parts: List[Any] = []
         if config.require_same_platform and platforms is not None:
-            parts.append(platforms[i])
+            parts.append(_normalize_key_value(platforms[i]))
         if config.require_same_currency and currencies is not None:
-            parts.append(currencies[i])
+            parts.append(_normalize_key_value(currencies[i]))
         if config.require_same_underlier and underliers is not None:
-            parts.append(underliers[i])
+            parts.append(_normalize_key_value(underliers[i]))
         if require_same_expiration and expirations is not None:
-            parts.append(expirations[i])
+            parts.append(_normalize_key_value(expirations[i]))
         if require_same_tenor and tenors is not None:
-            parts.append(tenors[i])
+            parts.append(_normalize_key_value(tenors[i]))
         if require_same_forward and forwards is not None:
-            parts.append(forwards[i])
+            parts.append(_normalize_key_value(forwards[i]))
         return tuple(parts)
 
     group_indices: Dict[Tuple[Any, ...], List[int]] = {}
