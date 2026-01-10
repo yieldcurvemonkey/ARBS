@@ -250,12 +250,35 @@ PRODUCT_TYPES = ProductTypeMapping()
 class PackageTypeMapping:
     """Package type literals."""
 
+    # Linear swap packages
     OUTRIGHT: str = "OUTRIGHT"
     CURVE: str = "CURVE"
     FLY: str = "FLY"
     MMS: str = "MATCHEDMATURITY"
+
+    # Swaption packages - basic
     STRADDLE: str = "STRADDLE"
     STRANGLE: str = "STRANGLE"
+    RISK_REVERSAL: str = "RISK_REVERSAL"
+
+    # Swaption packages - vertical spreads
+    VERTICAL_SPREAD_1x1: str = "VERTICAL_SPREAD_1x1"
+    VERTICAL_SPREAD_1x1_5: str = "VERTICAL_SPREAD_1x1.5"
+    VERTICAL_SPREAD_1x2: str = "VERTICAL_SPREAD_1x2"
+    VERTICAL_SPREAD_1x3: str = "VERTICAL_SPREAD_1x3"
+
+    # Swaption packages - conditional curve
+    CONDITIONAL_STEEPENER: str = "CONDITIONAL_STEEPENER"
+    CONDITIONAL_FLATTENER: str = "CONDITIONAL_FLATTENER"
+
+    # Swaption packages - vega curve
+    VEGA_EXPIRY_SPREAD: str = "VEGA_EXPIRY_SPREAD"
+    VEGA_TAIL_SPREAD: str = "VEGA_TAIL_SPREAD"
+    VEGA_DIAGONAL: str = "VEGA_DIAGONAL"
+
+    # Vega-based packages
+    VEGA_BUCKETED_PACKAGE: str = "VEGA_BUCKETED_PACKAGE"
+    IMPLIED_PACKAGE_SAME_TIMESTAMP: str = "IMPLIED_PACKAGE_SAME_TIMESTAMP"
 
 
 PACKAGE_TYPES = PackageTypeMapping()

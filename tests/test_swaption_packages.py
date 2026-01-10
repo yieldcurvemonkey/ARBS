@@ -952,5 +952,838 @@ class TestStraddleDetection:
             assert not (packaged["package_type"] == "STRADDLE").any()
 
 
+# =============================================================================
+# Vertical Spread Detection Tests
+# =============================================================================
+
+
+@pytest.fixture
+def vertical_spread_1x2_df():
+    """
+    Example 1x2 vertical spread: same tenor, different strikes, same option type.
+
+    Structure:
+    - 100mm 1Yx10Y payer @ 4.00% (long 1)
+    - 200mm 1Yx10Y payer @ 4.50% (short 2)
+    This is a bear payer spread (selling upside protection).
+    """
+    base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+    return pd.DataFrame([
+        {
+            "trade_id": "VS001",
+            "product_type": "SWAPTION_PAYER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,
+            "strike": 4.00,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 10.0,
+            "forward_start_years": 1.0,
+            "premium": 125000.0,
+            "Package indicator": True,
+        },
+        {
+            "trade_id": "VS002",
+            "product_type": "SWAPTION_PAYER",
+            "execution_timestamp": base_ts + pd.Timedelta(seconds=5),
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 200_000_000,  # 2x notional = 1x2 spread
+            "strike": 4.50,  # Higher strike
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 10.0,
+            "forward_start_years": 1.0,
+            "premium": 75000.0,
+            "Package indicator": True,
+        },
+    ])
+
+
+@pytest.fixture
+def vertical_spread_1x1_receiver_df():
+    """
+    Example 1x1 receiver spread (bull spread).
+
+    Structure:
+    - 100mm 1Yx10Y receiver @ 4.00% (long)
+    - 100mm 1Yx10Y receiver @ 3.50% (short)
+    This is a bull receiver spread (expecting rates to fall, but not below 3.50%).
+    """
+    base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+    return pd.DataFrame([
+        {
+            "trade_id": "RS001",
+            "product_type": "SWAPTION_RECEIVER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,
+            "strike": 4.00,  # Higher strike (long)
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 10.0,
+            "forward_start_years": 1.0,
+            "premium": 150000.0,
+        },
+        {
+            "trade_id": "RS002",
+            "product_type": "SWAPTION_RECEIVER",
+            "execution_timestamp": base_ts + pd.Timedelta(seconds=10),
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,  # Same notional = 1x1
+            "strike": 3.50,  # Lower strike (short)
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 10.0,
+            "forward_start_years": 1.0,
+            "premium": 80000.0,
+        },
+    ])
+
+
+class TestVerticalSpreadDetection:
+    """Tests for vertical spread detection functionality."""
+
+    def test_1x2_payer_spread_detection(self, vertical_spread_1x2_df, config):
+        """Test detection of 1x2 payer spread."""
+        from SDRUtils.packages.swaption_packages import detect_swaption_vertical_spreads_df
+
+        result = detect_swaption_vertical_spreads_df(
+            vertical_spread_1x2_df,
+            time_window_seconds=120,
+            config=config,
+        )
+
+        packaged = result[result["package_id"].notna()]
+        assert len(packaged) == 2, "Both legs should be in spread"
+
+        # Should be labeled as VERTICAL_SPREAD_1x2
+        assert (packaged["package_type"] == "VERTICAL_SPREAD_1x2").all()
+
+        # Should have same package_id
+        assert packaged["package_id"].nunique() == 1
+
+        # Should have 2 legs
+        assert (packaged["package_legs_count"] == 2).all()
+
+        # Reason should contain direction
+        reason = packaged["package_reason"].iloc[0]
+        assert "direction=" in reason
+        assert "type=PAYER" in reason
+
+    def test_1x1_receiver_spread_detection(self, vertical_spread_1x1_receiver_df, config):
+        """Test detection of 1x1 receiver spread."""
+        from SDRUtils.packages.swaption_packages import detect_swaption_vertical_spreads_df
+
+        result = detect_swaption_vertical_spreads_df(
+            vertical_spread_1x1_receiver_df,
+            time_window_seconds=120,
+            config=config,
+        )
+
+        packaged = result[result["package_id"].notna()]
+        assert len(packaged) == 2
+
+        # Should be labeled as VERTICAL_SPREAD_1x1
+        assert (packaged["package_type"] == "VERTICAL_SPREAD_1x1").all()
+
+        # Reason should indicate RECEIVER and BULL direction
+        reason = packaged["package_reason"].iloc[0]
+        assert "type=RECEIVER" in reason
+
+    def test_vertical_spread_not_straddle(self, config):
+        """Test that payer+receiver is not detected as vertical spread."""
+        base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+        df = pd.DataFrame([
+            {
+                "trade_id": "NS001",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 100_000_000,
+                "strike": 4.00,
+                "tenor_years": 10.0,
+                "forward_start_years": 1.0,
+            },
+            {
+                "trade_id": "NS002",
+                "product_type": "SWAPTION_RECEIVER",  # Different type
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 100_000_000,
+                "strike": 4.50,
+                "tenor_years": 10.0,
+                "forward_start_years": 1.0,
+            },
+        ])
+
+        from SDRUtils.packages.swaption_packages import detect_swaption_vertical_spreads_df
+
+        result = detect_swaption_vertical_spreads_df(df, config=config)
+        packaged = result[result["package_id"].notna()]
+
+        # Should NOT detect as vertical spread (different option types)
+        assert len(packaged) == 0
+
+    def test_vertical_spread_different_tenor_not_detected(self, config):
+        """Test that different underlying tenors don't form vertical spread."""
+        base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+        df = pd.DataFrame([
+            {
+                "trade_id": "DT001",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 100_000_000,
+                "strike": 4.00,
+                "tenor_years": 10.0,  # 10Y tail
+                "forward_start_years": 1.0,
+                "expiration_date": pd.Timestamp("2027-01-06"),
+            },
+            {
+                "trade_id": "DT002",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 100_000_000,
+                "strike": 4.50,
+                "tenor_years": 30.0,  # Different tail
+                "forward_start_years": 1.0,
+                "expiration_date": pd.Timestamp("2027-01-06"),
+            },
+        ])
+
+        from SDRUtils.packages.swaption_packages import detect_swaption_vertical_spreads_df
+
+        result = detect_swaption_vertical_spreads_df(df, config=config)
+        packaged = result[result["package_id"].notna()]
+
+        # Should NOT detect (different tenors)
+        assert len(packaged) == 0
+
+
+# =============================================================================
+# Conditional Curve Trade Detection Tests
+# =============================================================================
+
+
+@pytest.fixture
+def conditional_steepener_df():
+    """
+    Example conditional steepener: 1Yx10Y vs 1Yx30Y payers.
+
+    Structure:
+    - 100mm 1Yx10Y payer @ 4.00% (long short-tail)
+    - 50mm 1Yx30Y payer @ 4.25% (short long-tail, smaller due to DV01 weighting)
+
+    This is a conditional steepener - profits if curve steepens in a selloff.
+    """
+    base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+    return pd.DataFrame([
+        {
+            "trade_id": "CS001",
+            "product_type": "SWAPTION_PAYER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,
+            "strike": 4.00,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 10.0,  # 10Y tail
+            "forward_start_years": 1.0,
+            "premium": 200000.0,
+        },
+        {
+            "trade_id": "CS002",
+            "product_type": "SWAPTION_PAYER",
+            "execution_timestamp": base_ts + pd.Timedelta(seconds=15),
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 50_000_000,  # Smaller (DV01 weighted)
+            "strike": 4.25,
+            "expiration_date": pd.Timestamp("2027-01-06"),  # Same expiry
+            "tenor_years": 30.0,  # 30Y tail (20Y difference)
+            "forward_start_years": 1.0,
+            "premium": 150000.0,
+        },
+    ])
+
+
+@pytest.fixture
+def conditional_flattener_df():
+    """
+    Example conditional flattener: 1Yx10Y vs 1Yx30Y receivers.
+
+    Structure:
+    - 50mm 1Yx10Y receiver (short short-tail)
+    - 100mm 1Yx30Y receiver (long long-tail)
+
+    This is a conditional flattener - profits if curve flattens in a rally.
+    """
+    base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+    return pd.DataFrame([
+        {
+            "trade_id": "CF001",
+            "product_type": "SWAPTION_RECEIVER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 50_000_000,  # Smaller
+            "strike": 3.50,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 10.0,
+            "forward_start_years": 1.0,
+            "premium": 100000.0,
+        },
+        {
+            "trade_id": "CF002",
+            "product_type": "SWAPTION_RECEIVER",
+            "execution_timestamp": base_ts + pd.Timedelta(seconds=10),
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,  # Larger (long)
+            "strike": 3.75,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 30.0,  # 30Y tail
+            "forward_start_years": 1.0,
+            "premium": 200000.0,
+        },
+    ])
+
+
+class TestConditionalCurveDetection:
+    """Tests for conditional curve trade detection."""
+
+    def test_conditional_steepener_detection(self, conditional_steepener_df, config):
+        """Test detection of conditional steepener."""
+        from SDRUtils.packages.swaption_packages import detect_swaption_conditional_curve_df
+
+        result = detect_swaption_conditional_curve_df(
+            conditional_steepener_df,
+            time_window_seconds=120,
+            config=config,
+        )
+
+        packaged = result[result["package_id"].notna()]
+        assert len(packaged) == 2
+
+        # Should be labeled as CONDITIONAL_STEEPENER
+        assert (packaged["package_type"] == "CONDITIONAL_STEEPENER").all()
+
+        # Reason should contain tail info
+        reason = packaged["package_reason"].iloc[0]
+        assert "tails=" in reason
+        assert "10" in reason and "30" in reason
+
+    def test_conditional_flattener_detection(self, conditional_flattener_df, config):
+        """Test detection of conditional flattener."""
+        from SDRUtils.packages.swaption_packages import detect_swaption_conditional_curve_df
+
+        result = detect_swaption_conditional_curve_df(
+            conditional_flattener_df,
+            time_window_seconds=120,
+            config=config,
+        )
+
+        packaged = result[result["package_id"].notna()]
+        assert len(packaged) == 2
+
+        # Should be labeled as CONDITIONAL_FLATTENER
+        assert (packaged["package_type"] == "CONDITIONAL_FLATTENER").all()
+
+    def test_conditional_curve_requires_same_expiry(self, config):
+        """Test that different expiries don't form conditional curve."""
+        base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+        df = pd.DataFrame([
+            {
+                "trade_id": "DE001",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 100_000_000,
+                "strike": 4.00,
+                "expiration_date": pd.Timestamp("2027-01-06"),  # 1Y expiry
+                "tenor_years": 10.0,
+                "forward_start_years": 1.0,
+            },
+            {
+                "trade_id": "DE002",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 50_000_000,
+                "strike": 4.25,
+                "expiration_date": pd.Timestamp("2028-01-06"),  # Different expiry!
+                "tenor_years": 30.0,
+                "forward_start_years": 2.0,  # Different forward
+            },
+        ])
+
+        from SDRUtils.packages.swaption_packages import detect_swaption_conditional_curve_df
+
+        result = detect_swaption_conditional_curve_df(df, config=config)
+        packaged = result[result["package_id"].notna()]
+
+        # Should NOT detect (different expiries)
+        assert len(packaged) == 0
+
+    def test_conditional_curve_requires_min_tail_diff(self, config):
+        """Test that small tail differences don't form conditional curve."""
+        base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+        df = pd.DataFrame([
+            {
+                "trade_id": "MT001",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 100_000_000,
+                "strike": 4.00,
+                "expiration_date": pd.Timestamp("2027-01-06"),
+                "tenor_years": 10.0,
+                "forward_start_years": 1.0,
+            },
+            {
+                "trade_id": "MT002",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 100_000_000,
+                "strike": 4.00,
+                "expiration_date": pd.Timestamp("2027-01-06"),
+                "tenor_years": 12.0,  # Only 2Y difference (< 5Y min)
+                "forward_start_years": 1.0,
+            },
+        ])
+
+        from SDRUtils.packages.swaption_packages import detect_swaption_conditional_curve_df
+
+        result = detect_swaption_conditional_curve_df(df, config=config)
+        packaged = result[result["package_id"].notna()]
+
+        # Should NOT detect (tail diff too small)
+        assert len(packaged) == 0
+
+
+# =============================================================================
+# Vega Curve Detection Tests
+# =============================================================================
+
+
+@pytest.fixture
+def vega_expiry_spread_df():
+    """
+    Example vega expiry spread: 9Mx10Y vs 1Yx10Y straddles.
+
+    From trader context: 9m1y vs 1y1y with similar vega.
+    This trades the vol term structure.
+    """
+    base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+    return pd.DataFrame([
+        # First straddle: 9Mx10Y
+        {
+            "trade_id": "VE001",
+            "product_type": "SWAPTION_PAYER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,
+            "strike": 4.00,
+            "expiration_date": pd.Timestamp("2026-10-06"),
+            "tenor_years": 10.0,
+            "forward_start_years": 0.75,  # 9M expiry
+            "premium": 48000.0,
+        },
+        {
+            "trade_id": "VE002",
+            "product_type": "SWAPTION_RECEIVER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,
+            "strike": 4.00,
+            "expiration_date": pd.Timestamp("2026-10-06"),
+            "tenor_years": 10.0,
+            "forward_start_years": 0.75,
+            "premium": 48000.0,
+        },
+        # Second straddle: 1Yx10Y (different expiry, same tail)
+        {
+            "trade_id": "VE003",
+            "product_type": "SWAPTION_PAYER",
+            "execution_timestamp": base_ts + pd.Timedelta(seconds=30),
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,
+            "strike": 3.95,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 10.0,  # Same tail
+            "forward_start_years": 1.0,  # 1Y expiry (different)
+            "premium": 52000.0,
+        },
+        {
+            "trade_id": "VE004",
+            "product_type": "SWAPTION_RECEIVER",
+            "execution_timestamp": base_ts + pd.Timedelta(seconds=30),
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 100_000_000,
+            "strike": 3.95,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 10.0,
+            "forward_start_years": 1.0,
+            "premium": 52000.0,
+        },
+    ])
+
+
+@pytest.fixture
+def vega_tail_spread_df():
+    """
+    Example vega tail spread: 1Yx5Y vs 1Yx10Y straddles.
+
+    This is the 4y5y vs 2y5y example from trader context.
+    Trades the vol smile across the curve.
+    """
+    base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+    return pd.DataFrame([
+        # First straddle: 1Yx5Y
+        {
+            "trade_id": "VT001",
+            "product_type": "SWAPTION_PAYER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 230_000_000,
+            "strike": 4.025,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 5.0,  # 5Y tail
+            "forward_start_years": 1.0,
+            "premium": 125000.0,
+        },
+        {
+            "trade_id": "VT002",
+            "product_type": "SWAPTION_RECEIVER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 230_000_000,
+            "strike": 4.025,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 5.0,
+            "forward_start_years": 1.0,
+            "premium": 125000.0,
+        },
+        # Second straddle: 1Yx10Y (same expiry, different tail)
+        {
+            "trade_id": "VT003",
+            "product_type": "SWAPTION_PAYER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 150_000_000,
+            "strike": 3.981,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 10.0,  # 10Y tail (different)
+            "forward_start_years": 1.0,  # Same expiry
+            "premium": 135000.0,
+        },
+        {
+            "trade_id": "VT004",
+            "product_type": "SWAPTION_RECEIVER",
+            "execution_timestamp": base_ts,
+            "Platform identifier": "BILT",
+            "notional_currency": "USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "notional": 150_000_000,
+            "strike": 3.981,
+            "expiration_date": pd.Timestamp("2027-01-06"),
+            "tenor_years": 10.0,
+            "forward_start_years": 1.0,
+            "premium": 135000.0,
+        },
+    ])
+
+
+class TestVegaCurveDetection:
+    """Tests for vega curve trade detection."""
+
+    def test_vega_expiry_spread_detection(self, vega_expiry_spread_df, config):
+        """Test detection of vega expiry spread (same tail, different expiry)."""
+        from SDRUtils.packages.swaption_packages import (
+            detect_swaption_straddles_df,
+            detect_swaption_vega_curve_df,
+        )
+
+        # First detect straddles
+        result = detect_swaption_straddles_df(
+            vega_expiry_spread_df,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+            strike_tolerance=0.01,
+            notional_tolerance_pct=0.05,
+            config=config,
+        )
+
+        # Then detect vega curve
+        result = detect_swaption_vega_curve_df(
+            result,
+            time_window_seconds=300,
+            config=config,
+        )
+
+        # Check straddles were detected
+        straddles = result[result["package_type"] == "STRADDLE"]
+        assert len(straddles) == 4, "Should have 4 legs in 2 straddles"
+
+        # Check vega curve was detected
+        vega_curve = result[result["vega_curve_type"].notna()]
+        assert len(vega_curve) > 0, "Should detect vega curve"
+
+        # Should be VEGA_EXPIRY_SPREAD (same tail, different expiry)
+        assert (vega_curve["vega_curve_type"] == "VEGA_EXPIRY_SPREAD").all()
+
+    def test_vega_tail_spread_detection(self, vega_tail_spread_df, config):
+        """Test detection of vega tail spread (same expiry, different tail)."""
+        from SDRUtils.packages.swaption_packages import (
+            detect_swaption_straddles_df,
+            detect_swaption_vega_curve_df,
+        )
+
+        # First detect straddles
+        result = detect_swaption_straddles_df(
+            vega_tail_spread_df,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+            strike_tolerance=0.05,
+            notional_tolerance_pct=0.05,
+            config=config,
+        )
+
+        # Then detect vega curve
+        result = detect_swaption_vega_curve_df(
+            result,
+            time_window_seconds=300,
+            config=config,
+        )
+
+        # Check straddles were detected
+        straddles = result[result["package_type"] == "STRADDLE"]
+        assert len(straddles) == 4
+
+        # Check vega curve was detected
+        vega_curve = result[result["vega_curve_type"].notna()]
+        assert len(vega_curve) > 0
+
+        # Should be VEGA_TAIL_SPREAD (same expiry, different tail)
+        assert (vega_curve["vega_curve_type"] == "VEGA_TAIL_SPREAD").all()
+
+    def test_vega_curve_requires_straddles(self, config):
+        """Test that vega curve detection requires pre-detected straddles."""
+        from SDRUtils.packages.swaption_packages import detect_swaption_vega_curve_df
+
+        # DataFrame without any straddle annotations
+        df = pd.DataFrame([
+            {
+                "trade_id": "NV001",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": pd.Timestamp("2026-01-06 10:00:00", tz="UTC"),
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "notional": 100_000_000,
+                "tenor_years": 10.0,
+                "forward_start_years": 1.0,
+                "premium": 50000.0,
+                "package_type": "SWAPTION",
+            },
+        ])
+
+        result = detect_swaption_vega_curve_df(df, config=config)
+
+        # Should not detect anything (no straddles)
+        vega_curve = result[result["vega_curve_type"].notna()]
+        assert len(vega_curve) == 0
+
+
+# =============================================================================
+# Combined Detection Pipeline Tests
+# =============================================================================
+
+
+class TestCombinedDetectionPipeline:
+    """Tests for the combined detection pipeline."""
+
+    def test_full_pipeline_with_all_structures(self, config):
+        """Test that full pipeline detects multiple structure types."""
+        from SDRUtils.packages.swaption_packages import detect_and_link_swaption_packages_df
+
+        base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+        # Create a diverse set of trades
+        df = pd.DataFrame([
+            # Straddle
+            {
+                "trade_id": "FP001",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "notional": 100_000_000,
+                "strike": 4.00,
+                "expiration_date": pd.Timestamp("2027-01-06"),
+                "tenor_years": 10.0,
+                "forward_start_years": 1.0,
+                "premium": 50000.0,
+            },
+            {
+                "trade_id": "FP002",
+                "product_type": "SWAPTION_RECEIVER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "notional": 100_000_000,
+                "strike": 4.00,
+                "expiration_date": pd.Timestamp("2027-01-06"),
+                "tenor_years": 10.0,
+                "forward_start_years": 1.0,
+                "premium": 50000.0,
+            },
+            # 1x2 Vertical Spread (later in time)
+            {
+                "trade_id": "FP003",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts + pd.Timedelta(minutes=5),
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "notional": 100_000_000,
+                "strike": 4.50,
+                "expiration_date": pd.Timestamp("2027-06-06"),
+                "tenor_years": 5.0,
+                "forward_start_years": 0.5,
+                "premium": 30000.0,
+            },
+            {
+                "trade_id": "FP004",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts + pd.Timedelta(minutes=5, seconds=10),
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "notional": 200_000_000,  # 1x2
+                "strike": 5.00,
+                "expiration_date": pd.Timestamp("2027-06-06"),
+                "tenor_years": 5.0,
+                "forward_start_years": 0.5,
+                "premium": 15000.0,
+            },
+        ])
+
+        result = detect_and_link_swaption_packages_df(
+            df,
+            config=config,
+            detect_straddles=True,
+            detect_vertical_spreads=True,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+            straddle_strike_tolerance=0.01,
+            straddle_notional_tolerance_pct=0.05,
+        )
+
+        # Check straddle detected
+        straddles = result[result["package_type"] == "STRADDLE"]
+        assert len(straddles) == 2
+
+        # Check vertical spread detected
+        spreads = result[result["package_type"].str.startswith("VERTICAL_SPREAD", na=False)]
+        assert len(spreads) == 2
+
+    def test_detection_priority_order(self, config):
+        """Test that detection follows priority order (risk reversals first)."""
+        # This ensures trades matched by higher-priority detectors aren't
+        # re-matched by lower-priority ones
+        from SDRUtils.packages.swaption_packages import detect_and_link_swaption_packages_df
+
+        # Would need IDB platform data with risk reversal structure
+        # Simplified test: ensure straddles are detected before vertical spreads
+        base_ts = pd.Timestamp("2026-01-06 10:00:00", tz="UTC")
+
+        # Create trades that could be either straddle or vertical spread
+        df = pd.DataFrame([
+            {
+                "trade_id": "PO001",
+                "product_type": "SWAPTION_PAYER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "notional": 100_000_000,
+                "strike": 4.00,
+                "expiration_date": pd.Timestamp("2027-01-06"),
+                "tenor_years": 10.0,
+                "forward_start_years": 1.0,
+                "premium": 50000.0,
+            },
+            {
+                "trade_id": "PO002",
+                "product_type": "SWAPTION_RECEIVER",
+                "execution_timestamp": base_ts,
+                "Platform identifier": "BILT",
+                "notional_currency": "USD",
+                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "notional": 100_000_000,
+                "strike": 4.00,
+                "expiration_date": pd.Timestamp("2027-01-06"),
+                "tenor_years": 10.0,
+                "forward_start_years": 1.0,
+                "premium": 50000.0,
+            },
+        ])
+
+        result = detect_and_link_swaption_packages_df(
+            df,
+            config=config,
+            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+            straddle_strike_tolerance=0.01,
+            straddle_notional_tolerance_pct=0.05,
+        )
+
+        # Should be detected as STRADDLE (higher priority), not vertical spread
+        packaged = result[result["package_id"].notna()]
+        assert len(packaged) == 2
+        assert (packaged["package_type"] == "STRADDLE").all()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
