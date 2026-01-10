@@ -30,7 +30,7 @@ from SDRUtils.config import PRODUCT_TYPES, TRADE_ID, USD_CONVENTIONS
 from SDRUtils.core.classification import SwapTradeClassification, classifications_to_dataframe, classify_product_type
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
 from SDRUtils.core.parsing import parse_notional
-from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_to_label
+from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_from_dates, tenor_to_label
 from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.packages import detect_curve_trades_df, detect_fly_trades_df, detect_mms_trades_df, merge_package_legs_to_one_row
 from SDRUtils.products._swaps._cme_mac import fetch_mac_ref_data
@@ -75,7 +75,7 @@ def classify_sofr_swap_trade(
         expiration_date,
         conventions=USD_CONVENTIONS,
     )
-    tenor_label = tenor_to_label(tenor_years, expiration_date=expiration_date)
+    tenor_label = tenor_from_dates(effective_date, expiration_date)
 
     # Calculate forward start
     forward_years = calculate_forward_start_years(

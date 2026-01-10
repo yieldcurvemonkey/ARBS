@@ -8,7 +8,7 @@ import pandas as pd
 
 from SDRUtils.config import USD_CONVENTIONS, get_conventions
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years
-from SDRUtils.core.tenors import forward_to_label, tenor_to_label
+from SDRUtils.core.tenors import forward_to_label, tenor_from_dates, tenor_to_label
 
 
 def _norm_upi(x: object) -> str:
@@ -297,7 +297,7 @@ def make_swaption_desc_func(
             expiry_years = calculate_tenor_years(asof, exp, conventions=conventions)
             tail_years = calculate_tenor_years(exp, mat, conventions=conventions)
             expiry_label = forward_to_label(expiry_years, exp, True)
-            tail_label = tenor_to_label(tail_years, mat)
+            tail_label = tenor_from_dates(exp, mat)
 
             if eff <= exp:
                 tenor = f"{expiry_label}x{tail_label}"

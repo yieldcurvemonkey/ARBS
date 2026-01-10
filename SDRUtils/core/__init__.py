@@ -23,6 +23,7 @@ from SDRUtils.core.dates import (
     UTC_tz,
     to_ql_date,
     to_naive_timestamp,
+    calculate_tenor_components,
     calculate_tenor_years,
     calculate_forward_start_years,
     is_forward_starting,
@@ -31,6 +32,7 @@ from SDRUtils.core.dates import (
 # Tenors
 from SDRUtils.core.tenors import (
     tenor_to_label,
+    tenor_from_dates,
     forward_to_label,
     build_trade_label,
     get_imm_label,
@@ -76,11 +78,13 @@ __all__ = [
     "UTC_tz",
     "to_ql_date",
     "to_naive_timestamp",
+    "calculate_tenor_components",
     "calculate_tenor_years",
     "calculate_forward_start_years",
     "is_forward_starting",
     # Tenors
     "tenor_to_label",
+    "tenor_from_dates",
     "forward_to_label",
     "build_trade_label",
     "get_imm_label",
