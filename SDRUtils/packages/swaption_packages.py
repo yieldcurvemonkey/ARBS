@@ -3,9 +3,20 @@ Swaption package detection module.
 
 Detects multi-leg swaption packages including:
 - STRADDLE: Payer + Receiver swaptions with same strike/expiry/tenor
+- RISK_REVERSAL: 4-leg structures with wings + delta hedge (3 strikes, 2 notionals)
+- VERTICAL_SPREAD: Same tenor, different strikes, same option type (1x1, 1x2, 1x1.5, etc.)
+- CONDITIONAL_CURVE: Same expiry, different tail maturities (e.g., 1Yx10Y vs 1Yx30Y)
+- VEGA_CURVE: Vega-matched straddles across different tenors (expiry/tail spreads)
 - VEGA_BUCKETED_PACKAGE: Trades with similar vega within time proximity
 - IMPLIED_PACKAGE_SAME_TIMESTAMP: Trades with identical timestamps (BILT pattern)
 - LINKED_PACKAGES_TIME_PROXIMITY: Separate packages linked by time and vega overlap
+
+Key insights from trader context:
+- BILT: Premium field may be empty but Package Price filled - check BOTH
+- Implied packages: identical timestamps on BILT often indicate linked trades
+- Vega bucketing: trades within 5% vega and 5 min timestamp = potential package
+- Package indicator unreliable on customer platforms
+- IDB platforms (BGCD, ISWV, TPSE) are golden data sources
 
 Detection uses configurable business logic following the same patterns as
 curve.py and fly.py for linear trades.
@@ -17,7 +28,7 @@ import datetime
 import hashlib
 import itertools
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -87,6 +98,7 @@ class SwaptionPackageDetectionConfig:
     expiration_col: str = "expiration_date"
     tenor_col: str = "tenor_years"
     forward_col: str = "forward_start_years"
+    tail_maturity_col: str = "underlying_expiration_date"  # For tail maturity
 
     # Confidence scoring weights
     confidence_weights: Dict[str, float] = field(
@@ -97,6 +109,57 @@ class SwaptionPackageDetectionConfig:
             "premium_anomaly": 0.15,  # Premium zero but package_price non-zero
             "platform_match": 0.15,
         }
+    )
+
+    # ==========================================================================
+    # Vertical Spread Detection Parameters
+    # ==========================================================================
+
+    # Supported spread ratios: (ratio, name, tolerance)
+    # e.g., (2.0, "1x2", 0.1) means ratio 2.0 ± 10%
+    spread_ratios: List[Tuple[float, str, float]] = field(
+        default_factory=lambda: [
+            (1.0, "1x1", 0.10),   # 1x1 spread (same notional)
+            (1.5, "1x1.5", 0.10),  # 1x1.5 spread
+            (2.0, "1x2", 0.10),   # 1x2 spread
+            (3.0, "1x3", 0.10),   # 1x3 spread
+        ]
+    )
+
+    # Minimum strike width for vertical spreads (in absolute terms, e.g., 0.001 = 10bps)
+    vertical_spread_min_strike_width: float = 0.001  # 10bps minimum
+
+    # ==========================================================================
+    # Conditional Curve Trade Detection Parameters
+    # ==========================================================================
+
+    # Minimum tail difference (in years) for conditional curve trades
+    # e.g., 5.0 means at least 5Y difference between tails (10Y vs 30Y qualifies)
+    conditional_curve_min_tail_diff_years: float = 5.0
+
+    # ==========================================================================
+    # Vega Curve Detection Parameters
+    # ==========================================================================
+
+    # Vega tolerance for curve trades (typically looser than general vega tolerance)
+    vega_curve_tolerance_pct: float = 0.05  # 5% tolerance for vega curve matching
+
+    # Minimum expiry or tail difference for vega curve trades (in years)
+    vega_curve_min_expiry_diff_years: float = 0.25  # 3 months minimum
+    vega_curve_min_tail_diff_years: float = 1.0  # 1 year minimum
+
+    # ==========================================================================
+    # IDB Platform Classification
+    # ==========================================================================
+
+    # Inter-dealer broker platforms (golden data sources)
+    idb_platforms: List[str] = field(
+        default_factory=lambda: ["BGCD", "ISWV", "TPSE"]
+    )
+
+    # Customer-facing platforms (variable reliability)
+    customer_platforms: List[str] = field(
+        default_factory=lambda: ["BILT", "XXXX", "TWSF", "BBSF", "XOFF"]
     )
 
 
@@ -866,6 +929,812 @@ def detect_swaption_risk_reversals_df(
 
 
 # =============================================================================
+# Vertical Spread Detection
+# =============================================================================
+
+
+def detect_swaption_vertical_spreads_df(
+    df: pd.DataFrame,
+    *,
+    time_window_seconds: int = 120,
+    config: Optional["SwaptionPackageDetectionConfig"] = None,
+    product_col: str = "product_type",
+    package_col: str = "package_type",
+) -> pd.DataFrame:
+    """
+    Detect vertical spreads (1x1, 1x2, 1x1.5, etc.) in swaption trades.
+
+    A vertical spread consists of:
+    - Same underlying tenor (same expiry and tail)
+    - Different strikes (at least min_strike_width apart)
+    - Same option type (both payers OR both receivers)
+    - Notional ratio matches configured spread ratios
+
+    Direction determination:
+    - For PAYER spreads: long lower strike, short higher = BULL; opposite = BEAR
+    - For RECEIVER spreads: long higher strike, short lower = BULL; opposite = BEAR
+
+    Args:
+        df: Classifications dataframe with swaption trades
+        time_window_seconds: Max time gap between legs (default 120s)
+        config: Detection configuration (uses default if None)
+        product_col: Column name for product type
+        package_col: Column name for package type
+
+    Returns:
+        DataFrame with vertical spread annotations:
+        - package_type: "VERTICAL_SPREAD_1x1", "VERTICAL_SPREAD_1x2", etc.
+        - package_id: Deterministic package identifier
+        - package_legs: List of trade IDs in the spread
+        - package_confidence: Confidence score 0-1
+        - package_reason: Structured explanation with direction (BULL/BEAR)
+        - package_legs_count: Always 2 for vertical spreads
+    """
+    if df.empty:
+        return df
+
+    if config is None:
+        config = DEFAULT_SWAPTION_PACKAGE_CONFIG
+
+    out = df.copy()
+
+    for col, default in [
+        (package_col, "SWAPTION"),
+        ("package_id", None),
+        ("package_legs", None),
+        ("package_confidence", None),
+        ("package_reason", None),
+        ("package_legs_count", None),
+    ]:
+        if col not in out.columns:
+            out[col] = default
+
+    # Filter to swaption candidates not already packaged
+    is_swaption = out[product_col].astype(str).str.contains("SWAPTION", case=False, na=False)
+    not_packaged = out["package_id"].isna() | (out["package_id"] == "")
+    candidate_mask = is_swaption & not_packaged
+
+    if config.platform_allowlist:
+        candidate_mask &= out[config.platform_col].isin(config.platform_allowlist)
+    if config.platform_blocklist:
+        candidate_mask &= ~out[config.platform_col].isin(config.platform_blocklist)
+
+    cand = out.loc[candidate_mask].copy()
+    if len(cand) < 2:
+        return out
+
+    cand["_t"] = _ensure_int64_epoch_seconds(cand[config.exec_col])
+    cand.sort_values("_t", inplace=True, kind="mergesort")
+
+    # Extract arrays
+    n = len(cand)
+    tsec = cand["_t"].to_numpy(dtype=np.int64)
+    strike_vals = pd.to_numeric(cand[config.strike_col], errors="coerce").to_numpy(dtype=np.float64)
+    notional_vals = pd.to_numeric(cand[config.notional_col], errors="coerce").to_numpy(dtype=np.float64)
+    tenor_vals = pd.to_numeric(cand[config.tenor_col], errors="coerce").to_numpy(dtype=np.float64)
+    forward_vals = pd.to_numeric(cand[config.forward_col], errors="coerce").to_numpy(dtype=np.float64)
+    trade_ids = cand[config.trade_id_col].astype(str).to_numpy()
+    product_labels = cand[product_col].astype(str).to_numpy()
+    platforms = cand[config.platform_col].astype("string").to_numpy() if config.platform_col in cand.columns else None
+    currencies = cand[config.currency_col].astype("string").to_numpy() if config.currency_col in cand.columns else None
+    underliers = cand[config.underlier_col].astype("string").to_numpy() if config.underlier_col in cand.columns else None
+    expirations = cand[config.expiration_col].astype("string").to_numpy() if config.expiration_col in cand.columns else None
+    pkg_ind = cand[config.package_indicator_col].to_numpy() if config.package_indicator_col in cand.columns else None
+
+    # Output arrays
+    matched = np.zeros(n, dtype=bool)
+    pkg_ids = np.full(n, "", dtype=object)
+    pkg_type = np.full(n, "", dtype=object)
+    pkg_legs = np.full(n, None, dtype=object)
+    pkg_conf = np.full(n, 0.0, dtype=np.float64)
+    pkg_reason = np.full(n, "", dtype=object)
+    pkg_legs_count = np.full(n, 0, dtype=np.int32)
+
+    def _is_payer(label: str) -> bool:
+        upper = label.upper()
+        return "PAYER" in upper or "CALL" in upper
+
+    def _is_receiver(label: str) -> bool:
+        upper = label.upper()
+        return "RECEIVER" in upper or "PUT" in upper
+
+    def _same_option_type(i: int, j: int) -> bool:
+        """Check if both trades are same type (both payer or both receiver)."""
+        i_payer = _is_payer(product_labels[i])
+        j_payer = _is_payer(product_labels[j])
+        i_receiver = _is_receiver(product_labels[i])
+        j_receiver = _is_receiver(product_labels[j])
+        return (i_payer and j_payer) or (i_receiver and j_receiver)
+
+    def _econ_ok(i: int, j: int) -> bool:
+        """Check economic filters."""
+        if config.require_same_platform and platforms is not None:
+            if platforms[i] != platforms[j]:
+                return False
+        if config.require_same_currency and currencies is not None:
+            if currencies[i] != currencies[j]:
+                return False
+        if config.require_same_underlier and underliers is not None:
+            if underliers[i] != underliers[j]:
+                return False
+        return True
+
+    def _same_tenor(i: int, j: int) -> bool:
+        """Check if same underlying tenor (same expiry and tail)."""
+        # Same expiration date
+        if expirations is not None:
+            if expirations[i] != expirations[j]:
+                return False
+        # Same underlying tenor (tail)
+        if pd.notna(tenor_vals[i]) and pd.notna(tenor_vals[j]):
+            if abs(tenor_vals[i] - tenor_vals[j]) > 0.01:
+                return False
+        # Same forward start (expiry)
+        if pd.notna(forward_vals[i]) and pd.notna(forward_vals[j]):
+            if abs(forward_vals[i] - forward_vals[j]) > 0.01:
+                return False
+        return True
+
+    def _determine_direction(i: int, j: int) -> str:
+        """
+        Determine spread direction (BULL or BEAR).
+
+        Convention:
+        - PAYER: long lower strike = expecting rates to rise = BULL
+        - RECEIVER: long higher strike = expecting rates to fall = BULL
+        """
+        # Determine which leg is long (larger notional) vs short
+        if abs(notional_vals[i]) > abs(notional_vals[j]):
+            long_idx, short_idx = i, j
+        elif abs(notional_vals[j]) > abs(notional_vals[i]):
+            long_idx, short_idx = j, i
+        else:
+            # Same notional - use the first one as "long"
+            long_idx, short_idx = i, j
+
+        long_strike = strike_vals[long_idx]
+        short_strike = strike_vals[short_idx]
+        is_payer = _is_payer(product_labels[long_idx])
+
+        if is_payer:
+            # Payer spread: long lower strike = BULL (expecting rates up)
+            return "BULL" if long_strike < short_strike else "BEAR"
+        else:
+            # Receiver spread: long higher strike = BULL (expecting rates down)
+            return "BULL" if long_strike > short_strike else "BEAR"
+
+    def _match_spread_ratio(n1: float, n2: float) -> Optional[Tuple[str, float]]:
+        """Check if notional ratio matches any configured spread ratio."""
+        if n1 <= 0 or n2 <= 0:
+            return None
+
+        ratio = max(n1, n2) / min(n1, n2)
+
+        for target_ratio, ratio_name, tolerance in config.spread_ratios:
+            if abs(ratio - target_ratio) <= tolerance * target_ratio:
+                return ratio_name, ratio
+
+        return None
+
+    # Sliding window search
+    window: List[int] = []
+    left = 0
+
+    for idx in range(n):
+        # Evict old trades
+        while left < len(window) and (tsec[idx] - tsec[window[left]] > time_window_seconds):
+            left += 1
+        window = window[left:] + [idx]
+        left = 0
+
+        if matched[idx]:
+            continue
+
+        # Check pairs in window
+        for other_idx in window[:-1]:  # Exclude current
+            if matched[other_idx]:
+                continue
+
+            # Time check
+            if abs(tsec[idx] - tsec[other_idx]) > time_window_seconds:
+                continue
+
+            # Must be same option type
+            if not _same_option_type(idx, other_idx):
+                continue
+
+            # Must be same underlying tenor
+            if not _same_tenor(idx, other_idx):
+                continue
+
+            # Economic filters
+            if not _econ_ok(idx, other_idx):
+                continue
+
+            # Strike must be different (minimum width)
+            strike_diff = abs(strike_vals[idx] - strike_vals[other_idx])
+            if strike_diff < config.vertical_spread_min_strike_width:
+                continue
+
+            # Check notional ratio
+            ratio_match = _match_spread_ratio(
+                abs(notional_vals[idx]), abs(notional_vals[other_idx])
+            )
+            if ratio_match is None:
+                continue
+
+            ratio_name, actual_ratio = ratio_match
+
+            # Found a vertical spread
+            direction = _determine_direction(idx, other_idx)
+            opt_type = "PAYER" if _is_payer(product_labels[idx]) else "RECEIVER"
+
+            combo = [idx, other_idx]
+            time_delta = abs(tsec[idx] - tsec[other_idx])
+            strikes = sorted([strike_vals[idx], strike_vals[other_idx]])
+
+            platform = platforms[idx] if platforms is not None else "UNKNOWN"
+            pid = _compute_package_id(
+                [trade_ids[i] for i in combo],
+                str(platform),
+                int(tsec[idx] // 30),
+                f"VERTICAL_SPREAD_{ratio_name}",
+            )
+
+            # Confidence scoring
+            confidence = 0.7  # Base confidence for vertical spreads
+            if time_delta < 5:
+                confidence += 0.1
+            if pkg_ind is not None and any(pkg_ind[i] == True or pkg_ind[i] == "Y" for i in combo):
+                confidence += 0.1
+            confidence = min(confidence, 1.0)
+
+            reason = _build_package_reason(
+                platform=str(platform),
+                time_delta_max_seconds=float(time_delta),
+                vega_cluster_spread_pct=None,
+                premium_mode=f"VERTICAL_{ratio_name}",
+                num_legs=2,
+                identical_timestamps=(time_delta < 1),
+                extra_info=f"strikes={strikes[0]:.4f}/{strikes[1]:.4f}; "
+                           f"ratio={actual_ratio:.2f}; "
+                           f"type={opt_type}; "
+                           f"direction={direction}",
+            )
+
+            legs_list = [str(trade_ids[i]) for i in combo]
+            pkg_type_str = f"VERTICAL_SPREAD_{ratio_name}"
+
+            for i in combo:
+                matched[i] = True
+                pkg_ids[i] = pid
+                pkg_type[i] = pkg_type_str
+                pkg_legs[i] = legs_list
+                pkg_conf[i] = confidence
+                pkg_reason[i] = reason
+                pkg_legs_count[i] = 2
+
+            break  # Move to next trade
+
+    # Build result and merge back
+    res = pd.DataFrame({
+        config.trade_id_col: trade_ids,
+        "_pkg_type": pkg_type,
+        "_pkg_id": pkg_ids,
+        "_pkg_legs": pkg_legs,
+        "_pkg_conf": pkg_conf,
+        "_pkg_reason": pkg_reason,
+        "_pkg_legs_count": pkg_legs_count,
+    })
+
+    out[config.trade_id_col] = out[config.trade_id_col].astype(str)
+    out = out.merge(
+        res[[config.trade_id_col, "_pkg_type", "_pkg_id", "_pkg_legs", "_pkg_conf", "_pkg_reason", "_pkg_legs_count"]],
+        on=config.trade_id_col,
+        how="left",
+    )
+
+    detected_mask = out["_pkg_id"].notna() & (out["_pkg_id"] != "")
+    out.loc[detected_mask, package_col] = out.loc[detected_mask, "_pkg_type"]
+    out.loc[detected_mask, "package_id"] = out.loc[detected_mask, "_pkg_id"]
+    out.loc[detected_mask, "package_legs"] = out.loc[detected_mask, "_pkg_legs"]
+    out.loc[detected_mask, "package_confidence"] = out.loc[detected_mask, "_pkg_conf"]
+    out.loc[detected_mask, "package_reason"] = out.loc[detected_mask, "_pkg_reason"]
+    out.loc[detected_mask, "package_legs_count"] = out.loc[detected_mask, "_pkg_legs_count"]
+
+    temp_cols = ["_pkg_type", "_pkg_id", "_pkg_legs", "_pkg_conf", "_pkg_reason", "_pkg_legs_count"]
+    out.drop(columns=[c for c in temp_cols if c in out.columns], inplace=True, errors="ignore")
+
+    return out
+
+
+# =============================================================================
+# Conditional Curve Trade Detection
+# =============================================================================
+
+
+def detect_swaption_conditional_curve_df(
+    df: pd.DataFrame,
+    *,
+    time_window_seconds: int = 120,
+    config: Optional["SwaptionPackageDetectionConfig"] = None,
+    product_col: str = "product_type",
+    package_col: str = "package_type",
+) -> pd.DataFrame:
+    """
+    Detect conditional curve trades (same expiry, different tail maturities).
+
+    A conditional curve trade consists of:
+    - Same option expiration date
+    - Different underlying tail maturities (e.g., 10Y vs 30Y)
+    - Same option type (both payers OR both receivers)
+    - Tail difference >= min_tail_diff_years
+
+    Example: 1Yx10Y vs 1Yx30Y payer swaptions
+    This is a conditional steepener/flattener on the long end.
+
+    Direction determination:
+    - CONDITIONAL_STEEPENER: Long short-tail, short long-tail (expecting curve to steepen)
+    - CONDITIONAL_FLATTENER: Long long-tail, short short-tail (expecting curve to flatten)
+
+    Args:
+        df: Classifications dataframe with swaption trades
+        time_window_seconds: Max time gap between legs (default 120s)
+        config: Detection configuration (uses default if None)
+        product_col: Column name for product type
+        package_col: Column name for package type
+
+    Returns:
+        DataFrame with conditional curve annotations:
+        - package_type: "CONDITIONAL_STEEPENER" or "CONDITIONAL_FLATTENER"
+        - package_id: Deterministic package identifier
+        - package_legs: List of trade IDs in the trade
+        - package_confidence: Confidence score 0-1
+        - package_reason: Structured explanation
+        - package_legs_count: Always 2 for conditional curve trades
+    """
+    if df.empty:
+        return df
+
+    if config is None:
+        config = DEFAULT_SWAPTION_PACKAGE_CONFIG
+
+    out = df.copy()
+
+    for col, default in [
+        (package_col, "SWAPTION"),
+        ("package_id", None),
+        ("package_legs", None),
+        ("package_confidence", None),
+        ("package_reason", None),
+        ("package_legs_count", None),
+    ]:
+        if col not in out.columns:
+            out[col] = default
+
+    # Filter to swaption candidates not already packaged
+    is_swaption = out[product_col].astype(str).str.contains("SWAPTION", case=False, na=False)
+    not_packaged = out["package_id"].isna() | (out["package_id"] == "")
+    candidate_mask = is_swaption & not_packaged
+
+    if config.platform_allowlist:
+        candidate_mask &= out[config.platform_col].isin(config.platform_allowlist)
+    if config.platform_blocklist:
+        candidate_mask &= ~out[config.platform_col].isin(config.platform_blocklist)
+
+    cand = out.loc[candidate_mask].copy()
+    if len(cand) < 2:
+        return out
+
+    cand["_t"] = _ensure_int64_epoch_seconds(cand[config.exec_col])
+    cand.sort_values("_t", inplace=True, kind="mergesort")
+
+    # Extract arrays
+    n = len(cand)
+    tsec = cand["_t"].to_numpy(dtype=np.int64)
+    tenor_vals = pd.to_numeric(cand[config.tenor_col], errors="coerce").to_numpy(dtype=np.float64)
+    forward_vals = pd.to_numeric(cand[config.forward_col], errors="coerce").to_numpy(dtype=np.float64)
+    notional_vals = pd.to_numeric(cand[config.notional_col], errors="coerce").to_numpy(dtype=np.float64)
+    trade_ids = cand[config.trade_id_col].astype(str).to_numpy()
+    product_labels = cand[product_col].astype(str).to_numpy()
+    platforms = cand[config.platform_col].astype("string").to_numpy() if config.platform_col in cand.columns else None
+    currencies = cand[config.currency_col].astype("string").to_numpy() if config.currency_col in cand.columns else None
+    underliers = cand[config.underlier_col].astype("string").to_numpy() if config.underlier_col in cand.columns else None
+    expirations = cand[config.expiration_col].astype("string").to_numpy() if config.expiration_col in cand.columns else None
+    pkg_ind = cand[config.package_indicator_col].to_numpy() if config.package_indicator_col in cand.columns else None
+
+    # Output arrays
+    matched = np.zeros(n, dtype=bool)
+    pkg_ids = np.full(n, "", dtype=object)
+    pkg_type = np.full(n, "", dtype=object)
+    pkg_legs = np.full(n, None, dtype=object)
+    pkg_conf = np.full(n, 0.0, dtype=np.float64)
+    pkg_reason = np.full(n, "", dtype=object)
+    pkg_legs_count = np.full(n, 0, dtype=np.int32)
+
+    def _is_payer(label: str) -> bool:
+        upper = label.upper()
+        return "PAYER" in upper or "CALL" in upper
+
+    def _is_receiver(label: str) -> bool:
+        upper = label.upper()
+        return "RECEIVER" in upper or "PUT" in upper
+
+    def _same_option_type(i: int, j: int) -> bool:
+        i_payer = _is_payer(product_labels[i])
+        j_payer = _is_payer(product_labels[j])
+        i_receiver = _is_receiver(product_labels[i])
+        j_receiver = _is_receiver(product_labels[j])
+        return (i_payer and j_payer) or (i_receiver and j_receiver)
+
+    def _econ_ok(i: int, j: int) -> bool:
+        if config.require_same_platform and platforms is not None:
+            if platforms[i] != platforms[j]:
+                return False
+        if config.require_same_currency and currencies is not None:
+            if currencies[i] != currencies[j]:
+                return False
+        if config.require_same_underlier and underliers is not None:
+            if underliers[i] != underliers[j]:
+                return False
+        return True
+
+    def _same_expiry(i: int, j: int) -> bool:
+        """Check if same option expiration."""
+        if expirations is not None:
+            if expirations[i] != expirations[j]:
+                return False
+        # Also check forward_start_years as proxy
+        if pd.notna(forward_vals[i]) and pd.notna(forward_vals[j]):
+            if abs(forward_vals[i] - forward_vals[j]) > 0.05:  # ~2 weeks tolerance
+                return False
+        return True
+
+    def _tail_diff_years(i: int, j: int) -> float:
+        """Get the tail (tenor) difference in years."""
+        if pd.isna(tenor_vals[i]) or pd.isna(tenor_vals[j]):
+            return 0.0
+        return abs(tenor_vals[i] - tenor_vals[j])
+
+    def _determine_direction(i: int, j: int) -> str:
+        """
+        Determine trade direction.
+
+        For same option type:
+        - PAYER: long short-tail = steepener (expects short end to sell off more)
+        - RECEIVER: long long-tail = flattener (expects long end to rally more)
+
+        We determine "long" by larger notional.
+        """
+        # Which is short-tail vs long-tail
+        if tenor_vals[i] < tenor_vals[j]:
+            short_tail_idx, long_tail_idx = i, j
+        else:
+            short_tail_idx, long_tail_idx = j, i
+
+        # Which has larger notional (assumed to be the "long" leg)
+        short_tail_notional = abs(notional_vals[short_tail_idx])
+        long_tail_notional = abs(notional_vals[long_tail_idx])
+
+        is_payer = _is_payer(product_labels[i])
+
+        if is_payer:
+            # Payer: long short-tail = steepener
+            if short_tail_notional >= long_tail_notional:
+                return "CONDITIONAL_STEEPENER"
+            else:
+                return "CONDITIONAL_FLATTENER"
+        else:
+            # Receiver: long long-tail = flattener
+            if long_tail_notional >= short_tail_notional:
+                return "CONDITIONAL_FLATTENER"
+            else:
+                return "CONDITIONAL_STEEPENER"
+
+    # Sliding window search
+    window: List[int] = []
+    left = 0
+
+    for idx in range(n):
+        while left < len(window) and (tsec[idx] - tsec[window[left]] > time_window_seconds):
+            left += 1
+        window = window[left:] + [idx]
+        left = 0
+
+        if matched[idx]:
+            continue
+
+        for other_idx in window[:-1]:
+            if matched[other_idx]:
+                continue
+
+            if abs(tsec[idx] - tsec[other_idx]) > time_window_seconds:
+                continue
+
+            # Must be same option type
+            if not _same_option_type(idx, other_idx):
+                continue
+
+            # Must be same expiry
+            if not _same_expiry(idx, other_idx):
+                continue
+
+            # Must have different tails (at least min_tail_diff)
+            tail_diff = _tail_diff_years(idx, other_idx)
+            if tail_diff < config.conditional_curve_min_tail_diff_years:
+                continue
+
+            # Economic filters
+            if not _econ_ok(idx, other_idx):
+                continue
+
+            # Found a conditional curve trade
+            direction = _determine_direction(idx, other_idx)
+            opt_type = "PAYER" if _is_payer(product_labels[idx]) else "RECEIVER"
+
+            combo = [idx, other_idx]
+            time_delta = abs(tsec[idx] - tsec[other_idx])
+
+            # Build tenor descriptions
+            short_tail = min(tenor_vals[idx], tenor_vals[other_idx])
+            long_tail = max(tenor_vals[idx], tenor_vals[other_idx])
+            expiry = forward_vals[idx] if pd.notna(forward_vals[idx]) else 0
+
+            platform = platforms[idx] if platforms is not None else "UNKNOWN"
+            pid = _compute_package_id(
+                [trade_ids[i] for i in combo],
+                str(platform),
+                int(tsec[idx] // 30),
+                direction,
+            )
+
+            # Confidence scoring
+            confidence = 0.7
+            if time_delta < 5:
+                confidence += 0.1
+            if pkg_ind is not None and any(pkg_ind[i] == True or pkg_ind[i] == "Y" for i in combo):
+                confidence += 0.1
+            confidence = min(confidence, 1.0)
+
+            reason = _build_package_reason(
+                platform=str(platform),
+                time_delta_max_seconds=float(time_delta),
+                vega_cluster_spread_pct=None,
+                premium_mode="CONDITIONAL_CURVE",
+                num_legs=2,
+                identical_timestamps=(time_delta < 1),
+                extra_info=f"expiry={expiry:.2f}Y; "
+                           f"tails={short_tail:.0f}Y/{long_tail:.0f}Y; "
+                           f"type={opt_type}; "
+                           f"direction={direction}",
+            )
+
+            legs_list = [str(trade_ids[i]) for i in combo]
+
+            for i in combo:
+                matched[i] = True
+                pkg_ids[i] = pid
+                pkg_type[i] = direction
+                pkg_legs[i] = legs_list
+                pkg_conf[i] = confidence
+                pkg_reason[i] = reason
+                pkg_legs_count[i] = 2
+
+            break
+
+    # Merge back
+    res = pd.DataFrame({
+        config.trade_id_col: trade_ids,
+        "_pkg_type": pkg_type,
+        "_pkg_id": pkg_ids,
+        "_pkg_legs": pkg_legs,
+        "_pkg_conf": pkg_conf,
+        "_pkg_reason": pkg_reason,
+        "_pkg_legs_count": pkg_legs_count,
+    })
+
+    out[config.trade_id_col] = out[config.trade_id_col].astype(str)
+    out = out.merge(
+        res[[config.trade_id_col, "_pkg_type", "_pkg_id", "_pkg_legs", "_pkg_conf", "_pkg_reason", "_pkg_legs_count"]],
+        on=config.trade_id_col,
+        how="left",
+    )
+
+    detected_mask = out["_pkg_id"].notna() & (out["_pkg_id"] != "")
+    out.loc[detected_mask, package_col] = out.loc[detected_mask, "_pkg_type"]
+    out.loc[detected_mask, "package_id"] = out.loc[detected_mask, "_pkg_id"]
+    out.loc[detected_mask, "package_legs"] = out.loc[detected_mask, "_pkg_legs"]
+    out.loc[detected_mask, "package_confidence"] = out.loc[detected_mask, "_pkg_conf"]
+    out.loc[detected_mask, "package_reason"] = out.loc[detected_mask, "_pkg_reason"]
+    out.loc[detected_mask, "package_legs_count"] = out.loc[detected_mask, "_pkg_legs_count"]
+
+    temp_cols = ["_pkg_type", "_pkg_id", "_pkg_legs", "_pkg_conf", "_pkg_reason", "_pkg_legs_count"]
+    out.drop(columns=[c for c in temp_cols if c in out.columns], inplace=True, errors="ignore")
+
+    return out
+
+
+# =============================================================================
+# Vega Curve Detection (Straddle-based)
+# =============================================================================
+
+
+def detect_swaption_vega_curve_df(
+    df: pd.DataFrame,
+    *,
+    time_window_seconds: int = 300,
+    config: Optional["SwaptionPackageDetectionConfig"] = None,
+    product_col: str = "product_type",
+    package_col: str = "package_type",
+) -> pd.DataFrame:
+    """
+    Detect vega curve equivalent trades (vega-matched straddles across tenors).
+
+    From trader context:
+    - 4y5y (230mm k=4.025) vs 2y5y (470mm k=3.981) on BILT
+    - Vega of the straddles is *very* similar
+    - This is a customer-facing vega RV trade
+
+    Patterns detected:
+    - VEGA_EXPIRY_SPREAD: Same tail, different expiry (e.g., 9Mx10Y vs 1Yx10Y)
+    - VEGA_TAIL_SPREAD: Same expiry, different tail (e.g., 1Yx5Y vs 1Yx10Y)
+    - VEGA_DIAGONAL: Both expiry and tail differ
+
+    Detection requires pre-existing straddles (payer+receiver pairs).
+
+    Args:
+        df: Classifications dataframe with swaption trades (should have straddles detected)
+        time_window_seconds: Max time gap between straddles (default 300s = 5 min)
+        config: Detection configuration (uses default if None)
+        product_col: Column name for product type
+        package_col: Column name for package type
+
+    Returns:
+        DataFrame with vega curve annotations on the straddle legs:
+        - vega_curve_type: "VEGA_EXPIRY_SPREAD", "VEGA_TAIL_SPREAD", "VEGA_DIAGONAL"
+        - vega_curve_id: Links the two straddles
+        - vega_curve_legs: List of all trade IDs across both straddles
+    """
+    if df.empty:
+        return df
+
+    if config is None:
+        config = DEFAULT_SWAPTION_PACKAGE_CONFIG
+
+    out = df.copy()
+
+    # Initialize vega curve columns
+    if "vega_curve_type" not in out.columns:
+        out["vega_curve_type"] = None
+    if "vega_curve_id" not in out.columns:
+        out["vega_curve_id"] = None
+    if "vega_curve_legs" not in out.columns:
+        out["vega_curve_legs"] = None
+
+    # Find existing straddles
+    straddle_mask = out[package_col] == "STRADDLE"
+    if not straddle_mask.any():
+        return out
+
+    straddles = out.loc[straddle_mask].copy()
+
+    # Group by package_id to get straddle characteristics
+    straddle_groups = straddles.groupby("package_id").agg({
+        config.exec_col: "first",
+        config.platform_col: "first",
+        config.currency_col: "first",
+        config.tenor_col: "first",  # Tail
+        config.forward_col: "first",  # Expiry
+        config.notional_col: "sum",  # Total notional
+        config.premium_col: "sum",  # Total premium (vega proxy)
+        config.trade_id_col: list,
+    }).reset_index()
+
+    if len(straddle_groups) < 2:
+        return out
+
+    # Add timestamp for sorting
+    straddle_groups["_t"] = _ensure_int64_epoch_seconds(straddle_groups[config.exec_col])
+    straddle_groups.sort_values("_t", inplace=True, kind="mergesort")
+
+    n_straddles = len(straddle_groups)
+    matched_straddles: Set[str] = set()
+
+    for i in range(n_straddles):
+        pid_i = straddle_groups.iloc[i]["package_id"]
+        if pid_i in matched_straddles:
+            continue
+
+        t_i = straddle_groups.iloc[i]["_t"]
+        plat_i = straddle_groups.iloc[i][config.platform_col]
+        ccy_i = straddle_groups.iloc[i][config.currency_col]
+        tail_i = straddle_groups.iloc[i][config.tenor_col]
+        expiry_i = straddle_groups.iloc[i][config.forward_col]
+        vega_i = abs(straddle_groups.iloc[i][config.premium_col])  # Premium as vega proxy
+        trades_i = straddle_groups.iloc[i][config.trade_id_col]
+
+        if vega_i <= 0:
+            continue
+
+        for j in range(i + 1, n_straddles):
+            pid_j = straddle_groups.iloc[j]["package_id"]
+            if pid_j in matched_straddles:
+                continue
+
+            t_j = straddle_groups.iloc[j]["_t"]
+
+            # Time window check
+            if abs(t_i - t_j) > time_window_seconds:
+                continue
+
+            plat_j = straddle_groups.iloc[j][config.platform_col]
+            ccy_j = straddle_groups.iloc[j][config.currency_col]
+            tail_j = straddle_groups.iloc[j][config.tenor_col]
+            expiry_j = straddle_groups.iloc[j][config.forward_col]
+            vega_j = abs(straddle_groups.iloc[j][config.premium_col])
+            trades_j = straddle_groups.iloc[j][config.trade_id_col]
+
+            # Platform and currency match
+            if config.require_same_platform and plat_i != plat_j:
+                continue
+            if config.require_same_currency and ccy_i != ccy_j:
+                continue
+
+            # Vega similarity check
+            if vega_j <= 0:
+                continue
+            avg_vega = 0.5 * (vega_i + vega_j)
+            vega_diff = abs(vega_i - vega_j) / avg_vega
+            if vega_diff > config.vega_curve_tolerance_pct:
+                continue
+
+            # Determine curve type based on expiry/tail differences
+            tail_diff = abs(tail_i - tail_j) if pd.notna(tail_i) and pd.notna(tail_j) else 0
+            expiry_diff = abs(expiry_i - expiry_j) if pd.notna(expiry_i) and pd.notna(expiry_j) else 0
+
+            same_tail = tail_diff < 0.1  # Within ~1 month
+            same_expiry = expiry_diff < 0.1
+
+            if same_tail and not same_expiry and expiry_diff >= config.vega_curve_min_expiry_diff_years:
+                curve_type = "VEGA_EXPIRY_SPREAD"
+            elif same_expiry and not same_tail and tail_diff >= config.vega_curve_min_tail_diff_years:
+                curve_type = "VEGA_TAIL_SPREAD"
+            elif not same_tail and not same_expiry:
+                if expiry_diff >= config.vega_curve_min_expiry_diff_years or tail_diff >= config.vega_curve_min_tail_diff_years:
+                    curve_type = "VEGA_DIAGONAL"
+                else:
+                    continue  # Not significant enough difference
+            else:
+                continue  # Same tenor, not a curve trade
+
+            # Found a vega curve trade
+            matched_straddles.add(pid_i)
+            matched_straddles.add(pid_j)
+
+            curve_id = _compute_package_id(
+                [pid_i, pid_j],
+                str(plat_i),
+                int(t_i // 30),
+                curve_type,
+            )
+
+            all_trades = list(trades_i) + list(trades_j)
+
+            # Annotate all legs
+            for pid in [pid_i, pid_j]:
+                mask = out["package_id"] == pid
+                out.loc[mask, "vega_curve_type"] = curve_type
+                out.loc[mask, "vega_curve_id"] = curve_id
+                out.loc[mask, "vega_curve_legs"] = pd.Series(
+                    [all_trades] * mask.sum(), index=out.index[mask]
+                )
+
+            break  # Move to next straddle
+
+    return out
+
+
+# =============================================================================
 # Main Detection Functions
 # =============================================================================
 
@@ -1376,11 +2245,17 @@ def detect_and_link_swaption_packages_df(
     config: Optional[SwaptionPackageDetectionConfig] = None,
     product_col: str = "product_type",
     package_col: str = "package_type",
-    detect_straddles: bool = True,
+    # Detection flags
     detect_risk_reversals: bool = True,
+    detect_straddles: bool = True,
+    detect_vertical_spreads: bool = True,
+    detect_conditional_curve: bool = True,
+    detect_vega_curve: bool = True,
+    # Straddle parameters
     straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=0),
     straddle_strike_tolerance: float = 0.0000,
     straddle_notional_tolerance_pct: float = 0.00,
+    # Risk reversal parameters
     risk_reversal_time_window_seconds: int = 60,
     risk_reversal_strike_tolerance: float = 0.0001,
     risk_reversal_notional_tolerance_pct: float = 0.05,
@@ -1389,29 +2264,38 @@ def detect_and_link_swaption_packages_df(
     risk_reversal_require_same_tenor: bool = True,
     risk_reversal_require_same_forward: bool = True,
     risk_reversal_require_directional_structure: bool = True,
+    # Vertical spread parameters
+    vertical_spread_time_window_seconds: int = 120,
+    # Conditional curve parameters
+    conditional_curve_time_window_seconds: int = 120,
+    # Vega curve parameters
+    vega_curve_time_window_seconds: int = 300,
 ) -> pd.DataFrame:
     """
     Combined detection and linking of swaption packages.
 
-    Convenience function that runs straddle detection, vega-based detection,
-    and package linking in sequence.
+    Convenience function that runs all detection algorithms in sequence.
+    Each algorithm only processes trades not already assigned to a package.
 
-    Detection order:
-    1. Risk reversals (4 legs / 3 strikes / 2 notionals)
+    Detection order (priority):
+    1. Risk reversals (4 legs / 3 strikes / 2 notionals) - IDB structures
     2. Straddles (payer + receiver with same strike/expiry/tenor)
-    3. Vega-bucketed packages (similar vega within time window)
-    4. Package linking (link related packages by time/vega)
+    3. Vertical spreads (1x1, 1x2, 1x1.5, etc. - same tenor, different strikes)
+    4. Conditional curve trades (same expiry, different tails)
+    5. Vega curve trades (vega-matched straddles across tenors)
+    6. Package linking (link related packages by time/vega)
 
     Args:
         df: Classifications dataframe with swaption trades
         config: Detection configuration
-        vega_estimator: Optional custom vega estimation function
         product_col: Column name for product type
         package_col: Column name for package type
-        detect_straddles: Whether to detect straddles (default True)
         detect_risk_reversals: Whether to detect risk reversals (default True)
+        detect_straddles: Whether to detect straddles (default True)
+        detect_vertical_spreads: Whether to detect vertical spreads (default True)
+        detect_conditional_curve: Whether to detect conditional curve trades (default True)
+        detect_vega_curve: Whether to detect vega curve trades (default True)
         straddle_timestamp_tolerance: Max time between payer and receiver legs
-            for straddle detection. Pass as datetime.timedelta.
         straddle_strike_tolerance: Absolute tolerance for strike matching
         straddle_notional_tolerance_pct: Percentage tolerance for notional matching
         risk_reversal_time_window_seconds: Max time gap between risk reversal legs
@@ -1422,13 +2306,25 @@ def detect_and_link_swaption_packages_df(
         risk_reversal_require_same_tenor: Require same tenor_years across legs
         risk_reversal_require_same_forward: Require same forward_start_years across legs
         risk_reversal_require_directional_structure: Require payer/receiver alignment
+        vertical_spread_time_window_seconds: Max time gap between vertical spread legs
+        conditional_curve_time_window_seconds: Max time gap between conditional curve legs
+        vega_curve_time_window_seconds: Max time gap between vega curve straddles
 
     Returns:
-        DataFrame with full package annotations including links
+        DataFrame with full package annotations including:
+        - package_type: Type of package detected
+        - package_id: Deterministic package identifier
+        - package_legs: List of trade IDs in the package
+        - package_confidence: Confidence score 0-1
+        - package_reason: Structured explanation string
+        - package_legs_count: Number of legs in the package
+        - vega_curve_type: For vega curve trades, the specific type
+        - vega_curve_id: ID linking vega curve straddles
+        - vega_curve_legs: All trade IDs in vega curve
     """
     out = df.copy()
 
-    # Phase 1: Detect risk reversals first (highest priority)
+    # Phase 1: Detect risk reversals first (highest priority - IDB structures)
     if detect_risk_reversals:
         out = detect_swaption_risk_reversals_df(
             out,
@@ -1445,7 +2341,7 @@ def detect_and_link_swaption_packages_df(
             package_col=package_col,
         )
 
-    # Phase 2: Detect straddles next
+    # Phase 2: Detect straddles
     if detect_straddles:
         out = detect_swaption_straddles_df(
             out,
@@ -1457,21 +2353,35 @@ def detect_and_link_swaption_packages_df(
             package_col=package_col,
         )
 
-    # # Phase 2: Detect vega-bucketed packages (remaining trades)
-    # out = detect_swaption_packages_df(
-    #     out,
-    #     config=config,
-    #     vega_estimator=vega_estimator,
-    #     product_col=product_col,
-    #     package_col=package_col,
-    # )
+    # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
+    if detect_vertical_spreads:
+        out = detect_swaption_vertical_spreads_df(
+            out,
+            time_window_seconds=vertical_spread_time_window_seconds,
+            config=config,
+            product_col=product_col,
+            package_col=package_col,
+        )
 
-    # # Phase 3: Link related packages
-    # out = link_swaption_packages(
-    #     out,
-    #     config=config,
-    #     package_col=package_col,
-    # )
+    # Phase 4: Detect conditional curve trades (same expiry, different tails)
+    if detect_conditional_curve:
+        out = detect_swaption_conditional_curve_df(
+            out,
+            time_window_seconds=conditional_curve_time_window_seconds,
+            config=config,
+            product_col=product_col,
+            package_col=package_col,
+        )
+
+    # Phase 5: Detect vega curve trades (requires straddles to be detected first)
+    if detect_vega_curve and detect_straddles:
+        out = detect_swaption_vega_curve_df(
+            out,
+            time_window_seconds=vega_curve_time_window_seconds,
+            config=config,
+            product_col=product_col,
+            package_col=package_col,
+        )
 
     return out
 
