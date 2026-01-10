@@ -12,7 +12,7 @@ from typing import Optional
 import pandas as pd
 import QuantLib as ql
 
-from SDRUtils.core.dates import to_ql_date, to_naive_timestamp
+from SDRUtils.core.dates import calculate_tenor_components, to_ql_date, to_naive_timestamp
 
 
 def get_imm_label(effective_date: pd.Timestamp, tolerance_days: int = 3) -> Optional[str]:
@@ -168,6 +168,57 @@ def tenor_to_label(years: float, expiration_date: Optional[pd.Timestamp] = None,
         return f"{months}M"
     else:
         return f"{int(round(years))}Y"
+
+
+def tenor_from_dates(
+    effective_date: pd.Timestamp,
+    expiration_date: pd.Timestamp,
+    *,
+    is_swaptions: bool = False,
+) -> str:
+    """
+    Build tenor label using calendar components between two dates.
+
+    Special dates (IMM/FOMC) on the expiration date take priority.
+
+    Args:
+        effective_date: Start date of the swap
+        expiration_date: End date of the swap
+        is_swaptions: Whether to apply swaption-specific rules
+
+    Returns:
+        Tenor label string
+    """
+    if expiration_date is not None:
+        special_label = get_special_label(expiration_date)
+        if special_label:
+            return special_label
+
+    years_part, months_part, days_part = calculate_tenor_components(
+        effective_date,
+        expiration_date,
+    )
+
+    if years_part == 0 and months_part == 0:
+        if days_part == 2 and not is_swaptions:
+            return "spot"
+        return f"{days_part}D"
+
+    if years_part == 0 and days_part == 0:
+        return f"{months_part}M"
+
+    if months_part == 0 and days_part == 0:
+        return f"{years_part}Y"
+
+    if days_part == 0:
+        if years_part == 0:
+            return f"{months_part}M"
+        if months_part == 0:
+            return f"{years_part}Y"
+        return f"{years_part}Y{months_part}M"
+
+    total_years = years_part + months_part / 12.0 + days_part / 360.0
+    return tenor_to_label(total_years, expiration_date=expiration_date, is_swaptions=is_swaptions)
 
 
 def forward_to_label(years: float, effective_date: Optional[pd.Timestamp] = None, is_swaptions=False) -> str:

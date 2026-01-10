@@ -7,12 +7,13 @@ and year fraction calculations using QuantLib.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import QuantLib as ql
 import pytz
+from dateutil.relativedelta import relativedelta
 
 from SDRUtils.config import USD_CONVENTIONS, CurrencyConventions 
 
@@ -67,6 +68,50 @@ def ensure_int64_epoch_seconds(ts: pd.Series) -> np.ndarray:
     """Convert timestamp series to int64 epoch seconds (robust for tz-aware/naive)."""
     t = pd.to_datetime(ts, errors="coerce", utc=True)
     return (t.view("int64") // 1_000_000_000).astype(np.int64)
+
+
+def calculate_tenor_components(
+    effective_date: pd.Timestamp,
+    expiration_date: pd.Timestamp,
+    *,
+    conventions: Optional[CurrencyConventions] = None,
+    adjust_to_business_day: bool = True,
+) -> Tuple[int, int, int]:
+    """
+    Calculate tenor components (years, months, days) between two dates.
+
+    Args:
+        effective_date: Start date of the swap
+        expiration_date: End date of the swap
+        conventions: Currency conventions to use (defaults to USD)
+        adjust_to_business_day: Whether to adjust dates to business days
+
+    Returns:
+        Tuple of (years, months, days)
+    """
+    if conventions is None:
+        conventions = USD_CONVENTIONS
+
+    eff_ts = to_naive_timestamp(effective_date)
+    exp_ts = to_naive_timestamp(expiration_date)
+    if pd.isna(eff_ts) or pd.isna(exp_ts):
+        return 0, 0, 0
+
+    if adjust_to_business_day:
+        ql_eff = to_ql_date(eff_ts)
+        ql_exp = to_ql_date(exp_ts)
+        if ql_eff is None or ql_exp is None:
+            return 0, 0, 0
+        ql_eff = adjust_ql_date(ql_eff, conventions.calendar, conventions.business_day_convention)
+        ql_exp = adjust_ql_date(ql_exp, conventions.calendar, conventions.business_day_convention)
+        eff_ts = pd.Timestamp(ql_eff.year(), ql_eff.month(), ql_eff.dayOfMonth())
+        exp_ts = pd.Timestamp(ql_exp.year(), ql_exp.month(), ql_exp.dayOfMonth())
+
+    if exp_ts <= eff_ts:
+        return 0, 0, 0
+
+    delta = relativedelta(exp_ts.date(), eff_ts.date())
+    return delta.years, delta.months, delta.days
 
 
 def calculate_tenor_years(

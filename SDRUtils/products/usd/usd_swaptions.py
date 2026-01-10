@@ -23,7 +23,7 @@ from SDRUtils.core.classification import SwaptionTradeClassification, classifica
 from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
 from SDRUtils.core.parsing import parse_notional
-from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_to_label
+from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_from_dates, tenor_to_label
 from SDRUtils.packages import detect_and_link_swaption_packages_df, SwaptionPackageDetectionConfig, merge_package_legs_to_one_row
 from SDRUtils.products.usd.base import USDProductBase
 from SDRUtils.products._swaptions.upi import make_swaption_desc_func, _build_upi_df
@@ -102,7 +102,7 @@ class USD_Swaptions(USDProductBase):
             underlying_expiration_date,
             conventions=self.conventions,
         )
-        tenor_label = tenor_to_label(tenor_years, expiration_date=underlying_expiration_date)
+        tenor_label = tenor_from_dates(effective_date, underlying_expiration_date)
 
         forward_years = calculate_forward_start_years(
             effective_date,
