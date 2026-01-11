@@ -53,7 +53,12 @@ from SDRUtils.core.graph_resolver import (
 )
 
 # Lifecycle state machine
-from SDRUtils.core.lifecycle import replay_lifecycle
+from SDRUtils.core.lifecycle import (
+    replay_lifecycle,
+    replay_lifecycle_full,
+    ResolvedTrade,
+    ECONOMICS_FIELDS,
+)
 # Backward compatibility - re-export legacy names
 from SDRUtils.core.utils import (
     _USD_OIS_BDC,
@@ -98,6 +103,9 @@ __all__ = [
     "build_synthetic_uti_mapping",
     # Lifecycle
     "replay_lifecycle",
+    "replay_lifecycle_full",
+    "ResolvedTrade",
+    "ECONOMICS_FIELDS",
     # Legacy
     "_USD_OIS_BDC",
     "_USD_OIS_CAL",
