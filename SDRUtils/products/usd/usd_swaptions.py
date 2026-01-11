@@ -115,13 +115,16 @@ class USD_Swaptions(USDProductBase):
         strike = row.get("Strike Price")
 
         def _extract_prem(row):
-            opa = float(str(row.get("Option Premium Amount", "").replace(",", "")))
-            if opa == 0:
-                opa = float(str(row.get("Package transaction price", "").replace(",", "")))
-            return opa
+            try:
+                opa = float(str(row.get("Option Premium Amount", "").replace(",", "")))
+                if opa == 0:
+                    opa = float(str(row.get("Package transaction price", "").replace(",", "")))
+                return opa
+            except:
+                return 0
 
         return SwaptionTradeClassification(
-            event_action=f"{row['Action type']}-{row['Event type']}",
+            event_action=f"{row.get("Action type", "")}-{row.get("Event type", "")}",
             trade_id=trade_id,
             execution_timestamp=execution_ts,
             effective_date=effective_date,
