@@ -2334,9 +2334,9 @@ def detect_and_link_swaption_packages_df(
     """
     out = df.copy()
 
-    temp = out.copy()
-    temp["execution_timestamp"] = temp["execution_timestamp"].astype(str)
-    temp.to_excel("temp_out.xlsx")
+    # temp = out.copy()
+    # temp["execution_timestamp"] = temp["execution_timestamp"].astype(str)
+    # temp.to_excel("temp_out.xlsx")
 
     # Phase 1: Detect risk reversals first (highest priority - IDB structures)
     if detect_risk_reversals:

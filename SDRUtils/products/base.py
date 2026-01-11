@@ -111,6 +111,8 @@ class ProductModule(ABC):
         if messages.empty:
             return []
 
+        messages = messages.sort_values(by=event_timestamp_col)
+
         resolved = assign_synthetic_uti(
             messages,
             dissemination_col=dissemination_col,

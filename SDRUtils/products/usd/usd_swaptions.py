@@ -102,15 +102,14 @@ class USD_Swaptions(USDProductBase):
             underlying_expiration_date,
             conventions=self.conventions,
         )
-        tenor_label = tenor_from_dates(effective_date, underlying_expiration_date)
+        tenor_label = tenor_to_label(tenor_years, expiration_date, True)
 
-        forward_years = calculate_forward_start_years(
+        forward_years = calculate_tenor_years(
             effective_date,
             expiration_date,
             conventions=self.conventions,
         )
-
-        forward_label = forward_to_label(forward_years, effective_date=expiration_date)
+        forward_label = forward_to_label(forward_years, expiration_date, True)
 
         notional, is_notional_capped = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
         strike = row.get("Strike Price")
