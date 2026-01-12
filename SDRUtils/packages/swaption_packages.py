@@ -2592,6 +2592,7 @@ def detect_and_link_swaption_packages_df(
             product_col=product_col,
             package_col=package_col,
             must_be_reported_as_package=True,
+            custy_leg_option_premium_amount_tolerance=0.05,
         )
 
     # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
