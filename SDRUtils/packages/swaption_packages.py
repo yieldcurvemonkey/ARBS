@@ -116,11 +116,11 @@ class SwaptionPackageDetectionConfig:
     # ==========================================================================
 
     # Supported spread ratios: (ratio, name, tolerance)
-    # e.g., (2.0, "1x2", 0.1) means ratio 2.0 ± 10%
+    # e.g., (2.0, "1x2", 0.1) means ratio 2.0 +/- 10%
     spread_ratios: List[Tuple[float, str, float]] = field(
         default_factory=lambda: [
-            (1.0, "1x1", 0.10),  # 1x1 spread (same notional)
-            (1.5, "1x1.5", 0.10),  # 1x1.5 spread
+            (1.0, "1x1", 0.05),  # 1x1 spread (same notional)
+            (1.5, "1x1.5", 0.05),  # 1x1.5 spread
             (2.0, "1x2", 0.10),  # 1x2 spread
             (2.5, "1x2.5", 0.10),  # 1x2.5 spread
             (3.0, "1x3", 0.10),  # 1x3 spread
@@ -378,6 +378,7 @@ def detect_swaption_straddles_df(
     config: Optional["SwaptionPackageDetectionConfig"] = None,
     product_col: str = "product_type",
     package_col: str = "package_type",
+    must_be_reported_as_package: Optional[bool] = False,
 ) -> pd.DataFrame:
     """
     Detect swaption straddles (payer + receiver with same strike/expiry/tenor).
@@ -438,8 +439,12 @@ def detect_swaption_straddles_df(
     is_payer = out[product_col].astype(str).str.contains("PAYER|CALL", case=False, na=False)
     is_receiver = out[product_col].astype(str).str.contains("RECEIVER|PUT", case=False, na=False)
 
-    payer_mask = candidate_mask & is_payer
-    receiver_mask = candidate_mask & is_receiver
+    if must_be_reported_as_package:
+        payer_mask = candidate_mask & is_payer & (out["package_indicator"] == True)
+        receiver_mask = candidate_mask & is_receiver & (out["package_indicator"] == True)
+    else:
+        payer_mask = candidate_mask & is_payer
+        receiver_mask = candidate_mask & is_receiver
 
     payers = out.loc[payer_mask].copy()
     receivers = out.loc[receiver_mask].copy()
@@ -1058,16 +1063,19 @@ def detect_swaption_vertical_spreads_df(
 
     def _econ_ok(i: int, j: int) -> bool:
         """Check economic filters."""
-        if config.require_same_platform and platforms is not None:
-            if platforms[i] != platforms[j]:
-                return False
-        if config.require_same_currency and currencies is not None:
-            if currencies[i] != currencies[j]:
-                return False
-        if config.require_same_underlier and underliers is not None:
-            if underliers[i] != underliers[j]:
-                return False
-        return True
+        try:
+            if config.require_same_platform and platforms is not None:
+                if platforms[i] != platforms[j]:
+                    return False
+            if config.require_same_currency and currencies is not None:
+                if currencies[i] != currencies[j]:
+                    return False
+            if config.require_same_underlier and underliers is not None:
+                if underliers[i] != underliers[j]:
+                    return False
+            return True
+        except:
+            return False
 
     def _same_tenor(i: int, j: int) -> bool:
         """Check if same underlying tenor (same expiry and tail)."""
@@ -2262,7 +2270,7 @@ def detect_and_link_swaption_packages_df(
     detect_conditional_curve: bool = True,
     detect_vega_curve: bool = True,
     # Straddle parameters
-    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=0),
+    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=60),
     straddle_strike_tolerance: float = 0.0000,
     straddle_notional_tolerance_pct: float = 0.00,
     # Risk reversal parameters
@@ -2365,17 +2373,18 @@ def detect_and_link_swaption_packages_df(
             config=config,
             product_col=product_col,
             package_col=package_col,
+            must_be_reported_as_package=True,
         )
 
-    # # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
-    # if detect_vertical_spreads:
-    #     out = detect_swaption_vertical_spreads_df(
-    #         out,
-    #         time_window_seconds=vertical_spread_time_window_seconds,
-    #         config=config,
-    #         product_col=product_col,
-    #         package_col=package_col,
-    #     )
+    # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
+    if detect_vertical_spreads:
+        out = detect_swaption_vertical_spreads_df(
+            out,
+            time_window_seconds=vertical_spread_time_window_seconds,
+            config=config,
+            product_col=product_col,
+            package_col=package_col,
+        )
 
     # # Phase 4: Detect conditional curve trades (same expiry, different tails)
     # if detect_conditional_curve:

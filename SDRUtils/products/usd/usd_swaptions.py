@@ -8,6 +8,8 @@ reported to the DTCC SDR.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -16,54 +18,19 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytz
 import QuantLib as ql
-from collections.abc import Iterable, Sequence
 
+import Query.IRSwaps.adapter  # noqa: F401
+from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
+from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 from SDRUtils.config import PRODUCT_TYPES, TRADE_ID
 from SDRUtils.core.classification import SwaptionTradeClassification, classifications_to_dataframe, classify_product_type
-from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
 from SDRUtils.core.parsing import parse_notional
 from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_from_dates, tenor_to_label
-from SDRUtils.packages import detect_and_link_swaption_packages_df, SwaptionPackageDetectionConfig, merge_package_legs_to_one_row
+from SDRUtils.data.builder import SDRDataBuilder
+from SDRUtils.packages import SwaptionPackageDetectionConfig, detect_and_link_swaption_packages_df, merge_package_legs_to_one_row
+from SDRUtils.products._swaptions.upi import _build_upi_df, make_swaption_desc_func
 from SDRUtils.products.usd.base import USDProductBase
-from SDRUtils.products._swaptions.upi import make_swaption_desc_func, _build_upi_df
-
-from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
-from Query.IRSwaps.IRSwapQuery import IRSwapQuery
-
-
-def straddle_pricer_from_row(final_classification_row: pd.Series, pricer: QLIRSwapCurve):
-    q = IRSwapQuery(
-        curve="USD-SOFR-1D",
-        effective_date=final_classification_row["expiration_date"],
-        maturity_date=final_classification_row["underlying_expiration_date"],
-        structure_kwargs={"notional": final_classification_row["notional"]},
-    )
-    pkg, _ = q.resolve_package(pricer_or_curve=pricer)
-
-    underlying: ql.OvernightIndexedSwap = pkg[0]
-    underlying_swap_pricing_engine = ql.DiscountingSwapEngine(pricer.handle())
-    underlying.setPricingEngine(underlying_swap_pricing_engine)
-    observed_ql_swaption_pricing_engine = ql.BachelierSwaptionEngine(pricer.handle(), ql.QuoteHandle(ql.SimpleQuote(0.0)), pricer.daycounter())
-    observed_ql_swaption = ql.Swaption(underlying, ql.EuropeanExercise(underlying.startDate()))
-    observed_ql_swaption.setPricingEngine(observed_ql_swaption_pricing_engine)
-    iv = (
-        observed_ql_swaption.impliedVolatility(
-            price=final_classification_row["premium"],
-            discountCurve=pricer.handle(),
-            guess=0.01,
-            accuracy=1e-5,
-            maxEvaluations=1000,
-            minVol=0,
-            maxVol=0.1,
-            type=ql.Normal,
-            displacement=0,
-            priceType=ql.Swaption.Forward,
-        )
-        * 10_000
-    ) / 2
-
-    return observed_ql_swaption, iv
 
 
 class USD_Swaptions(USDProductBase):
@@ -184,7 +151,7 @@ class USD_Swaptions(USDProductBase):
             agency="CFTC",
             asset_class="RATES",
             filter_func=self.detect,
-            # ignore_cache=ignore_cache,
+            # ignore_cache=ignore_cache, 
         )
 
         if raw_sdr_trades_df.empty:
