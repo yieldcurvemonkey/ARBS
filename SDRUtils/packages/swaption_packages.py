@@ -73,7 +73,7 @@ class SwaptionPackageDetectionConfig:
     # Economic filters
     require_same_platform: bool = True
     require_same_currency: bool = True
-    require_same_underlier: bool = False # need to allow for different UPIs, will default this to false 
+    require_same_underlier: bool = False  # need to allow for different UPIs, will default this to false
 
     # Timestamp matching mode
     timestamp_mode: Literal["exact", "fuzzy"] = "fuzzy"
@@ -820,7 +820,7 @@ def detect_swaption_straddles_df(
                         out.loc[cidx_mask, "package_reason"] = custy_reason
                         out.loc[cidx_mask, "package_legs_count"] = 2
                         # Set the summed option_premium_amount for both legs
-                        out.loc[cidx_mask, option_premium_amount_col] = f"{summed_opt_prem:,.5f}".rstrip('0').rstrip('.').rstrip(',')
+                        out.loc[cidx_mask, option_premium_amount_col] = f"{summed_opt_prem:,.5f}".rstrip("0").rstrip(".").rstrip(",")
 
     return out
 
@@ -1890,11 +1890,12 @@ def detect_swaption_vega_curve_df(
     if "vega_curve_pricing_method" not in out.columns:
         out["vega_curve_pricing_method"] = None
 
-    # Find existing straddles
+    # Only operate on known straddle rows
     straddle_mask = out[package_col] == "STRADDLE"
     if not straddle_mask.any():
         return out
 
+    # Keep a view of just straddle rows for expensive computations / grouping
     straddles = out.loc[straddle_mask].copy()
 
     # Aggregation dict for straddle characteristics
@@ -1915,7 +1916,7 @@ def detect_swaption_vega_curve_df(
         if field in straddles.columns:
             agg_dict[field] = "first"
 
-    # Group by package_id to get straddle characteristics
+    # Group by package_id to get straddle characteristics (ONLY straddles)
     straddle_groups = straddles.groupby("package_id").agg(agg_dict).reset_index()
 
     if len(straddle_groups) < 2:
@@ -1925,46 +1926,19 @@ def detect_swaption_vega_curve_df(
     straddle_groups["_t"] = _ensure_int64_epoch_seconds(straddle_groups[config.exec_col])
     straddle_groups.sort_values("_t", inplace=True, kind="mergesort")
 
-    # Compute vega for each straddle (using QuantLib if available, else premium heuristic)
+    # Compute vega for each straddle group (ONLY straddles; never touch non-straddle rows)
     straddle_vegas: Dict[str, Tuple[float, str]] = {}  # package_id -> (vega, method)
     quantlib_pricing_available = use_quantlib_vega and (pricer is not None or curve_provider is not None)
 
-    for idx, row in straddle_groups.iterrows():
+    for _, row in straddle_groups.iterrows():
         pid = row["package_id"]
-        exec_ts = row[config.exec_col]
-        premium_vega = abs(row[config.premium_col])  # Fallback
 
-        # Try QuantLib pricing if enabled
         if quantlib_pricing_available:
-            try:
-                # Get the appropriate curve
-                if pricer is not None:
-                    active_pricer = pricer
-                elif curve_provider is not None:
-                    active_pricer = curve_provider(exec_ts)
-                else:
-                    active_pricer = None
-
-                if active_pricer is not None:
-                    # Build a straddle row for pricing
-                    # The pricer expects specific fields
-                    vega01 = _compute_straddle_vega_with_pricer(row, active_pricer)
-                    if vega01 is not None and vega01 > 0:
-                        straddle_vegas[pid] = (abs(vega01), "QUANTLIB")
-                        continue
-                    else:
-                        logger.debug(
-                            f"QuantLib pricing returned invalid vega01={vega01} for package_id={pid}, "
-                            f"falling back to premium heuristic"
-                        )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to compute QuantLib vega for package_id={pid}: {e}. "
-                    f"Falling back to premium heuristic."
-                )
-
-        # Fallback to premium-based heuristic
-        straddle_vegas[pid] = (premium_vega, "PREMIUM_HEURISTIC")
+            vega01 = _compute_straddle_vega_with_pricer(row, pricer)
+            straddle_vegas[pid] = (vega01, "QUANTLIB")
+        else:
+            # if you keep the heuristic later, plug it here
+            straddle_vegas[pid] = (0.0, "PREMIUM_HEURISTIC")
 
     n_straddles = len(straddle_groups)
     matched_straddles: Set[str] = set()
@@ -1982,7 +1956,7 @@ def detect_swaption_vega_curve_df(
         vega_i, method_i = straddle_vegas.get(pid_i, (0.0, "PREMIUM_HEURISTIC"))
         trades_i = straddle_groups.iloc[i][config.trade_id_col]
 
-        if vega_i <= 0:
+        if vega_i is None:
             continue
 
         for j in range(i + 1, n_straddles):
@@ -2021,7 +1995,7 @@ def detect_swaption_vega_curve_df(
             tail_diff = abs(tail_i - tail_j) if pd.notna(tail_i) and pd.notna(tail_j) else 0
             expiry_diff = abs(expiry_i - expiry_j) if pd.notna(expiry_i) and pd.notna(expiry_j) else 0
 
-            same_tail = tail_diff < 0.1  # Within ~1 month
+            same_tail = tail_diff < 0.1
             same_expiry = expiry_diff < 0.1
 
             if same_tail and not same_expiry and expiry_diff >= config.vega_curve_min_expiry_diff_years:
@@ -2032,11 +2006,10 @@ def detect_swaption_vega_curve_df(
                 if expiry_diff >= config.vega_curve_min_expiry_diff_years or tail_diff >= config.vega_curve_min_tail_diff_years:
                     curve_type = "VEGA_DIAGONAL"
                 else:
-                    continue  # Not significant enough difference
+                    continue
             else:
-                continue  # Same tenor, not a curve trade
+                continue
 
-            # Found a vega curve trade
             matched_straddles.add(pid_i)
             matched_straddles.add(pid_j)
 
@@ -2049,19 +2022,16 @@ def detect_swaption_vega_curve_df(
 
             all_trades = list(trades_i) + list(trades_j)
 
-            # Determine pricing method used (prefer QUANTLIB if either used it)
-            pricing_method = "QUANTLIB" if method_i == "QUANTLIB" or method_j == "QUANTLIB" else "PREMIUM_HEURISTIC"
-
-            # Annotate all legs
             for pid, vega_val, method in [(pid_i, vega_i, method_i), (pid_j, vega_j, method_j)]:
-                mask = out["package_id"] == pid
+                # IMPORTANT: only annotate straddle rows (do not touch non-straddles)
+                mask = straddle_mask & (out["package_id"] == pid)
                 out.loc[mask, "vega_curve_type"] = curve_type
                 out.loc[mask, "vega_curve_id"] = curve_id
                 out.loc[mask, "vega_curve_legs"] = pd.Series([all_trades] * mask.sum(), index=out.index[mask])
                 out.loc[mask, "vega_curve_vega01"] = vega_val
                 out.loc[mask, "vega_curve_pricing_method"] = method
 
-            break  # Move to next straddle
+            break
 
     return out
 
@@ -2602,6 +2572,7 @@ def detect_and_link_swaption_packages_df(
     conditional_curve_time_window_seconds: int = 120,
     # Vega curve parameters
     vega_curve_time_window_seconds: int = 300,
+    pricer: Optional["QLIRSwapCurve"] = None,
 ) -> pd.DataFrame:
     """
     Combined detection and linking of swaption packages.
@@ -2711,14 +2682,16 @@ def detect_and_link_swaption_packages_df(
     #         package_col=package_col,
     #     )
 
-    # # Phase 5: Detect vega curve trades (requires straddles to be detected first)
+    # Phase 5: Detect vega curve trades (requires straddles to be detected first)
     # if detect_vega_curve and detect_straddles:
+    #     print("here")
     #     out = detect_swaption_vega_curve_df(
     #         out,
     #         time_window_seconds=vega_curve_time_window_seconds,
     #         config=config,
     #         product_col=product_col,
     #         package_col=package_col,
+    #         pricer=pricer,
     #     )
 
     return out

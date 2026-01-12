@@ -26,26 +26,62 @@ def merge_package_legs_to_one_row(
 
     out = df.copy()
 
-    def _is_na(x) -> bool:
-        # robust NA check for scalars
-        try:
+    def _eq(a, b) -> bool:
+        # robust equality that won't produce ambiguous array truth values
+        if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
+            try:
+                return np.array_equal(a, b, equal_nan=True)
+            except TypeError:
+                # older numpy: equal_nan not supported for some dtypes
+                return np.array_equal(a, b)
+        return a == b
+
+    def _is_na_scalar(x) -> bool:
+        # NA check that is guaranteed to return a bool (not a bool-array)
+        if x is None:
+            return True
+        if isinstance(x, float) and np.isnan(x):
+            return True
+        if isinstance(x, (np.floating,)):
+            return bool(np.isnan(x))
+        if isinstance(x, pd.Timestamp):
             return pd.isna(x)
+        if isinstance(x, (datetime.date, datetime.datetime)):
+            return False
+        # avoid pd.isna on array-likes (returns array)
+        if isinstance(x, (list, tuple, dict, set, np.ndarray)):
+            return False
+        try:
+            return bool(pd.isna(x))
         except Exception:
-            return x is None
+            return False
+
+    def _is_empty(x) -> bool:
+        # unified "empty" predicate for scalars + containers + arrays
+        if _is_na_scalar(x):
+            return True
+        if isinstance(x, str):
+            return x == ""
+        if isinstance(x, np.ndarray):
+            return x.size == 0
+        if isinstance(x, (list, tuple, dict, set)):
+            return len(x) == 0
+        return False
 
     def _fmt(x) -> str:
-        if _is_na(x) or x == "":
+        if _is_empty(x):
             return ""
         if isinstance(x, pd.Timestamp):
             return x.isoformat()
         if isinstance(x, (datetime.date, datetime.datetime)):
-
             return x.isoformat()
         if isinstance(x, (float, np.floating)):
-            # keep readable; adjust precision if you want
             return f"{float(x):g}"
         if isinstance(x, (int, np.integer)):
             return str(int(x))
+        # if arrays slip through, stringify stably
+        if isinstance(x, np.ndarray):
+            return np.array2string(x, separator=",", threshold=20)
         return str(x)
 
     def _all_equal(vals) -> bool:
@@ -53,7 +89,7 @@ def merge_package_legs_to_one_row(
             return True
         first = vals[0]
         for v in vals[1:]:
-            if v != first:
+            if not _eq(v, first):
                 return False
         return True
 
@@ -62,14 +98,13 @@ def merge_package_legs_to_one_row(
 
         # special: keep legs list as list (not delimited string)
         if colname == legs_col:
-            # choose the first non-null list if present
             for v in vals:
                 if isinstance(v, list) and len(v) > 0:
                     return v
             return vals[0]
 
         # if everything is NA/empty -> NA
-        non_empty = [v for v in vals if not (_is_na(v) or v == "")]
+        non_empty = [v for v in vals if not _is_empty(v)]
         if not non_empty:
             return np.nan
 
@@ -84,27 +119,22 @@ def merge_package_legs_to_one_row(
                 sv = _fmt(v)
                 if sv.lower().startswith("spot "):
                     sv = sv[5:]
-                joined.append(sv)
-            # drop empties but preserve relative order
-            joined = [x for x in joined if x != ""]
+                if sv != "":
+                    joined.append(sv)
             return delim.join(joined) if joined else np.nan
 
         joined = [_fmt(v) for v in vals]
         joined = [x for x in joined if x != ""]
         return delim.join(joined) if joined else np.nan
 
-    # identify packaged rows (you can loosen/tighten this mask if needed)
     pack_mask = out[package_id_col].notna() & out[package_type_col].notna() & (out[package_type_col] != "OUTRIGHT")
 
-    # passthrough non-packaged rows
     passthrough = out.loc[~pack_mask].copy()
 
-    # merge packaged groups
     merged_rows = []
     for (_, _), g in out.loc[pack_mask].groupby([package_type_col, package_id_col], sort=False):
         g2 = g.copy()
 
-        # sort legs
         for c in sort_legs_by:
             if c not in g2.columns:
                 g2[c] = np.nan
@@ -116,8 +146,5 @@ def merge_package_legs_to_one_row(
         merged_rows.append(merged)
 
     merged_df = pd.DataFrame(merged_rows) if merged_rows else out.iloc[0:0].copy()
-
-    # combine
     result = pd.concat([passthrough, merged_df], ignore_index=True)
-
     return result

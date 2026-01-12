@@ -22,6 +22,8 @@ import QuantLib as ql
 import Query.IRSwaps.adapter  # noqa: F401
 from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+
 from SDRUtils.config import PRODUCT_TYPES, TRADE_ID
 from SDRUtils.core.classification import SwaptionTradeClassification, classifications_to_dataframe, classify_product_type
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
@@ -151,11 +153,14 @@ class USD_Swaptions(USDProductBase):
             agency="CFTC",
             asset_class="RATES",
             filter_func=self.detect,
-            # ignore_cache=ignore_cache, 
+            # ignore_cache=ignore_cache,
         )
 
         if raw_sdr_trades_df.empty:
             return raw_sdr_trades_df
+
+        curve_source = str(kwargs.get("curve_source", "ERIS_EOD_LIVE-QL_BASIC")).replace("/", "_")
+        mdp = IRSwapsMDP(source=curve_source)
 
         exec_dates = pd.to_datetime(raw_sdr_trades_df["Event timestamp"], errors="coerce").dt.date
         raw_sdr_trades_df = raw_sdr_trades_df.assign(_execution_date=exec_dates)
@@ -253,8 +258,7 @@ class USD_Swaptions(USDProductBase):
             # Detect swaption packages
             if detect_swaption_packages:
                 package_df = detect_and_link_swaption_packages_df(
-                    package_df,
-                    config=swaption_package_config,
+                    package_df, config=swaption_package_config, pricer=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date))
                 )
 
             count = len(day_df)
