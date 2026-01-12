@@ -2373,8 +2373,7 @@ def detect_and_link_swaption_packages_df(
             config=config,
             product_col=product_col,
             package_col=package_col,
-            # must_be_reported_as_package=True,
-            must_be_reported_as_package=False,
+            must_be_reported_as_package=True,
         )
 
     # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
