@@ -803,6 +803,7 @@ def detect_swaption_straddles_df(
                     for cidx in [cp_idx, cr_idx]:
                         cidx_mask = out.index == cidx
                         out.loc[cidx_mask, package_col] = "STRADDLE"
+                        out.loc[cidx_mask, "premium"] = summed_opt_prem
                         out.loc[cidx_mask, "package_id"] = custy_pid
                         cleg_count = int(cidx_mask.sum())
                         out.loc[cidx_mask, "package_legs"] = pd.Series(
@@ -813,7 +814,7 @@ def detect_swaption_straddles_df(
                         out.loc[cidx_mask, "package_reason"] = custy_reason
                         out.loc[cidx_mask, "package_legs_count"] = 2
                         # Set the summed option_premium_amount for both legs
-                        out.loc[cidx_mask, option_premium_amount_col] = f"{summed_opt_prem:,.5f}".rstrip('0').rstrip('.')
+                        out.loc[cidx_mask, option_premium_amount_col] = f"{summed_opt_prem:,.5f}".rstrip('0').rstrip('.').rstrip(',')
 
     return out
 
