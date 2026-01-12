@@ -28,6 +28,7 @@ from SDRUtils.packages.swaption_packages import (
     detect_swaption_packages_df,
     detect_swaption_risk_reversals_df,
     detect_swaption_straddles_df,
+    detect_swaption_vega_curve_df,
     detect_and_link_swaption_packages_df,
     link_swaption_packages,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "detect_swaption_packages_df",
     "detect_swaption_risk_reversals_df",
     "detect_swaption_straddles_df",
+    "detect_swaption_vega_curve_df",
     "detect_and_link_swaption_packages_df",
     "link_swaption_packages",
     "merge_package_legs_to_one_row",
