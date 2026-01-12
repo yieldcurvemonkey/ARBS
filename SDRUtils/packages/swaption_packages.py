@@ -67,7 +67,7 @@ class SwaptionPackageDetectionConfig:
     # Economic filters
     require_same_platform: bool = True
     require_same_currency: bool = True
-    require_same_underlier: bool = True
+    require_same_underlier: bool = False # need to allow for different UPIs, will default this to false 
 
     # Timestamp matching mode
     timestamp_mode: Literal["exact", "fuzzy"] = "fuzzy"
@@ -2344,7 +2344,7 @@ def detect_and_link_swaption_packages_df(
 
     # temp = out.copy()
     # temp["execution_timestamp"] = temp["execution_timestamp"].astype(str)
-    # temp.to_excel("temp_out.xlsx")
+    # temp.to_excel("temp_raw_out.xlsx")
 
     # Phase 1: Detect risk reversals first (highest priority - IDB structures)
     if detect_risk_reversals:
@@ -2373,7 +2373,8 @@ def detect_and_link_swaption_packages_df(
             config=config,
             product_col=product_col,
             package_col=package_col,
-            must_be_reported_as_package=True,
+            # must_be_reported_as_package=True,
+            must_be_reported_as_package=False,
         )
 
     # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
