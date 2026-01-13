@@ -223,6 +223,7 @@ class USD_Swaptions(USDProductBase):
                 end_ts = _to_utc(end)
                 final_df = final_df[(final_df["execution_timestamp"] >= start_ts) & (final_df["execution_timestamp"] <= end_ts)]
                 final_df = final_df.sort_values(by="execution_timestamp")
+                print(final_df)
                 if merge_package_legs:
                     final_df = merge_package_legs_to_one_row(final_df)
                     final_df = merge_vega_curve_packages(final_df)
@@ -303,10 +304,10 @@ class USD_Swaptions(USDProductBase):
         end_ts = _to_utc(end)
         final_df = final_df[(final_df["execution_timestamp"] >= start_ts) & (final_df["execution_timestamp"] <= end_ts)]
         final_df = final_df.sort_values(by="execution_timestamp")
+        print(final_df)
         if merge_package_legs:
             final_df = merge_package_legs_to_one_row(final_df)
-        final_df = merge_vega_curve_packages(final_df)
-
+            final_df = merge_vega_curve_packages(final_df)
         return final_df
 
     def metadata(self) -> Dict[str, str]:
