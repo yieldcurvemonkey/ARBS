@@ -206,17 +206,52 @@ def merge_vega_curve_packages(
 
     def _collect_legs(group: pd.DataFrame) -> list[str]:
         legs: list[str] = []
+
+        def _add_one(x) -> None:
+            if x is None:
+                return
+            # avoid ambiguous truthiness / pd.notna on array-likes
+            if isinstance(x, np.ndarray):
+                if x.size == 0:
+                    return
+                # flatten to python scalars/strings
+                for y in x.ravel().tolist():
+                    if y is None:
+                        continue
+                    if isinstance(y, float) and np.isnan(y):
+                        continue
+                    if pd.notna(y):
+                        legs.append(str(y))
+                return
+            if isinstance(x, (list, tuple, set)):
+                for y in x:
+                    _add_one(y)
+                return
+            if isinstance(x, dict):
+                for y in x.values():
+                    _add_one(y)
+                return
+
+            # scalar path
+            try:
+                if pd.notna(x) and str(x) != "":
+                    legs.append(str(x))
+            except Exception:
+                # last resort: stringify
+                sx = str(x)
+                if sx != "":
+                    legs.append(sx)
+
         if package_legs_col in group.columns:
             for v in group[package_legs_col].tolist():
-                if isinstance(v, list):
-                    legs.extend([str(x) for x in v])
-                elif pd.notna(v):
-                    legs.append(str(v))
+                _add_one(v)
+
         for v in group[trade_id_col].tolist():
-            if pd.notna(v):
-                legs.append(str(v))
+            _add_one(v)
+
+        # de-dupe, preserve order
         seen = set()
-        ordered = []
+        ordered: list[str] = []
         for leg in legs:
             if leg not in seen:
                 seen.add(leg)

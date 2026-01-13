@@ -215,7 +215,7 @@ class USD_Swaptions(USDProductBase):
                 final_df = final_df.sort_values(by="execution_timestamp")
                 if merge_package_legs:
                     final_df = merge_package_legs_to_one_row(final_df)
-                final_df = merge_vega_curve_packages(final_df)
+                    final_df = merge_vega_curve_packages(final_df)
                 return final_df
 
             return pd.DataFrame()
