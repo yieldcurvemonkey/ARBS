@@ -34,7 +34,7 @@ from SDRUtils.packages.swaption_packages import (
 )
 
 # Utilities
-from SDRUtils.packages.utils import merge_package_legs_to_one_row
+from SDRUtils.packages.utils import merge_package_legs_to_one_row, merge_vega_curve_packages
 
 
 __all__ = [
@@ -56,6 +56,7 @@ __all__ = [
     "detect_and_link_swaption_packages_df",
     "link_swaption_packages",
     "merge_package_legs_to_one_row",
+    "merge_vega_curve_packages",
     # Config
     "SwaptionPackageDetectionConfig",
 ]

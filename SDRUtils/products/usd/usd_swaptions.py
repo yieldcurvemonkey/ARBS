@@ -30,7 +30,12 @@ from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_y
 from SDRUtils.core.parsing import parse_notional
 from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_from_dates, tenor_to_label
 from SDRUtils.data.builder import SDRDataBuilder
-from SDRUtils.packages import SwaptionPackageDetectionConfig, detect_and_link_swaption_packages_df, merge_package_legs_to_one_row
+from SDRUtils.packages import (
+    SwaptionPackageDetectionConfig,
+    detect_and_link_swaption_packages_df,
+    merge_package_legs_to_one_row,
+    merge_vega_curve_packages,
+)
 from SDRUtils.products._swaptions.upi import _build_upi_df, make_swaption_desc_func
 from SDRUtils.products.usd.base import USDProductBase
 
@@ -210,6 +215,7 @@ class USD_Swaptions(USDProductBase):
                 final_df = final_df.sort_values(by="execution_timestamp")
                 if merge_package_legs:
                     final_df = merge_package_legs_to_one_row(final_df)
+                final_df = merge_vega_curve_packages(final_df)
                 return final_df
 
             return pd.DataFrame()
@@ -283,6 +289,7 @@ class USD_Swaptions(USDProductBase):
         final_df = final_df.sort_values(by="execution_timestamp")
         if merge_package_legs:
             final_df = merge_package_legs_to_one_row(final_df)
+        final_df = merge_vega_curve_packages(final_df)
 
         return final_df
 
