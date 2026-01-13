@@ -149,7 +149,7 @@ class SwaptionPackageDetectionConfig:
     # ==========================================================================
 
     # Vega tolerance for curve trades (typically looser than general vega tolerance)
-    vega_curve_tolerance_pct: float = 0.05  # 5% tolerance for vega curve matching
+    vega_curve_tolerance_pct: float = 0.10  # 10% tolerance for vega curve matching
 
     # Minimum expiry or tail difference for vega curve trades (in years)
     vega_curve_min_expiry_diff_years: float = 0.25  # 3 months minimum
@@ -2027,7 +2027,7 @@ def detect_swaption_vega_curve_df(
                 out.loc[mask, "vega_curve_type"] = curve_type
                 out.loc[mask, "vega_curve_id"] = curve_id
                 out.loc[mask, "vega_curve_legs"] = pd.Series([all_trades] * mask.sum(), index=out.index[mask])
-                out.loc[mask, "vega_curve_vega01"] = vega_val
+                out.loc[mask, "vega_curve_vega01"] = (vega_val / 2)
                 out.loc[mask, "vega_curve_pricing_method"] = "QUANTLIB"
 
             break
@@ -2682,16 +2682,15 @@ def detect_and_link_swaption_packages_df(
     #     )
 
     # Phase 5: Detect vega curve trades (requires straddles to be detected first)
-    # if detect_vega_curve and detect_straddles:
-    #     print("here")
-    #     out = detect_swaption_vega_curve_df(
-    #         out,
-    #         time_window_seconds=vega_curve_time_window_seconds,
-    #         config=config,
-    #         product_col=product_col,
-    #         package_col=package_col,
-    #         pricer=pricer,
-    #     )
+    if detect_vega_curve and detect_straddles:
+        out = detect_swaption_vega_curve_df(
+            out,
+            time_window_seconds=vega_curve_time_window_seconds,
+            config=config,
+            product_col=product_col,
+            package_col=package_col,
+            pricer=pricer,
+        )
 
     return out
 
