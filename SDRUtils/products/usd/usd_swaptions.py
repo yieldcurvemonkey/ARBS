@@ -174,28 +174,38 @@ class USD_Swaptions(USDProductBase):
         cache_base = Path(cache_path) / "classification_cache" / "usd_swaptions" / cache_flags
         cache_base.mkdir(parents=True, exist_ok=True)
 
+        eastern_tz = pytz.timezone("US/Eastern")
+        today_eastern = pd.Timestamp.now(tz=eastern_tz).date()
+
+        def _is_historical(exec_date: pd.Timestamp | Any) -> bool:
+            return exec_date < today_eastern
+
         cached_frames = []
         missing_dates = []
         for exec_date, count in raw_sdr_trades_df["_execution_date"].value_counts().items():
             if pd.isna(exec_date):
                 continue
             date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
+            final_marker = date_dir / "final.marker"
 
             found_cache = False
             if date_dir.exists() and (ignore_cache is False):
-                cache_candidates = []
-                for fp in date_dir.glob("*.parquet"):
-                    if fp.stem.isdigit():
-                        cache_candidates.append((int(fp.stem), fp))
+                if _is_historical(exec_date) and not final_marker.exists():
+                    found_cache = False
+                else:
+                    cache_candidates = []
+                    for fp in date_dir.glob("*.parquet"):
+                        if fp.stem.isdigit():
+                            cache_candidates.append((int(fp.stem), fp))
 
-                if cache_candidates:
-                    max_cached_count, best_cache_fp = max(cache_candidates, key=lambda x: x[0])
-                    if max_cached_count >= count:
-                        try:
-                            cached_frames.append(pd.read_parquet(best_cache_fp, engine="pyarrow"))
-                            found_cache = True
-                        except Exception:
-                            best_cache_fp.unlink(missing_ok=True)
+                    if cache_candidates:
+                        max_cached_count, best_cache_fp = max(cache_candidates, key=lambda x: x[0])
+                        if max_cached_count >= count:
+                            try:
+                                cached_frames.append(pd.read_parquet(best_cache_fp, engine="pyarrow"))
+                                found_cache = True
+                            except Exception:
+                                best_cache_fp.unlink(missing_ok=True)
 
             if not found_cache:
                 missing_dates.append(exec_date)
@@ -278,6 +288,9 @@ class USD_Swaptions(USDProductBase):
             table = pa.Table.from_pandas(package_df, preserve_index=False)
             pq.write_table(table, tmp_fp, compression="zstd")
             tmp_fp.replace(cache_fp)
+            if _is_historical(exec_date):
+                final_marker = date_dir / "final.marker"
+                final_marker.touch()
 
             built_frames.append(package_df)
 
