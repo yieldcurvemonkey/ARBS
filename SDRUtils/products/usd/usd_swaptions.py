@@ -195,17 +195,16 @@ class USD_Swaptions(USDProductBase):
                 else:
                     cache_candidates = []
                     for fp in date_dir.glob("*.parquet"):
-                        if fp.stem.isdigit():
-                            cache_candidates.append((int(fp.stem), fp))
+                        # pick the latest created file 
+                        cache_candidates.append((fp.stat().st_mtime, fp))
 
                     if cache_candidates:
-                        max_cached_count, best_cache_fp = max(cache_candidates, key=lambda x: x[0])
-                        if max_cached_count >= count:
-                            try:
-                                cached_frames.append(pd.read_parquet(best_cache_fp, engine="pyarrow"))
-                                found_cache = True
-                            except Exception:
-                                best_cache_fp.unlink(missing_ok=True)
+                        _, best_cache_fp = max(cache_candidates, key=lambda x: x[0])
+                        try:
+                            cached_frames.append(pd.read_parquet(best_cache_fp, engine="pyarrow"))
+                            found_cache = True
+                        except Exception:
+                            best_cache_fp.unlink(missing_ok=True)
 
             if not found_cache:
                 missing_dates.append(exec_date)
@@ -223,7 +222,6 @@ class USD_Swaptions(USDProductBase):
                 end_ts = _to_utc(end)
                 final_df = final_df[(final_df["execution_timestamp"] >= start_ts) & (final_df["execution_timestamp"] <= end_ts)]
                 final_df = final_df.sort_values(by="execution_timestamp")
-                print(final_df)
                 if merge_package_legs:
                     final_df = merge_package_legs_to_one_row(final_df)
                     final_df = merge_vega_curve_packages(final_df)
