@@ -261,6 +261,9 @@ class USD_Swaptions(USDProductBase):
             package_df = package_df.drop(columns=[TRADE_ID], errors="ignore")
             package_df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", col.lower()).lower().replace(" ", "_") for col in package_df.columns]
 
+            if "strike" in package_df.columns:
+                package_df["strike"] = pd.to_numeric(package_df["strike"], errors="coerce")
+
             # Detect swaption packages
             if detect_swaption_packages:
                 package_df = detect_and_link_swaption_packages_df(

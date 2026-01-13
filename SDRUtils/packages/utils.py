@@ -161,6 +161,7 @@ def merge_vega_curve_packages(
     trade_id_col: str = "trade_id",
     trade_label_col: str = "trade_label",
     tenor_label_col: str = "tenor_label",
+    fwd_label_col: str = "forward_label",
     premium_col: str = "premium",
     option_premium_amount_col: str = "option_premium_amount",
     notional_col: str = "notional",
@@ -239,16 +240,18 @@ def merge_vega_curve_packages(
             base[trade_label_col] = _join_labels(g[trade_label_col])
         if tenor_label_col in g.columns:
             base[tenor_label_col] = _join_labels(g[tenor_label_col])
+        if fwd_label_col in g.columns:
+            base[fwd_label_col] = _join_labels(g[fwd_label_col])
         if premium_col in g.columns:
-            base[premium_col] = _sum_numeric(g[premium_col])
+            base[premium_col] = _join_labels(g[premium_col])
         if option_premium_amount_col in g.columns:
-            base[option_premium_amount_col] = _sum_numeric(g[option_premium_amount_col])
+            base[option_premium_amount_col] = _join_labels(g[option_premium_amount_col])
         if notional_col in g.columns:
-            base[notional_col] = _merge_notional(g[notional_col])
+            base[notional_col] = _join_labels(g[notional_col])
         if estimated_pv01_col in g.columns:
-            base[estimated_pv01_col] = _sum_numeric(g[estimated_pv01_col])
+            base[estimated_pv01_col] = _join_labels(g[estimated_pv01_col])
         if vega_curve_vega01_col in g.columns:
-            base[vega_curve_vega01_col] = _sum_numeric(g[vega_curve_vega01_col])
+            base[vega_curve_vega01_col] = _join_labels(g[vega_curve_vega01_col])
         if vega_curve_legs_col in g.columns:
             base[vega_curve_legs_col] = _collect_legs(g)
         merged_rows.append(base)

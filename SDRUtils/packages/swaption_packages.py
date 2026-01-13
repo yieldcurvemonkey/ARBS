@@ -451,6 +451,11 @@ def detect_and_link_swaption_packages_df(
 
     out = df.copy()
 
+    # temp = out.copy()
+    # temp = temp.sort_values(by="execution_timestamp")
+    # temp["execution_timestamp"] = temp["execution_timestamp"].astype(str)
+    # temp.to_excel("temp_raw_trades.xlsx")
+
     # =========================================================================
     # Pipeline: Run detectors in priority order
     # =========================================================================
