@@ -35,11 +35,11 @@ from SDRUtils.packages.swaption.utils import (
     is_payer,
     is_receiver,
 )
-from SDRUtils.packages.swaption.straddle import detect_straddles
-from SDRUtils.packages.swaption.risk_reversal import detect_risk_reversals
-from SDRUtils.packages.swaption.spreads import detect_vertical_spreads
-from SDRUtils.packages.swaption.conditional_curve import detect_conditional_curve
-from SDRUtils.packages.swaption.vega_curve import detect_vega_curve
+from SDRUtils.packages.swaption.straddle import detect_straddles_packages
+from SDRUtils.packages.swaption.risk_reversal import detect_risk_reversals_packages 
+from SDRUtils.packages.swaption.spreads import detect_vertical_spreads_packages
+from SDRUtils.packages.swaption.conditional_curve import detect_conditional_curve_packages
+from SDRUtils.packages.swaption.vega_curve import detect_vega_curve_packages
 from SDRUtils.packages.swaption.vega_buckets import detect_vega_bucketed_packages
 from SDRUtils.packages.swaption.linking import link_packages
 
@@ -56,11 +56,11 @@ __all__ = [
     "is_payer",
     "is_receiver",
     # Detectors
-    "detect_straddles",
-    "detect_risk_reversals",
-    "detect_vertical_spreads",
-    "detect_conditional_curve",
-    "detect_vega_curve",
+    "detect_straddles_packages",
+    "detect_risk_reversals_packages",
+    "detect_vertical_spreads_packages",
+    "detect_conditional_curve_packages",
+    "detect_vega_curve_packages",
     "detect_vega_bucketed_packages",
     "link_packages",
 ]

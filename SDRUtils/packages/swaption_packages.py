@@ -39,11 +39,11 @@ import pandas as pd
 from SDRUtils.packages.base import PackageDetector
 
 # Import detection functions from submodules
-from SDRUtils.packages.swaption.straddle import detect_straddles
-from SDRUtils.packages.swaption.risk_reversal import detect_risk_reversals
-from SDRUtils.packages.swaption.spreads import detect_vertical_spreads
-from SDRUtils.packages.swaption.conditional_curve import detect_conditional_curve
-from SDRUtils.packages.swaption.vega_curve import detect_vega_curve
+from SDRUtils.packages.swaption.straddle import detect_straddles_packages
+from SDRUtils.packages.swaption.risk_reversal import detect_risk_reversals_packages 
+from SDRUtils.packages.swaption.spreads import detect_vertical_spreads_packages
+from SDRUtils.packages.swaption.conditional_curve import detect_conditional_curve_packages
+from SDRUtils.packages.swaption.vega_curve import detect_vega_curve_packages
 from SDRUtils.packages.swaption.vega_buckets import detect_vega_bucketed_packages
 from SDRUtils.packages.swaption.linking import link_packages
 
@@ -240,7 +240,7 @@ def detect_swaption_straddles_df(
     if config is None:
         config = DEFAULT_SWAPTION_PACKAGE_CONFIG
 
-    return detect_straddles(
+    return detect_straddles_packages(
         df,
         timestamp_tolerance=straddle_timestamp_tolerance,
         strike_tolerance=strike_tolerance,
@@ -459,7 +459,7 @@ def detect_and_link_swaption_packages_df(
 
     # Phase 1: Detect risk reversals first (highest priority - IDB structures)
     if detect_risk_reversals:
-        out = detect_risk_reversals(
+        out = detect_risk_reversals_packages(
             out,
             time_window_seconds=risk_reversal_time_window_seconds,
             strike_tolerance=risk_reversal_strike_tolerance,
@@ -490,7 +490,7 @@ def detect_and_link_swaption_packages_df(
 
     # Phase 2: Detect straddles
     if detect_straddles:
-        out = detect_straddles(
+        out = detect_straddles_packages(
             out,
             timestamp_tolerance=straddle_timestamp_tolerance,
             strike_tolerance=straddle_strike_tolerance,
@@ -516,7 +516,7 @@ def detect_and_link_swaption_packages_df(
 
     # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
     if detect_vertical_spreads:
-        out = detect_vertical_spreads(
+        out = detect_vertical_spreads_packages(
             out,
             time_window_seconds=vertical_spread_time_window_seconds,
             spread_ratios=config.spread_ratios,
@@ -569,7 +569,7 @@ def detect_and_link_swaption_packages_df(
 
     # Phase 5: Detect vega curve trades (requires straddles to be detected first)
     if detect_vega_curve and detect_straddles:
-        out = detect_vega_curve(
+        out = detect_vega_curve_packages(
             out,
             time_window_seconds=vega_curve_time_window_seconds,
             vega_tolerance_pct=config.vega_curve_tolerance_pct,

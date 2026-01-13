@@ -21,7 +21,7 @@ from SDRUtils.packages.swaption.utils import (
 )
 
 
-def detect_straddles(
+def detect_straddles_packages(
     df: pd.DataFrame,
     *,
     # Time window parameters

@@ -22,7 +22,7 @@ from SDRUtils.packages.swaption.utils import (
 )
 
 
-def detect_conditional_curve(
+def detect_conditional_curve_packages(
     df: pd.DataFrame,
     *,
     # Time window parameters

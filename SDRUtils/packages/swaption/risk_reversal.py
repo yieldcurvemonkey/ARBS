@@ -20,7 +20,7 @@ from SDRUtils.packages.swaption.utils import (
 )
 
 
-def detect_risk_reversals(
+def detect_risk_reversals_packages(
     df: pd.DataFrame,
     *,
     # Time window parameters

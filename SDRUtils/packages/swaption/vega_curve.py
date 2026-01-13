@@ -47,7 +47,7 @@ def _compute_straddle_vega_with_pricer(
         return None
 
 
-def detect_vega_curve(
+def detect_vega_curve_packages(
     df: pd.DataFrame,
     *,
     # Time window parameters

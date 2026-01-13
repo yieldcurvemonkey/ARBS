@@ -31,7 +31,7 @@ DEFAULT_SPREAD_RATIOS: List[Tuple[float, str, float]] = [
 ]
 
 
-def detect_vertical_spreads(
+def detect_vertical_spreads_packages(
     df: pd.DataFrame,
     *,
     # Time window parameters
