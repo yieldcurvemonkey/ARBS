@@ -200,7 +200,7 @@ class USD_Swaptions(USDProductBase):
 
                     if cache_candidates:
                         max_cached_count, best_cache_fp = max(cache_candidates, key=lambda x: x[0])
-                        if max_cached_count >= count:
+                        if max_cached_count == count:
                             try:
                                 cached_frames.append(pd.read_parquet(best_cache_fp, engine="pyarrow"))
                                 found_cache = True
