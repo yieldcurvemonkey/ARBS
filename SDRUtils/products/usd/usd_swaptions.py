@@ -196,16 +196,17 @@ class USD_Swaptions(USDProductBase):
                     cache_candidates = []
                     for fp in date_dir.glob("*.parquet"):
                         if fp.stem.isdigit():
-                            cache_candidates.append((int(fp.stem), fp))
+                            cached_count = int(fp.stem)
+                            if cached_count == count:
+                                cache_candidates.append((fp.stat().st_mtime, fp))
 
                     if cache_candidates:
-                        max_cached_count, best_cache_fp = max(cache_candidates, key=lambda x: x[0])
-                        if max_cached_count == count:
-                            try:
-                                cached_frames.append(pd.read_parquet(best_cache_fp, engine="pyarrow"))
-                                found_cache = True
-                            except Exception:
-                                best_cache_fp.unlink(missing_ok=True)
+                        _, best_cache_fp = max(cache_candidates, key=lambda x: x[0])
+                        try:
+                            cached_frames.append(pd.read_parquet(best_cache_fp, engine="pyarrow"))
+                            found_cache = True
+                        except Exception:
+                            best_cache_fp.unlink(missing_ok=True)
 
             if not found_cache:
                 missing_dates.append(exec_date)
