@@ -209,6 +209,18 @@ def detect_risk_reversals_packages(
         if np.any(np.isnan(strikes)) or np.any(np.isnan(notionals)):
             return False
 
+        payer_count = 0
+        receiver_count = 0
+        for idx in indices:
+            direction = _direction(product_labels[idx])
+            if direction == 1:
+                payer_count += 1
+            elif direction == -1:
+                receiver_count += 1
+
+        if payer_count != 2 or receiver_count != 2:
+            return False
+
         strike_groups_list = _strike_groups(strikes)
         # Classic 3-strike only for now (reference logic flow)
         if len(strike_groups_list) != 3:
