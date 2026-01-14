@@ -41,6 +41,7 @@ def detect_risk_reversals_packages(
     platform_col: str = "platform_identifier",
     currency_col: str = "notional_currency",
     underlier_col: str = "upi_underlier_name",
+    trade_label_col: str = "trade_label",
     trade_id_col: str = "trade_id",
     strike_col: str = "strike",
     expiration_col: str = "expiration_date",
@@ -80,6 +81,7 @@ def detect_risk_reversals_packages(
         platform_col: Column name for platform identifier
         currency_col: Column name for currency
         underlier_col: Column name for underlier
+        trade_label_col: Column name for trade label
         trade_id_col: Column name for trade ID
         strike_col: Column name for strike
         expiration_col: Column name for expiration date
@@ -130,6 +132,7 @@ def detect_risk_reversals_packages(
     platforms = cand[platform_col].astype("string").to_numpy() if platform_col in cand.columns else None
     currencies = cand[currency_col].astype("string").to_numpy() if currency_col in cand.columns else None
     underliers = cand[underlier_col].astype("string").to_numpy() if underlier_col in cand.columns else None
+    trade_labels = cand[trade_label_col].astype("string").to_numpy() if trade_label_col in cand.columns else None
     expirations = cand[expiration_col].astype("string").to_numpy() if expiration_col in cand.columns else None
     tenors = pd.to_numeric(cand[tenor_col], errors="coerce").to_numpy(dtype=np.float64) if tenor_col in cand.columns else None
     forwards = pd.to_numeric(cand[forward_col], errors="coerce").to_numpy(dtype=np.float64) if forward_col in cand.columns else None
@@ -217,14 +220,16 @@ def detect_risk_reversals_packages(
     def _same_index_ok(indices: List[int]) -> bool:
         if not require_same_index:
             return True
-        if underliers is None:
+        if trade_labels is None:
             return False
-        raw_underliers = [str(underliers[i]) for i in indices]
-        has_libor = any("LIBOR" in name.upper() for name in raw_underliers)
-        has_sofr = any("SOFR" in name.upper() for name in raw_underliers)
+        raw_labels = [str(trade_labels[i]) for i in indices]
+        has_libor = any("LIBOR" in name.upper() for name in raw_labels)
+        has_sofr = any("SOFR" in name.upper() for name in raw_labels)
         if has_libor and has_sofr:
             return False
-        index_names = {_extract_index_name(name) for name in raw_underliers}
+        if underliers is None:
+            return False
+        index_names = {_extract_index_name(str(underliers[i])) for i in indices}
         index_names.discard("")
         return len(index_names) == 1
 
