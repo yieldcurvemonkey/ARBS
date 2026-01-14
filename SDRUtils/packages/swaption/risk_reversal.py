@@ -219,7 +219,12 @@ def detect_risk_reversals_packages(
             return True
         if underliers is None:
             return False
-        index_names = {_extract_index_name(underliers[i]) for i in indices}
+        raw_underliers = [str(underliers[i]) for i in indices]
+        has_libor = any("LIBOR" in name.upper() for name in raw_underliers)
+        has_sofr = any("SOFR" in name.upper() for name in raw_underliers)
+        if has_libor and has_sofr:
+            return False
+        index_names = {_extract_index_name(name) for name in raw_underliers}
         index_names.discard("")
         return len(index_names) == 1
 
