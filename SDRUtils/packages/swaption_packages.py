@@ -39,7 +39,7 @@ import pandas as pd
 from SDRUtils.packages.base import PackageDetector
 
 # Import detection functions from submodules
-from SDRUtils.packages.swaption.straddle import detect_idb_straddles_packages
+from SDRUtils.packages.swaption.straddle import detect_dealer_straddles_packages
 from SDRUtils.packages.swaption.risk_reversal import detect_risk_reversals_packages
 from SDRUtils.packages.swaption.spreads import detect_vertical_spreads_packages
 from SDRUtils.packages.swaption.conditional_curve import detect_conditional_curve_packages
@@ -347,7 +347,7 @@ def detect_and_link_swaption_packages_df(
 
     # Phase 2: Detect straddles
     if detect_straddles:
-        out = detect_idb_straddles_packages(
+        out = detect_dealer_straddles_packages(
             out,
             timestamp_tolerance=straddle_timestamp_tolerance,
             strike_tolerance=straddle_strike_tolerance,

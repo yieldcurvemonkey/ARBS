@@ -21,7 +21,7 @@ from SDRUtils.packages.swaption.utils import (
 )
 
 
-def detect_idb_straddles_packages(
+def detect_dealer_straddles_packages(
     df: pd.DataFrame,
     *,
     # Time window parameters
@@ -271,7 +271,7 @@ def detect_idb_straddles_packages(
 
 # work in progress
 # notes here: 
-def _detect_customer_straddles(
+def detect_customer_straddles(
     out: pd.DataFrame,
     *,
     tolerance_seconds: float,

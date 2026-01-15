@@ -87,7 +87,7 @@ def usd_swaption_leg_pricer_from_row(
 
     # Create leg swaption and imply vol from FORWARD premium
     ql_swaption = ql.Swaption(ql_underlying, ql.EuropeanExercise(ql_underlying.startDate()))
-    print(ql_swaption.exercise().dates(), ql_underlying.maturityDate())
+    # print(ql_swaption.exercise().dates(), ql_underlying.maturityDate())
     initial_engine = ql.BachelierSwaptionEngine(
         pricer.handle(),
         ql.QuoteHandle(ql.SimpleQuote(0.0)),
