@@ -39,8 +39,8 @@ import pandas as pd
 from SDRUtils.packages.base import PackageDetector
 
 # Import detection functions from submodules
-from SDRUtils.packages.swaption.straddle import detect_straddles_packages
-from SDRUtils.packages.swaption.risk_reversal import detect_risk_reversals_packages 
+from SDRUtils.packages.swaption.straddle import detect_idb_straddles_packages
+from SDRUtils.packages.swaption.risk_reversal import detect_risk_reversals_packages
 from SDRUtils.packages.swaption.spreads import detect_vertical_spreads_packages
 from SDRUtils.packages.swaption.conditional_curve import detect_conditional_curve_packages
 from SDRUtils.packages.swaption.vega_curve import detect_vega_curve_packages
@@ -187,13 +187,7 @@ class SwaptionPackageDetectionConfig:
         self.customer_platforms = customer_platforms or ["BILT", "XXXX", "TWSF", "BBSF", "XOFF"]
 
 
-# Default config instance for backward compatibility
 DEFAULT_SWAPTION_PACKAGE_CONFIG = SwaptionPackageDetectionConfig()
-
-
-# =============================================================================
-# Backward Compatibility - Helper Function Wrappers
-# =============================================================================
 
 
 def _extract_effective_premium(
@@ -214,146 +208,6 @@ def _extract_effective_premium(
     )
 
 
-# =============================================================================
-# Straddle Detection (Backward Compatibility Wrapper)
-# =============================================================================
-
-
-def detect_swaption_straddles_df(
-    df: pd.DataFrame,
-    *,
-    straddle_timestamp_tolerance: datetime.timedelta,
-    strike_tolerance: float,
-    notional_tolerance_pct: float,
-    config: Optional[SwaptionPackageDetectionConfig] = None,
-    product_col: str = "product_type",
-    package_col: str = "package_type",
-    must_be_reported_as_package: Optional[bool] = False,
-    custy_leg_option_premium_amount_tolerance: Optional[float] = None,
-    option_premium_amount_col: str = "option_premium_amount",
-) -> pd.DataFrame:
-    """
-    Detect swaption straddles (payer + receiver with same strike/expiry/tenor).
-
-    This is a wrapper that delegates to the modular detect_straddles function.
-    """
-    if config is None:
-        config = DEFAULT_SWAPTION_PACKAGE_CONFIG
-
-    return detect_straddles_packages(
-        df,
-        timestamp_tolerance=straddle_timestamp_tolerance,
-        strike_tolerance=strike_tolerance,
-        notional_tolerance_pct=notional_tolerance_pct,
-        product_col=product_col,
-        package_col=package_col,
-        exec_col=config.exec_col,
-        platform_col=config.platform_col,
-        currency_col=config.currency_col,
-        underlier_col=config.underlier_col,
-        trade_id_col=config.trade_id_col,
-        strike_col=config.strike_col,
-        expiration_col=config.expiration_col,
-        tenor_col=config.tenor_col,
-        notional_col=config.notional_col,
-        package_indicator_col=config.package_indicator_col,
-        option_premium_amount_col=option_premium_amount_col,
-        require_same_platform=config.require_same_platform,
-        require_same_currency=config.require_same_currency,
-        require_same_underlier=config.require_same_underlier,
-        must_be_reported_as_package=must_be_reported_as_package,
-        custy_leg_option_premium_amount_tolerance=custy_leg_option_premium_amount_tolerance,
-    )
-
-
-# =============================================================================
-# Main Detection Function (Vega Bucketed)
-# =============================================================================
-
-
-def detect_swaption_packages_df(
-    df: pd.DataFrame,
-    *,
-    config: Optional[SwaptionPackageDetectionConfig] = None,
-    vega_estimator: Optional[Callable[[pd.Series], float]] = None,
-    product_col: str = "product_type",
-    package_col: str = "package_type",
-) -> pd.DataFrame:
-    """
-    Detect swaption packages using vega bucketing and time proximity.
-
-    This is a wrapper that delegates to the modular detect_vega_bucketed_packages function.
-    """
-    if config is None:
-        config = DEFAULT_SWAPTION_PACKAGE_CONFIG
-
-    return detect_vega_bucketed_packages(
-        df,
-        time_window_seconds=config.time_window_seconds,
-        vega_tolerance_pct=config.vega_tolerance_pct,
-        min_legs=config.min_legs,
-        product_col=product_col,
-        package_col=package_col,
-        exec_col=config.exec_col,
-        platform_col=config.platform_col,
-        currency_col=config.currency_col,
-        underlier_col=config.underlier_col,
-        trade_id_col=config.trade_id_col,
-        vega_col=config.vega_col,
-        notional_col=config.notional_col,
-        tenor_col=config.tenor_col,
-        forward_col=config.forward_col,
-        premium_col=config.premium_col,
-        package_price_col=config.package_price_col,
-        package_indicator_col=config.package_indicator_col,
-        require_same_platform=config.require_same_platform,
-        require_same_currency=config.require_same_currency,
-        require_same_underlier=config.require_same_underlier,
-        price_field_mode=config.price_field_mode,
-        confidence_weights=config.confidence_weights,
-        platform_allowlist=config.platform_allowlist,
-        platform_blocklist=config.platform_blocklist,
-        vega_estimator=vega_estimator,
-    )
-
-
-# =============================================================================
-# Package Linking (Backward Compatibility Wrapper)
-# =============================================================================
-
-
-def link_swaption_packages(
-    df: pd.DataFrame,
-    *,
-    config: Optional[SwaptionPackageDetectionConfig] = None,
-    package_col: str = "package_type",
-) -> pd.DataFrame:
-    """
-    Second-pass linking of separate swaption packages.
-
-    This is a wrapper that delegates to the modular link_packages function.
-    """
-    if config is None:
-        config = DEFAULT_SWAPTION_PACKAGE_CONFIG
-
-    return link_packages(
-        df,
-        time_window_link_seconds=config.time_window_link_seconds,
-        vega_tolerance_pct=config.vega_tolerance_pct,
-        package_col=package_col,
-        exec_col=config.exec_col,
-        platform_col=config.platform_col,
-        currency_col=config.currency_col,
-        require_same_platform=config.require_same_platform,
-        require_same_currency=config.require_same_currency,
-    )
-
-
-# =============================================================================
-# Combined Detection Pipeline
-# =============================================================================
-
-
 def detect_and_link_swaption_packages_df(
     df: pd.DataFrame,
     *,
@@ -369,14 +223,13 @@ def detect_and_link_swaption_packages_df(
     detect_conditional_curve: bool = True,
     detect_vega_curve: bool = True,
     # Straddle parameters
-    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=60),
+    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=0),
     straddle_strike_tolerance: float = 0.0000,
     straddle_notional_tolerance_pct: float = 0.00,
     # Risk reversal parameters
     risk_reversal_time_window_seconds: int = 60,
     risk_reversal_strike_tolerance: float = 0.0001,
     risk_reversal_notional_tolerance_pct: float = 0.05,
-    risk_reversal_middle_notional_max_ratio: float = 0.5,
     risk_reversal_require_same_expiration: bool = True,
     risk_reversal_require_same_tenor: bool = True,
     risk_reversal_require_same_forward: bool = True,
@@ -384,9 +237,9 @@ def detect_and_link_swaption_packages_df(
     # Vertical spread parameters
     vertical_spread_time_window_seconds: int = 120,
     # Conditional curve parameters
-    conditional_curve_time_window_seconds: int = 120,
+    conditional_curve_time_window_seconds: int = 300,
     # Vega curve parameters
-    vega_curve_time_window_seconds: int = 300,
+    dealer_vega_curve_time_window_seconds: int = 0,
     pricer: Optional["QLIRSwapCurve"] = None,
 ) -> pd.DataFrame:
     """
@@ -451,10 +304,10 @@ def detect_and_link_swaption_packages_df(
 
     out = df.copy()
 
-    # temp = out.copy()
-    # temp = temp.sort_values(by="execution_timestamp")
-    # temp["execution_timestamp"] = temp["execution_timestamp"].astype(str)
-    # temp.to_excel("temp_raw_trades.xlsx")
+    temp = out.copy()
+    temp = temp.sort_values(by="execution_timestamp")
+    temp["execution_timestamp"] = temp["execution_timestamp"].astype(str)
+    temp.to_excel("_temp_raw_trades.xlsx")
 
     # =========================================================================
     # Pipeline: Run detectors in priority order
@@ -469,7 +322,6 @@ def detect_and_link_swaption_packages_df(
             time_window_seconds=risk_reversal_time_window_seconds,
             strike_tolerance=risk_reversal_strike_tolerance,
             notional_tolerance_pct=risk_reversal_notional_tolerance_pct,
-            middle_notional_max_ratio=risk_reversal_middle_notional_max_ratio,
             require_same_expiration=risk_reversal_require_same_expiration,
             require_same_tenor=risk_reversal_require_same_tenor,
             require_same_forward=risk_reversal_require_same_forward,
@@ -495,7 +347,7 @@ def detect_and_link_swaption_packages_df(
 
     # Phase 2: Detect straddles
     if detect_straddles:
-        out = detect_straddles_packages(
+        out = detect_idb_straddles_packages(
             out,
             timestamp_tolerance=straddle_timestamp_tolerance,
             strike_tolerance=straddle_strike_tolerance,
@@ -516,7 +368,6 @@ def detect_and_link_swaption_packages_df(
             require_same_currency=config.require_same_currency,
             require_same_underlier=config.require_same_underlier,
             must_be_reported_as_package=True,
-            custy_leg_option_premium_amount_tolerance=0.05,
         )
 
     # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
@@ -576,7 +427,7 @@ def detect_and_link_swaption_packages_df(
     if detect_vega_curve and detect_straddles:
         out = detect_vega_curve_packages(
             out,
-            time_window_seconds=vega_curve_time_window_seconds,
+            time_window_seconds=dealer_vega_curve_time_window_seconds,
             vega_tolerance_pct=config.vega_curve_tolerance_pct,
             min_expiry_diff_years=config.vega_curve_min_expiry_diff_years,
             min_tail_diff_years=config.vega_curve_min_tail_diff_years,
@@ -650,10 +501,7 @@ __all__ = [
     "SwaptionPackageDetectionConfig",
     "DEFAULT_SWAPTION_PACKAGE_CONFIG",
     # Main detection functions
-    "detect_swaption_packages_df",
-    "detect_swaption_straddles_df",
     "detect_and_link_swaption_packages_df",
-    "link_swaption_packages",
     # Helper functions (for tests)
     "_vega_bucket",
     "_time_bucket",

@@ -3,7 +3,6 @@ import calendar
 import datetime
 import ssl
 import warnings
-
 from io import BytesIO
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -18,6 +17,7 @@ from pandas.errors import DtypeWarning
 from pandas.tseries.holiday import USFederalHolidayCalendar
 from pandas.tseries.offsets import CustomBusinessDay
 
+from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
 from Query.IRSwaps.backends.quantlib.ql_curve_building_utils import build_ql_discount_curve
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_pydate
@@ -45,7 +45,11 @@ def get_bdates_between(start_date: datetime.date, end_date: datetime.date, calen
     return sorted([ql_date_to_pydate(bd) for bd in bdates])
 
 
-class ErisFuturesFetcher(BaseFetcher):
+class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
+    """
+    Adds ZODB-backed read-through caching for raw ERIS files (CSV/XLSX).
+    """
+
     def __init__(
         self,
         global_timeout: int = 10,
@@ -54,15 +58,25 @@ class ErisFuturesFetcher(BaseFetcher):
         info_verbose: Optional[bool] = False,
         warning_verbose: Optional[bool] = False,
         error_verbose: Optional[bool] = False,
+        *,
+        cache_path: Optional[str] = None,
+        cache_attr: str = "eris_raw",
+        force_refresh: bool = False,
     ):
+        # Initialize both mixin and base via MRO
         super().__init__(
             global_timeout=global_timeout,
             proxies=proxies,
-            debug_verbose=debug_verbose,
-            info_verbose=info_verbose,
-            warning_verbose=warning_verbose,
-            error_verbose=error_verbose,
+            debug_verbose=debug_verbose or False,
+            info_verbose=info_verbose or False,
+            warning_verbose=warning_verbose or False,
+            error_verbose=error_verbose or False,
+            # ZODBCacheMixin args
+            use_btree=True,
+            force_refresh=force_refresh,
         )
+
+        # --- ERIS endpoint details
         self.eris_ftp_urls = "https://files.erisfutures.com/ftp"
         self.eris_ftp_headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -83,23 +97,86 @@ class ErisFuturesFetcher(BaseFetcher):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         }
 
+        self._cache_attr = cache_attr
+        if cache_path is None:
+            cache_path = ZODBCacheMixin.default_cache_path("ErisFuturesFetcher-raw.fs")
+
+        # mapping: key (str) -> dict(file_name, content: bytes, fetched_at, workbook_type)
+        self.zodb_open_cache(cache_attr=self._cache_attr, path=cache_path)
+
+    def _cache_key(self, date: Optional[datetime.date], workbook_type: str) -> str:
+        if hasattr(date, "date"):  # pandas.Timestamp compatibility
+            date = date.date()
+        if "Intraday" in workbook_type and date is None:
+            return f"{workbook_type}::intraday"
+        if date is None:
+            return f"{workbook_type}::none"
+        return f"{workbook_type}::{date.isoformat()}"
+
+    def _load_cached_raw(
+        self,
+        date: Optional[datetime.date],
+        workbook_type: Literal["EOD_DiscountFactors_SOFR", "EOD_ParCouponCurve_SOFR", "Eris_Intraday_DiscountFactors_SOFR"],
+        force_refresh: Optional[bool] = False,
+    ) -> Tuple[Optional[BytesIO], Optional[str]]:
+        if date is None or "intraday" in workbook_type.lower() or force_refresh:
+            return None, None
+
+        try:
+            entry = getattr(self, self._cache_attr).get(self._cache_key(date, workbook_type))
+            if not entry:
+                return None, None
+            return BytesIO(entry["content"]), entry["file_name"]
+        except Exception as e:
+            self._logger.debug(f"ZODB load miss/error for {workbook_type}-{date}: {e}")
+            return None, None
+
+    def _stage_cache_write(
+        self,
+        staged: List[Tuple[str, Dict[str, Any]]],
+        date: Optional[datetime.date],
+        workbook_type: str,
+        file_name: str,
+        content_bytes: bytes,
+    ) -> None:
+        key = self._cache_key(date, workbook_type)
+        staged.append(
+            (
+                key,
+                {
+                    "file_name": file_name,
+                    "content": content_bytes,
+                    "fetched_at": datetime.datetime.utcnow().isoformat(timespec="seconds"),
+                    "workbook_type": workbook_type,
+                },
+            )
+        )
+
+    def _commit_staged(self, staged: List[Tuple[str, Dict[str, Any]]]) -> None:
+        if not staged:
+            return
+        mapping = getattr(self, self._cache_attr)
+        with self.batched():
+            for key, payload in staged:
+                mapping[key] = payload
+
     async def _fetch_eris_ftp_files_helper(
         self,
         client: httpx.AsyncClient,
         date: datetime.date,
-        workbook_type: Literal["EOD_ParCouponCurve_SOFR", "Eris_Intraday_DiscountFactors_SOFR"],
+        workbook_type: Literal["EOD_DiscountFactors_SOFR", "EOD_ParCouponCurve_SOFR", "Eris_Intraday_DiscountFactors_SOFR"],
         max_retries: Optional[int] = 3,
         backoff_factor: Optional[int] = 1,
     ):
         def diff_month(d1, d2):
             return (d1.year - d2.year) * 12 + d1.month - d2.month
 
-        if "Intraday" in workbook_type:
+        if "Intraday" in workbook_type or date == datetime.date.today():
             eris_ftp_formatted_url = "https://files.erisfutures.com/ftp/Eris_Intraday_DiscountFactors_SOFR.csv"
             file_name = "Eris_Intraday_DiscountFactors_SOFR.csv"
         else:
             archives_path = f"archives/{date.year}/{date.month:02}-{calendar.month_name[date.month]}"
-            file_name = f"Eris_{date.strftime("%Y%m%d")}_{workbook_type}.csv"
+            file_name = f"Eris_{date.strftime('%Y%m%d')}_{workbook_type}.csv"
             if diff_month(datetime.date.today(), date) < 3:
                 eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{file_name}"
             else:
@@ -122,14 +199,12 @@ class ErisFuturesFetcher(BaseFetcher):
                         async for chunk in response.aiter_bytes():
                             buffer.write(chunk)
                         buffer.seek(0)
-
                     return buffer, file_name
 
-                except httpx.HTTPStatusError as e:
+                except httpx.HTTPStatusError:
                     self._logger.error(f"ERIS FTP - Bad Status for {workbook_type}-{date}: {response.status_code}")
                     if response.status_code == 404:
                         return None, None
-
                     retries += 1
                     wait_time = backoff_factor * (2 ** (retries - 1))
                     self._logger.debug(f"ERIS FTP - Throttled. Waiting for {wait_time} seconds before retrying...")
@@ -161,9 +236,9 @@ class ErisFuturesFetcher(BaseFetcher):
                 return None
 
             try:
-                datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d")
-                key = datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d")
-            except:
+                datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d").date()
+                key = datetime.datetime.strptime(file_name.split("_")[1], "%Y%m%d").date()
+            except Exception:
                 key = file_name
 
             return key, df
@@ -172,19 +247,33 @@ class ErisFuturesFetcher(BaseFetcher):
         self,
         semaphore: asyncio.Semaphore,
         client: httpx.AsyncClient,
-        date: datetime.date,
         workbook_type: Literal["EOD_ParCouponCurve_SOFR", "Eris_Intraday_DiscountFactors_SOFR", "EOD_DiscountFactors_SOFR"],
+        date: Optional[datetime.date] = None,
         task_id: Optional[Any] = None,
+        force_refresh: Optional[bool] = None,
     ):
         async with semaphore:
+            if not force_refresh:
+                cached_buf, cached_name = self._load_cached_raw(date, workbook_type)
+                if cached_buf and cached_name:
+                    key, df = await asyncio.to_thread(self._read_file, cached_buf, cached_name)
+                    if task_id:
+                        return key, df, None, task_id
+                    return key, df, None
+
             buffer, file_name = await self._fetch_eris_ftp_files_helper(client=client, date=date, workbook_type=workbook_type)
             if not buffer or not file_name:
-                return None, None
+                if task_id:
+                    return None, None, None, task_id
+                return None, None, None
 
-        key, df = await asyncio.to_thread(self._read_file, buffer, file_name)
+        raw_bytes = buffer.getvalue()
+        key, df = await asyncio.to_thread(self._read_file, BytesIO(raw_bytes), file_name)
+        staged = (date, workbook_type, file_name, raw_bytes)
+
         if task_id:
-            return key, df, task_id
-        return key, df
+            return key, df, staged, task_id
+        return key, df, staged
 
     def fetch_eris_ftp_timeseries(
         self,
@@ -195,47 +284,59 @@ class ErisFuturesFetcher(BaseFetcher):
         max_keepalive_connections: Optional[int] = 5,
         verbose: Optional[bool] = False,
     ) -> Dict[datetime.date, pd.DataFrame]:
+        bdates_idx = pd.date_range(start=start_date, end=end_date, freq=CustomBusinessDay(calendar=USFederalHolidayCalendar()))
+        dates: List[datetime.date] = [d.date() for d in bdates_idx]
 
-        bdates = pd.date_range(start=start_date, end=end_date, freq=CustomBusinessDay(calendar=USFederalHolidayCalendar()))
-
-        async def build_tasks(
-            client: httpx.AsyncClient,
-            dates: List[datetime.date],
-        ):
+        async def build_tasks(client: httpx.AsyncClient):
             tasks = []
             semaphore = asyncio.Semaphore(max_concurrent_tasks)
-            for date in dates:
-                task = asyncio.create_task(self._fetch_and_read_eris_ftp_file(semaphore=semaphore, client=client, date=date, workbook_type=workbook_type))
+            for d in dates:
+                task = asyncio.create_task(
+                    self._fetch_and_read_eris_ftp_file(
+                        semaphore=semaphore,
+                        client=client,
+                        date=d,
+                        workbook_type=workbook_type,
+                        force_refresh=self._force_refresh,
+                    )
+                )
                 tasks.append(task)
 
             return await tqdm.asyncio.tqdm.gather(*tasks, desc="FETCHING ERIS FTP Files...")
 
-        async def run_fetch_all(
-            dates: List[datetime.date],
-        ):
+        async def run_fetch_all():
             limits = httpx.Limits(
                 max_connections=max_concurrent_tasks,
                 max_keepalive_connections=max_keepalive_connections,
             )
             async with httpx.AsyncClient(limits=limits, verify=False, http2=True) as client:
-                all_data = await build_tasks(
-                    client=client,
-                    dates=dates,
-                )
+                all_data = await build_tasks(client)
                 return all_data
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DtypeWarning)
-            results: List[Tuple[str, pd.DataFrame]] = asyncio.run(
-                run_fetch_all(
-                    dates=bdates,
-                )
-            )
-            if results is None or len(results) == 0:
+            results = asyncio.run(run_fetch_all())
+            if not results:
                 print('"fetch_eris_ftp_timeseries" --- empty results') if verbose else None
                 return {}
 
-            return dict(results)
+            # Stage cache writes then commit once
+            staged: List[Tuple[str, Dict[str, Any]]] = []
+            out_pairs: List[Tuple[Union[str, datetime.date], pd.DataFrame]] = []
+            for item in results:
+                if item is None:
+                    continue
+                # item = (key, df, staged_or_none)
+                key, df, staged_payload = item
+                if key is None or df is None:
+                    continue
+                out_pairs.append((key, df))
+                if staged_payload:
+                    d, wbt, fname, raw = staged_payload
+                    self._stage_cache_write(staged, d, wbt, fname, raw)
+
+            self._commit_staged(staged)
+            return dict(out_pairs)
 
     def fetch_historical_eod_discount_curves(
         self,
@@ -313,11 +414,27 @@ class ErisFuturesFetcher(BaseFetcher):
             if results is None or len(results) == 0:
                 return {}
 
-            dict_df: Dict[datetime.date, pd.DataFrame] = dict(results)
+            staged: List[Tuple[str, Dict[str, Any]]] = []
             dict_ql_discount_curves: Dict[datetime.date, ql.DiscountCurve] = {}
-            for dt, discount_curve_df in dict_df.items():
-                if dt is None or discount_curve_df is None:
+
+            for item in results:
+                if not item:
                     continue
+                key, discount_curve_df, staged_payload = item  # key is expected to be a datetime.date for EOD files
+                if key is None or discount_curve_df is None:
+                    continue
+                tday: Optional[datetime.date] = key
+                if tday is None:
+                    continue  # skip malformed
+
+                if isinstance(key, datetime.date):
+                    intraday_ts = pytz.timezone("America/New_York").localize(datetime.datetime(tday.year, tday.month, tday.day, 15, 0))
+                else:
+                    intraday_ts = datetime.datetime.fromisoformat(
+                        str(parser.parse(discount_curve_df["Time"].iloc[0], tzinfos={"EDT": tz.gettz("US/Eastern"), "EST": tz.gettz("US/Eastern")}))
+                    ).astimezone(pytz.timezone("America/New_York"))
+                    tday = intraday_ts.date()
+
                 discount_curve_df["Date"] = pd.to_datetime(discount_curve_df["Date"], errors="coerce")
                 discount_curve_df["DiscountFactor"] = pd.to_numeric(discount_curve_df["DiscountFactor"], errors="coerce")
                 ql_curve = build_ql_discount_curve(
@@ -329,7 +446,14 @@ class ErisFuturesFetcher(BaseFetcher):
                 )
                 if enable_extrapolation:
                     ql_curve.enableExtrapolation()
-                dict_ql_discount_curves[dt] = ql_curve
+
+                dict_ql_discount_curves[tday] = ql_curve
+
+                if staged_payload:
+                    d, wbt, fname, raw = staged_payload
+                    self._stage_cache_write(staged, d, wbt, fname, raw)
+
+                self._commit_staged(staged)
 
             if append_intraday:
                 dict_ql_discount_curves[datetime_today_utc()] = self.fetch_intraday_discount_curve(

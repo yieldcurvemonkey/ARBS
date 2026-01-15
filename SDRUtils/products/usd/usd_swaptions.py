@@ -131,6 +131,7 @@ class USD_Swaptions(USDProductBase):
         detect_swaption_packages: bool = True,
         swaption_package_config: Optional[SwaptionPackageDetectionConfig] = None,
         merge_package_legs: bool = True,
+        only_newt: Optional[bool] = False,
         **kwargs: Any,
     ) -> pd.DataFrame:
         """
@@ -164,6 +165,9 @@ class USD_Swaptions(USDProductBase):
         if raw_sdr_trades_df.empty:
             return raw_sdr_trades_df
 
+        if only_newt:
+            raw_sdr_trades_df = raw_sdr_trades_df[(raw_sdr_trades_df["Action type"] == "NEWT") & (raw_sdr_trades_df["Event type"] == "TRAD")]
+
         curve_source = str(kwargs.get("curve_source", "ERIS_EOD_LIVE-QL_BASIC")).replace("/", "_")
         mdp = IRSwapsMDP(source=curve_source)
 
@@ -195,7 +199,7 @@ class USD_Swaptions(USDProductBase):
                 else:
                     cache_candidates = []
                     for fp in date_dir.glob("*.parquet"):
-                        # pick the latest created file 
+                        # pick the latest created file
                         cache_candidates.append((fp.stat().st_mtime, fp))
 
                     if cache_candidates:
@@ -302,7 +306,6 @@ class USD_Swaptions(USDProductBase):
         end_ts = _to_utc(end)
         final_df = final_df[(final_df["execution_timestamp"] >= start_ts) & (final_df["execution_timestamp"] <= end_ts)]
         final_df = final_df.sort_values(by="execution_timestamp")
-        print(final_df)
         if merge_package_legs:
             final_df = merge_package_legs_to_one_row(final_df)
             final_df = merge_vega_curve_packages(final_df)

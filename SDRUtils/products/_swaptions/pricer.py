@@ -13,6 +13,7 @@ from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 
 @dataclass
 class USDSwaptionStraddlePricerResult:
+    trade_label: str
     ql_payer_swaption: ql.Swaption
     ql_receiver_swaption: ql.Swaption
     notional: float
@@ -26,8 +27,11 @@ class USDSwaptionStraddlePricerResult:
 
 @dataclass
 class USDSwaptionLegPricerResult:
+    trade_label: str
     ql_swaption: ql.Swaption
-    iv_bpvol_yr: float
+    fwd_prem: float
+    notional: float
+    bpvol_yr: float
     dv01: float
     vega01: float
     gamma01: float
@@ -38,8 +42,8 @@ def usd_swaption_leg_pricer_from_row(
     final_classification_row: pd.Series,
     pricer: QLIRSwapCurve,
     *,
-    leg: Literal["payer", "receiver"],
-    fwd_prem: float,
+    leg: Literal["payer", "receiver"] = None,
+    fwd_prem: float = None,
     dStrike: float = 1.0,  # 1bp strike bump
 ) -> USDSwaptionLegPricerResult:
     """
@@ -58,6 +62,11 @@ def usd_swaption_leg_pricer_from_row(
       theta1d computed by rolling evaluationDate +1 and repricing
     """
     ql.Settings.instance().evaluationDate = pricer.handle().referenceDate()
+
+    if leg is None:
+        leg = "receiver" if "rec" in str(final_classification_row["trade_label"]).lower() else "payer"
+    if fwd_prem is None:
+        fwd_prem = final_classification_row["premium"]
 
     ql_underlying_pricing_engine = ql.DiscountingSwapEngine(pricer.handle())
 
@@ -78,6 +87,7 @@ def usd_swaption_leg_pricer_from_row(
 
     # Create leg swaption and imply vol from FORWARD premium
     ql_swaption = ql.Swaption(ql_underlying, ql.EuropeanExercise(ql_underlying.startDate()))
+    print(ql_swaption.exercise().dates(), ql_underlying.maturityDate())
     initial_engine = ql.BachelierSwaptionEngine(
         pricer.handle(),
         ql.QuoteHandle(ql.SimpleQuote(0.0)),
@@ -90,7 +100,7 @@ def usd_swaption_leg_pricer_from_row(
             price=fwd_prem,
             discountCurve=pricer.handle(),
             guess=0.01,
-            accuracy=1e-3,
+            accuracy=1e-8,
             maxEvaluations=1000,
             minVol=0.0,
             maxVol=1,
@@ -149,8 +159,11 @@ def usd_swaption_leg_pricer_from_row(
     ql.Settings.instance().evaluationDate = pricer.handle().referenceDate()
 
     return USDSwaptionLegPricerResult(
+        trade_label=final_classification_row["trade_label"],
         ql_swaption=ql_swaption,
-        iv_bpvol_yr=iv_bpvol_yr,
+        bpvol_yr=iv_bpvol_yr,
+        fwd_prem=fwd_prem,
+        notional=notional,
         dv01=dv01,
         vega01=vega01,
         gamma01=gamma01,
@@ -180,7 +193,7 @@ def usd_swaption_straddle_pricer_from_row(final_classification_row: pd.Series, p
         dStrike=1.0,
     )
 
-    bpvol_yr = (payer_res.iv_bpvol_yr + receiver_res.iv_bpvol_yr) / 2.0
+    bpvol_yr = (payer_res.bpvol_yr + receiver_res.bpvol_yr) / 2.0
 
     dv01 = payer_res.dv01 + receiver_res.dv01
     gamma01 = abs(payer_res.gamma01 + receiver_res.gamma01)
@@ -191,6 +204,7 @@ def usd_swaption_straddle_pricer_from_row(final_classification_row: pd.Series, p
     theta1d = -abs(payer_res.theta1d + receiver_res.theta1d)
 
     return USDSwaptionStraddlePricerResult(
+        trade_label=final_classification_row.get("trade_label", None),
         ql_payer_swaption=payer_res.ql_swaption,
         ql_receiver_swaption=receiver_res.ql_swaption,
         notional=abs(final_classification_row["notional"]),

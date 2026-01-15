@@ -54,6 +54,7 @@ def detect_vega_curve_packages(
     time_window_seconds: int = 300,
     # Vega curve parameters
     vega_tolerance_pct: float = 0.10,
+    vega_misweight_multipliers: Optional[Set[float]] = None,
     min_expiry_diff_years: float = 0.25,
     min_tail_diff_years: float = 1.0,
     # Column names
@@ -94,6 +95,9 @@ def detect_vega_curve_packages(
         df: Classifications dataframe with swaption trades (should have straddles detected)
         time_window_seconds: Max time gap between straddles (default 300s = 5 min)
         vega_tolerance_pct: Tolerance for vega matching (default 10%)
+        vega_misweight_multipliers: Acceptable vega ratio multipliers for misweighted
+            trades (e.g., 1.25, 1.5, 1.75, 2.0). Uses vega_tolerance_pct as the
+            tolerance around each multiplier.
         min_expiry_diff_years: Minimum expiry difference for vega spreads
         min_tail_diff_years: Minimum tail difference for vega spreads
         product_col: Column name for product type
@@ -120,6 +124,8 @@ def detect_vega_curve_packages(
         - vega_curve_id: Links the two straddles
         - vega_curve_legs: List of all trade IDs across both straddles
         - vega_curve_vega01: Calculated vega01 for each straddle (if pricer provided)
+        - vega_curve_weight: Target vega ratio matched (1.0 for balanced)
+        - vega_curve_vega_ratio: Actual vega ratio between straddles
         - vega_curve_pricing_method: "QUANTLIB"
     """
     if df.empty:
@@ -136,6 +142,10 @@ def detect_vega_curve_packages(
         out["vega_curve_legs"] = None
     if "vega_curve_vega01" not in out.columns:
         out["vega_curve_vega01"] = np.nan
+    if "vega_curve_weight" not in out.columns:
+        out["vega_curve_weight"] = np.nan
+    if "vega_curve_vega_ratio" not in out.columns:
+        out["vega_curve_vega_ratio"] = np.nan
     if "vega_curve_pricing_method" not in out.columns:
         out["vega_curve_pricing_method"] = None
 
@@ -182,6 +192,9 @@ def detect_vega_curve_packages(
 
     straddle_vegas: Dict[str, float] = {}  # package_id -> vega
 
+    if vega_misweight_multipliers is None:
+        vega_misweight_multipliers = {1, 1.5, 2, 2.5, 3}
+
     for _, row in straddle_groups.iterrows():
         pid = row["package_id"]
 
@@ -205,7 +218,7 @@ def detect_vega_curve_packages(
         vega_i = straddle_vegas.get(pid_i)
         trades_i = straddle_groups.iloc[i][trade_id_col]
 
-        if vega_i is None:
+        if vega_i is None or vega_i <= 0:
             continue
 
         for j in range(i + 1, n_straddles):
@@ -237,7 +250,18 @@ def detect_vega_curve_packages(
                 continue
             avg_vega = 0.5 * (vega_i + vega_j)
             vega_diff = abs(vega_i - vega_j) / avg_vega
-            if vega_diff > vega_tolerance_pct:
+            vega_ratio = max(vega_i, vega_j) / min(vega_i, vega_j)
+            vega_weight = None
+
+            if vega_diff <= vega_tolerance_pct:
+                vega_weight = 1.0
+            else:
+                for multiplier in vega_misweight_multipliers:
+                    if abs(vega_ratio - multiplier) / multiplier <= vega_tolerance_pct:
+                        vega_weight = multiplier
+                        break
+
+            if vega_weight is None:
                 continue
 
             # Determine curve type based on expiry/tail differences
@@ -277,7 +301,9 @@ def detect_vega_curve_packages(
                 out.loc[mask, "vega_curve_type"] = curve_type
                 out.loc[mask, "vega_curve_id"] = curve_id
                 out.loc[mask, "vega_curve_legs"] = pd.Series([all_trades] * mask.sum(), index=out.index[mask])
-                out.loc[mask, "vega_curve_vega01"] = (vega_val / 2)
+                out.loc[mask, "vega_curve_vega01"] = vega_val / 2
+                out.loc[mask, "vega_curve_weight"] = vega_weight
+                out.loc[mask, "vega_curve_vega_ratio"] = vega_ratio
                 out.loc[mask, "vega_curve_pricing_method"] = "QUANTLIB"
 
             break

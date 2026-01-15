@@ -291,18 +291,22 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             erisf = ErisFuturesFetcher(**self.config)
 
-            ts, ql_curve = next(
-                iter(
-                    erisf.fetch_historical_eod_discount_curves(
-                        ql_dc=ql_curve_def["DayCounter"],
-                        ql_cal=ql_curve_def["Calendar"],
-                        bdates=[timestamp],
-                        enable_extrapolation=True,
-                        show_tqdm=False,
-                        **kwargs,
-                    ).items()
+            if timestamp == "live" or timestamp == datetime.date.today():
+                eff = ErisFuturesFetcher(**self.config)
+                ql_curve, ts = eff.fetch_intraday_discount_curve(show_tqdm=True, enable_extrapolation=True, return_intraday_timestamp=True, **kwargs)
+            else:
+                ts, ql_curve = next(
+                    iter(
+                        erisf.fetch_historical_eod_discount_curves(
+                            ql_dc=ql_curve_def["DayCounter"],
+                            ql_cal=ql_curve_def["Calendar"],
+                            bdates=[timestamp],
+                            enable_extrapolation=True,
+                            show_tqdm=False,
+                            **kwargs,
+                        ).items()
+                    )
                 )
-            )
 
             ql_curve_handle = ql.YieldTermStructureHandle(ql_curve)
             irswap_index: ql.SwapIndex = QUANTLIB_CURVE_DEFINITIONS[curve_name]["ReferenceRate"](ql_curve_handle)

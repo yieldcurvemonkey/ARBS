@@ -164,6 +164,7 @@ def merge_vega_curve_packages(
     fwd_label_col: str = "forward_label",
     premium_col: str = "premium",
     option_premium_amount_col: str = "option_premium_amount",
+    strike_col: str = "strike",
     notional_col: str = "notional",
     estimated_pv01_col: str = "estimated_pv01",
     vega_curve_vega01_col: str = "vega_curve_vega01",
@@ -281,6 +282,8 @@ def merge_vega_curve_packages(
             base[premium_col] = _join_labels(g[premium_col])
         if option_premium_amount_col in g.columns:
             base[option_premium_amount_col] = _join_labels(g[option_premium_amount_col])
+        if strike_col in g.columns:
+            base[strike_col] = _join_labels(g[strike_col])
         if notional_col in g.columns:
             base[notional_col] = _join_labels(g[notional_col])
         if estimated_pv01_col in g.columns:

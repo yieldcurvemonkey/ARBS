@@ -14,8 +14,7 @@ import QuantLib as ql
 
 from SDRUtils.core.dates import calculate_tenor_components, to_ql_date, to_naive_timestamp
 
-
-def get_imm_label(effective_date: pd.Timestamp, tolerance_days: int = 3) -> Optional[str]:
+def get_imm_label(effective_date: pd.Timestamp, tolerance_days: int = 2) -> Optional[str]:
     """
     Get IMM label (e.g., 'IMM_Z2025') with tolerance for unadjusted dates.
 

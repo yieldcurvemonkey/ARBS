@@ -21,7 +21,7 @@ from SDRUtils.packages.swaption.utils import (
 )
 
 
-def detect_straddles_packages(
+def detect_idb_straddles_packages(
     df: pd.DataFrame,
     *,
     # Time window parameters
@@ -46,10 +46,9 @@ def detect_straddles_packages(
     # Economic filters
     require_same_platform: bool = True,
     require_same_currency: bool = True,
-    require_same_underlier: bool = False,
+    require_same_underlier: bool = True,
     # Additional options
-    must_be_reported_as_package: bool = False,
-    custy_leg_option_premium_amount_tolerance: Optional[float] = None,
+    must_be_reported_as_package: bool = True,
 ) -> pd.DataFrame:
     """
     Detect swaption straddles (payer + receiver with same strike/expiry/tenor).
@@ -61,11 +60,6 @@ def detect_straddles_packages(
     - Same underlying tenor
     - Same notional (within tolerance)
     - Execution timestamps within the specified tolerance
-
-    For customer trades (platform_identifier=BILT), straddles may be reported as
-    separate legs without the package_indicator flag. When custy_leg_option_premium_amount_tolerance
-    is provided, an additional matching rule is applied for customer trades that
-    matches based on option_premium_amount being the same within the tolerance.
 
     Args:
         df: Classifications dataframe with swaption trades
@@ -90,8 +84,6 @@ def detect_straddles_packages(
         require_same_currency: Require same currency for matching
         require_same_underlier: Require same underlier for matching
         must_be_reported_as_package: If True, only match trades with package_indicator=True
-        custy_leg_option_premium_amount_tolerance: Percentage tolerance for matching
-            customer (BILT) trades based on option_premium_amount.
 
     Returns:
         DataFrame with straddle annotations:
@@ -111,7 +103,8 @@ def detect_straddles_packages(
 
     is_swaption = out[product_col].astype(str).str.contains("SWAPTION", case=False, na=False)
     not_packaged = out["package_id"].isna() | (out["package_id"] == "")
-    candidate_mask = is_swaption & not_packaged
+    is_custy = out["platform_identifier"].isin(["XXXX", "XSEF", "XOFF", "BILT"])
+    candidate_mask = is_swaption & not_packaged & ~is_custy
 
     is_payer = out[product_col].astype(str).str.contains("PAYER|CALL", case=False, na=False)
     is_receiver = out[product_col].astype(str).str.contains("RECEIVER|PUT", case=False, na=False)
@@ -274,36 +267,10 @@ def detect_straddles_packages(
                 out.loc[idx_mask, "package_reason"] = reason
                 out.loc[idx_mask, "package_legs_count"] = 2
 
-    # =========================================================================
-    # Customer (BILT) straddle detection based on option_premium_amount matching
-    # =========================================================================
-    if custy_leg_option_premium_amount_tolerance is not None:
-        out = _detect_customer_straddles(
-            out,
-            tolerance_seconds=tolerance_seconds,
-            strike_tolerance=strike_tolerance,
-            notional_tolerance_pct=notional_tolerance_pct,
-            custy_leg_option_premium_amount_tolerance=custy_leg_option_premium_amount_tolerance,
-            product_col=product_col,
-            package_col=package_col,
-            exec_col=exec_col,
-            platform_col=platform_col,
-            currency_col=currency_col,
-            underlier_col=underlier_col,
-            trade_id_col=trade_id_col,
-            strike_col=strike_col,
-            expiration_col=expiration_col,
-            tenor_col=tenor_col,
-            notional_col=notional_col,
-            option_premium_amount_col=option_premium_amount_col,
-            require_same_platform=require_same_platform,
-            require_same_currency=require_same_currency,
-            require_same_underlier=require_same_underlier,
-        )
-
     return out
 
-
+# work in progress
+# notes here: 
 def _detect_customer_straddles(
     out: pd.DataFrame,
     *,
