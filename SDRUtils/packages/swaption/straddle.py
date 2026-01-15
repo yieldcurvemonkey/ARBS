@@ -21,11 +21,11 @@ from SDRUtils.packages.swaption.utils import (
 )
 
 
-def detect_dealer_straddles_packages(
+def detect_straddles_packages(
     df: pd.DataFrame,
     *,
     # Time window parameters
-    timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=60),
+    timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=0),
     # Matching tolerances
     strike_tolerance: float = 0.0000,
     notional_tolerance_pct: float = 0.00,
@@ -49,6 +49,8 @@ def detect_dealer_straddles_packages(
     require_same_underlier: bool = True,
     # Additional options
     must_be_reported_as_package: bool = True,
+    platforms_filter: list = None,
+    add_leg_premiums: bool = False,
 ) -> pd.DataFrame:
     """
     Detect swaption straddles (payer + receiver with same strike/expiry/tenor).
@@ -102,9 +104,14 @@ def detect_dealer_straddles_packages(
     tolerance_seconds = timestamp_tolerance.total_seconds()
 
     is_swaption = out[product_col].astype(str).str.contains("SWAPTION", case=False, na=False)
+    is_straddle = out[package_col].astype(str).str.contains("STRADDLE", case=False, na=False)
     not_packaged = out["package_id"].isna() | (out["package_id"] == "")
-    is_custy = out["platform_identifier"].isin(["XXXX", "XSEF", "XOFF", "BILT"])
-    candidate_mask = is_swaption & not_packaged & ~is_custy
+
+    if platforms_filter is not None:
+        is_platform = out["platform_identifier"].isin(platforms_filter)
+        candidate_mask = is_swaption & ~is_straddle & not_packaged & ~is_platform
+    else:
+        candidate_mask = is_swaption & ~is_straddle & not_packaged
 
     is_payer = out[product_col].astype(str).str.contains("PAYER|CALL", case=False, na=False)
     is_receiver = out[product_col].astype(str).str.contains("RECEIVER|PUT", case=False, na=False)
@@ -147,6 +154,7 @@ def detect_dealer_straddles_packages(
         p_currency = p_row.get(currency_col, "")
         p_underlier = p_row.get(underlier_col, "")
         p_trade_id = str(p_row.get(trade_id_col, ""))
+        p_prem = p_row.get(option_premium_amount_col, 0)
 
         # Skip if missing critical fields
         if pd.isna(p_strike) or pd.isna(p_tenor) or pd.isna(p_notional):
@@ -174,6 +182,7 @@ def detect_dealer_straddles_packages(
             r_platform = r_row.get(platform_col, "")
             r_currency = r_row.get(currency_col, "")
             r_underlier = r_row.get(underlier_col, "")
+            r_prem = r_row.get(option_premium_amount_col, 0)
 
             # Skip if missing critical fields
             if pd.isna(r_strike) or pd.isna(r_tenor) or pd.isna(r_notional):
@@ -267,237 +276,8 @@ def detect_dealer_straddles_packages(
                 out.loc[idx_mask, "package_reason"] = reason
                 out.loc[idx_mask, "package_legs_count"] = 2
 
-    return out
-
-# work in progress
-# notes here: 
-def detect_customer_straddles(
-    out: pd.DataFrame,
-    *,
-    tolerance_seconds: float,
-    strike_tolerance: float,
-    notional_tolerance_pct: float,
-    custy_leg_option_premium_amount_tolerance: float,
-    product_col: str,
-    package_col: str,
-    exec_col: str,
-    platform_col: str,
-    currency_col: str,
-    underlier_col: str,
-    trade_id_col: str,
-    strike_col: str,
-    expiration_col: str,
-    tenor_col: str,
-    notional_col: str,
-    option_premium_amount_col: str,
-    require_same_platform: bool,
-    require_same_currency: bool,
-    require_same_underlier: bool,
-) -> pd.DataFrame:
-    """
-    Detect customer straddles based on option_premium_amount matching.
-
-    For customer trades reported via BILT, straddles are reported as separate
-    legs so must_be_reported_as_package=True may miss them. This additional
-    rule matches based on option_premium_amount being the same within tolerance.
-    """
-    # Re-filter for unmatched swaptions on BILT platform only
-    is_swaption_custy = out[product_col].astype(str).str.contains("SWAPTION", case=False, na=False)
-    not_packaged_custy = out["package_id"].isna() | (out["package_id"] == "")
-    is_bilt = out[platform_col] == "BILT"
-    custy_candidate_mask = is_swaption_custy & not_packaged_custy & is_bilt
-
-    is_payer_custy = out[product_col].astype(str).str.contains("PAYER|CALL", case=False, na=False)
-    is_receiver_custy = out[product_col].astype(str).str.contains("RECEIVER|PUT", case=False, na=False)
-
-    # For customer trades, ignore must_be_reported_as_package filter
-    custy_payer_mask = custy_candidate_mask & is_payer_custy
-    custy_receiver_mask = custy_candidate_mask & is_receiver_custy
-
-    custy_payers = out.loc[custy_payer_mask].copy()
-    custy_receivers = out.loc[custy_receiver_mask].copy()
-
-    if custy_payers.empty or custy_receivers.empty:
-        return out
-
-    # Parse option_premium_amount for matching
-    if option_premium_amount_col in custy_payers.columns:
-        custy_payers["_opt_prem"] = custy_payers[option_premium_amount_col].apply(safe_float)
-    else:
-        custy_payers["_opt_prem"] = np.nan
-
-    if option_premium_amount_col in custy_receivers.columns:
-        custy_receivers["_opt_prem"] = custy_receivers[option_premium_amount_col].apply(safe_float)
-    else:
-        custy_receivers["_opt_prem"] = np.nan
-
-    custy_payers["_t"] = _ensure_int64_epoch_seconds(custy_payers[exec_col])
-    custy_receivers["_t"] = _ensure_int64_epoch_seconds(custy_receivers[exec_col])
-
-    custy_payer_idx = custy_payers.index.tolist()
-    custy_receiver_idx = custy_receivers.index.tolist()
-
-    custy_matched_payers: Set[int] = set()
-    custy_matched_receivers: Set[int] = set()
-
-    for cp_idx in custy_payer_idx:
-        if cp_idx in custy_matched_payers:
-            continue
-
-        cp_row = custy_payers.loc[cp_idx]
-        cp_t = cp_row["_t"]
-        cp_strike = safe_float(cp_row.get(strike_col))
-        cp_expiry = cp_row.get(expiration_col)
-        cp_tenor = safe_float(cp_row.get(tenor_col))
-        cp_notional = safe_float(cp_row.get(notional_col))
-        cp_platform = cp_row.get(platform_col, "")
-        cp_currency = cp_row.get(currency_col, "")
-        cp_underlier = cp_row.get(underlier_col, "")
-        cp_trade_id = str(cp_row.get(trade_id_col, ""))
-        cp_opt_prem = cp_row["_opt_prem"]
-
-        # Skip if missing critical fields
-        if pd.isna(cp_strike) or pd.isna(cp_tenor) or pd.isna(cp_notional):
-            continue
-
-        # For customer matching, require valid option_premium_amount
-        if pd.isna(cp_opt_prem):
-            continue
-
-        best_custy_match = None
-        best_custy_time_diff = float("inf")
-
-        for cr_idx in custy_receiver_idx:
-            if cr_idx in custy_matched_receivers:
-                continue
-
-            cr_row = custy_receivers.loc[cr_idx]
-            cr_t = cr_row["_t"]
-
-            # Check timestamp tolerance
-            time_diff = abs(cp_t - cr_t)
-            if time_diff > tolerance_seconds:
-                continue
-
-            cr_strike = safe_float(cr_row.get(strike_col))
-            cr_expiry = cr_row.get(expiration_col)
-            cr_tenor = safe_float(cr_row.get(tenor_col))
-            cr_notional = safe_float(cr_row.get(notional_col))
-            cr_platform = cr_row.get(platform_col, "")
-            cr_currency = cr_row.get(currency_col, "")
-            cr_underlier = cr_row.get(underlier_col, "")
-            cr_opt_prem = cr_row["_opt_prem"]
-
-            # Skip if missing critical fields
-            if pd.isna(cr_strike) or pd.isna(cr_tenor) or pd.isna(cr_notional):
-                continue
-
-            # For customer matching, require valid option_premium_amount
-            if pd.isna(cr_opt_prem):
-                continue
-
-            # Check strike match
-            if abs(cp_strike - cr_strike) > strike_tolerance:
-                continue
-
-            # Check expiry match (if both are valid)
-            if pd.notna(cp_expiry) and pd.notna(cr_expiry):
-                cp_exp_date = pd.to_datetime(cp_expiry)
-                cr_exp_date = pd.to_datetime(cr_expiry)
-                if cp_exp_date != cr_exp_date:
-                    continue
-
-            # Check tenor match
-            if abs(cp_tenor - cr_tenor) > 0.01:  # 0.01 year tolerance
-                continue
-
-            # Check notional match
-            avg_notional = 0.5 * (cp_notional + cr_notional)
-            if avg_notional > 0:
-                notional_diff = abs(cp_notional - cr_notional) / avg_notional
-                if notional_diff > notional_tolerance_pct:
-                    continue
-
-            # Check economic filters
-            if require_same_platform and cp_platform != cr_platform:
-                continue
-            if require_same_currency and cp_currency != cr_currency:
-                continue
-            if require_same_underlier and cp_underlier != cr_underlier:
-                continue
-
-            # CUSTOMER-SPECIFIC: Check option_premium_amount match within tolerance
-            avg_opt_prem = 0.5 * (cp_opt_prem + cr_opt_prem)
-            if avg_opt_prem > 0:
-                opt_prem_diff = abs(cp_opt_prem - cr_opt_prem) / avg_opt_prem
-                if opt_prem_diff > custy_leg_option_premium_amount_tolerance:
-                    continue
-
-            # This is a valid customer straddle match
-            if time_diff < best_custy_time_diff:
-                best_custy_time_diff = time_diff
-                best_custy_match = cr_idx
-
-        # If we found a customer straddle match, create the straddle
-        if best_custy_match is not None:
-            cr_idx = best_custy_match
-            cr_row = custy_receivers.loc[cr_idx]
-            cr_trade_id = str(cr_row.get(trade_id_col, ""))
-            cr_opt_prem = cr_row["_opt_prem"]
-
-            custy_matched_payers.add(cp_idx)
-            custy_matched_receivers.add(cr_idx)
-
-            # Generate package ID
-            custy_pid = compute_package_id(
-                [cp_trade_id, cr_trade_id],
-                cp_platform,
-                int(cp_t // 30),  # Time bucket
-                "STRADDLE",
-            )
-
-            # Compute confidence (slightly lower for customer matching)
-            custy_confidence = 0.75  # Base confidence for customer straddles
-            if best_custy_time_diff < 5:  # Within 5 seconds
-                custy_confidence += 0.1
-            if abs(safe_float(cp_row.get(strike_col)) - safe_float(cr_row.get(strike_col))) < 0.00001:
-                custy_confidence += 0.1
-            # Bonus for exact premium match
-            if abs(cp_opt_prem - cr_opt_prem) < 0.01:
-                custy_confidence += 0.05
-            custy_confidence = min(custy_confidence, 1.0)
-
-            # Build reason with customer-specific info
-            custy_reason = build_package_reason(
-                platform=cp_platform,
-                time_delta_max_seconds=best_custy_time_diff,
-                vega_cluster_spread_pct=None,
-                premium_mode="STRADDLE",
-                num_legs=2,
-                identical_timestamps=(best_custy_time_diff < 1),
-                extra_info=f"strike={cp_strike:.4f}; tenor={cp_tenor:.1f}Y; custy_prem_match",
-            )
-
-            custy_legs_list = [cp_trade_id, cr_trade_id]
-
-            # Sum option_premium_amount for the straddle
-            summed_opt_prem = cp_opt_prem + cr_opt_prem
-
-            # Update both legs
-            for cidx in [cp_idx, cr_idx]:
-                cidx_mask = out.index == cidx
-                out.loc[cidx_mask, package_col] = "STRADDLE"
-                out.loc[cidx_mask, "premium"] = summed_opt_prem
-                out.loc[cidx_mask, "package_id"] = custy_pid
-                cleg_count = int(cidx_mask.sum())
-                out.loc[cidx_mask, "package_legs"] = pd.Series(
-                    [custy_legs_list] * cleg_count,
-                    index=out.index[cidx_mask],
-                )
-                out.loc[cidx_mask, "package_confidence"] = custy_confidence
-                out.loc[cidx_mask, "package_reason"] = custy_reason
-                out.loc[cidx_mask, "package_legs_count"] = 2
-                # Set the summed option_premium_amount for both legs
-                out.loc[cidx_mask, option_premium_amount_col] = f"{summed_opt_prem:,.5f}".rstrip("0").rstrip(".").rstrip(",")
+                if add_leg_premiums:
+                    out.loc[idx_mask, option_premium_amount_col] = str(safe_float(p_prem) + safe_float(r_prem))
+                    out.loc[idx_mask, "premium"] = safe_float(p_prem) + safe_float(r_prem)
 
     return out

@@ -39,7 +39,7 @@ import pandas as pd
 from SDRUtils.packages.base import PackageDetector
 
 # Import detection functions from submodules
-from SDRUtils.packages.swaption.straddle import detect_dealer_straddles_packages
+from SDRUtils.packages.swaption.straddle import detect_straddles_packages
 from SDRUtils.packages.swaption.risk_reversal import detect_risk_reversals_packages
 from SDRUtils.packages.swaption.spreads import detect_vertical_spreads_packages
 from SDRUtils.packages.swaption.conditional_curve import detect_conditional_curve_packages
@@ -223,9 +223,7 @@ def detect_and_link_swaption_packages_df(
     detect_conditional_curve: bool = True,
     detect_vega_curve: bool = True,
     # Straddle parameters
-    dealer_straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=0),
-    dealer_straddle_strike_tolerance: float = 0.0000,
-    dealer_straddle_notional_tolerance_pct: float = 0.00,
+    custy_straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=60),
     # Risk reversal parameters
     risk_reversal_time_window_seconds: int = 60,
     risk_reversal_strike_tolerance: float = 0.0001,
@@ -347,11 +345,12 @@ def detect_and_link_swaption_packages_df(
 
     # Phase 2: Detect straddles
     if detect_straddles:
-        out = detect_dealer_straddles_packages(
+        # dealers + custy package reported straddles
+        out = detect_straddles_packages(
             out,
-            timestamp_tolerance=dealer_straddle_timestamp_tolerance,
-            strike_tolerance=dealer_straddle_strike_tolerance,
-            notional_tolerance_pct=dealer_straddle_notional_tolerance_pct,
+            timestamp_tolerance=datetime.timedelta(seconds=0),
+            strike_tolerance=0,
+            notional_tolerance_pct=0,
             product_col=product_col,
             package_col=package_col,
             exec_col=config.exec_col,
@@ -368,6 +367,32 @@ def detect_and_link_swaption_packages_df(
             require_same_currency=config.require_same_currency,
             require_same_underlier=config.require_same_underlier,
             must_be_reported_as_package=True,
+        )
+
+        # custy straddle legs reported seperately
+        out = detect_straddles_packages(
+            out,
+            timestamp_tolerance=custy_straddle_timestamp_tolerance,
+            strike_tolerance=0,
+            notional_tolerance_pct=0,
+            product_col=product_col,
+            package_col=package_col,
+            exec_col=config.exec_col,
+            platform_col=config.platform_col,
+            currency_col=config.currency_col,
+            underlier_col=config.underlier_col,
+            trade_id_col=config.trade_id_col,
+            strike_col=config.strike_col,
+            expiration_col=config.expiration_col,
+            tenor_col=config.tenor_col,
+            notional_col=config.notional_col,
+            package_indicator_col=config.package_indicator_col,
+            require_same_platform=config.require_same_platform,
+            require_same_currency=config.require_same_currency,
+            require_same_underlier=config.require_same_underlier,
+            must_be_reported_as_package=False,
+            add_leg_premiums=True,
+            platforms_filter=["XXXX", "XSEF", "XOFF", "BILT"],
         )
 
     # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
