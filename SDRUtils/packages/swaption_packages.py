@@ -34,6 +34,7 @@ from __future__ import annotations
 import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from SDRUtils.packages.base import PackageDetector
@@ -56,6 +57,10 @@ from SDRUtils.packages.swaption.utils import (
     build_package_reason as _build_package_reason,
     estimate_swaption_vega as _estimate_swaption_vega,
     extract_effective_premium,
+)
+from SDRUtils.products._swaptions.pricer import (
+    USDSwaptionStraddlePricerResult,
+    usd_swaption_straddle_pricer_from_row,
 )
 
 if TYPE_CHECKING:
@@ -470,6 +475,53 @@ def detect_and_link_swaption_packages_df(
             require_same_currency=config.require_same_currency,
             pricer=pricer,
         )
+
+    straddle_pricing_cols: List[str] = [
+        "straddle_bpvol_yr",
+        "straddle_fwd_premium",
+        "straddle_dv01",
+        "straddle_vega01",
+        "straddle_gamma01",
+        "straddle_theta1d",
+    ]
+    for col in straddle_pricing_cols:
+        if col not in out.columns:
+            out[col] = np.nan
+
+    straddle_mask: pd.Series = out[package_col] == "STRADDLE"
+    if straddle_mask.any() and pricer is not None:
+        def _price_straddle(row: pd.Series) -> Optional[USDSwaptionStraddlePricerResult]:
+            try:
+                return usd_swaption_straddle_pricer_from_row(row, pricer)
+            except Exception:
+                return None
+
+        def _build_pricing_row(row: pd.Series) -> pd.Series:
+            result = _price_straddle(row)
+            if result is None:
+                return pd.Series(
+                    {
+                        "straddle_bpvol_yr": np.nan,
+                        "straddle_fwd_premium": np.nan,
+                        "straddle_dv01": np.nan,
+                        "straddle_vega01": np.nan,
+                        "straddle_gamma01": np.nan,
+                        "straddle_theta1d": np.nan,
+                    }
+                )
+            return pd.Series(
+                {
+                    "straddle_bpvol_yr": result.bpvol_yr,
+                    "straddle_fwd_premium": result.fwd_prem,
+                    "straddle_dv01": result.dv01,
+                    "straddle_vega01": result.vega01,
+                    "straddle_gamma01": result.gamma01,
+                    "straddle_theta1d": result.theta1d,
+                }
+            )
+
+        pricing_results: pd.DataFrame = out.loc[straddle_mask].apply(_build_pricing_row, axis=1)
+        out.loc[straddle_mask, pricing_results.columns] = pricing_results
 
     return out
 
