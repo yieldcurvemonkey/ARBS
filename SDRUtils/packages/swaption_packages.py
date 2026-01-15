@@ -223,9 +223,9 @@ def detect_and_link_swaption_packages_df(
     detect_conditional_curve: bool = True,
     detect_vega_curve: bool = True,
     # Straddle parameters
-    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=0),
-    straddle_strike_tolerance: float = 0.0000,
-    straddle_notional_tolerance_pct: float = 0.00,
+    dealer_straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=0),
+    dealer_straddle_strike_tolerance: float = 0.0000,
+    dealer_straddle_notional_tolerance_pct: float = 0.00,
     # Risk reversal parameters
     risk_reversal_time_window_seconds: int = 60,
     risk_reversal_strike_tolerance: float = 0.0001,
@@ -349,9 +349,9 @@ def detect_and_link_swaption_packages_df(
     if detect_straddles:
         out = detect_dealer_straddles_packages(
             out,
-            timestamp_tolerance=straddle_timestamp_tolerance,
-            strike_tolerance=straddle_strike_tolerance,
-            notional_tolerance_pct=straddle_notional_tolerance_pct,
+            timestamp_tolerance=dealer_straddle_timestamp_tolerance,
+            strike_tolerance=dealer_straddle_strike_tolerance,
+            notional_tolerance_pct=dealer_straddle_notional_tolerance_pct,
             product_col=product_col,
             package_col=package_col,
             exec_col=config.exec_col,
