@@ -1,0 +1,1 @@
+# Swaption package detection utilities
