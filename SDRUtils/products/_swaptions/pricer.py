@@ -171,6 +171,10 @@ def usd_swaption_leg_pricer_from_row(
     )
 
 
+class SingleStraddleLegException(Exception):
+    pass
+
+
 def usd_swaption_straddle_pricer_from_row(final_classification_row: pd.Series, pricer: QLIRSwapCurve):
     ql.Settings.instance().evaluationDate = pricer.handle().referenceDate()
 
@@ -194,6 +198,9 @@ def usd_swaption_straddle_pricer_from_row(final_classification_row: pd.Series, p
     )
 
     bpvol_yr = (payer_res.bpvol_yr + receiver_res.bpvol_yr) / 2.0
+
+    if bpvol_yr <= 35:
+        raise SingleStraddleLegException("tooo low vol")
 
     dv01 = payer_res.dv01 + receiver_res.dv01
     gamma01 = abs(payer_res.gamma01 + receiver_res.gamma01)

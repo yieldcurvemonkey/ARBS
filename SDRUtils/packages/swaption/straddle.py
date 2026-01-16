@@ -7,7 +7,7 @@ Detects straddles: Payer + Receiver swaptions with same strike/expiry/tenor.
 from __future__ import annotations
 
 import datetime
-from typing import Optional, Set
+from typing import Optional, Set, Any
 
 import numpy as np
 import pandas as pd
@@ -36,6 +36,7 @@ def detect_straddles_packages(
     platform_col: str = "platform_identifier",
     currency_col: str = "notional_currency",
     underlier_col: str = "upi_underlier_name",
+    trade_label_col: str = "trade_label",
     trade_id_col: str = "trade_id",
     strike_col: str = "strike",
     expiration_col: str = "expiration_date",
@@ -47,6 +48,7 @@ def detect_straddles_packages(
     require_same_platform: bool = True,
     require_same_currency: bool = True,
     require_same_underlier: bool = True,
+    require_same_index: bool = True,
     # Additional options
     must_be_reported_as_package: bool = True,
     platforms_filter: list = None,
@@ -75,6 +77,7 @@ def detect_straddles_packages(
         platform_col: Column name for platform identifier
         currency_col: Column name for currency
         underlier_col: Column name for underlier
+        trade_label_col: Column name for trade label
         trade_id_col: Column name for trade ID
         strike_col: Column name for strike
         expiration_col: Column name for expiration date
@@ -85,6 +88,7 @@ def detect_straddles_packages(
         require_same_platform: Require same platform for matching
         require_same_currency: Require same currency for matching
         require_same_underlier: Require same underlier for matching
+        require_same_index: Require the same swaption index for matching
         must_be_reported_as_package: If True, only match trades with package_indicator=True
 
     Returns:
@@ -109,7 +113,7 @@ def detect_straddles_packages(
 
     if platforms_filter is not None:
         is_platform = out["platform_identifier"].isin(platforms_filter)
-        candidate_mask = is_swaption & ~is_straddle & not_packaged & ~is_platform
+        candidate_mask = is_swaption & ~is_straddle & not_packaged & is_platform
     else:
         candidate_mask = is_swaption & ~is_straddle & not_packaged
 
@@ -139,6 +143,33 @@ def detect_straddles_packages(
     matched_receivers: Set[int] = set()
 
     straddle_counter = 0
+
+    def _extract_index_name(value: Any) -> str:
+        if value is None or pd.isna(value):
+            return ""
+        text = str(value).strip()
+        if not text:
+            return ""
+        if "CONSTANT" in text:
+            text = text.split("CONSTANT", 1)[0].strip()
+        return text
+
+    def _same_index_ok(payer_row: pd.Series, receiver_row: pd.Series) -> bool:
+        if not require_same_index:
+            return True
+        if trade_label_col not in out.columns or underlier_col not in out.columns:
+            return False
+        payer_label = str(payer_row.get(trade_label_col, ""))
+        receiver_label = str(receiver_row.get(trade_label_col, ""))
+        has_libor = "LIBOR" in payer_label.upper() or "LIBOR" in receiver_label.upper()
+        has_sofr = "SOFR" in payer_label.upper() or "SOFR" in receiver_label.upper()
+        if has_libor and has_sofr:
+            return False
+        payer_index = _extract_index_name(payer_row.get(underlier_col, ""))
+        receiver_index = _extract_index_name(receiver_row.get(underlier_col, ""))
+        if not payer_index or not receiver_index:
+            return False
+        return payer_index == receiver_index
 
     for p_idx in payer_idx:
         if p_idx in matched_payers:
@@ -216,6 +247,8 @@ def detect_straddles_packages(
             if require_same_currency and p_currency != r_currency:
                 continue
             if require_same_underlier and p_underlier != r_underlier:
+                continue
+            if not _same_index_ok(p_row, r_row):
                 continue
 
             # This is a valid match - track the best one (closest in time)

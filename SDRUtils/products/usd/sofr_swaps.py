@@ -32,10 +32,13 @@ from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_y
 from SDRUtils.core.parsing import parse_notional
 from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_from_dates, tenor_to_label
 from SDRUtils.data.builder import SDRDataBuilder
-from SDRUtils.packages import detect_curve_trades_df, detect_fly_trades_df, detect_mms_trades_df, merge_package_legs_to_one_row
+from SDRUtils.packages.curve import detect_curve_trades_df
+from SDRUtils.packages.fly import detect_fly_trades_df
+from SDRUtils.packages.mms import detect_mms_trades_df
 from SDRUtils.products._swaps._cme_mac import fetch_mac_ref_data
 from SDRUtils.products._swaps.filters import sofr_swap_trades
 from SDRUtils.products.usd.base import USDProductBase
+from SDRUtils.packages.utils import merge_package_legs_to_one_row
 
 
 def classify_sofr_swap_trade(

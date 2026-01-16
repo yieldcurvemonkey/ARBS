@@ -64,6 +64,7 @@ def detect_vega_curve_packages(
     platform_col: str = "platform_identifier",
     currency_col: str = "notional_currency",
     trade_id_col: str = "trade_id",
+    trade_label_col: str = "trade_label",
     tenor_col: str = "tenor_years",
     forward_col: str = "forward_start_years",
     notional_col: str = "notional",
@@ -167,6 +168,7 @@ def detect_vega_curve_packages(
         notional_col: "sum",  # Total notional
         premium_col: "sum",  # Total premium (vega proxy fallback)
         trade_id_col: list,
+        trade_label_col: list,
     }
 
     # Also aggregate fields needed for QuantLib pricing if available

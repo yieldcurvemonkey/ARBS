@@ -34,6 +34,9 @@ from __future__ import annotations
 import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
+from tqdm import tqdm
+
+import numpy as np
 import pandas as pd
 
 from SDRUtils.packages.base import PackageDetector
@@ -56,6 +59,11 @@ from SDRUtils.packages.swaption.utils import (
     build_package_reason as _build_package_reason,
     estimate_swaption_vega as _estimate_swaption_vega,
     extract_effective_premium,
+)
+from SDRUtils.products._swaptions.pricer import (
+    USDSwaptionStraddlePricerResult,
+    SingleStraddleLegException,
+    usd_swaption_straddle_pricer_from_row,
 )
 
 if TYPE_CHECKING:
@@ -110,6 +118,7 @@ class SwaptionPackageDetectionConfig:
         currency_col: str = "notional_currency",
         underlier_col: str = "upi_underlier_name",
         trade_id_col: str = "trade_id",
+        trade_label_col: str = "trade_label",
         premium_col: str = "premium",
         package_price_col: str = "package_transaction_price",
         package_indicator_col: str = "package_indicator",
@@ -129,8 +138,8 @@ class SwaptionPackageDetectionConfig:
         conditional_curve_min_tail_diff_years: float = 5.0,
         # Vega curve
         vega_curve_tolerance_pct: float = 0.10,
-        vega_curve_min_expiry_diff_years: float = 0.25,
-        vega_curve_min_tail_diff_years: float = 1.0,
+        vega_curve_min_expiry_diff_years: float = 0.08,
+        vega_curve_min_tail_diff_years: float = 0.333,
         # IDB platforms
         idb_platforms: Optional[List[str]] = None,
         customer_platforms: Optional[List[str]] = None,
@@ -154,6 +163,7 @@ class SwaptionPackageDetectionConfig:
         self.currency_col = currency_col
         self.underlier_col = underlier_col
         self.trade_id_col = trade_id_col
+        self.trade_label_col = trade_label_col
         self.premium_col = premium_col
         self.package_price_col = package_price_col
         self.package_indicator_col = package_indicator_col
@@ -237,7 +247,7 @@ def detect_and_link_swaption_packages_df(
     # Conditional curve parameters
     conditional_curve_time_window_seconds: int = 300,
     # Vega curve parameters
-    dealer_vega_curve_time_window_seconds: int = 0,
+    vega_curve_time_window_seconds: int = 300,
     pricer: Optional["QLIRSwapCurve"] = None,
 ) -> pd.DataFrame:
     """
@@ -395,6 +405,77 @@ def detect_and_link_swaption_packages_df(
             platforms_filter=["XXXX", "XSEF", "XOFF", "BILT"],
         )
 
+        # price straddles
+        straddle_pricing_cols: List[str] = [
+            "straddle_bpvol_yr",
+            "straddle_fwd_premium",
+            "straddle_dv01",
+            "straddle_vega01",
+            "straddle_gamma01",
+            "straddle_theta1d",
+        ]
+        for col in straddle_pricing_cols:
+            if col not in out.columns:
+                out[col] = np.nan
+
+        straddle_mask: pd.Series = out[package_col] == "STRADDLE"
+        if straddle_mask.any() and pricer is not None:
+
+            def _price_straddle(row: pd.Series) -> Optional[USDSwaptionStraddlePricerResult]:
+                if "SOFR" not in str(row["trade_label"]).upper():
+                    return None
+                try:
+                    return usd_swaption_straddle_pricer_from_row(row, pricer)
+
+                # kind of stupid but works
+                except SingleStraddleLegException:
+                    row = row.copy()
+                    row["premium"] = row["premium"] * 2
+                    return usd_swaption_straddle_pricer_from_row(row, pricer)
+                except Exception:
+                    return None
+
+            def _build_pricing_row(row: pd.Series) -> pd.Series:
+                result = _price_straddle(row)
+                if result is None:
+                    return pd.Series(
+                        {
+                            "straddle_bpvol_yr": np.nan,
+                            "straddle_fwd_premium": np.nan,
+                            "straddle_dv01": np.nan,
+                            "straddle_vega01": np.nan,
+                            "straddle_gamma01": np.nan,
+                            "straddle_theta1d": np.nan,
+                        }
+                    )
+                return pd.Series(
+                    {
+                        "straddle_bpvol_yr": result.bpvol_yr,
+                        "straddle_fwd_premium": result.fwd_prem,
+                        "straddle_dv01": result.dv01,
+                        "straddle_vega01": result.vega01,
+                        "straddle_gamma01": result.gamma01,
+                        "straddle_theta1d": result.theta1d,
+                    }
+                )
+
+            # tqdm.pandas(desc="PRICING STRADDLES...")
+            # pricing_results: pd.DataFrame = out.loc[straddle_mask].apply(_build_pricing_row, axis=1)
+            rows = []
+            index = []
+            subset = out.loc[straddle_mask]
+            for idx, row in tqdm(
+                subset.iterrows(),
+                total=len(subset),
+                desc="PRICING STRADDLES...",
+            ):
+                rows.append(_build_pricing_row(row))
+                index.append(idx)
+
+            pricing_results = pd.DataFrame(rows, index=index)
+
+            out.loc[straddle_mask, pricing_results.columns] = pricing_results
+
     # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
     if detect_vertical_spreads:
         out = detect_vertical_spreads_packages(
@@ -452,7 +533,7 @@ def detect_and_link_swaption_packages_df(
     if detect_vega_curve and detect_straddles:
         out = detect_vega_curve_packages(
             out,
-            time_window_seconds=dealer_vega_curve_time_window_seconds,
+            time_window_seconds=vega_curve_time_window_seconds,
             vega_tolerance_pct=config.vega_curve_tolerance_pct,
             min_expiry_diff_years=config.vega_curve_min_expiry_diff_years,
             min_tail_diff_years=config.vega_curve_min_tail_diff_years,
@@ -462,6 +543,7 @@ def detect_and_link_swaption_packages_df(
             platform_col=config.platform_col,
             currency_col=config.currency_col,
             trade_id_col=config.trade_id_col,
+            trade_label_col=config.trade_label_col,
             tenor_col=config.tenor_col,
             forward_col=config.forward_col,
             notional_col=config.notional_col,
