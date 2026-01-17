@@ -235,7 +235,7 @@ def detect_and_link_swaption_packages_df(
     # Straddle parameters
     custy_straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=60),
     # Risk reversal parameters
-    risk_reversal_time_window_seconds: int = 60,
+    risk_reversal_time_window_seconds: int = 60 * 60,
     risk_reversal_strike_tolerance: float = 0.0001,
     risk_reversal_notional_tolerance_pct: float = 0.05,
     risk_reversal_require_same_expiration: bool = True,
@@ -312,10 +312,10 @@ def detect_and_link_swaption_packages_df(
 
     out = df.copy()
 
-    temp = out.copy()
-    temp = temp.sort_values(by="execution_timestamp")
-    temp["execution_timestamp"] = temp["execution_timestamp"].astype(str)
-    temp.to_excel("_temp_raw_trades.xlsx")
+    # temp = out.copy()
+    # temp = temp.sort_values(by="execution_timestamp")
+    # temp["execution_timestamp"] = temp["execution_timestamp"].astype(str)
+    # temp.to_excel("_temp_raw_trades.xlsx")
 
     # =========================================================================
     # Pipeline: Run detectors in priority order
@@ -325,6 +325,7 @@ def detect_and_link_swaption_packages_df(
 
     # Phase 1: Detect risk reversals first (highest priority - IDB structures)
     if detect_risk_reversals:
+        # interdealer risk reversals
         out = detect_risk_reversals_packages(
             out,
             time_window_seconds=risk_reversal_time_window_seconds,
@@ -350,8 +351,10 @@ def detect_and_link_swaption_packages_df(
             require_same_currency=config.require_same_currency,
             require_same_underlier=config.require_same_underlier,
             platform_allowlist=config.platform_allowlist,
-            platform_blocklist=config.platform_blocklist,
+            platform_blocklist=["XXXX", "XSEF", "XOFF", "BILT"], 
         )
+
+        # TODO custy risk reversals or stangles here
 
     # Phase 2: Detect straddles
     if detect_straddles:

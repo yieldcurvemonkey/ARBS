@@ -117,7 +117,6 @@ class USD_Swaptions(USDProductBase):
             exercise_style=(
                 "EUROPEAN" if "epn" in str(row.get("UPI FISN", "")).lower() else "BERMUDAN" if "brm" in str(row.get("UPI FISN", "")).lower() else "AMERICAN"
             ),
-            estimated_pv01=0.0,
             package_type=self.package_type,
         )
 
@@ -305,7 +304,6 @@ class USD_Swaptions(USDProductBase):
         end_ts = _to_utc(end)
         final_df = final_df[(final_df["execution_timestamp"] >= start_ts) & (final_df["execution_timestamp"] <= end_ts)]
         final_df = final_df.sort_values(by="execution_timestamp")
-        # return final_df 
         if merge_package_legs:
             final_df = merge_package_legs_to_one_row(final_df)
             final_df = merge_vega_curve_packages(final_df)

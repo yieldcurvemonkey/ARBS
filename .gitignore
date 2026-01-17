@@ -224,3 +224,5 @@ frontend/.next/
 frontend/node_modules/
 
 *.xlsx
+
+_temp_raw_raw_trades.csv

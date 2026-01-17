@@ -34,6 +34,7 @@ def detect_risk_reversals_packages(
     require_same_tenor: bool = True,
     require_same_forward: bool = True,
     require_directional_structure: bool = True,
+    require_same_event_action: bool = True,
     # Column names
     product_col: str = "product_type",
     package_col: str = "package_type",
@@ -48,6 +49,8 @@ def detect_risk_reversals_packages(
     tenor_col: str = "tenor_years",
     forward_col: str = "forward_start_years",
     notional_col: str = "notional",
+    upi_col: str = "unique_product_identifier",
+    event_action_col: str = "event_action",
     # Economic filters
     require_same_platform: bool = True,
     require_same_currency: bool = True,
@@ -64,6 +67,8 @@ def detect_risk_reversals_packages(
       - 4 trades
       - 3 distinct strikes (middle strike appears twice)
       - 2 distinct notionals (middle strike notional is smaller)
+      - 2 distinct unique_product_identifiers
+      - Same event_action across all legs
 
     Args:
         df: Classifications dataframe with swaption trades
@@ -75,6 +80,7 @@ def detect_risk_reversals_packages(
         require_same_tenor: Require same tenor_years across legs
         require_same_forward: Require same forward_start_years across legs
         require_directional_structure: Require payer/receiver direction alignment
+        require_same_event_action: Require same event_action across all legs
         product_col: Column name for product type
         package_col: Column name for package type
         exec_col: Column name for execution timestamp
@@ -88,6 +94,8 @@ def detect_risk_reversals_packages(
         tenor_col: Column name for tenor years
         forward_col: Column name for forward start years
         notional_col: Column name for notional
+        upi_col: Column name for unique product identifier
+        event_action_col: Column name for event action
         require_same_platform: Require same platform for matching
         require_same_currency: Require same currency for matching
         require_same_underlier: Require same underlier for matching
@@ -137,6 +145,8 @@ def detect_risk_reversals_packages(
     tenors = pd.to_numeric(cand[tenor_col], errors="coerce").to_numpy(dtype=np.float64) if tenor_col in cand.columns else None
     forwards = pd.to_numeric(cand[forward_col], errors="coerce").to_numpy(dtype=np.float64) if forward_col in cand.columns else None
     product_labels = cand[product_col].astype(str).to_numpy()
+    upis = cand[upi_col].astype("string").to_numpy() if upi_col in cand.columns else None
+    event_actions = cand[event_action_col].astype("string").to_numpy() if event_action_col in cand.columns else None
 
     matched = np.zeros(len(cand), dtype=bool)
     pkg_ids = np.full(len(cand), "", dtype=object)
@@ -233,6 +243,30 @@ def detect_risk_reversals_packages(
         index_names.discard("")
         return len(index_names) == 1
 
+    def _unique_upi_count_ok(indices: List[int]) -> bool:
+        """Check that exactly 2 unique UPIs exist across the 4 legs."""
+        if upis is None:
+            return False
+        unique_upis = set()
+        for i in indices:
+            val = str(upis[i])
+            if val and val not in ("", "nan", "<NA>", "None"):
+                unique_upis.add(val)
+        return len(unique_upis) == 2
+
+    def _same_event_action_ok(indices: List[int]) -> bool:
+        """Check that all legs have the same event_action value."""
+        if not require_same_event_action:
+            return True
+        if event_actions is None:
+            return False
+        actions = set()
+        for i in indices:
+            val = str(event_actions[i])
+            if val and val not in ("", "nan", "<NA>", "None"):
+                actions.add(val)
+        return len(actions) == 1
+
     def _is_risk_reversal(indices: List[int]) -> bool:
         strikes = strike_vals[indices]
         notionals = np.abs(notional_vals[indices])
@@ -241,6 +275,14 @@ def detect_risk_reversals_packages(
             return False
 
         if not _same_index_ok(indices):
+            return False
+
+        # Require exactly 2 unique UPIs
+        if not _unique_upi_count_ok(indices):
+            return False
+
+        # Require same event_action across all legs
+        if not _same_event_action_ok(indices):
             return False
 
         payer_count = 0
