@@ -10,6 +10,7 @@ import QuantLib as ql
 import Query.IRSwaps.adapter  # noqa: F401
 from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+from Query.IRSwaps.IRSwapValue import IRSwapValue
 
 
 class _SwaptionLegGreeks(NamedTuple):
@@ -20,6 +21,7 @@ class _SwaptionLegGreeks(NamedTuple):
     gamma01: float
     vega01: float
     theta1d: float
+    strike_offset: float
 
 
 @dataclass
@@ -75,6 +77,37 @@ class USDSwaptionLegPricerResult:
     vega01: float
     gamma01: float
     theta1d: float
+
+
+BENCHMARK_OFFSETS = [
+    -300,
+    -250,
+    -200,
+    -175,
+    -150,
+    -125,
+    -100,
+    -75,
+    -50,
+    -25,
+    -20,
+    -15,
+    -10,
+    0,
+    10,
+    15,
+    20,
+    25,
+    50,
+    75,
+    100,
+    125,
+    150,
+    175,
+    200,
+    250,
+    300,
+]
 
 
 def usd_swaption_leg_pricer_from_row(
@@ -462,12 +495,24 @@ def _compute_swaption_leg_greeks(
     theta1d = price_today - ql_swaption.NPV()
     ql.Settings.instance().evaluationDate = pricer.handle().referenceDate()
 
+    # ATMF
+    atm_query = IRSwapQuery(
+        curve="USD-SOFR-1D",
+        effective_date=expiration_date,
+        maturity_date=underlying_expiration_date,
+        structure_kwargs={"notional": signed_notional},
+    )
+    ql_atm_underlying_pkg, atm_rws = atm_query.resolve_package(pricer_or_curve=pricer)
+    atm_vmap = atm_query.build_value_map(pricer_or_curve=pricer, package=ql_atm_underlying_pkg, risk_weights=atm_rws)
+    atmf = abs(atm_vmap.apply(value=IRSwapValue.RATE))
+
     return _SwaptionLegGreeks(
         bpvol_yr=iv_bpvol_yr,
         dv01=dv01,
         gamma01=gamma01,
         vega01=vega01,
         theta1d=theta1d,
+        strike_offset=min(BENCHMARK_OFFSETS, key=lambda x: abs(x - (strike_percent - atmf) * 100)),
     )
 
 
@@ -552,7 +597,7 @@ def usd_swaption_dealer_risk_reversal_skew_from_row(
     skew_bpvol_yr = otm_payer_greeks.bpvol_yr - otm_receiver_greeks.bpvol_yr
 
     # Aggregate Greeks across all 4 legs
-    # double check here please 
+    # double check here please
     dv01 = atm_payer_greeks.dv01 + atm_receiver_greeks.dv01 + otm_payer_greeks.dv01 + otm_receiver_greeks.dv01
     gamma01 = (
         (abs(atm_payer_greeks.gamma01) + (atm_receiver_greeks.gamma01)) + abs(otm_payer_greeks.gamma01) - abs(otm_receiver_greeks.gamma01)
