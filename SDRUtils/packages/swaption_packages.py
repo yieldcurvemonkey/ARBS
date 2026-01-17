@@ -66,9 +66,11 @@ from SDRUtils.packages.utils import merge_package_legs_to_one_row
 from SDRUtils.products._swaptions.pricer import (
     USDSwaptionDealerRiskReversalSkewResult,
     USDSwaptionStraddlePricerResult,
+    USDSwaptionVerticalSpreadPricerResult,
     SingleStraddleLegException,
     usd_swaption_dealer_risk_reversal_skew_from_row,
     usd_swaption_straddle_pricer_from_row,
+    usd_swaption_vertical_spread_pricer_from_row,
 )
 
 if TYPE_CHECKING:
@@ -638,6 +640,125 @@ def detect_and_link_swaption_packages_df(
             platform_allowlist=config.platform_allowlist,
             platform_blocklist=config.platform_blocklist,
         )
+
+        # =================================================================
+        # Merge-Price-Unmerge workflow for Vertical Spread Greeks & metrics
+        # =================================================================
+        # The pricer requires merged rows (one row per package with delimited
+        # fields), but downstream Parquet caching needs individual legs.
+        # We merge temporarily for pricing, then broadcast results back.
+
+        vs_mask: pd.Series = out[package_col].astype(str).str.contains("VERTICAL_SPREAD", na=False)
+        if vs_mask.any() and pricer is not None:
+            # Initialize pricing columns (prefixed with vs_ for vertical spread)
+            vertical_spread_pricing_cols = [
+                "vs_spread_type",
+                "vs_atm_strike",
+                "vs_otm_strike",
+                "vs_strike_width_bps",
+                "vs_atm_bpvol_yr",
+                "vs_otm_bpvol_yr",
+                "vs_vol_spread_bpvol_yr",
+                "vs_atm_notional",
+                "vs_otm_notional",
+                "vs_notional_ratio",
+                "vs_net_premium",
+                "vs_atm_premium",
+                "vs_otm_premium",
+                "vs_atm_dv01",
+                "vs_atm_gamma01",
+                "vs_atm_vega01",
+                "vs_atm_theta1d",
+                "vs_otm_dv01",
+                "vs_otm_gamma01",
+                "vs_otm_vega01",
+                "vs_otm_theta1d",
+                "vs_dv01",
+                "vs_gamma01",
+                "vs_vega01",
+                "vs_theta1d",
+                "vs_atm_strike_offset",
+                "vs_otm_strike_offset",
+            ]
+            for col in vertical_spread_pricing_cols:
+                if col not in out.columns:
+                    out[col] = np.nan
+
+            # Step 1: Filter Vertical Spread legs (do NOT modify 'out' directly)
+            vs_legs_subset = out.loc[vs_mask].copy()
+            original_row_count = len(out)
+
+            # Step 2: Merge legs into single rows for the pricer
+            # This creates a temporary view where 2 legs become 1 row per package_id
+            vs_merged_packages = merge_package_legs_to_one_row(vs_legs_subset)
+
+            # Step 3: Calculate metrics on the MERGED rows
+            metrics = []
+            for idx, row in tqdm(
+                vs_merged_packages.iterrows(),
+                total=len(vs_merged_packages),
+                desc="PRICING VERTICAL SPREADS...",
+            ):
+                try:
+                    res: USDSwaptionVerticalSpreadPricerResult = (
+                        usd_swaption_vertical_spread_pricer_from_row(row, pricer)
+                    )
+                    metrics.append({
+                        "package_id": row["package_id"],  # Key for joining back
+                        "vs_spread_type": res.spread_type,
+                        "vs_atm_strike": res.atm_strike,
+                        "vs_otm_strike": res.otm_strike,
+                        "vs_strike_width_bps": res.strike_width_bps,
+                        "vs_atm_bpvol_yr": res.atm_bpvol_yr,
+                        "vs_otm_bpvol_yr": res.otm_bpvol_yr,
+                        "vs_vol_spread_bpvol_yr": res.vol_spread_bpvol_yr,
+                        "vs_atm_notional": res.atm_notional,
+                        "vs_otm_notional": res.otm_notional,
+                        "vs_notional_ratio": res.notional_ratio,
+                        "vs_net_premium": res.net_premium,
+                        "vs_atm_premium": res.atm_premium,
+                        "vs_otm_premium": res.otm_premium,
+                        "vs_atm_dv01": res.atm_dv01,
+                        "vs_atm_gamma01": res.atm_gamma01,
+                        "vs_atm_vega01": res.atm_vega01,
+                        "vs_atm_theta1d": res.atm_theta1d,
+                        "vs_otm_dv01": res.otm_dv01,
+                        "vs_otm_gamma01": res.otm_gamma01,
+                        "vs_otm_vega01": res.otm_vega01,
+                        "vs_otm_theta1d": res.otm_theta1d,
+                        "vs_dv01": res.dv01,
+                        "vs_gamma01": res.gamma01,
+                        "vs_vega01": res.vega01,
+                        "vs_theta1d": res.theta1d,
+                        "vs_atm_strike_offset": res.atm_strike_offset,
+                        "vs_otm_strike_offset": res.otm_strike_offset,
+                    })
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to price vertical spread package %s: %s",
+                        row.get("package_id", idx),
+                        exc,
+                    )
+                    continue
+
+            # Step 4: UNMERGE / JOIN back to the original leg-based dataframe
+            # This ensures we support downstream Parquet caching which expects
+            # the original leg structure.
+            if metrics:
+                metrics_df = pd.DataFrame(metrics)
+                # Merge on package_id, broadcasting metrics to all legs
+                out = out.merge(metrics_df, on="package_id", how="left", suffixes=("", "_new"))
+                # Handle any column conflicts from merge
+                for col in vertical_spread_pricing_cols:
+                    new_col = f"{col}_new"
+                    if new_col in out.columns:
+                        out[col] = out[new_col].combine_first(out[col])
+                        out.drop(columns=[new_col], inplace=True)
+
+            # Verify row count unchanged (critical for Parquet compatibility)
+            assert len(out) == original_row_count, (
+                f"Row count changed after VS pricing: {original_row_count} -> {len(out)}"
+            )
 
     # Phase 4: Detect conditional curve trades (same expiry, different tails)
     # Currently disabled in original code, keeping consistent
