@@ -42,13 +42,37 @@ logger = logging.getLogger(__name__)
 # Standard benchmark offsets from ATMF in basis points
 # These are the same as BENCHMARK_OFFSETS in pricer/constants.py
 BENCHMARK_STRIKE_OFFSETS_BPS: List[int] = [
-    -300, -250, -200, -175, -150, -125, -100, -75, -50, -25, -20, -15, -10,
+    -300,
+    -250,
+    -200,
+    -175,
+    -150,
+    -125,
+    -100,
+    -75,
+    -50,
+    -25,
+    -20,
+    -15,
+    -10,
     0,
-    10, 15, 20, 25, 50, 75, 100, 125, 150, 175, 200, 250, 300,
+    10,
+    15,
+    20,
+    25,
+    50,
+    75,
+    100,
+    125,
+    150,
+    175,
+    200,
+    250,
+    300,
 ]
 
 # Default tolerance for rounding to benchmark offsets (in bps)
-DEFAULT_OFFSET_TOLERANCE_BPS: float = 7.5
+DEFAULT_OFFSET_TOLERANCE_BPS: float = 2.5
 
 
 def _round_to_benchmark_offset(
@@ -281,12 +305,15 @@ def detect_outright_swaptions(
             continue
 
         # Compute ATMF
-        atmf = _compute_atmf_for_trade(
-            row,
-            current_pricer,
-            expiration_col=expiration_col,
-            underlying_expiration_col=underlying_expiration_col,
-            notional_col=notional_col,
+        atmf = (
+            _compute_atmf_for_trade(
+                row,
+                current_pricer,
+                expiration_col=expiration_col,
+                underlying_expiration_col=underlying_expiration_col,
+                notional_col=notional_col,
+            )
+            / 100
         )
 
         if atmf is None:
