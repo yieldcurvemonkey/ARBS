@@ -261,13 +261,13 @@ def detect_and_link_swaption_packages_df(
     customer_rr_benchmark_widths_bps: Optional[List[int]] = None,
     customer_rr_platforms_filter: Optional[List[str]] = None,
     # Vertical spread parameters
-    vertical_spread_time_window_seconds: int = 120,
+    vertical_spread_time_window_seconds: int = 300,
     # Ladder parameters (3+ leg christmas tree structures)
     detect_ladders: bool = True,
-    ladder_time_window_seconds: Optional[int] = None,  # None = use platform-specific defaults
+    ladder_time_window_seconds: Optional[int] = 300,  # None = use platform-specific defaults
     ladder_min_legs: int = 3,
     ladder_min_strikes: int = 2,
-    ladder_min_strike_width_bps: float = 15.0,
+    ladder_min_strike_width_bps: float = 10.0,
     ladder_notional_ratio_tolerance: float = 0.15,
     # Conditional curve parameters
     conditional_curve_time_window_seconds: int = 300,
@@ -395,7 +395,7 @@ def detect_and_link_swaption_packages_df(
             require_same_currency=config.require_same_currency,
             require_same_underlier=config.require_same_underlier,
             platform_allowlist=config.platform_allowlist,
-            platform_blocklist=["XXXX", "XSEF", "XOFF", "BILT"], 
+            platform_blocklist=["XXXX", "XSEF", "XOFF", "BILT"],
         )
 
         # =================================================================
@@ -442,20 +442,22 @@ def detect_and_link_swaption_packages_df(
             ):
                 try:
                     res = usd_swaption_dealer_risk_reversal_skew_from_row(row, pricer)
-                    metrics.append({
-                        "package_id": row["package_id"],  # Key for joining back
-                        "rr_atmf": res.atm_strike,
-                        "rr_out_strike": int(res.wing_strike_width / 2),
-                        "rr_skew_bpvol": res.skew_bpvol_yr,
-                        "rr_atm_bpvol": res.atm_bpvol_yr,
-                        "rr_payer_skew": res.payer_skew_bpvol_yr,
-                        "rr_receiver_skew": res.receiver_skew_bpvol_yr,
-                        "rr_dv01": res.dv01,
-                        "rr_wing_dv01": res.wing_dv01,
-                        "rr_gamma01": res.gamma01,
-                        "rr_vega01": res.vega01,
-                        "rr_theta1d": res.theta1d,
-                    })
+                    metrics.append(
+                        {
+                            "package_id": row["package_id"],  # Key for joining back
+                            "rr_atmf": res.atm_strike,
+                            "rr_out_strike": int(res.wing_strike_width / 2),
+                            "rr_skew_bpvol": res.skew_bpvol_yr,
+                            "rr_atm_bpvol": res.atm_bpvol_yr,
+                            "rr_payer_skew": res.payer_skew_bpvol_yr,
+                            "rr_receiver_skew": res.receiver_skew_bpvol_yr,
+                            "rr_dv01": res.dv01,
+                            "rr_wing_dv01": res.wing_dv01,
+                            "rr_gamma01": res.gamma01,
+                            "rr_vega01": res.vega01,
+                            "rr_theta1d": res.theta1d,
+                        }
+                    )
                 except Exception as exc:
                     logger.warning(
                         "Failed to price risk reversal package %s: %s",
@@ -479,11 +481,10 @@ def detect_and_link_swaption_packages_df(
                         out.drop(columns=[new_col], inplace=True)
 
             # Verify row count unchanged (critical for Parquet compatibility)
-            assert len(out) == original_row_count, (
-                f"Row count changed after RR pricing: {original_row_count} -> {len(out)}"
-            )
+            assert len(out) == original_row_count, f"Row count changed after RR pricing: {original_row_count} -> {len(out)}"
 
         # Customer RR/strangles: 2-leg payer+receiver with benchmark strike widths
+        # custy trades will not be priced
         if detect_customer_rr_strangles:
             out = detect_customer_rr_strangles_packages(
                 out,
@@ -634,7 +635,38 @@ def detect_and_link_swaption_packages_df(
 
             out.loc[straddle_mask, pricing_results.columns] = pricing_results
 
-    # Phase 3: Detect vertical spreads (1x1, 1x2, etc.)
+    # Phase 3b: Detect ladders (christmas trees) - 3+ leg vertical structures
+    # ladders will not be priced, they are mostly custy trades
+    if detect_ladders:
+        out = detect_ladder_packages(
+            out,
+            time_window_seconds=ladder_time_window_seconds,
+            min_legs=ladder_min_legs,
+            min_strikes=ladder_min_strikes,
+            min_strike_width_bps=ladder_min_strike_width_bps,
+            notional_ratio_tolerance=ladder_notional_ratio_tolerance,
+            product_col=product_col,
+            package_col=package_col,
+            exec_col=config.exec_col,
+            platform_col=config.platform_col,
+            currency_col=config.currency_col,
+            underlier_col=config.underlier_col,
+            trade_id_col=config.trade_id_col,
+            strike_col=config.strike_col,
+            expiration_col=config.expiration_col,
+            tenor_col=config.tenor_col,
+            forward_col=config.forward_col,
+            notional_col=config.notional_col,
+            premium_col=config.premium_col,
+            package_indicator_col=config.package_indicator_col,
+            require_same_platform=config.require_same_platform,
+            require_same_currency=config.require_same_currency,
+            require_same_underlier=config.require_same_underlier,
+            platform_allowlist=config.platform_allowlist,
+            platform_blocklist=config.platform_blocklist,
+        )
+
+    # Phase 3a: Detect vertical spreads (1x1, 1x2, etc.)
     if detect_vertical_spreads:
         out = detect_vertical_spreads_packages(
             out,
@@ -720,39 +752,39 @@ def detect_and_link_swaption_packages_df(
                 desc="PRICING VERTICAL SPREADS...",
             ):
                 try:
-                    res: USDSwaptionVerticalSpreadPricerResult = (
-                        usd_swaption_vertical_spread_pricer_from_row(row, pricer)
+                    res: USDSwaptionVerticalSpreadPricerResult = usd_swaption_vertical_spread_pricer_from_row(row, pricer)
+                    metrics.append(
+                        {
+                            "package_id": row["package_id"],  # Key for joining back
+                            "vs_spread_type": res.spread_type,
+                            "vs_atm_strike": res.atm_strike,
+                            "vs_otm_strike": res.otm_strike,
+                            "vs_strike_width_bps": res.strike_width_bps,
+                            "vs_atm_bpvol_yr": res.atm_bpvol_yr,
+                            "vs_otm_bpvol_yr": res.otm_bpvol_yr,
+                            "vs_vol_spread_bpvol_yr": res.vol_spread_bpvol_yr,
+                            "vs_atm_notional": res.atm_notional,
+                            "vs_otm_notional": res.otm_notional,
+                            "vs_notional_ratio": res.notional_ratio,
+                            "vs_net_premium": res.net_premium,
+                            "vs_atm_premium": res.atm_premium,
+                            "vs_otm_premium": res.otm_premium,
+                            "vs_atm_dv01": res.atm_dv01,
+                            "vs_atm_gamma01": res.atm_gamma01,
+                            "vs_atm_vega01": res.atm_vega01,
+                            "vs_atm_theta1d": res.atm_theta1d,
+                            "vs_otm_dv01": res.otm_dv01,
+                            "vs_otm_gamma01": res.otm_gamma01,
+                            "vs_otm_vega01": res.otm_vega01,
+                            "vs_otm_theta1d": res.otm_theta1d,
+                            "vs_dv01": res.dv01,
+                            "vs_gamma01": res.gamma01,
+                            "vs_vega01": res.vega01,
+                            "vs_theta1d": res.theta1d,
+                            "vs_atm_strike_offset": res.atm_strike_offset,
+                            "vs_otm_strike_offset": res.otm_strike_offset,
+                        }
                     )
-                    metrics.append({
-                        "package_id": row["package_id"],  # Key for joining back
-                        "vs_spread_type": res.spread_type,
-                        "vs_atm_strike": res.atm_strike,
-                        "vs_otm_strike": res.otm_strike,
-                        "vs_strike_width_bps": res.strike_width_bps,
-                        "vs_atm_bpvol_yr": res.atm_bpvol_yr,
-                        "vs_otm_bpvol_yr": res.otm_bpvol_yr,
-                        "vs_vol_spread_bpvol_yr": res.vol_spread_bpvol_yr,
-                        "vs_atm_notional": res.atm_notional,
-                        "vs_otm_notional": res.otm_notional,
-                        "vs_notional_ratio": res.notional_ratio,
-                        "vs_net_premium": res.net_premium,
-                        "vs_atm_premium": res.atm_premium,
-                        "vs_otm_premium": res.otm_premium,
-                        "vs_atm_dv01": res.atm_dv01,
-                        "vs_atm_gamma01": res.atm_gamma01,
-                        "vs_atm_vega01": res.atm_vega01,
-                        "vs_atm_theta1d": res.atm_theta1d,
-                        "vs_otm_dv01": res.otm_dv01,
-                        "vs_otm_gamma01": res.otm_gamma01,
-                        "vs_otm_vega01": res.otm_vega01,
-                        "vs_otm_theta1d": res.otm_theta1d,
-                        "vs_dv01": res.dv01,
-                        "vs_gamma01": res.gamma01,
-                        "vs_vega01": res.vega01,
-                        "vs_theta1d": res.theta1d,
-                        "vs_atm_strike_offset": res.atm_strike_offset,
-                        "vs_otm_strike_offset": res.otm_strike_offset,
-                    })
                 except Exception as exc:
                     logger.warning(
                         "Failed to price vertical spread package %s: %s",
@@ -776,40 +808,7 @@ def detect_and_link_swaption_packages_df(
                         out.drop(columns=[new_col], inplace=True)
 
             # Verify row count unchanged (critical for Parquet compatibility)
-            assert len(out) == original_row_count, (
-                f"Row count changed after VS pricing: {original_row_count} -> {len(out)}"
-            )
-
-    # Phase 3b: Detect ladders (christmas trees) - 3+ leg vertical structures
-    # Runs after vertical spreads so 2-leg spreads are detected first
-    if detect_ladders:
-        out = detect_ladder_packages(
-            out,
-            time_window_seconds=ladder_time_window_seconds,
-            min_legs=ladder_min_legs,
-            min_strikes=ladder_min_strikes,
-            min_strike_width_bps=ladder_min_strike_width_bps,
-            notional_ratio_tolerance=ladder_notional_ratio_tolerance,
-            product_col=product_col,
-            package_col=package_col,
-            exec_col=config.exec_col,
-            platform_col=config.platform_col,
-            currency_col=config.currency_col,
-            underlier_col=config.underlier_col,
-            trade_id_col=config.trade_id_col,
-            strike_col=config.strike_col,
-            expiration_col=config.expiration_col,
-            tenor_col=config.tenor_col,
-            forward_col=config.forward_col,
-            notional_col=config.notional_col,
-            premium_col=config.premium_col,
-            package_indicator_col=config.package_indicator_col,
-            require_same_platform=config.require_same_platform,
-            require_same_currency=config.require_same_currency,
-            require_same_underlier=config.require_same_underlier,
-            platform_allowlist=config.platform_allowlist,
-            platform_blocklist=config.platform_blocklist,
-        )
+            assert len(out) == original_row_count, f"Row count changed after VS pricing: {original_row_count} -> {len(out)}"
 
     # Phase 4: Detect conditional curve trades (same expiry, different tails)
     # Currently disabled in original code, keeping consistent
