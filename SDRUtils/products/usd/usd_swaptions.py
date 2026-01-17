@@ -97,7 +97,7 @@ class USD_Swaptions(USDProductBase):
                 return 0
 
         return SwaptionTradeClassification(
-            event_action=f"{row.get("Action type", "")}-{row.get("Event type", "")}",
+            event_action="TERM-ETRM" if forward_label == "OD" else f"{row.get("Action type", "")}-{row.get("Event type", "")}",
             trade_id=trade_id,
             execution_timestamp=execution_ts,
             effective_date=effective_date,
