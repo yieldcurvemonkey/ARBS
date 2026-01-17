@@ -230,6 +230,837 @@ def _extract_effective_premium(
     )
 
 
+# =============================================================================
+# Pipeline Phase Functions
+# =============================================================================
+# These helper functions encapsulate each detection phase of the pipeline.
+# They are called by detect_and_link_swaption_packages_df in priority order.
+
+
+def _price_risk_reversals(
+    df: pd.DataFrame,
+    package_col: str,
+    pricer: "QLIRSwapCurve",
+) -> pd.DataFrame:
+    """
+    Price risk reversal packages using merge-price-unmerge workflow.
+
+    The pricer requires merged rows (one row per package with delimited
+    fields), but downstream Parquet caching needs individual legs.
+    We merge temporarily for pricing, then broadcast results back.
+
+    Args:
+        df: DataFrame with detected risk reversals
+        package_col: Column name for package type
+        pricer: QLIRSwapCurve instance for pricing
+
+    Returns:
+        DataFrame with pricing columns added to risk reversal legs
+    """
+    out = df
+    rr_mask: pd.Series = out[package_col] == "RISK_REVERSAL"
+
+    if not rr_mask.any():
+        return out
+
+    # Initialize pricing columns
+    risk_reversal_pricing_cols = [
+        "rr_atmf",
+        "rr_out_strike",
+        "rr_skew_bpvol",
+        "rr_atm_bpvol",
+        "rr_payer_skew",
+        "rr_receiver_skew",
+        "rr_dv01",
+        "rr_wing_dv01",
+        "rr_gamma01",
+        "rr_vega01",
+        "rr_theta1d",
+    ]
+    for col in risk_reversal_pricing_cols:
+        if col not in out.columns:
+            out[col] = np.nan
+
+    # Step 1: Filter Risk Reversal legs (do NOT modify 'out' directly)
+    rr_legs_subset = out.loc[rr_mask].copy()
+    original_row_count = len(out)
+
+    # Step 2: Merge legs into single rows for the pricer
+    # This creates a temporary view where 4 legs become 1 row per package_id
+    rr_merged_packages = merge_package_legs_to_one_row(rr_legs_subset)
+
+    # Step 3: Calculate metrics on the MERGED rows
+    metrics = []
+    for idx, row in tqdm(
+        rr_merged_packages.iterrows(),
+        total=len(rr_merged_packages),
+        desc="PRICING RISK REVERSALS...",
+    ):
+        try:
+            res = usd_swaption_dealer_risk_reversal_skew_from_row(row, pricer)
+            metrics.append(
+                {
+                    "package_id": row["package_id"],  # Key for joining back
+                    "rr_atmf": res.atm_strike,
+                    "rr_out_strike": int(res.wing_strike_width / 2),
+                    "rr_skew_bpvol": res.skew_bpvol_yr,
+                    "rr_atm_bpvol": res.atm_bpvol_yr,
+                    "rr_payer_skew": res.payer_skew_bpvol_yr,
+                    "rr_receiver_skew": res.receiver_skew_bpvol_yr,
+                    "rr_dv01": res.dv01,
+                    "rr_wing_dv01": res.wing_dv01,
+                    "rr_gamma01": res.gamma01,
+                    "rr_vega01": res.vega01,
+                    "rr_theta1d": res.theta1d,
+                }
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to price risk reversal package %s: %s",
+                row.get("package_id", idx),
+                exc,
+            )
+            continue
+
+    # Step 4: UNMERGE / JOIN back to the original leg-based dataframe
+    # This ensures we support downstream Parquet caching which expects
+    # the original leg structure.
+    if metrics:
+        metrics_df = pd.DataFrame(metrics)
+        # Merge on package_id, broadcasting metrics to all legs
+        out = out.merge(metrics_df, on="package_id", how="left", suffixes=("", "_new"))
+        # Handle any column conflicts from merge
+        for col in risk_reversal_pricing_cols:
+            new_col = f"{col}_new"
+            if new_col in out.columns:
+                out[col] = out[new_col].combine_first(out[col])
+                out.drop(columns=[new_col], inplace=True)
+
+    # Verify row count unchanged (critical for Parquet compatibility)
+    assert len(out) == original_row_count, f"Row count changed after RR pricing: {original_row_count} -> {len(out)}"
+
+    return out
+
+
+def _run_risk_reversal_phase(
+    df: pd.DataFrame,
+    config: SwaptionPackageDetectionConfig,
+    product_col: str,
+    package_col: str,
+    pricer: Optional["QLIRSwapCurve"],
+    # Risk reversal parameters
+    risk_reversal_time_window_seconds: int,
+    risk_reversal_strike_tolerance: float,
+    risk_reversal_notional_tolerance_pct: float,
+    risk_reversal_require_same_expiration: bool,
+    risk_reversal_require_same_tenor: bool,
+    risk_reversal_require_same_forward: bool,
+    risk_reversal_require_directional_structure: bool,
+    # Customer RR parameters
+    detect_customer_rr_strangles: bool,
+    customer_rr_timestamp_window_seconds: int,
+    customer_rr_notional_tolerance_pct: float,
+    customer_rr_width_tolerance_bps: float,
+    customer_rr_benchmark_widths_bps: Optional[List[int]],
+    customer_rr_platforms_filter: Optional[List[str]],
+) -> pd.DataFrame:
+    """
+    Phase 1: Detect risk reversals (highest priority - IDB structures).
+
+    This includes:
+    - Inter-dealer 4-leg risk reversals
+    - Pricing of detected risk reversals
+    - Customer 2-leg RR/strangles with benchmark strike widths
+
+    Args:
+        df: Input DataFrame
+        config: Detection configuration
+        product_col: Column name for product type
+        package_col: Column name for package type
+        pricer: Optional pricer for Greeks calculation
+        ... (other parameters passed through)
+
+    Returns:
+        DataFrame with risk reversal annotations and pricing
+    """
+    out = df
+
+    # Detect inter-dealer risk reversals
+    out = detect_risk_reversals_packages(
+        out,
+        time_window_seconds=risk_reversal_time_window_seconds,
+        strike_tolerance=risk_reversal_strike_tolerance,
+        notional_tolerance_pct=risk_reversal_notional_tolerance_pct,
+        require_same_expiration=risk_reversal_require_same_expiration,
+        require_same_tenor=risk_reversal_require_same_tenor,
+        require_same_forward=risk_reversal_require_same_forward,
+        require_directional_structure=risk_reversal_require_directional_structure,
+        product_col=product_col,
+        package_col=package_col,
+        exec_col=config.exec_col,
+        platform_col=config.platform_col,
+        currency_col=config.currency_col,
+        underlier_col=config.underlier_col,
+        trade_id_col=config.trade_id_col,
+        strike_col=config.strike_col,
+        expiration_col=config.expiration_col,
+        tenor_col=config.tenor_col,
+        forward_col=config.forward_col,
+        notional_col=config.notional_col,
+        require_same_platform=config.require_same_platform,
+        require_same_currency=config.require_same_currency,
+        require_same_underlier=config.require_same_underlier,
+        platform_allowlist=config.platform_allowlist,
+        platform_blocklist=["XXXX", "XSEF", "XOFF", "BILT"],
+    )
+
+    # Price risk reversals if pricer is available
+    if pricer is not None:
+        out = _price_risk_reversals(out, package_col, pricer)
+
+    # Customer RR/strangles: 2-leg payer+receiver with benchmark strike widths
+    # custy trades will not be priced
+    if detect_customer_rr_strangles:
+        out = detect_customer_rr_strangles_packages(
+            out,
+            timestamp_window_seconds=customer_rr_timestamp_window_seconds,
+            notional_tolerance_pct=customer_rr_notional_tolerance_pct,
+            width_tolerance_bps=customer_rr_width_tolerance_bps,
+            benchmark_widths_bps=customer_rr_benchmark_widths_bps,
+            product_col=product_col,
+            package_col=package_col,
+            exec_col=config.exec_col,
+            platform_col=config.platform_col,
+            currency_col=config.currency_col,
+            underlier_col=config.underlier_col,
+            trade_id_col=config.trade_id_col,
+            strike_col=config.strike_col,
+            expiration_col=config.expiration_col,
+            tenor_col=config.tenor_col,
+            forward_col=config.forward_col,
+            notional_col=config.notional_col,
+            event_action_col="event_action",
+            require_same_platform=config.require_same_platform,
+            require_same_currency=config.require_same_currency,
+            require_same_underlier=config.require_same_underlier,
+            platforms_filter=customer_rr_platforms_filter or ["BILT", "TPSE", "XXXX"],
+        )
+
+    return out
+
+
+def _price_straddles(
+    df: pd.DataFrame,
+    package_col: str,
+    pricer: "QLIRSwapCurve",
+) -> pd.DataFrame:
+    """
+    Price straddle packages.
+
+    Columns are for the entire straddle not separate legs,
+    metrics/rows will look duplicated before merged.
+
+    Args:
+        df: DataFrame with detected straddles
+        package_col: Column name for package type
+        pricer: QLIRSwapCurve instance for pricing
+
+    Returns:
+        DataFrame with pricing columns added to straddle legs
+    """
+    out = df
+
+    straddle_pricing_cols: List[str] = [
+        "straddle_bpvol_yr",
+        "straddle_fwd_premium",
+        "straddle_dv01",
+        "straddle_vega01",
+        "straddle_gamma01",
+        "straddle_theta1d",
+    ]
+    for col in straddle_pricing_cols:
+        if col not in out.columns:
+            out[col] = np.nan
+
+    straddle_mask: pd.Series = out[package_col] == "STRADDLE"
+    if not straddle_mask.any():
+        return out
+
+    def _price_straddle_row(row: pd.Series) -> Optional[USDSwaptionStraddlePricerResult]:
+        if "SOFR" not in str(row["trade_label"]).upper():
+            return None
+        try:
+            return usd_swaption_straddle_pricer_from_row(row, pricer)
+
+        # kind of stupid but works
+        except SingleStraddleLegException:
+            row = row.copy()
+            row["premium"] = row["premium"] * 2
+            return usd_swaption_straddle_pricer_from_row(row, pricer)
+        except Exception:
+            return None
+
+    def _build_pricing_row(row: pd.Series) -> pd.Series:
+        result = _price_straddle_row(row)
+        if result is None:
+            return pd.Series(
+                {
+                    "straddle_bpvol_yr": np.nan,
+                    "straddle_fwd_premium": np.nan,
+                    "straddle_dv01": np.nan,
+                    "straddle_vega01": np.nan,
+                    "straddle_gamma01": np.nan,
+                    "straddle_theta1d": np.nan,
+                }
+            )
+        return pd.Series(
+            {
+                "straddle_bpvol_yr": result.bpvol_yr,
+                "straddle_fwd_premium": result.fwd_prem,
+                "straddle_dv01": result.dv01,
+                "straddle_vega01": result.vega01,
+                "straddle_gamma01": result.gamma01,
+                "straddle_theta1d": result.theta1d,
+            }
+        )
+
+    rows = []
+    index = []
+    subset = out.loc[straddle_mask]
+    for idx, row in tqdm(
+        subset.iterrows(),
+        total=len(subset),
+        desc="PRICING STRADDLES...",
+    ):
+        rows.append(_build_pricing_row(row))
+        index.append(idx)
+
+    pricing_results = pd.DataFrame(rows, index=index)
+    out.loc[straddle_mask, pricing_results.columns] = pricing_results
+
+    return out
+
+
+def _run_straddle_phase(
+    df: pd.DataFrame,
+    config: SwaptionPackageDetectionConfig,
+    product_col: str,
+    package_col: str,
+    pricer: Optional["QLIRSwapCurve"],
+    custy_straddle_timestamp_tolerance: datetime.timedelta,
+) -> pd.DataFrame:
+    """
+    Phase 2: Detect straddles (payer + receiver with same strike/expiry/tenor).
+
+    This includes:
+    - Dealer + customer package-reported straddles
+    - Customer straddle legs reported separately
+    - Pricing of detected straddles
+
+    Args:
+        df: Input DataFrame
+        config: Detection configuration
+        product_col: Column name for product type
+        package_col: Column name for package type
+        pricer: Optional pricer for Greeks calculation
+        custy_straddle_timestamp_tolerance: Max time between customer straddle legs
+
+    Returns:
+        DataFrame with straddle annotations and pricing
+    """
+    out = df
+
+    # Dealers + custy package reported straddles
+    out = detect_straddles_packages(
+        out,
+        timestamp_tolerance=datetime.timedelta(seconds=0),
+        strike_tolerance=0,
+        notional_tolerance_pct=0,
+        product_col=product_col,
+        package_col=package_col,
+        exec_col=config.exec_col,
+        platform_col=config.platform_col,
+        currency_col=config.currency_col,
+        underlier_col=config.underlier_col,
+        trade_id_col=config.trade_id_col,
+        strike_col=config.strike_col,
+        expiration_col=config.expiration_col,
+        tenor_col=config.tenor_col,
+        notional_col=config.notional_col,
+        package_indicator_col=config.package_indicator_col,
+        require_same_platform=config.require_same_platform,
+        require_same_currency=config.require_same_currency,
+        require_same_underlier=config.require_same_underlier,
+        must_be_reported_as_package=True,
+    )
+
+    # Custy straddle legs reported separately
+    out = detect_straddles_packages(
+        out,
+        timestamp_tolerance=custy_straddle_timestamp_tolerance,
+        strike_tolerance=0,
+        notional_tolerance_pct=0,
+        product_col=product_col,
+        package_col=package_col,
+        exec_col=config.exec_col,
+        platform_col=config.platform_col,
+        currency_col=config.currency_col,
+        underlier_col=config.underlier_col,
+        trade_id_col=config.trade_id_col,
+        strike_col=config.strike_col,
+        expiration_col=config.expiration_col,
+        tenor_col=config.tenor_col,
+        notional_col=config.notional_col,
+        package_indicator_col=config.package_indicator_col,
+        require_same_platform=config.require_same_platform,
+        require_same_currency=config.require_same_currency,
+        require_same_underlier=config.require_same_underlier,
+        must_be_reported_as_package=False,
+        add_leg_premiums=True,
+        platforms_filter=["XXXX", "XSEF", "XOFF", "BILT"],
+    )
+
+    # Price straddles if pricer is available
+    if pricer is not None:
+        out = _price_straddles(out, package_col, pricer)
+
+    return out
+
+
+def _run_ladder_phase(
+    df: pd.DataFrame,
+    config: SwaptionPackageDetectionConfig,
+    product_col: str,
+    package_col: str,
+    ladder_time_window_seconds: Optional[int],
+    ladder_min_legs: int,
+    ladder_min_strikes: int,
+    ladder_min_strike_width_bps: float,
+    ladder_notional_ratio_tolerance: float,
+) -> pd.DataFrame:
+    """
+    Phase 3b: Detect ladders (christmas trees) - 3+ leg vertical structures.
+
+    Ladders will not be priced, they are mostly custy trades.
+
+    Args:
+        df: Input DataFrame
+        config: Detection configuration
+        product_col: Column name for product type
+        package_col: Column name for package type
+        ladder_*: Ladder detection parameters
+
+    Returns:
+        DataFrame with ladder annotations
+    """
+    return detect_ladder_packages(
+        df,
+        time_window_seconds=ladder_time_window_seconds,
+        min_legs=ladder_min_legs,
+        min_strikes=ladder_min_strikes,
+        min_strike_width_bps=ladder_min_strike_width_bps,
+        notional_ratio_tolerance=ladder_notional_ratio_tolerance,
+        product_col=product_col,
+        package_col=package_col,
+        exec_col=config.exec_col,
+        platform_col=config.platform_col,
+        currency_col=config.currency_col,
+        underlier_col=config.underlier_col,
+        trade_id_col=config.trade_id_col,
+        strike_col=config.strike_col,
+        expiration_col=config.expiration_col,
+        tenor_col=config.tenor_col,
+        forward_col=config.forward_col,
+        notional_col=config.notional_col,
+        premium_col=config.premium_col,
+        package_indicator_col=config.package_indicator_col,
+        require_same_platform=config.require_same_platform,
+        require_same_currency=config.require_same_currency,
+        require_same_underlier=config.require_same_underlier,
+        platform_allowlist=config.platform_allowlist,
+        platform_blocklist=config.platform_blocklist,
+    )
+
+
+def _price_vertical_spreads(
+    df: pd.DataFrame,
+    package_col: str,
+    pricer: "QLIRSwapCurve",
+) -> pd.DataFrame:
+    """
+    Price vertical spread packages using merge-price-unmerge workflow.
+
+    The pricer requires merged rows (one row per package with delimited
+    fields), but downstream Parquet caching needs individual legs.
+    We merge temporarily for pricing, then broadcast results back.
+
+    Args:
+        df: DataFrame with detected vertical spreads
+        package_col: Column name for package type
+        pricer: QLIRSwapCurve instance for pricing
+
+    Returns:
+        DataFrame with pricing columns added to vertical spread legs
+    """
+    out = df
+    vs_mask: pd.Series = out[package_col].astype(str).str.contains("VERTICAL_SPREAD", na=False)
+
+    if not vs_mask.any():
+        return out
+
+    # Initialize pricing columns (prefixed with vs_ for vertical spread)
+    vertical_spread_pricing_cols = [
+        "vs_spread_type",
+        "vs_atm_strike",
+        "vs_otm_strike",
+        "vs_strike_width_bps",
+        "vs_atm_bpvol_yr",
+        "vs_otm_bpvol_yr",
+        "vs_vol_spread_bpvol_yr",
+        "vs_atm_notional",
+        "vs_otm_notional",
+        "vs_notional_ratio",
+        "vs_net_premium",
+        "vs_atm_premium",
+        "vs_otm_premium",
+        "vs_atm_dv01",
+        "vs_atm_gamma01",
+        "vs_atm_vega01",
+        "vs_atm_theta1d",
+        "vs_otm_dv01",
+        "vs_otm_gamma01",
+        "vs_otm_vega01",
+        "vs_otm_theta1d",
+        "vs_dv01",
+        "vs_gamma01",
+        "vs_vega01",
+        "vs_theta1d",
+        "vs_atm_strike_offset",
+        "vs_otm_strike_offset",
+    ]
+    for col in vertical_spread_pricing_cols:
+        if col not in out.columns:
+            out[col] = np.nan
+
+    # Step 1: Filter Vertical Spread legs (do NOT modify 'out' directly)
+    vs_legs_subset = out.loc[vs_mask].copy()
+    original_row_count = len(out)
+
+    # Step 2: Merge legs into single rows for the pricer
+    # This creates a temporary view where 2 legs become 1 row per package_id
+    vs_merged_packages = merge_package_legs_to_one_row(vs_legs_subset)
+
+    # Step 3: Calculate metrics on the MERGED rows
+    metrics = []
+    for idx, row in tqdm(
+        vs_merged_packages.iterrows(),
+        total=len(vs_merged_packages),
+        desc="PRICING VERTICAL SPREADS...",
+    ):
+        try:
+            res: USDSwaptionVerticalSpreadPricerResult = usd_swaption_vertical_spread_pricer_from_row(row, pricer)
+            metrics.append(
+                {
+                    "package_id": row["package_id"],  # Key for joining back
+                    "vs_spread_type": res.spread_type,
+                    "vs_atm_strike": res.atm_strike,
+                    "vs_otm_strike": res.otm_strike,
+                    "vs_strike_width_bps": res.strike_width_bps,
+                    "vs_atm_bpvol_yr": res.atm_bpvol_yr,
+                    "vs_otm_bpvol_yr": res.otm_bpvol_yr,
+                    "vs_vol_spread_bpvol_yr": res.vol_spread_bpvol_yr,
+                    "vs_atm_notional": res.atm_notional,
+                    "vs_otm_notional": res.otm_notional,
+                    "vs_notional_ratio": res.notional_ratio,
+                    "vs_net_premium": res.net_premium,
+                    "vs_atm_premium": res.atm_premium,
+                    "vs_otm_premium": res.otm_premium,
+                    "vs_atm_dv01": res.atm_dv01,
+                    "vs_atm_gamma01": res.atm_gamma01,
+                    "vs_atm_vega01": res.atm_vega01,
+                    "vs_atm_theta1d": res.atm_theta1d,
+                    "vs_otm_dv01": res.otm_dv01,
+                    "vs_otm_gamma01": res.otm_gamma01,
+                    "vs_otm_vega01": res.otm_vega01,
+                    "vs_otm_theta1d": res.otm_theta1d,
+                    "vs_dv01": res.dv01,
+                    "vs_gamma01": res.gamma01,
+                    "vs_vega01": res.vega01,
+                    "vs_theta1d": res.theta1d,
+                    "vs_atm_strike_offset": res.atm_strike_offset,
+                    "vs_otm_strike_offset": res.otm_strike_offset,
+                }
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to price vertical spread package %s: %s",
+                row.get("package_id", idx),
+                exc,
+            )
+            continue
+
+    # Step 4: UNMERGE / JOIN back to the original leg-based dataframe
+    # This ensures we support downstream Parquet caching which expects
+    # the original leg structure.
+    if metrics:
+        metrics_df = pd.DataFrame(metrics)
+        # Merge on package_id, broadcasting metrics to all legs
+        out = out.merge(metrics_df, on="package_id", how="left", suffixes=("", "_new"))
+        # Handle any column conflicts from merge
+        for col in vertical_spread_pricing_cols:
+            new_col = f"{col}_new"
+            if new_col in out.columns:
+                out[col] = out[new_col].combine_first(out[col])
+                out.drop(columns=[new_col], inplace=True)
+
+    # Verify row count unchanged (critical for Parquet compatibility)
+    assert len(out) == original_row_count, f"Row count changed after VS pricing: {original_row_count} -> {len(out)}"
+
+    return out
+
+
+def _run_vertical_spread_phase(
+    df: pd.DataFrame,
+    config: SwaptionPackageDetectionConfig,
+    product_col: str,
+    package_col: str,
+    pricer: Optional["QLIRSwapCurve"],
+    vertical_spread_time_window_seconds: int,
+) -> pd.DataFrame:
+    """
+    Phase 3a: Detect vertical spreads (1x1, 1x2, etc. - same tenor, different strikes).
+
+    This includes:
+    - Detection of vertical spread packages
+    - Pricing of detected spreads using merge-price-unmerge workflow
+
+    Args:
+        df: Input DataFrame
+        config: Detection configuration
+        product_col: Column name for product type
+        package_col: Column name for package type
+        pricer: Optional pricer for Greeks calculation
+        vertical_spread_time_window_seconds: Max time gap between spread legs
+
+    Returns:
+        DataFrame with vertical spread annotations and pricing
+    """
+    out = detect_vertical_spreads_packages(
+        df,
+        time_window_seconds=vertical_spread_time_window_seconds,
+        spread_ratios=config.spread_ratios,
+        min_strike_width=config.vertical_spread_min_strike_width,
+        product_col=product_col,
+        package_col=package_col,
+        exec_col=config.exec_col,
+        platform_col=config.platform_col,
+        currency_col=config.currency_col,
+        underlier_col=config.underlier_col,
+        trade_id_col=config.trade_id_col,
+        strike_col=config.strike_col,
+        expiration_col=config.expiration_col,
+        tenor_col=config.tenor_col,
+        forward_col=config.forward_col,
+        notional_col=config.notional_col,
+        package_indicator_col=config.package_indicator_col,
+        require_same_platform=config.require_same_platform,
+        require_same_currency=config.require_same_currency,
+        require_same_underlier=config.require_same_underlier,
+        platform_allowlist=config.platform_allowlist,
+        platform_blocklist=config.platform_blocklist,
+    )
+
+    # Price vertical spreads if pricer is available
+    if pricer is not None:
+        out = _price_vertical_spreads(out, package_col, pricer)
+
+    return out
+
+
+def _run_vega_curve_phase(
+    df: pd.DataFrame,
+    config: SwaptionPackageDetectionConfig,
+    product_col: str,
+    package_col: str,
+    pricer: Optional["QLIRSwapCurve"],
+    vega_curve_time_window_seconds: int,
+) -> pd.DataFrame:
+    """
+    Phase 5: Detect vega curve trades (vega-matched straddles across tenors).
+
+    Requires straddles to be detected first.
+
+    Args:
+        df: Input DataFrame
+        config: Detection configuration
+        product_col: Column name for product type
+        package_col: Column name for package type
+        pricer: Optional pricer for vega calculation
+        vega_curve_time_window_seconds: Max time gap between vega curve straddles
+
+    Returns:
+        DataFrame with vega curve annotations
+    """
+    return detect_vega_curve_packages(
+        df,
+        time_window_seconds=vega_curve_time_window_seconds,
+        vega_tolerance_pct=config.vega_curve_tolerance_pct,
+        min_expiry_diff_years=config.vega_curve_min_expiry_diff_years,
+        min_tail_diff_years=config.vega_curve_min_tail_diff_years,
+        product_col=product_col,
+        package_col=package_col,
+        exec_col=config.exec_col,
+        platform_col=config.platform_col,
+        currency_col=config.currency_col,
+        trade_id_col=config.trade_id_col,
+        trade_label_col=config.trade_label_col,
+        tenor_col=config.tenor_col,
+        forward_col=config.forward_col,
+        notional_col=config.notional_col,
+        premium_col=config.premium_col,
+        require_same_platform=config.require_same_platform,
+        require_same_currency=config.require_same_currency,
+        pricer=pricer,
+    )
+
+
+def _price_outrights(
+    df: pd.DataFrame,
+    package_col: str,
+    pricer: "QLIRSwapCurve",
+) -> pd.DataFrame:
+    """
+    Price outright packages.
+
+    Outrights are single-leg trades, so we use the direct row iteration
+    pattern (same as straddles) rather than merge-price-unmerge.
+
+    Args:
+        df: DataFrame with detected outrights
+        package_col: Column name for package type
+        pricer: QLIRSwapCurve instance for pricing
+
+    Returns:
+        DataFrame with pricing columns added to outright legs
+    """
+    out = df
+
+    outright_pricing_cols: List[str] = [
+        "outright_bpvol_yr",
+        "outright_fwd_premium",
+        "outright_dv01",
+        "outright_vega01",
+        "outright_gamma01",
+        "outright_theta1d",
+    ]
+    for col in outright_pricing_cols:
+        if col not in out.columns:
+            out[col] = np.nan
+
+    outright_mask: pd.Series = out[package_col] == "OUTRIGHT"
+    if not outright_mask.any():
+        return out
+
+    def _price_outright_row(row: pd.Series) -> Optional[USDSwaptionLegPricerResult]:
+        if "SOFR" not in str(row["trade_label"]).upper():
+            return None
+        try:
+            return usd_swaption_leg_pricer_from_row(row, pricer)
+        except Exception:
+            return None
+
+    def _build_outright_pricing_row(row: pd.Series) -> pd.Series:
+        result = _price_outright_row(row)
+        if result is None:
+            return pd.Series(
+                {
+                    "outright_bpvol_yr": np.nan,
+                    "outright_fwd_premium": np.nan,
+                    "outright_dv01": np.nan,
+                    "outright_vega01": np.nan,
+                    "outright_gamma01": np.nan,
+                    "outright_theta1d": np.nan,
+                }
+            )
+        return pd.Series(
+            {
+                "outright_bpvol_yr": result.bpvol_yr,
+                "outright_fwd_premium": result.fwd_prem,
+                "outright_dv01": result.dv01,
+                "outright_vega01": result.vega01,
+                "outright_gamma01": result.gamma01,
+                "outright_theta1d": result.theta1d,
+            }
+        )
+
+    rows = []
+    index = []
+    subset = out.loc[outright_mask]
+    for idx, row in tqdm(
+        subset.iterrows(),
+        total=len(subset),
+        desc="PRICING OUTRIGHTS...",
+    ):
+        rows.append(_build_outright_pricing_row(row))
+        index.append(idx)
+
+    if rows:
+        pricing_results = pd.DataFrame(rows, index=index)
+        out.loc[outright_mask, pricing_results.columns] = pricing_results
+
+    return out
+
+
+def _run_outright_phase(
+    df: pd.DataFrame,
+    config: SwaptionPackageDetectionConfig,
+    product_col: str,
+    package_col: str,
+    pricer: Optional["QLIRSwapCurve"],
+    outright_offset_tolerance_bps: float,
+    outright_platforms_filter: Optional[List[str]],
+) -> pd.DataFrame:
+    """
+    Phase 6: Detect and enrich outright/unexplained trades.
+
+    This runs last to capture all trades not matched by previous detectors.
+
+    Args:
+        df: Input DataFrame
+        config: Detection configuration
+        product_col: Column name for product type
+        package_col: Column name for package type
+        pricer: Optional pricer for Greeks calculation
+        outright_offset_tolerance_bps: Tolerance for ATMF offset benchmark matching
+        outright_platforms_filter: Platforms to consider for outright detection
+
+    Returns:
+        DataFrame with outright annotations and pricing
+    """
+    out = detect_outright_swaptions(
+        df,
+        pricer=pricer,
+        benchmark_offsets_bps=None,  # Use default benchmarks
+        offset_tolerance_bps=outright_offset_tolerance_bps,
+        product_col=product_col,
+        package_col=package_col,
+        trade_id_col=config.trade_id_col,
+        strike_col=config.strike_col,
+        expiration_col=config.expiration_col,
+        underlying_expiration_col=config.tail_maturity_col,
+        notional_col=config.notional_col,
+        trade_label_col=config.trade_label_col,
+        platforms_filter=outright_platforms_filter,
+        platform_col=config.platform_col,
+    )
+
+    # Price outrights if pricer is available
+    if pricer is not None:
+        out = _price_outrights(out, package_col, pricer)
+
+    return out
+
+
 def detect_and_link_swaption_packages_df(
     df: pd.DataFrame,
     *,
@@ -381,563 +1212,91 @@ def detect_and_link_swaption_packages_df(
     # Each detector processes only unpackaged trades, leaving a "pool" of
     # remaining trades for subsequent detectors.
 
-    # Phase 1: Detect risk reversals first (highest priority - IDB structures)
+    # Phase 1: Detect risk reversals (highest priority - IDB structures)
     if detect_risk_reversals:
-        # interdealer risk reversals
-        out = detect_risk_reversals_packages(
+        out = _run_risk_reversal_phase(
             out,
-            time_window_seconds=risk_reversal_time_window_seconds,
-            strike_tolerance=risk_reversal_strike_tolerance,
-            notional_tolerance_pct=risk_reversal_notional_tolerance_pct,
-            require_same_expiration=risk_reversal_require_same_expiration,
-            require_same_tenor=risk_reversal_require_same_tenor,
-            require_same_forward=risk_reversal_require_same_forward,
-            require_directional_structure=risk_reversal_require_directional_structure,
+            config=config,
             product_col=product_col,
             package_col=package_col,
-            exec_col=config.exec_col,
-            platform_col=config.platform_col,
-            currency_col=config.currency_col,
-            underlier_col=config.underlier_col,
-            trade_id_col=config.trade_id_col,
-            strike_col=config.strike_col,
-            expiration_col=config.expiration_col,
-            tenor_col=config.tenor_col,
-            forward_col=config.forward_col,
-            notional_col=config.notional_col,
-            require_same_platform=config.require_same_platform,
-            require_same_currency=config.require_same_currency,
-            require_same_underlier=config.require_same_underlier,
-            platform_allowlist=config.platform_allowlist,
-            platform_blocklist=["XXXX", "XSEF", "XOFF", "BILT"],
+            pricer=pricer,
+            risk_reversal_time_window_seconds=risk_reversal_time_window_seconds,
+            risk_reversal_strike_tolerance=risk_reversal_strike_tolerance,
+            risk_reversal_notional_tolerance_pct=risk_reversal_notional_tolerance_pct,
+            risk_reversal_require_same_expiration=risk_reversal_require_same_expiration,
+            risk_reversal_require_same_tenor=risk_reversal_require_same_tenor,
+            risk_reversal_require_same_forward=risk_reversal_require_same_forward,
+            risk_reversal_require_directional_structure=risk_reversal_require_directional_structure,
+            detect_customer_rr_strangles=detect_customer_rr_strangles,
+            customer_rr_timestamp_window_seconds=customer_rr_timestamp_window_seconds,
+            customer_rr_notional_tolerance_pct=customer_rr_notional_tolerance_pct,
+            customer_rr_width_tolerance_bps=customer_rr_width_tolerance_bps,
+            customer_rr_benchmark_widths_bps=customer_rr_benchmark_widths_bps,
+            customer_rr_platforms_filter=customer_rr_platforms_filter,
         )
-
-        # =================================================================
-        # Merge-Price-Unmerge workflow for Risk Reversal skew & Greeks
-        # =================================================================
-        # The pricer requires merged rows (one row per package with delimited
-        # fields), but downstream Parquet caching needs individual legs.
-        # We merge temporarily for pricing, then broadcast results back.
-
-        rr_mask: pd.Series = out[package_col] == "RISK_REVERSAL"
-        if rr_mask.any() and pricer is not None:
-            # Initialize pricing columns
-            risk_reversal_pricing_cols = [
-                "rr_atmf",
-                "rr_out_strike",
-                "rr_skew_bpvol",
-                "rr_atm_bpvol",
-                "rr_payer_skew",
-                "rr_receiver_skew",
-                "rr_dv01",
-                "rr_wing_dv01",
-                "rr_gamma01",
-                "rr_vega01",
-                "rr_theta1d",
-            ]
-            for col in risk_reversal_pricing_cols:
-                if col not in out.columns:
-                    out[col] = np.nan
-
-            # Step 1: Filter Risk Reversal legs (do NOT modify 'out' directly)
-            rr_legs_subset = out.loc[rr_mask].copy()
-            original_row_count = len(out)
-
-            # Step 2: Merge legs into single rows for the pricer
-            # This creates a temporary view where 4 legs become 1 row per package_id
-            rr_merged_packages = merge_package_legs_to_one_row(rr_legs_subset)
-
-            # Step 3: Calculate metrics on the MERGED rows
-            metrics = []
-            for idx, row in tqdm(
-                rr_merged_packages.iterrows(),
-                total=len(rr_merged_packages),
-                desc="PRICING RISK REVERSALS...",
-            ):
-                try:
-                    res = usd_swaption_dealer_risk_reversal_skew_from_row(row, pricer)
-                    metrics.append(
-                        {
-                            "package_id": row["package_id"],  # Key for joining back
-                            "rr_atmf": res.atm_strike,
-                            "rr_out_strike": int(res.wing_strike_width / 2),
-                            "rr_skew_bpvol": res.skew_bpvol_yr,
-                            "rr_atm_bpvol": res.atm_bpvol_yr,
-                            "rr_payer_skew": res.payer_skew_bpvol_yr,
-                            "rr_receiver_skew": res.receiver_skew_bpvol_yr,
-                            "rr_dv01": res.dv01,
-                            "rr_wing_dv01": res.wing_dv01,
-                            "rr_gamma01": res.gamma01,
-                            "rr_vega01": res.vega01,
-                            "rr_theta1d": res.theta1d,
-                        }
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to price risk reversal package %s: %s",
-                        row.get("package_id", idx),
-                        exc,
-                    )
-                    continue
-
-            # Step 4: UNMERGE / JOIN back to the original leg-based dataframe
-            # This ensures we support downstream Parquet caching which expects
-            # the original leg structure.
-            if metrics:
-                metrics_df = pd.DataFrame(metrics)
-                # Merge on package_id, broadcasting metrics to all legs
-                out = out.merge(metrics_df, on="package_id", how="left", suffixes=("", "_new"))
-                # Handle any column conflicts from merge
-                for col in risk_reversal_pricing_cols:
-                    new_col = f"{col}_new"
-                    if new_col in out.columns:
-                        out[col] = out[new_col].combine_first(out[col])
-                        out.drop(columns=[new_col], inplace=True)
-
-            # Verify row count unchanged (critical for Parquet compatibility)
-            assert len(out) == original_row_count, f"Row count changed after RR pricing: {original_row_count} -> {len(out)}"
-
-        # Customer RR/strangles: 2-leg payer+receiver with benchmark strike widths
-        # custy trades will not be priced
-        if detect_customer_rr_strangles:
-            out = detect_customer_rr_strangles_packages(
-                out,
-                timestamp_window_seconds=customer_rr_timestamp_window_seconds,
-                notional_tolerance_pct=customer_rr_notional_tolerance_pct,
-                width_tolerance_bps=customer_rr_width_tolerance_bps,
-                benchmark_widths_bps=customer_rr_benchmark_widths_bps,
-                product_col=product_col,
-                package_col=package_col,
-                exec_col=config.exec_col,
-                platform_col=config.platform_col,
-                currency_col=config.currency_col,
-                underlier_col=config.underlier_col,
-                trade_id_col=config.trade_id_col,
-                strike_col=config.strike_col,
-                expiration_col=config.expiration_col,
-                tenor_col=config.tenor_col,
-                forward_col=config.forward_col,
-                notional_col=config.notional_col,
-                event_action_col="event_action",
-                require_same_platform=config.require_same_platform,
-                require_same_currency=config.require_same_currency,
-                require_same_underlier=config.require_same_underlier,
-                platforms_filter=customer_rr_platforms_filter or ["BILT", "TPSE", "XXXX"],
-            )
 
     # Phase 2: Detect straddles
     if detect_straddles:
-        # dealers + custy package reported straddles
-        out = detect_straddles_packages(
+        out = _run_straddle_phase(
             out,
-            timestamp_tolerance=datetime.timedelta(seconds=0),
-            strike_tolerance=0,
-            notional_tolerance_pct=0,
+            config=config,
             product_col=product_col,
             package_col=package_col,
-            exec_col=config.exec_col,
-            platform_col=config.platform_col,
-            currency_col=config.currency_col,
-            underlier_col=config.underlier_col,
-            trade_id_col=config.trade_id_col,
-            strike_col=config.strike_col,
-            expiration_col=config.expiration_col,
-            tenor_col=config.tenor_col,
-            notional_col=config.notional_col,
-            package_indicator_col=config.package_indicator_col,
-            require_same_platform=config.require_same_platform,
-            require_same_currency=config.require_same_currency,
-            require_same_underlier=config.require_same_underlier,
-            must_be_reported_as_package=True,
+            pricer=pricer,
+            custy_straddle_timestamp_tolerance=custy_straddle_timestamp_tolerance,
         )
-
-        # custy straddle legs reported seperately
-        out = detect_straddles_packages(
-            out,
-            timestamp_tolerance=custy_straddle_timestamp_tolerance,
-            strike_tolerance=0,
-            notional_tolerance_pct=0,
-            product_col=product_col,
-            package_col=package_col,
-            exec_col=config.exec_col,
-            platform_col=config.platform_col,
-            currency_col=config.currency_col,
-            underlier_col=config.underlier_col,
-            trade_id_col=config.trade_id_col,
-            strike_col=config.strike_col,
-            expiration_col=config.expiration_col,
-            tenor_col=config.tenor_col,
-            notional_col=config.notional_col,
-            package_indicator_col=config.package_indicator_col,
-            require_same_platform=config.require_same_platform,
-            require_same_currency=config.require_same_currency,
-            require_same_underlier=config.require_same_underlier,
-            must_be_reported_as_package=False,
-            add_leg_premiums=True,
-            platforms_filter=["XXXX", "XSEF", "XOFF", "BILT"],
-        )
-
-        # price straddles
-        # columns are for tne entire straddle not seperate legs, metrics/rows will look duplicated before merged
-        straddle_pricing_cols: List[str] = [
-            "straddle_bpvol_yr",
-            "straddle_fwd_premium",
-            "straddle_dv01",
-            "straddle_vega01",
-            "straddle_gamma01",
-            "straddle_theta1d",
-        ]
-        for col in straddle_pricing_cols:
-            if col not in out.columns:
-                out[col] = np.nan
-
-        straddle_mask: pd.Series = out[package_col] == "STRADDLE"
-        if straddle_mask.any() and pricer is not None:
-
-            def _price_straddle(row: pd.Series) -> Optional[USDSwaptionStraddlePricerResult]:
-                if "SOFR" not in str(row["trade_label"]).upper():
-                    return None
-                try:
-                    return usd_swaption_straddle_pricer_from_row(row, pricer)
-
-                # kind of stupid but works
-                except SingleStraddleLegException:
-                    row = row.copy()
-                    row["premium"] = row["premium"] * 2
-                    return usd_swaption_straddle_pricer_from_row(row, pricer)
-                except Exception:
-                    return None
-
-            def _build_pricing_row(row: pd.Series) -> pd.Series:
-                result = _price_straddle(row)
-                if result is None:
-                    return pd.Series(
-                        {
-                            "straddle_bpvol_yr": np.nan,
-                            "straddle_fwd_premium": np.nan,
-                            "straddle_dv01": np.nan,
-                            "straddle_vega01": np.nan,
-                            "straddle_gamma01": np.nan,
-                            "straddle_theta1d": np.nan,
-                        }
-                    )
-                return pd.Series(
-                    {
-                        "straddle_bpvol_yr": result.bpvol_yr,
-                        "straddle_fwd_premium": result.fwd_prem,
-                        "straddle_dv01": result.dv01,
-                        "straddle_vega01": result.vega01,
-                        "straddle_gamma01": result.gamma01,
-                        "straddle_theta1d": result.theta1d,
-                    }
-                )
-
-            # tqdm.pandas(desc="PRICING STRADDLES...")
-            # pricing_results: pd.DataFrame = out.loc[straddle_mask].apply(_build_pricing_row, axis=1)
-            rows = []
-            index = []
-            subset = out.loc[straddle_mask]
-            for idx, row in tqdm(
-                subset.iterrows(),
-                total=len(subset),
-                desc="PRICING STRADDLES...",
-            ):
-                rows.append(_build_pricing_row(row))
-                index.append(idx)
-
-            pricing_results = pd.DataFrame(rows, index=index)
-
-            out.loc[straddle_mask, pricing_results.columns] = pricing_results
 
     # Phase 3b: Detect ladders (christmas trees) - 3+ leg vertical structures
-    # ladders will not be priced, they are mostly custy trades
     if detect_ladders:
-        out = detect_ladder_packages(
+        out = _run_ladder_phase(
             out,
-            time_window_seconds=ladder_time_window_seconds,
-            min_legs=ladder_min_legs,
-            min_strikes=ladder_min_strikes,
-            min_strike_width_bps=ladder_min_strike_width_bps,
-            notional_ratio_tolerance=ladder_notional_ratio_tolerance,
+            config=config,
             product_col=product_col,
             package_col=package_col,
-            exec_col=config.exec_col,
-            platform_col=config.platform_col,
-            currency_col=config.currency_col,
-            underlier_col=config.underlier_col,
-            trade_id_col=config.trade_id_col,
-            strike_col=config.strike_col,
-            expiration_col=config.expiration_col,
-            tenor_col=config.tenor_col,
-            forward_col=config.forward_col,
-            notional_col=config.notional_col,
-            premium_col=config.premium_col,
-            package_indicator_col=config.package_indicator_col,
-            require_same_platform=config.require_same_platform,
-            require_same_currency=config.require_same_currency,
-            require_same_underlier=config.require_same_underlier,
-            platform_allowlist=config.platform_allowlist,
-            platform_blocklist=config.platform_blocklist,
+            ladder_time_window_seconds=ladder_time_window_seconds,
+            ladder_min_legs=ladder_min_legs,
+            ladder_min_strikes=ladder_min_strikes,
+            ladder_min_strike_width_bps=ladder_min_strike_width_bps,
+            ladder_notional_ratio_tolerance=ladder_notional_ratio_tolerance,
         )
 
     # Phase 3a: Detect vertical spreads (1x1, 1x2, etc.)
     if detect_vertical_spreads:
-        out = detect_vertical_spreads_packages(
+        out = _run_vertical_spread_phase(
             out,
-            time_window_seconds=vertical_spread_time_window_seconds,
-            spread_ratios=config.spread_ratios,
-            min_strike_width=config.vertical_spread_min_strike_width,
+            config=config,
             product_col=product_col,
             package_col=package_col,
-            exec_col=config.exec_col,
-            platform_col=config.platform_col,
-            currency_col=config.currency_col,
-            underlier_col=config.underlier_col,
-            trade_id_col=config.trade_id_col,
-            strike_col=config.strike_col,
-            expiration_col=config.expiration_col,
-            tenor_col=config.tenor_col,
-            forward_col=config.forward_col,
-            notional_col=config.notional_col,
-            package_indicator_col=config.package_indicator_col,
-            require_same_platform=config.require_same_platform,
-            require_same_currency=config.require_same_currency,
-            require_same_underlier=config.require_same_underlier,
-            platform_allowlist=config.platform_allowlist,
-            platform_blocklist=config.platform_blocklist,
+            pricer=pricer,
+            vertical_spread_time_window_seconds=vertical_spread_time_window_seconds,
         )
-
-        # =================================================================
-        # Merge-Price-Unmerge workflow for Vertical Spread Greeks & metrics
-        # =================================================================
-        # The pricer requires merged rows (one row per package with delimited
-        # fields), but downstream Parquet caching needs individual legs.
-        # We merge temporarily for pricing, then broadcast results back.
-
-        vs_mask: pd.Series = out[package_col].astype(str).str.contains("VERTICAL_SPREAD", na=False)
-        if vs_mask.any() and pricer is not None:
-            # Initialize pricing columns (prefixed with vs_ for vertical spread)
-            vertical_spread_pricing_cols = [
-                "vs_spread_type",
-                "vs_atm_strike",
-                "vs_otm_strike",
-                "vs_strike_width_bps",
-                "vs_atm_bpvol_yr",
-                "vs_otm_bpvol_yr",
-                "vs_vol_spread_bpvol_yr",
-                "vs_atm_notional",
-                "vs_otm_notional",
-                "vs_notional_ratio",
-                "vs_net_premium",
-                "vs_atm_premium",
-                "vs_otm_premium",
-                "vs_atm_dv01",
-                "vs_atm_gamma01",
-                "vs_atm_vega01",
-                "vs_atm_theta1d",
-                "vs_otm_dv01",
-                "vs_otm_gamma01",
-                "vs_otm_vega01",
-                "vs_otm_theta1d",
-                "vs_dv01",
-                "vs_gamma01",
-                "vs_vega01",
-                "vs_theta1d",
-                "vs_atm_strike_offset",
-                "vs_otm_strike_offset",
-            ]
-            for col in vertical_spread_pricing_cols:
-                if col not in out.columns:
-                    out[col] = np.nan
-
-            # Step 1: Filter Vertical Spread legs (do NOT modify 'out' directly)
-            vs_legs_subset = out.loc[vs_mask].copy()
-            original_row_count = len(out)
-
-            # Step 2: Merge legs into single rows for the pricer
-            # This creates a temporary view where 2 legs become 1 row per package_id
-            vs_merged_packages = merge_package_legs_to_one_row(vs_legs_subset)
-
-            # Step 3: Calculate metrics on the MERGED rows
-            metrics = []
-            for idx, row in tqdm(
-                vs_merged_packages.iterrows(),
-                total=len(vs_merged_packages),
-                desc="PRICING VERTICAL SPREADS...",
-            ):
-                try:
-                    res: USDSwaptionVerticalSpreadPricerResult = usd_swaption_vertical_spread_pricer_from_row(row, pricer)
-                    metrics.append(
-                        {
-                            "package_id": row["package_id"],  # Key for joining back
-                            "vs_spread_type": res.spread_type,
-                            "vs_atm_strike": res.atm_strike,
-                            "vs_otm_strike": res.otm_strike,
-                            "vs_strike_width_bps": res.strike_width_bps,
-                            "vs_atm_bpvol_yr": res.atm_bpvol_yr,
-                            "vs_otm_bpvol_yr": res.otm_bpvol_yr,
-                            "vs_vol_spread_bpvol_yr": res.vol_spread_bpvol_yr,
-                            "vs_atm_notional": res.atm_notional,
-                            "vs_otm_notional": res.otm_notional,
-                            "vs_notional_ratio": res.notional_ratio,
-                            "vs_net_premium": res.net_premium,
-                            "vs_atm_premium": res.atm_premium,
-                            "vs_otm_premium": res.otm_premium,
-                            "vs_atm_dv01": res.atm_dv01,
-                            "vs_atm_gamma01": res.atm_gamma01,
-                            "vs_atm_vega01": res.atm_vega01,
-                            "vs_atm_theta1d": res.atm_theta1d,
-                            "vs_otm_dv01": res.otm_dv01,
-                            "vs_otm_gamma01": res.otm_gamma01,
-                            "vs_otm_vega01": res.otm_vega01,
-                            "vs_otm_theta1d": res.otm_theta1d,
-                            "vs_dv01": res.dv01,
-                            "vs_gamma01": res.gamma01,
-                            "vs_vega01": res.vega01,
-                            "vs_theta1d": res.theta1d,
-                            "vs_atm_strike_offset": res.atm_strike_offset,
-                            "vs_otm_strike_offset": res.otm_strike_offset,
-                        }
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to price vertical spread package %s: %s",
-                        row.get("package_id", idx),
-                        exc,
-                    )
-                    continue
-
-            # Step 4: UNMERGE / JOIN back to the original leg-based dataframe
-            # This ensures we support downstream Parquet caching which expects
-            # the original leg structure.
-            if metrics:
-                metrics_df = pd.DataFrame(metrics)
-                # Merge on package_id, broadcasting metrics to all legs
-                out = out.merge(metrics_df, on="package_id", how="left", suffixes=("", "_new"))
-                # Handle any column conflicts from merge
-                for col in vertical_spread_pricing_cols:
-                    new_col = f"{col}_new"
-                    if new_col in out.columns:
-                        out[col] = out[new_col].combine_first(out[col])
-                        out.drop(columns=[new_col], inplace=True)
-
-            # Verify row count unchanged (critical for Parquet compatibility)
-            assert len(out) == original_row_count, f"Row count changed after VS pricing: {original_row_count} -> {len(out)}"
 
     # Phase 4: Conditional curve detection (same expiry, different tails)
     # Note: detect_conditional_curve parameter reserved for future implementation
 
     # Phase 5: Detect vega curve trades (requires straddles to be detected first)
     if detect_vega_curve and detect_straddles:
-        out = detect_vega_curve_packages(
+        out = _run_vega_curve_phase(
             out,
-            time_window_seconds=vega_curve_time_window_seconds,
-            vega_tolerance_pct=config.vega_curve_tolerance_pct,
-            min_expiry_diff_years=config.vega_curve_min_expiry_diff_years,
-            min_tail_diff_years=config.vega_curve_min_tail_diff_years,
+            config=config,
             product_col=product_col,
             package_col=package_col,
-            exec_col=config.exec_col,
-            platform_col=config.platform_col,
-            currency_col=config.currency_col,
-            trade_id_col=config.trade_id_col,
-            trade_label_col=config.trade_label_col,
-            tenor_col=config.tenor_col,
-            forward_col=config.forward_col,
-            notional_col=config.notional_col,
-            premium_col=config.premium_col,
-            require_same_platform=config.require_same_platform,
-            require_same_currency=config.require_same_currency,
             pricer=pricer,
+            vega_curve_time_window_seconds=vega_curve_time_window_seconds,
         )
 
     # Phase 6: Detect and enrich outright/unexplained trades
     # This runs last to capture all trades not matched by previous detectors
     if detect_outrights:
-        out = detect_outright_swaptions(
+        out = _run_outright_phase(
             out,
-            pricer=pricer,
-            benchmark_offsets_bps=None,  # Use default benchmarks
-            offset_tolerance_bps=outright_offset_tolerance_bps,
+            config=config,
             product_col=product_col,
             package_col=package_col,
-            trade_id_col=config.trade_id_col,
-            strike_col=config.strike_col,
-            expiration_col=config.expiration_col,
-            underlying_expiration_col=config.tail_maturity_col,
-            notional_col=config.notional_col,
-            trade_label_col=config.trade_label_col,
-            platforms_filter=outright_platforms_filter,
-            platform_col=config.platform_col,
+            pricer=pricer,
+            outright_offset_tolerance_bps=outright_offset_tolerance_bps,
+            outright_platforms_filter=outright_platforms_filter,
         )
-
-        # =================================================================
-        # Price outrights using usd_swaption_leg_pricer_from_row
-        # =================================================================
-        # Outrights are single-leg trades, so we use the direct row iteration
-        # pattern (same as straddles) rather than merge-price-unmerge.
-
-        outright_pricing_cols: List[str] = [
-            "outright_bpvol_yr",
-            "outright_fwd_premium",
-            "outright_dv01",
-            "outright_vega01",
-            "outright_gamma01",
-            "outright_theta1d",
-        ]
-        for col in outright_pricing_cols:
-            if col not in out.columns:
-                out[col] = np.nan
-
-        outright_mask: pd.Series = out[package_col] == "OUTRIGHT"
-        if outright_mask.any() and pricer is not None:
-
-            def _price_outright(row: pd.Series) -> Optional[USDSwaptionLegPricerResult]:
-                if "SOFR" not in str(row["trade_label"]).upper():
-                    return None
-                try:
-                    return usd_swaption_leg_pricer_from_row(row, pricer)
-                except Exception:
-                    return None
-
-            def _build_outright_pricing_row(row: pd.Series) -> pd.Series:
-                result = _price_outright(row)
-                if result is None:
-                    return pd.Series(
-                        {
-                            "outright_bpvol_yr": np.nan,
-                            "outright_fwd_premium": np.nan,
-                            "outright_dv01": np.nan,
-                            "outright_vega01": np.nan,
-                            "outright_gamma01": np.nan,
-                            "outright_theta1d": np.nan,
-                        }
-                    )
-                return pd.Series(
-                    {
-                        "outright_bpvol_yr": result.bpvol_yr,
-                        "outright_fwd_premium": result.fwd_prem,
-                        "outright_dv01": result.dv01,
-                        "outright_vega01": result.vega01,
-                        "outright_gamma01": result.gamma01,
-                        "outright_theta1d": result.theta1d,
-                    }
-                )
-
-            rows = []
-            index = []
-            subset = out.loc[outright_mask]
-            for idx, row in tqdm(
-                subset.iterrows(),
-                total=len(subset),
-                desc="PRICING OUTRIGHTS...",
-            ):
-                rows.append(_build_outright_pricing_row(row))
-                index.append(idx)
-
-            if rows:
-                pricing_results = pd.DataFrame(rows, index=index)
-                out.loc[outright_mask, pricing_results.columns] = pricing_results
 
     return out
 
