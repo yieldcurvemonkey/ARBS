@@ -22,17 +22,24 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import datetime, timedelta
+import pytz
+from datetime import datetime, timedelta, date
 from typing import Optional
 
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+# Global Table Names
+PACKAGES_TABLE_NAME = "arbs_swaption_packages_v0"
+LEGS_TABLE_NAME = "arbs_swaption_legs_v0"
+NY_tz = pytz.timezone("America/New_York")
+
+
 # Schema definitions
-SCHEMA_SQL = """
+SCHEMA_SQL = f"""
 -- 1. Package-level data (One row per classified package)
-CREATE TABLE IF NOT EXISTS swaption_packages (
+CREATE TABLE IF NOT EXISTS {PACKAGES_TABLE_NAME} (
     package_id TEXT PRIMARY KEY,
     package_type TEXT NOT NULL,
     platform TEXT,
@@ -49,9 +56,9 @@ CREATE TABLE IF NOT EXISTS swaption_packages (
 );
 
 -- 2. Leg-level data (Multiple rows per package)
-CREATE TABLE IF NOT EXISTS swaption_legs (
+CREATE TABLE IF NOT EXISTS {LEGS_TABLE_NAME} (
     id SERIAL PRIMARY KEY,
-    package_id TEXT REFERENCES swaption_packages(package_id),
+    package_id TEXT REFERENCES {PACKAGES_TABLE_NAME}(package_id),
     trade_id TEXT NOT NULL,
     leg_order INTEGER,
     product_type TEXT,
@@ -63,10 +70,10 @@ CREATE TABLE IF NOT EXISTS swaption_legs (
 );
 
 -- Indexes for performance
-CREATE INDEX IF NOT EXISTS idx_packages_type ON swaption_packages(package_type);
-CREATE INDEX IF NOT EXISTS idx_packages_date ON swaption_packages(execution_timestamp);
-CREATE INDEX IF NOT EXISTS idx_packages_platform ON swaption_packages(platform);
-CREATE INDEX IF NOT EXISTS idx_legs_package ON swaption_legs(package_id);
+CREATE INDEX IF NOT EXISTS idx_packages_type ON {PACKAGES_TABLE_NAME}(package_type);
+CREATE INDEX IF NOT EXISTS idx_packages_date ON {PACKAGES_TABLE_NAME}(execution_timestamp);
+CREATE INDEX IF NOT EXISTS idx_packages_platform ON {PACKAGES_TABLE_NAME}(platform);
+CREATE INDEX IF NOT EXISTS idx_legs_package ON {LEGS_TABLE_NAME}(package_id);
 """
 
 
@@ -149,9 +156,7 @@ def transform_to_relational(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
     # For trades without a package_id, create one from trade_id
     mask_no_pkg = df["package_id"].isna() | (df["package_id"] == "")
     if mask_no_pkg.any():
-        df.loc[mask_no_pkg, "package_id"] = df.loc[mask_no_pkg, "trade_id"].apply(
-            lambda x: f"single_{x}"
-        )
+        df.loc[mask_no_pkg, "package_id"] = df.loc[mask_no_pkg, "trade_id"].apply(lambda x: f"single_{x}")
         df.loc[mask_no_pkg, "package_type"] = "OUTRIGHT"
 
     # Group by package_id to build package-level records
@@ -224,7 +229,7 @@ def transform_to_relational(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
 
 def get_existing_package_ids(engine: Engine) -> set:
     """Get set of existing package_ids from the database."""
-    query = "SELECT package_id FROM swaption_packages"
+    query = f"SELECT package_id FROM {PACKAGES_TABLE_NAME}"
     try:
         with engine.connect() as conn:
             result = conn.execute(text(query))
@@ -277,7 +282,7 @@ def ingest_to_postgres(
     with engine.begin() as conn:
         # Use pandas to_sql for bulk insert
         packages_df.to_sql(
-            "swaption_packages",
+            PACKAGES_TABLE_NAME,
             conn,
             if_exists="append",
             index=False,
@@ -291,7 +296,7 @@ def ingest_to_postgres(
                 legs_df = legs_df.drop(columns=["id"])
 
             legs_df.to_sql(
-                "swaption_legs",
+                LEGS_TABLE_NAME,
                 conn,
                 if_exists="append",
                 index=False,
@@ -405,9 +410,7 @@ def main(
         legs_inserted = 0
     else:
         print("\nIngesting to Postgres...")
-        packages_inserted, legs_inserted = ingest_to_postgres(
-            packages_df, legs_df, engine
-        )
+        packages_inserted, legs_inserted = ingest_to_postgres(packages_df, legs_df, engine)
 
     # Step 5: Print summary
     print_summary(df, packages_df, legs_df, packages_inserted, legs_inserted)
@@ -415,9 +418,7 @@ def main(
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Ingest swaption classification data into SwapPulse database."
-    )
+    parser = argparse.ArgumentParser(description="Ingest swaption classification data into SwapPulse database.")
     parser.add_argument(
         "--days",
         type=int,
@@ -448,20 +449,26 @@ def parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
-    args = parse_args()
+    # args = parse_args()
 
-    # Parse dates if provided
-    start = None
-    end = None
-    if args.start:
-        start = pd.Timestamp(args.start, tz="UTC")
-    if args.end:
-        end = pd.Timestamp(args.end, tz="UTC")
+    # # Parse dates if provided
+    # start = None
+    # end = None
+    # if args.start:
+    #     start = pd.Timestamp(args.start, tz="UTC")
+    # if args.end:
+    #     end = pd.Timestamp(args.end, tz="UTC")
+
+    cache_path = r"C:\Users\chris\clee\project-oasis\private\sdranalytics\.cache"
+
+    as_of = date(2026, 1, 15)
+    start = NY_tz.localize(datetime(as_of.year, as_of.month, as_of.day, 0, 0))
+    end = NY_tz.localize(datetime(as_of.year, as_of.month, as_of.day, 23, 59))
 
     main(
         start=start,
         end=end,
-        days=args.days,
-        cache_path=args.cache_path,
-        dry_run=args.dry_run,
+        # days=args.days,
+        cache_path=cache_path,
+        dry_run=True,
     )
