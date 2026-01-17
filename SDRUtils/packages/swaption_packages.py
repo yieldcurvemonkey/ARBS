@@ -359,49 +359,50 @@ def detect_and_link_swaption_packages_df(
             platform_blocklist=["XXXX", "XSEF", "XOFF", "BILT"], 
         )
 
-        risk_reversal_pricing_cols = [
-            "rr_skew_bpvol",
-            "rr_atm_bpvol",
-            "rr_payer_skew",
-            "rr_receiver_skew",
-            "rr_dv01",
-            "rr_gamma01",
-            "rr_vega01",
-            "rr_theta1d",
-        ]
-        for col in risk_reversal_pricing_cols:
-            if col not in out.columns:
-                out[col] = np.nan
+        # not correct
+        # risk_reversal_pricing_cols = [
+        #     "rr_skew_bpvol",
+        #     "rr_atm_bpvol",
+        #     "rr_payer_skew",
+        #     "rr_receiver_skew",
+        #     "rr_dv01",
+        #     "rr_gamma01",
+        #     "rr_vega01",
+        #     "rr_theta1d",
+        # ]
+        # for col in risk_reversal_pricing_cols:
+        #     if col not in out.columns:
+        #         out[col] = np.nan
 
-        rr_mask: pd.Series = out[package_col] == "RISK_REVERSAL"
-        if rr_mask.any() and pricer is not None:
+        # rr_mask: pd.Series = out[package_col] == "RISK_REVERSAL"
+        # if rr_mask.any() and pricer is not None:
 
-            def _price_rr(row: pd.Series) -> Optional[USDSwaptionDealerRiskReversalSkewResult]:
-                try:
-                    return usd_swaption_dealer_risk_reversal_skew_from_row(row, pricer)
-                except Exception as exc:
-                    logger.warning("Failed to price risk reversal row %s: %s", row.name, exc)
-                    return None
+        #     def _price_rr(row: pd.Series) -> Optional[USDSwaptionDealerRiskReversalSkewResult]:
+        #         try:
+        #             return usd_swaption_dealer_risk_reversal_skew_from_row(row, pricer)
+        #         except Exception as exc:
+        #             logger.warning("Failed to price risk reversal row %s: %s", row.name, exc)
+        #             return None
 
-            def _build_rr_pricing_row(row: pd.Series) -> pd.Series:
-                result = _price_rr(row)
-                if result is None:
-                    return pd.Series({col: np.nan for col in risk_reversal_pricing_cols})
-                return pd.Series(
-                    {
-                        "rr_skew_bpvol": result.skew_bpvol_yr,
-                        "rr_atm_bpvol": result.atm_bpvol_yr,
-                        "rr_payer_skew": result.payer_skew_bpvol_yr,
-                        "rr_receiver_skew": result.receiver_skew_bpvol_yr,
-                        "rr_dv01": result.dv01,
-                        "rr_gamma01": result.gamma01,
-                        "rr_vega01": result.vega01,
-                        "rr_theta1d": result.theta1d,
-                    }
-                )
+        #     def _build_rr_pricing_row(row: pd.Series) -> pd.Series:
+        #         result = _price_rr(row)
+        #         if result is None:
+        #             return pd.Series({col: np.nan for col in risk_reversal_pricing_cols})
+        #         return pd.Series(
+        #             {
+        #                 "rr_skew_bpvol": result.skew_bpvol_yr,
+        #                 "rr_atm_bpvol": result.atm_bpvol_yr,
+        #                 "rr_payer_skew": result.payer_skew_bpvol_yr,
+        #                 "rr_receiver_skew": result.receiver_skew_bpvol_yr,
+        #                 "rr_dv01": result.dv01,
+        #                 "rr_gamma01": result.gamma01,
+        #                 "rr_vega01": result.vega01,
+        #                 "rr_theta1d": result.theta1d,
+        #             }
+        #         )
 
-            rr_pricing_results = out.loc[rr_mask].apply(_build_rr_pricing_row, axis=1)
-            out.loc[rr_mask, rr_pricing_results.columns] = rr_pricing_results
+        #     rr_pricing_results = out.loc[rr_mask].apply(_build_rr_pricing_row, axis=1)
+        #     out.loc[rr_mask, rr_pricing_results.columns] = rr_pricing_results
 
         # TODO custy risk reversals or stangles here
 
@@ -458,6 +459,7 @@ def detect_and_link_swaption_packages_df(
         )
 
         # price straddles
+        # columns are for tne entire straddle not seperate legs, metrics/rows will look duplicated before merged
         straddle_pricing_cols: List[str] = [
             "straddle_bpvol_yr",
             "straddle_fwd_premium",
