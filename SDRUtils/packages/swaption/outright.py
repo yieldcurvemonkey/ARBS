@@ -72,7 +72,7 @@ BENCHMARK_STRIKE_OFFSETS_BPS: List[int] = [
 ]
 
 # Default tolerance for rounding to benchmark offsets (in bps)
-DEFAULT_OFFSET_TOLERANCE_BPS: float = 2.5
+DEFAULT_OFFSET_TOLERANCE_BPS: float = 7.5
 
 
 def _round_to_benchmark_offset(

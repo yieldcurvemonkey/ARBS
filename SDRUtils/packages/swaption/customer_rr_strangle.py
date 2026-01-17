@@ -36,7 +36,7 @@ from SDRUtils.packages.swaption.utils import (
 
 
 # Benchmark strike widths in basis points
-BENCHMARK_WIDTHS_BPS: List[int] = [10, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200]
+BENCHMARK_WIDTHS_BPS: List[int] = [10, 15, 20, 25, 30, 40, 50, 60, 70, 75, 80, 90, 100, 110, 125, 130, 150, 175, 200]
 
 # Default detection parameters
 DEFAULT_WIDTH_TOLERANCE_BPS: float = 3.0
@@ -338,9 +338,7 @@ def detect_customer_rr_strangles_packages(
             strike_diff_bps = abs(p_strike - r_strike) * 10000
 
             # Check if strike difference matches a benchmark width
-            matched_width = _match_benchmark_width(
-                strike_diff_bps, benchmark_widths_bps, width_tolerance_bps
-            )
+            matched_width = _match_benchmark_width(strike_diff_bps, benchmark_widths_bps, width_tolerance_bps)
 
             if matched_width is None:
                 continue
