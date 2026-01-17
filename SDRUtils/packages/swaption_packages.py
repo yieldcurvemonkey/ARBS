@@ -61,6 +61,7 @@ from SDRUtils.packages.swaption.utils import (
     estimate_swaption_vega as _estimate_swaption_vega,
     extract_effective_premium,
 )
+from SDRUtils.packages.utils import merge_package_legs_to_one_row
 from SDRUtils.products._swaptions.pricer import (
     USDSwaptionDealerRiskReversalSkewResult,
     USDSwaptionStraddlePricerResult,
@@ -359,50 +360,84 @@ def detect_and_link_swaption_packages_df(
             platform_blocklist=["XXXX", "XSEF", "XOFF", "BILT"], 
         )
 
-        # not correct
-        # risk_reversal_pricing_cols = [
-        #     "rr_skew_bpvol",
-        #     "rr_atm_bpvol",
-        #     "rr_payer_skew",
-        #     "rr_receiver_skew",
-        #     "rr_dv01",
-        #     "rr_gamma01",
-        #     "rr_vega01",
-        #     "rr_theta1d",
-        # ]
-        # for col in risk_reversal_pricing_cols:
-        #     if col not in out.columns:
-        #         out[col] = np.nan
+        # =================================================================
+        # Merge-Price-Unmerge workflow for Risk Reversal skew & Greeks
+        # =================================================================
+        # The pricer requires merged rows (one row per package with delimited
+        # fields), but downstream Parquet caching needs individual legs.
+        # We merge temporarily for pricing, then broadcast results back.
 
-        # rr_mask: pd.Series = out[package_col] == "RISK_REVERSAL"
-        # if rr_mask.any() and pricer is not None:
+        rr_mask: pd.Series = out[package_col] == "RISK_REVERSAL"
+        if rr_mask.any() and pricer is not None:
+            # Initialize pricing columns
+            risk_reversal_pricing_cols = [
+                "rr_skew_bpvol",
+                "rr_atm_bpvol",
+                "rr_payer_skew",
+                "rr_receiver_skew",
+                "rr_dv01",
+                "rr_gamma01",
+                "rr_vega01",
+                "rr_theta1d",
+            ]
+            for col in risk_reversal_pricing_cols:
+                if col not in out.columns:
+                    out[col] = np.nan
 
-        #     def _price_rr(row: pd.Series) -> Optional[USDSwaptionDealerRiskReversalSkewResult]:
-        #         try:
-        #             return usd_swaption_dealer_risk_reversal_skew_from_row(row, pricer)
-        #         except Exception as exc:
-        #             logger.warning("Failed to price risk reversal row %s: %s", row.name, exc)
-        #             return None
+            # Step 1: Filter Risk Reversal legs (do NOT modify 'out' directly)
+            rr_legs_subset = out.loc[rr_mask].copy()
+            original_row_count = len(out)
 
-        #     def _build_rr_pricing_row(row: pd.Series) -> pd.Series:
-        #         result = _price_rr(row)
-        #         if result is None:
-        #             return pd.Series({col: np.nan for col in risk_reversal_pricing_cols})
-        #         return pd.Series(
-        #             {
-        #                 "rr_skew_bpvol": result.skew_bpvol_yr,
-        #                 "rr_atm_bpvol": result.atm_bpvol_yr,
-        #                 "rr_payer_skew": result.payer_skew_bpvol_yr,
-        #                 "rr_receiver_skew": result.receiver_skew_bpvol_yr,
-        #                 "rr_dv01": result.dv01,
-        #                 "rr_gamma01": result.gamma01,
-        #                 "rr_vega01": result.vega01,
-        #                 "rr_theta1d": result.theta1d,
-        #             }
-        #         )
+            # Step 2: Merge legs into single rows for the pricer
+            # This creates a temporary view where 4 legs become 1 row per package_id
+            rr_merged_packages = merge_package_legs_to_one_row(rr_legs_subset)
 
-        #     rr_pricing_results = out.loc[rr_mask].apply(_build_rr_pricing_row, axis=1)
-        #     out.loc[rr_mask, rr_pricing_results.columns] = rr_pricing_results
+            # Step 3: Calculate metrics on the MERGED rows
+            metrics = []
+            for idx, row in tqdm(
+                rr_merged_packages.iterrows(),
+                total=len(rr_merged_packages),
+                desc="PRICING RISK REVERSALS...",
+            ):
+                try:
+                    res = usd_swaption_dealer_risk_reversal_skew_from_row(row, pricer)
+                    metrics.append({
+                        "package_id": row["package_id"],  # Key for joining back
+                        "rr_skew_bpvol": res.skew_bpvol_yr,
+                        "rr_atm_bpvol": res.atm_bpvol_yr,
+                        "rr_payer_skew": res.payer_skew_bpvol_yr,
+                        "rr_receiver_skew": res.receiver_skew_bpvol_yr,
+                        "rr_dv01": res.dv01,
+                        "rr_gamma01": res.gamma01,
+                        "rr_vega01": res.vega01,
+                        "rr_theta1d": res.theta1d,
+                    })
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to price risk reversal package %s: %s",
+                        row.get("package_id", idx),
+                        exc,
+                    )
+                    continue
+
+            # Step 4: UNMERGE / JOIN back to the original leg-based dataframe
+            # This ensures we support downstream Parquet caching which expects
+            # the original leg structure.
+            if metrics:
+                metrics_df = pd.DataFrame(metrics)
+                # Merge on package_id, broadcasting metrics to all legs
+                out = out.merge(metrics_df, on="package_id", how="left", suffixes=("", "_new"))
+                # Handle any column conflicts from merge
+                for col in risk_reversal_pricing_cols:
+                    new_col = f"{col}_new"
+                    if new_col in out.columns:
+                        out[col] = out[new_col].combine_first(out[col])
+                        out.drop(columns=[new_col], inplace=True)
+
+            # Verify row count unchanged (critical for Parquet compatibility)
+            assert len(out) == original_row_count, (
+                f"Row count changed after RR pricing: {original_row_count} -> {len(out)}"
+            )
 
         # TODO custy risk reversals or stangles here
 
