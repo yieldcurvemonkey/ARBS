@@ -5,6 +5,7 @@ Detects multi-leg swaption packages including:
 - STRADDLE: Payer + Receiver swaptions with same strike/expiry/tenor
 - RISK_REVERSAL: 4-leg structures with wings + delta hedge (3 strikes, 2 notionals)
 - VERTICAL_SPREAD: Same tenor, different strikes, same option type (1x1, 1x2, 1x1.5, etc.)
+- LADDER: Christmas tree structures with 3+ legs, same option type, asymmetric notionals
 - CONDITIONAL_CURVE: Same expiry, different tail maturities (e.g., 1Yx10Y vs 1Yx30Y)
 - VEGA_CURVE: Vega-matched straddles across different tenors (expiry/tail spreads)
 - VEGA_BUCKETED_PACKAGE: Trades with similar vega within time proximity
@@ -46,6 +47,7 @@ from SDRUtils.packages.base import PackageDetector
 from SDRUtils.packages.swaption.straddle import detect_straddles_packages
 from SDRUtils.packages.swaption.risk_reversal import detect_risk_reversals_packages
 from SDRUtils.packages.swaption.spreads import detect_vertical_spreads_packages
+from SDRUtils.packages.swaption.ladder import detect_ladder_packages
 from SDRUtils.packages.swaption.conditional_curve import detect_conditional_curve_packages
 from SDRUtils.packages.swaption.vega_curve import detect_vega_curve_packages
 from SDRUtils.packages.swaption.vega_buckets import detect_vega_bucketed_packages
@@ -260,6 +262,13 @@ def detect_and_link_swaption_packages_df(
     customer_rr_platforms_filter: Optional[List[str]] = None,
     # Vertical spread parameters
     vertical_spread_time_window_seconds: int = 120,
+    # Ladder parameters (3+ leg christmas tree structures)
+    detect_ladders: bool = True,
+    ladder_time_window_seconds: Optional[int] = None,  # None = use platform-specific defaults
+    ladder_min_legs: int = 3,
+    ladder_min_strikes: int = 2,
+    ladder_min_strike_width_bps: float = 15.0,
+    ladder_notional_ratio_tolerance: float = 0.15,
     # Conditional curve parameters
     conditional_curve_time_window_seconds: int = 300,
     # Vega curve parameters
@@ -278,6 +287,7 @@ def detect_and_link_swaption_packages_df(
     1b. Customer RR/strangles (2 legs / payer+receiver / benchmark strike widths)
     2. Straddles (payer + receiver with same strike/expiry/tenor)
     3. Vertical spreads (1x1, 1x2, 1x1.5, etc. - same tenor, different strikes)
+    3b. Ladders (3+ legs / christmas trees - same tenor, 3+ strikes, asymmetric notionals)
     4. Conditional curve trades (same expiry, different tails)
     5. Vega curve trades (vega-matched straddles across tenors)
 
@@ -314,6 +324,12 @@ def detect_and_link_swaption_packages_df(
         customer_rr_benchmark_widths_bps: List of benchmark widths (default: standard)
         customer_rr_platforms_filter: Platforms to consider for customer RR/strangles
         vertical_spread_time_window_seconds: Max time gap between spread legs
+        detect_ladders: Whether to detect ladder/christmas tree structures (default True)
+        ladder_time_window_seconds: Override platform-specific time windows (None = auto)
+        ladder_min_legs: Minimum legs to qualify as ladder (default 3)
+        ladder_min_strikes: Minimum distinct strikes (default 2)
+        ladder_min_strike_width_bps: Minimum strike separation in bps (default 15)
+        ladder_notional_ratio_tolerance: Tolerance for notional ratio matching (default 0.15)
         conditional_curve_time_window_seconds: Max time gap between curve legs
         vega_curve_time_window_seconds: Max time gap between vega curve straddles
         pricer: Optional QLIRSwapCurve instance for vega/skew calculation
@@ -330,6 +346,10 @@ def detect_and_link_swaption_packages_df(
         - vega_curve_id: ID linking vega curve straddles
         - vega_curve_legs: All trade IDs in vega curve
         - custy_rr_width_bps: For customer RR/strangles, the benchmark strike width
+        - ladder_structure: For ladders, structure label (e.g., "1x1x2", "2x1x1")
+        - ladder_direction: For ladders, "BULL" or "BEAR"
+        - ladder_strikes: For ladders, list of strikes
+        - ladder_notionals: For ladders, list of notionals per strike
     """
     if config is None:
         config = DEFAULT_SWAPTION_PACKAGE_CONFIG
@@ -759,6 +779,37 @@ def detect_and_link_swaption_packages_df(
             assert len(out) == original_row_count, (
                 f"Row count changed after VS pricing: {original_row_count} -> {len(out)}"
             )
+
+    # Phase 3b: Detect ladders (christmas trees) - 3+ leg vertical structures
+    # Runs after vertical spreads so 2-leg spreads are detected first
+    if detect_ladders:
+        out = detect_ladder_packages(
+            out,
+            time_window_seconds=ladder_time_window_seconds,
+            min_legs=ladder_min_legs,
+            min_strikes=ladder_min_strikes,
+            min_strike_width_bps=ladder_min_strike_width_bps,
+            notional_ratio_tolerance=ladder_notional_ratio_tolerance,
+            product_col=product_col,
+            package_col=package_col,
+            exec_col=config.exec_col,
+            platform_col=config.platform_col,
+            currency_col=config.currency_col,
+            underlier_col=config.underlier_col,
+            trade_id_col=config.trade_id_col,
+            strike_col=config.strike_col,
+            expiration_col=config.expiration_col,
+            tenor_col=config.tenor_col,
+            forward_col=config.forward_col,
+            notional_col=config.notional_col,
+            premium_col=config.premium_col,
+            package_indicator_col=config.package_indicator_col,
+            require_same_platform=config.require_same_platform,
+            require_same_currency=config.require_same_currency,
+            require_same_underlier=config.require_same_underlier,
+            platform_allowlist=config.platform_allowlist,
+            platform_blocklist=config.platform_blocklist,
+        )
 
     # Phase 4: Detect conditional curve trades (same expiry, different tails)
     # Currently disabled in original code, keeping consistent
