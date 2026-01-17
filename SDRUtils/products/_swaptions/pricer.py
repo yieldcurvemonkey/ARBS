@@ -552,10 +552,15 @@ def usd_swaption_dealer_risk_reversal_skew_from_row(
     skew_bpvol_yr = otm_payer_greeks.bpvol_yr - otm_receiver_greeks.bpvol_yr
 
     # Aggregate Greeks across all 4 legs
+    # double check here please 
     dv01 = atm_payer_greeks.dv01 + atm_receiver_greeks.dv01 + otm_payer_greeks.dv01 + otm_receiver_greeks.dv01
-    gamma01 = abs(atm_payer_greeks.gamma01 + atm_receiver_greeks.gamma01 + otm_payer_greeks.gamma01 + otm_receiver_greeks.gamma01)
-    vega01 = atm_payer_greeks.vega01 + atm_receiver_greeks.vega01 + otm_payer_greeks.vega01 + otm_receiver_greeks.vega01
-    theta1d = -abs(atm_payer_greeks.theta1d + atm_receiver_greeks.theta1d + otm_payer_greeks.theta1d + otm_receiver_greeks.theta1d)
+    gamma01 = (
+        (abs(atm_payer_greeks.gamma01) + (atm_receiver_greeks.gamma01)) + abs(otm_payer_greeks.gamma01) - abs(otm_receiver_greeks.gamma01)
+    )  # assume long payer skew
+    vega01 = (
+        (abs(atm_payer_greeks.vega01) + abs(atm_receiver_greeks.vega01)) + abs(otm_payer_greeks.vega01) - abs(otm_receiver_greeks.vega01)
+    )  # assume long payer skew
+    theta1d = -abs(atm_payer_greeks.theta1d + atm_receiver_greeks.theta1d + otm_payer_greeks.theta1d) + abs(otm_receiver_greeks.theta1d)
 
     return USDSwaptionDealerRiskReversalSkewResult(
         trade_label=risk_reversal_row.get("trade_label", ""),

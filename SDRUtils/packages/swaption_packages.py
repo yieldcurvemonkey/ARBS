@@ -371,11 +371,14 @@ def detect_and_link_swaption_packages_df(
         if rr_mask.any() and pricer is not None:
             # Initialize pricing columns
             risk_reversal_pricing_cols = [
+                "rr_atmf",
+                "rr_out_strike",
                 "rr_skew_bpvol",
                 "rr_atm_bpvol",
                 "rr_payer_skew",
                 "rr_receiver_skew",
                 "rr_dv01",
+                "rr_wing_dv01",
                 "rr_gamma01",
                 "rr_vega01",
                 "rr_theta1d",
@@ -403,11 +406,14 @@ def detect_and_link_swaption_packages_df(
                     res = usd_swaption_dealer_risk_reversal_skew_from_row(row, pricer)
                     metrics.append({
                         "package_id": row["package_id"],  # Key for joining back
+                        "rr_atmf": res.atm_strike,
+                        "rr_out_strike": int(res.wing_strike_width / 2),
                         "rr_skew_bpvol": res.skew_bpvol_yr,
                         "rr_atm_bpvol": res.atm_bpvol_yr,
                         "rr_payer_skew": res.payer_skew_bpvol_yr,
                         "rr_receiver_skew": res.receiver_skew_bpvol_yr,
                         "rr_dv01": res.dv01,
+                        "rr_wing_dv01": res.wing_dv01,
                         "rr_gamma01": res.gamma01,
                         "rr_vega01": res.vega01,
                         "rr_theta1d": res.theta1d,
