@@ -288,7 +288,7 @@ def _parse_delimited_field(value, dtype=float, delim: str = " / ") -> List:
             else:
                 result.append(p)
         return result
-    return [value]
+    return [value, value]
 
 
 def _parse_risk_reversal_legs(
@@ -628,4 +628,235 @@ def usd_swaption_dealer_risk_reversal_skew_from_row(
         vega01=vega01,
         theta1d=theta1d,
         wing_dv01=abs(otm_payer_greeks.dv01) + abs(otm_receiver_greeks.dv01),
+    )
+
+
+"""
+Vertical Spread Pricer - Drop-in addition to existing swaption pricers module.
+
+Add USDSwaptionVerticalSpreadPricerResult dataclass after the other result classes,
+and add usd_swaption_vertical_spread_pricer_from_row after the existing functions.
+"""
+
+# ============================================================================
+# DATACLASS - Add after USDSwaptionLegPricerResult
+# ============================================================================
+
+
+@dataclass
+class USDSwaptionVerticalSpreadPricerResult:
+    """Result of pricing a vertical spread (1x1 or 1x2) swaption package."""
+
+    trade_label: str
+    spread_type: Literal["PAYER_SPREAD", "RECEIVER_SPREAD"]
+    atm_strike: float
+    otm_strike: float
+    strike_width_bps: float
+    # Implied vols
+    atm_bpvol_yr: float
+    otm_bpvol_yr: float
+    vol_spread_bpvol_yr: float  # otm - atm (skew component)
+    # Notionals
+    atm_notional: float
+    otm_notional: float
+    notional_ratio: float  # otm_notional / atm_notional
+    # Premium
+    net_premium: float  # atm_premium - otm_premium (positive = debit)
+    atm_premium: float
+    otm_premium: float
+    # Leg-level Greeks
+    atm_dv01: float
+    atm_gamma01: float
+    atm_vega01: float
+    atm_theta1d: float
+    otm_dv01: float
+    otm_gamma01: float
+    otm_vega01: float
+    otm_theta1d: float
+    # Aggregate Greeks (long ATM, short OTM)
+    dv01: float
+    gamma01: float
+    vega01: float
+    theta1d: float
+    # Strike offsets from ATMF
+    atm_strike_offset: float
+    otm_strike_offset: float
+
+
+# ============================================================================
+# FUNCTION - Add after usd_swaption_dealer_risk_reversal_skew_from_row
+# ============================================================================
+
+
+def _identify_vertical_spread_structure(
+    strikes: List[float],
+    premiums: List[float],
+    notionals: List[float],
+    product_types: List[str],
+) -> Tuple[
+    Literal["PAYER_SPREAD", "RECEIVER_SPREAD"],
+    Tuple[float, float, float],  # atm: (strike, premium, notional)
+    Tuple[float, float, float],  # otm: (strike, premium, notional)
+]:
+    """
+    Identify the structure of a vertical spread from parsed legs.
+
+    Vertical spread structure:
+    - 2 legs with different strikes
+    - Same option type (both payers or both receivers)
+    - ATM leg = closer to forward (higher premium for same notional)
+    - OTM leg = further from forward (lower premium for same notional)
+
+    For payer spreads: ATM is lower strike, OTM is higher strike
+    For receiver spreads: ATM is higher strike, OTM is lower strike
+    """
+    if len(strikes) != 2:
+        raise ValueError(f"Vertical spread must have 2 legs, got {len(strikes)}")
+
+    pt_upper = [pt.upper() for pt in product_types]
+    is_payer = ["PAYER" in pt for pt in pt_upper]
+    is_receiver = ["RECEIVER" in pt for pt in pt_upper]
+
+    if all(is_payer):
+        spread_type = "PAYER_SPREAD"
+    elif all(is_receiver):
+        spread_type = "RECEIVER_SPREAD"
+    else:
+        raise ValueError(f"Vertical spread legs must be same type, got {product_types}")
+
+    # For payer spread: lower strike = ATM (more ITM, higher premium)
+    # For receiver spread: higher strike = ATM (more ITM, higher premium)
+    if spread_type == "PAYER_SPREAD":
+        if strikes[0] < strikes[1]:
+            atm_idx, otm_idx = 0, 1
+        else:
+            atm_idx, otm_idx = 1, 0
+    else:  # RECEIVER_SPREAD
+        if strikes[0] > strikes[1]:
+            atm_idx, otm_idx = 0, 1
+        else:
+            atm_idx, otm_idx = 1, 0
+
+    atm = (strikes[atm_idx], premiums[atm_idx], abs(notionals[atm_idx]))
+    otm = (strikes[otm_idx], premiums[otm_idx], abs(notionals[otm_idx]))
+
+    return spread_type, atm, otm
+
+
+def usd_swaption_vertical_spread_pricer_from_row(
+    vertical_spread_row: pd.Series,
+    pricer: QLIRSwapCurve,
+    *,
+    delim: str = " / ",
+) -> USDSwaptionVerticalSpreadPricerResult:
+    """
+    Price a vertical spread (1x1 or 1x2) swaption package from a row.
+
+    A vertical spread consists of:
+    - Long one swaption at ATM strike
+    - Short one swaption at OTM strike (same expiry, same underlying tenor)
+
+    For payer spreads: long lower strike, short higher strike (bull spread on rates)
+    For receiver spreads: long higher strike, short lower strike (bear spread on rates)
+
+    Net Greeks reflect the spread position (long ATM leg, short OTM leg).
+
+    Parameters
+    ----------
+    vertical_spread_row : pd.Series
+        Row from classified SDR data with package_type containing "VERTICAL_SPREAD"
+    pricer : QLIRSwapCurve
+        Curve pricer for Greeks computation
+    delim : str
+        Delimiter for parsing collapsed fields (default " / ")
+
+    Returns
+    -------
+    USDSwaptionVerticalSpreadPricerResult
+        Spread-level and leg-level Greeks with vol spread metrics
+    """
+    ql.Settings.instance().evaluationDate = pricer.handle().referenceDate()
+
+    pkg_type = vertical_spread_row.get("package_type", "")
+    if "VERTICAL_SPREAD" not in pkg_type:
+        raise ValueError(f"Expected VERTICAL_SPREAD package, got {pkg_type}")
+
+    # Reuse existing parsing helper
+    strikes = _parse_delimited_field(vertical_spread_row.get("strike"), dtype=float, delim=delim)
+    premiums = _parse_delimited_field(vertical_spread_row.get("premium"), dtype=float, delim=delim)
+    notionals = _parse_delimited_field(vertical_spread_row.get("notional"), dtype=float, delim=delim)
+    product_types = _parse_delimited_field(vertical_spread_row.get("product_type"), dtype=str, delim=delim)
+
+    spread_type, atm, otm = _identify_vertical_spread_structure(strikes, premiums, notionals, product_types)
+
+    atm_strike, atm_premium, atm_notional = atm
+    otm_strike, otm_premium, otm_notional = otm
+
+    expiration_date = vertical_spread_row["expiration_date"]
+    underlying_expiration_date = vertical_spread_row["underlying_expiration_date"]
+
+    leg_type: Literal["payer", "receiver"] = "payer" if spread_type == "PAYER_SPREAD" else "receiver"
+
+    # Compute Greeks for each leg using existing helper
+    atm_greeks = _compute_swaption_leg_greeks(
+        pricer,
+        expiration_date,
+        underlying_expiration_date,
+        atm_strike,
+        atm_notional,
+        atm_premium,
+        leg_type,
+    )
+
+    otm_greeks = _compute_swaption_leg_greeks(
+        pricer,
+        expiration_date,
+        underlying_expiration_date,
+        otm_strike,
+        otm_notional,
+        otm_premium,
+        leg_type,
+    )
+
+    # Aggregate Greeks: long ATM, short OTM
+    notional_ratio = otm_notional / atm_notional if atm_notional > 0 else 1.0
+
+    dv01 = atm_greeks.dv01 - otm_greeks.dv01
+    gamma01 = atm_greeks.gamma01 - otm_greeks.gamma01
+    vega01 = atm_greeks.vega01 - otm_greeks.vega01
+    theta1d = atm_greeks.theta1d - otm_greeks.theta1d
+
+    net_premium = atm_premium - otm_premium
+    strike_width_bps = abs(otm_strike - atm_strike) * 10_000
+    vol_spread = otm_greeks.bpvol_yr - atm_greeks.bpvol_yr
+
+    return USDSwaptionVerticalSpreadPricerResult(
+        trade_label=vertical_spread_row.get("trade_label", ""),
+        spread_type=spread_type,
+        atm_strike=atm_strike,
+        otm_strike=otm_strike,
+        strike_width_bps=strike_width_bps,
+        atm_bpvol_yr=atm_greeks.bpvol_yr,
+        otm_bpvol_yr=otm_greeks.bpvol_yr,
+        vol_spread_bpvol_yr=vol_spread,
+        atm_notional=atm_notional,
+        otm_notional=otm_notional,
+        notional_ratio=notional_ratio,
+        net_premium=net_premium,
+        atm_premium=atm_premium,
+        otm_premium=otm_premium,
+        atm_dv01=atm_greeks.dv01,
+        atm_gamma01=atm_greeks.gamma01,
+        atm_vega01=atm_greeks.vega01,
+        atm_theta1d=atm_greeks.theta1d,
+        otm_dv01=otm_greeks.dv01,
+        otm_gamma01=otm_greeks.gamma01,
+        otm_vega01=otm_greeks.vega01,
+        otm_theta1d=otm_greeks.theta1d,
+        dv01=dv01,
+        gamma01=gamma01,
+        vega01=vega01,
+        theta1d=theta1d,
+        atm_strike_offset=atm_greeks.strike_offset,
+        otm_strike_offset=otm_greeks.strike_offset,
     )

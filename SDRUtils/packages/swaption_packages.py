@@ -251,7 +251,7 @@ def detect_and_link_swaption_packages_df(
     risk_reversal_require_directional_structure: bool = True,
     # Customer RR/strangle parameters (2-leg)
     detect_customer_rr_strangles: bool = True,
-    customer_rr_timestamp_window_seconds: int = 5,
+    customer_rr_timestamp_window_seconds: int = 60 * 60,
     customer_rr_notional_tolerance_pct: float = 0.01,
     customer_rr_width_tolerance_bps: float = 3.0,
     customer_rr_benchmark_widths_bps: Optional[List[int]] = None,
