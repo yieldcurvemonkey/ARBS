@@ -50,6 +50,7 @@ from SDRUtils.packages.swaption.conditional_curve import detect_conditional_curv
 from SDRUtils.packages.swaption.vega_curve import detect_vega_curve_packages
 from SDRUtils.packages.swaption.vega_buckets import detect_vega_bucketed_packages
 from SDRUtils.packages.swaption.linking import link_packages
+from SDRUtils.packages.swaption.customer_rr_strangle import detect_customer_rr_strangles_packages
 
 # Import utility functions for backward compatibility
 from SDRUtils.packages.swaption.utils import (
@@ -240,7 +241,7 @@ def detect_and_link_swaption_packages_df(
     detect_vega_curve: bool = True,
     # Straddle parameters
     custy_straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=60),
-    # Risk reversal parameters
+    # Risk reversal parameters (inter-dealer 4-leg)
     risk_reversal_time_window_seconds: int = 60 * 60,
     risk_reversal_strike_tolerance: float = 0.0001,
     risk_reversal_notional_tolerance_pct: float = 0.05,
@@ -248,6 +249,13 @@ def detect_and_link_swaption_packages_df(
     risk_reversal_require_same_tenor: bool = True,
     risk_reversal_require_same_forward: bool = True,
     risk_reversal_require_directional_structure: bool = True,
+    # Customer RR/strangle parameters (2-leg)
+    detect_customer_rr_strangles: bool = True,
+    customer_rr_timestamp_window_seconds: int = 5,
+    customer_rr_notional_tolerance_pct: float = 0.01,
+    customer_rr_width_tolerance_bps: float = 3.0,
+    customer_rr_benchmark_widths_bps: Optional[List[int]] = None,
+    customer_rr_platforms_filter: Optional[List[str]] = None,
     # Vertical spread parameters
     vertical_spread_time_window_seconds: int = 120,
     # Conditional curve parameters
@@ -265,6 +273,7 @@ def detect_and_link_swaption_packages_df(
 
     Detection order (priority):
     1. Risk reversals (4 legs / 3 strikes / 2 notionals) - IDB structures
+    1b. Customer RR/strangles (2 legs / payer+receiver / benchmark strike widths)
     2. Straddles (payer + receiver with same strike/expiry/tenor)
     3. Vertical spreads (1x1, 1x2, 1x1.5, etc. - same tenor, different strikes)
     4. Conditional curve trades (same expiry, different tails)
@@ -296,6 +305,12 @@ def detect_and_link_swaption_packages_df(
         risk_reversal_require_same_tenor: Require same tenor across legs
         risk_reversal_require_same_forward: Require same forward across legs
         risk_reversal_require_directional_structure: Require payer/receiver alignment
+        detect_customer_rr_strangles: Whether to detect customer RR/strangles (default True)
+        customer_rr_timestamp_window_seconds: Max time gap for customer RR/strangle legs
+        customer_rr_notional_tolerance_pct: Notional tolerance for customer RR/strangle
+        customer_rr_width_tolerance_bps: Strike width tolerance in basis points
+        customer_rr_benchmark_widths_bps: List of benchmark widths (default: standard)
+        customer_rr_platforms_filter: Platforms to consider for customer RR/strangles
         vertical_spread_time_window_seconds: Max time gap between spread legs
         conditional_curve_time_window_seconds: Max time gap between curve legs
         vega_curve_time_window_seconds: Max time gap between vega curve straddles
@@ -312,6 +327,7 @@ def detect_and_link_swaption_packages_df(
         - vega_curve_type: For vega curve trades, the specific type
         - vega_curve_id: ID linking vega curve straddles
         - vega_curve_legs: All trade IDs in vega curve
+        - custy_rr_width_bps: For customer RR/strangles, the benchmark strike width
     """
     if config is None:
         config = DEFAULT_SWAPTION_PACKAGE_CONFIG
@@ -445,7 +461,32 @@ def detect_and_link_swaption_packages_df(
                 f"Row count changed after RR pricing: {original_row_count} -> {len(out)}"
             )
 
-        # TODO custy risk reversals or stangles here
+        # Customer RR/strangles: 2-leg payer+receiver with benchmark strike widths
+        if detect_customer_rr_strangles:
+            out = detect_customer_rr_strangles_packages(
+                out,
+                timestamp_window_seconds=customer_rr_timestamp_window_seconds,
+                notional_tolerance_pct=customer_rr_notional_tolerance_pct,
+                width_tolerance_bps=customer_rr_width_tolerance_bps,
+                benchmark_widths_bps=customer_rr_benchmark_widths_bps,
+                product_col=product_col,
+                package_col=package_col,
+                exec_col=config.exec_col,
+                platform_col=config.platform_col,
+                currency_col=config.currency_col,
+                underlier_col=config.underlier_col,
+                trade_id_col=config.trade_id_col,
+                strike_col=config.strike_col,
+                expiration_col=config.expiration_col,
+                tenor_col=config.tenor_col,
+                forward_col=config.forward_col,
+                notional_col=config.notional_col,
+                event_action_col="event_action",
+                require_same_platform=config.require_same_platform,
+                require_same_currency=config.require_same_currency,
+                require_same_underlier=config.require_same_underlier,
+                platforms_filter=customer_rr_platforms_filter or ["BILT", "TPSE", "XXXX"],
+            )
 
     # Phase 2: Detect straddles
     if detect_straddles:
