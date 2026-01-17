@@ -53,6 +53,7 @@ from SDRUtils.packages.swaption.vega_curve import detect_vega_curve_packages
 from SDRUtils.packages.swaption.vega_buckets import detect_vega_bucketed_packages
 from SDRUtils.packages.swaption.linking import link_packages
 from SDRUtils.packages.swaption.customer_rr_strangle import detect_customer_rr_strangles_packages
+from SDRUtils.packages.swaption.outright import detect_outright_swaptions
 
 # Import utility functions for backward compatibility
 from SDRUtils.packages.swaption.utils import (
@@ -274,6 +275,10 @@ def detect_and_link_swaption_packages_df(
     # Vega curve parameters
     vega_curve_time_window_seconds: int = 300,
     pricer: Optional["QLIRSwapCurve"] = None,
+    # Outright/unexplained detection parameters
+    detect_outrights: bool = True,
+    outright_offset_tolerance_bps: float = 7.5,
+    outright_platforms_filter: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """
     Combined detection and linking of swaption packages.
@@ -290,6 +295,7 @@ def detect_and_link_swaption_packages_df(
     3b. Ladders (3+ legs / christmas trees - same tenor, 3+ strikes, asymmetric notionals)
     4. Conditional curve trades (same expiry, different tails)
     5. Vega curve trades (vega-matched straddles across tenors)
+    6. Outrights (unexplained single-leg trades, enriched with ATMF offset)
 
     To add a new structure type (e.g., Iron Condors):
     1. Create SDRUtils/packages/swaption/condor.py with detect_iron_condors()
@@ -333,6 +339,9 @@ def detect_and_link_swaption_packages_df(
         conditional_curve_time_window_seconds: Max time gap between curve legs
         vega_curve_time_window_seconds: Max time gap between vega curve straddles
         pricer: Optional QLIRSwapCurve instance for vega/skew calculation
+        detect_outrights: Whether to detect and enrich outright trades (default True)
+        outright_offset_tolerance_bps: Tolerance for ATMF offset benchmark matching
+        outright_platforms_filter: Platforms to consider for outright detection
 
     Returns:
         DataFrame with full package annotations including:
@@ -350,6 +359,10 @@ def detect_and_link_swaption_packages_df(
         - ladder_direction: For ladders, "BULL" or "BEAR"
         - ladder_strikes: For ladders, list of strikes
         - ladder_notionals: For ladders, list of notionals per strike
+        - outright_atmf: For outrights, the ATMF rate
+        - outright_strike_offset_bps: For outrights, raw offset from ATMF in bps
+        - outright_strike_offset_rounded_bps: For outrights, offset rounded to benchmark
+        - outright_moneyness: For outrights, "ATM", "OTM_PAYER", "OTM_RECEIVER", etc.
     """
     if config is None:
         config = DEFAULT_SWAPTION_PACKAGE_CONFIG
@@ -858,6 +871,26 @@ def detect_and_link_swaption_packages_df(
             require_same_platform=config.require_same_platform,
             require_same_currency=config.require_same_currency,
             pricer=pricer,
+        )
+
+    # Phase 6: Detect and enrich outright/unexplained trades
+    # This runs last to capture all trades not matched by previous detectors
+    if detect_outrights:
+        out = detect_outright_swaptions(
+            out,
+            pricer=pricer,
+            benchmark_offsets_bps=None,  # Use default benchmarks
+            offset_tolerance_bps=outright_offset_tolerance_bps,
+            product_col=product_col,
+            package_col=package_col,
+            trade_id_col=config.trade_id_col,
+            strike_col=config.strike_col,
+            expiration_col=config.expiration_col,
+            underlying_expiration_col=config.tail_maturity_col,
+            notional_col=config.notional_col,
+            trade_label_col=config.trade_label_col,
+            platforms_filter=outright_platforms_filter,
+            platform_col=config.platform_col,
         )
 
     return out
