@@ -68,10 +68,12 @@ from SDRUtils.packages.swaption.utils import (
 from SDRUtils.packages.utils import merge_package_legs_to_one_row
 from SDRUtils.products._swaptions.pricer import (
     USDSwaptionDealerRiskReversalSkewResult,
+    USDSwaptionLegPricerResult,
     USDSwaptionStraddlePricerResult,
     USDSwaptionVerticalSpreadPricerResult,
     SingleStraddleLegException,
     usd_swaption_dealer_risk_reversal_skew_from_row,
+    usd_swaption_leg_pricer_from_row,
     usd_swaption_straddle_pricer_from_row,
     usd_swaption_vertical_spread_pricer_from_row,
 )
@@ -363,6 +365,12 @@ def detect_and_link_swaption_packages_df(
         - outright_strike_offset_bps: For outrights, raw offset from ATMF in bps
         - outright_strike_offset_rounded_bps: For outrights, offset rounded to benchmark
         - outright_moneyness: For outrights, "ATM", "OTM_PAYER", "OTM_RECEIVER", etc.
+        - outright_bpvol_yr: For outrights, implied volatility in basis points per year
+        - outright_fwd_premium: For outrights, forward premium used for pricing
+        - outright_dv01: For outrights, delta per 1bp rate move
+        - outright_vega01: For outrights, vega per 1bp vol move
+        - outright_gamma01: For outrights, gamma (delta sensitivity to rates)
+        - outright_theta1d: For outrights, theta decay per 1 day
     """
     if config is None:
         config = DEFAULT_SWAPTION_PACKAGE_CONFIG
@@ -892,6 +900,74 @@ def detect_and_link_swaption_packages_df(
             platforms_filter=outright_platforms_filter,
             platform_col=config.platform_col,
         )
+
+        # =================================================================
+        # Price outrights using usd_swaption_leg_pricer_from_row
+        # =================================================================
+        # Outrights are single-leg trades, so we use the direct row iteration
+        # pattern (same as straddles) rather than merge-price-unmerge.
+
+        outright_pricing_cols: List[str] = [
+            "outright_bpvol_yr",
+            "outright_fwd_premium",
+            "outright_dv01",
+            "outright_vega01",
+            "outright_gamma01",
+            "outright_theta1d",
+        ]
+        for col in outright_pricing_cols:
+            if col not in out.columns:
+                out[col] = np.nan
+
+        outright_mask: pd.Series = out[package_col] == "OUTRIGHT"
+        if outright_mask.any() and pricer is not None:
+
+            def _price_outright(row: pd.Series) -> Optional[USDSwaptionLegPricerResult]:
+                if "SOFR" not in str(row["trade_label"]).upper():
+                    return None
+                try:
+                    return usd_swaption_leg_pricer_from_row(row, pricer)
+                except Exception:
+                    return None
+
+            def _build_outright_pricing_row(row: pd.Series) -> pd.Series:
+                result = _price_outright(row)
+                if result is None:
+                    return pd.Series(
+                        {
+                            "outright_bpvol_yr": np.nan,
+                            "outright_fwd_premium": np.nan,
+                            "outright_dv01": np.nan,
+                            "outright_vega01": np.nan,
+                            "outright_gamma01": np.nan,
+                            "outright_theta1d": np.nan,
+                        }
+                    )
+                return pd.Series(
+                    {
+                        "outright_bpvol_yr": result.bpvol_yr,
+                        "outright_fwd_premium": result.fwd_prem,
+                        "outright_dv01": result.dv01,
+                        "outright_vega01": result.vega01,
+                        "outright_gamma01": result.gamma01,
+                        "outright_theta1d": result.theta1d,
+                    }
+                )
+
+            rows = []
+            index = []
+            subset = out.loc[outright_mask]
+            for idx, row in tqdm(
+                subset.iterrows(),
+                total=len(subset),
+                desc="PRICING OUTRIGHTS...",
+            ):
+                rows.append(_build_outright_pricing_row(row))
+                index.append(idx)
+
+            if rows:
+                pricing_results = pd.DataFrame(rows, index=index)
+                out.loc[outright_mask, pricing_results.columns] = pricing_results
 
     return out
 
