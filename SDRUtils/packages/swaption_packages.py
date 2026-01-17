@@ -32,6 +32,7 @@ fly.py and curve.py for linear trades.
 from __future__ import annotations
 
 import datetime
+import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
@@ -61,14 +62,18 @@ from SDRUtils.packages.swaption.utils import (
     extract_effective_premium,
 )
 from SDRUtils.products._swaptions.pricer import (
+    USDSwaptionDealerRiskReversalSkewResult,
     USDSwaptionStraddlePricerResult,
     SingleStraddleLegException,
+    usd_swaption_dealer_risk_reversal_skew_from_row,
     usd_swaption_straddle_pricer_from_row,
 )
 
 if TYPE_CHECKING:
     from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
 
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Backward Compatibility - Config Class
@@ -293,7 +298,7 @@ def detect_and_link_swaption_packages_df(
         vertical_spread_time_window_seconds: Max time gap between spread legs
         conditional_curve_time_window_seconds: Max time gap between curve legs
         vega_curve_time_window_seconds: Max time gap between vega curve straddles
-        pricer: Optional QLIRSwapCurve instance for vega calculation
+        pricer: Optional QLIRSwapCurve instance for vega/skew calculation
 
     Returns:
         DataFrame with full package annotations including:
@@ -353,6 +358,50 @@ def detect_and_link_swaption_packages_df(
             platform_allowlist=config.platform_allowlist,
             platform_blocklist=["XXXX", "XSEF", "XOFF", "BILT"], 
         )
+
+        risk_reversal_pricing_cols = [
+            "rr_skew_bpvol",
+            "rr_atm_bpvol",
+            "rr_payer_skew",
+            "rr_receiver_skew",
+            "rr_dv01",
+            "rr_gamma01",
+            "rr_vega01",
+            "rr_theta1d",
+        ]
+        for col in risk_reversal_pricing_cols:
+            if col not in out.columns:
+                out[col] = np.nan
+
+        rr_mask: pd.Series = out[package_col] == "RISK_REVERSAL"
+        if rr_mask.any() and pricer is not None:
+
+            def _price_rr(row: pd.Series) -> Optional[USDSwaptionDealerRiskReversalSkewResult]:
+                try:
+                    return usd_swaption_dealer_risk_reversal_skew_from_row(row, pricer)
+                except Exception as exc:
+                    logger.warning("Failed to price risk reversal row %s: %s", row.name, exc)
+                    return None
+
+            def _build_rr_pricing_row(row: pd.Series) -> pd.Series:
+                result = _price_rr(row)
+                if result is None:
+                    return pd.Series({col: np.nan for col in risk_reversal_pricing_cols})
+                return pd.Series(
+                    {
+                        "rr_skew_bpvol": result.skew_bpvol_yr,
+                        "rr_atm_bpvol": result.atm_bpvol_yr,
+                        "rr_payer_skew": result.payer_skew_bpvol_yr,
+                        "rr_receiver_skew": result.receiver_skew_bpvol_yr,
+                        "rr_dv01": result.dv01,
+                        "rr_gamma01": result.gamma01,
+                        "rr_vega01": result.vega01,
+                        "rr_theta1d": result.theta1d,
+                    }
+                )
+
+            rr_pricing_results = out.loc[rr_mask].apply(_build_rr_pricing_row, axis=1)
+            out.loc[rr_mask, rr_pricing_results.columns] = rr_pricing_results
 
         # TODO custy risk reversals or stangles here
 
