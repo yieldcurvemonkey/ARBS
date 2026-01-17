@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
 
@@ -55,13 +55,11 @@ from SDRUtils.packages.swaption.linking import link_packages
 from SDRUtils.packages.swaption.customer_rr_strangle import detect_customer_rr_strangles_packages
 from SDRUtils.packages.swaption.outright import detect_outright_swaptions
 
-# Import utility functions for backward compatibility
+# Import utility functions - aliased for backward compatibility exports
 from SDRUtils.packages.swaption.utils import (
     vega_bucket as _vega_bucket,
     time_bucket as _time_bucket,
-    safe_float as _safe_float,
     compute_package_id as _compute_package_id,
-    build_package_reason as _build_package_reason,
     estimate_swaption_vega as _estimate_swaption_vega,
     extract_effective_premium,
 )
@@ -376,11 +374,6 @@ def detect_and_link_swaption_packages_df(
         config = DEFAULT_SWAPTION_PACKAGE_CONFIG
 
     out = df.copy()
-
-    # temp = out.copy()
-    # temp = temp.sort_values(by="execution_timestamp")
-    # temp["execution_timestamp"] = temp["execution_timestamp"].astype(str)
-    # temp.to_excel("_temp_raw_trades.xlsx")
 
     # =========================================================================
     # Pipeline: Run detectors in priority order
@@ -831,31 +824,8 @@ def detect_and_link_swaption_packages_df(
             # Verify row count unchanged (critical for Parquet compatibility)
             assert len(out) == original_row_count, f"Row count changed after VS pricing: {original_row_count} -> {len(out)}"
 
-    # Phase 4: Detect conditional curve trades (same expiry, different tails)
-    # Currently disabled in original code, keeping consistent
-    # if detect_conditional_curve:
-    #     out = detect_conditional_curve(
-    #         out,
-    #         time_window_seconds=conditional_curve_time_window_seconds,
-    #         min_tail_diff_years=config.conditional_curve_min_tail_diff_years,
-    #         product_col=product_col,
-    #         package_col=package_col,
-    #         exec_col=config.exec_col,
-    #         platform_col=config.platform_col,
-    #         currency_col=config.currency_col,
-    #         underlier_col=config.underlier_col,
-    #         trade_id_col=config.trade_id_col,
-    #         expiration_col=config.expiration_col,
-    #         tenor_col=config.tenor_col,
-    #         forward_col=config.forward_col,
-    #         notional_col=config.notional_col,
-    #         package_indicator_col=config.package_indicator_col,
-    #         require_same_platform=config.require_same_platform,
-    #         require_same_currency=config.require_same_currency,
-    #         require_same_underlier=config.require_same_underlier,
-    #         platform_allowlist=config.platform_allowlist,
-    #         platform_blocklist=config.platform_blocklist,
-    #     )
+    # Phase 4: Conditional curve detection (same expiry, different tails)
+    # Note: detect_conditional_curve parameter reserved for future implementation
 
     # Phase 5: Detect vega curve trades (requires straddles to be detected first)
     if detect_vega_curve and detect_straddles:
@@ -1016,21 +986,30 @@ class SwaptionPackageDetector(PackageDetector):
 
 
 # =============================================================================
-# Exports for backward compatibility
+# Module Exports
 # =============================================================================
+# Public API:
+#   - detect_and_link_swaption_packages_df: Main detection pipeline function
+#   - SwaptionPackageDetector: Class interface for registry integration
+#
+# Deprecated (maintained for backward compatibility):
+#   - SwaptionPackageDetectionConfig: Use explicit kwargs instead
+#   - DEFAULT_SWAPTION_PACKAGE_CONFIG: Use explicit kwargs instead
+#   - _vega_bucket, _time_bucket, etc.: Import from swaption.utils instead
+#
+# For new code, import utilities directly from SDRUtils.packages.swaption.utils
 
 __all__ = [
-    # Config class (deprecated but maintained for compatibility)
+    # Public API
+    "detect_and_link_swaption_packages_df",
+    "SwaptionPackageDetector",
+    # Deprecated - config class (prefer explicit kwargs)
     "SwaptionPackageDetectionConfig",
     "DEFAULT_SWAPTION_PACKAGE_CONFIG",
-    # Main detection functions
-    "detect_and_link_swaption_packages_df",
-    # Helper functions (for tests)
+    # Deprecated - utility aliases (prefer SDRUtils.packages.swaption.utils)
     "_vega_bucket",
     "_time_bucket",
     "_extract_effective_premium",
     "_compute_package_id",
     "_estimate_swaption_vega",
-    # Detector class
-    "SwaptionPackageDetector",
 ]
