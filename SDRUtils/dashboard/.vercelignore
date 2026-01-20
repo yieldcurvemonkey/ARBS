@@ -1,0 +1,25 @@
+# Development files
+.env
+.env.local
+*.log
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Tests
+__tests__/
+*.test.ts
+*.spec.ts
+
+# TypeScript
+*.tsbuildinfo
+
+# Misc
+.vscode/
+.idea/

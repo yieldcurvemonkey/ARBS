@@ -1,0 +1,27 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "installCommand": "npm install --legacy-peer-deps",
+  "framework": "nextjs",
+  "regions": ["iad1"],
+  "env": {
+    "NODE_ENV": "production",
+    "DATABASE_URL": "postgresql://postgres.rdobtpugtnmefxplgwyp:0rbZUh8y0Fsvdlry@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+  },
+  "build": {
+    "env": {
+      "NODE_OPTIONS": "--max_old_space_size=4096"
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0"
+        }
+      ]
+    }
+  ]
+}
