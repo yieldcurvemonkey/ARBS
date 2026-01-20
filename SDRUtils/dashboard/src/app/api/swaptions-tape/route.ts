@@ -1,7 +1,7 @@
 // ABOUTME: Reads from arbs_swaption_master_tape_v2 with cursor pagination and fuzzy filtering for the Trade Tape.
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
-import { TAPE_SELECT_COLUMNS, TapeRow, DISPLAY_VIEW } from '@/lib/swaptions-tape'
+import { resolveDisplayView, TapeRow } from '@/lib/swaptions-tape'
 
 const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 200
@@ -15,7 +15,27 @@ const COLUMN_FILTER_FIELDS = [
   'notional',
   'label'
 ] as const
-const COLUMN_FILTER_EXPRESSIONS: Record<string, string[]> = {
+const COLUMN_FILTER_EXPRESSIONS_V2: Record<string, string[]> = {
+  action: ['plat.event_action'],
+  package_type: ['d.package_type'],
+  time: ['d.execution_start::text', 'd.execution_end::text'],
+  platform: [
+    "COALESCE(plat.platform_identifier, d.package_metrics->>'platform_identifier')"
+  ],
+  notional: ['d.total_notional'],
+  label: [
+    'd.package_id',
+    'd.manual_package_id',
+    'd.tenor_label',
+    'd.forward_label',
+    'd.package_type',
+    'd.user_comment',
+    'd.link_reason',
+    'd.tags::text',
+    'd.legs_json::text'
+  ]
+}
+const COLUMN_FILTER_EXPRESSIONS_V1: Record<string, string[]> = {
   action: ['plat.event_action'],
   package_type: ['d.package_type'],
   time: ['d.execution_start::text', 'd.execution_end::text'],
@@ -229,9 +249,10 @@ function buildNumericCondition(
 function buildColumnFilterClause(
   field: string,
   constraint: FilterConstraint,
-  params: unknown[]
+  params: unknown[],
+  expressionsMap: Record<string, string[]>
 ) {
-  const expressions = COLUMN_FILTER_EXPRESSIONS[field]
+  const expressions = expressionsMap[field]
   if (!expressions) return null
   if (field === 'notional') {
     return buildNumericCondition(
@@ -252,7 +273,8 @@ function buildColumnFilterClause(
 function buildColumnFiltersClause(
   columnFilters: ColumnFilterPayload,
   columnFilterOperator: string,
-  params: unknown[]
+  params: unknown[],
+  expressionsMap: Record<string, string[]>
 ) {
   const fieldClauses: string[] = []
   COLUMN_FILTER_FIELDS.forEach((field) => {
@@ -273,7 +295,9 @@ function buildColumnFiltersClause(
 
     const operator = normalizeFilterOperator(filterMeta.operator)
     const constraintClauses = activeConstraints
-      .map((constraint) => buildColumnFilterClause(field, constraint, params))
+      .map((constraint) =>
+        buildColumnFilterClause(field, constraint, params, expressionsMap)
+      )
       .filter(Boolean) as string[]
     if (!constraintClauses.length) return
 
@@ -304,6 +328,10 @@ export async function GET(request: Request) {
     searchParams.get(COLUMN_FILTER_OPERATOR_QUERY_KEY)
   )
   const limit = parseLimit(searchParams.get('limit'))
+  const { view, columns, hasManualFields } = await resolveDisplayView()
+  const columnFilterExpressions = hasManualFields
+    ? COLUMN_FILTER_EXPRESSIONS_V2
+    : COLUMN_FILTER_EXPRESSIONS_V1
 
   if (cursor && since) {
     return NextResponse.json(
@@ -328,18 +356,23 @@ export async function GET(request: Request) {
   if (filter) {
     params.push(`%${filter}%`)
     const idx = params.length
-    conditions.push(`(
-      package_id ILIKE $${idx}
-      OR tenor_label ILIKE $${idx}
-      OR forward_label ILIKE $${idx}
-      OR package_type ILIKE $${idx}
-    )`)
+    const filterClauses = [
+      `package_id ILIKE $${idx}`,
+      `tenor_label ILIKE $${idx}`,
+      `forward_label ILIKE $${idx}`,
+      `package_type ILIKE $${idx}`
+    ]
+    if (hasManualFields) {
+      filterClauses.push(`manual_package_id ILIKE $${idx}`)
+    }
+    conditions.push(`(${filterClauses.join(' OR ')})`)
   }
 
   const columnFilterClause = buildColumnFiltersClause(
     columnFilters,
     columnFilterOperator,
-    params
+    params,
+    columnFilterExpressions
   )
   if (columnFilterClause) {
     conditions.push(columnFilterClause)
@@ -351,8 +384,8 @@ export async function GET(request: Request) {
 
   try {
     const result = await query(
-      `SELECT ${TAPE_SELECT_COLUMNS}
-       FROM ${DISPLAY_VIEW} d
+      `SELECT ${columns}
+       FROM ${view} d
        LEFT JOIN LATERAL (
          SELECT mode() WITHIN GROUP (ORDER BY platform_identifier) AS platform_identifier
                , mode() WITHIN GROUP (ORDER BY event_action) AS event_action

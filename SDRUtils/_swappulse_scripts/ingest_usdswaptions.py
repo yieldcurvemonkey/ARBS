@@ -30,7 +30,11 @@ NY_tz = pytz.timezone("America/New_York")
 PACKAGES_TABLE = "arbs_swaption_packages_v1"
 LEGS_TABLE = "arbs_swaption_legs_v1"
 RUNS_TABLE = "arbs_swaption_ingestion_runs_v1"
-DISPLAY_VIEW = "arbs_swaption_display_items_v1"
+MANUAL_LINKS_TABLE = "arbs_swaption_manual_links_v1"
+LINK_HISTORY_TABLE = "arbs_swaption_link_history_v1"
+DISPLAY_VIEW_V1 = "arbs_swaption_display_items_v1"
+DISPLAY_VIEW_V2 = "arbs_swaption_display_items_v2"
+DISPLAY_VIEW = DISPLAY_VIEW_V1
 
 # Package-type-specific metrics to lift into JSONB (avoids wide sparse tables)
 PACKAGE_METRIC_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -225,6 +229,8 @@ DATE_COLUMNS: tuple[str, ...] = (
 
 # Schema (packages + legs + ingestion runs + display view)
 SCHEMA_SQL = f"""
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TABLE IF NOT EXISTS {PACKAGES_TABLE} (
     package_id TEXT PRIMARY KEY,
     package_type TEXT NOT NULL,
@@ -299,13 +305,58 @@ CREATE TABLE IF NOT EXISTS {RUNS_TABLE} (
     notes TEXT
 );
 
+CREATE TABLE IF NOT EXISTS {MANUAL_LINKS_TABLE} (
+    link_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    manual_package_id TEXT NOT NULL UNIQUE,
+    package_type TEXT,
+    linked_trade_ids TEXT[] NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by TEXT,
+    updated_at TIMESTAMPTZ,
+    user_comment TEXT,
+    link_reason TEXT,
+    tags TEXT[],
+    link_metrics JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    superseded_by UUID REFERENCES {MANUAL_LINKS_TABLE}(link_id),
+    CONSTRAINT valid_link_size CHECK (array_length(linked_trade_ids, 1) >= 2)
+);
+
+CREATE TABLE IF NOT EXISTS {LINK_HISTORY_TABLE} (
+    history_id BIGSERIAL PRIMARY KEY,
+    link_id UUID NOT NULL REFERENCES {MANUAL_LINKS_TABLE}(link_id),
+    action TEXT NOT NULL,
+    changed_by TEXT NOT NULL,
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    change_details JSONB,
+    previous_state JSONB
+);
+
+ALTER TABLE {PACKAGES_TABLE}
+    ADD COLUMN IF NOT EXISTS package_source TEXT DEFAULT 'AUTO';
+ALTER TABLE {PACKAGES_TABLE}
+    ADD COLUMN IF NOT EXISTS manual_link_id UUID REFERENCES {MANUAL_LINKS_TABLE}(link_id);
+
+ALTER TABLE {LEGS_TABLE}
+    ADD COLUMN IF NOT EXISTS manual_link_id UUID REFERENCES {MANUAL_LINKS_TABLE}(link_id);
+ALTER TABLE {LEGS_TABLE}
+    ADD COLUMN IF NOT EXISTS is_manually_linked BOOLEAN DEFAULT FALSE;
+
 CREATE INDEX IF NOT EXISTS idx_swaption_packages_type_date ON {PACKAGES_TABLE}(package_type, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_swaption_packages_exec ON {PACKAGES_TABLE}(execution_start);
 CREATE INDEX IF NOT EXISTS idx_swaption_packages_vega ON {PACKAGES_TABLE}(vega_curve_id) WHERE vega_curve_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_swaption_packages_source ON {PACKAGES_TABLE}(package_source);
 CREATE INDEX IF NOT EXISTS idx_swaption_legs_package ON {LEGS_TABLE}(package_id);
 CREATE INDEX IF NOT EXISTS idx_swaption_legs_exec ON {LEGS_TABLE}(execution_timestamp);
+CREATE INDEX IF NOT EXISTS idx_swaption_legs_manual_link ON {LEGS_TABLE}(manual_link_id);
+CREATE INDEX IF NOT EXISTS idx_manual_links_trades ON {MANUAL_LINKS_TABLE} USING GIN (linked_trade_ids);
+CREATE INDEX IF NOT EXISTS idx_manual_links_active ON {MANUAL_LINKS_TABLE}(is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_manual_links_created ON {MANUAL_LINKS_TABLE}(created_at);
+CREATE INDEX IF NOT EXISTS idx_manual_links_manual_pkg ON {MANUAL_LINKS_TABLE}(manual_package_id);
+CREATE INDEX IF NOT EXISTS idx_link_history_link ON {LINK_HISTORY_TABLE}(link_id);
 
-CREATE OR REPLACE VIEW {DISPLAY_VIEW} AS
+CREATE OR REPLACE VIEW {DISPLAY_VIEW_V1} AS
 SELECT
   p.package_id,
   p.package_type,
@@ -342,6 +393,62 @@ LEFT JOIN LATERAL (
             'exercise_style', l.exercise_style,
             'package_type', l.package_type,
             'leg_metrics', l.leg_metrics
+        ) ORDER BY l.leg_order
+    ) AS legs_json
+    FROM {LEGS_TABLE} l
+    WHERE l.package_id = p.package_id
+) l ON TRUE;
+
+CREATE OR REPLACE VIEW {DISPLAY_VIEW_V2} AS
+SELECT
+  p.package_id,
+  p.package_type,
+  p.package_source,
+  ml.link_id,
+  ml.manual_package_id,
+  ml.user_comment,
+  ml.link_reason,
+  ml.tags,
+  ml.created_by AS link_created_by,
+  ml.created_at AS link_created_at,
+  ml.link_metrics,
+  p.as_of_date,
+  p.execution_start,
+  p.execution_end,
+  p.expiration_date,
+  p.underlying_expiration_date,
+  p.tenor_label,
+  p.forward_label,
+  p.legs_count,
+  p.total_notional,
+  p.total_premium,
+  p.package_indicator,
+  p.package_transaction_price,
+  p.package_confidence,
+  p.package_reason,
+  p.vega_curve_id,
+  p.vega_curve_type,
+  p.package_metrics,
+  l.legs_json
+FROM {PACKAGES_TABLE} p
+LEFT JOIN {MANUAL_LINKS_TABLE} ml
+  ON p.manual_link_id = ml.link_id AND ml.is_active = TRUE
+LEFT JOIN LATERAL (
+    SELECT jsonb_agg(
+        jsonb_build_object(
+            'trade_id', l.trade_id,
+            'leg_order', l.leg_order,
+            'product_type', l.product_type,
+            'trade_label', l.trade_label,
+            'strike', l.strike,
+            'notional', l.notional,
+            'notional_currency', l.notional_currency,
+            'premium', l.premium,
+            'exercise_style', l.exercise_style,
+            'package_type', l.package_type,
+            'leg_metrics', l.leg_metrics,
+            'is_manually_linked', l.is_manually_linked,
+            'manual_link_id', l.manual_link_id
         ) ORDER BY l.leg_order
     ) AS legs_json
     FROM {LEGS_TABLE} l
@@ -968,29 +1075,29 @@ if __name__ == "__main__":
     import QuantLib as ql
     from BT.misc import ql_cal_date_range
 
-    date_range = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), date(2025, 1, 1), date(2025, 7, 1))
+    date_range = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), date(2026, 1, 19), date(2026, 1, 20))
     errors = []
     for d in date_range:
-        try:
-            as_of = d.date()
-            start = NY_tz.localize(datetime(as_of.year, as_of.month, as_of.day, 0, 0))
-            end = NY_tz.localize(datetime(as_of.year, as_of.month, as_of.day, 23, 59))
+        # try:
+        as_of = d.date()
+        start = NY_tz.localize(datetime(as_of.year, as_of.month, as_of.day, 0, 0))
+        end = NY_tz.localize(datetime(as_of.year, as_of.month, as_of.day, 23, 59))
 
-            cache_path = r"C:\Users\chris\clee\project-oasis\private\sdranalytics\.cache"
+        cache_path = r"C:\Users\chris\clee\project-oasis\private\sdranalytics\.cache"
 
-            main(
-                # start=parsed_start,
-                # end=parsed_end,
-                start=start,
-                end=end,
-                cache_path=cache_path,
-                ignore_cache=True,
-                only_newt=False,
-                dry_run=False,
-            )
-        except Exception as e:
-            print(e)
-            errors.append({"d": str(d), "err": str(e)})
+        main(
+            # start=parsed_start,
+            # end=parsed_end,
+            start=start,
+            end=end,
+            cache_path=cache_path,
+            ignore_cache=True,
+            only_newt=False,
+            dry_run=False,
+        )
+        # except Exception as e:
+        #     print(e)
+        #     errors.append({"d": str(d), "err": str(e)})
 
     print(pd.DataFrame(errors))
     pd.DataFrame(errors).to_excel("swappulse_usdswaptions_ingest.xlsx")
