@@ -22,6 +22,7 @@ Direction determination:
 from __future__ import annotations
 
 import itertools
+import time
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
@@ -65,6 +66,7 @@ DEFAULT_MIN_LEGS = 3  # Minimum legs for a ladder (distinguishes from vertical s
 DEFAULT_MIN_STRIKES = 2  # Minimum distinct strikes
 DEFAULT_MIN_STRIKE_WIDTH_BPS = 15  # Minimum strike separation in basis points
 DEFAULT_NOTIONAL_RATIO_TOLERANCE = 0.15  # 15% tolerance for notional ratios
+DEFAULT_LADDER_ITERATION_TIMEOUT_SEC = 5.0  # Hard timeout per cluster iteration
 
 
 def _get_platform_time_window(platform: str, override: Optional[int] = None) -> int:
@@ -147,6 +149,7 @@ def detect_ladder_packages(
     min_strikes: int = DEFAULT_MIN_STRIKES,
     min_strike_width_bps: float = DEFAULT_MIN_STRIKE_WIDTH_BPS,
     notional_ratio_tolerance: float = DEFAULT_NOTIONAL_RATIO_TOLERANCE,
+    ladder_iteration_timeout_seconds: Optional[float] = DEFAULT_LADDER_ITERATION_TIMEOUT_SEC,
     # Column names
     product_col: str = "product_type",
     package_col: str = "package_type",
@@ -190,6 +193,7 @@ def detect_ladder_packages(
         min_strikes: Minimum distinct strikes (default 2)
         min_strike_width_bps: Minimum strike separation in bps (default 15)
         notional_ratio_tolerance: Tolerance for notional ratio matching (default 0.15)
+        ladder_iteration_timeout_seconds: Hard timeout per cluster iteration in seconds (None to disable)
         product_col: Column name for product type
         package_col: Column name for package type
         exec_col: Column name for execution timestamp
@@ -455,6 +459,10 @@ def detect_ladder_packages(
             # Sliding window to find clusters
             i = 0
             while i < len(indices):
+                iteration_deadline = None
+                if ladder_iteration_timeout_seconds is not None:
+                    iteration_deadline = time.monotonic() + ladder_iteration_timeout_seconds
+
                 if matched[indices[i]]:
                     i += 1
                     continue
@@ -478,8 +486,12 @@ def detect_ladder_packages(
                 # Try to validate as ladder
                 if len(cluster) >= min_legs:
                     # Try largest possible cluster first, then smaller subsets
+                    timed_out = False
                     for size in range(len(cluster), min_legs - 1, -1):
                         for subset in itertools.combinations(cluster, size):
+                            if iteration_deadline is not None and time.monotonic() > iteration_deadline:
+                                timed_out = True
+                                break
                             subset_list = list(subset)
                             # Skip if any already matched
                             if any(matched[idx] for idx in subset_list):
@@ -556,9 +568,15 @@ def detect_ladder_packages(
                                 # Found a ladder in this cluster, break out
                                 break
 
+                        if timed_out:
+                            break
                         # If we found a match for this size, break
                         if any(matched[idx] for idx in cluster):
                             break
+
+                    if timed_out:
+                        i += 1
+                        continue
 
                 i += 1
 

@@ -305,19 +305,17 @@ def detect_outright_swaptions(
             continue
 
         # Compute ATMF
-        atmf = (
-            _compute_atmf_for_trade(
-                row,
-                current_pricer,
-                expiration_col=expiration_col,
-                underlying_expiration_col=underlying_expiration_col,
-                notional_col=notional_col,
-            )
-            / 100
+        atmf = _compute_atmf_for_trade(
+            row,
+            current_pricer,
+            expiration_col=expiration_col,
+            underlying_expiration_col=underlying_expiration_col,
+            notional_col=notional_col,
         )
-
         if atmf is None:
             continue
+
+        atmf = atmf / 100
 
         out.loc[idx, "outright_atmf"] = atmf
 

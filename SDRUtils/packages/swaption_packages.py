@@ -494,9 +494,12 @@ def _price_straddles(
 
         # kind of stupid but works
         except SingleStraddleLegException:
-            row = row.copy()
-            row["premium"] = row["premium"] * 2
-            return usd_swaption_straddle_pricer_from_row(row, pricer)
+            try:
+                row = row.copy()
+                row["premium"] = row["premium"] * 2
+                return usd_swaption_straddle_pricer_from_row(row, pricer)
+            except Exception:
+                return None
         except Exception:
             return None
 
