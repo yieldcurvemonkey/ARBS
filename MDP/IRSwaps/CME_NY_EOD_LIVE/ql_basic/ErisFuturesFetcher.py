@@ -482,8 +482,8 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
                 ]
             ]
         ] = "log_linear",
-        enable_extrapolation: Optional[bool] = False,
-        return_intraday_timestamp: Optional[bool] = False,
+        enable_extrapolation: Optional[bool] = True,
+        return_intraday_timestamp: Optional[bool] = True,
     ) -> ql.DiscountCurve | pd.DataFrame | Tuple[ql.DiscountCurve, datetime.date]:
         async def build_tasks(
             client: httpx.AsyncClient,
@@ -513,7 +513,7 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
             if results is None or len(results) == 0:
                 return {}
 
-            discount_curve_df = dict(results)["Eris_Intraday_DiscountFactors_SOFR.csv"]
+            discount_curve_df = dict([results[0][:-1]])["Eris_Intraday_DiscountFactors_SOFR.csv"]
             discount_curve_df["Date"] = pd.to_datetime(discount_curve_df["Date"], errors="coerce")
             discount_curve_df["DiscountFactor"] = pd.to_numeric(discount_curve_df["DiscountFactor"], errors="coerce")
             if return_df:

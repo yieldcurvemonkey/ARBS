@@ -182,34 +182,35 @@ class USD_Swaptions(USDProductBase):
         def _is_historical(exec_date: pd.Timestamp | Any) -> bool:
             return exec_date < today_eastern
 
-        cached_frames = []
+        # cached_frames = []
         missing_dates = []
         for exec_date, count in raw_sdr_trades_df["_execution_date"].value_counts().items():
-            if pd.isna(exec_date):
-                continue
-            date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
-            final_marker = date_dir / "final.marker"
+        #     if pd.isna(exec_date):
+        #         continue
+        #     date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
+        #     final_marker = date_dir / "final.marker"
 
-            found_cache = False
-            if date_dir.exists() and (ignore_cache is False):
-                if _is_historical(exec_date) and not final_marker.exists():
-                    found_cache = False
-                else:
-                    cache_candidates = []
-                    for fp in date_dir.glob("*.parquet"):
-                        # pick the latest created file
-                        cache_candidates.append((fp.stat().st_mtime, fp))
+        #     found_cache = False
+        #     if date_dir.exists() and (ignore_cache is False):
+        #         if _is_historical(exec_date) and not final_marker.exists():
+        #             found_cache = False
+        #         else:
+        #             cache_candidates = []
+        #             for fp in date_dir.glob("*.parquet"):
+        #                 # pick the latest created file
+        #                 cache_candidates.append((fp.stat().st_mtime, fp))
 
-                    if cache_candidates:
-                        _, best_cache_fp = max(cache_candidates, key=lambda x: x[0])
-                        try:
-                            cached_frames.append(pd.read_parquet(best_cache_fp, engine="pyarrow"))
-                            found_cache = True
-                        except Exception:
-                            best_cache_fp.unlink(missing_ok=True)
+        #             if cache_candidates:
+        #                 _, best_cache_fp = max(cache_candidates, key=lambda x: x[0])
+        #                 try:
+        #                     cached_frames.append(pd.read_parquet(best_cache_fp, engine="pyarrow"))
+        #                     found_cache = True
+        #                 except Exception:
+        #                     best_cache_fp.unlink(missing_ok=True)
 
-            if not found_cache:
-                missing_dates.append(exec_date)
+        #     if not found_cache:
+        #         missing_dates.append(exec_date)
+            missing_dates.append(exec_date)
 
         def _to_utc(ts: pd.Timestamp) -> pd.Timestamp:
             timestamp = pd.Timestamp(ts)
@@ -217,19 +218,19 @@ class USD_Swaptions(USDProductBase):
                 return timestamp.tz_localize(pytz.utc)
             return timestamp.tz_convert(pytz.utc)
 
-        if not missing_dates:
-            if cached_frames:
-                final_df = pd.concat(cached_frames, ignore_index=True)
-                start_ts = _to_utc(start)
-                end_ts = _to_utc(end)
-                final_df = final_df[(final_df["execution_timestamp"] >= start_ts) & (final_df["execution_timestamp"] <= end_ts)]
-                final_df = final_df.sort_values(by="execution_timestamp")
-                if merge_package_legs:
-                    final_df = merge_package_legs_to_one_row(final_df)
-                    final_df = merge_vega_curve_packages(final_df)
-                return final_df
+        # if not missing_dates:
+        #     if cached_frames:
+        #         final_df = pd.concat(cached_frames, ignore_index=True)
+        #         start_ts = _to_utc(start)
+        #         end_ts = _to_utc(end)
+        #         final_df = final_df[(final_df["execution_timestamp"] >= start_ts) & (final_df["execution_timestamp"] <= end_ts)]
+        #         final_df = final_df.sort_values(by="execution_timestamp")
+        #         if merge_package_legs:
+        #             final_df = merge_package_legs_to_one_row(final_df)
+        #             final_df = merge_vega_curve_packages(final_df)
+        #         return final_df
 
-            return pd.DataFrame()
+        #     return pd.DataFrame()
 
         built_frames = []
         for exec_date in missing_dates:
@@ -281,21 +282,22 @@ class USD_Swaptions(USDProductBase):
                     package_df, config=swaption_package_config, pricer=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date))
                 )
 
-            count = len(day_df)
-            date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
-            date_dir.mkdir(parents=True, exist_ok=True)
-            cache_fp = date_dir / f"{count}.parquet"
-            tmp_fp = cache_fp.with_suffix(".parquet.tmp")
-            table = pa.Table.from_pandas(package_df, preserve_index=False)
-            pq.write_table(table, tmp_fp, compression="zstd")
-            tmp_fp.replace(cache_fp)
-            if _is_historical(exec_date):
-                final_marker = date_dir / "final.marker"
-                final_marker.touch()
+            # count = len(day_df)
+            # date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
+            # date_dir.mkdir(parents=True, exist_ok=True)
+            # cache_fp = date_dir / f"{count}.parquet"
+            # tmp_fp = cache_fp.with_suffix(".parquet.tmp")
+            # table = pa.Table.from_pandas(package_df, preserve_index=False)
+            # pq.write_table(table, tmp_fp, compression="zstd")
+            # tmp_fp.replace(cache_fp)
+            # if _is_historical(exec_date):
+            #     final_marker = date_dir / "final.marker"
+            #     final_marker.touch()
 
             built_frames.append(package_df)
 
-        all_frames = [*cached_frames, *built_frames]
+        # all_frames = [*cached_frames, *built_frames]
+        all_frames = [*built_frames]
         if not all_frames:
             return pd.DataFrame()
 

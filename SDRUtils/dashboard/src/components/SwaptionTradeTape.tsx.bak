@@ -1,4 +1,4 @@
-// ABOUTME: USD Swaptions Trade Tape table (event action + package summary) powered by arbs_swaption_display_items_v1
+// ABOUTME: USD Swaptions Trade Tape table (event action + package summary) powered by arbs_swaption_display_items_v2
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -6,9 +6,13 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { formatLargeNumber } from "@/lib/utils";
 import {
   AlertTriangle,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Link2,
   RefreshCw,
+  X,
+  XCircle,
 } from "lucide-react";
 import {
   Bar,
@@ -45,6 +49,8 @@ type TapeLeg = {
   notional_currency?: string | null;
   premium?: number | null;
   is_notional_capped?: boolean | number | string | null;
+  is_manually_linked?: boolean | number | string | null;
+  manual_link_id?: string | null;
   exercise_style?: string | null;
   package_type?: string | null;
   execution_timestamp?: string | null;
@@ -59,6 +65,15 @@ type TapeLeg = {
 type TapeRow = {
   package_id: string;
   package_type: string | null;
+  package_source?: string | null;
+  manual_link_id?: string | null;
+  manual_package_id?: string | null;
+  user_comment?: string | null;
+  link_reason?: string | null;
+  tags?: string[] | null;
+  link_metrics?: Record<string, any> | null;
+  link_created_by?: string | null;
+  link_created_at?: string | null;
   detection_strat?: string | null;
   as_of_date: string | null;
   execution_start: string;
@@ -88,6 +103,50 @@ type TapeResponse = {
   nextCursor: string | null;
   hasMore: boolean;
   latestExecutionStart: string | null;
+};
+
+type ManualLinkValidationStatus = "ok" | "warn" | "error";
+
+type ManualLinkValidationItem = {
+  key: string;
+  label: string;
+  status: ManualLinkValidationStatus;
+  message: string;
+};
+
+type ManualLinkTrade = {
+  trade_id: string;
+  package_id: string;
+  trade_label?: string | null;
+  product_type?: string | null;
+  notional?: number | null;
+  execution_timestamp?: string | null;
+  platform_identifier?: string | null;
+};
+
+type ManualLinkHistoryItem = {
+  history_id: number;
+  action: string;
+  changed_by: string;
+  changed_at: string;
+  change_details?: Record<string, any> | null;
+  previous_state?: Record<string, any> | null;
+};
+
+type ManualLinkDetail = {
+  link_id: string;
+  manual_package_id: string;
+  package_type: string | null;
+  linked_trade_ids: string[];
+  created_by: string;
+  created_at: string;
+  updated_by?: string | null;
+  updated_at?: string | null;
+  user_comment?: string | null;
+  link_reason?: string | null;
+  tags?: string[] | null;
+  link_metrics?: Record<string, any> | null;
+  is_active: boolean;
 };
 
 type LegMetricValues = {
@@ -337,9 +396,23 @@ const TIMESERIES_VIEW_OPTIONS: Array<{
   { key: "DAILY_CLOSE", label: "Daily Close" },
   { key: "DAILY_OHLC", label: "Daily OHLC" },
 ];
-const TIMESERIES_FETCH_LIMIT = 200;
-const TIMESERIES_MAX_ROWS = 5000;
-const TIMESERIES_MAX_PAGES = 50;
+const TIMESERIES_FETCH_LIMIT = 500;
+const TIMESERIES_MAX_ROWS = 50000;
+const TIMESERIES_MAX_PAGES = 10000;
+const TIMESERIES_MAX_SCAN_MS = 60000 * 2;
+const MANUAL_PACKAGE_TYPES = [
+  { value: "USER_STRADDLE_PAIR", label: "Straddle Pair" },
+  { value: "USER_VERTICAL_SPREAD", label: "Vertical Spread" },
+  { value: "USER_TIME_SPREAD", label: "Time Spread" },
+  { value: "USER_CUSTOM", label: "Custom" },
+];
+const MANUAL_LINK_REASONS = [
+  { value: "Vega hedge", label: "Vega hedge" },
+  { value: "Customer flow", label: "Customer flow" },
+  { value: "Time spread", label: "Time spread" },
+  { value: "Structure repair", label: "Structure repair" },
+  { value: "Other", label: "Other" },
+];
 const TENOR_REGEX =
   /(\d+(?:\.\d+)?\s*(?:M|MO|MON|MONTH|MONTHS|Y|YR|YEAR|YEARS))\s*x\s*(\d+(?:\.\d+)?\s*(?:M|MO|MON|MONTH|MONTHS|Y|YR|YEAR|YEARS))/i;
 const TENOR_TOKEN_REGEX =
@@ -486,6 +559,20 @@ function formatExecutionWindow(start: string, end: string): string {
   return `${startStr} / ${endStr}`;
 }
 
+function formatTimestamp(value: string | null | undefined): string {
+  if (!value) return "--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const dateStr = date.toLocaleDateString("en-US");
+  const timeStr = date.toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  return `${dateStr} ${timeStr}`;
+}
+
 function isValid(value: any) {
   if (value === null || value === undefined) return false;
   if (typeof value === "number" && Number.isNaN(value)) return false;
@@ -532,6 +619,94 @@ function parseMetricNumber(value: any): number | null {
   if (!isValid(value)) return null;
   const numericValue = Number(value);
   return Number.isNaN(numericValue) ? null : numericValue;
+}
+
+function parseMetricSeries(value: any): number | null {
+  if (!isValid(value)) return null;
+  if (Array.isArray(value)) {
+    const numbers = value
+      .map((entry) => parseMetricNumber(entry))
+      .filter((entry): entry is number => entry !== null);
+    if (!numbers.length) return null;
+    return numbers.reduce((sum, entry) => sum + entry, 0);
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    if (!normalized) return null;
+    if (/[\\/|,]/.test(normalized)) {
+      const parts = normalized
+        .split(/[\\/|,]+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      const numbers = parts
+        .map((entry) => parseMetricNumber(entry))
+        .filter((entry): entry is number => entry !== null);
+      if (numbers.length) {
+        return numbers.reduce((sum, entry) => sum + entry, 0);
+      }
+    }
+  }
+  return parseMetricNumber(value);
+}
+
+function normalizeManualFlag(value: any): boolean {
+  if (value === true) return true;
+  if (value === false || value === null || value === undefined) return false;
+  if (typeof value === "number") return value !== 0;
+  const normalized = String(value).trim().toLowerCase();
+  return ["true", "1", "yes", "y", "t"].includes(normalized);
+}
+
+function isManualPackage(row: TapeRow): boolean {
+  if (row.manual_link_id) return true;
+  if (row.manual_package_id) return true;
+  const source = row.package_source?.toUpperCase();
+  return source === "MANUAL" || source === "HYBRID";
+}
+
+function manualLinkColor(linkId?: string | null): string | null {
+  if (!linkId) return null;
+  let hash = 0;
+  for (let i = 0; i < linkId.length; i += 1) {
+    hash = (hash * 31 + linkId.charCodeAt(i)) % 360;
+  }
+  return `hsl(${hash}, 65%, 52%)`;
+}
+
+function formatDurationSeconds(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "--";
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) return "--";
+  const absSeconds = Math.abs(numeric);
+  if (absSeconds < 60) return `${Math.round(absSeconds)}s`;
+  const minutes = Math.round(absSeconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}h`;
+}
+
+function parseIdList(value: string): string[] {
+  if (!value) return [];
+  return value
+    .split(/[,\s]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function formatManualMetricValue(value: any): string {
+  if (!isValid(value)) return "--";
+  if (typeof value === "number") return formatMetricValue(value, 2);
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry)).join(", ");
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
 }
 
 function isEmptyFilterValue(value: any) {
@@ -1541,6 +1716,11 @@ function LegsSubtable({
   const metrics = row.package_metrics || {};
   const packageType = normalizePackageType(row.package_type);
   const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
+  const manualLinkId = row.manual_link_id;
+  const manualColor = manualLinkColor(
+    row.manual_link_id || row.manual_package_id,
+  );
+  const rowIsManual = isManualPackage(row);
   const isStraddle = packageType === "STRADDLE";
   const isRiskReversal = packageType === "RISK_REVERSAL";
   const showStraddleSchema = isStraddle || isRiskReversal;
@@ -1559,6 +1739,7 @@ function LegsSubtable({
   const [extraTimeseriesRows, setExtraTimeseriesRows] = useState<TapeRow[]>([]);
   const [timeseriesLoading, setTimeseriesLoading] = useState(false);
   const [timeseriesError, setTimeseriesError] = useState<string | null>(null);
+  const [timeseriesNotice, setTimeseriesNotice] = useState<string | null>(null);
   const timeseriesFetchKeyRef = useRef<string | null>(null);
   const timeseriesFetchInFlight = useRef(false);
   const columnFiltersParam = searchParams.get(COLUMN_FILTER_QUERY_KEY);
@@ -1725,17 +1906,16 @@ function LegsSubtable({
   const isOhlcView = timeseriesView === "DAILY_OHLC";
   const timeseriesFetchKey = useMemo(
     () =>
-      `${seriesKey ?? ""}|${columnFiltersParam ?? ""}|${
-        columnFilterOpParam ?? ""
-      }|${filterParam ?? ""}`,
-    [columnFilterOpParam, columnFiltersParam, filterParam, seriesKey],
+      `${seriesKey ?? ""}|${excludeCusty}`,
+    [excludeCusty, seriesKey],
   );
 
   useEffect(() => {
     setExtraTimeseriesRows([]);
     setTimeseriesError(null);
+    setTimeseriesNotice(null);
     timeseriesFetchKeyRef.current = null;
-  }, [columnFilterOpParam, columnFiltersParam, filterParam, seriesKey]);
+  }, [excludeCusty, seriesKey]);
 
   useEffect(() => {
     if (!showTimeseries || !isStraddle || !seriesKey) return;
@@ -1748,54 +1928,44 @@ function LegsSubtable({
       timeseriesFetchInFlight.current = true;
       setTimeseriesLoading(true);
       setTimeseriesError(null);
-      const collected = new Map<string, TapeRow>();
-      let cursor: string | null = null;
-      let hasMore = true;
-      let pages = 0;
+      setTimeseriesNotice(null);
 
       try {
-        while (
-          hasMore &&
-          pages < TIMESERIES_MAX_PAGES &&
-          collected.size < TIMESERIES_MAX_ROWS
-        ) {
-          const params = new URLSearchParams();
-          params.set("limit", String(TIMESERIES_FETCH_LIMIT));
-          if (columnFiltersParam) {
-            params.set(COLUMN_FILTER_QUERY_KEY, columnFiltersParam);
-          }
-          if (columnFilterOpParam) {
-            params.set(COLUMN_FILTER_OPERATOR_QUERY_KEY, columnFilterOpParam);
-          }
-          if (filterParam) {
-            params.set("filter", filterParam);
-          }
-          if (cursor) params.set("cursor", cursor);
-
-          const res = await fetch(`/api/swaptions-tape?${params.toString()}`);
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(text || "Failed to load timeseries data");
-          }
-          const data: TapeResponse = await res.json();
-          data.rows.forEach((rowItem) => {
-            if (normalizePackageType(rowItem.package_type) !== "STRADDLE") {
-              return;
-            }
-            const action = extractPrimaryAction(rowItem);
-            if (action !== "NEWT-TRAD") return;
-            if (buildStraddleSeriesKey(rowItem) !== seriesKey) return;
-            collected.set(rowItem.package_id, rowItem);
-          });
-          hasMore = data.hasMore;
-          cursor = data.nextCursor;
-          pages += 1;
-          if (!cursor) break;
+        const params = new URLSearchParams();
+        params.set("seriesKey", seriesKey);
+        if (excludeCusty) {
+          params.set("excludeCusty", "true");
         }
+
+        const res = await fetch(`/api/swaptions-tape/timeseries?${params.toString()}`);
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Failed to load timeseries data");
+        }
+
+        const data: { rows: TapeRow[]; count: number; truncated: boolean } = await res.json();
+
+        // Client-side filtering to ensure exact match
+        const collected = new Map<string, TapeRow>();
+        data.rows.forEach((rowItem) => {
+          if (normalizePackageType(rowItem.package_type) !== "STRADDLE") {
+            return;
+          }
+          const action = extractPrimaryAction(rowItem);
+          if (action !== "NEWT-TRAD") return;
+          if (buildStraddleSeriesKey(rowItem) !== seriesKey) return;
+          collected.set(rowItem.package_id, rowItem);
+        });
 
         if (cancelled) return;
         setExtraTimeseriesRows(Array.from(collected.values()));
         timeseriesFetchKeyRef.current = timeseriesFetchKey;
+
+        if (data.truncated) {
+          setTimeseriesNotice(
+            `Timeseries data was truncated at ${TIMESERIES_MAX_ROWS} rows; showing partial history.`
+          );
+        }
       } catch (error: any) {
         if (!cancelled) {
           setTimeseriesError(
@@ -1816,9 +1986,7 @@ function LegsSubtable({
       cancelled = true;
     };
   }, [
-    columnFilterOpParam,
-    columnFiltersParam,
-    filterParam,
+    excludeCusty,
     isStraddle,
     seriesKey,
     showTimeseries,
@@ -2201,11 +2369,23 @@ function LegsSubtable({
             const values = computeLegValues(leg, legIndex);
             const legKey =
               leg.trade_id || `${row.package_id}-leg-${legIndex}`;
+            const isLegManual =
+              rowIsManual ||
+              normalizeManualFlag(leg.is_manually_linked) ||
+              (!!manualLinkId && leg.manual_link_id === manualLinkId);
 
             return (
               <tr key={legKey} className="odd:bg-slate-900/40">
                 <td className="px-2 py-1 font-mono text-slate-100">
-                  #{values.legNumber}
+                  <div className="flex items-center gap-1">
+                    {isLegManual && (
+                      <span
+                        className="h-2 w-2 rounded-full"
+                        style={{ backgroundColor: manualColor || "#64748b" }}
+                      />
+                    )}
+                    #{values.legNumber}
+                  </div>
                 </td>
                 <td className="px-2 py-1 text-slate-300">
                   {leg.product_type
@@ -2599,8 +2779,991 @@ function LegsSubtable({
                 : timeseriesError || "No timeseries data available."}
             </div>
           )}
+          {timeseriesNotice && !timeseriesLoading && !timeseriesError && (
+            <div className="mt-2 text-[11px] text-amber-300">
+              {timeseriesNotice}
+            </div>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ManualLinkModal({
+  isOpen,
+  selectedRows,
+  currentUser,
+  onUserChange,
+  onClose,
+  onCreated,
+}: {
+  isOpen: boolean;
+  selectedRows: TapeRow[];
+  currentUser: string;
+  onUserChange: (value: string) => void;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const selectedIds = useMemo(
+    () => selectedRows.map((row) => row.package_id),
+    [selectedRows],
+  );
+  const selectedSummaries = useMemo(
+    () =>
+      selectedRows.map((row) => ({
+        package_id: row.package_id,
+        package_type: row.package_type,
+        label: buildRichLabel(row),
+        execution_start: row.execution_start,
+        execution_end: row.execution_end,
+        manual_link_id: row.manual_link_id,
+        manual_package_id: row.manual_package_id,
+      })),
+    [selectedRows],
+  );
+  const [packageType, setPackageType] = useState(
+    MANUAL_PACKAGE_TYPES[0]?.value ?? "",
+  );
+  const [linkReason, setLinkReason] = useState(
+    MANUAL_LINK_REASONS[0]?.value ?? "",
+  );
+  const [comment, setComment] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
+  const [validation, setValidation] = useState<ManualLinkValidationItem[]>([]);
+  const [metrics, setMetrics] = useState<Record<string, any> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const hasValidationErrors = validation.some(
+    (item) => item.status === "error",
+  );
+
+  const addTag = useCallback(() => {
+    const next = tagInput.trim();
+    if (!next) return;
+    if (tags.includes(next)) {
+      setTagInput("");
+      return;
+    }
+    setTags((prev) => [...prev, next]);
+    setTagInput("");
+  }, [tagInput, tags]);
+
+  const removeTag = useCallback((tag: string) => {
+    setTags((prev) => prev.filter((item) => item !== tag));
+  }, []);
+
+  const validateLink = useCallback(async () => {
+    if (selectedIds.length < 2) return;
+    setValidating(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/swaption/links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trade_ids: selectedIds,
+          package_type: packageType || undefined,
+          link_reason: linkReason || undefined,
+          validate_only: true,
+        }),
+      });
+      const payload = await res.json();
+      if (!res.ok) {
+        setError(payload?.error || "Failed to validate manual link.");
+        if (payload?.validation) {
+          setValidation(payload.validation as ManualLinkValidationItem[]);
+        }
+        if (payload?.metrics) {
+          setMetrics(payload.metrics as Record<string, any>);
+        }
+        return;
+      }
+      setValidation(payload.validation || []);
+      setMetrics(payload.metrics || null);
+    } catch (err: any) {
+      setError(err?.message || "Failed to validate manual link.");
+    } finally {
+      setValidating(false);
+    }
+  }, [linkReason, packageType, selectedIds]);
+
+  const handleCreate = useCallback(async () => {
+    if (selectedIds.length < 2) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/swaption/links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trade_ids: selectedIds,
+          package_type: packageType || undefined,
+          comment: comment || undefined,
+          link_reason: linkReason || undefined,
+          tags,
+          user: currentUser || undefined,
+        }),
+      });
+      const payload = await res.json();
+      if (!res.ok) {
+        setError(payload?.error || "Failed to create manual link.");
+        if (payload?.validation) {
+          setValidation(payload.validation as ManualLinkValidationItem[]);
+        }
+        if (payload?.metrics) {
+          setMetrics(payload.metrics as Record<string, any>);
+        }
+        return;
+      }
+      onCreated();
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || "Failed to create manual link.");
+    } finally {
+      setSubmitting(false);
+    }
+  }, [
+    comment,
+    currentUser,
+    linkReason,
+    onClose,
+    onCreated,
+    packageType,
+    selectedIds,
+    tags,
+  ]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setPackageType(MANUAL_PACKAGE_TYPES[0]?.value ?? "");
+    setLinkReason(MANUAL_LINK_REASONS[0]?.value ?? "");
+    setComment("");
+    setTags([]);
+    setTagInput("");
+    setValidation([]);
+    setMetrics(null);
+    setError(null);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (selectedIds.length < 2) return;
+    validateLink();
+  }, [isOpen, selectedIds, validateLink]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+      <div className="w-full max-w-4xl overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+            <Link2 className="h-4 w-4 text-slate-300" />
+            Link Trades as Package
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded border border-slate-700 p-1 text-slate-300 transition hover:border-slate-500 hover:text-slate-100"
+            aria-label="Close manual link modal"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="max-h-[75vh] overflow-y-auto p-4">
+          <div className="grid gap-4 lg:grid-cols-[1.1fr_1fr]">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-xs text-slate-400">
+                <span className="uppercase tracking-wide">Selected Trades</span>
+                <span className="font-mono">
+                  {selectedSummaries.length} selected
+                </span>
+              </div>
+              <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+                {selectedSummaries.length ? (
+                  selectedSummaries.map((row) => (
+                    <div
+                      key={row.package_id}
+                      className="rounded border border-slate-800/70 bg-slate-900/60 px-2 py-1 text-xs text-slate-200"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono">{row.package_id}</span>
+                        <span className="text-[10px] uppercase text-slate-400">
+                          {row.package_type || "N/A"}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-300">
+                        {row.label}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        {formatExecutionWindow(
+                          row.execution_start,
+                          row.execution_end,
+                        )}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-xs text-slate-400">
+                    Select at least two trades to create a manual link.
+                  </div>
+                )}
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
+                <div className="flex items-center justify-between">
+                  <span className="uppercase tracking-wide text-slate-400">
+                    Validation
+                  </span>
+                  <button
+                    type="button"
+                    onClick={validateLink}
+                    disabled={validating || selectedIds.length < 2}
+                    className="rounded border border-slate-700 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500 disabled:opacity-50"
+                  >
+                    {validating ? "Validating" : "Refresh"}
+                  </button>
+                </div>
+                <div className="mt-2 space-y-2">
+                  {validation.length ? (
+                    validation.map((item) => (
+                      <div
+                        key={item.key}
+                        className="flex items-start gap-2 text-xs"
+                      >
+                        {item.status === "ok" ? (
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-400" />
+                        ) : item.status === "error" ? (
+                          <XCircle className="mt-0.5 h-4 w-4 text-rose-400" />
+                        ) : (
+                          <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-300" />
+                        )}
+                        <div>
+                          <div className="font-semibold text-slate-200">
+                            {item.label}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            {item.message}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-[11px] text-slate-400">
+                      Validation results will appear after refresh.
+                    </div>
+                  )}
+                </div>
+              </div>
+              {metrics && (
+                <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
+                  <div className="uppercase tracking-wide text-slate-400">
+                    Metrics
+                  </div>
+                  <div className="mt-2 grid gap-2 md:grid-cols-2">
+                    <div className="flex items-center justify-between">
+                      <span>Total notional</span>
+                      <span className="font-mono">
+                        {formatNotional(metrics.total_notional)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Total premium</span>
+                      <span className="font-mono">
+                        {formatMetricValue(metrics.total_premium, 2)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>DV01</span>
+                      <span className="font-mono">
+                        {formatMetricValue(metrics.total_dv01, 2)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Vega01</span>
+                      <span className="font-mono">
+                        {formatMetricValue(metrics.total_vega01, 2)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Time spread</span>
+                      <span className="font-mono">
+                        {formatDurationSeconds(metrics.time_spread_seconds)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Trades</span>
+                      <span className="font-mono">
+                        {metrics.trade_count ?? "--"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="space-y-3">
+              <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
+                <div className="uppercase tracking-wide text-slate-400">
+                  Link Details
+                </div>
+                <div className="mt-3 space-y-3">
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                      User
+                    </span>
+                    <input
+                      value={currentUser}
+                      onChange={(event) => onUserChange(event.target.value)}
+                      className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                      placeholder="username or email"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                      Package Type
+                    </span>
+                    <select
+                      value={packageType}
+                      onChange={(event) => setPackageType(event.target.value)}
+                      className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                    >
+                      {MANUAL_PACKAGE_TYPES.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                      Link Reason
+                    </span>
+                    <select
+                      value={linkReason}
+                      onChange={(event) => setLinkReason(event.target.value)}
+                      className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                    >
+                      {MANUAL_LINK_REASONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                      Tags
+                    </span>
+                    <div className="mt-1 flex gap-2">
+                      <input
+                        value={tagInput}
+                        onChange={(event) => setTagInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            addTag();
+                          }
+                        }}
+                        className="flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                        placeholder="comma or enter separated tags"
+                      />
+                      <button
+                        type="button"
+                        onClick={addTag}
+                        className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {tags.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {tags.map((tag) => (
+                          <span
+                            key={tag}
+                            className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-200"
+                          >
+                            {tag}
+                            <button
+                              type="button"
+                              onClick={() => removeTag(tag)}
+                              className="text-slate-400 hover:text-slate-200"
+                              aria-label={`Remove ${tag}`}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                      Comment
+                    </span>
+                    <textarea
+                      value={comment}
+                      onChange={(event) => setComment(event.target.value)}
+                      rows={4}
+                      className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                      placeholder="Add context for this manual link"
+                    />
+                  </label>
+                </div>
+              </div>
+              {error && (
+                <div className="rounded border border-rose-800/70 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
+                  {error}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-between border-t border-slate-800 px-4 py-3 text-xs">
+          <div className="text-slate-400">
+            {selectedSummaries.length < 2
+              ? "Select at least two trades to enable linking."
+              : hasValidationErrors
+                ? "Resolve validation errors before creating the link."
+                : "Ready to create a manual link."}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-300 transition hover:border-slate-500"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleCreate}
+              disabled={
+                submitting ||
+                selectedSummaries.length < 2 ||
+                hasValidationErrors ||
+                !currentUser
+              }
+              className="rounded border border-emerald-500/60 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
+            >
+              {submitting ? "Creating..." : "Create Link"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ManualLinkDetailsModal({
+  isOpen,
+  linkId,
+  currentUser,
+  onUserChange,
+  onClose,
+  onUpdated,
+}: {
+  isOpen: boolean;
+  linkId: string | null;
+  currentUser: string;
+  onUserChange: (value: string) => void;
+  onClose: () => void;
+  onUpdated: () => void;
+}) {
+  const [linkDetail, setLinkDetail] = useState<ManualLinkDetail | null>(null);
+  const [trades, setTrades] = useState<ManualLinkTrade[]>([]);
+  const [history, setHistory] = useState<ManualLinkHistoryItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [packageType, setPackageType] = useState("");
+  const [linkReason, setLinkReason] = useState("");
+  const [comment, setComment] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
+  const [addTradesInput, setAddTradesInput] = useState("");
+  const [removeTradesInput, setRemoveTradesInput] = useState("");
+  const [deactivateReason, setDeactivateReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [deactivating, setDeactivating] = useState(false);
+
+  const manualColor = manualLinkColor(linkId);
+  const metricEntries = linkDetail?.link_metrics
+    ? Object.entries(linkDetail.link_metrics)
+    : [];
+
+  const addTag = useCallback(() => {
+    const next = tagInput.trim();
+    if (!next) return;
+    if (tags.includes(next)) {
+      setTagInput("");
+      return;
+    }
+    setTags((prev) => [...prev, next]);
+    setTagInput("");
+  }, [tagInput, tags]);
+
+  const removeTag = useCallback((tag: string) => {
+    setTags((prev) => prev.filter((item) => item !== tag));
+  }, []);
+
+  const fetchLinkDetails = useCallback(async () => {
+    if (!linkId) return;
+    setLoading(true);
+    setError(null);
+    setLinkDetail(null);
+    setTrades([]);
+    setHistory([]);
+    try {
+      const res = await fetch(`/api/swaption/links/${linkId}`);
+      const payload = await res.json();
+      if (!res.ok) {
+        setError(payload?.error || "Failed to load manual link.");
+        return;
+      }
+      setLinkDetail(payload.link as ManualLinkDetail);
+      setTrades(payload.trades || []);
+      setHistory(payload.history || []);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load manual link.");
+    } finally {
+      setLoading(false);
+    }
+  }, [linkId]);
+
+  const handleSave = useCallback(async () => {
+    if (!linkId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const payload: Record<string, any> = {
+        user: currentUser || undefined,
+        package_type: packageType || undefined,
+        link_reason: linkReason || undefined,
+        comment: comment || undefined,
+        tags,
+      };
+      const addTrades = parseIdList(addTradesInput);
+      const removeTrades = parseIdList(removeTradesInput);
+      if (addTrades.length) payload.add_trades = addTrades;
+      if (removeTrades.length) payload.remove_trades = removeTrades;
+
+      const res = await fetch(`/api/swaption/links/${linkId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const responsePayload = await res.json();
+      if (!res.ok) {
+        setError(responsePayload?.error || "Failed to update manual link.");
+        return;
+      }
+      setAddTradesInput("");
+      setRemoveTradesInput("");
+      await fetchLinkDetails();
+      onUpdated();
+    } catch (err: any) {
+      setError(err?.message || "Failed to update manual link.");
+    } finally {
+      setSaving(false);
+    }
+  }, [
+    addTradesInput,
+    comment,
+    currentUser,
+    fetchLinkDetails,
+    linkId,
+    linkReason,
+    onUpdated,
+    packageType,
+    removeTradesInput,
+    tags,
+  ]);
+
+  const handleDeactivate = useCallback(async () => {
+    if (!linkId) return;
+    setDeactivating(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/swaption/links/${linkId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user: currentUser || undefined,
+          reason: deactivateReason || undefined,
+        }),
+      });
+      const responsePayload = await res.json();
+      if (!res.ok) {
+        setError(responsePayload?.error || "Failed to deactivate link.");
+        return;
+      }
+      onUpdated();
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || "Failed to deactivate link.");
+    } finally {
+      setDeactivating(false);
+    }
+  }, [currentUser, deactivateReason, linkId, onClose, onUpdated]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetchLinkDetails();
+  }, [fetchLinkDetails, isOpen]);
+
+  useEffect(() => {
+    if (!linkDetail) return;
+    setPackageType(linkDetail.package_type || "");
+    setLinkReason(linkDetail.link_reason || "");
+    setComment(linkDetail.user_comment || "");
+    setTags(Array.isArray(linkDetail.tags) ? linkDetail.tags : []);
+    setTagInput("");
+  }, [linkDetail]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+      <div className="w-full max-w-4xl overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+            <span
+              className="h-3 w-3 rounded-full"
+              style={{ backgroundColor: manualColor || "#64748b" }}
+            />
+            Manual Link Details
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded border border-slate-700 p-1 text-slate-300 transition hover:border-slate-500 hover:text-slate-100"
+            aria-label="Close manual link details"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="max-h-[75vh] overflow-y-auto p-4">
+          {loading ? (
+            <div className="flex items-center gap-2 text-sm text-slate-300">
+              <RefreshCw className="h-4 w-4 animate-spin" />
+              Loading manual link...
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                      Manual Package
+                    </div>
+                    <div className="text-sm font-semibold text-slate-100">
+                      {linkDetail?.manual_package_id || "--"}
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {linkDetail?.is_active ? "Active" : "Inactive"}
+                    </div>
+                  </div>
+                  <div className="space-y-1 text-right">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                      Created
+                    </div>
+                    <div className="text-[11px] text-slate-200">
+                      {linkDetail?.created_by || "--"}
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {formatTimestamp(linkDetail?.created_at)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
+                    <div className="uppercase tracking-wide text-slate-400">
+                      Edit Link
+                    </div>
+                    <div className="mt-3 space-y-3">
+                      <label className="block">
+                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                          User
+                        </span>
+                        <input
+                          value={currentUser}
+                          onChange={(event) =>
+                            onUserChange(event.target.value)
+                          }
+                          className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                          placeholder="username or email"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                          Package Type
+                        </span>
+                        <select
+                          value={packageType}
+                          onChange={(event) =>
+                            setPackageType(event.target.value)
+                          }
+                          className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                        >
+                          {MANUAL_PACKAGE_TYPES.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                          Link Reason
+                        </span>
+                        <select
+                          value={linkReason}
+                          onChange={(event) => setLinkReason(event.target.value)}
+                          className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                        >
+                          {MANUAL_LINK_REASONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                          Tags
+                        </span>
+                        <div className="mt-1 flex gap-2">
+                          <input
+                            value={tagInput}
+                            onChange={(event) => setTagInput(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addTag();
+                              }
+                            }}
+                            className="flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                            placeholder="comma or enter separated tags"
+                          />
+                          <button
+                            type="button"
+                            onClick={addTag}
+                            className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
+                          >
+                            Add
+                          </button>
+                        </div>
+                        {tags.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {tags.map((tag) => (
+                              <span
+                                key={tag}
+                                className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-200"
+                              >
+                                {tag}
+                                <button
+                                  type="button"
+                                  onClick={() => removeTag(tag)}
+                                  className="text-slate-400 hover:text-slate-200"
+                                  aria-label={`Remove ${tag}`}
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </label>
+                      <label className="block">
+                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                          Comment
+                        </span>
+                        <textarea
+                          value={comment}
+                          onChange={(event) => setComment(event.target.value)}
+                          rows={3}
+                          className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                          placeholder="Add context for this manual link"
+                        />
+                      </label>
+                      <div className="grid gap-2 md:grid-cols-2">
+                        <label className="block">
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                            Add Trades
+                          </span>
+                          <input
+                            value={addTradesInput}
+                            onChange={(event) =>
+                              setAddTradesInput(event.target.value)
+                            }
+                            className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                            placeholder="trade or package ids"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                            Remove Trades
+                          </span>
+                          <input
+                            value={removeTradesInput}
+                            onChange={(event) =>
+                              setRemoveTradesInput(event.target.value)
+                            }
+                            className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                            placeholder="trade or package ids"
+                          />
+                        </label>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleSave}
+                        disabled={saving || !currentUser || !linkDetail}
+                        className="rounded border border-emerald-500/60 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                      >
+                        {saving ? "Saving..." : "Save Changes"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
+                    <div className="uppercase tracking-wide text-slate-400">
+                      Deactivate Link
+                    </div>
+                    <div className="mt-2 flex flex-col gap-2">
+                      <input
+                        value={deactivateReason}
+                        onChange={(event) =>
+                          setDeactivateReason(event.target.value)
+                        }
+                        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                        placeholder="Reason for deactivation"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleDeactivate}
+                        disabled={deactivating || !currentUser || !linkDetail}
+                        className="rounded border border-rose-500/60 bg-rose-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-200 transition hover:bg-rose-500/20 disabled:opacity-50"
+                      >
+                        {deactivating ? "Deactivating..." : "Deactivate Link"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
+                    <div className="uppercase tracking-wide text-slate-400">
+                      Linked Trades
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      {trades.length ? (
+                        trades.map((trade) => (
+                          <div
+                            key={trade.trade_id}
+                            className="rounded border border-slate-800/70 bg-slate-900/60 px-2 py-1"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-mono">
+                                {trade.trade_id}
+                              </span>
+                              <span className="text-[10px] uppercase text-slate-400">
+                                {trade.product_type || "N/A"}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-300">
+                              {trade.trade_label || "--"}
+                            </div>
+                            <div className="flex items-center justify-between text-[10px] text-slate-500">
+                              <span>{trade.package_id}</span>
+                              <span>
+                                {formatNotional(trade.notional ?? null)}
+                              </span>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-[11px] text-slate-400">
+                          No linked trades found.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
+                    <div className="uppercase tracking-wide text-slate-400">
+                      Metrics
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      {metricEntries.length ? (
+                        metricEntries.map(([key, value]) => (
+                          <div
+                            key={key}
+                            className="flex items-center justify-between"
+                          >
+                            <span className="text-[11px] uppercase text-slate-400">
+                              {key.replace(/_/g, " ")}
+                            </span>
+                            <span className="font-mono">
+                              {formatManualMetricValue(value)}
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-[11px] text-slate-400">
+                          No metrics stored.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
+                    <div className="uppercase tracking-wide text-slate-400">
+                      History
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      {history.length ? (
+                        history.map((item) => (
+                          <div
+                            key={item.history_id}
+                            className="rounded border border-slate-800/70 bg-slate-900/60 px-2 py-1"
+                          >
+                            <div className="flex items-center justify-between text-[11px] text-slate-200">
+                              <span className="font-semibold">
+                                {item.action}
+                              </span>
+                              <span className="text-slate-500">
+                                {formatTimestamp(item.changed_at)}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {item.changed_by}
+                            </div>
+                            {item.change_details && (
+                              <pre className="mt-1 whitespace-pre-wrap rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[10px] text-slate-400">
+                                {JSON.stringify(item.change_details, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-[11px] text-slate-400">
+                          No history entries yet.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {error && (
+                <div className="rounded border border-rose-800/70 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
+                  {error}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2644,6 +3807,14 @@ export default function SwaptionTradeTape() {
   const [sortOrder, setSortOrder] = useState<1 | -1 | 0>(-1);
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>(
     {},
+  );
+  const [selectedRows, setSelectedRows] = useState<TapeRow[]>([]);
+  const [linkModalOpen, setLinkModalOpen] = useState(false);
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
+  const [detailLinkId, setDetailLinkId] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState("");
+  const [metricMode, setMetricMode] = useState<"NOTIONAL" | "VEGA">(
+    "NOTIONAL",
   );
   const latestRef = useRef<string | null>(null);
   const fetchInFlight = useRef(false);
@@ -2744,6 +3915,33 @@ export default function SwaptionTradeTape() {
   );
 
   useEffect(() => {
+    const stored =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("swaptionManualUser")
+        : null;
+    if (stored) {
+      setCurrentUser(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (currentUser) {
+      window.localStorage.setItem("swaptionManualUser", currentUser);
+    } else {
+      window.localStorage.removeItem("swaptionManualUser");
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    setSelectedRows((prev) =>
+      prev.filter((row) =>
+        rows.some((candidate) => candidate.package_id === row.package_id),
+      ),
+    );
+  }, [rows]);
+
+  useEffect(() => {
     columnFilterPayloadKeyRef.current = columnFilterPayloadKey;
   }, [columnFilterPayloadKey]);
 
@@ -2795,7 +3993,10 @@ export default function SwaptionTradeTape() {
     searchParams,
   ]);
 
-  const buildTradeLabel = (row: TapeRow) => buildRichLabel(row);
+  const buildTradeLabel = useCallback(
+    (row: TapeRow) => buildRichLabel(row),
+    [],
+  );
 
   const firstLegMetrics = useCallback((row: TapeRow) => {
     const leg = (row.legs_json || [])[0] as any;
@@ -2835,6 +4036,60 @@ export default function SwaptionTradeTape() {
       displayNotional = wingLeg?.notional ?? row.total_notional;
     }
     return displayNotional;
+  }, []);
+
+  const resolveDisplayVega = useCallback((row: TapeRow) => {
+    const metrics = row.package_metrics || {};
+    const packageType = normalizePackageType(row.package_type);
+    const vegaCurveValue = parseMetricSeries((metrics as any).vega_curve_vega01);
+    if (vegaCurveValue !== null) return vegaCurveValue;
+
+    if (packageType === "STRADDLE") {
+      const direct = parseMetricSeries((metrics as any).straddle_vega01);
+      if (direct !== null) return direct;
+      const legs = row.legs_json || [];
+      return parseMetricSeries((legs[0] as any)?.leg_metrics?.straddle_vega01);
+    }
+
+    if (packageType === "RISK_REVERSAL") {
+      return parseMetricSeries((metrics as any).rr_vega01);
+    }
+
+    if (
+      packageType === "VERTICAL_SPREAD_1X1" ||
+      packageType === "VERTICAL_SPREAD_1X2"
+    ) {
+      const netVega = parseMetricSeries((metrics as any).vs_vega01);
+      if (netVega !== null) return netVega;
+      const atmVega = parseMetricSeries((metrics as any).vs_atm_vega01);
+      const otmVega = parseMetricSeries((metrics as any).vs_otm_vega01);
+      if (atmVega !== null || otmVega !== null) {
+        return (atmVega ?? 0) + (otmVega ?? 0);
+      }
+      return null;
+    }
+
+    if (packageType === "OUTRIGHT") {
+      const legMetrics = (row.legs_json || [])[0]?.leg_metrics || {};
+      return parseMetricSeries((legMetrics as any).outright_vega01);
+    }
+
+    const legs = row.legs_json || [];
+    let total: number | null = null;
+    legs.forEach((leg) => {
+      const legMetrics = (leg as any)?.leg_metrics || {};
+      const legVega =
+        parseMetricSeries(legMetrics.outright_vega01) ??
+        parseMetricSeries(legMetrics.straddle_vega01) ??
+        parseMetricSeries(legMetrics.rr_vega01) ??
+        parseMetricSeries(legMetrics.vs_vega01) ??
+        parseMetricSeries(legMetrics.vs_atm_vega01) ??
+        parseMetricSeries(legMetrics.vs_otm_vega01) ??
+        parseMetricSeries(legMetrics.vega01);
+      if (legVega === null) return;
+      total = total === null ? legVega : total + legVega;
+    });
+    return total;
   }, []);
 
   const resolveFilterValue = useCallback(
@@ -2958,6 +4213,26 @@ export default function SwaptionTradeTape() {
     [filteredRows.length, fetchTape, hasMore, loadingMore, nextCursor],
   );
 
+  const openManualLinkDetails = useCallback((linkId?: string | null) => {
+    if (!linkId) return;
+    setDetailLinkId(linkId);
+    setDetailModalOpen(true);
+  }, []);
+
+  const closeManualLinkDetails = useCallback(() => {
+    setDetailModalOpen(false);
+    setDetailLinkId(null);
+  }, []);
+
+  const handleLinkCreated = useCallback(() => {
+    setSelectedRows([]);
+    fetchTape({ replace: true });
+  }, [fetchTape]);
+
+  const handleLinkUpdated = useCallback(() => {
+    fetchTape({ replace: true });
+  }, [fetchTape]);
+
   const rowClassName = (row: TapeRow) => {
     const metrics = firstLegMetrics(row);
     const action = metrics.event_action;
@@ -2974,6 +4249,7 @@ export default function SwaptionTradeTape() {
     ];
     return classes.join(" ").trim();
   };
+
 
   const toggleRowExpansion = useCallback((row: TapeRow) => {
     if (!row.legs_json || row.legs_json.length === 0) return;
@@ -3079,12 +4355,56 @@ export default function SwaptionTradeTape() {
 
   const packageBody = (row: TapeRow) => {
     const warning = hasActionWarning(row);
+    const manual = isManualPackage(row);
+    const manualLinkId = row.manual_link_id;
+    const manualColor = manualLinkColor(
+      row.manual_link_id || row.manual_package_id,
+    );
+    const source = row.package_source?.toUpperCase();
+    const sourceLabel = source === "HYBRID" ? "Hybrid" : "Manual";
+    const manualBadgeClass =
+      "inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900/60 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-200";
     return (
       <div className="flex items-center gap-2">
         <span className="inline-flex items-center gap-2 rounded-full px-2 py-1 text-[11px] font-semibold bg-gray-700 text-gray-100 border border-gray-500/40">
           {row.package_type || "N/A"}
           {warning && <AlertTriangle className="h-3 w-3 text-amber-300" />}
         </span>
+        {manual &&
+          (manualLinkId ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                openManualLinkDetails(manualLinkId);
+              }}
+              className={`${manualBadgeClass} hover:border-slate-500`}
+            >
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ backgroundColor: manualColor || "#64748b" }}
+              />
+              <span>{sourceLabel}</span>
+              {row.manual_package_id && (
+                <span className="text-slate-400">
+                  {row.manual_package_id}
+                </span>
+              )}
+            </button>
+          ) : (
+            <span className={manualBadgeClass}>
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ backgroundColor: manualColor || "#64748b" }}
+              />
+              <span>{sourceLabel}</span>
+              {row.manual_package_id && (
+                <span className="text-slate-400">
+                  {row.manual_package_id}
+                </span>
+              )}
+            </span>
+          ))}
       </div>
     );
   };
@@ -3104,10 +4424,17 @@ export default function SwaptionTradeTape() {
     );
   };
 
-  const notionalBody = (row: TapeRow) => {
+  const showVega = metricMode === "VEGA";
+  const metricLabel = showVega ? "Vega" : "Notional";
+  const metricColumnKey = showVega ? "metric-vega" : "metric-notional";
+
+  const metricBody = (row: TapeRow) => {
+    const value = showVega
+      ? resolveDisplayVega(row)
+      : resolveDisplayNotional(row);
     return (
       <span className="text-xs font-mono text-gray-200">
-        {formatNotional(resolveDisplayNotional(row))}
+        {showVega ? formatMetricValue(value, 2) : formatNotional(value)}
       </span>
     );
   };
@@ -3120,35 +4447,84 @@ export default function SwaptionTradeTape() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3 text-xs text-gray-300">
-        <span className="text-[11px] uppercase tracking-wide text-gray-400">
-          Filter Combine
-        </span>
-        <div className="inline-flex overflow-hidden rounded border border-gray-700">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3 text-xs text-gray-300">
+          <span className="text-[11px] uppercase tracking-wide text-gray-400">
+            Filter Combine
+          </span>
+          <div className="inline-flex overflow-hidden rounded border border-gray-700">
+            <button
+              type="button"
+              onClick={() => setColumnFilterOperator(FilterOperator.AND)}
+              className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                columnFilterOperator === FilterOperator.AND
+                  ? "bg-gray-700 text-gray-100"
+                  : "text-gray-300 hover:bg-gray-800"
+              }`}
+            >
+              AND
+            </button>
+            <button
+              type="button"
+              onClick={() => setColumnFilterOperator(FilterOperator.OR)}
+              className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                columnFilterOperator === FilterOperator.OR
+                  ? "bg-gray-700 text-gray-100"
+                  : "text-gray-300 hover:bg-gray-800"
+              }`}
+            >
+              OR
+            </button>
+          </div>
           <button
             type="button"
-            onClick={() => setColumnFilterOperator(FilterOperator.AND)}
-            className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
-              columnFilterOperator === FilterOperator.AND
-                ? "bg-gray-700 text-gray-100"
-                : "text-gray-300 hover:bg-gray-800"
-            }`}
+            onClick={() =>
+              setMetricMode((current) =>
+                current === "NOTIONAL" ? "VEGA" : "NOTIONAL",
+              )
+            }
+            className="rounded border border-gray-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-200 transition hover:border-gray-500 hover:bg-gray-800"
           >
-            AND
-          </button>
-          <button
-            type="button"
-            onClick={() => setColumnFilterOperator(FilterOperator.OR)}
-            className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
-              columnFilterOperator === FilterOperator.OR
-                ? "bg-gray-700 text-gray-100"
-                : "text-gray-300 hover:bg-gray-800"
-            }`}
-          >
-            OR
+            Toggle Notional/Vega
           </button>
         </div>
+        <div className="flex items-center gap-2 text-xs text-gray-300">
+          <span className="text-[11px] uppercase tracking-wide text-gray-400">
+            User
+          </span>
+          <input
+            value={currentUser}
+            onChange={(event) => setCurrentUser(event.target.value)}
+            className="rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-gray-100"
+            placeholder="username or email"
+          />
+        </div>
       </div>
+      {selectedRows.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
+          <div className="flex items-center gap-2">
+            <span className="font-mono">{selectedRows.length}</span>
+            trades selected
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedRows([])}
+              className="rounded border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => setLinkModalOpen(true)}
+              disabled={selectedRows.length < 2}
+              className="rounded border border-emerald-500/60 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
+            >
+              Link Selected
+            </button>
+          </div>
+        </div>
+      )}
       <style jsx global>{`
         .p-column-filter-overlay,
         .p-column-filter-overlay * {
@@ -3160,8 +4536,15 @@ export default function SwaptionTradeTape() {
         }
       `}</style>
       <DataTable
+        key={`datatable-${metricMode}`}
         value={filteredRows}
         dataKey="package_id"
+        selection={selectedRows}
+        onSelectionChange={(e) =>
+          setSelectedRows((e.value as TapeRow[]) || [])
+        }
+        selectionMode="multiple"
+        metaKeySelection={false}
         expandedRows={expandedRows}
         rowExpansionTemplate={rowExpansionTemplate}
         filters={filters}
@@ -3196,6 +4579,7 @@ export default function SwaptionTradeTape() {
           setSortOrder((e.sortOrder as 1 | -1 | 0) ?? 0);
         }}
       >
+        <Column selectionMode="multiple" style={{ width: 44 }} />
         <Column body={expanderBody} style={{ width: 48 }} />
         <Column
           field="event_action"
@@ -3231,9 +4615,10 @@ export default function SwaptionTradeTape() {
           style={{ width: COLUMN_DEFS[3].width }}
         />
         <Column
+          key={metricColumnKey}
           field="total_notional"
-          header={renderColumnHeader("Notional", "notional")}
-          body={notionalBody}
+          header={renderColumnHeader(metricLabel, "notional")}
+          body={metricBody}
           filter
           filterField="notional"
           dataType="numeric"
@@ -3260,6 +4645,23 @@ export default function SwaptionTradeTape() {
       {loadingMore && (
         <div className="text-sm text-gray-400">Loading more packages...</div>
       )}
+
+      <ManualLinkModal
+        isOpen={linkModalOpen}
+        selectedRows={selectedRows}
+        currentUser={currentUser}
+        onUserChange={setCurrentUser}
+        onClose={() => setLinkModalOpen(false)}
+        onCreated={handleLinkCreated}
+      />
+      <ManualLinkDetailsModal
+        isOpen={detailModalOpen}
+        linkId={detailLinkId}
+        currentUser={currentUser}
+        onUserChange={setCurrentUser}
+        onClose={closeManualLinkDetails}
+        onUpdated={handleLinkUpdated}
+      />
     </div>
   );
 }
