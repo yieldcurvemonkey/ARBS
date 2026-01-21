@@ -44,12 +44,17 @@ class ResolvedTrade:
         synthetic_uti: Stable synthetic identifier for this trade entity
         message_ids: List of dissemination IDs that belong to this entity
         actions: List of (action_type, timestamp) tuples in order
-        inception_state: State from the first NEWT message (for volume)
+        inception_state: State from the first NEWT message (immutable for market analytics)
         current_state: Final canonical state after all lifecycle updates
         status: Current trade status (ACTIVE, TERMINATED, ERRORED)
         is_lifecycle_update: True if trade has MODI/CORR events (not standalone)
         quality_flags: List of data quality warnings
         history: List of state snapshots after each event
+        amendments: List of MODI events with Amendment=True (market events)
+        corrections: List of CORR events with timestamps (audit trail)
+        updates: List of MODI events with Amendment=False (late data fills)
+        prior_uti: Prior UTI for NEWT-NOVA linkage (transferred risk)
+        event_type: Event type (TRAD or NOVA)
     """
 
     synthetic_uti: str
@@ -61,6 +66,11 @@ class ResolvedTrade:
     is_lifecycle_update: bool = False
     quality_flags: List[str] = field(default_factory=list)
     history: List[Dict[str, Any]] = field(default_factory=list)
+    amendments: List[Dict[str, Any]] = field(default_factory=list)
+    corrections: List[Dict[str, Any]] = field(default_factory=list)
+    updates: List[Dict[str, Any]] = field(default_factory=list)
+    prior_uti: Optional[str] = None
+    event_type: Optional[str] = None
 
     @property
     def inception_notional(self) -> Optional[float]:
@@ -89,6 +99,37 @@ class ResolvedTrade:
         For volume counting, only count trades that have a NEWT action.
         """
         return any(action == "NEWT" for action, _ in self.actions)
+
+    @property
+    def is_market_volume(self) -> bool:
+        """
+        Check if this trade should be counted in market volume.
+
+        Volume counting rules:
+        - COUNT: NEWT-TRAD (new trade execution)
+        - DO NOT COUNT: NEWT-NOVA (transferred risk, not new)
+        - DO NOT COUNT: MODI/CORR (lifecycle updates)
+
+        Returns:
+            True if this is NEWT-TRAD, False otherwise
+        """
+        if not self.is_new_trade:
+            return False
+        # NEWT-NOVA should not be counted (transferred risk)
+        if self.event_type == "NOVA":
+            return False
+        # NEWT-TRAD should be counted
+        return True
+
+    @property
+    def has_amendments(self) -> bool:
+        """Check if trade has any amendments (MODI with Amendment=True)."""
+        return len(self.amendments) > 0
+
+    @property
+    def has_corrections(self) -> bool:
+        """Check if trade has any corrections (CORR)."""
+        return len(self.corrections) > 0
 
 
 def _is_null_value(value: Any) -> bool:
@@ -309,21 +350,51 @@ def replay_lifecycle_full(
     for _, row in messages.iterrows():
         action = row.get(action_col)
         row_data = row.to_dict()
+        timestamp = row.get(event_timestamp_col)
 
         if action == "NEWT":
             state = row_data.copy()
             state["Active"] = True
             inception_state = state.copy()
 
+            # Extract event type (TRAD or NOVA) from NEWT
+            event_type = row.get("Event type")
+            if event_type and not pd.isna(event_type):
+                resolved.event_type = str(event_type)
+
+            # Extract Prior UTI for NEWT-NOVA linkage
+            prior_uti = row.get("Prior UTI") or row.get("UTI of related transaction")
+            if prior_uti and not pd.isna(prior_uti):
+                resolved.prior_uti = str(prior_uti)
+
         elif action == "MODI":
             is_amendment = row.get(amendment_indicator_col)
             if is_amendment is True or (isinstance(is_amendment, str) and is_amendment.upper() == "TRUE"):
+                # Amendment (market event) - track separately
+                resolved.amendments.append({
+                    "timestamp": timestamp,
+                    "data": row_data.copy(),
+                })
+                # Overwrite economics fields only
                 state = _update_state(state, row_data, overwrite=True, economics_only=True)
                 state = _update_state(state, row_data, overwrite=False)
             else:
+                # Update (late data fill) - track separately
+                resolved.updates.append({
+                    "timestamp": timestamp,
+                    "data": row_data.copy(),
+                })
+                # Fill nulls only
                 state = _update_state(state, row_data, overwrite=False)
 
         elif action == "CORR":
+            # Correction (error fix) - track separately and update current_state
+            resolved.corrections.append({
+                "timestamp": timestamp,
+                "data": row_data.copy(),
+            })
+            # CRITICAL: CORR updates current_state but NOT inception_state
+            # This preserves market analytics based on what was disseminated at trade time
             state = _update_state(state, row_data, overwrite=True)
 
         elif action == "TERM":

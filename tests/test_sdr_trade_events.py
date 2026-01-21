@@ -635,3 +635,286 @@ class TestEconomicsFields:
         assert "Strike Price" in ECONOMICS_FIELDS
         assert "Option Premium Amount" in ECONOMICS_FIELDS
         assert "Price" in ECONOMICS_FIELDS
+
+
+class TestDualStateModel:
+    """
+    Tests for dual-state model (inception vs current state).
+
+    These tests verify the refactored lifecycle system that separates:
+    - inception_state: What the market saw at trade time (for analytics)
+    - current_state: Final regulatory state after all updates
+    """
+
+    def test_scenario_1_newt_modi_update_corr(self):
+        """
+        Test 1: Basic NEWT → MODI (update) → CORR
+
+        T0: NEWT-TRAD, Strike=4.25%, Premium=null
+        T+3h: MODI-TRAD (Amend=False), Premium=125000
+        T+5h: CORR, Strike=4.24%
+
+        Expected: inception_state.strike=4.25%, current_state.strike=4.24%
+        """
+        messages = pd.DataFrame({
+            "Dissemination Identifier": ["NEWT1", "MODI1", "CORR1"],
+            "Original Dissemination Identifier": ["", "NEWT1", "NEWT1"],
+            "Action type": ["NEWT", "MODI", "CORR"],
+            "Event type": ["TRAD", "TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-07 21:00:00"),  # T0
+                pd.Timestamp("2026-01-08 00:00:00"),  # T+3h
+                pd.Timestamp("2026-01-08 02:00:00"),  # T+5h
+            ],
+            "Amendment indicator": [None, False, None],
+            "Strike Price": [4.25, None, 4.24],
+            "Option Premium Amount": [None, 125000, None],
+            "Notional amount-Leg 1": ["10,000,000", "10,000,000", "10,000,000"],
+        })
+        resolved = replay_lifecycle_full(messages, "NEWT1")
+
+        # Inception state should preserve original strike
+        assert resolved.inception_state is not None
+        assert resolved.inception_state["Strike Price"] == 4.25
+
+        # Current state should have corrected strike
+        assert resolved.current_state is not None
+        assert resolved.current_state["Strike Price"] == 4.24
+
+        # Premium should be filled from MODI (update)
+        assert resolved.current_state["Option Premium Amount"] == 125000
+
+        # Audit trail checks
+        assert len(resolved.updates) == 1  # MODI with Amendment=False
+        assert len(resolved.corrections) == 1  # CORR
+        assert len(resolved.amendments) == 0  # No amendments
+
+        # Should be counted as market volume (NEWT-TRAD)
+        assert resolved.is_market_volume is True
+
+    def test_scenario_2_amendment_market_event(self):
+        """
+        Test 2: Amendment (market event)
+
+        T0: NEWT-TRAD, Notional=10000
+        T+1d: MODI-TRAD (Amend=True), Notional=9000
+
+        Expected: inception_notional=10000, amendment logged as market event
+        """
+        messages = pd.DataFrame({
+            "Dissemination Identifier": ["NEWT1", "MODI1"],
+            "Original Dissemination Identifier": ["", "NEWT1"],
+            "Action type": ["NEWT", "MODI"],
+            "Event type": ["TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-07 21:00:00"),  # T0
+                pd.Timestamp("2026-01-08 21:00:00"),  # T+1d
+            ],
+            "Amendment indicator": [None, True],
+            "Notional amount-Leg 1": ["10,000", "9,000"],
+            "Fixed rate-Leg 1": [0.04, 0.045],
+        })
+        resolved = replay_lifecycle_full(messages, "NEWT1")
+
+        # Inception state should preserve original notional and rate
+        assert resolved.inception_state is not None
+        assert resolved.inception_state["Notional amount-Leg 1"] == "10,000"
+        assert resolved.inception_state["Fixed rate-Leg 1"] == 0.04
+
+        # Current state should have amended values
+        assert resolved.current_state is not None
+        assert resolved.current_state["Notional amount-Leg 1"] == "9,000"
+        assert resolved.current_state["Fixed rate-Leg 1"] == 0.045
+
+        # Amendment should be tracked
+        assert len(resolved.amendments) == 1
+        assert resolved.amendments[0]["timestamp"] == pd.Timestamp("2026-01-08 21:00:00")
+        assert resolved.has_amendments is True
+
+        # Should be counted as market volume (NEWT-TRAD)
+        assert resolved.is_market_volume is True
+
+    def test_scenario_3_full_novation(self):
+        """
+        Test 3: Full Novation
+
+        T0: NEWT-TRAD (UTI=AAA), Notional=13000
+        T+3d: TERM-NOVA (UTI=AAA)
+        T+3d: NEWT-NOVA (UTI=BBB), Prior UTI=AAA, Notional=13000
+
+        Expected: Volume=13000 (count AAA only). BBB.prior_uti links to AAA.
+        """
+        # Original trade
+        messages_aaa = pd.DataFrame({
+            "Dissemination Identifier": ["AAA_NEWT", "AAA_TERM"],
+            "Original Dissemination Identifier": ["", "AAA_NEWT"],
+            "Action type": ["NEWT", "TERM"],
+            "Event type": ["TRAD", "NOVA"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-07 21:00:00"),  # T0
+                pd.Timestamp("2026-01-10 21:00:00"),  # T+3d
+            ],
+            "Amendment indicator": [None, None],
+            "Notional amount-Leg 1": ["13,000", "13,000"],
+        })
+        resolved_aaa = replay_lifecycle_full(messages_aaa, "AAA_NEWT")
+
+        # Novated trade
+        messages_bbb = pd.DataFrame({
+            "Dissemination Identifier": ["BBB_NEWT"],
+            "Original Dissemination Identifier": [""],
+            "Action type": ["NEWT"],
+            "Event type": ["NOVA"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-10 21:00:00"),  # T+3d
+            ],
+            "Amendment indicator": [None],
+            "Prior UTI": ["AAA_ORIGINAL_UTI"],
+            "Notional amount-Leg 1": ["13,000"],
+        })
+        resolved_bbb = replay_lifecycle_full(messages_bbb, "BBB_NEWT")
+
+        # AAA should be market volume (NEWT-TRAD)
+        assert resolved_aaa.event_type == "TRAD"
+        assert resolved_aaa.is_market_volume is True
+        assert resolved_aaa.status == "TERMINATED"
+
+        # BBB should NOT be market volume (NEWT-NOVA is transferred risk)
+        assert resolved_bbb.event_type == "NOVA"
+        assert resolved_bbb.is_market_volume is False
+        assert resolved_bbb.prior_uti == "AAA_ORIGINAL_UTI"
+
+        # Total volume should be 13,000 (only AAA, not BBB)
+        # This is validated by is_market_volume check
+
+    def test_scenario_4_partial_novation(self):
+        """
+        Test 4: Partial Novation
+
+        T0: NEWT-TRAD (UTI=AAA), Notional=13000
+        T+3d: MODI-NOVA (Amend=True, UTI=AAA), Notional=8000
+        T+3d: NEWT-NOVA (UTI=BBB), Prior UTI=AAA, Notional=5000
+
+        Expected: inception_notional=13000, amendment reduces to 8000, BBB created for 5000.
+        """
+        # Original trade (partial novation)
+        messages_aaa = pd.DataFrame({
+            "Dissemination Identifier": ["AAA_NEWT", "AAA_MODI"],
+            "Original Dissemination Identifier": ["", "AAA_NEWT"],
+            "Action type": ["NEWT", "MODI"],
+            "Event type": ["TRAD", "NOVA"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-07 21:00:00"),  # T0
+                pd.Timestamp("2026-01-10 21:00:00"),  # T+3d
+            ],
+            "Amendment indicator": [None, True],
+            "Notional amount-Leg 1": ["13,000", "8,000"],
+        })
+        resolved_aaa = replay_lifecycle_full(messages_aaa, "AAA_NEWT")
+
+        # Novated trade (transferred portion)
+        messages_bbb = pd.DataFrame({
+            "Dissemination Identifier": ["BBB_NEWT"],
+            "Original Dissemination Identifier": [""],
+            "Action type": ["NEWT"],
+            "Event type": ["NOVA"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-10 21:00:00"),  # T+3d
+            ],
+            "Amendment indicator": [None],
+            "Prior UTI": ["AAA_ORIGINAL_UTI"],
+            "Notional amount-Leg 1": ["5,000"],
+        })
+        resolved_bbb = replay_lifecycle_full(messages_bbb, "BBB_NEWT")
+
+        # AAA: inception=13000, current=8000 (partial novation via amendment)
+        assert resolved_aaa.inception_state is not None
+        assert resolved_aaa.inception_state["Notional amount-Leg 1"] == "13,000"
+        assert resolved_aaa.current_state is not None
+        assert resolved_aaa.current_state["Notional amount-Leg 1"] == "8,000"
+        assert len(resolved_aaa.amendments) == 1
+        assert resolved_aaa.is_market_volume is True  # Original trade counts
+
+        # BBB: transferred portion, not new volume
+        assert resolved_bbb.prior_uti == "AAA_ORIGINAL_UTI"
+        assert resolved_bbb.inception_state is not None
+        assert resolved_bbb.inception_state["Notional amount-Leg 1"] == "5,000"
+        assert resolved_bbb.is_market_volume is False  # NEWT-NOVA doesn't count
+
+    def test_corr_does_not_mutate_inception_state(self):
+        """
+        CRITICAL: CORR should update current_state but NOT inception_state.
+
+        This is the core bug fix - CORR arriving hours after trade should not
+        corrupt market analytics based on what was disseminated at trade time.
+        """
+        messages = pd.DataFrame({
+            "Dissemination Identifier": ["NEWT1", "CORR1"],
+            "Original Dissemination Identifier": ["", "NEWT1"],
+            "Action type": ["NEWT", "CORR"],
+            "Event type": ["TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-07 21:00:00"),
+                pd.Timestamp("2026-01-08 05:00:00"),  # +8 hours
+            ],
+            "Amendment indicator": [None, None],
+            "Notional amount-Leg 1": ["100,000,000", "95,000,000"],
+            "Strike Price": [4.25, 4.24],
+            "Platform identifier": ["ISWV", "XOFF"],
+        })
+        resolved = replay_lifecycle_full(messages, "NEWT1")
+
+        # Inception state MUST be unchanged by CORR
+        assert resolved.inception_state["Notional amount-Leg 1"] == "100,000,000"
+        assert resolved.inception_state["Strike Price"] == 4.25
+        assert resolved.inception_state["Platform identifier"] == "ISWV"
+
+        # Current state should reflect CORR
+        assert resolved.current_state["Notional amount-Leg 1"] == "95,000,000"
+        assert resolved.current_state["Strike Price"] == 4.24
+        assert resolved.current_state["Platform identifier"] == "XOFF"
+
+        # CORR should be in audit trail
+        assert len(resolved.corrections) == 1
+        assert resolved.has_corrections is True
+
+    def test_volume_stability_across_time(self):
+        """
+        Volume at T+1h and T+24h should be identical for T0 trades.
+
+        This validates that late CORR events don't cause "volume drift".
+        """
+        messages = pd.DataFrame({
+            "Dissemination Identifier": ["NEWT1", "CORR1"],
+            "Original Dissemination Identifier": ["", "NEWT1"],
+            "Action type": ["NEWT", "CORR"],
+            "Event type": ["TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-07 21:00:00"),  # T0
+                pd.Timestamp("2026-01-08 21:00:00"),  # T+24h (late correction)
+            ],
+            "Amendment indicator": [None, None],
+            "Notional amount-Leg 1": ["50,000,000", "48,000,000"],
+        })
+        resolved = replay_lifecycle_full(messages, "NEWT1")
+
+        # Volume calculation should use inception_state, not current_state
+        inception_notional_str = resolved.inception_state["Notional amount-Leg 1"]
+        inception_notional = float(inception_notional_str.replace(",", ""))
+
+        current_notional_str = resolved.current_state["Notional amount-Leg 1"]
+        current_notional = float(current_notional_str.replace(",", ""))
+
+        # Volume at T+1h (before CORR) = inception_notional = 50MM
+        volume_t1h = inception_notional
+        assert volume_t1h == 50_000_000
+
+        # Volume at T+24h (after CORR) should STILL be inception_notional = 50MM
+        # NOT current_notional = 48MM
+        volume_t24h = inception_notional
+        assert volume_t24h == 50_000_000
+
+        # Verify current state DID change (to confirm CORR was applied)
+        assert current_notional == 48_000_000
+
+        # This demonstrates volume stability across time
