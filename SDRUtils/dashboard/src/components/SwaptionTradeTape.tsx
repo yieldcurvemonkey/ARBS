@@ -1906,10 +1906,8 @@ function LegsSubtable({
   const isOhlcView = timeseriesView === "DAILY_OHLC";
   const timeseriesFetchKey = useMemo(
     () =>
-      `${seriesKey ?? ""}|${columnFiltersParam ?? ""}|${
-        columnFilterOpParam ?? ""
-      }|${filterParam ?? ""}`,
-    [columnFilterOpParam, columnFiltersParam, filterParam, seriesKey],
+      `${seriesKey ?? ""}|${excludeCusty}`,
+    [excludeCusty, seriesKey],
   );
 
   useEffect(() => {
@@ -1917,7 +1915,7 @@ function LegsSubtable({
     setTimeseriesError(null);
     setTimeseriesNotice(null);
     timeseriesFetchKeyRef.current = null;
-  }, [columnFilterOpParam, columnFiltersParam, filterParam, seriesKey]);
+  }, [excludeCusty, seriesKey]);
 
   useEffect(() => {
     if (!showTimeseries || !isStraddle || !seriesKey) return;
@@ -1931,80 +1929,42 @@ function LegsSubtable({
       setTimeseriesLoading(true);
       setTimeseriesError(null);
       setTimeseriesNotice(null);
-      const collected = new Map<string, TapeRow>();
-      let cursor: string | null = null;
-      let hasMore = true;
-      let pages = 0;
-      const startedAt = Date.now();
-      let stopReason: "time" | "pages" | "rows" | null = null;
 
       try {
-        while (
-          hasMore &&
-          pages < TIMESERIES_MAX_PAGES &&
-          collected.size < TIMESERIES_MAX_ROWS
-        ) {
-          if (Date.now() - startedAt > TIMESERIES_MAX_SCAN_MS) {
-            stopReason = "time";
-            break;
-          }
-          const params = new URLSearchParams();
-          params.set("limit", String(TIMESERIES_FETCH_LIMIT));
-          if (columnFiltersParam) {
-            params.set(COLUMN_FILTER_QUERY_KEY, columnFiltersParam);
-          }
-          if (columnFilterOpParam) {
-            params.set(COLUMN_FILTER_OPERATOR_QUERY_KEY, columnFilterOpParam);
-          }
-          if (filterParam) {
-            params.set("filter", filterParam);
-          }
-          if (cursor) params.set("cursor", cursor);
-
-          const res = await fetch(`/api/swaptions-tape?${params.toString()}`);
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(text || "Failed to load timeseries data");
-          }
-          const data: TapeResponse = await res.json();
-          data.rows.forEach((rowItem) => {
-            if (normalizePackageType(rowItem.package_type) !== "STRADDLE") {
-              return;
-            }
-            const action = extractPrimaryAction(rowItem);
-            if (action !== "NEWT-TRAD") return;
-            if (buildStraddleSeriesKey(rowItem) !== seriesKey) return;
-            collected.set(rowItem.package_id, rowItem);
-          });
-          hasMore = data.hasMore;
-          cursor = data.nextCursor;
-          pages += 1;
-          if (!cursor) {
-            hasMore = false;
-            break;
-          }
+        const params = new URLSearchParams();
+        params.set("seriesKey", seriesKey);
+        if (excludeCusty) {
+          params.set("excludeCusty", "true");
         }
 
-        if (hasMore && !stopReason) {
-          if (pages >= TIMESERIES_MAX_PAGES) {
-            stopReason = "pages";
-          } else if (collected.size >= TIMESERIES_MAX_ROWS) {
-            stopReason = "rows";
-          }
+        const res = await fetch(`/api/swaptions-tape/timeseries?${params.toString()}`);
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Failed to load timeseries data");
         }
+
+        const data: { rows: TapeRow[]; count: number; truncated: boolean } = await res.json();
+
+        // Client-side filtering to ensure exact match
+        const collected = new Map<string, TapeRow>();
+        data.rows.forEach((rowItem) => {
+          if (normalizePackageType(rowItem.package_type) !== "STRADDLE") {
+            return;
+          }
+          const action = extractPrimaryAction(rowItem);
+          if (action !== "NEWT-TRAD") return;
+          if (buildStraddleSeriesKey(rowItem) !== seriesKey) return;
+          collected.set(rowItem.package_id, rowItem);
+        });
 
         if (cancelled) return;
         setExtraTimeseriesRows(Array.from(collected.values()));
         timeseriesFetchKeyRef.current = timeseriesFetchKey;
-        if (stopReason) {
-          const scanSeconds = Math.round(TIMESERIES_MAX_SCAN_MS / 1000);
-          const notice =
-            stopReason === "time"
-              ? `Timeseries scan stopped after ${scanSeconds}s; showing partial history.`
-              : stopReason === "pages"
-                ? `Timeseries scan hit ${TIMESERIES_MAX_PAGES} pages; showing partial history.`
-                : `Timeseries scan hit ${TIMESERIES_MAX_ROWS} rows; showing partial history.`;
-          setTimeseriesNotice(notice);
+
+        if (data.truncated) {
+          setTimeseriesNotice(
+            `Timeseries data was truncated at ${TIMESERIES_MAX_ROWS} rows; showing partial history.`
+          );
         }
       } catch (error: any) {
         if (!cancelled) {
@@ -2026,9 +1986,7 @@ function LegsSubtable({
       cancelled = true;
     };
   }, [
-    columnFilterOpParam,
-    columnFiltersParam,
-    filterParam,
+    excludeCusty,
     isStraddle,
     seriesKey,
     showTimeseries,
