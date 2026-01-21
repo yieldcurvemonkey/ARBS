@@ -1,18 +1,7 @@
 // ABOUTME: Root layout configuring app-wide fonts and metadata for the Swaption trade tape.
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "Swaption Trade Tape",
@@ -26,9 +15,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+      <body className="antialiased">
         <div className="min-h-screen bg-slate-950 text-slate-100">
           <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur">
             <div className="mx-auto flex max-w-[120rem] items-center justify-between px-4 py-4">

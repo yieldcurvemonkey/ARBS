@@ -79,9 +79,9 @@ function normalizeTags(value: unknown): string[] | null {
 
 export async function GET(
   request: Request,
-  context: { params: { linkId: string } }
+  context: { params: Promise<{ linkId: string }> }
 ) {
-  const linkId = context.params.linkId
+  const { linkId } = await context.params
   const availability = await ensureManualLinkTables()
   if (availability) return availability
   try {
@@ -148,9 +148,9 @@ export async function GET(
 
 export async function PATCH(
   request: Request,
-  context: { params: { linkId: string } }
+  context: { params: Promise<{ linkId: string }> }
 ) {
-  const linkId = context.params.linkId
+  const { linkId } = await context.params
   const availability = await ensureManualLinkTables()
   if (availability) return availability
   let payload: ManualLinkPatchPayload
@@ -319,9 +319,9 @@ export async function PATCH(
 
 export async function DELETE(
   request: Request,
-  context: { params: { linkId: string } }
+  context: { params: Promise<{ linkId: string }> }
 ) {
-  const linkId = context.params.linkId
+  const { linkId } = await context.params
   const availability = await ensureManualLinkTables()
   if (availability) return availability
   let payload: ManualLinkDeletePayload
