@@ -397,8 +397,9 @@ const TIMESERIES_VIEW_OPTIONS: Array<{
   { key: "DAILY_OHLC", label: "Daily OHLC" },
 ];
 const TIMESERIES_FETCH_LIMIT = 200;
-const TIMESERIES_MAX_ROWS = 5000;
-const TIMESERIES_MAX_PAGES = 50;
+const TIMESERIES_MAX_ROWS = 20000;
+const TIMESERIES_MAX_PAGES = 5000;
+const TIMESERIES_MAX_SCAN_MS = 60000;
 const MANUAL_PACKAGE_TYPES = [
   { value: "USER_STRADDLE_PAIR", label: "Straddle Pair" },
   { value: "USER_VERTICAL_SPREAD", label: "Vertical Spread" },
@@ -618,6 +619,34 @@ function parseMetricNumber(value: any): number | null {
   if (!isValid(value)) return null;
   const numericValue = Number(value);
   return Number.isNaN(numericValue) ? null : numericValue;
+}
+
+function parseMetricSeries(value: any): number | null {
+  if (!isValid(value)) return null;
+  if (Array.isArray(value)) {
+    const numbers = value
+      .map((entry) => parseMetricNumber(entry))
+      .filter((entry): entry is number => entry !== null);
+    if (!numbers.length) return null;
+    return numbers.reduce((sum, entry) => sum + entry, 0);
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    if (!normalized) return null;
+    if (/[\\/|,]/.test(normalized)) {
+      const parts = normalized
+        .split(/[\\/|,]+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      const numbers = parts
+        .map((entry) => parseMetricNumber(entry))
+        .filter((entry): entry is number => entry !== null);
+      if (numbers.length) {
+        return numbers.reduce((sum, entry) => sum + entry, 0);
+      }
+    }
+  }
+  return parseMetricNumber(value);
 }
 
 function normalizeManualFlag(value: any): boolean {
@@ -1710,6 +1739,7 @@ function LegsSubtable({
   const [extraTimeseriesRows, setExtraTimeseriesRows] = useState<TapeRow[]>([]);
   const [timeseriesLoading, setTimeseriesLoading] = useState(false);
   const [timeseriesError, setTimeseriesError] = useState<string | null>(null);
+  const [timeseriesNotice, setTimeseriesNotice] = useState<string | null>(null);
   const timeseriesFetchKeyRef = useRef<string | null>(null);
   const timeseriesFetchInFlight = useRef(false);
   const columnFiltersParam = searchParams.get(COLUMN_FILTER_QUERY_KEY);
@@ -1885,6 +1915,7 @@ function LegsSubtable({
   useEffect(() => {
     setExtraTimeseriesRows([]);
     setTimeseriesError(null);
+    setTimeseriesNotice(null);
     timeseriesFetchKeyRef.current = null;
   }, [columnFilterOpParam, columnFiltersParam, filterParam, seriesKey]);
 
@@ -1899,10 +1930,13 @@ function LegsSubtable({
       timeseriesFetchInFlight.current = true;
       setTimeseriesLoading(true);
       setTimeseriesError(null);
+      setTimeseriesNotice(null);
       const collected = new Map<string, TapeRow>();
       let cursor: string | null = null;
       let hasMore = true;
       let pages = 0;
+      const startedAt = Date.now();
+      let stopReason: "time" | "pages" | "rows" | null = null;
 
       try {
         while (
@@ -1910,6 +1944,10 @@ function LegsSubtable({
           pages < TIMESERIES_MAX_PAGES &&
           collected.size < TIMESERIES_MAX_ROWS
         ) {
+          if (Date.now() - startedAt > TIMESERIES_MAX_SCAN_MS) {
+            stopReason = "time";
+            break;
+          }
           const params = new URLSearchParams();
           params.set("limit", String(TIMESERIES_FETCH_LIMIT));
           if (columnFiltersParam) {
@@ -1941,12 +1979,33 @@ function LegsSubtable({
           hasMore = data.hasMore;
           cursor = data.nextCursor;
           pages += 1;
-          if (!cursor) break;
+          if (!cursor) {
+            hasMore = false;
+            break;
+          }
+        }
+
+        if (hasMore && !stopReason) {
+          if (pages >= TIMESERIES_MAX_PAGES) {
+            stopReason = "pages";
+          } else if (collected.size >= TIMESERIES_MAX_ROWS) {
+            stopReason = "rows";
+          }
         }
 
         if (cancelled) return;
         setExtraTimeseriesRows(Array.from(collected.values()));
         timeseriesFetchKeyRef.current = timeseriesFetchKey;
+        if (stopReason) {
+          const scanSeconds = Math.round(TIMESERIES_MAX_SCAN_MS / 1000);
+          const notice =
+            stopReason === "time"
+              ? `Timeseries scan stopped after ${scanSeconds}s; showing partial history.`
+              : stopReason === "pages"
+                ? `Timeseries scan hit ${TIMESERIES_MAX_PAGES} pages; showing partial history.`
+                : `Timeseries scan hit ${TIMESERIES_MAX_ROWS} rows; showing partial history.`;
+          setTimeseriesNotice(notice);
+        }
       } catch (error: any) {
         if (!cancelled) {
           setTimeseriesError(
@@ -2760,6 +2819,11 @@ function LegsSubtable({
               {timeseriesLoading
                 ? "Loading more history..."
                 : timeseriesError || "No timeseries data available."}
+            </div>
+          )}
+          {timeseriesNotice && !timeseriesLoading && !timeseriesError && (
+            <div className="mt-2 text-[11px] text-amber-300">
+              {timeseriesNotice}
             </div>
           )}
         </div>
@@ -3791,6 +3855,9 @@ export default function SwaptionTradeTape() {
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [detailLinkId, setDetailLinkId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState("");
+  const [metricMode, setMetricMode] = useState<"NOTIONAL" | "VEGA">(
+    "NOTIONAL",
+  );
   const latestRef = useRef<string | null>(null);
   const fetchInFlight = useRef(false);
   const columnFilterPayload = useMemo(
@@ -4011,6 +4078,60 @@ export default function SwaptionTradeTape() {
       displayNotional = wingLeg?.notional ?? row.total_notional;
     }
     return displayNotional;
+  }, []);
+
+  const resolveDisplayVega = useCallback((row: TapeRow) => {
+    const metrics = row.package_metrics || {};
+    const packageType = normalizePackageType(row.package_type);
+    const vegaCurveValue = parseMetricSeries((metrics as any).vega_curve_vega01);
+    if (vegaCurveValue !== null) return vegaCurveValue;
+
+    if (packageType === "STRADDLE") {
+      const direct = parseMetricSeries((metrics as any).straddle_vega01);
+      if (direct !== null) return direct;
+      const legs = row.legs_json || [];
+      return parseMetricSeries((legs[0] as any)?.leg_metrics?.straddle_vega01);
+    }
+
+    if (packageType === "RISK_REVERSAL") {
+      return parseMetricSeries((metrics as any).rr_vega01);
+    }
+
+    if (
+      packageType === "VERTICAL_SPREAD_1X1" ||
+      packageType === "VERTICAL_SPREAD_1X2"
+    ) {
+      const netVega = parseMetricSeries((metrics as any).vs_vega01);
+      if (netVega !== null) return netVega;
+      const atmVega = parseMetricSeries((metrics as any).vs_atm_vega01);
+      const otmVega = parseMetricSeries((metrics as any).vs_otm_vega01);
+      if (atmVega !== null || otmVega !== null) {
+        return (atmVega ?? 0) + (otmVega ?? 0);
+      }
+      return null;
+    }
+
+    if (packageType === "OUTRIGHT") {
+      const legMetrics = (row.legs_json || [])[0]?.leg_metrics || {};
+      return parseMetricSeries((legMetrics as any).outright_vega01);
+    }
+
+    const legs = row.legs_json || [];
+    let total: number | null = null;
+    legs.forEach((leg) => {
+      const legMetrics = (leg as any)?.leg_metrics || {};
+      const legVega =
+        parseMetricSeries(legMetrics.outright_vega01) ??
+        parseMetricSeries(legMetrics.straddle_vega01) ??
+        parseMetricSeries(legMetrics.rr_vega01) ??
+        parseMetricSeries(legMetrics.vs_vega01) ??
+        parseMetricSeries(legMetrics.vs_atm_vega01) ??
+        parseMetricSeries(legMetrics.vs_otm_vega01) ??
+        parseMetricSeries(legMetrics.vega01);
+      if (legVega === null) return;
+      total = total === null ? legVega : total + legVega;
+    });
+    return total;
   }, []);
 
   const resolveFilterValue = useCallback(
@@ -4345,10 +4466,17 @@ export default function SwaptionTradeTape() {
     );
   };
 
-  const notionalBody = (row: TapeRow) => {
+  const showVega = metricMode === "VEGA";
+  const metricLabel = showVega ? "Vega" : "Notional";
+  const metricColumnKey = showVega ? "metric-vega" : "metric-notional";
+
+  const metricBody = (row: TapeRow) => {
+    const value = showVega
+      ? resolveDisplayVega(row)
+      : resolveDisplayNotional(row);
     return (
       <span className="text-xs font-mono text-gray-200">
-        {formatNotional(resolveDisplayNotional(row))}
+        {showVega ? formatMetricValue(value, 2) : formatNotional(value)}
       </span>
     );
   };
@@ -4390,6 +4518,17 @@ export default function SwaptionTradeTape() {
               OR
             </button>
           </div>
+          <button
+            type="button"
+            onClick={() =>
+              setMetricMode((current) =>
+                current === "NOTIONAL" ? "VEGA" : "NOTIONAL",
+              )
+            }
+            className="rounded border border-gray-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-200 transition hover:border-gray-500 hover:bg-gray-800"
+          >
+            Toggle Notional/Vega
+          </button>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-300">
           <span className="text-[11px] uppercase tracking-wide text-gray-400">
@@ -4517,9 +4656,10 @@ export default function SwaptionTradeTape() {
           style={{ width: COLUMN_DEFS[3].width }}
         />
         <Column
+          key={metricColumnKey}
           field="total_notional"
-          header={renderColumnHeader("Notional", "notional")}
-          body={notionalBody}
+          header={renderColumnHeader(metricLabel, "notional")}
+          body={metricBody}
           filter
           filterField="notional"
           dataType="numeric"
