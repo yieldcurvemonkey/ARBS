@@ -4470,16 +4470,26 @@ export default function SwaptionTradeTape() {
   const metricLabel = showVega ? "Vega" : "Notional";
   const metricColumnKey = showVega ? "metric-vega" : "metric-notional";
 
-  const metricBody = (row: TapeRow) => {
-    const value = showVega
-      ? resolveDisplayVega(row)
-      : resolveDisplayNotional(row);
-    return (
-      <span className="text-xs font-mono text-gray-200">
-        {showVega ? formatMetricValue(value, 2) : formatNotional(value)}
-      </span>
-    );
-  };
+  const metricBody = useCallback(
+    (row: TapeRow) => {
+      const value = showVega
+        ? resolveDisplayVega(row)
+        : resolveDisplayNotional(row);
+      return (
+        <span className="text-xs font-mono text-gray-200">
+          {showVega ? formatMetricValue(value, 2) : formatNotional(value)}
+        </span>
+      );
+    },
+    [metricMode, showVega, resolveDisplayVega, resolveDisplayNotional],
+  );
+
+  // Force DataTable to re-render cells when metric mode changes
+  // by creating a new array reference (shallow copy preserves scroll position)
+  const tableData = useMemo(
+    () => filteredRows.slice(),
+    [filteredRows, metricMode],
+  );
 
   const labelBody = (row: TapeRow) => (
     <span className="text-xs font-mono text-gray-200">
@@ -4578,8 +4588,7 @@ export default function SwaptionTradeTape() {
         }
       `}</style>
       <DataTable
-        key={`datatable-${metricMode}`}
-        value={filteredRows}
+        value={tableData}
         dataKey="package_id"
         selection={selectedRows}
         onSelectionChange={(e) =>
@@ -4593,7 +4602,7 @@ export default function SwaptionTradeTape() {
         filterDisplay="menu"
         onFilter={(e) => setFilters(e.filters as DataTableFilterMeta)}
         lazy
-        totalRecords={hasMore ? filteredRows.length + 50 : filteredRows.length}
+        totalRecords={hasMore ? tableData.length + 50 : tableData.length}
         scrollable
         scrollHeight="100vh"
         virtualScrollerOptions={{
