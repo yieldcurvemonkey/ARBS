@@ -34,7 +34,7 @@ def detect_risk_reversals_packages(
     require_same_tenor: bool = True,
     require_same_forward: bool = True,
     require_directional_structure: bool = True,
-    require_same_event_action: bool = True,
+    require_same_event_action: bool = False,
     # Column names
     product_col: str = "product_type",
     package_col: str = "package_type",
@@ -68,7 +68,7 @@ def detect_risk_reversals_packages(
       - 3 distinct strikes (middle strike appears twice)
       - 2 distinct notionals (middle strike notional is smaller)
       - 2 distinct unique_product_identifiers
-      - Same event_action across all legs
+      - Same event_action across all legs (optional, not required by default)
 
     Args:
         df: Classifications dataframe with swaption trades
@@ -80,7 +80,7 @@ def detect_risk_reversals_packages(
         require_same_tenor: Require same tenor_years across legs
         require_same_forward: Require same forward_start_years across legs
         require_directional_structure: Require payer/receiver direction alignment
-        require_same_event_action: Require same event_action across all legs
+        require_same_event_action: Require same event_action across all legs (default False)
         product_col: Column name for product type
         package_col: Column name for package type
         exec_col: Column name for execution timestamp
