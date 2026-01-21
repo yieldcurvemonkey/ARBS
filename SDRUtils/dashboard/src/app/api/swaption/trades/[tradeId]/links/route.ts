@@ -35,9 +35,9 @@ async function ensureManualLinkTables() {
 
 export async function GET(
   request: Request,
-  context: { params: { tradeId: string } }
+  context: { params: Promise<{ tradeId: string }> }
 ) {
-  const tradeId = context.params.tradeId
+  const { tradeId } = await context.params
   const availability = await ensureManualLinkTables()
   if (availability) return availability
   try {
