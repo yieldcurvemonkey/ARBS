@@ -869,12 +869,126 @@ def build_classification_dataframe(
     return df
 
 
+def delete_date_range(
+    engine: Engine,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> tuple[int, int]:
+    """
+    Delete all packages and legs within a date range before re-ingestion.
+
+    Returns (packages_deleted, legs_deleted).
+    """
+    with engine.begin() as conn:
+        # Delete legs first (FK constraint)
+        legs_result = conn.execute(
+            text(
+                f"""
+                DELETE FROM {LEGS_TABLE}
+                WHERE package_id IN (
+                    SELECT package_id FROM {PACKAGES_TABLE}
+                    WHERE execution_start >= :start AND execution_start < :end
+                )
+            """
+            ),
+            {"start": start, "end": end},
+        )
+        legs_deleted = legs_result.rowcount
+
+        # Then delete packages
+        packages_result = conn.execute(
+            text(
+                f"""
+                DELETE FROM {PACKAGES_TABLE}
+                WHERE execution_start >= :start AND execution_start < :end
+            """
+            ),
+            {"start": start, "end": end},
+        )
+        packages_deleted = packages_result.rowcount
+
+    return packages_deleted, legs_deleted
+
+
+def get_last_ingested_timestamp(engine: Engine) -> Optional[pd.Timestamp]:
+    """Get the most recent execution_timestamp from legs table."""
+    with engine.connect() as conn:
+        result = conn.execute(text(f"SELECT MAX(execution_timestamp) FROM {LEGS_TABLE}")).scalar()
+    return pd.Timestamp(result, tz="UTC") if result else None
+
+
+def ingest_incremental(
+    engine: Engine,
+    cache_path: str,
+    lookback_buffer: timedelta = timedelta(minutes=15),
+) -> None:
+    """
+    Ingest only new trades since last run.
+
+    Uses a small lookback buffer to catch late-arriving trades.
+    """
+    last_ts = get_last_ingested_timestamp(engine)
+
+    if last_ts is None:
+        # First run — do a full day
+        start = pd.Timestamp.now(tz="UTC").normalize()
+    else:
+        # Start from last ingested minus buffer for late arrivals
+        start = last_ts - lookback_buffer
+
+    end = pd.Timestamp.now(tz="UTC")
+
+    print(f"Incremental ingest: {start} -> {end}")
+
+    raw_df = build_classification_dataframe(
+        start=start,
+        end=end,
+        cache_path=cache_path,
+        ignore_cache=True,  # Always fetch fresh for intraday
+        only_newt=False,
+    )
+
+    if raw_df.empty:
+        print("No new trades")
+        return
+
+    # Upsert handles duplicates — no delete needed
+    cleaned = normalize_dataframe(raw_df)
+    packages_df = build_packages_dataframe(cleaned)
+    legs_df = build_legs_dataframe(cleaned)
+
+    # Upsert directly (duplicates just update)
+    upsert_dataframe(packages_df, engine, PACKAGES_TABLE, ...)
+    upsert_dataframe(legs_df, engine, LEGS_TABLE, ...)
+
+
+def cleanup_orphaned_packages(engine: Engine) -> int:
+    """Delete packages that have no legs (orphaned by reclassification)."""
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                f"""
+                DELETE FROM {PACKAGES_TABLE} p
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {LEGS_TABLE} l
+                    WHERE l.package_id = p.package_id
+                )
+            """
+            )
+        )
+    return result.rowcount
+
+
 def ingest_to_postgres(
     df: pd.DataFrame,
     engine: Engine,
     start: pd.Timestamp,
     end: pd.Timestamp,
 ) -> tuple[pd.DataFrame, pd.DataFrame, int, int]:
+    pkgs_del, legs_del = delete_date_range(engine, start, end)
+    if pkgs_del or legs_del:
+        print(f"Deleted {pkgs_del} packages, {legs_del} legs in range")
+
     cleaned = normalize_dataframe(df)
     packages_df = build_packages_dataframe(cleaned)
     legs_df = build_legs_dataframe(cleaned)
@@ -1066,6 +1180,194 @@ def main(
     print_summary(raw_df, packages_df, legs_df, packages_written, legs_written)
 
 
+def get_last_ingested_timestamp(engine: Engine) -> Optional[pd.Timestamp]:
+    """Get the most recent execution_timestamp from legs table."""
+    with engine.connect() as conn:
+        result = conn.execute(text(f"SELECT MAX(execution_timestamp) FROM {LEGS_TABLE}")).scalar()
+    return pd.Timestamp(result, tz="UTC") if result else None
+
+
+def cleanup_orphaned_packages(engine: Engine) -> int:
+    """Delete packages that have no legs (orphaned by reclassification)."""
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                f"""
+                DELETE FROM {PACKAGES_TABLE} p
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {LEGS_TABLE} l
+                    WHERE l.package_id = p.package_id
+                )
+            """
+            )
+        )
+    return result.rowcount
+
+
+def main_incremental(
+    lookback_minutes: int = 15,
+    cache_path: Optional[str] = None,
+    only_newt: bool = False,
+    dry_run: bool = False,
+    cleanup_orphans: bool = True,
+) -> None:
+    """
+    Incremental ingest for intraday cron jobs.
+
+    Fetches trades since last ingested timestamp minus a lookback buffer
+    to catch late-arriving trades. Uses upsert to handle duplicates.
+
+    Args:
+        lookback_minutes: Buffer before last ingested timestamp to catch late arrivals.
+        cache_path: Path to SDR cache directory.
+        only_newt: If True, only include NEWT/TRAD events.
+        dry_run: If True, build dataframes but skip database writes.
+        cleanup_orphans: If True, delete orphaned packages after ingestion.
+    """
+    if cache_path is None:
+        cache_path = os.getenv("SDR_CACHE_PATH", "./sdr_cache")
+
+    engine = create_db_engine()
+    ensure_schema(engine)
+
+    # Determine time range
+    last_ts = get_last_ingested_timestamp(engine)
+    end = pd.Timestamp.now(tz="UTC")
+
+    if last_ts is None:
+        # First run — start of today
+        start = end.normalize()
+        print("No prior ingestion found; starting from beginning of today")
+    else:
+        start = last_ts - timedelta(minutes=lookback_minutes)
+
+    print("Incremental swaption ingestion")
+    print(f"  Last ingested: {last_ts}")
+    print(f"  Range: {start} -> {end}")
+    print(f"  Lookback buffer: {lookback_minutes} minutes")
+    print(f"  Cache: {cache_path}")
+    print(f"  Only NEWT/TRAD: {only_newt}")
+    print(f"  Dry run: {dry_run}")
+    print()
+
+    print("Building classification dataframe...")
+    raw_df = build_classification_dataframe(
+        start=start,
+        end=end,
+        cache_path=cache_path,
+        ignore_cache=True,  # Always fetch fresh for intraday
+        only_newt=only_newt,
+    )
+
+    if raw_df.empty:
+        print("No trades found in range.")
+        return
+
+    print(f"Found {len(raw_df)} trades in range")
+
+    if dry_run:
+        print("Dry run enabled; skipping database writes.")
+        cleaned = normalize_dataframe(raw_df)
+        packages_df = build_packages_dataframe(cleaned)
+        legs_df = build_legs_dataframe(cleaned)
+        print_summary(raw_df, packages_df, legs_df, 0, 0)
+        return
+
+    # Upsert directly — no delete needed, handles duplicates
+    cleaned = normalize_dataframe(raw_df)
+    packages_df = build_packages_dataframe(cleaned)
+    legs_df = build_legs_dataframe(cleaned)
+
+    packages_written = upsert_dataframe(
+        packages_df,
+        engine,
+        PACKAGES_TABLE,
+        conflict_cols=["package_id"],
+        update_cols=[
+            "package_type",
+            "as_of_date",
+            "execution_start",
+            "execution_end",
+            "expiration_date",
+            "underlying_expiration_date",
+            "effective_date",
+            "tenor_years",
+            "tenor_label",
+            "forward_start_years",
+            "forward_label",
+            "legs_count",
+            "total_notional",
+            "total_premium",
+            "package_indicator",
+            "package_transaction_price",
+            "package_confidence",
+            "package_reason",
+            "vega_curve_id",
+            "vega_curve_type",
+            "vega_curve_vega01",
+            "vega_curve_weight",
+            "vega_curve_vega_ratio",
+            "vega_curve_pricing_method",
+            "package_metrics",
+        ],
+        json_cols=["package_metrics"],
+        progress_desc="Writing packages",
+    )
+
+    legs_written = upsert_dataframe(
+        legs_df,
+        engine,
+        LEGS_TABLE,
+        conflict_cols=["trade_id"],
+        update_cols=[
+            "package_id",
+            "leg_order",
+            "event_action",
+            "execution_timestamp",
+            "effective_date",
+            "expiration_date",
+            "underlying_expiration_date",
+            "product_type",
+            "trade_label",
+            "tenor_years",
+            "tenor_label",
+            "forward_start_years",
+            "forward_label",
+            "notional",
+            "notional_currency",
+            "is_notional_capped",
+            "strike",
+            "premium",
+            "exercise_style",
+            "cleared",
+            "platform_identifier",
+            "package_type",
+            "package_indicator",
+            "package_transaction_price",
+            "leg_metrics",
+        ],
+        json_cols=["leg_metrics"],
+        progress_desc="Writing legs",
+    )
+
+    record_ingestion_run(
+        engine,
+        start=start,
+        end=end,
+        rows_raw=len(raw_df),
+        packages_written=packages_written,
+        legs_written=legs_written,
+    )
+
+    # Cleanup orphaned packages from reclassification
+    if cleanup_orphans:
+        orphans_deleted = cleanup_orphaned_packages(engine)
+        if orphans_deleted:
+            print(f"Cleaned up {orphans_deleted} orphaned packages")
+
+    print_summary(raw_df, packages_df, legs_df, packages_written, legs_written)
+
+
 if __name__ == "__main__":
     args = parse_args()
 
@@ -1075,7 +1377,7 @@ if __name__ == "__main__":
     import QuantLib as ql
     from BT.misc import ql_cal_date_range
 
-    date_range = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), date(2026, 1, 19), date(2026, 1, 20))
+    date_range = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), date(2026, 1, 21), date(2026, 1, 21))
     errors = []
     for d in date_range:
         # try:
