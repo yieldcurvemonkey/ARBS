@@ -3,8 +3,8 @@ import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import { resolveDisplayView, TapeRow } from '@/lib/swaptions-tape'
 
-const DEFAULT_LIMIT = 50
-const MAX_LIMIT = 200
+const DEFAULT_LIMIT = 200
+const MAX_LIMIT = 500
 const COLUMN_FILTER_QUERY_KEY = 'columnFilters'
 const COLUMN_FILTER_OPERATOR_QUERY_KEY = 'columnFilterOp'
 const COLUMN_FILTER_FIELDS = [

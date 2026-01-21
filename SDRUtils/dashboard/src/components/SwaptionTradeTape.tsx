@@ -396,10 +396,10 @@ const TIMESERIES_VIEW_OPTIONS: Array<{
   { key: "DAILY_CLOSE", label: "Daily Close" },
   { key: "DAILY_OHLC", label: "Daily OHLC" },
 ];
-const TIMESERIES_FETCH_LIMIT = 200;
-const TIMESERIES_MAX_ROWS = 20000;
-const TIMESERIES_MAX_PAGES = 5000;
-const TIMESERIES_MAX_SCAN_MS = 60000;
+const TIMESERIES_FETCH_LIMIT = 500;
+const TIMESERIES_MAX_ROWS = 50000;
+const TIMESERIES_MAX_PAGES = 10000;
+const TIMESERIES_MAX_SCAN_MS = 60000 * 2;
 const MANUAL_PACKAGE_TYPES = [
   { value: "USER_STRADDLE_PAIR", label: "Straddle Pair" },
   { value: "USER_VERTICAL_SPREAD", label: "Vertical Spread" },
