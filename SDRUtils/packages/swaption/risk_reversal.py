@@ -231,27 +231,39 @@ def detect_risk_reversals_packages(
         if not require_same_index:
             return True
         if trade_labels is None:
-            return False
+            # Allow detection when trade_label data is missing
+            return True
         raw_labels = [str(trade_labels[i]) for i in indices]
         has_libor = any("LIBOR" in name.upper() for name in raw_labels)
         has_sofr = any("SOFR" in name.upper() for name in raw_labels)
+        # Mixed LIBOR/SOFR is not allowed
         if has_libor and has_sofr:
             return False
         if underliers is None:
-            return False
+            # Allow detection when underlier data is missing
+            return True
         index_names = {_extract_index_name(str(underliers[i])) for i in indices}
         index_names.discard("")
+        # If no valid index names found, treat as acceptable (data missing/incomplete)
+        if len(index_names) == 0:
+            return True
+        # Otherwise require exactly 1 unique index name
         return len(index_names) == 1
 
     def _unique_upi_count_ok(indices: List[int]) -> bool:
         """Check that exactly 2 unique UPIs exist across the 4 legs."""
         if upis is None:
-            return False
+            # Allow detection when UPI data is missing
+            return True
         unique_upis = set()
         for i in indices:
             val = str(upis[i])
             if val and val not in ("", "nan", "<NA>", "None"):
                 unique_upis.add(val)
+        # If no valid UPIs found, treat as acceptable (data missing/incomplete)
+        if len(unique_upis) == 0:
+            return True
+        # Otherwise require exactly 2 unique UPIs
         return len(unique_upis) == 2
 
     def _same_event_action_ok(indices: List[int]) -> bool:
@@ -259,12 +271,17 @@ def detect_risk_reversals_packages(
         if not require_same_event_action:
             return True
         if event_actions is None:
-            return False
+            # Allow detection when event_action data is missing
+            return True
         actions = set()
         for i in indices:
             val = str(event_actions[i])
             if val and val not in ("", "nan", "<NA>", "None"):
                 actions.add(val)
+        # If no valid event_actions found, treat as acceptable (data missing/incomplete)
+        if len(actions) == 0:
+            return True
+        # Otherwise require all legs to have the same event_action
         return len(actions) == 1
 
     def _is_risk_reversal(indices: List[int]) -> bool:
