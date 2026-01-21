@@ -4578,6 +4578,7 @@ export default function SwaptionTradeTape() {
         }
       `}</style>
       <DataTable
+        key={`datatable-${metricMode}`}
         value={filteredRows}
         dataKey="package_id"
         selection={selectedRows}
