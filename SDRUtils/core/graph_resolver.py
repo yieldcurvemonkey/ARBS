@@ -78,6 +78,7 @@ def build_synthetic_uti_mapping(
     original_col: str = "Original Dissemination Identifier",
     action_col: str = "Action type",
     event_timestamp_col: str = "Event timestamp",
+    uti_col: Optional[str] = "Unique transaction identifier (UTI)",
 ) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
     """
     Build a mapping from dissemination IDs to synthetic UTIs.
@@ -86,12 +87,18 @@ def build_synthetic_uti_mapping(
     The synthetic UTI is selected using semantic anchoring: prefer the first
     NEWT message by timestamp, then earliest timestamp, then lexicographic min.
 
+    Linking strategy (in order of preference):
+    1. UTI-based: Group all messages with the same UTI together
+    2. Graph-based: Link via "Original Dissemination Identifier" edges
+    3. Fallback: Standalone messages become their own trade entities
+
     Args:
         messages: DataFrame containing SDR messages
         dissemination_col: Column name for dissemination identifiers
         original_col: Column name for original dissemination identifiers
         action_col: Column name for action type
         event_timestamp_col: Column name for event timestamp
+        uti_col: Column name for unique transaction identifier (UTI)
 
     Returns:
         Tuple of:
@@ -108,9 +115,17 @@ def build_synthetic_uti_mapping(
         else pd.Series([None] * len(messages))
     )
 
+    # Extract UTI if available
+    utis = (
+        messages[uti_col].apply(_normalize_identifier)
+        if uti_col and uti_col in messages.columns
+        else pd.Series([None] * len(messages))
+    )
+
     # Build lookup tables for semantic anchor selection
     id_to_action: Dict[str, str] = {}
     id_to_timestamp: Dict[str, pd.Timestamp] = {}
+    id_to_uti: Dict[str, str] = {}
 
     for idx, dissemination_id in dissemination_ids.items():
         if dissemination_id:
@@ -120,6 +135,9 @@ def build_synthetic_uti_mapping(
                 ts = messages.loc[idx, event_timestamp_col]
                 if ts is not None and not pd.isna(ts):
                     id_to_timestamp[dissemination_id] = ts
+            uti = utis.iloc[idx] if idx < len(utis) else None
+            if uti:
+                id_to_uti[dissemination_id] = uti
 
     # Build graph of message relationships
     graph = nx.Graph()
@@ -127,6 +145,7 @@ def build_synthetic_uti_mapping(
         if dissemination_id:
             graph.add_node(dissemination_id)
 
+    # Add edges based on Original Dissemination Identifier
     for dissemination_id, original_id in zip(dissemination_ids, original_ids):
         if not dissemination_id:
             continue
@@ -134,6 +153,22 @@ def build_synthetic_uti_mapping(
             graph.add_edge(dissemination_id, original_id)
         else:
             graph.add_node(dissemination_id)
+
+    # Add edges based on shared UTI (primary linking mechanism per SDR spec)
+    # Group messages with the same UTI together
+    if id_to_uti:
+        uti_to_ids: Dict[str, List[str]] = {}
+        for dissem_id, uti in id_to_uti.items():
+            if uti not in uti_to_ids:
+                uti_to_ids[uti] = []
+            uti_to_ids[uti].append(dissem_id)
+
+        # Connect all messages with the same UTI
+        for uti, ids in uti_to_ids.items():
+            if len(ids) > 1:
+                # Create a chain of edges to connect all IDs with this UTI
+                for i in range(len(ids) - 1):
+                    graph.add_edge(ids[i], ids[i + 1])
 
     # Build mapping using semantic anchor selection
     mapping: Dict[str, str] = {}
@@ -158,12 +193,18 @@ def assign_synthetic_uti(
     action_col: str = "Action type",
     event_timestamp_col: str = "Event timestamp",
     synthetic_col: str = "Synthetic UTI",
+    uti_col: Optional[str] = "Unique transaction identifier (UTI)",
 ) -> pd.DataFrame:
     """
     Assign synthetic UTIs to SDR messages based on graph clustering.
 
     Groups related messages (NEWT, MODI, CORR, etc.) into trade entities
     and assigns a stable synthetic UTI to each message based on its component.
+
+    Linking strategy (in order of preference):
+    1. UTI-based: Group all messages with the same UTI together
+    2. Graph-based: Link via "Original Dissemination Identifier" edges
+    3. Fallback: Standalone messages become their own trade entities
 
     Args:
         messages: DataFrame containing SDR messages
@@ -172,6 +213,7 @@ def assign_synthetic_uti(
         action_col: Column name for action type (used for semantic anchor)
         event_timestamp_col: Column name for event timestamp (used for semantic anchor)
         synthetic_col: Column name to store the synthetic UTI
+        uti_col: Column name for unique transaction identifier (UTI)
 
     Returns:
         DataFrame with synthetic UTI column added
@@ -187,6 +229,7 @@ def assign_synthetic_uti(
         original_col=original_col,
         action_col=action_col,
         event_timestamp_col=event_timestamp_col,
+        uti_col=uti_col,
     )
     dissemination_ids = messages[dissemination_col].apply(_normalize_identifier)
 

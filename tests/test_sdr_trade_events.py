@@ -635,3 +635,147 @@ class TestEconomicsFields:
         assert "Strike Price" in ECONOMICS_FIELDS
         assert "Option Premium Amount" in ECONOMICS_FIELDS
         assert "Price" in ECONOMICS_FIELDS
+
+
+class TestUTIBasedLinking:
+    """
+    Tests for UTI-based trade linking.
+
+    Per SDR technical specification, lifecycle events (NEWT, MODI, CORR) for the
+    same trade should share the same Unique Transaction Identifier (UTI).
+    """
+
+    def test_links_trades_by_uti_when_original_dissem_id_missing(self):
+        """Should link MODI to NEWT via shared UTI when Original Dissemination Identifier is missing."""
+        messages = pd.DataFrame({
+            "Dissemination Identifier": ["NEWT1", "MODI1", "MODI2"],
+            "Original Dissemination Identifier": ["", "", ""],  # Empty - not populated
+            "Unique transaction identifier (UTI)": ["UTI123", "UTI123", "UTI123"],  # Same UTI
+            "Action type": ["NEWT", "MODI", "MODI"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-21 14:29:41", tz="UTC"),
+                pd.Timestamp("2026-01-21 14:31:02", tz="UTC"),
+                pd.Timestamp("2026-01-21 14:32:00", tz="UTC"),
+            ],
+        })
+        mapping, components = build_synthetic_uti_mapping(
+            messages,
+            uti_col="Unique transaction identifier (UTI)",
+        )
+
+        # All should map to NEWT1 (the NEWT anchor)
+        assert mapping["NEWT1"] == "NEWT1"
+        assert mapping["MODI1"] == "NEWT1"
+        assert mapping["MODI2"] == "NEWT1"
+        assert "NEWT1" in components
+        assert set(components["NEWT1"]) == {"NEWT1", "MODI1", "MODI2"}
+
+    def test_uti_linking_with_original_dissem_id(self):
+        """Should use both UTI and Original Dissemination Identifier for robust linking."""
+        messages = pd.DataFrame({
+            "Dissemination Identifier": ["NEWT1", "MODI1", "MODI2", "MODI3"],
+            "Original Dissemination Identifier": ["", "NEWT1", "", ""],
+            "Unique transaction identifier (UTI)": ["UTI123", "UTI123", "UTI123", "UTI123"],
+            "Action type": ["NEWT", "MODI", "MODI", "MODI"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-21 14:29:41", tz="UTC"),
+                pd.Timestamp("2026-01-21 14:31:02", tz="UTC"),
+                pd.Timestamp("2026-01-21 14:32:00", tz="UTC"),
+                pd.Timestamp("2026-01-21 14:33:00", tz="UTC"),
+            ],
+        })
+        mapping, components = build_synthetic_uti_mapping(
+            messages,
+            uti_col="Unique transaction identifier (UTI)",
+        )
+
+        # All should be linked to NEWT1
+        assert mapping["NEWT1"] == "NEWT1"
+        assert mapping["MODI1"] == "NEWT1"
+        assert mapping["MODI2"] == "NEWT1"
+        assert mapping["MODI3"] == "NEWT1"
+        assert len(components) == 1
+
+    def test_separate_utis_create_separate_entities(self):
+        """Trades with different UTIs should remain separate even with similar timestamps."""
+        messages = pd.DataFrame({
+            "Dissemination Identifier": ["TRADE_A", "MODI_A", "TRADE_B", "MODI_B"],
+            "Original Dissemination Identifier": ["", "", "", ""],
+            "Unique transaction identifier (UTI)": ["UTI_A", "UTI_A", "UTI_B", "UTI_B"],
+            "Action type": ["NEWT", "MODI", "NEWT", "MODI"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-21 14:29:41", tz="UTC"),
+                pd.Timestamp("2026-01-21 14:31:02", tz="UTC"),
+                pd.Timestamp("2026-01-21 14:29:45", tz="UTC"),
+                pd.Timestamp("2026-01-21 14:31:05", tz="UTC"),
+            ],
+        })
+        mapping, components = build_synthetic_uti_mapping(
+            messages,
+            uti_col="Unique transaction identifier (UTI)",
+        )
+
+        assert mapping["TRADE_A"] == "TRADE_A"
+        assert mapping["MODI_A"] == "TRADE_A"
+        assert mapping["TRADE_B"] == "TRADE_B"
+        assert mapping["MODI_B"] == "TRADE_B"
+        assert len(components) == 2
+
+    def test_uti_column_missing_fallback_to_original_dissem_id(self):
+        """Should fall back to Original Dissemination Identifier when UTI column is missing."""
+        messages = pd.DataFrame({
+            "Dissemination Identifier": ["NEWT1", "MODI1"],
+            "Original Dissemination Identifier": ["", "NEWT1"],
+            "Action type": ["NEWT", "MODI"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-21 14:29:41", tz="UTC"),
+                pd.Timestamp("2026-01-21 14:31:02", tz="UTC"),
+            ],
+        })
+        mapping, components = build_synthetic_uti_mapping(
+            messages,
+            uti_col="Unique transaction identifier (UTI)",  # Column doesn't exist
+        )
+
+        # Should still link via Original Dissemination Identifier
+        assert mapping["NEWT1"] == "NEWT1"
+        assert mapping["MODI1"] == "NEWT1"
+
+    def test_lifecycle_replay_with_uti_linking(self):
+        """Full lifecycle replay should work with UTI-based linking."""
+        messages = pd.DataFrame({
+            "Dissemination Identifier": ["1802922016000000501", "1802934490000000601"],
+            "Original Dissemination Identifier": ["", ""],  # Not populated
+            "Unique transaction identifier (UTI)": ["UTI_XYZ123", "UTI_XYZ123"],  # Same UTI
+            "Action type": ["NEWT", "MODI"],
+            "Event type": ["TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-21 14:29:41", tz="UTC"),
+                pd.Timestamp("2026-01-21 14:31:02", tz="UTC"),
+            ],
+            "Amendment indicator": [None, True],
+            "Notional amount-Leg 1": ["100,000,000", "18,000,000"],
+            "Strike Price": [0.05015, 0.04015],
+        })
+
+        result = assign_synthetic_uti(
+            messages,
+            uti_col="Unique transaction identifier (UTI)",
+        )
+
+        # Should create only ONE synthetic UTI (both linked)
+        unique_utis = result["Synthetic UTI"].unique()
+        assert len(unique_utis) == 1
+
+        # Replay lifecycle to get final state
+        resolved = replay_lifecycle_full(
+            result,
+            synthetic_uti=unique_utis[0],
+        )
+
+        # Should have final state with amended notional
+        assert resolved.status == "ACTIVE"
+        assert resolved.current_state["Notional amount-Leg 1"] == "18,000,000"
+        assert resolved.current_state["Strike Price"] == 0.04015
+        # Inception state should have original notional
+        assert resolved.inception_state["Notional amount-Leg 1"] == "100,000,000"

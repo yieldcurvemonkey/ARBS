@@ -156,6 +156,7 @@ class ProductModule(ABC):
         action_col: str = "Action type",
         event_timestamp_col: str = "Event timestamp",
         amendment_indicator_col: str = "Amendment indicator",
+        uti_col: Optional[str] = "Unique transaction identifier (UTI)",
         **kwargs: Any,
     ) -> List[TradeClassification]:
         """
@@ -165,7 +166,7 @@ class ProductModule(ABC):
         counting/phantom trades:
 
         1. **Clustering**: Groups related messages (NEWT→MODI→CORR chains)
-           into trade entities using graph analysis on dissemination IDs.
+           into trade entities using graph analysis on dissemination IDs and UTIs.
         2. **Lifecycle Replay**: Processes actions in timestamp order to
            reconstruct the canonical trade state.
         3. **Classification**: Classifies the resolved state.
@@ -175,6 +176,11 @@ class ProductModule(ABC):
         economics if Amendment indicator=True), CORR messages overwrite all
         fields, and EROR messages invalidate the trade.
 
+        Linking strategy (in order of preference):
+        1. UTI-based: Group all messages with the same UTI together
+        2. Graph-based: Link via "Original Dissemination Identifier" edges
+        3. Fallback: Standalone messages become their own trade entities
+
         Args:
             messages: SDR message DataFrame containing lifecycle updates.
             dissemination_col: Column with dissemination identifiers.
@@ -183,6 +189,7 @@ class ProductModule(ABC):
             action_col: Column name for action type.
             event_timestamp_col: Column name for event timestamp.
             amendment_indicator_col: Column name for amendment indicator.
+            uti_col: Column name for unique transaction identifier (UTI).
             **kwargs: Additional arguments passed to classify_trade.
 
         Returns:
@@ -200,6 +207,7 @@ class ProductModule(ABC):
             action_col=action_col,
             event_timestamp_col=event_timestamp_col,
             synthetic_col=synthetic_col,
+            uti_col=uti_col,
         )
 
         classifications: List[TradeClassification] = []
@@ -244,6 +252,7 @@ class ProductModule(ABC):
         action_col: str = "Action type",
         event_timestamp_col: str = "Event timestamp",
         amendment_indicator_col: str = "Amendment indicator",
+        uti_col: Optional[str] = "Unique transaction identifier (UTI)",
         **kwargs: Any,
     ) -> ClassificationResult:
         """
@@ -259,6 +268,11 @@ class ProductModule(ABC):
         - Error tracking and debugging
         - Trade status tracking (ACTIVE/TERMINATED/ERRORED)
 
+        Linking strategy (in order of preference):
+        1. UTI-based: Group all messages with the same UTI together
+        2. Graph-based: Link via "Original Dissemination Identifier" edges
+        3. Fallback: Standalone messages become their own trade entities
+
         Args:
             messages: SDR message DataFrame containing lifecycle updates.
             dissemination_col: Column with dissemination identifiers.
@@ -267,6 +281,7 @@ class ProductModule(ABC):
             action_col: Column name for action type.
             event_timestamp_col: Column name for event timestamp.
             amendment_indicator_col: Column name for amendment indicator.
+            uti_col: Column name for unique transaction identifier (UTI).
             **kwargs: Additional arguments passed to classify_trade.
 
         Returns:
@@ -288,6 +303,7 @@ class ProductModule(ABC):
             action_col=action_col,
             event_timestamp_col=event_timestamp_col,
             synthetic_col=synthetic_col,
+            uti_col=uti_col,
         )
 
         classifications: List[TradeClassification] = []
