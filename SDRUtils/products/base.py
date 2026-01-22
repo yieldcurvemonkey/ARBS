@@ -207,16 +207,19 @@ class ProductModule(ABC):
 
         for synthetic_uti, group in tqdm(groups, desc="Classifying Trades", unit="trade"):
             try:
-                state, _ = replay_lifecycle(
+                # replay_lifecycle now returns (market_state, regulatory_state, history)
+                # Use regulatory_state for classification (official corrected state)
+                _, regulatory_state, _ = replay_lifecycle(
                     group,
                     action_col=action_col,
                     event_timestamp_col=event_timestamp_col,
                     amendment_indicator_col=amendment_indicator_col,
                     dissemination_col=dissemination_col,
                 )
-                if state is None:
+                if regulatory_state is None:
                     # Trade was errored or has no valid state
                     continue
+                state = regulatory_state
                 row = pd.Series(state)
                 if not self.validate_row(row):
                     continue
