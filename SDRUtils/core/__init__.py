@@ -57,6 +57,7 @@ from SDRUtils.core.lifecycle import (
     replay_lifecycle,
     replay_lifecycle_full,
     ResolvedTrade,
+    LifecycleReplayResult,
     ECONOMICS_FIELDS,
 )
 # Backward compatibility - re-export legacy names
@@ -105,6 +106,7 @@ __all__ = [
     "replay_lifecycle",
     "replay_lifecycle_full",
     "ResolvedTrade",
+    "LifecycleReplayResult",
     "ECONOMICS_FIELDS",
     # Legacy
     "_USD_OIS_BDC",

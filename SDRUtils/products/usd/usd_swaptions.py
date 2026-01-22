@@ -58,7 +58,7 @@ class USD_Swaptions(USDProductBase):
         desc_fn = make_swaption_desc_func()
         swaption_trades_df.loc[:, "description"] = swaption_trades_df.apply(desc_fn, axis=1)
         swaption_trades_df = swaption_trades_df[
-            (swaption_trades_df["description"].str.contains("USD")) & (swaption_trades_df["Maturity date of the underlier"].notna())
+            (swaption_trades_df["description"].astype(str).str.contains("USD")) & (swaption_trades_df["Maturity date of the underlier"].notna())
         ]
         return swaption_trades_df
 

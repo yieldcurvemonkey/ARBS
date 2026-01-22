@@ -306,6 +306,40 @@ class TestReplayLifecycle:
         assert state["Notional amount-Leg 1"] == "200,000,000"
         assert state["Platform identifier"] == "NEW_PLATFORM"
 
+    def test_market_state_ignores_corr_economics(self):
+        """Market state should not be overwritten by CORR."""
+        messages = pd.DataFrame({
+            "Action type": ["NEWT", "CORR"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-07 21:00:00"),
+                pd.Timestamp("2026-01-07 22:00:00"),
+            ],
+            "Notional amount-Leg 1": ["100,000,000", "200,000,000"],
+            "Strike Price": [0.04, 0.05],
+        })
+        replay = replay_lifecycle(messages)
+
+        assert replay.regulatory_state["Strike Price"] == 0.05
+        assert replay.market_state["Strike Price"] == 0.04
+        assert replay.market_view_state["Strike Price"] == 0.04
+
+    def test_market_state_skips_non_disseminated_modi(self):
+        """Non-disseminated MODI should not change market state."""
+        messages = pd.DataFrame({
+            "Action type": ["NEWT", "MODI"],
+            "Event timestamp": [
+                pd.Timestamp("2026-01-07 21:00:00"),
+                pd.Timestamp("2026-01-07 22:00:00"),
+            ],
+            "Amendment indicator": [None, False],
+            "Notional amount-Leg 1": ["100,000,000", "100,000,000"],
+            "Platform identifier": [None, "ISWV"],
+        })
+        replay = replay_lifecycle(messages)
+
+        assert replay.regulatory_state["Platform identifier"] == "ISWV"
+        assert replay.market_state.get("Platform identifier") is None
+
     def test_term_sets_inactive(self):
         """TERM should set trade as inactive."""
         messages = pd.DataFrame({
@@ -613,6 +647,24 @@ class TestResolvedTradeProperties:
 
         assert with_newt.is_new_trade is True
         assert without_newt.is_new_trade is False
+
+    def test_market_view_state_overlays_economics(self):
+        """Market view should keep regulatory metadata but market economics."""
+        resolved = ResolvedTrade(
+            synthetic_uti="TEST1",
+            current_state={
+                "Strike Price": 0.05,
+                "Platform identifier": "ISWV",
+            },
+            market_state={
+                "Strike Price": 0.04,
+                "Platform identifier": "OTHER",
+            },
+        )
+        view = resolved.market_view_state
+
+        assert view["Strike Price"] == 0.04
+        assert view["Platform identifier"] == "ISWV"
 
 
 class TestEconomicsFields:

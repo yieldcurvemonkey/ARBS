@@ -156,6 +156,7 @@ class ProductModule(ABC):
         action_col: str = "Action type",
         event_timestamp_col: str = "Event timestamp",
         amendment_indicator_col: str = "Amendment indicator",
+        state_view: str = "market_view",
         **kwargs: Any,
     ) -> List[TradeClassification]:
         """
@@ -170,10 +171,12 @@ class ProductModule(ABC):
            reconstruct the canonical trade state.
         3. **Classification**: Classifies the resolved state.
 
-        For each trade entity, only the canonical state after all lifecycle
-        updates is classified. MODI messages fill missing fields (or overwrite
-        economics if Amendment indicator=True), CORR messages overwrite all
-        fields, and EROR messages invalidate the trade.
+        For each trade entity, the lifecycle state view selected by
+        `state_view` is classified. Use:
+        - "market_view" (default): regulatory metadata with market-facing economics
+        - "market": last disseminated market state (CORR excluded)
+        - "regulatory": corrected regulatory state
+        - "execution": first NEWT snapshot
 
         Args:
             messages: SDR message DataFrame containing lifecycle updates.
@@ -183,6 +186,7 @@ class ProductModule(ABC):
             action_col: Column name for action type.
             event_timestamp_col: Column name for event timestamp.
             amendment_indicator_col: Column name for amendment indicator.
+            state_view: Lifecycle state view for classification.
             **kwargs: Additional arguments passed to classify_trade.
 
         Returns:
@@ -207,13 +211,14 @@ class ProductModule(ABC):
 
         for synthetic_uti, group in tqdm(groups, desc="Classifying Trades", unit="trade"):
             try:
-                state, _ = replay_lifecycle(
+                replay = replay_lifecycle(
                     group,
                     action_col=action_col,
                     event_timestamp_col=event_timestamp_col,
                     amendment_indicator_col=amendment_indicator_col,
                     dissemination_col=dissemination_col,
                 )
+                state = replay.get_state(state_view)
                 if state is None:
                     # Trade was errored or has no valid state
                     continue
@@ -244,6 +249,7 @@ class ProductModule(ABC):
         action_col: str = "Action type",
         event_timestamp_col: str = "Event timestamp",
         amendment_indicator_col: str = "Amendment indicator",
+        state_view: str = "market_view",
         **kwargs: Any,
     ) -> ClassificationResult:
         """
@@ -258,6 +264,9 @@ class ProductModule(ABC):
         - Volume semantics (inception_notional vs current_notional)
         - Error tracking and debugging
         - Trade status tracking (ACTIVE/TERMINATED/ERRORED)
+        - Access to regulatory vs market-facing lifecycle states
+
+        Classification uses the lifecycle state view selected by `state_view`.
 
         Args:
             messages: SDR message DataFrame containing lifecycle updates.
@@ -267,6 +276,7 @@ class ProductModule(ABC):
             action_col: Column name for action type.
             event_timestamp_col: Column name for event timestamp.
             amendment_indicator_col: Column name for amendment indicator.
+            state_view: Lifecycle state view for classification.
             **kwargs: Additional arguments passed to classify_trade.
 
         Returns:
@@ -313,7 +323,10 @@ class ProductModule(ABC):
                 if resolved_trade.current_state is None:
                     continue
 
-                row = pd.Series(resolved_trade.current_state)
+                state = resolved_trade.get_state(state_view)
+                if state is None:
+                    continue
+                row = pd.Series(state)
                 if not self.validate_row(row):
                     continue
 
