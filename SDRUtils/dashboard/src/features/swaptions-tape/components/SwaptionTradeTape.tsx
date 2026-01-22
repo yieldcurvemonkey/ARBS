@@ -2446,9 +2446,9 @@ function LegsSubtable({
             <th className="px-2 py-1 text-left">Leg</th>
             <th className="px-2 py-1 text-left">Side</th>
             <th className="px-2 py-1 text-right">Strike</th>
-            <th className="px-1 py-1 text-right">Notional</th>
+            <th className="px-0.5 py-1 text-right">Notional</th>
             {showStraddleSchema && (
-              <th className="px-1 py-1 text-right">Notional Capped</th>
+              <th className="px-0.5 py-1 text-right">Notional Capped</th>
             )}
             <th className="px-2 py-1 text-right">Premium</th>
             {showStraddleSchema && (
