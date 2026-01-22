@@ -3,7 +3,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { formatLargeNumber } from "@/lib/utils";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -580,12 +579,75 @@ function isValid(value: any) {
   return true;
 }
 
+/**
+ * Format large numbers with improved precision (4-5 significant figures)
+ * Examples:
+ * - 1,012,500 -> "1.0125M"
+ * - 1,000,000 -> "1M"
+ * - 1,234,567 -> "1.2346M"
+ * - 999,500 -> "999.5K"
+ * - 1,234,567,890 -> "1.2346B"
+ */
+function formatLargeNumber(value: number | null | undefined): string {
+  if (!isValid(value)) return "--";
+
+  const absValue = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+
+  // Billion range
+  if (absValue >= 1_000_000_000) {
+    const billions = absValue / 1_000_000_000;
+    if (billions >= 100) return `${sign}${billions.toFixed(2)}B`;
+    if (billions >= 10) return `${sign}${billions.toFixed(3)}B`;
+    return `${sign}${billions.toFixed(4)}B`;
+  }
+
+  // Million range
+  if (absValue >= 1_000_000) {
+    const millions = absValue / 1_000_000;
+    if (millions >= 100) return `${sign}${millions.toFixed(2)}M`;
+    if (millions >= 10) return `${sign}${millions.toFixed(3)}M`;
+    return `${sign}${millions.toFixed(4)}M`;
+  }
+
+  // Thousand range
+  if (absValue >= 1_000) {
+    const thousands = absValue / 1_000;
+    if (thousands >= 100) return `${sign}${thousands.toFixed(2)}K`;
+    if (thousands >= 10) return `${sign}${thousands.toFixed(3)}K`;
+    return `${sign}${thousands.toFixed(4)}K`;
+  }
+
+  // Below 1000, return as-is with appropriate decimal places
+  return `${sign}${absValue.toFixed(2)}`;
+}
+
 function formatNotional(notional: number | null | undefined) {
   if (!isValid(notional)) return "--";
-  const mm = Number(notional) / 1_000_000;
-  if (mm >= 1000) return `${(mm / 1000).toFixed(1)}BN`;
-  if (Number.isInteger(mm)) return `${mm.toFixed(0)}MM`;
-  return `${mm.toFixed(1)}MM`;
+  const value = Number(notional);
+  const mm = value / 1_000_000;
+
+  // Billion range (1000MM+)
+  if (mm >= 1000) {
+    const bn = mm / 1000;
+    if (bn >= 100) return `${bn.toFixed(2)}BN`;
+    if (bn >= 10) return `${bn.toFixed(3)}BN`;
+    return `${bn.toFixed(4)}BN`;
+  }
+
+  // Million range - use 4-5 significant figures
+  if (mm >= 100) return `${mm.toFixed(2)}MM`;
+  if (mm >= 10) return `${mm.toFixed(3)}MM`;
+  if (mm >= 1) return `${mm.toFixed(4)}MM`;
+
+  // Below 1MM, show in thousands
+  const k = value / 1_000;
+  if (k >= 100) return `${k.toFixed(2)}K`;
+  if (k >= 10) return `${k.toFixed(3)}K`;
+  if (k >= 1) return `${k.toFixed(4)}K`;
+
+  // Below 1K, show raw value
+  return `${value.toFixed(2)}`;
 }
 
 function formatStrikeAbsolute(strike?: number | null) {
@@ -601,7 +663,7 @@ function formatStrikeOffset(offset?: number | null, signAlways = true) {
   return signAlways ? `ATMF${rounded}bp` : `ATMF${rounded}`;
 }
 
-function formatMetricValue(value: number | null | undefined, decimals = 2) {
+function formatMetricValue(value: number | null | undefined, decimals = 3) {
   if (!isValid(value)) return "--";
   const numericValue = Number(value);
   if (Math.abs(numericValue) >= 1000) {
@@ -610,7 +672,7 @@ function formatMetricValue(value: number | null | undefined, decimals = 2) {
   return numericValue.toFixed(decimals);
 }
 
-function formatMetricDisplay(value: number | null | undefined, decimals = 2) {
+function formatMetricDisplay(value: number | null | undefined, decimals = 3) {
   if (!isValid(value)) return EMPTY_VALUE;
   return formatMetricValue(value, decimals);
 }
@@ -695,7 +757,7 @@ function parseIdList(value: string): string[] {
 
 function formatManualMetricValue(value: any): string {
   if (!isValid(value)) return "--";
-  if (typeof value === "number") return formatMetricValue(value, 2);
+  if (typeof value === "number") return formatMetricValue(value, 3);
   if (Array.isArray(value)) {
     return value.map((entry) => String(entry)).join(", ");
   }
@@ -2404,11 +2466,11 @@ function LegsSubtable({
                   </td>
                 )}
                 <td className="px-1 py-1 text-right font-mono">
-                  {formatMetricValue(values.premiumValue, 2)}
+                  {formatMetricValue(values.premiumValue, 3)}
                 </td>
                 {showStraddleSchema && (
                   <td className="px-1 py-1 text-right font-mono">
-                    {formatMetricValue(values.premiumBpsValue, 2)}
+                    {formatMetricValue(values.premiumBpsValue, 3)}
                   </td>
                 )}
                 <td className="px-1 py-1 text-right font-mono">
@@ -2418,17 +2480,17 @@ function LegsSubtable({
                   {formatMetricValue(values.bpvolDayValue, 3)}
                 </td>
                 <td className="px-1 py-1 text-right font-mono">
-                  {formatMetricValue(values.dv01Value, 2)}
+                  {formatMetricValue(values.dv01Value, 3)}
                 </td>
                 <td className="px-1 py-1 text-right font-mono">
-                  {formatMetricValue(values.vega01Value, 2)}
+                  {formatMetricValue(values.vega01Value, 3)}
                 </td>
                 <td className="px-1 py-1 text-right font-mono">
-                  {formatMetricValue(values.gamma01Value, 2)}
+                  {formatMetricValue(values.gamma01Value, 3)}
                 </td>
                 {showStraddleSchema && (
                   <td className="px-1 py-1 text-right font-mono">
-                    {formatMetricValue(values.theta01Value, 2)}
+                    {formatMetricValue(values.theta01Value, 3)}
                   </td>
                 )}
               </tr>
@@ -2450,7 +2512,7 @@ function LegsSubtable({
                 </td>
               )}
               <td className="px-1 py-1 text-right font-mono">
-                {formatMetricValue(riskReversalTotals.totalPremium, 2)}
+                {formatMetricValue(riskReversalTotals.totalPremium, 3)}
               </td>
               {showStraddleSchema && (
                 <td className="px-1 py-1 text-right font-mono text-slate-400">
@@ -2466,25 +2528,25 @@ function LegsSubtable({
               <td className="px-1 py-1 text-right font-mono">
                 <div className="flex flex-col items-end leading-tight">
                   <span>
-                    {formatMetricValue(riskReversalTotals.totalDv01, 2)}
+                    {formatMetricValue(riskReversalTotals.totalDv01, 3)}
                   </span>
                   {isValid(riskReversalTotals.totalWingDv01) && (
                     <span className="text-slate-300">
                       Wing{" "}
-                      {formatMetricValue(riskReversalTotals.totalWingDv01, 2)}
+                      {formatMetricValue(riskReversalTotals.totalWingDv01, 3)}
                     </span>
                   )}
                 </div>
               </td>
               <td className="px-1 py-1 text-right font-mono">
-                {formatMetricValue(riskReversalTotals.totalVega01, 2)}
+                {formatMetricValue(riskReversalTotals.totalVega01, 3)}
               </td>
               <td className="px-1 py-1 text-right font-mono">
-                {formatMetricValue(riskReversalTotals.totalGamma01, 2)}
+                {formatMetricValue(riskReversalTotals.totalGamma01, 3)}
               </td>
               {showStraddleSchema && (
                 <td className="px-1 py-1 text-right font-mono">
-                  {formatMetricValue(riskReversalTotals.totalTheta01, 2)}
+                  {formatMetricValue(riskReversalTotals.totalTheta01, 3)}
                 </td>
               )}
             </tr>
@@ -2503,10 +2565,10 @@ function LegsSubtable({
                 --
               </td>
               <td className="px-1 py-1 text-right font-mono">
-                {formatMetricValue(straddleTotals?.premium, 2)}
+                {formatMetricValue(straddleTotals?.premium, 3)}
               </td>
               <td className="px-1 py-1 text-right font-mono">
-                {formatMetricValue(straddleTotals?.premiumBps, 2)}
+                {formatMetricValue(straddleTotals?.premiumBps, 3)}
               </td>
               <td className="px-1 py-1 text-right font-mono text-slate-400">
                 --
@@ -2515,16 +2577,16 @@ function LegsSubtable({
                 --
               </td>
               <td className="px-1 py-1 text-right font-mono">
-                {formatMetricValue(straddleTotals?.dv01, 2)}
+                {formatMetricValue(straddleTotals?.dv01, 3)}
               </td>
               <td className="px-1 py-1 text-right font-mono">
-                {formatMetricValue(straddleTotals?.vega01, 2)}
+                {formatMetricValue(straddleTotals?.vega01, 3)}
               </td>
               <td className="px-1 py-1 text-right font-mono">
-                {formatMetricValue(straddleTotals?.gamma01, 2)}
+                {formatMetricValue(straddleTotals?.gamma01, 3)}
               </td>
               <td className="px-1 py-1 text-right font-mono">
-                {formatMetricValue(straddleTotals?.theta01, 2)}
+                {formatMetricValue(straddleTotals?.theta01, 3)}
               </td>
             </tr>
           )}
@@ -2541,7 +2603,7 @@ function LegsSubtable({
           </span>
           <span className="font-mono">
             Wing-to-Delta Notional Ratio:{" "}
-            {formatMetricDisplay(riskReversalTotals?.wingToDeltaRatio, 2)}
+            {formatMetricDisplay(riskReversalTotals?.wingToDeltaRatio, 3)}
           </span>
         </div>
       )}
@@ -3073,19 +3135,19 @@ function ManualLinkModal({
                     <div className="flex items-center justify-between">
                       <span>Total premium</span>
                       <span className="font-mono">
-                        {formatMetricValue(metrics.total_premium, 2)}
+                        {formatMetricValue(metrics.total_premium, 3)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>DV01</span>
                       <span className="font-mono">
-                        {formatMetricValue(metrics.total_dv01, 2)}
+                        {formatMetricValue(metrics.total_dv01, 3)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Vega01</span>
                       <span className="font-mono">
-                        {formatMetricValue(metrics.total_vega01, 2)}
+                        {formatMetricValue(metrics.total_vega01, 3)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
@@ -4434,7 +4496,7 @@ export default function SwaptionTradeTape() {
       : resolveDisplayNotional(row);
     return (
       <span className="text-xs font-mono text-gray-200">
-        {showVega ? formatMetricValue(value, 2) : formatNotional(value)}
+        {showVega ? formatMetricValue(value, 3) : formatNotional(value)}
       </span>
     );
   };
