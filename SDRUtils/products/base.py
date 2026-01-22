@@ -4,15 +4,12 @@ Base interface for SDR product modules.
 This module defines the abstract base class that all product implementations
 must inherit from. Products are organized by currency and product type.
 
-The classify_messages() method handles SDR lifecycle event resolution to avoid
-double counting/phantom trades. Key concepts:
+The classify_messages() method processes new trade executions only:
 
-- **Synthetic UTI**: A stable identifier for a trade entity, computed by
-  clustering related dissemination IDs via graph analysis.
-- **Lifecycle Replay**: Processes NEWT/MODI/CORR/TERM/EROR actions in
-  timestamp order to reconstruct the canonical trade state.
-- **Amendment Handling**: MODI with Amendment indicator=True overwrites
-  economics fields; otherwise only fills nulls.
+- **Filtering**: Only processes messages with Action type="NEWT" and
+  Event type="TRAD" to capture initial trade executions.
+- **Direct Classification**: Each trade is classified as-is without lifecycle
+  state resolution or replay.
 """
 
 from __future__ import annotations
@@ -26,8 +23,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from SDRUtils.core.classification import TradeClassification
-from SDRUtils.core.graph_resolver import assign_synthetic_uti
-from SDRUtils.core.lifecycle import ResolvedTrade, replay_lifecycle, replay_lifecycle_full
+from SDRUtils.core.lifecycle import ResolvedTrade
 
 logger = logging.getLogger(__name__)
 
@@ -151,85 +147,55 @@ class ProductModule(ABC):
         messages: pd.DataFrame,
         *,
         dissemination_col: str = "Dissemination Identifier",
-        original_col: str = "Original Dissemination Identifier",
-        synthetic_col: str = "Synthetic UTI",
         action_col: str = "Action type",
-        event_timestamp_col: str = "Event timestamp",
-        amendment_indicator_col: str = "Amendment indicator",
+        event_type_col: str = "Event type",
         **kwargs: Any,
     ) -> List[TradeClassification]:
         """
-        Classify a set of SDR messages by resolving lifecycle state.
+        Classify SDR messages for new trades only.
 
-        This method handles SDR lifecycle event resolution to avoid double
-        counting/phantom trades:
+        This simplified method filters for new trade executions and classifies
+        them directly without lifecycle replay:
 
-        1. **Clustering**: Groups related messages (NEWT→MODI→CORR chains)
-           into trade entities using graph analysis on dissemination IDs.
-        2. **Lifecycle Replay**: Processes actions in timestamp order to
-           reconstruct the canonical trade state.
-        3. **Classification**: Classifies the resolved state.
-
-        For each trade entity, only the canonical state after all lifecycle
-        updates is classified. MODI messages fill missing fields (or overwrite
-        economics if Amendment indicator=True), CORR messages overwrite all
-        fields, and EROR messages invalidate the trade.
+        1. **Filtering**: Only processes messages with Action type="NEWT" and
+           Event type="TRAD" to capture initial trade executions.
+        2. **Direct Classification**: Each trade is classified as-is without
+           lifecycle state resolution.
 
         Args:
-            messages: SDR message DataFrame containing lifecycle updates.
+            messages: SDR message DataFrame.
             dissemination_col: Column with dissemination identifiers.
-            original_col: Column with original dissemination identifiers.
-            synthetic_col: Column name for resolved synthetic UTI.
             action_col: Column name for action type.
-            event_timestamp_col: Column name for event timestamp.
-            amendment_indicator_col: Column name for amendment indicator.
+            event_type_col: Column name for event type.
             **kwargs: Additional arguments passed to classify_trade.
 
         Returns:
-            List of TradeClassification objects for active trades.
+            List of TradeClassification objects for new trades.
         """
         if messages.empty:
             return []
 
-        messages = messages.sort_values(by=event_timestamp_col)
+        # Filter for new trades only (Action type="NEWT" and Event type="TRAD")
+        filtered = messages[
+            (messages[action_col] == "NEWT") & (messages[event_type_col] == "TRAD")
+        ].copy()
 
-        resolved = assign_synthetic_uti(
-            messages,
-            dissemination_col=dissemination_col,
-            original_col=original_col,
-            action_col=action_col,
-            event_timestamp_col=event_timestamp_col,
-            synthetic_col=synthetic_col,
-        )
+        if filtered.empty:
+            return []
 
         classifications: List[TradeClassification] = []
-        groups = resolved.groupby(synthetic_col, dropna=False)
 
-        for synthetic_uti, group in tqdm(groups, desc="Classifying Trades", unit="trade"):
+        for idx, row in tqdm(filtered.iterrows(), desc="Classifying Trades", unit="trade", total=len(filtered)):
             try:
-                state, _ = replay_lifecycle(
-                    group,
-                    action_col=action_col,
-                    event_timestamp_col=event_timestamp_col,
-                    amendment_indicator_col=amendment_indicator_col,
-                    dissemination_col=dissemination_col,
-                )
-                if state is None:
-                    # Trade was errored or has no valid state
-                    continue
-                row = pd.Series(state)
                 if not self.validate_row(row):
                     continue
-                trade_id = row.get(dissemination_col) or synthetic_uti
+                trade_id = row.get(dissemination_col, idx)
                 classifications.append(self.classify_trade(row, trade_id=trade_id, **kwargs))
             except Exception as e:
                 # Log error with context for debugging
-                dissem_ids = group[dissemination_col].dropna().astype(str).tolist()
-                action_types = group[action_col].dropna().astype(str).tolist()
+                dissem_id = row.get(dissemination_col, "unknown")
                 logger.error(
-                    f"Failed to classify trade entity {synthetic_uti}: {type(e).__name__}: {e}. "
-                    f"Dissemination IDs: {dissem_ids[:5]}{'...' if len(dissem_ids) > 5 else ''}, "
-                    f"Actions: {action_types}"
+                    f"Failed to classify trade {dissem_id}: {type(e).__name__}: {e}"
                 )
 
         return classifications
@@ -239,34 +205,27 @@ class ProductModule(ABC):
         messages: pd.DataFrame,
         *,
         dissemination_col: str = "Dissemination Identifier",
-        original_col: str = "Original Dissemination Identifier",
-        synthetic_col: str = "Synthetic UTI",
         action_col: str = "Action type",
+        event_type_col: str = "Event type",
         event_timestamp_col: str = "Event timestamp",
-        amendment_indicator_col: str = "Amendment indicator",
         **kwargs: Any,
     ) -> ClassificationResult:
         """
-        Classify SDR messages with full lifecycle metadata and error tracking.
+        Classify SDR messages for new trades with error tracking.
 
         This is an enhanced version of classify_messages() that returns:
         - All successful TradeClassification objects
-        - Full ResolvedTrade objects with lifecycle metadata
+        - Simplified ResolvedTrade objects (one per NEWT trade)
         - ClassificationError objects for failed classifications
 
-        Use this method when you need:
-        - Volume semantics (inception_notional vs current_notional)
-        - Error tracking and debugging
-        - Trade status tracking (ACTIVE/TERMINATED/ERRORED)
+        Only processes Action type="NEWT" and Event type="TRAD" messages.
 
         Args:
-            messages: SDR message DataFrame containing lifecycle updates.
+            messages: SDR message DataFrame.
             dissemination_col: Column with dissemination identifiers.
-            original_col: Column with original dissemination identifiers.
-            synthetic_col: Column name for resolved synthetic UTI.
             action_col: Column name for action type.
+            event_type_col: Column name for event type.
             event_timestamp_col: Column name for event timestamp.
-            amendment_indicator_col: Column name for amendment indicator.
             **kwargs: Additional arguments passed to classify_trade.
 
         Returns:
@@ -279,66 +238,63 @@ class ProductModule(ABC):
                 errors=[],
             )
 
-        messages = messages.sort_values(by=event_timestamp_col)
+        # Filter for new trades only (Action type="NEWT" and Event type="TRAD")
+        filtered = messages[
+            (messages[action_col] == "NEWT") & (messages[event_type_col] == "TRAD")
+        ].copy()
 
-        resolved = assign_synthetic_uti(
-            messages,
-            dissemination_col=dissemination_col,
-            original_col=original_col,
-            action_col=action_col,
-            event_timestamp_col=event_timestamp_col,
-            synthetic_col=synthetic_col,
-        )
+        if filtered.empty:
+            return ClassificationResult(
+                classifications=[],
+                resolved_trades=[],
+                errors=[],
+            )
 
         classifications: List[TradeClassification] = []
         resolved_trades: List[ResolvedTrade] = []
         errors: List[ClassificationError] = []
 
-        groups = resolved.groupby(synthetic_col, dropna=False)
+        for idx, row in tqdm(filtered.iterrows(), desc="Classifying Trades", unit="trade", total=len(filtered)):
+            dissem_id = row.get(dissemination_col, str(idx))
 
-        for synthetic_uti, group in tqdm(groups, desc="Classifying Trades", unit="trade"):
             try:
-                # Use full lifecycle replay to get ResolvedTrade with metadata
-                resolved_trade = replay_lifecycle_full(
-                    group,
-                    synthetic_uti=str(synthetic_uti),
-                    action_col=action_col,
-                    event_timestamp_col=event_timestamp_col,
-                    amendment_indicator_col=amendment_indicator_col,
-                    dissemination_col=dissemination_col,
+                # Create simplified ResolvedTrade for this new trade
+                trade_state = row.to_dict()
+                event_ts = row.get(event_timestamp_col)
+
+                resolved_trade = ResolvedTrade(
+                    synthetic_uti=dissem_id,
+                    message_ids=[dissem_id],
+                    actions=[("NEWT", event_ts)],
+                    inception_state=trade_state,
+                    current_state=trade_state,
+                    status="ACTIVE",
+                    is_lifecycle_update=False,
+                    quality_flags=[],
+                    history=[],
                 )
                 resolved_trades.append(resolved_trade)
 
-                # Skip errored/invalid trades
-                if resolved_trade.current_state is None:
-                    continue
-
-                row = pd.Series(resolved_trade.current_state)
+                # Classify the trade
                 if not self.validate_row(row):
                     continue
 
-                trade_id = row.get(dissemination_col) or synthetic_uti
-                classification = self.classify_trade(row, trade_id=trade_id, **kwargs)
+                classification = self.classify_trade(row, trade_id=dissem_id, **kwargs)
                 classifications.append(classification)
 
             except Exception as e:
                 # Track error with full context
-                dissem_ids = group[dissemination_col].dropna().astype(str).tolist()
-                action_types = group[action_col].dropna().astype(str).tolist()
-
                 error = ClassificationError(
-                    synthetic_uti=str(synthetic_uti),
-                    dissemination_ids=dissem_ids,
+                    synthetic_uti=dissem_id,
+                    dissemination_ids=[dissem_id],
                     error_type=type(e).__name__,
                     error_message=str(e),
-                    action_types=action_types,
+                    action_types=["NEWT"],
                 )
                 errors.append(error)
 
                 logger.error(
-                    f"Failed to classify trade entity {synthetic_uti}: {type(e).__name__}: {e}. "
-                    f"Dissemination IDs: {dissem_ids[:5]}{'...' if len(dissem_ids) > 5 else ''}, "
-                    f"Actions: {action_types}"
+                    f"Failed to classify trade {dissem_id}: {type(e).__name__}: {e}"
                 )
 
         return ClassificationResult(
