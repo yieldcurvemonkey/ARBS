@@ -1823,6 +1823,7 @@ function LegsSubtable({
   const [timeseriesNotice, setTimeseriesNotice] = useState<string | null>(null);
   const timeseriesFetchKeyRef = useRef<string | null>(null);
   const timeseriesFetchInFlight = useRef(false);
+  const [showRawDataModal, setShowRawDataModal] = useState(false);
   const columnFiltersParam = searchParams.get(COLUMN_FILTER_QUERY_KEY);
   const columnFilterOpParam = searchParams.get(COLUMN_FILTER_OPERATOR_QUERY_KEY);
   const filterParam = searchParams.get("filter");
@@ -2409,8 +2410,8 @@ function LegsSubtable({
 
   return (
     <div className="space-y-3">
-      {isStraddle && (
-        <div className="flex items-center justify-end px-2">
+      <div className="flex items-center justify-end gap-2 px-2">
+        {isStraddle && (
           <button
             type="button"
             onClick={() => setShowTimeseries((current) => !current)}
@@ -2418,8 +2419,15 @@ function LegsSubtable({
           >
             {showTimeseries ? "Hide Timeseries" : "Show Timeseries"}
           </button>
-        </div>
-      )}
+        )}
+        <button
+          type="button"
+          onClick={() => setShowRawDataModal(true)}
+          className="rounded border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-300 transition hover:bg-slate-800"
+        >
+          Show Raw Data
+        </button>
+      </div>
       <div className="overflow-x-auto">
         <table className="min-w-full text-xs">
         <thead className="bg-slate-950/40 text-[11px] uppercase tracking-wide text-slate-400">
@@ -2867,6 +2875,48 @@ function LegsSubtable({
           )}
         </div>
       )}
+      <RawDataModal
+        isOpen={showRawDataModal}
+        data={row}
+        onClose={() => setShowRawDataModal(false)}
+      />
+    </div>
+  );
+}
+
+function RawDataModal({
+  isOpen,
+  data,
+  onClose,
+}: {
+  isOpen: boolean;
+  data: TapeRow;
+  onClose: () => void;
+}) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+      <div className="w-full max-w-4xl overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+            Raw Data
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded border border-slate-700 p-1 text-slate-300 transition hover:border-slate-500 hover:text-slate-100"
+            aria-label="Close raw data modal"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="max-h-[75vh] overflow-y-auto p-4">
+          <pre className="text-xs text-slate-200 bg-slate-950 rounded-lg p-4 overflow-x-auto">
+            {JSON.stringify(data, null, 2)}
+          </pre>
+        </div>
+      </div>
     </div>
   );
 }
