@@ -389,8 +389,10 @@ LEFT JOIN LATERAL (
             'strike', l.strike,
             'notional', l.notional,
             'notional_currency', l.notional_currency,
+            'is_notional_capped', l.is_notional_capped,
             'premium', l.premium,
             'exercise_style', l.exercise_style,
+            'cleared', l.cleared,
             'package_type', l.package_type,
             'leg_metrics', l.leg_metrics
         ) ORDER BY l.leg_order
@@ -443,8 +445,10 @@ LEFT JOIN LATERAL (
             'strike', l.strike,
             'notional', l.notional,
             'notional_currency', l.notional_currency,
+            'is_notional_capped', l.is_notional_capped,
             'premium', l.premium,
             'exercise_style', l.exercise_style,
+            'cleared', l.cleared,
             'package_type', l.package_type,
             'leg_metrics', l.leg_metrics,
             'is_manually_linked', l.is_manually_linked,
