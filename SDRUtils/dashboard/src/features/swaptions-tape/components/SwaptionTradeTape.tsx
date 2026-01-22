@@ -1824,7 +1824,7 @@ function LegsSubtable({
   const timeseriesFetchKeyRef = useRef<string | null>(null);
   const timeseriesFetchInFlight = useRef(false);
   const [showRawDataModal, setShowRawDataModal] = useState(false);
-  const [modalPosition, setModalPosition] = useState<{ top: number; left: number } | null>(null);
+  const [modalPosition, setModalPosition] = useState<{ top: number } | null>(null);
   const columnFiltersParam = searchParams.get(COLUMN_FILTER_QUERY_KEY);
   const columnFilterOpParam = searchParams.get(COLUMN_FILTER_OPERATOR_QUERY_KEY);
   const filterParam = searchParams.get("filter");
@@ -2425,9 +2425,10 @@ function LegsSubtable({
           type="button"
           onClick={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
+            // Position modal near the top of viewport, aligned with the row
+            const topPosition = window.scrollY + Math.max(100, rect.top - 50);
             setModalPosition({
-              top: rect.bottom + window.scrollY,
-              left: rect.left + window.scrollX,
+              top: topPosition,
             });
             setShowRawDataModal(true);
           }}
@@ -2901,20 +2902,20 @@ function RawDataModal({
 }: {
   isOpen: boolean;
   data: TapeRow;
-  position: { top: number; left: number } | null;
+  position: { top: number } | null;
   onClose: () => void;
 }) {
   if (!isOpen) return null;
 
-  // Calculate modal position with viewport boundary checks
+  // Position modal horizontally centered, vertically at the row position
   const modalStyle: React.CSSProperties = position
     ? {
         position: 'absolute' as const,
         top: `${position.top}px`,
-        left: `${position.left}px`,
+        left: '50%',
+        transform: 'translateX(-50%)',
         maxWidth: '800px',
         width: 'calc(100vw - 32px)',
-        transform: 'translateY(8px)', // Add small offset below the button
       }
     : {};
 
