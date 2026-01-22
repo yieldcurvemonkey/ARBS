@@ -1613,6 +1613,17 @@ function selectLegMetrics({
     };
   }
 
+  if (!packageType || packageType === "OUTRIGHT") {
+    const legMetrics = leg.leg_metrics || {};
+    return {
+      bpvol: parseMetricNumber(legMetrics.outright_bpvol_yr),
+      dv01: parseMetricNumber(legMetrics.outright_dv01),
+      vega01: parseMetricNumber(legMetrics.outright_vega01),
+      gamma01: parseMetricNumber(legMetrics.outright_gamma01),
+      theta01: parseMetricNumber(legMetrics.outright_theta1d),
+    };
+  }
+
   return EMPTY_LEG_METRICS;
 }
 
