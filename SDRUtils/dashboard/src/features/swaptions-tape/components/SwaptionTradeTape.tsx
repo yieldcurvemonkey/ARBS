@@ -417,6 +417,25 @@ const TENOR_REGEX =
 const TENOR_TOKEN_REGEX =
   /^(\d+(?:\.\d+)?)(?:\s*)(M|MO|MON|MONTH|MONTHS|Y|YR|YEAR|YEARS)$/i;
 
+/**
+ * Smart rounding that handles machine epsilon errors and removes trailing zeros
+ * Examples:
+ * - 249.999 -> "250"
+ * - 1.50000 -> "1.5"
+ * - 1.00000 -> "1"
+ * - 1.2345 with decimals=2 -> "1.23"
+ */
+function smartRound(value: number, decimals: number): string {
+  // Round to one extra decimal to catch epsilon errors, then round to desired precision
+  const epsilon = 1 / Math.pow(10, decimals + 1);
+  const rounded = Math.round((value + epsilon) * Math.pow(10, decimals)) / Math.pow(10, decimals);
+
+  // Format with fixed decimals then remove trailing zeros
+  return rounded
+    .toFixed(decimals)
+    .replace(/\.?0+$/, "");
+}
+
 function formatTenorNumber(value: number): string {
   if (Number.isInteger(value)) return String(value);
   return value
@@ -582,11 +601,11 @@ function isValid(value: any) {
 /**
  * Format large numbers with improved precision (4-5 significant figures)
  * Examples:
- * - 1,012,500 -> "1.0125M"
- * - 1,000,000 -> "1M"
- * - 1,234,567 -> "1.2346M"
- * - 999,500 -> "999.5K"
- * - 1,234,567,890 -> "1.2346B"
+ * - 1,012,500 -> "1.0125m"
+ * - 1,000,000 -> "1m"
+ * - 1,234,567 -> "1.2346m"
+ * - 999,500 -> "999.5k"
+ * - 1,234,567,890 -> "1.2346b"
  */
 function formatLargeNumber(value: number | null | undefined): string {
   if (!isValid(value)) return "--";
@@ -597,29 +616,29 @@ function formatLargeNumber(value: number | null | undefined): string {
   // Billion range
   if (absValue >= 1_000_000_000) {
     const billions = absValue / 1_000_000_000;
-    if (billions >= 100) return `${sign}${billions.toFixed(2)}B`;
-    if (billions >= 10) return `${sign}${billions.toFixed(3)}B`;
-    return `${sign}${billions.toFixed(4)}B`;
+    if (billions >= 100) return `${sign}${smartRound(billions, 2)}b`;
+    if (billions >= 10) return `${sign}${smartRound(billions, 3)}b`;
+    return `${sign}${smartRound(billions, 4)}b`;
   }
 
   // Million range
   if (absValue >= 1_000_000) {
     const millions = absValue / 1_000_000;
-    if (millions >= 100) return `${sign}${millions.toFixed(2)}M`;
-    if (millions >= 10) return `${sign}${millions.toFixed(3)}M`;
-    return `${sign}${millions.toFixed(4)}M`;
+    if (millions >= 100) return `${sign}${smartRound(millions, 2)}m`;
+    if (millions >= 10) return `${sign}${smartRound(millions, 3)}m`;
+    return `${sign}${smartRound(millions, 4)}m`;
   }
 
   // Thousand range
   if (absValue >= 1_000) {
     const thousands = absValue / 1_000;
-    if (thousands >= 100) return `${sign}${thousands.toFixed(2)}K`;
-    if (thousands >= 10) return `${sign}${thousands.toFixed(3)}K`;
-    return `${sign}${thousands.toFixed(4)}K`;
+    if (thousands >= 100) return `${sign}${smartRound(thousands, 2)}k`;
+    if (thousands >= 10) return `${sign}${smartRound(thousands, 3)}k`;
+    return `${sign}${smartRound(thousands, 4)}k`;
   }
 
   // Below 1000, return as-is with appropriate decimal places
-  return `${sign}${absValue.toFixed(2)}`;
+  return `${sign}${smartRound(absValue, 2)}`;
 }
 
 function formatNotional(notional: number | null | undefined) {
@@ -627,32 +646,32 @@ function formatNotional(notional: number | null | undefined) {
   const value = Number(notional);
   const mm = value / 1_000_000;
 
-  // Billion range (1000MM+)
+  // Billion range (1000mm+)
   if (mm >= 1000) {
     const bn = mm / 1000;
-    if (bn >= 100) return `${bn.toFixed(2)}BN`;
-    if (bn >= 10) return `${bn.toFixed(3)}BN`;
-    return `${bn.toFixed(4)}BN`;
+    if (bn >= 100) return `${smartRound(bn, 2)}bn`;
+    if (bn >= 10) return `${smartRound(bn, 3)}bn`;
+    return `${smartRound(bn, 4)}bn`;
   }
 
   // Million range - use 4-5 significant figures
-  if (mm >= 100) return `${mm.toFixed(2)}MM`;
-  if (mm >= 10) return `${mm.toFixed(3)}MM`;
-  if (mm >= 1) return `${mm.toFixed(4)}MM`;
+  if (mm >= 100) return `${smartRound(mm, 2)}mm`;
+  if (mm >= 10) return `${smartRound(mm, 3)}mm`;
+  if (mm >= 1) return `${smartRound(mm, 4)}mm`;
 
-  // Below 1MM, show in thousands
+  // Below 1mm, show in thousands
   const k = value / 1_000;
-  if (k >= 100) return `${k.toFixed(2)}K`;
-  if (k >= 10) return `${k.toFixed(3)}K`;
-  if (k >= 1) return `${k.toFixed(4)}K`;
+  if (k >= 100) return `${smartRound(k, 2)}k`;
+  if (k >= 10) return `${smartRound(k, 3)}k`;
+  if (k >= 1) return `${smartRound(k, 4)}k`;
 
-  // Below 1K, show raw value
-  return `${value.toFixed(2)}`;
+  // Below 1k, show raw value
+  return smartRound(value, 2);
 }
 
 function formatStrikeAbsolute(strike?: number | null) {
   if (!isValid(strike)) return "--";
-  return (Number(strike) * 100).toFixed(2);
+  return smartRound(Number(strike) * 100, 2);
 }
 
 function formatStrikeOffset(offset?: number | null, signAlways = true) {
@@ -669,7 +688,7 @@ function formatMetricValue(value: number | null | undefined, decimals = 3) {
   if (Math.abs(numericValue) >= 1000) {
     return formatLargeNumber(numericValue);
   }
-  return numericValue.toFixed(decimals);
+  return smartRound(numericValue, decimals);
 }
 
 function formatMetricDisplay(value: number | null | undefined, decimals = 3) {
