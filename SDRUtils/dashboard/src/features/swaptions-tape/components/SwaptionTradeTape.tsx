@@ -1835,6 +1835,7 @@ function LegsSubtable({
   const timeseriesFetchKeyRef = useRef<string | null>(null);
   const timeseriesFetchInFlight = useRef(false);
   const [showRawDataModal, setShowRawDataModal] = useState(false);
+  const [modalPosition, setModalPosition] = useState<{ top: number } | null>(null);
   const columnFiltersParam = searchParams.get(COLUMN_FILTER_QUERY_KEY);
   const columnFilterOpParam = searchParams.get(COLUMN_FILTER_OPERATOR_QUERY_KEY);
   const filterParam = searchParams.get("filter");
@@ -2433,7 +2434,15 @@ function LegsSubtable({
         )}
         <button
           type="button"
-          onClick={() => setShowRawDataModal(true)}
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            // Position modal near the top of viewport, aligned with the row
+            const topPosition = window.scrollY + Math.max(100, rect.top - 50);
+            setModalPosition({
+              top: topPosition,
+            });
+            setShowRawDataModal(true);
+          }}
           className="rounded border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-300 transition hover:bg-slate-800"
         >
           Show Raw Data
@@ -2889,6 +2898,7 @@ function LegsSubtable({
       <RawDataModal
         isOpen={showRawDataModal}
         data={row}
+        position={modalPosition}
         onClose={() => setShowRawDataModal(false)}
       />
     </div>
@@ -2898,17 +2908,35 @@ function LegsSubtable({
 function RawDataModal({
   isOpen,
   data,
+  position,
   onClose,
 }: {
   isOpen: boolean;
   data: TapeRow;
+  position: { top: number } | null;
   onClose: () => void;
 }) {
   if (!isOpen) return null;
 
+  // Position modal horizontally centered, vertically at the row position
+  const modalStyle: React.CSSProperties = position
+    ? {
+        position: 'absolute' as const,
+        top: `${position.top}px`,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        maxWidth: '800px',
+        width: 'calc(100vw - 32px)',
+      }
+    : {};
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
-      <div className="w-full max-w-4xl overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl">
+    <div className="fixed inset-0 z-50 bg-slate-950/80 p-4" onClick={onClose}>
+      <div
+        className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl"
+        style={modalStyle}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
             Raw Data
