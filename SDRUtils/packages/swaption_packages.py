@@ -576,7 +576,7 @@ def _run_straddle_phase(
     # Dealers + custy package reported straddles
     out = detect_straddles_packages(
         out,
-        timestamp_tolerance=datetime.timedelta(seconds=0),
+        timestamp_tolerance=datetime.timedelta(seconds=30),
         strike_tolerance=0,
         notional_tolerance_pct=0,
         product_col=product_col,

@@ -1381,7 +1381,7 @@ if __name__ == "__main__":
     import QuantLib as ql
     from BT.misc import ql_cal_date_range
 
-    date_range = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), date(2026, 1, 21), date(2026, 1, 21))
+    date_range = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), date(2026, 1, 22), date(2026, 1, 22))
     errors = []
     for d in date_range:
         # try:

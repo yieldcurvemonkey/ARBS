@@ -1613,6 +1613,17 @@ function selectLegMetrics({
     };
   }
 
+  if (!packageType || packageType === "OUTRIGHT") {
+    const legMetrics = leg.leg_metrics || {};
+    return {
+      bpvol: parseMetricNumber(legMetrics.outright_bpvol_yr),
+      dv01: parseMetricNumber(legMetrics.outright_dv01),
+      vega01: parseMetricNumber(legMetrics.outright_vega01),
+      gamma01: parseMetricNumber(legMetrics.outright_gamma01),
+      theta01: parseMetricNumber(legMetrics.outright_theta1d),
+    };
+  }
+
   return EMPTY_LEG_METRICS;
 }
 
@@ -2435,9 +2446,9 @@ function LegsSubtable({
             <th className="px-2 py-1 text-left">Leg</th>
             <th className="px-2 py-1 text-left">Side</th>
             <th className="px-2 py-1 text-right">Strike</th>
-            <th className="px-2 py-1 text-right">Notional</th>
+            <th className="px-0.5 py-1 text-right">Notional</th>
             {showStraddleSchema && (
-              <th className="px-2 py-1 text-right">Notional Capped</th>
+              <th className="px-0.5 py-1 text-right">Notional Capped</th>
             )}
             <th className="px-2 py-1 text-right">Premium</th>
             {showStraddleSchema && (
@@ -2449,7 +2460,7 @@ function LegsSubtable({
             <th className="px-2 py-1 text-right">Vega01</th>
             <th className="px-2 py-1 text-right">Gamma01</th>
             {showStraddleSchema && (
-              <th className="px-2 py-1 text-right">Theta1D</th>
+              <th className="py-1 pl-2 pr-4 text-right">Theta1D</th>
             )}
           </tr>
         </thead>
@@ -2516,7 +2527,7 @@ function LegsSubtable({
                   {formatMetricValue(values.gamma01Value, 3)}
                 </td>
                 {showStraddleSchema && (
-                  <td className="px-1 py-1 text-right font-mono">
+                  <td className="py-1 pl-1 pr-4 text-right font-mono">
                     {formatMetricValue(values.theta01Value, 3)}
                   </td>
                 )}
@@ -2572,7 +2583,7 @@ function LegsSubtable({
                 {formatMetricValue(riskReversalTotals.totalGamma01, 3)}
               </td>
               {showStraddleSchema && (
-                <td className="px-1 py-1 text-right font-mono">
+                <td className="py-1 pl-1 pr-4 text-right font-mono">
                   {formatMetricValue(riskReversalTotals.totalTheta01, 3)}
                 </td>
               )}
@@ -2612,7 +2623,7 @@ function LegsSubtable({
               <td className="px-1 py-1 text-right font-mono">
                 {formatMetricValue(straddleTotals?.gamma01, 3)}
               </td>
-              <td className="px-1 py-1 text-right font-mono">
+              <td className="py-1 pl-1 pr-4 text-right font-mono">
                 {formatMetricValue(straddleTotals?.theta01, 3)}
               </td>
             </tr>
