@@ -148,6 +148,15 @@ type ManualLinkDetail = {
   is_active: boolean;
 };
 
+type ManualLinkRow = {
+  link_id: string;
+  manual_package_id: string;
+  linked_trade_ids?: string[] | null;
+  is_active?: boolean | null;
+  created_at?: string | null;
+  package_type?: string | null;
+};
+
 type LegMetricValues = {
   bpvol: number | null;
   dv01: number | null;
@@ -669,6 +678,32 @@ function formatNotional(notional: number | null | undefined) {
   return smartRound(value, 2);
 }
 
+function computeDisplayNotional(row: TapeRow): number | null {
+  const packageType = normalizePackageType(row.package_type);
+  const isStraddle = packageType === "STRADDLE";
+  const isRiskReversal = packageType === "RISK_REVERSAL";
+  const legs = row.legs_json || [];
+  let displayNotional = row.total_notional;
+  if (isStraddle) {
+    displayNotional = legs[0]?.notional ?? row.total_notional;
+  } else if (isRiskReversal && legs.length) {
+    const strikeValues = legs
+      .map((leg) => (isValid(leg.strike) ? Number(leg.strike) : null))
+      .filter((strike): strike is number => strike !== null);
+    const maxStrike = strikeValues.length ? Math.max(...strikeValues) : null;
+    const minStrike = strikeValues.length ? Math.min(...strikeValues) : null;
+    const wingLeg =
+      (maxStrike !== null
+        ? legs.find((leg) => strikeMatches(leg.strike ?? null, maxStrike))
+        : null) ??
+      (minStrike !== null
+        ? legs.find((leg) => strikeMatches(leg.strike ?? null, minStrike))
+        : null);
+    displayNotional = wingLeg?.notional ?? row.total_notional;
+  }
+  return displayNotional ?? null;
+}
+
 function formatStrikeAbsolute(strike?: number | null) {
   if (!isValid(strike)) return "--";
   return smartRound(Number(strike) * 100, 2);
@@ -738,6 +773,31 @@ function normalizeManualFlag(value: any): boolean {
   return ["true", "1", "yes", "y", "t"].includes(normalized);
 }
 
+function normalizeNotionalCapped(value: any): boolean {
+  if (!isValid(value)) return false;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "y", "t"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "f"].includes(normalized)) return false;
+  return normalized.length > 0;
+}
+
+function isRowNotionalCapped(row: TapeRow): boolean {
+  const metrics = row.package_metrics || {};
+  const rowValue =
+    row.is_notional_capped ??
+    (metrics as any).is_notional_capped ??
+    (metrics as any).straddle_is_notional_capped;
+  if (normalizeNotionalCapped(rowValue)) return true;
+  const legs = row.legs_json || [];
+  return legs.some((leg) =>
+    normalizeNotionalCapped(
+      leg.leg_metrics?.is_notional_capped ?? leg.is_notional_capped,
+    ),
+  );
+}
+
 function isManualPackage(row: TapeRow): boolean {
   if (row.manual_link_id) return true;
   if (row.manual_package_id) return true;
@@ -754,6 +814,39 @@ function manualLinkColor(linkId?: string | null): string | null {
   return `hsl(${hash}, 65%, 52%)`;
 }
 
+function groupLinkedRows(rows: TapeRow[]): TapeRow[] {
+  const groups = new Map<string, TapeRow[]>();
+  rows.forEach((row) => {
+    const linkId = row.manual_package_id || row.manual_link_id;
+    if (!linkId) return;
+    if (!groups.has(linkId)) {
+      groups.set(linkId, []);
+    }
+    groups.get(linkId)?.push(row);
+  });
+
+  if (!groups.size) return rows;
+
+  const emitted = new Set<string>();
+  const result: TapeRow[] = [];
+
+  rows.forEach((row) => {
+    const linkId = row.manual_package_id || row.manual_link_id;
+    if (!linkId) {
+      result.push(row);
+      return;
+    }
+    if (emitted.has(linkId)) return;
+    emitted.add(linkId);
+    const groupRows = groups.get(linkId);
+    if (groupRows) {
+      result.push(...groupRows);
+    }
+  });
+
+  return result;
+}
+
 function formatDurationSeconds(value: number | null | undefined): string {
   if (value === null || value === undefined) return "--";
   const numeric = Number(value);
@@ -764,6 +857,17 @@ function formatDurationSeconds(value: number | null | undefined): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.round(minutes / 60);
   return `${hours}h`;
+}
+
+function dedupeManualTrades(trades: ManualLinkTrade[]): ManualLinkTrade[] {
+  const seen = new Set<string>();
+  return trades.filter((trade) => {
+    const key = trade?.trade_id ? String(trade.trade_id) : "";
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function parseIdList(value: string): string[] {
@@ -788,6 +892,15 @@ function formatManualMetricValue(value: any): string {
     }
   }
   return String(value);
+}
+
+function parseAxisInput(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "auto") return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function isEmptyFilterValue(value: any) {
@@ -1286,6 +1399,10 @@ function resolveStraddleNotional(row: TapeRow): number | null {
   return parseMetricNumber(row.total_notional);
 }
 
+function resolvePackageNotional(row: TapeRow): number | null {
+  return computeDisplayNotional(row);
+}
+
 function resolveStraddleBpvolYr(row: TapeRow): number | null {
   const metrics = row.package_metrics || {};
   const directValue = parseMetricNumber((metrics as any).straddle_bpvol_yr);
@@ -1300,6 +1417,20 @@ function computeStraddlePremium(row: TapeRow): number | null {
   legs.forEach((leg) => {
     if (!isValid(leg?.premium)) return;
     const premiumValue = Number(leg.premium) * STRADDLE_SPLIT_FACTOR;
+    if (Number.isNaN(premiumValue)) return;
+    total = total === null ? premiumValue : total + premiumValue;
+  });
+  if (total !== null) return total;
+  return isValid(row.total_premium) ? Number(row.total_premium) : null;
+}
+
+function computePackagePremium(row: TapeRow, packageType: string): number | null {
+  if (packageType === "STRADDLE") return computeStraddlePremium(row);
+  const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
+  let total: number | null = null;
+  legs.forEach((leg) => {
+    if (!isValid(leg?.premium)) return;
+    const premiumValue = Number(leg.premium);
     if (Number.isNaN(premiumValue)) return;
     total = total === null ? premiumValue : total + premiumValue;
   });
@@ -1332,6 +1463,23 @@ function computeStraddlePremiumBps(row: TapeRow): number | null {
   return null;
 }
 
+function computePackagePremiumBps(
+  row: TapeRow,
+  packageType: string,
+): number | null {
+  if (packageType === "STRADDLE") return computeStraddlePremiumBps(row);
+  const premiumValue = computePackagePremium(row, packageType);
+  const notionalValue = resolvePackageNotional(row);
+  if (
+    premiumValue !== null &&
+    notionalValue !== null &&
+    notionalValue !== 0
+  ) {
+    return (premiumValue / notionalValue) * 10_000;
+  }
+  return null;
+}
+
 function resolveStraddleGreek(
   row: TapeRow,
   key: keyof typeof STRADDLE_GREEK_FIELDS,
@@ -1342,6 +1490,163 @@ function resolveStraddleGreek(
   if (directValue !== null) return directValue;
   const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
   return parseMetricNumber((legs[0] as any)?.leg_metrics?.[field]);
+}
+
+function sumMetricNumbers(...values: any[]): number | null {
+  let total: number | null = null;
+  values.forEach((value) => {
+    const numeric = parseMetricNumber(value);
+    if (numeric === null) return;
+    total = total === null ? numeric : total + numeric;
+  });
+  return total;
+}
+
+function resolvePackageBpvolYr(
+  row: TapeRow,
+  packageType: string,
+): number | null {
+  if (packageType === "STRADDLE") return resolveStraddleBpvolYr(row);
+  const metrics = row.package_metrics || {};
+  const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
+  if (packageType === "RISK_REVERSAL") {
+    return (
+      parseMetricNumber((metrics as any).rr_skew_bpvol) ??
+      parseMetricNumber((metrics as any).rr_atm_bpvol) ??
+      parseMetricNumber((legs[0] as any)?.leg_metrics?.rr_atm_bpvol)
+    );
+  }
+  if (
+    packageType === "VERTICAL_SPREAD_1X1" ||
+    packageType === "VERTICAL_SPREAD_1X2"
+  ) {
+    return (
+      parseMetricNumber((metrics as any).vs_atm_bpvol_yr) ??
+      parseMetricNumber((metrics as any).vs_otm_bpvol_yr)
+    );
+  }
+  if (!packageType || packageType === "OUTRIGHT") {
+    return parseMetricNumber((legs[0] as any)?.leg_metrics?.outright_bpvol_yr);
+  }
+  return null;
+}
+
+function resolvePackageGreek(
+  row: TapeRow,
+  packageType: string,
+  key: keyof typeof STRADDLE_GREEK_FIELDS,
+): number | null {
+  if (packageType === "STRADDLE") return resolveStraddleGreek(row, key);
+  const metrics = row.package_metrics || {};
+  const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
+
+  if (packageType === "RISK_REVERSAL") {
+    if (key === "dv01") {
+      return (
+        parseMetricNumber((metrics as any).rr_dv01) ??
+        parseMetricNumber((metrics as any).rr_wing_dv01)
+      );
+    }
+    if (key === "vega01") {
+      return parseMetricNumber((metrics as any).rr_vega01);
+    }
+    if (key === "gamma01") {
+      return parseMetricNumber((metrics as any).rr_gamma01);
+    }
+    if (key === "theta01") {
+      return parseMetricNumber((metrics as any).rr_theta1d);
+    }
+  }
+
+  if (
+    packageType === "VERTICAL_SPREAD_1X1" ||
+    packageType === "VERTICAL_SPREAD_1X2"
+  ) {
+    if (key === "dv01") {
+      return sumMetricNumbers(
+        (metrics as any).vs_dv01,
+        (metrics as any).vs_atm_dv01,
+        (metrics as any).vs_otm_dv01,
+      );
+    }
+    if (key === "vega01") {
+      return sumMetricNumbers(
+        (metrics as any).vs_vega01,
+        (metrics as any).vs_atm_vega01,
+        (metrics as any).vs_otm_vega01,
+      );
+    }
+    if (key === "gamma01") {
+      return parseMetricNumber((metrics as any).vs_gamma01);
+    }
+    if (key === "theta01") {
+      return parseMetricNumber((metrics as any).vs_theta1d);
+    }
+  }
+
+  if (!packageType || packageType === "OUTRIGHT") {
+    const legMetrics = (legs[0] as any)?.leg_metrics || {};
+    if (key === "dv01") return parseMetricNumber(legMetrics.outright_dv01);
+    if (key === "vega01") return parseMetricNumber(legMetrics.outright_vega01);
+    if (key === "gamma01") return parseMetricNumber(legMetrics.outright_gamma01);
+    if (key === "theta01") return parseMetricNumber(legMetrics.outright_theta1d);
+  }
+
+  return null;
+}
+
+function buildTimeseriesSeriesKey(
+  row: TapeRow,
+  packageType: string,
+): string | null {
+  if (packageType === "STRADDLE") return buildStraddleSeriesKey(row);
+  const tenorKey = resolveTenorKey(row);
+  if (tenorKey) return tenorKey;
+  const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
+  const underlying = extractUnderlyingBase(legs[0]?.trade_label, row);
+  const label = packageType ? packageType.replace(/_/g, " ") : "PACKAGE";
+  return `${underlying} ${label}`.trim();
+}
+
+function buildTimeseriesPoint(
+  row: TapeRow,
+  packageType: string,
+): StraddleTimeseriesPoint | null {
+  if (packageType === "STRADDLE") {
+    return buildStraddleTimeseriesPoint(row);
+  }
+  if (!row.execution_start) return null;
+  const timestamp = new Date(row.execution_start).getTime();
+  if (Number.isNaN(timestamp)) return null;
+  const timeLabel = new Date(row.execution_start).toLocaleString("en-US", {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const bpvolYr = resolvePackageBpvolYr(row, packageType);
+  const bpvolDay = bpvolYr !== null ? bpvolYr / BPVOL_DAY_DIVISOR : null;
+  const notional = resolvePackageNotional(row);
+  const premium = computePackagePremium(row, packageType);
+  const premiumBps = computePackagePremiumBps(row, packageType);
+  const dv01 = resolvePackageGreek(row, packageType, "dv01");
+  const vega01 = resolvePackageGreek(row, packageType, "vega01");
+  const gamma01 = resolvePackageGreek(row, packageType, "gamma01");
+  const theta01 = resolvePackageGreek(row, packageType, "theta01");
+  return {
+    timestamp,
+    timeLabel,
+    bpvolYr,
+    bpvolDay,
+    premiumBps,
+    notional,
+    premium,
+    dv01,
+    vega01,
+    gamma01,
+    theta01,
+  };
 }
 
 function buildStraddleTimeseriesPoint(
@@ -1826,6 +2131,8 @@ function LegsSubtable({
     useState<TimeseriesRangeKey>("ALL");
   const [customRangeStart, setCustomRangeStart] = useState("");
   const [customRangeEnd, setCustomRangeEnd] = useState("");
+  const [yAxisMinInput, setYAxisMinInput] = useState("");
+  const [yAxisMaxInput, setYAxisMaxInput] = useState("");
   const [showLineDots, setShowLineDots] = useState(true);
   const [excludeCusty, setExcludeCusty] = useState(false);
   const [extraTimeseriesRows, setExtraTimeseriesRows] = useState<TapeRow[]>([]);
@@ -1839,7 +2146,11 @@ function LegsSubtable({
   const columnFiltersParam = searchParams.get(COLUMN_FILTER_QUERY_KEY);
   const columnFilterOpParam = searchParams.get(COLUMN_FILTER_OPERATOR_QUERY_KEY);
   const filterParam = searchParams.get("filter");
-  const seriesKey = isStraddle ? buildStraddleSeriesKey(row) : null;
+  const seriesKey =
+    packageType && packageType.length > 0
+      ? buildTimeseriesSeriesKey(row, packageType)
+      : null;
+  const canShowTimeseries = !!seriesKey;
   const combinedSeriesRows = useMemo(() => {
     const merged = new Map<string, TapeRow>();
     seriesRows.forEach((candidate) =>
@@ -1851,19 +2162,21 @@ function LegsSubtable({
     return Array.from(merged.values());
   }, [extraTimeseriesRows, seriesRows]);
   const timeseriesData = useMemo(() => {
-    if (!showTimeseries || !isStraddle || !seriesKey) return [];
+    if (!showTimeseries || !seriesKey || !packageType) return [];
     const candidates = Array.isArray(combinedSeriesRows)
       ? combinedSeriesRows
       : [];
     return candidates
       .filter(
         (candidate) => {
-          if (normalizePackageType(candidate.package_type) !== "STRADDLE") {
+          if (normalizePackageType(candidate.package_type) !== packageType) {
             return false;
           }
           const action = extractPrimaryAction(candidate);
           if (action !== "NEWT-TRAD") return false;
-          if (buildStraddleSeriesKey(candidate) !== seriesKey) return false;
+          if (buildTimeseriesSeriesKey(candidate, packageType) !== seriesKey) {
+            return false;
+          }
           if (excludeCusty) {
             const platform = resolvePlatformIdentifier(candidate);
             if (isCustyPlatform(platform)) return false;
@@ -1871,13 +2184,13 @@ function LegsSubtable({
           return true;
         },
       )
-      .map((candidate) => buildStraddleTimeseriesPoint(candidate))
+      .map((candidate) => buildTimeseriesPoint(candidate, packageType))
       .filter((point): point is StraddleTimeseriesPoint => point !== null)
       .sort((left, right) => left.timestamp - right.timestamp);
   }, [
     combinedSeriesRows,
     excludeCusty,
-    isStraddle,
+    packageType,
     seriesKey,
     showTimeseries,
   ]);
@@ -1986,10 +2299,23 @@ function LegsSubtable({
   const includeZeroInDomain =
     (timeseriesView === "INTRADAY" && selectedMetric.chartType === "bar") ||
     (timeseriesView === "DAILY_CLOSE" && useDailySum);
-  const yDomain = useMemo(
-    () => buildTimeseriesDomain(chartValues, includeZeroInDomain),
-    [chartValues, includeZeroInDomain],
-  );
+  const yDomain = useMemo(() => {
+    const autoDomain = buildTimeseriesDomain(chartValues, includeZeroInDomain);
+    const manualMin = parseAxisInput(yAxisMinInput);
+    const manualMax = parseAxisInput(yAxisMaxInput);
+    if (manualMin === null && manualMax === null) {
+      return autoDomain;
+    }
+    return [
+      manualMin ?? autoDomain?.[0] ?? "auto",
+      manualMax ?? autoDomain?.[1] ?? "auto",
+    ] as [number | string, number | string];
+  }, [
+    chartValues,
+    includeZeroInDomain,
+    yAxisMaxInput,
+    yAxisMinInput,
+  ]);
   const hasChartData =
     timeseriesView === "INTRADAY"
       ? intradayChartData.length > 0
@@ -2000,8 +2326,8 @@ function LegsSubtable({
   const isOhlcView = timeseriesView === "DAILY_OHLC";
   const timeseriesFetchKey = useMemo(
     () =>
-      `${seriesKey ?? ""}|${excludeCusty}`,
-    [excludeCusty, seriesKey],
+      `${seriesKey ?? ""}|${packageType ?? ""}|${excludeCusty}`,
+    [excludeCusty, packageType, seriesKey],
   );
 
   useEffect(() => {
@@ -2009,10 +2335,10 @@ function LegsSubtable({
     setTimeseriesError(null);
     setTimeseriesNotice(null);
     timeseriesFetchKeyRef.current = null;
-  }, [excludeCusty, seriesKey]);
+  }, [excludeCusty, packageType, seriesKey]);
 
   useEffect(() => {
-    if (!showTimeseries || !isStraddle || !seriesKey) return;
+    if (!showTimeseries || !packageType || !seriesKey) return;
     if (timeseriesRange !== "ALL" && timeseriesRange !== "CUSTOM") return;
     if (timeseriesFetchInFlight.current) return;
     if (timeseriesFetchKeyRef.current === timeseriesFetchKey) return;
@@ -2031,7 +2357,11 @@ function LegsSubtable({
           params.set("excludeCusty", "true");
         }
 
-        const res = await fetch(`/api/swaptions-tape/timeseries?${params.toString()}`);
+        params.set("packageType", packageType);
+
+        const res = await fetch(
+          `/api/swaptions-tape/timeseries?${params.toString()}`,
+        );
         if (!res.ok) {
           const text = await res.text();
           throw new Error(text || "Failed to load timeseries data");
@@ -2042,12 +2372,14 @@ function LegsSubtable({
         // Client-side filtering to ensure exact match
         const collected = new Map<string, TapeRow>();
         data.rows.forEach((rowItem) => {
-          if (normalizePackageType(rowItem.package_type) !== "STRADDLE") {
+          if (normalizePackageType(rowItem.package_type) !== packageType) {
             return;
           }
           const action = extractPrimaryAction(rowItem);
           if (action !== "NEWT-TRAD") return;
-          if (buildStraddleSeriesKey(rowItem) !== seriesKey) return;
+          if (buildTimeseriesSeriesKey(rowItem, packageType) !== seriesKey) {
+            return;
+          }
           collected.set(rowItem.package_id, rowItem);
         });
 
@@ -2081,7 +2413,7 @@ function LegsSubtable({
     };
   }, [
     excludeCusty,
-    isStraddle,
+    packageType,
     seriesKey,
     showTimeseries,
     timeseriesFetchKey,
@@ -2423,7 +2755,7 @@ function LegsSubtable({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-end gap-2 px-2">
-        {isStraddle && (
+        {canShowTimeseries && (
           <button
             type="button"
             onClick={() => setShowTimeseries((current) => !current)}
@@ -2654,7 +2986,7 @@ function LegsSubtable({
           </span>
         </div>
       )}
-      {isStraddle && showTimeseries && (
+      {canShowTimeseries && showTimeseries && (
         <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0 text-[11px] uppercase tracking-wide text-slate-400">
@@ -2766,6 +3098,40 @@ function LegsSubtable({
               </label>
             </div>
           )}
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+            <label className="flex items-center gap-2">
+              <span className="uppercase tracking-wide">Y Min</span>
+              <input
+                type="number"
+                step="any"
+                value={yAxisMinInput}
+                onChange={(event) => setYAxisMinInput(event.target.value)}
+                className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200"
+                placeholder="auto"
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="uppercase tracking-wide">Y Max</span>
+              <input
+                type="number"
+                step="any"
+                value={yAxisMaxInput}
+                onChange={(event) => setYAxisMaxInput(event.target.value)}
+                className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200"
+                placeholder="auto"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                setYAxisMinInput("");
+                setYAxisMaxInput("");
+              }}
+              className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-300 transition hover:bg-slate-800"
+            >
+              Auto
+            </button>
+          </div>
           {hasChartData ? (
             <div className="mt-3 h-48">
               <ResponsiveContainer width="100%" height="100%">
@@ -2973,7 +3339,7 @@ function ManualLinkModal({
   currentUser: string;
   onUserChange: (value: string) => void;
   onClose: () => void;
-  onCreated: () => void;
+  onCreated: (result?: { link_id: string; manual_package_id: string }) => void;
 }) {
   const selectedIds = useMemo(
     () => selectedRows.map((row) => row.package_id),
@@ -3089,7 +3455,14 @@ function ManualLinkModal({
         }
         return;
       }
-      onCreated();
+      const created =
+        payload?.link_id && payload?.manual_package_id
+          ? {
+              link_id: payload.link_id,
+              manual_package_id: payload.manual_package_id,
+            }
+          : undefined;
+      onCreated(created);
       onClose();
     } catch (err: any) {
       setError(err?.message || "Failed to create manual link.");
@@ -3493,7 +3866,7 @@ function ManualLinkDetailsModal({
         return;
       }
       setLinkDetail(payload.link as ManualLinkDetail);
-      setTrades(payload.trades || []);
+      setTrades(dedupeManualTrades(payload.trades || []));
       setHistory(payload.history || []);
     } catch (err: any) {
       setError(err?.message || "Failed to load manual link.");
@@ -3959,6 +4332,7 @@ export default function SwaptionTradeTape() {
   const router = useRouter();
   const pathname = usePathname();
   const [rows, setRows] = useState<TapeRow[]>([]);
+  const [manualLinks, setManualLinks] = useState<ManualLinkRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3983,6 +4357,7 @@ export default function SwaptionTradeTape() {
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [detailLinkId, setDetailLinkId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState("");
+  const [showManualLinksOnly, setShowManualLinksOnly] = useState(false);
   const [metricMode, setMetricMode] = useState<"NOTIONAL" | "VEGA">(
     "NOTIONAL",
   );
@@ -4163,6 +4538,133 @@ export default function SwaptionTradeTape() {
     searchParams,
   ]);
 
+  const manualLinkStartDate = useMemo(() => {
+    if (!rows.length) return null;
+    let minTime = Number.POSITIVE_INFINITY;
+    rows.forEach((row) => {
+      const ts = new Date(row.execution_start).getTime();
+      if (!Number.isNaN(ts) && ts < minTime) {
+        minTime = ts;
+      }
+    });
+    if (!Number.isFinite(minTime)) return null;
+    const start = new Date(minTime);
+    start.setDate(start.getDate() - 2);
+    return start.toISOString();
+  }, [rows]);
+
+  const manualLinkFetchRef = useRef<string | null>(null);
+
+  const fetchManualLinks = useCallback(async (startDate?: string | null) => {
+    try {
+      const params = new URLSearchParams();
+      params.set("is_active", "true");
+      params.set("limit", "1000");
+      if (startDate) params.set("start_date", startDate);
+      const res = await fetch(`/api/swaption/links?${params.toString()}`);
+      if (!res.ok) return;
+      const payload = await res.json();
+      const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+      setManualLinks(rows as ManualLinkRow[]);
+    } catch {
+      // Silent fail; manual links are a visual enhancement.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!manualLinkStartDate) return;
+    const prior = manualLinkFetchRef.current;
+    if (prior) {
+      const priorTime = new Date(prior).getTime();
+      const nextTime = new Date(manualLinkStartDate).getTime();
+      if (!Number.isNaN(priorTime) && !Number.isNaN(nextTime)) {
+        if (nextTime >= priorTime) return;
+      }
+    }
+    manualLinkFetchRef.current = manualLinkStartDate;
+    fetchManualLinks(manualLinkStartDate);
+  }, [fetchManualLinks, manualLinkStartDate]);
+
+  const manualLinkIndex = useMemo(() => {
+    const byTradeId = new Map<string, ManualLinkRow[]>();
+    const byLinkId = new Map<string, Set<string>>();
+    manualLinks.forEach((link) => {
+      let ids: string[] = [];
+      if (Array.isArray(link.linked_trade_ids)) {
+        ids = link.linked_trade_ids;
+      } else if (typeof link.linked_trade_ids === "string") {
+        const raw = link.linked_trade_ids.trim();
+        if (raw.startsWith("[") && raw.endsWith("]")) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              ids = parsed.map((entry) => String(entry));
+            }
+          } catch {
+            ids = raw.split(/[,\s]+/);
+          }
+        } else if (raw.startsWith("{") && raw.endsWith("}")) {
+          ids = raw
+            .slice(1, -1)
+            .split(",")
+            .map((entry) => entry.replace(/^"+|"+$/g, ""));
+        } else {
+          ids = raw.split(/[,\s]+/);
+        }
+      }
+      const normalizedIds = ids
+        .map((id) => String(id || "").trim())
+        .filter(Boolean);
+      if (!normalizedIds.length || !link.link_id) return;
+      byLinkId.set(link.link_id, new Set(normalizedIds));
+      normalizedIds.forEach((id) => {
+        const normalized = String(id || "").trim();
+        if (normalized) {
+          const existing = byTradeId.get(normalized);
+          if (existing) {
+            existing.push(link);
+          } else {
+            byTradeId.set(normalized, [link]);
+          }
+        }
+      });
+    });
+    return { byTradeId, byLinkId };
+  }, [manualLinks]);
+
+  const resolvedRows = useMemo(() => {
+    if (!manualLinkIndex.byTradeId.size) return rows;
+    return rows.map((row) => {
+      if (row.manual_link_id || row.manual_package_id) return row;
+      const tradeIds = new Set<string>();
+      (row.legs_json || []).forEach((leg) => {
+        if (leg.trade_id) tradeIds.add(leg.trade_id);
+      });
+      const tradeIdList = Array.from(tradeIds);
+      if (!tradeIdList.length) return row;
+      const candidates = manualLinkIndex.byTradeId.get(tradeIdList[0]) || [];
+      let matched: ManualLinkRow | null = null;
+      for (const candidate of candidates) {
+        const set = manualLinkIndex.byLinkId.get(candidate.link_id);
+        if (!set) continue;
+        const coversAll = tradeIdList.every((id) => set.has(id));
+        if (!coversAll) continue;
+        if (matched) {
+          matched = null;
+          break;
+        }
+        matched = candidate;
+      }
+      if (!matched) return row;
+      return {
+        ...row,
+        manual_link_id: matched.link_id ?? row.manual_link_id ?? null,
+        manual_package_id:
+          matched.manual_package_id ?? row.manual_package_id ?? null,
+      };
+    });
+  }, [manualLinkIndex, rows]);
+
   const buildTradeLabel = useCallback(
     (row: TapeRow) => buildRichLabel(row),
     [],
@@ -4183,29 +4685,7 @@ export default function SwaptionTradeTape() {
   }, []);
 
   const resolveDisplayNotional = useCallback((row: TapeRow) => {
-    const packageType = normalizePackageType(row.package_type);
-    const isStraddle = packageType === "STRADDLE";
-    const isRiskReversal = packageType === "RISK_REVERSAL";
-    const legs = row.legs_json || [];
-    let displayNotional = row.total_notional;
-    if (isStraddle) {
-      displayNotional = legs[0]?.notional ?? row.total_notional;
-    } else if (isRiskReversal && legs.length) {
-      const strikeValues = legs
-        .map((leg) => (isValid(leg.strike) ? Number(leg.strike) : null))
-        .filter((strike): strike is number => strike !== null);
-      const maxStrike = strikeValues.length ? Math.max(...strikeValues) : null;
-      const minStrike = strikeValues.length ? Math.min(...strikeValues) : null;
-      const wingLeg =
-        (maxStrike !== null
-          ? legs.find((leg) => strikeMatches(leg.strike ?? null, maxStrike))
-          : null) ??
-        (minStrike !== null
-          ? legs.find((leg) => strikeMatches(leg.strike ?? null, minStrike))
-          : null);
-      displayNotional = wingLeg?.notional ?? row.total_notional;
-    }
-    return displayNotional;
+    return computeDisplayNotional(row);
   }, []);
 
   const resolveDisplayVega = useCallback((row: TapeRow) => {
@@ -4287,12 +4767,34 @@ export default function SwaptionTradeTape() {
     [buildTradeLabel, firstLegMetrics, resolveDisplayNotional],
   );
 
+  const sortRowsByField = useCallback(
+    (data: TapeRow[], field: string, order: 1 | -1 | 0) => {
+      if (!field || order === 0) return data;
+      const sorted = [...data].sort((a, b) => {
+        const av = (a as any)[field];
+        const bv = (b as any)[field];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        if (typeof av === "number" && typeof bv === "number") {
+          return order === 1 ? av - bv : bv - av;
+        }
+        const aStr = String(av).toLowerCase();
+        const bStr = String(bv).toLowerCase();
+        if (aStr === bStr) return 0;
+        return order === 1 ? (aStr > bStr ? 1 : -1) : aStr < bStr ? 1 : -1;
+      });
+      return sorted;
+    },
+    [],
+  );
+
   const filteredRows = useMemo(() => {
     const activeFilters = Object.entries(filters || {}).filter(
       ([field, filterMeta]) =>
         field !== "global" && hasActiveConstraints(filterMeta),
     );
-    const filtered = rows.filter((row) => {
+    const filtered = resolvedRows.filter((row) => {
       if (!activeFilters.length) return true;
       const matches = activeFilters.map(([field, filterMeta]) => {
         const rowValue = resolveFilterValue(row, field);
@@ -4302,30 +4804,25 @@ export default function SwaptionTradeTape() {
         ? matches.some(Boolean)
         : matches.every(Boolean);
     });
-    if (!sortField || sortOrder === 0) return filtered;
-    const sorted = [...filtered].sort((a, b) => {
-      const av = (a as any)[sortField];
-      const bv = (b as any)[sortField];
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      if (typeof av === "number" && typeof bv === "number") {
-        return sortOrder === 1 ? av - bv : bv - av;
-      }
-      const aStr = String(av).toLowerCase();
-      const bStr = String(bv).toLowerCase();
-      if (aStr === bStr) return 0;
-      return sortOrder === 1 ? (aStr > bStr ? 1 : -1) : aStr < bStr ? 1 : -1;
-    });
-    return sorted;
+    const manualFiltered = showManualLinksOnly
+      ? filtered.filter(
+          (row) => !!row.manual_package_id || !!row.manual_link_id,
+        )
+      : filtered;
+    if (!sortField || sortOrder === 0) return groupLinkedRows(manualFiltered);
+    const sorted = sortRowsByField(manualFiltered, sortField, sortOrder);
+    return groupLinkedRows(sorted);
   }, [
-    rows,
+    resolvedRows,
     filters,
     resolveFilterValue,
     sortField,
     sortOrder,
     columnFilterOperator,
+    showManualLinksOnly,
+    sortRowsByField,
   ]);
+
 
   useEffect(() => {
     setRows([]);
@@ -4394,14 +4891,40 @@ export default function SwaptionTradeTape() {
     setDetailLinkId(null);
   }, []);
 
-  const handleLinkCreated = useCallback(() => {
-    setSelectedRows([]);
-    fetchTape({ replace: true });
-  }, [fetchTape]);
+  const handleLinkCreated = useCallback(
+    (result?: { link_id: string; manual_package_id: string }) => {
+      if (result) {
+        const linkedIds = new Set<string>();
+        selectedRows.forEach((row) => {
+          (row.legs_json || []).forEach((leg) => {
+            if (leg.trade_id) linkedIds.add(leg.trade_id);
+          });
+        });
+        if (linkedIds.size > 0) {
+          setManualLinks((prev) => {
+            const next = prev.filter((link) => link.link_id !== result.link_id);
+            next.unshift({
+              link_id: result.link_id,
+              manual_package_id: result.manual_package_id,
+              linked_trade_ids: Array.from(linkedIds),
+              is_active: true,
+              created_at: new Date().toISOString(),
+            });
+            return next;
+          });
+        }
+      }
+      setSelectedRows([]);
+      fetchTape({ replace: true });
+      fetchManualLinks(manualLinkStartDate);
+    },
+    [fetchManualLinks, fetchTape, manualLinkStartDate, selectedRows],
+  );
 
   const handleLinkUpdated = useCallback(() => {
     fetchTape({ replace: true });
-  }, [fetchTape]);
+    fetchManualLinks(manualLinkStartDate);
+  }, [fetchManualLinks, fetchTape, manualLinkStartDate]);
 
   const rowClassName = (row: TapeRow) => {
     const metrics = firstLegMetrics(row);
@@ -4411,10 +4934,12 @@ export default function SwaptionTradeTape() {
       ? packageTone(row.package_type)
       : "!bg-red-900/70 !text-red-100";
     const warning = hasActionWarning(row);
+    const isManualLinked = !!row.manual_link_id || !!row.manual_package_id;
     const classes = [
       "h-10 text-sm !text-gray-200 transition-[filter,box-shadow] hover:brightness-110 hover:shadow-[inset_0_0_0_1px_rgba(148,163,184,0.5)]",
       tone,
       actionTone(action),
+      isManualLinked ? "manual-linked-row" : "",
       warning && isActive ? "ring-1 ring-red-500/50" : "",
     ];
     return classes.join(" ").trim();
@@ -4602,9 +5127,15 @@ export default function SwaptionTradeTape() {
     const value = showVega
       ? resolveDisplayVega(row)
       : resolveDisplayNotional(row);
+    const isCapped = !showVega && isRowNotionalCapped(row);
+    const formatted = showVega
+      ? formatMetricValue(value, 3)
+      : formatNotional(value);
+    const suffix = isCapped && formatted !== "--" ? "+" : "";
     return (
       <span className="text-xs font-mono text-gray-200">
-        {showVega ? formatMetricValue(value, 3) : formatNotional(value)}
+        {formatted}
+        {suffix}
       </span>
     );
   };
@@ -4657,6 +5188,17 @@ export default function SwaptionTradeTape() {
           >
             Toggle Notional/Vega
           </button>
+          <button
+            type="button"
+            onClick={() => setShowManualLinksOnly((current) => !current)}
+            className={`rounded border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+              showManualLinksOnly
+                ? "border-yellow-400 bg-yellow-400/10 text-yellow-100"
+                : "border-gray-700 text-gray-200 hover:border-gray-500 hover:bg-gray-800"
+            }`}
+          >
+            Manual Links
+          </button>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-300">
           <span className="text-[11px] uppercase tracking-wide text-gray-400">
@@ -4703,6 +5245,12 @@ export default function SwaptionTradeTape() {
         .swaption-tape-table .p-datatable-tbody > tr,
         .swaption-tape-table .p-datatable-tbody > tr > td {
           border: none !important;
+        }
+        .swaption-tape-table
+          .p-datatable-tbody
+          > tr.manual-linked-row
+          > td {
+          background-color: rgba(245, 158, 11, 0.18) !important;
         }
       `}</style>
       <DataTable

@@ -11,19 +11,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import math
-from datetime import date, datetime, timedelta
+import os
+import time
+from datetime import timedelta
 from typing import Any, Dict, Iterable, Optional
 
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
-import pytz
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-
-NY_tz = pytz.timezone("America/New_York")
+from tqdm import tqdm
 
 
 # Table/view names (versioned so we can cut over safely)
@@ -225,6 +223,62 @@ DATE_COLUMNS: tuple[str, ...] = (
     "effective_date",
     "expiration_date",
     "underlying_expiration_date",
+)
+
+PACKAGE_UPSERT_UPDATE_COLUMNS: tuple[str, ...] = (
+    "package_type",
+    "as_of_date",
+    "execution_start",
+    "execution_end",
+    "expiration_date",
+    "underlying_expiration_date",
+    "effective_date",
+    "tenor_years",
+    "tenor_label",
+    "forward_start_years",
+    "forward_label",
+    "legs_count",
+    "total_notional",
+    "total_premium",
+    "package_indicator",
+    "package_transaction_price",
+    "package_confidence",
+    "package_reason",
+    "vega_curve_id",
+    "vega_curve_type",
+    "vega_curve_vega01",
+    "vega_curve_weight",
+    "vega_curve_vega_ratio",
+    "vega_curve_pricing_method",
+    "package_metrics",
+)
+
+LEG_UPSERT_UPDATE_COLUMNS: tuple[str, ...] = (
+    "package_id",
+    "leg_order",
+    "event_action",
+    "execution_timestamp",
+    "effective_date",
+    "expiration_date",
+    "underlying_expiration_date",
+    "product_type",
+    "trade_label",
+    "tenor_years",
+    "tenor_label",
+    "forward_start_years",
+    "forward_label",
+    "notional",
+    "notional_currency",
+    "is_notional_capped",
+    "strike",
+    "premium",
+    "exercise_style",
+    "cleared",
+    "platform_identifier",
+    "package_type",
+    "package_indicator",
+    "package_transaction_price",
+    "leg_metrics",
 )
 
 # Schema (packages + legs + ingestion runs + display view)
@@ -914,56 +968,45 @@ def delete_date_range(
     return packages_deleted, legs_deleted
 
 
+def _to_utc_timestamp(value: Any) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
+def _resolve_cache_path(cache_path: Optional[str]) -> str:
+    return cache_path or os.getenv("SDR_CACHE_PATH", "./sdr_cache")
+
+
 def get_last_ingested_timestamp(engine: Engine) -> Optional[pd.Timestamp]:
-    """Get the most recent execution_timestamp from legs table."""
+    """Get the most recent execution timestamp written to legs."""
     with engine.connect() as conn:
         result = conn.execute(text(f"SELECT MAX(execution_timestamp) FROM {LEGS_TABLE}")).scalar()
-    return pd.Timestamp(result, tz="UTC") if result else None
+    return _to_utc_timestamp(result) if result is not None else None
 
 
-def ingest_incremental(
-    engine: Engine,
-    cache_path: str,
-    lookback_buffer: timedelta = timedelta(minutes=15),
-) -> None:
+def get_last_run_timestamp(engine: Engine) -> Optional[pd.Timestamp]:
+    """Get the most recent end_ts written to ingestion runs."""
+    with engine.connect() as conn:
+        result = conn.execute(text(f"SELECT MAX(end_ts) FROM {RUNS_TABLE}")).scalar()
+    return _to_utc_timestamp(result) if result is not None else None
+
+
+def get_ingestion_cursor_timestamp(engine: Engine) -> Optional[pd.Timestamp]:
     """
-    Ingest only new trades since last run.
+    Cursor for incremental runs.
 
-    Uses a small lookback buffer to catch late-arriving trades.
+    Uses the latest timestamp between legs.execution_timestamp and runs.end_ts so
+    the service can advance even when a window has zero trades.
     """
-    last_ts = get_last_ingested_timestamp(engine)
-
-    if last_ts is None:
-        # First run — do a full day
-        start = pd.Timestamp.now(tz="UTC").normalize()
-    else:
-        # Start from last ingested minus buffer for late arrivals
-        start = last_ts - lookback_buffer
-
-    end = pd.Timestamp.now(tz="UTC")
-
-    print(f"Incremental ingest: {start} -> {end}")
-
-    raw_df = build_classification_dataframe(
-        start=start,
-        end=end,
-        cache_path=cache_path,
-        ignore_cache=True,  # Always fetch fresh for intraday
-        only_newt=False,
-    )
-
-    if raw_df.empty:
-        print("No new trades")
-        return
-
-    # Upsert handles duplicates — no delete needed
-    cleaned = normalize_dataframe(raw_df)
-    packages_df = build_packages_dataframe(cleaned)
-    legs_df = build_legs_dataframe(cleaned)
-
-    # Upsert directly (duplicates just update)
-    upsert_dataframe(packages_df, engine, PACKAGES_TABLE, ...)
-    upsert_dataframe(legs_df, engine, LEGS_TABLE, ...)
+    last_trade_ts = get_last_ingested_timestamp(engine)
+    last_run_ts = get_last_run_timestamp(engine)
+    if last_trade_ts is None:
+        return last_run_ts
+    if last_run_ts is None:
+        return last_trade_ts
+    return max(last_trade_ts, last_run_ts)
 
 
 def cleanup_orphaned_packages(engine: Engine) -> int:
@@ -983,6 +1026,34 @@ def cleanup_orphaned_packages(engine: Engine) -> int:
     return result.rowcount
 
 
+def upsert_transformed_frames(df: pd.DataFrame, engine: Engine) -> tuple[pd.DataFrame, pd.DataFrame, int, int]:
+    cleaned = normalize_dataframe(df)
+    packages_df = build_packages_dataframe(cleaned)
+    legs_df = build_legs_dataframe(cleaned)
+
+    packages_written = upsert_dataframe(
+        packages_df,
+        engine,
+        PACKAGES_TABLE,
+        conflict_cols=["package_id"],
+        update_cols=PACKAGE_UPSERT_UPDATE_COLUMNS,
+        json_cols=["package_metrics"],
+        progress_desc="Writing packages",
+    )
+
+    legs_written = upsert_dataframe(
+        legs_df,
+        engine,
+        LEGS_TABLE,
+        conflict_cols=["trade_id"],
+        update_cols=LEG_UPSERT_UPDATE_COLUMNS,
+        json_cols=["leg_metrics"],
+        progress_desc="Writing legs",
+    )
+
+    return packages_df, legs_df, packages_written, legs_written
+
+
 def ingest_to_postgres(
     df: pd.DataFrame,
     engine: Engine,
@@ -993,81 +1064,7 @@ def ingest_to_postgres(
     if pkgs_del or legs_del:
         print(f"Deleted {pkgs_del} packages, {legs_del} legs in range")
 
-    cleaned = normalize_dataframe(df)
-    packages_df = build_packages_dataframe(cleaned)
-    legs_df = build_legs_dataframe(cleaned)
-
-    packages_written = upsert_dataframe(
-        packages_df,
-        engine,
-        PACKAGES_TABLE,
-        conflict_cols=["package_id"],
-        update_cols=[
-            "package_type",
-            "as_of_date",
-            "execution_start",
-            "execution_end",
-            "expiration_date",
-            "underlying_expiration_date",
-            "effective_date",
-            "tenor_years",
-            "tenor_label",
-            "forward_start_years",
-            "forward_label",
-            "legs_count",
-            "total_notional",
-            "total_premium",
-            "package_indicator",
-            "package_transaction_price",
-            "package_confidence",
-            "package_reason",
-            "vega_curve_id",
-            "vega_curve_type",
-            "vega_curve_vega01",
-            "vega_curve_weight",
-            "vega_curve_vega_ratio",
-            "vega_curve_pricing_method",
-            "package_metrics",
-        ],
-        json_cols=["package_metrics"],
-        progress_desc="Writing packages",
-    )
-
-    legs_written = upsert_dataframe(
-        legs_df,
-        engine,
-        LEGS_TABLE,
-        conflict_cols=["trade_id"],
-        update_cols=[
-            "package_id",
-            "leg_order",
-            "event_action",
-            "execution_timestamp",
-            "effective_date",
-            "expiration_date",
-            "underlying_expiration_date",
-            "product_type",
-            "trade_label",
-            "tenor_years",
-            "tenor_label",
-            "forward_start_years",
-            "forward_label",
-            "notional",
-            "notional_currency",
-            "is_notional_capped",
-            "strike",
-            "premium",
-            "exercise_style",
-            "cleared",
-            "platform_identifier",
-            "package_type",
-            "package_indicator",
-            "package_transaction_price",
-            "leg_metrics",
-        ],
-        json_cols=["leg_metrics"],
-        progress_desc="Writing legs",
-    )
+    packages_df, legs_df, packages_written, legs_written = upsert_transformed_frames(df, engine)
 
     record_ingestion_run(
         engine,
@@ -1113,18 +1110,6 @@ def print_summary(
         print(f"  Avg legs per package: {packages_df['legs_count'].mean():.2f}")
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Ingest USD swaption classifications into SwapPulse Postgres.")
-    parser.add_argument("--days", type=int, default=7, help="Days to look back when start not provided.")
-    parser.add_argument("--start", type=str, help="Start date (YYYY-MM-DD).")
-    parser.add_argument("--end", type=str, help="End date (YYYY-MM-DD).")
-    parser.add_argument("--cache-path", type=str, help="Path to SDR cache directory.")
-    parser.add_argument("--ignore-cache", action="store_true", help="Ignore cached classifications.")
-    parser.add_argument("--no-only-newt", action="store_true", help="Include non-NEWT/TRAD events.")
-    parser.add_argument("--dry-run", action="store_true", help="Build dataframes but skip database writes.")
-    return parser.parse_args()
-
-
 def main(
     start: Optional[pd.Timestamp] = None,
     end: Optional[pd.Timestamp] = None,
@@ -1134,13 +1119,18 @@ def main(
     only_newt: bool = False,
     dry_run: bool = False,
 ) -> None:
-    # Resolve dates
     if end is None:
         end = pd.Timestamp.now(tz="UTC")
+    else:
+        end = _to_utc_timestamp(end)
     if start is None:
         start = end - timedelta(days=days)
-    if cache_path is None:
-        cache_path = os.getenv("SDR_CACHE_PATH", "./sdr_cache")
+    else:
+        start = _to_utc_timestamp(start)
+    if start > end:
+        raise ValueError(f"Start timestamp must be <= end timestamp. Got start={start}, end={end}")
+
+    cache_path = _resolve_cache_path(cache_path)
 
     print("Swaption ingestion")
     print(f"  Range: {start} -> {end}")
@@ -1184,71 +1174,37 @@ def main(
     print_summary(raw_df, packages_df, legs_df, packages_written, legs_written)
 
 
-def get_last_ingested_timestamp(engine: Engine) -> Optional[pd.Timestamp]:
-    """Get the most recent execution_timestamp from legs table."""
-    with engine.connect() as conn:
-        result = conn.execute(text(f"SELECT MAX(execution_timestamp) FROM {LEGS_TABLE}")).scalar()
-    return pd.Timestamp(result, tz="UTC") if result else None
-
-
-def cleanup_orphaned_packages(engine: Engine) -> int:
-    """Delete packages that have no legs (orphaned by reclassification)."""
-    with engine.begin() as conn:
-        result = conn.execute(
-            text(
-                f"""
-                DELETE FROM {PACKAGES_TABLE} p
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM {LEGS_TABLE} l
-                    WHERE l.package_id = p.package_id
-                )
-            """
-            )
-        )
-    return result.rowcount
-
-
-def main_incremental(
-    lookback_minutes: int = 15,
-    cache_path: Optional[str] = None,
+def ingest_incremental_once(
+    engine: Engine,
+    *,
+    cache_path: str,
     only_newt: bool = False,
     dry_run: bool = False,
     cleanup_orphans: bool = True,
+    initial_lookback_minutes: int = 24 * 60,
+    overlap_seconds: int = 0,
 ) -> None:
-    """
-    Incremental ingest for intraday cron jobs.
+    if initial_lookback_minutes < 0:
+        raise ValueError(f"initial_lookback_minutes must be >= 0, got {initial_lookback_minutes}")
+    if overlap_seconds < 0:
+        raise ValueError(f"overlap_seconds must be >= 0, got {overlap_seconds}")
 
-    Fetches trades since last ingested timestamp minus a lookback buffer
-    to catch late-arriving trades. Uses upsert to handle duplicates.
-
-    Args:
-        lookback_minutes: Buffer before last ingested timestamp to catch late arrivals.
-        cache_path: Path to SDR cache directory.
-        only_newt: If True, only include NEWT/TRAD events.
-        dry_run: If True, build dataframes but skip database writes.
-        cleanup_orphans: If True, delete orphaned packages after ingestion.
-    """
-    if cache_path is None:
-        cache_path = os.getenv("SDR_CACHE_PATH", "./sdr_cache")
-
-    engine = create_db_engine()
-    ensure_schema(engine)
-
-    # Determine time range
-    last_ts = get_last_ingested_timestamp(engine)
+    cursor_ts = get_ingestion_cursor_timestamp(engine)
     end = pd.Timestamp.now(tz="UTC")
 
-    if last_ts is None:
-        # First run — start of today
-        start = end.normalize()
-        print("No prior ingestion found; starting from beginning of today")
+    if cursor_ts is None:
+        start = end - timedelta(minutes=initial_lookback_minutes)
+        print(f"No ingestion cursor found; bootstrapping with {initial_lookback_minutes} minutes")
     else:
-        start = last_ts - timedelta(minutes=lookback_minutes)
+        start = cursor_ts - timedelta(seconds=overlap_seconds)
+
+    if start > end:
+        start = end
 
     print("Incremental swaption ingestion")
-    print(f"  Last ingested: {last_ts}")
+    print(f"  Last cursor: {cursor_ts}")
     print(f"  Range: {start} -> {end}")
-    print(f"  Lookback buffer: {lookback_minutes} minutes")
+    print(f"  Overlap: {overlap_seconds} seconds")
     print(f"  Cache: {cache_path}")
     print(f"  Only NEWT/TRAD: {only_newt}")
     print(f"  Dry run: {dry_run}")
@@ -1259,12 +1215,21 @@ def main_incremental(
         start=start,
         end=end,
         cache_path=cache_path,
-        ignore_cache=True,  # Always fetch fresh for intraday
+        ignore_cache=True,
         only_newt=only_newt,
     )
 
     if raw_df.empty:
         print("No trades found in range.")
+        if not dry_run:
+            record_ingestion_run(
+                engine,
+                start=start,
+                end=end,
+                rows_raw=0,
+                packages_written=0,
+                legs_written=0,
+            )
         return
 
     print(f"Found {len(raw_df)} trades in range")
@@ -1277,83 +1242,7 @@ def main_incremental(
         print_summary(raw_df, packages_df, legs_df, 0, 0)
         return
 
-    # Upsert directly — no delete needed, handles duplicates
-    cleaned = normalize_dataframe(raw_df)
-    packages_df = build_packages_dataframe(cleaned)
-    legs_df = build_legs_dataframe(cleaned)
-
-    packages_written = upsert_dataframe(
-        packages_df,
-        engine,
-        PACKAGES_TABLE,
-        conflict_cols=["package_id"],
-        update_cols=[
-            "package_type",
-            "as_of_date",
-            "execution_start",
-            "execution_end",
-            "expiration_date",
-            "underlying_expiration_date",
-            "effective_date",
-            "tenor_years",
-            "tenor_label",
-            "forward_start_years",
-            "forward_label",
-            "legs_count",
-            "total_notional",
-            "total_premium",
-            "package_indicator",
-            "package_transaction_price",
-            "package_confidence",
-            "package_reason",
-            "vega_curve_id",
-            "vega_curve_type",
-            "vega_curve_vega01",
-            "vega_curve_weight",
-            "vega_curve_vega_ratio",
-            "vega_curve_pricing_method",
-            "package_metrics",
-        ],
-        json_cols=["package_metrics"],
-        progress_desc="Writing packages",
-    )
-
-    legs_written = upsert_dataframe(
-        legs_df,
-        engine,
-        LEGS_TABLE,
-        conflict_cols=["trade_id"],
-        update_cols=[
-            "package_id",
-            "leg_order",
-            "event_action",
-            "execution_timestamp",
-            "effective_date",
-            "expiration_date",
-            "underlying_expiration_date",
-            "product_type",
-            "trade_label",
-            "tenor_years",
-            "tenor_label",
-            "forward_start_years",
-            "forward_label",
-            "notional",
-            "notional_currency",
-            "is_notional_capped",
-            "strike",
-            "premium",
-            "exercise_style",
-            "cleared",
-            "platform_identifier",
-            "package_type",
-            "package_indicator",
-            "package_transaction_price",
-            "leg_metrics",
-        ],
-        json_cols=["leg_metrics"],
-        progress_desc="Writing legs",
-    )
-
+    packages_df, legs_df, packages_written, legs_written = upsert_transformed_frames(raw_df, engine)
     record_ingestion_run(
         engine,
         start=start,
@@ -1363,7 +1252,6 @@ def main_incremental(
         legs_written=legs_written,
     )
 
-    # Cleanup orphaned packages from reclassification
     if cleanup_orphans:
         orphans_deleted = cleanup_orphaned_packages(engine)
         if orphans_deleted:
@@ -1372,38 +1260,194 @@ def main_incremental(
     print_summary(raw_df, packages_df, legs_df, packages_written, legs_written)
 
 
+def main_incremental(
+    cache_path: Optional[str] = None,
+    only_newt: bool = False,
+    dry_run: bool = False,
+    cleanup_orphans: bool = True,
+    initial_lookback_minutes: int = 24 * 60,
+    overlap_seconds: int = 0,
+) -> None:
+    cache_path = _resolve_cache_path(cache_path)
+    engine = create_db_engine()
+    ensure_schema(engine)
+    ingest_incremental_once(
+        engine,
+        cache_path=cache_path,
+        only_newt=only_newt,
+        dry_run=dry_run,
+        cleanup_orphans=cleanup_orphans,
+        initial_lookback_minutes=initial_lookback_minutes,
+        overlap_seconds=overlap_seconds,
+    )
+
+
+def main_service(
+    interval_seconds: int = 60,
+    cache_path: Optional[str] = None,
+    only_newt: bool = False,
+    dry_run: bool = False,
+    cleanup_orphans: bool = True,
+    initial_lookback_minutes: int = 24 * 60,
+    overlap_seconds: int = 0,
+    max_iterations: Optional[int] = None,
+    stop_on_error: bool = False,
+) -> None:
+    if interval_seconds <= 0:
+        raise ValueError(f"interval_seconds must be > 0, got {interval_seconds}")
+    if max_iterations is not None and max_iterations <= 0:
+        raise ValueError(f"max_iterations must be > 0 when provided, got {max_iterations}")
+
+    cache_path = _resolve_cache_path(cache_path)
+    engine = create_db_engine()
+    ensure_schema(engine)
+
+    print("Starting swaption ingestion service")
+    print(f"  Interval: {interval_seconds} seconds")
+    print(f"  Cache: {cache_path}")
+    print(f"  Only NEWT/TRAD: {only_newt}")
+    print(f"  Dry run: {dry_run}")
+    print(f"  Initial lookback: {initial_lookback_minutes} minutes")
+    print(f"  Overlap: {overlap_seconds} seconds")
+    if max_iterations:
+        print(f"  Max iterations: {max_iterations}")
+    print()
+
+    iteration = 0
+    while True:
+        iteration += 1
+        cycle_start_wall = pd.Timestamp.now(tz="UTC")
+        cycle_start_monotonic = time.monotonic()
+        print(f"[{cycle_start_wall.isoformat()}] Service cycle {iteration}")
+
+        try:
+            ingest_incremental_once(
+                engine,
+                cache_path=cache_path,
+                only_newt=only_newt,
+                dry_run=dry_run,
+                cleanup_orphans=cleanup_orphans,
+                initial_lookback_minutes=initial_lookback_minutes,
+                overlap_seconds=overlap_seconds,
+            )
+        except Exception as exc:
+            print(f"Service cycle {iteration} failed: {exc}")
+            if stop_on_error:
+                raise
+
+        if max_iterations is not None and iteration >= max_iterations:
+            print("Reached max iterations; exiting service loop.")
+            break
+
+        elapsed = time.monotonic() - cycle_start_monotonic
+        sleep_seconds = max(0.0, interval_seconds - elapsed)
+        print(f"Sleeping {sleep_seconds:.1f} seconds...\n")
+        time.sleep(sleep_seconds)
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return int(raw)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Ingest USD swaption classifications into SwapPulse Postgres.")
+    parser.add_argument(
+        "--mode",
+        choices=("range", "incremental", "service"),
+        default=os.getenv("SWAPPULSE_INGEST_MODE", "incremental"),
+        help="range=explicit date range, incremental=single catch-up run, service=continuous loop.",
+    )
+    parser.add_argument("--days", type=int, default=7, help="Days to look back when --start is not provided in range mode.")
+    parser.add_argument("--start", type=str, help="Start timestamp (e.g. 2026-02-04 or 2026-02-04T12:00:00Z).")
+    parser.add_argument("--end", type=str, help="End timestamp (e.g. 2026-02-04 or 2026-02-04T12:00:00Z).")
+    parser.add_argument("--cache-path", type=str, help="Path to SDR cache directory.")
+    parser.add_argument("--ignore-cache", action="store_true", help="Ignore cached classifications (range mode only).")
+    parser.add_argument("--only-newt", dest="only_newt", action="store_true", help="Only include NEWT/TRAD events.")
+    parser.add_argument("--no-only-newt", dest="only_newt", action="store_false", help=argparse.SUPPRESS)
+    parser.set_defaults(only_newt=False)
+    parser.add_argument("--dry-run", action="store_true", help="Build dataframes but skip database writes.")
+    parser.add_argument(
+        "--interval-seconds",
+        type=int,
+        default=_env_int("SWAPPULSE_INGEST_INTERVAL_SECONDS", 60),
+        help="Polling interval for service mode.",
+    )
+    parser.add_argument(
+        "--initial-lookback-minutes",
+        type=int,
+        default=_env_int("SWAPPULSE_INGEST_INITIAL_LOOKBACK_MINUTES", 24 * 60),
+        help="When cursor is empty, start incremental/service from now minus this many minutes.",
+    )
+    parser.add_argument(
+        "--overlap-seconds",
+        type=int,
+        default=_env_int("SWAPPULSE_INGEST_OVERLAP_SECONDS", 0),
+        help="Subtract this overlap from last cursor before incremental/service fetch.",
+    )
+    parser.add_argument(
+        "--no-cleanup-orphans",
+        action="store_true",
+        help="Skip orphan package cleanup after incremental writes.",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        help="Service mode only: stop after this many cycles.",
+    )
+    parser.add_argument(
+        "--stop-on-error",
+        action="store_true",
+        help="Service mode only: exit after the first failed cycle.",
+    )
+    return parser.parse_args()
+
+
+def _parse_timestamp_arg(raw: Optional[str], arg_name: str) -> Optional[pd.Timestamp]:
+    if raw is None:
+        return None
+    try:
+        return _to_utc_timestamp(raw)
+    except Exception as exc:
+        raise ValueError(f"Invalid --{arg_name} value: {raw}") from exc
+
+
 if __name__ == "__main__":
     args = parse_args()
+    parsed_start = _parse_timestamp_arg(args.start, "start")
+    parsed_end = _parse_timestamp_arg(args.end, "end")
+    cleanup_orphans = not args.no_cleanup_orphans
 
-    # parsed_start = pd.Timestamp(args.start, tz="UTC") if args.start else None
-    # parsed_end = pd.Timestamp(args.end, tz="UTC") if args.end else None
-
-    import QuantLib as ql
-    from BT.misc import ql_cal_date_range
-
-    date_range = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), date(2026, 1, 22), date(2026, 1, 22))
-    errors = []
-    for d in date_range:
-        # try:
-        as_of = d.date()
-        start = NY_tz.localize(datetime(as_of.year, as_of.month, as_of.day, 0, 0))
-        end = NY_tz.localize(datetime(as_of.year, as_of.month, as_of.day, 23, 59))
-
-        cache_path = r"C:\Users\chris\clee\project-oasis\private\sdranalytics\.cache"
-
+    if args.mode == "range":
         main(
-            # start=parsed_start,
-            # end=parsed_end,
-            start=start,
-            end=end,
-            cache_path=cache_path,
-            ignore_cache=True,
-            only_newt=False,
-            dry_run=False,
+            start=parsed_start,
+            end=parsed_end,
+            days=args.days,
+            cache_path=args.cache_path,
+            ignore_cache=args.ignore_cache,
+            only_newt=args.only_newt,
+            dry_run=args.dry_run,
         )
-        # except Exception as e:
-        #     print(e)
-        #     errors.append({"d": str(d), "err": str(e)})
-
-    print(pd.DataFrame(errors))
-    pd.DataFrame(errors).to_excel("swappulse_usdswaptions_ingest.xlsx")
+    elif args.mode == "incremental":
+        main_incremental(
+            cache_path=args.cache_path,
+            only_newt=args.only_newt,
+            dry_run=args.dry_run,
+            cleanup_orphans=cleanup_orphans,
+            initial_lookback_minutes=args.initial_lookback_minutes,
+            overlap_seconds=args.overlap_seconds,
+        )
+    else:
+        main_service(
+            interval_seconds=args.interval_seconds,
+            cache_path=args.cache_path,
+            only_newt=args.only_newt,
+            dry_run=args.dry_run,
+            cleanup_orphans=cleanup_orphans,
+            initial_lookback_minutes=args.initial_lookback_minutes,
+            overlap_seconds=args.overlap_seconds,
+            max_iterations=args.max_iterations,
+            stop_on_error=args.stop_on_error,
+        )

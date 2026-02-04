@@ -33,6 +33,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const seriesKey = searchParams.get('seriesKey')
   const excludeCusty = searchParams.get('excludeCusty') === 'true'
+  const packageTypeParam = searchParams.get('packageType')
 
   if (!seriesKey) {
     return NextResponse.json(
@@ -49,7 +50,14 @@ export async function GET(request: Request) {
     const params: unknown[] = []
 
     // Filter by package type
-    conditions.push("d.package_type ILIKE 'STRADDLE'")
+    if (packageTypeParam) {
+      params.push(packageTypeParam)
+      conditions.push(
+        `UPPER(REPLACE(d.package_type, '-', '_')) = $${params.length}`
+      )
+    } else {
+      conditions.push("d.package_type ILIKE 'STRADDLE'")
+    }
 
     // Filter by action (NEWT-TRAD only)
     conditions.push("plat.event_action = 'NEWT-TRAD'")
