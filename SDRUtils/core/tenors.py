@@ -134,6 +134,10 @@ def tenor_to_label(years: float, expiration_date: Optional[pd.Timestamp] = None,
     if years < 0:
         return "unwind"
 
+    approx_days = years * 365.0
+    if is_swaptions and 26.5 <= approx_days <= 31.5:
+        return "1M"
+
     days = years * 360.0
     tenor_days = {}
 
