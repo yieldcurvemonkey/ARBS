@@ -52,7 +52,7 @@ export function useTimeseriesData(params: UseTimeseriesDataParams): UseTimeserie
   const [showTimeseries, setShowTimeseries] = useState(false);
   const [timeseriesView, setTimeseriesView] = useState<TimeseriesViewKey>('INTRADAY');
   const [timeseriesMetric, setTimeseriesMetric] = useState<TimeseriesMetricKey>('bpvolYr');
-  const [timeseriesRange, setTimeseriesRange] = useState<TimeseriesRangeKey>('1W');
+  const [timeseriesRange, setTimeseriesRange] = useState<TimeseriesRangeKey>('1Y');
   const [customRangeStart, setCustomRangeStart] = useState('');
   const [customRangeEnd, setCustomRangeEnd] = useState('');
   const [showLineDots, setShowLineDots] = useState(false);

@@ -9,23 +9,24 @@ const MAX_TIMESERIES_ROWS = 50000
 function parseSeriesKey(seriesKey: string): {
   tenorLabel: string | null
   forwardLabel: string | null
-  isFullMatch: boolean
+  isValid: boolean
 } {
-  // Try to parse tenor key format: "1Yx10Y"
-  const tenorMatch = seriesKey.match(/^(\d+[DWMY])[xX](\d+[DWMY])$/)
+  // Parse strict tenor key format: "1Yx10Y"
+  const tenorMatch = seriesKey.match(
+    /^(\d+(?:\.\d+)?[DWMY])[xX](\d+(?:\.\d+)?[DWMY])$/i
+  )
   if (tenorMatch) {
     return {
       forwardLabel: tenorMatch[1],
       tenorLabel: tenorMatch[2],
-      isFullMatch: false
+      isValid: true
     }
   }
 
-  // Otherwise, it's a full match string like "10Y ATM STRADDLE"
   return {
     tenorLabel: null,
     forwardLabel: null,
-    isFullMatch: true
+    isValid: false
   }
 }
 
@@ -42,9 +43,18 @@ export async function GET(request: Request) {
     )
   }
 
-  const { tenorLabel, forwardLabel, isFullMatch } = parseSeriesKey(seriesKey)
+  const { tenorLabel, forwardLabel, isValid } = parseSeriesKey(seriesKey)
 
   try {
+    if (!isValid || !tenorLabel || !forwardLabel) {
+      return NextResponse.json(
+        {
+          error:
+            'seriesKey must be a strict forward x tenor key (e.g. 3Mx10Y).'
+        },
+        { status: 400 }
+      )
+    }
     const { view, columns } = await resolveDisplayView()
     const conditions: string[] = []
     const params: unknown[] = []
@@ -62,23 +72,11 @@ export async function GET(request: Request) {
     // Filter by action (NEWT-TRAD only)
     conditions.push("plat.event_action = 'NEWT-TRAD'")
 
-    if (!isFullMatch && tenorLabel && forwardLabel) {
-      // Match by tenor_label and forward_label
-      params.push(tenorLabel)
-      conditions.push(`d.tenor_label ILIKE $${params.length}`)
-      params.push(forwardLabel)
-      conditions.push(`d.forward_label ILIKE $${params.length}`)
-    } else {
-      // Full match - need to match the entire series key pattern
-      // This requires checking trade_label, tenor_label, and forward_label combinations
-      params.push(`%${seriesKey}%`)
-      const idx = params.length
-      conditions.push(`(
-        d.tenor_label ILIKE $${idx} OR
-        d.forward_label ILIKE $${idx} OR
-        d.legs_json::text ILIKE $${idx}
-      )`)
-    }
+    // Match by tenor_label and forward_label
+    params.push(tenorLabel)
+    conditions.push(`d.tenor_label ILIKE $${params.length}`)
+    params.push(forwardLabel)
+    conditions.push(`d.forward_label ILIKE $${params.length}`)
 
     // Exclude custy platforms if requested
     if (excludeCusty) {

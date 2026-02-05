@@ -105,6 +105,7 @@ export const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "bpvolYr",
     label: "BPVol/Yr",
+    unit: "bpvol/yr",
     color: "#38bdf8",
     decimals: 3,
     chartType: "line",
@@ -112,6 +113,7 @@ export const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "bpvolDay",
     label: "BPVol/day",
+    unit: "bpvol/day",
     color: "#f59e0b",
     decimals: 3,
     chartType: "line",
@@ -119,6 +121,7 @@ export const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "premiumBps",
     label: "Premium (bps)",
+    unit: "bps",
     color: "#f97316",
     decimals: 2,
     chartType: "line",
@@ -126,6 +129,7 @@ export const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "notional",
     label: "Notional",
+    unit: "USD",
     color: "#22c55e",
     decimals: 1,
     chartType: "bar",
@@ -133,6 +137,7 @@ export const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "premium",
     label: "Premium",
+    unit: "USD",
     color: "#0ea5e9",
     decimals: 2,
     chartType: "bar",
@@ -140,6 +145,7 @@ export const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "dv01",
     label: "DV01",
+    unit: "USD/bp",
     color: "#a855f7",
     decimals: 2,
     chartType: "bar",
@@ -147,6 +153,7 @@ export const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "vega01",
     label: "Vega01",
+    unit: "USD/bp",
     color: "#f472b6",
     decimals: 2,
     chartType: "bar",
@@ -154,6 +161,7 @@ export const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "gamma01",
     label: "Gamma01",
+    unit: "USD/bp^2",
     color: "#eab308",
     decimals: 2,
     chartType: "bar",
@@ -161,6 +169,7 @@ export const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "theta01",
     label: "Theta1D",
+    unit: "USD/day",
     color: "#fb7185",
     decimals: 2,
     chartType: "bar",
@@ -187,6 +196,7 @@ export const TIMESERIES_RANGE_OPTIONS: Array<{
   { key: "1M", label: "1M", days: 30 },
   { key: "3M", label: "3M", days: 90 },
   { key: "6M", label: "6M", days: 180 },
+  { key: "1Y", label: "1Y", days: 365 },
   { key: "CUSTOM", label: "Custom", days: null },
   { key: "ALL", label: "All", days: null },
 ];

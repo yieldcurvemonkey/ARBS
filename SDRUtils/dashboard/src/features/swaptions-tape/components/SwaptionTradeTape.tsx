@@ -21,6 +21,7 @@ import {
   Customized,
   Line,
   LineChart,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -197,9 +198,18 @@ type TimeseriesMetricDefinition = {
   color: string;
   decimals: number;
   chartType: TimeseriesChartType;
+  unit?: string;
 };
 
-type TimeseriesRangeKey = "1D" | "1W" | "1M" | "3M" | "6M" | "CUSTOM" | "ALL";
+type TimeseriesRangeKey =
+  | "1D"
+  | "1W"
+  | "1M"
+  | "3M"
+  | "6M"
+  | "1Y"
+  | "CUSTOM"
+  | "ALL";
 type TimeseriesViewKey = "INTRADAY" | "DAILY_CLOSE" | "DAILY_OHLC";
 
 type StraddleTimeseriesPoint = {
@@ -225,6 +235,19 @@ type DailyTimeseriesPoint = {
   close: number;
   daySum: number;
   range: number;
+};
+
+type TimeseriesChartPoint = {
+  timestamp: number;
+  timeLabel: string;
+  custyValue?: number | null;
+  idbValue?: number | null;
+};
+
+type TimeseriesExtremePoint = {
+  value: number;
+  timeLabel: string;
+  timestamp: number;
 };
 
 const SAFE_ACTIONS = new Set(["NEWT", "TRAD", "MODI"]);
@@ -304,17 +327,27 @@ const METRIC_SCHEMA = {
 const STRADDLE_STYLE = "EURO VANILLA PHYS";
 const STRADDLE_SPLIT_FACTOR = 0.5;
 const BPVOL_DAY_DIVISOR = 15.87;
-const CUSTY_PLATFORMS = new Set(["BILT", "XXXX"]);
+const IDB_PLATFORM_TOKENS = [
+  "BGC",
+  "TFS",
+  "GFI",
+  "ICAP",
+  "TRADITION",
+  "TP",
+] as const;
 const STRADDLE_GREEK_FIELDS = {
   dv01: "straddle_dv01",
   vega01: "straddle_vega01",
   gamma01: "straddle_gamma01",
   theta01: "straddle_theta1d",
 } as const;
+const CUSTY_SERIES_COLOR = "#f59e0b";
+const IDB_SERIES_COLOR = "#38bdf8";
 const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "bpvolYr",
     label: "BPVol/Yr",
+    unit: "bpvol/yr",
     color: "#38bdf8",
     decimals: 3,
     chartType: "line",
@@ -322,6 +355,7 @@ const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "bpvolDay",
     label: "BPVol/day",
+    unit: "bpvol/day",
     color: "#f59e0b",
     decimals: 3,
     chartType: "line",
@@ -329,6 +363,7 @@ const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "premiumBps",
     label: "Premium (bps)",
+    unit: "bps",
     color: "#f97316",
     decimals: 2,
     chartType: "line",
@@ -336,6 +371,7 @@ const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "notional",
     label: "Notional",
+    unit: "USD",
     color: "#22c55e",
     decimals: 1,
     chartType: "bar",
@@ -343,6 +379,7 @@ const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "premium",
     label: "Premium",
+    unit: "USD",
     color: "#0ea5e9",
     decimals: 2,
     chartType: "bar",
@@ -350,6 +387,7 @@ const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "dv01",
     label: "DV01",
+    unit: "USD/bp",
     color: "#a855f7",
     decimals: 2,
     chartType: "bar",
@@ -357,6 +395,7 @@ const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "vega01",
     label: "Vega01",
+    unit: "USD/bp",
     color: "#f472b6",
     decimals: 2,
     chartType: "bar",
@@ -364,6 +403,7 @@ const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "gamma01",
     label: "Gamma01",
+    unit: "USD/bp^2",
     color: "#eab308",
     decimals: 2,
     chartType: "bar",
@@ -371,6 +411,7 @@ const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
   {
     key: "theta01",
     label: "Theta1D",
+    unit: "USD/day",
     color: "#fb7185",
     decimals: 2,
     chartType: "bar",
@@ -393,6 +434,7 @@ const TIMESERIES_RANGE_OPTIONS: Array<{
   { key: "1M", label: "1M", days: 30 },
   { key: "3M", label: "3M", days: 90 },
   { key: "6M", label: "6M", days: 180 },
+  { key: "1Y", label: "1Y", days: 365 },
   { key: "CUSTOM", label: "Custom", days: null },
   { key: "ALL", label: "All", days: null },
 ];
@@ -512,6 +554,8 @@ const FILTER_FIELDS = [
 ] as const;
 const COLUMN_FILTER_QUERY_KEY = "columnFilters";
 const COLUMN_FILTER_OPERATOR_QUERY_KEY = "columnFilterOp";
+const SELECTED_PACKAGES_QUERY_KEY = "selectedPackages";
+const SELECTED_ONLY_QUERY_KEY = "selectedOnly";
 const NUMERIC_FILTER_FIELDS = new Set(["notional"]);
 
 const INITIAL_FILTERS: DataTableFilterMeta = {
@@ -587,9 +631,14 @@ function resolvePlatformIdentifier(row: TapeRow): string | null {
   return platform ? String(platform) : null;
 }
 
-function isCustyPlatform(platform: string | null | undefined): boolean {
+function isIdbPlatform(platform: string | null | undefined): boolean {
   if (!platform) return false;
-  return CUSTY_PLATFORMS.has(platform.trim().toUpperCase());
+  const normalized = platform.trim().toUpperCase();
+  return IDB_PLATFORM_TOKENS.some((token) => normalized.includes(token));
+}
+
+function isCustyPlatform(platform: string | null | undefined): boolean {
+  return !isIdbPlatform(platform);
 }
 
 function formatExecutionWindow(start: string, end: string): string {
@@ -979,6 +1028,37 @@ function parseIdList(value: string): string[] {
     .split(/[,\s]+/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function normalizeSelectedPackageIds(
+  ids: Array<string | null | undefined>,
+): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  ids.forEach((entry) => {
+    const value = typeof entry === "string" ? entry.trim() : "";
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    normalized.push(value);
+  });
+  return normalized;
+}
+
+function parseSelectedPackageIds(rawValue: string | null): string[] {
+  if (!rawValue) return [];
+  return normalizeSelectedPackageIds(parseIdList(rawValue));
+}
+
+function serializeSelectedPackageIds(
+  ids: Array<string | null | undefined>,
+): string {
+  return normalizeSelectedPackageIds(ids).join(",");
+}
+
+function parseBooleanQueryFlag(rawValue: string | null): boolean {
+  if (!rawValue) return false;
+  const normalized = rawValue.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function formatManualMetricValue(value: any): string {
@@ -1526,16 +1606,19 @@ function formatDateLabel(timestamp: number): string {
 function resolveTimeseriesMetricValue(
   point: StraddleTimeseriesPoint,
   metricKey: TimeseriesMetricKey,
+  transform?: (value: number) => number,
 ): number | null {
   const value = point[metricKey];
   if (!isValid(value)) return null;
   const numericValue = Number(value);
-  return Number.isNaN(numericValue) ? null : numericValue;
+  if (Number.isNaN(numericValue)) return null;
+  return transform ? transform(numericValue) : numericValue;
 }
 
 function buildDailyTimeseries(
   points: StraddleTimeseriesPoint[],
   metricKey: TimeseriesMetricKey,
+  transform?: (value: number) => number,
 ): DailyTimeseriesPoint[] {
   if (!points.length) return [];
   const buckets = new Map<
@@ -1554,7 +1637,7 @@ function buildDailyTimeseries(
   >();
 
   points.forEach((point) => {
-    const value = resolveTimeseriesMetricValue(point, metricKey);
+    const value = resolveTimeseriesMetricValue(point, metricKey, transform);
     if (value === null) return;
     const dayStart = new Date(
       new Date(point.timestamp).getFullYear(),
@@ -1596,6 +1679,142 @@ function buildDailyTimeseries(
       ...rest,
       range: rest.high - rest.low,
     }));
+}
+
+type SeriesValuePoint = {
+  timestamp: number;
+  timeLabel: string;
+  value: number;
+};
+
+function buildIntradaySeries(
+  points: StraddleTimeseriesPoint[],
+  metricKey: TimeseriesMetricKey,
+  transform?: (value: number) => number,
+): SeriesValuePoint[] {
+  return points
+    .map((point) => {
+      const value = resolveTimeseriesMetricValue(point, metricKey, transform);
+      if (value === null) return null;
+      return {
+        timestamp: point.timestamp,
+        timeLabel: point.timeLabel,
+        value,
+      };
+    })
+    .filter((point): point is SeriesValuePoint => point !== null)
+    .sort((left, right) => left.timestamp - right.timestamp);
+}
+
+function mergeIntradaySeries(
+  custyPoints: SeriesValuePoint[],
+  idbPoints: SeriesValuePoint[],
+): TimeseriesChartPoint[] {
+  const merged: TimeseriesChartPoint[] = [];
+  custyPoints.forEach((point) => {
+    merged.push({
+      timestamp: point.timestamp,
+      timeLabel: point.timeLabel,
+      custyValue: point.value,
+    });
+  });
+  idbPoints.forEach((point) => {
+    merged.push({
+      timestamp: point.timestamp,
+      timeLabel: point.timeLabel,
+      idbValue: point.value,
+    });
+  });
+  return merged.sort((left, right) => left.timestamp - right.timestamp);
+}
+
+function mergeDailySeries(
+  custyPoints: DailyTimeseriesPoint[],
+  idbPoints: DailyTimeseriesPoint[],
+  valueKey: "close" | "daySum",
+): TimeseriesChartPoint[] {
+  const buckets = new Map<number, TimeseriesChartPoint>();
+  const appendPoint = (
+    point: DailyTimeseriesPoint,
+    key: "custyValue" | "idbValue",
+  ) => {
+    const existing = buckets.get(point.timestamp) ?? {
+      timestamp: point.timestamp,
+      timeLabel: point.timeLabel,
+    };
+    const value = point[valueKey];
+    if (isValid(value)) {
+      existing[key] = Number(value);
+    }
+    buckets.set(point.timestamp, existing);
+  };
+  custyPoints.forEach((point) => appendPoint(point, "custyValue"));
+  idbPoints.forEach((point) => appendPoint(point, "idbValue"));
+  return Array.from(buckets.values()).sort(
+    (left, right) => left.timestamp - right.timestamp,
+  );
+}
+
+function filterTimeseriesByRange(
+  points: StraddleTimeseriesPoint[],
+  rangeKey: TimeseriesRangeKey,
+  customRangeStart: string,
+  customRangeEnd: string,
+  latestTimestamp: number | null,
+): StraddleTimeseriesPoint[] {
+  if (!points.length) return [];
+  if (rangeKey === "CUSTOM") {
+    const startTimestamp = parseDateInput(customRangeStart, false);
+    const endTimestamp = parseDateInput(customRangeEnd, true);
+    if (startTimestamp === null && endTimestamp === null) {
+      return points;
+    }
+    return points.filter((point) => {
+      if (startTimestamp !== null && point.timestamp < startTimestamp) {
+        return false;
+      }
+      if (endTimestamp !== null && point.timestamp > endTimestamp) {
+        return false;
+      }
+      return true;
+    });
+  }
+  const rangeConfig = TIMESERIES_RANGE_OPTIONS.find(
+    (option) => option.key === rangeKey,
+  );
+  if (!rangeConfig || rangeConfig.days === null || latestTimestamp === null) {
+    return points;
+  }
+  const cutoff = latestTimestamp - rangeConfig.days * 24 * 60 * 60 * 1000;
+  return points.filter((point) => point.timestamp >= cutoff);
+}
+
+function findTimeseriesExtremes(
+  points: StraddleTimeseriesPoint[],
+  metricKey: TimeseriesMetricKey,
+  transform?: (value: number) => number,
+): { min: TimeseriesExtremePoint | null; max: TimeseriesExtremePoint | null } {
+  let minPoint: TimeseriesExtremePoint | null = null;
+  let maxPoint: TimeseriesExtremePoint | null = null;
+  points.forEach((point) => {
+    const value = resolveTimeseriesMetricValue(point, metricKey, transform);
+    if (value === null) return;
+    if (!minPoint || value < minPoint.value) {
+      minPoint = {
+        value,
+        timeLabel: point.timeLabel,
+        timestamp: point.timestamp,
+      };
+    }
+    if (!maxPoint || value > maxPoint.value) {
+      maxPoint = {
+        value,
+        timeLabel: point.timeLabel,
+        timestamp: point.timestamp,
+      };
+    }
+  });
+  return { min: minPoint, max: maxPoint };
 }
 
 function OhlcSeries({
@@ -1692,17 +1911,13 @@ function resolveTenorKey(row: TapeRow): string | null {
       return `${matchForward}x${matchTenor}`;
     }
   }
-  if (tenorLabel) return tenorLabel;
   return null;
 }
 
-function buildStraddleSeriesKey(row: TapeRow): string {
+function buildStraddleSeriesKey(row: TapeRow): string | null {
   const tenorKey = resolveTenorKey(row);
   if (tenorKey) return tenorKey;
-  const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
-  const underlying = extractUnderlyingBase(legs[0]?.trade_label, row);
-  const cleanUnderlying = removeTrailingStyle(underlying, STRADDLE_STYLE);
-  return `${cleanUnderlying} ${STRADDLE_STYLE} STRADDLE`;
+  return null;
 }
 
 function resolveStraddleNotional(row: TapeRow): number | null {
@@ -1915,10 +2130,7 @@ function buildTimeseriesSeriesKey(
   if (packageType === "STRADDLE") return buildStraddleSeriesKey(row);
   const tenorKey = resolveTenorKey(row);
   if (tenorKey) return tenorKey;
-  const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
-  const underlying = extractUnderlyingBase(legs[0]?.trade_label, row);
-  const label = packageType ? packageType.replace(/_/g, " ") : "PACKAGE";
-  return `${underlying} ${label}`.trim();
+  return null;
 }
 
 function buildTimeseriesPoint(
@@ -2461,17 +2673,19 @@ function LegsSubtable({
   const splitFactor = isStraddle ? STRADDLE_SPLIT_FACTOR : 1;
   const [showTimeseries, setShowTimeseries] = useState(false);
   const [timeseriesView, setTimeseriesView] =
-    useState<TimeseriesViewKey>("INTRADAY");
+    useState<TimeseriesViewKey>("DAILY_CLOSE");
   const [timeseriesMetric, setTimeseriesMetric] =
-    useState<TimeseriesMetricKey>("bpvolYr");
+    useState<TimeseriesMetricKey>("vega01");
   const [timeseriesRange, setTimeseriesRange] =
-    useState<TimeseriesRangeKey>("ALL");
+    useState<TimeseriesRangeKey>("1Y");
   const [customRangeStart, setCustomRangeStart] = useState("");
   const [customRangeEnd, setCustomRangeEnd] = useState("");
   const [yAxisMinInput, setYAxisMinInput] = useState("");
   const [yAxisMaxInput, setYAxisMaxInput] = useState("");
   const [showLineDots, setShowLineDots] = useState(true);
-  const [excludeCusty, setExcludeCusty] = useState(false);
+  const [showCustySeries, setShowCustySeries] = useState(true);
+  const [showIdbSeries, setShowIdbSeries] = useState(true);
+  const [useGrossVega, setUseGrossVega] = useState(true);
   const [extraTimeseriesRows, setExtraTimeseriesRows] = useState<TapeRow[]>([]);
   const [timeseriesLoading, setTimeseriesLoading] = useState(false);
   const [timeseriesError, setTimeseriesError] = useState<string | null>(null);
@@ -2498,111 +2712,229 @@ function LegsSubtable({
     );
     return Array.from(merged.values());
   }, [extraTimeseriesRows, seriesRows]);
-  const timeseriesData = useMemo(() => {
+  const timeseriesRows = useMemo(() => {
     if (!showTimeseries || !seriesKey || !packageType) return [];
     const candidates = Array.isArray(combinedSeriesRows)
       ? combinedSeriesRows
       : [];
-    return candidates
-      .filter(
-        (candidate) => {
-          if (normalizePackageType(candidate.package_type) !== packageType) {
-            return false;
-          }
-          const action = extractPrimaryAction(candidate);
-          if (action !== "NEWT-TRAD") return false;
-          if (buildTimeseriesSeriesKey(candidate, packageType) !== seriesKey) {
-            return false;
-          }
-          if (excludeCusty) {
-            const platform = resolvePlatformIdentifier(candidate);
-            if (isCustyPlatform(platform)) return false;
-          }
-          return true;
-        },
-      )
-      .map((candidate) => buildTimeseriesPoint(candidate, packageType))
-      .filter((point): point is StraddleTimeseriesPoint => point !== null)
-      .sort((left, right) => left.timestamp - right.timestamp);
-  }, [
-    combinedSeriesRows,
-    excludeCusty,
-    packageType,
-    seriesKey,
-    showTimeseries,
-  ]);
-  const rangedTimeseriesData = useMemo(() => {
-    if (!timeseriesData.length) return [];
-    if (timeseriesRange === "CUSTOM") {
-      const startTimestamp = parseDateInput(customRangeStart, false);
-      const endTimestamp = parseDateInput(customRangeEnd, true);
-      if (startTimestamp === null && endTimestamp === null) {
-        return timeseriesData;
+    return candidates.filter((candidate) => {
+      if (normalizePackageType(candidate.package_type) !== packageType) {
+        return false;
       }
-      return timeseriesData.filter((point) => {
-        if (startTimestamp !== null && point.timestamp < startTimestamp) {
-          return false;
-        }
-        if (endTimestamp !== null && point.timestamp > endTimestamp) {
-          return false;
-        }
-        return true;
-      });
-    }
-    const rangeConfig = TIMESERIES_RANGE_OPTIONS.find(
-      (option) => option.key === timeseriesRange,
+      const action = extractPrimaryAction(candidate);
+      if (action !== "NEWT-TRAD") return false;
+      if (buildTimeseriesSeriesKey(candidate, packageType) !== seriesKey) {
+        return false;
+      }
+      return true;
+    });
+  }, [combinedSeriesRows, packageType, seriesKey, showTimeseries]);
+  const {
+    custy: custyTimeseriesData,
+    idb: idbTimeseriesData,
+    all: allTimeseriesData,
+  } = useMemo(() => {
+    const custyPoints: StraddleTimeseriesPoint[] = [];
+    const idbPoints: StraddleTimeseriesPoint[] = [];
+    timeseriesRows.forEach((candidate) => {
+      const point = buildTimeseriesPoint(candidate, packageType);
+      if (!point) return;
+      const platform = resolvePlatformIdentifier(candidate);
+      if (isCustyPlatform(platform)) {
+        custyPoints.push(point);
+      } else {
+        idbPoints.push(point);
+      }
+    });
+    custyPoints.sort((left, right) => left.timestamp - right.timestamp);
+    idbPoints.sort((left, right) => left.timestamp - right.timestamp);
+    const allPoints = [...custyPoints, ...idbPoints].sort(
+      (left, right) => left.timestamp - right.timestamp,
     );
-    if (!rangeConfig || rangeConfig.days === null) return timeseriesData;
-    const latestTimestamp = timeseriesData[timeseriesData.length - 1].timestamp;
-    const cutoff =
-      latestTimestamp - rangeConfig.days * 24 * 60 * 60 * 1000;
-    return timeseriesData.filter((point) => point.timestamp >= cutoff);
-  }, [customRangeEnd, customRangeStart, timeseriesData, timeseriesRange]);
+    return {
+      custy: custyPoints,
+      idb: idbPoints,
+      all: allPoints,
+    };
+  }, [packageType, timeseriesRows]);
+  const latestTimestamp = useMemo(() => {
+    if (!allTimeseriesData.length) return null;
+    return allTimeseriesData[allTimeseriesData.length - 1].timestamp;
+  }, [allTimeseriesData]);
+  const rangedCustyData = useMemo(
+    () =>
+      filterTimeseriesByRange(
+        custyTimeseriesData,
+        timeseriesRange,
+        customRangeStart,
+        customRangeEnd,
+        latestTimestamp,
+      ),
+    [
+      custyTimeseriesData,
+      timeseriesRange,
+      customRangeStart,
+      customRangeEnd,
+      latestTimestamp,
+    ],
+  );
+  const rangedIdbData = useMemo(
+    () =>
+      filterTimeseriesByRange(
+        idbTimeseriesData,
+        timeseriesRange,
+        customRangeStart,
+        customRangeEnd,
+        latestTimestamp,
+      ),
+    [
+      idbTimeseriesData,
+      timeseriesRange,
+      customRangeStart,
+      customRangeEnd,
+      latestTimestamp,
+    ],
+  );
+  const rangedAllData = useMemo(
+    () =>
+      filterTimeseriesByRange(
+        allTimeseriesData,
+        timeseriesRange,
+        customRangeStart,
+        customRangeEnd,
+        latestTimestamp,
+      ),
+    [
+      allTimeseriesData,
+      timeseriesRange,
+      customRangeStart,
+      customRangeEnd,
+      latestTimestamp,
+    ],
+  );
+  const metricTransform = useMemo(() => {
+    if (timeseriesMetric === "vega01" && useGrossVega) {
+      return (value: number) => Math.abs(value);
+    }
+    return undefined;
+  }, [timeseriesMetric, useGrossVega]);
+  const custyIntraday = useMemo(
+    () =>
+      buildIntradaySeries(rangedCustyData, timeseriesMetric, metricTransform),
+    [metricTransform, rangedCustyData, timeseriesMetric],
+  );
+  const idbIntraday = useMemo(
+    () => buildIntradaySeries(rangedIdbData, timeseriesMetric, metricTransform),
+    [metricTransform, rangedIdbData, timeseriesMetric],
+  );
+  const custyDailySeries = useMemo(
+    () =>
+      buildDailyTimeseries(rangedCustyData, timeseriesMetric, metricTransform),
+    [metricTransform, rangedCustyData, timeseriesMetric],
+  );
+  const idbDailySeries = useMemo(
+    () => buildDailyTimeseries(rangedIdbData, timeseriesMetric, metricTransform),
+    [metricTransform, rangedIdbData, timeseriesMetric],
+  );
+  const allDailySeries = useMemo(
+    () => buildDailyTimeseries(rangedAllData, timeseriesMetric, metricTransform),
+    [metricTransform, rangedAllData, timeseriesMetric],
+  );
   const selectedMetric =
     TIMESERIES_METRICS.find((metric) => metric.key === timeseriesMetric) ||
     TIMESERIES_METRICS[0];
-  const intradayChartData = useMemo(
-    () =>
-      rangedTimeseriesData.filter((point) =>
-        isValid(point[timeseriesMetric]),
-      ),
-    [rangedTimeseriesData, timeseriesMetric],
-  );
-  const dailySeries = useMemo(
-    () => buildDailyTimeseries(rangedTimeseriesData, timeseriesMetric),
-    [rangedTimeseriesData, timeseriesMetric],
-  );
+  const metricLabelWithUnit =
+    selectedMetric.unit &&
+    !selectedMetric.label
+      .toLowerCase()
+      .includes(selectedMetric.unit.toLowerCase())
+      ? `${selectedMetric.label} (${selectedMetric.unit})`
+      : selectedMetric.label;
+  const rangeLabel =
+    TIMESERIES_RANGE_OPTIONS.find((option) => option.key === timeseriesRange)
+      ?.label ?? timeseriesRange;
   const useDailySum =
     timeseriesView === "DAILY_CLOSE" &&
     DAILY_CLOSE_CUMULATIVE_METRICS.has(timeseriesMetric);
-  const dailyCloseDataKey = useDailySum ? "daySum" : "close";
+  const dailyValueKey = useDailySum ? "daySum" : "close";
+  const showCusty = showCustySeries;
+  const showIdb = showIdbSeries;
+  const seriesSelectionCount = (showCusty ? 1 : 0) + (showIdb ? 1 : 0);
+  const ohlcNote =
+    timeseriesView === "DAILY_OHLC" && seriesSelectionCount > 1
+      ? "OHLC shows combined Custy + IDB."
+      : null;
+  const mergedIntradayData = useMemo(
+    () =>
+      mergeIntradaySeries(
+        showCusty ? custyIntraday : [],
+        showIdb ? idbIntraday : [],
+      ),
+    [custyIntraday, idbIntraday, showCusty, showIdb],
+  );
+  const mergedDailyData = useMemo(
+    () =>
+      mergeDailySeries(
+        showCusty ? custyDailySeries : [],
+        showIdb ? idbDailySeries : [],
+        dailyValueKey,
+      ),
+    [custyDailySeries, dailyValueKey, idbDailySeries, showCusty, showIdb],
+  );
   const chartData =
-    timeseriesView === "INTRADAY" ? intradayChartData : dailySeries;
+    timeseriesView === "INTRADAY" ? mergedIntradayData : mergedDailyData;
+  const ohlcSeries = useMemo(() => {
+    if (seriesSelectionCount === 1) {
+      return showIdb ? idbDailySeries : custyDailySeries;
+    }
+    return allDailySeries;
+  }, [
+    allDailySeries,
+    custyDailySeries,
+    idbDailySeries,
+    seriesSelectionCount,
+    showIdb,
+  ]);
   const chartValues = useMemo(() => {
     if (timeseriesView === "DAILY_OHLC") {
-      return dailySeries
+      return ohlcSeries
         .flatMap((point) => [point.open, point.high, point.low, point.close])
         .filter((value) => !Number.isNaN(value));
     }
-    if (timeseriesView === "DAILY_CLOSE") {
-      return dailySeries
-        .map((point) => (useDailySum ? point.daySum : point.close))
-        .filter((value) => !Number.isNaN(value));
-    }
-    return intradayChartData
-      .map((point) => Number(point[timeseriesMetric]))
-      .filter((value) => !Number.isNaN(value));
-  }, [
-    dailySeries,
-    intradayChartData,
-    useDailySum,
-    timeseriesMetric,
-    timeseriesView,
-  ]);
+    return chartData
+      .flatMap((point) => [point.custyValue, point.idbValue])
+      .filter((value): value is number => isValid(value));
+  }, [chartData, ohlcSeries, timeseriesView]);
   const metricFormatter = useCallback(
     (value: number) =>
       formatTimeseriesMetric(timeseriesMetric, value, selectedMetric.decimals),
     [selectedMetric.decimals, timeseriesMetric],
+  );
+  const metricFormatterWithUnit = useCallback(
+    (value: number) => {
+      const formatted = metricFormatter(value);
+      if (!selectedMetric.unit || formatted === "--") return formatted;
+      return `${formatted} ${selectedMetric.unit}`;
+    },
+    [metricFormatter, selectedMetric.unit],
+  );
+  const custyExtremes = useMemo(
+    () =>
+      findTimeseriesExtremes(
+        custyTimeseriesData,
+        timeseriesMetric,
+        metricTransform,
+      ),
+    [custyTimeseriesData, metricTransform, timeseriesMetric],
+  );
+  const idbExtremes = useMemo(
+    () =>
+      findTimeseriesExtremes(
+        idbTimeseriesData,
+        timeseriesMetric,
+        metricTransform,
+      ),
+    [idbTimeseriesData, metricTransform, timeseriesMetric],
   );
   const renderOhlcTooltip = useCallback(
     ({ active, payload }: any) => {
@@ -2614,24 +2946,32 @@ function LegsSubtable({
           <div className="font-semibold text-slate-100">{point.timeLabel}</div>
           <div className="flex items-center justify-between gap-3">
             <span>Open</span>
-            <span className="font-mono">{metricFormatter(point.open)}</span>
+            <span className="font-mono">
+              {metricFormatterWithUnit(point.open)}
+            </span>
           </div>
           <div className="flex items-center justify-between gap-3">
             <span>High</span>
-            <span className="font-mono">{metricFormatter(point.high)}</span>
+            <span className="font-mono">
+              {metricFormatterWithUnit(point.high)}
+            </span>
           </div>
           <div className="flex items-center justify-between gap-3">
             <span>Low</span>
-            <span className="font-mono">{metricFormatter(point.low)}</span>
+            <span className="font-mono">
+              {metricFormatterWithUnit(point.low)}
+            </span>
           </div>
           <div className="flex items-center justify-between gap-3">
             <span>Close</span>
-            <span className="font-mono">{metricFormatter(point.close)}</span>
+            <span className="font-mono">
+              {metricFormatterWithUnit(point.close)}
+            </span>
           </div>
         </div>
       );
     },
-    [metricFormatter],
+    [metricFormatterWithUnit],
   );
   const includeZeroInDomain =
     (timeseriesView === "INTRADAY" && selectedMetric.chartType === "bar") ||
@@ -2653,18 +2993,19 @@ function LegsSubtable({
     yAxisMaxInput,
     yAxisMinInput,
   ]);
+  const hasSeriesSelection = showCusty || showIdb;
   const hasChartData =
-    timeseriesView === "INTRADAY"
-      ? intradayChartData.length > 0
-      : dailySeries.length > 0;
+    hasSeriesSelection &&
+    (timeseriesView === "DAILY_OHLC"
+      ? ohlcSeries.length > 0
+      : chartData.length > 0);
   const isLineChartView =
     (timeseriesView === "DAILY_CLOSE" && !useDailySum) ||
     (timeseriesView === "INTRADAY" && selectedMetric.chartType === "line");
   const isOhlcView = timeseriesView === "DAILY_OHLC";
   const timeseriesFetchKey = useMemo(
-    () =>
-      `${seriesKey ?? ""}|${packageType ?? ""}|${excludeCusty}`,
-    [excludeCusty, packageType, seriesKey],
+    () => `${seriesKey ?? ""}|${packageType ?? ""}`,
+    [packageType, seriesKey],
   );
 
   useEffect(() => {
@@ -2672,11 +3013,17 @@ function LegsSubtable({
     setTimeseriesError(null);
     setTimeseriesNotice(null);
     timeseriesFetchKeyRef.current = null;
-  }, [excludeCusty, packageType, seriesKey]);
+  }, [packageType, seriesKey]);
 
   useEffect(() => {
     if (!showTimeseries || !packageType || !seriesKey) return;
-    if (timeseriesRange !== "ALL" && timeseriesRange !== "CUSTOM") return;
+    if (
+      timeseriesRange !== "ALL" &&
+      timeseriesRange !== "CUSTOM" &&
+      timeseriesRange !== "1Y"
+    ) {
+      return;
+    }
     if (timeseriesFetchInFlight.current) return;
     if (timeseriesFetchKeyRef.current === timeseriesFetchKey) return;
 
@@ -2690,10 +3037,6 @@ function LegsSubtable({
       try {
         const params = new URLSearchParams();
         params.set("seriesKey", seriesKey);
-        if (excludeCusty) {
-          params.set("excludeCusty", "true");
-        }
-
         params.set("packageType", packageType);
 
         const res = await fetch(
@@ -2749,7 +3092,6 @@ function LegsSubtable({
       cancelled = true;
     };
   }, [
-    excludeCusty,
     packageType,
     seriesKey,
     showTimeseries,
@@ -3330,19 +3672,50 @@ function LegsSubtable({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0 text-[11px] uppercase tracking-wide text-slate-400">
               <span className="block truncate">{seriesKey}</span>
+              <span className="block truncate text-[10px] text-slate-500 normal-case">
+                {metricLabelWithUnit} · {rangeLabel}
+              </span>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setExcludeCusty((current) => !current)}
-                className={`rounded border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
-                  excludeCusty
-                    ? "bg-slate-700 text-slate-100"
-                    : "text-slate-300 hover:bg-slate-800"
-                }`}
-              >
-                No Custy
-              </button>
+              <div className="inline-flex overflow-hidden rounded border border-slate-700">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowCustySeries((current) => !current)
+                  }
+                  className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                    showCustySeries
+                      ? "bg-amber-500/20 text-amber-100"
+                      : "text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  Custy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowIdbSeries((current) => !current)}
+                  className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                    showIdbSeries
+                      ? "bg-sky-500/20 text-sky-100"
+                      : "text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  IDB
+                </button>
+              </div>
+              {timeseriesMetric === "vega01" && (
+                <button
+                  type="button"
+                  onClick={() => setUseGrossVega((current) => !current)}
+                  className={`rounded border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                    useGrossVega
+                      ? "bg-emerald-500/20 text-emerald-100"
+                      : "text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  {useGrossVega ? "Gross Vega" : "Net Vega"}
+                </button>
+              )}
               {isLineChartView && (
                 <button
                   type="button"
@@ -3475,7 +3848,7 @@ function LegsSubtable({
             <div className="mt-3 h-48">
               <ResponsiveContainer width="100%" height="100%">
                 {isOhlcView ? (
-                  <ComposedChart data={chartData}>
+                  <ComposedChart data={ohlcSeries}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
                     <XAxis
                       dataKey="timeLabel"
@@ -3487,6 +3860,13 @@ function LegsSubtable({
                       tickFormatter={metricFormatter}
                       domain={yDomain ?? ["auto", "auto"]}
                       allowDataOverflow
+                      label={{
+                        value: metricLabelWithUnit,
+                        angle: -90,
+                        position: "insideLeft",
+                        fill: "#94a3b8",
+                        fontSize: 10,
+                      }}
                     />
                     <Tooltip
                       content={renderOhlcTooltip}
@@ -3525,9 +3905,16 @@ function LegsSubtable({
                       tickFormatter={metricFormatter}
                       domain={yDomain ?? ["auto", "auto"]}
                       allowDataOverflow
+                      label={{
+                        value: metricLabelWithUnit,
+                        angle: -90,
+                        position: "insideLeft",
+                        fill: "#94a3b8",
+                        fontSize: 10,
+                      }}
                     />
                     <Tooltip
-                      formatter={(value: number) => metricFormatter(value)}
+                      formatter={(value: number) => metricFormatterWithUnit(value)}
                       labelStyle={{ color: "#e2e8f0" }}
                       contentStyle={{
                         backgroundColor: "#0f172a",
@@ -3536,19 +3923,39 @@ function LegsSubtable({
                     />
                     <Line
                       type="monotone"
-                      dataKey={
-                        timeseriesView === "DAILY_CLOSE"
-                          ? dailyCloseDataKey
-                          : selectedMetric.key
-                      }
-                      stroke={selectedMetric.color}
+                      dataKey="custyValue"
+                      name="Custy"
+                      stroke={CUSTY_SERIES_COLOR}
                       strokeWidth={2}
                       dot={
                         showLineDots
-                          ? { r: 3, fill: selectedMetric.color }
+                          ? { r: 3, fill: CUSTY_SERIES_COLOR }
                           : false
                       }
                       activeDot={showLineDots ? { r: 4 } : false}
+                      connectNulls
+                      hide={!showCusty}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="idbValue"
+                      name="IDB"
+                      stroke={IDB_SERIES_COLOR}
+                      strokeWidth={2}
+                      dot={
+                        showLineDots
+                          ? { r: 3, fill: IDB_SERIES_COLOR }
+                          : false
+                      }
+                      activeDot={showLineDots ? { r: 4 } : false}
+                      connectNulls
+                      hide={!showIdb}
+                    />
+                    <Legend
+                      verticalAlign="top"
+                      align="right"
+                      iconType="line"
+                      wrapperStyle={{ fontSize: "10px", color: "#94a3b8" }}
                     />
                   </LineChart>
                 ) : (
@@ -3564,9 +3971,16 @@ function LegsSubtable({
                       tickFormatter={metricFormatter}
                       domain={yDomain ?? ["auto", "auto"]}
                       allowDataOverflow
+                      label={{
+                        value: metricLabelWithUnit,
+                        angle: -90,
+                        position: "insideLeft",
+                        fill: "#94a3b8",
+                        fontSize: 10,
+                      }}
                     />
                     <Tooltip
-                      formatter={(value: number) => metricFormatter(value)}
+                      formatter={(value: number) => metricFormatterWithUnit(value)}
                       labelStyle={{ color: "#e2e8f0" }}
                       contentStyle={{
                         backgroundColor: "#0f172a",
@@ -3574,13 +3988,24 @@ function LegsSubtable({
                       }}
                     />
                     <Bar
-                      dataKey={
-                        timeseriesView === "DAILY_CLOSE"
-                          ? dailyCloseDataKey
-                          : selectedMetric.key
-                      }
-                      fill={selectedMetric.color}
+                      dataKey="custyValue"
+                      name="Custy"
+                      fill={CUSTY_SERIES_COLOR}
                       radius={[3, 3, 0, 0]}
+                      hide={!showCusty}
+                    />
+                    <Bar
+                      dataKey="idbValue"
+                      name="IDB"
+                      fill={IDB_SERIES_COLOR}
+                      radius={[3, 3, 0, 0]}
+                      hide={!showIdb}
+                    />
+                    <Legend
+                      verticalAlign="top"
+                      align="right"
+                      iconType="square"
+                      wrapperStyle={{ fontSize: "10px", color: "#94a3b8" }}
                     />
                   </BarChart>
                 )}
@@ -3588,11 +4013,88 @@ function LegsSubtable({
             </div>
           ) : (
             <div className="mt-3 text-xs text-slate-400">
-              {timeseriesLoading
-                ? "Loading more history..."
-                : timeseriesError || "No timeseries data available."}
+              {!hasSeriesSelection
+                ? "Select Custy and/or IDB to display a series."
+                : timeseriesLoading
+                  ? "Loading more history..."
+                  : timeseriesError || "No timeseries data available."}
             </div>
           )}
+          {(showCusty || showIdb) && (
+            <div className="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-slate-400">
+              {showCusty && (custyExtremes.min || custyExtremes.max) && (
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="uppercase tracking-wide text-amber-300">
+                    Custy
+                  </span>
+                  {custyExtremes.min && (
+                    <span>
+                      Low:{" "}
+                      <span className="font-mono text-slate-200">
+                        {metricFormatterWithUnit(custyExtremes.min.value)}
+                      </span>{" "}
+                      @ {custyExtremes.min.timeLabel}
+                    </span>
+                  )}
+                  {custyExtremes.max && (
+                    <span>
+                      High:{" "}
+                      <span className="font-mono text-slate-200">
+                        {metricFormatterWithUnit(custyExtremes.max.value)}
+                      </span>{" "}
+                      @ {custyExtremes.max.timeLabel}
+                    </span>
+                  )}
+                </span>
+              )}
+              {showIdb && (idbExtremes.min || idbExtremes.max) && (
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="uppercase tracking-wide text-sky-300">
+                    IDB
+                  </span>
+                  {idbExtremes.min && (
+                    <span>
+                      Low:{" "}
+                      <span className="font-mono text-slate-200">
+                        {metricFormatterWithUnit(idbExtremes.min.value)}
+                      </span>{" "}
+                      @ {idbExtremes.min.timeLabel}
+                    </span>
+                  )}
+                  {idbExtremes.max && (
+                    <span>
+                      High:{" "}
+                      <span className="font-mono text-slate-200">
+                        {metricFormatterWithUnit(idbExtremes.max.value)}
+                      </span>{" "}
+                      @ {idbExtremes.max.timeLabel}
+                    </span>
+                  )}
+                </span>
+              )}
+            </div>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+            <span>Units: {metricLabelWithUnit}</span>
+            <span className="text-slate-600">•</span>
+            <span>IDB platforms: {IDB_PLATFORM_TOKENS.join(", ")}</span>
+            <span className="text-slate-600">•</span>
+            <span>Custy = non-IDB or blank platform</span>
+            <span className="text-slate-600">•</span>
+            <span>
+              {timeseriesMetric === "vega01" && useGrossVega
+                ? "Gross Vega = sum of abs(Vega01)"
+                : "Daily Close sums cumulative metrics (notional/greeks)"}
+            </span>
+            <span className="text-slate-600">•</span>
+            <span>High/Low based on loaded history</span>
+            {ohlcNote && (
+              <>
+                <span className="text-slate-600">•</span>
+                <span>{ohlcNote}</span>
+              </>
+            )}
+          </div>
           {timeseriesNotice && !timeseriesLoading && !timeseriesError && (
             <div className="mt-2 text-[11px] text-amber-300">
               {timeseriesNotice}
@@ -4692,6 +5194,12 @@ export default function SwaptionTradeTape() {
     {},
   );
   const [selectedRows, setSelectedRows] = useState<TapeRow[]>([]);
+  const [selectedPackageIds, setSelectedPackageIds] = useState<string[]>(() =>
+    parseSelectedPackageIds(searchParams.get(SELECTED_PACKAGES_QUERY_KEY)),
+  );
+  const [showSelectedOnly, setShowSelectedOnly] = useState<boolean>(() =>
+    parseBooleanQueryFlag(searchParams.get(SELECTED_ONLY_QUERY_KEY)),
+  );
   const [linkModalOpen, setLinkModalOpen] = useState(false);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [detailLinkId, setDetailLinkId] = useState<string | null>(null);
@@ -4710,8 +5218,18 @@ export default function SwaptionTradeTape() {
     () => JSON.stringify(columnFilterPayload),
     [columnFilterPayload],
   );
+  const selectedPackageIdsKey = useMemo(
+    () => serializeSelectedPackageIds(selectedPackageIds),
+    [selectedPackageIds],
+  );
+  const selectedPackageIdSet = useMemo(
+    () => new Set(selectedPackageIds),
+    [selectedPackageIds],
+  );
   const columnFilterPayloadKeyRef = useRef(columnFilterPayloadKey);
   const columnFilterOperatorRef = useRef(columnFilterOperator);
+  const selectedPackageIdsKeyRef = useRef(selectedPackageIdsKey);
+  const showSelectedOnlyRef = useRef(showSelectedOnly);
 
   const upsertRows = useCallback((incoming: TapeRow[], replace = false) => {
     setRows((prev) => {
@@ -4818,12 +5336,22 @@ export default function SwaptionTradeTape() {
   }, [currentUser]);
 
   useEffect(() => {
-    setSelectedRows((prev) =>
-      prev.filter((row) =>
-        rows.some((candidate) => candidate.package_id === row.package_id),
-      ),
+    const rowById = new Map<string, TapeRow>();
+    rows.forEach((row) => rowById.set(row.package_id, row));
+    const nextSelectedRows = selectedPackageIds
+      .map((packageId) => rowById.get(packageId))
+      .filter((row): row is TapeRow => !!row);
+    const nextSelectionKey = serializeSelectedPackageIds(
+      nextSelectedRows.map((row) => row.package_id),
     );
-  }, [rows]);
+    setSelectedRows((prev) => {
+      const prevSelectionKey = serializeSelectedPackageIds(
+        prev.map((row) => row.package_id),
+      );
+      if (prevSelectionKey === nextSelectionKey) return prev;
+      return nextSelectedRows;
+    });
+  }, [rows, selectedPackageIds]);
 
   useEffect(() => {
     columnFilterPayloadKeyRef.current = columnFilterPayloadKey;
@@ -4832,6 +5360,20 @@ export default function SwaptionTradeTape() {
   useEffect(() => {
     columnFilterOperatorRef.current = columnFilterOperator;
   }, [columnFilterOperator]);
+
+  useEffect(() => {
+    selectedPackageIdsKeyRef.current = selectedPackageIdsKey;
+  }, [selectedPackageIdsKey]);
+
+  useEffect(() => {
+    showSelectedOnlyRef.current = showSelectedOnly;
+  }, [showSelectedOnly]);
+
+  useEffect(() => {
+    if (!selectedPackageIds.length && showSelectedOnly) {
+      setShowSelectedOnly(false);
+    }
+  }, [selectedPackageIds.length, showSelectedOnly]);
 
   useEffect(() => {
     const nextFilters = parseColumnFilterPayload(
@@ -4849,6 +5391,21 @@ export default function SwaptionTradeTape() {
     if (nextOperator !== columnFilterOperatorRef.current) {
       setColumnFilterOperator(nextOperator);
     }
+    const nextSelectedPackageIds = parseSelectedPackageIds(
+      searchParams.get(SELECTED_PACKAGES_QUERY_KEY),
+    );
+    const nextSelectedPackageIdsKey = serializeSelectedPackageIds(
+      nextSelectedPackageIds,
+    );
+    if (nextSelectedPackageIdsKey !== selectedPackageIdsKeyRef.current) {
+      setSelectedPackageIds(nextSelectedPackageIds);
+    }
+    const nextShowSelectedOnly = parseBooleanQueryFlag(
+      searchParams.get(SELECTED_ONLY_QUERY_KEY),
+    );
+    if (nextShowSelectedOnly !== showSelectedOnlyRef.current) {
+      setShowSelectedOnly(nextShowSelectedOnly);
+    }
   }, [searchParams]);
 
   useEffect(() => {
@@ -4864,6 +5421,16 @@ export default function SwaptionTradeTape() {
     } else {
       nextParams.delete(COLUMN_FILTER_OPERATOR_QUERY_KEY);
     }
+    if (selectedPackageIdsKey) {
+      nextParams.set(SELECTED_PACKAGES_QUERY_KEY, selectedPackageIdsKey);
+    } else {
+      nextParams.delete(SELECTED_PACKAGES_QUERY_KEY);
+    }
+    if (showSelectedOnly) {
+      nextParams.set(SELECTED_ONLY_QUERY_KEY, "1");
+    } else {
+      nextParams.delete(SELECTED_ONLY_QUERY_KEY);
+    }
     const nextQuery = nextParams.toString();
     if (nextQuery !== currentQuery) {
       const nextUrl = nextQuery ? `${pathname}?${nextQuery}` : pathname;
@@ -4874,6 +5441,8 @@ export default function SwaptionTradeTape() {
     columnFilterPayloadKey,
     pathname,
     router,
+    selectedPackageIdsKey,
+    showSelectedOnly,
     searchParams,
   ]);
 
@@ -5148,8 +5717,11 @@ export default function SwaptionTradeTape() {
           (row) => !!row.manual_package_id || !!row.manual_link_id,
         )
       : filtered;
-    if (!sortField || sortOrder === 0) return groupLinkedRows(manualFiltered);
-    const sorted = sortRowsByField(manualFiltered, sortField, sortOrder);
+    const selectedFiltered = showSelectedOnly
+      ? manualFiltered.filter((row) => selectedPackageIdSet.has(row.package_id))
+      : manualFiltered;
+    if (!sortField || sortOrder === 0) return groupLinkedRows(selectedFiltered);
+    const sorted = sortRowsByField(selectedFiltered, sortField, sortOrder);
     return groupLinkedRows(sorted);
   }, [
     resolvedRows,
@@ -5159,6 +5731,8 @@ export default function SwaptionTradeTape() {
     sortOrder,
     columnFilterOperator,
     showManualLinksOnly,
+    showSelectedOnly,
+    selectedPackageIdSet,
     sortRowsByField,
   ]);
 
@@ -5253,7 +5827,7 @@ export default function SwaptionTradeTape() {
           });
         }
       }
-      setSelectedRows([]);
+      setSelectedPackageIds([]);
       fetchTape({ replace: true });
       fetchManualLinks(manualLinkStartDate);
     },
@@ -5269,6 +5843,7 @@ export default function SwaptionTradeTape() {
     const metrics = firstLegMetrics(row);
     const action = metrics.event_action;
     const isActive = action ? ACTIVE_ACTIONS.has(action.toUpperCase()) : false;
+    const isSelected = selectedPackageIdSet.has(row.package_id);
     const tone = isActive
       ? packageTone(row.package_type)
       : "!bg-red-900/70 !text-red-100";
@@ -5279,6 +5854,7 @@ export default function SwaptionTradeTape() {
       tone,
       actionTone(action),
       isManualLinked ? "manual-linked-row" : "",
+      isSelected ? "selected-share-row" : "",
       warning && isActive ? "ring-1 ring-red-500/50" : "",
     ];
     return classes.join(" ").trim();
@@ -5551,16 +6127,43 @@ export default function SwaptionTradeTape() {
           />
         </div>
       </div>
-      {selectedRows.length > 0 && (
+      {selectedPackageIds.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
           <div className="flex items-center gap-2">
-            <span className="font-mono">{selectedRows.length}</span>
+            <span className="font-mono">{selectedPackageIds.length}</span>
             trades selected
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex overflow-hidden rounded border border-slate-700">
+              <button
+                type="button"
+                onClick={() => setShowSelectedOnly(true)}
+                className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                  showSelectedOnly
+                    ? "bg-sky-500/20 text-sky-100"
+                    : "text-slate-200 hover:bg-slate-800"
+                }`}
+              >
+                Selected Only
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSelectedOnly(false)}
+                className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                  !showSelectedOnly
+                    ? "bg-slate-700 text-slate-100"
+                    : "text-slate-200 hover:bg-slate-800"
+                }`}
+              >
+                Show All
+              </button>
+            </div>
             <button
               type="button"
-              onClick={() => setSelectedRows([])}
+              onClick={() => {
+                setSelectedPackageIds([]);
+                setShowSelectedOnly(false);
+              }}
               className="rounded border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
             >
               Clear
@@ -5591,15 +6194,49 @@ export default function SwaptionTradeTape() {
           > td {
           background-color: rgba(245, 158, 11, 0.18) !important;
         }
+        .swaption-tape-table
+          .p-datatable-tbody
+          > tr.selected-share-row
+          > td {
+          box-shadow:
+            inset 0 1px 0 rgba(125, 211, 252, 0.4),
+            inset 0 -1px 0 rgba(125, 211, 252, 0.4) !important;
+        }
+        .swaption-tape-table
+          .p-datatable-tbody
+          > tr.selected-share-row
+          > td:first-child {
+          box-shadow:
+            inset 1px 0 0 rgba(125, 211, 252, 0.4),
+            inset 0 1px 0 rgba(125, 211, 252, 0.4),
+            inset 0 -1px 0 rgba(125, 211, 252, 0.4) !important;
+        }
+        .swaption-tape-table
+          .p-datatable-tbody
+          > tr.selected-share-row
+          > td:last-child {
+          box-shadow:
+            inset -1px 0 0 rgba(125, 211, 252, 0.4),
+            inset 0 1px 0 rgba(125, 211, 252, 0.4),
+            inset 0 -1px 0 rgba(125, 211, 252, 0.4) !important;
+        }
       `}</style>
       <DataTable
         key={`datatable-${metricMode}`}
         value={filteredRows}
         dataKey="package_id"
         selection={selectedRows}
-        onSelectionChange={(e) =>
-          setSelectedRows((e.value as TapeRow[]) || [])
-        }
+        onSelectionChange={(e) => {
+          const nextSelectedRows = ((e.value as TapeRow[]) || []).filter(
+            (row): row is TapeRow => !!row,
+          );
+          setSelectedRows(nextSelectedRows);
+          setSelectedPackageIds(
+            normalizeSelectedPackageIds(
+              nextSelectedRows.map((row) => row.package_id),
+            ),
+          );
+        }}
         selectionMode="multiple"
         metaKeySelection={false}
         expandedRows={expandedRows}

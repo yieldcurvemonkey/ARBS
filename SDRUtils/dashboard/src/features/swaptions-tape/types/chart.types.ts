@@ -19,9 +19,18 @@ export type TimeseriesMetricDefinition = {
   color: string;
   decimals: number;
   chartType: TimeseriesChartType;
+  unit?: string;
 };
 
-export type TimeseriesRangeKey = "1D" | "1W" | "1M" | "3M" | "6M" | "CUSTOM" | "ALL";
+export type TimeseriesRangeKey =
+  | "1D"
+  | "1W"
+  | "1M"
+  | "3M"
+  | "6M"
+  | "1Y"
+  | "CUSTOM"
+  | "ALL";
 export type TimeseriesViewKey = "INTRADAY" | "DAILY_CLOSE" | "DAILY_OHLC";
 
 export type StraddleTimeseriesPoint = {
