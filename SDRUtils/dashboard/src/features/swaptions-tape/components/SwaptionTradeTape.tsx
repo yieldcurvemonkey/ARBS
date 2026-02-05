@@ -250,6 +250,16 @@ type TimeseriesExtremePoint = {
   timestamp: number;
 };
 
+type TimeseriesSummaryStats = {
+  tradeCount: number;
+  totalNotional: number | null;
+  avgNotional: number | null;
+  medianNotional: number | null;
+  tradesPerDay: number | null;
+  avgGapMs: number | null;
+  activeDays: number | null;
+};
+
 const SAFE_ACTIONS = new Set(["NEWT", "TRAD", "MODI"]);
 const ACTIVE_ACTIONS = new Set(["NEWT-TRAD", "MODI-TRAD", "CORR-TRAD"]);
 const POLL_INTERVAL_MS = 5000;
@@ -327,14 +337,10 @@ const METRIC_SCHEMA = {
 const STRADDLE_STYLE = "EURO VANILLA PHYS";
 const STRADDLE_SPLIT_FACTOR = 0.5;
 const BPVOL_DAY_DIVISOR = 15.87;
-const IDB_PLATFORM_TOKENS = [
-  "BGC",
-  "TFS",
-  "GFI",
-  "ICAP",
-  "TRADITION",
-  "TP",
-] as const;
+const IDB_MIC_CODES = ["BGCD", "ISWV", "TPSE"] as const;
+const CUSTY_MIC_CODES = ["BILT", "XXXX", "TWSF", "BBSF", "XOFF"] as const;
+const IDB_MIC_SET = new Set<string>(IDB_MIC_CODES);
+const CUSTY_MIC_SET = new Set<string>(CUSTY_MIC_CODES);
 const STRADDLE_GREEK_FIELDS = {
   dv01: "straddle_dv01",
   vega01: "straddle_vega01",
@@ -631,14 +637,27 @@ function resolvePlatformIdentifier(row: TapeRow): string | null {
   return platform ? String(platform) : null;
 }
 
+function normalizePlatformTokens(
+  platform: string | null | undefined,
+): string[] {
+  if (!platform) return [];
+  return platform
+    .trim()
+    .toUpperCase()
+    .split(/[\s,;/]+/)
+    .filter(Boolean);
+}
+
 function isIdbPlatform(platform: string | null | undefined): boolean {
-  if (!platform) return false;
-  const normalized = platform.trim().toUpperCase();
-  return IDB_PLATFORM_TOKENS.some((token) => normalized.includes(token));
+  const tokens = normalizePlatformTokens(platform);
+  return tokens.some((token) => IDB_MIC_SET.has(token));
 }
 
 function isCustyPlatform(platform: string | null | undefined): boolean {
-  return !isIdbPlatform(platform);
+  const tokens = normalizePlatformTokens(platform);
+  if (!tokens.length) return true;
+  if (tokens.some((token) => CUSTY_MIC_SET.has(token))) return true;
+  return !tokens.some((token) => IDB_MIC_SET.has(token));
 }
 
 function formatExecutionWindow(start: string, end: string): string {
@@ -883,6 +902,18 @@ function formatMetricDisplay(value: number | null | undefined, decimals = 3) {
   return formatMetricValue(value, decimals);
 }
 
+function formatRate(value: number | null | undefined, decimals = 2) {
+  if (!isValid(value)) return "--";
+  return smartRound(Number(value), decimals);
+}
+
+function formatCount(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "--";
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) return "--";
+  return Math.round(numeric).toLocaleString("en-US");
+}
+
 function parseMetricNumber(value: any): number | null {
   if (!isValid(value)) return null;
   const numericValue = Number(value);
@@ -1009,6 +1040,24 @@ function formatDurationSeconds(value: number | null | undefined): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.round(minutes / 60);
   return `${hours}h`;
+}
+
+function formatDurationMs(value: number | null | undefined): string {
+  if (!isValid(value)) return "--";
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) return "--";
+  const absMs = Math.abs(numeric);
+  if (absMs < 1000) return `${Math.round(absMs)}ms`;
+  const seconds = absMs / 1000;
+  if (seconds < 60) return `${smartRound(seconds, 1)}s`;
+  const minutes = seconds / 60;
+  if (minutes < 60) return `${smartRound(minutes, 1)}m`;
+  const hours = minutes / 60;
+  if (hours < 48) return `${smartRound(hours, 1)}h`;
+  const days = hours / 24;
+  if (days < 365) return `${smartRound(days, 1)}d`;
+  const years = days / 365;
+  return `${smartRound(years, 1)}y`;
 }
 
 function dedupeManualTrades(trades: ManualLinkTrade[]): ManualLinkTrade[] {
@@ -1815,6 +1864,73 @@ function findTimeseriesExtremes(
     }
   });
   return { min: minPoint, max: maxPoint };
+}
+
+function median(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[middle];
+  return (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function buildLocalDateKey(timestamp: number): string | null {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function computeTimeseriesSummary(
+  points: StraddleTimeseriesPoint[],
+): TimeseriesSummaryStats {
+  const tradeCount = points.length;
+  const notionals = points
+    .map((point) => point.notional)
+    .filter(isValid)
+    .map((value) => Math.abs(Number(value)))
+    .filter((value) => Number.isFinite(value));
+  const totalNotional = notionals.length
+    ? notionals.reduce((sum, value) => sum + value, 0)
+    : null;
+  const avgNotional =
+    notionals.length && totalNotional !== null
+      ? totalNotional / notionals.length
+      : null;
+  const medianNotional = notionals.length ? median(notionals) : null;
+
+  const timestamps = points
+    .map((point) => point.timestamp)
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
+  let avgGapMs: number | null = null;
+  if (timestamps.length > 1) {
+    let totalGap = 0;
+    for (let index = 1; index < timestamps.length; index += 1) {
+      totalGap += timestamps[index] - timestamps[index - 1];
+    }
+    avgGapMs = totalGap / (timestamps.length - 1);
+  }
+  const activeDaysSet = new Set<string>();
+  timestamps.forEach((timestamp) => {
+    const key = buildLocalDateKey(timestamp);
+    if (key) activeDaysSet.add(key);
+  });
+  const activeDays = activeDaysSet.size;
+  const tradesPerDay =
+    activeDays > 0 ? tradeCount / activeDays : null;
+
+  return {
+    tradeCount,
+    totalNotional,
+    avgNotional,
+    medianNotional,
+    tradesPerDay,
+    avgGapMs,
+    activeDays,
+  };
 }
 
 function OhlcSeries({
@@ -2668,8 +2784,12 @@ function LegsSubtable({
   );
   const rowIsManual = isManualPackage(row);
   const isStraddle = packageType === "STRADDLE";
+  const isOutright = !packageType || packageType === "OUTRIGHT";
   const isRiskReversal = packageType === "RISK_REVERSAL";
   const showStraddleSchema = isStraddle || isRiskReversal;
+  const showOutrightSchema = isOutright;
+  const showNotionalCappedColumn = showStraddleSchema || showOutrightSchema;
+  const showPremiumBpsColumn = showStraddleSchema || showOutrightSchema;
   const splitFactor = isStraddle ? STRADDLE_SPLIT_FACTOR : 1;
   const [showTimeseries, setShowTimeseries] = useState(false);
   const [timeseriesView, setTimeseriesView] =
@@ -2864,6 +2984,39 @@ function LegsSubtable({
     timeseriesView === "DAILY_OHLC" && seriesSelectionCount > 1
       ? "OHLC shows combined Custy + IDB."
       : null;
+  const summarySeries = useMemo(() => {
+    const entries: Array<{
+      key: string;
+      label: string;
+      tone: string;
+      stats: TimeseriesSummaryStats;
+    }> = [];
+    if (showCusty) {
+      entries.push({
+        key: "custy",
+        label: "Custy",
+        tone: "text-amber-300",
+        stats: computeTimeseriesSummary(rangedCustyData),
+      });
+    }
+    if (showIdb) {
+      entries.push({
+        key: "idb",
+        label: "IDB",
+        tone: "text-sky-300",
+        stats: computeTimeseriesSummary(rangedIdbData),
+      });
+    }
+    if (showCusty && showIdb) {
+      entries.push({
+        key: "combined",
+        label: "Combined",
+        tone: "text-slate-200",
+        stats: computeTimeseriesSummary(rangedAllData),
+      });
+    }
+    return entries;
+  }, [rangedAllData, rangedCustyData, rangedIdbData, showCusty, showIdb]);
   const mergedIntradayData = useMemo(
     () =>
       mergeIntradaySeries(
@@ -3469,11 +3622,11 @@ function LegsSubtable({
             <th className="px-2 py-1 text-left">Side</th>
             <th className="px-2 py-1 text-right">Strike</th>
             <th className="px-0.5 py-1 text-right">Notional</th>
-            {showStraddleSchema && (
+            {showNotionalCappedColumn && (
               <th className="px-0.5 py-1 text-right">Notional Capped</th>
             )}
             <th className="px-2 py-1 text-right">Premium</th>
-            {showStraddleSchema && (
+            {showPremiumBpsColumn && (
               <th className="px-2 py-1 text-right">Premium (bps)</th>
             )}
             <th className="px-2 py-1 text-right">BPVol/Yr</th>
@@ -3520,7 +3673,7 @@ function LegsSubtable({
                 <td className="px-1 py-1 text-right font-mono">
                   {formatNotional(values.notionalValue)}
                 </td>
-                {showStraddleSchema && (
+                {showNotionalCappedColumn && (
                   <td className="px-1 py-1 text-right font-mono">
                     {resolveNotionalCapped(leg)}
                   </td>
@@ -3528,7 +3681,7 @@ function LegsSubtable({
                 <td className="px-1 py-1 text-right font-mono">
                   {formatMetricValue(values.premiumValue, 3)}
                 </td>
-                {showStraddleSchema && (
+                {showPremiumBpsColumn && (
                   <td className="px-1 py-1 text-right font-mono">
                     {formatMetricValue(values.premiumBpsValue, 3)}
                   </td>
@@ -3844,6 +3997,66 @@ function LegsSubtable({
               Auto
             </button>
           </div>
+          {summarySeries.length > 0 && (
+            <div className="mt-3 grid gap-2 lg:grid-cols-3">
+              {summarySeries.map((entry) => {
+                const stats = entry.stats;
+                return (
+                  <div
+                    key={entry.key}
+                    className="rounded border border-slate-800 bg-slate-950/60 p-3 text-[11px] text-slate-300"
+                  >
+                    <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-slate-400">
+                      <span className={`font-semibold ${entry.tone}`}>
+                        {entry.label}
+                      </span>
+                      <span className="font-mono text-slate-200">
+                        {formatCount(stats.tradeCount)} trades
+                      </span>
+                    </div>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span>Trades/active day</span>
+                        <span className="font-mono text-slate-200">
+                          {formatRate(stats.tradesPerDay, 2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>Avg gap</span>
+                        <span className="font-mono text-slate-200">
+                          {formatDurationMs(stats.avgGapMs)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>Avg size</span>
+                        <span className="font-mono text-slate-200">
+                          {formatNotional(stats.avgNotional)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>Median size</span>
+                        <span className="font-mono text-slate-200">
+                          {formatNotional(stats.medianNotional)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>Total size</span>
+                        <span className="font-mono text-slate-200">
+                          {formatNotional(stats.totalNotional)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>Active days</span>
+                        <span className="font-mono text-slate-200">
+                          {formatCount(stats.activeDays)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {hasChartData ? (
             <div className="mt-3 h-48">
               <ResponsiveContainer width="100%" height="100%">
@@ -4077,9 +4290,11 @@ function LegsSubtable({
           <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
             <span>Units: {metricLabelWithUnit}</span>
             <span className="text-slate-600">•</span>
-            <span>IDB platforms: {IDB_PLATFORM_TOKENS.join(", ")}</span>
+            <span>IDB MICs: {IDB_MIC_CODES.join(", ")}</span>
             <span className="text-slate-600">•</span>
-            <span>Custy = non-IDB or blank platform</span>
+            <span>Custy MICs: {CUSTY_MIC_CODES.join(", ")}</span>
+            <span className="text-slate-600">•</span>
+            <span>Unknown/blank MICs treated as Custy</span>
             <span className="text-slate-600">•</span>
             <span>
               {timeseriesMetric === "vega01" && useGrossVega
@@ -4088,6 +4303,11 @@ function LegsSubtable({
             </span>
             <span className="text-slate-600">•</span>
             <span>High/Low based on loaded history</span>
+            <span className="text-slate-600">|</span>
+            <span>
+              Summary stats use selected range + loaded history (size uses abs
+              notional)
+            </span>
             {ohlcNote && (
               <>
                 <span className="text-slate-600">•</span>

@@ -5,6 +5,7 @@ import { query } from '@/lib/db'
 import { resolveDisplayView, TapeRow } from '@/lib/swaptions-tape'
 
 const MAX_TIMESERIES_ROWS = 50000
+const IDB_MIC_CODES = ['BGCD', 'ISWV', 'TPSE']
 
 function parseSeriesKey(seriesKey: string): {
   tenorLabel: string | null
@@ -78,16 +79,15 @@ export async function GET(request: Request) {
     params.push(forwardLabel)
     conditions.push(`d.forward_label ILIKE $${params.length}`)
 
-    // Exclude custy platforms if requested
+    // Exclude custy platforms if requested (keep IDB MICs only)
     if (excludeCusty) {
-      conditions.push(`(
-        plat.platform_identifier NOT ILIKE '%BGC%' AND
-        plat.platform_identifier NOT ILIKE '%TFS%' AND
-        plat.platform_identifier NOT ILIKE '%GFI%' AND
-        plat.platform_identifier NOT ILIKE '%ICAP%' AND
-        plat.platform_identifier NOT ILIKE '%TRADITION%' AND
-        plat.platform_identifier NOT ILIKE '%TP%'
-      )`)
+      const idbPlaceholders = IDB_MIC_CODES.map(
+        (_, idx) => `$${params.length + idx + 1}`
+      ).join(', ')
+      params.push(...IDB_MIC_CODES)
+      conditions.push(
+        `UPPER(plat.platform_identifier) IN (${idbPlaceholders})`
+      )
     }
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
