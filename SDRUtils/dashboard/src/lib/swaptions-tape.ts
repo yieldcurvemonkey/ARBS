@@ -5,7 +5,7 @@ export type TapeRow = {
   package_id: string
   package_type: string | null
   package_source?: string | null
-  manual_link_id?: string | null
+  link_id?: string | null
   manual_package_id?: string | null
   user_comment?: string | null
   link_reason?: string | null
@@ -13,7 +13,6 @@ export type TapeRow = {
   link_metrics?: Record<string, any> | null
   link_created_by?: string | null
   link_created_at?: string | null
-  detection_strat?: string | null
   as_of_date: string | null
   execution_start: string
   execution_end: string
@@ -28,7 +27,6 @@ export type TapeRow = {
   package_transaction_price: number | null
   package_confidence: number | null
   package_reason: string | null
-  is_notional_capped?: boolean | number | string | null
   vega_curve_id?: string | null
   vega_curve_type?: string | null
   package_metrics: Record<string, any> | null
@@ -40,11 +38,10 @@ export type TapeRow = {
 const V2_VIEW = 'arbs_swaption_display_items_v2'
 const V1_VIEW = 'arbs_swaption_display_items_v1'
 
-const BASE_COLUMNS = [
+// Columns matching the V1 view definition exactly
+const V1_COLUMNS = [
   'd.package_id',
   'd.package_type',
-  'd.package_source',
-  'd.detection_strat',
   'd.as_of_date',
   'd.execution_start',
   'd.execution_end',
@@ -59,7 +56,6 @@ const BASE_COLUMNS = [
   'd.package_transaction_price',
   'd.package_confidence',
   'd.package_reason',
-  'd.is_notional_capped',
   'd.vega_curve_id',
   'd.vega_curve_type',
   'd.package_metrics',
@@ -68,8 +64,10 @@ const BASE_COLUMNS = [
   'plat.event_action',
 ]
 
-const MANUAL_COLUMNS = [
-  'd.manual_link_id',
+// Additional columns in the V2 view (manual linking + package_source)
+const V2_EXTRA_COLUMNS = [
+  'd.package_source',
+  'd.link_id',
   'd.manual_package_id',
   'd.user_comment',
   'd.link_reason',
@@ -85,7 +83,7 @@ async function checkHasManualFields(): Promise<boolean> {
   if (cachedHasManualFields !== null) return cachedHasManualFields
   try {
     await query(
-      `SELECT manual_link_id FROM ${V2_VIEW} LIMIT 0`
+      `SELECT link_id FROM ${V2_VIEW} LIMIT 0`
     )
     cachedHasManualFields = true
     return true
@@ -103,8 +101,8 @@ export async function resolveDisplayView(): Promise<{
   const hasManualFields = await checkHasManualFields()
   const view = hasManualFields ? V2_VIEW : V1_VIEW
   const columnList = hasManualFields
-    ? [...BASE_COLUMNS, ...MANUAL_COLUMNS]
-    : BASE_COLUMNS
+    ? [...V1_COLUMNS, ...V2_EXTRA_COLUMNS]
+    : V1_COLUMNS
   return {
     view,
     columns: columnList.join(', '),
