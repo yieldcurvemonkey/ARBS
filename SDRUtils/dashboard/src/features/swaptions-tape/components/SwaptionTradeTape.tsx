@@ -255,9 +255,23 @@ type TimeseriesSummaryStats = {
   totalNotional: number | null;
   avgNotional: number | null;
   medianNotional: number | null;
+  p25Notional: number | null;
+  p75Notional: number | null;
+  totalPremium: number | null;
+  avgPremium: number | null;
+  medianPremium: number | null;
+  totalVega01: number | null;
+  avgVega01: number | null;
+  totalDv01: number | null;
   tradesPerDay: number | null;
+  tradesPerWeek: number | null;
+  tradesPerMonth: number | null;
   avgGapMs: number | null;
   activeDays: number | null;
+  activeWeeks: number | null;
+  activeMonths: number | null;
+  firstTradeDate: string | null;
+  lastTradeDate: string | null;
 };
 
 const SAFE_ACTIONS = new Set(["NEWT", "TRAD", "MODI"]);
@@ -1874,6 +1888,17 @@ function median(values: number[]): number | null {
   return (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+function percentile(sortedValues: number[], p: number): number | null {
+  if (!sortedValues.length) return null;
+  if (sortedValues.length === 1) return sortedValues[0];
+  const index = (p / 100) * (sortedValues.length - 1);
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return sortedValues[lower];
+  const weight = index - lower;
+  return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
+}
+
 function buildLocalDateKey(timestamp: number): string | null {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return null;
@@ -1883,15 +1908,36 @@ function buildLocalDateKey(timestamp: number): string | null {
   return `${year}-${month}-${day}`;
 }
 
+function buildLocalWeekKey(timestamp: number): string | null {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getFullYear();
+  const jan1 = new Date(year, 0, 1);
+  const dayOfYear = Math.floor(
+    (date.getTime() - jan1.getTime()) / (24 * 60 * 60 * 1000),
+  );
+  const weekNumber = Math.ceil((dayOfYear + jan1.getDay() + 1) / 7);
+  return `${year}-W${String(weekNumber).padStart(2, "0")}`;
+}
+
+function buildLocalMonthKey(timestamp: number): string | null {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
 function computeTimeseriesSummary(
   points: StraddleTimeseriesPoint[],
 ): TimeseriesSummaryStats {
   const tradeCount = points.length;
+
+  // Notional stats
   const notionals = points
     .map((point) => point.notional)
     .filter(isValid)
     .map((value) => Math.abs(Number(value)))
     .filter((value) => Number.isFinite(value));
+  const sortedNotionals = [...notionals].sort((a, b) => a - b);
   const totalNotional = notionals.length
     ? notionals.reduce((sum, value) => sum + value, 0)
     : null;
@@ -1900,7 +1946,46 @@ function computeTimeseriesSummary(
       ? totalNotional / notionals.length
       : null;
   const medianNotional = notionals.length ? median(notionals) : null;
+  const p25Notional = percentile(sortedNotionals, 25);
+  const p75Notional = percentile(sortedNotionals, 75);
 
+  // Premium stats
+  const premiums = points
+    .map((point) => point.premium)
+    .filter(isValid)
+    .map((value) => Math.abs(Number(value)))
+    .filter((value) => Number.isFinite(value));
+  const totalPremium = premiums.length
+    ? premiums.reduce((sum, value) => sum + value, 0)
+    : null;
+  const avgPremium =
+    premiums.length && totalPremium !== null
+      ? totalPremium / premiums.length
+      : null;
+  const medianPremium = premiums.length ? median(premiums) : null;
+
+  // Vega / DV01 stats
+  const vegas = points
+    .map((point) => point.vega01)
+    .filter(isValid)
+    .map((value) => Math.abs(Number(value)))
+    .filter((value) => Number.isFinite(value));
+  const totalVega01 = vegas.length
+    ? vegas.reduce((sum, value) => sum + value, 0)
+    : null;
+  const avgVega01 =
+    vegas.length && totalVega01 !== null ? totalVega01 / vegas.length : null;
+
+  const dv01s = points
+    .map((point) => point.dv01)
+    .filter(isValid)
+    .map((value) => Math.abs(Number(value)))
+    .filter((value) => Number.isFinite(value));
+  const totalDv01 = dv01s.length
+    ? dv01s.reduce((sum, value) => sum + value, 0)
+    : null;
+
+  // Timestamp / frequency stats
   const timestamps = points
     .map((point) => point.timestamp)
     .filter((value) => Number.isFinite(value))
@@ -1913,23 +1998,55 @@ function computeTimeseriesSummary(
     }
     avgGapMs = totalGap / (timestamps.length - 1);
   }
+
   const activeDaysSet = new Set<string>();
+  const activeWeeksSet = new Set<string>();
+  const activeMonthsSet = new Set<string>();
   timestamps.forEach((timestamp) => {
-    const key = buildLocalDateKey(timestamp);
-    if (key) activeDaysSet.add(key);
+    const dayKey = buildLocalDateKey(timestamp);
+    if (dayKey) activeDaysSet.add(dayKey);
+    const weekKey = buildLocalWeekKey(timestamp);
+    if (weekKey) activeWeeksSet.add(weekKey);
+    const monthKey = buildLocalMonthKey(timestamp);
+    if (monthKey) activeMonthsSet.add(monthKey);
   });
   const activeDays = activeDaysSet.size;
-  const tradesPerDay =
-    activeDays > 0 ? tradeCount / activeDays : null;
+  const activeWeeks = activeWeeksSet.size;
+  const activeMonths = activeMonthsSet.size;
+  const tradesPerDay = activeDays > 0 ? tradeCount / activeDays : null;
+  const tradesPerWeek = activeWeeks > 0 ? tradeCount / activeWeeks : null;
+  const tradesPerMonth = activeMonths > 0 ? tradeCount / activeMonths : null;
+
+  // First/last trade dates
+  const firstTradeDate =
+    timestamps.length > 0 ? buildLocalDateKey(timestamps[0]) : null;
+  const lastTradeDate =
+    timestamps.length > 0
+      ? buildLocalDateKey(timestamps[timestamps.length - 1])
+      : null;
 
   return {
     tradeCount,
     totalNotional,
     avgNotional,
     medianNotional,
+    p25Notional,
+    p75Notional,
+    totalPremium,
+    avgPremium,
+    medianPremium,
+    totalVega01,
+    avgVega01,
+    totalDv01,
     tradesPerDay,
+    tradesPerWeek,
+    tradesPerMonth,
     avgGapMs,
     activeDays,
+    activeWeeks,
+    activeMonths,
+    firstTradeDate,
+    lastTradeDate,
   };
 }
 
@@ -3017,6 +3134,23 @@ function LegsSubtable({
     }
     return entries;
   }, [rangedAllData, rangedCustyData, rangedIdbData, showCusty, showIdb]);
+  const custyIdbPremiumRatio = useMemo(() => {
+    if (!showCusty || !showIdb) return null;
+    const custyEntry = summarySeries.find((e) => e.key === "custy");
+    const idbEntry = summarySeries.find((e) => e.key === "idb");
+    const custyPremium = custyEntry?.stats.totalPremium;
+    const idbPremium = idbEntry?.stats.totalPremium;
+    if (
+      custyPremium === null ||
+      custyPremium === undefined ||
+      idbPremium === null ||
+      idbPremium === undefined ||
+      idbPremium === 0
+    ) {
+      return null;
+    }
+    return custyPremium / idbPremium;
+  }, [showCusty, showIdb, summarySeries]);
   const mergedIntradayData = useMemo(
     () =>
       mergeIntradaySeries(
@@ -3998,63 +4132,169 @@ function LegsSubtable({
             </button>
           </div>
           {summarySeries.length > 0 && (
-            <div className="mt-3 grid gap-2 lg:grid-cols-3">
-              {summarySeries.map((entry) => {
-                const stats = entry.stats;
-                return (
-                  <div
-                    key={entry.key}
-                    className="rounded border border-slate-800 bg-slate-950/60 p-3 text-[11px] text-slate-300"
-                  >
-                    <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-slate-400">
-                      <span className={`font-semibold ${entry.tone}`}>
-                        {entry.label}
-                      </span>
-                      <span className="font-mono text-slate-200">
-                        {formatCount(stats.tradeCount)} trades
-                      </span>
+            <div className="mt-3 space-y-2">
+              <div className="grid gap-2 lg:grid-cols-3">
+                {summarySeries.map((entry) => {
+                  const stats = entry.stats;
+                  return (
+                    <div
+                      key={entry.key}
+                      className="rounded border border-slate-800 bg-slate-950/60 p-3 text-[11px] text-slate-300"
+                    >
+                      <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-slate-400">
+                        <span className={`font-semibold ${entry.tone}`}>
+                          {entry.label}
+                        </span>
+                        <span className="font-mono text-slate-200">
+                          {formatCount(stats.tradeCount)} trades
+                        </span>
+                      </div>
+                      {stats.firstTradeDate && stats.lastTradeDate && (
+                        <div className="mt-1 text-[10px] text-slate-500">
+                          {stats.firstTradeDate} to {stats.lastTradeDate}
+                        </div>
+                      )}
+                      <div className="mt-2 space-y-1.5">
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                          Volume / Size
+                        </div>
+                        <div className="grid gap-1 sm:grid-cols-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Avg size (notional)</span>
+                            <span className="font-mono text-slate-200">
+                              {formatNotional(stats.avgNotional)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Median size</span>
+                            <span className="font-mono text-slate-200">
+                              {formatNotional(stats.medianNotional)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>25th pctl</span>
+                            <span className="font-mono text-slate-200">
+                              {formatNotional(stats.p25Notional)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>75th pctl</span>
+                            <span className="font-mono text-slate-200">
+                              {formatNotional(stats.p75Notional)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Total notional</span>
+                            <span className="font-mono text-slate-200">
+                              {formatNotional(stats.totalNotional)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                          Premium (USD)
+                        </div>
+                        <div className="grid gap-1 sm:grid-cols-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Total premium</span>
+                            <span className="font-mono text-slate-200">
+                              {formatLargeNumber(stats.totalPremium)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Avg premium</span>
+                            <span className="font-mono text-slate-200">
+                              {formatLargeNumber(stats.avgPremium)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Median premium</span>
+                            <span className="font-mono text-slate-200">
+                              {formatLargeNumber(stats.medianPremium)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                          Greeks
+                        </div>
+                        <div className="grid gap-1 sm:grid-cols-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Total gross vega</span>
+                            <span className="font-mono text-slate-200">
+                              {formatLargeNumber(stats.totalVega01)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Avg gross vega</span>
+                            <span className="font-mono text-slate-200">
+                              {formatLargeNumber(stats.avgVega01)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Total gross DV01</span>
+                            <span className="font-mono text-slate-200">
+                              {formatLargeNumber(stats.totalDv01)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                          Frequency
+                        </div>
+                        <div className="grid gap-1 sm:grid-cols-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Trades/day</span>
+                            <span className="font-mono text-slate-200">
+                              {formatRate(stats.tradesPerDay, 2)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Trades/week</span>
+                            <span className="font-mono text-slate-200">
+                              {formatRate(stats.tradesPerWeek, 2)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Trades/month</span>
+                            <span className="font-mono text-slate-200">
+                              {formatRate(stats.tradesPerMonth, 1)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Avg gap</span>
+                            <span className="font-mono text-slate-200">
+                              {formatDurationMs(stats.avgGapMs)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Active days</span>
+                            <span className="font-mono text-slate-200">
+                              {formatCount(stats.activeDays)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span>Active months</span>
+                            <span className="font-mono text-slate-200">
+                              {formatCount(stats.activeMonths)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Trades/active day</span>
-                        <span className="font-mono text-slate-200">
-                          {formatRate(stats.tradesPerDay, 2)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Avg gap</span>
-                        <span className="font-mono text-slate-200">
-                          {formatDurationMs(stats.avgGapMs)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Avg size</span>
-                        <span className="font-mono text-slate-200">
-                          {formatNotional(stats.avgNotional)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Median size</span>
-                        <span className="font-mono text-slate-200">
-                          {formatNotional(stats.medianNotional)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Total size</span>
-                        <span className="font-mono text-slate-200">
-                          {formatNotional(stats.totalNotional)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Active days</span>
-                        <span className="font-mono text-slate-200">
-                          {formatCount(stats.activeDays)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
+              {custyIdbPremiumRatio !== null && (
+                <div className="rounded border border-slate-800 bg-slate-950/60 p-2 text-[11px] text-slate-300">
+                  <span className="mr-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    Custy / IDB Premium Ratio:
+                  </span>
+                  <span className="font-mono text-slate-200">
+                    {smartRound(custyIdbPremiumRatio, 3)}x
+                  </span>
+                  <span className="ml-2 text-[10px] text-slate-500">
+                    (total abs premium in Custy vs IDB for selected range)
+                  </span>
+                </div>
+              )}
             </div>
           )}
           {hasChartData ? (
@@ -5388,6 +5628,523 @@ function PackageRow({
   );
 }
 
+type MarketBucket = {
+  forward_label: string;
+  tenor_label: string;
+  package_type: string;
+  platform_class: "CUSTY" | "IDB";
+  trade_count: number;
+  total_notional: number | null;
+  total_premium: number | null;
+  avg_notional: number | null;
+  avg_premium: number | null;
+  first_trade: string | null;
+  last_trade: string | null;
+};
+
+type MarketSummaryMetricKey =
+  | "trade_count"
+  | "total_notional"
+  | "total_premium"
+  | "avg_notional"
+  | "avg_premium";
+
+const MARKET_SUMMARY_METRICS: Array<{
+  key: MarketSummaryMetricKey;
+  label: string;
+  unit: string;
+  formatter: (v: number | null) => string;
+}> = [
+  {
+    key: "trade_count",
+    label: "Trades",
+    unit: "count",
+    formatter: (v) => (v === null ? "--" : formatCount(v)),
+  },
+  {
+    key: "total_notional",
+    label: "Total Notional",
+    unit: "USD",
+    formatter: (v) => formatNotional(v),
+  },
+  {
+    key: "total_premium",
+    label: "Total Premium",
+    unit: "USD",
+    formatter: (v) => formatLargeNumber(v),
+  },
+  {
+    key: "avg_notional",
+    label: "Avg Notional",
+    unit: "USD",
+    formatter: (v) => formatNotional(v),
+  },
+  {
+    key: "avg_premium",
+    label: "Avg Premium",
+    unit: "USD",
+    formatter: (v) => formatLargeNumber(v),
+  },
+];
+
+const MARKET_SUMMARY_DAYS_OPTIONS = [
+  { key: 30, label: "30D" },
+  { key: 90, label: "90D" },
+  { key: 180, label: "6M" },
+  { key: 365, label: "1Y" },
+];
+
+const TENOR_ORDER: Record<string, number> = {
+  "1M": 1, "2M": 2, "3M": 3, "6M": 6, "9M": 9,
+  "1Y": 12, "2Y": 24, "3Y": 36, "5Y": 60, "7Y": 84,
+  "10Y": 120, "15Y": 180, "20Y": 240, "25Y": 300, "30Y": 360,
+};
+
+function tenorSortKey(label: string): number {
+  const upper = label.toUpperCase();
+  if (TENOR_ORDER[upper] !== undefined) return TENOR_ORDER[upper];
+  const match = upper.match(/^(\d+(?:\.\d+)?)\s*(M|Y)$/);
+  if (match) {
+    const amount = Number(match[1]);
+    return match[2] === "Y" ? amount * 12 : amount;
+  }
+  return 9999;
+}
+
+function heatmapColor(value: number, maxValue: number): string {
+  if (maxValue <= 0 || value <= 0) return "bg-slate-900/40";
+  const ratio = Math.min(value / maxValue, 1);
+  if (ratio < 0.1) return "bg-slate-800/60";
+  if (ratio < 0.25) return "bg-sky-950/80";
+  if (ratio < 0.5) return "bg-sky-900/70";
+  if (ratio < 0.75) return "bg-sky-800/60";
+  return "bg-sky-700/50";
+}
+
+function MarketSummaryPanel() {
+  const [isOpen, setIsOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [buckets, setBuckets] = useState<MarketBucket[]>([]);
+  const [daysBack, setDaysBack] = useState(365);
+  const [metric, setMetric] = useState<MarketSummaryMetricKey>("trade_count");
+  const [platformFilter, setPlatformFilter] = useState<
+    "ALL" | "CUSTY" | "IDB"
+  >("ALL");
+  const [packageTypeFilter, setPackageTypeFilter] = useState<string>("ALL");
+  const fetchRef = useRef(false);
+
+  const fetchSummary = useCallback(async () => {
+    if (fetchRef.current) return;
+    fetchRef.current = true;
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({ days: String(daysBack) });
+      const res = await fetch(
+        `/api/swaptions-tape/market-summary?${params.toString()}`,
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to load market summary");
+      }
+      const data = await res.json();
+      setBuckets(data.buckets || []);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load market summary");
+    } finally {
+      setLoading(false);
+      fetchRef.current = false;
+    }
+  }, [daysBack]);
+
+  useEffect(() => {
+    if (isOpen && buckets.length === 0 && !loading && !error) {
+      fetchSummary();
+    }
+  }, [isOpen, buckets.length, loading, error, fetchSummary]);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchSummary();
+    }
+  }, [daysBack, isOpen, fetchSummary]);
+
+  const filteredBuckets = useMemo(() => {
+    let result = buckets;
+    if (platformFilter !== "ALL") {
+      result = result.filter((b) => b.platform_class === platformFilter);
+    }
+    if (packageTypeFilter !== "ALL") {
+      result = result.filter((b) => b.package_type === packageTypeFilter);
+    }
+    return result;
+  }, [buckets, packageTypeFilter, platformFilter]);
+
+  const availablePackageTypes = useMemo(() => {
+    const types = new Set<string>();
+    buckets.forEach((b) => types.add(b.package_type));
+    return Array.from(types).sort();
+  }, [buckets]);
+
+  // Build aggregated heatmap by (forward_label, tenor_label)
+  const heatmapData = useMemo(() => {
+    const agg = new Map<string, number>();
+    const forwardSet = new Set<string>();
+    const tenorSet = new Set<string>();
+
+    filteredBuckets.forEach((b) => {
+      const key = `${b.forward_label}|${b.tenor_label}`;
+      forwardSet.add(b.forward_label);
+      tenorSet.add(b.tenor_label);
+      const current = agg.get(key) ?? 0;
+      const value = Number(b[metric]) || 0;
+      agg.set(key, current + value);
+    });
+
+    const forwards = Array.from(forwardSet).sort(
+      (a, b) => tenorSortKey(a) - tenorSortKey(b),
+    );
+    const tenors = Array.from(tenorSet).sort(
+      (a, b) => tenorSortKey(a) - tenorSortKey(b),
+    );
+    let maxValue = 0;
+    agg.forEach((v) => {
+      if (v > maxValue) maxValue = v;
+    });
+
+    return { agg, forwards, tenors, maxValue };
+  }, [filteredBuckets, metric]);
+
+  // Build aggregated table rows for top structures
+  const topStructures = useMemo(() => {
+    const agg = new Map<
+      string,
+      {
+        key: string;
+        forward: string;
+        tenor: string;
+        tradeCount: number;
+        totalNotional: number;
+        totalPremium: number;
+        avgNotional: number[];
+        avgPremium: number[];
+        custyTrades: number;
+        idbTrades: number;
+        custyPremium: number;
+        idbPremium: number;
+        firstTrade: string | null;
+        lastTrade: string | null;
+      }
+    >();
+    filteredBuckets.forEach((b) => {
+      const key = `${b.forward_label}x${b.tenor_label}`;
+      const existing = agg.get(key) ?? {
+        key,
+        forward: b.forward_label,
+        tenor: b.tenor_label,
+        tradeCount: 0,
+        totalNotional: 0,
+        totalPremium: 0,
+        avgNotional: [],
+        avgPremium: [],
+        custyTrades: 0,
+        idbTrades: 0,
+        custyPremium: 0,
+        idbPremium: 0,
+        firstTrade: null,
+        lastTrade: null,
+      };
+      existing.tradeCount += b.trade_count;
+      existing.totalNotional += b.total_notional ?? 0;
+      existing.totalPremium += b.total_premium ?? 0;
+      if (b.avg_notional !== null) existing.avgNotional.push(b.avg_notional);
+      if (b.avg_premium !== null) existing.avgPremium.push(b.avg_premium);
+      if (b.platform_class === "CUSTY") {
+        existing.custyTrades += b.trade_count;
+        existing.custyPremium += b.total_premium ?? 0;
+      } else {
+        existing.idbTrades += b.trade_count;
+        existing.idbPremium += b.total_premium ?? 0;
+      }
+      if (
+        b.first_trade &&
+        (!existing.firstTrade || b.first_trade < existing.firstTrade)
+      ) {
+        existing.firstTrade = b.first_trade;
+      }
+      if (
+        b.last_trade &&
+        (!existing.lastTrade || b.last_trade > existing.lastTrade)
+      ) {
+        existing.lastTrade = b.last_trade;
+      }
+      agg.set(key, existing);
+    });
+
+    return Array.from(agg.values())
+      .sort((a, b) => b.tradeCount - a.tradeCount)
+      .slice(0, 50);
+  }, [filteredBuckets]);
+
+  const selectedMetricDef =
+    MARKET_SUMMARY_METRICS.find((m) => m.key === metric) ||
+    MARKET_SUMMARY_METRICS[0];
+
+  if (!isOpen) {
+    return (
+      <button
+        type="button"
+        onClick={() => setIsOpen(true)}
+        className="rounded border border-slate-700 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-300 transition hover:bg-slate-800"
+      >
+        Market-Wide Volume Summary
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4 text-[11px] text-slate-300">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm font-semibold text-slate-200">
+          Market-Wide Volume Summary
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsOpen(false)}
+          className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 transition hover:bg-slate-800"
+        >
+          Close
+        </button>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="inline-flex overflow-hidden rounded border border-slate-700">
+          {MARKET_SUMMARY_DAYS_OPTIONS.map((opt) => (
+            <button
+              key={opt.key}
+              type="button"
+              onClick={() => setDaysBack(opt.key)}
+              className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                daysBack === opt.key
+                  ? "bg-slate-700 text-slate-100"
+                  : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <div className="inline-flex overflow-hidden rounded border border-slate-700">
+          {MARKET_SUMMARY_METRICS.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              onClick={() => setMetric(m.key)}
+              className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                metric === m.key
+                  ? "bg-slate-700 text-slate-100"
+                  : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <div className="inline-flex overflow-hidden rounded border border-slate-700">
+          {(["ALL", "CUSTY", "IDB"] as const).map((pf) => (
+            <button
+              key={pf}
+              type="button"
+              onClick={() => setPlatformFilter(pf)}
+              className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                platformFilter === pf
+                  ? pf === "CUSTY"
+                    ? "bg-amber-500/20 text-amber-100"
+                    : pf === "IDB"
+                      ? "bg-sky-500/20 text-sky-100"
+                      : "bg-slate-700 text-slate-100"
+                  : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              {pf}
+            </button>
+          ))}
+        </div>
+        <select
+          value={packageTypeFilter}
+          onChange={(e) => setPackageTypeFilter(e.target.value)}
+          className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200"
+        >
+          <option value="ALL">All Package Types</option>
+          {availablePackageTypes.map((pt) => (
+            <option key={pt} value={pt}>
+              {pt}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={fetchSummary}
+          className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-300 transition hover:bg-slate-800"
+        >
+          Refresh
+        </button>
+      </div>
+
+      {loading && (
+        <div className="mt-3 text-slate-400">Loading market summary...</div>
+      )}
+      {error && <div className="mt-3 text-red-400">{error}</div>}
+
+      {!loading && !error && heatmapData.forwards.length > 0 && (
+        <>
+          <div className="mt-4">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              Volume Heatmap: {selectedMetricDef.label} ({selectedMetricDef.unit}) &middot; Past {daysBack}D
+              {platformFilter !== "ALL" && ` · ${platformFilter}`}
+              {packageTypeFilter !== "ALL" && ` · ${packageTypeFilter}`}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="text-[10px]">
+                <thead>
+                  <tr>
+                    <th className="px-1.5 py-1 text-left text-slate-500">
+                      Fwd \ Tenor
+                    </th>
+                    {heatmapData.tenors.map((t) => (
+                      <th
+                        key={t}
+                        className="px-1.5 py-1 text-center text-slate-400"
+                      >
+                        {t}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {heatmapData.forwards.map((f) => (
+                    <tr key={f}>
+                      <td className="px-1.5 py-0.5 font-semibold text-slate-400">
+                        {f}
+                      </td>
+                      {heatmapData.tenors.map((t) => {
+                        const value =
+                          heatmapData.agg.get(`${f}|${t}`) ?? 0;
+                        const bg = heatmapColor(value, heatmapData.maxValue);
+                        return (
+                          <td
+                            key={t}
+                            className={`px-1.5 py-0.5 text-center font-mono ${bg} ${
+                              value > 0 ? "text-slate-200" : "text-slate-600"
+                            }`}
+                            title={`${f}x${t}: ${selectedMetricDef.formatter(value)}`}
+                          >
+                            {value > 0
+                              ? selectedMetricDef.formatter(value)
+                              : "\u00B7"}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              Top Structures by Trade Count &middot; Past {daysBack}D
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-[10px]">
+                <thead className="bg-slate-950/60 text-[10px] uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-2 py-1 text-left">Structure</th>
+                    <th className="px-2 py-1 text-right">Trades</th>
+                    <th className="px-2 py-1 text-right">Custy / IDB</th>
+                    <th className="px-2 py-1 text-right">Total Notional</th>
+                    <th className="px-2 py-1 text-right">Total Premium</th>
+                    <th className="px-2 py-1 text-right">
+                      Custy/IDB Prem Ratio
+                    </th>
+                    <th className="px-2 py-1 text-right">Avg Size</th>
+                    <th className="px-2 py-1 text-right">Last Trade</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topStructures.map((s) => {
+                    const premiumRatio =
+                      s.idbPremium > 0
+                        ? smartRound(s.custyPremium / s.idbPremium, 2)
+                        : "--";
+                    const avgNotional =
+                      s.avgNotional.length > 0
+                        ? s.avgNotional.reduce((a, b) => a + b, 0) /
+                          s.avgNotional.length
+                        : null;
+                    return (
+                      <tr
+                        key={s.key}
+                        className="border-t border-slate-800/50 hover:bg-slate-900/40"
+                      >
+                        <td className="px-2 py-1 font-semibold text-slate-200">
+                          {s.key}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono text-slate-200">
+                          {formatCount(s.tradeCount)}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono">
+                          <span className="text-amber-300">
+                            {formatCount(s.custyTrades)}
+                          </span>
+                          {" / "}
+                          <span className="text-sky-300">
+                            {formatCount(s.idbTrades)}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono text-slate-200">
+                          {formatNotional(s.totalNotional)}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono text-slate-200">
+                          {formatLargeNumber(s.totalPremium)}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono text-slate-200">
+                          {premiumRatio}
+                          {premiumRatio !== "--" ? "x" : ""}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono text-slate-200">
+                          {formatNotional(avgNotional)}
+                        </td>
+                        <td className="px-2 py-1 text-right text-slate-400">
+                          {s.lastTrade
+                            ? new Date(s.lastTrade).toLocaleDateString("en-US")
+                            : "--"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div className="mt-2 text-[10px] text-slate-500">
+            <span>Units: {selectedMetricDef.label} ({selectedMetricDef.unit})</span>
+            <span className="mx-1 text-slate-600">&middot;</span>
+            <span>IDB MICs: {IDB_MIC_CODES.join(", ")}</span>
+            <span className="mx-1 text-slate-600">&middot;</span>
+            <span>Custy MICs: {CUSTY_MIC_CODES.join(", ")} + unknown</span>
+            <span className="mx-1 text-slate-600">&middot;</span>
+            <span>Premium = abs(total_premium) per trade</span>
+            <span className="mx-1 text-slate-600">&middot;</span>
+            <span>Notional = abs(total_notional) per trade</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function SwaptionTradeTape() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -6441,6 +7198,7 @@ export default function SwaptionTradeTape() {
             inset 0 -1px 0 rgba(125, 211, 252, 0.4) !important;
         }
       `}</style>
+      <MarketSummaryPanel />
       <DataTable
         key={`datatable-${metricMode}`}
         value={filteredRows}
