@@ -617,7 +617,7 @@ function isValid(value: any) {
  * - 1,234,567,890 -> "1.2346b"
  */
 function formatLargeNumber(value: number | null | undefined): string {
-  if (!isValid(value)) return "--";
+  if (value === null || value === undefined || Number.isNaN(value)) return "--";
 
   const absValue = Math.abs(value);
   const sign = value < 0 ? "-" : "";
@@ -942,24 +942,25 @@ function buildColumnFilterPayload(filters: DataTableFilterMeta) {
   FILTER_FIELDS.forEach((field) => {
     const filterMeta = (filters || {})[field];
     if (!filterMeta) return;
-    const constraints = Array.isArray(filterMeta.constraints)
-      ? filterMeta.constraints
+    const filterMetaAny = filterMeta as any;
+    const constraints = Array.isArray(filterMetaAny.constraints)
+      ? filterMetaAny.constraints
       : [
           {
-            value: filterMeta.value,
-            matchMode: filterMeta.matchMode,
+            value: filterMetaAny.value,
+            matchMode: filterMetaAny.matchMode,
           },
         ];
     const activeConstraints = constraints
-      .map((constraint) => ({
+      .map((constraint: any) => ({
         value: constraint?.value,
         matchMode: constraint?.matchMode,
       }))
-      .filter((constraint) => !isEmptyFilterValue(constraint.value));
+      .filter((constraint: any) => !isEmptyFilterValue(constraint.value));
     if (!activeConstraints.length) return;
     payload[field] = {
       operator:
-        filterMeta.operator === FilterOperator.OR
+        filterMetaAny.operator === FilterOperator.OR
           ? FilterOperator.OR
           : FilterOperator.AND,
       constraints: activeConstraints,

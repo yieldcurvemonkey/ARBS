@@ -1290,25 +1290,51 @@ def main_service(
     cleanup_orphans: bool = True,
     initial_lookback_minutes: int = 24 * 60,
     overlap_seconds: int = 0,
+    smart_intervals: bool = True,
+    active_interval_seconds: int = 60,
+    inactive_interval_seconds: int = 10 * 60,
+    active_window_start: str = "07:00",
+    active_window_end: str = "18:00",
+    market_timezone: str = "America/New_York",
+    weekdays_only: bool = True,
     max_iterations: Optional[int] = None,
     stop_on_error: bool = False,
 ) -> None:
     if interval_seconds <= 0:
         raise ValueError(f"interval_seconds must be > 0, got {interval_seconds}")
+    if active_interval_seconds <= 0:
+        raise ValueError(f"active_interval_seconds must be > 0, got {active_interval_seconds}")
+    if inactive_interval_seconds <= 0:
+        raise ValueError(f"inactive_interval_seconds must be > 0, got {inactive_interval_seconds}")
     if max_iterations is not None and max_iterations <= 0:
         raise ValueError(f"max_iterations must be > 0 when provided, got {max_iterations}")
+
+    active_start_minutes = _parse_hhmm_to_minutes(active_window_start, "active-window-start")
+    active_end_minutes = _parse_hhmm_to_minutes(active_window_end, "active-window-end")
+    try:
+        pd.Timestamp.now(tz="UTC").tz_convert(market_timezone)
+    except Exception as exc:
+        raise ValueError(f"Invalid market timezone: {market_timezone}") from exc
 
     cache_path = _resolve_cache_path(cache_path)
     engine = create_db_engine()
     ensure_schema(engine)
 
     print("Starting swaption ingestion service")
-    print(f"  Interval: {interval_seconds} seconds")
+    print(f"  Base interval: {interval_seconds} seconds")
     print(f"  Cache: {cache_path}")
     print(f"  Only NEWT/TRAD: {only_newt}")
     print(f"  Dry run: {dry_run}")
     print(f"  Initial lookback: {initial_lookback_minutes} minutes")
     print(f"  Overlap: {overlap_seconds} seconds")
+    if smart_intervals:
+        print("  Smart intervals: enabled")
+        print(f"  Active interval: {active_interval_seconds} seconds")
+        print(f"  Inactive interval: {inactive_interval_seconds} seconds")
+        print(f"  Active window: {active_window_start} - {active_window_end} ({market_timezone})")
+        print(f"  Weekdays only: {weekdays_only}")
+    else:
+        print("  Smart intervals: disabled")
     if max_iterations:
         print(f"  Max iterations: {max_iterations}")
     print()
@@ -1339,9 +1365,23 @@ def main_service(
             print("Reached max iterations; exiting service loop.")
             break
 
+        now_utc = pd.Timestamp.now(tz="UTC")
+        interval_in_effect = interval_seconds
+        interval_label = "fixed interval"
+        if smart_intervals:
+            local_now = now_utc.tz_convert(market_timezone)
+            is_active = _is_in_active_window(
+                local_now=local_now,
+                active_start_minutes=active_start_minutes,
+                active_end_minutes=active_end_minutes,
+                weekdays_only=weekdays_only,
+            )
+            interval_in_effect = active_interval_seconds if is_active else inactive_interval_seconds
+            interval_label = "active market hours" if is_active else "off-hours"
+
         elapsed = time.monotonic() - cycle_start_monotonic
-        sleep_seconds = max(0.0, interval_seconds - elapsed)
-        print(f"Sleeping {sleep_seconds:.1f} seconds...\n")
+        sleep_seconds = max(0.0, interval_in_effect - elapsed)
+        print(f"Sleeping {sleep_seconds:.1f} seconds ({interval_label}, interval={interval_in_effect}s)...\n")
         time.sleep(sleep_seconds)
 
 
@@ -1350,6 +1390,41 @@ def _env_int(name: str, default: int) -> int:
     if raw is None or raw == "":
         return default
     return int(raw)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+
+
+def _parse_hhmm_to_minutes(value: str, arg_name: str) -> int:
+    try:
+        hour_str, minute_str = value.split(":", maxsplit=1)
+        hour = int(hour_str)
+        minute = int(minute_str)
+    except Exception as exc:
+        raise ValueError(f"Invalid --{arg_name}: {value}. Expected HH:MM.") from exc
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError(f"Invalid --{arg_name}: {value}. Expected HH:MM in 24h format.")
+    return hour * 60 + minute
+
+
+def _is_in_active_window(
+    *,
+    local_now: pd.Timestamp,
+    active_start_minutes: int,
+    active_end_minutes: int,
+    weekdays_only: bool,
+) -> bool:
+    if weekdays_only and local_now.weekday() >= 5:
+        return False
+
+    now_minutes = local_now.hour * 60 + local_now.minute
+    if active_start_minutes <= active_end_minutes:
+        return active_start_minutes <= now_minutes < active_end_minutes
+    return now_minutes >= active_start_minutes or now_minutes < active_end_minutes
 
 
 def parse_args() -> argparse.Namespace:
@@ -1367,13 +1442,71 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ignore-cache", action="store_true", help="Ignore cached classifications (range mode only).")
     parser.add_argument("--only-newt", dest="only_newt", action="store_true", help="Only include NEWT/TRAD events.")
     parser.add_argument("--no-only-newt", dest="only_newt", action="store_false", help=argparse.SUPPRESS)
-    parser.set_defaults(only_newt=False)
+    parser.add_argument(
+        "--smart-intervals",
+        dest="smart_intervals",
+        action="store_true",
+        help="Service mode: use active/off-hours intervals by market time window.",
+    )
+    parser.add_argument(
+        "--no-smart-intervals",
+        dest="smart_intervals",
+        action="store_false",
+        help="Service mode: always use --interval-seconds.",
+    )
+    parser.add_argument(
+        "--weekdays-only",
+        dest="weekdays_only",
+        action="store_true",
+        help="Service mode: active window applies only Monday-Friday.",
+    )
+    parser.add_argument(
+        "--include-weekends",
+        dest="weekdays_only",
+        action="store_false",
+        help="Service mode: active window also applies on weekends.",
+    )
+    parser.set_defaults(
+        only_newt=False,
+        smart_intervals=_env_bool("SWAPPULSE_INGEST_SMART_INTERVALS", True),
+        weekdays_only=_env_bool("SWAPPULSE_INGEST_WEEKDAYS_ONLY", True),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Build dataframes but skip database writes.")
     parser.add_argument(
         "--interval-seconds",
         type=int,
         default=_env_int("SWAPPULSE_INGEST_INTERVAL_SECONDS", 60),
-        help="Polling interval for service mode.",
+        help="Service mode fallback polling interval when smart intervals are disabled.",
+    )
+    parser.add_argument(
+        "--active-interval-seconds",
+        type=int,
+        default=_env_int("SWAPPULSE_INGEST_ACTIVE_INTERVAL_SECONDS", 60),
+        help="Service mode interval during active market window.",
+    )
+    parser.add_argument(
+        "--inactive-interval-seconds",
+        type=int,
+        default=_env_int("SWAPPULSE_INGEST_INACTIVE_INTERVAL_SECONDS", 10 * 60),
+        help="Service mode interval outside active market window.",
+    )
+    parser.add_argument(
+        "--active-window-start",
+        type=str,
+        default=os.getenv("SWAPPULSE_INGEST_ACTIVE_WINDOW_START", "07:00"),
+        help="Service mode active window start in HH:MM, market timezone.",
+    )
+    parser.add_argument(
+        "--active-window-end",
+        type=str,
+        default=os.getenv("SWAPPULSE_INGEST_ACTIVE_WINDOW_END", "18:00"),
+        help="Service mode active window end in HH:MM, market timezone.",
+    )
+    parser.add_argument(
+        "--market-timezone",
+        type=str,
+        default=os.getenv("SWAPPULSE_INGEST_MARKET_TIMEZONE", "America/New_York"),
+        help="Service mode market timezone used for active window.",
     )
     parser.add_argument(
         "--initial-lookback-minutes",
@@ -1448,6 +1581,13 @@ if __name__ == "__main__":
             cleanup_orphans=cleanup_orphans,
             initial_lookback_minutes=args.initial_lookback_minutes,
             overlap_seconds=args.overlap_seconds,
+            smart_intervals=args.smart_intervals,
+            active_interval_seconds=args.active_interval_seconds,
+            inactive_interval_seconds=args.inactive_interval_seconds,
+            active_window_start=args.active_window_start,
+            active_window_end=args.active_window_end,
+            market_timezone=args.market_timezone,
+            weekdays_only=args.weekdays_only,
             max_iterations=args.max_iterations,
             stop_on_error=args.stop_on_error,
         )
