@@ -57,3 +57,32 @@ export type DailyTimeseriesPoint = {
   daySum: number;
   range: number;
 };
+
+export type TimeseriesChartPoint = {
+  timestamp: number;
+  timeLabel: string;
+  custyValue?: number | null;
+  idbValue?: number | null;
+};
+
+export type TimeseriesExtremePoint = {
+  value: number;
+  timeLabel: string;
+  timestamp: number;
+};
+
+export type TimeseriesSummaryStats = {
+  tradeCount: number;
+  totalNotional: number | null;
+  avgNotional: number | null;
+  medianNotional: number | null;
+  tradesPerDay: number | null;
+  avgGapMs: number | null;
+  activeDays: number | null;
+};
+
+export type SeriesValuePoint = {
+  timestamp: number;
+  timeLabel: string;
+  value: number;
+};

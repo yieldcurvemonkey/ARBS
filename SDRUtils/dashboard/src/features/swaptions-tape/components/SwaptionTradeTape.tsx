@@ -38,421 +38,66 @@ import { VirtualScrollerLazyEvent } from "primereact/virtualscroller";
 import "primereact/resources/themes/lara-dark-indigo/theme.css";
 import "primereact/resources/primereact.min.css";
 import "primeicons/primeicons.css";
+import type {
+  TapeLeg,
+  TapeRow,
+  TapeResponse,
+  LegMetricValues,
+} from "../types/trade.types";
+import type {
+  ManualLinkValidationStatus,
+  ManualLinkValidationItem,
+  ManualLinkTrade,
+  ManualLinkHistoryItem,
+  ManualLinkDetail,
+  ManualLinkRow,
+} from "../types/link.types";
+import type {
+  ColumnFilterConstraint,
+  ColumnFilterPayload,
+} from "../types/filter.types";
+import type {
+  TimeseriesChartType,
+  TimeseriesMetricKey,
+  TimeseriesMetricDefinition,
+  TimeseriesRangeKey,
+  TimeseriesViewKey,
+  StraddleTimeseriesPoint,
+  DailyTimeseriesPoint,
+  TimeseriesChartPoint,
+  TimeseriesExtremePoint,
+  TimeseriesSummaryStats,
+  SeriesValuePoint,
+} from "../types/chart.types";
+import {
+  SAFE_ACTIONS,
+  ACTIVE_ACTIONS,
+  POLL_INTERVAL_MS,
+  ROW_ESTIMATE_PX,
+  EMPTY_VALUE,
+  PACKAGE_TONES,
+  NESTED_TABLE_BG,
+  ACTION_TONES,
+  COLUMN_DEFS,
+  METRIC_SCHEMA,
+  STRADDLE_STYLE,
+  STRADDLE_SPLIT_FACTOR,
+  BPVOL_DAY_DIVISOR,
+  STRADDLE_GREEK_FIELDS,
+  TIMESERIES_METRICS,
+  DAILY_CLOSE_CUMULATIVE_METRICS,
+  TIMESERIES_RANGE_OPTIONS,
+  TIMESERIES_VIEW_OPTIONS,
+  TIMESERIES_FETCH_LIMIT,
+} from "../constants";
 
-type TapeLeg = {
-  trade_id?: string;
-  leg_order?: number;
-  product_type?: string | null;
-  trade_label?: string | null;
-  strike?: number | null;
-  notional?: number | null;
-  notional_currency?: string | null;
-  premium?: number | null;
-  is_notional_capped?: boolean | number | string | null;
-  is_manually_linked?: boolean | number | string | null;
-  manual_link_id?: string | null;
-  exercise_style?: string | null;
-  package_type?: string | null;
-  execution_timestamp?: string | null;
-  execution_start?: string | null;
-  execution_end?: string | null;
-  execution_time?: string | null;
-  event_timestamp?: string | null;
-  leg_metrics?: Record<string, any>;
-  event_action?: string | null;
-};
-
-type TapeRow = {
-  package_id: string;
-  package_type: string | null;
-  package_source?: string | null;
-  manual_link_id?: string | null;
-  manual_package_id?: string | null;
-  user_comment?: string | null;
-  link_reason?: string | null;
-  tags?: string[] | null;
-  link_metrics?: Record<string, any> | null;
-  link_created_by?: string | null;
-  link_created_at?: string | null;
-  detection_strat?: string | null;
-  as_of_date: string | null;
-  execution_start: string;
-  execution_end: string;
-  expiration_date: string | null;
-  underlying_expiration_date: string | null;
-  tenor_label: string | null;
-  forward_label: string | null;
-  legs_count: number;
-  total_notional: number | null;
-  total_premium: number | null;
-  package_indicator: boolean | null;
-  package_transaction_price: number | null;
-  package_confidence: number | null;
-  package_reason: string | null;
-  is_notional_capped?: boolean | number | string | null;
-  vega_curve_id?: string | null;
-  vega_curve_type?: string | null;
-  package_metrics: Record<string, any> | null;
-  legs_json: TapeLeg[];
-  platform_identifier?: string | null;
-  event_action?: string | null;
-};
-
-type TapeResponse = {
-  rows: TapeRow[];
-  nextCursor: string | null;
-  hasMore: boolean;
-  latestExecutionStart: string | null;
-};
-
-type ManualLinkValidationStatus = "ok" | "warn" | "error";
-
-type ManualLinkValidationItem = {
-  key: string;
-  label: string;
-  status: ManualLinkValidationStatus;
-  message: string;
-};
-
-type ManualLinkTrade = {
-  trade_id: string;
-  package_id: string;
-  trade_label?: string | null;
-  product_type?: string | null;
-  notional?: number | null;
-  execution_timestamp?: string | null;
-  platform_identifier?: string | null;
-};
-
-type ManualLinkHistoryItem = {
-  history_id: number;
-  action: string;
-  changed_by: string;
-  changed_at: string;
-  change_details?: Record<string, any> | null;
-  previous_state?: Record<string, any> | null;
-};
-
-type ManualLinkDetail = {
-  link_id: string;
-  manual_package_id: string;
-  package_type: string | null;
-  linked_trade_ids: string[];
-  created_by: string;
-  created_at: string;
-  updated_by?: string | null;
-  updated_at?: string | null;
-  user_comment?: string | null;
-  link_reason?: string | null;
-  tags?: string[] | null;
-  link_metrics?: Record<string, any> | null;
-  is_active: boolean;
-};
-
-type ManualLinkRow = {
-  link_id: string;
-  manual_package_id: string;
-  linked_trade_ids?: string[] | string | null;
-  is_active?: boolean | null;
-  created_at?: string | null;
-  package_type?: string | null;
-};
-
-type LegMetricValues = {
-  bpvol: number | null;
-  dv01: number | null;
-  vega01: number | null;
-  gamma01: number | null;
-  theta01: number | null;
-};
-
-type ColumnFilterConstraint = {
-  value: any;
-  matchMode?: string;
-};
-
-type ColumnFilterPayload = Record<
-  string,
-  {
-    operator?: string;
-    constraints: ColumnFilterConstraint[];
-  }
->;
-
-type TimeseriesChartType = "line" | "bar";
-
-type TimeseriesMetricKey =
-  | "bpvolYr"
-  | "bpvolDay"
-  | "premiumBps"
-  | "notional"
-  | "premium"
-  | "dv01"
-  | "vega01"
-  | "gamma01"
-  | "theta01";
-
-type TimeseriesMetricDefinition = {
-  key: TimeseriesMetricKey;
-  label: string;
-  color: string;
-  decimals: number;
-  chartType: TimeseriesChartType;
-  unit?: string;
-};
-
-type TimeseriesRangeKey =
-  | "1D"
-  | "1W"
-  | "1M"
-  | "3M"
-  | "6M"
-  | "1Y"
-  | "CUSTOM"
-  | "ALL";
-type TimeseriesViewKey = "INTRADAY" | "DAILY_CLOSE" | "DAILY_OHLC";
-
-type StraddleTimeseriesPoint = {
-  timestamp: number;
-  timeLabel: string;
-  bpvolYr: number | null;
-  bpvolDay: number | null;
-  premiumBps: number | null;
-  notional: number | null;
-  premium: number | null;
-  dv01: number | null;
-  vega01: number | null;
-  gamma01: number | null;
-  theta01: number | null;
-};
-
-type DailyTimeseriesPoint = {
-  timestamp: number;
-  timeLabel: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  daySum: number;
-  range: number;
-};
-
-type TimeseriesChartPoint = {
-  timestamp: number;
-  timeLabel: string;
-  custyValue?: number | null;
-  idbValue?: number | null;
-};
-
-type TimeseriesExtremePoint = {
-  value: number;
-  timeLabel: string;
-  timestamp: number;
-};
-
-type TimeseriesSummaryStats = {
-  tradeCount: number;
-  totalNotional: number | null;
-  avgNotional: number | null;
-  medianNotional: number | null;
-  tradesPerDay: number | null;
-  avgGapMs: number | null;
-  activeDays: number | null;
-};
-
-const SAFE_ACTIONS = new Set(["NEWT", "TRAD", "MODI"]);
-const ACTIVE_ACTIONS = new Set(["NEWT-TRAD", "MODI-TRAD", "CORR-TRAD"]);
-const POLL_INTERVAL_MS = 5000;
-const ROW_ESTIMATE_PX = 44;
-const EMPTY_VALUE = "\u2014";
-const PACKAGE_TONES: Record<string, string> = {
-  STRADDLE: "!bg-purple-900/30", // Purple (Distinct from others)
-  RISK_REVERSAL: "!bg-amber-900/30", // Amber (Orange-yellow, distinct from Red)
-  VERTICAL_SPREAD_1X1: "!bg-blue-900/30", // Blue
-  VERTICAL_SPREAD_1X2: "!bg-cyan-900/30", // Cyan (High contrast with Blue and Emerald)
-  RECEIVER_LADDER: "!bg-emerald-900/30", // Emerald (Distinct Green)
-  CUSTY_RR_STRANGLE: "!bg-lime-900/30", // Lime (Bright Yellow-Green, replaces Pink)
-  OUTRIGHT: "!bg-gray-800/50", // Gray (Neutral, distinct from saturated colors)
-};
-const NESTED_TABLE_BG = "bg-slate-900/50";
-
-const ACTION_TONES: Record<string, string> = {
-  NEWT: "",
-  TRAD: "",
-  MODI: "",
-};
-
-const COLUMN_DEFS = [
-  { key: "event_action", label: "Action", width: 110 },
-  { key: "package_type", label: "Package Type", width: 150 },
-  { key: "time", label: "Time", width: 180 },
-  { key: "platform", label: "Platform", width: 120 },
-  { key: "notional", label: "Notional", width: 130 },
-  { key: "label", label: "Trade Label", width: 700 },
-];
-
-const METRIC_SCHEMA = {
-  STRADDLE: {
-    bpvol: "straddle_bpvol_yr",
-    theta01: "straddle_theta1d",
-    greeks: {
-      dv01: "straddle_dv01",
-      vega01: "straddle_vega01",
-      gamma01: "straddle_gamma01",
-    },
-  },
-  RISK_REVERSAL: {
-    bpvol: "rr_atm_bpvol",
-    skew: {
-      payer: "rr_payer_skew",
-      receiver: "rr_receiver_skew",
-    },
-    greeks: {
-      dv01: "rr_wing_dv01",
-      vega01: "rr_vega01",
-    },
-  },
-  VERTICAL_SPREAD_1X1: {
-    bpvol: ["vs_atm_bpvol_yr", "vs_otm_bpvol_yr"],
-    greeks: {
-      dv01: ["vs_atm_dv01", "vs_otm_dv01"],
-      vega01: ["vs_atm_vega01", "vs_otm_vega01"],
-    },
-  },
-  VERTICAL_SPREAD_1X2: {
-    bpvol: ["vs_atm_bpvol_yr", "vs_otm_bpvol_yr"],
-    greeks: {
-      dv01: ["vs_atm_dv01", "vs_otm_dv01"],
-      vega01: ["vs_atm_vega01", "vs_otm_vega01"],
-    },
-  },
-  RECEIVER_LADDER: {
-    cols: ["ladder_strikes", "ladder_notionals"],
-  },
-  PAYER_LADDER: {
-    cols: ["ladder_strikes", "ladder_notionals"],
-  },
-} as const;
-
-const STRADDLE_STYLE = "EURO VANILLA PHYS";
-const STRADDLE_SPLIT_FACTOR = 0.5;
-const BPVOL_DAY_DIVISOR = 15.87;
+// Platform classification constants (component-specific, distinct from constants.ts)
 const IDB_MIC_CODES = ["BGCD", "ISWV", "TPSE"] as const;
 const CUSTY_MIC_CODES = ["BILT", "XXXX", "TWSF", "BBSF", "XOFF"] as const;
 const IDB_MIC_SET = new Set<string>(IDB_MIC_CODES);
 const CUSTY_MIC_SET = new Set<string>(CUSTY_MIC_CODES);
-const STRADDLE_GREEK_FIELDS = {
-  dv01: "straddle_dv01",
-  vega01: "straddle_vega01",
-  gamma01: "straddle_gamma01",
-  theta01: "straddle_theta1d",
-} as const;
 const CUSTY_SERIES_COLOR = "#f59e0b";
 const IDB_SERIES_COLOR = "#38bdf8";
-const TIMESERIES_METRICS: TimeseriesMetricDefinition[] = [
-  {
-    key: "bpvolYr",
-    label: "BPVol/Yr",
-    unit: "bpvol/yr",
-    color: "#38bdf8",
-    decimals: 3,
-    chartType: "line",
-  },
-  {
-    key: "bpvolDay",
-    label: "BPVol/day",
-    unit: "bpvol/day",
-    color: "#f59e0b",
-    decimals: 3,
-    chartType: "line",
-  },
-  {
-    key: "premiumBps",
-    label: "Premium (bps)",
-    unit: "bps",
-    color: "#f97316",
-    decimals: 2,
-    chartType: "line",
-  },
-  {
-    key: "notional",
-    label: "Notional",
-    unit: "USD",
-    color: "#22c55e",
-    decimals: 1,
-    chartType: "bar",
-  },
-  {
-    key: "premium",
-    label: "Premium",
-    unit: "USD",
-    color: "#0ea5e9",
-    decimals: 2,
-    chartType: "bar",
-  },
-  {
-    key: "dv01",
-    label: "DV01",
-    unit: "USD/bp",
-    color: "#a855f7",
-    decimals: 2,
-    chartType: "bar",
-  },
-  {
-    key: "vega01",
-    label: "Vega01",
-    unit: "USD/bp",
-    color: "#f472b6",
-    decimals: 2,
-    chartType: "bar",
-  },
-  {
-    key: "gamma01",
-    label: "Gamma01",
-    unit: "USD/bp^2",
-    color: "#eab308",
-    decimals: 2,
-    chartType: "bar",
-  },
-  {
-    key: "theta01",
-    label: "Theta1D",
-    unit: "USD/day",
-    color: "#fb7185",
-    decimals: 2,
-    chartType: "bar",
-  },
-];
-const DAILY_CLOSE_CUMULATIVE_METRICS = new Set<TimeseriesMetricKey>([
-  "notional",
-  "dv01",
-  "vega01",
-  "gamma01",
-  "theta01",
-]);
-const TIMESERIES_RANGE_OPTIONS: Array<{
-  key: TimeseriesRangeKey;
-  label: string;
-  days: number | null;
-}> = [
-  { key: "1D", label: "1D", days: 1 },
-  { key: "1W", label: "1W", days: 7 },
-  { key: "1M", label: "1M", days: 30 },
-  { key: "3M", label: "3M", days: 90 },
-  { key: "6M", label: "6M", days: 180 },
-  { key: "1Y", label: "1Y", days: 365 },
-  { key: "CUSTOM", label: "Custom", days: null },
-  { key: "ALL", label: "All", days: null },
-];
-const TIMESERIES_VIEW_OPTIONS: Array<{
-  key: TimeseriesViewKey;
-  label: string;
-}> = [
-  { key: "INTRADAY", label: "Intraday" },
-  { key: "DAILY_CLOSE", label: "Daily Close" },
-  { key: "DAILY_OHLC", label: "Daily OHLC" },
-];
-const TIMESERIES_FETCH_LIMIT = 500;
 const TIMESERIES_MAX_ROWS = 50000;
 const TIMESERIES_MAX_PAGES = 10000;
 const TIMESERIES_MAX_SCAN_MS = 60000 * 2;
@@ -1729,12 +1374,6 @@ function buildDailyTimeseries(
       range: rest.high - rest.low,
     }));
 }
-
-type SeriesValuePoint = {
-  timestamp: number;
-  timeLabel: string;
-  value: number;
-};
 
 function buildIntradaySeries(
   points: StraddleTimeseriesPoint[],

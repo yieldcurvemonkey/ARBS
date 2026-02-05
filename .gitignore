@@ -223,6 +223,9 @@ node_modules/
 frontend/.next/
 frontend/node_modules/
 
+# Allow Next.js src/lib/ (overrides Python lib/ pattern on line 17)
+!SDRUtils/dashboard/src/lib/
+
 *.xlsx
 
 _temp_raw_raw_trades.csv

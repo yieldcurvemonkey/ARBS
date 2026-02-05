@@ -43,3 +43,12 @@ export type ManualLinkDetail = {
   link_metrics?: Record<string, any> | null;
   is_active: boolean;
 };
+
+export type ManualLinkRow = {
+  link_id: string;
+  manual_package_id: string;
+  linked_trade_ids?: string[] | string | null;
+  is_active?: boolean | null;
+  created_at?: string | null;
+  package_type?: string | null;
+};
