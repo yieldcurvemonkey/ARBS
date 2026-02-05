@@ -3,7 +3,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { DataTableFilterMeta, FilterOperator } from 'primereact/api';
+import { FilterOperator } from 'primereact/api';
+import type { DataTableFilterMeta } from 'primereact/datatable';
 
 export interface UseColumnFiltersReturn {
   filters: DataTableFilterMeta;

@@ -17,7 +17,7 @@ export interface TradeTapeTableProps {
   onRowCollapse: (row: TapeRow) => void;
   onSort?: (event: any) => void;
   sortField?: string;
-  sortOrder?: number;
+  sortOrder?: 1 | 0 | -1 | null;
 }
 
 /**
@@ -49,14 +49,17 @@ export function TradeTapeTable(props: TradeTapeTableProps) {
         value={rows}
         loading={loading}
         selection={selectedRows}
-        onSelectionChange={(e) => onSelectionChange(e.value)}
+        selectionMode="multiple"
+        onSelectionChange={(e) =>
+          onSelectionChange((e.value as unknown as TapeRow[]) || [])
+        }
         expandedRows={expandedRows}
         onRowToggle={(e) => {
           // Handle row expansion
         }}
         dataKey="package_id"
         sortField={sortField}
-        sortOrder={sortOrder}
+        sortOrder={sortOrder ?? null}
         onSort={onSort}
         scrollable
         scrollHeight="flex"

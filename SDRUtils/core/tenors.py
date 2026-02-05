@@ -14,6 +14,7 @@ import QuantLib as ql
 
 from SDRUtils.core.dates import calculate_tenor_components, to_ql_date, to_naive_timestamp
 
+
 def get_imm_label(effective_date: pd.Timestamp, tolerance_days: int = 2) -> Optional[str]:
     """
     Get IMM label (e.g., 'IMM_Z2025') with tolerance for unadjusted dates.
@@ -157,6 +158,8 @@ def tenor_to_label(years: float, expiration_date: Optional[pd.Timestamp] = None,
     if abs(closest_days - days) <= tolerance_days:
         if tenor_days[closest_days] == "2D" and not is_swaptions:
             return "spot"
+        if tenor_days[closest_days] == "4W" and days >= 27:
+            return "1M"
         return tenor_days[closest_days]
 
     # Fallback for non-standard tenors

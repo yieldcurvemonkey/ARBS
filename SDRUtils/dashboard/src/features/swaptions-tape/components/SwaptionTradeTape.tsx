@@ -151,7 +151,7 @@ type ManualLinkDetail = {
 type ManualLinkRow = {
   link_id: string;
   manual_package_id: string;
-  linked_trade_ids?: string[] | null;
+  linked_trade_ids?: string[] | string | null;
   is_active?: boolean | null;
   created_at?: string | null;
   package_type?: string | null;
@@ -484,8 +484,24 @@ function normalizeTenorToken(value: string | null | undefined): string | null {
 }
 
 const STRIKE_MATCH_EPS = 1e-4;
+const STRIKE_DISPLAY_DECIMALS = 3;
 const DEFAULT_TEXT_MATCH_MODE = FilterMatchMode.CONTAINS;
 const DEFAULT_NUMERIC_MATCH_MODE = FilterMatchMode.EQUALS;
+const TIME_FILTER_MATCH_MODE_OPTIONS = [
+  { label: "Contains", value: FilterMatchMode.CONTAINS },
+  { label: "Equals", value: FilterMatchMode.EQUALS },
+  { label: "Not equals", value: FilterMatchMode.NOT_EQUALS },
+  { label: "Greater than", value: FilterMatchMode.GREATER_THAN },
+  {
+    label: "Greater than or equal",
+    value: FilterMatchMode.GREATER_THAN_OR_EQUAL_TO,
+  },
+  { label: "Less than", value: FilterMatchMode.LESS_THAN },
+  {
+    label: "Less than or equal",
+    value: FilterMatchMode.LESS_THAN_OR_EQUAL_TO,
+  },
+];
 const FILTER_FIELDS = [
   "action",
   "package_type",
@@ -584,6 +600,89 @@ function formatExecutionWindow(start: string, end: string): string {
   const endStr = `${endDate.toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
   if (startDate.getTime() === endDate.getTime()) return startStr;
   return `${startStr} / ${endStr}`;
+}
+
+const MONTH_NAMES_SHORT = [
+  "jan",
+  "feb",
+  "mar",
+  "apr",
+  "may",
+  "jun",
+  "jul",
+  "aug",
+  "sep",
+  "oct",
+  "nov",
+  "dec",
+] as const;
+
+const MONTH_NAMES_LONG = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+] as const;
+
+function buildDateSearchTokens(date: Date, useUtc = false): string[] {
+  if (Number.isNaN(date.getTime())) return [];
+  const year = useUtc ? date.getUTCFullYear() : date.getFullYear();
+  const month = (useUtc ? date.getUTCMonth() : date.getMonth()) + 1;
+  const day = useUtc ? date.getUTCDate() : date.getDate();
+  const mm = String(month).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  const monthShort = MONTH_NAMES_SHORT[month - 1];
+  const monthLong = MONTH_NAMES_LONG[month - 1];
+
+  return [
+    `${month}/${day}`,
+    `${mm}/${dd}`,
+    `${month}-${day}`,
+    `${mm}-${dd}`,
+    `${month}.${day}`,
+    `${mm}.${dd}`,
+    `${month}/${day}/${year}`,
+    `${mm}/${dd}/${year}`,
+    `${year}-${mm}-${dd}`,
+    `${monthShort} ${day}`,
+    `${monthLong} ${day}`,
+    `${day} ${monthShort}`,
+    `${day} ${monthLong}`,
+    `${monthShort} ${day} ${year}`,
+    `${monthLong} ${day} ${year}`,
+  ];
+}
+
+function buildExecutionTimeFilterValue(
+  start: string | null | undefined,
+  end: string | null | undefined,
+): string {
+  const tokenSet = new Set<string>();
+  const appendToken = (value: string | null | undefined) => {
+    if (!value) return;
+    const normalized = value.trim().toLowerCase();
+    if (normalized) tokenSet.add(normalized);
+  };
+
+  appendToken(formatExecutionWindow(start || "", end || ""));
+
+  [start, end].forEach((rawValue) => {
+    if (!rawValue) return;
+    appendToken(rawValue);
+    const date = new Date(rawValue);
+    buildDateSearchTokens(date, false).forEach((token) => appendToken(token));
+    buildDateSearchTokens(date, true).forEach((token) => appendToken(token));
+  });
+
+  return Array.from(tokenSet).join(" ");
 }
 
 function formatTimestamp(value: string | null | undefined): string {
@@ -705,8 +804,12 @@ function computeDisplayNotional(row: TapeRow): number | null {
 }
 
 function formatStrikeAbsolute(strike?: number | null) {
-  if (!isValid(strike)) return "--";
-  return smartRound(Number(strike) * 100, 2);
+  const strikeValue = parseMetricNumber(strike);
+  if (strikeValue === null) return "--";
+  const strikePct = strikeValue * 100;
+  const factor = 10 ** STRIKE_DISPLAY_DECIMALS;
+  const rounded = Math.round((strikePct + Number.EPSILON) * factor) / factor;
+  return rounded.toFixed(STRIKE_DISPLAY_DECIMALS);
 }
 
 function formatStrikeOffset(offset?: number | null, signAlways = true) {
@@ -919,6 +1022,183 @@ function parseFilterNumber(value: any): number | null {
   return null;
 }
 
+const ISO_TIMESTAMP_PATTERN =
+  /\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:z|[+-]\d{2}:?\d{2})?\b/i;
+const ISO_LOCAL_TIMESTAMP_PATTERN =
+  /\b(\d{4})-(\d{1,2})-(\d{1,2})(?:[ t](\d{1,2}):(\d{2})(?::(\d{2}))?)?\b/i;
+const US_LOCAL_TIMESTAMP_PATTERN =
+  /\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?\b/;
+const EASTERN_TIME_ZONE = "America/New_York";
+const EASTERN_PARTS_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: EASTERN_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+function parseFilterYear(rawYear: string): number {
+  const parsed = Number(rawYear);
+  if (!Number.isFinite(parsed)) return Number.NaN;
+  if (rawYear.length === 2) {
+    return parsed >= 70 ? parsed + 1900 : parsed + 2000;
+  }
+  return parsed;
+}
+
+function extractTimeZoneParts(timestampMs: number, timeZone: string) {
+  const formatter =
+    timeZone === EASTERN_TIME_ZONE
+      ? EASTERN_PARTS_FORMATTER
+      : new Intl.DateTimeFormat("en-US", {
+          timeZone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        });
+  const parts = formatter.formatToParts(new Date(timestampMs));
+  const values: Record<string, number> = {};
+  parts.forEach((part) => {
+    if (part.type === "literal") return;
+    const numeric = Number(part.value);
+    if (Number.isFinite(numeric)) values[part.type] = numeric;
+  });
+  const year = values.year;
+  const month = values.month;
+  const day = values.day;
+  const hour = values.hour;
+  const minute = values.minute;
+  const second = values.second;
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    !Number.isInteger(second)
+  ) {
+    return null;
+  }
+  return { year, month, day, hour, minute, second };
+}
+
+function toEasternEpochMs(
+  year: number,
+  month: number,
+  day: number,
+  hour = 0,
+  minute = 0,
+  second = 0,
+): number | null {
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    !Number.isInteger(second)
+  ) {
+    return null;
+  }
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+  if (hour < 0 || hour > 23) return null;
+  if (minute < 0 || minute > 59) return null;
+  if (second < 0 || second > 59) return null;
+
+  const desiredAsUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+  const probe = new Date(desiredAsUtc);
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() + 1 !== month ||
+    probe.getUTCDate() !== day ||
+    probe.getUTCHours() !== hour ||
+    probe.getUTCMinutes() !== minute ||
+    probe.getUTCSeconds() !== second
+  ) {
+    return null;
+  }
+
+  let candidate = desiredAsUtc;
+  for (let i = 0; i < 4; i += 1) {
+    const zoned = extractTimeZoneParts(candidate, EASTERN_TIME_ZONE);
+    if (!zoned) return null;
+    const zonedAsUtc = Date.UTC(
+      zoned.year,
+      zoned.month - 1,
+      zoned.day,
+      zoned.hour,
+      zoned.minute,
+      zoned.second,
+    );
+    const delta = desiredAsUtc - zonedAsUtc;
+    if (delta === 0) break;
+    candidate += delta;
+  }
+
+  const finalized = extractTimeZoneParts(candidate, EASTERN_TIME_ZONE);
+  if (!finalized) return null;
+  if (
+    finalized.year !== year ||
+    finalized.month !== month ||
+    finalized.day !== day ||
+    finalized.hour !== hour ||
+    finalized.minute !== minute ||
+    finalized.second !== second
+  ) {
+    return null;
+  }
+  return candidate;
+}
+
+function parseFilterTimestamp(value: any): number | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.replace(/\+/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+
+  const isoMatch = normalized.match(ISO_TIMESTAMP_PATTERN)?.[0];
+  if (isoMatch && /(?:z|[+-]\d{2}:?\d{2})$/i.test(isoMatch)) {
+    const parsed = Date.parse(isoMatch);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+
+  const usMatch = normalized.match(US_LOCAL_TIMESTAMP_PATTERN);
+  if (usMatch) {
+    const month = Number(usMatch[1]);
+    const day = Number(usMatch[2]);
+    const year = parseFilterYear(usMatch[3]);
+    const hour = usMatch[4] ? Number(usMatch[4]) : 0;
+    const minute = usMatch[5] ? Number(usMatch[5]) : 0;
+    const second = usMatch[6] ? Number(usMatch[6]) : 0;
+    const parsed = toEasternEpochMs(year, month, day, hour, minute, second);
+    if (parsed !== null) return parsed;
+  }
+
+  const isoLocalMatch = normalized.match(ISO_LOCAL_TIMESTAMP_PATTERN);
+  if (isoLocalMatch) {
+    const year = Number(isoLocalMatch[1]);
+    const month = Number(isoLocalMatch[2]);
+    const day = Number(isoLocalMatch[3]);
+    const hour = isoLocalMatch[4] ? Number(isoLocalMatch[4]) : 0;
+    const minute = isoLocalMatch[5] ? Number(isoLocalMatch[5]) : 0;
+    const second = isoLocalMatch[6] ? Number(isoLocalMatch[6]) : 0;
+    const parsed = toEasternEpochMs(year, month, day, hour, minute, second);
+    if (parsed !== null) return parsed;
+  }
+
+  const direct = Date.parse(normalized);
+  if (!Number.isNaN(direct)) return direct;
+
+  return null;
+}
+
 function normalizeFilterConstraintValue(field: string, value: any) {
   if (NUMERIC_FILTER_FIELDS.has(field)) {
     if (Array.isArray(value)) {
@@ -993,14 +1273,14 @@ function parseColumnFilterPayload(rawValue: string | null): DataTableFilterMeta 
           },
         ];
     const normalizedConstraints = constraints
-      .map((constraint) => ({
+      .map((constraint: any) => ({
         value: normalizeFilterConstraintValue(field, constraint?.value),
         matchMode:
           typeof constraint?.matchMode === "string"
             ? constraint.matchMode
             : (INITIAL_FILTERS as any)[field]?.constraints?.[0]?.matchMode,
       }))
-      .filter((constraint) => !isEmptyFilterValue(constraint.value));
+      .filter((constraint: any) => !isEmptyFilterValue(constraint.value));
     if (!normalizedConstraints.length) return;
     nextFilters[field] = {
       operator:
@@ -1031,7 +1311,39 @@ function matchFilterValue(
 
   const rowNumber = parseFilterNumber(rowValue);
   const filterNumber = parseFilterNumber(filterValue);
-  const numericModes = new Set([
+  const rowTimestamp = parseFilterTimestamp(rowValue);
+  const filterTimestamp = parseFilterTimestamp(filterValue);
+  const comparisonModes = new Set<string>([
+    FilterMatchMode.EQUALS,
+    FilterMatchMode.NOT_EQUALS,
+    FilterMatchMode.LESS_THAN,
+    FilterMatchMode.LESS_THAN_OR_EQUAL_TO,
+    FilterMatchMode.GREATER_THAN,
+    FilterMatchMode.GREATER_THAN_OR_EQUAL_TO,
+  ]);
+  if (
+    comparisonModes.has(mode) &&
+    rowTimestamp !== null &&
+    filterTimestamp !== null
+  ) {
+    switch (mode) {
+      case FilterMatchMode.EQUALS:
+        return rowTimestamp === filterTimestamp;
+      case FilterMatchMode.NOT_EQUALS:
+        return rowTimestamp !== filterTimestamp;
+      case FilterMatchMode.LESS_THAN:
+        return rowTimestamp < filterTimestamp;
+      case FilterMatchMode.LESS_THAN_OR_EQUAL_TO:
+        return rowTimestamp <= filterTimestamp;
+      case FilterMatchMode.GREATER_THAN:
+        return rowTimestamp > filterTimestamp;
+      case FilterMatchMode.GREATER_THAN_OR_EQUAL_TO:
+        return rowTimestamp >= filterTimestamp;
+      default:
+        return false;
+    }
+  }
+  const numericModes = new Set<string>([
     FilterMatchMode.EQUALS,
     FilterMatchMode.NOT_EQUALS,
     FilterMatchMode.LESS_THAN,
@@ -1090,16 +1402,16 @@ function matchFilterMeta(rowValue: any, filterMeta: any): boolean {
         },
       ];
   const activeConstraints = constraints.filter(
-    (constraint) => !isEmptyFilterValue(constraint?.value),
+    (constraint: any) => !isEmptyFilterValue(constraint?.value),
   );
   if (!activeConstraints.length) return true;
   const operator = filterMeta.operator || FilterOperator.AND;
   const useOr = operator === FilterOperator.OR;
   return useOr
-    ? activeConstraints.some((constraint) =>
+    ? activeConstraints.some((constraint: any) =>
         matchFilterValue(rowValue, constraint.value, constraint.matchMode),
       )
-    : activeConstraints.every((constraint) =>
+    : activeConstraints.every((constraint: any) =>
         matchFilterValue(rowValue, constraint.value, constraint.matchMode),
       );
 }
@@ -1115,7 +1427,7 @@ function hasActiveConstraints(filterMeta: any): boolean {
         },
       ];
   return constraints.some(
-    (constraint) => !isEmptyFilterValue(constraint?.value),
+    (constraint: any) => !isEmptyFilterValue(constraint?.value),
   );
 }
 
@@ -1954,6 +2266,39 @@ function removeTrailingStyle(underlying: string, style: string) {
   return underlying.replace(regex, "").trim();
 }
 
+function resolveRiskReversalWidthBps(
+  strikes: number[],
+  metrics: Record<string, any>,
+): number | null {
+  if (!strikes.length) {
+    const widthFromMetrics = parseMetricNumber(metrics.rr_out_strike);
+    return widthFromMetrics !== null ? Math.round(widthFromMetrics) : null;
+  }
+
+  const sortedStrikes = [...strikes].sort((a, b) => a - b);
+  const minStrike = sortedStrikes[0];
+  const maxStrike = sortedStrikes[sortedStrikes.length - 1];
+  const middleIndex = Math.floor(sortedStrikes.length / 2);
+  const atmfFromStrikes =
+    sortedStrikes.length >= 3
+      ? sortedStrikes.length % 2 === 1
+        ? sortedStrikes[middleIndex]
+        : (sortedStrikes[middleIndex - 1] + sortedStrikes[middleIndex]) / 2
+      : null;
+  const atmf = atmfFromStrikes ?? parseMetricNumber(metrics.rr_atmf);
+  const widthFromStrikes =
+    atmf !== null
+      ? Math.round(
+          Math.max(Math.abs(maxStrike - atmf), Math.abs(atmf - minStrike)) *
+            10000,
+        )
+      : null;
+  if (widthFromStrikes !== null) return widthFromStrikes;
+
+  const widthFromMetrics = parseMetricNumber(metrics.rr_out_strike);
+  return widthFromMetrics !== null ? Math.round(widthFromMetrics) : null;
+}
+
 function buildRichLabel(row: TapeRow): string {
   const legs = row.legs_json || [];
   const pkgType = (row.package_type || "").toUpperCase();
@@ -1994,19 +2339,10 @@ function buildRichLabel(row: TapeRow): string {
   // RISK REVERSAL
   if (pkgType === "RISK_REVERSAL") {
     const strikes = legs
-      .map((l) => l.strike)
-      .filter((s) => isValid(s))
-      .map(Number)
+      .map((leg) => parseMetricNumber(leg.strike))
+      .filter((strike): strike is number => strike !== null)
       .sort((a, b) => a - b);
-    const atmf = isValid(metrics.rr_atmf)
-      ? Number(metrics.rr_atmf)
-      : strikes.length === 3
-        ? strikes[1]
-        : null;
-    let width: number | null = null;
-    if (isValid(metrics.rr_out_strike)) width = Number(metrics.rr_out_strike);
-    else if (strikes.length >= 3 && isValid(atmf))
-      width = Math.round((Math.max(...strikes) - atmf) * 10000);
+    const width = resolveRiskReversalWidthBps(strikes, metrics);
     if (width !== null) {
       return `${underlying} ${width}bp RR`;
     }
@@ -2671,15 +3007,17 @@ function LegsSubtable({
 
         const totalBpvolYr =
           parseMetricNumber(metrics.rr_skew_bpvol) ??
-          (highValues?.bpvolValue !== null && lowValues?.bpvolValue !== null
-            ? highValues.bpvolValue - lowValues.bpvolValue
+          ((highValues?.bpvolValue ?? null) !== null &&
+          (lowValues?.bpvolValue ?? null) !== null
+            ? (highValues?.bpvolValue ?? 0) - (lowValues?.bpvolValue ?? 0)
             : null);
         const totalBpvolDay =
           totalBpvolYr !== null
             ? totalBpvolYr / BPVOL_DAY_DIVISOR
-            : highValues?.bpvolDayValue !== null &&
-                lowValues?.bpvolDayValue !== null
-              ? highValues.bpvolDayValue - lowValues.bpvolDayValue
+            : (highValues?.bpvolDayValue ?? null) !== null &&
+                (lowValues?.bpvolDayValue ?? null) !== null
+              ? (highValues?.bpvolDayValue ?? 0) -
+                (lowValues?.bpvolDayValue ?? 0)
               : null;
 
         const totalDv01 = parseMetricNumber(metrics.rr_dv01);
@@ -4608,7 +4946,7 @@ export default function SwaptionTradeTape() {
           ids = raw
             .slice(1, -1)
             .split(",")
-            .map((entry) => entry.replace(/^"+|"+$/g, ""));
+            .map((entry: string) => entry.replace(/^"+|"+$/g, ""));
         } else {
           ids = raw.split(/[,\s]+/);
         }
@@ -4751,7 +5089,7 @@ export default function SwaptionTradeTape() {
         case "package_type":
           return row.package_type || "";
         case "time":
-          return formatExecutionWindow(
+          return buildExecutionTimeFilterValue(
             row.execution_start,
             row.execution_end,
           );
@@ -4862,7 +5200,7 @@ export default function SwaptionTradeTape() {
   };
 
   const handleVirtualLoad = useCallback(
-    (event: VirtualScrollerLazyLoadEvent) => {
+    (event: any) => {
       const last =
         typeof event.last === "number"
           ? event.last
@@ -4994,26 +5332,26 @@ export default function SwaptionTradeTape() {
 
   const buildFilterSummary = useCallback(
     (filterField: string) => {
-      const filterMeta = (filters || {})[filterField];
+      const filterMeta = ((filters || {})[filterField] as any) || null;
       if (!hasActiveConstraints(filterMeta)) return null;
-      const constraints = Array.isArray(filterMeta.constraints)
+      const constraints = Array.isArray(filterMeta?.constraints)
         ? filterMeta.constraints
         : [
             {
-              value: filterMeta.value,
-              matchMode: filterMeta.matchMode,
+              value: filterMeta?.value,
+              matchMode: filterMeta?.matchMode,
             },
           ];
       const activeConstraints = constraints.filter(
-        (constraint) => !isEmptyFilterValue(constraint?.value),
+        (constraint: any) => !isEmptyFilterValue(constraint?.value),
       );
       if (!activeConstraints.length) return null;
       const operatorLabel =
-        (filterMeta.operator || FilterOperator.AND) === FilterOperator.OR
+        (filterMeta?.operator || FilterOperator.AND) === FilterOperator.OR
           ? "OR"
           : "AND";
       return activeConstraints
-        .map((constraint) => {
+        .map((constraint: any) => {
           const modeLabel = formatMatchModeLabel(constraint.matchMode);
           const valueLabel = formatFilterValue(constraint.value);
           return `${modeLabel} ${valueLabel}`;
@@ -5282,12 +5620,14 @@ export default function SwaptionTradeTape() {
         columnResizeMode="fit"
         rowClassName={rowClassName}
         rowHover
-        pt={{
-          bodyCell: {
-            className: "py-1 px-2 text-xs !border-0",
-            style: { backgroundColor: "transparent" },
-          },
-        }}
+        pt={
+          {
+            bodyCell: {
+              className: "py-1 px-2 text-xs !border-0",
+              style: { backgroundColor: "transparent" },
+            },
+          } as any
+        }
         className="swaption-tape-table rounded-2xl border border-gray-800 bg-gradient-to-b from-gray-950 to-gray-900 shadow-inner text-gray-200"
         size="small"
         sortMode="single"
@@ -5322,6 +5662,7 @@ export default function SwaptionTradeTape() {
           body={timeBody}
           filter
           filterField="time"
+          filterMatchModeOptions={TIME_FILTER_MATCH_MODE_OPTIONS}
           style={{ width: COLUMN_DEFS[2].width }}
           sortable
         />

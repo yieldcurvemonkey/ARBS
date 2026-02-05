@@ -975,6 +975,22 @@ def _to_utc_timestamp(value: Any) -> pd.Timestamp:
     return ts.tz_convert("UTC")
 
 
+def _resolve_end_of_day_fetch_timestamp(value: Any, market_timezone: str) -> pd.Timestamp:
+    """Resolve timestamp to market-local end-of-day, returned in UTC."""
+    end_utc = _to_utc_timestamp(value)
+    end_local = end_utc.tz_convert(market_timezone)
+    end_of_day_local = end_local.normalize() + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+    return end_of_day_local.tz_convert("UTC")
+
+
+def _resolve_start_of_day_fetch_timestamp(value: Any, market_timezone: str) -> pd.Timestamp:
+    """Resolve timestamp to market-local start-of-day, returned in UTC."""
+    start_utc = _to_utc_timestamp(value)
+    start_local = start_utc.tz_convert(market_timezone)
+    start_of_day_local = start_local.normalize()
+    return start_of_day_local.tz_convert("UTC")
+
+
 def _resolve_cache_path(cache_path: Optional[str]) -> str:
     return cache_path or os.getenv("SDR_CACHE_PATH", "./sdr_cache")
 
@@ -1183,6 +1199,9 @@ def ingest_incremental_once(
     cleanup_orphans: bool = True,
     initial_lookback_minutes: int = 24 * 60,
     overlap_seconds: int = 0,
+    force_fetch_end_of_day: bool = False,
+    force_fetch_full_market_day: bool = False,
+    market_timezone: str = "America/New_York",
 ) -> None:
     if initial_lookback_minutes < 0:
         raise ValueError(f"initial_lookback_minutes must be >= 0, got {initial_lookback_minutes}")
@@ -1201,9 +1220,23 @@ def ingest_incremental_once(
     if start > end:
         start = end
 
+    fetch_start = start
+    fetch_end = end
+    if force_fetch_end_of_day or force_fetch_full_market_day:
+        try:
+            if force_fetch_full_market_day:
+                fetch_start = _resolve_start_of_day_fetch_timestamp(end, market_timezone)
+            fetch_end = _resolve_end_of_day_fetch_timestamp(end, market_timezone)
+        except Exception as exc:
+            raise ValueError(f"Invalid market timezone: {market_timezone}") from exc
+
     print("Incremental swaption ingestion")
     print(f"  Last cursor: {cursor_ts}")
     print(f"  Range: {start} -> {end}")
+    if force_fetch_full_market_day:
+        print(f"  Classifier fetch range (full market day {market_timezone}): {fetch_start} -> {fetch_end}")
+    elif force_fetch_end_of_day:
+        print(f"  Classifier fetch end (forced EOD {market_timezone}): {fetch_end}")
     print(f"  Overlap: {overlap_seconds} seconds")
     print(f"  Cache: {cache_path}")
     print(f"  Only NEWT/TRAD: {only_newt}")
@@ -1212,8 +1245,8 @@ def ingest_incremental_once(
 
     print("Building classification dataframe...")
     raw_df = build_classification_dataframe(
-        start=start,
-        end=end,
+        start=fetch_start,
+        end=fetch_end,
         cache_path=cache_path,
         ignore_cache=True,
         only_newt=only_newt,
@@ -1355,6 +1388,9 @@ def main_service(
                 cleanup_orphans=cleanup_orphans,
                 initial_lookback_minutes=initial_lookback_minutes,
                 overlap_seconds=overlap_seconds,
+                force_fetch_end_of_day=True,
+                force_fetch_full_market_day=True,
+                market_timezone=market_timezone,
             )
         except Exception as exc:
             print(f"Service cycle {iteration} failed: {exc}")

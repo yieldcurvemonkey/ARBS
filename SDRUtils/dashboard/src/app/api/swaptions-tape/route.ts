@@ -15,10 +15,38 @@ const COLUMN_FILTER_FIELDS = [
   'notional',
   'label'
 ] as const
+
+function buildTimeSearchExpressions(column: string): string[] {
+  return [
+    `${column}::text`,
+    `to_char(${column} AT TIME ZONE 'UTC', 'MM/DD')`,
+    `to_char(${column} AT TIME ZONE 'UTC', 'FMMM/FMDD')`,
+    `to_char(${column} AT TIME ZONE 'UTC', 'FMMM-FMDD')`,
+    `to_char(${column} AT TIME ZONE 'UTC', 'FMMM.FMDD')`,
+    `to_char(${column} AT TIME ZONE 'UTC', 'FMMon FMDD')`,
+    `to_char(${column} AT TIME ZONE 'UTC', 'FMMonth FMDD')`,
+    `to_char(${column} AT TIME ZONE 'UTC', 'FMDD FMMon')`,
+    `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`,
+    `to_char(${column} AT TIME ZONE 'America/New_York', 'MM/DD')`,
+    `to_char(${column} AT TIME ZONE 'America/New_York', 'FMMM/FMDD')`,
+    `to_char(${column} AT TIME ZONE 'America/New_York', 'FMMM-FMDD')`,
+    `to_char(${column} AT TIME ZONE 'America/New_York', 'FMMM.FMDD')`,
+    `to_char(${column} AT TIME ZONE 'America/New_York', 'FMMon FMDD')`,
+    `to_char(${column} AT TIME ZONE 'America/New_York', 'FMMonth FMDD')`,
+    `to_char(${column} AT TIME ZONE 'America/New_York', 'FMDD FMMon')`,
+    `to_char(${column} AT TIME ZONE 'America/New_York', 'YYYY-MM-DD')`
+  ]
+}
+
+const TIME_FILTER_EXPRESSIONS = [
+  ...buildTimeSearchExpressions('d.execution_start'),
+  ...buildTimeSearchExpressions('d.execution_end')
+]
+
 const COLUMN_FILTER_EXPRESSIONS_V2: Record<string, string[]> = {
   action: ['plat.event_action'],
   package_type: ['d.package_type'],
-  time: ['d.execution_start::text', 'd.execution_end::text'],
+  time: TIME_FILTER_EXPRESSIONS,
   platform: [
     "COALESCE(plat.platform_identifier, d.package_metrics->>'platform_identifier')"
   ],
@@ -38,7 +66,7 @@ const COLUMN_FILTER_EXPRESSIONS_V2: Record<string, string[]> = {
 const COLUMN_FILTER_EXPRESSIONS_V1: Record<string, string[]> = {
   action: ['plat.event_action'],
   package_type: ['d.package_type'],
-  time: ['d.execution_start::text', 'd.execution_end::text'],
+  time: TIME_FILTER_EXPRESSIONS,
   platform: [
     "COALESCE(plat.platform_identifier, d.package_metrics->>'platform_identifier')"
   ],
@@ -114,6 +142,147 @@ function normalizeTextMatchMode(matchMode?: string) {
   }
 }
 
+const TEMPORAL_MATCH_MODES = new Set([
+  'equals',
+  'notEquals',
+  'lt',
+  'lte',
+  'gt',
+  'gte'
+])
+const ISO_TIMESTAMP_PATTERN =
+  /\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:z|[+-]\d{2}:?\d{2})?\b/i
+const ISO_LOCAL_TIMESTAMP_PATTERN =
+  /\b(\d{4})-(\d{1,2})-(\d{1,2})(?:[ t](\d{1,2}):(\d{2})(?::(\d{2}))?)?\b/i
+const US_LOCAL_TIMESTAMP_PATTERN =
+  /\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?\b/
+
+type ParsedTemporalFilterValue =
+  | { kind: 'absolute'; value: string }
+  | { kind: 'easternLocal'; value: string }
+
+function parseYear(rawYear: string): number {
+  const parsed = Number(rawYear)
+  if (!Number.isFinite(parsed)) return Number.NaN
+  if (rawYear.length === 2) {
+    return parsed >= 70 ? parsed + 1900 : parsed + 2000
+  }
+  return parsed
+}
+
+function toEasternLocalTimestamp(
+  year: number,
+  month: number,
+  day: number,
+  hour = 0,
+  minute = 0,
+  second = 0
+): string | null {
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    !Number.isInteger(second)
+  ) {
+    return null
+  }
+  if (month < 1 || month > 12) return null
+  if (day < 1 || day > 31) return null
+  if (hour < 0 || hour > 23) return null
+  if (minute < 0 || minute > 59) return null
+  if (second < 0 || second > 59) return null
+
+  // Validate date parts (reject rollover cases like 2/30).
+  const probe = new Date(Date.UTC(year, month - 1, day, hour, minute, second))
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() + 1 !== month ||
+    probe.getUTCDate() !== day ||
+    probe.getUTCHours() !== hour ||
+    probe.getUTCMinutes() !== minute ||
+    probe.getUTCSeconds() !== second
+  ) {
+    return null
+  }
+
+  const yyyy = String(year).padStart(4, '0')
+  const mm = String(month).padStart(2, '0')
+  const dd = String(day).padStart(2, '0')
+  const hh = String(hour).padStart(2, '0')
+  const mi = String(minute).padStart(2, '0')
+  const ss = String(second).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`
+}
+
+function parseTemporalFilterValue(
+  rawValue: unknown
+): ParsedTemporalFilterValue | null {
+  if (rawValue === null || rawValue === undefined) return null
+  const normalized = String(rawValue)
+    .replace(/\+/g, ' ')
+    .replace(/\s+/g, ' ')
+  .trim()
+  if (!normalized) return null
+
+  // Absolute timestamps with explicit timezone (Z or +/-hh:mm).
+  const isoMatch = normalized.match(ISO_TIMESTAMP_PATTERN)?.[0]
+  if (isoMatch && /(?:z|[+-]\d{2}:?\d{2})$/i.test(isoMatch)) {
+    const parsed = Date.parse(isoMatch)
+    if (!Number.isNaN(parsed)) {
+      return { kind: 'absolute', value: new Date(parsed).toISOString() }
+    }
+  }
+
+  // Parse local timestamp inputs as America/New_York regardless of host timezone.
+  const usMatch = normalized.match(US_LOCAL_TIMESTAMP_PATTERN)
+  if (usMatch) {
+    const month = Number(usMatch[1])
+    const day = Number(usMatch[2])
+    const year = parseYear(usMatch[3])
+    const hour = usMatch[4] ? Number(usMatch[4]) : 0
+    const minute = usMatch[5] ? Number(usMatch[5]) : 0
+    const second = usMatch[6] ? Number(usMatch[6]) : 0
+    const easternLocal = toEasternLocalTimestamp(
+      year,
+      month,
+      day,
+      hour,
+      minute,
+      second
+    )
+    if (easternLocal) return { kind: 'easternLocal', value: easternLocal }
+  }
+
+  const isoLocalMatch = normalized.match(ISO_LOCAL_TIMESTAMP_PATTERN)
+  if (isoLocalMatch) {
+    const year = Number(isoLocalMatch[1])
+    const month = Number(isoLocalMatch[2])
+    const day = Number(isoLocalMatch[3])
+    const hour = isoLocalMatch[4] ? Number(isoLocalMatch[4]) : 0
+    const minute = isoLocalMatch[5] ? Number(isoLocalMatch[5]) : 0
+    const second = isoLocalMatch[6] ? Number(isoLocalMatch[6]) : 0
+    const easternLocal = toEasternLocalTimestamp(
+      year,
+      month,
+      day,
+      hour,
+      minute,
+      second
+    )
+    if (easternLocal) return { kind: 'easternLocal', value: easternLocal }
+  }
+
+  // Last-resort parse for fully-qualified timestamp strings.
+  const parsed = Date.parse(normalized)
+  if (!Number.isNaN(parsed)) {
+    return { kind: 'absolute', value: new Date(parsed).toISOString() }
+  }
+
+  return null
+}
+
 function buildTextCondition(
   expressions: string[],
   matchMode: string | undefined,
@@ -136,39 +305,40 @@ function buildTextCondition(
   }
 
   const value = String(rawValue).trim()
-  if (!value) return null
+  const normalizedInput = value.replace(/\+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!normalizedInput) return null
 
   const normalizedMode = normalizeTextMatchMode(matchMode)
   let op = 'ILIKE'
-  let pattern = value
+  let pattern = normalizedInput
 
   switch (normalizedMode) {
     case 'startsWith':
-      pattern = `${value}%`
+      pattern = `${normalizedInput}%`
       op = 'ILIKE'
       break
     case 'contains':
-      pattern = `%${value}%`
+      pattern = `%${normalizedInput}%`
       op = 'ILIKE'
       break
     case 'notContains':
-      pattern = `%${value}%`
+      pattern = `%${normalizedInput}%`
       op = 'NOT ILIKE'
       break
     case 'endsWith':
-      pattern = `%${value}`
+      pattern = `%${normalizedInput}`
       op = 'ILIKE'
       break
     case 'equals':
-      pattern = value
+      pattern = normalizedInput
       op = 'ILIKE'
       break
     case 'notEquals':
-      pattern = value
+      pattern = normalizedInput
       op = 'NOT ILIKE'
       break
     default:
-      pattern = `%${value}%`
+      pattern = `%${normalizedInput}%`
       op = 'ILIKE'
       break
   }
@@ -246,6 +416,49 @@ function buildNumericCondition(
   return `${expression} ${op} $${params.length}`
 }
 
+function buildTimeCondition(
+  expressions: string[],
+  matchMode: string | undefined,
+  rawValue: unknown,
+  params: unknown[]
+) {
+  const normalizedMode = matchMode || 'contains'
+  if (TEMPORAL_MATCH_MODES.has(normalizedMode)) {
+    const parsedTimestamp = parseTemporalFilterValue(rawValue)
+    if (parsedTimestamp) {
+      let op = '='
+      switch (normalizedMode) {
+        case 'notEquals':
+          op = '<>'
+          break
+        case 'lt':
+          op = '<'
+          break
+        case 'lte':
+          op = '<='
+          break
+        case 'gt':
+          op = '>'
+          break
+        case 'gte':
+          op = '>='
+          break
+        default:
+          op = '='
+      }
+      params.push(parsedTimestamp.value)
+      const placeholder = `$${params.length}`
+      const rhs =
+        parsedTimestamp.kind === 'easternLocal'
+          ? `(${placeholder}::timestamp AT TIME ZONE 'America/New_York')`
+          : `${placeholder}::timestamptz`
+      return `d.execution_start ${op} ${rhs}`
+    }
+  }
+
+  return buildTextCondition(expressions, matchMode, rawValue, params)
+}
+
 function buildColumnFilterClause(
   field: string,
   constraint: FilterConstraint,
@@ -257,6 +470,14 @@ function buildColumnFilterClause(
   if (field === 'notional') {
     return buildNumericCondition(
       expressions[0],
+      constraint.matchMode,
+      constraint.value,
+      params
+    )
+  }
+  if (field === 'time') {
+    return buildTimeCondition(
+      expressions,
       constraint.matchMode,
       constraint.value,
       params
