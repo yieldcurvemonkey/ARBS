@@ -255,6 +255,9 @@ type TimeseriesSummaryStats = {
   totalNotional: number | null;
   avgNotional: number | null;
   medianNotional: number | null;
+  totalPremium: number | null;
+  avgPremium: number | null;
+  medianPremium: number | null;
   tradesPerDay: number | null;
   avgGapMs: number | null;
   activeDays: number | null;
@@ -1901,6 +1904,20 @@ function computeTimeseriesSummary(
       : null;
   const medianNotional = notionals.length ? median(notionals) : null;
 
+  const premiums = points
+    .map((point) => point.premium)
+    .filter(isValid)
+    .map((value) => Math.abs(Number(value)))
+    .filter((value) => Number.isFinite(value));
+  const totalPremium = premiums.length
+    ? premiums.reduce((sum, value) => sum + value, 0)
+    : null;
+  const avgPremium =
+    premiums.length && totalPremium !== null
+      ? totalPremium / premiums.length
+      : null;
+  const medianPremium = premiums.length ? median(premiums) : null;
+
   const timestamps = points
     .map((point) => point.timestamp)
     .filter((value) => Number.isFinite(value))
@@ -1927,6 +1944,9 @@ function computeTimeseriesSummary(
     totalNotional,
     avgNotional,
     medianNotional,
+    totalPremium,
+    avgPremium,
+    medianPremium,
     tradesPerDay,
     avgGapMs,
     activeDays,
@@ -3998,7 +4018,7 @@ function LegsSubtable({
             </button>
           </div>
           {summarySeries.length > 0 && (
-            <div className="mt-3 grid gap-2 lg:grid-cols-3">
+            <div className="mt-3 grid gap-2 lg:grid-cols-4">
               {summarySeries.map((entry) => {
                 const stats = entry.stats;
                 return (
@@ -4014,40 +4034,58 @@ function LegsSubtable({
                         {formatCount(stats.tradeCount)} trades
                       </span>
                     </div>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Trades/active day</span>
-                        <span className="font-mono text-slate-200">
+                    <div className="mt-2 grid gap-1.5 text-[11px]">
+                      <div className="flex items-center justify-between gap-3 border-b border-slate-800/60 pb-1">
+                        <span className="text-slate-400">Trades/active day</span>
+                        <span className="font-mono text-slate-100">
                           {formatRate(stats.tradesPerDay, 2)}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Avg gap</span>
-                        <span className="font-mono text-slate-200">
+                      <div className="flex items-center justify-between gap-3 border-b border-slate-800/60 pb-1">
+                        <span className="text-slate-400">Avg gap</span>
+                        <span className="font-mono text-slate-100">
                           {formatDurationMs(stats.avgGapMs)}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Avg size</span>
-                        <span className="font-mono text-slate-200">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-400">Avg size</span>
+                        <span className="font-mono text-slate-100">
                           {formatNotional(stats.avgNotional)}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Median size</span>
-                        <span className="font-mono text-slate-200">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-400">Median size</span>
+                        <span className="font-mono text-slate-100">
                           {formatNotional(stats.medianNotional)}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Total size</span>
-                        <span className="font-mono text-slate-200">
+                      <div className="flex items-center justify-between gap-3 border-t border-slate-800/60 pt-1">
+                        <span className="text-slate-400">Total size</span>
+                        <span className="font-mono text-slate-100">
                           {formatNotional(stats.totalNotional)}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span>Active days</span>
-                        <span className="font-mono text-slate-200">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-400">Total premium</span>
+                        <span className="font-mono text-slate-100">
+                          {formatMetricValue(stats.totalPremium, 2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-400">Avg premium</span>
+                        <span className="font-mono text-slate-100">
+                          {formatMetricValue(stats.avgPremium, 2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-400">Median premium</span>
+                        <span className="font-mono text-slate-100">
+                          {formatMetricValue(stats.medianPremium, 2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-400">Active days</span>
+                        <span className="font-mono text-slate-100">
                           {formatCount(stats.activeDays)}
                         </span>
                       </div>
@@ -4055,10 +4093,90 @@ function LegsSubtable({
                   </div>
                 );
               })}
+              {summarySeries.length > 1 && (
+                <div className="rounded border border-slate-800 bg-slate-950/60 p-3 text-[11px] text-slate-300">
+                  <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-slate-400">
+                    <span className="font-semibold text-slate-200">
+                      Premium Split
+                    </span>
+                    <span className="font-mono text-slate-200">
+                      {formatMetricValue(
+                        (summarySeries.find((s) => s.key === "combined")?.stats
+                          .totalPremium ?? 0) || null,
+                        2,
+                      )}
+                    </span>
+                  </div>
+                  <div className="mt-2 grid gap-1.5 text-[11px]">
+                    {(() => {
+                      const custy = summarySeries.find(
+                        (s) => s.key === "custy",
+                      )?.stats;
+                      const idb = summarySeries.find(
+                        (s) => s.key === "idb",
+                      )?.stats;
+                      const custyPremium = custy?.totalPremium ?? null;
+                      const idbPremium = idb?.totalPremium ?? null;
+                      const combined =
+                        (custyPremium ?? 0) + (idbPremium ?? 0);
+                      const custyShare =
+                        combined > 0 && custyPremium !== null
+                          ? (custyPremium / combined) * 100
+                          : null;
+                      const idbShare =
+                        combined > 0 && idbPremium !== null
+                          ? (idbPremium / combined) * 100
+                          : null;
+                      const ratio =
+                        custyPremium !== null &&
+                        idbPremium !== null &&
+                        idbPremium !== 0
+                          ? custyPremium / idbPremium
+                          : null;
+                      return (
+                        <>
+                          <div className="flex items-center justify-between gap-3 border-b border-slate-800/60 pb-1">
+                            <span className="text-amber-300">Custy total</span>
+                            <span className="font-mono text-slate-100">
+                              {formatMetricValue(custyPremium, 2)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 border-b border-slate-800/60 pb-1">
+                            <span className="text-sky-300">IDB total</span>
+                            <span className="font-mono text-slate-100">
+                              {formatMetricValue(idbPremium, 2)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-slate-400">
+                              Custy/IDB ratio
+                            </span>
+                            <span className="font-mono text-slate-100">
+                              {formatRate(ratio, 2)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-slate-400">Custy share</span>
+                            <span className="font-mono text-slate-100">
+                              {formatRate(custyShare, 1)}%
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-slate-400">IDB share</span>
+                            <span className="font-mono text-slate-100">
+                              {formatRate(idbShare, 1)}%
+                            </span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {hasChartData ? (
-            <div className="mt-3 h-48">
+            <div className="mt-3 h-56 md:h-64 lg:h-72">
               <ResponsiveContainer width="100%" height="100%">
                 {isOhlcView ? (
                   <ComposedChart data={ohlcSeries}>

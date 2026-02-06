@@ -5,6 +5,7 @@
   "framework": "nextjs",
   "regions": ["iad1"],
   "env": {
+    "CI": "false",
     "NODE_ENV": "production",
     "DATABASE_URL": "postgresql://postgres.rdobtpugtnmefxplgwyp:0rbZUh8y0Fsvdlry@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
   },
