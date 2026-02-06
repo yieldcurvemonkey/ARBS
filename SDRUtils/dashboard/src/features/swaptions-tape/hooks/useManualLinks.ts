@@ -154,7 +154,7 @@ export function useManualLinks(params: UseManualLinksParams): UseManualLinksRetu
     if (isOpen && selectedIds.length > 0) {
       validateLink();
     }
-  }, [isOpen, selectedIds.length]);
+  }, [isOpen, selectedIds.length, validateLink]);
 
   return {
     packageType,

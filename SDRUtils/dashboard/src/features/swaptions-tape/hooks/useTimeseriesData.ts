@@ -1,7 +1,7 @@
 // Hook for managing timeseries chart data
 // TODO: Extract full implementation from SwaptionTradeTape.tsx (lines 1728-1995)
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TapeRow, StraddleTimeseriesPoint, DailyTimeseriesPoint, TimeseriesViewKey, TimeseriesMetricKey, TimeseriesRangeKey } from '../types';
 
 export interface UseTimeseriesDataParams {
@@ -72,7 +72,7 @@ export function useTimeseriesData(params: UseTimeseriesDataParams): UseTimeserie
   const dailySeries: DailyTimeseriesPoint[] = [];
 
   // TODO: Extract fetchTimeseriesRows from lines 1927-1981
-  const fetchTimeseriesRows = async () => {
+  const fetchTimeseriesRows = useCallback(async () => {
     if (!seriesKey || !showTimeseries || timeseriesFetchInFlight.current) return;
 
     timeseriesFetchInFlight.current = true;
@@ -99,14 +99,14 @@ export function useTimeseriesData(params: UseTimeseriesDataParams): UseTimeserie
       setTimeseriesLoading(false);
       timeseriesFetchInFlight.current = false;
     }
-  };
+  }, [excludeCusty, seriesKey, showTimeseries]);
 
   // Auto-fetch when seriesKey or dependencies change
   useEffect(() => {
     if (showTimeseries && seriesKey) {
       fetchTimeseriesRows();
     }
-  }, [seriesKey, excludeCusty, showTimeseries]);
+  }, [fetchTimeseriesRows, seriesKey, showTimeseries]);
 
   return {
     showTimeseries,

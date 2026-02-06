@@ -27,6 +27,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { TradeRarityPanel } from "./TradeRarityPanel/TradeRarityPanel";
+import { TimeseriesAnnotations } from "./TradeRarityPanel/TimeseriesAnnotations";
 import {
   DataTable,
   DataTableFilterMeta,
@@ -258,6 +260,8 @@ type TimeseriesSummaryStats = {
   totalPremium: number | null;
   avgPremium: number | null;
   medianPremium: number | null;
+  avgVega01: number | null;
+  medianVega01: number | null;
   tradesPerDay: number | null;
   avgGapMs: number | null;
   activeDays: number | null;
@@ -1918,6 +1922,18 @@ function computeTimeseriesSummary(
       : null;
   const medianPremium = premiums.length ? median(premiums) : null;
 
+  const vegas = points
+    .map((point) => point.vega01)
+    .filter(isValid)
+    .map((value) => Math.abs(Number(value)))
+    .filter((value) => Number.isFinite(value));
+  const totalVega = vegas.length
+    ? vegas.reduce((sum, value) => sum + value, 0)
+    : null;
+  const avgVega01 =
+    vegas.length && totalVega !== null ? totalVega / vegas.length : null;
+  const medianVega01 = vegas.length ? median(vegas) : null;
+
   const timestamps = points
     .map((point) => point.timestamp)
     .filter((value) => Number.isFinite(value))
@@ -1947,6 +1963,8 @@ function computeTimeseriesSummary(
     totalPremium,
     avgPremium,
     medianPremium,
+    avgVega01,
+    medianVega01,
     tradesPerDay,
     avgGapMs,
     activeDays,
@@ -2823,6 +2841,10 @@ function LegsSubtable({
   const [yAxisMinInput, setYAxisMinInput] = useState("");
   const [yAxisMaxInput, setYAxisMaxInput] = useState("");
   const [showLineDots, setShowLineDots] = useState(true);
+  const [showSigmaBands, setShowSigmaBands] = useState(false);
+  const [timeseriesTab, setTimeseriesTab] = useState<"CHART" | "RARITY">(
+    "CHART",
+  );
   const [showCustySeries, setShowCustySeries] = useState(true);
   const [showIdbSeries, setShowIdbSeries] = useState(true);
   const [useGrossVega, setUseGrossVega] = useState(true);
@@ -3078,6 +3100,41 @@ function LegsSubtable({
       .flatMap((point) => [point.custyValue, point.idbValue])
       .filter((value): value is number => isValid(value));
   }, [chartData, ohlcSeries, timeseriesView]);
+  const currentTimeseriesPoint = useMemo(
+    () => (packageType ? buildTimeseriesPoint(row, packageType) : null),
+    [packageType, row],
+  );
+  const currentMetricValue = useMemo(() => {
+    if (!currentTimeseriesPoint) return null;
+    return resolveTimeseriesMetricValue(
+      currentTimeseriesPoint,
+      timeseriesMetric,
+      metricTransform,
+    );
+  }, [currentTimeseriesPoint, metricTransform, timeseriesMetric]);
+  const timeseriesDistributionValues = useMemo(
+    () =>
+      rangedAllData
+        .map((point) =>
+          resolveTimeseriesMetricValue(point, timeseriesMetric, metricTransform),
+        )
+        .filter((value): value is number => isValid(value)),
+    [metricTransform, rangedAllData, timeseriesMetric],
+  );
+  const currentTimeLabel = currentTimeseriesPoint?.timeLabel ?? null;
+  const currentTimestamp = currentTimeseriesPoint?.timestamp ?? null;
+  const rangeMinTimestamp = rangedAllData.length
+    ? rangedAllData[0].timestamp
+    : null;
+  const rangeMaxTimestamp = rangedAllData.length
+    ? rangedAllData[rangedAllData.length - 1].timestamp
+    : null;
+  const showHighlight =
+    currentTimestamp !== null &&
+    rangeMinTimestamp !== null &&
+    rangeMaxTimestamp !== null &&
+    currentTimestamp >= rangeMinTimestamp &&
+    currentTimestamp <= rangeMaxTimestamp;
   const metricFormatter = useCallback(
     (value: number) =>
       formatTimeseriesMetric(timeseriesMetric, value, selectedMetric.decimals),
@@ -3090,6 +3147,16 @@ function LegsSubtable({
       return `${formatted} ${selectedMetric.unit}`;
     },
     [metricFormatter, selectedMetric.unit],
+  );
+  const rarityFormatters = useMemo(
+    () => ({
+      formatNotional,
+      formatMetricValue,
+      formatRate,
+      formatCount,
+      formatDurationMs,
+    }),
+    [],
   );
   const custyExtremes = useMemo(
     () =>
@@ -3187,6 +3254,11 @@ function LegsSubtable({
     setTimeseriesNotice(null);
     timeseriesFetchKeyRef.current = null;
   }, [packageType, seriesKey]);
+
+  useEffect(() => {
+    if (!showTimeseries) return;
+    setTimeseriesTab("CHART");
+  }, [packageType, seriesKey, showTimeseries]);
 
   useEffect(() => {
     if (!showTimeseries || !packageType || !seriesKey) return;
@@ -3846,11 +3918,39 @@ function LegsSubtable({
             <div className="min-w-0 text-[11px] uppercase tracking-wide text-slate-400">
               <span className="block truncate">{seriesKey}</span>
               <span className="block truncate text-[10px] text-slate-500 normal-case">
-                {metricLabelWithUnit} · {rangeLabel}
+                {timeseriesTab === "CHART"
+                  ? `${metricLabelWithUnit} - ${rangeLabel}`
+                  : "Trade Rarity"}
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <div className="inline-flex overflow-hidden rounded border border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setTimeseriesTab("CHART")}
+                  className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                    timeseriesTab === "CHART"
+                      ? "bg-slate-700 text-slate-100"
+                      : "text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  Timeseries
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimeseriesTab("RARITY")}
+                  className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                    timeseriesTab === "RARITY"
+                      ? "bg-slate-700 text-slate-100"
+                      : "text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  Trade Rarity
+                </button>
+              </div>
+              {timeseriesTab === "CHART" && (
+                <>
+                  <div className="inline-flex overflow-hidden rounded border border-slate-700">
                 <button
                   type="button"
                   onClick={() =>
@@ -3902,6 +4002,17 @@ function LegsSubtable({
                   No Dots
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => setShowSigmaBands((current) => !current)}
+                className={`rounded border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                  showSigmaBands
+                    ? "bg-cyan-500/20 text-cyan-100"
+                    : "text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                Sigma Bands
+              </button>
               <div className="inline-flex overflow-hidden rounded border border-slate-700">
                 {TIMESERIES_VIEW_OPTIONS.map((option) => {
                   const isActive = option.key === timeseriesView;
@@ -3959,8 +4070,12 @@ function LegsSubtable({
                   );
                 })}
               </div>
+                </>
+              )}
             </div>
           </div>
+          {timeseriesTab === "CHART" && (
+            <>
           {timeseriesRange === "CUSTOM" && (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
               <label className="flex items-center gap-2">
@@ -4048,19 +4163,31 @@ function LegsSubtable({
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-3">
-                        <span className="text-slate-400">Avg size</span>
+                        <span className="text-slate-400">Avg notional</span>
                         <span className="font-mono text-slate-100">
                           {formatNotional(stats.avgNotional)}
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-3">
-                        <span className="text-slate-400">Median size</span>
+                        <span className="text-slate-400">Median notional</span>
                         <span className="font-mono text-slate-100">
                           {formatNotional(stats.medianNotional)}
                         </span>
                       </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-400">Avg vega</span>
+                        <span className="font-mono text-slate-100">
+                          {formatMetricValue(stats.avgVega01, 2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-400">Median vega</span>
+                        <span className="font-mono text-slate-100">
+                          {formatMetricValue(stats.medianVega01, 2)}
+                        </span>
+                      </div>
                       <div className="flex items-center justify-between gap-3 border-t border-slate-800/60 pt-1">
-                        <span className="text-slate-400">Total size</span>
+                        <span className="text-slate-400">Total notional</span>
                         <span className="font-mono text-slate-100">
                           {formatNotional(stats.totalNotional)}
                         </span>
@@ -4199,6 +4326,14 @@ function LegsSubtable({
                         fontSize: 10,
                       }}
                     />
+                    <TimeseriesAnnotations
+                      distributionValues={timeseriesDistributionValues}
+                      currentValue={currentMetricValue}
+                      currentTimeLabel={currentTimeLabel}
+                      showSigmaBands={showSigmaBands}
+                      formatValue={metricFormatterWithUnit}
+                      showHighlight={showHighlight}
+                    />
                     <Tooltip
                       content={renderOhlcTooltip}
                       labelStyle={{ color: "#e2e8f0" }}
@@ -4243,6 +4378,14 @@ function LegsSubtable({
                         fill: "#94a3b8",
                         fontSize: 10,
                       }}
+                    />
+                    <TimeseriesAnnotations
+                      distributionValues={timeseriesDistributionValues}
+                      currentValue={currentMetricValue}
+                      currentTimeLabel={currentTimeLabel}
+                      showSigmaBands={showSigmaBands}
+                      formatValue={metricFormatterWithUnit}
+                      showHighlight={showHighlight}
                     />
                     <Tooltip
                       formatter={(value: number) => metricFormatterWithUnit(value)}
@@ -4309,6 +4452,14 @@ function LegsSubtable({
                         fill: "#94a3b8",
                         fontSize: 10,
                       }}
+                    />
+                    <TimeseriesAnnotations
+                      distributionValues={timeseriesDistributionValues}
+                      currentValue={currentMetricValue}
+                      currentTimeLabel={currentTimeLabel}
+                      showSigmaBands={showSigmaBands}
+                      formatValue={metricFormatterWithUnit}
+                      showHighlight={showHighlight}
                     />
                     <Tooltip
                       formatter={(value: number) => metricFormatterWithUnit(value)}
@@ -4436,6 +4587,17 @@ function LegsSubtable({
           {timeseriesNotice && !timeseriesLoading && !timeseriesError && (
             <div className="mt-2 text-[11px] text-amber-300">
               {timeseriesNotice}
+            </div>
+          )}
+            </>
+          )}
+          {timeseriesTab === "RARITY" && (
+            <div className="mt-3">
+              <TradeRarityPanel
+                selectedRow={row}
+                timeseriesRows={timeseriesRows}
+                formatters={rarityFormatters}
+              />
             </div>
           )}
         </div>
