@@ -8,6 +8,7 @@ export interface UseTimeseriesDataParams {
   seriesKey: string | null;
   isStraddle: boolean;
   excludeCusty: boolean;
+  excludeLargeCustyNotional?: boolean;
 }
 
 export interface UseTimeseriesDataReturn {
@@ -27,6 +28,8 @@ export interface UseTimeseriesDataReturn {
   setShowLineDots: (show: boolean) => void;
   excludeCusty: boolean;
   setExcludeCusty: (exclude: boolean) => void;
+  excludeLargeCustyNotional: boolean;
+  setExcludeLargeCustyNotional: (exclude: boolean) => void;
   timeseriesLoading: boolean;
   timeseriesError: string | null;
   timeseriesNotice: string | null;
@@ -47,7 +50,12 @@ export interface UseTimeseriesDataReturn {
  * @returns Timeseries data and control functions
  */
 export function useTimeseriesData(params: UseTimeseriesDataParams): UseTimeseriesDataReturn {
-  const { seriesKey, isStraddle, excludeCusty: excludeCustyParam } = params;
+  const {
+    seriesKey,
+    isStraddle,
+    excludeCusty: excludeCustyParam,
+    excludeLargeCustyNotional: excludeLargeCustyNotionalParam,
+  } = params;
 
   const [showTimeseries, setShowTimeseries] = useState(false);
   const [timeseriesView, setTimeseriesView] = useState<TimeseriesViewKey>('INTRADAY');
@@ -57,6 +65,8 @@ export function useTimeseriesData(params: UseTimeseriesDataParams): UseTimeserie
   const [customRangeEnd, setCustomRangeEnd] = useState('');
   const [showLineDots, setShowLineDots] = useState(false);
   const [excludeCusty, setExcludeCusty] = useState(false);
+  const [excludeLargeCustyNotional, setExcludeLargeCustyNotional] =
+    useState(!!excludeLargeCustyNotionalParam);
   const [extraTimeseriesRows, setExtraTimeseriesRows] = useState<TapeRow[]>([]);
   const [timeseriesLoading, setTimeseriesLoading] = useState(false);
   const [timeseriesError, setTimeseriesError] = useState<string | null>(null);
@@ -83,6 +93,9 @@ export function useTimeseriesData(params: UseTimeseriesDataParams): UseTimeserie
     try {
       const params = new URLSearchParams({ seriesKey });
       if (excludeCusty) params.set('excludeCusty', 'true');
+      if (excludeLargeCustyNotional) {
+        params.set('excludeLargeCustyNotional', 'true');
+      }
 
       const res = await fetch(`/api/swaptions-tape/timeseries?${params}`);
       if (!res.ok) throw new Error(`Fetch failed: ${res.statusText}`);
@@ -99,7 +112,7 @@ export function useTimeseriesData(params: UseTimeseriesDataParams): UseTimeserie
       setTimeseriesLoading(false);
       timeseriesFetchInFlight.current = false;
     }
-  }, [excludeCusty, seriesKey, showTimeseries]);
+  }, [excludeCusty, excludeLargeCustyNotional, seriesKey, showTimeseries]);
 
   // Auto-fetch when seriesKey or dependencies change
   useEffect(() => {
@@ -125,6 +138,8 @@ export function useTimeseriesData(params: UseTimeseriesDataParams): UseTimeserie
     setShowLineDots,
     excludeCusty,
     setExcludeCusty,
+    excludeLargeCustyNotional,
+    setExcludeLargeCustyNotional,
     timeseriesLoading,
     timeseriesError,
     timeseriesNotice,

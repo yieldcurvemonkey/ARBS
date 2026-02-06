@@ -28,6 +28,11 @@ import {
   YAxis,
 } from "recharts";
 import { QuadrantSparkline } from "./VolGridFlow/QuadrantSparkline";
+import { VolGridFlowHistory } from "./VolGridFlow/VolGridFlowHistory";
+import type {
+  HistoryLookback,
+  QuadrantDayAggregate,
+} from "./VolGridFlow/quadrantHistory.types";
 import {
   buildQuadrantSparklineData,
   classifySparklineShape,
@@ -491,10 +496,10 @@ const isDisplayQuadrant = (
   quadrant === "LRC";
 
 const QUADRANT_TONES: Record<VolGridQuadrant, string> = {
-  ULC: "border-sky-500/40 bg-sky-500/10 text-sky-200",
+  ULC: "border-slate-500/40 bg-slate-500/10 text-slate-200",
   URC: "border-amber-500/40 bg-amber-500/10 text-amber-200",
-  LLC: "border-rose-500/40 bg-rose-500/10 text-rose-200",
-  LRC: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+  LLC: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+  LRC: "border-sky-500/40 bg-sky-500/10 text-sky-200",
   BOUNDARY: "border-slate-500/40 bg-slate-500/10 text-slate-200",
   UNKNOWN: "border-slate-700/50 bg-slate-900/60 text-slate-400",
 };
@@ -625,6 +630,9 @@ const IDB_MIC_CODES = ["BGCD", "ISWV", "TPSE"] as const;
 const CUSTY_MIC_CODES = ["BILT", "XXXX", "TWSF", "BBSF", "XOFF"] as const;
 const IDB_MIC_SET = new Set<string>(IDB_MIC_CODES);
 const CUSTY_MIC_SET = new Set<string>(CUSTY_MIC_CODES);
+const COMICALLY_LARGE_CUSTY_NOTIONAL = 100_000_000_000_000;
+const COMICALLY_LARGE_CUSTY_TOGGLE_LABEL =
+  "Remove Comically Large Custy Notional Trade";
 const STRADDLE_GREEK_FIELDS = {
   dv01: "straddle_dv01",
   vega01: "straddle_vega01",
@@ -1114,6 +1122,15 @@ function isCustyPlatform(platform: string | null | undefined): boolean {
   if (!tokens.length) return true;
   if (tokens.some((token) => CUSTY_MIC_SET.has(token))) return true;
   return !tokens.some((token) => IDB_MIC_SET.has(token));
+}
+
+function isComicallyLargeCustyTrade(row: TapeRow): boolean {
+  const platform = resolvePlatformIdentifier(row);
+  if (!isCustyPlatform(platform)) return false;
+  const notionalRaw = computeDisplayNotional(row);
+  const notional = parseNumericValue(notionalRaw);
+  if (notional === null || !Number.isFinite(notional)) return false;
+  return Math.abs(notional) >= COMICALLY_LARGE_CUSTY_NOTIONAL;
 }
 
 function formatExecutionWindow(start: string, end: string): string {
@@ -1887,6 +1904,131 @@ function buildQuadrantFlowState(
     totalTradeCount,
     dominantTheme: summarizeDominantTheme(snapshots),
     crossQuadrantSignal: detectCrossQuadrantSignal(snapshots),
+  };
+}
+
+function createEmptyDailyStats() {
+  return {
+    tradeCount: 0,
+    grossNotional: 0,
+    netNotional: 0,
+    netDirection: "balanced" as const,
+    netGrossRatio: 0,
+    totalPremium: 0,
+    custyTradeCount: 0,
+    idbTradeCount: 0,
+    custyGross: 0,
+    idbGross: 0,
+    custyPremium: 0,
+    idbPremium: 0,
+  };
+}
+
+function normalizeDailyStats(
+  stats: ReturnType<typeof createEmptyDailyStats>,
+) {
+  const gross = stats.grossNotional;
+  const net = stats.netNotional;
+  stats.netGrossRatio = gross > 0 ? Math.abs(net) / gross : 0;
+  if (gross === 0) {
+    stats.netDirection = "balanced";
+  } else if (stats.netGrossRatio < 0.1) {
+    stats.netDirection = "balanced";
+  } else {
+    stats.netDirection = net >= 0 ? "payer" : "receiver";
+  }
+  return stats;
+}
+
+function buildQuadrantDayAggregate(
+  rows: TapeRow[],
+  config: QuadrantConfig,
+  dateKey: string,
+): QuadrantDayAggregate {
+  const quadrants = {
+    ULC: createEmptyDailyStats(),
+    URC: createEmptyDailyStats(),
+    LLC: createEmptyDailyStats(),
+    LRC: createEmptyDailyStats(),
+  };
+  const boundary = createEmptyDailyStats();
+  const unclassified = createEmptyDailyStats();
+
+  rows.forEach((row) => {
+    const classification = resolveQuadrantClassification(row, config);
+    const target =
+      classification.quadrant === "BOUNDARY"
+        ? boundary
+        : classification.quadrant === "UNKNOWN"
+          ? unclassified
+          : quadrants[classification.quadrant];
+
+    target.tradeCount += 1;
+    const platform = resolvePlatformIdentifier(row);
+    const isIdb = isIdbPlatform(platform);
+    const isCusty = isCustyPlatform(platform);
+    if (isIdb) target.idbTradeCount += 1;
+    if (isCusty) target.custyTradeCount += 1;
+
+    const notionalRaw = computeDisplayNotional(row);
+    const notional = parseNumericValue(notionalRaw);
+    if (notional !== null && Number.isFinite(notional)) {
+      const direction = resolveRowDirection(row);
+      target.grossNotional += Math.abs(notional);
+      if (direction === "PAYER") {
+        target.netNotional += notional;
+      } else if (direction === "RECEIVER") {
+        target.netNotional -= notional;
+      }
+      if (isIdb) {
+        target.idbGross += Math.abs(notional);
+      }
+      if (isCusty) {
+        target.custyGross += Math.abs(notional);
+      }
+    }
+
+    const packageType = normalizePackageType(row.package_type) || "OUTRIGHT";
+    const premium = computePackagePremium(row, packageType);
+    if (premium !== null && Number.isFinite(premium)) {
+      target.totalPremium += premium;
+      if (isIdb) {
+        target.idbPremium += premium;
+      }
+      if (isCusty) {
+        target.custyPremium += premium;
+      }
+    }
+  });
+
+  QUADRANT_DISPLAY_KEYS.forEach((key) => {
+    normalizeDailyStats(quadrants[key]);
+  });
+  normalizeDailyStats(boundary);
+  normalizeDailyStats(unclassified);
+
+  const gridTotal = createEmptyDailyStats();
+  QUADRANT_DISPLAY_KEYS.forEach((key) => {
+    const stats = quadrants[key];
+    gridTotal.tradeCount += stats.tradeCount;
+    gridTotal.grossNotional += stats.grossNotional;
+    gridTotal.netNotional += stats.netNotional;
+    gridTotal.totalPremium += stats.totalPremium;
+    gridTotal.custyTradeCount += stats.custyTradeCount;
+    gridTotal.idbTradeCount += stats.idbTradeCount;
+    gridTotal.custyGross += stats.custyGross;
+    gridTotal.idbGross += stats.idbGross;
+    gridTotal.custyPremium += stats.custyPremium;
+    gridTotal.idbPremium += stats.idbPremium;
+  });
+  normalizeDailyStats(gridTotal);
+
+  return {
+    date: dateKey,
+    quadrants,
+    boundary,
+    unclassified,
+    gridTotal,
   };
 }
 
@@ -4254,9 +4396,13 @@ function buildRichLabel(row: TapeRow): string {
 function LegsSubtable({
   row,
   seriesRows,
+  excludeLargeCustyNotional,
+  onExcludeLargeCustyNotionalChange,
 }: {
   row: TapeRow;
   seriesRows: TapeRow[];
+  excludeLargeCustyNotional: boolean;
+  onExcludeLargeCustyNotionalChange: (next: boolean) => void;
 }) {
   const searchParams = useSearchParams();
   const metrics = row.package_metrics || {};
@@ -4334,9 +4480,18 @@ function LegsSubtable({
       if (buildTimeseriesSeriesKey(candidate, packageType) !== seriesKey) {
         return false;
       }
+      if (excludeLargeCustyNotional && isComicallyLargeCustyTrade(candidate)) {
+        return false;
+      }
       return true;
     });
-  }, [combinedSeriesRows, packageType, seriesKey, showTimeseries]);
+  }, [
+    combinedSeriesRows,
+    excludeLargeCustyNotional,
+    packageType,
+    seriesKey,
+    showTimeseries,
+  ]);
   const {
     custy: custyTimeseriesData,
     idb: idbTimeseriesData,
@@ -4546,10 +4701,13 @@ function LegsSubtable({
       .flatMap((point) => [point.custyValue, point.idbValue])
       .filter((value): value is number => isValid(value));
   }, [chartData, ohlcSeries, timeseriesView]);
-  const currentTimeseriesPoint = useMemo(
-    () => (packageType ? buildTimeseriesPoint(row, packageType) : null),
-    [packageType, row],
-  );
+  const currentTimeseriesPoint = useMemo(() => {
+    if (!packageType) return null;
+    if (excludeLargeCustyNotional && isComicallyLargeCustyTrade(row)) {
+      return null;
+    }
+    return buildTimeseriesPoint(row, packageType);
+  }, [excludeLargeCustyNotional, packageType, row]);
   const currentMetricValue = useMemo(() => {
     if (!currentTimeseriesPoint) return null;
     return resolveTimeseriesMetricValue(
@@ -4690,8 +4848,11 @@ function LegsSubtable({
     (timeseriesView === "INTRADAY" && selectedMetric.chartType === "line");
   const isOhlcView = timeseriesView === "DAILY_OHLC";
   const timeseriesFetchKey = useMemo(
-    () => `${seriesKey ?? ""}|${packageType ?? ""}`,
-    [packageType, seriesKey],
+    () =>
+      `${seriesKey ?? ""}|${packageType ?? ""}|${
+        excludeLargeCustyNotional ? "excludeLargeCusty" : "all"
+      }`,
+    [excludeLargeCustyNotional, packageType, seriesKey],
   );
 
   useEffect(() => {
@@ -4699,7 +4860,7 @@ function LegsSubtable({
     setTimeseriesError(null);
     setTimeseriesNotice(null);
     timeseriesFetchKeyRef.current = null;
-  }, [packageType, seriesKey]);
+  }, [excludeLargeCustyNotional, packageType, seriesKey]);
 
   useEffect(() => {
     if (!showTimeseries) return;
@@ -4729,6 +4890,9 @@ function LegsSubtable({
         const params = new URLSearchParams();
         params.set("seriesKey", seriesKey);
         params.set("packageType", packageType);
+        if (excludeLargeCustyNotional) {
+          params.set("excludeLargeCustyNotional", "true");
+        }
 
         const res = await fetch(
           `/api/swaptions-tape/timeseries?${params.toString()}`,
@@ -4749,6 +4913,12 @@ function LegsSubtable({
           const action = extractPrimaryAction(rowItem);
           if (action !== "NEWT-TRAD") return;
           if (buildTimeseriesSeriesKey(rowItem, packageType) !== seriesKey) {
+            return;
+          }
+          if (
+            excludeLargeCustyNotional &&
+            isComicallyLargeCustyTrade(rowItem)
+          ) {
             return;
           }
           collected.set(rowItem.package_id, rowItem);
@@ -4783,6 +4953,7 @@ function LegsSubtable({
       cancelled = true;
     };
   }, [
+    excludeLargeCustyNotional,
     packageType,
     seriesKey,
     showTimeseries,
@@ -5394,6 +5565,21 @@ function LegsSubtable({
                   Trade Rarity
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={() =>
+                  onExcludeLargeCustyNotionalChange(
+                    !excludeLargeCustyNotional,
+                  )
+                }
+                className={`rounded border border-slate-700 px-3 py-1 text-[10px] font-semibold tracking-wide transition ${
+                  excludeLargeCustyNotional
+                    ? "bg-rose-500/20 text-rose-100"
+                    : "text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                {COMICALLY_LARGE_CUSTY_TOGGLE_LABEL}
+              </button>
               {timeseriesTab === "CHART" && (
                 <>
                   <div className="inline-flex overflow-hidden rounded border border-slate-700">
@@ -6348,16 +6534,29 @@ function QuadrantFlowDashboard({
   rows,
   config,
   onConfigChange,
+  excludeLargeCustyNotional,
+  onExcludeLargeCustyNotionalChange,
 }: {
   rows: TapeRow[];
   config: QuadrantConfig;
   onConfigChange: (next: QuadrantConfig) => void;
+  excludeLargeCustyNotional: boolean;
+  onExcludeLargeCustyNotionalChange: (next: boolean) => void;
 }) {
   const [showConfig, setShowConfig] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [viewMode, setViewMode] = useState<"TODAY" | "HISTORY">("TODAY");
+  const [historyLookback, setHistoryLookback] =
+    useState<HistoryLookback>("3M");
   const [flowScope, setFlowScope] = useState<"COMBINED" | "IDB" | "CUSTY">(
     "COMBINED",
   );
+  const historyPlatform =
+    flowScope === "COMBINED"
+      ? "combined"
+      : flowScope === "IDB"
+        ? "idb"
+        : "custy";
   const scopedRows = useMemo(() => {
     if (flowScope === "COMBINED") return rows;
     return rows.filter((row) => {
@@ -6366,6 +6565,10 @@ function QuadrantFlowDashboard({
       return isCustyPlatform(platform);
     });
   }, [flowScope, rows]);
+  const historyScopedRows = useMemo(() => {
+    if (!excludeLargeCustyNotional) return scopedRows;
+    return scopedRows.filter((row) => !isComicallyLargeCustyTrade(row));
+  }, [excludeLargeCustyNotional, scopedRows]);
   const flowState = useMemo(
     () => buildQuadrantFlowState(scopedRows, config),
     [scopedRows, config],
@@ -6381,6 +6584,16 @@ function QuadrantFlowDashboard({
       .filter((value): value is number => value !== null);
     return timestamps.length ? Math.max(...timestamps) : null;
   }, [scopedRows]);
+
+  const todayDateKey = useMemo(() => {
+    if (latestTimestamp === null) return null;
+    return formatDateKey(latestTimestamp);
+  }, [latestTimestamp]);
+
+  const todayAggregate = useMemo(() => {
+    if (!todayDateKey) return null;
+    return buildQuadrantDayAggregate(historyScopedRows, config, todayDateKey);
+  }, [config, historyScopedRows, todayDateKey]);
 
   const quadrantBuckets = useMemo(() => {
     const boundaryRows: TapeRow[] = [];
@@ -6483,6 +6696,28 @@ function QuadrantFlowDashboard({
     onConfigChange({ ...config, [key]: numeric });
   };
 
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT")
+      ) {
+        return;
+      }
+      if (event.key === "h" || event.key === "H") {
+        setViewMode("HISTORY");
+      }
+      if (event.key === "t" || event.key === "T") {
+        setViewMode("TODAY");
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4 text-xs text-slate-200">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -6503,6 +6738,52 @@ function QuadrantFlowDashboard({
             <span className="text-cyan-300">receiver</span>{" "}
             {"\u00b7"} <span className="text-emerald-300">payer</span>{" "}
             {"\u00b7"} <span className="text-slate-400">balanced</span>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
+            <div className="inline-flex overflow-hidden rounded border border-slate-700">
+              <button
+                type="button"
+                onClick={() => setViewMode("TODAY")}
+                className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                  viewMode === "TODAY"
+                    ? "bg-slate-700 text-slate-100"
+                    : "text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("HISTORY")}
+                className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                  viewMode === "HISTORY"
+                    ? "bg-slate-700 text-slate-100"
+                    : "text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                History
+              </button>
+            </div>
+            {viewMode === "HISTORY" && (
+              <div className="inline-flex overflow-hidden rounded border border-slate-700">
+                {(["1W", "1M", "3M", "6M", "1Y", "ALL"] as HistoryLookback[]).map(
+                  (option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => setHistoryLookback(option)}
+                      className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                        historyLookback === option
+                          ? "bg-slate-700 text-slate-100"
+                          : "text-slate-300 hover:bg-slate-800"
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  ),
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -6610,65 +6891,86 @@ function QuadrantFlowDashboard({
 
       {!isCollapsed && (
         <>
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            <QuadrantCell
-              snapshot={flowState.snapshots.ULC}
-              meta={DEFAULT_QUADRANT_META.ULC}
-              trades={quadrantTrades.ULC}
-            />
-            <QuadrantCell
-              snapshot={flowState.snapshots.URC}
-              meta={DEFAULT_QUADRANT_META.URC}
-              trades={quadrantTrades.URC}
-            />
-            <QuadrantCell
-              snapshot={flowState.snapshots.LLC}
-              meta={DEFAULT_QUADRANT_META.LLC}
-              trades={quadrantTrades.LLC}
-            />
-            <QuadrantCell
-              snapshot={flowState.snapshots.LRC}
-              meta={DEFAULT_QUADRANT_META.LRC}
-              trades={quadrantTrades.LRC}
-            />
-          </div>
-
-          {(flowNotes.length ||
-            flowState.dominantTheme ||
-            flowState.crossQuadrantSignal ||
-            custyConcentrationNote) && (
-            <div className="mt-3 space-y-1 text-[11px] text-slate-300">
-              {flowNotes.map((note) => (
-                <div key={note.label} title={note.title}>
-                  {note.label}
-                </div>
-              ))}
-              {custyConcentrationNote && <div>{custyConcentrationNote}</div>}
-              {flowState.dominantTheme && (
-                <div>Dominant theme: {flowState.dominantTheme}</div>
-              )}
-              {flowState.crossQuadrantSignal && (
-                <div>
-                  Cross-quadrant:{" "}
-                  {flowState.crossQuadrantSignal.map((signal, index) => (
-                    <span
-                      key={`${signal.label}-${index}`}
-                      title={signal.title}
-                      className="cursor-help"
-                    >
-                      {signal.label}
-                      {index < flowState.crossQuadrantSignal.length - 1
-                        ? " \u00b7 "
-                        : ""}
-                    </span>
-                  ))}
-                </div>
-              )}
-              <div className="text-[10px] text-slate-500">
-                Pace baseline: relative to other quadrants in the current view
-                (not historical).
+          {viewMode === "TODAY" ? (
+            <>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                <QuadrantCell
+                  snapshot={flowState.snapshots.ULC}
+                  meta={DEFAULT_QUADRANT_META.ULC}
+                  trades={quadrantTrades.ULC}
+                />
+                <QuadrantCell
+                  snapshot={flowState.snapshots.URC}
+                  meta={DEFAULT_QUADRANT_META.URC}
+                  trades={quadrantTrades.URC}
+                />
+                <QuadrantCell
+                  snapshot={flowState.snapshots.LLC}
+                  meta={DEFAULT_QUADRANT_META.LLC}
+                  trades={quadrantTrades.LLC}
+                />
+                <QuadrantCell
+                  snapshot={flowState.snapshots.LRC}
+                  meta={DEFAULT_QUADRANT_META.LRC}
+                  trades={quadrantTrades.LRC}
+                />
               </div>
-            </div>
+
+              {(flowNotes.length ||
+                flowState.dominantTheme ||
+                flowState.crossQuadrantSignal ||
+                custyConcentrationNote) && (
+                <div className="mt-3 space-y-1 text-[11px] text-slate-300">
+                  {flowNotes.map((note) => (
+                    <div key={note.label} title={note.title}>
+                      {note.label}
+                    </div>
+                  ))}
+                  {custyConcentrationNote && <div>{custyConcentrationNote}</div>}
+                  {flowState.dominantTheme && (
+                    <div>Dominant theme: {flowState.dominantTheme}</div>
+                  )}
+                  {flowState.crossQuadrantSignal && (
+                    <div>
+                      Cross-quadrant:{" "}
+                      {flowState.crossQuadrantSignal.map((signal, index) => (
+                        <span
+                          key={`${signal.label}-${index}`}
+                          title={signal.title}
+                          className="cursor-help"
+                        >
+                          {signal.label}
+                          {index < flowState.crossQuadrantSignal.length - 1
+                            ? " \u00b7 "
+                            : ""}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="text-[10px] text-slate-500">
+                    Pace baseline: relative to other quadrants in the current view
+                    (not historical).
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <VolGridFlowHistory
+              lookback={historyLookback}
+              platform={historyPlatform}
+              quadrantConfig={config}
+              todayData={todayAggregate}
+              formatters={{
+                formatNotional,
+                formatSignedNotional,
+                formatRate,
+                formatCount,
+              }}
+              excludeLargeCustyNotional={excludeLargeCustyNotional}
+              onExcludeLargeCustyNotionalChange={
+                onExcludeLargeCustyNotionalChange
+              }
+            />
           )}
         </>
       )}
@@ -6680,10 +6982,12 @@ function SequenceAnalysisPanel({
   rows,
   cluster,
   quadrantConfig,
+  excludeLargeCustyNotional,
 }: {
   rows: TapeRow[];
   cluster: SequenceCluster | null;
   quadrantConfig: QuadrantConfig;
+  excludeLargeCustyNotional: boolean;
 }) {
   const summary = useMemo(() => buildSequenceSummary(rows), [rows]);
 
@@ -6760,7 +7064,9 @@ function SequenceAnalysisPanel({
       historyFetchKeyRef.current = null;
       return;
     }
-    const fetchKey = `${bucketKey}|${packageTypeKey}`;
+    const fetchKey = `${bucketKey}|${packageTypeKey}|${
+      excludeLargeCustyNotional ? "excludeLargeCusty" : "all"
+    }`;
     if (historyFetchKeyRef.current === fetchKey) return;
 
     let cancelled = false;
@@ -6775,6 +7081,9 @@ function SequenceAnalysisPanel({
         const params = new URLSearchParams();
         params.set("seriesKey", bucketKey);
         params.set("packageType", packageTypeKey);
+        if (excludeLargeCustyNotional) {
+          params.set("excludeLargeCustyNotional", "true");
+        }
         const res = await fetch(
           `/api/swaptions-tape/timeseries?${params.toString()}`,
           { signal: controller.signal },
@@ -6786,7 +7095,10 @@ function SequenceAnalysisPanel({
         const payload = await res.json();
         if (cancelled) return;
         const rows = Array.isArray(payload?.rows) ? payload.rows : [];
-        setHistoryRows(rows as TapeRow[]);
+        const filteredRows = excludeLargeCustyNotional
+          ? rows.filter((row) => !isComicallyLargeCustyTrade(row))
+          : rows;
+        setHistoryRows(filteredRows as TapeRow[]);
         setHistoryTruncated(!!payload?.truncated);
         historyFetchKeyRef.current = fetchKey;
       } catch (error: any) {
@@ -6807,7 +7119,7 @@ function SequenceAnalysisPanel({
       cancelled = true;
       controller.abort();
     };
-  }, [bucketKey, packageTypeKey]);
+  }, [bucketKey, excludeLargeCustyNotional, packageTypeKey]);
 
   const historyWindowRows = useMemo(() => {
     if (!anchorTimestamp) return [];
@@ -8901,15 +9213,24 @@ function ManualLinkDetailsModal({
 function PackageRow({
   row,
   seriesRows,
+  excludeLargeCustyNotional,
+  onExcludeLargeCustyNotionalChange,
 }: {
   row: TapeRow;
   seriesRows: TapeRow[];
+  excludeLargeCustyNotional: boolean;
+  onExcludeLargeCustyNotionalChange: (next: boolean) => void;
 }) {
   return (
     <div
       className={`ml-6 rounded-lg border border-slate-800/80 ${NESTED_TABLE_BG} shadow-[inset_0_1px_0_rgba(148,163,184,0.08)]`}
     >
-      <LegsSubtable row={row} seriesRows={seriesRows} />
+      <LegsSubtable
+        row={row}
+        seriesRows={seriesRows}
+        excludeLargeCustyNotional={excludeLargeCustyNotional}
+        onExcludeLargeCustyNotionalChange={onExcludeLargeCustyNotionalChange}
+      />
     </div>
   );
 }
@@ -8954,6 +9275,8 @@ export default function SwaptionTradeTape() {
   const [metricMode, setMetricMode] = useState<"NOTIONAL" | "VEGA">(
     "NOTIONAL",
   );
+  const [excludeLargeCustyNotional, setExcludeLargeCustyNotional] =
+    useState(true);
   const [quadrantConfig, setQuadrantConfig] = useState<QuadrantConfig>(() => {
     if (typeof window === "undefined") return DEFAULT_QUADRANT_CONFIG;
     const stored = window.localStorage.getItem("swaptionQuadrantConfig");
@@ -9720,7 +10043,12 @@ export default function SwaptionTradeTape() {
 
   const rowExpansionTemplate = (row: TapeRow) => (
     <div className="-mx-2 -my-1 px-0 py-0">
-      <PackageRow row={row} seriesRows={filteredRows} />
+      <PackageRow
+        row={row}
+        seriesRows={filteredRows}
+        excludeLargeCustyNotional={excludeLargeCustyNotional}
+        onExcludeLargeCustyNotionalChange={setExcludeLargeCustyNotional}
+      />
     </div>
   );
 
@@ -9899,6 +10227,19 @@ export default function SwaptionTradeTape() {
 
   return (
     <div className="space-y-6">
+      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-100">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-300" />
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-200">
+              In Development
+            </div>
+            <div className="text-[11px] text-amber-100/90">
+              Vol and Greeks may look off while this dashboard is still in progress.
+            </div>
+          </div>
+        </div>
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3 text-xs text-gray-300">
           <span className="text-[11px] uppercase tracking-wide text-gray-400">
@@ -9967,6 +10308,8 @@ export default function SwaptionTradeTape() {
         rows={filteredRows}
         config={quadrantConfig}
         onConfigChange={setQuadrantConfig}
+        excludeLargeCustyNotional={excludeLargeCustyNotional}
+        onExcludeLargeCustyNotionalChange={setExcludeLargeCustyNotional}
       />
       {selectedPackageIds.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
@@ -10055,6 +10398,7 @@ export default function SwaptionTradeTape() {
           rows={selectedRows}
           cluster={selectedCluster}
           quadrantConfig={quadrantConfig}
+          excludeLargeCustyNotional={excludeLargeCustyNotional}
         />
       )}
       <style jsx global>{`

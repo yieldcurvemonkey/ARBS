@@ -6,6 +6,7 @@ import { resolveDisplayView, TapeRow } from '@/lib/swaptions-tape'
 
 const MAX_TIMESERIES_ROWS = 50000
 const IDB_MIC_CODES = ['BGCD', 'ISWV', 'TPSE']
+const COMICALLY_LARGE_CUSTY_NOTIONAL = 100_000_000_000_000
 
 function parseSeriesKey(seriesKey: string): {
   tenorLabel: string | null
@@ -35,6 +36,8 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const seriesKey = searchParams.get('seriesKey')
   const excludeCusty = searchParams.get('excludeCusty') === 'true'
+  const excludeLargeCustyNotional =
+    searchParams.get('excludeLargeCustyNotional') === 'true'
   const packageTypeParam = searchParams.get('packageType')
 
   if (!seriesKey) {
@@ -94,6 +97,21 @@ export async function GET(request: Request) {
       params.push(...IDB_MIC_CODES)
       conditions.push(
         `UPPER(plat.platform_identifier) IN (${idbPlaceholders})`
+      )
+    }
+
+    if (excludeLargeCustyNotional) {
+      params.push(COMICALLY_LARGE_CUSTY_NOTIONAL)
+      const thresholdParam = `$${params.length}`
+      conditions.push(
+        `NOT (
+          abs(coalesce(d.total_notional, 0)) >= ${thresholdParam}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM regexp_split_to_table(upper(coalesce(plat.platform_identifier, '')), '[\\s,;/]+') AS token
+            WHERE token IN ('BGCD', 'ISWV', 'TPSE')
+          )
+        )`
       )
     }
 
