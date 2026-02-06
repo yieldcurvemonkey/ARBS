@@ -29,6 +29,11 @@ import {
 } from "recharts";
 import { TradeRarityPanel } from "./TradeRarityPanel/TradeRarityPanel";
 import { TimeseriesAnnotations } from "./TradeRarityPanel/TimeseriesAnnotations";
+import { QuadrantFlowDashboard, QuadrantTradeContext, QuadrantTimeseries, QuadrantConfigPanel } from "./QuadrantDashboard";
+import { useQuadrantData } from "../hooks/useQuadrantData";
+import { classifyTradeQuadrant, buildTradeQuadrantContext } from "../quadrant/quadrant.utils";
+import { QUADRANT_COLORS } from "../quadrant/quadrant.config";
+import type { VolGridQuadrant } from "../types/quadrant.types";
 import {
   DataTable,
   DataTableFilterMeta,
@@ -2842,7 +2847,7 @@ function LegsSubtable({
   const [yAxisMaxInput, setYAxisMaxInput] = useState("");
   const [showLineDots, setShowLineDots] = useState(true);
   const [showSigmaBands, setShowSigmaBands] = useState(false);
-  const [timeseriesTab, setTimeseriesTab] = useState<"CHART" | "RARITY">(
+  const [timeseriesTab, setTimeseriesTab] = useState<"CHART" | "RARITY" | "QUADRANT">(
     "CHART",
   );
   const [showCustySeries, setShowCustySeries] = useState(true);
@@ -3920,7 +3925,9 @@ function LegsSubtable({
               <span className="block truncate text-[10px] text-slate-500 normal-case">
                 {timeseriesTab === "CHART"
                   ? `${metricLabelWithUnit} - ${rangeLabel}`
-                  : "Trade Rarity"}
+                  : timeseriesTab === "RARITY"
+                  ? "Trade Rarity"
+                  : "Quadrant Context"}
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -3946,6 +3953,17 @@ function LegsSubtable({
                   }`}
                 >
                   Trade Rarity
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimeseriesTab("QUADRANT")}
+                  className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                    timeseriesTab === "QUADRANT"
+                      ? "bg-purple-700 text-purple-100"
+                      : "text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  Quadrant
                 </button>
               </div>
               {timeseriesTab === "CHART" && (
@@ -4598,6 +4616,11 @@ function LegsSubtable({
                 timeseriesRows={timeseriesRows}
                 formatters={rarityFormatters}
               />
+            </div>
+          )}
+          {timeseriesTab === "QUADRANT" && (
+            <div className="mt-3">
+              <QuadrantTradeContextWrapper row={row} seriesRows={seriesRows} />
             </div>
           )}
         </div>
@@ -5652,6 +5675,22 @@ function ManualLinkDetailsModal({
   );
 }
 
+/** Wrapper that computes quadrant context for a trade using pure utility functions. */
+function QuadrantTradeContextWrapper({
+  row,
+  seriesRows,
+}: {
+  row: TapeRow;
+  seriesRows: TapeRow[];
+}) {
+  const context = useMemo(
+    () => buildTradeQuadrantContext(row, seriesRows),
+    [row, seriesRows],
+  );
+
+  return <QuadrantTradeContext context={context} trade={row} />;
+}
+
 function PackageRow({
   row,
   seriesRows,
@@ -5708,6 +5747,9 @@ export default function SwaptionTradeTape() {
   const [metricMode, setMetricMode] = useState<"NOTIONAL" | "VEGA">(
     "NOTIONAL",
   );
+  const [showQuadrantDashboard, setShowQuadrantDashboard] = useState(false);
+  const [showQuadrantConfig, setShowQuadrantConfig] = useState(false);
+  const [showQuadrantTimeseries, setShowQuadrantTimeseries] = useState(false);
   const latestRef = useRef<string | null>(null);
   const fetchInFlight = useRef(false);
   const columnFilterPayload = useMemo(
@@ -6236,6 +6278,8 @@ export default function SwaptionTradeTape() {
     sortRowsByField,
   ]);
 
+  // Quadrant framework: classify trades, compute grid flow state, detect anomalies
+  const quadrantData = useQuadrantData({ rows: filteredRows });
 
   useEffect(() => {
     setRows([]);
@@ -6555,11 +6599,21 @@ export default function SwaptionTradeTape() {
     );
   };
 
-  const labelBody = (row: TapeRow) => (
-    <span className="text-xs font-mono text-gray-200">
-      {buildTradeLabel(row)}
-    </span>
-  );
+  const labelBody = (row: TapeRow) => {
+    const qClass = quadrantData.classificationMap.get(row.package_id);
+    const qLabel = qClass?.quadrant;
+    const qColors = qLabel ? QUADRANT_COLORS[qLabel] : null;
+    return (
+      <span className="text-xs font-mono text-gray-200 inline-flex items-center gap-1.5">
+        {qLabel && qColors && (
+          <span className={`${qColors.bg} ${qColors.border} border rounded px-1 py-0 text-[9px] font-semibold ${qColors.text} leading-tight`}>
+            {qLabel}
+          </span>
+        )}
+        {buildTradeLabel(row)}
+      </span>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -6613,6 +6667,17 @@ export default function SwaptionTradeTape() {
             }`}
           >
             Manual Links
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowQuadrantDashboard((current) => !current)}
+            className={`rounded border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+              showQuadrantDashboard
+                ? "border-purple-400 bg-purple-400/10 text-purple-100"
+                : "border-gray-700 text-gray-200 hover:border-gray-500 hover:bg-gray-800"
+            }`}
+          >
+            Vol Grid
           </button>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-300">
@@ -6677,6 +6742,52 @@ export default function SwaptionTradeTape() {
               Link Selected
             </button>
           </div>
+        </div>
+      )}
+      {/* Quadrant Flow Dashboard */}
+      {showQuadrantDashboard && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowQuadrantTimeseries((c) => !c)}
+              className={`rounded border px-2 py-0.5 text-[10px] font-medium transition ${
+                showQuadrantTimeseries
+                  ? "border-purple-500/50 bg-purple-500/10 text-purple-200"
+                  : "border-slate-700 text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              Timeseries
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowQuadrantConfig((c) => !c)}
+              className={`rounded border px-2 py-0.5 text-[10px] font-medium transition ${
+                showQuadrantConfig
+                  ? "border-slate-500 bg-slate-800 text-slate-200"
+                  : "border-slate-700 text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              Configure
+            </button>
+          </div>
+          <QuadrantFlowDashboard
+            gridState={quadrantData.gridState}
+            anomalies={quadrantData.anomalies}
+            dateLabel={new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+          />
+          {showQuadrantTimeseries && (
+            <QuadrantTimeseries rows={filteredRows} config={quadrantData.config} />
+          )}
+          {showQuadrantConfig && (
+            <QuadrantConfigPanel
+              config={quadrantData.config}
+              onConfigChange={quadrantData.setConfig}
+              meta={quadrantData.meta}
+              onMetaChange={quadrantData.updateMeta}
+              onClose={() => setShowQuadrantConfig(false)}
+            />
+          )}
         </div>
       )}
       <style jsx global>{`
