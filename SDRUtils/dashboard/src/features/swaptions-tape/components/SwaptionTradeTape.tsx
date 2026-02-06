@@ -267,10 +267,112 @@ type TimeseriesSummaryStats = {
   activeDays: number | null;
 };
 
+type SequenceDirection = "PAYER" | "RECEIVER" | "MIXED" | "UNKNOWN";
+
+type SequenceRowMeta = {
+  row: TapeRow;
+  timestamp: number | null;
+  direction: SequenceDirection;
+  directionSymbol: string;
+  notional: number | null;
+  signedNotional: number | null;
+  platform: string | null;
+  isIdb: boolean;
+  isCusty: boolean;
+  bucketKey: string | null;
+};
+
+type SequenceSummary = {
+  tradeCount: number;
+  bucketKey: string | null;
+  bucketBreakdown: Array<{ key: string; count: number }>;
+  windowLabel: string;
+  durationMs: number | null;
+  avgGapMs: number | null;
+  minGapMs: number | null;
+  maxGapMs: number | null;
+  gapTrend: "accelerating" | "decelerating" | "steady" | null;
+  tradesPerHour: number | null;
+  grossNotional: number | null;
+  netNotional: number | null;
+  netToGrossPct: number | null;
+  netDirection: "PAYER" | "RECEIVER" | "FLAT" | "UNKNOWN";
+  directionPattern: string;
+  directionCompact: string;
+  directionCounts: {
+    payer: number;
+    receiver: number;
+    mixed: number;
+    unknown: number;
+  };
+  clipSizes: number[];
+  clipUniformityPct: number | null;
+  clipUniformityLabel: string;
+  clipMedian: number | null;
+  platformBreakdown: Array<{
+    platform: string;
+    count: number;
+    sharePct: number;
+  }>;
+  idbSharePct: number | null;
+  custySharePct: number | null;
+  bpvolStart: number | null;
+  bpvolEnd: number | null;
+  bpvolChange: number | null;
+  sequenceRows: Array<{
+    id: string;
+    timeLabel: string;
+    direction: SequenceDirection;
+    directionSymbol: string;
+    notional: number | null;
+    platform: string | null;
+    label: string;
+  }>;
+  runningNetSeries: Array<{
+    index: number;
+    timestamp: number | null;
+    timeLabel: string;
+    netValue: number | null;
+    directionSymbol: string;
+    notional: number | null;
+  }>;
+  imbalancePeak: number | null;
+  imbalancePeakIndex: number | null;
+  reversionTrades: number | null;
+  reversionMs: number | null;
+  firstOpposingGapMs: number | null;
+  estimatedParticipants: number | null;
+  participantClusters: number[];
+  initiatorLabel: string;
+  initiatorConfidence: "low" | "medium" | "high";
+  hedgedPct: number | null;
+  sizeProfile: string;
+  narrative: string;
+  warnings: string[];
+};
+
+type SequenceCluster = {
+  id: string;
+  bucketKey: string;
+  rows: TapeRow[];
+  startTimestamp: number;
+  endTimestamp: number;
+  durationMs: number;
+};
+
 const SAFE_ACTIONS = new Set(["NEWT", "TRAD", "MODI"]);
 const ACTIVE_ACTIONS = new Set(["NEWT-TRAD", "MODI-TRAD", "CORR-TRAD"]);
 const POLL_INTERVAL_MS = 5000;
 const ROW_ESTIMATE_PX = 44;
+const SEQUENCE_CLUSTER_MAX_GAP_MINUTES = 60;
+const SEQUENCE_CLUSTER_MIN_TRADES = 3;
+const CLIP_UNIFORMITY_TOLERANCE = 0.1;
+const ONE_HOUR_MS = 60 * 60 * 1000;
+const ONE_DAY_MS = 24 * ONE_HOUR_MS;
+const ONE_YEAR_MS = 365 * ONE_DAY_MS;
+const POST_CLUSTER_WINDOW_MS = 2 * ONE_HOUR_MS;
+const HEDGE_LATENCY_NOTIONAL = 100_000_000;
+const HEDGE_LATENCY_MAX_WINDOW_MS = 6 * ONE_HOUR_MS;
 const EMPTY_VALUE = "\u2014";
 const PACKAGE_TONES: Record<string, string> = {
   STRADDLE: "!bg-purple-900/30", // Purple (Distinct from others)
@@ -707,6 +809,8 @@ const MONTH_NAMES_LONG = [
   "december",
 ] as const;
 
+const DAY_NAMES_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
 function buildDateSearchTokens(date: Date, useUtc = false): string[] {
   if (Number.isNaN(date.getTime())) return [];
   const year = useUtc ? date.getUTCFullYear() : date.getFullYear();
@@ -1065,6 +1169,657 @@ function formatDurationMs(value: number | null | undefined): string {
   if (days < 365) return `${smartRound(days, 1)}d`;
   const years = days / 365;
   return `${smartRound(years, 1)}y`;
+}
+
+function formatDateShort(timestamp: number | null | undefined): string {
+  if (!isValid(timestamp)) return "--";
+  const date = new Date(Number(timestamp));
+  if (Number.isNaN(date.getTime())) return "--";
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
+function formatDayOfWeek(index: number | null | undefined): string {
+  if (index === null || index === undefined) return "--";
+  return DAY_NAMES_SHORT[index] ?? "--";
+}
+
+function formatSignedNotional(value: number | null | undefined): string {
+  if (!isValid(value)) return "--";
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) return "--";
+  const sign = numeric < 0 ? "-" : "+";
+  return `${sign}${formatNotional(Math.abs(numeric))}`;
+}
+
+function parseTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ts = new Date(value).getTime();
+  if (Number.isNaN(ts)) return null;
+  return ts;
+}
+
+function clusterValuesByTolerance(
+  values: number[],
+  tolerancePct: number,
+): number[][] {
+  if (!values.length) return [];
+  const sorted = [...values].sort((a, b) => a - b);
+  const clusters: number[][] = [];
+  sorted.forEach((value) => {
+    let placed = false;
+    for (const cluster of clusters) {
+      const anchor = cluster[0];
+      if (anchor === 0) continue;
+      if (Math.abs(value - anchor) / anchor <= tolerancePct) {
+        cluster.push(value);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      clusters.push([value]);
+    }
+  });
+  return clusters;
+}
+
+function classifySizeProfile(
+  values: number[],
+  uniformityPct: number | null,
+): string {
+  if (!values.length) return "unknown";
+  if (uniformityPct !== null && uniformityPct >= 80) return "uniform clips";
+  const sorted = [...values].sort((a, b) => a - b);
+  const clusters = clusterValuesByTolerance(values, CLIP_UNIFORMITY_TOLERANCE);
+  const largestCluster = clusters.reduce(
+    (max, cluster) => Math.max(max, cluster.length),
+    0,
+  );
+  if (largestCluster >= values.length - 1) {
+    return "one odd lot";
+  }
+  const isAscending = values.every(
+    (value, index) => index === 0 || value >= values[index - 1],
+  );
+  const isDescending = values.every(
+    (value, index) => index === 0 || value <= values[index - 1],
+  );
+  if (isAscending && values[values.length - 1] >= values[0] * 1.5) {
+    return "escalating clips";
+  }
+  if (isDescending && values[0] >= values[values.length - 1] * 1.5) {
+    return "descending clips";
+  }
+  if (sorted[sorted.length - 1] >= sorted[0] * 3) {
+    return "wide dispersion";
+  }
+  return "varied clips";
+}
+
+function percentileRank(value: number, values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  let count = 0;
+  for (const entry of sorted) {
+    if (entry <= value) count += 1;
+  }
+  return (count / sorted.length) * 100;
+}
+
+function median(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  return sorted[mid];
+}
+
+function extractLegDirection(leg: TapeLeg): "PAYER" | "RECEIVER" | null {
+  const raw = `${leg.product_type ?? ""} ${leg.trade_label ?? ""}`.toUpperCase();
+  if (raw.includes("PAYER")) return "PAYER";
+  if (raw.includes("RECEIVER")) return "RECEIVER";
+  return null;
+}
+
+function resolveRowDirection(row: TapeRow): SequenceDirection {
+  const packageType = normalizePackageType(row.package_type);
+  const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
+  const legDirections = legs
+    .map((leg) => extractLegDirection(leg))
+    .filter((direction): direction is "PAYER" | "RECEIVER" => direction !== null);
+  const hasPayer = legDirections.includes("PAYER");
+  const hasReceiver = legDirections.includes("RECEIVER");
+  if (hasPayer && hasReceiver) return "MIXED";
+  if (hasPayer) return "PAYER";
+  if (hasReceiver) return "RECEIVER";
+
+  if (packageType.includes("PAYER") && !packageType.includes("RECEIVER")) {
+    return "PAYER";
+  }
+  if (packageType.includes("RECEIVER") && !packageType.includes("PAYER")) {
+    return "RECEIVER";
+  }
+  if (
+    packageType === "STRADDLE" ||
+    packageType === "RISK_REVERSAL" ||
+    packageType === "CUSTY_RR_STRANGLE" ||
+    packageType.startsWith("VERTICAL_SPREAD")
+  ) {
+    return "MIXED";
+  }
+  return "UNKNOWN";
+}
+
+function directionToSymbol(direction: SequenceDirection): string {
+  if (direction === "PAYER") return "P";
+  if (direction === "RECEIVER") return "R";
+  if (direction === "MIXED") return "M";
+  return "?";
+}
+
+function buildSequenceSummary(rows: TapeRow[]): SequenceSummary {
+  const tradeCount = rows.length;
+  const rowMeta: SequenceRowMeta[] = rows.map((row) => {
+    const timestamp = parseTimestamp(row.execution_start);
+    const direction = resolveRowDirection(row);
+    const directionSymbol = directionToSymbol(direction);
+    const notional = computeDisplayNotional(row);
+    const signedNotional =
+      notional !== null && direction === "PAYER"
+        ? notional
+        : notional !== null && direction === "RECEIVER"
+          ? -notional
+          : null;
+    const platform = resolvePlatformIdentifier(row);
+    const isIdb = isIdbPlatform(platform);
+    const isCusty = isCustyPlatform(platform);
+    const bucketKey = resolveTenorKey(row);
+    return {
+      row,
+      timestamp,
+      direction,
+      directionSymbol,
+      notional,
+      signedNotional,
+      platform,
+      isIdb,
+      isCusty,
+      bucketKey,
+    };
+  });
+
+  const sortedMeta = [...rowMeta].sort((left, right) => {
+    if (left.timestamp === null && right.timestamp === null) return 0;
+    if (left.timestamp === null) return 1;
+    if (right.timestamp === null) return -1;
+    return left.timestamp - right.timestamp;
+  });
+
+  const bucketCounts = new Map<string, number>();
+  sortedMeta.forEach((meta) => {
+    const key = meta.bucketKey || "UNKNOWN";
+    bucketCounts.set(key, (bucketCounts.get(key) || 0) + 1);
+  });
+  const bucketBreakdown = Array.from(bucketCounts.entries())
+    .map(([key, count]) => ({ key, count }))
+    .sort((a, b) => b.count - a.count);
+  const bucketKey = bucketBreakdown[0]?.key || null;
+
+  const timestamps = sortedMeta
+    .map((meta) => meta.timestamp)
+    .filter((value): value is number => value !== null);
+  const startTimestamp = timestamps.length ? timestamps[0] : null;
+  const endTimestamp = timestamps.length
+    ? timestamps[timestamps.length - 1]
+    : null;
+  const durationMs =
+    startTimestamp !== null && endTimestamp !== null
+      ? Math.max(0, endTimestamp - startTimestamp)
+      : null;
+  const windowLabel =
+    startTimestamp !== null && endTimestamp !== null
+      ? formatExecutionWindow(
+          sortedMeta.find((meta) => meta.timestamp !== null)?.row
+            .execution_start ?? "",
+          sortedMeta
+            .slice()
+            .reverse()
+            .find((meta) => meta.timestamp !== null)?.row.execution_start ?? "",
+        )
+      : "--";
+
+  const gaps: number[] = [];
+  for (let i = 1; i < timestamps.length; i += 1) {
+    gaps.push(timestamps[i] - timestamps[i - 1]);
+  }
+  const avgGapMs =
+    gaps.length > 0 ? gaps.reduce((a, b) => a + b, 0) / gaps.length : null;
+  const minGapMs = gaps.length ? Math.min(...gaps) : null;
+  const maxGapMs = gaps.length ? Math.max(...gaps) : null;
+  let gapTrend: "accelerating" | "decelerating" | "steady" | null = null;
+  if (gaps.length >= 2) {
+    const first = gaps[0];
+    const last = gaps[gaps.length - 1];
+    if (last < first * 0.7) {
+      gapTrend = "accelerating";
+    } else if (last > first * 1.3) {
+      gapTrend = "decelerating";
+    } else {
+      gapTrend = "steady";
+    }
+  }
+
+  const tradesPerHour =
+    durationMs !== null && durationMs > 0
+      ? (tradeCount / durationMs) * 3_600_000
+      : null;
+
+  const clipSizes = sortedMeta
+    .map((meta) => meta.notional)
+    .filter((value): value is number => isValid(value))
+    .map((value) => Math.abs(value));
+
+  const grossNotional =
+    clipSizes.length > 0
+      ? clipSizes.reduce((sum, value) => sum + value, 0)
+      : null;
+
+  let netNotionalSum = 0;
+  let signedCount = 0;
+  sortedMeta.forEach((meta) => {
+    if (meta.signedNotional === null) return;
+    netNotionalSum += meta.signedNotional;
+    signedCount += 1;
+  });
+  const netNotional = signedCount > 0 ? netNotionalSum : null;
+
+  const netDirection =
+    grossNotional === null || netNotional === null
+      ? "UNKNOWN"
+      : netNotional > 0
+        ? "PAYER"
+        : netNotional < 0
+          ? "RECEIVER"
+          : "FLAT";
+
+  const netToGrossPct =
+    grossNotional && grossNotional !== 0 && netNotional !== null
+      ? (Math.abs(netNotional) / grossNotional) * 100
+      : null;
+
+  const directionCounts = sortedMeta.reduce(
+    (counts, meta) => {
+      if (meta.direction === "PAYER") counts.payer += 1;
+      else if (meta.direction === "RECEIVER") counts.receiver += 1;
+      else if (meta.direction === "MIXED") counts.mixed += 1;
+      else counts.unknown += 1;
+      return counts;
+    },
+    { payer: 0, receiver: 0, mixed: 0, unknown: 0 },
+  );
+
+  const directionSymbols = sortedMeta.map((meta) => meta.directionSymbol);
+  const directionPattern = directionSymbols.join(" \u2192 ");
+  const directionCompact = directionSymbols
+    .map((symbol) => {
+      if (symbol === "P") return "+";
+      if (symbol === "R") return "-";
+      return "?";
+    })
+    .join("");
+
+  const clipMedian = (() => {
+    if (!clipSizes.length) return null;
+    const sorted = [...clipSizes].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 0) {
+      return (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+    return sorted[mid];
+  })();
+  const clipUniformityPct =
+    clipMedian !== null && clipMedian > 0
+      ? (clipSizes.filter(
+          (value) =>
+            Math.abs(value - clipMedian) <= clipMedian * CLIP_UNIFORMITY_TOLERANCE,
+        ).length /
+          clipSizes.length) *
+        100
+      : null;
+  const clipUniformityLabel =
+    clipUniformityPct === null
+      ? "N/A"
+      : clipUniformityPct >= 80
+        ? "Uniform"
+        : clipUniformityPct >= 55
+          ? "Mostly uniform"
+          : "Varied";
+  const sizeProfile = classifySizeProfile(clipSizes, clipUniformityPct);
+
+  const participantClusters = clipSizes.length
+    ? clusterValuesByTolerance(clipSizes, CLIP_UNIFORMITY_TOLERANCE).map(
+        (cluster) =>
+          cluster.reduce((sum, value) => sum + value, 0) / cluster.length,
+      )
+    : [];
+  const estimatedParticipants = participantClusters.length || null;
+
+  const platformCounts = new Map<string, number>();
+  let idbCount = 0;
+  let custyCount = 0;
+  sortedMeta.forEach((meta) => {
+    const key = meta.platform || "UNKNOWN";
+    platformCounts.set(key, (platformCounts.get(key) || 0) + 1);
+    if (meta.isIdb) idbCount += 1;
+    if (meta.isCusty) custyCount += 1;
+  });
+  const platformBreakdown = Array.from(platformCounts.entries())
+    .map(([platform, count]) => ({
+      platform,
+      count,
+      sharePct: tradeCount ? (count / tradeCount) * 100 : 0,
+    }))
+    .sort((a, b) => b.count - a.count);
+  const idbSharePct = tradeCount ? (idbCount / tradeCount) * 100 : null;
+  const custySharePct = tradeCount ? (custyCount / tradeCount) * 100 : null;
+
+  const bpvolValues = sortedMeta
+    .map((meta) => {
+      const pkgType = normalizePackageType(meta.row.package_type);
+      return resolvePackageBpvolYr(meta.row, pkgType);
+    })
+    .filter((value): value is number => isValid(value));
+  const bpvolStart = bpvolValues.length ? bpvolValues[0] : null;
+  const bpvolEnd = bpvolValues.length
+    ? bpvolValues[bpvolValues.length - 1]
+    : null;
+  const bpvolChange =
+    bpvolStart !== null && bpvolEnd !== null ? bpvolEnd - bpvolStart : null;
+
+  const sequenceRows = sortedMeta.map((meta) => ({
+    id: meta.row.package_id,
+    timeLabel:
+      meta.timestamp !== null
+        ? new Date(meta.timestamp).toLocaleTimeString("en-US", {
+            hour12: false,
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          })
+        : "--",
+    direction: meta.direction,
+    directionSymbol: meta.directionSymbol,
+    notional: meta.notional,
+    platform: meta.platform,
+    label: buildRichLabel(meta.row),
+  }));
+
+  let runningNet = 0;
+  const runningNetSeries = sortedMeta.map((meta, index) => {
+    if (meta.signedNotional !== null) {
+      runningNet += meta.signedNotional;
+    }
+    return {
+      index,
+      timestamp: meta.timestamp,
+      timeLabel:
+        meta.timestamp !== null
+          ? new Date(meta.timestamp).toLocaleTimeString("en-US", {
+              hour12: false,
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            })
+          : "--",
+      netValue: meta.signedNotional !== null ? runningNet : null,
+      directionSymbol: meta.directionSymbol,
+      notional: meta.notional,
+    };
+  });
+  let imbalancePeak: number | null = null;
+  let imbalancePeakIndex: number | null = null;
+  runningNetSeries.forEach((point, index) => {
+    if (point.netValue === null) return;
+    if (imbalancePeak === null || Math.abs(point.netValue) > Math.abs(imbalancePeak)) {
+      imbalancePeak = point.netValue;
+      imbalancePeakIndex = index;
+    }
+  });
+  let reversionTrades: number | null = null;
+  let reversionMs: number | null = null;
+  if (imbalancePeakIndex !== null && imbalancePeak !== null) {
+    const target = Math.abs(imbalancePeak) * 0.33;
+    for (let i = imbalancePeakIndex + 1; i < runningNetSeries.length; i += 1) {
+      const point = runningNetSeries[i];
+      if (point.netValue === null) continue;
+      if (Math.abs(point.netValue) <= target) {
+        reversionTrades = i - imbalancePeakIndex;
+        const startTs = runningNetSeries[imbalancePeakIndex].timestamp;
+        if (startTs !== null && point.timestamp !== null) {
+          reversionMs = point.timestamp - startTs;
+        }
+        break;
+      }
+    }
+  }
+
+  let firstOpposingGapMs: number | null = null;
+  const firstDirectional = sortedMeta.find(
+    (meta) => meta.direction === "PAYER" || meta.direction === "RECEIVER",
+  );
+  if (firstDirectional && firstDirectional.timestamp !== null) {
+    const targetDirection =
+      firstDirectional.direction === "PAYER" ? "RECEIVER" : "PAYER";
+    const opposing = sortedMeta.find(
+      (meta) =>
+        meta.timestamp !== null && meta.direction === targetDirection,
+    );
+    if (opposing && opposing.timestamp !== null) {
+      firstOpposingGapMs = opposing.timestamp - firstDirectional.timestamp;
+    }
+  }
+
+  const hedgedPct =
+    netToGrossPct !== null ? Math.max(0, 100 - netToGrossPct) : null;
+
+  const firstMeta = sortedMeta[0];
+  let initiatorLabel = "Initiator unclear";
+  let initiatorConfidence: "low" | "medium" | "high" = "low";
+  if (firstMeta) {
+    const rest = sortedMeta.slice(1);
+    const restIdbShare =
+      rest.length > 0
+        ? rest.filter((meta) => meta.isIdb).length / rest.length
+        : 0;
+    if (firstMeta.isCusty) {
+      initiatorLabel = "Custy initiator";
+      initiatorConfidence = restIdbShare >= 0.5 ? "high" : "medium";
+    } else if (firstMeta.isIdb) {
+      initiatorLabel = "Likely dealer initiator";
+      initiatorConfidence = restIdbShare >= 0.7 ? "low" : "medium";
+    } else {
+      initiatorLabel = "Initiator unclear";
+      initiatorConfidence = "low";
+    }
+  }
+
+  const warnings: string[] = [];
+  if (bucketBreakdown.length > 1) {
+    warnings.push("Multiple buckets selected; summary aggregates across them.");
+  }
+  if (directionCounts.unknown + directionCounts.mixed > 0) {
+    warnings.push("Some trades have mixed/unknown direction; net may be understated.");
+  }
+
+  const narrativeParts: string[] = [];
+  const hasBothDirections =
+    directionCounts.payer > 0 && directionCounts.receiver > 0;
+  if (hasBothDirections) {
+    if (netToGrossPct !== null && netToGrossPct <= 20) {
+      narrativeParts.push(
+        "Mixed direction with low net/gross suggests offsetting hedges or risk recycling.",
+      );
+    } else if (netDirection === "UNKNOWN") {
+      narrativeParts.push(
+        "Mixed direction with unclear net due to missing notional data.",
+      );
+    } else {
+      narrativeParts.push(
+        `Mixed flow with a net ${netDirection.toLowerCase()} lean.`,
+      );
+    }
+  } else if (directionCounts.payer > 0 || directionCounts.receiver > 0) {
+    if (netDirection === "UNKNOWN") {
+      narrativeParts.push(
+        "One-way flow detected, but net direction is unclear without notionals.",
+      );
+    } else {
+      narrativeParts.push(
+        `One-way ${netDirection.toLowerCase()} flow suggests directional accumulation.`,
+      );
+    }
+  } else {
+    narrativeParts.push(
+      "Directionality is unclear due to multi-leg structures in the selection.",
+    );
+  }
+  if (idbSharePct !== null && idbSharePct >= 80) {
+    narrativeParts.push("Activity is concentrated on IDB venues.");
+  } else if (custySharePct !== null && custySharePct >= 80) {
+    narrativeParts.push("Flow is custy-heavy across venues.");
+  } else if (idbSharePct !== null && custySharePct !== null) {
+    narrativeParts.push(
+      "Mix of custy and IDB prints suggests intermediation in flight.",
+    );
+  }
+  if (gapTrend === "accelerating") {
+    narrativeParts.push("Inter-trade gaps are compressing, indicating urgency.");
+  } else if (gapTrend === "decelerating") {
+    narrativeParts.push("Gaps are widening, suggesting the sequence is fading.");
+  }
+
+  return {
+    tradeCount,
+    bucketKey,
+    bucketBreakdown,
+    windowLabel,
+    durationMs,
+    avgGapMs,
+    minGapMs,
+    maxGapMs,
+    gapTrend,
+    tradesPerHour,
+    grossNotional,
+    netNotional,
+    netToGrossPct,
+    netDirection,
+    directionPattern,
+    directionCompact,
+    directionCounts,
+    clipSizes,
+    clipUniformityPct,
+    clipUniformityLabel,
+    clipMedian,
+    platformBreakdown,
+    idbSharePct,
+    custySharePct,
+    bpvolStart,
+    bpvolEnd,
+    bpvolChange,
+    sequenceRows,
+    runningNetSeries,
+    imbalancePeak,
+    imbalancePeakIndex,
+    reversionTrades,
+    reversionMs,
+    firstOpposingGapMs,
+    estimatedParticipants,
+    participantClusters,
+    initiatorLabel,
+    initiatorConfidence,
+    hedgedPct,
+    sizeProfile,
+    narrative: narrativeParts.join(" "),
+    warnings,
+  };
+}
+
+function detectSequenceClusters(
+  rows: TapeRow[],
+  maxGapMinutes: number,
+  minTrades: number,
+): SequenceCluster[] {
+  const clusters: SequenceCluster[] = [];
+  const grouped = new Map<string, TapeRow[]>();
+  rows.forEach((row) => {
+    const action = extractPrimaryAction(row);
+    if (action && !ACTIVE_ACTIONS.has(action)) return;
+    const bucketKey = resolveTenorKey(row);
+    if (!bucketKey) return;
+    const timestamp = parseTimestamp(row.execution_start);
+    if (timestamp === null) return;
+    const list = grouped.get(bucketKey);
+    if (list) {
+      list.push(row);
+    } else {
+      grouped.set(bucketKey, [row]);
+    }
+  });
+
+  grouped.forEach((bucketRows, bucketKey) => {
+    const sorted = bucketRows
+      .map((row) => ({
+        row,
+        timestamp: parseTimestamp(row.execution_start) || 0,
+      }))
+      .sort((a, b) => a.timestamp - b.timestamp);
+    let current: typeof sorted = [];
+    sorted.forEach((entry, index) => {
+      if (current.length === 0) {
+        current = [entry];
+        return;
+      }
+      const prev = current[current.length - 1];
+      const gapMinutes = (entry.timestamp - prev.timestamp) / 60000;
+      if (gapMinutes <= maxGapMinutes) {
+        current.push(entry);
+      } else {
+        if (current.length >= minTrades) {
+          const startTimestamp = current[0].timestamp;
+          const endTimestamp = current[current.length - 1].timestamp;
+          clusters.push({
+            id: `${bucketKey}-${startTimestamp}`,
+            bucketKey,
+            rows: current.map((item) => item.row),
+            startTimestamp,
+            endTimestamp,
+            durationMs: Math.max(0, endTimestamp - startTimestamp),
+          });
+        }
+        current = [entry];
+      }
+      if (index === sorted.length - 1 && current.length >= minTrades) {
+        const startTimestamp = current[0].timestamp;
+        const endTimestamp = current[current.length - 1].timestamp;
+        clusters.push({
+          id: `${bucketKey}-${startTimestamp}`,
+          bucketKey,
+          rows: current.map((item) => item.row),
+          startTimestamp,
+          endTimestamp,
+          durationMs: Math.max(0, endTimestamp - startTimestamp),
+        });
+      }
+    });
+  });
+
+  return clusters;
 }
 
 function dedupeManualTrades(trades: ManualLinkTrade[]): ManualLinkTrade[] {
@@ -1871,14 +2626,6 @@ function findTimeseriesExtremes(
     }
   });
   return { min: minPoint, max: maxPoint };
-}
-
-function median(values: number[]): number | null {
-  if (!values.length) return null;
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 1) return sorted[middle];
-  return (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 function buildLocalDateKey(timestamp: number): string | null {
@@ -4667,6 +5414,1291 @@ function RawDataModal({
   );
 }
 
+function NetFlowSparkline({
+  series,
+  peakIndex,
+}: {
+  series: SequenceSummary["runningNetSeries"];
+  peakIndex: number | null;
+}) {
+  const values = series
+    .map((point) =>
+      typeof point.netValue === "number" && Number.isFinite(point.netValue)
+        ? point.netValue
+        : null,
+    )
+    .filter((value): value is number => value !== null);
+  if (values.length < 2) {
+    return (
+      <div className="text-[10px] text-slate-500">
+        Net flow unavailable for this selection.
+      </div>
+    );
+  }
+  const width = 240;
+  const height = 56;
+  const padding = 6;
+  const minValue = Math.min(...values, 0);
+  const maxValue = Math.max(...values, 0);
+  const range = maxValue - minValue || 1;
+  const stepCount = Math.max(series.length - 1, 1);
+  const scaleX = (index: number) =>
+    padding + (index / stepCount) * (width - padding * 2);
+  const scaleY = (value: number) =>
+    height - padding - ((value - minValue) / range) * (height - padding * 2);
+
+  let path = "";
+  let prevX: number | null = null;
+  let prevY: number | null = null;
+  series.forEach((point, index) => {
+    if (typeof point.netValue !== "number" || !Number.isFinite(point.netValue)) {
+      return;
+    }
+    const x = scaleX(index);
+    const y = scaleY(point.netValue);
+    if (prevX === null || prevY === null) {
+      path = `M ${x} ${y}`;
+    } else {
+      path += ` L ${x} ${prevY} L ${x} ${y}`;
+    }
+    prevX = x;
+    prevY = y;
+  });
+
+  const baselineY = scaleY(0);
+  const peakPoint =
+    peakIndex !== null &&
+    typeof series[peakIndex]?.netValue === "number" &&
+    Number.isFinite(series[peakIndex]?.netValue)
+      ? {
+          x: scaleX(peakIndex),
+          y: scaleY(series[peakIndex].netValue as number),
+        }
+      : null;
+
+  return (
+    <svg width={width} height={height} className="overflow-visible">
+      <line
+        x1={padding}
+        x2={width - padding}
+        y1={baselineY}
+        y2={baselineY}
+        stroke="rgba(148,163,184,0.4)"
+        strokeDasharray="3 3"
+      />
+      <path
+        d={path}
+        fill="none"
+        stroke="#38bdf8"
+        strokeWidth={2}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      {peakPoint && (
+        <circle
+          cx={peakPoint.x}
+          cy={peakPoint.y}
+          r={3}
+          fill="#f97316"
+          stroke="rgba(15,23,42,0.8)"
+          strokeWidth={1}
+        />
+      )}
+    </svg>
+  );
+}
+
+function SequenceAnalysisPanel({
+  rows,
+  cluster,
+}: {
+  rows: TapeRow[];
+  cluster: SequenceCluster | null;
+}) {
+  const summary = useMemo(() => buildSequenceSummary(rows), [rows]);
+
+  const [historyRows, setHistoryRows] = useState<TapeRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyTruncated, setHistoryTruncated] = useState(false);
+  const historyFetchKeyRef = useRef<string | null>(null);
+
+  const bucketKey = useMemo(() => {
+    if (summary.bucketBreakdown.length !== 1) return null;
+    if (!summary.bucketKey || summary.bucketKey === "UNKNOWN") return null;
+    return summary.bucketKey;
+  }, [summary.bucketBreakdown.length, summary.bucketKey]);
+
+  const packageTypeKey = useMemo(() => {
+    const types = new Set<string>();
+    rows.forEach((row) => {
+      const normalized = normalizePackageType(row.package_type);
+      types.add(normalized || "OUTRIGHT");
+    });
+    return types.size === 1 ? Array.from(types)[0] : null;
+  }, [rows]);
+
+  const anchorTimestamp = useMemo(() => {
+    const timestamps = rows
+      .map((row) => parseTimestamp(row.execution_start))
+      .filter((value): value is number => value !== null);
+    return timestamps.length ? Math.max(...timestamps) : null;
+  }, [rows]);
+
+  useEffect(() => {
+    if (!bucketKey || !packageTypeKey) {
+      setHistoryRows([]);
+      setHistoryError(null);
+      setHistoryTruncated(false);
+      historyFetchKeyRef.current = null;
+      return;
+    }
+    const fetchKey = `${bucketKey}|${packageTypeKey}`;
+    if (historyFetchKeyRef.current === fetchKey) return;
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const fetchHistory = async () => {
+      setHistoryLoading(true);
+      setHistoryError(null);
+      setHistoryRows([]);
+      setHistoryTruncated(false);
+      try {
+        const params = new URLSearchParams();
+        params.set("seriesKey", bucketKey);
+        params.set("packageType", packageTypeKey);
+        const res = await fetch(
+          `/api/swaptions-tape/timeseries?${params.toString()}`,
+          { signal: controller.signal },
+        );
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Failed to load sequence history.");
+        }
+        const payload = await res.json();
+        if (cancelled) return;
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        setHistoryRows(rows as TapeRow[]);
+        setHistoryTruncated(!!payload?.truncated);
+        historyFetchKeyRef.current = fetchKey;
+      } catch (error: any) {
+        if (cancelled) return;
+        setHistoryError(
+          error?.message || "Failed to load sequence history.",
+        );
+      } finally {
+        if (!cancelled) {
+          setHistoryLoading(false);
+        }
+      }
+    };
+
+    fetchHistory();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [bucketKey, packageTypeKey]);
+
+  const historyWindowRows = useMemo(() => {
+    if (!anchorTimestamp) return [];
+    const windowStart = anchorTimestamp - ONE_YEAR_MS;
+    return historyRows.filter((row): row is TapeRow => {
+      if (!row) return false;
+      const ts = parseTimestamp(row.execution_start);
+      if (ts === null) return false;
+      return ts >= windowStart && ts <= anchorTimestamp;
+    });
+  }, [anchorTimestamp, historyRows]);
+
+  const currentStartTs = useMemo(() => {
+    const timestamps = rows
+      .map((row) => parseTimestamp(row.execution_start))
+      .filter((value): value is number => value !== null);
+    return timestamps.length ? Math.min(...timestamps) : null;
+  }, [rows]);
+
+  const currentEndTs = useMemo(() => {
+    const timestamps = rows
+      .map((row) => parseTimestamp(row.execution_start))
+      .filter((value): value is number => value !== null);
+    return timestamps.length ? Math.max(...timestamps) : null;
+  }, [rows]);
+
+  const historicalClusters = useMemo(
+    () =>
+      historyWindowRows.length
+        ? detectSequenceClusters(
+            historyWindowRows,
+            SEQUENCE_CLUSTER_MAX_GAP_MINUTES,
+            SEQUENCE_CLUSTER_MIN_TRADES,
+          )
+        : [],
+    [historyWindowRows],
+  );
+
+  const minTradesForStats = Math.max(
+    SEQUENCE_CLUSTER_MIN_TRADES,
+    summary.tradeCount,
+  );
+
+  const similarClusters = useMemo(() => {
+    const maxWindowMs = SEQUENCE_CLUSTER_MAX_GAP_MINUTES * 60 * 1000;
+    return historicalClusters.filter(
+      (cluster) =>
+        cluster.rows.length >= minTradesForStats &&
+        cluster.durationMs <= maxWindowMs,
+    );
+  }, [historicalClusters, minTradesForStats]);
+
+  const clusterStats = useMemo(() => {
+    return similarClusters.map((cluster) => {
+      const summary = buildSequenceSummary(cluster.rows);
+      const startDate = new Date(cluster.startTimestamp);
+      return {
+        cluster,
+        summary,
+        tradeCount: cluster.rows.length,
+        grossNotional: summary.grossNotional,
+        pace: summary.tradesPerHour,
+        netDirection: summary.netDirection,
+        netToGrossPct: summary.netToGrossPct,
+        directionKey: summary.directionCompact,
+        sizeProfile: summary.sizeProfile,
+        startTimestamp: cluster.startTimestamp,
+        endTimestamp: cluster.endTimestamp,
+        durationMs: cluster.durationMs,
+        startHour: startDate.getHours(),
+        dayOfWeek: startDate.getDay(),
+        dayOfMonth: startDate.getDate(),
+      };
+    });
+  }, [similarClusters]);
+
+  const clusterStatsPrior = useMemo(() => {
+    if (currentStartTs === null) return clusterStats;
+    return clusterStats.filter((stat) => stat.endTimestamp < currentStartTs);
+  }, [clusterStats, currentStartTs]);
+
+  const historyRowPoints = useMemo(() => {
+    const points = historyWindowRows
+      .map((row) => {
+        if (!row) return null;
+        const timestamp = parseTimestamp(row.execution_start);
+        if (timestamp === null || !Number.isFinite(timestamp)) return null;
+        const notional = computeDisplayNotional(row);
+        const direction = resolveRowDirection(row);
+        const packageType = normalizePackageType(row.package_type) || "OUTRIGHT";
+        const bpvol = resolvePackageBpvolYr(row, packageType);
+        return {
+          timestamp,
+          notional,
+          direction,
+          bpvol,
+        };
+      })
+      .filter(
+        (point): point is {
+          timestamp: number;
+          notional: number | null;
+          direction: SequenceDirection;
+          bpvol: number | null;
+        } =>
+          !!point &&
+          typeof point.timestamp === "number" &&
+          Number.isFinite(point.timestamp),
+      )
+      .sort((a, b) => a.timestamp - b.timestamp);
+    return points;
+  }, [historyWindowRows]);
+
+  const clusterRarity = useMemo(() => {
+    if (!clusterStats.length || currentStartTs === null) return null;
+    const startTimes = clusterStats
+      .map((stat) => stat.startTimestamp)
+      .sort((a, b) => a - b);
+    const intervals: number[] = [];
+    for (let i = 1; i < startTimes.length; i += 1) {
+      intervals.push(startTimes[i] - startTimes[i - 1]);
+    }
+    const avgIntervalDays =
+      intervals.length > 0
+        ? intervals.reduce((sum, value) => sum + value, 0) /
+          intervals.length /
+          ONE_DAY_MS
+        : null;
+
+    const lastCluster = clusterStatsPrior.reduce(
+      (latest, stat) =>
+        !latest || stat.startTimestamp > latest.startTimestamp ? stat : latest,
+      null as (typeof clusterStatsPrior)[number] | null,
+    );
+    const lastClusterDaysAgo =
+      lastCluster && currentStartTs !== null
+        ? (currentStartTs - lastCluster.startTimestamp) / ONE_DAY_MS
+        : null;
+
+    const grossValues = clusterStats
+      .map((stat) => stat.grossNotional)
+      .filter((value): value is number => value !== null);
+    const paceValues = clusterStats
+      .map((stat) => stat.pace)
+      .filter((value): value is number => value !== null);
+
+    const grossPercentile =
+      summary.grossNotional !== null
+        ? percentileRank(summary.grossNotional, grossValues)
+        : null;
+    const pacePercentile =
+      summary.tradesPerHour !== null
+        ? percentileRank(summary.tradesPerHour, paceValues)
+        : null;
+
+    const hourBuckets = new Map<number, number>();
+    clusterStats.forEach((stat) => {
+      const bucket = Math.floor(stat.startHour / 4);
+      hourBuckets.set(bucket, (hourBuckets.get(bucket) || 0) + 1);
+    });
+    const [modeBucket] =
+      Array.from(hourBuckets.entries()).sort((a, b) => b[1] - a[1])[0] || [];
+    const bucketStartHour =
+      modeBucket !== undefined ? modeBucket * 4 : null;
+    const typicalTimeLabel =
+      bucketStartHour !== null
+        ? `${String(bucketStartHour).padStart(2, "0")}:00-${String(
+            bucketStartHour + 4,
+          ).padStart(2, "0")}:00 ET`
+        : null;
+
+    const currentHour =
+      currentStartTs !== null ? new Date(currentStartTs).getHours() : null;
+    const currentBucket =
+      currentHour !== null ? Math.floor(currentHour / 4) : null;
+    let timeOfDayNote: string | null = null;
+    if (
+      currentBucket !== null &&
+      modeBucket !== undefined &&
+      currentBucket !== modeBucket
+    ) {
+      timeOfDayNote =
+        currentBucket < (modeBucket as number)
+          ? "unusually early"
+          : "unusually late";
+    }
+
+    const dayOfWeekCounts = new Map<number, number>();
+    clusterStats.forEach((stat) => {
+      dayOfWeekCounts.set(
+        stat.dayOfWeek,
+        (dayOfWeekCounts.get(stat.dayOfWeek) || 0) + 1,
+      );
+    });
+    const topDay = Array.from(dayOfWeekCounts.entries()).sort(
+      (a, b) => b[1] - a[1],
+    )[0];
+    const typicalDayLabel = topDay
+      ? `${formatDayOfWeek(topDay[0])} (${formatRate(
+          (topDay[1] / clusterStats.length) * 100,
+          0,
+        )}%)`
+      : null;
+
+    const domCounts = new Map<number, number>();
+    clusterStats.forEach((stat) => {
+      const bin = Math.min(Math.floor((stat.dayOfMonth - 1) / 5), 5);
+      domCounts.set(bin, (domCounts.get(bin) || 0) + 1);
+    });
+    const topDom = Array.from(domCounts.entries()).sort(
+      (a, b) => b[1] - a[1],
+    )[0];
+    const domLabel = topDom
+      ? topDom[0] === 5
+        ? "26-31"
+        : `${topDom[0] * 5 + 1}-${topDom[0] * 5 + 5}`
+      : null;
+
+    return {
+      clusterCount: clusterStats.length,
+      avgIntervalDays,
+      lastClusterDaysAgo,
+      lastClusterDate: lastCluster ? formatDateShort(lastCluster.startTimestamp) : null,
+      grossPercentile,
+      pacePercentile,
+      typicalTimeLabel,
+      timeOfDayNote,
+      typicalDayLabel,
+      domLabel,
+    };
+  }, [clusterStats, clusterStatsPrior, currentStartTs, summary.grossNotional, summary.tradesPerHour]);
+
+  const postClusterHistory = useMemo(() => {
+    if (!clusterStatsPrior.length || !historyRowPoints.length) return null;
+    const windows = [30, 60, 120].map((m) => m * 60 * 1000);
+    let follow30 = 0;
+    let follow60 = 0;
+    let follow120 = 0;
+    let additionalGrossSum = 0;
+    let additionalGrossCount = 0;
+    const payerVolDrifts: number[] = [];
+    const receiverVolDrifts: number[] = [];
+
+    const timestamps = historyRowPoints.map((point) => point.timestamp);
+
+    const findFirstIndexAfter = (ts: number) => {
+      let lo = 0;
+      let hi = timestamps.length;
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (timestamps[mid] <= ts) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo;
+    };
+
+    clusterStatsPrior.forEach((stat) => {
+      const startIndex = findFirstIndexAfter(stat.endTimestamp);
+      const endWindow = stat.endTimestamp + windows[2];
+      let has30 = false;
+      let has60 = false;
+      let has120 = false;
+      let gross = 0;
+      for (let i = startIndex; i < historyRowPoints.length; i += 1) {
+        const point = historyRowPoints[i];
+        if (!point) continue;
+        if (point.timestamp > endWindow) break;
+        const delta = point.timestamp - stat.endTimestamp;
+        if (delta <= windows[0]) has30 = true;
+        if (delta <= windows[1]) has60 = true;
+        if (delta <= windows[2]) has120 = true;
+        if (point.notional !== null) gross += Math.abs(point.notional);
+      }
+      if (has30) follow30 += 1;
+      if (has60) follow60 += 1;
+      if (has120) follow120 += 1;
+      if (gross > 0) {
+        additionalGrossSum += gross;
+        additionalGrossCount += 1;
+      }
+
+      let nextVolTrade: typeof historyRowPoints[number] | null = null;
+      for (let i = startIndex; i < historyRowPoints.length; i += 1) {
+        const point = historyRowPoints[i];
+        if (!point) continue;
+        const delta = point.timestamp - stat.endTimestamp;
+        if (delta > ONE_DAY_MS) break;
+        if (point.bpvol !== null) {
+          nextVolTrade = point;
+          break;
+        }
+      }
+
+      if (
+        stat.summary.bpvolEnd !== null &&
+        nextVolTrade &&
+        nextVolTrade.bpvol !== null
+      ) {
+        const drift = nextVolTrade.bpvol - stat.summary.bpvolEnd;
+        if (stat.netDirection === "PAYER") payerVolDrifts.push(drift);
+        if (stat.netDirection === "RECEIVER") receiverVolDrifts.push(drift);
+      }
+    });
+
+    const sampleSize = clusterStatsPrior.length;
+    return {
+      sampleSize,
+      follow30Pct: sampleSize ? (follow30 / sampleSize) * 100 : null,
+      follow60Pct: sampleSize ? (follow60 / sampleSize) * 100 : null,
+      follow120Pct: sampleSize ? (follow120 / sampleSize) * 100 : null,
+      avgAdditionalGross2h:
+        additionalGrossCount > 0
+          ? additionalGrossSum / additionalGrossCount
+          : null,
+      payerVolDriftAvg: payerVolDrifts.length
+        ? payerVolDrifts.reduce((a, b) => a + b, 0) / payerVolDrifts.length
+        : null,
+      receiverVolDriftAvg: receiverVolDrifts.length
+        ? receiverVolDrifts.reduce((a, b) => a + b, 0) /
+          receiverVolDrifts.length
+        : null,
+    };
+  }, [clusterStatsPrior, historyRowPoints]);
+
+  const patternMatch = useMemo(() => {
+    if (!clusterStats.length) return null;
+    const sameSize = clusterStats.filter(
+      (stat) => stat.tradeCount === summary.tradeCount,
+    );
+    const patternCount = sameSize.filter(
+      (stat) => stat.directionKey === summary.directionCompact,
+    ).length;
+    const sizeProfileCount = sameSize.filter(
+      (stat) => stat.sizeProfile === summary.sizeProfile,
+    ).length;
+
+    const grossValues = clusterStats
+      .map((stat) => stat.grossNotional)
+      .filter((value): value is number => value !== null);
+    const paceValues = clusterStats
+      .map((stat) => stat.pace)
+      .filter((value): value is number => value !== null);
+
+    const grossPct =
+      summary.grossNotional !== null
+        ? percentileRank(summary.grossNotional, grossValues)
+        : null;
+    const pacePct =
+      summary.tradesPerHour !== null
+        ? percentileRank(summary.tradesPerHour, paceValues)
+        : null;
+    const anomalyScore =
+      grossPct !== null && pacePct !== null
+        ? (grossPct + pacePct) / 2
+        : null;
+    const anomalyLabel =
+      anomalyScore === null
+        ? "unknown"
+        : anomalyScore >= 90
+          ? "rare"
+          : anomalyScore >= 70
+            ? "notable"
+            : "routine";
+
+    let bestMatch: typeof clusterStats[number] | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    clusterStats.forEach((stat) => {
+      if (currentStartTs !== null && stat.startTimestamp === currentStartTs) {
+        return;
+      }
+      let score = 0;
+      score += stat.directionKey === summary.directionCompact ? 0 : 1;
+      score += stat.sizeProfile === summary.sizeProfile ? 0 : 0.5;
+      if (summary.netToGrossPct !== null && stat.netToGrossPct !== null) {
+        score +=
+          Math.abs(summary.netToGrossPct - stat.netToGrossPct) / 50;
+      } else {
+        score += 0.5;
+      }
+      if (summary.durationMs !== null) {
+        score +=
+          Math.abs(summary.durationMs - stat.durationMs) /
+          (SEQUENCE_CLUSTER_MAX_GAP_MINUTES * 60 * 1000);
+      }
+      if (summary.grossNotional !== null && stat.grossNotional !== null) {
+        score +=
+          Math.abs(summary.grossNotional - stat.grossNotional) /
+          summary.grossNotional;
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        bestMatch = stat;
+      }
+    });
+
+    return {
+      patternFreqPct: sameSize.length
+        ? (patternCount / sameSize.length) * 100
+        : null,
+      sizeProfileFreqPct: sameSize.length
+        ? (sizeProfileCount / sameSize.length) * 100
+        : null,
+      anomalyScore,
+      anomalyLabel,
+      bestMatch,
+    };
+  }, [
+    clusterStats,
+    currentStartTs,
+    summary.directionCompact,
+    summary.durationMs,
+    summary.grossNotional,
+    summary.netToGrossPct,
+    summary.sizeProfile,
+    summary.tradeCount,
+    summary.tradesPerHour,
+  ]);
+
+  const hedgeLatencyStats = useMemo(() => {
+    if (!historyRowPoints.length) return null;
+    const latencies: number[] = [];
+    for (let i = 0; i < historyRowPoints.length; i += 1) {
+      const point = historyRowPoints[i];
+      if (
+        point.notional === null ||
+        point.notional < HEDGE_LATENCY_NOTIONAL
+      ) {
+        continue;
+      }
+      if (point.direction !== "PAYER" && point.direction !== "RECEIVER") {
+        continue;
+      }
+      const target =
+        point.direction === "PAYER" ? "RECEIVER" : "PAYER";
+      for (let j = i + 1; j < historyRowPoints.length; j += 1) {
+        const next = historyRowPoints[j];
+        const delta = next.timestamp - point.timestamp;
+        if (delta > HEDGE_LATENCY_MAX_WINDOW_MS) break;
+        if (next.direction === target) {
+          latencies.push(delta);
+          break;
+        }
+      }
+    }
+    return {
+      medianMs: median(latencies),
+      currentMs: summary.firstOpposingGapMs,
+    };
+  }, [historyRowPoints, summary.firstOpposingGapMs]);
+
+  const intradayInventory = useMemo(() => {
+    if (currentStartTs === null || !historyRowPoints.length) return null;
+    const day = new Date(currentStartTs);
+    const dayStart = new Date(
+      day.getFullYear(),
+      day.getMonth(),
+      day.getDate(),
+    ).getTime();
+    const dayEnd = dayStart + ONE_DAY_MS;
+    let net = 0;
+    let gross = 0;
+    let peak = 0;
+    historyRowPoints.forEach((point) => {
+      if (point.timestamp < dayStart || point.timestamp > dayEnd) return;
+      if (point.notional !== null) {
+        gross += Math.abs(point.notional);
+      }
+      if (point.direction === "PAYER" && point.notional !== null) {
+        net += point.notional;
+      }
+      if (point.direction === "RECEIVER" && point.notional !== null) {
+        net -= point.notional;
+      }
+      peak = Math.max(peak, Math.abs(net));
+    });
+    return {
+      gross: gross || null,
+      net: gross ? net : null,
+      peak: gross ? peak : null,
+    };
+  }, [currentStartTs, historyRowPoints]);
+
+  const bucketLabel =
+    summary.bucketBreakdown.length > 1
+      ? "Mixed buckets"
+      : summary.bucketKey && summary.bucketKey !== "UNKNOWN"
+        ? summary.bucketKey
+        : "Unlabeled bucket";
+  const bucketDetail = summary.bucketBreakdown
+    .map((entry) => `${entry.key} (${entry.count})`)
+    .join(" \u00b7 ");
+  const clipLabel = summary.clipSizes.length
+    ? summary.clipSizes.map((value) => formatNotional(value)).join(" / ")
+    : "--";
+  const platformLabel = summary.platformBreakdown.length
+    ? summary.platformBreakdown
+        .slice(0, 3)
+        .map(
+          (entry) =>
+            `${entry.platform} ${formatRate(entry.sharePct, 0)}%`,
+        )
+        .join(" \u00b7 ")
+    : "--";
+
+  const directionTone = (direction: SequenceDirection) => {
+    if (direction === "PAYER") return "text-rose-300";
+    if (direction === "RECEIVER") return "text-emerald-300";
+    if (direction === "MIXED") return "text-amber-300";
+    return "text-slate-400";
+  };
+
+  const netFlowSteps = useMemo(() => {
+    const values = summary.runningNetSeries
+      .map((point) => point.netValue)
+      .filter((value): value is number => value !== null)
+      .map((value) => formatSignedNotional(value));
+    if (!values.length) return "--";
+    return ["0", ...values].join(" \u2192 ");
+  }, [summary.runningNetSeries]);
+
+  const imbalancePoint =
+    summary.imbalancePeakIndex !== null
+      ? summary.runningNetSeries[summary.imbalancePeakIndex]
+      : null;
+
+  const participantLabel = summary.participantClusters.length
+    ? summary.participantClusters.map((value) => formatNotional(value)).join(" / ")
+    : "--";
+
+  const historyStatusNote = !bucketKey
+    ? "History unavailable for mixed bucket selections."
+    : !packageTypeKey
+      ? "History unavailable for mixed package types."
+      : null;
+
+  if (rows.length < 2) return null;
+
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4 text-xs text-slate-200">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] uppercase tracking-wide text-slate-400">
+            Sequence Analysis
+          </div>
+          <div className="text-sm font-semibold text-slate-100">
+            {bucketLabel}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {summary.windowLabel}
+            {summary.durationMs !== null && (
+              <>
+                {" "}
+                {"\u00b7"} {formatDurationMs(summary.durationMs)}
+              </>
+            )}
+          </div>
+          {bucketDetail && (
+            <div className="text-[10px] text-slate-500 truncate">
+              {bucketDetail}
+            </div>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="rounded border border-slate-700 bg-slate-900/60 px-2 py-1 font-mono text-slate-200">
+            {summary.tradeCount} trades
+          </span>
+          {cluster && (
+            <span className="rounded border border-sky-500/50 bg-sky-500/10 px-2 py-1 font-mono text-sky-200">
+              Cluster {cluster.rows.length} {"\u00b7"}{" "}
+              {formatDurationMs(cluster.durationMs)}
+            </span>
+          )}
+          <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 font-mono text-emerald-200">
+            Net {summary.netDirection.toLowerCase()}
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-4">
+        <div className="rounded border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">
+            Flow
+          </div>
+          <div className="mt-2 space-y-1 text-[11px]">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Gross</span>
+              <span className="font-mono text-slate-100">
+                {formatNotional(summary.grossNotional)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Net</span>
+              <span className="font-mono text-slate-100">
+                {formatSignedNotional(
+                  summary.grossNotional === null ? null : summary.netNotional,
+                )}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Net/Gross</span>
+              <span className="font-mono text-slate-100">
+                {summary.netToGrossPct !== null
+                  ? `${formatRate(summary.netToGrossPct, 1)}%`
+                  : "--"}
+              </span>
+            </div>
+            {summary.bpvolStart !== null && summary.bpvolEnd !== null && (
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Vol drift</span>
+                <span className="font-mono text-slate-100">
+                  {formatMetricValue(summary.bpvolStart, 2)} {"\u2192"}{" "}
+                  {formatMetricValue(summary.bpvolEnd, 2)} (
+                  {formatMetricValue(summary.bpvolChange, 2)})
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="rounded border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">
+            Timing
+          </div>
+          <div className="mt-2 space-y-1 text-[11px]">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Avg gap</span>
+              <span className="font-mono text-slate-100">
+                {formatDurationMs(summary.avgGapMs)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Min gap</span>
+              <span className="font-mono text-slate-100">
+                {formatDurationMs(summary.minGapMs)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Max gap</span>
+              <span className="font-mono text-slate-100">
+                {formatDurationMs(summary.maxGapMs)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Trades/hr</span>
+              <span className="font-mono text-slate-100">
+                {summary.tradesPerHour !== null
+                  ? formatRate(summary.tradesPerHour, 2)
+                  : "--"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Gap trend</span>
+              <span className="font-mono text-slate-100">
+                {summary.gapTrend ?? "--"}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div className="rounded border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">
+            Clips
+          </div>
+          <div className="mt-2 space-y-1 text-[11px]">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Sequence</span>
+              <span className="font-mono text-slate-100">{clipLabel}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Uniformity</span>
+              <span className="font-mono text-slate-100">
+                {summary.clipUniformityLabel}
+                {summary.clipUniformityPct !== null
+                  ? ` (${formatRate(summary.clipUniformityPct, 0)}%)`
+                  : ""}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Median</span>
+              <span className="font-mono text-slate-100">
+                {formatNotional(summary.clipMedian)}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div className="rounded border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">
+            Venue
+          </div>
+          <div className="mt-2 space-y-1 text-[11px]">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Platforms</span>
+              <span className="font-mono text-slate-100">{platformLabel}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">IDB share</span>
+              <span className="font-mono text-slate-100">
+                {summary.idbSharePct !== null
+                  ? `${formatRate(summary.idbSharePct, 0)}%`
+                  : "--"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Custy share</span>
+              <span className="font-mono text-slate-100">
+                {summary.custySharePct !== null
+                  ? `${formatRate(summary.custySharePct, 0)}%`
+                  : "--"}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <div className="rounded border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">
+            Flow Momentum
+          </div>
+          <div className="mt-2">
+            <NetFlowSparkline
+              series={summary.runningNetSeries}
+              peakIndex={summary.imbalancePeakIndex}
+            />
+            <div className="mt-2 text-[10px] text-slate-400">
+              Net flow:{" "}
+              <span className="font-mono text-slate-200">{netFlowSteps}</span>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-1 text-[11px]">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Imbalance peak</span>
+              <span className="font-mono text-slate-100">
+                {summary.imbalancePeak !== null
+                  ? `${formatSignedNotional(summary.imbalancePeak)}${
+                      imbalancePoint?.timeLabel
+                        ? ` @ ${imbalancePoint.timeLabel}`
+                        : ""
+                    }`
+                  : "--"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Reversion speed</span>
+              <span className="font-mono text-slate-100">
+                {summary.reversionTrades !== null
+                  ? `${summary.reversionTrades} trades / ${formatDurationMs(
+                      summary.reversionMs,
+                    )}`
+                  : "--"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Hedged in-cluster</span>
+              <span className="font-mono text-slate-100">
+                {summary.hedgedPct !== null
+                  ? `${formatRate(summary.hedgedPct, 0)}%`
+                  : "--"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Participants</span>
+              <span className="font-mono text-slate-100">
+                {summary.estimatedParticipants ?? "--"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Clip clusters</span>
+              <span className="font-mono text-slate-100">
+                {participantLabel}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Initiator</span>
+              <span className="font-mono text-slate-100">
+                {summary.initiatorLabel} ({summary.initiatorConfidence})
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Opposing print</span>
+              <span className="font-mono text-slate-100">
+                {summary.firstOpposingGapMs !== null
+                  ? formatDurationMs(summary.firstOpposingGapMs)
+                  : "--"}
+                {hedgeLatencyStats?.medianMs
+                  ? ` (median ${formatDurationMs(
+                      hedgeLatencyStats.medianMs,
+                    )})`
+                  : ""}
+              </span>
+            </div>
+            {intradayInventory && (
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Day net / gross</span>
+                <span className="font-mono text-slate-100">
+                  {formatSignedNotional(intradayInventory.net)} /{" "}
+                  {formatNotional(intradayInventory.gross)}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="rounded border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">
+            Cluster Rarity
+          </div>
+          {historyLoading && (
+            <div className="mt-2 text-[11px] text-slate-400">
+              Loading cluster history...
+            </div>
+          )}
+          {historyError && (
+            <div className="mt-2 text-[11px] text-rose-300">
+              {historyError}
+            </div>
+          )}
+          {!historyLoading && !historyError && clusterRarity && (
+            <div className="mt-2 space-y-1 text-[11px]">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">
+                  Clusters &gt;={minTradesForStats} trades ({'<='}{SEQUENCE_CLUSTER_MAX_GAP_MINUTES}m, 365d)
+                </span>
+                <span className="font-mono text-slate-100">
+                  {clusterRarity.clusterCount}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Avg interval</span>
+                <span className="font-mono text-slate-100">
+                  {clusterRarity.avgIntervalDays !== null
+                    ? `${formatRate(clusterRarity.avgIntervalDays, 1)}d`
+                    : "--"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Last similar</span>
+                <span className="font-mono text-slate-100">
+                  {clusterRarity.lastClusterDaysAgo !== null
+                    ? `${formatRate(clusterRarity.lastClusterDaysAgo, 0)}d ago (${clusterRarity.lastClusterDate})`
+                    : "--"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Gross percentile</span>
+                <span className="font-mono text-slate-100">
+                  {clusterRarity.grossPercentile !== null
+                    ? `P${formatRate(clusterRarity.grossPercentile, 0)}`
+                    : "--"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Pace percentile</span>
+                <span className="font-mono text-slate-100">
+                  {clusterRarity.pacePercentile !== null
+                    ? `P${formatRate(clusterRarity.pacePercentile, 0)}`
+                    : "--"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Typical time</span>
+                <span className="font-mono text-slate-100">
+                  {clusterRarity.typicalTimeLabel ?? "--"}
+                </span>
+              </div>
+              {clusterRarity.timeOfDayNote && (
+                <div className="text-[10px] text-amber-300">
+                  This cluster is {clusterRarity.timeOfDayNote}.
+                </div>
+              )}
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Top weekday</span>
+                <span className="font-mono text-slate-100">
+                  {clusterRarity.typicalDayLabel ?? "--"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Top month window</span>
+                <span className="font-mono text-slate-100">
+                  {clusterRarity.domLabel ? `${clusterRarity.domLabel}` : "--"}
+                </span>
+              </div>
+              {historyTruncated && (
+                <div className="mt-2 text-[10px] text-amber-300">
+                  History truncated at 50k rows.
+                </div>
+              )}
+            </div>
+          )}
+          {!historyLoading && !historyError && !clusterRarity && (
+            <div className="mt-2 text-[11px] text-slate-400">
+              {historyStatusNote || "No historical clusters found."}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <div className="rounded border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">
+            Post-Cluster History
+          </div>
+          {historyError && (
+            <div className="mt-2 text-[11px] text-rose-300">
+              {historyError}
+            </div>
+          )}
+          {!historyError && historyLoading && (
+            <div className="mt-2 text-[11px] text-slate-400">
+              Loading post-cluster history...
+            </div>
+          )}
+          {!historyError && !historyLoading && !postClusterHistory && (
+            <div className="mt-2 text-[11px] text-slate-400">
+              {historyStatusNote || "No post-cluster samples available."}
+            </div>
+          )}
+          {!historyError && !historyLoading && postClusterHistory && (
+            <div className="mt-2 space-y-1 text-[11px]">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Similar clusters</span>
+                <span className="font-mono text-slate-100">
+                  {postClusterHistory.sampleSize}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Follow-on 30m</span>
+                <span className="font-mono text-slate-100">
+                  {postClusterHistory.follow30Pct !== null
+                    ? `${formatRate(postClusterHistory.follow30Pct, 0)}%`
+                    : "--"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Follow-on 60m</span>
+                <span className="font-mono text-slate-100">
+                  {postClusterHistory.follow60Pct !== null
+                    ? `${formatRate(postClusterHistory.follow60Pct, 0)}%`
+                    : "--"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Follow-on 120m</span>
+                <span className="font-mono text-slate-100">
+                  {postClusterHistory.follow120Pct !== null
+                    ? `${formatRate(postClusterHistory.follow120Pct, 0)}%`
+                    : "--"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Avg gross next 2h</span>
+                <span className="font-mono text-slate-100">
+                  {formatNotional(postClusterHistory.avgAdditionalGross2h)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Vol drift (net payer)</span>
+                <span className="font-mono text-slate-100">
+                  {postClusterHistory.payerVolDriftAvg !== null
+                    ? formatMetricValue(postClusterHistory.payerVolDriftAvg, 2)
+                    : "--"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Vol drift (net receiver)</span>
+                <span className="font-mono text-slate-100">
+                  {postClusterHistory.receiverVolDriftAvg !== null
+                    ? formatMetricValue(
+                        postClusterHistory.receiverVolDriftAvg,
+                        2,
+                      )
+                    : "--"}
+                </span>
+              </div>
+              <div className="mt-2 text-[10px] text-slate-500">
+                Cross-bucket propagation requires multi-bucket history.
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="rounded border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">
+            Pattern Match
+          </div>
+          {historyError && (
+            <div className="mt-2 text-[11px] text-rose-300">
+              {historyError}
+            </div>
+          )}
+          {!historyError && historyLoading && (
+            <div className="mt-2 text-[11px] text-slate-400">
+              Loading pattern history...
+            </div>
+          )}
+          {!historyError && !historyLoading && !patternMatch && (
+            <div className="mt-2 text-[11px] text-slate-400">
+              {historyStatusNote || "No historical patterns available."}
+            </div>
+          )}
+          {!historyError && !historyLoading && patternMatch && (
+            <div className="mt-2 space-y-1 text-[11px]">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Pattern freq (N={summary.tradeCount})</span>
+                <span className="font-mono text-slate-100">
+                  {patternMatch.patternFreqPct !== null
+                    ? `${formatRate(patternMatch.patternFreqPct, 0)}%`
+                    : "--"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Size profile</span>
+                <span className="font-mono text-slate-100">
+                  {summary.sizeProfile}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Profile freq</span>
+                <span className="font-mono text-slate-100">
+                  {patternMatch.sizeProfileFreqPct !== null
+                    ? `${formatRate(patternMatch.sizeProfileFreqPct, 0)}%`
+                    : "--"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Anomaly score</span>
+                <span className="font-mono text-slate-100">
+                  {patternMatch.anomalyScore !== null
+                    ? `${patternMatch.anomalyLabel.toUpperCase()} (P${formatRate(
+                        patternMatch.anomalyScore,
+                        0,
+                      )})`
+                    : "--"}
+                </span>
+              </div>
+              {patternMatch.bestMatch && (
+                <div className="mt-2 text-[10px] text-slate-400">
+                  Nearest match:{" "}
+                  <span className="text-slate-200">
+                    {formatDateShort(patternMatch.bestMatch.startTimestamp)}
+                  </span>{" "}
+                  · {patternMatch.bestMatch.summary.directionPattern} ·{" "}
+                  {formatNotional(patternMatch.bestMatch.grossNotional)} ·{" "}
+                  {formatDurationMs(patternMatch.bestMatch.durationMs)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <div className="rounded border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">
+            Pattern
+          </div>
+          <div className="mt-2 text-sm font-mono text-slate-100">
+            {summary.directionPattern || "--"}
+          </div>
+          <div className="text-[10px] text-slate-500">
+            {summary.directionCompact || "--"}
+          </div>
+          <div className="mt-2 text-[11px] text-slate-300">
+            {summary.narrative}
+          </div>
+        </div>
+        <div className="rounded border border-slate-800 bg-slate-950/60 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-slate-400">
+            Sequence
+          </div>
+          <div className="mt-2 space-y-1">
+            {summary.sequenceRows.map((item) => (
+              <div
+                key={item.id}
+                className="grid grid-cols-1 items-center gap-1 text-[11px] text-slate-200 md:grid-cols-[90px_36px_90px_70px_1fr]"
+              >
+                <span className="font-mono text-slate-300">
+                  {item.timeLabel}
+                </span>
+                <span className={`font-semibold ${directionTone(item.direction)}`}>
+                  {item.directionSymbol}
+                </span>
+                <span className="font-mono">{formatNotional(item.notional)}</span>
+                <span className="text-slate-400">
+                  {item.platform || "--"}
+                </span>
+                <span className="truncate text-slate-400">{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {summary.warnings.length > 0 && (
+        <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+          {summary.warnings.join(" ")}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ManualLinkModal({
   isOpen,
   selectedRows,
@@ -5708,6 +7740,7 @@ export default function SwaptionTradeTape() {
   const [metricMode, setMetricMode] = useState<"NOTIONAL" | "VEGA">(
     "NOTIONAL",
   );
+  const [showSequencePanel, setShowSequencePanel] = useState(false);
   const latestRef = useRef<string | null>(null);
   const fetchInFlight = useRef(false);
   const columnFilterPayload = useMemo(
@@ -5874,6 +7907,12 @@ export default function SwaptionTradeTape() {
       setShowSelectedOnly(false);
     }
   }, [selectedPackageIds.length, showSelectedOnly]);
+
+  useEffect(() => {
+    if (selectedRows.length < 2 && showSequencePanel) {
+      setShowSequencePanel(false);
+    }
+  }, [selectedRows.length, showSequencePanel]);
 
   useEffect(() => {
     const nextFilters = parseColumnFilterPayload(
@@ -6072,6 +8111,45 @@ export default function SwaptionTradeTape() {
       };
     });
   }, [manualLinkIndex, rows]);
+
+  const sequenceClusters = useMemo(
+    () =>
+      detectSequenceClusters(
+        resolvedRows,
+        SEQUENCE_CLUSTER_MAX_GAP_MINUTES,
+        SEQUENCE_CLUSTER_MIN_TRADES,
+      ),
+    [resolvedRows],
+  );
+
+  const clusterByPackageId = useMemo(() => {
+    const map = new Map<string, SequenceCluster>();
+    sequenceClusters.forEach((cluster) => {
+      cluster.rows.forEach((row) => {
+        map.set(row.package_id, cluster);
+      });
+    });
+    return map;
+  }, [sequenceClusters]);
+
+  const selectedCluster = useMemo(() => {
+    if (selectedRows.length < 2) return null;
+    const first = selectedRows[0];
+    if (!first) return null;
+    const cluster = clusterByPackageId.get(first.package_id);
+    if (!cluster) return null;
+    const isSameCluster = selectedRows.every(
+      (row) => clusterByPackageId.get(row.package_id)?.id === cluster.id,
+    );
+    return isSameCluster ? cluster : null;
+  }, [clusterByPackageId, selectedRows]);
+
+  const singleSelectionCluster = useMemo(() => {
+    if (selectedRows.length !== 1) return null;
+    const first = selectedRows[0];
+    if (!first) return null;
+    return clusterByPackageId.get(first.package_id) ?? null;
+  }, [clusterByPackageId, selectedRows]);
 
   const buildTradeLabel = useCallback(
     (row: TapeRow) => buildRichLabel(row),
@@ -6344,6 +8422,7 @@ export default function SwaptionTradeTape() {
     const action = metrics.event_action;
     const isActive = action ? ACTIVE_ACTIONS.has(action.toUpperCase()) : false;
     const isSelected = selectedPackageIdSet.has(row.package_id);
+    const cluster = clusterByPackageId.get(row.package_id);
     const tone = isActive
       ? packageTone(row.package_type)
       : "!bg-red-900/70 !text-red-100";
@@ -6354,6 +8433,7 @@ export default function SwaptionTradeTape() {
       tone,
       actionTone(action),
       isManualLinked ? "manual-linked-row" : "",
+      cluster ? "clustered-row" : "",
       isSelected ? "selected-share-row" : "",
       warning && isActive ? "ring-1 ring-red-500/50" : "",
     ];
@@ -6663,11 +8743,41 @@ export default function SwaptionTradeTape() {
               onClick={() => {
                 setSelectedPackageIds([]);
                 setShowSelectedOnly(false);
+                setShowSequencePanel(false);
               }}
               className="rounded border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
             >
               Clear
             </button>
+            <button
+              type="button"
+              onClick={() => setShowSequencePanel((current) => !current)}
+              disabled={selectedRows.length < 2}
+              className={`rounded border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                showSequencePanel
+                  ? "border-sky-400/70 bg-sky-500/15 text-sky-100"
+                  : "border-slate-700 text-slate-200 hover:border-slate-500"
+              }`}
+            >
+              {showSequencePanel ? "Hide Sequence" : "Show Sequence"}
+            </button>
+            {singleSelectionCluster && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedPackageIds(
+                    normalizeSelectedPackageIds(
+                      singleSelectionCluster.rows.map((row) => row.package_id),
+                    ),
+                  );
+                  setShowSelectedOnly(true);
+                  setShowSequencePanel(true);
+                }}
+                className="rounded border border-sky-500/60 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-sky-200 transition hover:bg-sky-500/20"
+              >
+                Select Cluster ({singleSelectionCluster.rows.length})
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setLinkModalOpen(true)}
@@ -6678,6 +8788,9 @@ export default function SwaptionTradeTape() {
             </button>
           </div>
         </div>
+      )}
+      {selectedRows.length >= 2 && showSequencePanel && (
+        <SequenceAnalysisPanel rows={selectedRows} cluster={selectedCluster} />
       )}
       <style jsx global>{`
         .p-column-filter-overlay,

@@ -62,10 +62,17 @@ export async function GET(request: Request) {
 
     // Filter by package type
     if (packageTypeParam) {
-      params.push(packageTypeParam)
-      conditions.push(
-        `UPPER(REPLACE(d.package_type, '-', '_')) = $${params.length}`
-      )
+      const normalized = packageTypeParam.toUpperCase().replace(/-/g, '_')
+      params.push(normalized)
+      if (normalized === 'OUTRIGHT') {
+        conditions.push(
+          `(d.package_type IS NULL OR UPPER(REPLACE(d.package_type, '-', '_')) = $${params.length})`
+        )
+      } else {
+        conditions.push(
+          `UPPER(REPLACE(d.package_type, '-', '_')) = $${params.length}`
+        )
+      }
     } else {
       conditions.push("d.package_type ILIKE 'STRADDLE'")
     }
