@@ -27,6 +27,17 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { QuadrantSparkline } from "./VolGridFlow/QuadrantSparkline";
+import {
+  buildQuadrantSparklineData,
+  classifySparklineShape,
+  findPeakImbalance,
+} from "./VolGridFlow/quadrantSparkline.utils";
+import type {
+  QuadrantTrade,
+  SparklinePattern,
+  SparklinePoint,
+} from "./VolGridFlow/quadrantSparkline.types";
 import { TradeRarityPanel } from "./TradeRarityPanel/TradeRarityPanel";
 import { TimeseriesAnnotations } from "./TradeRarityPanel/TimeseriesAnnotations";
 import {
@@ -360,6 +371,66 @@ type SequenceCluster = {
   durationMs: number;
 };
 
+type VolGridQuadrant = "ULC" | "URC" | "LLC" | "LRC" | "BOUNDARY" | "UNKNOWN";
+
+type QuadrantConfig = {
+  expiryBoundaryYears: number;
+  tenorBoundaryYears: number;
+  boundaryToleranceYears: number;
+};
+
+type QuadrantMeta = {
+  id: Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">;
+  label: string;
+  fullName: string;
+  description: string;
+  typicalParticipants: string[];
+  supplyDemandDrivers: string;
+  deskView: string;
+  deskViewUpdatedAt: string;
+  deskViewUpdatedBy: string;
+};
+
+type QuadrantClassification = {
+  quadrant: VolGridQuadrant;
+  forwardYears: number | null;
+  tenorYears: number | null;
+  boundaryHint: string | null;
+};
+
+type QuadrantFlowSnapshot = {
+  quadrant: VolGridQuadrant;
+  tradeCount: number;
+  grossNotional: number;
+  netNotional: number;
+  totalPremium: number | null;
+  premiumCount: number;
+  netGrossRatio: number;
+  dominantDirection: "payer" | "receiver" | "balanced" | "unknown";
+  intensity: number;
+  paceVsAverage: number | null;
+  narrative: string;
+};
+
+type QuadrantFlowState = {
+  snapshots: Record<VolGridQuadrant, QuadrantFlowSnapshot>;
+  maxTradeCount: number;
+  avgTradeCount: number | null;
+  totalTradeCount: number;
+  dominantTheme: string | null;
+  crossQuadrantSignal:
+    | Array<{
+        label: string;
+        title?: string;
+      }>
+    | null;
+};
+
+type QuadrantTradeMap = Record<
+  Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">,
+  QuadrantTrade[]
+>;
+
 const SAFE_ACTIONS = new Set(["NEWT", "TRAD", "MODI"]);
 const ACTIVE_ACTIONS = new Set(["NEWT-TRAD", "MODI-TRAD", "CORR-TRAD"]);
 const POLL_INTERVAL_MS = 5000;
@@ -373,6 +444,7 @@ const ONE_YEAR_MS = 365 * ONE_DAY_MS;
 const POST_CLUSTER_WINDOW_MS = 2 * ONE_HOUR_MS;
 const HEDGE_LATENCY_NOTIONAL = 100_000_000;
 const HEDGE_LATENCY_MAX_WINDOW_MS = 6 * ONE_HOUR_MS;
+const LOW_SAMPLE_TRADES = 5;
 const EMPTY_VALUE = "\u2014";
 const PACKAGE_TONES: Record<string, string> = {
   STRADDLE: "!bg-purple-900/30", // Purple (Distinct from others)
@@ -391,9 +463,112 @@ const ACTION_TONES: Record<string, string> = {
   MODI: "",
 };
 
+const DEFAULT_QUADRANT_CONFIG: QuadrantConfig = {
+  expiryBoundaryYears: 1.5,
+  tenorBoundaryYears: 7.5,
+  boundaryToleranceYears: 0.5,
+};
+
+const QUADRANT_KEYS: VolGridQuadrant[] = [
+  "ULC",
+  "URC",
+  "LLC",
+  "LRC",
+  "BOUNDARY",
+  "UNKNOWN",
+];
+
+const QUADRANT_DISPLAY_KEYS: Array<
+  Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">
+> = ["ULC", "URC", "LLC", "LRC"];
+
+const isDisplayQuadrant = (
+  quadrant: VolGridQuadrant,
+): quadrant is Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN"> =>
+  quadrant === "ULC" ||
+  quadrant === "URC" ||
+  quadrant === "LLC" ||
+  quadrant === "LRC";
+
+const QUADRANT_TONES: Record<VolGridQuadrant, string> = {
+  ULC: "border-sky-500/40 bg-sky-500/10 text-sky-200",
+  URC: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+  LLC: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+  LRC: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+  BOUNDARY: "border-slate-500/40 bg-slate-500/10 text-slate-200",
+  UNKNOWN: "border-slate-700/50 bg-slate-900/60 text-slate-400",
+};
+
+const QUADRANT_DIRECTION_TONES: Record<
+  QuadrantFlowSnapshot["dominantDirection"],
+  string
+> = {
+  payer: "border-emerald-500/60 bg-emerald-500/10 text-emerald-100",
+  receiver: "border-cyan-500/60 bg-cyan-500/10 text-cyan-100",
+  balanced: "border-slate-600/60 bg-slate-900/60 text-slate-200",
+  unknown: "border-slate-700/60 bg-slate-950/60 text-slate-400",
+};
+
+const DEFAULT_QUADRANT_META: Record<
+  Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">,
+  QuadrantMeta
+> = {
+  ULC: {
+    id: "ULC",
+    label: "ULC",
+    fullName: "Gamma + Short Tails",
+    description: "Short-expiry options on short-tenor swaps",
+    typicalParticipants: ["Pay-fix hedging", "Front-end gamma desks"],
+    supplyDemandDrivers: "Pay-fix in 2y from hedging, but less focus",
+    deskView: "Neutral/monitor",
+    deskViewUpdatedAt: "2026-02-06T00:00:00Z",
+    deskViewUpdatedBy: "SYSTEM",
+  },
+  URC: {
+    id: "URC",
+    label: "URC",
+    fullName: "Gamma + Long Tails",
+    description: "Short-expiry options on long-tenor swaps",
+    typicalParticipants: [
+      "GSE pay-fix hedging",
+      "Systematic gamma sellers",
+      "Mortgage desks",
+    ],
+    supplyDemandDrivers:
+      "GSE pay-fix (5-10y), systematic gamma selling, Operation Twist suppression",
+    deskView: "SELL (3m10y straddles)",
+    deskViewUpdatedAt: "2026-02-06T00:00:00Z",
+    deskViewUpdatedBy: "SYSTEM",
+  },
+  LLC: {
+    id: "LLC",
+    label: "LLC",
+    fullName: "Vega + Short Tails",
+    description: "Long-expiry options on short-tenor swaps",
+    typicalParticipants: ["Callable issuance desks", "Dealer vega supply"],
+    supplyDemandDrivers: "Callable issuance = vega supply headwind",
+    deskView: "Neutral/avoid",
+    deskViewUpdatedAt: "2026-02-06T00:00:00Z",
+    deskViewUpdatedBy: "SYSTEM",
+  },
+  LRC: {
+    id: "LRC",
+    label: "LRC",
+    fullName: "Vega + Long Tails",
+    description: "Long-expiry options on long-tenor swaps",
+    typicalParticipants: ["Real money tail hedgers", "Long-dated vol buyers"],
+    supplyDemandDrivers:
+      "Less affected by GSE flows; callable supply doesn't reach here; tail asymmetry",
+    deskView: "OWN (30y tail outperformance)",
+    deskViewUpdatedAt: "2026-02-06T00:00:00Z",
+    deskViewUpdatedBy: "SYSTEM",
+  },
+};
+
 const COLUMN_DEFS = [
   { key: "event_action", label: "Action", width: 110 },
   { key: "package_type", label: "Package Type", width: 150 },
+  { key: "quadrant", label: "Quadrant", width: 110 },
   { key: "time", label: "Time", width: 180 },
   { key: "platform", label: "Platform", width: 120 },
   { key: "notional", label: "Notional", width: 130 },
@@ -640,6 +815,173 @@ function normalizeTenorToken(value: string | null | undefined): string | null {
   return null;
 }
 
+function parseTenorYears(value: string | null | undefined): number | null {
+  const normalized = normalizeTenorToken(value);
+  if (!normalized) return null;
+  const match = normalized.match(/^(\d+(?:\.\d+)?)(M|Y)$/i);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const unit = match[2].toUpperCase();
+  if (unit === "Y") return amount;
+  if (unit === "M") return amount / 12;
+  return null;
+}
+
+function resolveForwardTenorYears(
+  row: TapeRow,
+): { forwardYears: number; tenorYears: number } | null {
+  const forwardLabel = normalizeTenorToken(row.forward_label);
+  const tenorLabel = normalizeTenorToken(row.tenor_label);
+  const forwardYears = parseTenorYears(forwardLabel);
+  const tenorYears = parseTenorYears(tenorLabel);
+  if (forwardYears !== null && tenorYears !== null) {
+    return { forwardYears, tenorYears };
+  }
+
+  const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
+  const tradeLabel = legs[0]?.trade_label ?? "";
+  const rawLabel = `${tradeLabel} ${row.forward_label ?? ""} ${row.tenor_label ?? ""}`;
+  const match = rawLabel.match(TENOR_REGEX);
+  if (!match) return null;
+  const matchForward = parseTenorYears(match[1]);
+  const matchTenor = parseTenorYears(match[2]);
+  if (matchForward === null || matchTenor === null) return null;
+  return { forwardYears: matchForward, tenorYears: matchTenor };
+}
+
+function classifyQuadrant(
+  forwardYears: number,
+  tenorYears: number,
+  config: QuadrantConfig,
+): QuadrantClassification {
+  const expiryDelta = forwardYears - config.expiryBoundaryYears;
+  const tenorDelta = tenorYears - config.tenorBoundaryYears;
+  const isExpiryBoundary =
+    Math.abs(expiryDelta) <= config.boundaryToleranceYears;
+  const isTenorBoundary =
+    Math.abs(tenorDelta) <= config.boundaryToleranceYears;
+  const expirySide = expiryDelta < 0 ? "SHORT" : "LONG";
+  const tenorSide = tenorDelta < 0 ? "SHORT" : "LONG";
+
+  if (isExpiryBoundary || isTenorBoundary) {
+    let boundaryHint: string | null = null;
+    if (isExpiryBoundary && isTenorBoundary) {
+      boundaryHint = "ULC/URC/LLC/LRC";
+    } else if (isExpiryBoundary) {
+      boundaryHint = tenorSide === "SHORT" ? "ULC/LLC" : "URC/LRC";
+    } else if (isTenorBoundary) {
+      boundaryHint = expirySide === "SHORT" ? "ULC/URC" : "LLC/LRC";
+    }
+    return {
+      quadrant: "BOUNDARY",
+      forwardYears,
+      tenorYears,
+      boundaryHint,
+    };
+  }
+
+  if (expirySide === "SHORT" && tenorSide === "SHORT") {
+    return {
+      quadrant: "ULC",
+      forwardYears,
+      tenorYears,
+      boundaryHint: null,
+    };
+  }
+  if (expirySide === "SHORT" && tenorSide === "LONG") {
+    return {
+      quadrant: "URC",
+      forwardYears,
+      tenorYears,
+      boundaryHint: null,
+    };
+  }
+  if (expirySide === "LONG" && tenorSide === "SHORT") {
+    return {
+      quadrant: "LLC",
+      forwardYears,
+      tenorYears,
+      boundaryHint: null,
+    };
+  }
+  return {
+    quadrant: "LRC",
+    forwardYears,
+    tenorYears,
+    boundaryHint: null,
+  };
+}
+
+function resolveQuadrantClassification(
+  row: TapeRow,
+  config: QuadrantConfig,
+): QuadrantClassification {
+  const resolved = resolveForwardTenorYears(row);
+  if (!resolved) {
+    return {
+      quadrant: "UNKNOWN",
+      forwardYears: null,
+      tenorYears: null,
+      boundaryHint: null,
+    };
+  }
+  return classifyQuadrant(
+    resolved.forwardYears,
+    resolved.tenorYears,
+    config,
+  );
+}
+
+function resolveQuadrantDisplay(
+  row: TapeRow,
+  config: QuadrantConfig,
+): {
+  quadrant: VolGridQuadrant;
+  label: string;
+  hint: string | null;
+  tooltip: string | null;
+} {
+  const classification = resolveQuadrantClassification(row, config);
+  if (classification.quadrant === "UNKNOWN") {
+    return {
+      quadrant: "UNKNOWN",
+      label: "--",
+      hint: null,
+      tooltip: "Quadrant unavailable",
+    };
+  }
+  if (classification.quadrant === "BOUNDARY") {
+    const hint = classification.boundaryHint;
+    const tooltip = hint ? `Boundary trade between ${hint}` : "Boundary trade";
+    return {
+      quadrant: "BOUNDARY",
+      label: "BOUNDARY",
+      hint,
+      tooltip,
+    };
+  }
+  const meta = DEFAULT_QUADRANT_META[classification.quadrant];
+  return {
+    quadrant: classification.quadrant,
+    label: classification.quadrant,
+    hint: null,
+    tooltip: meta ? buildQuadrantTooltip(meta) : null,
+  };
+}
+
+function buildQuadrantFilterValue(
+  row: TapeRow,
+  config: QuadrantConfig,
+): string {
+  const classification = resolveQuadrantClassification(row, config);
+  if (classification.quadrant === "UNKNOWN") return "";
+  if (classification.quadrant === "BOUNDARY") {
+    return `BOUNDARY ${classification.boundaryHint ?? ""}`.trim();
+  }
+  return classification.quadrant;
+}
+
 const STRIKE_MATCH_EPS = 1e-4;
 const STRIKE_DISPLAY_DECIMALS = 3;
 const DEFAULT_TEXT_MATCH_MODE = FilterMatchMode.CONTAINS;
@@ -662,6 +1004,7 @@ const TIME_FILTER_MATCH_MODE_OPTIONS = [
 const FILTER_FIELDS = [
   "action",
   "package_type",
+  "quadrant",
   "time",
   "platform",
   "notional",
@@ -679,6 +1022,10 @@ const INITIAL_FILTERS: DataTableFilterMeta = {
     constraints: [{ value: null, matchMode: DEFAULT_TEXT_MATCH_MODE }],
   },
   package_type: {
+    operator: FilterOperator.AND,
+    constraints: [{ value: null, matchMode: DEFAULT_TEXT_MATCH_MODE }],
+  },
+  quadrant: {
     operator: FilterOperator.AND,
     constraints: [{ value: null, matchMode: DEFAULT_TEXT_MATCH_MODE }],
   },
@@ -1031,6 +1378,31 @@ function parseMetricNumber(value: any): number | null {
   return Number.isNaN(numericValue) ? null : numericValue;
 }
 
+function parseNumericValue(value: any): number | null {
+  if (!isValid(value)) return null;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase().replace(/,/g, "");
+    if (!normalized) return null;
+    const match = normalized.match(/^([+-]?\d+(?:\.\d+)?)(mm|bn|[kmb])?$/);
+    if (match) {
+      const base = Number(match[1]);
+      if (!Number.isFinite(base)) return null;
+      const suffix = match[2];
+      if (!suffix) return base;
+      if (suffix === "k") return base * 1_000;
+      if (suffix === "m" || suffix === "mm") return base * 1_000_000;
+      if (suffix === "b" || suffix === "bn") return base * 1_000_000_000;
+      return base;
+    }
+    const numericValue = Number(normalized);
+    return Number.isNaN(numericValue) ? null : numericValue;
+  }
+  return parseMetricNumber(value);
+}
+
 function parseMetricSeries(value: any): number | null {
   if (!isValid(value)) return null;
   if (Array.isArray(value)) {
@@ -1200,6 +1572,333 @@ function parseTimestamp(value: string | null | undefined): number | null {
   const ts = new Date(value).getTime();
   if (Number.isNaN(ts)) return null;
   return ts;
+}
+
+function createEmptyQuadrantSnapshot(
+  quadrant: VolGridQuadrant,
+): QuadrantFlowSnapshot {
+  return {
+    quadrant,
+    tradeCount: 0,
+    grossNotional: 0,
+    netNotional: 0,
+    totalPremium: null,
+    premiumCount: 0,
+    netGrossRatio: 0,
+    dominantDirection: "unknown",
+    intensity: 0,
+    paceVsAverage: null,
+    narrative: "quiet",
+  };
+}
+
+function buildQuadrantNarrative(snapshot: QuadrantFlowSnapshot): string {
+  if (snapshot.tradeCount === 0) return "quiet";
+  const directionLabel =
+    snapshot.dominantDirection === "balanced"
+      ? "balanced flow"
+      : snapshot.dominantDirection === "unknown"
+        ? "mixed flow"
+        : `net ${snapshot.dominantDirection} flow`;
+  if (snapshot.intensity >= 0.75) return `active - ${directionLabel}`;
+  if (snapshot.intensity >= 0.4) return `steady - ${directionLabel}`;
+  return `light - ${directionLabel}`;
+}
+
+function summarizeDominantTheme(
+  snapshots: Record<VolGridQuadrant, QuadrantFlowSnapshot>,
+): string | null {
+  const items = QUADRANT_DISPLAY_KEYS.map((key) => snapshots[key]).filter(
+    (entry) => entry.tradeCount > 0,
+  );
+  if (!items.length) return null;
+
+  const directional = items.filter(
+    (entry) =>
+      entry.dominantDirection === "payer" ||
+      entry.dominantDirection === "receiver",
+  );
+  const maxNetAbs =
+    directional.length > 0
+      ? Math.max(...directional.map((entry) => Math.abs(entry.netNotional)))
+      : 0;
+  const directionalLeader = directional.reduce(
+    (best, entry) => {
+      const score = Math.abs(entry.netNotional);
+      if (!best || score > best.score) return { entry, score };
+      return best;
+    },
+    null as { entry: QuadrantFlowSnapshot; score: number } | null,
+  );
+  const directionalLeaderEntry = directionalLeader?.entry ?? null;
+  const directionalLeaderQuadrant = directionalLeaderEntry?.quadrant ?? null;
+
+  const paceLeader = items
+    .filter((entry) => entry.paceVsAverage !== null)
+    .reduce(
+      (best, entry) => {
+        const pace = entry.paceVsAverage ?? 0;
+        if (!best || pace > best.pace) return { entry, pace };
+        return best;
+      },
+      null as { entry: QuadrantFlowSnapshot; pace: number } | null,
+    );
+
+  const highlights: string[] = [];
+
+  if (directionalLeaderEntry && maxNetAbs > 0) {
+    const entry = directionalLeaderEntry;
+    const outsized =
+      entry.netGrossRatio >= 0.4 || entry.tradeCount < LOW_SAMPLE_TRADES;
+    const base = `${entry.quadrant} ${
+      outsized ? "showing outsized" : "showing"
+    } ${entry.dominantDirection} lean (${formatSignedNotional(
+      entry.netNotional,
+    )} net on ${entry.tradeCount} trades)`;
+    const suffix =
+      entry.tradeCount < LOW_SAMPLE_TRADES ? " - low sample" : "";
+    highlights.push(`${base}${suffix}`);
+  }
+
+  if (paceLeader && paceLeader.pace >= 1.1) {
+    const entry = paceLeader.entry;
+    if (!directionalLeaderQuadrant || entry.quadrant !== directionalLeaderQuadrant) {
+      const directionLabel =
+        entry.dominantDirection === "payer" ||
+        entry.dominantDirection === "receiver"
+          ? `net ${entry.dominantDirection} flow`
+          : "balanced flow";
+      const details =
+        entry.dominantDirection === "payer" ||
+        entry.dominantDirection === "receiver"
+          ? `${formatSignedNotional(entry.netNotional)}, ${formatRate(
+              entry.paceVsAverage,
+              2,
+            )}x avg`
+          : `${formatRate(entry.paceVsAverage, 2)}x avg`;
+      highlights.push(
+        `${entry.quadrant} active with ${directionLabel} (${details})`,
+      );
+    }
+  }
+
+  if (highlights.length) return highlights.join(" ");
+
+  const fallback = items
+    .map((entry) => ({
+      entry,
+      score: Math.abs(entry.netNotional),
+    }))
+    .sort((a, b) => b.score - a.score)[0]?.entry;
+  if (!fallback) return null;
+  const directionLabel =
+    fallback.dominantDirection === "balanced"
+      ? "balanced"
+      : fallback.dominantDirection === "unknown"
+        ? "mixed"
+        : fallback.dominantDirection;
+  return `${fallback.quadrant} ${directionLabel} flow is leading`;
+}
+
+function detectCrossQuadrantSignal(
+  snapshots: Record<VolGridQuadrant, QuadrantFlowSnapshot>,
+): Array<{ label: string; title?: string }> | null {
+  const isDirectional = (entry: QuadrantFlowSnapshot) =>
+    entry.tradeCount > 0 &&
+    entry.netGrossRatio >= 0.1 &&
+    (entry.dominantDirection === "payer" ||
+      entry.dominantDirection === "receiver");
+
+  const directionShort = (direction: QuadrantFlowSnapshot["dominantDirection"]) =>
+    direction === "receiver" ? "rcvr" : "payer";
+  const toTitleCase = (value: string) =>
+    value.replace(/\b\w/g, (match) => match.toUpperCase());
+
+  const quadrantMeaning: Record<VolGridQuadrant, string> = {
+    ULC: "short-expiry short-tenor",
+    URC: "short-expiry long-tenor",
+    LLC: "long-expiry short-tenor",
+    LRC: "long-expiry long-tenor",
+    BOUNDARY: "boundary",
+    UNKNOWN: "unclassified",
+  };
+
+  const pairings: Array<{
+    left: VolGridQuadrant;
+    right: VolGridQuadrant;
+    label: string;
+  }> = [
+    { left: "URC", right: "LLC", label: "diagonal" },
+    { left: "ULC", right: "LRC", label: "diagonal" },
+    { left: "URC", right: "LRC", label: "right column" },
+    { left: "ULC", right: "LLC", label: "left column" },
+    { left: "ULC", right: "URC", label: "upper row" },
+    { left: "LLC", right: "LRC", label: "lower row" },
+  ];
+
+  const signals: Array<{ label: string; title?: string }> = [];
+  pairings.forEach((pair) => {
+    if (signals.length >= 2) return;
+    const left = snapshots[pair.left];
+    const right = snapshots[pair.right];
+    if (!left || !right) return;
+    if (!isDirectional(left) || !isDirectional(right)) return;
+    if (left.dominantDirection === right.dominantDirection) return;
+    const leftVerb = left.dominantDirection === "receiver" ? "receiving" : "paying";
+    const rightVerb = right.dominantDirection === "receiver" ? "receiving" : "paying";
+    const leftDesc = `${leftVerb} ${quadrantMeaning[left.quadrant]}`;
+    const rightDesc = `${rightVerb} ${quadrantMeaning[right.quadrant]}`;
+    const label = `${toTitleCase(pair.label)}: ${left.quadrant} ${directionShort(
+      left.dominantDirection,
+    )} / ${right.quadrant} ${directionShort(right.dominantDirection)}`;
+    const title = `${left.quadrant} ${left.dominantDirection} / ${right.quadrant} ${right.dominantDirection} split (${pair.label}) - ${leftDesc}, ${rightDesc}`;
+    signals.push({ label, title });
+  });
+
+  return signals.length ? signals : null;
+}
+
+function buildQuadrantTradeBuckets(
+  rows: TapeRow[],
+  config: QuadrantConfig,
+): QuadrantTradeMap {
+  const buckets: QuadrantTradeMap = {
+    ULC: [],
+    URC: [],
+    LLC: [],
+    LRC: [],
+  };
+
+  rows.forEach((row) => {
+    const classification = resolveQuadrantClassification(row, config);
+    if (!isDisplayQuadrant(classification.quadrant)) return;
+    const timestamp = parseTimestamp(row.execution_start);
+    if (timestamp === null) return;
+    const notional = computeDisplayNotional(row);
+    if (!isValid(notional)) return;
+    const notionalValue = Number(notional);
+    if (!Number.isFinite(notionalValue)) return;
+    const direction = resolveRowDirection(row);
+    const signedNotional =
+      direction === "PAYER"
+        ? notionalValue
+        : direction === "RECEIVER"
+          ? -notionalValue
+          : 0;
+    const platformValue = resolvePlatformIdentifier(row);
+    const platform: QuadrantTrade["platform"] = isIdbPlatform(platformValue)
+      ? "idb"
+      : "custy";
+    buckets[classification.quadrant].push({
+      packageId: row.package_id,
+      executionTimestamp: timestamp,
+      signedNotional,
+      platform,
+    });
+  });
+
+  return buckets;
+}
+
+function buildQuadrantFlowState(
+  rows: TapeRow[],
+  config: QuadrantConfig,
+): QuadrantFlowState {
+  const snapshots = QUADRANT_KEYS.reduce(
+    (acc, quadrant) => {
+      acc[quadrant] = createEmptyQuadrantSnapshot(quadrant);
+      return acc;
+    },
+    {} as Record<VolGridQuadrant, QuadrantFlowSnapshot>,
+  );
+
+  let totalTradeCount = 0;
+
+  rows.forEach((row) => {
+    const classification = resolveQuadrantClassification(row, config);
+    const bucket = snapshots[classification.quadrant];
+    if (!bucket) return;
+    bucket.tradeCount += 1;
+    totalTradeCount += 1;
+
+    const notionalRaw = computeDisplayNotional(row);
+    const notional = parseNumericValue(notionalRaw);
+    if (notional !== null && Number.isFinite(notional)) {
+      bucket.grossNotional += Math.abs(notional);
+      const direction = resolveRowDirection(row);
+      if (direction === "PAYER") {
+        bucket.netNotional += notional;
+      } else if (direction === "RECEIVER") {
+        bucket.netNotional -= notional;
+      }
+    }
+
+    const packageType = normalizePackageType(row.package_type) || "OUTRIGHT";
+    const premium = computePackagePremium(row, packageType);
+    if (premium !== null) {
+      if (bucket.totalPremium === null) {
+        bucket.totalPremium = 0;
+      }
+      bucket.totalPremium += premium;
+      bucket.premiumCount += 1;
+    }
+  });
+
+  const maxTradeCount = Math.max(
+    0,
+    ...QUADRANT_DISPLAY_KEYS.map((key) => snapshots[key].tradeCount),
+  );
+  const avgTradeCount =
+    QUADRANT_DISPLAY_KEYS.length > 0
+      ? QUADRANT_DISPLAY_KEYS.reduce(
+          (sum, key) => sum + snapshots[key].tradeCount,
+          0,
+        ) / QUADRANT_DISPLAY_KEYS.length
+      : null;
+
+  QUADRANT_KEYS.forEach((key) => {
+    const snapshot = snapshots[key];
+    if (!Number.isFinite(snapshot.grossNotional)) snapshot.grossNotional = 0;
+    if (!Number.isFinite(snapshot.netNotional)) snapshot.netNotional = 0;
+    if (snapshot.premiumCount === 0) snapshot.totalPremium = null;
+    const gross = snapshot.grossNotional;
+    const net = snapshot.netNotional;
+    snapshot.netGrossRatio = gross > 0 ? Math.abs(net) / gross : 0;
+    if (gross === 0) {
+      snapshot.dominantDirection = "unknown";
+    } else if (snapshot.netGrossRatio < 0.1) {
+      snapshot.dominantDirection = "balanced";
+    } else {
+      snapshot.dominantDirection = net >= 0 ? "payer" : "receiver";
+    }
+    snapshot.intensity =
+      maxTradeCount > 0 ? snapshot.tradeCount / maxTradeCount : 0;
+    snapshot.paceVsAverage =
+      avgTradeCount !== null && avgTradeCount > 0
+        ? snapshot.tradeCount / avgTradeCount
+        : null;
+    snapshot.narrative = buildQuadrantNarrative(snapshot);
+  });
+
+  return {
+    snapshots,
+    maxTradeCount,
+    avgTradeCount,
+    totalTradeCount,
+    dominantTheme: summarizeDominantTheme(snapshots),
+    crossQuadrantSignal: detectCrossQuadrantSignal(snapshots),
+  };
+}
+
+function buildQuadrantTooltip(meta: QuadrantMeta): string {
+  const participants = meta.typicalParticipants.join(", ");
+  return [
+    meta.label,
+    participants ? `Participants: ${participants}` : null,
+    meta.supplyDemandDrivers ? `Drivers: ${meta.supplyDemandDrivers}` : null,
+  ]
+    .filter(Boolean)
+    .join(" | ");
 }
 
 function clusterValuesByTolerance(
@@ -5508,14 +6207,522 @@ function NetFlowSparkline({
   );
 }
 
+function describeSparklinePattern(
+  pattern: SparklinePattern,
+  points: SparklinePoint[],
+): string | null {
+  if (pattern === "empty") return null;
+  if (pattern === "single_trade") return "single print";
+  if (pattern === "monotonic_receiver") return "steady receiver accumulation";
+  if (pattern === "monotonic_payer") return "steady payer accumulation";
+  if (pattern === "burst_then_flat") return "burst early, then flat";
+  if (pattern === "oscillating") return "two-way flow, no clear direction";
+  if (pattern === "reversal") {
+    const peak = findPeakImbalance(points);
+    if (!peak) return "reversed from earlier peak";
+    const direction = peak.cumulativeNet < 0 ? "receiver" : "payer";
+    return `reversed from ${formatNotional(
+      Math.abs(peak.cumulativeNet),
+    )} ${direction} earlier`;
+  }
+  return null;
+}
+
+function QuadrantCell({
+  snapshot,
+  meta,
+  trades,
+}: {
+  snapshot: QuadrantFlowSnapshot;
+  meta: QuadrantMeta;
+  trades: QuadrantTrade[];
+}) {
+  const tone = QUADRANT_DIRECTION_TONES[snapshot.dominantDirection];
+  const directionColor =
+    snapshot.dominantDirection === "payer"
+      ? "payer"
+      : snapshot.dominantDirection === "receiver"
+        ? "receiver"
+        : "balanced";
+  const netValue = formatSignedNotional(snapshot.netNotional);
+  const netAbs = formatNotional(Math.abs(snapshot.netNotional));
+  const netLabel =
+    snapshot.dominantDirection === "unknown"
+      ? "--"
+      : snapshot.dominantDirection === "balanced"
+        ? `~${netAbs} balanced`
+        : `${netValue} ${snapshot.dominantDirection}`;
+  const paceLabel =
+    snapshot.paceVsAverage !== null
+      ? `${formatRate(snapshot.paceVsAverage, 2)}x avg`
+      : "--";
+  const tooltip = buildQuadrantTooltip(meta);
+  const isLowSample =
+    snapshot.tradeCount > 0 && snapshot.tradeCount < LOW_SAMPLE_TRADES;
+  const sparklineData = useMemo(
+    () => buildQuadrantSparklineData(trades),
+    [trades],
+  );
+  const sparklinePattern = useMemo(
+    () => classifySparklineShape(sparklineData),
+    [sparklineData],
+  );
+  const sparklineDescriptor = useMemo(
+    () => describeSparklinePattern(sparklinePattern, sparklineData),
+    [sparklinePattern, sparklineData],
+  );
+  const narrative = sparklineDescriptor
+    ? `${snapshot.narrative} (${sparklineDescriptor})`
+    : snapshot.narrative;
+
+  return (
+    <div
+      className={`rounded border ${tone} p-2.5 shadow-[inset_0_1px_0_rgba(148,163,184,0.08)]`}
+      title={tooltip}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-wide">
+            {meta.label}
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="rounded border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] font-mono text-slate-100">
+            {snapshot.tradeCount} trades
+          </span>
+          {snapshot.paceVsAverage !== null && (
+            <span className="rounded border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[10px] font-mono text-slate-300">
+              {paceLabel}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-slate-300">
+        <div className="flex items-center justify-between">
+          <span className="text-slate-400">Gross</span>
+          <span className="font-mono text-slate-100">
+            {formatNotional(snapshot.grossNotional)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-slate-400">Premium</span>
+          <span className="font-mono text-slate-100">
+            {formatNotional(snapshot.totalPremium)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-slate-400">Net</span>
+          <span className="font-mono text-slate-100">{netLabel}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-slate-400">Pace</span>
+          <span className="font-mono text-slate-100">{paceLabel}</span>
+        </div>
+      </div>
+
+      <div className="mt-2 h-[34px] w-full">
+        <QuadrantSparkline
+          trades={trades}
+          directionColor={directionColor}
+          height={34}
+          showPeakMarker
+          showFill
+          showEndLabel={false}
+          formatValue={formatSignedNotional}
+        />
+      </div>
+      <div className="mt-1 text-[10px] text-slate-300">
+        {narrative}
+      </div>
+      {isLowSample && (
+        <div className="mt-1 text-[10px] text-amber-200/80">
+          Low sample - net may reflect single print
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuadrantFlowDashboard({
+  rows,
+  config,
+  onConfigChange,
+}: {
+  rows: TapeRow[];
+  config: QuadrantConfig;
+  onConfigChange: (next: QuadrantConfig) => void;
+}) {
+  const [showConfig, setShowConfig] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [flowScope, setFlowScope] = useState<"COMBINED" | "IDB" | "CUSTY">(
+    "COMBINED",
+  );
+  const scopedRows = useMemo(() => {
+    if (flowScope === "COMBINED") return rows;
+    return rows.filter((row) => {
+      const platform = resolvePlatformIdentifier(row);
+      if (flowScope === "IDB") return isIdbPlatform(platform);
+      return isCustyPlatform(platform);
+    });
+  }, [flowScope, rows]);
+  const flowState = useMemo(
+    () => buildQuadrantFlowState(scopedRows, config),
+    [scopedRows, config],
+  );
+  const quadrantTrades = useMemo(
+    () => buildQuadrantTradeBuckets(scopedRows, config),
+    [scopedRows, config],
+  );
+
+  const latestTimestamp = useMemo(() => {
+    const timestamps = scopedRows
+      .map((row) => parseTimestamp(row.execution_start))
+      .filter((value): value is number => value !== null);
+    return timestamps.length ? Math.max(...timestamps) : null;
+  }, [scopedRows]);
+
+  const quadrantBuckets = useMemo(() => {
+    const boundaryRows: TapeRow[] = [];
+    const unknownRows: TapeRow[] = [];
+    scopedRows.forEach((row) => {
+      const quadrant = resolveQuadrantClassification(row, config).quadrant;
+      if (quadrant === "BOUNDARY") boundaryRows.push(row);
+      if (quadrant === "UNKNOWN") unknownRows.push(row);
+    });
+    const summarizeExamples = (rows: TapeRow[]) => {
+      const examples = new Set<string>();
+      rows.forEach((row) => {
+        if (examples.size >= 4) return;
+        const tenorKey = resolveTenorKey(row);
+        const forward = normalizeTenorToken(row.forward_label);
+        const tenor = normalizeTenorToken(row.tenor_label);
+        const label =
+          tenorKey ||
+          (forward || tenor ? `${forward ?? "?"}x${tenor ?? "?"}` : null) ||
+          buildRichLabel(row);
+        if (label) examples.add(label);
+      });
+      return Array.from(examples).join(", ");
+    };
+    return {
+      boundaryRows,
+      unknownRows,
+      boundaryExamples: summarizeExamples(boundaryRows),
+      unknownExamples: summarizeExamples(unknownRows),
+    };
+  }, [config, scopedRows]);
+
+  const boundarySnapshot = flowState.snapshots.BOUNDARY;
+  const unknownSnapshot = flowState.snapshots.UNKNOWN;
+  const totalTrades = flowState.totalTradeCount || 0;
+  const boundaryShare =
+    totalTrades > 0 ? boundarySnapshot.tradeCount / totalTrades : 0;
+  const unknownShare =
+    totalTrades > 0 ? unknownSnapshot.tradeCount / totalTrades : 0;
+  const boundaryNote =
+    boundarySnapshot.tradeCount > 0
+      ? `Boundary: ${boundarySnapshot.tradeCount} trades (${formatRate(
+          boundaryShare * 100,
+          0,
+        )}%), gross ${formatNotional(boundarySnapshot.grossNotional)}`
+      : null;
+  const unknownNote =
+    unknownSnapshot.tradeCount > 0
+      ? `Unclassified: ${unknownSnapshot.tradeCount} trades (${formatRate(
+          unknownShare * 100,
+          0,
+        )}%)`
+      : null;
+  const boundaryWarning =
+    boundaryShare >= 0.25
+      ? "Boundary share high - consider widening boundaries."
+      : null;
+  const flowNotes = [
+    boundaryNote && {
+      label: boundaryNote,
+      title: quadrantBuckets.boundaryExamples
+        ? `Examples: ${quadrantBuckets.boundaryExamples}`
+        : undefined,
+    },
+    unknownNote && {
+      label: unknownNote,
+      title: quadrantBuckets.unknownExamples
+        ? `Examples: ${quadrantBuckets.unknownExamples}`
+        : "Check missing forward/tenor labels.",
+    },
+    boundaryWarning && { label: boundaryWarning, title: undefined },
+  ].filter(Boolean) as Array<{ label: string; title?: string }>;
+
+  const custyConcentrationNote = (() => {
+    if (flowScope !== "CUSTY") return null;
+    const classifiedTrades = QUADRANT_DISPLAY_KEYS.reduce(
+      (sum, key) => sum + flowState.snapshots[key].tradeCount,
+      0,
+    );
+    if (classifiedTrades === 0) return null;
+    const top = QUADRANT_DISPLAY_KEYS.map((key) => flowState.snapshots[key]).sort(
+      (a, b) => b.tradeCount - a.tradeCount,
+    )[0];
+    if (!top) return null;
+    const share = top.tradeCount / classifiedTrades;
+    if (share < 0.5) return null;
+    return `Custy flow concentrated in ${top.quadrant} (${formatRate(
+      share * 100,
+      0,
+    )}% of classified trades).`;
+  })();
+
+  const updateConfigValue = (
+    key: keyof QuadrantConfig,
+    value: string,
+  ) => {
+    const numeric = Number(value);
+    const minValue = key === "boundaryToleranceYears" ? 0 : 0.01;
+    if (!Number.isFinite(numeric) || numeric < minValue) return;
+    onConfigChange({ ...config, [key]: numeric });
+  };
+
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4 text-xs text-slate-200">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-400">
+            Vol Grid Flow
+          </div>
+          <div className="text-sm font-semibold text-slate-100">
+            Today {formatDateShort(latestTimestamp)}
+          </div>
+          <div className="text-[10px] text-slate-500">
+            Boundaries: expiry {formatRate(config.expiryBoundaryYears, 2)}y{" "}
+            {"\u00b7"} tenor {formatRate(config.tenorBoundaryYears, 2)}y{" "}
+            {"\u00b7"} tolerance +/-{formatRate(config.boundaryToleranceYears, 2)}y
+          </div>
+          <div className="text-[10px] text-slate-500">
+            Legend:{" "}
+            <span className="text-cyan-300">receiver</span>{" "}
+            {"\u00b7"} <span className="text-emerald-300">payer</span>{" "}
+            {"\u00b7"} <span className="text-slate-400">balanced</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex overflow-hidden rounded border border-slate-700">
+            <button
+              type="button"
+              onClick={() => setFlowScope("COMBINED")}
+              className={`px-2 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                flowScope === "COMBINED"
+                  ? "bg-slate-700 text-slate-100"
+                  : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              Combined
+            </button>
+            <button
+              type="button"
+              onClick={() => setFlowScope("IDB")}
+              className={`px-2 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                flowScope === "IDB"
+                  ? "bg-slate-700 text-slate-100"
+                  : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              IDB
+            </button>
+            <button
+              type="button"
+              onClick={() => setFlowScope("CUSTY")}
+              className={`px-2 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+                flowScope === "CUSTY"
+                  ? "bg-slate-700 text-slate-100"
+                  : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              Custy
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsCollapsed((current) => !current)}
+            className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
+          >
+            {isCollapsed ? "Expand" : "Collapse"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowConfig((current) => !current)}
+            disabled={isCollapsed}
+            className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
+          >
+            {showConfig ? "Hide Config" : "Config"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onConfigChange(DEFAULT_QUADRANT_CONFIG)}
+            disabled={isCollapsed}
+            className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
+          >
+            Reset
+          </button>
+        </div>
+      </div>
+
+      {!isCollapsed && showConfig && (
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          <label className="block text-[10px] uppercase tracking-wide text-slate-400">
+            Expiry boundary (years)
+            <input
+              type="number"
+              step="0.25"
+              value={config.expiryBoundaryYears}
+              onChange={(event) =>
+                updateConfigValue("expiryBoundaryYears", event.target.value)
+              }
+              className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+            />
+          </label>
+          <label className="block text-[10px] uppercase tracking-wide text-slate-400">
+            Tenor boundary (years)
+            <input
+              type="number"
+              step="0.25"
+              value={config.tenorBoundaryYears}
+              onChange={(event) =>
+                updateConfigValue("tenorBoundaryYears", event.target.value)
+              }
+              className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+            />
+          </label>
+          <label className="block text-[10px] uppercase tracking-wide text-slate-400">
+            Boundary tolerance (years)
+            <input
+              type="number"
+              step="0.1"
+              value={config.boundaryToleranceYears}
+              onChange={(event) =>
+                updateConfigValue("boundaryToleranceYears", event.target.value)
+              }
+              className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+            />
+          </label>
+        </div>
+      )}
+
+      {!isCollapsed && (
+        <>
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            <QuadrantCell
+              snapshot={flowState.snapshots.ULC}
+              meta={DEFAULT_QUADRANT_META.ULC}
+              trades={quadrantTrades.ULC}
+            />
+            <QuadrantCell
+              snapshot={flowState.snapshots.URC}
+              meta={DEFAULT_QUADRANT_META.URC}
+              trades={quadrantTrades.URC}
+            />
+            <QuadrantCell
+              snapshot={flowState.snapshots.LLC}
+              meta={DEFAULT_QUADRANT_META.LLC}
+              trades={quadrantTrades.LLC}
+            />
+            <QuadrantCell
+              snapshot={flowState.snapshots.LRC}
+              meta={DEFAULT_QUADRANT_META.LRC}
+              trades={quadrantTrades.LRC}
+            />
+          </div>
+
+          {(flowNotes.length ||
+            flowState.dominantTheme ||
+            flowState.crossQuadrantSignal ||
+            custyConcentrationNote) && (
+            <div className="mt-3 space-y-1 text-[11px] text-slate-300">
+              {flowNotes.map((note) => (
+                <div key={note.label} title={note.title}>
+                  {note.label}
+                </div>
+              ))}
+              {custyConcentrationNote && <div>{custyConcentrationNote}</div>}
+              {flowState.dominantTheme && (
+                <div>Dominant theme: {flowState.dominantTheme}</div>
+              )}
+              {flowState.crossQuadrantSignal && (
+                <div>
+                  Cross-quadrant:{" "}
+                  {flowState.crossQuadrantSignal.map((signal, index) => (
+                    <span
+                      key={`${signal.label}-${index}`}
+                      title={signal.title}
+                      className="cursor-help"
+                    >
+                      {signal.label}
+                      {index < flowState.crossQuadrantSignal.length - 1
+                        ? " \u00b7 "
+                        : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="text-[10px] text-slate-500">
+                Pace baseline: relative to other quadrants in the current view
+                (not historical).
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function SequenceAnalysisPanel({
   rows,
   cluster,
+  quadrantConfig,
 }: {
   rows: TapeRow[];
   cluster: SequenceCluster | null;
+  quadrantConfig: QuadrantConfig;
 }) {
   const summary = useMemo(() => buildSequenceSummary(rows), [rows]);
+
+  const quadrantSummary = useMemo(() => {
+    if (!rows.length) return null;
+    const classifications = rows.map((row) =>
+      resolveQuadrantClassification(row, quadrantConfig),
+    );
+    const keyFor = (entry: QuadrantClassification) => {
+      if (entry.quadrant === "BOUNDARY") {
+        return `BOUNDARY:${entry.boundaryHint ?? ""}`;
+      }
+      return entry.quadrant;
+    };
+    const unique = new Set(classifications.map(keyFor));
+    if (unique.size !== 1) {
+      return {
+        label: "Mixed quadrants",
+        detail: null,
+      };
+    }
+    const entry = classifications[0];
+    if (entry.quadrant === "UNKNOWN") {
+      return {
+        label: "Quadrant unavailable",
+        detail: null,
+      };
+    }
+    if (entry.quadrant === "BOUNDARY") {
+      return {
+        label: "Boundary trade",
+        detail: entry.boundaryHint ? `Between ${entry.boundaryHint}` : null,
+      };
+    }
+    return {
+      label: entry.quadrant,
+      detail: null,
+    };
+  }, [quadrantConfig, rows]);
 
   const [historyRows, setHistoryRows] = useState<TapeRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -6160,6 +7367,13 @@ function SequenceAnalysisPanel({
           {bucketDetail && (
             <div className="text-[10px] text-slate-500 truncate">
               {bucketDetail}
+            </div>
+          )}
+          {quadrantSummary && (
+            <div className="text-[10px] text-slate-400">
+              Quadrant:{" "}
+              <span className="text-slate-200">{quadrantSummary.label}</span>
+              {quadrantSummary.detail ? ` - ${quadrantSummary.detail}` : ""}
             </div>
           )}
         </div>
@@ -7740,6 +8954,20 @@ export default function SwaptionTradeTape() {
   const [metricMode, setMetricMode] = useState<"NOTIONAL" | "VEGA">(
     "NOTIONAL",
   );
+  const [quadrantConfig, setQuadrantConfig] = useState<QuadrantConfig>(() => {
+    if (typeof window === "undefined") return DEFAULT_QUADRANT_CONFIG;
+    const stored = window.localStorage.getItem("swaptionQuadrantConfig");
+    if (!stored) return DEFAULT_QUADRANT_CONFIG;
+    try {
+      const parsed = JSON.parse(stored);
+      return {
+        ...DEFAULT_QUADRANT_CONFIG,
+        ...(parsed || {}),
+      } as QuadrantConfig;
+    } catch {
+      return DEFAULT_QUADRANT_CONFIG;
+    }
+  });
   const [showSequencePanel, setShowSequencePanel] = useState(false);
   const latestRef = useRef<string | null>(null);
   const fetchInFlight = useRef(false);
@@ -7867,6 +9095,14 @@ export default function SwaptionTradeTape() {
       window.localStorage.removeItem("swaptionManualUser");
     }
   }, [currentUser]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      "swaptionQuadrantConfig",
+      JSON.stringify(quadrantConfig),
+    );
+  }, [quadrantConfig]);
 
   useEffect(() => {
     const rowById = new Map<string, TapeRow>();
@@ -8235,6 +9471,8 @@ export default function SwaptionTradeTape() {
           return firstLegMetrics(row).event_action || "";
         case "package_type":
           return row.package_type || "";
+        case "quadrant":
+          return buildQuadrantFilterValue(row, quadrantConfig);
         case "time":
           return buildExecutionTimeFilterValue(
             row.execution_start,
@@ -8250,7 +9488,7 @@ export default function SwaptionTradeTape() {
           return (row as any)[field];
       }
     },
-    [buildTradeLabel, firstLegMetrics, resolveDisplayNotional],
+    [buildTradeLabel, firstLegMetrics, quadrantConfig, resolveDisplayNotional],
   );
 
   const sortRowsByField = useCallback(
@@ -8599,6 +9837,24 @@ export default function SwaptionTradeTape() {
     );
   };
 
+  const quadrantBody = (row: TapeRow) => {
+    const display = resolveQuadrantDisplay(row, quadrantConfig);
+    const tone = QUADRANT_TONES[display.quadrant];
+    return (
+      <div
+        className={`inline-flex min-w-[86px] flex-col items-start gap-0.5 rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${tone}`}
+        title={display.tooltip || undefined}
+      >
+        <span>{display.label}</span>
+        {display.hint && (
+          <span className="text-[9px] font-normal normal-case text-slate-300">
+            {display.hint}
+          </span>
+        )}
+      </div>
+    );
+  };
+
   const timeBody = (row: TapeRow) => (
     <span className="text-xs text-gray-300">
       {formatExecutionWindow(row.execution_start, row.execution_end)}
@@ -8707,6 +9963,11 @@ export default function SwaptionTradeTape() {
           />
         </div>
       </div>
+      <QuadrantFlowDashboard
+        rows={filteredRows}
+        config={quadrantConfig}
+        onConfigChange={setQuadrantConfig}
+      />
       {selectedPackageIds.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
           <div className="flex items-center gap-2">
@@ -8790,7 +10051,11 @@ export default function SwaptionTradeTape() {
         </div>
       )}
       {selectedRows.length >= 2 && showSequencePanel && (
-        <SequenceAnalysisPanel rows={selectedRows} cluster={selectedCluster} />
+        <SequenceAnalysisPanel
+          rows={selectedRows}
+          cluster={selectedCluster}
+          quadrantConfig={quadrantConfig}
+        />
       )}
       <style jsx global>{`
         .p-column-filter-overlay,
@@ -8907,13 +10172,21 @@ export default function SwaptionTradeTape() {
           style={{ width: COLUMN_DEFS[1].width }}
         />
         <Column
+          field="quadrant"
+          header={renderColumnHeader("Quadrant", "quadrant")}
+          body={quadrantBody}
+          filter
+          filterField="quadrant"
+          style={{ width: COLUMN_DEFS[2].width }}
+        />
+        <Column
           field="execution_start"
           header={renderColumnHeader("Time", "time")}
           body={timeBody}
           filter
           filterField="time"
           filterMatchModeOptions={TIME_FILTER_MATCH_MODE_OPTIONS}
-          style={{ width: COLUMN_DEFS[2].width }}
+          style={{ width: COLUMN_DEFS[3].width }}
           sortable
         />
         <Column
@@ -8922,7 +10195,7 @@ export default function SwaptionTradeTape() {
           body={platformBody}
           filter
           filterField="platform"
-          style={{ width: COLUMN_DEFS[3].width }}
+          style={{ width: COLUMN_DEFS[4].width }}
         />
         <Column
           key={metricColumnKey}
@@ -8932,7 +10205,7 @@ export default function SwaptionTradeTape() {
           filter
           filterField="notional"
           dataType="numeric"
-          style={{ width: COLUMN_DEFS[4].width }}
+          style={{ width: COLUMN_DEFS[5].width }}
           sortable
         />
         <Column
@@ -8941,7 +10214,7 @@ export default function SwaptionTradeTape() {
           body={labelBody}
           filter
           filterField="label"
-          style={{ width: COLUMN_DEFS[5].width }}
+          style={{ width: COLUMN_DEFS[6].width }}
         />
       </DataTable>
 
