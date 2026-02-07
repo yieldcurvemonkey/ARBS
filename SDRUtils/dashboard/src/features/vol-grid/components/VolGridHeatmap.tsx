@@ -206,7 +206,7 @@ export function VolGridHeatmap({ gridState, viewMode, onCellClick }: Props) {
                       onClick={() => onCellClick?.(cell)}
                     >
                       <div className="flex flex-col items-center gap-0 leading-tight">
-                        <span className={`text-[11px] font-medium ${cell.atmfVol === null ? 'text-slate-600' : 'text-slate-100'}`}>
+                        <span className={`text-[11px] font-medium ${cell.atmfVol === null ? 'text-slate-600' : cell.atmfVolSource === 'interpolated' ? 'text-slate-300' : 'text-slate-100'}`}>
                           {value}
                         </span>
                         {viewMode !== 'change' && viewMode !== 'staleness' && cell.atmfVolChange !== null && (

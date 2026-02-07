@@ -31,6 +31,8 @@ import {
   computePropagation,
   SOURCE_CODES,
   SourceCode,
+  gridDistance,
+  decayFactor,
 } from './propagation'
 import { computePremiumGrid } from './premium'
 
@@ -111,8 +113,8 @@ function computeStalenessCategory(
       return 'very_stale' // never degrade to no_data for closed sessions with observations
     }
     if (source === 'propagated') return 'recent'
+    if (source === 'interpolated') return 'recent'
     if (source === 'prior') return 'stale'
-    if (source === 'interpolated') return 'stale'
     return 'no_data'
   }
 
@@ -205,6 +207,8 @@ export class VolSurfaceEngine {
 
   /**
    * Process a batch of calibration observations into the surface.
+   * After all observations are blended and propagated, runs IDW interpolation
+   * to fill any remaining empty cells in the grid.
    */
   processObservations(
     observations: CalibrationObservation[],
@@ -220,11 +224,18 @@ export class VolSurfaceEngine {
     }
 
     this.calibrationTrades = observations
+
+    // Fill remaining empty cells via IDW interpolation from observed/prior cells
+    this.interpolateEmptyCells()
   }
 
   private processOneObservation(obs: CalibrationObservation): void {
-    // Map trade to grid points
     const mapping = mapTradeToGridPoints(obs.expiryYears, obs.tenorYears)
+
+    // Save old vol at primary grid point before blending (for propagation reference)
+    const primaryI = mapping[0].point.expiryIdx
+    const primaryJ = mapping[0].point.tenorIdx
+    const volBeforeBlend = this.state.volMatrix[primaryI][primaryJ]
 
     // For each affected grid point, blend observation with current value
     for (const { point, weight } of mapping) {
@@ -252,12 +263,15 @@ export class VolSurfaceEngine {
       this.state.lastObservation[i][j] = obs
     }
 
-    // Propagate to neighbors
-    const priorVol = this.state.priorMatrix[mapping[0].point.expiryIdx]?.[mapping[0].point.tenorIdx]
-    const currentVol = this.state.volMatrix[mapping[0].point.expiryIdx]?.[mapping[0].point.tenorIdx]
+    // Propagate change to neighbors.
+    // Use pre-blend value as reference (if available), otherwise fall back to prior.
+    // This allows propagation to work even without a prior surface — the first observation
+    // at a cell establishes a reference for subsequent observations.
+    const referenceVol = volBeforeBlend ?? this.state.priorMatrix[primaryI]?.[primaryJ] ?? null
+    const newVol = this.state.volMatrix[primaryI][primaryJ]
 
-    if (priorVol !== null && priorVol !== undefined && currentVol !== null) {
-      const volChange = currentVol - priorVol
+    if (referenceVol !== null && newVol !== null) {
+      const volChange = newVol - referenceVol
 
       const deltas = computePropagation(
         mapping,
@@ -273,18 +287,87 @@ export class VolSurfaceEngine {
         const [ni, nj] = key.split(',').map(Number)
         if (this.state.volMatrix[ni][nj] !== null) {
           this.state.volMatrix[ni][nj] = (this.state.volMatrix[ni][nj] as number) + delta
+          if (this.state.sourceCode[ni][nj] < SOURCE_CODES.direct_observation) {
+            this.state.sourceCode[ni][nj] = Math.max(
+              this.state.sourceCode[ni][nj],
+              SOURCE_CODES.propagated,
+            ) as SourceCode
+            this.state.confidence[ni][nj] = Math.min(
+              1.0,
+              this.state.confidence[ni][nj] + 0.1,
+            )
+          }
+          this.state.lastPropagatedFrom[ni][nj] = obs.tradeLabel
         }
-        if (this.state.sourceCode[ni][nj] < SOURCE_CODES.direct_observation) {
-          this.state.sourceCode[ni][nj] = Math.max(
-            this.state.sourceCode[ni][nj],
-            SOURCE_CODES.propagated,
-          ) as SourceCode
-          this.state.confidence[ni][nj] = Math.min(
-            1.0,
-            this.state.confidence[ni][nj] + 0.1,
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // IDW Interpolation — fills empty cells from observed anchors
+  // -----------------------------------------------------------------------
+
+  /**
+   * Fill all remaining empty cells using Inverse Distance Weighting (IDW)
+   * from cells that have values (direct observations, prior, or propagated).
+   *
+   * Uses the same log-space anisotropic distance metric as propagation,
+   * so vol changes propagate more readily along the tenor axis than the
+   * expiry axis, reflecting the correlation structure of the swaption grid.
+   */
+  private interpolateEmptyCells(): void {
+    // Collect all cells that have values as interpolation anchors
+    const anchors: { i: number; j: number; vol: number; time: number }[] = []
+    for (let i = 0; i < NUM_EXPIRIES; i++) {
+      for (let j = 0; j < NUM_TENORS; j++) {
+        if (this.state.volMatrix[i][j] !== null) {
+          anchors.push({
+            i, j,
+            vol: this.state.volMatrix[i][j] as number,
+            time: this.state.lastObsTime[i][j],
+          })
+        }
+      }
+    }
+
+    if (anchors.length < 2) return // Need at least 2 anchors for meaningful interpolation
+
+    // For each empty cell, compute IDW interpolated value
+    for (let i = 0; i < NUM_EXPIRIES; i++) {
+      for (let j = 0; j < NUM_TENORS; j++) {
+        if (this.state.volMatrix[i][j] !== null) continue
+
+        const targetExpiry = EXPIRY_YEARS[EXPIRY_LABELS[i]]
+        const targetTenor = TENOR_YEARS[TENOR_LABELS[j]]
+
+        let weightedSum = 0
+        let totalWeight = 0
+        let latestTime = 0
+
+        for (const anchor of anchors) {
+          const anchorExpiry = EXPIRY_YEARS[EXPIRY_LABELS[anchor.i]]
+          const anchorTenor = TENOR_YEARS[TENOR_LABELS[anchor.j]]
+
+          const dist = gridDistance(
+            targetExpiry, targetTenor,
+            anchorExpiry, anchorTenor,
+            this.propagationConfig,
           )
+          const w = decayFactor(dist, this.propagationConfig)
+
+          if (w < 0.01) continue // Too far to contribute meaningfully
+
+          weightedSum += w * anchor.vol
+          totalWeight += w
+          if (anchor.time > latestTime) latestTime = anchor.time
         }
-        this.state.lastPropagatedFrom[ni][nj] = obs.tradeLabel
+
+        if (totalWeight > 0) {
+          this.state.volMatrix[i][j] = weightedSum / totalWeight
+          this.state.sourceCode[i][j] = SOURCE_CODES.interpolated
+          this.state.confidence[i][j] = Math.min(0.7, totalWeight / (2 + totalWeight))
+          this.state.lastObsTime[i][j] = latestTime
+        }
       }
     }
   }
