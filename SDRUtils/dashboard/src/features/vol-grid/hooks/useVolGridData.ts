@@ -12,7 +12,6 @@ const POLL_INTERVAL_MS = 5_000
 
 type UseVolGridDataOptions = {
   presetName: string
-  includePremium: boolean
   pollEnabled: boolean
   lengthScale?: number
   expiryWeight?: number
@@ -31,7 +30,6 @@ type UseVolGridDataReturn = {
 export function useVolGridData(options: UseVolGridDataOptions): UseVolGridDataReturn {
   const {
     presetName,
-    includePremium,
     pollEnabled,
     lengthScale,
     expiryWeight,
@@ -52,7 +50,6 @@ export function useVolGridData(options: UseVolGridDataOptions): UseVolGridDataRe
     try {
       const params = new URLSearchParams({
         calibration_preset: presetName,
-        include_premium: includePremium ? 'true' : 'false',
       })
       if (lengthScale !== undefined) params.set('length_scale', String(lengthScale))
       if (expiryWeight !== undefined) params.set('expiry_weight', String(expiryWeight))
@@ -84,7 +81,7 @@ export function useVolGridData(options: UseVolGridDataOptions): UseVolGridDataRe
       setIsLoading(false)
       fetchInFlight.current = false
     }
-  }, [presetName, includePremium, lengthScale, expiryWeight, tenorWeight])
+  }, [presetName, lengthScale, expiryWeight, tenorWeight])
 
   // Initial fetch
   useEffect(() => {

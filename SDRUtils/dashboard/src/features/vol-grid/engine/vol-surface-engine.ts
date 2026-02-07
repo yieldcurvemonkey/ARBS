@@ -34,7 +34,7 @@ import {
   gridDistance,
   decayFactor,
 } from './propagation'
-import { computePremiumGrid } from './premium'
+import { computePremiumGrid, computeFlatRateAnnuities } from './premium'
 
 // ---------------------------------------------------------------------------
 // Internal state matrices
@@ -383,14 +383,12 @@ export class VolSurfaceEngine {
     const stalenessRef = session.stalenessReferenceTime
     const cells: VolGridCell[][] = []
 
-    // Compute premium grid if annuity data is available
-    let premiumGrid: (number | null)[][] | null = null
-    let premiumBpsGrid: (number | null)[][] | null = null
-    if (this.annuityData.length > 0) {
-      const result = computePremiumGrid(this.state.volMatrix, this.annuityData)
-      premiumGrid = result.premiumGrid
-      premiumBpsGrid = result.premiumBpsGrid
-    }
+    // Compute premium grid — use external annuity data if available,
+    // otherwise fall back to flat-rate approximation (~4.3% SOFR)
+    const annuityData = this.annuityData.length > 0
+      ? this.annuityData
+      : computeFlatRateAnnuities()
+    const { premiumGrid, premiumBpsGrid } = computePremiumGrid(this.state.volMatrix, annuityData)
 
     for (let i = 0; i < NUM_EXPIRIES; i++) {
       cells.push([])

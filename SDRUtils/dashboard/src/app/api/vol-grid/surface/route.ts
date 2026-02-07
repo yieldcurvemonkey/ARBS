@@ -8,7 +8,6 @@ import { VolSurfaceEngine } from '@/features/vol-grid/engine/vol-surface-engine'
 import { filterCalibrationTrades } from '@/features/vol-grid/engine/calibration-filter'
 import { computeMarketSession } from '@/features/vol-grid/engine/market-session'
 import {
-  CalibrationFilterConfig,
   IDB_STRADDLES_PRESET,
   CALIBRATION_PRESETS,
   PropagationConfig,
@@ -143,7 +142,6 @@ async function fetchAnnuityData(
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const presetName = searchParams.get('calibration_preset') || 'IDB Straddles'
-  const includePremium = searchParams.get('include_premium') === 'true'
 
   // Parse propagation config overrides
   const propagationConfig: PropagationConfig = {
@@ -176,24 +174,23 @@ export async function GET(request: Request) {
       engine.initializeFromPrior(priorVols)
     }
 
-    // Optionally load annuity data for premium computation
-    if (includePremium) {
-      const pythonApiUrl = process.env.VOL_GRID_PYTHON_API_URL || null
-      const annuityData = await fetchAnnuityData(pythonApiUrl)
-      if (annuityData) {
-        engine.setAnnuityData(annuityData.grid_points, {
-          curveName: annuityData.curve_name,
-          source: annuityData.source,
-          timestamp: annuityData.timestamp,
-          referenceDate: annuityData.reference_date,
-        })
-      }
+    // If Python SOFR curve backend is available, use it for accurate annuities.
+    // Otherwise the engine falls back to flat-rate approximation (~4.3% SOFR).
+    const pythonApiUrl = process.env.VOL_GRID_PYTHON_API_URL || null
+    const annuityData = await fetchAnnuityData(pythonApiUrl)
+    if (annuityData) {
+      engine.setAnnuityData(annuityData.grid_points, {
+        curveName: annuityData.curve_name,
+        source: annuityData.source,
+        timestamp: annuityData.timestamp,
+        referenceDate: annuityData.reference_date,
+      })
     }
 
-    // Process observations
+    // Process observations (also fills empty cells via interpolation)
     engine.processObservations(observations, filteredOutCount)
 
-    // Build grid state with session context
+    // Build grid state — always includes premiums (flat-rate fallback if no curve)
     const gridState = engine.buildGridState(session)
 
     return NextResponse.json(gridState)

@@ -30,7 +30,6 @@ export function VolGrid() {
 
   const { gridState, calibrationTrades, isLoading, error, lastFetchTime, refetch } = useVolGridData({
     presetName,
-    includePremium: viewMode === 'premium',
     pollEnabled,
     lengthScale: propagationConfig.lengthScale,
     expiryWeight: propagationConfig.expiryWeight,
