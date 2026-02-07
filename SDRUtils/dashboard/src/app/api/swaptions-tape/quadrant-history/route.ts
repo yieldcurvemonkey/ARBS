@@ -40,12 +40,14 @@ function toDateKey(value: string | Date): string {
   return String(value)
 }
 
+type NetDirection = 'balanced' | 'payer' | 'receiver'
+
 function createEmptyStats() {
   return {
     tradeCount: 0,
     grossNotional: 0,
     netNotional: 0,
-    netDirection: 'balanced' as const,
+    netDirection: 'balanced' as NetDirection,
     netGrossRatio: 0,
     totalPremium: 0,
     custyTradeCount: 0,

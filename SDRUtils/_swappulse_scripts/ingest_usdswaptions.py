@@ -157,6 +157,7 @@ NUMERIC_COLUMNS: tuple[str, ...] = (
     "vega_curve_vega01",
     "vega_curve_weight",
     "vega_curve_vega_ratio",
+    "economic_notional",
     "straddle_bpvol_yr",
     "straddle_fwd_premium",
     "straddle_dv01",
@@ -239,6 +240,7 @@ PACKAGE_UPSERT_UPDATE_COLUMNS: tuple[str, ...] = (
     "forward_label",
     "legs_count",
     "total_notional",
+    "economic_notional",
     "total_premium",
     "package_indicator",
     "package_transaction_price",
@@ -300,6 +302,7 @@ CREATE TABLE IF NOT EXISTS {PACKAGES_TABLE} (
     forward_label TEXT,
     legs_count INTEGER NOT NULL,
     total_notional NUMERIC,
+    economic_notional NUMERIC,
     total_premium NUMERIC,
     package_indicator BOOLEAN,
     package_transaction_price NUMERIC,
@@ -390,6 +393,8 @@ CREATE TABLE IF NOT EXISTS {LINK_HISTORY_TABLE} (
 ALTER TABLE {PACKAGES_TABLE}
     ADD COLUMN IF NOT EXISTS package_source TEXT DEFAULT 'AUTO';
 ALTER TABLE {PACKAGES_TABLE}
+    ADD COLUMN IF NOT EXISTS economic_notional NUMERIC;
+ALTER TABLE {PACKAGES_TABLE}
     ADD COLUMN IF NOT EXISTS manual_link_id UUID REFERENCES {MANUAL_LINKS_TABLE}(link_id);
 
 ALTER TABLE {LEGS_TABLE}
@@ -423,6 +428,7 @@ SELECT
   p.forward_label,
   p.legs_count,
   p.total_notional,
+  p.economic_notional,
   p.total_premium,
   p.package_indicator,
   p.package_transaction_price,
@@ -477,6 +483,7 @@ SELECT
   p.forward_label,
   p.legs_count,
   p.total_notional,
+  p.economic_notional,
   p.total_premium,
   p.package_indicator,
   p.package_transaction_price,
@@ -735,6 +742,57 @@ def build_leg_metrics(row: pd.Series) -> Dict[str, Any]:
     return metrics
 
 
+def compute_economic_notional(group: pd.DataFrame, pkg_type: str) -> Optional[float]:
+    """Compute economic notional (structure-adjusted) for a package."""
+    if group.empty:
+        return None
+
+    notionals = pd.to_numeric(
+        group.get("notional", pd.Series(dtype=float)), errors="coerce"
+    )
+    if notionals.empty:
+        return None
+
+    total_raw = notionals.sum(skipna=True)
+    if pd.isna(total_raw):
+        return None
+    total = abs(float(total_raw))
+    if total == 0:
+        return 0.0
+
+    max_leg = notionals.abs().max(skipna=True)
+    normalized = (pkg_type or "").replace("-", "_").upper()
+
+    if normalized == "STRADDLE":
+        return total / 2
+
+    if normalized in {"RISK_REVERSAL", "VERTICAL_SPREAD_1X1", "CUSTY_RR_STRANGLE"}:
+        if pd.notna(max_leg):
+            return abs(float(max_leg))
+        return total / 2
+
+    if normalized == "VERTICAL_SPREAD_1X2":
+        atm_notional = None
+        if "vs_atm_notional" in group.columns:
+            candidate = _consistent_value(group["vs_atm_notional"])
+            if candidate is None:
+                series = group["vs_atm_notional"].dropna()
+                if not series.empty:
+                    candidate = series.iloc[0]
+            if candidate is not None and not pd.isna(candidate):
+                atm_notional = float(candidate)
+        if atm_notional is not None:
+            return abs(atm_notional)
+        return total / 3
+
+    if normalized in {"RECEIVER_LADDER", "PAYER_LADDER"}:
+        if pd.notna(max_leg):
+            return abs(float(max_leg))
+        return total
+
+    return total
+
+
 def build_packages_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
@@ -748,6 +806,10 @@ def build_packages_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         execution_start = g["execution_timestamp"].min()
         execution_end = g["execution_timestamp"].max()
         as_of_date = execution_start.date() if pd.notna(execution_start) else None
+        total_notional = pd.to_numeric(
+            g.get("notional", pd.Series(dtype=float)), errors="coerce"
+        ).sum(skipna=True)
+        economic_notional = compute_economic_notional(g, pkg_type)
 
         record = {
             "package_id": package_id,
@@ -763,7 +825,8 @@ def build_packages_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             "forward_start_years": _consistent_value(g["forward_start_years"]),
             "forward_label": _consistent_value(g["forward_label"]),
             "legs_count": len(g),
-            "total_notional": pd.to_numeric(g.get("notional", pd.Series(dtype=float)), errors="coerce").sum(skipna=True),
+            "total_notional": total_notional,
+            "economic_notional": economic_notional,
             "total_premium": pd.to_numeric(g.get("premium", pd.Series(dtype=float)), errors="coerce").sum(skipna=True),
             "package_indicator": _consistent_value(g["package_indicator"]) if "package_indicator" in g else None,
             "package_transaction_price": _consistent_value(g["package_transaction_price"]) if "package_transaction_price" in g else None,

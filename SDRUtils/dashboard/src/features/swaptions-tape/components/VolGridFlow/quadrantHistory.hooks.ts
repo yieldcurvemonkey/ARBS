@@ -107,7 +107,16 @@ export function useQuadrantHistory(params: QuadrantHistoryParams): QuadrantHisto
         inFlightRef.current = null
       }
     }
-  }, [cacheKey])
+  }, [
+    cacheKey,
+    excludeLargeCustyNotional,
+    platform,
+    quadrantConfig.boundaryToleranceYears,
+    quadrantConfig.expiryBoundaryYears,
+    quadrantConfig.tenorBoundaryYears,
+    range.end,
+    range.start,
+  ])
 
   return { data, isLoading, error }
 }

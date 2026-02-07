@@ -34,14 +34,22 @@ import type {
   QuadrantDayAggregate,
 } from "./VolGridFlow/quadrantHistory.types";
 import {
-  buildQuadrantSparklineData,
-  classifySparklineShape,
+  buildDirectionalSparklineData,
+  buildVolFlowSparklineData,
+  classifyDirectionalShape,
+  classifyVolFlowShape,
+  computeStructureDecomposition,
   findPeakImbalance,
+  findSteepestSegment,
+  getEconomicNotional,
+  isDeltaNeutral,
 } from "./VolGridFlow/quadrantSparkline.utils";
 import type {
-  QuadrantTrade,
-  SparklinePattern,
+  DirectionalSparklinePattern,
+  QuadrantTradeFlows,
+  SparklineMode,
   SparklinePoint,
+  VolFlowPattern,
 } from "./VolGridFlow/quadrantSparkline.types";
 import { TradeRarityPanel } from "./TradeRarityPanel/TradeRarityPanel";
 import { TimeseriesAnnotations } from "./TradeRarityPanel/TimeseriesAnnotations";
@@ -102,6 +110,7 @@ type TapeRow = {
   forward_label: string | null;
   legs_count: number;
   total_notional: number | null;
+  economic_notional?: number | null;
   total_premium: number | null;
   package_indicator: boolean | null;
   package_transaction_price: number | null;
@@ -283,6 +292,8 @@ type TimeseriesSummaryStats = {
   activeDays: number | null;
 };
 
+type NetDirection = "balanced" | "payer" | "receiver";
+
 type SequenceDirection = "PAYER" | "RECEIVER" | "MIXED" | "UNKNOWN";
 
 type SequenceRowMeta = {
@@ -376,6 +387,32 @@ type SequenceCluster = {
   durationMs: number;
 };
 
+type SequenceClusterStat = {
+  cluster: SequenceCluster;
+  summary: SequenceSummary;
+  tradeCount: number;
+  grossNotional: number | null;
+  pace: number | null;
+  netDirection: SequenceSummary["netDirection"];
+  netToGrossPct: number | null;
+  directionKey: string;
+  sizeProfile: string;
+  startTimestamp: number;
+  endTimestamp: number;
+  durationMs: number;
+  startHour: number;
+  dayOfWeek: number;
+  dayOfMonth: number;
+};
+
+type PatternMatch = {
+  patternFreqPct: number | null;
+  sizeProfileFreqPct: number | null;
+  anomalyScore: number | null;
+  anomalyLabel: string;
+  bestMatch: SequenceClusterStat | null;
+};
+
 type VolGridQuadrant = "ULC" | "URC" | "LLC" | "LRC" | "BOUNDARY" | "UNKNOWN";
 
 type QuadrantConfig = {
@@ -433,8 +470,15 @@ type QuadrantFlowState = {
 
 type QuadrantTradeMap = Record<
   Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">,
-  QuadrantTrade[]
+  QuadrantTradeFlows[]
 >;
+
+type VolFlowQuadrantSummary = {
+  quadrant: Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">;
+  totalEconomicNotional: number;
+  straddleShare: number;
+  tradeCount: number;
+};
 
 const SAFE_ACTIONS = new Set(["NEWT", "TRAD", "MODI"]);
 const ACTIVE_ACTIONS = new Set(["NEWT-TRAD", "MODI-TRAD", "CORR-TRAD"]);
@@ -1346,6 +1390,29 @@ function computeDisplayNotional(row: TapeRow): number | null {
   return displayNotional ?? null;
 }
 
+function resolveEconomicNotional(
+  row: TapeRow,
+  packageType: string,
+): number | null {
+  const directValue =
+    row.economic_notional ?? row.package_metrics?.economic_notional ?? null;
+  const parsedDirect = parseNumericValue(directValue);
+  if (parsedDirect !== null && Number.isFinite(parsedDirect)) {
+    return Math.abs(parsedDirect);
+  }
+
+  const totalValue = parseNumericValue(row.total_notional);
+  if (totalValue !== null && Number.isFinite(totalValue)) {
+    return getEconomicNotional(totalValue, packageType);
+  }
+
+  const fallback = computeDisplayNotional(row);
+  if (fallback !== null && Number.isFinite(fallback)) {
+    return Math.abs(fallback);
+  }
+  return null;
+}
+
 function formatStrikeAbsolute(strike?: number | null) {
   const strikeValue = parseMetricNumber(strike);
   if (strikeValue === null) return "--";
@@ -1795,6 +1862,11 @@ function buildQuadrantTradeBuckets(
     if (!isValid(notional)) return;
     const notionalValue = Number(notional);
     if (!Number.isFinite(notionalValue)) return;
+    const packageType = normalizePackageType(row.package_type) || "OUTRIGHT";
+    const economicNotionalRaw = resolveEconomicNotional(row, packageType);
+    const economicNotional = Number.isFinite(economicNotionalRaw)
+      ? Math.abs(economicNotionalRaw as number)
+      : Math.abs(notionalValue);
     const direction = resolveRowDirection(row);
     const signedNotional =
       direction === "PAYER"
@@ -1803,13 +1875,17 @@ function buildQuadrantTradeBuckets(
           ? -notionalValue
           : 0;
     const platformValue = resolvePlatformIdentifier(row);
-    const platform: QuadrantTrade["platform"] = isIdbPlatform(platformValue)
+    const platform: QuadrantTradeFlows["platform"] = isIdbPlatform(platformValue)
       ? "idb"
       : "custy";
     buckets[classification.quadrant].push({
       packageId: row.package_id,
       executionTimestamp: timestamp,
+      packageType,
       signedNotional,
+      economicNotional,
+      isDeltaNeutral: isDeltaNeutral(packageType),
+      isStraddle: packageType === "STRADDLE",
       platform,
     });
   });
@@ -1912,7 +1988,7 @@ function createEmptyDailyStats() {
     tradeCount: 0,
     grossNotional: 0,
     netNotional: 0,
-    netDirection: "balanced" as const,
+    netDirection: "balanced" as NetDirection,
     netGrossRatio: 0,
     totalPremium: 0,
     custyTradeCount: 0,
@@ -6394,7 +6470,7 @@ function NetFlowSparkline({
 }
 
 function describeSparklinePattern(
-  pattern: SparklinePattern,
+  pattern: DirectionalSparklinePattern,
   points: SparklinePoint[],
 ): string | null {
   if (pattern === "empty") return null;
@@ -6406,22 +6482,184 @@ function describeSparklinePattern(
   if (pattern === "reversal") {
     const peak = findPeakImbalance(points);
     if (!peak) return "reversed from earlier peak";
-    const direction = peak.cumulativeNet < 0 ? "receiver" : "payer";
+    const direction = peak.cumulativeValue < 0 ? "receiver" : "payer";
     return `reversed from ${formatNotional(
-      Math.abs(peak.cumulativeNet),
+      Math.abs(peak.cumulativeValue),
     )} ${direction} earlier`;
   }
   return null;
+}
+
+function formatTimeShort(timestamp: number | null | undefined): string {
+  if (!isValid(timestamp)) return "--";
+  const date = new Date(Number(timestamp));
+  if (Number.isNaN(date.getTime())) return "--";
+  return date.toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatTimeRange(
+  start: number | null | undefined,
+  end: number | null | undefined,
+): string {
+  if (!isValid(start) || !isValid(end)) return "--";
+  return `${formatTimeShort(start)}-${formatTimeShort(end)}`;
+}
+
+function activityLabel(snapshot: QuadrantFlowSnapshot): string {
+  if (snapshot.tradeCount === 0) return "quiet";
+  if (snapshot.intensity >= 0.75) return "active";
+  if (snapshot.intensity >= 0.4) return "steady";
+  return "light";
+}
+
+function buildVolFlowNarrative({
+  snapshot,
+  trades,
+  totalEconomicNotional,
+  pattern,
+  straddleShare,
+  steepestSegment,
+}: {
+  snapshot: QuadrantFlowSnapshot;
+  trades: QuadrantTradeFlows[];
+  totalEconomicNotional: number;
+  pattern: VolFlowPattern;
+  straddleShare: number;
+  steepestSegment: ReturnType<typeof findSteepestSegment>;
+}): string {
+  if (snapshot.tradeCount === 0) return "quiet";
+
+  const activityLevel = activityLabel(snapshot);
+  const volDescription = `${formatNotional(totalEconomicNotional)} vol flow`;
+  const timestamps = trades
+    .map((trade) => trade.executionTimestamp)
+    .filter((value) => Number.isFinite(value));
+  const firstTrade = timestamps.length ? Math.min(...timestamps) : null;
+
+  let shapeDescription = "steady throughout";
+  switch (pattern) {
+    case "single_burst":
+      shapeDescription = firstTrade
+        ? `single burst at ${formatTimeShort(firstTrade)}`
+        : "single burst";
+      break;
+    case "sparse":
+      shapeDescription = `sparse - ${trades.length} trades`;
+      break;
+    case "front_loaded":
+      shapeDescription = "front-loaded";
+      break;
+    case "back_loaded":
+      shapeDescription = "back-loaded";
+      break;
+    case "midday_burst":
+      shapeDescription = steepestSegment
+        ? `burst ${formatTimeRange(
+            steepestSegment.startTimestamp,
+            steepestSegment.endTimestamp,
+          )}`
+        : "midday burst";
+      break;
+    case "steady":
+      shapeDescription = "steady throughout";
+      break;
+    case "empty":
+    default:
+      shapeDescription = "quiet";
+      break;
+  }
+
+  const straddleNote =
+    straddleShare >= 0.4
+      ? `, ${Math.round(straddleShare * 100)}% straddles`
+      : "";
+
+  return `${activityLevel} - ${volDescription} (${shapeDescription}${straddleNote})`;
+}
+
+function buildVolFlowDashboardNarrative(
+  summaries: VolFlowQuadrantSummary[],
+): string[] {
+  if (!summaries.length) return [];
+  const total = summaries.reduce(
+    (sum, entry) => sum + entry.totalEconomicNotional,
+    0,
+  );
+  if (total <= 0) return [];
+
+  const sorted = [...summaries].sort(
+    (a, b) => b.totalEconomicNotional - a.totalEconomicNotional,
+  );
+  const leader = sorted[0];
+  const leaderShare = leader.totalEconomicNotional / total;
+
+  const byQuadrant = summaries.reduce(
+    (acc, entry) => {
+      acc[entry.quadrant] = entry;
+      return acc;
+    },
+    {} as Record<
+      Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">,
+      VolFlowQuadrantSummary
+    >,
+  );
+
+  const upperShare =
+    ((byQuadrant.ULC?.totalEconomicNotional ?? 0) +
+      (byQuadrant.URC?.totalEconomicNotional ?? 0)) /
+    total;
+  const lowerShare =
+    ((byQuadrant.LLC?.totalEconomicNotional ?? 0) +
+      (byQuadrant.LRC?.totalEconomicNotional ?? 0)) /
+    total;
+
+  const narratives: string[] = [];
+
+  narratives.push(
+    `${leader.quadrant} heaviest vol flow (${formatNotional(
+      leader.totalEconomicNotional,
+    )}, ${formatRate(leaderShare * 100, 0)}% of grid activity)`,
+  );
+
+  const lowerQualifier = lowerShare <= 0.2 ? "quiet" : "share";
+  narratives.push(
+    `ULC + URC account for ${formatRate(
+      upperShare * 100,
+      0,
+    )}% of grid vol flow. Lower row ${lowerQualifier} (${formatRate(
+      lowerShare * 100,
+      0,
+    )}%).`,
+  );
+
+  narratives.push(
+    `Straddle share: ${summaries
+      .map(
+        (entry) =>
+          `${entry.quadrant} ${formatRate(entry.straddleShare * 100, 0)}%`,
+      )
+      .join(", ")}`,
+  );
+
+  return narratives;
 }
 
 function QuadrantCell({
   snapshot,
   meta,
   trades,
+  mode,
+  onTradeSelect,
 }: {
   snapshot: QuadrantFlowSnapshot;
   meta: QuadrantMeta;
-  trades: QuadrantTrade[];
+  trades: QuadrantTradeFlows[];
+  mode: SparklineMode;
+  onTradeSelect?: (packageId: string) => void;
 }) {
   const tone = QUADRANT_DIRECTION_TONES[snapshot.dominantDirection];
   const directionColor =
@@ -6445,21 +6683,70 @@ function QuadrantCell({
   const tooltip = buildQuadrantTooltip(meta);
   const isLowSample =
     snapshot.tradeCount > 0 && snapshot.tradeCount < LOW_SAMPLE_TRADES;
-  const sparklineData = useMemo(
-    () => buildQuadrantSparklineData(trades),
+  const decomposition = useMemo(
+    () => computeStructureDecomposition(trades),
     [trades],
   );
-  const sparklinePattern = useMemo(
-    () => classifySparklineShape(sparklineData),
-    [sparklineData],
+  const straddleTradeCount = useMemo(
+    () => trades.filter((trade) => trade.isDeltaNeutral).length,
+    [trades],
+  );
+  const straddleSharePct = Math.round(decomposition.straddleShare * 100);
+  const outrightSharePct = Math.max(0, 100 - straddleSharePct);
+  const straddleShareNote = isLowSample
+    ? ` (${straddleTradeCount} of ${snapshot.tradeCount})`
+    : "";
+
+  const directionalPoints = useMemo(
+    () => buildDirectionalSparklineData(trades),
+    [trades],
+  );
+  const volFlowPoints = useMemo(
+    () => buildVolFlowSparklineData(trades),
+    [trades],
+  );
+  const directionalPattern = useMemo(
+    () => classifyDirectionalShape(directionalPoints),
+    [directionalPoints],
+  );
+  const volFlowPattern = useMemo(
+    () => classifyVolFlowShape(volFlowPoints),
+    [volFlowPoints],
   );
   const sparklineDescriptor = useMemo(
-    () => describeSparklinePattern(sparklinePattern, sparklineData),
-    [sparklinePattern, sparklineData],
+    () => describeSparklinePattern(directionalPattern, directionalPoints),
+    [directionalPattern, directionalPoints],
   );
-  const narrative = sparklineDescriptor
-    ? `${snapshot.narrative} (${sparklineDescriptor})`
-    : snapshot.narrative;
+  const steepestSegment = useMemo(
+    () => findSteepestSegment(volFlowPoints),
+    [volFlowPoints],
+  );
+  const volNarrative = useMemo(
+    () =>
+      buildVolFlowNarrative({
+        snapshot,
+        trades,
+        totalEconomicNotional: decomposition.totalEconomicNotional,
+        pattern: volFlowPattern,
+        straddleShare: decomposition.straddleShare,
+        steepestSegment,
+      }),
+    [
+      decomposition.straddleShare,
+      decomposition.totalEconomicNotional,
+      snapshot,
+      steepestSegment,
+      trades,
+      volFlowPattern,
+    ],
+  );
+  const narrative =
+    mode === "vol_flow"
+      ? volNarrative
+      : sparklineDescriptor
+        ? `${snapshot.narrative} (${sparklineDescriptor})`
+        : snapshot.narrative;
+  const sparklineHeight = mode === "vol_flow" ? 120 : 72;
 
   return (
     <div
@@ -6485,37 +6772,83 @@ function QuadrantCell({
       </div>
 
       <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-slate-300">
-        <div className="flex items-center justify-between">
-          <span className="text-slate-400">Gross</span>
-          <span className="font-mono text-slate-100">
-            {formatNotional(snapshot.grossNotional)}
-          </span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-slate-400">Premium</span>
-          <span className="font-mono text-slate-100">
-            {formatNotional(snapshot.totalPremium)}
-          </span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-slate-400">Net</span>
-          <span className="font-mono text-slate-100">{netLabel}</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-slate-400">Pace</span>
-          <span className="font-mono text-slate-100">{paceLabel}</span>
-        </div>
+        {mode === "vol_flow" ? (
+          <>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Vol flow</span>
+              <span className="font-mono text-amber-200">
+                {formatNotional(decomposition.totalEconomicNotional)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Premium</span>
+              <span className="font-mono text-slate-100">
+                {formatNotional(snapshot.totalPremium)}
+              </span>
+            </div>
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Straddle share</span>
+                <span className="font-mono text-slate-100">
+                  {straddleSharePct}%{straddleShareNote}
+                </span>
+              </div>
+              <div className="flex h-1 w-full overflow-hidden rounded bg-slate-800">
+                <div
+                  className="h-full bg-amber-400"
+                  style={{ width: `${straddleSharePct}%` }}
+                />
+                <div
+                  className="h-full bg-slate-600"
+                  style={{ width: `${outrightSharePct}%` }}
+                />
+              </div>
+              <div className="text-[9px] text-slate-500">
+                Outrights {outrightSharePct}%
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Pace</span>
+              <span className="font-mono text-slate-100">{paceLabel}</span>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Gross</span>
+              <span className="font-mono text-slate-100">
+                {formatNotional(snapshot.grossNotional)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Premium</span>
+              <span className="font-mono text-slate-100">
+                {formatNotional(snapshot.totalPremium)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Net</span>
+              <span className="font-mono text-slate-100">{netLabel}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Pace</span>
+              <span className="font-mono text-slate-100">{paceLabel}</span>
+            </div>
+          </>
+        )}
       </div>
 
-      <div className="mt-2 h-[34px] w-full">
+      <div className="mt-2 w-full" style={{ height: sparklineHeight }}>
         <QuadrantSparkline
           trades={trades}
+          mode={mode}
           directionColor={directionColor}
-          height={34}
-          showPeakMarker
+          height={sparklineHeight}
+          showMarker
           showFill
           showEndLabel={false}
-          formatValue={formatSignedNotional}
+          formatValue={mode === "vol_flow" ? formatNotional : formatSignedNotional}
+          onPointClick={onTradeSelect}
         />
       </div>
       <div className="mt-1 text-[10px] text-slate-300">
@@ -6523,7 +6856,9 @@ function QuadrantCell({
       </div>
       {isLowSample && (
         <div className="mt-1 text-[10px] text-amber-200/80">
-          Low sample - net may reflect single print
+          {mode === "vol_flow"
+            ? "Low sample - activity may reflect single print"
+            : "Low sample - net may reflect single print"}
         </div>
       )}
     </div>
@@ -6536,16 +6871,20 @@ function QuadrantFlowDashboard({
   onConfigChange,
   excludeLargeCustyNotional,
   onExcludeLargeCustyNotionalChange,
+  onTradeSelect,
 }: {
   rows: TapeRow[];
   config: QuadrantConfig;
   onConfigChange: (next: QuadrantConfig) => void;
   excludeLargeCustyNotional: boolean;
   onExcludeLargeCustyNotionalChange: (next: boolean) => void;
+  onTradeSelect?: (packageId: string) => void;
 }) {
   const [showConfig, setShowConfig] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [viewMode, setViewMode] = useState<"TODAY" | "HISTORY">("TODAY");
+  const [flowMode, setFlowMode] =
+    useState<SparklineMode>("net_directional");
   const [historyLookback, setHistoryLookback] =
     useState<HistoryLookback>("3M");
   const [flowScope, setFlowScope] = useState<"COMBINED" | "IDB" | "CUSTY">(
@@ -6576,6 +6915,24 @@ function QuadrantFlowDashboard({
   const quadrantTrades = useMemo(
     () => buildQuadrantTradeBuckets(scopedRows, config),
     [scopedRows, config],
+  );
+  const volFlowSummaries = useMemo(
+    () =>
+      QUADRANT_DISPLAY_KEYS.map((quadrant) => {
+        const trades = quadrantTrades[quadrant];
+        const decomposition = computeStructureDecomposition(trades);
+        return {
+          quadrant,
+          totalEconomicNotional: decomposition.totalEconomicNotional,
+          straddleShare: decomposition.straddleShare,
+          tradeCount: trades.length,
+        };
+      }),
+    [quadrantTrades],
+  );
+  const volFlowNarratives = useMemo(
+    () => buildVolFlowDashboardNarrative(volFlowSummaries),
+    [volFlowSummaries],
   );
 
   const latestTimestamp = useMemo(() => {
@@ -6697,6 +7054,19 @@ function QuadrantFlowDashboard({
   };
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem("swaptionVolGridFlowMode");
+    if (stored === "vol_flow") {
+      setFlowMode("vol_flow");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("swaptionVolGridFlowMode", flowMode);
+  }, [flowMode]);
+
+  useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (
@@ -6735,9 +7105,15 @@ function QuadrantFlowDashboard({
           </div>
           <div className="text-[10px] text-slate-500">
             Legend:{" "}
-            <span className="text-cyan-300">receiver</span>{" "}
-            {"\u00b7"} <span className="text-emerald-300">payer</span>{" "}
-            {"\u00b7"} <span className="text-slate-400">balanced</span>
+            {flowMode === "vol_flow" ? (
+              <span className="text-amber-300">vol flow</span>
+            ) : (
+              <>
+                <span className="text-cyan-300">receiver</span>{" "}
+                {"\u00b7"} <span className="text-emerald-300">payer</span>{" "}
+                {"\u00b7"} <span className="text-slate-400">balanced</span>
+              </>
+            )}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
             <div className="inline-flex overflow-hidden rounded border border-slate-700">
@@ -6762,6 +7138,30 @@ function QuadrantFlowDashboard({
                 }`}
               >
                 History
+              </button>
+            </div>
+            <div className="inline-flex overflow-hidden rounded border border-slate-700">
+              <button
+                type="button"
+                onClick={() => setFlowMode("net_directional")}
+                className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                  flowMode === "net_directional"
+                    ? "bg-slate-700 text-slate-100"
+                    : "text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                Net Flow
+              </button>
+              <button
+                type="button"
+                onClick={() => setFlowMode("vol_flow")}
+                className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                  flowMode === "vol_flow"
+                    ? "bg-slate-700 text-slate-100"
+                    : "text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                Vol Flow
               </button>
             </div>
             {viewMode === "HISTORY" && (
@@ -6898,28 +7298,38 @@ function QuadrantFlowDashboard({
                   snapshot={flowState.snapshots.ULC}
                   meta={DEFAULT_QUADRANT_META.ULC}
                   trades={quadrantTrades.ULC}
+                  mode={flowMode}
+                  onTradeSelect={onTradeSelect}
                 />
                 <QuadrantCell
                   snapshot={flowState.snapshots.URC}
                   meta={DEFAULT_QUADRANT_META.URC}
                   trades={quadrantTrades.URC}
+                  mode={flowMode}
+                  onTradeSelect={onTradeSelect}
                 />
                 <QuadrantCell
                   snapshot={flowState.snapshots.LLC}
                   meta={DEFAULT_QUADRANT_META.LLC}
                   trades={quadrantTrades.LLC}
+                  mode={flowMode}
+                  onTradeSelect={onTradeSelect}
                 />
                 <QuadrantCell
                   snapshot={flowState.snapshots.LRC}
                   meta={DEFAULT_QUADRANT_META.LRC}
                   trades={quadrantTrades.LRC}
+                  mode={flowMode}
+                  onTradeSelect={onTradeSelect}
                 />
               </div>
 
               {(flowNotes.length ||
-                flowState.dominantTheme ||
-                flowState.crossQuadrantSignal ||
-                custyConcentrationNote) && (
+                custyConcentrationNote ||
+                (flowMode === "vol_flow"
+                  ? volFlowNarratives.length > 0
+                  : flowState.dominantTheme ||
+                    flowState.crossQuadrantSignal)) && (
                 <div className="mt-3 space-y-1 text-[11px] text-slate-300">
                   {flowNotes.map((note) => (
                     <div key={note.label} title={note.title}>
@@ -6927,25 +7337,35 @@ function QuadrantFlowDashboard({
                     </div>
                   ))}
                   {custyConcentrationNote && <div>{custyConcentrationNote}</div>}
-                  {flowState.dominantTheme && (
-                    <div>Dominant theme: {flowState.dominantTheme}</div>
-                  )}
-                  {flowState.crossQuadrantSignal && (
-                    <div>
-                      Cross-quadrant:{" "}
-                      {flowState.crossQuadrantSignal.map((signal, index) => (
-                        <span
-                          key={`${signal.label}-${index}`}
-                          title={signal.title}
-                          className="cursor-help"
-                        >
-                          {signal.label}
-                          {index < flowState.crossQuadrantSignal.length - 1
-                            ? " \u00b7 "
-                            : ""}
-                        </span>
+                  {flowMode === "vol_flow" ? (
+                    <>
+                      {volFlowNarratives.map((line) => (
+                        <div key={line}>{line}</div>
                       ))}
-                    </div>
+                    </>
+                  ) : (
+                    <>
+                      {flowState.dominantTheme && (
+                        <div>Dominant theme: {flowState.dominantTheme}</div>
+                      )}
+                      {flowState.crossQuadrantSignal && (
+                        <div>
+                          Cross-quadrant:{" "}
+                          {flowState.crossQuadrantSignal.map(
+                            (signal, index, arr) => (
+                              <span
+                                key={`${signal.label}-${index}`}
+                                title={signal.title}
+                                className="cursor-help"
+                              >
+                                {signal.label}
+                                {index < arr.length - 1 ? " \u00b7 " : ""}
+                              </span>
+                            ),
+                          )}
+                        </div>
+                      )}
+                    </>
                   )}
                   <div className="text-[10px] text-slate-500">
                     Pace baseline: relative to other quadrants in the current view
@@ -7094,11 +7514,13 @@ function SequenceAnalysisPanel({
         }
         const payload = await res.json();
         if (cancelled) return;
-        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        const rows: TapeRow[] = Array.isArray(payload?.rows)
+          ? (payload.rows as TapeRow[])
+          : [];
         const filteredRows = excludeLargeCustyNotional
           ? rows.filter((row) => !isComicallyLargeCustyTrade(row))
           : rows;
-        setHistoryRows(filteredRows as TapeRow[]);
+        setHistoryRows(filteredRows);
         setHistoryTruncated(!!payload?.truncated);
         historyFetchKeyRef.current = fetchKey;
       } catch (error: any) {
@@ -7172,7 +7594,7 @@ function SequenceAnalysisPanel({
     );
   }, [historicalClusters, minTradesForStats]);
 
-  const clusterStats = useMemo(() => {
+  const clusterStats = useMemo<SequenceClusterStat[]>(() => {
     return similarClusters.map((cluster) => {
       const summary = buildSequenceSummary(cluster.rows);
       const startDate = new Date(cluster.startTimestamp);
@@ -7444,7 +7866,7 @@ function SequenceAnalysisPanel({
     };
   }, [clusterStatsPrior, historyRowPoints]);
 
-  const patternMatch = useMemo(() => {
+  const patternMatch = useMemo<PatternMatch | null>(() => {
     if (!clusterStats.length) return null;
     const sameSize = clusterStats.filter(
       (stat) => stat.tradeCount === summary.tradeCount,
@@ -7484,7 +7906,7 @@ function SequenceAnalysisPanel({
             ? "notable"
             : "routine";
 
-    let bestMatch: typeof clusterStats[number] | null = null;
+    let bestMatch: SequenceClusterStat | null = null;
     let bestScore = Number.POSITIVE_INFINITY;
     clusterStats.forEach((stat) => {
       if (currentStartTs !== null && stat.startTimestamp === currentStartTs) {
@@ -9875,6 +10297,13 @@ export default function SwaptionTradeTape() {
     sortRowsByField,
   ]);
 
+  const handleSparklineTradeSelect = useCallback((packageId: string) => {
+    if (!packageId) return;
+    setSelectedPackageIds((prev) =>
+      normalizeSelectedPackageIds([...prev, packageId]),
+    );
+  }, []);
+
 
   useEffect(() => {
     setRows([]);
@@ -10310,6 +10739,7 @@ export default function SwaptionTradeTape() {
         onConfigChange={setQuadrantConfig}
         excludeLargeCustyNotional={excludeLargeCustyNotional}
         onExcludeLargeCustyNotionalChange={setExcludeLargeCustyNotional}
+        onTradeSelect={handleSparklineTradeSelect}
       />
       {selectedPackageIds.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
