@@ -29,6 +29,9 @@ export default function RootLayout({
                 <Link href="/swaptions-tape" className="hover:text-white">
                   Tape
                 </Link>
+                <Link href="/vol-grid" className="hover:text-white">
+                  Vol Grid
+                </Link>
                 <span className="text-slate-500">
                   More coming soon
                 </span>

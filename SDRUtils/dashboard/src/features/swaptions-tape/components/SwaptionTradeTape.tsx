@@ -8662,10 +8662,20 @@ function ManualLinkModal({
   onClose: () => void;
   onCreated: (result?: { link_id: string; manual_package_id: string }) => void;
 }) {
-  const selectedIds = useMemo(
-    () => selectedRows.map((row) => row.package_id),
-    [selectedRows],
-  );
+  const selectedTradeIds = useMemo(() => {
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    selectedRows.forEach((row) => {
+      const legs = row.legs_json || [];
+      legs.forEach((leg) => {
+        const id = String(leg.trade_id || "").trim();
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        ids.push(id);
+      });
+    });
+    return ids;
+  }, [selectedRows]);
   const selectedSummaries = useMemo(
     () =>
       selectedRows.map((row) => ({
@@ -8714,7 +8724,7 @@ function ManualLinkModal({
   }, []);
 
   const validateLink = useCallback(async () => {
-    if (selectedIds.length < 2) return;
+    if (selectedTradeIds.length < 2) return;
     setValidating(true);
     setError(null);
     try {
@@ -8722,7 +8732,7 @@ function ManualLinkModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          trade_ids: selectedIds,
+          trade_ids: selectedTradeIds,
           package_type: packageType || undefined,
           link_reason: linkReason || undefined,
           validate_only: true,
@@ -8746,10 +8756,10 @@ function ManualLinkModal({
     } finally {
       setValidating(false);
     }
-  }, [linkReason, packageType, selectedIds]);
+  }, [linkReason, packageType, selectedTradeIds]);
 
   const handleCreate = useCallback(async () => {
-    if (selectedIds.length < 2) return;
+    if (selectedTradeIds.length < 2) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -8757,7 +8767,7 @@ function ManualLinkModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          trade_ids: selectedIds,
+          trade_ids: selectedTradeIds,
           package_type: packageType || undefined,
           comment: comment || undefined,
           link_reason: linkReason || undefined,
@@ -8797,7 +8807,7 @@ function ManualLinkModal({
     onClose,
     onCreated,
     packageType,
-    selectedIds,
+    selectedTradeIds,
     tags,
   ]);
 
@@ -8815,9 +8825,9 @@ function ManualLinkModal({
 
   useEffect(() => {
     if (!isOpen) return;
-    if (selectedIds.length < 2) return;
+    if (selectedTradeIds.length < 2) return;
     validateLink();
-  }, [isOpen, selectedIds, validateLink]);
+  }, [isOpen, selectedTradeIds, validateLink]);
 
   if (!isOpen) return null;
 
@@ -8844,7 +8854,7 @@ function ManualLinkModal({
               <div className="flex items-center justify-between text-xs text-slate-400">
                 <span className="uppercase tracking-wide">Selected Trades</span>
                 <span className="font-mono">
-                  {selectedSummaries.length} selected
+                  {selectedTradeIds.length} selected
                 </span>
               </div>
               <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
@@ -8885,7 +8895,7 @@ function ManualLinkModal({
                   <button
                     type="button"
                     onClick={validateLink}
-                    disabled={validating || selectedIds.length < 2}
+                    disabled={validating || selectedTradeIds.length < 2}
                     className="rounded border border-slate-700 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500 disabled:opacity-50"
                   >
                     {validating ? "Validating" : "Refresh"}
@@ -9087,7 +9097,7 @@ function ManualLinkModal({
         </div>
         <div className="flex items-center justify-between border-t border-slate-800 px-4 py-3 text-xs">
           <div className="text-slate-400">
-            {selectedSummaries.length < 2
+            {selectedTradeIds.length < 2
               ? "Select at least two trades to enable linking."
               : hasValidationErrors
                 ? "Resolve validation errors before creating the link."
@@ -9106,7 +9116,7 @@ function ManualLinkModal({
               onClick={handleCreate}
               disabled={
                 submitting ||
-                selectedSummaries.length < 2 ||
+                selectedTradeIds.length < 2 ||
                 hasValidationErrors ||
                 !currentUser
               }

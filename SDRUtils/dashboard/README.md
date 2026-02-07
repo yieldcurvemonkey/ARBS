@@ -136,6 +136,15 @@ All API routes are in `src/app/api/`. They read from PostgreSQL (Supabase) and r
 | `/api/swaptions/summary` | GET | `[COMPLETE]` | Historical summaries |
 | `/api/swaption-structure` | GET | `[COMPLETE]` | Structure analysis |
 
+### Vol Grid Routes
+
+| Route | Method | Status | Description |
+|-------|--------|--------|-------------|
+| `/api/vol-grid/surface` | GET | `[INCOMPLETE]` | Live ATMF vol + premium grid surface |
+| `/api/vol-grid/calibration-config` | GET/PUT | `[INCOMPLETE]` | Calibration filter configuration |
+| `/api/vol-grid/calibration-trades` | GET | `[INCOMPLETE]` | Calibration trades feed |
+| `/api/curves/sofr` | GET | `[INCOMPLETE]` | SOFR discount curve (IRSwapsMDP) |
+
 ### Central Bank Routes
 
 | Route | Method | Status | Description |

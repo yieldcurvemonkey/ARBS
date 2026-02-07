@@ -350,16 +350,25 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
   const renderDot = useCallback(
     (props: any) => {
       const { cx, cy, payload } = props;
+      const dotKey = `${payload?.tradeId ?? "trade"}-${
+        payload?.tradeIndex ?? props.index ?? 0
+      }-${payload?.timestamp ?? ""}`;
       if (!payload || payload.tradeIndex < 0 || cx === null || cy === null) {
-        return null;
+        return (
+          <circle
+            key={dotKey}
+            cx={0}
+            cy={0}
+            r={0}
+            fill="none"
+            stroke="none"
+          />
+        );
       }
       const handleClick = () => {
         if (!onPointClick || !payload.tradeId) return;
         onPointClick(payload.tradeId as string);
       };
-      const dotKey = `${payload.tradeId ?? "trade"}-${
-        payload.tradeIndex ?? props.index ?? 0
-      }-${payload.timestamp ?? ""}`;
       return (
         <circle
           key={dotKey}
