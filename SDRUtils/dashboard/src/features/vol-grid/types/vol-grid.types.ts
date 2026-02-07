@@ -135,6 +135,14 @@ export type VolGridCell = {
 // Full grid state (returned by API)
 // ---------------------------------------------------------------------------
 
+export type MarketSessionInfo = {
+  status: 'open' | 'pre_market' | 'after_hours' | 'weekend' | 'holiday'
+  isMarketOpen: boolean
+  tradingDate: string            // YYYY-MM-DD of the session this grid represents
+  sessionLabel: string           // "Live — Fri Feb 6" or "Fri Feb 6 Close"
+  shouldPoll: boolean
+}
+
 export type VolGridState = {
   cells: VolGridCell[][]         // [expiryIndex][tenorIndex]
   lastUpdateTime: number         // epoch ms
@@ -142,6 +150,7 @@ export type VolGridState = {
   filteredOutCount: number
   curveInfo: CurveInfo | null
   priorSource: 'previous_close' | 'historical_median' | 'none'
+  session: MarketSessionInfo
 }
 
 export type CurveInfo = {

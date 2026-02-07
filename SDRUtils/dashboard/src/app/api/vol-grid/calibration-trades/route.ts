@@ -1,9 +1,10 @@
 // ABOUTME: Returns all calibration trades that fed the current vol surface.
+// Handles weekends/after-hours by querying the last trading session.
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import { filterCalibrationTrades } from '@/features/vol-grid/engine/calibration-filter'
+import { computeMarketSession } from '@/features/vol-grid/engine/market-session'
 import {
-  CalibrationFilterConfig,
   IDB_STRADDLES_PRESET,
   CALIBRATION_PRESETS,
 } from '@/features/vol-grid/types'
@@ -11,12 +12,13 @@ import {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const presetName = searchParams.get('calibration_preset') || 'IDB Straddles'
-  const lookbackMinutes = parseInt(searchParams.get('lookback_minutes') || '480', 10)
   const limit = Math.min(parseInt(searchParams.get('limit') || '100', 10), 500)
 
   const calibrationConfig = CALIBRATION_PRESETS[presetName] || IDB_STRADDLES_PRESET
 
   try {
+    const session = computeMarketSession()
+
     const sql = `
       SELECT
         p.package_id,
@@ -51,10 +53,13 @@ export async function GET(request: Request) {
         FROM arbs_swaption_legs_v1 l2
         WHERE l2.package_id = p.package_id
       ) plat ON TRUE
-      WHERE p.execution_start >= NOW() - INTERVAL '${lookbackMinutes} minutes'
+      WHERE p.execution_start >= $1::timestamptz
+        AND p.execution_start <= $2::timestamptz
       ORDER BY p.execution_start DESC
     `
-    const result = await query(sql)
+    const startIso = new Date(session.sessionStart).toISOString()
+    const endIso = new Date(session.isMarketOpen ? Date.now() : session.sessionEnd).toISOString()
+    const result = await query(sql, [startIso, endIso])
     const { observations, filteredOutCount } = filterCalibrationTrades(result.rows, calibrationConfig)
 
     // Sort by most recent first and limit
@@ -67,6 +72,11 @@ export async function GET(request: Request) {
       totalQualifying: observations.length,
       filteredOutCount,
       preset: presetName,
+      session: {
+        status: session.status,
+        tradingDate: session.tradingDate,
+        sessionLabel: session.sessionLabel,
+      },
     })
   } catch (error: any) {
     console.error('vol-grid/calibration-trades GET error', error)

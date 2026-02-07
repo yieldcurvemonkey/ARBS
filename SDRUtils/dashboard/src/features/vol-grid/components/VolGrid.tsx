@@ -49,6 +49,8 @@ export function VolGrid() {
     setSelectedCell(prev => (prev?.expiry === cell.expiry && prev?.tenor === cell.tenor) ? null : cell)
   }, [])
 
+  const session = gridState?.session ?? null
+
   const lastUpdateStr = lastFetchTime
     ? new Date(lastFetchTime).toLocaleTimeString('en-US', {
         hour: '2-digit',
@@ -64,7 +66,10 @@ export function VolGrid() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold text-white tracking-tight">
-            Live ATMF Vol Grid
+            {session?.isMarketOpen
+              ? 'Live ATMF Vol Grid'
+              : `ATMF Vol Grid \u2014 ${session?.sessionLabel || 'Closed'}`
+            }
           </h2>
           <span className="text-xs text-slate-500">
             Calibration: {presetName}
@@ -77,17 +82,30 @@ export function VolGrid() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Polling toggle */}
-          <button
-            onClick={() => setPollEnabled(p => !p)}
-            className={`px-2 py-1 text-[10px] rounded border transition-colors ${
-              pollEnabled
-                ? 'border-green-700 bg-green-900/30 text-green-400'
-                : 'border-slate-700 bg-slate-800/50 text-slate-500'
-            }`}
-          >
-            {pollEnabled ? 'LIVE' : 'PAUSED'}
-          </button>
+          {/* Session status badge */}
+          {session && !session.isMarketOpen && (
+            <span className="px-2 py-1 text-[10px] rounded border border-amber-700 bg-amber-900/30 text-amber-400">
+              CLOSED
+            </span>
+          )}
+
+          {/* Polling toggle — only interactive when market is open */}
+          {session?.isMarketOpen ? (
+            <button
+              onClick={() => setPollEnabled(p => !p)}
+              className={`px-2 py-1 text-[10px] rounded border transition-colors ${
+                pollEnabled
+                  ? 'border-green-700 bg-green-900/30 text-green-400'
+                  : 'border-slate-700 bg-slate-800/50 text-slate-500'
+              }`}
+            >
+              {pollEnabled ? 'LIVE' : 'PAUSED'}
+            </button>
+          ) : (
+            <span className="px-2 py-1 text-[10px] rounded border border-slate-700 bg-slate-800/50 text-slate-500">
+              {session?.tradingDate || 'OFFLINE'}
+            </span>
+          )}
 
           {/* Refresh */}
           <button
@@ -122,11 +140,21 @@ export function VolGrid() {
 
         {/* Legend */}
         <div className="ml-4 flex items-center gap-3 text-[10px] text-slate-500">
-          <span className="flex items-center gap-1"><span className="text-green-400">{'\u25CF'}</span> live (&lt;15m)</span>
-          <span className="flex items-center gap-1"><span className="text-emerald-500">{'\u25CF'}</span> recent (&lt;1h)</span>
-          <span className="flex items-center gap-1"><span className="text-amber-500">{'\u25CF'}</span> stale (&lt;4h)</span>
-          <span className="flex items-center gap-1"><span className="text-red-500">{'\u25CF'}</span> very stale</span>
-          <span className="flex items-center gap-1"><span className="text-slate-600">{'\u25CB'}</span> no data</span>
+          {session?.isMarketOpen ? (
+            <>
+              <span className="flex items-center gap-1"><span className="text-green-400">{'\u25CF'}</span> live (&lt;15m)</span>
+              <span className="flex items-center gap-1"><span className="text-emerald-500">{'\u25CF'}</span> recent (&lt;1h)</span>
+              <span className="flex items-center gap-1"><span className="text-amber-500">{'\u25CF'}</span> stale (&lt;4h)</span>
+              <span className="flex items-center gap-1"><span className="text-red-500">{'\u25CF'}</span> very stale</span>
+              <span className="flex items-center gap-1"><span className="text-slate-600">{'\u25CB'}</span> no data</span>
+            </>
+          ) : (
+            <>
+              <span className="flex items-center gap-1"><span className="text-emerald-500">{'\u25CF'}</span> observed</span>
+              <span className="flex items-center gap-1"><span className="text-amber-500">{'\u25CF'}</span> propagated</span>
+              <span className="flex items-center gap-1"><span className="text-slate-600">{'\u25CB'}</span> no data</span>
+            </>
+          )}
         </div>
       </div>
 
@@ -185,7 +213,7 @@ export function VolGrid() {
                   <Stat label="Premium" value={selectedCell.atmfPremiumBps !== null ? `${selectedCell.atmfPremiumBps.toFixed(1)} bps` : '—'} />
                   <Stat label="Source" value={selectedCell.atmfVolSource} />
                   <Stat label="Confidence" value={selectedCell.atmfVolConfidence.toFixed(2)} />
-                  <Stat label="Obs today" value={String(selectedCell.observationCount)} />
+                  <Stat label={session?.isMarketOpen ? 'Obs today' : 'Obs session'} value={String(selectedCell.observationCount)} />
                   <Stat label="Staleness" value={selectedCell.stalenessCategory} />
                   <Stat label="Quadrant" value={selectedCell.quadrant} />
                 </div>

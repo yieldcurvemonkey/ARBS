@@ -1,15 +1,15 @@
 // ABOUTME: API endpoint that builds and returns the live ATMF vol surface grid.
 // Fetches calibration trades from DB, runs them through the vol surface engine,
 // and returns the full grid state with vol, premium, staleness per cell.
+// Handles weekends/after-hours by looking back to the last trading session.
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import { VolSurfaceEngine } from '@/features/vol-grid/engine/vol-surface-engine'
 import { filterCalibrationTrades } from '@/features/vol-grid/engine/calibration-filter'
+import { computeMarketSession } from '@/features/vol-grid/engine/market-session'
 import {
   CalibrationFilterConfig,
   IDB_STRADDLES_PRESET,
-  ALL_IDB_PRESET,
-  ALL_STRADDLES_PRESET,
   CALIBRATION_PRESETS,
   PropagationConfig,
   DEFAULT_PROPAGATION_CONFIG,
@@ -17,13 +17,13 @@ import {
   AnnuityData,
 } from '@/features/vol-grid/types'
 
-const PRESETS: Record<string, CalibrationFilterConfig> = CALIBRATION_PRESETS
-
 // ---------------------------------------------------------------------------
 // Fetch qualifying straddle trades from database
 // ---------------------------------------------------------------------------
 
-async function fetchRecentTrades(lookbackMinutes: number = 480) {
+async function fetchTrades(sessionStart: number, sessionEnd: number) {
+  // Use explicit timestamps instead of NOW() - INTERVAL to handle weekends correctly.
+  // sessionStart/sessionEnd are epoch ms computed by market-session.ts
   const sql = `
     SELECT
       p.package_id,
@@ -58,10 +58,13 @@ async function fetchRecentTrades(lookbackMinutes: number = 480) {
       FROM arbs_swaption_legs_v1 l2
       WHERE l2.package_id = p.package_id
     ) plat ON TRUE
-    WHERE p.execution_start >= NOW() - INTERVAL '${lookbackMinutes} minutes'
+    WHERE p.execution_start >= $1::timestamptz
+      AND p.execution_start <= $2::timestamptz
     ORDER BY p.execution_start ASC
   `
-  const result = await query(sql)
+  const startIso = new Date(sessionStart).toISOString()
+  const endIso = new Date(sessionEnd).toISOString()
+  const result = await query(sql, [startIso, endIso])
   return result.rows
 }
 
@@ -141,7 +144,6 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const presetName = searchParams.get('calibration_preset') || 'IDB Straddles'
   const includePremium = searchParams.get('include_premium') === 'true'
-  const lookbackMinutes = parseInt(searchParams.get('lookback_minutes') || '480', 10)
 
   // Parse propagation config overrides
   const propagationConfig: PropagationConfig = {
@@ -151,12 +153,15 @@ export async function GET(request: Request) {
     tenorWeight: parseFloat(searchParams.get('tenor_weight') || String(DEFAULT_PROPAGATION_CONFIG.tenorWeight)),
   }
 
-  const calibrationConfig = PRESETS[presetName] || IDB_STRADDLES_PRESET
+  const calibrationConfig = CALIBRATION_PRESETS[presetName] || IDB_STRADDLES_PRESET
 
   try {
-    // Fetch trades and prior in parallel
+    // Compute the market session — this determines what time window to query
+    const session = computeMarketSession()
+
+    // Fetch trades for the relevant session window and prior in parallel
     const [rawTrades, priorVols] = await Promise.all([
-      fetchRecentTrades(lookbackMinutes),
+      fetchTrades(session.sessionStart, session.isMarketOpen ? Date.now() : session.sessionEnd),
       fetchHistoricalMedianVols(),
     ])
 
@@ -188,8 +193,8 @@ export async function GET(request: Request) {
     // Process observations
     engine.processObservations(observations, filteredOutCount)
 
-    // Build and return grid state
-    const gridState = engine.buildGridState()
+    // Build grid state with session context
+    const gridState = engine.buildGridState(session)
 
     return NextResponse.json(gridState)
   } catch (error: any) {

@@ -22,7 +22,9 @@ import {
   AnnuityPoint,
   Quadrant,
   CurveInfo,
+  MarketSessionInfo,
 } from '../types'
+import type { MarketSession } from './market-session'
 import {
   mapTradeToGridPoints,
   computeBlendWeight,
@@ -89,14 +91,32 @@ function classifyQuadrant(expiryYears: number, tenorYears: number): Quadrant {
 
 function computeStalenessCategory(
   lastObsTime: number,
-  currentTime: number,
+  referenceTime: number,
   source: VolSource,
   config: StalenessConfig,
+  isSessionClosed: boolean,
 ): StalenessCategory {
   if (source === 'no_data') return 'no_data'
 
-  const minutes = lastObsTime > 0 ? (currentTime - lastObsTime) / 60_000 : Infinity
+  const minutes = lastObsTime > 0 ? (referenceTime - lastObsTime) / 60_000 : Infinity
 
+  // When the market session is closed, staleness is measured from session close.
+  // Friday's last print at 4:55 PM is only 5 minutes "stale" relative to the 5 PM close,
+  // even if it's now Saturday. This prevents the entire grid from going red over weekends.
+  if (isSessionClosed) {
+    if (source === 'direct_observation') {
+      if (minutes < config.recentThresholdMinutes) return 'recent'
+      if (minutes < config.staleThresholdMinutes) return 'stale'
+      if (minutes < config.veryStaleThresholdMinutes) return 'very_stale'
+      return 'very_stale' // never degrade to no_data for closed sessions with observations
+    }
+    if (source === 'propagated') return 'recent'
+    if (source === 'prior') return 'stale'
+    if (source === 'interpolated') return 'stale'
+    return 'no_data'
+  }
+
+  // Live session staleness
   if (source === 'direct_observation') {
     if (minutes < config.liveThresholdMinutes) return 'live'
     if (minutes < config.recentThresholdMinutes) return 'recent'
@@ -273,8 +293,11 @@ export class VolSurfaceEngine {
   // Build grid state for API response / UI
   // -----------------------------------------------------------------------
 
-  buildGridState(): VolGridState {
+  buildGridState(session: MarketSession): VolGridState {
     const now = Date.now()
+    const isSessionClosed = !session.isMarketOpen
+    // When closed, measure staleness from session close time, not wall clock
+    const stalenessRef = session.stalenessReferenceTime
     const cells: VolGridCell[][] = []
 
     // Compute premium grid if annuity data is available
@@ -294,7 +317,8 @@ export class VolSurfaceEngine {
         const source = sourceCodeToVolSource(this.state.sourceCode[i][j])
         const lastObs = this.state.lastObservation[i][j]
         const lastObsTime = this.state.lastObsTime[i][j]
-        const staleness = lastObsTime > 0 ? (now - lastObsTime) / 60_000 : Infinity
+        // Staleness measured from session close when market is closed
+        const staleness = lastObsTime > 0 ? (stalenessRef - lastObsTime) / 60_000 : Infinity
 
         const cell: VolGridCell = {
           expiry: EXPIRY_LABELS[i],
@@ -317,7 +341,7 @@ export class VolSurfaceEngine {
           observationCount: this.state.observationCount[i][j],
           staleness: staleness === Infinity ? -1 : Math.round(staleness),
           stalenessCategory: computeStalenessCategory(
-            lastObsTime, now, source, this.stalenessConfig,
+            lastObsTime, stalenessRef, source, this.stalenessConfig, isSessionClosed,
           ),
 
           lastPropagatedFrom: this.state.lastPropagatedFrom[i][j],
@@ -330,6 +354,14 @@ export class VolSurfaceEngine {
       }
     }
 
+    const sessionInfo: MarketSessionInfo = {
+      status: session.status,
+      isMarketOpen: session.isMarketOpen,
+      tradingDate: session.tradingDate,
+      sessionLabel: session.sessionLabel,
+      shouldPoll: session.shouldPoll,
+    }
+
     return {
       cells,
       lastUpdateTime: now,
@@ -337,6 +369,7 @@ export class VolSurfaceEngine {
       filteredOutCount: this.filteredOutCount,
       curveInfo: this.curveInfo,
       priorSource: this.hasPrior() ? 'historical_median' : 'none',
+      session: sessionInfo,
     }
   }
 

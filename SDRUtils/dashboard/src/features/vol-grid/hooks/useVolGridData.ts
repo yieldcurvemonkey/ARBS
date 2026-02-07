@@ -1,12 +1,11 @@
-// ABOUTME: Hook for fetching vol grid surface data with polling.
+// ABOUTME: Hook for fetching vol grid surface data with session-aware polling.
+// Automatically disables polling when market is closed (weekends, after hours).
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   VolGridState,
   CalibrationObservation,
-  CalibrationFilterConfig,
-  ViewMode,
 } from '../types'
 
 const POLL_INTERVAL_MS = 5_000
@@ -15,7 +14,6 @@ type UseVolGridDataOptions = {
   presetName: string
   includePremium: boolean
   pollEnabled: boolean
-  lookbackMinutes?: number
   lengthScale?: number
   expiryWeight?: number
   tenorWeight?: number
@@ -35,7 +33,6 @@ export function useVolGridData(options: UseVolGridDataOptions): UseVolGridDataRe
     presetName,
     includePremium,
     pollEnabled,
-    lookbackMinutes = 480,
     lengthScale,
     expiryWeight,
     tenorWeight,
@@ -56,7 +53,6 @@ export function useVolGridData(options: UseVolGridDataOptions): UseVolGridDataRe
       const params = new URLSearchParams({
         calibration_preset: presetName,
         include_premium: includePremium ? 'true' : 'false',
-        lookback_minutes: String(lookbackMinutes),
       })
       if (lengthScale !== undefined) params.set('length_scale', String(lengthScale))
       if (expiryWeight !== undefined) params.set('expiry_weight', String(expiryWeight))
@@ -88,7 +84,7 @@ export function useVolGridData(options: UseVolGridDataOptions): UseVolGridDataRe
       setIsLoading(false)
       fetchInFlight.current = false
     }
-  }, [presetName, includePremium, lookbackMinutes, lengthScale, expiryWeight, tenorWeight])
+  }, [presetName, includePremium, lengthScale, expiryWeight, tenorWeight])
 
   // Initial fetch
   useEffect(() => {
@@ -96,12 +92,13 @@ export function useVolGridData(options: UseVolGridDataOptions): UseVolGridDataRe
     fetchSurface()
   }, [fetchSurface])
 
-  // Polling
+  // Polling — only when user wants it AND market session says to poll
+  const sessionShouldPoll = gridState?.session?.shouldPoll ?? true
   useEffect(() => {
-    if (!pollEnabled) return
+    if (!pollEnabled || !sessionShouldPoll) return
     const interval = setInterval(fetchSurface, POLL_INTERVAL_MS)
     return () => clearInterval(interval)
-  }, [pollEnabled, fetchSurface])
+  }, [pollEnabled, sessionShouldPoll, fetchSurface])
 
   return {
     gridState,
