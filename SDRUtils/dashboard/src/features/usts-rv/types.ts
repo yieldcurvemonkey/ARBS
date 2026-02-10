@@ -1,0 +1,90 @@
+export type UstsRvValueColumn =
+  | 'mmss'
+  | 'ytm'
+  | 'clean_price'
+  | 'dirty_price'
+  | 'mdur'
+  | 'coupon'
+
+export type UstsRvXColumn = 'ttm' | 'mdur'
+
+export type UstsRvSplineMethod = 'bspline' | 'loess'
+
+export type UstsRvSplineConfigRequest = {
+  id: string
+  enabled?: boolean
+  name?: string
+  method: UstsRvSplineMethod
+  valueColumn: UstsRvValueColumn
+  xColumn?: UstsRvXColumn
+  color?: string
+  lineWidth?: number
+  degree?: number
+  knots?: number[]
+  frac?: number
+  it?: number
+  delta?: number
+  excludeRanks?: number[]
+  pointCount?: number
+  xMin?: number | null
+  xMax?: number | null
+}
+
+export type UstsRvSnapshotRequest = {
+  asOf?: string
+  minTtm?: number
+  xColumn?: UstsRvXColumn
+  curveName?: string
+  includeValues?: UstsRvValueColumn[]
+  splineConfigs?: UstsRvSplineConfigRequest[]
+}
+
+export type UstsRvPoint = {
+  cusip: string
+  ust_label: string | null
+  oi: string | null
+  rank: number | null
+  ttm: number | null
+  mdur: number | null
+  ytm: number | null
+  mmss: number | null
+  clean_price: number | null
+  dirty_price: number | null
+  coupon: number | null
+  issue_date: string | null
+  maturity_date: string | null
+  market_timestamp: string | null
+}
+
+export type UstsRvSplineSeries = {
+  id: string
+  name: string
+  method: UstsRvSplineMethod
+  valueColumn: string
+  xColumn: string
+  color: string | null
+  lineWidth: number
+  fitCount: number
+  x: number[]
+  y: number[]
+  error: string | null
+}
+
+export type UstsRvSnapshotResponse = {
+  requestedAsOf: string
+  asOf: string
+  requestedLive: boolean
+  curveName: string
+  xColumn: UstsRvXColumn | string
+  includeValues: string[]
+  availableValueColumns: string[]
+  points: UstsRvPoint[]
+  splineSeries: UstsRvSplineSeries[]
+  meta: {
+    asOf: string
+    pointCount: number
+    curveName: string
+    warnings?: string[]
+  }
+}
+

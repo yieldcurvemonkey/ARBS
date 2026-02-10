@@ -32,6 +32,9 @@ export default function RootLayout({
                 <Link href="/vol-grid" className="hover:text-white">
                   Vol Grid
                 </Link>
+                <Link href="/usts-rv" className="hover:text-white">
+                  UST RV
+                </Link>
                 <span className="text-slate-500">
                   More coming soon
                 </span>
