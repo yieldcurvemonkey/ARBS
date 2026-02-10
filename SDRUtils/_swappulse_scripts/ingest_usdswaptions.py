@@ -416,6 +416,7 @@ CREATE INDEX IF NOT EXISTS idx_manual_links_manual_pkg ON {MANUAL_LINKS_TABLE}(m
 CREATE INDEX IF NOT EXISTS idx_link_history_link ON {LINK_HISTORY_TABLE}(link_id);
 
 CREATE OR REPLACE VIEW {DISPLAY_VIEW_V1} AS
+-- NOTE: Append new columns at the end to avoid CREATE OR REPLACE VIEW rename errors.
 SELECT
   p.package_id,
   p.package_type,
@@ -428,7 +429,6 @@ SELECT
   p.forward_label,
   p.legs_count,
   p.total_notional,
-  p.economic_notional,
   p.total_premium,
   p.package_indicator,
   p.package_transaction_price,
@@ -437,7 +437,8 @@ SELECT
   p.vega_curve_id,
   p.vega_curve_type,
   p.package_metrics,
-  l.legs_json
+  l.legs_json,
+  p.economic_notional
 FROM {PACKAGES_TABLE} p
 LEFT JOIN LATERAL (
     SELECT jsonb_agg(
@@ -462,6 +463,7 @@ LEFT JOIN LATERAL (
 ) l ON TRUE;
 
 CREATE OR REPLACE VIEW {DISPLAY_VIEW_V2} AS
+-- NOTE: Append new columns at the end to avoid CREATE OR REPLACE VIEW rename errors.
 SELECT
   p.package_id,
   p.package_type,
@@ -483,7 +485,6 @@ SELECT
   p.forward_label,
   p.legs_count,
   p.total_notional,
-  p.economic_notional,
   p.total_premium,
   p.package_indicator,
   p.package_transaction_price,
@@ -492,7 +493,8 @@ SELECT
   p.vega_curve_id,
   p.vega_curve_type,
   p.package_metrics,
-  l.legs_json
+  l.legs_json,
+  p.economic_notional
 FROM {PACKAGES_TABLE} p
 LEFT JOIN {MANUAL_LINKS_TABLE} ml
   ON p.manual_link_id = ml.link_id AND ml.is_active = TRUE
@@ -1379,7 +1381,7 @@ def main_incremental(
 
 
 def main_service(
-    interval_seconds: int = 60,
+    interval_seconds: int = 120,
     cache_path: Optional[str] = None,
     only_newt: bool = False,
     dry_run: bool = False,
@@ -1387,7 +1389,7 @@ def main_service(
     initial_lookback_minutes: int = 24 * 60,
     overlap_seconds: int = 0,
     smart_intervals: bool = True,
-    active_interval_seconds: int = 60,
+    active_interval_seconds: int = 120,
     inactive_interval_seconds: int = 10 * 60,
     active_window_start: str = "07:00",
     active_window_end: str = "18:00",
@@ -1574,13 +1576,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--interval-seconds",
         type=int,
-        default=_env_int("SWAPPULSE_INGEST_INTERVAL_SECONDS", 60),
+        default=_env_int("SWAPPULSE_INGEST_INTERVAL_SECONDS", 120),
         help="Service mode fallback polling interval when smart intervals are disabled.",
     )
     parser.add_argument(
         "--active-interval-seconds",
         type=int,
-        default=_env_int("SWAPPULSE_INGEST_ACTIVE_INTERVAL_SECONDS", 60),
+        default=_env_int("SWAPPULSE_INGEST_ACTIVE_INTERVAL_SECONDS", 120),
         help="Service mode interval during active market window.",
     )
     parser.add_argument(
