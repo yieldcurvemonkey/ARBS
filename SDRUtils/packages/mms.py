@@ -299,8 +299,15 @@ def _match_swaps_to_ust_by_maturity(
         return out
 
     # Load and build maturity map
-    ust_ref = _load_ust_reference_data(source=ust_ref_source, force_refresh=ust_force_refresh)
-    maturity_map = _build_maturity_to_ust_map(ust_ref)
+    try:
+        ust_ref = _load_ust_reference_data(source=ust_ref_source, force_refresh=ust_force_refresh)
+        if ust_ref.empty or "maturity_date" not in ust_ref.columns or "cusip" not in ust_ref.columns:
+            out["matched_ust_maturity"] = False
+            return out
+        maturity_map = _build_maturity_to_ust_map(ust_ref)
+    except Exception:
+        out["matched_ust_maturity"] = False
+        return out
 
     # Normalize swap maturity date
     swap_mat = _to_date_series(out.loc[m, swap_maturity_col])

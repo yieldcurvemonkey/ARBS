@@ -352,6 +352,7 @@ class USD_SOFR_SwapProduct(USDProductBase):
         detect_mac=True,
         detect_spreadover=True,
         ignore_cache: bool = False,
+        merge_package_legs: bool = False,
         **kwargs: Any,
     ):
         sdr = SDRDataBuilder(cache_path=cache_path, show_tqdm=True)
@@ -411,7 +412,8 @@ class USD_SOFR_SwapProduct(USDProductBase):
             if cached_frames:
                 final_df = pd.concat(cached_frames, ignore_index=True)
                 final_df = final_df[(final_df["execution_timestamp"] >= start.astimezone(pytz.utc)) & (final_df["execution_timestamp"] <= end.astimezone(pytz.utc))]
-                final_df = merge_package_legs_to_one_row(final_df)
+                if merge_package_legs:
+                    final_df = merge_package_legs_to_one_row(final_df)
                 final_df["risk"] = final_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))
                 final_df["risk"] = (final_df["risk"] / 100).round().mul(100)
                 return final_df
@@ -496,7 +498,8 @@ class USD_SOFR_SwapProduct(USDProductBase):
 
         final_df = pd.concat(all_frames, ignore_index=True)
         final_df = final_df[(final_df["execution_timestamp"] >= start.astimezone(pytz.utc)) & (final_df["execution_timestamp"] <= end.astimezone(pytz.utc))]
-        final_df = merge_package_legs_to_one_row(final_df)
+        if merge_package_legs:
+            final_df = merge_package_legs_to_one_row(final_df)
         final_df["risk"] = final_df["estimated_pv01"].apply(lambda x: float(str(x).split("/")[0]) if type(x) == str else float(x))
         final_df["risk"] = (final_df["risk"] / 100).round().mul(100)
         return final_df

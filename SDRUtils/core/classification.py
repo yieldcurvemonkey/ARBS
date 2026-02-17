@@ -65,7 +65,7 @@ class TradeClassification:
     is_notional_capped: bool
 
     # Estimated PV01 (per 1bp)
-    # estimated_pv01: float
+    estimated_pv01: Optional[float] = field(default=None, kw_only=True)
 
     # TODO support more packages
     # Package info

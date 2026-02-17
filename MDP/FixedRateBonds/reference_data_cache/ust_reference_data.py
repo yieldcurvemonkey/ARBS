@@ -2,7 +2,7 @@ import datetime
 import math
 import os
 from pathlib import Path
-from typing import Iterable, List, Literal, Optional, Union
+from typing import Any, Iterable, List, Literal, Optional, Union
 
 import pandas as pd
 import pyarrow as pa
@@ -38,35 +38,64 @@ def _cleanup_old_cache_dirs(root: Path, keep_last: int = 3) -> None:
         pass
 
 
+def _last_ust_govt_business_day(d: datetime.date) -> datetime.date:
+    cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    qd = ql.Date(d.day, d.month, d.year)
+    qd_adj = cal.adjust(qd, ql.Preceding)
+    return datetime.date(qd_adj.year(), qd_adj.month(), qd_adj.dayOfMonth())
+
+
+def _normalize_as_of(raw: Any) -> datetime.date:
+    if raw is None:
+        return _last_ust_govt_business_day(datetime.date.today())
+    if isinstance(raw, datetime.datetime):
+        return raw.date()
+    if isinstance(raw, datetime.date):
+        return raw
+    parsed = pd.to_datetime(raw, errors="coerce")
+    if pd.isna(parsed):
+        raise ValueError(f"Invalid as_of value: {raw!r}")
+    return parsed.date()
+
+
+def _coerce_to_dataframe(result: Any) -> pd.DataFrame:
+    if isinstance(result, tuple):
+        if not result:
+            return pd.DataFrame()
+        result = result[0]
+    if isinstance(result, pd.DataFrame):
+        return result
+    return pd.DataFrame(result)
+
+
 def update_reference_data(
     source: Literal["fiscaldata", "treasurydirect"],
-    source_kwargs={},
+    source_kwargs: Optional[dict] = None,
     force_refresh: bool = False,
 ) -> pd.DataFrame:
 
+    source_kwargs = dict(source_kwargs or {})
     cache_dir = _resolve_ust_cache_dir(source)
+    as_of: Optional[datetime.date] = None
 
     if source == "fiscaldata":
-
-        def _last_ust_govt_business_day(d: datetime.date) -> datetime.date:
-            cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
-            qd = ql.Date(d.day, d.month, d.year)
-            qd_adj = cal.adjust(qd, ql.Preceding)
-            return datetime.date(qd_adj.year(), qd_adj.month(), qd_adj.dayOfMonth())
-
         as_of = _last_ust_govt_business_day(datetime.date.today())
+    elif source == "treasurydirect":
+        as_of = _normalize_as_of(source_kwargs.get("as_of"))
+    else:
+        raise NotImplementedError(f"Source '{source}' is not implemented.")
 
-        today_dir = cache_dir / as_of.strftime("%Y-%m-%d")
-        today_dir.mkdir(parents=True, exist_ok=True)
+    as_of_dir = cache_dir / as_of.strftime("%Y-%m-%d")
+    as_of_dir.mkdir(parents=True, exist_ok=True)
+    file_path = as_of_dir / f"{as_of.strftime('%Y-%m-%d')}.parquet"
 
-        file_path = today_dir / f"{as_of.strftime('%Y-%m-%d')}.parquet"
+    if not force_refresh and file_path.exists():
+        try:
+            return pd.read_parquet(file_path)
+        except Exception:
+            pass
 
-        if not force_refresh and file_path.exists():
-            try:
-                return pd.read_parquet(file_path)
-            except Exception:
-                pass
-
+    if source == "fiscaldata":
         df = _fetch_fiscaldata(
             fetch_as_of="all",
             process_as_of=as_of,
@@ -77,12 +106,11 @@ def update_reference_data(
             append_soma_holdings=False,
         )
     elif source == "treasurydirect":
-        df = fetch_ust_refdata_treasurydirect(
-            as_of_date=source_kwargs["as_of"],
+        raw = fetch_ust_refdata_treasurydirect(
+            as_of_date=as_of,
             max_workers=12,
         )
-    else:
-        raise NotImplementedError(f"Source '{source}' is not implemented.")
+        df = _coerce_to_dataframe(raw)
 
     try:
         table = pa.Table.from_pandas(df, preserve_index=False)
