@@ -1,28 +1,22 @@
 import argparse
 import datetime
 import json
-import re
+import os
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote_plus
 
 import numpy as np
 import pandas as pd
 import QuantLib as ql
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
-from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
-from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
-from Query.IRSwaps.IRSwapQuery import IRSwapQuery
-from Query.IRSwaps.IRSwapValue import IRSwapValue
 from RVUtils.Interpolation.GeneralCurveInterpolator import GeneralCurveInterpolator
-from TB.FixedRateBondsTB import FixedRateBondsTB
-from TB.IRSwapsTB import IRSwapsTB
-from TB.TimeseriesBuilder import TimeseriesBuilder
 
 
-def _to_iso(val: Any):
-    if isinstance(val, (datetime.datetime, datetime.date)):
-        return val.isoformat()
-    return val
+POINTS_TABLE = "arbs_ust_rv_points_v1"
+AVAILABLE_VALUE_COLUMNS = ["mmss", "ytm", "clean_price", "dirty_price", "mdur", "coupon"]
 
 
 def _json_value(val: Any):
@@ -121,11 +115,6 @@ def _adjust_to_business_day(d: datetime.date) -> datetime.date:
     return datetime.date(probe.year(), probe.month(), probe.dayOfMonth())
 
 
-def _extract_cusip(text: str) -> Optional[str]:
-    match = re.search(r"\b[0-9A-Z]{9}\b", str(text or "").upper())
-    return match.group(0) if match else None
-
-
 def _normalize_knots(raw: Any, x_min: float, x_max: float) -> List[float]:
     if raw is None:
         return []
@@ -159,101 +148,219 @@ def _ensure_numeric_columns(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
     return out
 
 
-def _build_points_df(
-    as_of_date: datetime.date,
-    include_mmss: bool,
+def _ct_alias_from_rank_oi(rank: Any, oi: Any) -> Optional[str]:
+    try:
+        r = int(float(rank))
+    except Exception:
+        return None
+    if r != 0:
+        return None
+    import re
+
+    match = re.search(r"(\d{1,2})", str(oi or ""))
+    if not match:
+        return None
+    try:
+        tenor = int(match.group(1))
+    except Exception:
+        return None
+    if tenor <= 0:
+        return None
+    return f"CT{tenor}"
+
+
+def get_db_connection_string(override: Optional[str] = None) -> str:
+    if override and str(override).strip():
+        conn_string = str(override).strip()
+    else:
+        conn_string = ""
+        for key in ("SWAPPULSE_DATABASE_URL", "DATABASE_URL"):
+            raw = os.getenv(key)
+            if raw and raw.strip():
+                conn_string = raw.strip()
+                break
+
+    if conn_string:
+        if conn_string.startswith("postgres://"):
+            conn_string = "postgresql://" + conn_string[len("postgres://") :]
+        return conn_string
+
+    host = os.getenv("SWAPPULSE_DB_HOST", "").strip()
+    port = os.getenv("SWAPPULSE_DB_PORT", "5432").strip()
+    dbname = os.getenv("SWAPPULSE_DB_NAME", "postgres").strip()
+    user = os.getenv("SWAPPULSE_DB_USER", "").strip()
+    password = os.getenv("SWAPPULSE_DB_PASSWORD", "").strip()
+    sslmode = os.getenv("SWAPPULSE_DB_SSLMODE", "").strip()
+
+    if not host or not user or not password:
+        raise ValueError(
+            "Postgres connection is not configured. Set one of "
+            "SWAPPULSE_DATABASE_URL / DATABASE_URL, or set "
+            "SWAPPULSE_DB_HOST, SWAPPULSE_DB_USER, SWAPPULSE_DB_PASSWORD "
+            "(optionally SWAPPULSE_DB_PORT, SWAPPULSE_DB_NAME, SWAPPULSE_DB_SSLMODE)."
+        )
+
+    auth_user = quote_plus(user)
+    auth_password = quote_plus(password)
+    conn_string = f"postgresql://{auth_user}:{auth_password}@{host}:{port}/{dbname}"
+    if sslmode:
+        conn_string += f"?sslmode={sslmode}"
+    return conn_string
+
+
+def create_db_engine(connection_string: Optional[str] = None) -> Engine:
+    conn_string = get_db_connection_string(connection_string)
+    return create_engine(
+        conn_string,
+        pool_size=5,
+        max_overflow=10,
+        pool_timeout=30,
+        pool_recycle=1800,
+        pool_pre_ping=True,
+    )
+
+
+def _coerce_date(val: Any) -> Optional[datetime.date]:
+    if val is None:
+        return None
+    if isinstance(val, datetime.datetime):
+        return val.date()
+    if isinstance(val, datetime.date):
+        return val
+    try:
+        return datetime.date.fromisoformat(str(val))
+    except Exception:
+        return None
+
+
+def _load_points_df(
+    engine: Engine,
+    *,
+    target_as_of: datetime.date,
     curve_name: str,
     min_ttm: float,
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-QL")
+) -> Tuple[pd.DataFrame, Dict[str, Any], List[str]]:
+    warnings: List[str] = []
+    selected_as_of: Optional[datetime.date] = None
 
-    ref_df = usts_mdp.get_bond_reference_data(as_of_date=as_of_date).copy()
-    ref_df = ref_df.drop(columns=["record_date"], errors="ignore").rename(columns={"label": "ust_label"})
-    ref_df = _ensure_numeric_columns(ref_df, ["ttm", "rank", "cpn"])
-    ref_df = ref_df[ref_df["ttm"] >= min_ttm].copy()
-    ref_df["cusip"] = ref_df["cusip"].astype(str)
-    ref_df = ref_df.drop_duplicates(subset=["cusip"], keep="last")
+    with engine.begin() as conn:
+        selected_as_of_raw = conn.execute(
+            text(
+                f"""
+                SELECT MAX(as_of_date) AS as_of_date
+                FROM {POINTS_TABLE}
+                WHERE curve_name = :curve_name
+                  AND as_of_date <= :target_as_of
+                """
+            ),
+            {"curve_name": curve_name, "target_as_of": target_as_of},
+        ).scalar()
+        selected_as_of = _coerce_date(selected_as_of_raw)
 
-    ts_for_pricing: datetime.date | str = "live" if as_of_date == datetime.date.today() else as_of_date
-    pricers = usts_mdp.get_pricer(
-        request={
-            "cusips": ref_df["cusip"].tolist(),
-            "timestamp": ts_for_pricing,
-            "show_tqdm": False,
-        }
-    )
+        if selected_as_of is None:
+            latest_any_raw = conn.execute(
+                text(
+                    f"""
+                    SELECT MAX(as_of_date) AS as_of_date
+                    FROM {POINTS_TABLE}
+                    WHERE curve_name = :curve_name
+                    """
+                ),
+                {"curve_name": curve_name},
+            ).scalar()
+            selected_as_of = _coerce_date(latest_any_raw)
+            if selected_as_of is not None:
+                warnings.append(
+                    f"No DB snapshot found on/before {target_as_of.isoformat()}; using latest available {selected_as_of.isoformat()}."
+                )
 
-    metrics: List[Dict[str, Any]] = []
-    for cusip, pricer in pricers.items():
-        meta = {}
-        try:
-            meta = pricer.meta() or {}
-        except Exception:
-            meta = {}
+        if selected_as_of is None:
+            raise RuntimeError(
+                f"No UST RV snapshots found in table '{POINTS_TABLE}' for curve '{curve_name}'. "
+                "Run SDRUtils/_swappulse_scripts/ingest_ustrv.py first."
+            )
 
-        metrics.append(
+        if selected_as_of != target_as_of:
+            warnings.append(
+                f"Using DB snapshot asOf {selected_as_of.isoformat()} for requested {target_as_of.isoformat()}."
+            )
+
+        rows = conn.execute(
+            text(
+                f"""
+                SELECT
+                    cusip,
+                    oi,
+                    ust_label,
+                    rank,
+                    ttm,
+                    mdur,
+                    ytm,
+                    mmss,
+                    clean_price,
+                    dirty_price,
+                    coupon,
+                    issue_date,
+                    maturity_date,
+                    market_timestamp,
+                    snapshot_ts
+                FROM {POINTS_TABLE}
+                WHERE curve_name = :curve_name
+                  AND as_of_date = :as_of_date
+                  AND (ttm IS NULL OR ttm >= :min_ttm)
+                ORDER BY ttm NULLS LAST, oi NULLS LAST, rank NULLS LAST, cusip
+                """
+            ),
             {
-                "cusip": str(cusip),
-                "ytm": _safe_float(pricer.ytm() if hasattr(pricer, "ytm") else None),
-                "mdur": _safe_float(pricer.mod_duration() if hasattr(pricer, "mod_duration") else None),
-                "clean_price": _safe_float(pricer.clean_price() if hasattr(pricer, "clean_price") else None),
-                "dirty_price": _safe_float(pricer.dirty_price() if hasattr(pricer, "dirty_price") else None),
-                "market_timestamp": _to_iso(meta.get("timestamp")),
-            }
-        )
+                "curve_name": curve_name,
+                "as_of_date": selected_as_of,
+                "min_ttm": float(min_ttm),
+            },
+        ).mappings().all()
 
-    metrics_df = pd.DataFrame(metrics)
-    if metrics_df.empty:
-        merged_df = ref_df.copy()
-        merged_df["ytm"] = np.nan
-        merged_df["mdur"] = np.nan
-        merged_df["clean_price"] = np.nan
-        merged_df["dirty_price"] = np.nan
-        merged_df["market_timestamp"] = None
+    column_names = [
+        "cusip",
+        "oi",
+        "ust_label",
+        "rank",
+        "ttm",
+        "mdur",
+        "ytm",
+        "mmss",
+        "clean_price",
+        "dirty_price",
+        "coupon",
+        "issue_date",
+        "maturity_date",
+        "market_timestamp",
+        "snapshot_ts",
+    ]
+    if rows:
+        points_df = pd.DataFrame(rows)
     else:
-        merged_df = ref_df.merge(metrics_df, on="cusip", how="left")
+        points_df = pd.DataFrame(columns=column_names)
 
-    if include_mmss and not merged_df.empty:
-        swaps_mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC")
-        tb = TimeseriesBuilder(
-            irswaps_tb=IRSwapsTB(swaps_mdp),
-            fixedratebonds_tb=FixedRateBondsTB(usts_mdp),
-        )
-
-        queries = [IRSwapQuery(curve=curve_name, tenor=c, value=IRSwapValue.MMSS) for c in merged_df["cusip"].tolist()]
-        ts_df = tb.get_timeseries(
-            start=as_of_date,
-            end=as_of_date,
-            queries=queries,
-            n_jobs=5,
-        )
-
-        mmss_map: Dict[str, float] = {}
-        if ts_df is not None and not ts_df.empty:
-            latest = ts_df.iloc[-1]
-            for col_name, val in latest.items():
-                c = _extract_cusip(col_name)
-                fv = _safe_float(val)
-                if c and fv is not None:
-                    mmss_map[c] = fv
-
-        merged_df["mmss"] = merged_df["cusip"].map(mmss_map)
-    else:
-        merged_df["mmss"] = np.nan
-
-    merged_df["coupon"] = merged_df["cpn"] if "cpn" in merged_df.columns else np.nan
-    merged_df = _ensure_numeric_columns(
-        merged_df,
-        ["rank", "ttm", "coupon", "ytm", "mdur", "clean_price", "dirty_price", "mmss"],
+    points_df = _ensure_numeric_columns(
+        points_df,
+        ["rank", "ttm", "mdur", "ytm", "mmss", "clean_price", "dirty_price", "coupon"],
     )
-    merged_df = merged_df.sort_values(by=["ttm", "oi", "rank"], kind="mergesort")
+    if "cusip" in points_df.columns:
+        points_df["cusip"] = points_df["cusip"].astype(str)
+
+    latest_snapshot_ts = None
+    if "snapshot_ts" in points_df.columns and not points_df.empty:
+        try:
+            latest_snapshot_ts = pd.to_datetime(points_df["snapshot_ts"], errors="coerce").max()
+        except Exception:
+            latest_snapshot_ts = None
 
     meta = {
-        "asOf": as_of_date.isoformat(),
-        "pointCount": int(len(merged_df)),
+        "asOf": selected_as_of.isoformat(),
+        "pointCount": int(len(points_df)),
         "curveName": curve_name,
+        "snapshotTs": _json_value(latest_snapshot_ts),
     }
-    return merged_df, meta
+    return points_df, meta, warnings
 
 
 def _build_single_spline(
@@ -431,7 +538,7 @@ def _build_single_spline(
         }
 
 
-def build_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def build_payload(payload: Dict[str, Any], db_connection_string: Optional[str] = None) -> Dict[str, Any]:
     raw_as_of = payload.get("asOf")
     requested_date, requested_live = _parse_date(raw_as_of)
     effective_date = _adjust_to_business_day(requested_date)
@@ -446,13 +553,10 @@ def build_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     include_values = [str(v) for v in include_values]
 
     spline_cfgs = payload.get("splineConfigs") or []
-    include_mmss = ("mmss" in include_values) or any(
-        str(cfg.get("valueColumn") or "").lower() == "mmss" for cfg in spline_cfgs
-    )
-
-    points_df, base_meta = _build_points_df(
-        as_of_date=effective_date,
-        include_mmss=include_mmss,
+    engine = create_db_engine(db_connection_string)
+    points_df, base_meta, load_warnings = _load_points_df(
+        engine,
+        target_as_of=effective_date,
         curve_name=curve_name,
         min_ttm=min_ttm,
     )
@@ -464,6 +568,7 @@ def build_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "ust_label": _json_value(row.get("ust_label")),
             "oi": _json_value(row.get("oi")),
             "rank": _json_value(row.get("rank")),
+            "ct_alias": _json_value(_ct_alias_from_rank_oi(row.get("rank"), row.get("oi"))),
             "ttm": _json_value(row.get("ttm")),
             "mdur": _json_value(row.get("mdur")),
             "ytm": _json_value(row.get("ytm")),
@@ -488,15 +593,17 @@ def build_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     warnings: List[str] = []
     if requested_date != effective_date:
         warnings.append(f"Adjusted asOf from {requested_date.isoformat()} to prior business day {effective_date.isoformat()}.")
+    warnings.extend(load_warnings)
+    as_of_for_response = str(base_meta.get("asOf") or effective_date.isoformat())
 
     return {
         "requestedAsOf": requested_date.isoformat(),
-        "asOf": effective_date.isoformat(),
+        "asOf": as_of_for_response,
         "requestedLive": requested_live,
         "curveName": curve_name,
         "xColumn": x_column,
         "includeValues": include_values,
-        "availableValueColumns": ["mmss", "ytm", "clean_price", "dirty_price", "mdur", "coupon"],
+        "availableValueColumns": AVAILABLE_VALUE_COLUMNS,
         "points": points,
         "splineSeries": spline_series,
         "meta": {**base_meta, "warnings": warnings},
@@ -505,12 +612,21 @@ def build_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def main():
     parser = argparse.ArgumentParser(description="UST RV notebook endpoint: points + custom splines")
+    parser.add_argument(
+        "--database-url",
+        type=str,
+        default=os.getenv("SWAPPULSE_DATABASE_URL", os.getenv("DATABASE_URL")),
+        help=(
+            "Postgres connection URL. If omitted, resolves from "
+            "SWAPPULSE_DATABASE_URL, then DATABASE_URL, then SWAPPULSE_DB_* vars."
+        ),
+    )
     parser.add_argument("--payload", default=None, help="JSON payload. If omitted, read from stdin.")
     args = parser.parse_args()
 
     try:
         payload = _parse_payload(args.payload)
-        out = build_payload(payload)
+        out = build_payload(payload, db_connection_string=args.database_url)
         print(json.dumps(out, ensure_ascii=True))
     except Exception as exc:
         err = {

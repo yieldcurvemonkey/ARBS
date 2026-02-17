@@ -88,3 +88,42 @@ export type UstsRvSnapshotResponse = {
   }
 }
 
+export type UstsRvTimeseriesRequest = {
+  asOf?: string
+  curveName?: string
+  valueColumn: UstsRvValueColumn
+  cusips: string[]
+  startDate?: string
+  endDate?: string
+  lookbackDays?: number
+}
+
+export type UstsRvTimeseriesPoint = {
+  asOf: string
+  value: number | null
+  snapshotTs: string | null
+}
+
+export type UstsRvTimeseriesSeries = {
+  cusip: string
+  ust_label: string | null
+  oi: string | null
+  rank: number | null
+  points: UstsRvTimeseriesPoint[]
+}
+
+export type UstsRvTimeseriesResponse = {
+  requestedAsOf: string
+  asOf: string
+  requestedLive: boolean
+  curveName: string
+  valueColumn: UstsRvValueColumn
+  startDate: string | null
+  endDate: string | null
+  series: UstsRvTimeseriesSeries[]
+  meta: {
+    seriesCount: number
+    totalPoints: number
+    warnings?: string[]
+  }
+}
