@@ -2,6 +2,7 @@ from pathlib import Path
 import datetime
 from typing import Optional, Literal
 import os
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from pandas.tseries.holiday import USFederalHolidayCalendar
@@ -13,6 +14,9 @@ from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.FixingsFetcher import FixingsFetcher
 _PUBLISH_CAL = USFederalHolidayCalendar()
 _CBD = CustomBusinessDay(calendar=_PUBLISH_CAL)
 _KEEP_LAST_N_DATED_DIRS = 3  # retain recent caches for fallback
+_NY_TZ = ZoneInfo("America/New_York")
+_SOFR_PUBLISH_TIME_ET = datetime.time(hour=8, minute=0)
+_SOFR_CURVES = {"USD-SOFR-1D"}
 
 
 def _last_usbd_before(d: datetime.date) -> pd.Timestamp:
@@ -47,6 +51,46 @@ def _read_cached_if_valid(root: Path, curve_name: str, expected_dt: pd.Timestamp
             # ignore malformed/partial cache files
             continue
     return None
+
+
+def _latest_cache_refresh_time(root: Path) -> Optional[datetime.datetime]:
+    latest_mtime: Optional[float] = None
+    for p in root.rglob("*.csv"):
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        if latest_mtime is None or mtime > latest_mtime:
+            latest_mtime = mtime
+
+    if latest_mtime is None:
+        return None
+
+    return datetime.datetime.fromtimestamp(latest_mtime, tz=datetime.timezone.utc).astimezone(_NY_TZ)
+
+
+def _should_refresh_for_runtime_staleness(root: Path, curve_name: str, as_of_date: datetime.date) -> bool:
+    """
+    For SOFR, refresh same-day cache if the last cache refresh was before 8:00 ET.
+    This ensures a 6:00 ET cache snapshot is re-fetched after publication time.
+    """
+    curve_key = (curve_name or "").upper().strip()
+    if curve_key not in _SOFR_CURVES:
+        return False
+
+    now_et = datetime.datetime.now(tz=_NY_TZ)
+    if as_of_date != now_et.date():
+        return False
+
+    publish_cutoff = datetime.datetime.combine(now_et.date(), _SOFR_PUBLISH_TIME_ET, tzinfo=_NY_TZ)
+    if now_et < publish_cutoff:
+        return False
+
+    last_refresh = _latest_cache_refresh_time(root)
+    if last_refresh is None:
+        return True
+
+    return last_refresh < publish_cutoff
 
 
 def _cleanup_old_cache_dirs(root: Path, keep_last: int = _KEEP_LAST_N_DATED_DIRS) -> None:
@@ -106,18 +150,19 @@ def _fetch_fixings(
 ) -> pd.Series:
 
     if as_of_date == "live":
-        as_of_date = datetime.date.today()
+        as_of_date = datetime.datetime.now(tz=_NY_TZ).date()
 
     fixings_cache = _resolve_fixings_cache_dir(curve_name)
 
-    tday = datetime.date.today()
+    tday = datetime.datetime.now(tz=_NY_TZ).date()
     today_dir = fixings_cache / tday.strftime("%Y-%m-%d")
     today_dir.mkdir(parents=True, exist_ok=True)
 
     expected_dt = _last_usbd_before(as_of_date)
+    runtime_stale = _should_refresh_for_runtime_staleness(fixings_cache, curve_name, as_of_date)
 
     # If we have a valid cache anywhere (today or a recent prior day) and not force-refreshing, use it.
-    if not force_refresh:
+    if not force_refresh and not runtime_stale:
         cached = _read_cached_if_valid(fixings_cache, curve_name, expected_dt)
         if cached is not None:
             return cached

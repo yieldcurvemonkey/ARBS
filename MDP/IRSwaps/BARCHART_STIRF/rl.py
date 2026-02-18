@@ -183,7 +183,7 @@ class BARCHART_STIRF_CURVE:
         pricers: Dict[str, List[RLSTIRFuturePricer]] = self.stirf_mdp.get_data(
             {
                 "symbols": [
-                    # "SERCM1",
+                    "SERCM1",
                     "SERCM2",
                     "SERCM3",
                     "SERCM4",

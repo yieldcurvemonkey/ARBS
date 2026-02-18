@@ -19,6 +19,7 @@ import requests
 
 from Caching.ZODBCacheMixin import ZODBCacheMixin
 from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
+from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import (
     _imm_cutoff,
     _next_contracts,
@@ -349,10 +350,11 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
     # process-wide state so multiple instances reuse POP + fetcher/session
     _BARCHART_STATE: Dict[str, Any] = {}
 
-    def __init__(self, source: str = "WEBULL_STIRF-RL", **kwargs: Any):
+    def __init__(self, source: str = "WEBULL_STIRF-RL", force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
         ZODBCacheMixin.__init__(self)
 
+        self.force_refresh_fixings = force_refresh_fixings
         self._open_count = 0
         self._open_lock = threading.RLock()
         self._cache_ready = False
@@ -405,31 +407,60 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             return cache.get(key)
 
     # ----------------------------- pricer build ------------------------------
-    @staticmethod
-    def _build_pricer_from_args(args: Dict[str, Any]) -> RLSTIRFuturePricer:
+    def _is_sofr_symbol(self, sym: str) -> bool:
+        norm = _normalize_symbol(sym) or (sym or "").strip().upper().replace("/", "")
+        return norm.startswith("SR1") or norm.startswith("SR3")
+
+    def _reference_date_from_timestamp(self, ts: Any) -> datetime.date:
+        if isinstance(ts, str):
+            t = ts.strip()
+            if t.lower() == "live":
+                return datetime.date.today()
+            try:
+                return datetime.date.fromisoformat(t.split("T")[0])
+            except ValueError:
+                return pd.Timestamp(t).date()
+        if isinstance(ts, datetime.datetime):
+            return ts.date()
+        if isinstance(ts, datetime.date):
+            return ts
+        return datetime.date.today()
+
+    def _build_pricer_from_args(
+        self,
+        args: Dict[str, Any],
+        fixings_memo: Optional[Dict[Tuple[str, datetime.date], pd.Series]] = None,
+    ) -> RLSTIRFuturePricer:
         """
         Builds a RLSTIRFuturePricer from cached dictionary arguments.
         Resolves effective/maturity dates using the symbol helper.
         """
         sym = args["symbol"]
         price = float(args["price"])
-        timestamp_str = args["timestamp"]
-
-        # Parse timestamp from string (ISO) to date for the pricer
-        if isinstance(timestamp_str, str):
-            try:
-                ref_date = datetime.date.fromisoformat(timestamp_str.split("T")[0])
-            except ValueError:
-                # Fallback for pandas/other string formats
-                ref_date = pd.Timestamp(timestamp_str).date()
-        elif isinstance(timestamp_str, (datetime.date, datetime.datetime)):
-            ref_date = _as_date(timestamp_str)
-        else:
-            ref_date = datetime.date.today()
+        ref_date = self._reference_date_from_timestamp(args.get("timestamp"))
 
         # Use helper to get rateslib object just to extract correct dates/spec
         # This avoids duplicating the logic for IMM vs ZQ dates
         _, temp_stir = _stir_future_from_symbol(sym, price)
+
+        meta = dict(args)
+        if self._is_sofr_symbol(sym):
+            curve_name = "USD-SOFR-1D"
+            memo = fixings_memo if fixings_memo is not None else {}
+            memo_key = (curve_name, ref_date)
+            # try:
+            sofr_fixings = memo.get(memo_key)
+            if sofr_fixings is None:
+                sofr_fixings = _fetch_fixings(
+                    as_of_date=ref_date,
+                    curve_name=curve_name,
+                    force_refresh=self.force_refresh_fixings,
+                ).sort_index()
+                sofr_fixings = sofr_fixings[sofr_fixings.index.date <= ref_date] * 100
+                memo[memo_key] = sofr_fixings
+            meta["fixings"] = sofr_fixings
+            # except Exception:
+            #     pass
 
         return RLSTIRFuturePricer(
             rl_stirf_id=sym,
@@ -440,7 +471,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             rate=100.0 - price,
             contracts=1,
             notional=1_000_000,
-            meta_data=args,
+            meta_data=meta,
         )
 
     # ----------------------------- webull fetch ------------------------------
@@ -677,6 +708,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         self._ensure_pricer_cache()
 
         result: Dict[str, List[InstrumentLike]] = {}
+        fixings_memo: Dict[Tuple[str, datetime.date], pd.Series] = {}
 
         # For SER-FF spreads, accumulate legs here
         spread_legs: Dict[str, Dict[str, InstrumentLike]] = defaultdict(dict)
@@ -694,7 +726,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                     cache_key = f"{ts_iso}-{t}-{src}"
                     cached = None if not read_cache else self._threadsafe_cache_get(cache_key)
                     if cached is not None:
-                        insts.append(self._build_pricer_from_args(cached))
+                        insts.append(self._build_pricer_from_args(cached, fixings_memo=fixings_memo))
                     else:
                         to_fetch.setdefault(alias, []).append(t)
                 if insts:
@@ -713,7 +745,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 cache_key = f"{ts_iso}-{t}-{src}"
                 cached = None if not read_cache else self._threadsafe_cache_get(cache_key)
                 if cached is not None:
-                    spread_legs[alias][t] = self._build_pricer_from_args(cached)
+                    spread_legs[alias][t] = self._build_pricer_from_args(cached, fixings_memo=fixings_memo)
                 else:
                     to_fetch.setdefault(alias, []).append(t)
 
@@ -790,7 +822,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                     if cached is None:
                         continue
 
-                    insts.append(self._build_pricer_from_args(cached))
+                    insts.append(self._build_pricer_from_args(cached, fixings_memo=fixings_memo))
 
                 if insts:
                     result[alias] = insts
@@ -829,7 +861,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 if cached is None:
                     continue
 
-                spread_legs[alias][t] = self._build_pricer_from_args(cached)
+                spread_legs[alias][t] = self._build_pricer_from_args(cached, fixings_memo=fixings_memo)
 
             if len(spread_legs[alias]) == 2:
                 result[alias] = [spread_legs[alias][sr1_leg], spread_legs[alias][zq_leg]]
