@@ -307,6 +307,38 @@ def detect_spreadovers(package_df: pd.DataFrame):
     return copy_df
 
 
+def _coerce_numeric_like(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce")
+
+    normalized = (
+        series.astype("string")
+        .str.strip()
+        .str.replace(",", "", regex=False)
+        .str.replace("$", "", regex=False)
+        .str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+    )
+    normalized = normalized.where(~normalized.isin(["", "None", "none", "nan", "NaN"]), other=pd.NA)
+    return pd.to_numeric(normalized, errors="coerce")
+
+
+def _prepare_cache_dataframe_for_arrow(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    numeric_columns = [
+        "notional",
+        "tenor_years",
+        "forward_start_years",
+        "fixed_rate",
+        "estimated_pv01",
+        "package_transaction_spread",
+        "other_payment_amount",
+    ]
+    for col in numeric_columns:
+        if col in out.columns:
+            out[col] = _coerce_numeric_like(out[col])
+    return out
+
+
 class USD_SOFR_SwapProduct(USDProductBase):
     """
     USD SOFR OIS Swap product implementation.
@@ -480,6 +512,9 @@ class USD_SOFR_SwapProduct(USDProductBase):
                 package_df = detect_mac_swaps(package_df)
             if detect_spreadover:
                 package_df = detect_spreadovers(package_df)
+
+            # Normalize mixed object/string numerics before parquet serialization.
+            package_df = _prepare_cache_dataframe_for_arrow(package_df)
 
             count = len(day_df)
             date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"

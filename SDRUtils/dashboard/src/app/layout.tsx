@@ -4,7 +4,7 @@ import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Swaption Trade Tape",
+  title: "yieldcurvemonkey's jungle",
   description: "USD Swaptions SDR trade tape",
 };
 
@@ -20,14 +20,17 @@ export default function RootLayout({
           <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur">
             <div className="mx-auto flex max-w-[120rem] items-center justify-between px-4 py-4">
               <Link href="/" className="text-lg font-semibold tracking-tight">
-                Swaption Tape
+                yieldcurvemonkey&apos;s jungle
               </Link>
               <nav className="flex items-center gap-4 text-sm text-slate-300">
                 <Link href="/" className="hover:text-white">
                   Home
                 </Link>
                 <Link href="/swaptions-tape" className="hover:text-white">
-                  Tape
+                  USD Swaption Tape
+                </Link>
+                <Link href="/sofr-swaps" className="hover:text-white">
+                  USD SOFR Swaps Tape
                 </Link>
                 <Link href="/vol-grid" className="hover:text-white">
                   Vol Grid

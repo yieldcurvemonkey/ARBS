@@ -920,7 +920,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--service-backfill-days",
         type=int,
-        default=_env_int("SWAPPULSE_USTRV_SERVICE_BACKFILL_DAYS", 7),
+        default=_env_int("SWAPPULSE_USTRV_SERVICE_BACKFILL_DAYS", 2),
         help=(
             "Service mode only: on startup, reprocess this many calendar days "
             "of history (business-day filtered). Set to 0 to disable."
