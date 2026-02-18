@@ -4,6 +4,7 @@ from typing import Union, Any, Optional
 
 import rateslib as rl
 import numpy as np
+import pandas as pd
 
 from Query.STIRFutures._STIRFutureGenericPricer import _STIRFutureGenericPricer
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
@@ -215,6 +216,7 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
         notional: Optional[float] = None,
         bpv: Optional[float] = None,
         is_ser: Optional[bool] = False,
+        fixings: Optional[pd.Series] = None,
         **kwargs,
     ) -> rl.STIRFuture:
         if "SR1" in self._rl_stirf_id or "SER" in self._rl_stirf_id: 
@@ -272,5 +274,6 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
             spec=spec,
             price=p,
             contracts=int(c),
-            curves=self._curve
+            curves=self._curve,
+            leg2_fixings=fixings or self._meta_data.get("fixings", None),
         )
