@@ -4,6 +4,7 @@ Scrapes meeting schedules from:
 - Federal Reserve (FOMC): https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
 - ECB (Governing Council): https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html
 - Bank of Japan (MPM): https://www.boj.or.jp/en/mopo/mpmsche_minu/index.htm
+- Bank of England (MPC): https://www.bankofengland.co.uk/monetary-policy/upcoming-mpc-dates
 
 Results are cached to a local JSON file and only refetched when the cache is stale
 (default: 30 days). Hardcoded fallback dates are used when fetching fails.
@@ -350,6 +351,99 @@ def _fetch_boj_dates() -> List[datetime.date]:
 
 
 # ---------------------------------------------------------------------------
+# BOE fetcher
+# ---------------------------------------------------------------------------
+
+
+def _fetch_boe_dates() -> List[datetime.date]:
+    """Fetch Bank of England MPC announcement dates.
+
+    Returns the decision/announcement date for each MPC meeting, sorted
+    chronologically.  The BOE page lists upcoming years in tables preceded
+    by headings like "2026 confirmed dates" / "2027 provisional dates".
+    """
+    import requests
+
+    resp = requests.get(
+        "https://www.bankofengland.co.uk/monetary-policy/upcoming-mpc-dates",
+        timeout=_FETCH_TIMEOUT,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; ARBS)"},
+    )
+    resp.raise_for_status()
+    html = resp.text
+
+    meetings: List[datetime.date] = []
+
+    # The page contains year headings followed by tables.
+    # Strategy: find "<hN>YYYY ...</hN>" headings, then parse the next table.
+    # We split the HTML by tables and walk backwards to find the year heading.
+    tables = re.findall(r"<table.*?</table>", html, re.DOTALL)
+
+    for table in tables:
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table, re.DOTALL)
+
+        for row in rows:
+            cells = re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", row, re.DOTALL)
+            if not cells:
+                continue
+            first_cell = re.sub(r"<[^>]+>", " ", cells[0])
+            first_cell = re.sub(r"&nbsp;", " ", first_cell).strip()
+
+            # Skip non-MPC rows (cookie table, headers, etc.)
+            # MPC rows start with a day-of-week: "Thursday 5 February"
+            day_match = re.match(
+                r"(?:Monday|Tuesday|Wednesday|Thursday|Friday)\s+(\d{1,2})\s+(\w+)",
+                first_cell,
+            )
+            if not day_match:
+                continue
+
+            day = int(day_match.group(1))
+            month_str = day_match.group(2).lower()
+            month_num = _MONTH_FULL.get(month_str)
+            if month_num is None:
+                continue
+
+            meetings.append((month_num, day))
+
+    if not meetings:
+        return []
+
+    # Determine years from headings.
+    # The page has headings like "2026 confirmed dates" and "2027 provisional dates"
+    year_headings = re.findall(r"<h\d[^>]*>[^<]*?(\d{4})\s+(?:confirmed|provisional)", html)
+    years = [int(y) for y in year_headings]
+
+    if not years:
+        # Fallback: try to find any 4-digit year in headings
+        year_headings = re.findall(r"<h\d[^>]*>\s*(\d{4})", html)
+        years = sorted(set(int(y) for y in year_headings if 2020 <= int(y) <= 2040))
+
+    # Associate meetings with years.
+    # The BOE has 8 meetings per year, and each table corresponds to one year.
+    # Tables appear in the same order as the year headings.
+    result: List[datetime.date] = []
+    meeting_idx = 0
+    for year in years:
+        # Count how many meetings likely belong to this year (8 per year typically)
+        year_meetings = []
+        while meeting_idx < len(meetings):
+            month_num, day = meetings[meeting_idx]
+            # Sanity check: if we've already assigned 8+ meetings to this year,
+            # the rest likely belong to the next year
+            if len(year_meetings) >= 8:
+                break
+            try:
+                year_meetings.append(datetime.date(year, month_num, day))
+            except ValueError:
+                pass
+            meeting_idx += 1
+        result.extend(year_meetings)
+
+    return sorted(result)
+
+
+# ---------------------------------------------------------------------------
 # Meeting map builder
 # ---------------------------------------------------------------------------
 
@@ -389,12 +483,14 @@ _CURVE_TO_CB = {
     "USD-FEDFUNDS": "FOMC",
     "EUR-ESTR": "ECB",
     "JPY-TONA": "BOJ",
+    "GBP-SONIA": "BOE",
 }
 
 _CB_FETCHERS = {
     "FOMC": _fetch_fomc_dates,
     "ECB": _fetch_ecb_dates,
     "BOJ": _fetch_boj_dates,
+    "BOE": _fetch_boe_dates,
 }
 
 
