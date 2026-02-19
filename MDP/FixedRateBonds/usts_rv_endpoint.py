@@ -16,7 +16,7 @@ from RVUtils.Interpolation.GeneralCurveInterpolator import GeneralCurveInterpola
 
 
 POINTS_TABLE = "arbs_ust_rv_points_v1"
-AVAILABLE_VALUE_COLUMNS = ["mmss", "ytm", "clean_price", "dirty_price", "mdur", "coupon"]
+AVAILABLE_VALUE_COLUMNS = ["mmss", "ytm", "clean_price", "dirty_price", "mdur", "coupon", "carry_bps", "roll_bps", "carry_and_roll_bps"]
 
 
 def _json_value(val: Any):
@@ -297,6 +297,9 @@ def _load_points_df(
                     mdur,
                     ytm,
                     mmss,
+                    carry_bps,
+                    roll_bps,
+                    carry_and_roll_bps,
                     clean_price,
                     dirty_price,
                     coupon,
@@ -327,6 +330,9 @@ def _load_points_df(
         "mdur",
         "ytm",
         "mmss",
+        "carry_bps",
+        "roll_bps",
+        "carry_and_roll_bps",
         "clean_price",
         "dirty_price",
         "coupon",
@@ -342,7 +348,7 @@ def _load_points_df(
 
     points_df = _ensure_numeric_columns(
         points_df,
-        ["rank", "ttm", "mdur", "ytm", "mmss", "clean_price", "dirty_price", "coupon"],
+        ["rank", "ttm", "mdur", "ytm", "mmss", "carry_bps", "roll_bps", "carry_and_roll_bps", "clean_price", "dirty_price", "coupon"],
     )
     if "cusip" in points_df.columns:
         points_df["cusip"] = points_df["cusip"].astype(str)
@@ -573,6 +579,9 @@ def build_payload(payload: Dict[str, Any], db_connection_string: Optional[str] =
             "mdur": _json_value(row.get("mdur")),
             "ytm": _json_value(row.get("ytm")),
             "mmss": _json_value(row.get("mmss")),
+            "carry_bps": _json_value(row.get("carry_bps")),
+            "roll_bps": _json_value(row.get("roll_bps")),
+            "carry_and_roll_bps": _json_value(row.get("carry_and_roll_bps")),
             "clean_price": _json_value(row.get("clean_price")),
             "dirty_price": _json_value(row.get("dirty_price")),
             "coupon": _json_value(row.get("coupon")),

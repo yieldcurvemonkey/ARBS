@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS {POINTS_TABLE} (
     mdur NUMERIC,
     ytm NUMERIC,
     mmss NUMERIC,
+    carry_bps NUMERIC,
+    roll_bps NUMERIC,
+    carry_and_roll_bps NUMERIC,
     clean_price NUMERIC,
     dirty_price NUMERIC,
     coupon NUMERIC,
@@ -71,6 +74,9 @@ NUMERIC_COLUMNS: tuple[str, ...] = (
     "mdur",
     "ytm",
     "mmss",
+    "carry_bps",
+    "roll_bps",
+    "carry_and_roll_bps",
     "clean_price",
     "dirty_price",
     "coupon",
@@ -187,6 +193,10 @@ def ensure_schema(engine: Engine) -> None:
             stmt = statement.strip()
             if stmt:
                 conn.execute(text(stmt))
+        for col in ("carry_bps", "roll_bps", "carry_and_roll_bps"):
+            conn.execute(text(
+                f"ALTER TABLE {POINTS_TABLE} ADD COLUMN IF NOT EXISTS {col} NUMERIC"
+            ))
 
 
 def _pythonify(val: Any) -> Any:
@@ -405,8 +415,37 @@ def build_points_dataframe(
                 if cusip and fv is not None:
                     mmss_map[cusip] = fv
         merged_df["mmss"] = merged_df["cusip"].map(mmss_map)
+
+        cusip_list = merged_df["cusip"].tolist()
+        cr_values = {
+            "carry_bps": IRSwapValue.CARRY_BPS_RUNNING,
+            "roll_bps": IRSwapValue.ROLL_BPS_RUNNING,
+            "carry_and_roll_bps": IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING,
+        }
+        for col_name, ir_value in cr_values.items():
+            cr_queries = [
+                IRSwapQuery(curve=curve_name, tenor=c, value=ir_value, value_kwargs={"horizon": "3m"})
+                for c in cusip_list
+            ]
+            try:
+                cr_df = tb.get_timeseries(start=as_of_date, end=as_of_date, queries=cr_queries, n_jobs=5)
+                cr_map: Dict[str, float] = {}
+                if cr_df is not None and not cr_df.empty:
+                    latest = cr_df.iloc[-1]
+                    for cn, val in latest.items():
+                        cusip = _extract_cusip_from_query_name(cn)
+                        fv = _safe_float(val)
+                        if cusip and fv is not None:
+                            cr_map[cusip] = fv
+                merged_df[col_name] = merged_df["cusip"].map(cr_map)
+            except Exception as exc:
+                print(f"Warning: {col_name} computation failed: {exc}")
+                merged_df[col_name] = np.nan
     else:
         merged_df["mmss"] = np.nan
+        merged_df["carry_bps"] = np.nan
+        merged_df["roll_bps"] = np.nan
+        merged_df["carry_and_roll_bps"] = np.nan
 
     merged_df["coupon"] = merged_df["cpn"] if "cpn" in merged_df.columns else np.nan
     merged_df = _ensure_numeric_columns(merged_df, NUMERIC_COLUMNS)
@@ -421,6 +460,9 @@ def build_points_dataframe(
         "mdur",
         "ytm",
         "mmss",
+        "carry_bps",
+        "roll_bps",
+        "carry_and_roll_bps",
         "clean_price",
         "dirty_price",
         "coupon",
@@ -474,7 +516,8 @@ def ingest_snapshot(
         f"Snapshot {as_of_date} ({curve_name}): "
         f"points={len(points_df)} "
         f"otrs={int((points_df['rank'] == 0).sum())} "
-        f"mmss_non_null={int(points_df['mmss'].notna().sum())}"
+        f"mmss_non_null={int(points_df['mmss'].notna().sum())} "
+        f"carry_non_null={int(points_df['carry_bps'].notna().sum())}"
     )
 
     if dry_run:
@@ -494,6 +537,9 @@ def ingest_snapshot(
             "mdur",
             "ytm",
             "mmss",
+            "carry_bps",
+            "roll_bps",
+            "carry_and_roll_bps",
             "clean_price",
             "dirty_price",
             "coupon",
