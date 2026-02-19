@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import warnings
 from datetime import datetime, timedelta
 from functools import reduce
@@ -69,6 +70,19 @@ class BarchartFetcher(BaseFetcher):
     _current_laravel_token: str = None
     _current_xsrf_token: str = None
     _BARCHART_MAX_RECORD = 5_000
+    _STIR_ROOT_CODE_RE = re.compile(r"^(SR[13]|SFR|SER|FF|ZQ|SQ|SL|RA|EB)([FGHJKMNQUVXZ]\d{2})$", re.IGNORECASE)
+    _STIR_ROOT_TO_BARCHART = {
+        "SR3": "SQ",
+        "SFR": "SQ",
+        "SQ": "SQ",
+        "SR1": "SL",
+        "SER": "SL",
+        "SL": "SL",
+        "ZQ": "ZQ",
+        "FF": "ZQ",
+        "RA": "RA",  # Eurex 3M ESTR
+        "EB": "EB",  # ICE 3M ESTR
+    }
 
     def __init__(
         self,
@@ -87,6 +101,15 @@ class BarchartFetcher(BaseFetcher):
             warning_verbose=warning_verbose,
             error_verbose=error_verbose,
         )
+
+    @classmethod
+    def _normalize_barchart_symbol(cls, symbol: str) -> str:
+        s = (symbol or "").strip().upper().replace("/", "")
+        m = cls._STIR_ROOT_CODE_RE.match(s)
+        if not m:
+            return s
+        root, code = m.group(1).upper(), m.group(2).upper()
+        return f"{cls._STIR_ROOT_TO_BARCHART.get(root, root)}{code}"
 
     def _get_new_session_token(self, dummy_symbol: Optional[str] = "BTC") -> Tuple[str, str]:
         """
@@ -448,6 +471,8 @@ class BarchartFetcher(BaseFetcher):
         show_tqdm: Optional[bool] = True,
         merge_val_col: Optional[Literal["Open", "High", "Low", "Close", "Volume", "Open Interest"]] = "Close",
     ):
+        barchart_symbols = [self._normalize_barchart_symbol(s) for s in barchart_symbols]
+
         async def build_eod_tasks(
             client: httpx.AsyncClient,
             barchart_symbols: List[str],

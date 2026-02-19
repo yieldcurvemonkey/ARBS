@@ -75,6 +75,8 @@ def _to_barchart_symbol(sym: str) -> str:
         return "SQ" + s[3:]
     if s.startswith("SR1"):
         return "SL" + s[3:]
+    if s.startswith("RA") or s.startswith("EB"):
+        return s
     return s
 
 
@@ -84,6 +86,8 @@ def _from_barchart_symbol(sym: str) -> str:
         return "SR3" + s[2:]
     if s.startswith("SL"):
         return "SR1" + s[2:]
+    if s.startswith("RA") or s.startswith("EB"):
+        return s
     return s
 
 
@@ -97,7 +101,7 @@ def _normalize_symbol(sym: str) -> Optional[str]:
         return f"SR3{s}"
 
     # Accept internal + common aliases + barchart roots
-    m = re.match(r"^(SR[13]|SFR|SER|FF|ZQ|SQ|SL)([FGHJKMNQUVXZ]\d{2})$", s)
+    m = re.match(r"^(SR[13]|SFR|SER|FF|ZQ|SQ|SL|RA|EB)([FGHJKMNQUVXZ]\d{2})$", s)
     if m:
         root, code = m.groups()
         root = root.replace("SFR", "SR3").replace("SER", "SR1").replace("FF", "ZQ").replace("SQ", "SR3").replace("SL", "SR1")
@@ -218,13 +222,13 @@ def _resolve_aliases_bulk(symbols: Iterable[str], timestamp: DateLike) -> "Order
                 continue
 
             # Constant maturity rank: CM1, CM2... Optional root prefix.
-            m_cm = re.match(r"^(?P<prefix>(sr[13]|sfr|ser|ff|zq|sq|sl)?)cm(?P<rank>\d+)$", lower)
+            m_cm = re.match(r"^(?P<prefix>(sr[13]|sfr|ser|ff|zq|sq|sl|ra|eb)?)cm(?P<rank>\d+)$", lower)
             if m_cm:
                 rank = int(m_cm.group("rank"))
                 prefix = (m_cm.group("prefix") or "SR3").upper()
                 root = prefix.replace("SFR", "SR3").replace("SER", "SR1").replace("FF", "ZQ").replace("SQ", "SR3").replace("SL", "SR1")
-                valid_months = [3, 6, 9, 12] if root.startswith("SR3") else list(range(1, 13))
-                cutoff = _imm_cutoff if root.startswith("SR3") else None
+                valid_months = [3, 6, 9, 12] if (root.startswith("SR3") or root in {"RA", "EB"}) else list(range(1, 13))
+                cutoff = _imm_cutoff if (root.startswith("SR3") or root in {"RA", "EB"}) else None
                 contracts = _next_contracts(as_of, prefix=root, count=max(rank, 1), valid_months=valid_months, cutoff_fn=cutoff)
                 aliases[alias] = [contracts[rank - 1]]
                 continue
@@ -283,13 +287,31 @@ def _stir_future_from_symbol(sym: str, price: float) -> Tuple[str, rl.STIRFuture
 
     effective = rl.scheduling.get_imm(code=code)
     termination = rl.scheduling.next_imm(effective)
+    spec = "eur_stir" if root in {"RA", "EB"} else "usd_stir"
     stir = rl.STIRFuture(
         effective=effective,
         termination=termination,
-        spec="usd_stir",
+        spec=spec,
         price=price,
     )
     return norm, stir
+
+
+def _curve_from_symbol(sym: str) -> Optional[str]:
+    norm = _normalize_symbol(sym)
+    if not norm:
+        return None
+    m = re.match(r"^(?P<root>SR[13]|ZQ|RA|EB)(?P<code>[FGHJKMNQUVXZ]\d{2})$", norm)
+    if not m:
+        return None
+    root = m.group("root")
+    if root in {"SR1", "SR3"}:
+        return "USD-SOFR-1D"
+    if root == "ZQ":
+        return "USD-FEDFUNDS"
+    if root in {"RA", "EB"}:
+        return "EUR-ESTR"
+    return None
 
 
 def _build_socks5h(host: str) -> dict:
@@ -355,6 +377,10 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         ZODBCacheMixin.__init__(self)
 
         self.force_refresh_fixings = force_refresh_fixings
+        self.cache_full_intraday_fetch = bool(kwargs.get("cache_full_intraday_fetch", False))
+        self._schwab_app_key = kwargs.get("schwab_app_key") or os.getenv("SCHWABDEV_APP_KEY") or os.getenv("SCHWAB_APP_KEY") or "zm3GYiQREbtrpBHACURcNzFJIObUq2aX"
+        self._schwab_app_secret = kwargs.get("schwab_app_secret") or os.getenv("SCHWABDEV_APP_SECRET") or os.getenv("SCHWAB_APP_SECRET") or "SznUHXvKPZUnmxG9"
+        self._schwab_scope = kwargs.get("schwab_scope", "pystonk")
         self._open_count = 0
         self._open_lock = threading.RLock()
         self._cache_ready = False
@@ -438,14 +464,14 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         sym = args["symbol"]
         price = float(args["price"])
         ref_date = self._reference_date_from_timestamp(args.get("timestamp"))
+        curve_name = _curve_from_symbol(sym)
 
         # Use helper to get rateslib object just to extract correct dates/spec
         # This avoids duplicating the logic for IMM vs ZQ dates
         _, temp_stir = _stir_future_from_symbol(sym, price)
 
         meta = dict(args)
-        if self._is_sofr_symbol(sym):
-            curve_name = "USD-SOFR-1D"
+        if curve_name == "USD-SOFR-1D":
             memo = fixings_memo if fixings_memo is not None else {}
             memo_key = (curve_name, ref_date)
             # try:
@@ -467,6 +493,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             reference_date=ref_date,
             effective_date=temp_stir.__dict__["kwargs"]["effective"].date(),
             maturity_date=temp_stir.__dict__["kwargs"]["termination"].date(),
+            curve=curve_name,
             price=price,
             rate=100.0 - price,
             contracts=1,
@@ -575,13 +602,25 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         show_tqdm: bool,
         interval: Optional[Literal[1, 5, 10, 15, 30, 60, 120, 240]],
         window_minutes: int = 2,
+        full_day_intraday: bool = False,
     ) -> pd.DataFrame:
         chi = pytz.timezone("America/Chicago")
         ts_chi = ts_dt.astimezone(chi)
 
+        def _cme_session_bounds(anchor: datetime.datetime) -> Tuple[datetime.datetime, datetime.datetime]:
+            # CME rates futures trade ~23h/day with a maintenance break around 16:00-17:00 CT.
+            session_open = anchor.replace(hour=17, minute=0, second=0, microsecond=0)
+            if anchor < session_open:
+                session_open = session_open - datetime.timedelta(days=1)
+            start_local = session_open
+            end_local = session_open + datetime.timedelta(hours=23)
+            return start_local, end_local
+
         if interval is None:
             start = chi.localize(datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day, 0, 1))
             end = chi.localize(datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day, 23, 59))
+        elif full_day_intraday:
+            start, end = _cme_session_bounds(ts_chi)
         else:
             start = ts_chi - datetime.timedelta(minutes=window_minutes)
             end = ts_chi + datetime.timedelta(minutes=window_minutes)
@@ -641,11 +680,28 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
 
         df = df.copy()
         df.columns = [_from_barchart_symbol(c) for c in df.columns]
+        if full_day_intraday and interval is not None and int(interval) == 1:
+            # In full-session mode we want cache keys for every minute, not only
+            # minutes where Barchart returned a print.
+            if isinstance(df.index, pd.DatetimeIndex):
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize(chi)
+                full_index = pd.date_range(start=start, end=end, freq="1min", tz=df.index.tz)
+                if len(full_index):
+                    df = df.sort_index()
+                    df = df.reindex(df.index.union(full_index)).sort_index().ffill().bfill()
+                    df = df.loc[full_index]
         return df
 
     def _fetch_tos_live_quotes(self, tickers: List[str], ts_dt: datetime.datetime) -> pd.DataFrame:
         tos_map = {t: _to_tos_symbol(t) for t in tickers}
-        quotes = get_quotes(symbols=list(tos_map.values()))
+        quote_kwargs: Dict[str, Any] = {"symbols": list(tos_map.values())}
+        if self._schwab_app_key and self._schwab_app_secret:
+            quote_kwargs["app_key"] = self._schwab_app_key
+            quote_kwargs["app_secret"] = self._schwab_app_secret
+            quote_kwargs["scope"] = self._schwab_scope
+
+        quotes = get_quotes(**quote_kwargs)
         if not quotes:
             return pd.DataFrame()
 
@@ -691,6 +747,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         *,
         show_tqdm: bool = False,
         force_refresh: bool = False,
+        cache_full_intraday_fetch: bool = False,
     ) -> Dict[str, List[InstrumentLike]]:
         ts_dt = _as_datetime(timestamp)
         alias_map = _resolve_aliases_bulk(symbols, timestamp)
@@ -698,12 +755,15 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             raise ValueError("No valid symbols resolved from request.")
 
         src = self.source.upper()
-        if src not in {"WEBULL_STIRF-RL", "BARCHART_STIRF-RL", "BARCHART_TOS_LIVE_STIRF-RL"}:
+        live_quote_sources = {"BARCHART_TOS_LIVE_STIRF-RL", "SCHWAB_APP_STIRF-RL"}
+        if src not in {"WEBULL_STIRF-RL", "BARCHART_STIRF-RL", *live_quote_sources}:
             raise NotImplementedError(f"Unsupported source {self.source}")
 
         want_eod = isinstance(timestamp, datetime.date) and not isinstance(timestamp, datetime.datetime)
-        use_live = src == "BARCHART_TOS_LIVE_STIRF-RL" and _should_use_live_quotes(timestamp)
+        use_live = src in live_quote_sources and _should_use_live_quotes(timestamp)
         read_cache = not force_refresh and not use_live
+        use_barchart_intraday = src != "WEBULL_STIRF-RL" and not want_eod and not use_live
+        floor_req_to_minute = cache_full_intraday_fetch and use_barchart_intraday
 
         self._ensure_pricer_cache()
 
@@ -713,9 +773,45 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         # For SER-FF spreads, accumulate legs here
         spread_legs: Dict[str, Dict[str, InstrumentLike]] = defaultdict(dict)
 
+        def _cache_ts_iso(ts_like: Any, *, floor_minute: bool) -> str:
+            ts_obj = pd.Timestamp(ts_like)
+            # Normalize Barchart intraday cache keys to UTC so equivalent instants
+            # from different tz representations map to the same key.
+            if use_barchart_intraday and ts_obj.tzinfo is not None:
+                ts_obj = ts_obj.tz_convert(pytz.UTC)
+            if floor_minute:
+                ts_obj = ts_obj.floor("min")
+            return ts_obj.isoformat()
+
         # ---------- pass 1: cache hit ----------
         to_fetch: "OrderedDict[str, List[str]]" = OrderedDict()
-        ts_iso = pd.Timestamp(ts_dt).isoformat()
+        ts_exact_local_iso = pd.Timestamp(ts_dt).isoformat()
+        ts_floor_local_iso = pd.Timestamp(ts_dt).floor("min").isoformat()
+        req_ts_key_candidates: List[str] = []
+
+        def _push_key(k: str) -> None:
+            if k and k not in req_ts_key_candidates:
+                req_ts_key_candidates.append(k)
+
+        _push_key(_cache_ts_iso(ts_dt, floor_minute=floor_req_to_minute))
+        if use_barchart_intraday:
+            # Always probe canonical UTC cache keys so a cache primed with
+            # cache_full_intraday_fetch=True can be reused even if a later call
+            # omits the flag.
+            _push_key(_cache_ts_iso(ts_dt, floor_minute=True))
+            _push_key(_cache_ts_iso(ts_dt, floor_minute=False))
+        # Legacy/local key variants for backward compatibility.
+        _push_key(ts_exact_local_iso)
+        _push_key(ts_floor_local_iso)
+
+        def _get_cached_request_key(ticker: str):
+            if not read_cache:
+                return None
+            for ts_key in req_ts_key_candidates:
+                cached_local = self._threadsafe_cache_get(f"{ts_key}-{ticker}-{src}")
+                if cached_local is not None:
+                    return cached_local
+            return None
 
         for alias, tickers in alias_map.items():
             is_spread = _is_serff_spread_alias(alias)
@@ -723,8 +819,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             if not is_spread:
                 insts: List[InstrumentLike] = []
                 for t in tickers:
-                    cache_key = f"{ts_iso}-{t}-{src}"
-                    cached = None if not read_cache else self._threadsafe_cache_get(cache_key)
+                    cached = _get_cached_request_key(t)
                     if cached is not None:
                         insts.append(self._build_pricer_from_args(cached, fixings_memo=fixings_memo))
                     else:
@@ -742,8 +837,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
 
             sr1_leg, zq_leg = legs
             for t in [sr1_leg, zq_leg]:
-                cache_key = f"{ts_iso}-{t}-{src}"
-                cached = None if not read_cache else self._threadsafe_cache_get(cache_key)
+                cached = _get_cached_request_key(t)
                 if cached is not None:
                     spread_legs[alias][t] = self._build_pricer_from_args(cached, fixings_memo=fixings_memo)
                 else:
@@ -764,7 +858,13 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 price_df = self._fetch_tos_live_quotes(all_missing, ts_dt)
             else:
                 interval = None if want_eod else 1
-                price_df = self._fetch_barchart_timeseries(all_missing, ts_dt, show_tqdm=show_tqdm, interval=interval)
+                price_df = self._fetch_barchart_timeseries(
+                    all_missing,
+                    ts_dt,
+                    show_tqdm=show_tqdm,
+                    interval=interval,
+                    full_day_intraday=floor_req_to_minute,
+                )
 
             price_df = price_df.ffill().bfill()
             if price_df.empty:
@@ -775,14 +875,14 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 for t in price_df.columns:
                     series = price_df[t].dropna()
                     for curr_ts, px in series.items():
+                        curr_ts_iso = _cache_ts_iso(curr_ts, floor_minute=floor_req_to_minute)
                         args = {
                             "symbol": t,
                             "price": float(px),
-                            "timestamp": curr_ts.isoformat() if hasattr(curr_ts, "isoformat") else str(curr_ts),
+                            "timestamp": curr_ts_iso,
                             "schema": 1,
                         }
-                        cache_key = f"{curr_ts.isoformat()}-{t}-{src}"
-                        self._threadsafe_cache_put(cache_key, args)
+                        self._threadsafe_cache_put(f"{curr_ts_iso}-{t}-{src}", args)
 
         # ---------- pass 2: build outputs from cache / fetched ----------
         for alias, tickers in to_fetch.items():
@@ -791,8 +891,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             if not is_spread:
                 insts: List[InstrumentLike] = list(result.get(alias, []))  # type: ignore[assignment]
                 for t in tickers:
-                    cache_key = f"{ts_iso}-{t}-{src}"
-                    cached = None if not read_cache else self._threadsafe_cache_get(cache_key)
+                    cached = _get_cached_request_key(t)
 
                     if cached is None and not price_df.empty and t in price_df:
                         series = price_df[t].dropna()
@@ -805,17 +904,15 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                         args = {
                             "symbol": t,
                             "price": float(series.loc[idx]),
-                            "timestamp": idx.isoformat() if hasattr(idx, "isoformat") else str(idx),
+                            "timestamp": _cache_ts_iso(idx, floor_minute=floor_req_to_minute),
                             "schema": 1,
                         }
 
-                        idx_iso = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)
+                        idx_iso = _cache_ts_iso(idx, floor_minute=floor_req_to_minute)
                         if not use_live:
-                            cache_key2 = f"{idx_iso}-{t}-{src}"
-                            self._threadsafe_cache_put(cache_key2, args)
-
-                            cache_key_req = f"{ts_iso}-{t}-{src}"
-                            self._threadsafe_cache_put(cache_key_req, args)
+                            self._threadsafe_cache_put(f"{idx_iso}-{t}-{src}", args)
+                            for req_ts_key in req_ts_key_candidates:
+                                self._threadsafe_cache_put(f"{req_ts_key}-{t}-{src}", args)
 
                         cached = args
 
@@ -838,8 +935,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 if t in spread_legs[alias]:
                     continue
 
-                cache_key = f"{ts_iso}-{t}-{src}"
-                cached = None if not read_cache else self._threadsafe_cache_get(cache_key)
+                cached = _get_cached_request_key(t)
 
                 if cached is None and not price_df.empty and t in price_df:
                     series = price_df[t].dropna()
@@ -850,12 +946,14 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                     args = {
                         "symbol": t,
                         "price": float(series.loc[idx]),
-                        "timestamp": idx.isoformat() if hasattr(idx, "isoformat") else str(idx),
+                        "timestamp": _cache_ts_iso(idx, floor_minute=floor_req_to_minute),
                         "schema": 1,
                     }
                     if not use_live:
-                        cache_key2 = f"{idx.isoformat()}-{t}-{src}"
-                        self._threadsafe_cache_put(cache_key2, args)
+                        idx_iso = _cache_ts_iso(idx, floor_minute=floor_req_to_minute)
+                        self._threadsafe_cache_put(f"{idx_iso}-{t}-{src}", args)
+                        for req_ts_key in req_ts_key_candidates:
+                            self._threadsafe_cache_put(f"{req_ts_key}-{t}-{src}", args)
                     cached = args
 
                 if cached is None:
@@ -877,6 +975,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         timestamp: DateLike = request.get("timestamp", "live")
         show_tqdm = bool(request.get("show_tqdm", False))
         force_refresh = bool(request.get("force_refresh", False))
+        cache_full_intraday_fetch = bool(request.get("cache_full_intraday_fetch", self.cache_full_intraday_fetch))
 
         if not symbols:
             raise ValueError("Request must include 'symbols' or 'tickers'.")
@@ -887,6 +986,41 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                 timestamp,
                 show_tqdm=show_tqdm,
                 force_refresh=force_refresh,
+                cache_full_intraday_fetch=cache_full_intraday_fetch,
+            )
+
+    def get_bulk_pricer(self, request: Dict[str, Any]) -> Dict[DateLike, Dict[str, List[InstrumentLike]]]:
+        return self.get_bulk_data(request)
+
+    def get_bulk_data(self, request: Dict[str, Any]) -> Dict[DateLike, Dict[str, List[InstrumentLike]]]:
+        symbols = _clean_symbols(request.get("symbols") or request.get("tickers") or [])
+        timestamps_raw = request.get("timestamps", None)
+        show_tqdm = bool(request.get("show_tqdm", False))
+        force_refresh = bool(request.get("force_refresh", False))
+        max_workers = int(request.get("max_workers", 8))
+        cache_full_intraday_fetch = bool(request.get("cache_full_intraday_fetch", self.cache_full_intraday_fetch))
+
+        if not symbols:
+            raise ValueError("Request must include 'symbols' or 'tickers'.")
+        if timestamps_raw is None:
+            raise ValueError("Request must include 'timestamps'.")
+
+        if isinstance(timestamps_raw, (str, datetime.date, datetime.datetime)):
+            timestamps: List[DateLike] = [timestamps_raw]
+        else:
+            timestamps = list(timestamps_raw)
+
+        if not timestamps:
+            raise ValueError("Request 'timestamps' is empty.")
+
+        with self:
+            return self.bulk_get_data(
+                timestamps=timestamps,
+                symbols=symbols,
+                show_tqdm=show_tqdm,
+                force_refresh=force_refresh,
+                max_workers=max_workers,
+                cache_full_intraday_fetch=cache_full_intraday_fetch,
             )
 
     def bulk_get_data(
@@ -897,6 +1031,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         show_tqdm: bool = False,
         force_refresh: bool = False,
         max_workers: int = 8,
+        cache_full_intraday_fetch: bool = False,
     ) -> Dict[DateLike, Dict[str, List[InstrumentLike]]]:
         jobs: List[Tuple[DateLike, List[str]]] = []
         base_symbols = _clean_symbols(symbols)
@@ -908,7 +1043,13 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         with self:
 
             def _process_one(ts: DateLike, syms: List[str]):
-                return ts, self._get_data_for_timestamp(syms, ts, show_tqdm=show_tqdm, force_refresh=force_refresh)
+                return ts, self._get_data_for_timestamp(
+                    syms,
+                    ts,
+                    show_tqdm=show_tqdm,
+                    force_refresh=force_refresh,
+                    cache_full_intraday_fetch=cache_full_intraday_fetch,
+                )
 
             if max_workers == 1 or len(jobs) == 1:
                 iterable = jobs
