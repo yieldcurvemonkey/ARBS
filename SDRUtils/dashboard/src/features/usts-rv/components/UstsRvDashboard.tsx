@@ -12,6 +12,7 @@ import type {
   UstsRvValueColumn,
   UstsRvXColumn
 } from '@/features/usts-rv/types'
+import { ouCalibrate, simulateOUBands, type OUCalibration } from '@/features/usts-rv/ou'
 
 const VALUE_OPTIONS: Array<{ key: UstsRvValueColumn; label: string }> = [
   { key: 'mmss', label: 'MMSS' },
@@ -19,7 +20,10 @@ const VALUE_OPTIONS: Array<{ key: UstsRvValueColumn; label: string }> = [
   { key: 'clean_price', label: 'Clean Price' },
   { key: 'dirty_price', label: 'Dirty Price' },
   { key: 'mdur', label: 'Mod Duration' },
-  { key: 'coupon', label: 'Coupon' }
+  { key: 'coupon', label: 'Coupon' },
+  { key: 'carry_bps', label: 'Carry (bps)' },
+  { key: 'roll_bps', label: 'Roll (bps)' },
+  { key: 'carry_and_roll_bps', label: 'Carry + Roll (bps)' }
 ]
 
 const X_OPTIONS: Array<{ key: UstsRvXColumn; label: string }> = [
@@ -48,7 +52,10 @@ const VALUE_SYMBOLS: Record<UstsRvValueColumn, string> = {
   clean_price: 'square',
   dirty_price: 'cross',
   mdur: 'triangle-up',
-  coupon: 'triangle-down'
+  coupon: 'triangle-down',
+  carry_bps: 'star',
+  roll_bps: 'hexagram',
+  carry_and_roll_bps: 'pentagon'
 }
 
 type PlotViewport = {
@@ -903,6 +910,8 @@ export default function UstsRvDashboard() {
   >([])
   const [didLoadSavedQuickSpreadPresets, setDidLoadSavedQuickSpreadPresets] =
     useState(false)
+  const [showMeanReversion, setShowMeanReversion] = useState(false)
+  const [ouForwardSteps, setOuForwardSteps] = useState(126)
   const [viewport, setViewport] = useState<PlotViewport>({
     xRange: null,
     yRange: null,
@@ -1410,6 +1419,41 @@ export default function UstsRvDashboard() {
       .filter((series): series is TimeseriesFormulaSeries => Boolean(series))
   }, [timeseries, formulaConfigs])
 
+  type OUStatEntry = {
+    seriesLabel: string
+    calibration: OUCalibration
+  }
+
+  const ouStats = useMemo((): OUStatEntry[] => {
+    if (!showMeanReversion || !timeseries) return []
+    const entries: OUStatEntry[] = []
+    const hiddenSet = new Set(timeseriesHiddenCusips)
+
+    for (const series of timeseries.series ?? []) {
+      if (hiddenSet.has(series.cusip)) continue
+      const values = series.points
+        .map((p) => p.value)
+        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+      const cal = ouCalibrate(values)
+      if (cal) {
+        const label = `${series.cusip}${series.ust_label ? ` (${series.ust_label})` : ''}`
+        entries.push({ seriesLabel: label, calibration: cal })
+      }
+    }
+
+    for (const formula of timeseriesFormulaSeries) {
+      const values = formula.points
+        .map((p) => p.value)
+        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+      const cal = ouCalibrate(values)
+      if (cal) {
+        entries.push({ seriesLabel: `F: ${formula.name}`, calibration: cal })
+      }
+    }
+
+    return entries
+  }, [showMeanReversion, timeseries, timeseriesHiddenCusips, timeseriesFormulaSeries])
+
   const formulaWarnings = useMemo(() => {
     if (!formulaConfigs.length) return []
     const builtById = new Map(timeseriesFormulaSeries.map((series) => [series.id, series]))
@@ -1483,7 +1527,10 @@ export default function UstsRvDashboard() {
             point.ttm ?? '--',
             point.mdur ?? '--',
             point.market_timestamp ?? '--',
-            valueColumn.toUpperCase()
+            valueColumn.toUpperCase(),
+            typeof point.carry_bps === 'number' ? point.carry_bps.toFixed(2) : '--',
+            typeof point.roll_bps === 'number' ? point.roll_bps.toFixed(2) : '--',
+            typeof point.carry_and_roll_bps === 'number' ? point.carry_and_roll_bps.toFixed(2) : '--'
           ]),
           marker: {
             color: oiColor,
@@ -1503,6 +1550,9 @@ export default function UstsRvDashboard() {
             'TTM %{customdata[4]}<br>' +
             'MDur %{customdata[5]}<br>' +
             '%{customdata[7]} %{y:.4f}<br>' +
+            'Carry %{customdata[8]} bps<br>' +
+            'Roll %{customdata[9]} bps<br>' +
+            'C+R %{customdata[10]} bps<br>' +
             'Market TS %{customdata[6]}<extra></extra>'
         })
 
@@ -1523,7 +1573,10 @@ export default function UstsRvDashboard() {
               point.rank ?? '--',
               point.ttm ?? '--',
               point.mdur ?? '--',
-              valueColumn.toUpperCase()
+              valueColumn.toUpperCase(),
+              typeof point.carry_bps === 'number' ? point.carry_bps.toFixed(2) : '--',
+              typeof point.roll_bps === 'number' ? point.roll_bps.toFixed(2) : '--',
+              typeof point.carry_and_roll_bps === 'number' ? point.carry_and_roll_bps.toFixed(2) : '--'
             ]),
             marker: {
               color: oiColor,
@@ -1543,7 +1596,10 @@ export default function UstsRvDashboard() {
               'Rank %{customdata[3]}<br>' +
               'TTM %{customdata[4]}<br>' +
               'MDur %{customdata[5]}<br>' +
-              '%{customdata[6]} %{y:.4f}<extra></extra>'
+              '%{customdata[6]} %{y:.4f}<br>' +
+              'Carry %{customdata[7]} bps<br>' +
+              'Roll %{customdata[8]} bps<br>' +
+              'C+R %{customdata[9]} bps<extra></extra>'
           })
         }
       }
@@ -1784,6 +1840,144 @@ export default function UstsRvDashboard() {
       })
     }
 
+    // OU mean-reversion bands
+    if (showMeanReversion) {
+      const clampedSteps = Math.max(5, Math.min(504, ouForwardSteps))
+      let ouBandIndex = 0
+
+      const addOUBands = (
+        seriesValues: Array<number | null>,
+        seriesDates: string[],
+        yaxis: TimeseriesAxis,
+        label: string
+      ) => {
+        const cleanValues = seriesValues.filter(
+          (v): v is number => typeof v === 'number' && Number.isFinite(v)
+        )
+        const cal = ouCalibrate(cleanValues)
+        if (!cal) return
+
+        const lastDate = seriesDates[seriesDates.length - 1]
+        const lastValue = cleanValues[cleanValues.length - 1]
+        if (!lastDate || lastValue === undefined) return
+
+        const bands = simulateOUBands(lastValue, cal.mu, cal.kappa, cal.sigma, clampedSteps, lastDate)
+        const bandDates = bands.map((b) => b.date)
+        const bandMean = bands.map((b) => b.mean)
+        const bandP1 = bands.map((b) => b.plus1Sigma)
+        const bandM1 = bands.map((b) => b.minus1Sigma)
+        const bandP2 = bands.map((b) => b.plus2Sigma)
+        const bandM2 = bands.map((b) => b.minus2Sigma)
+
+        // Mean trace
+        out.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: `OU Mean: ${label}`,
+          x: bandDates,
+          y: bandMean,
+          yaxis,
+          line: { color: '#94a3b8', width: 1.5, dash: 'dash' },
+          showlegend: ouBandIndex === 0,
+          legendgroup: 'ou-bands',
+          hovertemplate: `OU Mean ${label}<br>%{y:.4f}<br>%{x}<extra></extra>`
+        })
+
+        // +1/-1 sigma bands
+        out.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: `OU +1\u03c3`,
+          x: bandDates,
+          y: bandP1,
+          yaxis,
+          line: { color: 'rgba(251, 191, 36, 0.5)', width: 1, dash: 'dot' },
+          showlegend: false,
+          legendgroup: 'ou-bands',
+          hoverinfo: 'skip'
+        })
+        out.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: `OU -1\u03c3`,
+          x: bandDates,
+          y: bandM1,
+          yaxis,
+          fill: 'tonexty',
+          fillcolor: 'rgba(251, 191, 36, 0.06)',
+          line: { color: 'rgba(251, 191, 36, 0.5)', width: 1, dash: 'dot' },
+          showlegend: false,
+          legendgroup: 'ou-bands',
+          hoverinfo: 'skip'
+        })
+
+        // +2/-2 sigma bands
+        out.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: `OU +2\u03c3`,
+          x: bandDates,
+          y: bandP2,
+          yaxis,
+          line: { color: 'rgba(248, 113, 113, 0.4)', width: 1, dash: 'dot' },
+          showlegend: false,
+          legendgroup: 'ou-bands',
+          hoverinfo: 'skip'
+        })
+        out.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: `OU -2\u03c3`,
+          x: bandDates,
+          y: bandM2,
+          yaxis,
+          fill: 'tonexty',
+          fillcolor: 'rgba(248, 113, 113, 0.04)',
+          line: { color: 'rgba(248, 113, 113, 0.4)', width: 1, dash: 'dot' },
+          showlegend: false,
+          legendgroup: 'ou-bands',
+          hoverinfo: 'skip'
+        })
+
+        ouBandIndex++
+      }
+
+      // Add OU bands for base series
+      for (let idx = 0; idx < (timeseries.series ?? []).length; idx += 1) {
+        const series = timeseries.series[idx]
+        if (hiddenCusips.has(series.cusip)) continue
+        const yaxis: TimeseriesAxis = timeseriesRightAxisCusips.includes(series.cusip) ? 'y2' : 'y'
+        const values = series.points.map((p) =>
+          typeof p.value === 'number' && Number.isFinite(p.value) ? p.value : null
+        )
+        const dates = series.points.map((p) => p.asOf)
+        addOUBands(values, dates, yaxis, series.cusip)
+      }
+
+      // Add OU bands for formula series
+      for (const formula of timeseriesFormulaSeries) {
+        const values = formula.points.map((p) =>
+          typeof p.value === 'number' && Number.isFinite(p.value) ? p.value : null
+        )
+        const dates = formula.points.map((p) => p.asOf)
+        addOUBands(values, dates, formula.yaxis, formula.name)
+      }
+
+      // Legend entry for OU bands
+      if (ouBandIndex > 0) {
+        out.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: `OU Bands (${clampedSteps}d)`,
+          x: [null],
+          y: [null],
+          line: { color: '#94a3b8', width: 1.5, dash: 'dash' },
+          showlegend: true,
+          legendgroup: 'ou-bands'
+        })
+      }
+    }
+
     return out
   }, [
     timeseries,
@@ -1791,7 +1985,9 @@ export default function UstsRvDashboard() {
     valueColumn,
     timeseriesRightAxisCusips,
     timeseriesHiddenCusips,
-    timeseriesFormulaSeries
+    timeseriesFormulaSeries,
+    showMeanReversion,
+    ouForwardSteps
   ])
 
   const hasTimeseriesSecondaryAxis = useMemo(
@@ -2439,7 +2635,82 @@ export default function UstsRvDashboard() {
             />
             EMA 50
           </label>
+          <span className="mx-2 text-slate-600">|</span>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={showMeanReversion}
+              onChange={(e) => setShowMeanReversion(e.target.checked)}
+            />
+            Mean Reversion (OU)
+          </label>
+          {showMeanReversion && (
+            <label className="flex items-center gap-1 text-xs text-slate-400">
+              Fwd Steps
+              <input
+                type="number"
+                min={5}
+                max={504}
+                step={1}
+                value={ouForwardSteps}
+                onChange={(e) => {
+                  const v = Math.max(5, Math.min(504, Number(e.target.value) || 126))
+                  setOuForwardSteps(v)
+                }}
+                className="ml-1 w-16 rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-xs text-slate-200"
+              />
+            </label>
+          )}
         </div>
+
+        {showMeanReversion && ouStats.length > 0 && (
+          <div className="mt-3 rounded-lg border border-slate-800 bg-slate-900/65 p-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+              OU Mean Reversion Stats
+            </div>
+            <div className="mt-2 overflow-x-auto">
+              <table className="min-w-full text-left text-xs text-slate-300">
+                <thead className="text-slate-400">
+                  <tr>
+                    <th className="px-2 py-1">Series</th>
+                    <th className="px-2 py-1">Z</th>
+                    <th className="px-2 py-1">Half-Life</th>
+                    <th className="px-2 py-1">Mu</th>
+                    <th className="px-2 py-1">Kappa</th>
+                    <th className="px-2 py-1">Sigma</th>
+                    <th className="px-2 py-1">Phi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ouStats.map((entry) => {
+                    const absZ = Math.abs(entry.calibration.zScore)
+                    const zColor =
+                      absZ > 2
+                        ? 'text-rose-400 font-semibold'
+                        : absZ > 1
+                          ? 'text-amber-400'
+                          : 'text-slate-300'
+                    return (
+                      <tr key={entry.seriesLabel} className="border-t border-slate-800">
+                        <td className="px-2 py-1 font-medium">{entry.seriesLabel}</td>
+                        <td className={`px-2 py-1 ${zColor}`}>
+                          {entry.calibration.zScore.toFixed(2)}
+                        </td>
+                        <td className="px-2 py-1">
+                          {entry.calibration.halfLife.toFixed(1)}d
+                        </td>
+                        <td className="px-2 py-1">{entry.calibration.mu.toFixed(4)}</td>
+                        <td className="px-2 py-1">{entry.calibration.kappa.toFixed(4)}</td>
+                        <td className="px-2 py-1">{entry.calibration.sigma.toFixed(4)}</td>
+                        <td className="px-2 py-1">{entry.calibration.phi.toFixed(4)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {!!timeseriesWarnings.length && (
           <div className="mt-3 rounded-md border border-amber-800 bg-amber-950/40 p-3 text-xs text-amber-200">
@@ -2491,6 +2762,9 @@ export default function UstsRvDashboard() {
                 <th className="px-2 py-1">MMSS</th>
                 <th className="px-2 py-1">YTM</th>
                 <th className="px-2 py-1">Clean Px</th>
+                <th className="px-2 py-1">Carry</th>
+                <th className="px-2 py-1">Roll</th>
+                <th className="px-2 py-1">C+R</th>
               </tr>
             </thead>
             <tbody>
@@ -2519,11 +2793,26 @@ export default function UstsRvDashboard() {
                       ? row.clean_price.toFixed(3)
                       : '--'}
                   </td>
+                  <td className="px-2 py-1">
+                    {typeof row.carry_bps === 'number'
+                      ? row.carry_bps.toFixed(2)
+                      : '--'}
+                  </td>
+                  <td className="px-2 py-1">
+                    {typeof row.roll_bps === 'number'
+                      ? row.roll_bps.toFixed(2)
+                      : '--'}
+                  </td>
+                  <td className="px-2 py-1">
+                    {typeof row.carry_and_roll_bps === 'number'
+                      ? row.carry_and_roll_bps.toFixed(2)
+                      : '--'}
+                  </td>
                 </tr>
               ))}
               {tableRows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-2 py-3 text-slate-500">
+                  <td colSpan={11} className="px-2 py-3 text-slate-500">
                     No bonds in current viewport.
                   </td>
                 </tr>

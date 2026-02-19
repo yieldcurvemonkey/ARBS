@@ -5,6 +5,9 @@ export type UstsRvValueColumn =
   | 'dirty_price'
   | 'mdur'
   | 'coupon'
+  | 'carry_bps'
+  | 'roll_bps'
+  | 'carry_and_roll_bps'
 
 export type UstsRvXColumn = 'ttm' | 'mdur'
 
@@ -51,6 +54,9 @@ export type UstsRvPoint = {
   clean_price: number | null
   dirty_price: number | null
   coupon: number | null
+  carry_bps: number | null
+  roll_bps: number | null
+  carry_and_roll_bps: number | null
   issue_date: string | null
   maturity_date: string | null
   market_timestamp: string | null

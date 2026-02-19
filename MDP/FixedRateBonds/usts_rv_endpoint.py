@@ -16,7 +16,7 @@ from RVUtils.Interpolation.GeneralCurveInterpolator import GeneralCurveInterpola
 
 
 POINTS_TABLE = "arbs_ust_rv_points_v1"
-AVAILABLE_VALUE_COLUMNS = ["mmss", "ytm", "clean_price", "dirty_price", "mdur", "coupon"]
+AVAILABLE_VALUE_COLUMNS = ["mmss", "ytm", "clean_price", "dirty_price", "mdur", "coupon", "carry_bps", "roll_bps", "carry_and_roll_bps"]
 
 
 def _json_value(val: Any):
@@ -300,6 +300,9 @@ def _load_points_df(
                     clean_price,
                     dirty_price,
                     coupon,
+                    carry_bps,
+                    roll_bps,
+                    carry_and_roll_bps,
                     issue_date,
                     maturity_date,
                     market_timestamp,
@@ -330,6 +333,9 @@ def _load_points_df(
         "clean_price",
         "dirty_price",
         "coupon",
+        "carry_bps",
+        "roll_bps",
+        "carry_and_roll_bps",
         "issue_date",
         "maturity_date",
         "market_timestamp",
@@ -342,7 +348,7 @@ def _load_points_df(
 
     points_df = _ensure_numeric_columns(
         points_df,
-        ["rank", "ttm", "mdur", "ytm", "mmss", "clean_price", "dirty_price", "coupon"],
+        ["rank", "ttm", "mdur", "ytm", "mmss", "clean_price", "dirty_price", "coupon", "carry_bps", "roll_bps", "carry_and_roll_bps"],
     )
     if "cusip" in points_df.columns:
         points_df["cusip"] = points_df["cusip"].astype(str)
@@ -576,6 +582,9 @@ def build_payload(payload: Dict[str, Any], db_connection_string: Optional[str] =
             "clean_price": _json_value(row.get("clean_price")),
             "dirty_price": _json_value(row.get("dirty_price")),
             "coupon": _json_value(row.get("coupon")),
+            "carry_bps": _json_value(row.get("carry_bps")),
+            "roll_bps": _json_value(row.get("roll_bps")),
+            "carry_and_roll_bps": _json_value(row.get("carry_and_roll_bps")),
             "issue_date": _json_value(row.get("issue_date")),
             "maturity_date": _json_value(row.get("maturity_date")),
             "market_timestamp": _json_value(row.get("market_timestamp")),

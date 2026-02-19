@@ -65,6 +65,12 @@ CREATE INDEX IF NOT EXISTS idx_ust_rv_points_snapshot ON {POINTS_TABLE}(snapshot
 CREATE INDEX IF NOT EXISTS idx_ust_rv_runs_date ON {RUNS_TABLE}(as_of_date, ingestion_started_at DESC);
 """
 
+MIGRATE_CARRY_ROLL_SQL = f"""
+ALTER TABLE {POINTS_TABLE} ADD COLUMN IF NOT EXISTS carry_bps NUMERIC;
+ALTER TABLE {POINTS_TABLE} ADD COLUMN IF NOT EXISTS roll_bps NUMERIC;
+ALTER TABLE {POINTS_TABLE} ADD COLUMN IF NOT EXISTS carry_and_roll_bps NUMERIC;
+"""
+
 NUMERIC_COLUMNS: tuple[str, ...] = (
     "rank",
     "ttm",
@@ -74,6 +80,9 @@ NUMERIC_COLUMNS: tuple[str, ...] = (
     "clean_price",
     "dirty_price",
     "coupon",
+    "carry_bps",
+    "roll_bps",
+    "carry_and_roll_bps",
 )
 
 
@@ -184,6 +193,11 @@ def create_db_engine(connection_string: Optional[str] = None) -> Engine:
 def ensure_schema(engine: Engine) -> None:
     with engine.begin() as conn:
         for statement in SCHEMA_SQL.split(";"):
+            stmt = statement.strip()
+            if stmt:
+                conn.execute(text(stmt))
+    with engine.begin() as conn:
+        for statement in MIGRATE_CARRY_ROLL_SQL.split(";"):
             stmt = statement.strip()
             if stmt:
                 conn.execute(text(stmt))
@@ -325,6 +339,106 @@ def delete_stale_points(
     return int(res.rowcount or 0)
 
 
+def _load_sofr_fixing_pct(as_of_date: datetime.date) -> Optional[float]:
+    """Load the latest SOFR fixing strictly before as_of_date, in percent units."""
+    try:
+        from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
+
+        fixings = _fetch_fixings(as_of_date=as_of_date, curve_name="USD-SOFR-1D")
+        if fixings is None or fixings.empty:
+            return None
+        idx = pd.to_datetime(fixings.index, errors="coerce")
+        mask = idx < pd.Timestamp(as_of_date)
+        valid = fixings[mask]
+        if valid.empty:
+            return None
+        latest_val = float(valid.iloc[-1])
+        if np.isnan(latest_val) or np.isinf(latest_val):
+            return None
+        # Normalize: if returned as decimal (e.g. 0.0435), convert to percent (4.35)
+        if abs(latest_val) < 1.0:
+            latest_val = latest_val * 100.0
+        return latest_val
+    except Exception as exc:
+        print(f"[carry/roll] SOFR fixing load failed: {exc}")
+        return None
+
+
+def _fit_roll_spline(ttm: np.ndarray, ytm: np.ndarray):
+    """Fit a B-spline on (ttm, ytm) cross-section, return callable or None."""
+    try:
+        from RVUtils.Interpolation.GeneralCurveInterpolator import GeneralCurveInterpolator
+
+        # Deduplicate by ttm
+        df_fit = pd.DataFrame({"ttm": ttm, "ytm": ytm}).dropna()
+        if df_fit.empty:
+            return None
+        dedup = df_fit.groupby("ttm", as_index=False)["ytm"].mean().sort_values("ttm")
+        n_unique = len(dedup)
+        if n_unique < 3:
+            return None
+        x = dedup["ttm"].to_numpy(dtype=float)
+        y = dedup["ytm"].to_numpy(dtype=float)
+        k = min(3, n_unique - 1)
+        interpolator = GeneralCurveInterpolator(x=x, y=y)
+        spline_func = interpolator.b_spline1_interpolation(k=k, return_func=True)
+        return spline_func, float(np.nanmin(x)), float(np.nanmax(x))
+    except Exception as exc:
+        print(f"[carry/roll] Spline fit failed: {exc}")
+        return None
+
+
+def _compute_carry_roll_columns(df: pd.DataFrame, as_of_date: datetime.date) -> pd.DataFrame:
+    """Add carry_bps, roll_bps, carry_and_roll_bps columns to the dataframe."""
+    HORIZON_YEARS = 0.25  # 3 month horizon
+
+    out = df.copy()
+    out["carry_bps"] = np.nan
+    out["roll_bps"] = np.nan
+    out["carry_and_roll_bps"] = np.nan
+
+    # --- Carry: (coupon - SOFR) * horizon * 100 bps ---
+    sofr_pct = _load_sofr_fixing_pct(as_of_date)
+    if sofr_pct is not None and "coupon" in out.columns:
+        coupon_vals = pd.to_numeric(out["coupon"], errors="coerce")
+        carry = (coupon_vals - sofr_pct) * HORIZON_YEARS * 100.0
+        out["carry_bps"] = carry
+    else:
+        print(f"[carry/roll] SOFR not available for {as_of_date}; carry will be null.")
+
+    # --- Roll: fitted yield roll-down ---
+    if "ttm" in out.columns and "ytm" in out.columns:
+        ttm_arr = pd.to_numeric(out["ttm"], errors="coerce").to_numpy(dtype=float)
+        ytm_arr = pd.to_numeric(out["ytm"], errors="coerce").to_numpy(dtype=float)
+        fit_result = _fit_roll_spline(ttm_arr, ytm_arr)
+        if fit_result is not None:
+            spline_func, x_min, x_max = fit_result
+            for i in range(len(out)):
+                t = ttm_arr[i]
+                y = ytm_arr[i]
+                if np.isnan(t) or np.isnan(y):
+                    continue
+                t_proj = t - HORIZON_YEARS
+                if t_proj < x_min or t_proj > x_max:
+                    continue
+                try:
+                    y_proj = float(spline_func(np.array([t_proj]))[0])
+                    if np.isfinite(y_proj):
+                        out.iloc[i, out.columns.get_loc("roll_bps")] = (y - y_proj) * 100.0
+                except Exception:
+                    continue
+        else:
+            print(f"[carry/roll] Spline fit unavailable for {as_of_date}; roll will be null.")
+
+    # --- Combined ---
+    carry_vals = pd.to_numeric(out["carry_bps"], errors="coerce")
+    roll_vals = pd.to_numeric(out["roll_bps"], errors="coerce")
+    both_valid = carry_vals.notna() & roll_vals.notna()
+    out.loc[both_valid, "carry_and_roll_bps"] = carry_vals[both_valid] + roll_vals[both_valid]
+
+    return out
+
+
 def build_points_dataframe(
     *,
     as_of_date: datetime.date,
@@ -412,6 +526,9 @@ def build_points_dataframe(
     merged_df = _ensure_numeric_columns(merged_df, NUMERIC_COLUMNS)
     merged_df = merged_df.sort_values(by=["ttm", "oi", "rank"], kind="mergesort")
 
+    # Compute carry/roll columns
+    merged_df = _compute_carry_roll_columns(merged_df, as_of_date)
+
     keep_cols = [
         "cusip",
         "oi",
@@ -424,6 +541,9 @@ def build_points_dataframe(
         "clean_price",
         "dirty_price",
         "coupon",
+        "carry_bps",
+        "roll_bps",
+        "carry_and_roll_bps",
         "issue_date",
         "maturity_date",
         "market_timestamp",
@@ -470,11 +590,18 @@ def ingest_snapshot(
     snapshot_ts = pd.Timestamp.now(tz="UTC")
     points_df["snapshot_ts"] = snapshot_ts
 
+    carry_count = int(points_df["carry_bps"].notna().sum()) if "carry_bps" in points_df.columns else 0
+    roll_count = int(points_df["roll_bps"].notna().sum()) if "roll_bps" in points_df.columns else 0
+    cr_count = int(points_df["carry_and_roll_bps"].notna().sum()) if "carry_and_roll_bps" in points_df.columns else 0
+
     print(
         f"Snapshot {as_of_date} ({curve_name}): "
         f"points={len(points_df)} "
         f"otrs={int((points_df['rank'] == 0).sum())} "
-        f"mmss_non_null={int(points_df['mmss'].notna().sum())}"
+        f"mmss_non_null={int(points_df['mmss'].notna().sum())} "
+        f"carry_non_null={carry_count} "
+        f"roll_non_null={roll_count} "
+        f"c+r_non_null={cr_count}"
     )
 
     if dry_run:
@@ -497,6 +624,9 @@ def ingest_snapshot(
             "clean_price",
             "dirty_price",
             "coupon",
+            "carry_bps",
+            "roll_bps",
+            "carry_and_roll_bps",
             "issue_date",
             "maturity_date",
             "market_timestamp",

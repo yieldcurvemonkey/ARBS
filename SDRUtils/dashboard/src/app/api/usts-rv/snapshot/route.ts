@@ -15,7 +15,10 @@ const VALUE_COLUMNS: UstsRvValueColumn[] = [
   'clean_price',
   'dirty_price',
   'mdur',
-  'coupon'
+  'coupon',
+  'carry_bps',
+  'roll_bps',
+  'carry_and_roll_bps'
 ]
 
 const X_COLUMNS: UstsRvXColumn[] = ['ttm', 'mdur']
