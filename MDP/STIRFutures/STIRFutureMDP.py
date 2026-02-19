@@ -35,6 +35,45 @@ from Query.STIRFutures.backends.rateslib.RLSTIRFuturePricer import RLSTIRFutureP
 DateLike = Union[datetime.date, datetime.datetime, Literal["live"]]
 InstrumentLike = _STIRFutureGenericPricer
 
+_MONTHLY_STIR_ROOTS = {"SR1", "ZQ", "IJ", "JU"}
+_IMM_STIR_ROOTS = {"SR3", "RA", "EB", "RG", "IM", "TV", "J8", "T0", "IT", "J2"}
+_ROOT_ALIAS_MAP = {
+    "SFR": "SR3",
+    "SER": "SR1",
+    "FF": "ZQ",
+    "SQ": "SR3",
+    "SL": "SR1",
+}
+_ROOT_TO_CURVE_MAP = {
+    "SR1": "USD-SOFR-1D",
+    "SR3": "USD-SOFR-1D",
+    "ZQ": "USD-FEDFUNDS",
+    "RA": "EUR-ESTR",
+    "EB": "EUR-ESTR",
+    "IJ": "EUR-ESTR",
+    "RG": "CAD-CORRA",
+    "IM": "EUR-EURIBOR-3M",
+    "TV": "EUR-EURIBOR-3M",
+    "J8": "GBP-SONIA",
+    "JU": "GBP-SONIA",
+    "T0": "JPY-TONA",
+    "IT": "JPY-TONA",
+    "J2": "CHF-SARON",
+}
+_ROOT_TO_STIR_SPEC = {
+    "RA": "eur_stir",
+    "EB": "eur_stir",
+    "IJ": "eur_stir1",
+    "IM": "eur_stir3",
+    "TV": "eur_stir3",
+    "J8": "gbp_stir",
+    "JU": "gbp_stir",
+    "RG": "cad_irs",
+    "T0": "jpy_irs",
+    "IT": "jpy_irs",
+    "J2": "chf_irs",
+}
+
 
 # ----------------------------- time helpers ---------------------------------
 def _as_datetime(ts: DateLike) -> datetime.datetime:
@@ -101,10 +140,10 @@ def _normalize_symbol(sym: str) -> Optional[str]:
         return f"SR3{s}"
 
     # Accept internal + common aliases + barchart roots
-    m = re.match(r"^(SR[13]|SFR|SER|FF|ZQ|SQ|SL|RA|EB)([FGHJKMNQUVXZ]\d{2})$", s)
+    m = re.match(r"^(SR[13]|SFR|SER|FF|ZQ|SQ|SL|RA|EB|IJ|RG|IM|TV|J8|JU|T0|IT|J2)([FGHJKMNQUVXZ]\d{2})$", s)
     if m:
         root, code = m.groups()
-        root = root.replace("SFR", "SR3").replace("SER", "SR1").replace("FF", "ZQ").replace("SQ", "SR3").replace("SL", "SR1")
+        root = _ROOT_ALIAS_MAP.get(root, root)
         return f"{root}{code}"
 
     return WebullFintechFetcher._normalize_future_symbol(s)
@@ -222,13 +261,14 @@ def _resolve_aliases_bulk(symbols: Iterable[str], timestamp: DateLike) -> "Order
                 continue
 
             # Constant maturity rank: CM1, CM2... Optional root prefix.
-            m_cm = re.match(r"^(?P<prefix>(sr[13]|sfr|ser|ff|zq|sq|sl|ra|eb)?)cm(?P<rank>\d+)$", lower)
+            m_cm = re.match(r"^(?P<prefix>(sr[13]|sfr|ser|ff|zq|sq|sl|ra|eb|ij|rg|im|tv|j8|ju|t0|it|j2)?)cm(?P<rank>\d+)$", lower)
             if m_cm:
                 rank = int(m_cm.group("rank"))
                 prefix = (m_cm.group("prefix") or "SR3").upper()
-                root = prefix.replace("SFR", "SR3").replace("SER", "SR1").replace("FF", "ZQ").replace("SQ", "SR3").replace("SL", "SR1")
-                valid_months = [3, 6, 9, 12] if (root.startswith("SR3") or root in {"RA", "EB"}) else list(range(1, 13))
-                cutoff = _imm_cutoff if (root.startswith("SR3") or root in {"RA", "EB"}) else None
+                root = _ROOT_ALIAS_MAP.get(prefix, prefix)
+                use_imm = root in _IMM_STIR_ROOTS
+                valid_months = [3, 6, 9, 12] if use_imm else list(range(1, 13))
+                cutoff = _imm_cutoff if use_imm else None
                 contracts = _next_contracts(as_of, prefix=root, count=max(rank, 1), valid_months=valid_months, cutoff_fn=cutoff)
                 aliases[alias] = [contracts[rank - 1]]
                 continue
@@ -273,13 +313,13 @@ def _stir_future_from_symbol(sym: str, price: float) -> Tuple[str, rl.STIRFuture
     root = m.group("root")
     code = m.group("code")
 
-    if root.startswith("SR1") or root.startswith("ZQ"):
+    if root in _MONTHLY_STIR_ROOTS:
         effective = cme_code_effective_date(code)
         termination = first_business_day_next_month(pd.Timestamp(effective))
         stir = rl.STIRFuture(
             effective=effective,
             termination=termination,
-            spec="usd_stir1",
+            spec=_ROOT_TO_STIR_SPEC.get(root, "usd_stir1"),
             roll="som",
             price=price,
         )
@@ -287,7 +327,7 @@ def _stir_future_from_symbol(sym: str, price: float) -> Tuple[str, rl.STIRFuture
 
     effective = rl.scheduling.get_imm(code=code)
     termination = rl.scheduling.next_imm(effective)
-    spec = "eur_stir" if root in {"RA", "EB"} else "usd_stir"
+    spec = _ROOT_TO_STIR_SPEC.get(root, "usd_stir")
     stir = rl.STIRFuture(
         effective=effective,
         termination=termination,
@@ -301,17 +341,11 @@ def _curve_from_symbol(sym: str) -> Optional[str]:
     norm = _normalize_symbol(sym)
     if not norm:
         return None
-    m = re.match(r"^(?P<root>SR[13]|ZQ|RA|EB)(?P<code>[FGHJKMNQUVXZ]\d{2})$", norm)
+    m = re.match(r"^(?P<root>SR[13]|ZQ|RA|EB|IJ|RG|IM|TV|J8|JU|T0|IT|J2)(?P<code>[FGHJKMNQUVXZ]\d{2})$", norm)
     if not m:
         return None
     root = m.group("root")
-    if root in {"SR1", "SR3"}:
-        return "USD-SOFR-1D"
-    if root == "ZQ":
-        return "USD-FEDFUNDS"
-    if root in {"RA", "EB"}:
-        return "EUR-ESTR"
-    return None
+    return _ROOT_TO_CURVE_MAP.get(root)
 
 
 def _build_socks5h(host: str) -> dict:

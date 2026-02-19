@@ -276,7 +276,17 @@ def _load_central_bank_dates():
     try:
         from Query.IRSwaps._central_bank_dates_fetcher import fetch_central_bank_dates
 
-        return fetch_central_bank_dates(fallback=_FALLBACK_DATES)
+        loaded = fetch_central_bank_dates(fallback=_FALLBACK_DATES)
+
+        # Always merge fallback data as a baseline. Cached payloads from older
+        # fetch runs may omit some curve IDs; keep hardcoded coverage intact.
+        merged = {}
+        for curve_id in set(_FALLBACK_DATES.keys()) | set(loaded.keys()):
+            base = dict(_FALLBACK_DATES.get(curve_id, {}))
+            base.update(loaded.get(curve_id, {}))
+            merged[curve_id] = dict(sorted(base.items(), key=lambda kv: kv[1][0]))
+
+        return merged
     except Exception:
         logger.debug("Central bank date auto-fetch unavailable, using fallback", exc_info=True)
         return _FALLBACK_DATES

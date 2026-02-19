@@ -49,6 +49,17 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
             "SR1": "USD-SOFR-1D",
             "FF": "USD-FEDFUNDS",
             "ZQ": "USD-FEDFUNDS",
+            "RA": "EUR-ESTR",
+            "EB": "EUR-ESTR",
+            "IJ": "EUR-ESTR",
+            "RG": "CAD-CORRA",
+            "IM": "EUR-EURIBOR-3M",
+            "TV": "EUR-EURIBOR-3M",
+            "J8": "GBP-SONIA",
+            "JU": "GBP-SONIA",
+            "T0": "JPY-TONA",
+            "IT": "JPY-TONA",
+            "J2": "CHF-SARON",
         }
         if self._rl_stirf_id[:-3] in known_id_to_curve_map:
             self._curve = known_id_to_curve_map[self._rl_stirf_id[:-3]]
@@ -103,7 +114,8 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
     def calendar(self) -> rl.Cal:
         # Assuming we look up the calendar from the definitions map used for curves/IRSwaps
         # This matches how FRB looked up 'spec' then got 'calendar'
-        return rl.defaults.spec[RATESLIB_CURVE_DEFINITIONS[self._curve]["ReferenceRate2"]]["calendar"]
+        spec = RATESLIB_CURVE_DEFINITIONS[self._curve].get("ReferenceRate2", RATESLIB_CURVE_DEFINITIONS[self._curve]["ReferenceRate"])
+        return rl.defaults.spec[spec]["calendar"]
 
     def calendar_advance(self, dt1: Union[datetime.date, rl.dt], dt2: str):
         # Using the BusinessConvention from definitions

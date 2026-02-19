@@ -71,7 +71,10 @@ class BarchartFetcher(BaseFetcher):
     _current_laravel_token: str = None
     _current_xsrf_token: str = None
     _BARCHART_MAX_RECORD = 5_000
-    _STIR_ROOT_CODE_RE = re.compile(r"^(SR[13]|SFR|SER|FF|ZQ|SQ|SL|RA|EB)([FGHJKMNQUVXZ]\d{2})$", re.IGNORECASE)
+    _STIR_ROOT_CODE_RE = re.compile(
+        r"^(SR[13]|SFR|SER|FF|ZQ|SQ|SL|RA|EB|IJ|RG|IM|TV|J8|JU|T0|IT|J2)([FGHJKMNQUVXZ]\d{2})$",
+        re.IGNORECASE,
+    )
     _STIR_ROOT_TO_BARCHART = {
         "SR3": "SQ",
         "SFR": "SQ",
@@ -83,6 +86,15 @@ class BarchartFetcher(BaseFetcher):
         "FF": "ZQ",
         "RA": "RA",  # Eurex 3M ESTR
         "EB": "EB",  # ICE 3M ESTR
+        "IJ": "IJ",  # ICE 1M ESTR
+        "RG": "RG",  # B3 3M CORRA
+        "IM": "IM",  # ICE 3M Euribor
+        "TV": "TV",  # Eurex 3M Euribor
+        "J8": "J8",  # ICE 3M SONIA
+        "JU": "JU",  # ICE 1M SONIA
+        "T0": "T0",  # JPX 3M TONA
+        "IT": "IT",  # TFX 3M TONA
+        "J2": "J2",  # Eurex 3M SARON
     }
 
     def __init__(
@@ -577,6 +589,8 @@ class BarchartFetcher(BaseFetcher):
 
             def merge_dfs_on_column(dfs_dict: Dict[str, pd.DataFrame], on_column: str, merge_val_col: str):
                 dfs_dict = {key: df[[on_column, merge_val_col]].rename(columns={merge_val_col: key}) for key, df in dfs_dict.items() if df is not None}
+                if not dfs_dict:
+                    return pd.DataFrame(columns=[on_column])
                 merged_df = reduce(lambda left, right: pd.merge(left, right, on=on_column, how="outer"), dfs_dict.values())
                 merged_df.sort_values(by=on_column, inplace=True)
                 return merged_df

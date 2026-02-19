@@ -350,6 +350,8 @@ def _normalize_quotes_payload(payload: dict) -> dict:
     """
     out = {}
     for sym, data in payload.items():
+        if sym == "errors":
+            continue
         q = data.get("quote", {}) or {}
         out[sym] = {
             "bid": q.get("bidPrice"),
