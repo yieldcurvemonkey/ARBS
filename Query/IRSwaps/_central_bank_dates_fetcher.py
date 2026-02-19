@@ -5,6 +5,8 @@ Scrapes meeting schedules from:
 - ECB (Governing Council): https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html
 - Bank of Japan (MPM): https://www.boj.or.jp/en/mopo/mpmsche_minu/index.htm
 - Bank of England (MPC): https://www.bankofengland.co.uk/monetary-policy/upcoming-mpc-dates
+- Bank of Canada (BOC): https://www.bankofcanada.ca/core-functions/monetary-policy/key-interest-rate/
+- Swiss National Bank (SNB): https://www.snb.ch/en/the-snb/mandates-goals/monetary-policy/decisions
 
 Results are cached to a local JSON file and only refetched when the cache is stale
 (default: 30 days). Hardcoded fallback dates are used when fetching fails.
@@ -444,6 +446,82 @@ def _fetch_boe_dates() -> List[datetime.date]:
 
 
 # ---------------------------------------------------------------------------
+# BOC fetcher
+# ---------------------------------------------------------------------------
+
+
+def _fetch_boc_dates() -> List[datetime.date]:
+    """Fetch Bank of Canada interest rate decision dates.
+
+    Scrapes the policy interest rate page which lists decision dates in a
+    table with ``data-date`` attributes in ISO format (YYYY-MM-DD).  Returns
+    all available dates sorted chronologically.
+    """
+    import requests
+
+    resp = requests.get(
+        "https://www.bankofcanada.ca/core-functions/monetary-policy/key-interest-rate/",
+        timeout=_FETCH_TIMEOUT,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; ARBS)"},
+    )
+    resp.raise_for_status()
+    html = resp.text
+
+    meetings: List[datetime.date] = []
+    seen: set = set()
+
+    # The table has <th data-date="YYYY-MM-DD"> for each decision date
+    for m in re.finditer(r'data-date="(\d{4}-\d{2}-\d{2})"', html):
+        try:
+            dt = datetime.date.fromisoformat(m.group(1))
+            if dt not in seen:
+                meetings.append(dt)
+                seen.add(dt)
+        except ValueError:
+            continue
+
+    return sorted(meetings)
+
+
+# ---------------------------------------------------------------------------
+# SNB fetcher
+# ---------------------------------------------------------------------------
+
+
+def _fetch_snb_dates() -> List[datetime.date]:
+    """Fetch Swiss National Bank monetary policy assessment dates.
+
+    Scrapes the SNB decisions page and extracts assessment dates from press
+    release URLs which follow the pattern ``/pre_YYYYMMDD``.  Returns all
+    available dates sorted chronologically.
+    """
+    import requests
+
+    resp = requests.get(
+        "https://www.snb.ch/en/the-snb/mandates-goals/monetary-policy/decisions",
+        timeout=_FETCH_TIMEOUT,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; ARBS)"},
+    )
+    resp.raise_for_status()
+    html = resp.text
+
+    meetings: List[datetime.date] = []
+    seen: set = set()
+
+    # Press release URLs follow the pattern: /pre_YYYYMMDD
+    for m in re.finditer(r"/pre_(\d{4})(\d{2})(\d{2})", html):
+        try:
+            dt = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if dt not in seen:
+                meetings.append(dt)
+                seen.add(dt)
+        except ValueError:
+            continue
+
+    return sorted(meetings)
+
+
+# ---------------------------------------------------------------------------
 # Meeting map builder
 # ---------------------------------------------------------------------------
 
@@ -484,6 +562,8 @@ _CURVE_TO_CB = {
     "EUR-ESTR": "ECB",
     "JPY-TONA": "BOJ",
     "GBP-SONIA": "BOE",
+    "CAD-CORRA": "BOC",
+    "CHF-SARON": "SNB",
 }
 
 _CB_FETCHERS = {
@@ -491,6 +571,8 @@ _CB_FETCHERS = {
     "ECB": _fetch_ecb_dates,
     "BOJ": _fetch_boj_dates,
     "BOE": _fetch_boe_dates,
+    "BOC": _fetch_boc_dates,
+    "SNB": _fetch_snb_dates,
 }
 
 
