@@ -1,11 +1,21 @@
 import datetime
+import logging
 
 from definitions.IRSwaps import CURVE_DEFINITIONS
 
+logger = logging.getLogger(__name__)
 
-# TODO automate with caching like rl curvce build in oasis
+# ---------------------------------------------------------------------------
+# Hardcoded fallback dates.
+#
+# These serve as the baseline when web scraping is unavailable or returns
+# incomplete data (e.g. the ECB page only shows the current year, and past
+# meetings are removed).  The automated fetcher merges scraped data on top
+# of this, so any *new* meetings announced by central banks are picked up
+# automatically while historical data is preserved.
+# ---------------------------------------------------------------------------
 
-_CENTRAL_BANK_DATES = {
+_FALLBACK_DATES = {
     "USD-SOFR-1D": {
         "feb23": (datetime.date(2023, 2, 1), datetime.date(2023, 3, 22)),
         "mar23": (datetime.date(2023, 3, 22), datetime.date(2023, 5, 3)),
@@ -159,3 +169,22 @@ _CENTRAL_BANK_DATES = {
         "dec26": (datetime.date(2026, 12, 18), datetime.date(2027, 1, 27)),
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Load dates: try cache/scrape, merge with fallback
+# ---------------------------------------------------------------------------
+
+
+def _load_central_bank_dates():
+    """Load central bank dates from cache/web, falling back to hardcoded data."""
+    try:
+        from Query.IRSwaps._central_bank_dates_fetcher import fetch_central_bank_dates
+
+        return fetch_central_bank_dates(fallback=_FALLBACK_DATES)
+    except Exception:
+        logger.debug("Central bank date auto-fetch unavailable, using fallback", exc_info=True)
+        return _FALLBACK_DATES
+
+
+_CENTRAL_BANK_DATES = _load_central_bank_dates()
