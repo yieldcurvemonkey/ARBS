@@ -10,6 +10,7 @@ from urllib.parse import quote, unquote, urlencode
 
 import httpx
 import pandas as pd
+import pytz
 import requests
 import tqdm
 import tqdm.asyncio
@@ -194,12 +195,14 @@ class BarchartFetcher(BaseFetcher):
 
         if not _tz_ok(start_date) or not _tz_ok(end_date):
             raise ValueError("start_date and end_date must include timezone information if provided.")
-        if start_date is not None and end_date is not None and start_date.tzinfo != end_date.tzinfo:
-            raise ValueError("start_date and end_date must have the same timezone.")
 
-        # Barchart expects end cursor as '%Y%m%d%H%M' in *exchange time*.
-        # We'll respect the tz of start/end if provided; otherwise we omit &end (latest slice).
-        tz = (start_date or end_date).tzinfo if (start_date or end_date) else None
+        # Barchart intraday timestamps are always exchange-local (Central for futures/forex).
+        exchange_tz = pytz.timezone("America/Chicago")
+        request_tzinfo = (start_date or end_date).tzinfo if (start_date or end_date) else exchange_tz
+        request_tz_name = getattr(request_tzinfo, "zone", None) or getattr(request_tzinfo, "key", None)
+        request_tz = pytz.timezone(request_tz_name) if request_tz_name else request_tzinfo
+        start_exchange = start_date.astimezone(exchange_tz) if start_date is not None else None
+        end_exchange = end_date.astimezone(exchange_tz) if end_date is not None else None
 
         base_url = (
             f"https://www.barchart.com/proxies/timeseries/historical/queryminutes.ashx?"
@@ -227,7 +230,7 @@ class BarchartFetcher(BaseFetcher):
             if end_cursor is not None:
                 if end_cursor.tzinfo is None or end_cursor.tzinfo.utcoffset(end_cursor) is None:
                     raise ValueError("Internal error: end_cursor must be tz-aware.")
-                end_str = end_cursor.strftime("%Y%m%d%H%M")  # keep caller tz
+                end_str = end_cursor.astimezone(exchange_tz).strftime("%Y%m%d%H%M")
                 url = f"{base_url}&end={end_str}"
             else:
                 url = base_url  # latest
@@ -263,8 +266,10 @@ class BarchartFetcher(BaseFetcher):
                     # Parse and localize/conform tz
                     df_slice["Date"] = pd.to_datetime(df_slice["Date"], errors="coerce")
                     df_slice = df_slice.dropna(subset=["Date"])
-                    if tz is not None:
-                        df_slice["Date"] = df_slice["Date"].dt.tz_localize(tz)
+                    if getattr(df_slice["Date"].dt, "tz", None) is None:
+                        df_slice["Date"] = df_slice["Date"].dt.tz_localize(exchange_tz)
+                    else:
+                        df_slice["Date"] = df_slice["Date"].dt.tz_convert(exchange_tz)
 
                     return df_slice
 
@@ -288,7 +293,7 @@ class BarchartFetcher(BaseFetcher):
             # Cursoring: start with end_date (if provided), else latest (None)
             # Each slice returns up to MAX_RECORD rows ending at `end_cursor` (inclusive), going backwards.
             # We page backward until we cross start_date or can’t get more.
-            end_cursor = end_date if end_date is not None else None
+            end_cursor = end_exchange if end_exchange is not None else None
             slices: List[pd.DataFrame] = []
             seen_earliest: Optional[pd.Timestamp] = None
 
@@ -302,8 +307,8 @@ class BarchartFetcher(BaseFetcher):
                     break
 
                 # If the API returns future/open-ended rows when no end is provided, cap by end_date if present
-                if end_date is not None:
-                    df_slice = df_slice[df_slice["Date"] <= end_date]
+                if end_exchange is not None:
+                    df_slice = df_slice[df_slice["Date"] <= end_exchange]
 
                 slices.append(df_slice)
 
@@ -311,7 +316,7 @@ class BarchartFetcher(BaseFetcher):
                 latest = df_slice["Date"].max()
 
                 # Stop if we already covered start_date
-                if start_date is not None and earliest <= start_date:
+                if start_exchange is not None and earliest <= start_exchange:
                     break
 
                 # Detect no-progress and break
@@ -322,7 +327,7 @@ class BarchartFetcher(BaseFetcher):
                 # Page one interval earlier than the earliest we saw to avoid overlap
                 # (Barchart’s `end` is inclusive). Subtract `interval` minutes.
                 step_minutes = int(interval)
-                end_cursor = (earliest - pd.Timedelta(minutes=step_minutes)).to_pydatetime().replace(tzinfo=tz)
+                end_cursor = earliest - pd.Timedelta(minutes=step_minutes)
 
             if not slices:
                 if uid:
@@ -333,21 +338,27 @@ class BarchartFetcher(BaseFetcher):
             df = df.drop_duplicates(subset=["Date"], keep="last").sort_values("Date")
             df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
             df = df.dropna(subset=["Date"])
-            df["Date"] = df["Date"].dt.tz_convert(tz)
+            if getattr(df["Date"].dt, "tz", None) is None:
+                df["Date"] = df["Date"].dt.tz_localize(exchange_tz)
+            else:
+                df["Date"] = df["Date"].dt.tz_convert(exchange_tz)
             df_copy = df.copy()
 
-            if start_date is not None:
-                df = df[df["Date"] >= start_date]
-            if end_date is not None:
-                df = df[df["Date"] <= end_date]
+            if start_exchange is not None:
+                df = df[df["Date"] >= start_exchange]
+            if end_exchange is not None:
+                df = df[df["Date"] <= end_exchange]
 
-            if df.empty and not df_copy.empty and start_date and end_date:
+            if df.empty and not df_copy.empty and start_exchange and end_exchange:
                 df_copy = df_copy.set_index("Date")
-                new_index = pd.date_range(start=start_date, end=end_date, freq=f"{interval}min", tz=tz)
+                new_index = pd.date_range(start=start_exchange, end=end_exchange, freq=f"{interval}min", tz=exchange_tz)
                 combined_index = df_copy.index.union(new_index)
                 df_reindexed = df_copy.reindex(combined_index)
                 df_filled = df_reindexed.ffill().bfill()
                 df = df_filled.loc[new_index].reset_index().rename(columns={"index": "Date"})
+
+            if request_tz is not None:
+                df["Date"] = df["Date"].dt.tz_convert(request_tz)
 
             if set_dt_index:
                 df = df.set_index("Date")

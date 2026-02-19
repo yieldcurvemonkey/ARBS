@@ -813,6 +813,21 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                     return cached_local
             return None
 
+        def _align_lookup_ts(index: pd.Index, req_ts: datetime.datetime) -> datetime.datetime:
+            if not isinstance(index, pd.DatetimeIndex):
+                return req_ts
+
+            ts_obj = pd.Timestamp(req_ts)
+            if index.tz is None:
+                if ts_obj.tzinfo is not None:
+                    ts_obj = ts_obj.tz_localize(None)
+            else:
+                if ts_obj.tzinfo is None:
+                    ts_obj = ts_obj.tz_localize(index.tz)
+                else:
+                    ts_obj = ts_obj.tz_convert(index.tz)
+            return ts_obj.to_pydatetime()
+
         for alias, tickers in alias_map.items():
             is_spread = _is_serff_spread_alias(alias)
 
@@ -898,7 +913,8 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                         if series.empty:
                             continue
 
-                        pos = series.index.get_indexer([ts_dt], method="nearest")
+                        lookup_ts = _align_lookup_ts(series.index, ts_dt)
+                        pos = series.index.get_indexer([lookup_ts], method="nearest")
                         idx = series.index[pos[0]] if pos.size and pos[0] != -1 else series.index[-1]
 
                         args = {
@@ -941,7 +957,8 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
                     series = price_df[t].dropna()
                     if series.empty:
                         continue
-                    pos = series.index.get_indexer([ts_dt], method="nearest")
+                    lookup_ts = _align_lookup_ts(series.index, ts_dt)
+                    pos = series.index.get_indexer([lookup_ts], method="nearest")
                     idx = series.index[pos[0]] if pos.size and pos[0] != -1 else series.index[-1]
                     args = {
                         "symbol": t,
