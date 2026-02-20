@@ -12,7 +12,7 @@ import datetime
 import math
 import os
 import time
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 from urllib.parse import quote_plus
 
 import numpy as np
@@ -21,6 +21,8 @@ import QuantLib as ql
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from tqdm import tqdm
+
+from RVUtils.Interpolation.GeneralCurveInterpolator import GeneralCurveInterpolator
 
 
 POINTS_TABLE = "arbs_ust_rv_points_v1"
@@ -41,6 +43,51 @@ CREATE TABLE IF NOT EXISTS {POINTS_TABLE} (
     clean_price NUMERIC,
     dirty_price NUMERIC,
     coupon NUMERIC,
+    carry_bps NUMERIC,
+    roll_bps NUMERIC,
+    carry_and_roll_bps NUMERIC,
+    carry_1m_bps NUMERIC,
+    roll_1m_bps NUMERIC,
+    carry_and_roll_1m_bps NUMERIC,
+    carry_2m_bps NUMERIC,
+    roll_2m_bps NUMERIC,
+    carry_and_roll_2m_bps NUMERIC,
+    carry_3m_bps NUMERIC,
+    roll_3m_bps NUMERIC,
+    carry_and_roll_3m_bps NUMERIC,
+    carry_6m_bps NUMERIC,
+    roll_6m_bps NUMERIC,
+    carry_and_roll_6m_bps NUMERIC,
+    swap_carry_bps NUMERIC,
+    swap_roll_bps NUMERIC,
+    swap_carry_and_roll_bps NUMERIC,
+    swap_carry_1m_bps NUMERIC,
+    swap_roll_1m_bps NUMERIC,
+    swap_carry_and_roll_1m_bps NUMERIC,
+    swap_carry_2m_bps NUMERIC,
+    swap_roll_2m_bps NUMERIC,
+    swap_carry_and_roll_2m_bps NUMERIC,
+    swap_carry_3m_bps NUMERIC,
+    swap_roll_3m_bps NUMERIC,
+    swap_carry_and_roll_3m_bps NUMERIC,
+    swap_carry_6m_bps NUMERIC,
+    swap_roll_6m_bps NUMERIC,
+    swap_carry_and_roll_6m_bps NUMERIC,
+    mmss_carry_bps NUMERIC,
+    mmss_roll_bps NUMERIC,
+    mmss_carry_and_roll_bps NUMERIC,
+    mmss_carry_1m_bps NUMERIC,
+    mmss_roll_1m_bps NUMERIC,
+    mmss_carry_and_roll_1m_bps NUMERIC,
+    mmss_carry_2m_bps NUMERIC,
+    mmss_roll_2m_bps NUMERIC,
+    mmss_carry_and_roll_2m_bps NUMERIC,
+    mmss_carry_3m_bps NUMERIC,
+    mmss_roll_3m_bps NUMERIC,
+    mmss_carry_and_roll_3m_bps NUMERIC,
+    mmss_carry_6m_bps NUMERIC,
+    mmss_roll_6m_bps NUMERIC,
+    mmss_carry_and_roll_6m_bps NUMERIC,
     issue_date DATE,
     maturity_date DATE,
     market_timestamp TIMESTAMPTZ,
@@ -65,6 +112,54 @@ CREATE INDEX IF NOT EXISTS idx_ust_rv_points_snapshot ON {POINTS_TABLE}(snapshot
 CREATE INDEX IF NOT EXISTS idx_ust_rv_runs_date ON {RUNS_TABLE}(as_of_date, ingestion_started_at DESC);
 """
 
+CARRY_ROLL_HORIZONS: tuple[tuple[str, str, float], ...] = (
+    ("1m", "1M", 1.0 / 12.0),
+    ("2m", "2M", 2.0 / 12.0),
+    ("3m", "3M", 3.0 / 12.0),
+    ("6m", "6M", 6.0 / 12.0),
+)
+
+CARRY_BPS_HORIZON_COLUMNS: tuple[str, ...] = tuple(
+    f"carry_{label}_bps" for label, _, _ in CARRY_ROLL_HORIZONS
+)
+ROLL_BPS_HORIZON_COLUMNS: tuple[str, ...] = tuple(
+    f"roll_{label}_bps" for label, _, _ in CARRY_ROLL_HORIZONS
+)
+CARRY_AND_ROLL_BPS_HORIZON_COLUMNS: tuple[str, ...] = tuple(
+    f"carry_and_roll_{label}_bps" for label, _, _ in CARRY_ROLL_HORIZONS
+)
+
+SWAP_CARRY_BPS_HORIZON_COLUMNS: tuple[str, ...] = tuple(
+    f"swap_carry_{label}_bps" for label, _, _ in CARRY_ROLL_HORIZONS
+)
+SWAP_ROLL_BPS_HORIZON_COLUMNS: tuple[str, ...] = tuple(
+    f"swap_roll_{label}_bps" for label, _, _ in CARRY_ROLL_HORIZONS
+)
+SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS: tuple[str, ...] = tuple(
+    f"swap_carry_and_roll_{label}_bps" for label, _, _ in CARRY_ROLL_HORIZONS
+)
+
+MMSS_CARRY_BPS_HORIZON_COLUMNS: tuple[str, ...] = tuple(
+    f"mmss_carry_{label}_bps" for label, _, _ in CARRY_ROLL_HORIZONS
+)
+MMSS_ROLL_BPS_HORIZON_COLUMNS: tuple[str, ...] = tuple(
+    f"mmss_roll_{label}_bps" for label, _, _ in CARRY_ROLL_HORIZONS
+)
+MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS: tuple[str, ...] = tuple(
+    f"mmss_carry_and_roll_{label}_bps" for label, _, _ in CARRY_ROLL_HORIZONS
+)
+
+SWAP_CARRY_ROLL_ALIAS_COLUMNS: tuple[str, ...] = (
+    "swap_carry_bps",
+    "swap_roll_bps",
+    "swap_carry_and_roll_bps",
+)
+MMSS_CARRY_ROLL_ALIAS_COLUMNS: tuple[str, ...] = (
+    "mmss_carry_bps",
+    "mmss_roll_bps",
+    "mmss_carry_and_roll_bps",
+)
+
 NUMERIC_COLUMNS: tuple[str, ...] = (
     "rank",
     "ttm",
@@ -74,7 +169,362 @@ NUMERIC_COLUMNS: tuple[str, ...] = (
     "clean_price",
     "dirty_price",
     "coupon",
+    "carry_bps",
+    "roll_bps",
+    "carry_and_roll_bps",
+    *CARRY_BPS_HORIZON_COLUMNS,
+    *ROLL_BPS_HORIZON_COLUMNS,
+    *CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+    *SWAP_CARRY_ROLL_ALIAS_COLUMNS,
+    *SWAP_CARRY_BPS_HORIZON_COLUMNS,
+    *SWAP_ROLL_BPS_HORIZON_COLUMNS,
+    *SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+    *MMSS_CARRY_ROLL_ALIAS_COLUMNS,
+    *MMSS_CARRY_BPS_HORIZON_COLUMNS,
+    *MMSS_ROLL_BPS_HORIZON_COLUMNS,
+    *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
 )
+
+
+def _load_sofr_fixing_pct(as_of_date: datetime.date) -> Optional[float]:
+    from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
+
+    try:
+        fixings = _fetch_fixings(as_of_date=as_of_date, curve_name="USD-SOFR-1D")
+    except Exception:
+        return None
+    if fixings is None:
+        return None
+
+    try:
+        s = pd.Series(fixings).copy()
+    except Exception:
+        return None
+    if s.empty:
+        return None
+
+    idx = pd.to_datetime(s.index, errors="coerce")
+    val = pd.to_numeric(s, errors="coerce")
+    tmp = pd.DataFrame({"fixing": val}, index=idx)
+    tmp = tmp[~tmp.index.isna()]
+    tmp = tmp.dropna(subset=["fixing"])
+    tmp = tmp[tmp.index.date < as_of_date].sort_index()
+    if tmp.empty:
+        return None
+
+    sofr_pct = float(tmp["fixing"].iloc[-1])
+    if not np.isfinite(sofr_pct):
+        return None
+
+    # Fixings are usually decimals (e.g. 0.0435). Convert to percent if needed.
+    if abs(sofr_pct) <= 1.0:
+        sofr_pct *= 100.0
+    return sofr_pct
+
+
+def _fit_roll_spline(ttm: np.ndarray, ytm: np.ndarray) -> Optional[Callable[[np.ndarray], np.ndarray]]:
+    if ttm.size == 0 or ytm.size == 0:
+        return None
+
+    df = pd.DataFrame({"ttm": ttm, "ytm": ytm})
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=["ttm", "ytm"])
+    if df.empty:
+        return None
+
+    dedup = df.groupby("ttm", as_index=False)["ytm"].mean().sort_values(by="ttm")
+    if len(dedup) < 4:
+        return None
+
+    x = dedup["ttm"].to_numpy(dtype=float)
+    y = dedup["ytm"].to_numpy(dtype=float)
+    degree = max(1, min(3, len(x) - 1))
+    try:
+        interp = GeneralCurveInterpolator(x=x, y=y)
+        return interp.b_spline1_interpolation(k=degree, return_func=True)
+    except Exception:
+        return None
+
+
+def _coerce_date(val: Any) -> Optional[datetime.date]:
+    if val is None:
+        return None
+    if isinstance(val, datetime.datetime):
+        return val.date()
+    if isinstance(val, datetime.date):
+        return val
+    if isinstance(val, ql.Date):
+        return datetime.date(val.year(), val.month(), val.dayOfMonth())
+    try:
+        year = getattr(val, "year", None)
+        month = getattr(val, "month", None)
+        day = getattr(val, "day", None)
+        if callable(year):
+            year = year()
+        if callable(month):
+            month = month()
+        if callable(day):
+            day = day()
+        if year is not None and month is not None and day is not None:
+            return datetime.date(int(year), int(month), int(day))
+    except Exception:
+        pass
+    try:
+        return pd.Timestamp(val).date()
+    except Exception:
+        return None
+
+
+def _advance_horizon_date(
+    *,
+    as_of_date: datetime.date,
+    pricer: Any = None,
+    horizon_tenor: str = "3M",
+) -> datetime.date:
+    if pricer is not None:
+        try:
+            adv = pricer.calendar_advance(as_of_date, horizon_tenor)
+            d = _coerce_date(adv)
+            if d is not None:
+                return d
+        except Exception:
+            pass
+
+    try:
+        cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+        qd = _to_ql_date(as_of_date)
+        adv = cal.advance(qd, ql.Period(horizon_tenor), ql.ModifiedFollowing)
+        return datetime.date(adv.year(), adv.month(), adv.dayOfMonth())
+    except Exception:
+        return as_of_date + datetime.timedelta(days=91)
+
+
+def _to_ql_date(d: datetime.date) -> ql.Date:
+    return ql.Date(d.day, d.month, d.year)
+
+
+def _normalize_coupon_pct(cpn_raw: Optional[float]) -> Optional[float]:
+    if cpn_raw is None or not np.isfinite(cpn_raw):
+        return None
+    cpn = float(cpn_raw)
+    # Support either decimal (0.0475) or percent (4.75) coupon conventions.
+    if abs(cpn) <= 1.0:
+        cpn *= 100.0
+    return cpn
+
+
+def _coupon_accrual_price_per_100(
+    *,
+    issue_date: Optional[datetime.date],
+    maturity_date: Optional[datetime.date],
+    coupon_pct: Optional[float],
+    start_date: datetime.date,
+    end_date: datetime.date,
+) -> Optional[float]:
+    if end_date <= start_date:
+        return 0.0
+
+    cpn = _normalize_coupon_pct(coupon_pct)
+    if issue_date is not None and maturity_date is not None and cpn is not None:
+        try:
+            cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+            sched = ql.Schedule(
+                _to_ql_date(issue_date),
+                _to_ql_date(maturity_date),
+                ql.Period(6, ql.Months),
+                cal,
+                ql.ModifiedFollowing,
+                ql.ModifiedFollowing,
+                ql.DateGeneration.Backward,
+                False,
+            )
+            qs = _to_ql_date(start_date)
+            qe = _to_ql_date(end_date)
+            total = 0.0
+            cpn_per_period = cpn / 2.0
+
+            for i in range(len(sched) - 1):
+                a0 = sched[i]
+                a1 = sched[i + 1]
+                if a1 <= qs or a0 >= qe:
+                    continue
+                ov_start = a0 if a0 > qs else qs
+                ov_end = a1 if a1 < qe else qe
+                ov_days = int(ov_end - ov_start)
+                period_days = int(a1 - a0)
+                if ov_days <= 0 or period_days <= 0:
+                    continue
+                total += cpn_per_period * (ov_days / period_days)
+
+            if total > 0.0:
+                return float(total)
+        except Exception:
+            pass
+
+    # Fallback: annual coupon * Act/365 over horizon (price points per 100 face).
+    if cpn is None:
+        return None
+    days = max((end_date - start_date).days, 0)
+    return float(cpn) * (days / 365.0)
+
+
+def _compute_carry_roll_columns(
+    df: pd.DataFrame,
+    *,
+    as_of_date: datetime.date,
+    pricers: Dict[str, Any],
+) -> pd.DataFrame:
+    out = df.copy()
+    metric_cols = [
+        "carry_bps",
+        "roll_bps",
+        "carry_and_roll_bps",
+        *CARRY_BPS_HORIZON_COLUMNS,
+        *ROLL_BPS_HORIZON_COLUMNS,
+        *CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+    ]
+    for col in metric_cols:
+        out[col] = np.nan
+    if out.empty:
+        return out
+
+    out = _ensure_numeric_columns(out, ["ttm", "ytm", "coupon", "dirty_price", "mdur"])
+
+    sofr_pct = _load_sofr_fixing_pct(as_of_date=as_of_date)
+    if sofr_pct is not None:
+        # Carry in yield bps:
+        # carry_price = coupon_accrual(Act/Act) - financing_cost(Act/360)
+        # carry_bps = carry_price / DV01, with DV01 ~= ModDur * Dirty / 10000 (per 100 face)
+        sofr_dec = float(sofr_pct) / 100.0
+        horizon_defaults: dict[str, datetime.date] = {
+            label: _advance_horizon_date(as_of_date=as_of_date, horizon_tenor=tenor)
+            for label, tenor, _ in CARRY_ROLL_HORIZONS
+        }
+        carry_by_horizon: dict[str, list[float]] = {
+            label: [] for label, _, _ in CARRY_ROLL_HORIZONS
+        }
+
+        for _, row in out.iterrows():
+            cusip = str(row.get("cusip") or "")
+            pricer = pricers.get(cusip)
+
+            dirty0 = _safe_float(row.get("dirty_price"))
+            if dirty0 is None and pricer is not None and hasattr(pricer, "dirty_price"):
+                dirty0 = _safe_float(pricer.dirty_price())
+
+            mdur = _safe_float(row.get("mdur"))
+            if mdur is None and pricer is not None and hasattr(pricer, "mod_duration"):
+                mdur = _safe_float(pricer.mod_duration())
+
+            if dirty0 is None or mdur is None or dirty0 <= 0 or mdur <= 0:
+                for label, _, _ in CARRY_ROLL_HORIZONS:
+                    carry_by_horizon[label].append(np.nan)
+                continue
+
+            issue_date = _coerce_date(row.get("issue_date"))
+            maturity_date = _coerce_date(row.get("maturity_date"))
+            cpn = _safe_float(row.get("coupon"))
+
+            if (issue_date is None or maturity_date is None or cpn is None) and pricer is not None:
+                try:
+                    if issue_date is None:
+                        issue_date = _coerce_date(pricer.issue_date())
+                    if maturity_date is None:
+                        maturity_date = _coerce_date(pricer.maturity_date())
+                    if cpn is None:
+                        cpn = _safe_float(pricer.coupon())
+                except Exception:
+                    pass
+
+            dv01 = mdur * dirty0 / 10000.0
+            if dv01 <= 0 or not np.isfinite(dv01):
+                for label, _, _ in CARRY_ROLL_HORIZONS:
+                    carry_by_horizon[label].append(np.nan)
+                continue
+
+            for label, tenor, _ in CARRY_ROLL_HORIZONS:
+                horizon_date = horizon_defaults[label]
+                if pricer is not None:
+                    horizon_date = _advance_horizon_date(
+                        as_of_date=as_of_date,
+                        pricer=pricer,
+                        horizon_tenor=tenor,
+                    )
+
+                if horizon_date <= as_of_date:
+                    carry_by_horizon[label].append(np.nan)
+                    continue
+
+                horizon_days = max((horizon_date - as_of_date).days, 1)
+                coupon_accrual = _coupon_accrual_price_per_100(
+                    issue_date=issue_date,
+                    maturity_date=maturity_date,
+                    coupon_pct=cpn,
+                    start_date=as_of_date,
+                    end_date=horizon_date,
+                )
+
+                if coupon_accrual is None:
+                    carry_by_horizon[label].append(np.nan)
+                    continue
+
+                financing_cost = dirty0 * sofr_dec * (horizon_days / 360.0)
+                carry_price = coupon_accrual - financing_cost
+                carry_bps = carry_price / dv01
+                if not np.isfinite(carry_bps):
+                    carry_bps = np.nan
+                carry_by_horizon[label].append(float(carry_bps))
+
+        for label, _, _ in CARRY_ROLL_HORIZONS:
+            out[f"carry_{label}_bps"] = pd.Series(carry_by_horizon[label], index=out.index)
+
+    ttm_arr = out["ttm"].to_numpy(dtype=float)
+    ytm_arr = out["ytm"].to_numpy(dtype=float)
+    roll_func = _fit_roll_spline(ttm=ttm_arr, ytm=ytm_arr)
+    if roll_func is not None:
+        fit_df = (
+            out[["ttm", "ytm"]]
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna(subset=["ttm", "ytm"])
+            .groupby("ttm", as_index=False)["ytm"]
+            .mean()
+            .sort_values(by="ttm")
+        )
+        if not fit_df.empty:
+            fit_min = float(fit_df["ttm"].iloc[0])
+            fit_max = float(fit_df["ttm"].iloc[-1])
+            for label, _, horizon_years in CARRY_ROLL_HORIZONS:
+                shifted_ttm = out["ttm"] - horizon_years
+                valid = (
+                    out["ttm"].notna()
+                    & out["ytm"].notna()
+                    & shifted_ttm.notna()
+                    & (shifted_ttm >= fit_min)
+                    & (shifted_ttm <= fit_max)
+                )
+                if not bool(valid.any()):
+                    continue
+                x_now = out.loc[valid, "ttm"].to_numpy(dtype=float)
+                x_prev = shifted_ttm.loc[valid].to_numpy(dtype=float)
+                try:
+                    y_now = np.asarray(roll_func(x_now), dtype=float)
+                    y_prev = np.asarray(roll_func(x_prev), dtype=float)
+                    roll_bps = (y_now - y_prev) * 100.0
+                    roll_bps[~np.isfinite(roll_bps)] = np.nan
+                    out.loc[valid, f"roll_{label}_bps"] = roll_bps
+                except Exception:
+                    pass
+
+    for label, _, _ in CARRY_ROLL_HORIZONS:
+        carry_col = f"carry_{label}_bps"
+        roll_col = f"roll_{label}_bps"
+        carry_roll_col = f"carry_and_roll_{label}_bps"
+        out[carry_roll_col] = out[carry_col] + out[roll_col]
+
+    # Backward-compatible aliases for existing consumers (3m horizon).
+    out["carry_bps"] = out["carry_3m_bps"]
+    out["roll_bps"] = out["roll_3m_bps"]
+    out["carry_and_roll_bps"] = out["carry_and_roll_3m_bps"]
+    return out
 
 
 def _safe_float(x: Any) -> Optional[float]:
@@ -187,6 +637,30 @@ def ensure_schema(engine: Engine) -> None:
             stmt = statement.strip()
             if stmt:
                 conn.execute(text(stmt))
+        for col in (
+            "carry_bps",
+            "roll_bps",
+            "carry_and_roll_bps",
+            *CARRY_BPS_HORIZON_COLUMNS,
+            *ROLL_BPS_HORIZON_COLUMNS,
+            *CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+            *SWAP_CARRY_ROLL_ALIAS_COLUMNS,
+            *SWAP_CARRY_BPS_HORIZON_COLUMNS,
+            *SWAP_ROLL_BPS_HORIZON_COLUMNS,
+            *SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+            *MMSS_CARRY_ROLL_ALIAS_COLUMNS,
+            *MMSS_CARRY_BPS_HORIZON_COLUMNS,
+            *MMSS_ROLL_BPS_HORIZON_COLUMNS,
+            *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+        ):
+            conn.execute(
+                text(
+                    f"""
+                    ALTER TABLE {POINTS_TABLE}
+                    ADD COLUMN IF NOT EXISTS {col} NUMERIC
+                    """
+                )
+            )
 
 
 def _pythonify(val: Any) -> Any:
@@ -386,29 +860,107 @@ def build_points_dataframe(
             irswaps_tb=IRSwapsTB(swaps_mdp),
             fixedratebonds_tb=FixedRateBondsTB(usts_mdp),
         )
-        queries = [
+        mmss_queries = [
             IRSwapQuery(curve=curve_name, tenor=c, value=IRSwapValue.MMSS)
             for c in merged_df["cusip"].tolist()
         ]
-        ts_df = tb.get_timeseries(
+
+        metric_specs: list[tuple[str, IRSwapValue]] = [
+            ("swap_carry", IRSwapValue.CARRY_BPS_RUNNING),
+            ("swap_roll", IRSwapValue.ROLL_BPS_RUNNING),
+        ]
+        swap_metric_queries: list[IRSwapQuery] = []
+        query_name_to_output_col: Dict[str, str] = {}
+        metric_maps_by_col: Dict[str, Dict[str, float]] = {}
+        for cusip in merged_df["cusip"].tolist():
+            for label, tenor, _ in CARRY_ROLL_HORIZONS:
+                for metric_prefix, metric_value in metric_specs:
+                    output_col = f"{metric_prefix}_{label}_bps"
+                    query_name = f"USTRV::{cusip}::{metric_prefix}::{label}"
+                    swap_metric_queries.append(
+                        IRSwapQuery(
+                            curve=curve_name,
+                            tenor=cusip,
+                            value=metric_value,
+                            value_kwargs={"horizon": tenor},
+                            # Long MMSS spread is modeled as long bond + pay-fixed swap.
+                            structure_kwargs={"bpv": -1},
+                            name=query_name,
+                        )
+                    )
+                    query_name_to_output_col[query_name] = output_col
+                    metric_maps_by_col.setdefault(output_col, {})
+
+        combined_queries = [*mmss_queries, *swap_metric_queries]
+        combined_df = tb.get_timeseries(
             start=as_of_date,
             end=as_of_date,
-            queries=queries,
-            n_jobs=5,
+            queries=combined_queries,
+            n_jobs=1,
         )
         mmss_map: Dict[str, float] = {}
-        if ts_df is not None and not ts_df.empty:
-            latest = ts_df.iloc[-1]
-            for col_name, val in latest.items():
-                cusip = _extract_cusip_from_query_name(col_name)
+        if combined_df is not None and not combined_df.empty:
+            latest_metrics = combined_df.iloc[-1]
+            for query_name, val in latest_metrics.items():
+                query_name = str(query_name)
+                output_col = query_name_to_output_col.get(query_name)
+                if output_col is None:
+                    cusip = _extract_cusip_from_query_name(query_name)
+                    fv = _safe_float(val)
+                    if cusip and fv is not None:
+                        mmss_map[cusip] = fv
+                    continue
+                cusip = _extract_cusip_from_query_name(query_name)
                 fv = _safe_float(val)
                 if cusip and fv is not None:
-                    mmss_map[cusip] = fv
+                    metric_maps_by_col[output_col][cusip] = fv
+
         merged_df["mmss"] = merged_df["cusip"].map(mmss_map)
+
+        for label, _, _ in CARRY_ROLL_HORIZONS:
+            swap_carry_col = f"swap_carry_{label}_bps"
+            swap_roll_col = f"swap_roll_{label}_bps"
+            swap_carry_roll_col = f"swap_carry_and_roll_{label}_bps"
+            merged_df[swap_carry_col] = merged_df["cusip"].map(metric_maps_by_col.get(swap_carry_col, {}))
+            merged_df[swap_roll_col] = merged_df["cusip"].map(metric_maps_by_col.get(swap_roll_col, {}))
+            merged_df[swap_carry_roll_col] = merged_df[swap_carry_col] + merged_df[swap_roll_col]
     else:
         merged_df["mmss"] = np.nan
+        for col in (
+            *SWAP_CARRY_BPS_HORIZON_COLUMNS,
+            *SWAP_ROLL_BPS_HORIZON_COLUMNS,
+            *SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+            *MMSS_CARRY_BPS_HORIZON_COLUMNS,
+            *MMSS_ROLL_BPS_HORIZON_COLUMNS,
+            *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+        ):
+            merged_df[col] = np.nan
+
+    merged_df["swap_carry_bps"] = merged_df.get("swap_carry_3m_bps")
+    merged_df["swap_roll_bps"] = merged_df.get("swap_roll_3m_bps")
+    merged_df["swap_carry_and_roll_bps"] = merged_df.get("swap_carry_and_roll_3m_bps")
 
     merged_df["coupon"] = merged_df["cpn"] if "cpn" in merged_df.columns else np.nan
+    merged_df = _compute_carry_roll_columns(
+        merged_df,
+        as_of_date=as_of_date,
+        pricers={str(k): v for k, v in pricers.items()},
+    )
+    for label, _, _ in CARRY_ROLL_HORIZONS:
+        merged_df[f"mmss_carry_{label}_bps"] = (
+            merged_df[f"carry_{label}_bps"] + merged_df[f"swap_carry_{label}_bps"]
+        )
+        merged_df[f"mmss_roll_{label}_bps"] = (
+            merged_df[f"roll_{label}_bps"] + merged_df[f"swap_roll_{label}_bps"]
+        )
+        merged_df[f"mmss_carry_and_roll_{label}_bps"] = (
+            merged_df[f"carry_and_roll_{label}_bps"] + merged_df[f"swap_carry_and_roll_{label}_bps"]
+        )
+
+    merged_df["mmss_carry_bps"] = merged_df.get("mmss_carry_3m_bps")
+    merged_df["mmss_roll_bps"] = merged_df.get("mmss_roll_3m_bps")
+    merged_df["mmss_carry_and_roll_bps"] = merged_df.get("mmss_carry_and_roll_3m_bps")
+
     merged_df = _ensure_numeric_columns(merged_df, NUMERIC_COLUMNS)
     merged_df = merged_df.sort_values(by=["ttm", "oi", "rank"], kind="mergesort")
 
@@ -424,6 +976,20 @@ def build_points_dataframe(
         "clean_price",
         "dirty_price",
         "coupon",
+        "carry_bps",
+        "roll_bps",
+        "carry_and_roll_bps",
+        *CARRY_BPS_HORIZON_COLUMNS,
+        *ROLL_BPS_HORIZON_COLUMNS,
+        *CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+        *SWAP_CARRY_ROLL_ALIAS_COLUMNS,
+        *SWAP_CARRY_BPS_HORIZON_COLUMNS,
+        *SWAP_ROLL_BPS_HORIZON_COLUMNS,
+        *SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+        *MMSS_CARRY_ROLL_ALIAS_COLUMNS,
+        *MMSS_CARRY_BPS_HORIZON_COLUMNS,
+        *MMSS_ROLL_BPS_HORIZON_COLUMNS,
+        *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
         "issue_date",
         "maturity_date",
         "market_timestamp",
@@ -470,11 +1036,36 @@ def ingest_snapshot(
     snapshot_ts = pd.Timestamp.now(tz="UTC")
     points_df["snapshot_ts"] = snapshot_ts
 
+    horizon_counts = " ".join(
+        [
+            f"{label}:"
+            f"bond=({int(points_df[f'carry_{label}_bps'].notna().sum())},"
+            f"{int(points_df[f'roll_{label}_bps'].notna().sum())},"
+            f"{int(points_df[f'carry_and_roll_{label}_bps'].notna().sum())}) "
+            f"swap=({int(points_df[f'swap_carry_{label}_bps'].notna().sum())},"
+            f"{int(points_df[f'swap_roll_{label}_bps'].notna().sum())},"
+            f"{int(points_df[f'swap_carry_and_roll_{label}_bps'].notna().sum())}) "
+            f"mmss=({int(points_df[f'mmss_carry_{label}_bps'].notna().sum())},"
+            f"{int(points_df[f'mmss_roll_{label}_bps'].notna().sum())},"
+            f"{int(points_df[f'mmss_carry_and_roll_{label}_bps'].notna().sum())})"
+            for label, _, _ in CARRY_ROLL_HORIZONS
+        ]
+    )
     print(
         f"Snapshot {as_of_date} ({curve_name}): "
         f"points={len(points_df)} "
         f"otrs={int((points_df['rank'] == 0).sum())} "
-        f"mmss_non_null={int(points_df['mmss'].notna().sum())}"
+        f"mmss_non_null={int(points_df['mmss'].notna().sum())} "
+        f"carry_non_null={int(points_df['carry_bps'].notna().sum())} "
+        f"roll_non_null={int(points_df['roll_bps'].notna().sum())} "
+        f"carry_roll_non_null={int(points_df['carry_and_roll_bps'].notna().sum())} "
+        f"swap_carry_non_null={int(points_df['swap_carry_bps'].notna().sum())} "
+        f"swap_roll_non_null={int(points_df['swap_roll_bps'].notna().sum())} "
+        f"swap_carry_roll_non_null={int(points_df['swap_carry_and_roll_bps'].notna().sum())} "
+        f"mmss_carry_non_null={int(points_df['mmss_carry_bps'].notna().sum())} "
+        f"mmss_roll_non_null={int(points_df['mmss_roll_bps'].notna().sum())} "
+        f"mmss_carry_roll_non_null={int(points_df['mmss_carry_and_roll_bps'].notna().sum())} "
+        f"{horizon_counts}"
     )
 
     if dry_run:
@@ -497,6 +1088,20 @@ def ingest_snapshot(
             "clean_price",
             "dirty_price",
             "coupon",
+            "carry_bps",
+            "roll_bps",
+            "carry_and_roll_bps",
+            *CARRY_BPS_HORIZON_COLUMNS,
+            *ROLL_BPS_HORIZON_COLUMNS,
+            *CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+            *SWAP_CARRY_ROLL_ALIAS_COLUMNS,
+            *SWAP_CARRY_BPS_HORIZON_COLUMNS,
+            *SWAP_ROLL_BPS_HORIZON_COLUMNS,
+            *SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+            *MMSS_CARRY_ROLL_ALIAS_COLUMNS,
+            *MMSS_CARRY_BPS_HORIZON_COLUMNS,
+            *MMSS_ROLL_BPS_HORIZON_COLUMNS,
+            *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
             "issue_date",
             "maturity_date",
             "market_timestamp",

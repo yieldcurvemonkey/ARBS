@@ -105,7 +105,11 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         # return (self.fair_rate(irswap) * 100 - float(irswap.rate(curves=self._rl_curve_handle.roll(horizon)))) * 100
 
     def carry_and_roll_bps_running(self, irswap: rl.IRS, horizon: str):
-        raise NotImplementedError("rateslib not implemented")
+        # Keep parity with quantlib backend: running carry + running rolldown.
+        return self.carry_bps_running(irswap=irswap, horizon=horizon) + self.roll_bps_running(
+            irswap=irswap,
+            horizon=horizon,
+        )
 
     def nodes(self):
         rl_nodes: dict[pd.Timestamp, float] = self.handle().nodes._nodes

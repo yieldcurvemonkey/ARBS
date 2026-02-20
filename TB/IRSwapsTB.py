@@ -75,12 +75,36 @@ def _build_row_for_query(
     date_col: str,
 ) -> Tuple[DateLike, str, float]:
     q_eff = resolve_query(q, timestamp=ref_dt, pricer_or_curve=curve)
-    col_name = q_eff.col_name(curve.id())
-    col_name = q.col_name() if ("CT" in q.tenor or "9128" in q.tenor) else col_name
+    if getattr(q, "name", None):
+        # Explicit labels should be preserved verbatim so callers can disambiguate queries.
+        col_name = str(q.name)
+    else:
+        col_name = q_eff.col_name(curve.id())
+        tenor_txt = str(getattr(q, "tenor", "") or "")
+        if ("CT" in tenor_txt) or ("9128" in tenor_txt):
+            col_name = q.col_name()
     pkg, rw = q_eff.resolve_package(pricer_or_curve=curve, is_for_timeseries=True)
     val_map = q_eff.build_value_map(pricer_or_curve=curve, package=pkg, risk_weights=rw)
     value = val_map.apply(value=q_eff.value, **q.value_kwargs)
     return ref_dt, col_name, float(value)
+
+
+def _build_rows_for_chunk(
+    chunk: List[Tuple[DateLike, IRSwapQuery, _IRSwapGenericCurve]],
+    date_col: str,
+) -> Tuple[
+    List[Tuple[Tuple[DateLike, str, float], IRSwapQuery, DateLike]],
+    List[Tuple[IRSwapQuery, DateLike, Exception]],
+]:
+    rows: List[Tuple[Tuple[DateLike, str, float], IRSwapQuery, DateLike]] = []
+    errors: List[Tuple[IRSwapQuery, DateLike, Exception]] = []
+    for d, q, curve in chunk:
+        try:
+            row = _build_row_for_query(curve, q, d, date_col)
+            rows.append((row, q, d))
+        except Exception as e:
+            errors.append((q, d, e))
+    return rows, errors
 
 
 def _is_today(d: DateLike) -> bool:
@@ -209,7 +233,13 @@ class IRSwapsTB(ZODBCacheMixin):
             qs = by_curve[curve_name]
             total_tasks = len(missing_points) * len(qs)
             pbar_disable = not self._show_tqdm
-            with tqdm(total=total_tasks, disable=pbar_disable, desc=f"PRICING {curve_name} IRSWAPS...", leave=True) as pbar:
+            worker_count = int(n_jobs) if n_jobs and n_jobs > 1 else 1
+            with tqdm(
+                total=total_tasks,
+                disable=pbar_disable,
+                desc=f"PRICING {curve_name} IRSWAPS [workers={worker_count}]...",
+                leave=True,
+            ) as pbar:
                 tasks: List[Tuple[datetime.datetime | datetime.date, IRSwapQuery, _IRSwapGenericCurve]] = []
                 for d in sorted(missing_points):
                     curve = built_map.get(d)
@@ -225,17 +255,29 @@ class IRSwapsTB(ZODBCacheMixin):
                 if tasks:
                     if (n_jobs or 1) > 1:
                         max_workers = int(n_jobs) if n_jobs and n_jobs > 1 else None
+                        mw = int(max_workers or 1)
+                        chunk_size = max(16, len(tasks) // max(1, mw * 4))
+                        task_chunks: List[List[Tuple[datetime.datetime | datetime.date, IRSwapQuery, _IRSwapGenericCurve]]] = [
+                            tasks[i : i + chunk_size]
+                            for i in range(0, len(tasks), chunk_size)
+                        ]
                         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                            fut_map = {ex.submit(_build_row_for_query, curve, q, d, self._date_col): (q, d) for (d, q, curve) in tasks}
+                            fut_map = {
+                                ex.submit(_build_rows_for_chunk, chunk, self._date_col): chunk
+                                for chunk in task_chunks
+                            }
                             for fut in as_completed(fut_map):
-                                q, d = fut_map[fut]
+                                chunk = fut_map[fut]
                                 try:
-                                    row = fut.result()
-                                    new_rows_with_q.append((row, q, curve_name, d))
-                                except Exception as e:
-                                    self._logger.exception(f"Pricing failed for curve='{curve_name}', date='{d}', query='{q}'. Error: {e}")
+                                    rows, errs = fut.result()
+                                    for row, q, d in rows:
+                                        new_rows_with_q.append((row, q, curve_name, d))
+                                    for q, d, e in errs:
+                                        self._logger.exception(
+                                            f"Pricing failed for curve='{curve_name}', date='{d}', query='{q}'. Error: {e}"
+                                        )
                                 finally:
-                                    pbar.update(1)
+                                    pbar.update(len(chunk))
                     else:
                         for d, q, curve in tasks:
                             try:

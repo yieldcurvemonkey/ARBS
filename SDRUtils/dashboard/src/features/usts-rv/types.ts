@@ -4,6 +4,9 @@ export type UstsRvValueColumn =
   | 'clean_price'
   | 'dirty_price'
   | 'mdur'
+  | 'carry_bps'
+  | 'roll_bps'
+  | 'carry_and_roll_bps'
   | 'coupon'
 
 export type UstsRvXColumn = 'ttm' | 'mdur'
@@ -51,6 +54,51 @@ export type UstsRvPoint = {
   clean_price: number | null
   dirty_price: number | null
   coupon: number | null
+  carry_bps: number | null
+  roll_bps: number | null
+  carry_and_roll_bps: number | null
+  carry_1m_bps: number | null
+  roll_1m_bps: number | null
+  carry_and_roll_1m_bps: number | null
+  carry_2m_bps: number | null
+  roll_2m_bps: number | null
+  carry_and_roll_2m_bps: number | null
+  carry_3m_bps: number | null
+  roll_3m_bps: number | null
+  carry_and_roll_3m_bps: number | null
+  carry_6m_bps: number | null
+  roll_6m_bps: number | null
+  carry_and_roll_6m_bps: number | null
+  swap_carry_bps: number | null
+  swap_roll_bps: number | null
+  swap_carry_and_roll_bps: number | null
+  swap_carry_1m_bps: number | null
+  swap_roll_1m_bps: number | null
+  swap_carry_and_roll_1m_bps: number | null
+  swap_carry_2m_bps: number | null
+  swap_roll_2m_bps: number | null
+  swap_carry_and_roll_2m_bps: number | null
+  swap_carry_3m_bps: number | null
+  swap_roll_3m_bps: number | null
+  swap_carry_and_roll_3m_bps: number | null
+  swap_carry_6m_bps: number | null
+  swap_roll_6m_bps: number | null
+  swap_carry_and_roll_6m_bps: number | null
+  mmss_carry_bps: number | null
+  mmss_roll_bps: number | null
+  mmss_carry_and_roll_bps: number | null
+  mmss_carry_1m_bps: number | null
+  mmss_roll_1m_bps: number | null
+  mmss_carry_and_roll_1m_bps: number | null
+  mmss_carry_2m_bps: number | null
+  mmss_roll_2m_bps: number | null
+  mmss_carry_and_roll_2m_bps: number | null
+  mmss_carry_3m_bps: number | null
+  mmss_roll_3m_bps: number | null
+  mmss_carry_and_roll_3m_bps: number | null
+  mmss_carry_6m_bps: number | null
+  mmss_roll_6m_bps: number | null
+  mmss_carry_and_roll_6m_bps: number | null
   issue_date: string | null
   maturity_date: string | null
   market_timestamp: string | null

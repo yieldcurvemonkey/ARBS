@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type {
+  UstsRvPoint,
   UstsRvSplineConfigRequest,
   UstsRvSnapshotRequest,
   UstsRvSnapshotResponse,
@@ -12,6 +13,7 @@ import type {
   UstsRvValueColumn,
   UstsRvXColumn
 } from '@/features/usts-rv/types'
+import { ouCalibrate, simulateOUBands } from '@/features/usts-rv/ou'
 
 const VALUE_OPTIONS: Array<{ key: UstsRvValueColumn; label: string }> = [
   { key: 'mmss', label: 'MMSS' },
@@ -48,8 +50,165 @@ const VALUE_SYMBOLS: Record<UstsRvValueColumn, string> = {
   clean_price: 'square',
   dirty_price: 'cross',
   mdur: 'triangle-up',
+  carry_bps: 'star',
+  roll_bps: 'hexagram',
+  carry_and_roll_bps: 'pentagon',
   coupon: 'triangle-down'
 }
+
+type CarryRollHorizon = '1m' | '2m' | '3m' | '6m'
+
+const SNAPSHOT_CARRY_ROLL_HORIZONS: Array<{ key: CarryRollHorizon; label: string }> = [
+  { key: '1m', label: '1M' },
+  { key: '2m', label: '2M' },
+  { key: '3m', label: '3M' },
+  { key: '6m', label: '6M' }
+]
+
+const SNAPSHOT_CARRY_ROLL_FIELD_MAP: Record<
+  CarryRollHorizon,
+  {
+    carry: keyof UstsRvPoint
+    roll: keyof UstsRvPoint
+    carryAndRoll: keyof UstsRvPoint
+  }
+> = {
+  '1m': {
+    carry: 'carry_1m_bps',
+    roll: 'roll_1m_bps',
+    carryAndRoll: 'carry_and_roll_1m_bps'
+  },
+  '2m': {
+    carry: 'carry_2m_bps',
+    roll: 'roll_2m_bps',
+    carryAndRoll: 'carry_and_roll_2m_bps'
+  },
+  '3m': {
+    carry: 'carry_3m_bps',
+    roll: 'roll_3m_bps',
+    carryAndRoll: 'carry_and_roll_3m_bps'
+  },
+  '6m': {
+    carry: 'carry_6m_bps',
+    roll: 'roll_6m_bps',
+    carryAndRoll: 'carry_and_roll_6m_bps'
+  }
+}
+
+const SNAPSHOT_SWAP_CARRY_ROLL_FIELD_MAP: Record<
+  CarryRollHorizon,
+  {
+    carry: keyof UstsRvPoint
+    roll: keyof UstsRvPoint
+    carryAndRoll: keyof UstsRvPoint
+  }
+> = {
+  '1m': {
+    carry: 'swap_carry_1m_bps',
+    roll: 'swap_roll_1m_bps',
+    carryAndRoll: 'swap_carry_and_roll_1m_bps'
+  },
+  '2m': {
+    carry: 'swap_carry_2m_bps',
+    roll: 'swap_roll_2m_bps',
+    carryAndRoll: 'swap_carry_and_roll_2m_bps'
+  },
+  '3m': {
+    carry: 'swap_carry_3m_bps',
+    roll: 'swap_roll_3m_bps',
+    carryAndRoll: 'swap_carry_and_roll_3m_bps'
+  },
+  '6m': {
+    carry: 'swap_carry_6m_bps',
+    roll: 'swap_roll_6m_bps',
+    carryAndRoll: 'swap_carry_and_roll_6m_bps'
+  }
+}
+
+const SNAPSHOT_MMSS_CARRY_ROLL_FIELD_MAP: Record<
+  CarryRollHorizon,
+  {
+    carry: keyof UstsRvPoint
+    roll: keyof UstsRvPoint
+    carryAndRoll: keyof UstsRvPoint
+  }
+> = {
+  '1m': {
+    carry: 'mmss_carry_1m_bps',
+    roll: 'mmss_roll_1m_bps',
+    carryAndRoll: 'mmss_carry_and_roll_1m_bps'
+  },
+  '2m': {
+    carry: 'mmss_carry_2m_bps',
+    roll: 'mmss_roll_2m_bps',
+    carryAndRoll: 'mmss_carry_and_roll_2m_bps'
+  },
+  '3m': {
+    carry: 'mmss_carry_3m_bps',
+    roll: 'mmss_roll_3m_bps',
+    carryAndRoll: 'mmss_carry_and_roll_3m_bps'
+  },
+  '6m': {
+    carry: 'mmss_carry_6m_bps',
+    roll: 'mmss_roll_6m_bps',
+    carryAndRoll: 'mmss_carry_and_roll_6m_bps'
+  }
+}
+
+type SnapshotTableColumnId =
+  | 'cusip'
+  | 'label'
+  | 'oi'
+  | 'rank'
+  | 'ttm'
+  | 'mmss'
+  | 'ytm'
+  | 'cleanPx'
+  | 'bondCarry'
+  | 'bondRoll'
+  | 'bondCarryRoll'
+  | 'swapCarry'
+  | 'swapRoll'
+  | 'swapCarryRoll'
+  | 'mmssCarry'
+  | 'mmssRoll'
+  | 'mmssCarryRoll'
+  | 'deltaYtm'
+  | 'deltaMmss'
+
+type SnapshotTableColumnKind = 'text' | 'number'
+
+type SnapshotTableColumnDefinition = {
+  id: SnapshotTableColumnId
+  label: string
+  kind: SnapshotTableColumnKind
+  decimals?: number
+  defaultVisible: boolean
+  getValue: (point: UstsRvPoint) => string | number | null
+}
+
+type SnapshotDeltaByCusip = Record<
+  string,
+  {
+    deltaYtmBps: number | null
+    deltaMmssBps: number | null
+  }
+>
+
+const SNAPSHOT_TABLE_DEFAULT_VISIBLE_COLUMN_IDS: SnapshotTableColumnId[] = [
+  'cusip',
+  'label',
+  'oi',
+  'rank',
+  'ttm',
+  'mmss',
+  'ytm',
+  'cleanPx',
+  'bondCarryRoll',
+  'mmssCarryRoll',
+  'deltaYtm',
+  'deltaMmss'
+]
 
 type PlotViewport = {
   xRange: [number, number] | null
@@ -103,6 +262,21 @@ type TimeseriesFormulaSeries = {
   expression: string
   points: Array<{ asOf: string; value: number | null }>
   nonNullCount: number
+}
+
+type MeanReversionSeries = {
+  id: string
+  name: string
+  yaxis: TimeseriesAxis
+  color: string
+  lastDate: string
+  lastValue: number
+  zScore: number
+  halfLife: number
+  mu: number
+  kappa: number
+  sigma: number
+  phi: number
 }
 
 type TimeseriesQuickSpreadPreset = {
@@ -436,6 +610,16 @@ function formatTimestamp(value: string | null | undefined) {
   }).format(d)
 }
 
+function formatNumber(value: number | null | undefined, decimals = 3) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '--'
+  return value.toFixed(decimals)
+}
+
+function pointMetric(point: UstsRvPoint, key: keyof UstsRvPoint): number | null {
+  const raw = point[key]
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+}
+
 function toFiniteNumber(value: unknown): number | null {
   const num = Number(value)
   return Number.isFinite(num) ? num : null
@@ -447,6 +631,140 @@ function normalizeRange(raw: unknown): [number, number] | null {
   const hi = toFiniteNumber(raw[1])
   if (lo === null || hi === null) return null
   return lo <= hi ? [lo, hi] : [hi, lo]
+}
+
+function shiftIsoDate(dateIso: string, days: number) {
+  const d = new Date(`${dateIso}T00:00:00Z`)
+  if (Number.isNaN(d.getTime())) return dateIso
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+function parseDeltaHorizon(raw: string) {
+  const normalized = String(raw || '').trim().toUpperCase().replace(/\s+/g, '')
+  if (!normalized) {
+    return {
+      normalizedLabel: '',
+      days: null as number | null,
+      error: 'Enter a delta horizon like 1W, 3M, 10D, or 1Y.'
+    }
+  }
+
+  const match = normalized.match(/^(\d+)([DWMY])$/)
+  if (!match) {
+    return {
+      normalizedLabel: normalized,
+      days: null as number | null,
+      error: `Invalid delta horizon '${raw}'. Use formats like 1W, 3M, 10D, or 1Y.`
+    }
+  }
+
+  const quantity = Math.trunc(Number(match[1]))
+  const unit = match[2]
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return {
+      normalizedLabel: normalized,
+      days: null as number | null,
+      error: 'Delta horizon quantity must be a positive integer.'
+    }
+  }
+
+  const unitDays =
+    unit === 'D' ? 1 : unit === 'W' ? 7 : unit === 'M' ? 30 : unit === 'Y' ? 365 : NaN
+  if (!Number.isFinite(unitDays)) {
+    return {
+      normalizedLabel: normalized,
+      days: null as number | null,
+      error: `Unsupported delta horizon unit '${unit}'.`
+    }
+  }
+
+  return {
+    normalizedLabel: `${quantity}${unit}`,
+    days: quantity * unitDays,
+    error: null as string | null
+  }
+}
+
+function matchesTextFilter(value: string | number | null, rawFilter: string) {
+  const filter = rawFilter.trim().toLowerCase()
+  if (!filter) return true
+  const normalizedValue =
+    value === null || value === undefined ? '--' : String(value).trim() || '--'
+  return normalizedValue.toLowerCase().includes(filter)
+}
+
+function matchesNumericFilter(value: number | null, rawFilter: string, decimals = 3) {
+  const filter = rawFilter.trim()
+  if (!filter) return true
+
+  if (value === null || !Number.isFinite(value)) {
+    const normalized = filter.toLowerCase()
+    return normalized === '--' || normalized === 'na' || normalized === 'null'
+  }
+
+  const rangeMatch = filter.match(/^(-?\d+(?:\.\d+)?)\s*\.\.\s*(-?\d+(?:\.\d+)?)$/)
+  if (rangeMatch) {
+    const left = Number(rangeMatch[1])
+    const right = Number(rangeMatch[2])
+    if (Number.isFinite(left) && Number.isFinite(right)) {
+      const lo = Math.min(left, right)
+      const hi = Math.max(left, right)
+      return value >= lo && value <= hi
+    }
+  }
+
+  const cmpMatch = filter.match(/^(<=|>=|=|<|>)\s*(-?\d+(?:\.\d+)?)$/)
+  if (cmpMatch) {
+    const rhs = Number(cmpMatch[2])
+    if (!Number.isFinite(rhs)) return false
+    if (cmpMatch[1] === '<') return value < rhs
+    if (cmpMatch[1] === '<=') return value <= rhs
+    if (cmpMatch[1] === '>') return value > rhs
+    if (cmpMatch[1] === '>=') return value >= rhs
+    return Math.abs(value - rhs) < 1e-9
+  }
+
+  const direct = Number(filter)
+  if (Number.isFinite(direct)) {
+    return Math.abs(value - direct) < 1e-9
+  }
+
+  return formatNumber(value, decimals).includes(filter)
+}
+
+function matchesSnapshotTableFilter(
+  value: string | number | null,
+  kind: SnapshotTableColumnKind,
+  rawFilter: string,
+  decimals = 3
+) {
+  if (!rawFilter.trim()) return true
+  if (kind === 'text') return matchesTextFilter(value, rawFilter)
+  const numericValue =
+    typeof value === 'number' && Number.isFinite(value) ? value : null
+  return matchesNumericFilter(numericValue, rawFilter, decimals)
+}
+
+function buildAnchorValueByCusip(
+  response: UstsRvTimeseriesResponse,
+  targetDateIso: string
+) {
+  const out = new Map<string, number>()
+  for (const series of response.series ?? []) {
+    const cusip = String(series.cusip || '').trim().toUpperCase()
+    if (!cusip) continue
+
+    let anchor: number | null = null
+    for (const point of series.points ?? []) {
+      if (!point?.asOf) continue
+      if (point.asOf > targetDateIso) break
+      const v = toFiniteNumber(point.value)
+      if (v !== null) anchor = v
+    }
+    if (anchor !== null) out.set(cusip, anchor)
+  }
+  return out
 }
 
 function oiSortKey(oi: string) {
@@ -869,6 +1187,21 @@ export default function UstsRvDashboard() {
   const [minTtm, setMinTtm] = useState(1)
   const [xColumn, setXColumn] = useState<UstsRvXColumn>('ttm')
   const [valueColumn, setValueColumn] = useState<UstsRvValueColumn>('ytm')
+  const [snapshotCarryRollHorizon, setSnapshotCarryRollHorizon] =
+    useState<CarryRollHorizon>('3m')
+  const [showSnapshotPreview, setShowSnapshotPreview] = useState(true)
+  const [deltaHorizonInput, setDeltaHorizonInput] = useState('1D')
+  const [snapshotDeltaByCusip, setSnapshotDeltaByCusip] =
+    useState<SnapshotDeltaByCusip>({})
+  const [snapshotDeltaLoading, setSnapshotDeltaLoading] = useState(false)
+  const [snapshotDeltaError, setSnapshotDeltaError] = useState<string | null>(null)
+  const [snapshotColumnFilters, setSnapshotColumnFilters] = useState<
+    Partial<Record<SnapshotTableColumnId, string>>
+  >({})
+  const [visibleSnapshotColumnIds, setVisibleSnapshotColumnIds] = useState<
+    SnapshotTableColumnId[]
+  >(SNAPSHOT_TABLE_DEFAULT_VISIBLE_COLUMN_IDS)
+  const [showSnapshotColumnPicker, setShowSnapshotColumnPicker] = useState(false)
   const [selectedPresetIds, setSelectedPresetIds] = useState<string[]>(DEFAULT_PRESET_IDS)
   const [showSplinePresets, setShowSplinePresets] = useState(false)
   const [snapshot, setSnapshot] = useState<UstsRvSnapshotResponse | null>(null)
@@ -880,6 +1213,8 @@ export default function UstsRvDashboard() {
   const [timeseriesLoading, setTimeseriesLoading] = useState(false)
   const [timeseriesError, setTimeseriesError] = useState<string | null>(null)
   const [timeseriesLookbackDays, setTimeseriesLookbackDays] = useState(365 * 5)
+  const [showMeanReversion, setShowMeanReversion] = useState(false)
+  const [ouForwardSteps, setOuForwardSteps] = useState(126)
   const [timeseriesTechnicals, setTimeseriesTechnicals] = useState<TimeseriesTechnicals>({
     sma20: false,
     sma50: false,
@@ -1429,10 +1764,469 @@ export default function UstsRvDashboard() {
     return warnings
   }, [formulaConfigs, timeseriesFormulaSeries])
 
+  const normalizedOuForwardSteps = useMemo(() => {
+    const v = Math.trunc(Number(ouForwardSteps))
+    if (!Number.isFinite(v)) return 126
+    return Math.max(5, Math.min(504, v))
+  }, [ouForwardSteps])
+
+  const meanReversionSeries = useMemo(() => {
+    if (!showMeanReversion || !timeseries) return []
+
+    const out: MeanReversionSeries[] = []
+    const hiddenCusips = new Set(timeseriesHiddenCusips)
+
+    for (let idx = 0; idx < (timeseries.series ?? []).length; idx += 1) {
+      const series = timeseries.series[idx]
+      if (hiddenCusips.has(series.cusip)) continue
+
+      const yaxis: TimeseriesAxis = timeseriesRightAxisCusips.includes(series.cusip)
+        ? 'y2'
+        : 'y'
+      const color = TIMESERIES_LINE_PALETTE[idx % TIMESERIES_LINE_PALETTE.length]
+      const valid = series.points.filter(
+        (point) =>
+          typeof point.value === 'number' &&
+          Number.isFinite(point.value) &&
+          Boolean(point.asOf)
+      )
+      if (valid.length < 20) continue
+
+      const values = valid.map((point) => point.value as number)
+      const ou = ouCalibrate(values)
+      if (!ou) continue
+
+      const last = valid[valid.length - 1]
+      out.push({
+        id: `bond-${series.cusip}`,
+        name: series.cusip,
+        yaxis,
+        color,
+        lastDate: last.asOf,
+        lastValue: last.value as number,
+        zScore: ou.zScore,
+        halfLife: ou.halfLife,
+        mu: ou.mu,
+        kappa: ou.kappa,
+        sigma: ou.sigma,
+        phi: ou.phi
+      })
+    }
+
+    for (let idx = 0; idx < timeseriesFormulaSeries.length; idx += 1) {
+      const formula = timeseriesFormulaSeries[idx]
+      const color = FORMULA_LINE_PALETTE[idx % FORMULA_LINE_PALETTE.length]
+      const valid = formula.points.filter(
+        (point) =>
+          typeof point.value === 'number' &&
+          Number.isFinite(point.value) &&
+          Boolean(point.asOf)
+      )
+      if (valid.length < 20) continue
+
+      const values = valid.map((point) => point.value as number)
+      const ou = ouCalibrate(values)
+      if (!ou) continue
+
+      const last = valid[valid.length - 1]
+      out.push({
+        id: `formula-${formula.id}`,
+        name: formula.name,
+        yaxis: formula.yaxis,
+        color,
+        lastDate: last.asOf,
+        lastValue: last.value as number,
+        zScore: ou.zScore,
+        halfLife: ou.halfLife,
+        mu: ou.mu,
+        kappa: ou.kappa,
+        sigma: ou.sigma,
+        phi: ou.phi
+      })
+    }
+
+    return out
+  }, [
+    showMeanReversion,
+    timeseries,
+    timeseriesFormulaSeries,
+    timeseriesHiddenCusips,
+    timeseriesRightAxisCusips
+  ])
+
+  const snapshotCarryRollFields = useMemo(
+    () => SNAPSHOT_CARRY_ROLL_FIELD_MAP[snapshotCarryRollHorizon],
+    [snapshotCarryRollHorizon]
+  )
+  const snapshotSwapCarryRollFields = useMemo(
+    () => SNAPSHOT_SWAP_CARRY_ROLL_FIELD_MAP[snapshotCarryRollHorizon],
+    [snapshotCarryRollHorizon]
+  )
+  const snapshotMmssCarryRollFields = useMemo(
+    () => SNAPSHOT_MMSS_CARRY_ROLL_FIELD_MAP[snapshotCarryRollHorizon],
+    [snapshotCarryRollHorizon]
+  )
+  const parsedDeltaHorizon = useMemo(
+    () => parseDeltaHorizon(deltaHorizonInput),
+    [deltaHorizonInput]
+  )
+  const deltaHorizonLabel =
+    parsedDeltaHorizon.normalizedLabel ||
+    String(deltaHorizonInput || '').trim().toUpperCase() ||
+    'DELTA'
+  const deltaEndDate = snapshot?.asOf || asOf
+  const deltaTargetDate = useMemo(() => {
+    if (!deltaEndDate || parsedDeltaHorizon.days === null) return null
+    return shiftIsoDate(deltaEndDate, -parsedDeltaHorizon.days)
+  }, [deltaEndDate, parsedDeltaHorizon.days])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const run = async () => {
+      if (parsedDeltaHorizon.error) {
+        setSnapshotDeltaByCusip({})
+        setSnapshotDeltaError(parsedDeltaHorizon.error)
+        setSnapshotDeltaLoading(false)
+        return
+      }
+      if (!snapshot || !snapshot.points?.length || !deltaTargetDate || !deltaEndDate) {
+        setSnapshotDeltaByCusip({})
+        setSnapshotDeltaError(null)
+        setSnapshotDeltaLoading(false)
+        return
+      }
+
+      const cusips = Array.from(
+        new Set(
+          snapshot.points
+            .map((point) => String(point.cusip || '').trim().toUpperCase())
+            .filter((cusip) => cusip.length === 9)
+        )
+      )
+      if (!cusips.length) {
+        setSnapshotDeltaByCusip({})
+        setSnapshotDeltaError(null)
+        setSnapshotDeltaLoading(false)
+        return
+      }
+
+      const startDate = shiftIsoDate(deltaTargetDate, -14)
+
+      setSnapshotDeltaLoading(true)
+      setSnapshotDeltaError(null)
+      try {
+        const fetchSeries = async (
+          valueColumn: 'ytm' | 'mmss'
+        ): Promise<UstsRvTimeseriesResponse> => {
+          const res = await fetch('/api/usts-rv/timeseries', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              asOf: deltaEndDate,
+              curveName: snapshot.curveName,
+              valueColumn,
+              cusips,
+              startDate,
+              endDate: deltaEndDate
+            })
+          })
+          const data = await res.json()
+          if (!res.ok) {
+            throw new Error(
+              data?.error ||
+                `Failed to load ${valueColumn.toUpperCase()} deltas for ${deltaHorizonLabel}.`
+            )
+          }
+          return data as UstsRvTimeseriesResponse
+        }
+
+        const [ytmSeries, mmssSeries] = await Promise.all([
+          fetchSeries('ytm'),
+          fetchSeries('mmss')
+        ])
+        if (cancelled) return
+
+        const ytmAnchorByCusip = buildAnchorValueByCusip(ytmSeries, deltaTargetDate)
+        const mmssAnchorByCusip = buildAnchorValueByCusip(mmssSeries, deltaTargetDate)
+        const next: SnapshotDeltaByCusip = {}
+
+        for (const point of snapshot.points) {
+          const cusip = String(point.cusip || '').trim().toUpperCase()
+          if (!cusip) continue
+          const ytmAnchor = ytmAnchorByCusip.get(cusip)
+          const mmssAnchor = mmssAnchorByCusip.get(cusip)
+          const currentYtm = toFiniteNumber(point.ytm)
+          const currentMmss = toFiniteNumber(point.mmss)
+
+          next[cusip] = {
+            deltaYtmBps:
+              currentYtm !== null && ytmAnchor !== undefined
+                ? (currentYtm - ytmAnchor) * 100
+                : null,
+            deltaMmssBps:
+              currentMmss !== null && mmssAnchor !== undefined
+                ? currentMmss - mmssAnchor
+                : null
+          }
+        }
+
+        setSnapshotDeltaByCusip(next)
+      } catch (err: any) {
+        if (cancelled) return
+        setSnapshotDeltaByCusip({})
+        setSnapshotDeltaError(err?.message || 'Failed to load delta horizon changes.')
+      } finally {
+        if (!cancelled) setSnapshotDeltaLoading(false)
+      }
+    }
+
+    void run()
+
+    return () => {
+      cancelled = true
+    }
+  }, [snapshot, deltaTargetDate, deltaEndDate, parsedDeltaHorizon.error, deltaHorizonLabel])
+
+  const snapshotTableColumns = useMemo<SnapshotTableColumnDefinition[]>(
+    () => [
+      {
+        id: 'cusip',
+        label: 'CUSIP',
+        kind: 'text',
+        defaultVisible: true,
+        getValue: (point) => point.cusip
+      },
+      {
+        id: 'label',
+        label: 'Label',
+        kind: 'text',
+        defaultVisible: true,
+        getValue: (point) => point.ust_label
+      },
+      {
+        id: 'oi',
+        label: 'OI',
+        kind: 'text',
+        defaultVisible: true,
+        getValue: (point) => point.oi
+      },
+      {
+        id: 'rank',
+        label: 'Rank',
+        kind: 'number',
+        decimals: 0,
+        defaultVisible: true,
+        getValue: (point) => point.rank
+      },
+      {
+        id: 'ttm',
+        label: 'TTM',
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: true,
+        getValue: (point) => point.ttm
+      },
+      {
+        id: 'mmss',
+        label: 'MMSS',
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: true,
+        getValue: (point) => point.mmss
+      },
+      {
+        id: 'ytm',
+        label: 'YTM',
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: true,
+        getValue: (point) => point.ytm
+      },
+      {
+        id: 'cleanPx',
+        label: 'Clean Px',
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: true,
+        getValue: (point) => point.clean_price
+      },
+      {
+        id: 'bondCarry',
+        label: `Bond Carry (${snapshotCarryRollHorizon.toUpperCase()})`,
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: false,
+        getValue: (point) => pointMetric(point, snapshotCarryRollFields.carry)
+      },
+      {
+        id: 'bondRoll',
+        label: `Bond Roll (${snapshotCarryRollHorizon.toUpperCase()})`,
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: false,
+        getValue: (point) => pointMetric(point, snapshotCarryRollFields.roll)
+      },
+      {
+        id: 'bondCarryRoll',
+        label: `Bond C+R (${snapshotCarryRollHorizon.toUpperCase()})`,
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: true,
+        getValue: (point) => pointMetric(point, snapshotCarryRollFields.carryAndRoll)
+      },
+      {
+        id: 'swapCarry',
+        label: `Swap Carry (${snapshotCarryRollHorizon.toUpperCase()}, Pay)`,
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: false,
+        getValue: (point) => pointMetric(point, snapshotSwapCarryRollFields.carry)
+      },
+      {
+        id: 'swapRoll',
+        label: `Swap Roll (${snapshotCarryRollHorizon.toUpperCase()}, Pay)`,
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: false,
+        getValue: (point) => pointMetric(point, snapshotSwapCarryRollFields.roll)
+      },
+      {
+        id: 'swapCarryRoll',
+        label: `Swap C+R (${snapshotCarryRollHorizon.toUpperCase()}, Pay)`,
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: false,
+        getValue: (point) => pointMetric(point, snapshotSwapCarryRollFields.carryAndRoll)
+      },
+      {
+        id: 'mmssCarry',
+        label: `MMSS Carry (${snapshotCarryRollHorizon.toUpperCase()}, Long)`,
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: false,
+        getValue: (point) => pointMetric(point, snapshotMmssCarryRollFields.carry)
+      },
+      {
+        id: 'mmssRoll',
+        label: `MMSS Roll (${snapshotCarryRollHorizon.toUpperCase()}, Long)`,
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: false,
+        getValue: (point) => pointMetric(point, snapshotMmssCarryRollFields.roll)
+      },
+      {
+        id: 'mmssCarryRoll',
+        label: `MMSS C+R (${snapshotCarryRollHorizon.toUpperCase()}, Long)`,
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: true,
+        getValue: (point) => pointMetric(point, snapshotMmssCarryRollFields.carryAndRoll)
+      },
+      {
+        id: 'deltaYtm',
+        label: `${deltaHorizonLabel} ΔYTM`,
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: true,
+        getValue: (point) =>
+          snapshotDeltaByCusip[String(point.cusip || '').trim().toUpperCase()]?.deltaYtmBps ??
+          null
+      },
+      {
+        id: 'deltaMmss',
+        label: `${deltaHorizonLabel} ΔMMSS`,
+        kind: 'number',
+        decimals: 3,
+        defaultVisible: true,
+        getValue: (point) =>
+          snapshotDeltaByCusip[String(point.cusip || '').trim().toUpperCase()]?.deltaMmssBps ??
+          null
+      }
+    ],
+    [
+      snapshotCarryRollHorizon,
+      snapshotCarryRollFields,
+      snapshotSwapCarryRollFields,
+      snapshotMmssCarryRollFields,
+      snapshotDeltaByCusip,
+      deltaHorizonLabel
+    ]
+  )
+
+  const visibleSnapshotColumns = useMemo(() => {
+    const selected = new Set(visibleSnapshotColumnIds)
+    return snapshotTableColumns.filter((column) => selected.has(column.id))
+  }, [snapshotTableColumns, visibleSnapshotColumnIds])
+
+  const toggleSnapshotColumnVisibility = useCallback(
+    (columnId: SnapshotTableColumnId) => {
+      setVisibleSnapshotColumnIds((current) => {
+        const hasColumn = current.includes(columnId)
+        if (hasColumn) {
+          if (current.length <= 1) return current
+          return current.filter((id) => id !== columnId)
+        }
+
+        const nextSet = new Set([...current, columnId])
+        return snapshotTableColumns
+          .map((column) => column.id)
+          .filter((id) => nextSet.has(id))
+      })
+    },
+    [snapshotTableColumns]
+  )
+
+  const resetSnapshotColumns = useCallback(() => {
+    setVisibleSnapshotColumnIds(SNAPSHOT_TABLE_DEFAULT_VISIBLE_COLUMN_IDS)
+  }, [])
+
+  const showAllSnapshotColumns = useCallback(() => {
+    setVisibleSnapshotColumnIds(snapshotTableColumns.map((column) => column.id))
+  }, [snapshotTableColumns])
+
+  const clearSnapshotFilters = useCallback(() => {
+    setSnapshotColumnFilters({})
+  }, [])
+
+  const rowMatchesSnapshotFilters = useCallback(
+    (point: UstsRvPoint) => {
+      for (const column of visibleSnapshotColumns) {
+        const filterValue = snapshotColumnFilters[column.id] ?? ''
+        if (!filterValue.trim()) continue
+        const rawValue = column.getValue(point)
+        if (
+          !matchesSnapshotTableFilter(
+            rawValue,
+            column.kind,
+            filterValue,
+            column.decimals ?? 3
+          )
+        ) {
+          return false
+        }
+      }
+      return true
+    },
+    [visibleSnapshotColumns, snapshotColumnFilters]
+  )
+
+  const filteredSnapshotPoints = useMemo(() => {
+    if (!snapshot) return []
+
+    return (snapshot.points ?? []).filter((point) => {
+      const x = point[xColumn]
+      const y = point[valueColumn]
+      const validX = typeof x === 'number' && Number.isFinite(x)
+      const validY = typeof y === 'number' && Number.isFinite(y)
+      return validX && validY && rowMatchesSnapshotFilters(point)
+    })
+  }, [snapshot, xColumn, valueColumn, rowMatchesSnapshotFilters])
+
   const traces = useMemo(() => {
     if (!snapshot) return []
 
-    const points = snapshot.points ?? []
+    const points = filteredSnapshotPoints
     const nextTraces: any[] = []
     const oiLabels = Array.from(
       new Set(points.map((point) => point.oi ?? 'Unknown'))
@@ -1441,19 +2235,9 @@ export default function UstsRvDashboard() {
     const legendShown = new Set<string>()
 
     const symbol = VALUE_SYMBOLS[valueColumn] ?? 'circle'
-    const filteredByValue = points.filter((point) => {
-      const x = point[xColumn]
-      const y = point[valueColumn]
-      return (
-        typeof x === 'number' &&
-        Number.isFinite(x) &&
-        typeof y === 'number' &&
-        Number.isFinite(y)
-      )
-    })
-    if (filteredByValue.length) {
-      const pointsByOi = new Map<string, typeof filteredByValue>()
-      for (const point of filteredByValue) {
+    if (points.length) {
+      const pointsByOi = new Map<string, UstsRvPoint[]>()
+      for (const point of points) {
         const oiLabel = point.oi ?? 'Unknown'
         const bucket = pointsByOi.get(oiLabel)
         if (bucket) bucket.push(point)
@@ -1483,6 +2267,16 @@ export default function UstsRvDashboard() {
             point.ttm ?? '--',
             point.mdur ?? '--',
             point.market_timestamp ?? '--',
+            formatNumber(pointMetric(point, snapshotCarryRollFields.carry)),
+            formatNumber(pointMetric(point, snapshotCarryRollFields.roll)),
+            formatNumber(pointMetric(point, snapshotCarryRollFields.carryAndRoll)),
+            formatNumber(pointMetric(point, snapshotSwapCarryRollFields.carry)),
+            formatNumber(pointMetric(point, snapshotSwapCarryRollFields.roll)),
+            formatNumber(pointMetric(point, snapshotSwapCarryRollFields.carryAndRoll)),
+            formatNumber(pointMetric(point, snapshotMmssCarryRollFields.carry)),
+            formatNumber(pointMetric(point, snapshotMmssCarryRollFields.roll)),
+            formatNumber(pointMetric(point, snapshotMmssCarryRollFields.carryAndRoll)),
+            snapshotCarryRollHorizon.toUpperCase(),
             valueColumn.toUpperCase()
           ]),
           marker: {
@@ -1502,7 +2296,16 @@ export default function UstsRvDashboard() {
             'Rank %{customdata[3]}<br>' +
             'TTM %{customdata[4]}<br>' +
             'MDur %{customdata[5]}<br>' +
-            '%{customdata[7]} %{y:.4f}<br>' +
+            'Bond Carry %{customdata[7]} bps (%{customdata[16]})<br>' +
+            'Bond Roll %{customdata[8]} bps (%{customdata[16]})<br>' +
+            'Bond C+R %{customdata[9]} bps (%{customdata[16]})<br>' +
+            'Swap Carry (Pay) %{customdata[10]} bps (%{customdata[16]})<br>' +
+            'Swap Roll (Pay) %{customdata[11]} bps (%{customdata[16]})<br>' +
+            'Swap C+R (Pay) %{customdata[12]} bps (%{customdata[16]})<br>' +
+            'MMSS Carry (Long Spread) %{customdata[13]} bps (%{customdata[16]})<br>' +
+            'MMSS Roll (Long Spread) %{customdata[14]} bps (%{customdata[16]})<br>' +
+            'MMSS C+R (Long Spread) %{customdata[15]} bps (%{customdata[16]})<br>' +
+            '%{customdata[17]} %{y:.4f}<br>' +
             'Market TS %{customdata[6]}<extra></extra>'
         })
 
@@ -1523,6 +2326,17 @@ export default function UstsRvDashboard() {
               point.rank ?? '--',
               point.ttm ?? '--',
               point.mdur ?? '--',
+              point.market_timestamp ?? '--',
+              formatNumber(pointMetric(point, snapshotCarryRollFields.carry)),
+              formatNumber(pointMetric(point, snapshotCarryRollFields.roll)),
+              formatNumber(pointMetric(point, snapshotCarryRollFields.carryAndRoll)),
+              formatNumber(pointMetric(point, snapshotSwapCarryRollFields.carry)),
+              formatNumber(pointMetric(point, snapshotSwapCarryRollFields.roll)),
+              formatNumber(pointMetric(point, snapshotSwapCarryRollFields.carryAndRoll)),
+              formatNumber(pointMetric(point, snapshotMmssCarryRollFields.carry)),
+              formatNumber(pointMetric(point, snapshotMmssCarryRollFields.roll)),
+              formatNumber(pointMetric(point, snapshotMmssCarryRollFields.carryAndRoll)),
+              snapshotCarryRollHorizon.toUpperCase(),
               valueColumn.toUpperCase()
             ]),
             marker: {
@@ -1543,7 +2357,17 @@ export default function UstsRvDashboard() {
               'Rank %{customdata[3]}<br>' +
               'TTM %{customdata[4]}<br>' +
               'MDur %{customdata[5]}<br>' +
-              '%{customdata[6]} %{y:.4f}<extra></extra>'
+              'Bond Carry %{customdata[7]} bps (%{customdata[16]})<br>' +
+              'Bond Roll %{customdata[8]} bps (%{customdata[16]})<br>' +
+              'Bond C+R %{customdata[9]} bps (%{customdata[16]})<br>' +
+              'Swap Carry (Pay) %{customdata[10]} bps (%{customdata[16]})<br>' +
+              'Swap Roll (Pay) %{customdata[11]} bps (%{customdata[16]})<br>' +
+              'Swap C+R (Pay) %{customdata[12]} bps (%{customdata[16]})<br>' +
+              'MMSS Carry (Long Spread) %{customdata[13]} bps (%{customdata[16]})<br>' +
+              'MMSS Roll (Long Spread) %{customdata[14]} bps (%{customdata[16]})<br>' +
+              'MMSS C+R (Long Spread) %{customdata[15]} bps (%{customdata[16]})<br>' +
+              '%{customdata[17]} %{y:.4f}<br>' +
+              'Market TS %{customdata[6]}<extra></extra>'
           })
         }
       }
@@ -1568,7 +2392,16 @@ export default function UstsRvDashboard() {
     }
 
     return nextTraces
-  }, [snapshot, valueColumn, xColumn])
+  }, [
+    snapshot,
+    filteredSnapshotPoints,
+    valueColumn,
+    xColumn,
+    snapshotCarryRollHorizon,
+    snapshotCarryRollFields,
+    snapshotSwapCarryRollFields,
+    snapshotMmssCarryRollFields
+  ])
 
   const layout = useMemo(
     () => ({
@@ -1784,6 +2617,91 @@ export default function UstsRvDashboard() {
       })
     }
 
+    if (showMeanReversion && meanReversionSeries.length) {
+      for (const series of meanReversionSeries) {
+        const bands = simulateOUBands(
+          series.lastValue,
+          series.mu,
+          series.kappa,
+          series.sigma,
+          normalizedOuForwardSteps,
+          series.lastDate
+        )
+        if (!bands.length) continue
+
+        const x = bands.map((point) => point.date)
+        out.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: `${series.name} OU Mean`,
+          x,
+          y: bands.map((point) => point.mean),
+          yaxis: series.yaxis,
+          showlegend: false,
+          line: { color: series.color, width: 1.4 },
+          hovertemplate: `${series.name} OU Mean %{y:.4f}<br>Date %{x}<extra></extra>`
+        })
+        out.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: `${series.name} OU +1σ`,
+          x,
+          y: bands.map((point) => point.plus1Sigma),
+          yaxis: series.yaxis,
+          showlegend: false,
+          line: { color: '#ef4444', width: 1.2, dash: 'dash' },
+          hovertemplate: `${series.name} OU +1σ %{y:.4f}<br>Date %{x}<extra></extra>`
+        })
+        out.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: `${series.name} OU -1σ`,
+          x,
+          y: bands.map((point) => point.minus1Sigma),
+          yaxis: series.yaxis,
+          showlegend: false,
+          line: { color: '#ef4444', width: 1.2, dash: 'dash' },
+          hovertemplate: `${series.name} OU -1σ %{y:.4f}<br>Date %{x}<extra></extra>`
+        })
+        out.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: `${series.name} OU +2σ`,
+          x,
+          y: bands.map((point) => point.plus2Sigma),
+          yaxis: series.yaxis,
+          showlegend: false,
+          line: { color: '#ef4444', width: 1.2, dash: 'dashdot' },
+          hovertemplate: `${series.name} OU +2σ %{y:.4f}<br>Date %{x}<extra></extra>`
+        })
+        out.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: `${series.name} OU -2σ`,
+          x,
+          y: bands.map((point) => point.minus2Sigma),
+          yaxis: series.yaxis,
+          showlegend: false,
+          line: { color: '#ef4444', width: 1.2, dash: 'dashdot' },
+          hovertemplate: `${series.name} OU -2σ %{y:.4f}<br>Date %{x}<extra></extra>`
+        })
+      }
+
+      const legendAnchor = meanReversionSeries[0]
+      out.push({
+        type: 'scatter',
+        mode: 'lines',
+        name: `OU Bands (${normalizedOuForwardSteps}d)`,
+        x: [legendAnchor.lastDate, legendAnchor.lastDate],
+        y: [legendAnchor.mu, legendAnchor.mu],
+        yaxis: legendAnchor.yaxis,
+        visible: 'legendonly',
+        showlegend: true,
+        line: { color: '#ef4444', width: 1.4, dash: 'dash' },
+        hoverinfo: 'skip'
+      })
+    }
+
     return out
   }, [
     timeseries,
@@ -1791,7 +2709,10 @@ export default function UstsRvDashboard() {
     valueColumn,
     timeseriesRightAxisCusips,
     timeseriesHiddenCusips,
-    timeseriesFormulaSeries
+    timeseriesFormulaSeries,
+    showMeanReversion,
+    meanReversionSeries,
+    normalizedOuForwardSteps
   ])
 
   const hasTimeseriesSecondaryAxis = useMemo(
@@ -1872,11 +2793,11 @@ export default function UstsRvDashboard() {
   )
 
   const tableRows = useMemo(() => {
-    if (!snapshot) return []
+    if (!filteredSnapshotPoints.length) return []
     const xRange = viewport.xRange
     const yRange = viewport.yRange
 
-    return snapshot.points
+    return filteredSnapshotPoints
       .filter((row) => {
         const xVal = row[xColumn]
         if (typeof xVal !== 'number' || !Number.isFinite(xVal)) return false
@@ -1894,7 +2815,7 @@ export default function UstsRvDashboard() {
         if (ax !== bx) return ax - bx
         return (a.oi ?? '').localeCompare(b.oi ?? '')
       })
-  }, [snapshot, viewport, xColumn, valueColumn])
+  }, [filteredSnapshotPoints, viewport, xColumn, valueColumn])
 
   const warnings = snapshot?.meta?.warnings ?? []
   const timeseriesWarnings = [...(timeseries?.meta?.warnings ?? []), ...formulaWarnings]
@@ -1914,7 +2835,7 @@ export default function UstsRvDashboard() {
           <div className="text-xs text-slate-400">
             <div>As Of: {snapshot?.asOf ?? '--'}</div>
             <div>Points: {snapshot?.meta?.pointCount ?? '--'}</div>
-            <div>Visible In Plot: {tableRows.length}</div>
+            <div>Visible In Plot: {filteredSnapshotPoints.length}</div>
             <div>Last Refresh: {formatTimestamp(lastRefresh)}</div>
           </div>
         </div>
@@ -2105,6 +3026,214 @@ export default function UstsRvDashboard() {
             onViewportChange={handleViewportChange}
             onPointClick={handleScatterPointClick}
           />
+        )}
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-200">
+              Snapshot Preview ({tableRows.length} bonds in current viewport)
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Table is synchronized to the current plot viewport. Zoom or pan to filter rows.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-xs text-slate-400">
+              Carry/Roll Horizon
+              <select
+                value={snapshotCarryRollHorizon}
+                onChange={(e) =>
+                  setSnapshotCarryRollHorizon(e.target.value as CarryRollHorizon)
+                }
+                className="ml-2 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
+                disabled={!showSnapshotPreview}
+              >
+                {SNAPSHOT_CARRY_ROLL_HORIZONS.map((horizon) => (
+                  <option key={horizon.key} value={horizon.key}>
+                    {horizon.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs text-slate-400">
+              Delta Horizon
+              <input
+                type="text"
+                value={deltaHorizonInput}
+                onChange={(e) => setDeltaHorizonInput(e.target.value)}
+                className="ml-2 w-16 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs uppercase text-slate-200"
+                placeholder="1W"
+                disabled={!showSnapshotPreview}
+              />
+            </label>
+            <button
+              onClick={() => setShowSnapshotColumnPicker((current) => !current)}
+              className="rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-200 hover:border-slate-400"
+              disabled={!showSnapshotPreview}
+            >
+              Columns ({visibleSnapshotColumns.length}/{snapshotTableColumns.length})
+            </button>
+            <button
+              onClick={clearSnapshotFilters}
+              className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-slate-500"
+              disabled={!showSnapshotPreview}
+            >
+              Clear Filters
+            </button>
+            <button
+              onClick={() => setShowSnapshotPreview((current) => !current)}
+              className="rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-200 hover:border-slate-400"
+            >
+              {showSnapshotPreview ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
+        </div>
+        {showSnapshotPreview && (
+          <>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+              <div>Filters apply to the table and the scatter plot.</div>
+              <div>
+                {snapshotDeltaLoading
+                  ? `Loading ${deltaHorizonLabel} deltas...`
+                  : deltaTargetDate
+                    ? `${deltaHorizonLabel} anchor: ${deltaTargetDate}`
+                    : 'Delta horizon unavailable.'}
+              </div>
+            </div>
+
+            {showSnapshotColumnPicker && (
+              <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-slate-200">
+                    Column Visibility ({visibleSnapshotColumns.length}/
+                    {snapshotTableColumns.length})
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={resetSnapshotColumns}
+                      className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-400"
+                    >
+                      Defaults
+                    </button>
+                    <button
+                      onClick={showAllSnapshotColumns}
+                      className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:border-slate-500"
+                    >
+                      Show All
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {snapshotTableColumns.map((column) => {
+                    const isVisible = visibleSnapshotColumnIds.includes(column.id)
+                    return (
+                      <label
+                        key={column.id}
+                        className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-xs text-slate-300"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isVisible}
+                          onChange={() => toggleSnapshotColumnVisibility(column.id)}
+                        />
+                        <span>{column.label}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {snapshotDeltaError && (
+              <div className="mt-3 rounded-md border border-amber-800 bg-amber-950/40 p-2 text-xs text-amber-200">
+                {snapshotDeltaError}
+              </div>
+            )}
+
+            <div className="mt-3 overflow-x-auto rounded-md border border-slate-800">
+              <table className="min-w-full text-left text-xs text-slate-300">
+                <thead className="bg-slate-950/90 text-slate-300">
+                  <tr className="border-b border-slate-800">
+                    {visibleSnapshotColumns.map((column) => (
+                      <th
+                        key={column.id}
+                        className="whitespace-nowrap px-2 py-1 font-semibold"
+                      >
+                        {column.label}
+                      </th>
+                    ))}
+                  </tr>
+                  <tr className="border-b border-slate-800/70">
+                    {visibleSnapshotColumns.map((column) => (
+                      <th key={`${column.id}-filter`} className="px-2 py-1">
+                        <input
+                          type="text"
+                          value={snapshotColumnFilters[column.id] ?? ''}
+                          onChange={(e) =>
+                            setSnapshotColumnFilters((current) => ({
+                              ...current,
+                              [column.id]: e.target.value
+                            }))
+                          }
+                          placeholder={
+                            column.kind === 'number'
+                              ? 'e.g. >0 or -2..2'
+                              : 'contains'
+                          }
+                          className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200 placeholder:text-slate-500"
+                        />
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableRows.map((row, rowIndex) => (
+                    <tr
+                      key={`${row.cusip}-${row.oi ?? '--'}-${rowIndex}`}
+                      className={`border-t border-slate-800 ${
+                        row.rank === 0 ? 'font-semibold text-white' : ''
+                      }`}
+                    >
+                      {visibleSnapshotColumns.map((column) => {
+                        const rawValue = column.getValue(row)
+                        const displayValue =
+                          column.kind === 'number'
+                            ? formatNumber(
+                                typeof rawValue === 'number' && Number.isFinite(rawValue)
+                                  ? rawValue
+                                  : null,
+                                column.decimals ?? 3
+                              )
+                            : (() => {
+                                if (rawValue === null || rawValue === undefined) return '--'
+                                const txt = String(rawValue).trim()
+                                return txt || '--'
+                              })()
+
+                        return (
+                          <td key={`${row.cusip}-${column.id}`} className="whitespace-nowrap px-2 py-1">
+                            {displayValue}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                  {tableRows.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={Math.max(visibleSnapshotColumns.length, 1)}
+                        className="px-2 py-3 text-slate-500"
+                      >
+                        No bonds in current viewport.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 
@@ -2410,6 +3539,14 @@ export default function UstsRvDashboard() {
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
+              checked={showMeanReversion}
+              onChange={(e) => setShowMeanReversion(e.target.checked)}
+            />
+            Mean Reversion / OU Analysis
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
               checked={timeseriesTechnicals.sma20}
               onChange={() => toggleTimeseriesTechnical('sma20')}
             />
@@ -2439,6 +3576,80 @@ export default function UstsRvDashboard() {
             />
             EMA 50
           </label>
+        </div>
+
+        <div className="mt-3 rounded-lg border border-slate-800 bg-slate-900/65 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+              Mean Reversion / OU Analysis
+            </div>
+            <label className="text-[11px] text-slate-300">
+              Forward Steps
+              <input
+                type="number"
+                min={5}
+                max={504}
+                step={1}
+                value={ouForwardSteps}
+                onChange={(e) => setOuForwardSteps(Number(e.target.value))}
+                className="ml-2 w-20 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
+                disabled={!showMeanReversion}
+              />
+            </label>
+          </div>
+
+          {showMeanReversion ? (
+            meanReversionSeries.length ? (
+              <div className="mt-3 overflow-x-auto">
+                <table className="min-w-full text-left text-[11px] text-slate-300">
+                  <thead className="text-slate-400">
+                    <tr>
+                      <th className="px-2 py-1">Series</th>
+                      <th className="px-2 py-1">Z-Score</th>
+                      <th className="px-2 py-1">Half-Life</th>
+                      <th className="px-2 py-1">Mu (μ)</th>
+                      <th className="px-2 py-1">Kappa (κ)</th>
+                      <th className="px-2 py-1">Sigma (σ)</th>
+                      <th className="px-2 py-1">Phi (φ)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {meanReversionSeries.map((row) => {
+                      const absZ = Math.abs(row.zScore)
+                      const zClass =
+                        absZ > 2
+                          ? 'text-rose-300'
+                          : absZ > 1
+                            ? 'text-amber-300'
+                            : 'text-slate-200'
+                      return (
+                        <tr key={row.id} className="border-t border-slate-800">
+                          <td className="px-2 py-1">{row.name}</td>
+                          <td className={`px-2 py-1 font-semibold ${zClass}`}>
+                            {row.zScore.toFixed(3)}
+                          </td>
+                          <td className="px-2 py-1">{row.halfLife.toFixed(2)}</td>
+                          <td className="px-2 py-1">{row.mu.toFixed(4)}</td>
+                          <td className="px-2 py-1">{row.kappa.toFixed(4)}</td>
+                          <td className="px-2 py-1">{row.sigma.toFixed(4)}</td>
+                          <td className="px-2 py-1">{row.phi.toFixed(4)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="mt-2 text-xs text-slate-500">
+                No eligible series for OU calibration (requires at least 20 finite observations and
+                stationary fit).
+              </div>
+            )
+          ) : (
+            <div className="mt-2 text-xs text-slate-500">
+              Enable the toggle above to project OU mean and sigma bands.
+            </div>
+          )}
         </div>
 
         {!!timeseriesWarnings.length && (
@@ -2472,66 +3683,6 @@ export default function UstsRvDashboard() {
         )}
       </div>
 
-      <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-        <h2 className="text-sm font-semibold text-slate-200">
-          Snapshot Preview ({tableRows.length} bonds in current viewport)
-        </h2>
-        <p className="mt-1 text-xs text-slate-500">
-          Table is synchronized to the current plot viewport. Zoom or pan to filter rows.
-        </p>
-        <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-left text-xs text-slate-300">
-            <thead className="text-slate-400">
-              <tr>
-                <th className="px-2 py-1">CUSIP</th>
-                <th className="px-2 py-1">Label</th>
-                <th className="px-2 py-1">OI</th>
-                <th className="px-2 py-1">Rank</th>
-                <th className="px-2 py-1">TTM</th>
-                <th className="px-2 py-1">MMSS</th>
-                <th className="px-2 py-1">YTM</th>
-                <th className="px-2 py-1">Clean Px</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tableRows.map((row) => (
-                <tr
-                  key={row.cusip}
-                  className={`border-t border-slate-800 ${
-                    row.rank === 0 ? 'font-semibold text-white' : ''
-                  }`}
-                >
-                  <td className="px-2 py-1">{row.cusip}</td>
-                  <td className="px-2 py-1">{row.ust_label ?? '--'}</td>
-                  <td className="px-2 py-1">{row.oi ?? '--'}</td>
-                  <td className="px-2 py-1">{row.rank ?? '--'}</td>
-                  <td className="px-2 py-1">
-                    {typeof row.ttm === 'number' ? row.ttm.toFixed(3) : '--'}
-                  </td>
-                  <td className="px-2 py-1">
-                    {typeof row.mmss === 'number' ? row.mmss.toFixed(3) : '--'}
-                  </td>
-                  <td className="px-2 py-1">
-                    {typeof row.ytm === 'number' ? row.ytm.toFixed(3) : '--'}
-                  </td>
-                  <td className="px-2 py-1">
-                    {typeof row.clean_price === 'number'
-                      ? row.clean_price.toFixed(3)
-                      : '--'}
-                  </td>
-                </tr>
-              ))}
-              {tableRows.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="px-2 py-3 text-slate-500">
-                    No bonds in current viewport.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   )
 }

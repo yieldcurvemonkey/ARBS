@@ -228,3 +228,4 @@ frontend/node_modules/
 _temp_raw_raw_trades.csv
 
 /sdr_cache
+/notebooks/data

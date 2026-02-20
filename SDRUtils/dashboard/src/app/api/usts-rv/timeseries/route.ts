@@ -14,6 +14,9 @@ const VALUE_COLUMNS: UstsRvValueColumn[] = [
   'clean_price',
   'dirty_price',
   'mdur',
+  'carry_bps',
+  'roll_bps',
+  'carry_and_roll_bps',
   'coupon'
 ]
 
