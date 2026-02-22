@@ -2,12 +2,14 @@ import argparse
 import datetime
 import json
 import os
+import re
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote_plus
 
 import numpy as np
 import pandas as pd
+import pytz
 import QuantLib as ql
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -16,6 +18,12 @@ from RVUtils.Interpolation.GeneralCurveInterpolator import GeneralCurveInterpola
 
 
 POINTS_TABLE = "arbs_ust_rv_points_v1"
+DEFAULT_DATA_MODE = "eod_live"
+DEFAULT_ENDPOINT = "snapshot"
+INTRADAY_SOURCE = "USTS_WEBULL_WSJ_LIVE-RL"
+INTRADAY_OPEN_TIME = datetime.time(7, 0)
+INTRADAY_CLOSE_TIME = datetime.time(15, 0)
+MAX_INTRADAY_LOOKBACK_DAYS = 30
 AVAILABLE_VALUE_COLUMNS = [
     "mmss",
     "ytm",
@@ -123,6 +131,117 @@ def _adjust_to_business_day(d: datetime.date) -> datetime.date:
     while not cal.isBusinessDay(probe):
         probe = cal.advance(probe, ql.Period(-1, ql.Days))
     return datetime.date(probe.year(), probe.month(), probe.dayOfMonth())
+
+
+def _normalize_data_mode(raw: Any) -> str:
+    txt = str(raw or "").strip().lower().replace("-", "_")
+    if txt in {"intraday_live", "intraday+live"}:
+        return "intraday_live"
+    return "eod_live"
+
+
+def _normalize_endpoint(raw: Any) -> str:
+    txt = str(raw or "").strip().lower()
+    if txt in {"timeseries", "ts"}:
+        return "timeseries"
+    return "snapshot"
+
+
+def _parse_date_only(raw: Any) -> Optional[datetime.date]:
+    if raw is None:
+        return None
+    txt = str(raw).strip()
+    if not txt:
+        return None
+    try:
+        return datetime.date.fromisoformat(txt)
+    except Exception:
+        pass
+    try:
+        parsed = datetime.datetime.fromisoformat(txt.replace("Z", "+00:00"))
+        return parsed.date()
+    except Exception:
+        return None
+
+
+def _parse_datetime_any(raw: Any) -> Optional[datetime.datetime]:
+    if raw is None:
+        return None
+    if isinstance(raw, datetime.datetime):
+        return raw
+    txt = str(raw).strip()
+    if not txt:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(txt.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _intraday_snapshot_timestamp(
+    *,
+    as_of_date: datetime.date,
+    requested_live: bool,
+    raw_timestamp: Any,
+) -> datetime.datetime | str:
+    if requested_live:
+        return "live"
+
+    dt = _parse_datetime_any(raw_timestamp)
+    ny_tz = pytz.timezone("America/New_York")
+    if dt is not None:
+        if dt.tzinfo is None:
+            dt = ny_tz.localize(dt)
+        else:
+            dt = dt.astimezone(ny_tz)
+        return dt
+
+    return ny_tz.localize(
+        datetime.datetime(
+            as_of_date.year,
+            as_of_date.month,
+            as_of_date.day,
+            INTRADAY_CLOSE_TIME.hour,
+            INTRADAY_CLOSE_TIME.minute,
+            INTRADAY_CLOSE_TIME.second,
+        )
+    )
+
+
+def _normalize_series_tokens(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+
+    if isinstance(raw, str):
+        raw_items = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, list):
+        raw_items = [str(item or "").strip() for item in raw]
+    else:
+        return []
+
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        token = item.upper()
+        if not token:
+            continue
+        if token in seen:
+            continue
+        if re.match(r"^[0-9A-Z]{9}$", token) or re.match(r"^CT\d{1,2}$", token):
+            out.append(token)
+            seen.add(token)
+    return out
+
+
+def _parse_ct_tenor(token: str) -> Optional[int]:
+    match = re.match(r"^CT(\d{1,2})$", str(token or "").upper())
+    if not match:
+        return None
+    try:
+        tenor = int(match.group(1))
+    except Exception:
+        return None
+    return tenor if tenor > 0 else None
 
 
 def _normalize_knots(raw: Any, x_min: float, x_max: float) -> List[float]:
@@ -692,6 +811,71 @@ def _build_single_spline(
         }
 
 
+def _row_to_point(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "cusip": _json_value(row.get("cusip")),
+        "ust_label": _json_value(row.get("ust_label")),
+        "oi": _json_value(row.get("oi")),
+        "rank": _json_value(row.get("rank")),
+        "ct_alias": _json_value(_ct_alias_from_rank_oi(row.get("rank"), row.get("oi"))),
+        "ttm": _json_value(row.get("ttm")),
+        "mdur": _json_value(row.get("mdur")),
+        "ytm": _json_value(row.get("ytm")),
+        "mmss": _json_value(row.get("mmss")),
+        "clean_price": _json_value(row.get("clean_price")),
+        "dirty_price": _json_value(row.get("dirty_price")),
+        "carry_bps": _json_value(row.get("carry_bps")),
+        "roll_bps": _json_value(row.get("roll_bps")),
+        "carry_and_roll_bps": _json_value(row.get("carry_and_roll_bps")),
+        "carry_1m_bps": _json_value(row.get("carry_1m_bps")),
+        "roll_1m_bps": _json_value(row.get("roll_1m_bps")),
+        "carry_and_roll_1m_bps": _json_value(row.get("carry_and_roll_1m_bps")),
+        "carry_2m_bps": _json_value(row.get("carry_2m_bps")),
+        "roll_2m_bps": _json_value(row.get("roll_2m_bps")),
+        "carry_and_roll_2m_bps": _json_value(row.get("carry_and_roll_2m_bps")),
+        "carry_3m_bps": _json_value(row.get("carry_3m_bps")),
+        "roll_3m_bps": _json_value(row.get("roll_3m_bps")),
+        "carry_and_roll_3m_bps": _json_value(row.get("carry_and_roll_3m_bps")),
+        "carry_6m_bps": _json_value(row.get("carry_6m_bps")),
+        "roll_6m_bps": _json_value(row.get("roll_6m_bps")),
+        "carry_and_roll_6m_bps": _json_value(row.get("carry_and_roll_6m_bps")),
+        "swap_carry_bps": _json_value(row.get("swap_carry_bps")),
+        "swap_roll_bps": _json_value(row.get("swap_roll_bps")),
+        "swap_carry_and_roll_bps": _json_value(row.get("swap_carry_and_roll_bps")),
+        "swap_carry_1m_bps": _json_value(row.get("swap_carry_1m_bps")),
+        "swap_roll_1m_bps": _json_value(row.get("swap_roll_1m_bps")),
+        "swap_carry_and_roll_1m_bps": _json_value(row.get("swap_carry_and_roll_1m_bps")),
+        "swap_carry_2m_bps": _json_value(row.get("swap_carry_2m_bps")),
+        "swap_roll_2m_bps": _json_value(row.get("swap_roll_2m_bps")),
+        "swap_carry_and_roll_2m_bps": _json_value(row.get("swap_carry_and_roll_2m_bps")),
+        "swap_carry_3m_bps": _json_value(row.get("swap_carry_3m_bps")),
+        "swap_roll_3m_bps": _json_value(row.get("swap_roll_3m_bps")),
+        "swap_carry_and_roll_3m_bps": _json_value(row.get("swap_carry_and_roll_3m_bps")),
+        "swap_carry_6m_bps": _json_value(row.get("swap_carry_6m_bps")),
+        "swap_roll_6m_bps": _json_value(row.get("swap_roll_6m_bps")),
+        "swap_carry_and_roll_6m_bps": _json_value(row.get("swap_carry_and_roll_6m_bps")),
+        "mmss_carry_bps": _json_value(row.get("mmss_carry_bps")),
+        "mmss_roll_bps": _json_value(row.get("mmss_roll_bps")),
+        "mmss_carry_and_roll_bps": _json_value(row.get("mmss_carry_and_roll_bps")),
+        "mmss_carry_1m_bps": _json_value(row.get("mmss_carry_1m_bps")),
+        "mmss_roll_1m_bps": _json_value(row.get("mmss_roll_1m_bps")),
+        "mmss_carry_and_roll_1m_bps": _json_value(row.get("mmss_carry_and_roll_1m_bps")),
+        "mmss_carry_2m_bps": _json_value(row.get("mmss_carry_2m_bps")),
+        "mmss_roll_2m_bps": _json_value(row.get("mmss_roll_2m_bps")),
+        "mmss_carry_and_roll_2m_bps": _json_value(row.get("mmss_carry_and_roll_2m_bps")),
+        "mmss_carry_3m_bps": _json_value(row.get("mmss_carry_3m_bps")),
+        "mmss_roll_3m_bps": _json_value(row.get("mmss_roll_3m_bps")),
+        "mmss_carry_and_roll_3m_bps": _json_value(row.get("mmss_carry_and_roll_3m_bps")),
+        "mmss_carry_6m_bps": _json_value(row.get("mmss_carry_6m_bps")),
+        "mmss_roll_6m_bps": _json_value(row.get("mmss_roll_6m_bps")),
+        "mmss_carry_and_roll_6m_bps": _json_value(row.get("mmss_carry_and_roll_6m_bps")),
+        "coupon": _json_value(row.get("coupon")),
+        "issue_date": _json_value(row.get("issue_date")),
+        "maturity_date": _json_value(row.get("maturity_date")),
+        "market_timestamp": _json_value(row.get("market_timestamp")),
+    }
+
+
 def build_payload(payload: Dict[str, Any], db_connection_string: Optional[str] = None) -> Dict[str, Any]:
     raw_as_of = payload.get("asOf")
     requested_date, requested_live = _parse_date(raw_as_of)
@@ -717,68 +901,7 @@ def build_payload(payload: Dict[str, Any], db_connection_string: Optional[str] =
 
     points: List[Dict[str, Any]] = []
     for _, row in points_df.iterrows():
-        point = {
-            "cusip": _json_value(row.get("cusip")),
-            "ust_label": _json_value(row.get("ust_label")),
-            "oi": _json_value(row.get("oi")),
-            "rank": _json_value(row.get("rank")),
-            "ct_alias": _json_value(_ct_alias_from_rank_oi(row.get("rank"), row.get("oi"))),
-            "ttm": _json_value(row.get("ttm")),
-            "mdur": _json_value(row.get("mdur")),
-            "ytm": _json_value(row.get("ytm")),
-            "mmss": _json_value(row.get("mmss")),
-            "clean_price": _json_value(row.get("clean_price")),
-            "dirty_price": _json_value(row.get("dirty_price")),
-            "carry_bps": _json_value(row.get("carry_bps")),
-            "roll_bps": _json_value(row.get("roll_bps")),
-            "carry_and_roll_bps": _json_value(row.get("carry_and_roll_bps")),
-            "carry_1m_bps": _json_value(row.get("carry_1m_bps")),
-            "roll_1m_bps": _json_value(row.get("roll_1m_bps")),
-            "carry_and_roll_1m_bps": _json_value(row.get("carry_and_roll_1m_bps")),
-            "carry_2m_bps": _json_value(row.get("carry_2m_bps")),
-            "roll_2m_bps": _json_value(row.get("roll_2m_bps")),
-            "carry_and_roll_2m_bps": _json_value(row.get("carry_and_roll_2m_bps")),
-            "carry_3m_bps": _json_value(row.get("carry_3m_bps")),
-            "roll_3m_bps": _json_value(row.get("roll_3m_bps")),
-            "carry_and_roll_3m_bps": _json_value(row.get("carry_and_roll_3m_bps")),
-            "carry_6m_bps": _json_value(row.get("carry_6m_bps")),
-            "roll_6m_bps": _json_value(row.get("roll_6m_bps")),
-            "carry_and_roll_6m_bps": _json_value(row.get("carry_and_roll_6m_bps")),
-            "swap_carry_bps": _json_value(row.get("swap_carry_bps")),
-            "swap_roll_bps": _json_value(row.get("swap_roll_bps")),
-            "swap_carry_and_roll_bps": _json_value(row.get("swap_carry_and_roll_bps")),
-            "swap_carry_1m_bps": _json_value(row.get("swap_carry_1m_bps")),
-            "swap_roll_1m_bps": _json_value(row.get("swap_roll_1m_bps")),
-            "swap_carry_and_roll_1m_bps": _json_value(row.get("swap_carry_and_roll_1m_bps")),
-            "swap_carry_2m_bps": _json_value(row.get("swap_carry_2m_bps")),
-            "swap_roll_2m_bps": _json_value(row.get("swap_roll_2m_bps")),
-            "swap_carry_and_roll_2m_bps": _json_value(row.get("swap_carry_and_roll_2m_bps")),
-            "swap_carry_3m_bps": _json_value(row.get("swap_carry_3m_bps")),
-            "swap_roll_3m_bps": _json_value(row.get("swap_roll_3m_bps")),
-            "swap_carry_and_roll_3m_bps": _json_value(row.get("swap_carry_and_roll_3m_bps")),
-            "swap_carry_6m_bps": _json_value(row.get("swap_carry_6m_bps")),
-            "swap_roll_6m_bps": _json_value(row.get("swap_roll_6m_bps")),
-            "swap_carry_and_roll_6m_bps": _json_value(row.get("swap_carry_and_roll_6m_bps")),
-            "mmss_carry_bps": _json_value(row.get("mmss_carry_bps")),
-            "mmss_roll_bps": _json_value(row.get("mmss_roll_bps")),
-            "mmss_carry_and_roll_bps": _json_value(row.get("mmss_carry_and_roll_bps")),
-            "mmss_carry_1m_bps": _json_value(row.get("mmss_carry_1m_bps")),
-            "mmss_roll_1m_bps": _json_value(row.get("mmss_roll_1m_bps")),
-            "mmss_carry_and_roll_1m_bps": _json_value(row.get("mmss_carry_and_roll_1m_bps")),
-            "mmss_carry_2m_bps": _json_value(row.get("mmss_carry_2m_bps")),
-            "mmss_roll_2m_bps": _json_value(row.get("mmss_roll_2m_bps")),
-            "mmss_carry_and_roll_2m_bps": _json_value(row.get("mmss_carry_and_roll_2m_bps")),
-            "mmss_carry_3m_bps": _json_value(row.get("mmss_carry_3m_bps")),
-            "mmss_roll_3m_bps": _json_value(row.get("mmss_roll_3m_bps")),
-            "mmss_carry_and_roll_3m_bps": _json_value(row.get("mmss_carry_and_roll_3m_bps")),
-            "mmss_carry_6m_bps": _json_value(row.get("mmss_carry_6m_bps")),
-            "mmss_roll_6m_bps": _json_value(row.get("mmss_roll_6m_bps")),
-            "mmss_carry_and_roll_6m_bps": _json_value(row.get("mmss_carry_and_roll_6m_bps")),
-            "coupon": _json_value(row.get("coupon")),
-            "issue_date": _json_value(row.get("issue_date")),
-            "maturity_date": _json_value(row.get("maturity_date")),
-            "market_timestamp": _json_value(row.get("market_timestamp")),
-        }
+        point = _row_to_point(row.to_dict())
         points.append(point)
 
     spline_series = []
@@ -799,6 +922,7 @@ def build_payload(payload: Dict[str, Any], db_connection_string: Optional[str] =
         "requestedAsOf": requested_date.isoformat(),
         "asOf": as_of_for_response,
         "requestedLive": requested_live,
+        "dataMode": "eod_live",
         "curveName": curve_name,
         "xColumn": x_column,
         "includeValues": include_values,
@@ -807,6 +931,389 @@ def build_payload(payload: Dict[str, Any], db_connection_string: Optional[str] =
         "splineSeries": spline_series,
         "meta": {**base_meta, "warnings": warnings},
     }
+
+
+def build_intraday_snapshot_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        from SDRUtils._swappulse_scripts.ingest_ustrv import build_points_dataframe
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            f"Intraday snapshot mode requires Python module '{exc.name}'. "
+            "Use the project Python environment (set PYTHON_BIN if needed)."
+        ) from exc
+
+    raw_as_of = payload.get("asOf")
+    requested_date, requested_live = _parse_date(raw_as_of)
+    effective_date = _adjust_to_business_day(requested_date)
+
+    min_ttm = _safe_float(payload.get("minTtm"))
+    if min_ttm is None:
+        min_ttm = 1.0
+
+    x_column = str(payload.get("xColumn") or "ttm")
+    curve_name = str(payload.get("curveName") or "USD-SOFR-1D")
+    include_values = payload.get("includeValues") or ["mmss", "ytm"]
+    include_values = [str(v) for v in include_values]
+    spline_cfgs = payload.get("splineConfigs") or []
+
+    pricing_timestamp = _intraday_snapshot_timestamp(
+        as_of_date=effective_date,
+        requested_live=requested_live,
+        raw_timestamp=payload.get("intradayTimestamp"),
+    )
+    points_df = build_points_dataframe(
+        as_of_date=effective_date,
+        curve_name=curve_name,
+        min_ttm=min_ttm,
+        include_mmss=True,
+        usts_source=INTRADAY_SOURCE,
+        pricing_timestamp=pricing_timestamp,
+    )
+    points_df = _ensure_numeric_columns(
+        points_df,
+        [
+            "rank",
+            "ttm",
+            "mdur",
+            "ytm",
+            "mmss",
+            "clean_price",
+            "dirty_price",
+            "coupon",
+            "carry_bps",
+            "roll_bps",
+            "carry_and_roll_bps",
+        ],
+    )
+
+    points: List[Dict[str, Any]] = []
+    for row in points_df.to_dict(orient="records"):
+        points.append(_row_to_point(row))
+
+    spline_series = []
+    for i, cfg in enumerate(spline_cfgs):
+        if not isinstance(cfg, dict):
+            continue
+        if cfg.get("enabled") is False:
+            continue
+        spline_series.append(_build_single_spline(points_df=points_df, cfg=cfg, fallback_x_col=x_column, idx=i))
+
+    latest_market_ts = None
+    if "market_timestamp" in points_df.columns and not points_df.empty:
+        try:
+            latest_market_ts = pd.to_datetime(points_df["market_timestamp"], errors="coerce").max()
+        except Exception:
+            latest_market_ts = None
+
+    warnings: List[str] = []
+    if requested_date != effective_date:
+        warnings.append(f"Adjusted asOf from {requested_date.isoformat()} to prior business day {effective_date.isoformat()}.")
+    if pricing_timestamp != "live":
+        warnings.append(f"Intraday snapshot timestamp: {_json_value(pricing_timestamp)}")
+    elif requested_live:
+        warnings.append("Intraday snapshot sourced from WSJ live quotes.")
+    if not points:
+        warnings.append("No intraday points returned for selected date/source.")
+
+    return {
+        "requestedAsOf": requested_date.isoformat(),
+        "asOf": effective_date.isoformat(),
+        "requestedLive": requested_live,
+        "dataMode": "intraday_live",
+        "curveName": curve_name,
+        "xColumn": x_column,
+        "includeValues": include_values,
+        "availableValueColumns": AVAILABLE_VALUE_COLUMNS,
+        "points": points,
+        "splineSeries": spline_series,
+        "meta": {
+            "asOf": effective_date.isoformat(),
+            "pointCount": int(len(points)),
+            "curveName": curve_name,
+            "snapshotTs": _json_value(latest_market_ts),
+            "warnings": warnings,
+        },
+    }
+
+
+def _intraday_value_getter(value_column: str):
+    col = str(value_column or "ytm").strip().lower()
+    if col == "ytm":
+        return lambda pricer: _safe_float(pricer.ytm() if hasattr(pricer, "ytm") else None), None
+    if col == "clean_price":
+        return (
+            lambda pricer: _safe_float(pricer.clean_price() if hasattr(pricer, "clean_price") else None),
+            None,
+        )
+    if col == "dirty_price":
+        return (
+            lambda pricer: _safe_float(pricer.dirty_price() if hasattr(pricer, "dirty_price") else None),
+            None,
+        )
+    if col == "mdur":
+        return (
+            lambda pricer: _safe_float(pricer.mod_duration() if hasattr(pricer, "mod_duration") else None),
+            None,
+        )
+    if col == "coupon":
+        return (
+            lambda pricer: _safe_float((pricer.meta() or {}).get("cpn") if hasattr(pricer, "meta") else None),
+            None,
+        )
+
+    if col in {"mmss", "carry_bps", "roll_bps", "carry_and_roll_bps"}:
+        return None, f"Intraday dataMode does not currently support valueColumn '{col}'."
+    return None, f"Unsupported valueColumn '{value_column}'."
+
+
+def build_intraday_timeseries_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    from BT.misc import ql_cal_date_range
+    try:
+        from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            f"Intraday timeseries mode requires Python module '{exc.name}'. "
+            "Use the project Python environment (set PYTHON_BIN if needed)."
+        ) from exc
+
+    raw_as_of = payload.get("asOf")
+    requested_date, requested_live = _parse_date(raw_as_of)
+    effective_date = _adjust_to_business_day(requested_date)
+    curve_name = str(payload.get("curveName") or "USD-SOFR-1D")
+    value_column = str(payload.get("valueColumn") or "ytm")
+
+    series_tokens = _normalize_series_tokens(payload.get("cusips"))
+    if not series_tokens:
+        raise ValueError("At least one valid CUSIP or CT tenor is required for intraday timeseries.")
+
+    value_getter, value_err = _intraday_value_getter(value_column)
+    if value_getter is None:
+        raise ValueError(value_err or f"Unsupported valueColumn '{value_column}'.")
+
+    warnings: List[str] = []
+    end_date = _parse_date_only(payload.get("endDate")) or effective_date
+    if end_date > effective_date:
+        warnings.append(f"Adjusted endDate from {end_date.isoformat()} to snapshot asOf {effective_date.isoformat()}.")
+        end_date = effective_date
+
+    start_date = _parse_date_only(payload.get("startDate"))
+    if start_date is None:
+        lookback_days = _safe_float(payload.get("lookbackDays"))
+        if lookback_days is None:
+            lookback_days = 10.0
+        lookback_days_int = max(1, int(lookback_days))
+        if lookback_days_int > MAX_INTRADAY_LOOKBACK_DAYS:
+            warnings.append(
+                f"Lookback {lookback_days_int}D exceeds intraday max {MAX_INTRADAY_LOOKBACK_DAYS}D; clamped."
+            )
+            lookback_days_int = MAX_INTRADAY_LOOKBACK_DAYS
+        start_date = end_date - datetime.timedelta(days=lookback_days_int)
+    else:
+        span_days = (end_date - start_date).days
+        if span_days > MAX_INTRADAY_LOOKBACK_DAYS:
+            adjusted_start = end_date - datetime.timedelta(days=MAX_INTRADAY_LOOKBACK_DAYS)
+            warnings.append(
+                f"Requested intraday span {span_days}D exceeds max {MAX_INTRADAY_LOOKBACK_DAYS}D; using startDate {adjusted_start.isoformat()}."
+            )
+            start_date = adjusted_start
+
+    if start_date > end_date:
+        warnings.append(f"Adjusted startDate {start_date.isoformat()} to endDate {end_date.isoformat()}.")
+        start_date = end_date
+
+    ny_tz = pytz.timezone("America/New_York")
+    start_dt = ny_tz.localize(
+        datetime.datetime(
+            start_date.year,
+            start_date.month,
+            start_date.day,
+            INTRADAY_OPEN_TIME.hour,
+            INTRADAY_OPEN_TIME.minute,
+            INTRADAY_OPEN_TIME.second,
+        )
+    )
+    if requested_live and end_date == datetime.date.today():
+        end_dt = datetime.datetime.now(tz=ny_tz)
+    else:
+        end_dt = ny_tz.localize(
+            datetime.datetime(
+                end_date.year,
+                end_date.month,
+                end_date.day,
+                INTRADAY_CLOSE_TIME.hour,
+                INTRADAY_CLOSE_TIME.minute,
+                INTRADAY_CLOSE_TIME.second,
+            )
+        )
+
+    if end_dt < start_dt:
+        end_dt = start_dt
+
+    ts_range = ql_cal_date_range(
+        ql.UnitedStates(ql.UnitedStates.GovernmentBond),
+        start=start_dt,
+        end=end_dt,
+        freq="1min",
+        open_time=INTRADAY_OPEN_TIME,
+        close_time=INTRADAY_CLOSE_TIME,
+    )
+    ts_points = [pd.Timestamp(ts) for ts in ts_range]
+    include_live_point = bool(requested_live and end_date == datetime.date.today())
+
+    if not ts_points:
+        warnings.append("No intraday timestamps found for requested range.")
+        return {
+            "requestedAsOf": requested_date.isoformat(),
+            "asOf": effective_date.isoformat(),
+            "requestedLive": requested_live,
+            "dataMode": "intraday_live",
+            "curveName": curve_name,
+            "valueColumn": value_column,
+            "startDate": start_date.isoformat(),
+            "endDate": end_date.isoformat(),
+            "series": [],
+            "meta": {
+                "seriesCount": 0,
+                "totalPoints": 0,
+                "warnings": warnings,
+            },
+        }
+
+    usts_mdp = FixedRateBondsMDP(source=INTRADAY_SOURCE)
+    timestamp_requests: List[Any] = list(ts_points)
+    if include_live_point:
+        timestamp_requests.append("live")
+    bulk_map = usts_mdp.bulk_get_data(
+        timestamps=timestamp_requests,
+        cusips=series_tokens,
+        show_tqdm=False,
+        max_workers=8,
+    )
+
+    ref_df = usts_mdp.get_bond_reference_data(as_of_date=end_date).copy()
+    if "cusip" in ref_df.columns:
+        ref_df["cusip"] = ref_df["cusip"].astype(str).str.upper()
+    ref_by_cusip = {str(row.get("cusip")).upper(): row for row in ref_df.to_dict(orient="records")}
+
+    series_out: List[Dict[str, Any]] = []
+    total_points = 0
+    for token in series_tokens:
+        tenor = _parse_ct_tenor(token)
+        if tenor is not None:
+            ust_label = f"Constant Maturity {tenor}Y"
+            oi = f"{tenor}-Year"
+            rank = 0
+        else:
+            meta_row = ref_by_cusip.get(token, {})
+            ust_label = _json_value(meta_row.get("ust_label") or meta_row.get("label"))
+            oi = _json_value(meta_row.get("oi"))
+            rank = _json_value(meta_row.get("rank"))
+
+        points: List[Dict[str, Any]] = []
+        for ts in ts_points:
+            pricers_for_ts = bulk_map.get(ts, {}) or {}
+            pricer = pricers_for_ts.get(token)
+            if pricer is None:
+                continue
+
+            try:
+                value = value_getter(pricer)
+            except Exception:
+                value = None
+
+            meta = {}
+            if hasattr(pricer, "meta"):
+                try:
+                    meta = pricer.meta() or {}
+                except Exception:
+                    meta = {}
+            market_ts = meta.get("timestamp")
+            as_of_ts = pd.Timestamp(market_ts if market_ts is not None else ts)
+            if as_of_ts.tzinfo is None:
+                as_of_ts = as_of_ts.tz_localize("UTC")
+
+            points.append(
+                {
+                    "asOf": as_of_ts.isoformat(),
+                    "value": _json_value(value),
+                    "snapshotTs": _json_value(market_ts if market_ts is not None else as_of_ts),
+                }
+            )
+
+        if include_live_point:
+            live_map = bulk_map.get("live", {}) or {}
+            live_pricer = live_map.get(token)
+            if live_pricer is not None:
+                try:
+                    live_value = value_getter(live_pricer)
+                except Exception:
+                    live_value = None
+                live_meta = {}
+                if hasattr(live_pricer, "meta"):
+                    try:
+                        live_meta = live_pricer.meta() or {}
+                    except Exception:
+                        live_meta = {}
+                live_market_ts = live_meta.get("timestamp")
+                live_as_of_ts = pd.Timestamp(live_market_ts if live_market_ts is not None else datetime.datetime.now(tz=pytz.UTC))
+                if live_as_of_ts.tzinfo is None:
+                    live_as_of_ts = live_as_of_ts.tz_localize("UTC")
+                points.append(
+                    {
+                        "asOf": live_as_of_ts.isoformat(),
+                        "value": _json_value(live_value),
+                        "snapshotTs": _json_value(live_market_ts if live_market_ts is not None else live_as_of_ts),
+                    }
+                )
+
+        total_points += len(points)
+        series_out.append(
+            {
+                "cusip": token,
+                "ust_label": ust_label,
+                "oi": oi,
+                "rank": rank,
+                "points": points,
+            }
+        )
+
+    if include_live_point:
+        warnings.append("Included WSJ live point for today's session.")
+
+    if total_points == 0:
+        warnings.append("No intraday points found for selected series/date range.")
+
+    return {
+        "requestedAsOf": requested_date.isoformat(),
+        "asOf": effective_date.isoformat(),
+        "requestedLive": requested_live,
+        "dataMode": "intraday_live",
+        "curveName": curve_name,
+        "valueColumn": value_column,
+        "startDate": start_date.isoformat(),
+        "endDate": end_date.isoformat(),
+        "series": series_out,
+        "meta": {
+            "seriesCount": len(series_out),
+            "totalPoints": int(total_points),
+            "warnings": warnings,
+        },
+    }
+
+
+def build_response(payload: Dict[str, Any], db_connection_string: Optional[str] = None) -> Dict[str, Any]:
+    endpoint = _normalize_endpoint(payload.get("endpoint") or payload.get("kind") or DEFAULT_ENDPOINT)
+    data_mode = _normalize_data_mode(payload.get("dataMode") or DEFAULT_DATA_MODE)
+
+    if endpoint == "timeseries":
+        if data_mode != "intraday_live":
+            raise ValueError("Python UST RV timeseries endpoint currently supports only dataMode='intraday_live'.")
+        return build_intraday_timeseries_payload(payload)
+
+    if data_mode == "intraday_live":
+        return build_intraday_snapshot_payload(payload)
+
+    return build_payload(payload, db_connection_string=db_connection_string)
 
 
 def main():
@@ -825,7 +1332,7 @@ def main():
 
     try:
         payload = _parse_payload(args.payload)
-        out = build_payload(payload, db_connection_string=args.database_url)
+        out = build_response(payload, db_connection_string=args.database_url)
         print(json.dumps(out, ensure_ascii=True))
     except Exception as exc:
         err = {

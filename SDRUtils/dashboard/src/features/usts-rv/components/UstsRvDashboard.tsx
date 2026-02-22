@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type {
+  UstsRvDataMode,
   UstsRvPoint,
   UstsRvSplineConfigRequest,
   UstsRvSnapshotRequest,
@@ -27,6 +28,11 @@ const VALUE_OPTIONS: Array<{ key: UstsRvValueColumn; label: string }> = [
 const X_OPTIONS: Array<{ key: UstsRvXColumn; label: string }> = [
   { key: 'ttm', label: 'Time To Maturity' },
   { key: 'mdur', label: 'Mod Duration' }
+]
+
+const DATA_MODE_OPTIONS: Array<{ key: UstsRvDataMode; label: string }> = [
+  { key: 'eod_live', label: 'EOD + Live' },
+  { key: 'intraday_live', label: 'Intraday + Live' }
 ]
 
 const OI_COLOR_PALETTE = [
@@ -610,6 +616,34 @@ function formatTimestamp(value: string | null | undefined) {
   }).format(d)
 }
 
+function formatNyDateTimeAxisLabel(value: string | null | undefined) {
+  const txt = String(value || '').trim()
+  if (!txt) return ''
+  if (/^\d{4}-\d{2}-\d{2}$/.test(txt)) {
+    return `${txt} 00:00:00`
+  }
+  const d = new Date(txt)
+  if (Number.isNaN(d.getTime())) return txt
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(d)
+  const map = new Map(parts.map((part) => [part.type, part.value]))
+  const year = map.get('year') ?? '0000'
+  const month = map.get('month') ?? '01'
+  const day = map.get('day') ?? '01'
+  const hour = map.get('hour') ?? '00'
+  const minute = map.get('minute') ?? '00'
+  const second = map.get('second') ?? '00'
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`
+}
+
 function formatNumber(value: number | null | undefined, decimals = 3) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '--'
   return value.toFixed(decimals)
@@ -1184,6 +1218,8 @@ function PlotlyFigure({ data, layout, config, onViewportChange, onPointClick }: 
 
 export default function UstsRvDashboard() {
   const [asOf, setAsOf] = useState(todayIsoDate())
+  const [asOfTime, setAsOfTime] = useState('15:00')
+  const [dataMode, setDataMode] = useState<UstsRvDataMode>('eod_live')
   const [minTtm, setMinTtm] = useState(1)
   const [xColumn, setXColumn] = useState<UstsRvXColumn>('ttm')
   const [valueColumn, setValueColumn] = useState<UstsRvValueColumn>('ytm')
@@ -1212,7 +1248,12 @@ export default function UstsRvDashboard() {
   const [timeseries, setTimeseries] = useState<UstsRvTimeseriesResponse | null>(null)
   const [timeseriesLoading, setTimeseriesLoading] = useState(false)
   const [timeseriesError, setTimeseriesError] = useState<string | null>(null)
-  const [timeseriesLookbackDays, setTimeseriesLookbackDays] = useState(365 * 5)
+  const [timeseriesStartDate, setTimeseriesStartDate] = useState(() =>
+    shiftIsoDate(todayIsoDate(), -(365 * 5))
+  )
+  const [timeseriesEndDate, setTimeseriesEndDate] = useState(() => todayIsoDate())
+  const [timeseriesStartTime, setTimeseriesStartTime] = useState('07:00')
+  const [timeseriesEndTime, setTimeseriesEndTime] = useState('15:00')
   const [showMeanReversion, setShowMeanReversion] = useState(false)
   const [ouForwardSteps, setOuForwardSteps] = useState(126)
   const [timeseriesTechnicals, setTimeseriesTechnicals] = useState<TimeseriesTechnicals>({
@@ -1290,14 +1331,19 @@ export default function UstsRvDashboard() {
   }, [availablePresets])
 
   const buildRequest = useCallback((): UstsRvSnapshotRequest => {
-    return {
+    const requestPayload: UstsRvSnapshotRequest = {
       asOf: asOf || undefined,
+      dataMode,
       minTtm,
       xColumn,
       includeValues: [valueColumn],
       splineConfigs: selectedPresetConfigs
     }
-  }, [asOf, minTtm, xColumn, valueColumn, selectedPresetConfigs])
+    if (dataMode === 'intraday_live') {
+      requestPayload.asOfTime = asOfTime || undefined
+    }
+    return requestPayload
+  }, [asOf, asOfTime, dataMode, minTtm, xColumn, valueColumn, selectedPresetConfigs])
 
   const fetchSnapshot = useCallback(async (requestPayload: UstsRvSnapshotRequest) => {
     setLoading(true)
@@ -1720,17 +1766,29 @@ export default function UstsRvDashboard() {
     void fetchTimeseries({
       asOf: snapshot?.asOf || asOf,
       curveName: snapshot?.curveName,
+      dataMode,
       valueColumn,
       cusips: selectedBonds.map((bond) => bond.cusip),
-      lookbackDays: timeseriesLookbackDays
+      startDate: timeseriesStartDate || undefined,
+      endDate: timeseriesEndDate || undefined,
+      ...(dataMode === 'intraday_live'
+        ? {
+            startTime: timeseriesStartTime || undefined,
+            endTime: timeseriesEndTime || undefined
+          }
+        : {})
     })
   }, [
     selectedBonds,
     valueColumn,
+    dataMode,
     snapshot?.asOf,
     snapshot?.curveName,
     asOf,
-    timeseriesLookbackDays,
+    timeseriesStartDate,
+    timeseriesEndDate,
+    timeseriesStartTime,
+    timeseriesEndTime,
     fetchTimeseries
   ])
 
@@ -1884,6 +1942,12 @@ export default function UstsRvDashboard() {
     let cancelled = false
 
     const run = async () => {
+      if (dataMode === 'intraday_live') {
+        setSnapshotDeltaByCusip({})
+        setSnapshotDeltaError(null)
+        setSnapshotDeltaLoading(false)
+        return
+      }
       if (parsedDeltaHorizon.error) {
         setSnapshotDeltaByCusip({})
         setSnapshotDeltaError(parsedDeltaHorizon.error)
@@ -1925,6 +1989,7 @@ export default function UstsRvDashboard() {
             body: JSON.stringify({
               asOf: deltaEndDate,
               curveName: snapshot.curveName,
+              dataMode,
               valueColumn,
               cusips,
               startDate,
@@ -1986,7 +2051,14 @@ export default function UstsRvDashboard() {
     return () => {
       cancelled = true
     }
-  }, [snapshot, deltaTargetDate, deltaEndDate, parsedDeltaHorizon.error, deltaHorizonLabel])
+  }, [
+    snapshot,
+    dataMode,
+    deltaTargetDate,
+    deltaEndDate,
+    parsedDeltaHorizon.error,
+    deltaHorizonLabel
+  ])
 
   const snapshotTableColumns = useMemo<SnapshotTableColumnDefinition[]>(
     () => [
@@ -2467,6 +2539,8 @@ export default function UstsRvDashboard() {
 
     const out: any[] = []
     const hiddenCusips = new Set(timeseriesHiddenCusips)
+    const mapX = (raw: string) =>
+      dataMode === 'intraday_live' ? formatNyDateTimeAxisLabel(raw) : raw
     const addTechnicals = ({
       x,
       values,
@@ -2537,7 +2611,7 @@ export default function UstsRvDashboard() {
       const yaxis: TimeseriesAxis = timeseriesRightAxisCusips.includes(series.cusip)
         ? 'y2'
         : 'y'
-      const x = series.points.map((point) => point.asOf)
+      const x = series.points.map((point) => mapX(point.asOf))
       const y = series.points.map((point) => point.value)
       const baseName = `${series.cusip}${series.ust_label ? ` (${series.ust_label})` : ''}`
 
@@ -2582,7 +2656,7 @@ export default function UstsRvDashboard() {
     for (let idx = 0; idx < timeseriesFormulaSeries.length; idx += 1) {
       const formula = timeseriesFormulaSeries[idx]
       const color = FORMULA_LINE_PALETTE[idx % FORMULA_LINE_PALETTE.length]
-      const x = formula.points.map((point) => point.asOf)
+      const x = formula.points.map((point) => mapX(point.asOf))
       const y = formula.points.map((point) => point.value)
       const values = formula.points.map((point) =>
         typeof point.value === 'number' && Number.isFinite(point.value)
@@ -2629,7 +2703,7 @@ export default function UstsRvDashboard() {
         )
         if (!bands.length) continue
 
-        const x = bands.map((point) => point.date)
+        const x = bands.map((point) => mapX(point.date))
         out.push({
           type: 'scatter',
           mode: 'lines',
@@ -2705,6 +2779,7 @@ export default function UstsRvDashboard() {
     return out
   }, [
     timeseries,
+    dataMode,
     timeseriesTechnicals,
     valueColumn,
     timeseriesRightAxisCusips,
@@ -2736,8 +2811,11 @@ export default function UstsRvDashboard() {
         bgcolor: 'rgba(15, 23, 42, 0.65)'
       },
       xaxis: {
-        title: 'As Of Date',
-        type: 'date',
+        title:
+          dataMode === 'intraday_live'
+            ? 'As Of Time (America/New_York)'
+            : 'As Of Date',
+        type: dataMode === 'intraday_live' ? 'category' : 'date',
         showspikes: true,
         spikesnap: 'cursor',
         spikemode: 'across',
@@ -2770,9 +2848,9 @@ export default function UstsRvDashboard() {
             }
           }
         : {}),
-      uirevision: `usts-rv-timeseries-${valueColumn}-${hasTimeseriesSecondaryAxis ? 'dual' : 'single'}`
+      uirevision: `usts-rv-timeseries-${valueColumn}-${dataMode}-${hasTimeseriesSecondaryAxis ? 'dual' : 'single'}`
     }),
-    [valueColumn, hasTimeseriesSecondaryAxis]
+    [valueColumn, dataMode, hasTimeseriesSecondaryAxis]
   )
 
   const timeseriesConfig = useMemo(
@@ -2829,10 +2907,16 @@ export default function UstsRvDashboard() {
               UST Relative Value Explorer
             </h1>
             <p className="text-sm text-slate-400">
-              Database-backed UST RV scatter with selectable pre-built spline sets.
+              {dataMode === 'intraday_live'
+                ? 'Intraday + live UST RV scatter with selectable pre-built spline sets.'
+                : 'Database-backed UST RV scatter with selectable pre-built spline sets.'}
             </p>
           </div>
           <div className="text-xs text-slate-400">
+            <div>
+              Mode:{' '}
+              {DATA_MODE_OPTIONS.find((opt) => opt.key === dataMode)?.label ?? dataMode}
+            </div>
             <div>As Of: {snapshot?.asOf ?? '--'}</div>
             <div>Points: {snapshot?.meta?.pointCount ?? '--'}</div>
             <div>Visible In Plot: {filteredSnapshotPoints.length}</div>
@@ -2840,7 +2924,24 @@ export default function UstsRvDashboard() {
           </div>
         </div>
 
-        <div className="mt-6 grid gap-4 lg:grid-cols-4">
+        <div className="mt-6 w-full max-w-xs">
+          <label className="text-xs text-slate-400">
+            Data Mode
+            <select
+              value={dataMode}
+              onChange={(e) => setDataMode(e.target.value as UstsRvDataMode)}
+              className="mt-2 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+            >
+              {DATA_MODE_OPTIONS.map((opt) => (
+                <option key={opt.key} value={opt.key}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-5">
           <label className="text-xs text-slate-400">
             As Of Date
             <input
@@ -2850,6 +2951,18 @@ export default function UstsRvDashboard() {
               className="mt-2 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
             />
           </label>
+          {dataMode === 'intraday_live' && (
+            <label className="text-xs text-slate-400">
+              As Of Time (America/New_York)
+              <input
+                type="time"
+                step={60}
+                value={asOfTime}
+                onChange={(e) => setAsOfTime(e.target.value)}
+                className="mt-2 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+              />
+            </label>
+          )}
           <label className="text-xs text-slate-400">
             X Axis
             <select
@@ -3095,7 +3208,9 @@ export default function UstsRvDashboard() {
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
               <div>Filters apply to the table and the scatter plot.</div>
               <div>
-                {snapshotDeltaLoading
+                {dataMode === 'intraday_live'
+                  ? 'Delta horizon is available in EOD + Live mode.'
+                  : snapshotDeltaLoading
                   ? `Loading ${deltaHorizonLabel} deltas...`
                   : deltaTargetDate
                     ? `${deltaHorizonLabel} anchor: ${deltaTargetDate}`
@@ -3250,16 +3365,47 @@ export default function UstsRvDashboard() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <label className="text-xs text-slate-400">
-              Lookback Days
+              Start Date
               <input
-                type="number"
-                min={30}
-                step={30}
-                value={timeseriesLookbackDays}
-                onChange={(e) => setTimeseriesLookbackDays(Number(e.target.value))}
-                className="ml-2 w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
+                type="date"
+                value={timeseriesStartDate}
+                onChange={(e) => setTimeseriesStartDate(e.target.value)}
+                className="ml-2 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
               />
             </label>
+            {dataMode === 'intraday_live' && (
+              <label className="text-xs text-slate-400">
+                Start Time (America/New_York)
+                <input
+                  type="time"
+                  step={60}
+                  value={timeseriesStartTime}
+                  onChange={(e) => setTimeseriesStartTime(e.target.value)}
+                  className="ml-2 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
+                />
+              </label>
+            )}
+            <label className="text-xs text-slate-400">
+              End Date
+              <input
+                type="date"
+                value={timeseriesEndDate}
+                onChange={(e) => setTimeseriesEndDate(e.target.value)}
+                className="ml-2 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
+              />
+            </label>
+            {dataMode === 'intraday_live' && (
+              <label className="text-xs text-slate-400">
+                End Time (America/New_York)
+                <input
+                  type="time"
+                  step={60}
+                  value={timeseriesEndTime}
+                  onChange={(e) => setTimeseriesEndTime(e.target.value)}
+                  className="ml-2 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
+                />
+              </label>
+            )}
             <button
               onClick={clearSelectedBonds}
               className="rounded-md border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:border-slate-400"

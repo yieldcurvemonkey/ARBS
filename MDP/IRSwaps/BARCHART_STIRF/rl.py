@@ -66,16 +66,14 @@ def _sort_nodes(nodes: Dict) -> Dict:
 
 def _as_node_ts(d: datetime.date, *, base_ts: pd.Timestamp) -> pd.Timestamp:
     """
-    Create a timezone-aware pd.Timestamp for date `d` using the SAME time-of-day + tz as `base_ts`.
+    Create a date-anchored node timestamp (00:00) for rateslib curves.
+
+    Do not carry intraday time-of-day from quote timestamps into curve nodes.
+    RFR float periods and fixings are date-based; intraday node starts can make
+    front contracts fail with missing-fixing errors even when fixings are present.
     """
-    tod = base_ts.to_pydatetime().timetz()
-    naive = rl.dt(d.year, d.month, d.day, tod.hour, tod.minute, tod.second, tod.microsecond)
-    return naive
-    # ts = pd.Timestamp(naive)
-    # # localize to base tz (works for pytz/dateutil tz and tz strings)
-    # if ts.tzinfo is None:
-    #     return ts.tz_localize(base_ts.tz)
-    # return ts.tz_convert(base_ts.tz)
+    dt = d.date() if isinstance(d, (pd.Timestamp, datetime.datetime)) else d
+    return rl.dt(dt.year, dt.month, dt.day)
 
 
 def _cm_instruments(prefix: str, count: int = 12) -> List[str]:
@@ -128,7 +126,7 @@ def _build_stirf_nodes(
     node_dates = sorted(set(node_dates))
 
     # build nodes dict (values are placeholders / initial guesses)
-    nodes: Dict[pd.Timestamp, float] = {_as_node_ts(base_ts, base_ts=base_ts): 1.0}
+    nodes: Dict[pd.Timestamp, float] = {_as_node_ts(base_date, base_ts=base_ts): 1.0}
     for d in node_dates:
         nodes[_as_node_ts(d, base_ts=base_ts)] = 1.0
 
@@ -174,7 +172,7 @@ class BARCHART_STIRF_CURVE:
             }
 
         self._STIRF_CURVE_CONFIGS = {
-            "USD-SOFR-1D-Q8": {
+            "USD-SOFR-1D-Q8STIRT": {
                 "fetch_pricers_func": self.stirf_mdp.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp.get_bulk_data,
                 "instruments": [
@@ -195,7 +193,7 @@ class BARCHART_STIRF_CURVE:
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "usd_irs_lt_2y",
             },
-            "USD-SOFR-1D-Q12x3": {
+            "USD-SOFR-1D-Q12x3STIRT": {
                 "fetch_pricers_func": self.stirf_mdp.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp.get_bulk_data,
                 "instruments": [
@@ -220,7 +218,7 @@ class BARCHART_STIRF_CURVE:
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "usd_irs_lt_2y",
             },
-            "USD-OIS-Q12xM11": {
+            "USD-OIS-Q12xM11STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_schwab_app.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_schwab_app.get_bulk_data,
                 "instruments": [
@@ -268,7 +266,7 @@ class BARCHART_STIRF_CURVE:
                 "rl_irs_spec": "usd_irs_lt_2y",
                 "serff_skew": True,
             },
-            "EUR-ESTR-LONDON-Q12": {
+            "EUR-ESTR-LONDON-Q12STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_barchart.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_barchart.get_bulk_data,
                 "instruments": [
@@ -289,7 +287,7 @@ class BARCHART_STIRF_CURVE:
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "eur_irs",
             },
-            "EUR-ESTR-NYC-Q12": {
+            "EUR-ESTR-NYC-Q12STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_barchart.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_barchart.get_bulk_data,
                 "instruments": [
@@ -310,7 +308,7 @@ class BARCHART_STIRF_CURVE:
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "eur_irs",
             },
-            # "EUR-ESTR-ICE-Q12xM12": {
+            # "EUR-ESTR-ICE-Q12xM12STIRT": {
             #     "fetch_pricers_func": self.stirf_mdp_barchart.get_data,
             #     "fetch_pricers_bulk_func": self.stirf_mdp_barchart.get_bulk_data,
             #     "instruments": _cm_instruments("IJ", 8) + _cm_instruments("EB"),
@@ -318,7 +316,7 @@ class BARCHART_STIRF_CURVE:
             #     "max_tenor_from_timestamp_months": 24,
             #     "rl_irs_spec": "eur_irs",
             # },
-            "CAD-CORRA-Q8": {
+            "CAD-CORRA-Q8STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_barchart.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_barchart.get_bulk_data,
                 "instruments": _cm_instruments("RG", 8),
@@ -326,7 +324,7 @@ class BARCHART_STIRF_CURVE:
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "cad_irs",
             },
-            "GBP-SONIA-Q12": {
+            "GBP-SONIA-Q12STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_barchart.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_barchart.get_bulk_data,
                 # "instruments": _cm_instruments("J8") + _cm_instruments("JU"),
@@ -335,7 +333,7 @@ class BARCHART_STIRF_CURVE:
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "gbp_irs",
             },
-            "JPY-TONA-JPX-Q12": {
+            "JPY-TONA-JPX-Q12STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_barchart.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_barchart.get_bulk_data,
                 "instruments": _cm_instruments("T0"),
@@ -343,7 +341,7 @@ class BARCHART_STIRF_CURVE:
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "jpy_irs",
             },
-            "JPY-TONA-TFX-Q12": {
+            "JPY-TONA-TFX-Q12STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_barchart.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_barchart.get_bulk_data,
                 "instruments": _cm_instruments("IT"),
@@ -351,7 +349,7 @@ class BARCHART_STIRF_CURVE:
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "jpy_irs",
             },
-            "CHF-SARON-Q12": {
+            "CHF-SARON-Q12STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_barchart.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_barchart.get_bulk_data,
                 "instruments": _cm_instruments("J2"),
@@ -359,7 +357,7 @@ class BARCHART_STIRF_CURVE:
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "chf_irs",
             },
-            "EUR-EURIBOR-ICE-Q12": {
+            "EUR-EURIBOR-ICE-Q12STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_barchart.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_barchart.get_bulk_data,
                 "instruments": _cm_instruments("IM"),
@@ -367,8 +365,9 @@ class BARCHART_STIRF_CURVE:
                 "node_reference_key": "EUR-ESTR",
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "eur_irs",
+                "interpolation": "linear_zero_rate",
             },
-            "EUR-EURIBOR-EUREX-Q12": {
+            "EUR-EURIBOR-EUREX-Q12STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_barchart.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_barchart.get_bulk_data,
                 "instruments": _cm_instruments("TV"),
@@ -376,6 +375,7 @@ class BARCHART_STIRF_CURVE:
                 "node_reference_key": "EUR-ESTR",
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "eur_irs",
+                "interpolation": "linear_zero_rate",
             },
         }
 
@@ -402,6 +402,7 @@ class BARCHART_STIRF_CURVE:
                 str(cfg.get("node_reference_key", cfg.get("reference_key", ""))),
                 str(cfg.get("sofr_reference_key", "")),
                 str(cfg.get("rl_irs_spec", "")),
+                str(cfg.get("interpolation", "log_linear")),
                 str(int(bool(cfg.get("serff_skew", False)))),
                 str(cfg.get("max_tenor_from_timestamp_months", "")),
                 ",".join(str(x) for x in cfg.get("instruments", [])),
@@ -547,6 +548,7 @@ class BARCHART_STIRF_CURVE:
     ) -> Tuple[rl.Curve, rl.Solver]:
         sorted_pricers = _sort_pricers_for_solver(pricers)
         node_reference_key = cfg.get("node_reference_key", cfg["reference_key"])
+        interpolation = cfg.get("interpolation", "log_linear")
 
         def one_day_irs(eff_date, curve_key):
             return rl.IRS(
@@ -605,7 +607,7 @@ class BARCHART_STIRF_CURVE:
                 convention=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["DayCounter"],
                 calendar=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["Calendar"],
                 modifier=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["BusinessConvention"],
-                interpolation="log_linear",
+                interpolation=interpolation,
             )
 
             sofr_meeting_dates = sorted(k for k in nodes.keys())
@@ -641,7 +643,7 @@ class BARCHART_STIRF_CURVE:
                 convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
                 calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
                 modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
-                interpolation="log_linear",
+                interpolation=interpolation,
             )
 
             meeting_dates = sorted(k for k in nodes.keys())
@@ -673,7 +675,7 @@ class BARCHART_STIRF_CURVE:
             convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
             calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
             modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
-            interpolation="log_linear",
+            interpolation=interpolation,
         )
 
         instruments = [self._build_pricable_for_curve(p, curve_key=cfg["reference_key"]) for p in sorted_pricers]

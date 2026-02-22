@@ -104,12 +104,15 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         )
 
     def dirty_price(self, notional=None):
+        effective_notional = self._notional if notional is None else notional
+        if effective_notional is None:
+            effective_notional = 1_000_000
         return rl.FixedRateBond(
             self._to_rl_dt(self.issue_date()),
             self._to_rl_dt(self.maturity_date()),
             spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"],
             fixed_rate=self.coupon(),
-            notional=notional,
+            notional=effective_notional,
         ).price(
             ytm=self.ytm(),
             dirty=True,

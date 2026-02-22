@@ -61,7 +61,7 @@ class FixedRateBondValueFunctionMap(BaseValueFunctionMap[FixedRateBondValue, flo
             FixedRateBondValue.NPV: self._npv,
             FixedRateBondValue.PV01: self._pv01,
             FixedRateBondValue.DV01: self._dv01,
-            # FixedRateBondValue.MOD_DURATION: self._mod_duration,
+            FixedRateBondValue.MOD_DURATION: self._mod_duration,
             # FixedRateBondValue.CONVEXITY: self._convexity,
         }
 

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 
 import type {
+  UstsRvDataMode,
   UstsRvSnapshotRequest,
   UstsRvValueColumn,
   UstsRvXColumn
@@ -22,6 +23,7 @@ const VALUE_COLUMNS: UstsRvValueColumn[] = [
 ]
 
 const X_COLUMNS: UstsRvXColumn[] = ['ttm', 'mdur']
+const DATA_MODES: UstsRvDataMode[] = ['eod_live', 'intraday_live']
 
 function normalizeValueColumns(raw: unknown): UstsRvValueColumn[] | undefined {
   if (!Array.isArray(raw)) return undefined
@@ -40,10 +42,20 @@ function normalizeXColumn(raw: unknown): UstsRvXColumn | undefined {
     : undefined
 }
 
+function normalizeDataMode(raw: unknown): UstsRvDataMode | undefined {
+  if (typeof raw !== 'string') return undefined
+  return DATA_MODES.includes(raw as UstsRvDataMode)
+    ? (raw as UstsRvDataMode)
+    : undefined
+}
+
 function normalizeRequest(raw: any): UstsRvSnapshotRequest {
   const req: UstsRvSnapshotRequest = {}
   if (typeof raw?.asOf === 'string') req.asOf = raw.asOf
+  if (typeof raw?.asOfTime === 'string') req.asOfTime = raw.asOfTime
   if (typeof raw?.curveName === 'string') req.curveName = raw.curveName
+  const dataMode = normalizeDataMode(raw?.dataMode)
+  if (dataMode) req.dataMode = dataMode
 
   const xColumn = normalizeXColumn(raw?.xColumn)
   if (xColumn) req.xColumn = xColumn
@@ -117,7 +129,9 @@ export async function GET(request: Request) {
 
   const req = normalizeRequest({
     asOf: searchParams.get('asOf') ?? undefined,
+    asOfTime: searchParams.get('asOfTime') ?? undefined,
     curveName: searchParams.get('curveName') ?? undefined,
+    dataMode: searchParams.get('dataMode') ?? undefined,
     xColumn: searchParams.get('xColumn') ?? undefined,
     minTtm: searchParams.get('minTtm') ?? undefined,
     includeValues

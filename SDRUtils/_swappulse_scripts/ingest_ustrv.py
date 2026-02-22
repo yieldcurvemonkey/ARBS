@@ -8,16 +8,21 @@ versioned tables for the dashboard to read quickly.
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime
+import io
 import math
 import os
 import time
+import uuid
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 from urllib.parse import quote_plus
 
 import numpy as np
 import pandas as pd
+import pytz
 import QuantLib as ql
+import requests
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from tqdm import tqdm
@@ -26,7 +31,13 @@ from RVUtils.Interpolation.GeneralCurveInterpolator import GeneralCurveInterpola
 
 
 POINTS_TABLE = "arbs_ust_rv_points_v1"
+INTRADAY_POINTS_TABLE = "arbs_ust_rv_intraday_points_v1"
 RUNS_TABLE = "arbs_ust_rv_ingestion_runs_v1"
+INTRADAY_SOURCE = "USTS_WEBULL_WSJ_LIVE-RL"
+
+_REQUESTS_TIMEOUT_SECONDS: Optional[float] = None
+_REQUESTS_TIMEOUT_PATCHED = False
+_REQUESTS_ORIGINAL_REQUEST: Optional[Callable[..., Any]] = None
 
 SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS {POINTS_TABLE} (
@@ -97,6 +108,74 @@ CREATE TABLE IF NOT EXISTS {POINTS_TABLE} (
     PRIMARY KEY (as_of_date, curve_name, cusip)
 );
 
+CREATE TABLE IF NOT EXISTS {INTRADAY_POINTS_TABLE} (
+    as_of_date DATE NOT NULL,
+    curve_name TEXT NOT NULL,
+    cusip TEXT NOT NULL,
+    oi TEXT,
+    ust_label TEXT,
+    rank INTEGER,
+    ttm NUMERIC,
+    mdur NUMERIC,
+    ytm NUMERIC,
+    mmss NUMERIC,
+    clean_price NUMERIC,
+    dirty_price NUMERIC,
+    coupon NUMERIC,
+    carry_bps NUMERIC,
+    roll_bps NUMERIC,
+    carry_and_roll_bps NUMERIC,
+    carry_1m_bps NUMERIC,
+    roll_1m_bps NUMERIC,
+    carry_and_roll_1m_bps NUMERIC,
+    carry_2m_bps NUMERIC,
+    roll_2m_bps NUMERIC,
+    carry_and_roll_2m_bps NUMERIC,
+    carry_3m_bps NUMERIC,
+    roll_3m_bps NUMERIC,
+    carry_and_roll_3m_bps NUMERIC,
+    carry_6m_bps NUMERIC,
+    roll_6m_bps NUMERIC,
+    carry_and_roll_6m_bps NUMERIC,
+    swap_carry_bps NUMERIC,
+    swap_roll_bps NUMERIC,
+    swap_carry_and_roll_bps NUMERIC,
+    swap_carry_1m_bps NUMERIC,
+    swap_roll_1m_bps NUMERIC,
+    swap_carry_and_roll_1m_bps NUMERIC,
+    swap_carry_2m_bps NUMERIC,
+    swap_roll_2m_bps NUMERIC,
+    swap_carry_and_roll_2m_bps NUMERIC,
+    swap_carry_3m_bps NUMERIC,
+    swap_roll_3m_bps NUMERIC,
+    swap_carry_and_roll_3m_bps NUMERIC,
+    swap_carry_6m_bps NUMERIC,
+    swap_roll_6m_bps NUMERIC,
+    swap_carry_and_roll_6m_bps NUMERIC,
+    mmss_carry_bps NUMERIC,
+    mmss_roll_bps NUMERIC,
+    mmss_carry_and_roll_bps NUMERIC,
+    mmss_carry_1m_bps NUMERIC,
+    mmss_roll_1m_bps NUMERIC,
+    mmss_carry_and_roll_1m_bps NUMERIC,
+    mmss_carry_2m_bps NUMERIC,
+    mmss_roll_2m_bps NUMERIC,
+    mmss_carry_and_roll_2m_bps NUMERIC,
+    mmss_carry_3m_bps NUMERIC,
+    mmss_roll_3m_bps NUMERIC,
+    mmss_carry_and_roll_3m_bps NUMERIC,
+    mmss_carry_6m_bps NUMERIC,
+    mmss_roll_6m_bps NUMERIC,
+    mmss_carry_and_roll_6m_bps NUMERIC,
+    issue_date DATE,
+    maturity_date DATE,
+    market_timestamp TIMESTAMPTZ NOT NULL,
+    snapshot_ts TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (curve_name, market_timestamp, cusip)
+);
+
 CREATE TABLE IF NOT EXISTS {RUNS_TABLE} (
     run_id BIGSERIAL PRIMARY KEY,
     ingestion_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -109,6 +188,9 @@ CREATE TABLE IF NOT EXISTS {RUNS_TABLE} (
 
 CREATE INDEX IF NOT EXISTS idx_ust_rv_points_curve_date ON {POINTS_TABLE}(curve_name, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_ust_rv_points_snapshot ON {POINTS_TABLE}(snapshot_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_ust_rv_intraday_curve_date ON {INTRADAY_POINTS_TABLE}(curve_name, as_of_date);
+CREATE INDEX IF NOT EXISTS idx_ust_rv_intraday_curve_ts ON {INTRADAY_POINTS_TABLE}(curve_name, market_timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_ust_rv_intraday_cusip_ts ON {INTRADAY_POINTS_TABLE}(cusip, market_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_ust_rv_runs_date ON {RUNS_TABLE}(as_of_date, ingestion_started_at DESC);
 """
 
@@ -183,6 +265,36 @@ NUMERIC_COLUMNS: tuple[str, ...] = (
     *MMSS_CARRY_BPS_HORIZON_COLUMNS,
     *MMSS_ROLL_BPS_HORIZON_COLUMNS,
     *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+)
+
+POINT_DATA_COLUMNS: tuple[str, ...] = (
+    "oi",
+    "ust_label",
+    "rank",
+    "ttm",
+    "mdur",
+    "ytm",
+    "mmss",
+    "clean_price",
+    "dirty_price",
+    "coupon",
+    "carry_bps",
+    "roll_bps",
+    "carry_and_roll_bps",
+    *CARRY_BPS_HORIZON_COLUMNS,
+    *ROLL_BPS_HORIZON_COLUMNS,
+    *CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+    *SWAP_CARRY_ROLL_ALIAS_COLUMNS,
+    *SWAP_CARRY_BPS_HORIZON_COLUMNS,
+    *SWAP_ROLL_BPS_HORIZON_COLUMNS,
+    *SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+    *MMSS_CARRY_ROLL_ALIAS_COLUMNS,
+    *MMSS_CARRY_BPS_HORIZON_COLUMNS,
+    *MMSS_ROLL_BPS_HORIZON_COLUMNS,
+    *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+    "issue_date",
+    "maturity_date",
+    "market_timestamp",
 )
 
 
@@ -633,34 +745,37 @@ def create_db_engine(connection_string: Optional[str] = None) -> Engine:
 
 def ensure_schema(engine: Engine) -> None:
     with engine.begin() as conn:
+        if engine.dialect.name == "postgresql":
+            conn.execute(text("SET LOCAL statement_timeout = 0"))
         for statement in SCHEMA_SQL.split(";"):
             stmt = statement.strip()
             if stmt:
                 conn.execute(text(stmt))
-        for col in (
-            "carry_bps",
-            "roll_bps",
-            "carry_and_roll_bps",
-            *CARRY_BPS_HORIZON_COLUMNS,
-            *ROLL_BPS_HORIZON_COLUMNS,
-            *CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
-            *SWAP_CARRY_ROLL_ALIAS_COLUMNS,
-            *SWAP_CARRY_BPS_HORIZON_COLUMNS,
-            *SWAP_ROLL_BPS_HORIZON_COLUMNS,
-            *SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
-            *MMSS_CARRY_ROLL_ALIAS_COLUMNS,
-            *MMSS_CARRY_BPS_HORIZON_COLUMNS,
-            *MMSS_ROLL_BPS_HORIZON_COLUMNS,
-            *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
-        ):
-            conn.execute(
-                text(
-                    f"""
-                    ALTER TABLE {POINTS_TABLE}
-                    ADD COLUMN IF NOT EXISTS {col} NUMERIC
-                    """
+        for table_name in (POINTS_TABLE, INTRADAY_POINTS_TABLE):
+            for col in (
+                "carry_bps",
+                "roll_bps",
+                "carry_and_roll_bps",
+                *CARRY_BPS_HORIZON_COLUMNS,
+                *ROLL_BPS_HORIZON_COLUMNS,
+                *CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+                *SWAP_CARRY_ROLL_ALIAS_COLUMNS,
+                *SWAP_CARRY_BPS_HORIZON_COLUMNS,
+                *SWAP_ROLL_BPS_HORIZON_COLUMNS,
+                *SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+                *MMSS_CARRY_ROLL_ALIAS_COLUMNS,
+                *MMSS_CARRY_BPS_HORIZON_COLUMNS,
+                *MMSS_ROLL_BPS_HORIZON_COLUMNS,
+                *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+            ):
+                conn.execute(
+                    text(
+                        f"""
+                        ALTER TABLE {table_name}
+                        ADD COLUMN IF NOT EXISTS {col} NUMERIC
+                        """
+                    )
                 )
-            )
 
 
 def _pythonify(val: Any) -> Any:
@@ -689,17 +804,116 @@ def _pythonify(val: Any) -> Any:
     return val
 
 
+def _coerce_copy_cell(val: Any) -> Any:
+    py = _pythonify(val)
+    if py is None:
+        return r"\N"
+    if isinstance(py, (datetime.date, datetime.datetime)):
+        return py.isoformat()
+    return py
+
+
+def _upsert_dataframe_postgres_copy(
+    df: pd.DataFrame,
+    engine: Engine,
+    *,
+    table_name: str,
+    conflict_cols: Iterable[str],
+    update_cols: Iterable[str],
+    batch_size: int,
+    progress_desc: Optional[str],
+) -> int:
+    total = int(len(df))
+    if total == 0:
+        return 0
+
+    all_cols = list(df.columns)
+    col_list = ", ".join(all_cols)
+    conflict_clause = ", ".join(conflict_cols)
+    updates = ", ".join([f"{c} = EXCLUDED.{c}" for c in update_cols])
+    temp_table = f"{table_name}_tmp_{uuid.uuid4().hex[:12]}"
+    desc = progress_desc or f"Writing {table_name} (COPY)"
+
+    insert_sql = f"""
+        INSERT INTO {table_name} ({col_list})
+        SELECT {col_list}
+        FROM {temp_table}
+        ON CONFLICT ({conflict_clause}) DO UPDATE
+        SET {updates},
+            updated_at = NOW()
+    """
+    copy_sql = f"COPY {temp_table} ({col_list}) FROM STDIN WITH (FORMAT csv, NULL '\\N')"
+
+    raw_conn = engine.raw_connection()
+    try:
+        cur = raw_conn.cursor()
+        try:
+            cur.execute("SET LOCAL statement_timeout = 0")
+            cur.execute("SET LOCAL synchronous_commit = OFF")
+            cur.execute(f"CREATE TEMP TABLE {temp_table} (LIKE {table_name} INCLUDING DEFAULTS) ON COMMIT DROP")
+
+            for start_idx in tqdm(range(0, total, batch_size), desc=desc, unit="batch"):
+                stop_idx = min(start_idx + batch_size, total)
+                view = df.iloc[start_idx:stop_idx]
+
+                buffer = io.StringIO()
+                writer = csv.writer(buffer, lineterminator="\n")
+                for row in view.itertuples(index=False, name=None):
+                    writer.writerow([_coerce_copy_cell(v) for v in row])
+                buffer.seek(0)
+                cur.copy_expert(copy_sql, buffer)
+
+            merge_start = time.monotonic()
+            print(
+                f"{desc}: staged_rows={total}. "
+                f"Merging temp table into {table_name}..."
+            )
+            cur.execute(insert_sql)
+            merge_elapsed = time.monotonic() - merge_start
+            print(f"{desc}: merge complete in {merge_elapsed:.1f}s")
+            raw_conn.commit()
+        finally:
+            cur.close()
+    except Exception:
+        raw_conn.rollback()
+        raise
+    finally:
+        raw_conn.close()
+
+    return total
+
+
 def upsert_dataframe(
     df: pd.DataFrame,
     engine: Engine,
     table_name: str,
     conflict_cols: Iterable[str],
     update_cols: Iterable[str],
-    batch_size: int = 1000,
+    batch_size: int = 5000,
     progress_desc: Optional[str] = None,
 ) -> int:
     if df.empty:
         return 0
+
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be > 0, got {batch_size}")
+
+    if engine.dialect.name == "postgresql":
+        try:
+            return _upsert_dataframe_postgres_copy(
+                df,
+                engine,
+                table_name=table_name,
+                conflict_cols=conflict_cols,
+                update_cols=update_cols,
+                batch_size=batch_size,
+                progress_desc=progress_desc,
+            )
+        except Exception as exc:
+            print(
+                "COPY upsert path failed; falling back to executemany path. "
+                f"reason={type(exc).__name__}: {exc}"
+            )
 
     records = df.to_dict(orient="records")
     records = [{k: _pythonify(v) for k, v in rec.items()} for rec in records]
@@ -723,7 +937,7 @@ def upsert_dataframe(
     total = len(records)
     desc = progress_desc or f"Writing {table_name}"
     with engine.begin() as conn:
-        for start_idx in tqdm(range(0, total, batch_size), desc=desc, unit="rows"):
+        for start_idx in tqdm(range(0, total, batch_size), desc=desc, unit="batch"):
             batch = records[start_idx : start_idx + batch_size]
             conn.execute(sql, batch)
 
@@ -805,6 +1019,8 @@ def build_points_dataframe(
     curve_name: str,
     min_ttm: float,
     include_mmss: bool,
+    usts_source: str = "USTS_FEDINVEST_WSJ_LIVE-QL",
+    pricing_timestamp: Optional[datetime.date | datetime.datetime | str] = None,
 ) -> pd.DataFrame:
     from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
     from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
@@ -814,7 +1030,7 @@ def build_points_dataframe(
     from TB.IRSwapsTB import IRSwapsTB
     from TB.TimeseriesBuilder import TimeseriesBuilder
 
-    usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-QL")
+    usts_mdp = FixedRateBondsMDP(source=usts_source)
     ref_df = usts_mdp.get_bond_reference_data(as_of_date=as_of_date).copy()
     ref_df = ref_df.drop(columns=["record_date"], errors="ignore").rename(columns={"label": "ust_label"})
     ref_df = _ensure_numeric_columns(ref_df, ["ttm", "rank", "cpn"])
@@ -825,7 +1041,29 @@ def build_points_dataframe(
     if ref_df.empty:
         return pd.DataFrame()
 
-    ts_for_pricing: datetime.date | str = "live" if as_of_date == datetime.date.today() else as_of_date
+    if pricing_timestamp is not None:
+        ts_for_pricing: datetime.date | datetime.datetime | str = pricing_timestamp
+    else:
+        ts_for_pricing = "live" if as_of_date == datetime.date.today() else as_of_date
+
+    source_upper = str(usts_source).upper()
+    if (
+        source_upper == "USTS_WEBULL_WSJ_LIVE-RL"
+        and isinstance(ts_for_pricing, datetime.date)
+        and not isinstance(ts_for_pricing, datetime.datetime)
+        and ts_for_pricing != datetime.date.today()
+    ):
+        ny_tz = pytz.timezone("America/New_York")
+        ts_for_pricing = ny_tz.localize(
+            datetime.datetime(
+                ts_for_pricing.year,
+                ts_for_pricing.month,
+                ts_for_pricing.day,
+                15,
+                0,
+            )
+        )
+
     pricers = usts_mdp.get_pricer(
         request={
             "cusips": ref_df["cusip"].tolist(),
@@ -964,36 +1202,7 @@ def build_points_dataframe(
     merged_df = _ensure_numeric_columns(merged_df, NUMERIC_COLUMNS)
     merged_df = merged_df.sort_values(by=["ttm", "oi", "rank"], kind="mergesort")
 
-    keep_cols = [
-        "cusip",
-        "oi",
-        "ust_label",
-        "rank",
-        "ttm",
-        "mdur",
-        "ytm",
-        "mmss",
-        "clean_price",
-        "dirty_price",
-        "coupon",
-        "carry_bps",
-        "roll_bps",
-        "carry_and_roll_bps",
-        *CARRY_BPS_HORIZON_COLUMNS,
-        *ROLL_BPS_HORIZON_COLUMNS,
-        *CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
-        *SWAP_CARRY_ROLL_ALIAS_COLUMNS,
-        *SWAP_CARRY_BPS_HORIZON_COLUMNS,
-        *SWAP_ROLL_BPS_HORIZON_COLUMNS,
-        *SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
-        *MMSS_CARRY_ROLL_ALIAS_COLUMNS,
-        *MMSS_CARRY_BPS_HORIZON_COLUMNS,
-        *MMSS_ROLL_BPS_HORIZON_COLUMNS,
-        *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
-        "issue_date",
-        "maturity_date",
-        "market_timestamp",
-    ]
+    keep_cols = ["cusip", *POINT_DATA_COLUMNS]
     for col in keep_cols:
         if col not in merged_df.columns:
             merged_df[col] = None
@@ -1078,33 +1287,7 @@ def ingest_snapshot(
         table_name=POINTS_TABLE,
         conflict_cols=("as_of_date", "curve_name", "cusip"),
         update_cols=(
-            "oi",
-            "ust_label",
-            "rank",
-            "ttm",
-            "mdur",
-            "ytm",
-            "mmss",
-            "clean_price",
-            "dirty_price",
-            "coupon",
-            "carry_bps",
-            "roll_bps",
-            "carry_and_roll_bps",
-            *CARRY_BPS_HORIZON_COLUMNS,
-            *ROLL_BPS_HORIZON_COLUMNS,
-            *CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
-            *SWAP_CARRY_ROLL_ALIAS_COLUMNS,
-            *SWAP_CARRY_BPS_HORIZON_COLUMNS,
-            *SWAP_ROLL_BPS_HORIZON_COLUMNS,
-            *SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
-            *MMSS_CARRY_ROLL_ALIAS_COLUMNS,
-            *MMSS_CARRY_BPS_HORIZON_COLUMNS,
-            *MMSS_ROLL_BPS_HORIZON_COLUMNS,
-            *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
-            "issue_date",
-            "maturity_date",
-            "market_timestamp",
+            *POINT_DATA_COLUMNS,
             "snapshot_ts",
         ),
         progress_desc="Writing UST RV points",
@@ -1123,6 +1306,359 @@ def ingest_snapshot(
         points_written=points_written,
     )
     return points_written, deleted
+
+
+def _is_business_day(d: datetime.date) -> bool:
+    cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    qd = ql.Date(d.day, d.month, d.year)
+    return bool(cal.isBusinessDay(qd))
+
+
+def build_intraday_points_dataframe(
+    *,
+    as_of_date: datetime.date,
+    curve_name: str,
+    min_ttm: float,
+    interval_minutes: int,
+    session_open: datetime.time,
+    session_close: datetime.time,
+    max_workers: int,
+    show_tqdm: bool,
+) -> pd.DataFrame:
+    from BT.misc import ql_cal_date_range
+    from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
+    from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
+    from TB.FixedRateBondsTB import FixedRateBondsTB
+
+    if interval_minutes <= 0:
+        raise ValueError(f"interval_minutes must be > 0, got {interval_minutes}")
+    if session_close <= session_open:
+        raise ValueError(
+            f"session_close must be after session_open. Got {session_open} -> {session_close}."
+        )
+    if not _is_business_day(as_of_date):
+        return pd.DataFrame()
+
+    usts_mdp = FixedRateBondsMDP(source=INTRADAY_SOURCE)
+    ref_df = usts_mdp.get_bond_reference_data(as_of_date=as_of_date).copy()
+    ref_df = ref_df.drop(columns=["record_date"], errors="ignore").rename(columns={"label": "ust_label"})
+    ref_df = _ensure_numeric_columns(ref_df, ["ttm", "rank", "cpn"])
+    ref_df = ref_df[ref_df["ttm"] >= min_ttm].copy()
+    ref_df["cusip"] = ref_df["cusip"].astype(str)
+    ref_df = ref_df.drop_duplicates(subset=["cusip"], keep="last")
+    if ref_df.empty:
+        return pd.DataFrame()
+
+    ny_tz = pytz.timezone("America/New_York")
+    start_dt = ny_tz.localize(datetime.datetime.combine(as_of_date, session_open))
+    end_dt = ny_tz.localize(datetime.datetime.combine(as_of_date, session_close))
+    timestamps = ql_cal_date_range(
+        ql.UnitedStates(ql.UnitedStates.GovernmentBond),
+        start=start_dt,
+        end=end_dt,
+        freq=f"{int(interval_minutes)}min",
+        open_time=session_open,
+        close_time=session_close,
+    )
+    if not timestamps:
+        return pd.DataFrame()
+
+    ts_points = sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
+    queries = [FixedRateBondQuery(cusip=cusip) for cusip in ref_df["cusip"].tolist()]
+    if not queries:
+        return pd.DataFrame()
+
+    with FixedRateBondsTB(usts_mdp, show_tqdm=show_tqdm) as usts_tb:
+        ytm_df = usts_tb.get_timeseries(
+            start=None,
+            end=None,
+            timestamps=ts_points,
+            queries=queries,
+            n_jobs=max_workers,
+        )
+    if ytm_df is None or ytm_df.empty:
+        return pd.DataFrame()
+
+    ytm_df = ytm_df.copy()
+    ytm_df.index = pd.to_datetime(ytm_df.index, errors="coerce", utc=True)
+    ytm_df = ytm_df[~ytm_df.index.isna()]
+    if ytm_df.empty:
+        return pd.DataFrame()
+
+    ytm_rows: list[pd.DataFrame] = []
+    for col in ytm_df.columns:
+        cusip = _extract_cusip_from_query_name(str(col))
+        if not cusip:
+            continue
+        tmp = pd.DataFrame(
+            {
+                "market_timestamp": ytm_df.index,
+                "cusip": cusip,
+                "ytm": pd.to_numeric(ytm_df[col], errors="coerce"),
+            }
+        ).dropna(subset=["ytm"])
+        if not tmp.empty:
+            ytm_rows.append(tmp)
+
+    if not ytm_rows:
+        return pd.DataFrame()
+
+    out = pd.concat(ytm_rows, ignore_index=True)
+    ref_slim = ref_df[
+        ["cusip", "oi", "ust_label", "rank", "ttm", "cpn", "issue_date", "maturity_date"]
+    ].copy()
+    ref_slim = ref_slim.rename(columns={"cpn": "coupon"}).drop_duplicates(subset=["cusip"], keep="last")
+    out = out.merge(ref_slim, on="cusip", how="left")
+
+    out["as_of_date"] = as_of_date
+    out["curve_name"] = curve_name
+    out["mdur"] = np.nan
+    out["mmss"] = np.nan
+    out["clean_price"] = np.nan
+    out["dirty_price"] = np.nan
+    out["carry_bps"] = np.nan
+    out["roll_bps"] = np.nan
+    out["carry_and_roll_bps"] = np.nan
+    for col in (
+        *CARRY_BPS_HORIZON_COLUMNS,
+        *ROLL_BPS_HORIZON_COLUMNS,
+        *CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+        *SWAP_CARRY_ROLL_ALIAS_COLUMNS,
+        *SWAP_CARRY_BPS_HORIZON_COLUMNS,
+        *SWAP_ROLL_BPS_HORIZON_COLUMNS,
+        *SWAP_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+        *MMSS_CARRY_ROLL_ALIAS_COLUMNS,
+        *MMSS_CARRY_BPS_HORIZON_COLUMNS,
+        *MMSS_ROLL_BPS_HORIZON_COLUMNS,
+        *MMSS_CARRY_AND_ROLL_BPS_HORIZON_COLUMNS,
+    ):
+        out[col] = np.nan
+
+    for col in ["as_of_date", "curve_name", "cusip", *POINT_DATA_COLUMNS]:
+        if col not in out.columns:
+            out[col] = None
+
+    out = _ensure_numeric_columns(out, NUMERIC_COLUMNS)
+    out["cusip"] = out["cusip"].astype(str)
+    out["market_timestamp"] = pd.to_datetime(out["market_timestamp"], errors="coerce", utc=True)
+    out = out.dropna(subset=["market_timestamp"])
+    out = out.drop_duplicates(subset=["curve_name", "market_timestamp", "cusip"], keep="last")
+    out = out.sort_values(by=["market_timestamp", "ttm", "oi", "rank", "cusip"], kind="mergesort")
+    return out[["as_of_date", "curve_name", "cusip", *POINT_DATA_COLUMNS]]
+
+
+def ingest_intraday_day(
+    engine: Engine,
+    *,
+    as_of_date: datetime.date,
+    curve_name: str,
+    min_ttm: float,
+    dry_run: bool,
+    interval_minutes: int,
+    session_open: datetime.time,
+    session_close: datetime.time,
+    max_workers: int,
+    show_tqdm: bool,
+) -> int:
+    try:
+        points_df = build_intraday_points_dataframe(
+            as_of_date=as_of_date,
+            curve_name=curve_name,
+            min_ttm=min_ttm,
+            interval_minutes=interval_minutes,
+            session_open=session_open,
+            session_close=session_close,
+            max_workers=max_workers,
+            show_tqdm=show_tqdm,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "build_intraday_points_dataframe failed "
+            f"for as_of={as_of_date}, curve={curve_name}, "
+            f"session={session_open}-{session_close}, interval={interval_minutes}min, "
+            f"max_workers={max_workers}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    if points_df.empty:
+        print(f"No intraday points returned for {as_of_date} ({curve_name}).")
+        return 0
+
+    snapshot_ts = pd.Timestamp.now(tz="UTC")
+    points_df["snapshot_ts"] = snapshot_ts
+
+    print(
+        f"Intraday snapshot {as_of_date} ({curve_name}): "
+        f"rows={len(points_df)} "
+        f"unique_cusips={points_df['cusip'].nunique()} "
+        f"range=[{points_df['market_timestamp'].min()}, {points_df['market_timestamp'].max()}]"
+    )
+
+    if dry_run:
+        print("Dry run enabled; skipping intraday database writes.")
+        return int(len(points_df))
+
+    points_written = upsert_dataframe(
+        points_df,
+        engine=engine,
+        table_name=INTRADAY_POINTS_TABLE,
+        conflict_cols=("curve_name", "market_timestamp", "cusip"),
+        update_cols=(
+            "as_of_date",
+            *POINT_DATA_COLUMNS,
+            "snapshot_ts",
+        ),
+        progress_desc="Writing UST RV intraday points",
+    )
+    record_ingestion_run(
+        engine,
+        as_of_date=as_of_date,
+        curve_name=curve_name,
+        snapshot_ts=snapshot_ts,
+        points_written=points_written,
+        notes=(
+            f"intraday table={INTRADAY_POINTS_TABLE} interval={interval_minutes}min "
+            f"session={session_open}-{session_close}"
+        ),
+    )
+    return points_written
+
+
+def get_existing_intraday_dates(
+    engine: Engine,
+    *,
+    curve_name: str,
+    start_date: datetime.date,
+    end_date: datetime.date,
+) -> set[datetime.date]:
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                f"""
+                SELECT DISTINCT as_of_date
+                FROM {INTRADAY_POINTS_TABLE}
+                WHERE curve_name = :curve_name
+                  AND as_of_date BETWEEN :start_date AND :end_date
+                """
+            ),
+            dict(curve_name=curve_name, start_date=start_date, end_date=end_date),
+        ).fetchall()
+
+    out: set[datetime.date] = set()
+    for row in rows:
+        d = _coerce_db_date(row[0] if row else None)
+        if d is not None:
+            out.add(d)
+    return out
+
+
+def run_intraday_backfill_mode(
+    *,
+    engine: Engine,
+    start_date: datetime.date,
+    end_date: datetime.date,
+    curve_name: str,
+    min_ttm: float,
+    dry_run: bool,
+    interval_minutes: int,
+    session_open: datetime.time,
+    session_close: datetime.time,
+    max_workers: int,
+    show_tqdm: bool,
+    skip_existing: bool,
+    network_timeout_seconds: Optional[float] = None,
+    stop_on_error: bool = False,
+) -> None:
+    all_days = _date_range_business_days(start_date, end_date)
+    if not all_days:
+        print(f"No business days between {start_date} and {end_date}.")
+        return
+
+    if skip_existing and not dry_run:
+        existing = get_existing_intraday_dates(
+            engine,
+            curve_name=curve_name,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        days = [d for d in all_days if d not in existing]
+        print(
+            f"Intraday backfill business days={len(all_days)}, "
+            f"existing={len(existing)}, remaining={len(days)}"
+        )
+    else:
+        days = all_days
+        print(f"Intraday backfill business days={len(days)}")
+
+    if not days:
+        print("Intraday backfill complete: nothing new to ingest.")
+        return
+
+    run_start_wall = pd.Timestamp.now(tz="UTC")
+    run_start_monotonic = time.monotonic()
+    print(
+        f"[{run_start_wall.isoformat()}] Intraday backfill START "
+        f"curve={curve_name} range={start_date}->{end_date} "
+        f"days={len(days)} interval={interval_minutes}min "
+        f"session={session_open}-{session_close} "
+        f"max_workers={max_workers} dry_run={dry_run}"
+    )
+
+    total_written = 0
+    failed_days: list[tuple[datetime.date, str]] = []
+    for idx, d in enumerate(days, start=1):
+        day_start_wall = pd.Timestamp.now(tz="UTC")
+        day_start_monotonic = time.monotonic()
+        print(
+            f"[{day_start_wall.isoformat()}] Intraday day {idx}/{len(days)} START "
+            f"as_of={d} curve={curve_name}"
+        )
+        try:
+            written = ingest_intraday_day(
+                engine,
+                as_of_date=d,
+                curve_name=curve_name,
+                min_ttm=min_ttm,
+                dry_run=dry_run,
+                interval_minutes=interval_minutes,
+                session_open=session_open,
+                session_close=session_close,
+                max_workers=max_workers,
+                show_tqdm=show_tqdm,
+            )
+            total_written += int(written)
+            day_elapsed = time.monotonic() - day_start_monotonic
+            day_end_wall = pd.Timestamp.now(tz="UTC")
+            print(
+                f"[{day_end_wall.isoformat()}] Intraday day {idx}/{len(days)} END "
+                f"as_of={d} status=ok rows_written={int(written)} "
+                f"elapsed={day_elapsed:.1f}s"
+            )
+        except Exception as exc:
+            day_elapsed = time.monotonic() - day_start_monotonic
+            day_end_wall = pd.Timestamp.now(tz="UTC")
+            err = _format_intraday_day_error(
+                exc,
+                network_timeout_seconds=network_timeout_seconds,
+            )
+            failed_days.append((d, err))
+            print(
+                f"[{day_end_wall.isoformat()}] Intraday day {idx}/{len(days)} END "
+                f"as_of={d} status=failed elapsed={day_elapsed:.1f}s error={err}"
+            )
+            if stop_on_error:
+                raise
+
+    run_elapsed = time.monotonic() - run_start_monotonic
+    run_end_wall = pd.Timestamp.now(tz="UTC")
+    print(
+        f"[{run_end_wall.isoformat()}] Intraday backfill END. "
+        f"days_processed={len(days)}, rows_written={total_written}, "
+        f"failed_days={len(failed_days)}, elapsed={run_elapsed:.1f}s"
+    )
+    if failed_days:
+        print("Intraday backfill failed dates:")
+        for d, err in failed_days:
+            print(f"  {d}: {err}")
 
 
 def _parse_date(raw: str, arg_name: str) -> datetime.date:
@@ -1420,11 +1956,84 @@ def run_service_mode(
         time.sleep(sleep_seconds)
 
 
+def _configure_requests_timeout(timeout_seconds: Optional[float]) -> Optional[float]:
+    """
+    Configure a default timeout for requests made without an explicit timeout.
+    This avoids indefinite hangs from upstream APIs.
+    """
+    global _REQUESTS_TIMEOUT_SECONDS, _REQUESTS_TIMEOUT_PATCHED, _REQUESTS_ORIGINAL_REQUEST
+
+    if timeout_seconds is None:
+        return None
+
+    timeout_val = float(timeout_seconds)
+    if not math.isfinite(timeout_val):
+        raise ValueError(f"--network-timeout-seconds must be finite, got {timeout_seconds}")
+    if timeout_val <= 0:
+        print("Network timeout disabled (--network-timeout-seconds <= 0).")
+        return None
+
+    _REQUESTS_TIMEOUT_SECONDS = timeout_val
+    if not _REQUESTS_TIMEOUT_PATCHED:
+        _REQUESTS_ORIGINAL_REQUEST = requests.sessions.Session.request
+
+        def _patched_request(self: requests.sessions.Session, method: str, url: str, **kwargs: Any):
+            kwargs.setdefault("timeout", _REQUESTS_TIMEOUT_SECONDS)
+            assert _REQUESTS_ORIGINAL_REQUEST is not None
+            return _REQUESTS_ORIGINAL_REQUEST(self, method, url, **kwargs)
+
+        requests.sessions.Session.request = _patched_request
+        _REQUESTS_TIMEOUT_PATCHED = True
+
+    print(
+        "Configured default requests timeout "
+        f"to {timeout_val:.1f}s for calls without an explicit timeout."
+    )
+    return timeout_val
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    txt = f"{type(exc).__name__}: {exc}".lower()
+    return ("timeout" in txt) or ("timed out" in txt)
+
+
+def _format_intraday_day_error(
+    exc: Exception,
+    *,
+    network_timeout_seconds: Optional[float] = None,
+) -> str:
+    base = f"{type(exc).__name__}: {exc}"
+    if not _is_timeout_error(exc):
+        return base
+
+    if network_timeout_seconds is not None and network_timeout_seconds > 0:
+        timeout_txt = f"{network_timeout_seconds:.1f}s"
+    else:
+        timeout_txt = "disabled"
+
+    return (
+        f"{base}. Timeout while fetching intraday data "
+        f"(default requests timeout={timeout_txt}). "
+        "Try reducing --intraday-max-workers or increasing --network-timeout-seconds."
+    )
+
+
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None or raw == "":
         return default
     return int(raw)
+
+
+def _parse_time_arg(raw: str, arg_name: str) -> datetime.time:
+    txt = (raw or "").strip()
+    if not txt:
+        raise ValueError(f"--{arg_name} cannot be empty")
+    try:
+        parsed = datetime.time.fromisoformat(txt)
+    except Exception as exc:
+        raise ValueError(f"Invalid --{arg_name}: {raw}. Expected HH:MM or HH:MM:SS.") from exc
+    return parsed
 
 
 def parse_args() -> argparse.Namespace:
@@ -1439,12 +2048,18 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--skip-schema",
+        action="store_true",
+        help="Skip schema/index ensure step (use when schema is already provisioned).",
+    )
+    parser.add_argument(
         "--mode",
-        choices=("range", "historical", "incremental", "service"),
+        choices=("range", "historical", "incremental", "service", "intraday"),
         default=os.getenv("SWAPPULSE_USTRV_INGEST_MODE", "incremental"),
         help=(
             "range=custom date range backfill, historical=long-range backfill for "
-            "timeseries history, incremental=single snapshot, service=continuous loop."
+            "timeseries history, incremental=single snapshot, service=continuous loop, "
+            "intraday=minute-level intraday backfill."
         ),
     )
     parser.add_argument(
@@ -1468,6 +2083,15 @@ def parse_args() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Build snapshots but skip writes.",
+    )
+    parser.add_argument(
+        "--network-timeout-seconds",
+        type=float,
+        default=float(os.getenv("SWAPPULSE_USTRV_NETWORK_TIMEOUT_SECONDS", "20")),
+        help=(
+            "Default timeout (seconds) for requests calls that do not specify one. "
+            "Set <= 0 to disable."
+        ),
     )
 
     parser.add_argument(
@@ -1514,6 +2138,40 @@ def parse_args() -> argparse.Namespace:
         "--include-existing",
         action="store_true",
         help="Historical mode: reprocess dates already present in DB.",
+    )
+    parser.add_argument(
+        "--intraday-include-existing",
+        action="store_true",
+        help="Intraday mode: reprocess dates already present in intraday table.",
+    )
+    parser.add_argument(
+        "--intraday-open-time",
+        type=str,
+        default=os.getenv("SWAPPULSE_USTRV_INTRADAY_OPEN_TIME", "07:00"),
+        help="Intraday mode session open time in America/New_York (HH:MM).",
+    )
+    parser.add_argument(
+        "--intraday-close-time",
+        type=str,
+        default=os.getenv("SWAPPULSE_USTRV_INTRADAY_CLOSE_TIME", "15:00"),
+        help="Intraday mode session close time in America/New_York (HH:MM).",
+    )
+    parser.add_argument(
+        "--intraday-interval-minutes",
+        type=int,
+        default=_env_int("SWAPPULSE_USTRV_INTRADAY_INTERVAL_MINUTES", 1),
+        help="Intraday mode minute interval for timestamps.",
+    )
+    parser.add_argument(
+        "--intraday-max-workers",
+        type=int,
+        default=_env_int("SWAPPULSE_USTRV_INTRADAY_MAX_WORKERS", 8),
+        help="Intraday mode max workers passed to FixedRateBondsMDP.bulk_get_data.",
+    )
+    parser.add_argument(
+        "--intraday-show-tqdm",
+        action="store_true",
+        help="Intraday mode: show tqdm progress for MDP bulk fetch.",
     )
 
     parser.add_argument(
@@ -1593,8 +2251,12 @@ def _resolve_historical_dates(
 if __name__ == "__main__":
     args = parse_args()
     include_mmss = not args.no_mmss
+    configured_network_timeout = _configure_requests_timeout(args.network_timeout_seconds)
     engine = create_db_engine(args.database_url)
-    ensure_schema(engine)
+    if args.skip_schema:
+        print("Skipping schema ensure (--skip-schema).")
+    else:
+        ensure_schema(engine)
 
     if args.mode == "range":
         start_date, end_date = _resolve_range_dates(args.start_date, args.end_date, args.days)
@@ -1634,6 +2296,26 @@ if __name__ == "__main__":
             min_ttm=args.min_ttm,
             include_mmss=include_mmss,
             dry_run=args.dry_run,
+        )
+    elif args.mode == "intraday":
+        start_date, end_date = _resolve_range_dates(args.start_date, args.end_date, args.days)
+        session_open = _parse_time_arg(args.intraday_open_time, "intraday-open-time")
+        session_close = _parse_time_arg(args.intraday_close_time, "intraday-close-time")
+        run_intraday_backfill_mode(
+            engine=engine,
+            start_date=start_date,
+            end_date=end_date,
+            curve_name=args.curve_name,
+            min_ttm=args.min_ttm,
+            dry_run=args.dry_run,
+            interval_minutes=args.intraday_interval_minutes,
+            session_open=session_open,
+            session_close=session_close,
+            max_workers=args.intraday_max_workers,
+            show_tqdm=args.intraday_show_tqdm,
+            skip_existing=not args.intraday_include_existing,
+            network_timeout_seconds=configured_network_timeout,
+            stop_on_error=args.stop_on_error,
         )
     else:
         run_service_mode(

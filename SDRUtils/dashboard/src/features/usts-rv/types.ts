@@ -10,6 +10,7 @@ export type UstsRvValueColumn =
   | 'coupon'
 
 export type UstsRvXColumn = 'ttm' | 'mdur'
+export type UstsRvDataMode = 'eod_live' | 'intraday_live'
 
 export type UstsRvSplineMethod = 'bspline' | 'loess'
 
@@ -35,9 +36,11 @@ export type UstsRvSplineConfigRequest = {
 
 export type UstsRvSnapshotRequest = {
   asOf?: string
+  asOfTime?: string
   minTtm?: number
   xColumn?: UstsRvXColumn
   curveName?: string
+  dataMode?: UstsRvDataMode
   includeValues?: UstsRvValueColumn[]
   splineConfigs?: UstsRvSplineConfigRequest[]
 }
@@ -122,6 +125,7 @@ export type UstsRvSnapshotResponse = {
   requestedAsOf: string
   asOf: string
   requestedLive: boolean
+  dataMode: UstsRvDataMode
   curveName: string
   xColumn: UstsRvXColumn | string
   includeValues: string[]
@@ -139,10 +143,13 @@ export type UstsRvSnapshotResponse = {
 export type UstsRvTimeseriesRequest = {
   asOf?: string
   curveName?: string
+  dataMode?: UstsRvDataMode
   valueColumn: UstsRvValueColumn
   cusips: string[]
   startDate?: string
   endDate?: string
+  startTime?: string
+  endTime?: string
   lookbackDays?: number
 }
 
@@ -164,6 +171,7 @@ export type UstsRvTimeseriesResponse = {
   requestedAsOf: string
   asOf: string
   requestedLive: boolean
+  dataMode: UstsRvDataMode
   curveName: string
   valueColumn: UstsRvValueColumn
   startDate: string | null
