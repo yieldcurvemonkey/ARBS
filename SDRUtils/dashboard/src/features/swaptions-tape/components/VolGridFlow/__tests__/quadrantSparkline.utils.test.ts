@@ -262,6 +262,40 @@ describe("quadrantSparkline.utils", () => {
     expect(points.map((point) => point.cumulativeValue)).toEqual([0, 20, 25, 35]);
   });
 
+  it("uses total vega flow volume (absolute) instead of net", () => {
+    const trades = [
+      makeTrade({
+        executionTimestamp: 1000,
+        economicNotional: 1_000_000,
+        flowVega01: -12,
+      }),
+      makeTrade({
+        executionTimestamp: 2000,
+        economicNotional: 1_000_000,
+        flowVega01: 8,
+      }),
+    ];
+    const points = buildVolFlowSparklineData(trades, "vega");
+    expect(points.map((point) => point.cumulativeValue)).toEqual([0, 12, 20]);
+  });
+
+  it("uses total gamma flow volume (absolute) instead of net", () => {
+    const trades = [
+      makeTrade({
+        executionTimestamp: 1000,
+        economicNotional: 1_000_000,
+        flowGamma01: -5,
+      }),
+      makeTrade({
+        executionTimestamp: 2000,
+        economicNotional: 1_000_000,
+        flowGamma01: 7,
+      }),
+    ];
+    const points = buildVolFlowSparklineData(trades, "gamma");
+    expect(points.map((point) => point.cumulativeValue)).toEqual([0, 5, 12]);
+  });
+
   it("computes economic notional by package type", () => {
     expect(getEconomicNotional(360_000_000, "OUTRIGHT")).toBe(360_000_000);
     expect(getEconomicNotional(720_000_000, "STRADDLE")).toBe(360_000_000);

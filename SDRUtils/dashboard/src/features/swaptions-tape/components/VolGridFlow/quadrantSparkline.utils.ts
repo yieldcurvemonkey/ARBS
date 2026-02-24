@@ -4,6 +4,7 @@ import type {
   SparklinePoint,
   SteepestSegment,
   StructureDecomposition,
+  VolFlowAxisMetric,
   VolFlowPattern,
 } from "./quadrantSparkline.types";
 
@@ -124,6 +125,7 @@ export function buildDirectionalSparklineData(
 
 export function buildVolFlowSparklineData(
   trades: QuadrantTradeFlows[],
+  flowMetric: VolFlowAxisMetric = "vega",
 ): SparklinePoint[] {
   if (!Array.isArray(trades) || trades.length === 0) return [];
 
@@ -152,20 +154,37 @@ export function buildVolFlowSparklineData(
   ];
 
   sorted.forEach(({ trade }, index) => {
-    const economicNotional = Number.isFinite(trade.economicNotional)
-      ? Math.abs(trade.economicNotional)
-      : 0;
-    cumulative += economicNotional;
+    const flowVega = Number.isFinite(trade.flowVega01 as number)
+      ? Math.abs(Number(trade.flowVega01))
+      : null;
+    const flowGamma = Number.isFinite(trade.flowGamma01 as number)
+      ? Math.abs(Number(trade.flowGamma01))
+      : null;
+    const selectedFlowValue = flowMetric === "gamma" ? flowGamma : flowVega;
+    const absoluteSelectedFlowValue =
+      selectedFlowValue !== null && Number.isFinite(selectedFlowValue)
+        ? Math.abs(Number(selectedFlowValue))
+        : null;
+    const flowValue =
+      absoluteSelectedFlowValue !== null && absoluteSelectedFlowValue > 0
+        ? absoluteSelectedFlowValue
+        : Number.isFinite(trade.economicNotional)
+          ? Math.abs(trade.economicNotional)
+          : 0;
+    cumulative += flowValue;
     points.push({
       timestamp: trade.executionTimestamp,
       cumulativeValue: cumulative,
       tradeIndex: index,
-      tradeValue: economicNotional,
+      tradeValue: flowValue,
       tradeId: trade.packageId,
       packageType: trade.packageType,
       platform: trade.platform,
       signedNotional: trade.signedNotional,
       economicNotional: trade.economicNotional,
+      flowVega01: trade.flowVega01,
+      flowGamma01: trade.flowGamma01,
+      flowMetric,
       isDeltaNeutral: trade.isDeltaNeutral,
       isStraddle: trade.isStraddle,
     });

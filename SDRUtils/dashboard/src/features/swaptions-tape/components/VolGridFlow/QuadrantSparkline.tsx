@@ -30,6 +30,7 @@ import type {
   SparklineMode,
   SparklinePoint,
   SteepestSegment,
+  VolFlowAxisMetric,
 } from "./quadrantSparkline.types";
 
 const DIRECTION_COLORS: Record<
@@ -43,6 +44,92 @@ const DIRECTION_COLORS: Record<
 
 const BASELINE_COLOR = "#64748b";
 const VOL_FLOW_COLOR = "#fbbf24";
+const VOL_FLOW_COMPARISON_COLOR = "#fef3c7";
+const SPARKLINE_TIME_TICK_MS = 30 * 60 * 1000;
+
+function formatYAxisTick(value: number): string {
+  if (!Number.isFinite(value)) return "";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) {
+    return `${(value / 1_000_000_000).toFixed(1)}b`;
+  }
+  if (abs >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}m`;
+  }
+  if (abs >= 1_000) {
+    return `${(value / 1_000).toFixed(1)}k`;
+  }
+  if (abs >= 100) {
+    return value.toFixed(0);
+  }
+  if (abs >= 10) {
+    return value.toFixed(1);
+  }
+  return value.toFixed(2);
+}
+
+function cumulativeValueAt(
+  points: SparklinePoint[],
+  timestamp: number,
+): number {
+  if (!points.length || !Number.isFinite(timestamp)) return 0;
+  let cumulative = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index];
+    if (!Number.isFinite(point.timestamp)) continue;
+    if (point.timestamp > timestamp) break;
+    if (Number.isFinite(point.cumulativeValue)) {
+      cumulative = Number(point.cumulativeValue);
+    }
+  }
+  return cumulative;
+}
+
+function sliceSeriesToDomain(
+  points: SparklinePoint[],
+  domain: [number, number],
+  seriesPrefix: string,
+): SparklinePoint[] {
+  if (!points.length) return [];
+  const [start, end] = domain;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return points;
+  }
+
+  const startValue = cumulativeValueAt(points, start);
+  const endValue = cumulativeValueAt(points, end);
+  const inRangePoints = points.filter(
+    (point) =>
+      Number.isFinite(point.timestamp) &&
+      point.timestamp >= start &&
+      point.timestamp <= end,
+  );
+
+  const windowedPoints: SparklinePoint[] = [
+    {
+      timestamp: start,
+      cumulativeValue: startValue,
+      tradeIndex: -1,
+      tradeValue: 0,
+      tradeId: `${seriesPrefix}-window-start`,
+      isBaseline: true,
+    },
+    ...inRangePoints,
+  ];
+
+  const lastPoint = windowedPoints[windowedPoints.length - 1];
+  if (!lastPoint || lastPoint.timestamp < end) {
+    windowedPoints.push({
+      timestamp: end,
+      cumulativeValue: endValue,
+      tradeIndex: -1,
+      tradeValue: 0,
+      tradeId: `${seriesPrefix}-window-end`,
+    });
+  }
+
+  return windowedPoints;
+}
 
 type SingleTradeStemProps = {
   points: SparklinePoint[];
@@ -58,7 +145,8 @@ function SingleTradeStem({
   stroke,
 }: SingleTradeStemProps) {
   if (points.length < 2) return null;
-  const tradePoint = points[points.length - 1];
+  const tradePoint =
+    [...points].reverse().find((point) => point.tradeIndex >= 0) ?? null;
   if (!tradePoint || !Number.isFinite(tradePoint.timestamp)) return null;
   const xAxis = xAxisMap ? Object.values(xAxisMap)[0] : null;
   const yAxis = yAxisMap ? Object.values(yAxisMap)[0] : null;
@@ -91,6 +179,9 @@ export type QuadrantSparklineProps = {
   trades: QuadrantTradeFlows[];
   mode: SparklineMode;
   directionColor: "receiver" | "payer" | "balanced";
+  volFlowMetric?: VolFlowAxisMetric;
+  comparisonPoints?: SparklinePoint[];
+  xDomainOverride?: [number, number] | null;
   width?: number;
   height?: number;
   showMarker?: boolean;
@@ -188,6 +279,7 @@ type SparklineTooltipProps = {
   active?: boolean;
   payload?: Array<{ payload?: SparklinePoint }>;
   mode: SparklineMode;
+  volFlowMetric: VolFlowAxisMetric;
   formatValue: (value: number | null | undefined) => string;
   onSelect?: (tradeId: string) => void;
 };
@@ -196,11 +288,15 @@ function SparklineTooltip({
   active,
   payload,
   mode,
+  volFlowMetric,
   formatValue,
   onSelect,
 }: SparklineTooltipProps) {
   if (!active || !payload || payload.length === 0) return null;
-  const point = payload[0]?.payload;
+  const point =
+    payload
+      .map((entry) => entry?.payload)
+      .find((entry) => entry && entry.tradeIndex >= 0) || payload[0]?.payload;
   if (!point || point.tradeIndex < 0) return null;
   const handleClick = () => {
     if (!onSelect || !point.tradeId) return;
@@ -210,9 +306,10 @@ function SparklineTooltip({
   const timeLabel = formatSegmentTime(point.timestamp);
   const platform =
     point.platform === "idb" ? "IDB" : point.platform === "custy" ? "Custy" : "--";
+  const flowMetricLabel = volFlowMetric === "gamma" ? "gamma" : "vega";
   const tradeValueLabel =
     mode === "vol_flow"
-      ? `Trade vol: ${formatValue(point.tradeValue)}`
+      ? `Trade ${flowMetricLabel}: ${formatValue(point.tradeValue)}`
       : `Trade net: ${formatValue(point.tradeValue)}`;
   const cumulativeLabel =
     mode === "vol_flow"
@@ -263,6 +360,9 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
   trades,
   mode,
   directionColor,
+  volFlowMetric = "vega",
+  comparisonPoints,
+  xDomainOverride,
   height = 120,
   showMarker = true,
   showFill = true,
@@ -277,22 +377,26 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
     [trades],
   );
   const volFlowPoints = useMemo(
-    () => buildVolFlowSparklineData(trades),
-    [trades],
+    () => buildVolFlowSparklineData(trades, volFlowMetric),
+    [trades, volFlowMetric],
+  );
+  const comparisonSeriesPoints = useMemo(
+    () =>
+      mode === "vol_flow" && Array.isArray(comparisonPoints)
+        ? comparisonPoints
+        : [],
+    [comparisonPoints, mode],
   );
   const points = mode === "vol_flow" ? volFlowPoints : directionalPoints;
-  const tradeCount = Math.max(points.length - 1, 0);
-  const showLine = tradeCount > 1;
-  const showDots = tradeCount > 0;
-  const showSingleTradeStem = tradeCount === 1;
   const showAxisTicks = mode === "vol_flow" && height >= 96;
+  const showYAxis = mode === "vol_flow" && height >= 96;
   const showGridLines = mode === "vol_flow" && height >= 96;
   const rightMargin = showEndLabel ? 30 : 6;
   const chartMargin = {
     top: showAxisTicks ? 8 : 4,
     right: rightMargin,
-    bottom: showAxisTicks ? 20 : 2,
-    left: 0,
+    bottom: showAxisTicks ? 24 : 2,
+    left: showYAxis ? 44 : 0,
   };
 
   const directionalDomain = useMemo(
@@ -303,8 +407,34 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
     () => computeVolFlowDomain(volFlowPoints),
     [volFlowPoints],
   );
-  const yDomain = mode === "vol_flow" ? volFlowDomain : directionalDomain;
-  const xDomain = useMemo((): [number, number] => {
+  const volFlowDomainWithComparison = useMemo((): [number, number] => {
+    if (!comparisonSeriesPoints.length) return volFlowDomain;
+    const values = [...volFlowPoints, ...comparisonSeriesPoints]
+      .map((point) => point.cumulativeValue)
+      .filter((value) => Number.isFinite(value));
+    if (!values.length) return volFlowDomain;
+    const maxValue = Math.max(...values, 0);
+    if (!Number.isFinite(maxValue) || maxValue <= 0) return [0, 1];
+    return [0, maxValue * 1.1];
+  }, [comparisonSeriesPoints, volFlowDomain, volFlowPoints]);
+  const yDomain =
+    mode === "vol_flow" ? volFlowDomainWithComparison : directionalDomain;
+  const yTicks = useMemo(() => {
+    if (!showYAxis) return undefined;
+    const [minValue, maxValue] = yDomain;
+    if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {
+      return undefined;
+    }
+    if (maxValue <= minValue) return [minValue];
+    const targetTickCount = height >= 120 ? 7 : 6;
+    const step = (maxValue - minValue) / (targetTickCount - 1);
+    if (!Number.isFinite(step) || step <= 0) return [minValue, maxValue];
+    const ticks = Array.from({ length: targetTickCount }, (_, index) =>
+      Number((minValue + step * index).toPrecision(12)),
+    );
+    return Array.from(new Set(ticks));
+  }, [height, showYAxis, yDomain]);
+  const defaultXDomain = useMemo((): [number, number] => {
     if (!points.length) return [0, 1];
     const timestamps = points.map((point) => point.timestamp);
     const minValue = Math.min(...timestamps);
@@ -312,20 +442,57 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
     const pad = minValue === maxValue ? 1 : 0;
     return [minValue - pad, maxValue + pad];
   }, [points]);
+  const xDomain = useMemo((): [number, number] => {
+    if (
+      xDomainOverride &&
+      Number.isFinite(xDomainOverride[0]) &&
+      Number.isFinite(xDomainOverride[1]) &&
+      xDomainOverride[0] < xDomainOverride[1]
+    ) {
+      return xDomainOverride;
+    }
+    return defaultXDomain;
+  }, [defaultXDomain, xDomainOverride]);
   const xTicks = useMemo(() => {
-    if (!showAxisTicks || !points.length) return undefined;
+    if (!showAxisTicks) return undefined;
     const [minValue, maxValue] = xDomain;
     if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {
       return undefined;
     }
     if (minValue === maxValue) return [minValue];
-    const midValue = minValue + (maxValue - minValue) / 2;
-    const ticks = [minValue, midValue, maxValue];
-    const unique = Array.from(
-      new Set(ticks.map((value) => Number(value))),
+    const alignedStart =
+      Math.ceil(minValue / SPARKLINE_TIME_TICK_MS) * SPARKLINE_TIME_TICK_MS;
+    const ticks: number[] = [minValue];
+    for (
+      let timestamp = alignedStart;
+      timestamp < maxValue;
+      timestamp += SPARKLINE_TIME_TICK_MS
+    ) {
+      ticks.push(timestamp);
+    }
+    ticks.push(maxValue);
+    const unique = Array.from(new Set(ticks.map((value) => Number(value)))).sort(
+      (left, right) => left - right,
     );
     return unique;
-  }, [points.length, showAxisTicks, xDomain]);
+  }, [showAxisTicks, xDomain]);
+  const displayPoints = useMemo(
+    () => sliceSeriesToDomain(points, xDomain, "main"),
+    [points, xDomain],
+  );
+  const displayComparisonPoints = useMemo(
+    () => sliceSeriesToDomain(comparisonSeriesPoints, xDomain, "comparison"),
+    [comparisonSeriesPoints, xDomain],
+  );
+  const visibleTradeCount = useMemo(
+    () =>
+      displayPoints.filter((point) => (point.tradeIndex ?? -1) >= 0).length,
+    [displayPoints],
+  );
+  const tradeCount = visibleTradeCount;
+  const showLine = tradeCount > 1;
+  const showDots = tradeCount > 0;
+  const showSingleTradeStem = tradeCount === 1;
 
   const peakPoint = useMemo(() => {
     if (!showMarker) return null;
@@ -386,7 +553,7 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
     [lineColor, onPointClick],
   );
 
-  if (!points.length) {
+  if (!displayPoints.length) {
     return (
       <div style={{ height }} className="w-full">
         {renderBaselinePlaceholder(height, mode)}
@@ -397,19 +564,21 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
   return (
     <div style={{ height }} className="w-full">
       <ResponsiveContainer width="100%" height={height}>
-        <AreaChart data={points} margin={chartMargin}>
+        <AreaChart data={displayPoints} margin={chartMargin}>
           <XAxis
             dataKey="timestamp"
             type="number"
             scale="time"
             domain={xDomain}
+            allowDataOverflow
             hide={!showAxisTicks}
-            axisLine={false}
-            tickLine={false}
-            tickMargin={4}
+            axisLine={{ stroke: "#475569", strokeWidth: 1, opacity: 0.9 }}
+            tickLine={{ stroke: "#64748b", strokeWidth: 1, opacity: 0.9 }}
+            tickMargin={6}
             tick={{
-              fill: "#64748b",
-              fontSize: 8,
+              fill: "#cbd5e1",
+              fontSize: 9,
+              fontWeight: 600,
               fontFamily:
                 "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace",
             }}
@@ -417,7 +586,25 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
             ticks={xTicks}
             interval="preserveStartEnd"
           />
-          <YAxis type="number" domain={yDomain} hide tickCount={3} />
+          <YAxis
+            type="number"
+            domain={yDomain}
+            hide={!showYAxis}
+            tickCount={yTicks?.length ?? 4}
+            ticks={yTicks}
+            width={40}
+            axisLine={{ stroke: "#475569", strokeWidth: 1, opacity: 0.9 }}
+            tickLine={{ stroke: "#64748b", strokeWidth: 1, opacity: 0.9 }}
+            tickMargin={4}
+            tick={{
+              fill: "#cbd5e1",
+              fontSize: 9,
+              fontWeight: 600,
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace",
+            }}
+            tickFormatter={(value) => formatYAxisTick(Number(value))}
+          />
           {showGridLines && (
             <CartesianGrid
               vertical={false}
@@ -434,6 +621,7 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
             content={
               <SparklineTooltip
                 mode={mode}
+                volFlowMetric={volFlowMetric}
                 formatValue={formatValue}
                 onSelect={onPointClick}
               />
@@ -445,6 +633,22 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
               stroke={BASELINE_COLOR}
               strokeDasharray="2 2"
               strokeWidth={1}
+            />
+          )}
+          {mode === "vol_flow" && displayComparisonPoints.length > 1 && (
+            <Area
+              type="stepAfter"
+              data={displayComparisonPoints}
+              dataKey="cumulativeValue"
+              stroke={VOL_FLOW_COMPARISON_COLOR}
+              strokeWidth={1.25}
+              strokeDasharray="4 3"
+              fill="none"
+              fillOpacity={0}
+              dot={false}
+              activeDot={false}
+              isAnimationActive={false}
+              baseValue={0}
             />
           )}
           {mode === "vol_flow" && steepestSegment && showMarker && (
@@ -477,7 +681,7 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
               component={(props: any) => (
                 <SingleTradeStem
                   {...props}
-                  points={points}
+                  points={displayPoints}
                   stroke={lineColor}
                 />
               )}
@@ -498,7 +702,7 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
               <LabelList
                 dataKey="cumulativeValue"
                 content={(props: any) => {
-                  if (props.index !== points.length - 1) return null;
+                  if (props.index !== displayPoints.length - 1) return null;
                   const x = (props.x ?? 0) + 26;
                   const y = props.y ?? 0;
                   return (

@@ -1,4 +1,5 @@
 export type SparklineMode = "net_directional" | "vol_flow";
+export type VolFlowAxisMetric = "vega" | "gamma";
 
 export type QuadrantTradeFlows = {
   packageId: string;
@@ -7,6 +8,8 @@ export type QuadrantTradeFlows = {
   platform?: "custy" | "idb";
   signedNotional: number;
   economicNotional: number;
+  flowVega01?: number | null;
+  flowGamma01?: number | null;
   isDeltaNeutral: boolean;
   isStraddle: boolean;
 };
@@ -22,6 +25,9 @@ export type SparklinePoint = {
   platform?: "custy" | "idb";
   signedNotional?: number;
   economicNotional?: number;
+  flowVega01?: number | null;
+  flowGamma01?: number | null;
+  flowMetric?: VolFlowAxisMetric;
   isDeltaNeutral?: boolean;
   isStraddle?: boolean;
 };

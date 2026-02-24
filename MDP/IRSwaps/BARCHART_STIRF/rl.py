@@ -171,6 +171,7 @@ class BARCHART_STIRF_CURVE:
                 "lock": threading.RLock(),
             }
 
+        # support mixed interpolation: https://quant.stackexchange.com/questions/81563/second-layer-instruments-in-rateslib
         self._STIRF_CURVE_CONFIGS = {
             "USD-SOFR-1D-Q8STIRT": {
                 "fetch_pricers_func": self.stirf_mdp.get_data,
