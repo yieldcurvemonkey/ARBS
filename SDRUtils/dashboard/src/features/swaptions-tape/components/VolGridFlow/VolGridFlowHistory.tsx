@@ -93,8 +93,8 @@ const METRIC_DEFINITIONS: QuadrantTimeseriesMetric[] = [
   },
   {
     key: 'pace',
-    label: 'Pace',
-    yAxisLabel: 'Pace (x avg)',
+    label: 'Activity vs 20d Avg',
+    yAxisLabel: 'Activity (x 20d avg)',
     chartType: 'line',
   },
 ]
@@ -219,11 +219,23 @@ function computeCustyShares(days: QuadrantDayAggregate[]): Map<string, Record<Vo
   return map
 }
 
-function computePaceMap(days: QuadrantDayAggregate[]): Map<string, Record<VolGridQuadrant, number | null>> {
+function computePaceMap(
+  days: QuadrantDayAggregate[],
+  todayDate?: string | null,
+): Map<string, Record<VolGridQuadrant, number | null>> {
   const map = new Map<string, Record<VolGridQuadrant, number | null>>()
   QUADRANTS.forEach((quadrant) => {
     const rolling = computeRollingAverage(days, quadrant, 'grossNotional', 20)
     days.forEach((day, index) => {
+      // Exclude today's partial-day data — comparing partial intraday gross
+      // against full-day historical averages produces misleadingly low values.
+      // The real-time quadrant cells already show time-of-day-normalized pace.
+      if (todayDate && day.date === todayDate) {
+        const entry = map.get(day.date) ?? { ULC: null, URC: null, LLC: null, LRC: null }
+        entry[quadrant] = null
+        map.set(day.date, entry)
+        return
+      }
       const baseline = rolling[index]?.value ?? null
       const pace = baseline && baseline > 0 ? day.quadrants[quadrant].grossNotional / baseline : null
       const entry = map.get(day.date) ?? { ULC: null, URC: null, LLC: null, LRC: null }
@@ -290,7 +302,7 @@ export function VolGridFlowHistory({
   }, [aggregatedDays])
 
   const custyShares = useMemo(() => computeCustyShares(aggregatedDays), [aggregatedDays])
-  const paceMap = useMemo(() => computePaceMap(aggregatedDays), [aggregatedDays])
+  const paceMap = useMemo(() => computePaceMap(aggregatedDays, highlightDate), [aggregatedDays, highlightDate])
 
   const chartData = useMemo(
     () =>
