@@ -2203,6 +2203,8 @@ function buildQuadrantNarrative(snapshot: QuadrantFlowSnapshot): string {
 
 function summarizeDominantTheme(
   snapshots: Record<VolGridQuadrant, QuadrantFlowSnapshot>,
+  volFlowPace?: Record<Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">, number | null> | null,
+  paceLookbackLabel?: string,
 ): string | null {
   const items = QUADRANT_DISPLAY_KEYS.map((key) => snapshots[key]).filter(
     (entry) => entry.tradeCount > 0,
@@ -2229,11 +2231,22 @@ function summarizeDominantTheme(
   const directionalLeaderEntry = directionalLeader?.entry ?? null;
   const directionalLeaderQuadrant = directionalLeaderEntry?.quadrant ?? null;
 
+  // Use the time-of-day normalized vol-flow pace when available,
+  // falling back to the cross-quadrant paceVsAverage.
+  const resolvePace = (entry: QuadrantFlowSnapshot): number | null => {
+    if (volFlowPace) {
+      const quadrantKey = entry.quadrant as Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">;
+      const pace = volFlowPace[quadrantKey];
+      if (pace !== null && pace !== undefined) return pace;
+    }
+    return entry.paceVsAverage;
+  };
+
   const paceLeader = items
-    .filter((entry) => entry.paceVsAverage !== null)
+    .filter((entry) => resolvePace(entry) !== null)
     .reduce(
       (best, entry) => {
-        const pace = entry.paceVsAverage ?? 0;
+        const pace = resolvePace(entry) ?? 0;
         if (!best || pace > best.pace) return { entry, pace };
         return best;
       },
@@ -2241,6 +2254,7 @@ function summarizeDominantTheme(
     );
 
   const highlights: string[] = [];
+  const paceLabel = paceLookbackLabel ? `vs ${paceLookbackLabel}` : "avg";
 
   if (directionalLeaderEntry && maxNetAbs > 0) {
     const entry = directionalLeaderEntry;
@@ -2264,14 +2278,15 @@ function summarizeDominantTheme(
         entry.dominantDirection === "receiver"
           ? `net ${entry.dominantDirection} flow`
           : "balanced flow";
+      const entryPace = resolvePace(entry);
       const details =
         entry.dominantDirection === "payer" ||
         entry.dominantDirection === "receiver"
           ? `${formatSignedNotional(entry.netNotional)}, ${formatRate(
-              entry.paceVsAverage,
+              entryPace,
               2,
-            )}x avg`
-          : `${formatRate(entry.paceVsAverage, 2)}x avg`;
+            )}x ${paceLabel}`
+          : `${formatRate(entryPace, 2)}x ${paceLabel}`;
       highlights.push(
         `${entry.quadrant} active with ${directionLabel} (${details})`,
       );
@@ -7544,6 +7559,7 @@ function QuadrantCell({
   mode,
   volFlowMetric,
   volFlowPaceOverride,
+  paceLookbackLabel,
   onVolFlowMetricChange,
   sparklineXDomain,
   comparisonPoints,
@@ -7555,6 +7571,7 @@ function QuadrantCell({
   mode: SparklineMode;
   volFlowMetric: VolFlowAxisMetric;
   volFlowPaceOverride?: number | null;
+  paceLookbackLabel?: string;
   onVolFlowMetricChange?: (next: VolFlowAxisMetric) => void;
   sparklineXDomain?: [number, number] | null;
   comparisonPoints?: SparklinePoint[];
@@ -7575,11 +7592,10 @@ function QuadrantCell({
       : snapshot.dominantDirection === "balanced"
         ? `~${netAbs} balanced`
         : `${netValue} ${snapshot.dominantDirection}`;
-  const paceValue =
-    mode === "vol_flow" ? volFlowPaceOverride ?? null : snapshot.paceVsAverage;
+  const paceValue = volFlowPaceOverride ?? null;
   const paceLabel =
     paceValue !== null
-      ? `${formatRate(paceValue, 2)}x avg`
+      ? `${formatRate(paceValue, 2)}x vs ${paceLookbackLabel ?? "avg"}`
       : "--";
   const tooltip = buildQuadrantTooltip(meta);
   const isLowSample =
@@ -7836,6 +7852,7 @@ function QuadrantFlowDashboard({
   );
   const [volFlowWindowStartHours, setVolFlowWindowStartHours] =
     useState<number>(DEFAULT_VOL_FLOW_WINDOW_START_HOURS);
+  const [showPaceOverlay, setShowPaceOverlay] = useState(true);
   const [overlayHistoryRows, setOverlayHistoryRows] = useState<TapeRow[]>([]);
   const [flowScope, setFlowScope] = useState<"COMBINED" | "IDB" | "CUSTY">(
     "COMBINED",
@@ -7999,6 +8016,17 @@ function QuadrantFlowDashboard({
   const flowState = useMemo(
     () => buildQuadrantFlowState(todayScopedRows, config),
     [todayScopedRows, config],
+  );
+  // Recompute dominantTheme with time-of-day normalized vol-flow pace
+  // instead of the cross-quadrant trade count ratio stored in paceVsAverage.
+  const dominantTheme = useMemo(
+    () =>
+      summarizeDominantTheme(
+        flowState.snapshots,
+        volFlowPaceByQuadrant,
+        intradayAverageLookback,
+      ),
+    [flowState.snapshots, volFlowPaceByQuadrant, intradayAverageLookback],
   );
   const volFlowSummaries = useMemo(
     () =>
@@ -8468,6 +8496,17 @@ function QuadrantFlowDashboard({
                     ))}
                   </select>
                 </label>
+                <button
+                  type="button"
+                  onClick={() => setShowPaceOverlay((prev) => !prev)}
+                  className={`rounded border border-slate-700 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                    showPaceOverlay
+                      ? "bg-slate-700 text-slate-100"
+                      : "text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  Overlay
+                </button>
                 <label className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900/40 px-2 py-1 text-[10px] uppercase tracking-wide text-slate-400">
                   Window
                   <select
@@ -8636,13 +8675,16 @@ function QuadrantFlowDashboard({
                   mode={flowMode}
                   volFlowMetric={volFlowMetricByQuadrant.ULC}
                   volFlowPaceOverride={volFlowPaceByQuadrant.ULC}
+                  paceLookbackLabel={intradayAverageLookback}
                   onVolFlowMetricChange={(next) =>
                     updateQuadrantVolFlowMetric("ULC", next)
                   }
                   sparklineXDomain={sparklineXDomain}
                   comparisonPoints={
-                    intradayAverageProfilesByMetric[volFlowMetricByQuadrant.ULC]
-                      .ULC
+                    showPaceOverlay
+                      ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.ULC]
+                          .ULC
+                      : undefined
                   }
                   onTradeSelect={onTradeSelect}
                 />
@@ -8653,13 +8695,16 @@ function QuadrantFlowDashboard({
                   mode={flowMode}
                   volFlowMetric={volFlowMetricByQuadrant.URC}
                   volFlowPaceOverride={volFlowPaceByQuadrant.URC}
+                  paceLookbackLabel={intradayAverageLookback}
                   onVolFlowMetricChange={(next) =>
                     updateQuadrantVolFlowMetric("URC", next)
                   }
                   sparklineXDomain={sparklineXDomain}
                   comparisonPoints={
-                    intradayAverageProfilesByMetric[volFlowMetricByQuadrant.URC]
-                      .URC
+                    showPaceOverlay
+                      ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.URC]
+                          .URC
+                      : undefined
                   }
                   onTradeSelect={onTradeSelect}
                 />
@@ -8670,13 +8715,16 @@ function QuadrantFlowDashboard({
                   mode={flowMode}
                   volFlowMetric={volFlowMetricByQuadrant.LLC}
                   volFlowPaceOverride={volFlowPaceByQuadrant.LLC}
+                  paceLookbackLabel={intradayAverageLookback}
                   onVolFlowMetricChange={(next) =>
                     updateQuadrantVolFlowMetric("LLC", next)
                   }
                   sparklineXDomain={sparklineXDomain}
                   comparisonPoints={
-                    intradayAverageProfilesByMetric[volFlowMetricByQuadrant.LLC]
-                      .LLC
+                    showPaceOverlay
+                      ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.LLC]
+                          .LLC
+                      : undefined
                   }
                   onTradeSelect={onTradeSelect}
                 />
@@ -8687,13 +8735,16 @@ function QuadrantFlowDashboard({
                   mode={flowMode}
                   volFlowMetric={volFlowMetricByQuadrant.LRC}
                   volFlowPaceOverride={volFlowPaceByQuadrant.LRC}
+                  paceLookbackLabel={intradayAverageLookback}
                   onVolFlowMetricChange={(next) =>
                     updateQuadrantVolFlowMetric("LRC", next)
                   }
                   sparklineXDomain={sparklineXDomain}
                   comparisonPoints={
-                    intradayAverageProfilesByMetric[volFlowMetricByQuadrant.LRC]
-                      .LRC
+                    showPaceOverlay
+                      ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.LRC]
+                          .LRC
+                      : undefined
                   }
                   onTradeSelect={onTradeSelect}
                 />
@@ -8703,7 +8754,7 @@ function QuadrantFlowDashboard({
                 custyConcentrationNote ||
                 (flowMode === "vol_flow"
                   ? volFlowNarratives.length > 0
-                  : flowState.dominantTheme ||
+                  : dominantTheme ||
                     flowState.crossQuadrantSignal)) && (
                 <div className="mt-3 space-y-1 text-[11px] text-slate-300">
                   {flowNotes.map((note) => (
@@ -8720,8 +8771,8 @@ function QuadrantFlowDashboard({
                     </>
                   ) : (
                     <>
-                      {flowState.dominantTheme && (
-                        <div>Dominant theme: {flowState.dominantTheme}</div>
+                      {dominantTheme && (
+                        <div>Dominant theme: {dominantTheme}</div>
                       )}
                       {flowState.crossQuadrantSignal && (
                         <div>
