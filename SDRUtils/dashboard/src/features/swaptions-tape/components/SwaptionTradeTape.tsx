@@ -7852,6 +7852,7 @@ function QuadrantFlowDashboard({
   );
   const [volFlowWindowStartHours, setVolFlowWindowStartHours] =
     useState<number>(DEFAULT_VOL_FLOW_WINDOW_START_HOURS);
+  const [showPaceOverlay, setShowPaceOverlay] = useState(true);
   const [overlayHistoryRows, setOverlayHistoryRows] = useState<TapeRow[]>([]);
   const [flowScope, setFlowScope] = useState<"COMBINED" | "IDB" | "CUSTY">(
     "COMBINED",
@@ -8495,6 +8496,17 @@ function QuadrantFlowDashboard({
                     ))}
                   </select>
                 </label>
+                <button
+                  type="button"
+                  onClick={() => setShowPaceOverlay((prev) => !prev)}
+                  className={`rounded border border-slate-700 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                    showPaceOverlay
+                      ? "bg-slate-700 text-slate-100"
+                      : "text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  Overlay
+                </button>
                 <label className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900/40 px-2 py-1 text-[10px] uppercase tracking-wide text-slate-400">
                   Window
                   <select
@@ -8669,8 +8681,10 @@ function QuadrantFlowDashboard({
                   }
                   sparklineXDomain={sparklineXDomain}
                   comparisonPoints={
-                    intradayAverageProfilesByMetric[volFlowMetricByQuadrant.ULC]
-                      .ULC
+                    showPaceOverlay
+                      ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.ULC]
+                          .ULC
+                      : undefined
                   }
                   onTradeSelect={onTradeSelect}
                 />
@@ -8687,8 +8701,10 @@ function QuadrantFlowDashboard({
                   }
                   sparklineXDomain={sparklineXDomain}
                   comparisonPoints={
-                    intradayAverageProfilesByMetric[volFlowMetricByQuadrant.URC]
-                      .URC
+                    showPaceOverlay
+                      ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.URC]
+                          .URC
+                      : undefined
                   }
                   onTradeSelect={onTradeSelect}
                 />
@@ -8705,8 +8721,10 @@ function QuadrantFlowDashboard({
                   }
                   sparklineXDomain={sparklineXDomain}
                   comparisonPoints={
-                    intradayAverageProfilesByMetric[volFlowMetricByQuadrant.LLC]
-                      .LLC
+                    showPaceOverlay
+                      ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.LLC]
+                          .LLC
+                      : undefined
                   }
                   onTradeSelect={onTradeSelect}
                 />
@@ -8723,8 +8741,10 @@ function QuadrantFlowDashboard({
                   }
                   sparklineXDomain={sparklineXDomain}
                   comparisonPoints={
-                    intradayAverageProfilesByMetric[volFlowMetricByQuadrant.LRC]
-                      .LRC
+                    showPaceOverlay
+                      ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.LRC]
+                          .LRC
+                      : undefined
                   }
                   onTradeSelect={onTradeSelect}
                 />
