@@ -16,6 +16,8 @@ import {
 const makeTrade = (
   overrides: Partial<QuadrantTradeFlows> = {},
 ): QuadrantTradeFlows => ({
+  flowVega01: Math.abs(Number(overrides.economicNotional ?? 0)),
+  flowGamma01: Math.abs(Number(overrides.economicNotional ?? 0)),
   packageId: "pkg-1",
   executionTimestamp: 1,
   packageType: "OUTRIGHT",
@@ -294,6 +296,30 @@ describe("quadrantSparkline.utils", () => {
     ];
     const points = buildVolFlowSparklineData(trades, "gamma");
     expect(points.map((point) => point.cumulativeValue)).toEqual([0, 5, 12]);
+  });
+
+  it("does not fallback to notional when vega is missing", () => {
+    const trades = [
+      makeTrade({
+        executionTimestamp: 1000,
+        economicNotional: 500_000_000,
+        flowVega01: null,
+      }),
+    ];
+    const points = buildVolFlowSparklineData(trades, "vega");
+    expect(points.map((point) => point.cumulativeValue)).toEqual([0, 0]);
+  });
+
+  it("does not fallback to notional when gamma is missing", () => {
+    const trades = [
+      makeTrade({
+        executionTimestamp: 1000,
+        economicNotional: 500_000_000,
+        flowGamma01: null,
+      }),
+    ];
+    const points = buildVolFlowSparklineData(trades, "gamma");
+    expect(points.map((point) => point.cumulativeValue)).toEqual([0, 0]);
   });
 
   it("computes economic notional by package type", () => {

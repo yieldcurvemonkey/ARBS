@@ -45,6 +45,7 @@ const DIRECTION_COLORS: Record<
 const BASELINE_COLOR = "#64748b";
 const VOL_FLOW_COLOR = "#fbbf24";
 const VOL_FLOW_COMPARISON_COLOR = "#fef3c7";
+const AS_OF_LINE_COLOR = "#ef4444";
 const SPARKLINE_TIME_TICK_MS = 30 * 60 * 1000;
 
 function formatYAxisTick(value: number): string {
@@ -182,6 +183,7 @@ export type QuadrantSparklineProps = {
   volFlowMetric?: VolFlowAxisMetric;
   comparisonPoints?: SparklinePoint[];
   xDomainOverride?: [number, number] | null;
+  asOfTimestamp?: number | null;
   width?: number;
   height?: number;
   showMarker?: boolean;
@@ -363,6 +365,7 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
   volFlowMetric = "vega",
   comparisonPoints,
   xDomainOverride,
+  asOfTimestamp,
   height = 120,
   showMarker = true,
   showFill = true,
@@ -453,6 +456,13 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
     }
     return defaultXDomain;
   }, [defaultXDomain, xDomainOverride]);
+  const asOfX = useMemo(() => {
+    if (asOfTimestamp === null || asOfTimestamp === undefined) return null;
+    if (!Number.isFinite(asOfTimestamp)) return null;
+    const value = Number(asOfTimestamp);
+    if (value < xDomain[0] || value > xDomain[1]) return null;
+    return value;
+  }, [asOfTimestamp, xDomain]);
   const xTicks = useMemo(() => {
     if (!showAxisTicks) return undefined;
     const [minValue, maxValue] = xDomain;
@@ -633,6 +643,15 @@ export const QuadrantSparkline = memo(function QuadrantSparkline({
               stroke={BASELINE_COLOR}
               strokeDasharray="2 2"
               strokeWidth={1}
+            />
+          )}
+          {mode === "vol_flow" && asOfX !== null && (
+            <ReferenceLine
+              x={asOfX}
+              stroke={AS_OF_LINE_COLOR}
+              strokeDasharray="4 3"
+              strokeWidth={1}
+              ifOverflow="hidden"
             />
           )}
           {mode === "vol_flow" && displayComparisonPoints.length > 1 && (

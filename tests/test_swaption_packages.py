@@ -25,6 +25,7 @@ from SDRUtils.packages.swaption_packages import (
     _compute_package_id,
     _estimate_swaption_vega,
 )
+from SDRUtils.packages.swaption.delta_hedge import detect_delta_hedge_packages
 
 
 # =============================================================================
@@ -1777,6 +1778,269 @@ class TestCombinedDetectionPipeline:
         packaged = result[result["package_id"].notna()]
         assert len(packaged) == 2
         assert (packaged["package_type"] == "STRADDLE").all()
+
+
+def _make_delta_swaption_row(
+    *,
+    trade_id: str,
+    execution_timestamp: pd.Timestamp,
+    notional: float = 100_000_000,
+    strike: float = 0.0400,
+    tenor_years: float = 5.0,
+    product_type: str = "SWAPTION_PAYER",
+    package_indicator: bool = True,
+    exercise_style: str = "EUROPEAN",
+    package_id: str | None = None,
+    package_type: str = "SWAPTION",
+) -> dict:
+    return {
+        "trade_id": trade_id,
+        "product_type": product_type,
+        "execution_timestamp": execution_timestamp,
+        "platform_identifier": "BILT",
+        "notional_currency": "USD",
+        "upi_underlier_name": "USD-SOFR-OIS Compound",
+        "trade_label": "USD SOFR PAYER SWAPTION",
+        "notional": notional,
+        "strike": strike,
+        "tenor_years": tenor_years,
+        "forward_start_years": 1.0,
+        "premium": 125000.0,
+        "package_indicator": package_indicator,
+        "exercise_style": exercise_style,
+        "expiration_date": pd.Timestamp("2027-01-05"),
+        "underlying_expiration_date": pd.Timestamp("2032-01-05"),
+        "package_id": package_id,
+        "package_type": package_type,
+    }
+
+
+def _make_delta_swap_row(
+    *,
+    trade_id: str,
+    execution_timestamp: pd.Timestamp,
+    notional: float = 50_000_000,
+    fixed_rate: float = 0.0401,
+    effective_date: str = "2027-01-05",
+    maturity_date: str = "2032-01-05",
+    package_indicator: bool = True,
+    platform: str = "BILT",
+) -> dict:
+    return {
+        "Dissemination Identifier": trade_id,
+        "Event timestamp": execution_timestamp,
+        "Effective Date": effective_date,
+        "Maturity date of the underlier": maturity_date,
+        "Notional amount-Leg 1": f"{notional:,.0f}",
+        "Fixed rate-Leg 1": fixed_rate,
+        "Platform identifier": platform,
+        "Package indicator": package_indicator,
+        "UPI Underlier Name": "USD-SOFR-OIS Compound",
+    }
+
+
+class TestDeltaHedgeDetection:
+    def test_basic_match(self):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        df = pd.DataFrame([_make_delta_swaption_row(trade_id="SWPT-1", execution_timestamp=ts)])
+        swaps_df = pd.DataFrame([_make_delta_swap_row(trade_id="SWAP-1", execution_timestamp=ts + pd.Timedelta(seconds=1))])
+
+        result = detect_delta_hedge_packages(df, swaps_df)
+        row = result.iloc[0]
+
+        assert row["package_type"] == "DELTA_HEDGE"
+        assert pd.notna(row["package_id"])
+        assert row["delta_hedge_swap_trade_id"] == "SWAP-1"
+        assert row["delta_hedge_match_window_seconds"] == 1
+        assert row["package_legs_count"] == 2
+
+    def test_no_match_tenor_mismatch(self):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        df = pd.DataFrame([_make_delta_swaption_row(trade_id="SWPT-1", execution_timestamp=ts, tenor_years=5.0)])
+        swaps_df = pd.DataFrame(
+            [
+                _make_delta_swap_row(
+                    trade_id="SWAP-1",
+                    execution_timestamp=ts + pd.Timedelta(seconds=1),
+                    effective_date="2027-01-05",
+                    maturity_date="2040-01-05",
+                )
+            ]
+        )
+
+        result = detect_delta_hedge_packages(df, swaps_df)
+        row = result.iloc[0]
+        assert pd.isna(row["package_id"]) or row["package_id"] == ""
+
+    def test_no_match_timestamp_too_far(self):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        df = pd.DataFrame([_make_delta_swaption_row(trade_id="SWPT-1", execution_timestamp=ts)])
+        swaps_df = pd.DataFrame([_make_delta_swap_row(trade_id="SWAP-1", execution_timestamp=ts + pd.Timedelta(seconds=120))])
+
+        result = detect_delta_hedge_packages(df, swaps_df)
+        row = result.iloc[0]
+        assert pd.isna(row["package_id"]) or row["package_id"] == ""
+
+    def test_excludes_chooser_straddle(self):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        df = pd.DataFrame(
+            [
+                _make_delta_swaption_row(
+                    trade_id="SWPT-1",
+                    execution_timestamp=ts,
+                    product_type="SWAPTION_CHOOSER",
+                )
+            ]
+        )
+        swaps_df = pd.DataFrame([_make_delta_swap_row(trade_id="SWAP-1", execution_timestamp=ts + pd.Timedelta(seconds=1))])
+
+        result = detect_delta_hedge_packages(df, swaps_df)
+        row = result.iloc[0]
+        assert pd.isna(row["package_id"]) or row["package_id"] == ""
+
+    def test_delta_out_of_range_rejected(self):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        df = pd.DataFrame([_make_delta_swaption_row(trade_id="SWPT-1", execution_timestamp=ts, notional=100_000_000)])
+        swaps_df = pd.DataFrame([_make_delta_swap_row(trade_id="SWAP-1", execution_timestamp=ts + pd.Timedelta(seconds=1), notional=90_000_000)])
+
+        result = detect_delta_hedge_packages(df, swaps_df)
+        row = result.iloc[0]
+        assert pd.isna(row["package_id"]) or row["package_id"] == ""
+
+    def test_tiered_window_confidence(self):
+        t1 = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        t2 = pd.Timestamp("2026-01-08 10:05:00", tz="UTC")
+        t3 = pd.Timestamp("2026-01-08 11:00:00", tz="UTC")
+
+        df = pd.DataFrame(
+            [
+                _make_delta_swaption_row(trade_id="SWPT-1", execution_timestamp=t1),
+                _make_delta_swaption_row(trade_id="SWPT-2", execution_timestamp=t2),
+                _make_delta_swaption_row(trade_id="SWPT-3", execution_timestamp=t3),
+            ]
+        )
+        swaps_df = pd.DataFrame(
+            [
+                _make_delta_swap_row(trade_id="SWAP-1", execution_timestamp=t1 + pd.Timedelta(seconds=1)),
+                _make_delta_swap_row(trade_id="SWAP-2", execution_timestamp=t2 + pd.Timedelta(seconds=5)),
+                _make_delta_swap_row(trade_id="SWAP-3", execution_timestamp=t3 + pd.Timedelta(seconds=60)),
+            ]
+        )
+
+        result = detect_delta_hedge_packages(df, swaps_df)
+        conf = result.set_index("trade_id")["package_confidence"]
+
+        assert conf["SWPT-1"] > conf["SWPT-2"] > conf["SWPT-3"]
+        assert np.isclose(conf["SWPT-1"], 0.90, atol=1e-6)
+        assert np.isclose(conf["SWPT-2"], 0.80, atol=1e-6)
+        assert np.isclose(conf["SWPT-3"], 0.70, atol=1e-6)
+
+    def test_already_packaged_skipped(self):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        df = pd.DataFrame(
+            [
+                _make_delta_swaption_row(
+                    trade_id="SWPT-1",
+                    execution_timestamp=ts,
+                    package_id="EXISTING-PKG",
+                    package_type="STRADDLE",
+                )
+            ]
+        )
+        swaps_df = pd.DataFrame([_make_delta_swap_row(trade_id="SWAP-1", execution_timestamp=ts + pd.Timedelta(seconds=1))])
+
+        result = detect_delta_hedge_packages(df, swaps_df)
+        row = result.iloc[0]
+        assert row["package_id"] == "EXISTING-PKG"
+        assert row["package_type"] == "STRADDLE"
+        assert row["delta_hedge_swap_trade_id"] is None
+
+    def test_empty_swap_df_returns_unchanged(self):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        df = pd.DataFrame([_make_delta_swaption_row(trade_id="SWPT-1", execution_timestamp=ts)])
+
+        result = detect_delta_hedge_packages(df, pd.DataFrame())
+        row = result.iloc[0]
+        assert row["package_type"] == "SWAPTION"
+        assert pd.isna(row["package_id"]) or row["package_id"] == ""
+
+    def test_bermudan_excluded(self):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        df = pd.DataFrame(
+            [
+                _make_delta_swaption_row(
+                    trade_id="SWPT-1",
+                    execution_timestamp=ts,
+                    exercise_style="BERMUDAN",
+                )
+            ]
+        )
+        swaps_df = pd.DataFrame([_make_delta_swap_row(trade_id="SWAP-1", execution_timestamp=ts + pd.Timedelta(seconds=1))])
+
+        result = detect_delta_hedge_packages(df, swaps_df)
+        row = result.iloc[0]
+        assert pd.isna(row["package_id"]) or row["package_id"] == ""
+
+    def test_pipeline_no_swap_candidates_is_noop_for_existing_flows(self):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        df = pd.DataFrame(
+            [
+                _make_delta_swaption_row(
+                    trade_id="S1",
+                    execution_timestamp=ts,
+                    product_type="SWAPTION_PAYER",
+                    strike=0.04,
+                ),
+                _make_delta_swaption_row(
+                    trade_id="S2",
+                    execution_timestamp=ts + pd.Timedelta(seconds=20),
+                    product_type="SWAPTION_RECEIVER",
+                    strike=0.04,
+                ),
+            ]
+        )
+
+        baseline = detect_and_link_swaption_packages_df(
+            df,
+            detect_delta_hedges=False,
+        )
+        with_empty_swaps = detect_and_link_swaption_packages_df(
+            df,
+            detect_delta_hedges=True,
+            swap_candidates_df=pd.DataFrame(),
+        )
+
+        assert baseline["package_type"].tolist() == with_empty_swaps["package_type"].tolist()
+        assert baseline["package_id"].fillna("").tolist() == with_empty_swaps["package_id"].fillna("").tolist()
+
+    def test_delta_phase_does_not_override_prepackaged_rows(self):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        df = pd.DataFrame(
+            [
+                _make_delta_swaption_row(
+                    trade_id="SWPT-1",
+                    execution_timestamp=ts,
+                    package_id="PREPACKAGED",
+                    package_type="STRADDLE",
+                )
+            ]
+        )
+        swaps_df = pd.DataFrame([_make_delta_swap_row(trade_id="SWAP-1", execution_timestamp=ts + pd.Timedelta(seconds=1))])
+
+        result = detect_and_link_swaption_packages_df(
+            df,
+            detect_risk_reversals=False,
+            detect_straddles=False,
+            detect_vertical_spreads=False,
+            detect_ladders=False,
+            detect_vega_curve=False,
+            detect_outrights=False,
+            detect_delta_hedges=True,
+            swap_candidates_df=swaps_df,
+        )
+        row = result.iloc[0]
+        assert row["package_id"] == "PREPACKAGED"
+        assert row["package_type"] == "STRADDLE"
 
 
 if __name__ == "__main__":

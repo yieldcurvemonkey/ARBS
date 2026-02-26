@@ -279,6 +279,7 @@ class PackageTypeMapping:
     # Vega-based packages
     VEGA_BUCKETED_PACKAGE: str = "VEGA_BUCKETED_PACKAGE"
     IMPLIED_PACKAGE_SAME_TIMESTAMP: str = "IMPLIED_PACKAGE_SAME_TIMESTAMP"
+    DELTA_HEDGE: str = "DELTA_HEDGE"
 
 
 PACKAGE_TYPES = PackageTypeMapping()

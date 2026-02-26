@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from tqdm import tqdm
 
@@ -53,6 +53,7 @@ from SDRUtils.packages.swaption.vega_curve import detect_vega_curve_packages
 from SDRUtils.packages.swaption.vega_buckets import detect_vega_bucketed_packages
 from SDRUtils.packages.swaption.linking import link_packages
 from SDRUtils.packages.swaption.customer_rr_strangle import detect_customer_rr_strangles_packages
+from SDRUtils.packages.swaption.delta_hedge import detect_delta_hedge_packages
 from SDRUtils.packages.swaption.outright import detect_outright_swaptions
 
 # Import utility functions - aliased for backward compatibility exports
@@ -64,20 +65,14 @@ from SDRUtils.packages.swaption.utils import (
     extract_effective_premium,
 )
 from SDRUtils.packages.utils import merge_package_legs_to_one_row
-from SDRUtils.products._swaptions.pricer import (
-    USDSwaptionDealerRiskReversalSkewResult,
-    USDSwaptionLegPricerResult,
-    USDSwaptionStraddlePricerResult,
-    USDSwaptionVerticalSpreadPricerResult,
-    SingleStraddleLegException,
-    usd_swaption_dealer_risk_reversal_skew_from_row,
-    usd_swaption_leg_pricer_from_row,
-    usd_swaption_straddle_pricer_from_row,
-    usd_swaption_vertical_spread_pricer_from_row,
-)
 
 if TYPE_CHECKING:
     from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
+    from SDRUtils.products._swaptions.pricer import (
+        USDSwaptionLegPricerResult,
+        USDSwaptionStraddlePricerResult,
+        USDSwaptionVerticalSpreadPricerResult,
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -289,6 +284,10 @@ def _price_risk_reversals(
     # This creates a temporary view where 4 legs become 1 row per package_id
     rr_merged_packages = merge_package_legs_to_one_row(rr_legs_subset)
 
+    from SDRUtils.products._swaptions.pricer import (
+        usd_swaption_dealer_risk_reversal_skew_from_row,
+    )
+
     # Step 3: Calculate metrics on the MERGED rows
     metrics = []
     for idx, row in tqdm(
@@ -485,6 +484,11 @@ def _price_straddles(
     straddle_mask: pd.Series = out[package_col] == "STRADDLE"
     if not straddle_mask.any():
         return out
+
+    from SDRUtils.products._swaptions.pricer import (
+        SingleStraddleLegException,
+        usd_swaption_straddle_pricer_from_row,
+    )
 
     def _price_straddle_row(row: pd.Series) -> Optional[USDSwaptionStraddlePricerResult]:
         if "SOFR" not in str(row["trade_label"]).upper():
@@ -753,6 +757,10 @@ def _price_vertical_spreads(
     # This creates a temporary view where 2 legs become 1 row per package_id
     vs_merged_packages = merge_package_legs_to_one_row(vs_legs_subset)
 
+    from SDRUtils.products._swaptions.pricer import (
+        usd_swaption_vertical_spread_pricer_from_row,
+    )
+
     # Step 3: Calculate metrics on the MERGED rows
     metrics = []
     for idx, row in tqdm(
@@ -927,6 +935,64 @@ def _run_vega_curve_phase(
     )
 
 
+def _run_delta_hedge_phase(
+    df: pd.DataFrame,
+    config: SwaptionPackageDetectionConfig,
+    product_col: str,
+    package_col: str,
+    pricer: Optional["QLIRSwapCurve"],
+    swap_candidates_df: pd.DataFrame,
+    timestamp_windows: Sequence[int],
+    delta_hedge_tenor_tolerance_years: float,
+    delta_hedge_implied_delta_min: float,
+    delta_hedge_implied_delta_max: float,
+    delta_hedge_strike_proximity_bps: float,
+    delta_hedge_dv01_tolerance: float,
+    require_swaption_package_indicator_for_delta_hedge: bool,
+    require_swap_package_indicator_for_delta_hedge: bool,
+    delta_hedge_require_same_platform: bool,
+    delta_hedge_check_dv01: bool,
+) -> pd.DataFrame:
+    """
+    Phase 5.5: Detect swaption + SOFR swap delta-hedge packages.
+
+    Runs after vega-curve and before outright classification. This phase only
+    consumes still-unpackaged swaptions.
+    """
+    if swap_candidates_df is None or swap_candidates_df.empty:
+        return df
+
+    return detect_delta_hedge_packages(
+        df,
+        swap_candidates_df,
+        timestamp_windows=timestamp_windows,
+        tenor_tolerance_years=delta_hedge_tenor_tolerance_years,
+        implied_delta_min=delta_hedge_implied_delta_min,
+        implied_delta_max=delta_hedge_implied_delta_max,
+        strike_proximity_bps=delta_hedge_strike_proximity_bps,
+        dv01_tolerance=delta_hedge_dv01_tolerance,
+        require_swaption_package_indicator=require_swaption_package_indicator_for_delta_hedge,
+        require_swap_package_indicator=require_swap_package_indicator_for_delta_hedge,
+        require_same_platform=delta_hedge_require_same_platform,
+        check_dv01=delta_hedge_check_dv01,
+        pricer=pricer,
+        product_col=product_col,
+        package_col=package_col,
+        exec_col=config.exec_col,
+        trade_id_col=config.trade_id_col,
+        platform_col=config.platform_col,
+        underlier_col=config.underlier_col,
+        package_indicator_col=config.package_indicator_col,
+        tenor_col=config.tenor_col,
+        notional_col=config.notional_col,
+        strike_col=config.strike_col,
+        premium_col=config.premium_col,
+        trade_label_col=config.trade_label_col,
+        expiration_col=config.expiration_col,
+        underlying_expiration_col=config.tail_maturity_col,
+    )
+
+
 def _price_outrights(
     df: pd.DataFrame,
     package_col: str,
@@ -963,6 +1029,8 @@ def _price_outrights(
     outright_mask: pd.Series = out[package_col] == "OUTRIGHT"
     if not outright_mask.any():
         return out
+
+    from SDRUtils.products._swaptions.pricer import usd_swaption_leg_pricer_from_row
 
     def _price_outright_row(row: pd.Series) -> Optional[USDSwaptionLegPricerResult]:
         if "SOFR" not in str(row["trade_label"]).upper():
@@ -1108,6 +1176,19 @@ def detect_and_link_swaption_packages_df(
     conditional_curve_time_window_seconds: int = 300,
     # Vega curve parameters
     vega_curve_time_window_seconds: int = 300,
+    # Delta-hedge parameters
+    detect_delta_hedges: bool = True,
+    swap_candidates_df: Optional[pd.DataFrame] = None,
+    delta_hedge_timestamp_windows: Sequence[int] = (1, 5, 60),
+    delta_hedge_tenor_tolerance_years: float = 0.50,
+    delta_hedge_implied_delta_min: float = 0.20,
+    delta_hedge_implied_delta_max: float = 0.80,
+    delta_hedge_strike_proximity_bps: float = 50.0,
+    delta_hedge_dv01_tolerance: float = 0.20,
+    require_swaption_package_indicator_for_delta_hedge: bool = True,
+    require_swap_package_indicator_for_delta_hedge: bool = True,
+    delta_hedge_require_same_platform: bool = False,
+    delta_hedge_check_dv01: bool = True,
     pricer: Optional["QLIRSwapCurve"] = None,
     # Outright/unexplained detection parameters
     detect_outrights: bool = True,
@@ -1129,6 +1210,7 @@ def detect_and_link_swaption_packages_df(
     3b. Ladders (3+ legs / christmas trees - same tenor, 3+ strikes, asymmetric notionals)
     4. Conditional curve trades (same expiry, different tails)
     5. Vega curve trades (vega-matched straddles across tenors)
+    5.5. Delta-hedges (swaption + SOFR swap pairs)
     6. Outrights (unexplained single-leg trades, enriched with ATMF offset)
 
     To add a new structure type (e.g., Iron Condors):
@@ -1172,6 +1254,18 @@ def detect_and_link_swaption_packages_df(
         ladder_notional_ratio_tolerance: Tolerance for notional ratio matching (default 0.15)
         conditional_curve_time_window_seconds: Max time gap between curve legs
         vega_curve_time_window_seconds: Max time gap between vega curve straddles
+        detect_delta_hedges: Whether to run swaption/swap delta-hedge detection
+        swap_candidates_df: Raw SOFR swap candidates (same date slice as df)
+        delta_hedge_timestamp_windows: Candidate time windows in seconds (searched in order)
+        delta_hedge_tenor_tolerance_years: Max swaption/swap tenor mismatch in years
+        delta_hedge_implied_delta_min: Minimum allowed implied-delta notional ratio
+        delta_hedge_implied_delta_max: Maximum allowed implied-delta notional ratio
+        delta_hedge_strike_proximity_bps: Strike/fixed-rate proximity bonus threshold
+        delta_hedge_dv01_tolerance: Allowed |dv01_ratio - implied_delta| for PASS
+        require_swaption_package_indicator_for_delta_hedge: Require package flag on swaptions
+        require_swap_package_indicator_for_delta_hedge: Require package flag on swap hedges
+        delta_hedge_require_same_platform: Require swaption/swap platform to match
+        delta_hedge_check_dv01: Run soft DV01 validation on matched pairs
         pricer: Optional QLIRSwapCurve instance for vega/skew calculation
         detect_outrights: Whether to detect and enrich outright trades (default True)
         outright_offset_tolerance_bps: Tolerance for ATMF offset benchmark matching
@@ -1193,6 +1287,14 @@ def detect_and_link_swaption_packages_df(
         - ladder_direction: For ladders, "BULL" or "BEAR"
         - ladder_strikes: For ladders, list of strikes
         - ladder_notionals: For ladders, list of notionals per strike
+        - delta_hedge_implied_delta: Implied hedge ratio from notional
+        - delta_hedge_swap_trade_id: Raw SDR trade id for hedge swap
+        - delta_hedge_swap_fixed_rate: Hedge swap fixed rate
+        - delta_hedge_swap_tenor_years: Hedge swap tenor in years
+        - delta_hedge_swap_notional: Hedge swap notional
+        - delta_hedge_match_window_seconds: Matching timestamp window used
+        - delta_hedge_dv01_ratio: |swap_dv01 / swaption_dv01| when available
+        - delta_hedge_dv01_check: PASS/FAIL/SKIP status for DV01 consistency check
         - outright_atmf: For outrights, the ATMF rate
         - outright_strike_offset_bps: For outrights, raw offset from ATMF in bps
         - outright_strike_offset_rounded_bps: For outrights, offset rounded to benchmark
@@ -1288,6 +1390,27 @@ def detect_and_link_swaption_packages_df(
             vega_curve_time_window_seconds=vega_curve_time_window_seconds,
         )
 
+    # Phase 5.5: Detect swaption + swap delta-hedges for still-unpackaged rows
+    if detect_delta_hedges and swap_candidates_df is not None and not swap_candidates_df.empty:
+        out = _run_delta_hedge_phase(
+            out,
+            config=config,
+            product_col=product_col,
+            package_col=package_col,
+            pricer=pricer,
+            swap_candidates_df=swap_candidates_df,
+            timestamp_windows=delta_hedge_timestamp_windows,
+            delta_hedge_tenor_tolerance_years=delta_hedge_tenor_tolerance_years,
+            delta_hedge_implied_delta_min=delta_hedge_implied_delta_min,
+            delta_hedge_implied_delta_max=delta_hedge_implied_delta_max,
+            delta_hedge_strike_proximity_bps=delta_hedge_strike_proximity_bps,
+            delta_hedge_dv01_tolerance=delta_hedge_dv01_tolerance,
+            require_swaption_package_indicator_for_delta_hedge=require_swaption_package_indicator_for_delta_hedge,
+            require_swap_package_indicator_for_delta_hedge=require_swap_package_indicator_for_delta_hedge,
+            delta_hedge_require_same_platform=delta_hedge_require_same_platform,
+            delta_hedge_check_dv01=delta_hedge_check_dv01,
+        )
+
     # Phase 6: Detect and enrich outright/unexplained trades
     # This runs last to capture all trades not matched by previous detectors
     if detect_outrights:
@@ -1302,6 +1425,155 @@ def detect_and_link_swaption_packages_df(
         )
 
     return out
+
+
+# =============================================================================
+# Backward Compatibility Wrappers
+# =============================================================================
+
+
+def detect_swaption_packages_df(
+    df: pd.DataFrame,
+    *,
+    config: Optional[SwaptionPackageDetectionConfig] = None,
+    **kwargs: Any,
+) -> pd.DataFrame:
+    """
+    Backward-compatible alias for the main detection pipeline.
+    """
+    return detect_and_link_swaption_packages_df(df, config=config, **kwargs)
+
+
+def detect_swaption_straddles_df(
+    df: pd.DataFrame,
+    *,
+    config: Optional[SwaptionPackageDetectionConfig] = None,
+    straddle_timestamp_tolerance: datetime.timedelta = datetime.timedelta(seconds=60),
+    product_col: str = "product_type",
+    package_col: str = "package_type",
+    pricer: Optional["QLIRSwapCurve"] = None,
+    **_: Any,
+) -> pd.DataFrame:
+    """
+    Backward-compatible wrapper for straddle-only detection.
+    """
+    cfg = config or DEFAULT_SWAPTION_PACKAGE_CONFIG
+    return _run_straddle_phase(
+        df,
+        config=cfg,
+        product_col=product_col,
+        package_col=package_col,
+        pricer=pricer,
+        custy_straddle_timestamp_tolerance=straddle_timestamp_tolerance,
+    )
+
+
+def detect_swaption_vertical_spreads_df(
+    df: pd.DataFrame,
+    *,
+    config: Optional[SwaptionPackageDetectionConfig] = None,
+    product_col: str = "product_type",
+    package_col: str = "package_type",
+    pricer: Optional["QLIRSwapCurve"] = None,
+    vertical_spread_time_window_seconds: int = 300,
+    **_: Any,
+) -> pd.DataFrame:
+    """
+    Backward-compatible wrapper for vertical-spread detection.
+    """
+    cfg = config or DEFAULT_SWAPTION_PACKAGE_CONFIG
+    return _run_vertical_spread_phase(
+        df,
+        config=cfg,
+        product_col=product_col,
+        package_col=package_col,
+        pricer=pricer,
+        vertical_spread_time_window_seconds=vertical_spread_time_window_seconds,
+    )
+
+
+def detect_swaption_conditional_curve_df(
+    df: pd.DataFrame,
+    *,
+    config: Optional[SwaptionPackageDetectionConfig] = None,
+    product_col: str = "product_type",
+    package_col: str = "package_type",
+    conditional_curve_time_window_seconds: int = 300,
+    **_: Any,
+) -> pd.DataFrame:
+    """
+    Backward-compatible wrapper for conditional-curve detection.
+    """
+    cfg = config or DEFAULT_SWAPTION_PACKAGE_CONFIG
+    return detect_conditional_curve_packages(
+        df,
+        time_window_seconds=conditional_curve_time_window_seconds,
+        min_tail_diff_years=cfg.conditional_curve_min_tail_diff_years,
+        product_col=product_col,
+        package_col=package_col,
+        exec_col=cfg.exec_col,
+        platform_col=cfg.platform_col,
+        currency_col=cfg.currency_col,
+        underlier_col=cfg.underlier_col,
+        trade_id_col=cfg.trade_id_col,
+        expiration_col=cfg.expiration_col,
+        tail_maturity_col=cfg.tail_maturity_col,
+        notional_col=cfg.notional_col,
+        package_indicator_col=cfg.package_indicator_col,
+        require_same_platform=cfg.require_same_platform,
+        require_same_currency=cfg.require_same_currency,
+        require_same_underlier=cfg.require_same_underlier,
+        platform_allowlist=cfg.platform_allowlist,
+        platform_blocklist=cfg.platform_blocklist,
+    )
+
+
+def detect_swaption_vega_curve_df(
+    df: pd.DataFrame,
+    *,
+    config: Optional[SwaptionPackageDetectionConfig] = None,
+    product_col: str = "product_type",
+    package_col: str = "package_type",
+    pricer: Optional["QLIRSwapCurve"] = None,
+    vega_curve_time_window_seconds: int = 300,
+    **_: Any,
+) -> pd.DataFrame:
+    """
+    Backward-compatible wrapper for vega-curve detection.
+    """
+    cfg = config or DEFAULT_SWAPTION_PACKAGE_CONFIG
+    return _run_vega_curve_phase(
+        df,
+        config=cfg,
+        product_col=product_col,
+        package_col=package_col,
+        pricer=pricer,
+        vega_curve_time_window_seconds=vega_curve_time_window_seconds,
+    )
+
+
+def link_swaption_packages(
+    df: pd.DataFrame,
+    *,
+    config: Optional[SwaptionPackageDetectionConfig] = None,
+    package_col: str = "package_type",
+    **_: Any,
+) -> pd.DataFrame:
+    """
+    Backward-compatible wrapper for package linking.
+    """
+    cfg = config or DEFAULT_SWAPTION_PACKAGE_CONFIG
+    return link_packages(
+        df,
+        time_window_link_seconds=cfg.time_window_link_seconds,
+        vega_tolerance_pct=cfg.vega_tolerance_pct,
+        package_col=package_col,
+        exec_col=cfg.exec_col,
+        platform_col=cfg.platform_col,
+        currency_col=cfg.currency_col,
+        require_same_platform=cfg.require_same_platform,
+        require_same_currency=cfg.require_same_currency,
+    )
 
 
 # =============================================================================
@@ -1363,6 +1635,12 @@ class SwaptionPackageDetector(PackageDetector):
 
 __all__ = [
     # Public API
+    "detect_swaption_packages_df",
+    "detect_swaption_straddles_df",
+    "detect_swaption_vertical_spreads_df",
+    "detect_swaption_conditional_curve_df",
+    "detect_swaption_vega_curve_df",
+    "link_swaption_packages",
     "detect_and_link_swaption_packages_df",
     "SwaptionPackageDetector",
     # Deprecated - config class (prefer explicit kwargs)

@@ -160,6 +160,9 @@ const US_LOCAL_TIMESTAMP_PATTERN =
 type ParsedTemporalFilterValue =
   | { kind: 'absolute'; value: string }
   | { kind: 'easternLocal'; value: string }
+type ParsedTemporalDayRange =
+  | { kind: 'absolute'; start: string; end: string }
+  | { kind: 'easternLocal'; start: string; end: string }
 
 function parseYear(rawYear: string): number {
   const parsed = Number(rawYear)
@@ -214,6 +217,56 @@ function toEasternLocalTimestamp(
   const mi = String(minute).padStart(2, '0')
   const ss = String(second).padStart(2, '0')
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`
+}
+
+function buildEasternLocalDayRange(
+  year: number,
+  month: number,
+  day: number
+): { start: string; end: string } | null {
+  const start = toEasternLocalTimestamp(year, month, day, 0, 0, 0)
+  if (!start) return null
+  const nextDay = new Date(Date.UTC(year, month - 1, day))
+  if (Number.isNaN(nextDay.getTime())) return null
+  nextDay.setUTCDate(nextDay.getUTCDate() + 1)
+  const end = toEasternLocalTimestamp(
+    nextDay.getUTCFullYear(),
+    nextDay.getUTCMonth() + 1,
+    nextDay.getUTCDate(),
+    0,
+    0,
+    0
+  )
+  if (!end) return null
+  return { start, end }
+}
+
+function parseTemporalContainsDayRange(
+  rawValue: unknown
+): ParsedTemporalDayRange | null {
+  if (rawValue === null || rawValue === undefined) return null
+  const normalized = String(rawValue).replace(/\+/g, ' ').trim()
+  if (!normalized) return null
+
+  const usDateOnly = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+  if (usDateOnly) {
+    const month = Number(usDateOnly[1])
+    const day = Number(usDateOnly[2])
+    const year = parseYear(usDateOnly[3])
+    const range = buildEasternLocalDayRange(year, month, day)
+    if (range) return { kind: 'easternLocal', ...range }
+  }
+
+  const isoDateOnly = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+  if (isoDateOnly) {
+    const year = Number(isoDateOnly[1])
+    const month = Number(isoDateOnly[2])
+    const day = Number(isoDateOnly[3])
+    const range = buildEasternLocalDayRange(year, month, day)
+    if (range) return { kind: 'easternLocal', ...range }
+  }
+
+  return null
 }
 
 function parseTemporalFilterValue(
@@ -423,6 +476,25 @@ function buildTimeCondition(
   params: unknown[]
 ) {
   const normalizedMode = matchMode || 'contains'
+  if (normalizedMode === 'contains') {
+    const dayRange = parseTemporalContainsDayRange(rawValue)
+    if (dayRange) {
+      params.push(dayRange.start)
+      const startPlaceholder = `$${params.length}`
+      params.push(dayRange.end)
+      const endPlaceholder = `$${params.length}`
+      const startExpr =
+        dayRange.kind === 'easternLocal'
+          ? `(${startPlaceholder}::timestamp AT TIME ZONE 'America/New_York')`
+          : `${startPlaceholder}::timestamptz`
+      const endExpr =
+        dayRange.kind === 'easternLocal'
+          ? `(${endPlaceholder}::timestamp AT TIME ZONE 'America/New_York')`
+          : `${endPlaceholder}::timestamptz`
+      return `(d.execution_start >= ${startExpr} AND d.execution_start < ${endExpr})`
+    }
+  }
+
   if (TEMPORAL_MATCH_MODES.has(normalizedMode)) {
     const parsedTimestamp = parseTemporalFilterValue(rawValue)
     if (parsedTimestamp) {
@@ -599,6 +671,17 @@ export async function GET(request: Request) {
     conditions.push(columnFilterClause)
   }
 
+  // Hide sparse outright artifacts (typically MODI duplicates) that have
+  // no usable leg metadata and only pollute the tape.
+  conditions.push(
+    `NOT (
+      d.package_type = 'OUTRIGHT'
+      AND COALESCE(plat.event_action, '') = ''
+      AND COALESCE(plat.product_type, '') = ''
+      AND COALESCE(plat.trade_label, '') = ''
+    )`
+  )
+
   const limitParamIndex = params.length + 1
   params.push(limit + 1) // Fetch one extra row to compute hasMore
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -610,6 +693,8 @@ export async function GET(request: Request) {
        LEFT JOIN LATERAL (
          SELECT mode() WITHIN GROUP (ORDER BY platform_identifier) AS platform_identifier
                , mode() WITHIN GROUP (ORDER BY event_action) AS event_action
+               , mode() WITHIN GROUP (ORDER BY product_type) AS product_type
+               , mode() WITHIN GROUP (ORDER BY trade_label) AS trade_label
          FROM arbs_swaption_legs_v1 l
          WHERE l.package_id = d.package_id
        ) plat ON TRUE

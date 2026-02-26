@@ -71,14 +71,25 @@ const QUADRANT_COLORS: Record<VolGridQuadrant, { stroke: string; fill: string }>
 function renderTodayDot(props: any) {
   const { cx, cy, payload, dataKey, index } = props
   const key = `today-dot-${payload?.date ?? 'na'}-${dataKey ?? 'series'}-${index ?? 0}`
+  const safeCx = Number.isFinite(cx) ? cx : 0
+  const safeCy = Number.isFinite(cy) ? cy : 0
   if (!payload?.isToday) {
-    return null
+    return (
+      <circle
+        key={key}
+        cx={safeCx}
+        cy={safeCy}
+        r={0}
+        fill="none"
+        stroke="none"
+      />
+    )
   }
   return (
     <circle
       key={key}
-      cx={cx}
-      cy={cy}
+      cx={safeCx}
+      cy={safeCy}
       r={3.5}
       fill="#e2e8f0"
       stroke="#0f172a"

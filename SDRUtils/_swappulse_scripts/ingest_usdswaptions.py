@@ -129,6 +129,19 @@ PACKAGE_METRIC_COLUMNS: dict[str, tuple[str, ...]] = {
         "ladder_notionals",
     ),
     "CUSTY_RR_STRANGLE": ("custy_rr_width_bps",),
+    "DELTA_HEDGE": (
+        "delta_hedge_implied_delta",
+        "delta_hedge_swap_trade_id",
+        "delta_hedge_swap_fixed_rate",
+        "delta_hedge_swap_tenor_years",
+        "delta_hedge_swap_notional",
+        "delta_hedge_match_window_seconds",
+        "delta_hedge_dv01_ratio",
+        "delta_hedge_time_diff_seconds",
+        "delta_hedge_swap_dv01",
+        "delta_hedge_swaption_dv01",
+        "delta_hedge_dv01_check",
+    ),
 }
 
 # Leg-level analytics that are only meaningful for outrights
@@ -176,6 +189,15 @@ NUMERIC_COLUMNS: tuple[str, ...] = (
     "rr_vega01",
     "rr_theta1d",
     "custy_rr_width_bps",
+    "delta_hedge_implied_delta",
+    "delta_hedge_swap_fixed_rate",
+    "delta_hedge_swap_tenor_years",
+    "delta_hedge_swap_notional",
+    "delta_hedge_match_window_seconds",
+    "delta_hedge_dv01_ratio",
+    "delta_hedge_time_diff_seconds",
+    "delta_hedge_swap_dv01",
+    "delta_hedge_swaption_dv01",
     "vs_atm_strike",
     "vs_otm_strike",
     "vs_strike_width_bps",
@@ -575,6 +597,11 @@ def _boolify(val: Any) -> Optional[bool]:
     return None
 
 
+def _is_blank_like_series(series: pd.Series) -> pd.Series:
+    text = series.astype("string").str.strip().str.lower()
+    return series.isna() | text.isin({"", "nan", "none", "null", "nat"})
+
+
 def _pythonify(val: Any) -> Any:
     """Convert numpy/pandas scalars to plain python types for JSONB."""
     if val is None:
@@ -653,6 +680,23 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             out.loc[mask_no_pkg, "package_type"] = "OUTRIGHT"
         else:
             out["package_type"] = "OUTRIGHT"
+
+    # Defensive guard: drop sparse outright artifacts (typically MODI/TRAD duplicates)
+    # that have economics but no action/product/label metadata.
+    required_cols = {"package_type", "event_action", "product_type", "trade_label"}
+    if required_cols.issubset(set(out.columns)):
+        is_outright = out["package_type"].astype("string").str.upper().eq("OUTRIGHT")
+        blank_action = _is_blank_like_series(out["event_action"])
+        blank_product = _is_blank_like_series(out["product_type"])
+        blank_label = _is_blank_like_series(out["trade_label"])
+        sparse_outright_mask = is_outright & blank_action & blank_product & blank_label
+        sparse_outright_count = int(sparse_outright_mask.sum())
+        if sparse_outright_count > 0:
+            print(
+                f"Dropping {sparse_outright_count} sparse OUTRIGHT rows "
+                "(missing event_action/product_type/trade_label)."
+            )
+            out = out.loc[~sparse_outright_mask].copy()
 
     out["package_id"] = out["package_id"].astype(str)
     return out

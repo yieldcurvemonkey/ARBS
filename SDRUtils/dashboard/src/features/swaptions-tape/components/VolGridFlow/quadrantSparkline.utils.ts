@@ -161,16 +161,10 @@ export function buildVolFlowSparklineData(
       ? Math.abs(Number(trade.flowGamma01))
       : null;
     const selectedFlowValue = flowMetric === "gamma" ? flowGamma : flowVega;
-    const absoluteSelectedFlowValue =
+    const flowValue =
       selectedFlowValue !== null && Number.isFinite(selectedFlowValue)
         ? Math.abs(Number(selectedFlowValue))
-        : null;
-    const flowValue =
-      absoluteSelectedFlowValue !== null && absoluteSelectedFlowValue > 0
-        ? absoluteSelectedFlowValue
-        : Number.isFinite(trade.economicNotional)
-          ? Math.abs(trade.economicNotional)
-          : 0;
+        : 0;
     cumulative += flowValue;
     points.push({
       timestamp: trade.executionTimestamp,

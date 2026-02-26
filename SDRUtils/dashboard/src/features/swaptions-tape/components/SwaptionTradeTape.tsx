@@ -139,6 +139,11 @@ type TapeResponse = {
   hasMore: boolean;
   latestExecutionStart: string | null;
 };
+type FetchTapeRequest = {
+  cursor?: string | null;
+  since?: string | null;
+  replace?: boolean;
+};
 
 type ManualLinkValidationStatus = "ok" | "warn" | "error";
 
@@ -484,6 +489,8 @@ type VolFlowQuadrantMetricMap = Record<
   Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">,
   VolFlowAxisMetric
 >;
+type VolFlowDirectionFilter = "ALL" | "PAYER" | "RECEIVER";
+type VolFlowTypeShareBasis = "RISK" | "NOTIONAL";
 
 type VolFlowQuadrantSummary = {
   quadrant: Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">;
@@ -497,6 +504,8 @@ const ACTIVE_ACTIONS = new Set(["NEWT-TRAD", "MODI-TRAD", "CORR-TRAD"]);
 const POLL_INTERVAL_MS = 5000;
 const TODAY_BACKFILL_FETCH_LIMIT = 500;
 const TODAY_BACKFILL_MAX_PAGES = 40;
+const FILTERED_BOOTSTRAP_FETCH_LIMIT = 500;
+const FILTERED_BOOTSTRAP_MAX_PAGES = 40;
 const ROW_ESTIMATE_PX = 44;
 const SEQUENCE_CLUSTER_MAX_GAP_MINUTES = 60;
 const SEQUENCE_CLUSTER_MIN_TRADES = 3;
@@ -511,11 +520,10 @@ const VOL_FLOW_INTRADAY_LOOKBACK_OPTIONS = [
   "1M",
   "2M",
   "3M",
-  "6M",
 ] as const;
 type VolFlowIntradayLookback =
   (typeof VOL_FLOW_INTRADAY_LOOKBACK_OPTIONS)[number];
-const DEFAULT_VOL_FLOW_INTRADAY_LOOKBACK: VolFlowIntradayLookback = "3M";
+const DEFAULT_VOL_FLOW_INTRADAY_LOOKBACK: VolFlowIntradayLookback = "1M";
 const VOL_FLOW_INTRADAY_LOOKBACK_DAYS: Record<
   VolFlowIntradayLookback,
   number
@@ -525,7 +533,6 @@ const VOL_FLOW_INTRADAY_LOOKBACK_DAYS: Record<
   "1M": 30,
   "2M": 60,
   "3M": 90,
-  "6M": 180,
 };
 const VOL_FLOW_AXIS_METRIC_OPTIONS: VolFlowAxisMetric[] = [
   "vega",
@@ -536,9 +543,32 @@ const VOL_FLOW_AXIS_METRIC_LABEL: Record<VolFlowAxisMetric, string> = {
   vega: "Vega01",
   gamma: "Gamma01",
 };
+const VOL_FLOW_DIRECTION_FILTER_OPTIONS: VolFlowDirectionFilter[] = [
+  "ALL",
+  "PAYER",
+  "RECEIVER",
+];
+const VOL_FLOW_DIRECTION_FILTER_LABEL: Record<VolFlowDirectionFilter, string> = {
+  ALL: "All",
+  PAYER: "Payer",
+  RECEIVER: "Receiver",
+};
+const VOL_FLOW_TYPE_SHARE_BASIS_OPTIONS: VolFlowTypeShareBasis[] = [
+  "RISK",
+  "NOTIONAL",
+];
+const VOL_FLOW_TYPE_SHARE_BASIS_LABEL: Record<VolFlowTypeShareBasis, string> = {
+  RISK: "Risk",
+  NOTIONAL: "Notional",
+};
 const VOL_FLOW_WINDOW_HOUR_OPTIONS = [24, 16, 12, 8, 6, 4, 2, 1];
 const DEFAULT_VOL_FLOW_WINDOW_HOURS = 12;
-const DEFAULT_VOL_FLOW_WINDOW_START_HOURS = 6;
+const DEFAULT_VOL_FLOW_WINDOW_START_HOURS = 6.5;
+const VOL_FLOW_INTRADAY_LOOKBACK_STORAGE_KEY =
+  "swaptionVolGridIntradayAvgLookback.v3";
+const VOL_FLOW_WINDOW_HOURS_STORAGE_KEY = "swaptionVolGridFlowWindowHours.v3";
+const VOL_FLOW_WINDOW_START_HOURS_STORAGE_KEY =
+  "swaptionVolGridFlowWindowStartHours.v3";
 const VOL_FLOW_OVERLAY_FETCH_LIMIT = 500;
 const VOL_FLOW_OVERLAY_FETCH_MAX_PAGES = 40;
 const POST_CLUSTER_WINDOW_MS = 2 * ONE_HOUR_MS;
@@ -554,6 +584,7 @@ const PACKAGE_TONES: Record<string, string> = {
   VERTICAL_SPREAD_1X2: "!bg-cyan-900/30", // Cyan (High contrast with Blue and Emerald)
   RECEIVER_LADDER: "!bg-emerald-900/30", // Emerald (Distinct Green)
   CUSTY_RR_STRANGLE: "!bg-lime-900/30", // Lime (Bright Yellow-Green, replaces Pink)
+  DELTA_HEDGE: "!bg-teal-900/30", // Teal (Distinct hedge package tone)
   OUTRIGHT: "!bg-gray-800/50", // Gray (Neutral, distinct from saturated colors)
 };
 const NESTED_TABLE_BG = "bg-slate-900/50";
@@ -604,16 +635,6 @@ const QUADRANT_TONES: Record<VolGridQuadrant, string> = {
   LRC: "border-sky-500/40 bg-sky-500/10 text-sky-200",
   BOUNDARY: "border-slate-500/40 bg-slate-500/10 text-slate-200",
   UNKNOWN: "border-slate-700/50 bg-slate-900/60 text-slate-400",
-};
-
-const QUADRANT_DIRECTION_TONES: Record<
-  QuadrantFlowSnapshot["dominantDirection"],
-  string
-> = {
-  payer: "border-emerald-500/60 bg-emerald-500/10 text-emerald-100",
-  receiver: "border-cyan-500/60 bg-cyan-500/10 text-cyan-100",
-  balanced: "border-slate-600/60 bg-slate-900/60 text-slate-200",
-  unknown: "border-slate-700/60 bg-slate-950/60 text-slate-400",
 };
 
 const DEFAULT_QUADRANT_META: Record<
@@ -1277,6 +1298,14 @@ const FILTER_FIELDS = [
   "notional",
   "label",
 ] as const;
+const SERVER_FILTER_FIELDS = [
+  "action",
+  "package_type",
+  "time",
+  "platform",
+  "notional",
+  "label",
+] as const;
 const COLUMN_FILTER_QUERY_KEY = "columnFilters";
 const COLUMN_FILTER_OPERATOR_QUERY_KEY = "columnFilterOp";
 const SELECTED_PACKAGES_QUERY_KEY = "selectedPackages";
@@ -1633,8 +1662,22 @@ function extractPrimaryAction(row: TapeRow): string | null {
   if (row.event_action) return row.event_action.toUpperCase();
   const legs = row.legs_json || [];
   if (!legs.length) return null;
-  const action = legAction(legs[0]);
-  return action ? action.toUpperCase() : null;
+  for (const leg of legs) {
+    const action = legAction(leg);
+    if (action) return action.toUpperCase();
+  }
+  return null;
+}
+
+function isDisplayableTradeRow(row: TapeRow | null | undefined): row is TapeRow {
+  if (!row?.package_id) return false;
+  const action = extractPrimaryAction(row);
+  return !!(action && action.trim());
+}
+
+function filterOutEmptyTrades(rows: TapeRow[]): TapeRow[] {
+  if (!Array.isArray(rows) || !rows.length) return [];
+  return rows.filter((row): row is TapeRow => isDisplayableTradeRow(row));
 }
 
 function hasActionWarning(row: TapeRow): boolean {
@@ -1678,6 +1721,17 @@ function isCustyPlatform(platform: string | null | undefined): boolean {
   if (!tokens.length) return true;
   if (tokens.some((token) => CUSTY_MIC_SET.has(token))) return true;
   return !tokens.some((token) => IDB_MIC_SET.has(token));
+}
+
+type VolFlowScope = "COMBINED" | "IDB" | "CUSTY";
+
+function filterRowsByVolFlowScope(rows: TapeRow[], flowScope: VolFlowScope) {
+  if (flowScope === "COMBINED") return rows;
+  return rows.filter((row) => {
+    const platform = resolvePlatformIdentifier(row);
+    if (flowScope === "IDB") return isIdbPlatform(platform);
+    return isCustyPlatform(platform);
+  });
 }
 
 function isComicallyLargeCustyTrade(row: TapeRow): boolean {
@@ -2432,6 +2486,40 @@ function buildQuadrantTradeBuckets(
   return buckets;
 }
 
+function filterVolFlowTradesByDirection(
+  trades: QuadrantTradeFlows[],
+  directionFilter: VolFlowDirectionFilter,
+): QuadrantTradeFlows[] {
+  if (directionFilter === "ALL") return trades;
+  if (directionFilter === "PAYER") {
+    return trades.filter((trade) => trade.signedNotional > 0);
+  }
+  return trades.filter((trade) => trade.signedNotional < 0);
+}
+
+function filterQuadrantTradeMapByDirection(
+  tradeMap: QuadrantTradeMap,
+  directionFilter: VolFlowDirectionFilter,
+): QuadrantTradeMap {
+  if (directionFilter === "ALL") return tradeMap;
+  return {
+    ULC: filterVolFlowTradesByDirection(tradeMap.ULC, directionFilter),
+    URC: filterVolFlowTradesByDirection(tradeMap.URC, directionFilter),
+    LLC: filterVolFlowTradesByDirection(tradeMap.LLC, directionFilter),
+    LRC: filterVolFlowTradesByDirection(tradeMap.LRC, directionFilter),
+  };
+}
+
+function matchesVolFlowDirectionFilter(
+  row: TapeRow,
+  directionFilter: VolFlowDirectionFilter,
+): boolean {
+  if (directionFilter === "ALL") return true;
+  const direction = resolveRowDirection(row);
+  if (directionFilter === "PAYER") return direction === "PAYER";
+  return direction === "RECEIVER";
+}
+
 function toLocalDayStartTimestamp(timestamp: number): number {
   const date = new Date(timestamp);
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
@@ -2451,6 +2539,15 @@ function isVolFlowAxisMetric(
 ): value is VolFlowAxisMetric {
   if (!value) return false;
   return (VOL_FLOW_AXIS_METRIC_OPTIONS as readonly string[]).includes(value);
+}
+
+function isVolFlowDirectionFilter(
+  value: string | null,
+): value is VolFlowDirectionFilter {
+  if (!value) return false;
+  return (
+    VOL_FLOW_DIRECTION_FILTER_OPTIONS as readonly string[]
+  ).includes(value);
 }
 
 function formatHourOfDay(value: number): string {
@@ -2475,10 +2572,6 @@ function resolveVolFlowWeight(
   if (greek !== null && Number.isFinite(greek)) {
     return Math.abs(Number(greek));
   }
-  const fallbackNotional = resolveEconomicNotional(row, packageType);
-  if (Number.isFinite(fallbackNotional as number)) {
-    return Math.abs(Number(fallbackNotional));
-  }
   return 0;
 }
 
@@ -2488,6 +2581,7 @@ function buildQuadrantIntradayAverageProfiles(
   anchorDayStart: number | null,
   lookbackDays: number,
   flowMetric: VolFlowAxisMetric,
+  directionFilter: VolFlowDirectionFilter = "ALL",
 ): Record<Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">, SparklinePoint[]> {
   const emptyProfiles: Record<
     Exclude<VolGridQuadrant, "BOUNDARY" | "UNKNOWN">,
@@ -2532,6 +2626,7 @@ function buildQuadrantIntradayAverageProfiles(
 
     const dayStart = toLocalDayStartTimestamp(timestamp);
     observedDayStarts.add(dayStart);
+    if (!matchesVolFlowDirectionFilter(row, directionFilter)) return;
 
     const classification = resolveQuadrantClassification(row, config);
     if (!isDisplayQuadrant(classification.quadrant)) return;
@@ -3782,9 +3877,12 @@ function parseColumnFilterOperator(value: string | null) {
   return value === FilterOperator.OR ? FilterOperator.OR : FilterOperator.AND;
 }
 
-function buildColumnFilterPayload(filters: DataTableFilterMeta) {
+function buildColumnFilterPayload(
+  filters: DataTableFilterMeta,
+  fields: readonly string[] = FILTER_FIELDS,
+) {
   const payload: ColumnFilterPayload = {};
-  FILTER_FIELDS.forEach((field) => {
+  fields.forEach((field) => {
     const filterMeta = (filters || {})[field];
     if (!filterMeta) return;
     const filterMetaAny = filterMeta as any;
@@ -5321,6 +5419,15 @@ function buildRichLabel(row: TapeRow): string {
     return `${underlying} ${strikeStr} ${qualifiers.join(" ")}`;
   }
 
+  if (pkgType === "DELTA_HEDGE") {
+    const impliedDelta = parseMetricNumber(metrics.delta_hedge_implied_delta);
+    const impliedDeltaLabel =
+      impliedDelta !== null
+        ? `${formatMetricValue(impliedDelta * 100, 1)}%`
+        : "n/a";
+    return `${underlying} DELTA HEDGE (${impliedDeltaLabel})`;
+  }
+
   // Fallback
   return `${underlying} ${pkgType || ""}`.trim();
 }
@@ -5352,6 +5459,7 @@ function LegsSubtable({
     isStraddle && isAssumedIncompleteStraddle(row);
   const isOutright = !packageType || packageType === "OUTRIGHT";
   const isRiskReversal = packageType === "RISK_REVERSAL";
+  const isDeltaHedgePackage = packageType === "DELTA_HEDGE";
   const showStraddleSchema = isStraddle || isRiskReversal;
   const showOutrightSchema = isOutright;
   const showNotionalCappedColumn = showStraddleSchema || showOutrightSchema;
@@ -5845,7 +5953,7 @@ function LegsSubtable({
 
           const data: { rows: TapeRow[]; count: number; truncated: boolean } =
             await res.json();
-          data.rows.forEach((rowItem) => {
+          filterOutEmptyTrades(data.rows || []).forEach((rowItem) => {
             fetchedRowsById.set(rowItem.package_id, rowItem);
           });
           truncated = truncated || data.truncated;
@@ -5853,8 +5961,9 @@ function LegsSubtable({
 
         // Client-side filtering to ensure exact match
         const collected = new Map<string, TapeRow>();
-        inferIncompleteStraddles(Array.from(fetchedRowsById.values())).forEach(
-          (rowItem) => {
+        filterOutEmptyTrades(
+          inferIncompleteStraddles(Array.from(fetchedRowsById.values())),
+        ).forEach((rowItem) => {
           if (normalizePackageType(rowItem.package_type) !== packageType) {
             return;
           }
@@ -6270,6 +6379,146 @@ function LegsSubtable({
         },
       )
     : null;
+
+  if (isDeltaHedgePackage) {
+    const swaptionLeg = displayLegs[0] ?? null;
+    const hedgeSwapTradeId = isValid(metrics.delta_hedge_swap_trade_id)
+      ? String(metrics.delta_hedge_swap_trade_id)
+      : null;
+    const hedgeSwapFixedRate = parseMetricNumber(metrics.delta_hedge_swap_fixed_rate);
+    const hedgeSwapNotional = parseMetricNumber(metrics.delta_hedge_swap_notional);
+    const hedgeSwapTenorYears = parseMetricNumber(
+      metrics.delta_hedge_swap_tenor_years,
+    );
+    const hedgeMatchWindowSeconds = parseMetricNumber(
+      metrics.delta_hedge_match_window_seconds,
+    );
+    const hedgeImpliedDelta = parseMetricNumber(metrics.delta_hedge_implied_delta);
+    const hedgeDv01Ratio = parseMetricNumber(metrics.delta_hedge_dv01_ratio);
+    const hedgeDv01Check = isValid(metrics.delta_hedge_dv01_check)
+      ? String(metrics.delta_hedge_dv01_check).toUpperCase()
+      : "SKIP";
+    const hedgeFixedRateDisplay =
+      hedgeSwapFixedRate === null
+        ? "--"
+        : `${formatRate(
+            Math.abs(hedgeSwapFixedRate) <= 1
+              ? hedgeSwapFixedRate * 100
+              : hedgeSwapFixedRate,
+            3,
+          )}%`;
+
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-end gap-2 px-2">
+          <button
+            type="button"
+            onClick={(e) => {
+              onOpenRawDataModal?.(
+                row,
+                e.currentTarget.getBoundingClientRect(),
+              );
+            }}
+            className="rounded border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-300 transition hover:bg-slate-800"
+          >
+            Show Raw Data
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-xs">
+            <thead className="bg-slate-950/40 text-[11px] uppercase tracking-wide text-slate-400">
+              <tr>
+                <th className="px-2 py-1 text-left">Leg</th>
+                <th className="px-2 py-1 text-left">Trade ID</th>
+                <th className="px-2 py-1 text-left">Type</th>
+                <th className="px-2 py-1 text-right">Strike / Rate</th>
+                <th className="px-2 py-1 text-right">Notional</th>
+                <th className="px-2 py-1 text-right">Premium</th>
+                <th className="px-2 py-1 text-right">Tenor</th>
+                <th className="px-2 py-1 text-right">Execution</th>
+                <th className="px-2 py-1 text-right">Match Window</th>
+                <th className="px-2 py-1 text-right">Implied Δ</th>
+                <th className="px-2 py-1 text-right">DV01 Ratio</th>
+                <th className="py-1 pl-2 pr-4 text-right">DV01 Check</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-100">
+              <tr className="odd:bg-slate-900/40">
+                <td className="px-2 py-1 font-semibold text-slate-200">Swaption</td>
+                <td className="px-2 py-1 font-mono text-slate-300">
+                  {swaptionLeg?.trade_id || "--"}
+                </td>
+                <td className="px-2 py-1 text-slate-300">
+                  {swaptionLeg?.product_type || "--"}
+                </td>
+                <td className="px-1 py-1 text-right font-mono">
+                  {formatStrikeAbsolute(parseMetricNumber(swaptionLeg?.strike))}
+                </td>
+                <td className="px-1 py-1 text-right font-mono">
+                  {formatNotional(parseMetricNumber(swaptionLeg?.notional))}
+                </td>
+                <td className="px-1 py-1 text-right font-mono">
+                  {formatMetricValue(parseMetricNumber(swaptionLeg?.premium), 3)}
+                </td>
+                <td className="px-1 py-1 text-right font-mono">
+                  {row.tenor_label || "--"}
+                </td>
+                <td className="px-1 py-1 text-right font-mono">
+                  {formatTimestamp(swaptionLeg?.execution_timestamp || row.execution_start)}
+                </td>
+                <td className="px-1 py-1 text-right font-mono text-slate-400">--</td>
+                <td className="px-1 py-1 text-right font-mono text-slate-400">--</td>
+                <td className="px-1 py-1 text-right font-mono text-slate-400">--</td>
+                <td className="py-1 pl-1 pr-4 text-right font-mono text-slate-400">--</td>
+              </tr>
+              {hedgeSwapTradeId ? (
+                <tr className="odd:bg-slate-900/40">
+                  <td className="px-2 py-1 font-semibold text-teal-200">Hedge Swap</td>
+                  <td className="px-2 py-1 font-mono text-slate-300">{hedgeSwapTradeId}</td>
+                  <td className="px-2 py-1 text-slate-300">SOFR_SWAP</td>
+                  <td className="px-1 py-1 text-right font-mono">{hedgeFixedRateDisplay}</td>
+                  <td className="px-1 py-1 text-right font-mono">
+                    {formatNotional(hedgeSwapNotional)}
+                  </td>
+                  <td className="px-1 py-1 text-right font-mono text-slate-400">--</td>
+                  <td className="px-1 py-1 text-right font-mono">
+                    {hedgeSwapTenorYears !== null
+                      ? `${formatMetricValue(hedgeSwapTenorYears, 2)}Y`
+                      : "--"}
+                  </td>
+                  <td className="px-1 py-1 text-right font-mono">
+                    {formatExecutionWindow(row.execution_start, row.execution_end)}
+                  </td>
+                  <td className="px-1 py-1 text-right font-mono">
+                    {hedgeMatchWindowSeconds !== null
+                      ? `${formatMetricValue(hedgeMatchWindowSeconds, 0)}s`
+                      : "--"}
+                  </td>
+                  <td className="px-1 py-1 text-right font-mono">
+                    {hedgeImpliedDelta !== null
+                      ? `${formatMetricValue(hedgeImpliedDelta, 3)}x`
+                      : "--"}
+                  </td>
+                  <td className="px-1 py-1 text-right font-mono">
+                    {formatMetricValue(hedgeDv01Ratio, 3)}
+                  </td>
+                  <td className="py-1 pl-1 pr-4 text-right font-mono">
+                    {hedgeDv01Check}
+                  </td>
+                </tr>
+              ) : (
+                <tr className="bg-slate-950/40">
+                  <td className="px-2 py-2 text-slate-300" colSpan={12}>
+                    hedge details unavailable
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
 
   if (!displayLegs.length) {
     return (
@@ -7556,28 +7805,34 @@ function QuadrantCell({
   snapshot,
   meta,
   trades,
+  sparklineTrades,
+  typeShareBasis,
   mode,
   volFlowMetric,
   volFlowPaceOverride,
   paceLookbackLabel,
   onVolFlowMetricChange,
   sparklineXDomain,
+  asOfTimestamp,
   comparisonPoints,
   onTradeSelect,
 }: {
   snapshot: QuadrantFlowSnapshot;
   meta: QuadrantMeta;
   trades: QuadrantTradeFlows[];
+  sparklineTrades?: QuadrantTradeFlows[];
+  typeShareBasis: VolFlowTypeShareBasis;
   mode: SparklineMode;
   volFlowMetric: VolFlowAxisMetric;
   volFlowPaceOverride?: number | null;
   paceLookbackLabel?: string;
   onVolFlowMetricChange?: (next: VolFlowAxisMetric) => void;
   sparklineXDomain?: [number, number] | null;
+  asOfTimestamp?: number | null;
   comparisonPoints?: SparklinePoint[];
   onTradeSelect?: (packageId: string) => void;
 }) {
-  const tone = QUADRANT_DIRECTION_TONES[snapshot.dominantDirection];
+  const tone = QUADRANT_TONES[meta.id];
   const directionColor =
     snapshot.dominantDirection === "payer"
       ? "payer"
@@ -7613,14 +7868,80 @@ function QuadrantCell({
   const straddleShareNote = isLowSample
     ? ` (${straddleTradeCount} of ${snapshot.tradeCount})`
     : "";
+  const volFlowMetricLabel = VOL_FLOW_AXIS_METRIC_LABEL[volFlowMetric];
+  const typeShareMetricLabel = volFlowMetricLabel.toLowerCase();
+  const typeShareWeightLabel =
+    typeShareBasis === "RISK" ? typeShareMetricLabel : "notional";
+  const directionalTypeBreakdown = useMemo(
+    () =>
+      trades.reduce(
+        (acc, trade) => {
+          const signed = Number.isFinite(trade.signedNotional)
+            ? Number(trade.signedNotional)
+            : 0;
+          const rawMetric =
+            volFlowMetric === "gamma" ? trade.flowGamma01 : trade.flowVega01;
+          const metricValue =
+            rawMetric !== null && Number.isFinite(rawMetric)
+              ? Math.abs(Number(rawMetric))
+              : 0;
+          const notionalValue = Number.isFinite(trade.economicNotional)
+            ? Math.abs(Number(trade.economicNotional))
+            : Math.abs(signed);
+          const shareWeight =
+            typeShareBasis === "RISK" ? metricValue : notionalValue;
+          if (signed > 0) {
+            acc.payerWeight += shareWeight;
+            acc.payerCount += 1;
+          } else if (signed < 0) {
+            acc.receiverWeight += shareWeight;
+            acc.receiverCount += 1;
+          }
+          return acc;
+        },
+        {
+          payerWeight: 0,
+          receiverWeight: 0,
+          payerCount: 0,
+          receiverCount: 0,
+        },
+      ),
+    [trades, typeShareBasis, volFlowMetric],
+  );
+  const totalDirectionalMetric =
+    directionalTypeBreakdown.payerWeight + directionalTypeBreakdown.receiverWeight;
+  const payerSharePct =
+    totalDirectionalMetric > 0
+      ? Math.round(
+          (directionalTypeBreakdown.payerWeight / totalDirectionalMetric) * 100,
+        )
+      : 0;
+  const receiverSharePct =
+    totalDirectionalMetric > 0 ? Math.max(0, 100 - payerSharePct) : 0;
+  const directionalTradeCount =
+    directionalTypeBreakdown.payerCount + directionalTypeBreakdown.receiverCount;
+  const typeShareLabel =
+    totalDirectionalMetric > 0
+      ? `${payerSharePct}% payer`
+      : "--";
+  const typeShareNote = isLowSample
+    ? directionalTradeCount > 0
+      ? ` (${directionalTradeCount} directional)`
+      : " (no directional)"
+    : "";
+  const effectiveSparklineTrades = sparklineTrades ?? trades;
+  const sparklineDecomposition = useMemo(
+    () => computeStructureDecomposition(effectiveSparklineTrades),
+    [effectiveSparklineTrades],
+  );
 
   const directionalPoints = useMemo(
-    () => buildDirectionalSparklineData(trades),
-    [trades],
+    () => buildDirectionalSparklineData(effectiveSparklineTrades),
+    [effectiveSparklineTrades],
   );
   const volFlowPoints = useMemo(
-    () => buildVolFlowSparklineData(trades, volFlowMetric),
-    [trades, volFlowMetric],
+    () => buildVolFlowSparklineData(effectiveSparklineTrades, volFlowMetric),
+    [effectiveSparklineTrades, volFlowMetric],
   );
   const totalVolFlowValue = useMemo(() => {
     if (!volFlowPoints.length) return 0;
@@ -7646,18 +7967,18 @@ function QuadrantCell({
     () =>
       buildVolFlowNarrative({
         snapshot,
-        trades,
-        totalEconomicNotional: decomposition.totalEconomicNotional,
+        trades: effectiveSparklineTrades,
+        totalEconomicNotional: sparklineDecomposition.totalEconomicNotional,
         pattern: volFlowPattern,
-        straddleShare: decomposition.straddleShare,
+        straddleShare: sparklineDecomposition.straddleShare,
         steepestSegment,
       }),
     [
-      decomposition.straddleShare,
-      decomposition.totalEconomicNotional,
+      effectiveSparklineTrades,
+      sparklineDecomposition.straddleShare,
+      sparklineDecomposition.totalEconomicNotional,
       snapshot,
       steepestSegment,
-      trades,
       volFlowPattern,
     ],
   );
@@ -7670,12 +7991,10 @@ function QuadrantCell({
   const formatVolFlowValue = useCallback(
     (value: number | null | undefined) => {
       if (!isValid(value)) return "--";
-      const label = VOL_FLOW_AXIS_METRIC_LABEL[volFlowMetric].toLowerCase();
-      return `${formatMetricValue(Number(value), 3)} ${label}`;
+      return `${formatMetricValue(Number(value), 3)} ${typeShareMetricLabel}`;
     },
-    [volFlowMetric],
+    [typeShareMetricLabel],
   );
-  const volFlowMetricLabel = VOL_FLOW_AXIS_METRIC_LABEL[volFlowMetric];
   const sparklineHeight = mode === "vol_flow" ? 120 : 72;
 
   return (
@@ -7737,7 +8056,7 @@ function QuadrantCell({
                 {formatNotional(snapshot.totalPremium)}
               </span>
             </div>
-            <div className="flex flex-col gap-1">
+            <div className="col-span-2 flex flex-col gap-1">
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Straddle share</span>
                 <span className="font-mono text-slate-100">
@@ -7758,7 +8077,35 @@ function QuadrantCell({
                 Outrights {outrightSharePct}%
               </div>
             </div>
-            <div className="flex items-center justify-between">
+            <div className="col-span-2 flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">
+                  Type share ({typeShareWeightLabel})
+                </span>
+                <span className="font-mono text-slate-100">
+                  {typeShareLabel}
+                  {typeShareNote}
+                </span>
+              </div>
+              <div className="flex h-1 w-full overflow-hidden rounded bg-slate-800">
+                <div
+                  className="h-full bg-cyan-400"
+                  style={{ width: `${receiverSharePct}%` }}
+                />
+                <div
+                  className="h-full bg-emerald-400"
+                  style={{ width: `${payerSharePct}%` }}
+                />
+              </div>
+              <div className="text-[9px] text-slate-500">
+                {totalDirectionalMetric > 0
+                  ? `Receivers ${receiverSharePct}%`
+                  : directionalTradeCount > 0
+                    ? `No ${typeShareWeightLabel} flow`
+                    : "No directional flow"}
+              </div>
+            </div>
+            <div className="col-span-2 flex items-center justify-between">
               <span className="text-slate-400">Pace</span>
               <span className="font-mono text-slate-100">{paceLabel}</span>
             </div>
@@ -7791,12 +8138,13 @@ function QuadrantCell({
 
       <div className="mt-2 w-full" style={{ height: sparklineHeight }}>
         <QuadrantSparkline
-          trades={trades}
+          trades={effectiveSparklineTrades}
           mode={mode}
           directionColor={directionColor}
           volFlowMetric={volFlowMetric}
           comparisonPoints={mode === "vol_flow" ? comparisonPoints : undefined}
           xDomainOverride={sparklineXDomain}
+          asOfTimestamp={mode === "vol_flow" ? asOfTimestamp : null}
           height={sparklineHeight}
           showMarker
           showFill
@@ -7825,24 +8173,21 @@ function QuadrantFlowDashboard({
   rows,
   config,
   onConfigChange,
-  excludeLargeCustyNotional,
-  onExcludeLargeCustyNotionalChange,
   onTradeSelect,
 }: {
   rows: TapeRow[];
   config: QuadrantConfig;
   onConfigChange: (next: QuadrantConfig) => void;
-  excludeLargeCustyNotional: boolean;
-  onExcludeLargeCustyNotionalChange: (next: boolean) => void;
   onTradeSelect?: (packageId: string) => void;
 }) {
   const [showConfig, setShowConfig] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [viewMode, setViewMode] = useState<"TODAY" | "HISTORY">("TODAY");
+  const [excludeLargeCustyNotional, setExcludeLargeCustyNotional] =
+    useState(true);
+  const [viewMode] = useState<"TODAY" | "HISTORY">("TODAY");
   const [flowMode, setFlowMode] =
     useState<SparklineMode>("vol_flow");
-  const [historyLookback, setHistoryLookback] =
-    useState<HistoryLookback>("3M");
+  const [historyLookback] = useState<HistoryLookback>("3M");
   const [intradayAverageLookback, setIntradayAverageLookback] =
     useState<VolFlowIntradayLookback>(DEFAULT_VOL_FLOW_INTRADAY_LOOKBACK);
   const [volFlowMetricByQuadrant, setVolFlowMetricByQuadrant] =
@@ -7854,9 +8199,11 @@ function QuadrantFlowDashboard({
     useState<number>(DEFAULT_VOL_FLOW_WINDOW_START_HOURS);
   const [showPaceOverlay, setShowPaceOverlay] = useState(true);
   const [overlayHistoryRows, setOverlayHistoryRows] = useState<TapeRow[]>([]);
-  const [flowScope, setFlowScope] = useState<"COMBINED" | "IDB" | "CUSTY">(
-    "COMBINED",
-  );
+  const [flowScope, setFlowScope] = useState<VolFlowScope>("COMBINED");
+  const [volFlowDirectionFilter, setVolFlowDirectionFilter] =
+    useState<VolFlowDirectionFilter>("ALL");
+  const [volFlowTypeShareBasis, setVolFlowTypeShareBasis] =
+    useState<VolFlowTypeShareBasis>("RISK");
   const overlayHistoryFetchKeyRef = useRef<string | null>(null);
   const overlayHistoryCacheRef = useRef<Map<string, TapeRow[]>>(new Map());
   const intradayAverageLookbackDays =
@@ -7867,45 +8214,42 @@ function QuadrantFlowDashboard({
       : flowScope === "IDB"
         ? "idb"
         : "custy";
-  const scopedRows = useMemo(() => {
-    if (flowScope === "COMBINED") return rows;
-    return rows.filter((row) => {
-      const platform = resolvePlatformIdentifier(row);
-      if (flowScope === "IDB") return isIdbPlatform(platform);
-      return isCustyPlatform(platform);
-    });
-  }, [flowScope, rows]);
+  const scopedRows = useMemo(
+    () => filterRowsByVolFlowScope(filterOutEmptyTrades(rows), flowScope),
+    [flowScope, rows],
+  );
   const historyScopedRows = useMemo(() => {
     if (!excludeLargeCustyNotional) return scopedRows;
     return scopedRows.filter((row) => !isComicallyLargeCustyTrade(row));
   }, [excludeLargeCustyNotional, scopedRows]);
-  const overlaySourceRows = useMemo(
-    () => (overlayHistoryRows.length ? overlayHistoryRows : rows),
-    [overlayHistoryRows, rows],
-  );
+  const overlaySourceRows = useMemo(() => {
+    const sourceRows = overlayHistoryRows.length ? overlayHistoryRows : rows;
+    return filterOutEmptyTrades(sourceRows);
+  }, [overlayHistoryRows, rows]);
   const overlayScopedRows = useMemo(() => {
-    const scopedSourceRows =
-      flowScope === "COMBINED"
-        ? overlaySourceRows
-        : overlaySourceRows.filter((row) => {
-            const platform = resolvePlatformIdentifier(row);
-            if (flowScope === "IDB") return isIdbPlatform(platform);
-            return isCustyPlatform(platform);
-          });
+    const scopedSourceRows = filterRowsByVolFlowScope(
+      overlaySourceRows,
+      flowScope,
+    );
     if (!excludeLargeCustyNotional) return scopedSourceRows;
     return scopedSourceRows.filter((row) => !isComicallyLargeCustyTrade(row));
   }, [excludeLargeCustyNotional, flowScope, overlaySourceRows]);
   const latestTimestamp = useMemo(() => {
-    const timestamps = scopedRows
+    const timestamps = historyScopedRows
       .map((row) => parseTimestamp(row.execution_start))
       .filter((value): value is number => value !== null);
     return timestamps.length ? Math.max(...timestamps) : null;
-  }, [scopedRows]);
+  }, [historyScopedRows]);
 
   const todayDateKey = useMemo(() => {
     if (latestTimestamp === null) return null;
     return formatDateKey(latestTimestamp);
   }, [latestTimestamp]);
+
+  const isLatestDateHistorical = useMemo(() => {
+    if (!todayDateKey) return false;
+    return todayDateKey !== formatDateKey(Date.now());
+  }, [todayDateKey]);
 
   const todayAnchorDayStart = useMemo(() => {
     if (!todayDateKey) return null;
@@ -7969,11 +8313,11 @@ function QuadrantFlowDashboard({
 
   const todayScopedRows = useMemo(() => {
     if (!todayDateKey) return [];
-    return scopedRows.filter((row) => {
+    return historyScopedRows.filter((row) => {
       const timestamp = parseTimestamp(row.execution_start);
       return timestamp !== null && formatDateKey(timestamp) === todayDateKey;
     });
-  }, [scopedRows, todayDateKey]);
+  }, [historyScopedRows, todayDateKey]);
   const intradayAverageProfilesByMetric = useMemo(
     () => ({
       vega: buildQuadrantIntradayAverageProfiles(
@@ -7982,6 +8326,7 @@ function QuadrantFlowDashboard({
         todayAnchorDayStart,
         intradayAverageLookbackDays,
         "vega",
+        volFlowDirectionFilter,
       ),
       gamma: buildQuadrantIntradayAverageProfiles(
         overlayScopedRows,
@@ -7989,25 +8334,37 @@ function QuadrantFlowDashboard({
         todayAnchorDayStart,
         intradayAverageLookbackDays,
         "gamma",
+        volFlowDirectionFilter,
       ),
     }),
-    [overlayScopedRows, config, todayAnchorDayStart, intradayAverageLookbackDays],
+    [
+      overlayScopedRows,
+      config,
+      todayAnchorDayStart,
+      intradayAverageLookbackDays,
+      volFlowDirectionFilter,
+    ],
   );
 
   const quadrantTrades = useMemo(
     () => buildQuadrantTradeBuckets(todayScopedRows, config),
     [todayScopedRows, config],
   );
+  const sparklineQuadrantTrades = useMemo(
+    () =>
+      filterQuadrantTradeMapByDirection(quadrantTrades, volFlowDirectionFilter),
+    [quadrantTrades, volFlowDirectionFilter],
+  );
   const volFlowPaceByQuadrant = useMemo(
     () =>
       buildVolFlowPaceByQuadrant(
-        quadrantTrades,
+        sparklineQuadrantTrades,
         intradayAverageProfilesByMetric,
         volFlowMetricByQuadrant,
         latestTimestamp,
       ),
     [
-      quadrantTrades,
+      sparklineQuadrantTrades,
       intradayAverageProfilesByMetric,
       volFlowMetricByQuadrant,
       latestTimestamp,
@@ -8181,7 +8538,7 @@ function QuadrantFlowDashboard({
       return;
     }
 
-    const fetchKey = `${anchorDayStart}|${intradayAverageLookbackDays}`;
+    const fetchKey = `${anchorDayStart}|${intradayAverageLookbackDays}|${flowScope}`;
     if (overlayHistoryFetchKeyRef.current === fetchKey) return;
 
     const cachedRows = overlayHistoryCacheRef.current.get(fetchKey);
@@ -8223,9 +8580,9 @@ function QuadrantFlowDashboard({
         }
 
         const payload: TapeResponse = await response.json();
-        const pageRows = Array.isArray(payload?.rows)
-          ? (payload.rows as TapeRow[])
-          : [];
+        const pageRows = filterOutEmptyTrades(
+          Array.isArray(payload?.rows) ? (payload.rows as TapeRow[]) : [],
+        );
         pageRows.forEach((row) => {
           if (row?.package_id) {
             rowsById.set(row.package_id, row);
@@ -8251,9 +8608,12 @@ function QuadrantFlowDashboard({
       }
 
       if (cancelled) return;
-      const inferredRows = inferIncompleteStraddles(Array.from(rowsById.values()));
-      overlayHistoryCacheRef.current.set(fetchKey, inferredRows);
-      setOverlayHistoryRows(inferredRows);
+      const inferredRows = filterOutEmptyTrades(
+        inferIncompleteStraddles(Array.from(rowsById.values())),
+      );
+      const scopedInferredRows = filterRowsByVolFlowScope(inferredRows, flowScope);
+      overlayHistoryCacheRef.current.set(fetchKey, scopedInferredRows);
+      setOverlayHistoryRows(scopedInferredRows);
     };
 
     fetchOverlayHistoryRows().catch(() => {
@@ -8266,7 +8626,7 @@ function QuadrantFlowDashboard({
       cancelled = true;
       controller.abort();
     };
-  }, [todayAnchorDayStart, intradayAverageLookbackDays]);
+  }, [flowScope, todayAnchorDayStart, intradayAverageLookbackDays]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -8276,7 +8636,7 @@ function QuadrantFlowDashboard({
   useEffect(() => {
     if (typeof window === "undefined") return;
     const stored = window.localStorage.getItem(
-      "swaptionVolGridIntradayAvgLookback",
+      VOL_FLOW_INTRADAY_LOOKBACK_STORAGE_KEY,
     );
     if (isVolFlowIntradayLookback(stored)) {
       setIntradayAverageLookback(stored);
@@ -8286,7 +8646,7 @@ function QuadrantFlowDashboard({
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(
-      "swaptionVolGridIntradayAvgLookback",
+      VOL_FLOW_INTRADAY_LOOKBACK_STORAGE_KEY,
       intradayAverageLookback,
     );
   }, [intradayAverageLookback]);
@@ -8328,31 +8688,37 @@ function QuadrantFlowDashboard({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const storedWindow = Number(
-      window.localStorage.getItem("swaptionVolGridFlowWindowHours"),
+    const storedWindowRaw = window.localStorage.getItem(
+      VOL_FLOW_WINDOW_HOURS_STORAGE_KEY,
     );
-    const storedStart = Number(
-      window.localStorage.getItem("swaptionVolGridFlowWindowStartHours"),
+    const storedStartRaw = window.localStorage.getItem(
+      VOL_FLOW_WINDOW_START_HOURS_STORAGE_KEY,
     );
-    if (
-      Number.isFinite(storedWindow) &&
-      VOL_FLOW_WINDOW_HOUR_OPTIONS.includes(storedWindow)
-    ) {
-      setVolFlowWindowHours(storedWindow);
+    if (storedWindowRaw !== null) {
+      const storedWindow = Number(storedWindowRaw);
+      if (
+        Number.isFinite(storedWindow) &&
+        VOL_FLOW_WINDOW_HOUR_OPTIONS.includes(storedWindow)
+      ) {
+        setVolFlowWindowHours(storedWindow);
+      }
     }
-    if (Number.isFinite(storedStart)) {
-      setVolFlowWindowStartHours(storedStart);
+    if (storedStartRaw !== null) {
+      const storedStart = Number(storedStartRaw);
+      if (Number.isFinite(storedStart)) {
+        setVolFlowWindowStartHours(storedStart);
+      }
     }
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(
-      "swaptionVolGridFlowWindowHours",
+      VOL_FLOW_WINDOW_HOURS_STORAGE_KEY,
       String(volFlowWindowHours),
     );
     window.localStorage.setItem(
-      "swaptionVolGridFlowWindowStartHours",
+      VOL_FLOW_WINDOW_START_HOURS_STORAGE_KEY,
       String(effectiveVolFlowWindowStartHours),
     );
   }, [effectiveVolFlowWindowStartHours, volFlowWindowHours]);
@@ -8367,28 +8733,6 @@ function QuadrantFlowDashboard({
     });
   }, [maxVolFlowWindowStartHours]);
 
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.tagName === "SELECT")
-      ) {
-        return;
-      }
-      if (event.key === "h" || event.key === "H") {
-        setViewMode("HISTORY");
-      }
-      if (event.key === "t" || event.key === "T") {
-        setViewMode("TODAY");
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
-
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4 text-xs text-slate-200">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -8397,7 +8741,14 @@ function QuadrantFlowDashboard({
             Vol Grid Flow
           </div>
           <div className="text-sm font-semibold text-slate-100">
-            Today {formatDateShort(latestTimestamp)}
+            {isLatestDateHistorical ? (
+              <>
+                <span className="text-red-400">Historical</span>{" "}
+                {formatDateShort(latestTimestamp)}
+              </>
+            ) : (
+              <>Today {formatDateShort(latestTimestamp)}</>
+            )}
           </div>
           <div className="text-[10px] text-slate-500">
             Boundaries: expiry {formatRate(config.expiryBoundaryYears, 2)}y{" "}
@@ -8415,6 +8766,14 @@ function QuadrantFlowDashboard({
                   y-axis metric)
                 </span>
                 {"\u00b7"}{" "}
+                <span className="text-slate-400">
+                  type filter {VOL_FLOW_DIRECTION_FILTER_LABEL[volFlowDirectionFilter].toLowerCase()}
+                </span>
+                {"\u00b7"}{" "}
+                <span className="text-slate-400">
+                  type share {VOL_FLOW_TYPE_SHARE_BASIS_LABEL[volFlowTypeShareBasis].toLowerCase()}
+                </span>
+                {"\u00b7"}{" "}
                 <span className="text-slate-400">Y selector in each quadrant</span>
               </>
             ) : (
@@ -8427,55 +8786,11 @@ function QuadrantFlowDashboard({
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
             <div className="inline-flex overflow-hidden rounded border border-slate-700">
-              <button
-                type="button"
-                onClick={() => setViewMode("TODAY")}
-                className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
-                  viewMode === "TODAY"
-                    ? "bg-slate-700 text-slate-100"
-                    : "text-slate-300 hover:bg-slate-800"
-                }`}
-              >
-                Today
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode("HISTORY")}
-                className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
-                  viewMode === "HISTORY"
-                    ? "bg-slate-700 text-slate-100"
-                    : "text-slate-300 hover:bg-slate-800"
-                }`}
-              >
-                History
-              </button>
-            </div>
-            <div className="inline-flex overflow-hidden rounded border border-slate-700">
               <span className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide bg-slate-700 text-slate-100">
                 Vol Flow
               </span>
             </div>
-            {viewMode === "HISTORY" && (
-              <div className="inline-flex overflow-hidden rounded border border-slate-700">
-                {(["1W", "1M", "3M", "6M", "1Y", "ALL"] as HistoryLookback[]).map(
-                  (option) => (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => setHistoryLookback(option)}
-                      className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
-                        historyLookback === option
-                          ? "bg-slate-700 text-slate-100"
-                          : "text-slate-300 hover:bg-slate-800"
-                      }`}
-                    >
-                      {option}
-                    </button>
-                  ),
-                )}
-              </div>
-            )}
-            {viewMode === "TODAY" && flowMode === "vol_flow" && (
+            {flowMode === "vol_flow" && (
               <>
                 <label className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900/40 px-2 py-1 text-[10px] uppercase tracking-wide text-slate-400">
                   Avg
@@ -8496,6 +8811,46 @@ function QuadrantFlowDashboard({
                     ))}
                   </select>
                 </label>
+                <label className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900/40 px-2 py-1 text-[10px] uppercase tracking-wide text-slate-400">
+                  Type
+                  <select
+                    value={volFlowDirectionFilter}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      if (isVolFlowDirectionFilter(next)) {
+                        setVolFlowDirectionFilter(next);
+                      }
+                    }}
+                    className="rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-100 outline-none"
+                  >
+                    {VOL_FLOW_DIRECTION_FILTER_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {VOL_FLOW_DIRECTION_FILTER_LABEL[option]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="inline-flex items-center overflow-hidden rounded border border-slate-700">
+                  {VOL_FLOW_TYPE_SHARE_BASIS_OPTIONS.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => setVolFlowTypeShareBasis(option)}
+                      className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                        volFlowTypeShareBasis === option
+                          ? "bg-slate-700 text-slate-100"
+                          : "text-slate-300 hover:bg-slate-800"
+                      }`}
+                      title={`Type share weighted by ${
+                        option === "RISK"
+                          ? "selected Y metric (Vega01/Gamma01)"
+                          : "economic notional"
+                      }`}
+                    >
+                      Share {VOL_FLOW_TYPE_SHARE_BASIS_LABEL[option]}
+                    </button>
+                  ))}
+                </div>
                 <button
                   type="button"
                   onClick={() => setShowPaceOverlay((prev) => !prev)}
@@ -8672,6 +9027,8 @@ function QuadrantFlowDashboard({
                   snapshot={flowState.snapshots.ULC}
                   meta={DEFAULT_QUADRANT_META.ULC}
                   trades={quadrantTrades.ULC}
+                  sparklineTrades={sparklineQuadrantTrades.ULC}
+                  typeShareBasis={volFlowTypeShareBasis}
                   mode={flowMode}
                   volFlowMetric={volFlowMetricByQuadrant.ULC}
                   volFlowPaceOverride={volFlowPaceByQuadrant.ULC}
@@ -8680,6 +9037,7 @@ function QuadrantFlowDashboard({
                     updateQuadrantVolFlowMetric("ULC", next)
                   }
                   sparklineXDomain={sparklineXDomain}
+                  asOfTimestamp={latestTimestamp}
                   comparisonPoints={
                     showPaceOverlay
                       ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.ULC]
@@ -8692,6 +9050,8 @@ function QuadrantFlowDashboard({
                   snapshot={flowState.snapshots.URC}
                   meta={DEFAULT_QUADRANT_META.URC}
                   trades={quadrantTrades.URC}
+                  sparklineTrades={sparklineQuadrantTrades.URC}
+                  typeShareBasis={volFlowTypeShareBasis}
                   mode={flowMode}
                   volFlowMetric={volFlowMetricByQuadrant.URC}
                   volFlowPaceOverride={volFlowPaceByQuadrant.URC}
@@ -8700,6 +9060,7 @@ function QuadrantFlowDashboard({
                     updateQuadrantVolFlowMetric("URC", next)
                   }
                   sparklineXDomain={sparklineXDomain}
+                  asOfTimestamp={latestTimestamp}
                   comparisonPoints={
                     showPaceOverlay
                       ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.URC]
@@ -8712,6 +9073,8 @@ function QuadrantFlowDashboard({
                   snapshot={flowState.snapshots.LLC}
                   meta={DEFAULT_QUADRANT_META.LLC}
                   trades={quadrantTrades.LLC}
+                  sparklineTrades={sparklineQuadrantTrades.LLC}
+                  typeShareBasis={volFlowTypeShareBasis}
                   mode={flowMode}
                   volFlowMetric={volFlowMetricByQuadrant.LLC}
                   volFlowPaceOverride={volFlowPaceByQuadrant.LLC}
@@ -8720,6 +9083,7 @@ function QuadrantFlowDashboard({
                     updateQuadrantVolFlowMetric("LLC", next)
                   }
                   sparklineXDomain={sparklineXDomain}
+                  asOfTimestamp={latestTimestamp}
                   comparisonPoints={
                     showPaceOverlay
                       ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.LLC]
@@ -8732,6 +9096,8 @@ function QuadrantFlowDashboard({
                   snapshot={flowState.snapshots.LRC}
                   meta={DEFAULT_QUADRANT_META.LRC}
                   trades={quadrantTrades.LRC}
+                  sparklineTrades={sparklineQuadrantTrades.LRC}
+                  typeShareBasis={volFlowTypeShareBasis}
                   mode={flowMode}
                   volFlowMetric={volFlowMetricByQuadrant.LRC}
                   volFlowPaceOverride={volFlowPaceByQuadrant.LRC}
@@ -8740,6 +9106,7 @@ function QuadrantFlowDashboard({
                     updateQuadrantVolFlowMetric("LRC", next)
                   }
                   sparklineXDomain={sparklineXDomain}
+                  asOfTimestamp={latestTimestamp}
                   comparisonPoints={
                     showPaceOverlay
                       ? intradayAverageProfilesByMetric[volFlowMetricByQuadrant.LRC]
@@ -8795,7 +9162,11 @@ function QuadrantFlowDashboard({
                   )}
                   <div className="text-[10px] text-slate-500">
                     {flowMode === "vol_flow"
-                      ? `Pace baseline: current cumulative flow versus ${intradayAverageLookback} intraday average at current timestamp (matching each quadrant y-axis metric).`
+                      ? `Pace baseline: current cumulative flow versus ${intradayAverageLookback} intraday average at current timestamp (matching each quadrant y-axis metric${
+                          volFlowDirectionFilter === "ALL"
+                            ? ""
+                            : `, ${VOL_FLOW_DIRECTION_FILTER_LABEL[volFlowDirectionFilter].toLowerCase()} only`
+                        }).`
                       : "Pace baseline: relative to other quadrants in the current view (not historical)."}
                   </div>
                 </div>
@@ -8814,9 +9185,7 @@ function QuadrantFlowDashboard({
                 formatCount,
               }}
               excludeLargeCustyNotional={excludeLargeCustyNotional}
-              onExcludeLargeCustyNotionalChange={
-                onExcludeLargeCustyNotionalChange
-              }
+              onExcludeLargeCustyNotionalChange={setExcludeLargeCustyNotional}
             />
           )}
         </>
@@ -8948,9 +9317,9 @@ function SequenceAnalysisPanel({
             throw new Error(text || "Failed to load sequence history.");
           }
           const payload = await res.json();
-          const payloadRows: TapeRow[] = Array.isArray(payload?.rows)
-            ? (payload.rows as TapeRow[])
-            : [];
+          const payloadRows = filterOutEmptyTrades(
+            Array.isArray(payload?.rows) ? (payload.rows as TapeRow[]) : [],
+          );
           payloadRows.forEach((historyRow) => {
             fetchedRowsById.set(historyRow.package_id, historyRow);
           });
@@ -8958,9 +9327,9 @@ function SequenceAnalysisPanel({
         }
 
         if (cancelled) return;
-        const inferredRows = inferIncompleteStraddles(
+        const inferredRows = filterOutEmptyTrades(inferIncompleteStraddles(
           Array.from(fetchedRowsById.values()),
-        ).filter(
+        )).filter(
           (historyRow) =>
             (normalizePackageType(historyRow.package_type) || "OUTRIGHT") ===
             packageTypeKey,
@@ -11191,6 +11560,7 @@ export default function SwaptionTradeTape() {
   } | null>(null);
   const latestRef = useRef<string | null>(null);
   const fetchInFlight = useRef(false);
+  const queuedFetchRequestRef = useRef<FetchTapeRequest | null>(null);
   const columnFilterPayload = useMemo(
     () => buildColumnFilterPayload(filters),
     [filters],
@@ -11198,6 +11568,11 @@ export default function SwaptionTradeTape() {
   const columnFilterPayloadKey = useMemo(
     () => JSON.stringify(columnFilterPayload),
     [columnFilterPayload],
+  );
+  const serverColumnFilterPayloadKey = useMemo(
+    () =>
+      JSON.stringify(buildColumnFilterPayload(filters, SERVER_FILTER_FIELDS)),
+    [filters],
   );
   const selectedPackageIdsKey = useMemo(
     () => serializeSelectedPackageIds(selectedPackageIds),
@@ -11219,16 +11594,17 @@ export default function SwaptionTradeTape() {
   const upsertRows = useCallback((incoming: TapeRow[], replace = false) => {
     setRows((prev) => {
       const map = new Map<string, TapeRow>();
+      const sanitizedIncoming = filterOutEmptyTrades(incoming);
       if (!replace) {
         prev.forEach((row) => map.set(row.package_id, row));
       }
-      incoming.forEach((row) => map.set(row.package_id, row));
+      sanitizedIncoming.forEach((row) => map.set(row.package_id, row));
       const merged = Array.from(map.values()).sort(
         (a, b) =>
           new Date(b.execution_start).getTime() -
           new Date(a.execution_start).getTime(),
       );
-      const inferred = inferIncompleteStraddles(merged);
+      const inferred = filterOutEmptyTrades(inferIncompleteStraddles(merged));
       if (inferred.length > 0) {
         latestRef.current = inferred[0].execution_start;
       }
@@ -11241,13 +11617,10 @@ export default function SwaptionTradeTape() {
       cursor,
       since,
       replace = false,
-    }: {
-      cursor?: string | null;
-      since?: string | null;
-      replace?: boolean;
-    } = {}) => {
+    }: FetchTapeRequest = {}) => {
       if (fetchInFlight.current) {
-        if (replace) setLoading(false);
+        queuedFetchRequestRef.current = { cursor, since, replace };
+        if (replace) setLoading(true);
         setLoadingMore(false);
         return;
       }
@@ -11263,6 +11636,12 @@ export default function SwaptionTradeTape() {
           const params = new URLSearchParams();
           params.set("limit", String(pageLimit));
           if (filter) params.set("filter", filter);
+          if (serverColumnFilterPayloadKey !== "{}") {
+            params.set(COLUMN_FILTER_QUERY_KEY, serverColumnFilterPayloadKey);
+          }
+          if (columnFilterOperator !== FilterOperator.AND) {
+            params.set(COLUMN_FILTER_OPERATOR_QUERY_KEY, columnFilterOperator);
+          }
           if (pageCursor) params.set("cursor", pageCursor);
           if (pageSince) params.set("since", pageSince);
           const response = await fetch(
@@ -11275,19 +11654,34 @@ export default function SwaptionTradeTape() {
           return (await response.json()) as TapeResponse;
         };
 
-        const initialLimit =
-          replace && !since && !cursor ? TODAY_BACKFILL_FETCH_LIMIT : 50;
+        const shouldBootstrapTodayBackfill =
+          replace &&
+          !since &&
+          !cursor &&
+          !filter &&
+          serverColumnFilterPayloadKey === "{}";
+        const shouldBootstrapFilteredHistory =
+          replace &&
+          !since &&
+          !cursor &&
+          (filter || serverColumnFilterPayloadKey !== "{}");
+        const initialLimit = shouldBootstrapTodayBackfill
+          ? TODAY_BACKFILL_FETCH_LIMIT
+          : shouldBootstrapFilteredHistory
+            ? FILTERED_BOOTSTRAP_FETCH_LIMIT
+          : 50;
         const data = await fetchPage(cursor, since, initialLimit);
 
-        if (replace && !since && !cursor) {
+        if (shouldBootstrapTodayBackfill) {
           const rowsById = new Map<string, TapeRow>();
-          (data.rows || []).forEach((row) => {
+          const initialRows = filterOutEmptyTrades(data.rows || []);
+          initialRows.forEach((row) => {
             if (row?.package_id) rowsById.set(row.package_id, row);
           });
 
           const todayAnchorTs =
             parseTimestamp(data.latestExecutionStart) ??
-            parseTimestamp(data.rows?.[0]?.execution_start) ??
+            parseTimestamp(initialRows[0]?.execution_start) ??
             null;
           const todayStartTs =
             todayAnchorTs !== null
@@ -11297,7 +11691,7 @@ export default function SwaptionTradeTape() {
           let backfillCursor = data.nextCursor;
           let backfillHasMore = data.hasMore;
           let pagesFetched = 0;
-          let oldestLoadedTs = (data.rows || []).reduce((min, row) => {
+          let oldestLoadedTs = initialRows.reduce((min, row) => {
             const ts = parseTimestamp(row.execution_start);
             if (ts === null) return min;
             return Math.min(min, ts);
@@ -11316,7 +11710,9 @@ export default function SwaptionTradeTape() {
               null,
               TODAY_BACKFILL_FETCH_LIMIT,
             );
-            const pageRows = Array.isArray(page.rows) ? page.rows : [];
+            const pageRows = filterOutEmptyTrades(
+              Array.isArray(page.rows) ? (page.rows as TapeRow[]) : [],
+            );
             pageRows.forEach((row) => {
               if (row?.package_id) rowsById.set(row.package_id, row);
             });
@@ -11341,7 +11737,9 @@ export default function SwaptionTradeTape() {
               new Date(b.execution_start).getTime() -
               new Date(a.execution_start).getTime(),
           );
-          const inferred = inferIncompleteStraddles(backfilledRows);
+          const inferred = filterOutEmptyTrades(
+            inferIncompleteStraddles(backfilledRows),
+          );
           setRows(inferred);
           if (inferred.length > 0) {
             latestRef.current = inferred[0].execution_start;
@@ -11351,6 +11749,56 @@ export default function SwaptionTradeTape() {
 
           setNextCursor(backfillCursor ?? data.nextCursor);
           setHasMore(backfillHasMore);
+        } else if (shouldBootstrapFilteredHistory) {
+          const rowsById = new Map<string, TapeRow>();
+          filterOutEmptyTrades(data.rows || []).forEach((row) => {
+            if (row?.package_id) rowsById.set(row.package_id, row);
+          });
+
+          let bootstrapCursor = data.nextCursor;
+          let bootstrapHasMore = data.hasMore;
+          let pagesFetched = 0;
+
+          while (
+            bootstrapHasMore &&
+            bootstrapCursor &&
+            pagesFetched < FILTERED_BOOTSTRAP_MAX_PAGES
+          ) {
+            const page = await fetchPage(
+              bootstrapCursor,
+              null,
+              FILTERED_BOOTSTRAP_FETCH_LIMIT,
+            );
+            const pageRows = filterOutEmptyTrades(
+              Array.isArray(page.rows) ? (page.rows as TapeRow[]) : [],
+            );
+            pageRows.forEach((row) => {
+              if (row?.package_id) rowsById.set(row.package_id, row);
+            });
+
+            bootstrapCursor = page.nextCursor;
+            bootstrapHasMore = page.hasMore;
+            pagesFetched += 1;
+            if (!pageRows.length) break;
+          }
+
+          const bootstrapRows = Array.from(rowsById.values()).sort(
+            (a, b) =>
+              new Date(b.execution_start).getTime() -
+              new Date(a.execution_start).getTime(),
+          );
+          const inferred = filterOutEmptyTrades(
+            inferIncompleteStraddles(bootstrapRows),
+          );
+          setRows(inferred);
+          if (inferred.length > 0) {
+            latestRef.current = inferred[0].execution_start;
+          } else {
+            latestRef.current = data.latestExecutionStart;
+          }
+
+          setNextCursor(bootstrapCursor ?? data.nextCursor);
+          setHasMore(bootstrapHasMore);
         } else if (since) {
           upsertRows(data.rows, false);
         } else {
@@ -11359,7 +11807,7 @@ export default function SwaptionTradeTape() {
           setHasMore(data.hasMore);
         }
 
-        if (!since && !(replace && !since && !cursor)) {
+        if (!since && !shouldBootstrapTodayBackfill && !shouldBootstrapFilteredHistory) {
           setNextCursor(data.nextCursor);
           setHasMore(data.hasMore);
         }
@@ -11373,9 +11821,14 @@ export default function SwaptionTradeTape() {
         fetchInFlight.current = false;
         if (replace) setLoading(false);
         setLoadingMore(false);
+        const queuedRequest = queuedFetchRequestRef.current;
+        if (queuedRequest) {
+          queuedFetchRequestRef.current = null;
+          void fetchTape(queuedRequest);
+        }
       }
     },
-    [filter, upsertRows],
+    [columnFilterOperator, filter, serverColumnFilterPayloadKey, upsertRows],
   );
 
   useEffect(() => {
@@ -11658,9 +12111,11 @@ export default function SwaptionTradeTape() {
               matched.manual_package_id ?? row.manual_package_id ?? null,
           };
         });
-    return applyManualAssumedStraddles(
-      withManualLinks,
-      forcedStraddlePackageIdSet,
+    return filterOutEmptyTrades(
+      applyManualAssumedStraddles(
+        withManualLinks,
+        forcedStraddlePackageIdSet,
+      ),
     );
   }, [forcedStraddlePackageIdSet, manualLinkIndex, rows]);
 
@@ -11961,13 +12416,14 @@ export default function SwaptionTradeTape() {
   }, [filter, fetchTape]);
 
   useEffect(() => {
+    if (filter || serverColumnFilterPayloadKey !== "{}") return;
     const id = setInterval(() => {
       if (latestRef.current) {
         fetchTape({ since: latestRef.current });
       }
     }, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [fetchTape]);
+  }, [fetchTape, filter, serverColumnFilterPayloadKey]);
 
   useEffect(() => {
     // Keep legacy auto-load when filtered list is very short
@@ -12253,9 +12709,18 @@ export default function SwaptionTradeTape() {
     );
     const source = row.package_source?.toUpperCase();
     const sourceLabel = source === "HYBRID" ? "Hybrid" : "Manual";
-    const packageLabel =
-      normalizePackageType(row.package_type || "") || row.package_type || "N/A";
-    const displayLabel = assumedIncomplete ? `${packageLabel}*` : packageLabel;
+    const normalizedPackageType = normalizePackageType(row.package_type || "");
+    const isDeltaHedgePackage = normalizedPackageType === "DELTA_HEDGE";
+    const packageLabel = normalizedPackageType || row.package_type || "N/A";
+    const packageLabelWithMarker = isDeltaHedgePackage
+      ? `${packageLabel} Δ`
+      : packageLabel;
+    const displayLabel = assumedIncomplete
+      ? `${packageLabelWithMarker}*`
+      : packageLabelWithMarker;
+    const deltaHedgeTooltip = isDeltaHedgePackage
+      ? "Swap-linked hedge package: swaption paired to a synthetic hedge swap row."
+      : undefined;
     const inferredTooltip =
       row.assumed_straddle_reason ||
       "Inferred intraday incomplete straddle: broker likely reported one leg now and will complete both legs later in the day.";
@@ -12296,7 +12761,7 @@ export default function SwaptionTradeTape() {
               ? "bg-purple-900/30 text-purple-100 border-purple-500/40"
               : "bg-gray-700 text-gray-100 border-gray-500/40"
           }`}
-          title={assumedIncomplete ? inferredTooltip : undefined}
+          title={assumedIncomplete ? inferredTooltip : deltaHedgeTooltip}
         >
           {displayLabel}
           {warning && <AlertTriangle className="h-3 w-3 text-amber-300" />}
@@ -12416,7 +12881,7 @@ export default function SwaptionTradeTape() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="swaption-tape-shell space-y-6 pb-28">
       <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-100">
         <div className="flex items-start gap-2">
           <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-300" />
@@ -12508,8 +12973,6 @@ export default function SwaptionTradeTape() {
         rows={resolvedRows}
         config={quadrantConfig}
         onConfigChange={setQuadrantConfig}
-        excludeLargeCustyNotional={excludeLargeCustyNotional}
-        onExcludeLargeCustyNotionalChange={setExcludeLargeCustyNotional}
         onTradeSelect={handleSparklineTradeSelect}
       />
       {selectedPackageIds.length > 0 && (
@@ -12616,6 +13079,24 @@ export default function SwaptionTradeTape() {
         />
       )}
       <style jsx global>{`
+        .swaption-tape-shell {
+          --swaption-tape-scale: 0.84;
+          zoom: var(--swaption-tape-scale);
+        }
+        @supports not (zoom: 1) {
+          .swaption-tape-shell {
+            transform: scale(var(--swaption-tape-scale));
+            transform-origin: top left;
+            width: calc(100% / var(--swaption-tape-scale));
+          }
+        }
+        @media (max-width: 1024px) {
+          .swaption-tape-shell {
+            --swaption-tape-scale: 1;
+            transform: none;
+            width: 100%;
+          }
+        }
         .p-column-filter-overlay,
         .p-column-filter-overlay * {
           font-size: 0.7rem !important;
@@ -12683,7 +13164,7 @@ export default function SwaptionTradeTape() {
         lazy
         totalRecords={hasMore ? filteredRows.length + 50 : filteredRows.length}
         scrollable
-        scrollHeight="100vh"
+        scrollHeight="calc(100vh + 7rem)"
         virtualScrollerOptions={{
           itemSize: ROW_ESTIMATE_PX,
           lazy: true,

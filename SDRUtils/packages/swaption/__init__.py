@@ -14,6 +14,7 @@ Modules:
     conditional_curve: Same expiry, different tail maturities
     vega_curve: Vega-matched straddles across tenors
     vega_buckets: Vega-similar trades within time proximity
+    delta_hedge: Swaption + SOFR swap hedge linkage
     outright: Unexplained single-leg trades with ATMF enrichment
     linking: Second-pass linking of packages by time/vega overlap
     utils: Shared utilities for all detection modules
@@ -35,6 +36,7 @@ from SDRUtils.packages.swaption.conditional_curve import (
 )
 from SDRUtils.packages.swaption.vega_curve import detect_vega_curve_packages
 from SDRUtils.packages.swaption.vega_buckets import detect_vega_bucketed_packages
+from SDRUtils.packages.swaption.delta_hedge import detect_delta_hedge_packages
 from SDRUtils.packages.swaption.outright import detect_outright_swaptions
 from SDRUtils.packages.swaption.linking import link_packages
 
@@ -63,6 +65,7 @@ __all__ = [
     "detect_conditional_curve_packages",
     "detect_vega_curve_packages",
     "detect_vega_bucketed_packages",
+    "detect_delta_hedge_packages",
     "detect_outright_swaptions",
     "link_packages",
     # Utilities

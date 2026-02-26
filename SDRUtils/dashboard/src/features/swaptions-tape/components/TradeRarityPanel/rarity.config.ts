@@ -348,6 +348,51 @@ const STRUCTURE_ANALYTICS_CONFIG: Record<string, StructureAnalyticsConfig> = {
     },
     histogramDefault: 'custy_rr_width_bps',
   },
+  DELTA_HEDGE: {
+    packageType: 'DELTA_HEDGE',
+    primaryMetric: metric('delta_hedge_implied_delta', 'Implied Delta', 'ratio', {
+      primary: true,
+      decimals: 3,
+      formatKind: 'ratio',
+    }),
+    secondaryMetrics: [
+      metric('delta_hedge_dv01_ratio', 'DV01 Ratio', 'ratio', {
+        decimals: 3,
+        formatKind: 'ratio',
+      }),
+      derivedMetric('delta_ratio_gap', 'Delta/DV01 Gap', 'ratio', {
+        decimals: 3,
+        formatKind: 'ratio',
+        formula: 'abs(delta_hedge_dv01_ratio - delta_hedge_implied_delta)',
+      }),
+      metric('delta_hedge_match_window_seconds', 'Match Window', 'sec', {
+        decimals: 0,
+        formatKind: 'count',
+      }),
+      metric('delta_hedge_swap_tenor_years', 'Swap Tenor', 'years', {
+        decimals: 2,
+        formatKind: 'raw',
+      }),
+      metric('delta_hedge_swap_notional', 'Swap Notional', 'USD', {
+        formatKind: 'notional',
+        absolute: true,
+      }),
+      metric('total_notional', 'Swaption Notional', 'USD', {
+        formatKind: 'notional',
+        absolute: true,
+      }),
+      metric('total_premium', 'Premium', 'USD', {
+        formatKind: 'premium',
+        absolute: true,
+      }),
+    ],
+    similarityCriteria: {
+      metric: 'delta_hedge_implied_delta',
+      mode: 'absolute_range',
+      threshold: 0.1,
+    },
+    histogramDefault: 'delta_hedge_implied_delta',
+  },
   OUTRIGHT: {
     packageType: 'OUTRIGHT',
     primaryMetric: metric('outright_bpvol_yr', 'BPVol/Yr', 'bpvol/yr', {

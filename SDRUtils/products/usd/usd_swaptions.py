@@ -36,7 +36,116 @@ from SDRUtils.packages.swaption_packages import (
 )
 from SDRUtils.packages.utils import merge_package_legs_to_one_row, merge_vega_curve_packages
 from SDRUtils.products._swaptions.upi import _build_upi_df, make_swaption_desc_func
+from SDRUtils.products._swaps.filters import new_sofr_swap_trades
 from SDRUtils.products.usd.base import USDProductBase
+
+
+def _is_blank_series(series: pd.Series) -> pd.Series:
+    return series.isna() | series.astype("string").str.strip().eq("")
+
+
+def _clean_text(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.lower() in {"nan", "nat", "none"}:
+        return ""
+    return text
+
+
+def _backfill_swaption_fields(package_df: pd.DataFrame) -> pd.DataFrame:
+    out = package_df.copy()
+
+    if "action_type" in out.columns and "event_type" in out.columns:
+        action_text = out["action_type"].fillna("").astype("string").str.strip()
+        event_text = out["event_type"].fillna("").astype("string").str.strip()
+        event_action_fallback = (action_text + "-" + event_text).str.strip("-")
+        event_action_fallback = event_action_fallback.mask(event_action_fallback.eq(""), "NEWT-TRAD")
+        if "event_action" not in out.columns:
+            out["event_action"] = event_action_fallback
+        else:
+            missing_event_action = _is_blank_series(out["event_action"])
+            out.loc[missing_event_action, "event_action"] = event_action_fallback.loc[missing_event_action]
+
+    if "description" in out.columns:
+        if "trade_label" not in out.columns:
+            out["trade_label"] = out["description"]
+        else:
+            missing_trade_label = _is_blank_series(out["trade_label"])
+            out.loc[missing_trade_label, "trade_label"] = out.loc[missing_trade_label, "description"]
+
+    if "upi_fisn" in out.columns:
+        fisn_text = out["upi_fisn"].fillna("").astype("string").str.lower()
+
+        if "exercise_style" not in out.columns:
+            out["exercise_style"] = None
+        missing_exercise_style = _is_blank_series(out["exercise_style"])
+        exercise_fallback = pd.Series("AMERICAN", index=out.index, dtype="string")
+        exercise_fallback = exercise_fallback.mask(fisn_text.str.contains("epn", na=False), "EUROPEAN")
+        exercise_fallback = exercise_fallback.mask(fisn_text.str.contains("brm", na=False), "BERMUDAN")
+        out.loc[missing_exercise_style, "exercise_style"] = exercise_fallback.loc[missing_exercise_style]
+
+    if "product_type" in out.columns:
+        missing_product_type = _is_blank_series(out["product_type"])
+        if missing_product_type.any():
+            needed_cols = [c for c in ["upi_fisn", "upi_underlier_name", "fixed_rate_leg_1"] if c in out.columns]
+
+            def _infer_product_type(row: pd.Series) -> str:
+                scratch_row = pd.Series(
+                    {
+                        "UPI FISN": row.get("upi_fisn", ""),
+                        "UPI Underlier Name": row.get("upi_underlier_name", ""),
+                        "Fixed rate-Leg 1": row.get("fixed_rate_leg_1", ""),
+                    }
+                )
+                return classify_product_type(scratch_row)
+
+            if needed_cols:
+                inferred = out.loc[missing_product_type, needed_cols].apply(_infer_product_type, axis=1)
+                out.loc[missing_product_type, "product_type"] = inferred
+
+    if "tenor_label" in out.columns and "tenor_years" in out.columns:
+        missing_tenor_label = _is_blank_series(out["tenor_label"])
+        if missing_tenor_label.any():
+            fallback_tenor = out.loc[missing_tenor_label].apply(
+                lambda row: tenor_to_label(
+                    float(row.get("tenor_years")) if pd.notna(row.get("tenor_years")) else 0.0,
+                    pd.to_datetime(row.get("expiration_date"), errors="coerce"),
+                    True,
+                ),
+                axis=1,
+            )
+            out.loc[missing_tenor_label, "tenor_label"] = fallback_tenor
+
+    if "forward_label" in out.columns and "forward_start_years" in out.columns:
+        missing_forward_label = _is_blank_series(out["forward_label"])
+        if missing_forward_label.any():
+            fallback_forward = out.loc[missing_forward_label].apply(
+                lambda row: forward_to_label(
+                    float(row.get("forward_start_years")) if pd.notna(row.get("forward_start_years")) else 0.0,
+                    pd.to_datetime(row.get("expiration_date"), errors="coerce"),
+                    True,
+                ),
+                axis=1,
+            )
+            out.loc[missing_forward_label, "forward_label"] = fallback_forward
+
+    if "trade_label" in out.columns:
+        missing_trade_label = _is_blank_series(out["trade_label"])
+        if missing_trade_label.any():
+            fallback_trade_label = out.loc[missing_trade_label].apply(
+                lambda row: build_trade_label(
+                    _clean_text(row.get("forward_label")) or "OD",
+                    _clean_text(row.get("tenor_label")) or "UNK",
+                    True,
+                ),
+                axis=1,
+            )
+            out.loc[missing_trade_label, "trade_label"] = fallback_trade_label
+
+    return out
 
 
 class USD_Swaptions(USDProductBase):
@@ -83,6 +192,15 @@ class USD_Swaptions(USDProductBase):
             conventions=self.conventions,
         )
         forward_label = forward_to_label(forward_years, expiration_date, True)
+        action_type = _clean_text(row.get("Action type"))
+        event_type = _clean_text(row.get("Event type"))
+        event_action = "TERM-ETRM" if forward_label == "OD" else f"{action_type}-{event_type}".strip("-")
+        if not event_action:
+            event_action = "NEWT-TRAD"
+        trade_label = _clean_text(row.get("description"))
+        if not trade_label:
+            trade_label = build_trade_label(_clean_text(forward_label) or "OD", _clean_text(tenor_label) or "UNK", True)
+        notional_currency = _clean_text(row.get("Notional currency-Leg 1")) or _clean_text(row.get("Notional currency-Leg 2")) or "USD"
 
         notional, is_notional_capped = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
         strike = row.get("Strike Price")
@@ -97,20 +215,20 @@ class USD_Swaptions(USDProductBase):
                 return 0
 
         return SwaptionTradeClassification(
-            event_action="TERM-ETRM" if forward_label == "OD" else f"{row.get("Action type", "")}-{row.get("Event type", "")}",
+            event_action=event_action,
             trade_id=trade_id,
             execution_timestamp=execution_ts,
             effective_date=effective_date,
             expiration_date=expiration_date,
             underlying_expiration_date=underlying_expiration_date,
             product_type=product_type,
-            trade_label=row["description"],
+            trade_label=trade_label,
             tenor_years=tenor_years,
             tenor_label=tenor_label,
             forward_label=forward_label,
             forward_start_years=forward_years,
             notional=notional,
-            notional_currency=row.get("Notional currency-Leg 1", "USD"),
+            notional_currency=notional_currency,
             is_notional_capped=is_notional_capped,
             strike=strike if pd.notna(strike) else None,
             premium=_extract_prem(row),
@@ -130,6 +248,7 @@ class USD_Swaptions(USDProductBase):
         swaption_package_config: Optional[SwaptionPackageDetectionConfig] = None,
         merge_package_legs: bool = True,
         only_newt: Optional[bool] = False,
+        detect_delta_hedges: bool = True,
         **kwargs: Any,
     ) -> pd.DataFrame:
         """
@@ -143,6 +262,7 @@ class USD_Swaptions(USDProductBase):
             cache_path: Path for caching SDR data
             ignore_cache: Whether to ignore cached data
             detect_swaption_packages: Whether to detect swaption packages
+            detect_delta_hedges: Whether to detect swaption/swap delta-hedge packages
             swaption_package_config: Configuration for swaption package detection
             merge_package_legs: Whether to merge package legs into single rows
             **kwargs: Additional arguments
@@ -162,6 +282,19 @@ class USD_Swaptions(USDProductBase):
 
         if raw_sdr_trades_df.empty:
             return raw_sdr_trades_df
+
+        raw_sofr_swaps_df = pd.DataFrame()
+        if detect_swaption_packages and detect_delta_hedges:
+            raw_sofr_swaps_df = sdr.grab_sdr_trades(
+                start_timestamp=start,
+                end_timestamp=end,
+                agency="CFTC",
+                asset_class="RATES",
+                filter_func=new_sofr_swap_trades,
+            )
+            if not raw_sofr_swaps_df.empty:
+                swap_exec_dates = pd.to_datetime(raw_sofr_swaps_df["Event timestamp"], errors="coerce").dt.date
+                raw_sofr_swaps_df = raw_sofr_swaps_df.assign(_execution_date=swap_exec_dates)
 
         if only_newt:
             raw_sdr_trades_df = raw_sdr_trades_df[(raw_sdr_trades_df["Action type"] == "NEWT") & (raw_sdr_trades_df["Event type"] == "TRAD")]
@@ -253,12 +386,16 @@ class USD_Swaptions(USDProductBase):
             package_cols = [
                 TRADE_ID,
                 "UPI Underlier Name",
+                "UPI FISN",
                 "Unique Product Identifier",
                 "Platform identifier",
                 "Cleared",
+                "Action type",
+                "Event type",
                 "Package indicator",
                 "Package transaction price",
                 "Option Premium Amount",
+                "description",
             ]
             # Only include columns that exist
             package_cols = [c for c in package_cols if c in day_df.columns]
@@ -272,15 +409,41 @@ class USD_Swaptions(USDProductBase):
             # Normalize column names (convert CamelCase and spaces to snake_case)
             package_df = package_df.drop(columns=[TRADE_ID], errors="ignore")
             package_df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", col.lower()).lower().replace(" ", "_") for col in package_df.columns]
+            package_df = _backfill_swaption_fields(package_df)
+
+            # Defensive guard: package detection/classification should only run on NEWT/TRAD rows.
+            if "action_type" in package_df.columns and "event_type" in package_df.columns:
+                newt_trad_mask = (
+                    package_df["action_type"].astype("string").str.upper().eq("NEWT")
+                    & package_df["event_type"].astype("string").str.upper().eq("TRAD")
+                )
+                package_df = package_df.loc[newt_trad_mask].copy()
+                if package_df.empty:
+                    continue
 
             if "strike" in package_df.columns:
                 package_df["strike"] = pd.to_numeric(package_df["strike"], errors="coerce")
 
             # Detect swaption packages
             if detect_swaption_packages:
-                package_df = detect_and_link_swaption_packages_df(
-                    package_df, config=swaption_package_config, pricer=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date))
-                )
+                day_swap_df = pd.DataFrame()
+                if detect_delta_hedges and not raw_sofr_swaps_df.empty:
+                    day_swap_df = raw_sofr_swaps_df[raw_sofr_swaps_df["_execution_date"] == exec_date].copy()
+
+                if detect_delta_hedges and not day_swap_df.empty:
+                    package_df = detect_and_link_swaption_packages_df(
+                        package_df,
+                        config=swaption_package_config,
+                        pricer=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date)),
+                        detect_delta_hedges=True,
+                        swap_candidates_df=day_swap_df,
+                    )
+                else:
+                    package_df = detect_and_link_swaption_packages_df(
+                        package_df,
+                        config=swaption_package_config,
+                        pricer=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date)),
+                    )
 
             # count = len(day_df)
             # date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
