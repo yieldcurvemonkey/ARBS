@@ -22,6 +22,7 @@ from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from Query.Base.query_resolution import resolve_query
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
+from TB.BaseTimeseriesTB import BaseTimeseriesTB
 from TB.utils import DateLike, _canonicalize_value, _dt_to_epoch_ns
 from utils.ql_utils import datetime_to_ql_date
 
@@ -88,7 +89,7 @@ def _build_row_for_query(
     return ref_dt, user_passed_col_name, float(value)
 
 
-class FixedRateBondsTB(ZODBCacheMixin):
+class FixedRateBondsTB(ZODBCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_fixedratebonds_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING FIXED-RATE BONDS."
     _CACHE_VERSION = "v1"
@@ -111,11 +112,15 @@ class FixedRateBondsTB(ZODBCacheMixin):
         ts_row_group_size: int = 256_000,
         ts_compression: str = "zstd",
     ):
-        super().__init__(use_btree=use_btree, force_refresh=force_refresh)
+        ZODBCacheMixin.__init__(
+            self,
+            use_btree=use_btree,
+            force_refresh=force_refresh,
+            mdp=mdp,
+            date_col=date_col,
+            show_tqdm=show_tqdm,
+        )
 
-        self.mdp = mdp
-        self._date_col = date_col
-        self._show_tqdm = show_tqdm
         self._logger = logger or logging.getLogger(_LOGGER_NAME)
 
         self._skip_non_business = skip_non_business
@@ -152,6 +157,12 @@ class FixedRateBondsTB(ZODBCacheMixin):
         qh = _query_fingerprint(q)
         return f"{self._CACHE_VERSION}|{ns}|{qh}"
 
+    def _flatten_queries(
+        self,
+        queries: List[FixedRateBondQuery | List[FixedRateBondQuery]],
+    ) -> List[FixedRateBondQuery]:
+        return _flatten_queries(queries)
+
     # >>> added
     def _ts_symbol_for_query(self, q: FixedRateBondQuery) -> str:
         """
@@ -180,28 +191,27 @@ class FixedRateBondsTB(ZODBCacheMixin):
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
     ) -> pd.DataFrame:
-        if timestamps is not None and len(timestamps) > 0:
-            ref_points = sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
+        has_timestamps = timestamps is not None and len(timestamps) > 0
+        is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
+        if has_timestamps:
+            ref_points = self._build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps)
             is_intraday = True
+        elif is_intraday:
+            assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
+            eff_freq = freq or "1T"
+            ref_points = self._build_reference_points(start=start, end=end, freq=eff_freq, timestamps=None)
         else:
-            is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
-            if is_intraday:
-                assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
-                eff_freq = freq or "1T"
-                rng = pd.date_range(start=start, end=end, freq=eff_freq, tz=start.tzinfo)
-                ref_points = rng.to_pydatetime().tolist()
+            if self._skip_non_business:
+                bd = []
+                for d in pd.date_range(start=start, end=end, freq="D"):
+                    qld = datetime_to_ql_date(d.date())
+                    if self._cal.isBusinessDay(qld):
+                        bd.append(d.date())
+                ref_points = bd
             else:
-                if self._skip_non_business:
-                    bd = []
-                    for d in pd.date_range(start=start, end=end, freq="D"):
-                        qld = datetime_to_ql_date(d.date())
-                        if self._cal.isBusinessDay(qld):
-                            bd.append(d.date())
-                    ref_points = bd
-                else:
-                    ref_points = pd.date_range(start, end, freq="D").date.tolist()
+                ref_points = pd.date_range(start, end, freq="D").date.tolist()
 
-        flat: List[FixedRateBondQuery] = _flatten_queries(queries)
+        flat: List[FixedRateBondQuery] = self._flatten_queries(queries)
 
         cached_rows: List[Tuple[DateLike, str, float]] = []
         ref_points_set = set(ref_points)
@@ -278,12 +288,7 @@ class FixedRateBondsTB(ZODBCacheMixin):
                 to_price_dates.append(d)
 
         if not to_price_dates and cached_rows:
-            df = pd.DataFrame(cached_rows, columns=[self._date_col, "_col", "_val"])
-            out = df.pivot_table(index=self._date_col, columns="_col", values="_val", aggfunc="last").sort_index()
-            out = out.reset_index()
-            out.index.name = None
-            out.columns.name = None
-            return out.set_index(self._date_col)
+            return self._rows_to_frame(cached_rows)
 
         def _split_components(txt: str) -> List[str]:
             s = (txt or "").strip()
@@ -411,9 +416,4 @@ class FixedRateBondsTB(ZODBCacheMixin):
         if not all_rows:
             return pd.DataFrame(columns=[self._date_col])
 
-        df = pd.DataFrame(all_rows, columns=[self._date_col, "_col", "_val"])
-        out = df.pivot_table(index=self._date_col, columns="_col", values="_val", aggfunc="last").sort_index()
-        out = out.reset_index()
-        out.index.name = None
-        out.columns.name = None
-        return out.set_index(self._date_col)
+        return self._rows_to_frame(all_rows)

@@ -1,12 +1,6 @@
-"""
-Tests for the TimeseriesBuilder refactor: dynamic product routing via routers + MDPs.
-
-All tests use lightweight mocks — no real market data calls.
-"""
-
 import datetime
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -14,64 +8,28 @@ import pytest
 
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base.BaseQuery import BaseQuery
-from Query.Base._GenericPricable import _GenericPricable
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 from Query.IRSwaps.IRSwapValue import IRSwapValue
+from Query.STIRFutureOptions.STIRFutureOptionQuery import STIRFutureOptionQuery
+from Query.STIRFutureOptions.STIRFutureOptionValue import STIRFutureOptionValue
+from Query.STIRFutureOptions.backends.quantlib.QLSTIRFutureOptionPricer import QLSTIRFutureOptionPricer
+from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
+from Query.STIRFutures.STIRFutureValue import STIRFutureValue
+from Query.STIRFutures._STIRFutureGenericPricable import _STIRFutureGenericPricable
+from Query.STIRFutures._STIRFutureGenericPricer import _STIRFutureGenericPricer
+from Query.USTFutures.USTFutureQuery import USTFutureQuery
+from Query.USTFutures.USTFutureValue import USTFutureValue
+from Query.USTFutures._USTFutureGenericPricable import _USTFutureGenericPricable
+from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
+from TB.STIRFutureOptionsTB import STIRFutureOptionsTB
+from TB.STIRFuturesTB import STIRFuturesTB
 from TB.TimeseriesBuilder import TimeseriesBuilder, _safe_col_name
+from TB.USTFuturesTB import USTFuturesTB
 
 
-# ---------------------------------------------------------------------------
-# Fake query subclass — bypasses the adapter registry entirely
-# ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class _FakeQuery(BaseQuery):
-    """Minimal concrete BaseQuery for testing the generic fallback path."""
-
-    fake_product: str = "FAKE"
-    fake_col: str = "fake_col"
-    fake_value_result: float = 42.0
-    value: str = "PRICE"
-
-    def __post_init__(self):
-        object.__setattr__(self, "product", self.fake_product)
-        object.__setattr__(self, "structure_id", "OUTRIGHT")
-        object.__setattr__(self, "value_id", self.value)
-
-    def return_query(self) -> List["BaseQuery"]:
-        return [self]
-
-    def col_name(self, cube_name: Optional[str] = None) -> str:
-        return self.fake_col
-
-    def eval_expression(self, cube_name: Optional[str] = None) -> str:
-        return self.fake_col
-
-    # Override to bypass adapter registry
-    def resolve_package(
-        self, *, pricer_or_curve: Any, **hints: Any
-    ) -> Tuple[List[Any], List[float]]:
-        return ([], [1.0])
-
-    def build_value_map(
-        self, *, pricer_or_curve: Any, package: Any, risk_weights: Any
-    ) -> Any:
-        result = self.fake_value_result
-
-        class _VM:
-            def apply(self, value: Any, **kw: Any) -> float:
-                return result
-
-        return _VM()
-
-
-# ---------------------------------------------------------------------------
-# Fake router — mimics IRSwapsTB / FixedRateBondsTB
-# ---------------------------------------------------------------------------
 class _FakeRouter:
-    """Returns a canned DataFrame and records received queries."""
-
     def __init__(
         self,
         col_values: Optional[Dict[str, float]] = None,
@@ -98,49 +56,371 @@ class _FakeRouter:
         freq=None,
         timestamps=None,
     ) -> pd.DataFrame:
+        _ = n_jobs, ignore_cache, freq, timestamps
         self.received_queries.extend(queries)
         dates = pd.bdate_range(start, end).date.tolist()
         if not dates:
             return pd.DataFrame()
 
-        col_data: Dict[str, list] = {}
+        data: Dict[str, List[float]] = {}
         if self.col_values:
             for col, val in self.col_values.items():
-                col_data[col] = [val] * len(dates)
-        elif self.auto_cols and queries:
+                data[col] = [val] * len(dates)
+        elif self.auto_cols:
             for q in queries:
                 col = _safe_col_name(q, f"col_{id(q)}")
-                col_data[col] = [self.auto_value] * len(dates)
+                data[col] = [self.auto_value] * len(dates)
         else:
             return pd.DataFrame()
 
-        df = pd.DataFrame(col_data, index=pd.Index(dates, name=self.date_col))
-        return df
+        return pd.DataFrame(data, index=pd.Index(dates, name=self.date_col))
 
 
-# ---------------------------------------------------------------------------
-# Fake MDP for the generic fallback path
-# ---------------------------------------------------------------------------
-class _FakeMDP(MarketDataProvider):
-    """Returns a dummy pricer object for any request."""
+class _MockSTIRFuturePricable(_STIRFutureGenericPricable):
+    def __init__(self, price: float = 95.125):
+        self._price = float(price)
+        self._fixed_rate = 100.0 - self._price
 
-    def __init__(self):
-        super().__init__(source="FAKE")
+    def effective_date(self) -> datetime.date:
+        return datetime.date(2026, 1, 1)
 
-    def get_pricer(self, request: Any) -> Any:
-        return MagicMock(name="fake_pricer")
+    def maturity_date(self) -> datetime.date:
+        return datetime.date(2026, 3, 31)
+
+    def price(self) -> float:
+        return self._price
+
+    def fixed_rate(self) -> float:
+        return self._fixed_rate
+
+    def set_fixed_rate(self, rate_decimal: float) -> None:
+        self._fixed_rate = float(rate_decimal) * 100.0
+        self._price = 100.0 - self._fixed_rate
+
+    def nominal(self) -> float:
+        return 1_000_000.0
+
+    def with_notional(self, notional: float) -> "_STIRFutureGenericPricable":
+        _ = notional
+        return self
+
+    def fair_rate(self) -> float:
+        return self._fixed_rate / 100.0
+
+    def npv(self) -> float:
+        return self._price
+
+    def pv01(self) -> float:
+        return 1.0
+
+    def dv01(self, shift: float = 1e-4) -> float:
+        _ = shift
+        return 1.0
+
+    def gamma(self, shift: float = 1e-4) -> float:
+        _ = shift
+        return 0.0
+
+    def dollar_carry(self, horizon: str) -> float:
+        _ = horizon
+        return 0.0
+
+    def carry_bps_running(self, horizon: str) -> float:
+        _ = horizon
+        return 0.0
+
+    def roll_bps_running(self, horizon: str) -> float:
+        _ = horizon
+        return 0.0
+
+    def carry_and_roll_bps_running(self, horizon: str) -> float:
+        _ = horizon
+        return 0.0
 
 
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
-def _make_tb(
-    irs_kw: Optional[dict] = None,
-    frb_kw: Optional[dict] = None,
-) -> Tuple[TimeseriesBuilder, _FakeRouter, _FakeRouter]:
-    irs = _FakeRouter(**(irs_kw or {"auto_cols": True, "auto_value": 0.045}))
-    frb = _FakeRouter(**(frb_kw or {"auto_cols": True, "auto_value": 0.040}))
-    tb = TimeseriesBuilder(irswaps_tb=irs, fixedratebonds_tb=frb)
+class _MockSTIRFuturePricer(_STIRFutureGenericPricer):
+    def __init__(self, symbol: str, price: float = 95.125):
+        self._symbol = symbol
+        self._price = float(price)
+
+    def id(self) -> str:
+        return self._symbol
+
+    def reference_date(self) -> datetime.date:
+        return datetime.date(2026, 1, 2)
+
+    def calendar(self) -> Any:
+        return None
+
+    def calendar_advance(self, dt1: datetime.date, dt2: datetime.date) -> datetime.date:
+        _ = dt2
+        return dt1
+
+    def handle(self) -> Any:
+        return None
+
+    def index(self) -> Any:
+        return None
+
+    def meta(self) -> Any:
+        return {}
+
+    def effective_date(self, stirf: _STIRFutureGenericPricable = None) -> datetime.date:
+        _ = stirf
+        return datetime.date(2026, 1, 1)
+
+    def maturity_date(self, stirf: _STIRFutureGenericPricable = None) -> datetime.date:
+        _ = stirf
+        return datetime.date(2026, 3, 31)
+
+    def fixed_rate(self, stirf: _STIRFutureGenericPricable = None) -> float:
+        _ = stirf
+        return 100.0 - self._price
+
+    def set_fixed_rate(self, stirf: _STIRFutureGenericPricable = None, rate_decimal: float = 0.0) -> None:
+        _ = stirf, rate_decimal
+
+    def notional(self, stirf: _STIRFutureGenericPricable = None) -> float:
+        _ = stirf
+        return 1_000_000.0
+
+    def fair_rate(self, stirf: _STIRFutureGenericPricable = None) -> float:
+        _ = stirf
+        return (100.0 - self._price) / 100.0
+
+    def npv(self, stirf: _STIRFutureGenericPricable = None) -> float:
+        _ = stirf
+        return self._price
+
+    def pv01(self, stirf: _STIRFutureGenericPricable = None, contracts=None, notional=None) -> float:
+        _ = stirf, contracts, notional
+        return 1.0
+
+    def dv01(self, stirf: _STIRFutureGenericPricable = None, shift: float = 1e-4) -> float:
+        _ = stirf, shift
+        return 1.0
+
+    def gamma(self, stirf: _STIRFutureGenericPricable = None, shift: float = 1e-4) -> float:
+        _ = stirf, shift
+        return 0.0
+
+    def dollar_carry(self, stirf: _STIRFutureGenericPricable = None, horizon: str = "1M") -> float:
+        _ = stirf, horizon
+        return 0.0
+
+    def carry_bps_running(self, stirf: _STIRFutureGenericPricable = None, horizon: str = "1M") -> float:
+        _ = stirf, horizon
+        return 0.0
+
+    def roll_bps_running(self, stirf: _STIRFutureGenericPricable = None, horizon: str = "1M") -> float:
+        _ = stirf, horizon
+        return 0.0
+
+    def carry_and_roll_bps_running(self, stirf: _STIRFutureGenericPricable = None, horizon: str = "1M") -> float:
+        _ = stirf, horizon
+        return 0.0
+
+    def resolve_pricable(self, stirf: _STIRFutureGenericPricable, risk_weight: Optional[float] = None) -> _STIRFutureGenericPricable:
+        _ = risk_weight
+        return stirf
+
+    def build_pricable(self, /, **kwargs: Any) -> _STIRFutureGenericPricable:
+        price = kwargs.get("price")
+        if price is None:
+            price = self._price
+        return _MockSTIRFuturePricable(price=price)
+
+    def build_stirf(
+        self,
+        fwd: Optional[str] = None,
+        tenor: Optional[str] = None,
+        effective_date: Optional[datetime.date] = None,
+        maturity_date: Optional[datetime.date] = None,
+        fixed_rate: Optional[float] = -0.00,
+        notional: Optional[float] = None,
+        bpv: Optional[float] = None,
+        is_ser: Optional[bool] = False,
+    ) -> Any:
+        _ = fwd, tenor, effective_date, maturity_date, fixed_rate, notional, bpv, is_ser
+        return _MockSTIRFuturePricable(price=self._price)
+
+    def price(self) -> float:
+        return self._price
+
+
+class _MockUSTFuturePricable(_USTFutureGenericPricable):
+    def __init__(self, symbol: str, price: float = 110.5):
+        self._symbol = symbol
+        self._price = float(price)
+
+    def contract_code(self) -> str:
+        return self._symbol
+
+    def effective_date(self) -> datetime.date:
+        return datetime.date(2026, 1, 1)
+
+    def maturity_date(self) -> datetime.date:
+        return datetime.date(2026, 12, 31)
+
+    def price(self) -> float:
+        return self._price
+
+    def contracts(self) -> int:
+        return 1
+
+    def notional(self) -> float:
+        return 100_000.0
+
+
+class _MockUSTFuturePricer(_USTFutureGenericPricer):
+    def __init__(self, symbol: str, price: float = 110.5):
+        self._symbol = symbol
+        self._price = float(price)
+
+    def id(self) -> str:
+        return self._symbol
+
+    def reference_date(self) -> datetime.date:
+        return datetime.date(2026, 1, 2)
+
+    def meta(self) -> Any:
+        return {}
+
+    def effective_date(self, ustf: _USTFutureGenericPricable) -> datetime.date:
+        return ustf.effective_date()
+
+    def maturity_date(self, ustf: _USTFutureGenericPricable) -> datetime.date:
+        return ustf.maturity_date()
+
+    def price(self, ustf: _USTFutureGenericPricable) -> float:
+        _ = ustf
+        return self._price
+
+    def yield_to_maturity(self, ustf: _USTFutureGenericPricable) -> float:
+        _ = ustf
+        return 0.04
+
+    def pv01(self, ustf: _USTFutureGenericPricable) -> float:
+        _ = ustf
+        return 1.0
+
+    def dv01(self, ustf: _USTFutureGenericPricable) -> float:
+        _ = ustf
+        return 1.0
+
+    def npv(self, instrument: _USTFutureGenericPricable, /, **kwargs: Any) -> float:
+        _ = instrument, kwargs
+        return self._price
+
+    def resolve_pricable(self, ustf: _USTFutureGenericPricable, risk_weight: Optional[float] = None) -> _USTFutureGenericPricable:
+        _ = risk_weight
+        return ustf
+
+    def build_pricable(self, /, **kwargs: Any) -> _USTFutureGenericPricable:
+        symbol = kwargs.get("contract_code", self._symbol)
+        price = kwargs.get("price")
+        if price is None:
+            price = self._price
+        return _MockUSTFuturePricable(symbol=symbol, price=price)
+
+    def build_ustf(
+        self,
+        contract_code: Optional[str] = None,
+        effective_date: Optional[datetime.date] = None,
+        maturity_date: Optional[datetime.date] = None,
+        price: Optional[float] = None,
+        contracts: Optional[int] = None,
+        notional: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Any:
+        _ = effective_date, maturity_date, contracts, notional, kwargs
+        return _MockUSTFuturePricable(symbol=contract_code or self._symbol, price=price or self._price)
+
+
+def _mk_option_pricer(symbol: str, price: float = 0.21) -> QLSTIRFutureOptionPricer:
+    right = symbol[-1].upper()
+    strike = float(int(symbol.split("|", 1)[1][:-1])) / 100.0
+    return QLSTIRFutureOptionPricer(
+        symbol=symbol,
+        right=right,
+        underlying_symbol=symbol.split("|", 1)[0],
+        strike=strike,
+        quote_timestamp=datetime.datetime(2026, 1, 2, 17, 0, tzinfo=datetime.timezone.utc),
+        expiry_date=datetime.date(2026, 12, 16),
+        market_price=price,
+        model_price=price,
+        iv_normal=0.8,
+        delta=0.5,
+        gamma=0.3,
+        vega=0.1,
+        theta=-0.02,
+        forward=96.0,
+        discount=0.99,
+        meta_data={},
+    )
+
+
+class _MockSTIRFutureMDP(MarketDataProvider):
+    def __init__(self, price: float = 95.125):
+        super().__init__(source="MOCK_STIR")
+        self.price = float(price)
+
+    def get_pricer(self, request: Dict[str, Any]) -> Dict[str, List[_MockSTIRFuturePricer]]:
+        symbols = request.get("symbols", [])
+        return {sym: [_MockSTIRFuturePricer(sym, price=self.price)] for sym in symbols}
+
+
+class _MockUSTFutureMDP(MarketDataProvider):
+    def __init__(self, price: float = 110.5):
+        super().__init__(source="MOCK_UST")
+        self.price = float(price)
+
+    def get_pricer(self, request: Dict[str, Any]) -> Dict[str, _MockUSTFuturePricer]:
+        symbols = request.get("symbols", [])
+        return {sym: _MockUSTFuturePricer(sym, price=self.price) for sym in symbols}
+
+
+class _MockSTIRFutureOptionMDP(MarketDataProvider):
+    def __init__(self, price: float = 0.21):
+        super().__init__(source="MOCK_STIR_OPT")
+        self.price = float(price)
+
+    def get_pricer(self, request: Dict[str, Any]) -> Dict[str, List[QLSTIRFutureOptionPricer]]:
+        symbols = request.get("symbols", [])
+        return {sym: [_mk_option_pricer(sym, price=self.price)] for sym in symbols}
+
+
+@dataclass(frozen=True)
+class _UnsupportedProductQuery(BaseQuery):
+    fake_product: str = "UNKNOWN"
+
+    def __post_init__(self):
+        object.__setattr__(self, "product", self.fake_product)
+        object.__setattr__(self, "structure_id", "OUTRIGHT")
+        object.__setattr__(self, "value_id", "PRICE")
+
+    def return_query(self) -> List[BaseQuery]:
+        return [self]
+
+    def col_name(self, cube_name: Optional[str] = None) -> str:
+        _ = cube_name
+        return "unsupported"
+
+    def eval_expression(self, cube_name: Optional[str] = None) -> str:
+        _ = cube_name
+        return "unsupported"
+
+
+def _make_builder() -> Tuple[TimeseriesBuilder, _FakeRouter, _FakeRouter]:
+    irs = _FakeRouter(auto_cols=True, auto_value=0.045)
+    frb = _FakeRouter(auto_cols=True, auto_value=0.040)
+    tb = TimeseriesBuilder(
+        irswaps_tb=irs,
+        fixedratebonds_tb=frb,
+        stirfutures_tb=STIRFuturesTB(_MockSTIRFutureMDP(), show_tqdm=False),
+        ustfutures_tb=USTFuturesTB(_MockUSTFutureMDP(), show_tqdm=False),
+        stirfutureoptions_tb=STIRFutureOptionsTB(_MockSTIRFutureOptionMDP(), show_tqdm=False),
+    )
     return tb, irs, frb
 
 
@@ -148,312 +428,88 @@ START = datetime.date(2025, 1, 6)
 END = datetime.date(2025, 1, 10)
 
 
-# ===================================================================
-# 1. Per-call router override is used for the matching product bucket
-# ===================================================================
-class TestRouterOverridePerCall:
+def test_mixed_product_routing_joins_output_columns():
+    tb, _, _ = _make_builder()
+    irs_q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+    stir_q = STIRFutureQuery(symbol="SR3H26", curve="USD-SOFR-1D", value=STIRFutureValue.PRICE)
 
-    def test_router_override_per_call_used_for_product_bucket(self):
-        tb, _, _ = _make_tb()
+    out = tb.get_timeseries(start=START, end=END, queries=[irs_q, stir_q])
 
-        override = _FakeRouter(col_values={"x_col": 99.0})
-        q = _FakeQuery(fake_product="XPROD", fake_col="x_col")
-
-        df = tb.get_timeseries(
-            start=START,
-            end=END,
-            queries=[q],
-            routers={"XPROD": override},
-        )
-
-        assert not df.empty
-        assert len(override.received_queries) == 1
-        assert override.received_queries[0] is q
-        assert "x_col" in df.columns
-
-    def test_per_call_router_overrides_instance_router(self):
-        """Per-call routers should take precedence over instance routers."""
-        tb, irs_router, _ = _make_tb()
-
-        # Override the IRS router at call time
-        override_irs = _FakeRouter(col_values={"override_col": 0.05})
-        q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
-
-        df = tb.get_timeseries(
-            start=START,
-            end=END,
-            queries=[q],
-            routers={"IRS": override_irs},
-        )
-
-        # Override should have received the query, not the instance router
-        assert len(override_irs.received_queries) > 0
-        assert len(irs_router.received_queries) == 0
+    assert not out.empty
+    assert irs_q.col_name() in out.columns
+    assert stir_q.col_name() in out.columns
 
 
-# ===================================================================
-# 2. Generic MDP fallback evaluates queries via BaseQuery pipeline
-# ===================================================================
-class TestGenericMDPFallback:
+def test_stir_ust_option_integration_with_mock_mdps():
+    tb, _, _ = _make_builder()
+    q_stir = STIRFutureQuery(symbol="SR3H26", curve="USD-SOFR-1D", value=STIRFutureValue.PRICE)
+    q_ust = USTFutureQuery(symbol="TYH26", value=USTFutureValue.PRICE)
+    q_opt = STIRFutureOptionQuery(symbol="SR3H26|9700C", value=STIRFutureOptionValue.PRICE)
 
-    def test_generic_mdp_fallback_evaluates_stirfuture_query(self):
-        tb, _, _ = _make_tb()
-        fake_mdp = _FakeMDP()
+    out = tb.get_timeseries(start=START, end=END, queries=[q_stir, q_ust, q_opt])
 
-        q = _FakeQuery(
-            fake_product="STIRFUTURE",
-            fake_col="SOFR-H26",
-            fake_value_result=95.125,
-        )
-
-        df = tb.get_timeseries(
-            start=START,
-            end=END,
-            queries=[q],
-            mdps={"STIRFUTURE": fake_mdp},
-        )
-
-        assert not df.empty
-        assert "SOFR-H26" in df.columns
-        assert (df["SOFR-H26"] == 95.125).all()
-
-    def test_generic_mdp_fallback_with_timestamps(self):
-        tb, _, _ = _make_tb()
-        fake_mdp = _FakeMDP()
-
-        q = _FakeQuery(
-            fake_product="STIRFUTURE",
-            fake_col="SOFR-M26",
-            fake_value_result=94.5,
-        )
-        ts = [
-            datetime.datetime(2025, 1, 6, 16, 0),
-            datetime.datetime(2025, 1, 7, 16, 0),
-        ]
-
-        df = tb.get_timeseries(
-            start=START,
-            end=END,
-            queries=[q],
-            mdps={"STIRFUTURE": fake_mdp},
-            timestamps=ts,
-        )
-
-        assert not df.empty
-        assert len(df) == 2
-        assert "SOFR-M26" in df.columns
-
-    def test_generic_mdp_fallback_uses_query_name_if_set(self):
-        tb, _, _ = _make_tb()
-        fake_mdp = _FakeMDP()
-
-        q = _FakeQuery(
-            fake_product="STIRFUTURE",
-            fake_col="ignored",
-            fake_value_result=95.0,
-            name="Custom Name",
-        )
-
-        df = tb.get_timeseries(
-            start=START,
-            end=END,
-            queries=[q],
-            mdps={"STIRFUTURE": fake_mdp},
-        )
-
-        assert "Custom Name" in df.columns
+    assert q_stir.col_name() in out.columns
+    assert q_ust.col_name() in out.columns
+    assert q_opt.col_name() in out.columns
+    assert out[q_stir.col_name()].tolist() == pytest.approx([95.125] * len(out))
+    assert out[q_ust.col_name()].tolist() == pytest.approx([110.5] * len(out))
+    assert out[q_opt.col_name()].tolist() == pytest.approx([0.21] * len(out))
 
 
-# ===================================================================
-# 3. Mixed products: router + generic MDP fallback joined output
-# ===================================================================
-class TestMixedProductsRouterPlusMDP:
-
-    def test_mixed_products_router_plus_generic_mdp_joined_output(self):
-        irs_col = "irs_rate"
-        tb, irs_router, _ = _make_tb(
-            irs_kw={"col_values": {irs_col: 0.04}},
-        )
-
-        irs_q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
-        stir_q = _FakeQuery(
-            fake_product="STIRFUTURE",
-            fake_col="SOFR-H26",
-            fake_value_result=95.0,
-        )
-
-        df = tb.get_timeseries(
-            start=START,
-            end=END,
-            queries=[irs_q, stir_q],
-            mdps={"STIRFUTURE": _FakeMDP()},
-        )
-
-        assert not df.empty
-        # IRS column from router
-        assert irs_col in df.columns
-        # STIR column from MDP fallback
-        assert "SOFR-H26" in df.columns
-        # Both should have the same date index
-        assert len(df) > 0
+def test_unknown_product_without_router_or_mdp_raises_clear_error():
+    tb, _, _ = _make_builder()
+    q = _UnsupportedProductQuery(fake_product="NONEXISTENT")
+    with pytest.raises(KeyError) as exc_info:
+        tb.get_timeseries(start=START, end=END, queries=[q])
+    msg = str(exc_info.value)
+    assert "NONEXISTENT" in msg
+    assert "IRS" in msg
+    assert "FRB" in msg
 
 
-# ===================================================================
-# 4. Unknown product without router or MDP raises a clear error
-# ===================================================================
-class TestUnknownProductError:
-
-    def test_unknown_product_without_router_or_mdp_raises_clear_error(self):
-        tb, _, _ = _make_tb()
-        q = _FakeQuery(fake_product="NONEXISTENT", fake_col="col")
-
-        with pytest.raises(KeyError) as exc_info:
-            tb.get_timeseries(start=START, end=END, queries=[q])
-
-        msg = str(exc_info.value)
-        assert "NONEXISTENT" in msg
-        assert "IRS" in msg
-        assert "FRB" in msg
-
-    def test_error_includes_available_mdps(self):
-        """Available MDP keys should also appear in the error."""
-        tb, _, _ = _make_tb()
-        q = _FakeQuery(fake_product="MISSING", fake_col="col")
-
-        with pytest.raises(KeyError) as exc_info:
-            tb.get_timeseries(
-                start=START,
-                end=END,
-                queries=[q],
-                mdps={"STIRFUTURE": _FakeMDP()},
-            )
-
-        msg = str(exc_info.value)
-        assert "MISSING" in msg
-        assert "STIRFUTURE" in msg
+def test_fx_forward_query_guardrail_when_query_type_missing():
+    tb, _, _ = _make_builder()
+    q = _UnsupportedProductQuery(fake_product="FXFORWARD")
+    with pytest.raises(NotImplementedError, match="not supported yet"):
+        tb.get_timeseries(start=START, end=END, queries=[q])
 
 
-# ===================================================================
-# 5. MMSS and SPREADOVER derived spread pipeline still executes
-# ===================================================================
-class TestMMSSAndSpreadover:
+def test_mmss_regression_routes_derived_irs_and_frb_queries():
+    irs_router = _FakeRouter(auto_cols=True, auto_value=0.045)
+    frb_router = _FakeRouter(auto_cols=True, auto_value=0.040)
+    tb = TimeseriesBuilder(irswaps_tb=irs_router, fixedratebonds_tb=frb_router)
 
-    def test_mmss_and_spreadover_behavior_unchanged(self):
-        # Build expected column names from the derived queries the spread code creates
-        q_irs_derived = IRSwapQuery(
-            curve="USD-SOFR-1D", tenor="CT10", value=IRSwapValue.RATE
-        )
-        q_frb_derived = FixedRateBondQuery(cusip="CT10", value=FixedRateBondValue.YTM)
-        irs_col = _safe_col_name(q_irs_derived, "IRS_FALLBACK")
-        frb_col = _safe_col_name(q_frb_derived, "FRB_FALLBACK")
+    q_mmss = IRSwapQuery(curve="USD-SOFR-1D", tenor="CT10", value=IRSwapValue.MMSS)
+    out = tb.get_timeseries(start=START, end=END, queries=[q_mmss])
 
-        irs_router = _FakeRouter(auto_cols=True, auto_value=0.045)
-        frb_router = _FakeRouter(auto_cols=True, auto_value=0.040)
-
-        tb = TimeseriesBuilder(irswaps_tb=irs_router, fixedratebonds_tb=frb_router)
-
-        q_mmss = IRSwapQuery(
-            curve="USD-SOFR-1D", tenor="CT10", value=IRSwapValue.MMSS
-        )
-
-        df = tb.get_timeseries(start=START, end=END, queries=[q_mmss])
-
-        # The spread section should have called IRS and FRB routers
-        # with derived RATE / YTM queries (not the original MMSS query)
-        irs_rate_qs = [
-            q
-            for q in irs_router.received_queries
-            if isinstance(q, IRSwapQuery) and q.value == IRSwapValue.RATE
-        ]
-        frb_ytm_qs = [
-            q
-            for q in frb_router.received_queries
-            if isinstance(q, FixedRateBondQuery) and q.value == FixedRateBondValue.YTM
-        ]
-
-        assert len(irs_rate_qs) > 0, "IRS router not called with derived RATE query"
-        assert len(frb_ytm_qs) > 0, "FRB router not called with derived YTM query"
-
-        # Result should include a spread column
-        if not df.empty:
-            assert len(df.columns) > 0
-
-    def test_mmss_query_separated_from_regular_irs(self):
-        """MMSS query should NOT be passed to the IRS router's regular call."""
-        irs_router = _FakeRouter(auto_cols=True, auto_value=0.045)
-        frb_router = _FakeRouter(auto_cols=True, auto_value=0.040)
-        tb = TimeseriesBuilder(irswaps_tb=irs_router, fixedratebonds_tb=frb_router)
-
-        q_rate = IRSwapQuery(
-            curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE
-        )
-        q_mmss = IRSwapQuery(
-            curve="USD-SOFR-1D", tenor="CT10", value=IRSwapValue.MMSS
-        )
-
-        tb.get_timeseries(start=START, end=END, queries=[q_rate, q_mmss])
-
-        # The first IRS router call should only include the RATE query, not MMSS
-        first_batch = []
-        for q in irs_router.received_queries:
-            if isinstance(q, IRSwapQuery) and q.value == IRSwapValue.RATE:
-                first_batch.append(q)
-
-        assert any(q.value == IRSwapValue.RATE for q in first_batch)
-        assert not any(
-            isinstance(q, IRSwapQuery) and q.value == IRSwapValue.MMSS
-            for q in irs_router.received_queries
-        )
+    assert not any(
+        isinstance(q, IRSwapQuery) and q.value == IRSwapValue.MMSS
+        for q in irs_router.received_queries
+    )
+    assert any(
+        isinstance(q, IRSwapQuery) and q.value == IRSwapValue.RATE
+        for q in irs_router.received_queries
+    )
+    assert any(
+        isinstance(q, FixedRateBondQuery) and q.value == FixedRateBondValue.YTM
+        for q in frb_router.received_queries
+    )
+    assert not out.empty
 
 
-# ===================================================================
-# 6. Regression: ASW uses explicit IRS/FRB router, not loop variable
-# ===================================================================
-class TestASWExplicitRouterUsage:
+def test_spreadover_alias_mapping_regression_ct_vs_y():
+    irs_router = _FakeRouter(auto_cols=True, auto_value=0.045)
+    frb_router = _FakeRouter(auto_cols=True, auto_value=0.040)
+    tb = TimeseriesBuilder(irswaps_tb=irs_router, fixedratebonds_tb=frb_router)
 
-    def test_asw_uses_explicit_irs_frb_router_not_loop_variable(self):
-        """
-        Before the fix, the ASW section used `tb.mdp` where `tb` was the loop
-        variable. If the last product in the loop was FRB, `tb` would point to
-        the FRB router, and `tb.mdp` would be the wrong MDP.
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="10Y", value=IRSwapValue.SPREADOVER)
+    tb.get_timeseries(start=START, end=END, queries=[q])
 
-        This test forces FRB to iterate after IRS (by providing both queries)
-        and verifies the IRS router's MDP is accessed for the ASW curve fetch.
-        """
-        mock_irs_mdp = MagicMock(name="irs_mdp")
-        mock_irs_curve = MagicMock(name="irs_curve")
-        mock_irs_mdp.get_pricer.return_value = mock_irs_curve
-
-        mock_frb_mdp = MagicMock(name="frb_mdp")
-        mock_frb_mdp.get_pricer.return_value = {"CT10": MagicMock(name="frb_pricer")}
-
-        irs_router = _FakeRouter(auto_cols=True, auto_value=0.045)
-        irs_router.mdp = mock_irs_mdp
-
-        frb_router = _FakeRouter(auto_cols=True, auto_value=0.040)
-        frb_router.mdp = mock_frb_mdp
-
-        tb = TimeseriesBuilder(irswaps_tb=irs_router, fixedratebonds_tb=frb_router)
-
-        # ASW query (bucketed under IRS, then filtered into irswap_asw_queries)
-        asw_q = IRSwapQuery(
-            curve="USD-SOFR-1D", tenor="CT10", value=IRSwapValue.PAR_PAR_ASW
-        )
-        # FRB query — forces FRB to be iterated after IRS in the loop
-        frb_q = FixedRateBondQuery(cusip="CT10", value=FixedRateBondValue.YTM)
-
-        # Should NOT raise AttributeError about wrong `tb.mdp`
-        try:
-            tb.get_timeseries(start=START, end=END, queries=[asw_q, frb_q])
-        except Exception as e:
-            # QuantLib may not be available — that's OK.
-            # The important thing is it didn't crash at `irs_mdp = tb.mdp`
-            # with the wrong router.
-            assert not (
-                isinstance(e, AttributeError) and "mdp" in str(e)
-            ), f"ASW section may still be using loop-local 'tb': {e}"
-
-        # The IRS MDP should have been accessed (for the curve fetch)
-        assert mock_irs_mdp.get_pricer.called, (
-            "IRS router's MDP was not used — ASW section may be using wrong MDP"
-        )
+    assert any(
+        isinstance(x, FixedRateBondQuery) and x.cusip == "CT10"
+        for x in frb_router.received_queries
+    )
+    assert any(
+        isinstance(x, IRSwapQuery) and x.tenor == "10Y" and x.value == IRSwapValue.RATE
+        for x in irs_router.received_queries
+    )

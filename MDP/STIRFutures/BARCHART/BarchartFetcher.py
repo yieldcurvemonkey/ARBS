@@ -1,13 +1,14 @@
 import asyncio
 import logging
 import re
+import threading
 import time
 import warnings
 from datetime import datetime, timedelta
 from functools import reduce
 from io import StringIO
 from typing import Annotated, Dict, List, Literal, Optional, Tuple
-from urllib.parse import quote, unquote, urlencode
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 import httpx
 import pandas as pd
@@ -72,6 +73,9 @@ class BarchartFetcher(BaseFetcher):
     _current_laravel_token: str = None
     _current_xsrf_token: str = None
     _BARCHART_MAX_RECORD = 5_000
+    _SESSION_TOKEN_TTL_SECONDS = 60
+    _SHARED_SESSION_TOKEN_CACHE: Dict[str, Dict[str, object]] = {}
+    _SHARED_SESSION_TOKEN_CACHE_LOCK = threading.RLock()
     _STIR_ROOT_CODE_RE = re.compile(
         r"^(SR[13]|SFR|SER|FF|ZQ|SQ|SL|RA|EB|IJ|RG|IM|TV|J8|JU|T0|IT|J2)([FGHJKMNQUVXZ]\d{2})$",
         re.IGNORECASE,
@@ -106,6 +110,8 @@ class BarchartFetcher(BaseFetcher):
         info_verbose: Optional[bool] = False,
         warning_verbose: Optional[bool] = False,
         error_verbose: Optional[bool] = False,
+        session_token_ttl_seconds: Optional[int] = None,
+        session_token_scope: Optional[str] = None,
     ):
         super().__init__(
             global_timeout=global_timeout,
@@ -115,6 +121,9 @@ class BarchartFetcher(BaseFetcher):
             warning_verbose=warning_verbose,
             error_verbose=error_verbose,
         )
+        ttl = self._SESSION_TOKEN_TTL_SECONDS if session_token_ttl_seconds is None else int(session_token_ttl_seconds)
+        self._session_token_ttl_seconds = max(1, ttl)
+        self._session_token_scope = session_token_scope
 
     @classmethod
     def _normalize_barchart_symbol(cls, symbol: str) -> str:
@@ -124,6 +133,78 @@ class BarchartFetcher(BaseFetcher):
             return s
         root, code = m.group(1).upper(), m.group(2).upper()
         return f"{cls._STIR_ROOT_TO_BARCHART.get(root, root)}{code}"
+
+    @classmethod
+    def clear_shared_session_token_cache(cls):
+        with cls._SHARED_SESSION_TOKEN_CACHE_LOCK:
+            cls._SHARED_SESSION_TOKEN_CACHE.clear()
+
+    @staticmethod
+    def _proxy_scope_component(proxy_url: Optional[str]) -> str:
+        if not proxy_url:
+            return ""
+        parsed = urlparse(proxy_url)
+        scheme = (parsed.scheme or "").lower()
+        username = parsed.username or ""
+        password = parsed.password or ""
+        return f"{scheme}|{username}|{password}"
+
+    def _session_cache_key(self) -> str:
+        if self._session_token_scope:
+            return f"scope:{self._session_token_scope}"
+        http_scope = self._proxy_scope_component(self._proxies.get("http"))
+        https_scope = self._proxy_scope_component(self._proxies.get("https"))
+        proxy_scope = f"{http_scope}|{https_scope}" if (http_scope or https_scope) else "direct"
+        return f"default:{proxy_scope}"
+
+    def _apply_session_token(self, token_pair: Tuple[str, str]) -> Tuple[str, str]:
+        self._current_laravel_token, self._current_xsrf_token = token_pair
+        return token_pair
+
+    @classmethod
+    def _cached_session_token_unlocked(cls, cache_key: str) -> Optional[Tuple[str, str]]:
+        entry = cls._SHARED_SESSION_TOKEN_CACHE.get(cache_key)
+        if not entry:
+            return None
+        expires_at = float(entry.get("expires_at", 0.0))
+        if time.time() >= expires_at:
+            cls._SHARED_SESSION_TOKEN_CACHE.pop(cache_key, None)
+            return None
+        token_pair = entry.get("token_pair")
+        if not isinstance(token_pair, tuple) or len(token_pair) != 2:
+            cls._SHARED_SESSION_TOKEN_CACHE.pop(cache_key, None)
+            return None
+        return token_pair
+
+    def _get_shared_session_token(
+        self,
+        dummy_symbol: Optional[str] = "BTC",
+        force_refresh: bool = False,
+    ) -> Tuple[str, str]:
+        cache_key = self._session_cache_key()
+
+        with self._SHARED_SESSION_TOKEN_CACHE_LOCK:
+            if not force_refresh:
+                cached = self._cached_session_token_unlocked(cache_key)
+                if cached is not None:
+                    return self._apply_session_token(cached)
+
+            token_pair = self._get_new_session_token(dummy_symbol=dummy_symbol)
+            self._SHARED_SESSION_TOKEN_CACHE[cache_key] = {
+                "token_pair": token_pair,
+                "expires_at": time.time() + float(self._session_token_ttl_seconds),
+                "updated_at": time.time(),
+            }
+            return self._apply_session_token(token_pair)
+
+    def _get_shared_session_token_pool(
+        self,
+        pool_size: int,
+        dummy_symbol: Optional[str] = "BTC",
+    ) -> List[Tuple[str, str]]:
+        size = max(1, int(pool_size))
+        token_pair = self._get_shared_session_token(dummy_symbol=dummy_symbol, force_refresh=False)
+        return [token_pair] * size
 
     def _get_new_session_token(self, dummy_symbol: Optional[str] = "BTC") -> Tuple[str, str]:
         """
@@ -165,11 +246,9 @@ class BarchartFetcher(BaseFetcher):
 
     def _fetch_session_tokens(self, dummy_symbol: Optional[str] = "BTC"):
         """
-        Fallback session token fetch which also sets the instance’s tokens.
+        Fallback session token fetch which also sets the instance tokens.
         """
-        token, xsrf = self._get_new_session_token(dummy_symbol)
-        self._current_laravel_token = token
-        self._current_xsrf_token = xsrf
+        self._get_shared_session_token(dummy_symbol=dummy_symbol, force_refresh=False)
 
     def _parse_aspx_response_to_df(self, response_content: bytes, columns: Optional[List[str]] = None):
         if isinstance(response_content, bytes):
@@ -253,7 +332,7 @@ class BarchartFetcher(BaseFetcher):
                 if retries > 0:
                     self._logger.debug(f"Attempting to get a new session token for {symbol} after failed attempt.")
                     try:
-                        token = self._get_new_session_token()
+                        token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=True)
                         headers = build_headers(token=token)
                     except Exception as token_e:
                         self._logger.error(f"Failed to get new token: {token_e}")
@@ -407,20 +486,30 @@ class BarchartFetcher(BaseFetcher):
                 f"symbol={quote(symbol)}&data=daily&maxrecords={self._BARCHART_MAX_RECORD}"
                 f"&volume=contract&order=asc"
             )
-            headers = {
-                "dnt": "1",
-                "referer": f"https://www.barchart.com/futures/quotes/{quote(symbol)}/interactive-chart",
-                "sec-ch-ua": '"Not A(Brand";v="8", "Chromium";v="132", "Google Chrome";v="132"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
-                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-                "cookie": f"laravel_token={token[0]}",
-                "x-xsrf-token": token[1],
-            }
+
+            def _build_headers(token_pair: Tuple[str, str]) -> Dict[str, str]:
+                return {
+                    "dnt": "1",
+                    "referer": f"https://www.barchart.com/futures/quotes/{quote(symbol)}/interactive-chart",
+                    "sec-ch-ua": '"Not A(Brand";v="8", "Chromium";v="132", "Google Chrome";v="132"',
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": '"Windows"',
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+                    "cookie": f"laravel_token={token_pair[0]}",
+                    "x-xsrf-token": token_pair[1],
+                }
+
+            headers = _build_headers(token)
 
             retries = 0
             while retries < max_retries:
                 try:
+                    if retries > 0:
+                        try:
+                            token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=True)
+                            headers = _build_headers(token)
+                        except Exception as token_e:
+                            self._logger.error(f"Failed to refresh token for {symbol}: {token_e}")
                     response = await client.get(url, headers=headers)
                     response.raise_for_status()
                     df = self._parse_aspx_response_to_df(response.content, columns=columns)
@@ -553,8 +642,8 @@ class BarchartFetcher(BaseFetcher):
             end_date: datetime,
             interval: Optional[Literal[1, 5, 10, 15, 30, 60, 120, 240]] = None,
         ):
-            tokens_tasks = [asyncio.to_thread(self._get_new_session_token) for _ in range(max_concurrent_tasks)]
-            tokens_pool = await tqdm.asyncio.tqdm.gather(*tokens_tasks, desc="FETCHING SESSION TOKENS...")
+            pool_size = max(1, int(max_concurrent_tasks or 1))
+            tokens_pool = await asyncio.to_thread(self._get_shared_session_token_pool, pool_size, "BTC")
 
             limits = httpx.Limits(
                 max_connections=max_concurrent_tasks,
@@ -832,8 +921,8 @@ class BarchartFetcher(BaseFetcher):
                 self._logger.error(f"Failed to fetch option quotes from Barchart for {symbol}: {e}")
 
         async def run_all(symbols: list):
-            tokens_tasks = [asyncio.to_thread(self._get_new_session_token) for _ in range(max_concurrent_tasks)]
-            tokens_pool = await tqdm.asyncio.tqdm.gather(*tokens_tasks, desc="FETCHING SESSION TOKENS...")
+            pool_size = max(1, int(max_concurrent_tasks or 1))
+            tokens_pool = await asyncio.to_thread(self._get_shared_session_token_pool, pool_size, "BTC")
 
             limits = httpx.Limits(max_connections=max_concurrent_tasks, max_keepalive_connections=max_keepalive_connections)
             async with httpx.AsyncClient(
@@ -909,3 +998,4 @@ class BarchartFetcher(BaseFetcher):
             "call": pd.DataFrame([opt["raw"] for opt in res.json()["data"]["Call"]]),
             "put": pd.DataFrame([opt["raw"] for opt in res.json()["data"]["Put"]]),
         }
+

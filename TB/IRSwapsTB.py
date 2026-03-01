@@ -23,6 +23,7 @@ from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapQueryWrapper
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 from Query.IRSwaps.IRSwapValue import IRSwapValue
 from Query.Base.query_resolution import resolve_query
+from TB.BaseTimeseriesTB import BaseTimeseriesTB
 from TB.utils import DateLike, _canonicalize_value, _dt_to_epoch_ns
 from utils.ql_utils import datetime_to_ql_date
 from BT.misc import ql_cal_date_range
@@ -120,7 +121,7 @@ def _is_today(d: DateLike) -> bool:
     return False
 
 
-class IRSwapsTB(ZODBCacheMixin):
+class IRSwapsTB(ZODBCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_irswaps_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS."
     _CACHE_VERSION = "v2"
@@ -136,11 +137,15 @@ class IRSwapsTB(ZODBCacheMixin):
         show_tqdm: bool = True,
         logger: Optional[logging.Logger] = None,
     ):
-        super().__init__(use_btree=use_btree, force_refresh=force_refresh)
+        ZODBCacheMixin.__init__(
+            self,
+            use_btree=use_btree,
+            force_refresh=force_refresh,
+            mdp=mdp,
+            date_col=date_col,
+            show_tqdm=show_tqdm,
+        )
 
-        self.mdp = mdp
-        self._date_col = date_col
-        self._show_tqdm = show_tqdm
         self._logger = logger or logging.getLogger(_LOGGER_NAME)
 
         # stem = cache_stem or f"IRSwapsTB_{mdp.source}"
@@ -168,6 +173,12 @@ class IRSwapsTB(ZODBCacheMixin):
         qh = _query_fingerprint(q)
         return f"{self._CACHE_VERSION}|{curve_name}|{ns}|{qh}"
 
+    def _flatten_queries(
+        self,
+        queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper],
+    ) -> List[IRSwapQuery]:
+        return _flatten_queries(queries)
+
     def get_timeseries(
         self,
         start: DateLike,
@@ -179,19 +190,14 @@ class IRSwapsTB(ZODBCacheMixin):
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
     ) -> pd.DataFrame:
-        if timestamps is not None and len(timestamps) > 0:
-            ref_points = sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
-        else:
-            is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
-            if is_intraday:
-                assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
-                eff_freq = freq or "1T"  # default to 1-minute resolution
-                rng = pd.date_range(start=start, end=end, freq=eff_freq, tz=start.tzinfo)
-                ref_points = rng.to_pydatetime().tolist()
-            else:
-                ref_points = pd.bdate_range(start, end).date.tolist()
+        has_timestamps = timestamps is not None and len(timestamps) > 0
+        is_intraday = (not has_timestamps) and isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
+        if is_intraday:
+            assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
+        eff_freq = (freq or "1T") if is_intraday else freq
+        ref_points = self._build_reference_points(start=start, end=end, freq=eff_freq, timestamps=timestamps)
 
-        flat = _flatten_queries(queries)
+        flat = self._flatten_queries(queries)
         by_curve = _group_queries_by_curve(flat)
 
         to_fetch: DefaultDict[str, set] = defaultdict(set)
@@ -299,14 +305,7 @@ class IRSwapsTB(ZODBCacheMixin):
         if not all_rows:
             return pd.DataFrame(columns=[self._date_col])
 
-        df = pd.DataFrame(all_rows, columns=[self._date_col, "_col", "_val"])
-        out = df.pivot_table(index=self._date_col, columns="_col", values="_val", aggfunc="last").sort_index()
-        out = out.reset_index()
-        out.index.name = None
-        out.columns.name = None
-        out = out.set_index(self._date_col)
-
-        return out
+        return self._rows_to_frame(all_rows)
 
     def sfr_cvx_adj(
         self,

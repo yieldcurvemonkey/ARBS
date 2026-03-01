@@ -1,27 +1,28 @@
 import datetime
+import re
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, DefaultDict, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 
-import re
 import pandas as pd
 import tqdm
 
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base.BaseQuery import BaseQuery
-from Query.Base.query_resolution import resolve_for_request, resolve_query
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 from Query.IRSwaps.IRSwapValue import IRSwapValue
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
-
+from TB.BaseTimeseriesTB import BaseTimeseriesTB
 from TB.utils import DateLike
 
-# Avoid hard import cycles for optional type checking
 if TYPE_CHECKING:
     from TB.FixedRateBondsTB import FixedRateBondsTB
     from TB.IRSwapsTB import IRSwapsTB
+    from TB.STIRFutureOptionsTB import STIRFutureOptionsTB
+    from TB.STIRFuturesTB import STIRFuturesTB
+    from TB.USTFuturesTB import USTFuturesTB
 
 
 def _flatten_base_queries(queries: Iterable[Union[BaseQuery, List[BaseQuery]]]) -> List[BaseQuery]:
@@ -29,29 +30,45 @@ def _flatten_base_queries(queries: Iterable[Union[BaseQuery, List[BaseQuery]]]) 
     for q in queries:
         if isinstance(q, list):
             for qq in q:
-                flat.extend(qq.return_query())
+                out = qq.return_query() if hasattr(qq, "return_query") else [qq]
+                flat.extend(out if isinstance(out, list) else [out])
         else:
-            flat.extend(q.return_query())
+            out = q.return_query() if hasattr(q, "return_query") else [q]
+            flat.extend(out if isinstance(out, list) else [out])
     return flat
 
 
 def _ct_alias_to_y(tenor: str) -> str:
-    """'CT2/CT10' -> '2Y/10Y', 'ct05xCT30' -> '05Yx30Y'"""
     _CT_RE = re.compile(r"(?i)\bct\s*(\d+)\b")
     return _CT_RE.sub(r"\1Y", str(tenor))
 
 
 def _y_alias_to_ct(tenor: str) -> str:
-    """'5Y' -> 'CT5', '2Y/10Y' -> 'CT2/CT10', '2Yx10Y' -> 'CT2xCT10'"""
     _Y_RE = re.compile(r"(?i)\b(\d+)\s*y\b")
     return _Y_RE.sub(r"CT\1", str(tenor))
 
 
-def _safe_col_name(q, default: str) -> str:
+def _safe_col_name(q: Any, default: str) -> str:
     try:
         return q.col_name()
     except Exception:
         return default
+
+
+class _GenericTimeseriesTB(BaseTimeseriesTB):
+    def __init__(
+        self,
+        *,
+        product: str,
+        mdp: MarketDataProvider,
+        date_col: str,
+    ):
+        self._product = product
+        super().__init__(mdp=mdp, date_col=date_col, show_tqdm=True)
+
+    def _pricing_message(self, queries: List[BaseQuery]) -> str:
+        _ = queries
+        return f"Generic TB [{self._product}]"
 
 
 class TimeseriesBuilder:
@@ -60,6 +77,10 @@ class TimeseriesBuilder:
         *,
         irswaps_tb: "IRSwapsTB",
         fixedratebonds_tb: "FixedRateBondsTB",
+        stirfutures_tb: Optional["STIRFuturesTB"] = None,
+        ustfutures_tb: Optional["USTFuturesTB"] = None,
+        stirfutureoptions_tb: Optional["STIRFutureOptionsTB"] = None,
+        fxforwards_tb: Optional[object] = None,
         date_col: str = "Date",
     ):
         self._date_col = date_col
@@ -67,83 +88,89 @@ class TimeseriesBuilder:
             "IRS": irswaps_tb,
             "FRB": fixedratebonds_tb,
         }
+        if stirfutures_tb is not None:
+            self._routers["STIRFUTURE"] = stirfutures_tb
+        if ustfutures_tb is not None:
+            self._routers["USTFUTURE"] = ustfutures_tb
+        if stirfutureoptions_tb is not None:
+            self._routers["STIRFUTUREOPTION"] = stirfutureoptions_tb
+        if fxforwards_tb is not None:
+            self._routers["FXFORWARD"] = fxforwards_tb
+
+        self._generic_router_cache: Dict[str, _GenericTimeseriesTB] = {}
 
     def register_router(self, product: str, tb_obj: object) -> None:
         self._routers[product] = tb_obj
 
-    # ------------------------------------------------------------------
-    # Generic fallback for products without a dedicated TB router
-    # ------------------------------------------------------------------
-    def _generic_fallback_timeseries(
+    def _get_generic_router(self, product: str, mdp: MarketDataProvider) -> _GenericTimeseriesTB:
+        existing = self._generic_router_cache.get(product)
+        if existing is not None and existing.mdp is mdp:
+            return existing
+        generic_tb = _GenericTimeseriesTB(product=product, mdp=mdp, date_col=self._date_col)
+        self._generic_router_cache[product] = generic_tb
+        return generic_tb
+
+    def _route_product_timeseries(
         self,
+        *,
         product: str,
         qs: List[BaseQuery],
-        mdp: MarketDataProvider,
+        merged_routers: Dict[str, Any],
+        merged_mdps: Dict[str, MarketDataProvider],
         start: DateLike,
         end: DateLike,
+        n_jobs: Optional[int],
+        ignore_cache: Optional[bool],
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
     ) -> pd.DataFrame:
-        """Evaluate queries via their BaseQuery pipeline (adapter → structure → value)."""
-        # Build reference points
-        if timestamps is not None:
-            ref_points = sorted(timestamps)
-        elif freq is not None and isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime):
-            ref_points = pd.date_range(start, end, freq=freq).tolist()
-        else:
-            ref_points = pd.bdate_range(start, end).date.tolist()
+        tb = merged_routers.get(product)
+        if tb is not None:
+            return tb.get_timeseries(  # type: ignore[attr-defined]
+                start,
+                end,
+                qs,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                freq=freq,
+                timestamps=timestamps,
+            )
 
-        rows: List[Tuple[Any, str, float]] = []
-        for ts in tqdm.tqdm(ref_points, desc=f"Generic TB [{product}]"):
-            now = ts if isinstance(ts, datetime.datetime) else datetime.datetime.combine(ts, datetime.time())
-            for q in qs:
-                try:
-                    # 1. Build initial MDP request and fetch pricer
-                    seed_req = q.build_mdp_request(now)
-                    pricer = mdp.get_pricer(dict(seed_req))
+        if product in merged_mdps:
+            generic_tb = self._get_generic_router(product, merged_mdps[product])
+            return generic_tb.get_timeseries(
+                start,
+                end,
+                qs,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                freq=freq,
+                timestamps=timestamps,
+            )
 
-                    # 2. Resolve query request (may hydrate/expand aliases)
-                    q_resolved = resolve_for_request(q, timestamp=now, pricer_or_curve=pricer)
+        if product in {"FXFORWARD", "FXFORWARDS"}:
+            raise NotImplementedError(
+                "FX forward timeseries queries are not supported yet: no FX-forward BaseQuery implementation is available."
+            )
 
-                    # 3. Re-fetch pricer if resolved request differs
-                    resolved_req = q_resolved.build_mdp_request(now)
-                    if resolved_req != seed_req:
-                        pricer = mdp.get_pricer(dict(resolved_req))
+        available = sorted(set(merged_routers.keys()) | set(merged_mdps.keys()))
+        raise KeyError(
+            f"No timeseries router or MDP registered for product '{product}'. "
+            f"Available: {available}"
+        )
 
-                    # 4. Final query resolution
-                    q_eff = resolve_query(q_resolved, timestamp=now, pricer_or_curve=pricer)
-
-                    # 5. Resolve package (pricables + weights)
-                    package, risk_weights = q_eff.resolve_package(
-                        pricer_or_curve=pricer, is_for_timeseries=True
-                    )
-
-                    # 6. Build value map and evaluate
-                    vmap = q_eff.build_value_map(
-                        pricer_or_curve=pricer,
-                        package=package,
-                        risk_weights=risk_weights,
-                    )
-                    value_key = getattr(q_eff, "value", None) or q_eff.default_mtm_value_id()
-                    value_kwargs = getattr(q_eff, "value_kwargs", {}) or {}
-                    result = vmap.apply(value=value_key, **value_kwargs)
-
-                    # 7. Column naming
-                    col = q_eff.name if q_eff.name else _safe_col_name(q_eff, f"{product}_{id(q_eff)}")
-
-                    # 8. Date for index
-                    date_val = ts.date() if isinstance(ts, datetime.datetime) else ts
-                    rows.append((date_val, col, float(result)))
-                except Exception:
-                    continue
-
-        if not rows:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(rows, columns=[self._date_col, "Column", "Value"])
-        df = df.pivot(index=self._date_col, columns="Column", values="Value").sort_index()
-        df.columns.name = None
-        return df
+    def _append_product_frame(
+        self,
+        per_product_frames: List[Tuple[str, pd.DataFrame]],
+        *,
+        product: str,
+        df: pd.DataFrame,
+    ) -> None:
+        if df is None or df.empty:
+            return
+        if self._date_col in df.columns:
+            df = df.set_index(self._date_col)
+        per_product_frames.append((product, pd.concat({product: df}, axis=1)))
 
     def get_timeseries(
         self,
@@ -168,7 +195,6 @@ class TimeseriesBuilder:
                 raise ValueError(f"Query missing 'product': {q!r}")
             by_product[q.product].append(q)
 
-        # Merge routers: per-call overrides take precedence over instance routers
         merged_routers: Dict[str, Any] = dict(self._routers)
         if routers:
             merged_routers.update(routers)
@@ -179,13 +205,9 @@ class TimeseriesBuilder:
         irswap_asw_queries: List[IRSwapQuery] = []
 
         for product, qs in by_product.items():
-            tb = merged_routers.get(product)
-
-            if tb is not None and product == "IRS":
+            if product == "IRS":
                 irs_qs_unfiltered: List[IRSwapQuery] = [q for q in qs if isinstance(q, IRSwapQuery)]
-
                 irs_qs: List[IRSwapQuery] = []
-
                 for q in irs_qs_unfiltered:
                     if q.value in [IRSwapValue.MMSS, IRSwapValue.SPREADOVER]:
                         irswap_spread_queries.append(q)
@@ -194,68 +216,62 @@ class TimeseriesBuilder:
                     else:
                         irs_qs.append(q)
 
-                # if len(irs_qs) != len(qs):
-                #     raise TypeError("Mixed/non-IRS queries encountered in IRS bucket")
-                df = tb.get_timeseries(  # type: ignore[attr-defined]
-                    start,
-                    end,
-                    irs_qs,
-                    n_jobs=n_jobs,
-                    ignore_cache=ignore_cache,
-                    freq=freq,
-                    timestamps=timestamps,
-                )
-            elif tb is not None and product == "FRB":
+                if irs_qs:
+                    df = self._route_product_timeseries(
+                        product="IRS",
+                        qs=irs_qs,
+                        merged_routers=merged_routers,
+                        merged_mdps=merged_mdps,
+                        start=start,
+                        end=end,
+                        n_jobs=n_jobs,
+                        ignore_cache=ignore_cache,
+                        freq=freq,
+                        timestamps=timestamps,
+                    )
+                    self._append_product_frame(per_product_frames, product="IRS", df=df)
+                continue
+
+            if product == "FRB":
                 frb_qs: List[FixedRateBondQuery] = [q for q in qs if isinstance(q, FixedRateBondQuery)]
                 if len(frb_qs) != len(qs):
                     raise TypeError("Mixed/non-FRB queries encountered in FixedRateBond bucket")
-                df = tb.get_timeseries(  # type: ignore[attr-defined]
-                    start,
-                    end,
-                    frb_qs,
-                    n_jobs=n_jobs,
-                    ignore_cache=ignore_cache,
-                    freq=freq,
-                    timestamps=timestamps,
-                )
-            elif tb is not None:
-                # Registered router for other products – delegate directly
-                df = tb.get_timeseries(  # type: ignore[attr-defined]
-                    start,
-                    end,
-                    qs,
-                    n_jobs=n_jobs,
-                    ignore_cache=ignore_cache,
-                    freq=freq,
-                    timestamps=timestamps,
-                )
-            elif product in merged_mdps:
-                # Generic MDP fallback path
-                df = self._generic_fallback_timeseries(
-                    product=product,
-                    qs=qs,
-                    mdp=merged_mdps[product],
+                df = self._route_product_timeseries(
+                    product="FRB",
+                    qs=frb_qs,
+                    merged_routers=merged_routers,
+                    merged_mdps=merged_mdps,
                     start=start,
                     end=end,
+                    n_jobs=n_jobs,
+                    ignore_cache=ignore_cache,
                     freq=freq,
                     timestamps=timestamps,
                 )
-            else:
-                available = sorted(set(merged_routers.keys()) | set(merged_mdps.keys()))
-                raise KeyError(
-                    f"No timeseries router or MDP registered for product '{product}'. "
-                    f"Available: {available}"
-                )
-
-            if df is None or df.empty:
+                self._append_product_frame(per_product_frames, product="FRB", df=df)
                 continue
-            if self._date_col in df.columns:
-                df = df.set_index(self._date_col)
 
-            df = pd.concat({product: df}, axis=1)
-            per_product_frames.append((product, df))
+            df = self._route_product_timeseries(
+                product=product,
+                qs=qs,
+                merged_routers=merged_routers,
+                merged_mdps=merged_mdps,
+                start=start,
+                end=end,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                freq=freq,
+                timestamps=timestamps,
+            )
+            self._append_product_frame(per_product_frames, product=product, df=df)
+
+        irs_router = merged_routers.get("IRS")
+        frb_router = merged_routers.get("FRB")
 
         if irswap_spread_queries:
+            if irs_router is None or frb_router is None:
+                raise KeyError("IRS/FRB routers must be registered for MMSS/SPREADOVER evaluation.")
+
             irss_frb_qs = []
             irrs_irs_qs = []
             pair_specs = []
@@ -267,9 +283,7 @@ class TimeseriesBuilder:
                 if q.value == IRSwapValue.MMSS:
                     q_frb = FixedRateBondQuery(cusip=q.tenor, value=FixedRateBondValue.YTM)
                     q_irs = IRSwapQuery(curve=q.curve, tenor=q.tenor, value=IRSwapValue.RATE)
-                    op = "swap_minus_cash"  # spread = IRS - UST
-                    # mult = 100.0  # report in bps
-
+                    op = "swap_minus_cash"
                 elif q.value == IRSwapValue.SPREADOVER:
                     t = str(q.tenor)
                     if _CT_RE.search(t):
@@ -280,16 +294,13 @@ class TimeseriesBuilder:
                         q_irs = IRSwapQuery(curve=q.curve, tenor=t, value=IRSwapValue.RATE)
                     else:
                         raise NotImplementedError(f"Unrecognized SPREADOVER tenor: {t!r}")
-                    op = "swap_minus_cash"  # spreadover = IRS - UST
-                    # mult = 100.0
-
+                    op = "swap_minus_cash"
                 else:
                     raise NotImplementedError(f"Unhandled spread type: {q.value}")
 
                 irss_frb_qs.append(q_frb)
                 irrs_irs_qs.append(q_irs)
 
-                # Record robust pairing info using expected column names
                 irs_col = _safe_col_name(
                     q_irs,
                     f"{getattr(q_irs,'curve','IRS')}.{getattr(q_irs,'tenor','')}.{IRSwapValue.RATE.name}",
@@ -302,18 +313,16 @@ class TimeseriesBuilder:
                     q,
                     f"{getattr(q,'curve','IRS')}.{getattr(q,'tenor','')}.{getattr(q,'value',IRSwapValue.MMSS).name}",
                 )
-
                 pair_specs.append(
                     {
                         "spread_name": spread_name,
                         "irs_col": irs_col,
                         "frb_col": frb_col,
-                        "op": op,  # 'swap_minus_cash' or 'cash_minus_swap'
-                        # "mult": mult,  # e.g., 100.0 for bps
+                        "op": op,
                     }
                 )
 
-            irs_df = merged_routers["IRS"].get_timeseries(  # type: ignore[attr-defined]
+            irs_df = irs_router.get_timeseries(  # type: ignore[attr-defined]
                 start,
                 end,
                 irrs_irs_qs,
@@ -322,7 +331,7 @@ class TimeseriesBuilder:
                 freq=freq,
                 timestamps=timestamps,
             )
-            cash_df = merged_routers["FRB"].get_timeseries(  # type: ignore[attr-defined]
+            cash_df = frb_router.get_timeseries(  # type: ignore[attr-defined]
                 start,
                 end,
                 irss_frb_qs,
@@ -337,8 +346,6 @@ class TimeseriesBuilder:
             for spec in pair_specs:
                 a = irs_df[spec["irs_col"]].reindex(idx) if spec["irs_col"] in irs_df.columns else pd.Series(index=idx, dtype="float64")
                 b = cash_df[spec["frb_col"]].reindex(idx) if spec["frb_col"] in cash_df.columns else pd.Series(index=idx, dtype="float64")
-
-                # future-proof for 'ASW' and 'CAS'
                 if spec["op"] == "swap_minus_cash":
                     if "outright" in str(spec["irs_col"]).lower():
                         spread = (a - b) * 100
@@ -346,7 +353,6 @@ class TimeseriesBuilder:
                         spread = a - b
                 else:
                     raise ValueError(f"Unknown op: {spec['op']}")
-
                 spread_cols[spec["spread_name"]] = spread
 
             if spread_cols:
@@ -355,8 +361,11 @@ class TimeseriesBuilder:
                 per_product_frames.append(("SWAPSPREADS", pd.concat({"SWAPSPREADS": spread_df}, axis=1)))
 
         if irswap_asw_queries:
-            irs_mdp = merged_routers["IRS"].mdp  # type: ignore[attr-defined]
-            frb_mdp = merged_routers["FRB"].mdp  # type: ignore[attr-defined]
+            if irs_router is None or frb_router is None:
+                raise KeyError("IRS/FRB routers must be registered for ASW evaluation.")
+
+            irs_mdp = irs_router.mdp  # type: ignore[attr-defined]
+            frb_mdp = frb_router.mdp  # type: ignore[attr-defined]
 
             ref_points = pd.bdate_range(start, end).date.tolist()
             rows = []
@@ -372,7 +381,7 @@ class TimeseriesBuilder:
                             continue
                         frb_pricer = next(iter(frb_pricers.values()))
 
-                        idx = getattr(ql_curve, "index")() if hasattr(ql_curve, "index") else None
+                        _ = getattr(ql_curve, "index")() if hasattr(ql_curve, "index") else None
                         asw_bps = _fair_asw_spread_bps(ql_curve, frb_pricer, par_par_asw=q.value == IRSwapValue.PAR_PAR_ASW)
                         col = _safe_col_name(q, default=f"ASW[{q.curve}:{alias}]")
                         rows.append((d, col, float(asw_bps)))
@@ -392,9 +401,7 @@ class TimeseriesBuilder:
 
         out = out.sort_index()
         out.index.name = self._date_col
-        
-        # data errors
-        # out = out[((out < 200_000).all(axis=1)) & (out > -200_000).all(axis=1)]
+
         if drop_multilevel_cols:
             out.columns = out.columns.droplevel()
 
