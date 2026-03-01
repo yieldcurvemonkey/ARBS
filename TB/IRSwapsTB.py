@@ -16,7 +16,7 @@ import QuantLib as ql
 import Query.IRSwaps.adapter  # noqa: F401
 # fmt: on
 
-from Caching.ZODBCacheMixin import ZODBCacheMixin
+from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapQueryWrapper
@@ -121,7 +121,7 @@ def _is_today(d: DateLike) -> bool:
     return False
 
 
-class IRSwapsTB(ZODBCacheMixin, BaseTimeseriesTB):
+class IRSwapsTB(DiskCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_irswaps_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS."
     _CACHE_VERSION = "v2"
@@ -137,7 +137,7 @@ class IRSwapsTB(ZODBCacheMixin, BaseTimeseriesTB):
         show_tqdm: bool = True,
         logger: Optional[logging.Logger] = None,
     ):
-        ZODBCacheMixin.__init__(
+        DiskCacheMixin.__init__(
             self,
             use_btree=use_btree,
             force_refresh=force_refresh,
@@ -155,7 +155,7 @@ class IRSwapsTB(ZODBCacheMixin, BaseTimeseriesTB):
         self._cache_attr = f"{self._CACHE_ATTR_BASE}_{self._CACHE_VERSION}"
 
         # mapping cache: key=(iso_date, curve_name, query_key) -> (date, col, val)
-        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._cache_path)
+        self.open_cache(cache_attr=self._cache_attr, path=self._cache_path)
 
     def __enter__(self):
         return self
@@ -165,8 +165,8 @@ class IRSwapsTB(ZODBCacheMixin, BaseTimeseriesTB):
 
     def close(self):
         if hasattr(self, self._cache_attr):
-            self._logger.debug(f"Closing ZODB connection for cache: {self._cache_attr}")
-            self.close_zodb()
+            self._logger.debug(f"Closing cache: {self._cache_attr}")
+            self.close_cache()
 
     def _cache_key(self, d: DateLike, curve_name: str, q: IRSwapQuery) -> str:
         ns = _dt_to_epoch_ns(d)

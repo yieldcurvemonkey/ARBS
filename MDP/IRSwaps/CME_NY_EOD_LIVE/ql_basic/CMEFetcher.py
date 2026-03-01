@@ -16,7 +16,7 @@ from dateutil.relativedelta import relativedelta
 from pandas.errors import DtypeWarning
 from pandas.tseries.offsets import BDay
 
-from Caching.ZODBCacheMixin import ZODBCacheMixin
+from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
 from Query.IRSwaps.backends.quantlib.ql_curve_building_utils import build_ql_discount_curve, build_ql_zero_curve
 
@@ -34,7 +34,7 @@ def is_business_day(date: pd.Timestamp | datetime.date):
     return bool(len(pd.bdate_range(date, date)))
 
 
-class CMEFetcher(BaseFetcher, ZODBCacheMixin):
+class CMEFetcher(BaseFetcher, DiskCacheMixin):
     _base_cme_ftp_url = "https://www.cmegroup.com/ftp"
     _base_cme_ftp_headers = {
         "authority": "www.cmegroup.com",
@@ -75,11 +75,11 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
             warning_verbose=warning_verbose,
             error_verbose=error_verbose,
         )
-        ZODBCacheMixin.__init__(self)
+        DiskCacheMixin.__init__(self)
 
     def _ensure_cache(self):
-        cache_path = ZODBCacheMixin.default_cache_path("CMEFetcher_curve_reports")
-        self.zodb_open_cache(
+        cache_path = DiskCacheMixin.default_cache_path("CMEFetcher_curve_reports")
+        self.open_cache(
             cache_attr="_curve_report_cache",
             path=cache_path,
             encode=None,
@@ -251,7 +251,7 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
             key, df = self._read_single_file(buf.getvalue(), file_name, convert_key_into_dt=True)
             if key and df is not None:
                 self._curve_report_cache[key] = df
-                self.zodb_commit()
+                # auto-committed (DiskCache)
 
     def fetch_curve_reports(
         self,
@@ -301,7 +301,7 @@ class CMEFetcher(BaseFetcher, ZODBCacheMixin):
                 if d in self._curve_report_cache:
                     results[d] = self._curve_report_cache[d]
 
-        self.close_zodb()
+        self.close_cache()
         return results
 
     def build_ql_eod_curves(

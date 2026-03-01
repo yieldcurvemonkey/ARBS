@@ -11,7 +11,7 @@ import pytz
 import QuantLib as ql
 import tqdm
 
-from Caching.ZODBCacheMixin import ZODBCacheMixin
+from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base._GenericPricable import _GenericPricable
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
@@ -25,7 +25,7 @@ def _closer(obj):
     try:
         yield obj
     finally:
-        getattr(obj, "close_zodb", lambda: None)()
+        getattr(obj, "close_cache", lambda: None)()
 
 
 def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> Optional[str]:
@@ -113,13 +113,13 @@ def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> Optional[str]:
     return unique_cusips[0]
 
 
-class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
+class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], DiskCacheMixin):
 
     _FRB_PRICER_CACHE = "_frb_pricer_cache"
 
     def __init__(self, source: str = "USTS_FEDINVEST_WSJ_LIVE-QL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
-        ZODBCacheMixin.__init__(self)
+        DiskCacheMixin.__init__(self)
 
         self._open_count = 0
         self._open_lock = threading.RLock()
@@ -133,8 +133,8 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
     def _ensure_pricer_cache(self) -> None:
         if self._cache_ready and hasattr(self, self._FRB_PRICER_CACHE):
             return
-        cache_path = ZODBCacheMixin.default_cache_path("FixedRateBondPricer_Cache")
-        self.zodb_open_cache(
+        cache_path = DiskCacheMixin.default_cache_path("FixedRateBondPricer_Cache")
+        self.open_cache(
             cache_attr=self._FRB_PRICER_CACHE,
             path=cache_path,
             encode=None,
@@ -161,7 +161,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
         return {k: cls._py_scalar(v) for k, v in dict(meta or {}).items()}
 
     def _threadsafe_cache_put(self, key: str, value: dict) -> None:
-        # protect ZODB cache writes; avoid holding the lock during network I/O
+        # protect cache writes; avoid holding the lock during network I/O
         with self._open_lock:
             self._ensure_pricer_cache()
             cache = getattr(self, self._FRB_PRICER_CACHE)
@@ -509,7 +509,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                     cache_key = f"{cache_ts.isoformat()}-{cusip}-{self.source.upper()}"
                     cache[cache_key] = args
                     out[original] = self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
-                    self.zodb_commit()
+                    # auto-committed (DiskCache)
 
             return out
 
@@ -596,7 +596,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                         "source": cache_key,
                     }
                     cache[cache_key] = args
-                    self.zodb_commit()
+                    # auto-committed (DiskCache)
 
                     if curr_ts == timestamp:
                         out[original] = self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
@@ -751,7 +751,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                     md["ytm_interp_bounds"] = interp_bounds
 
                 cache[cache_key] = args
-                self.zodb_commit()
+                # auto-committed (DiskCache)
 
                 return self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
 
@@ -942,7 +942,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 }
 
             cache[cache_key] = args
-            self.zodb_commit()
+            # auto-committed (DiskCache)
 
             return self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
 
@@ -1038,7 +1038,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 "source": cache_key,
             }
             cache[cache_key] = args
-            self.zodb_commit()
+            # auto-committed (DiskCache)
             return self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
 
     def get_bond_reference_data(self, as_of_date: datetime.date, kwargs={}):
@@ -1096,7 +1096,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                 d = ts
             return ql.Date(d.day, d.month, d.year)
 
-        # Use your existing ZODB open/commit lifecycle.
+        # Use open/close lifecycle.
         with self:
             out: _BulkOut = defaultdict(dict)
 
@@ -1296,7 +1296,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                             show_tqdm=show_tqdm,
                         )  # batched async underneath  :contentReference[oaicite:1]{index=1}  :contentReference[oaicite:2]{index=2}
 
-                        # Persist all timeslices to ZODB (same scheme as your RL branch)
+                        # Persist all timeslices to cache (same scheme as your RL branch)
                         for original, cusip in to_fetch.items():
                             if cusip not in wide.columns:
                                 continue
@@ -1327,7 +1327,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
                                 }
                                 result[original] = self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
 
-                        self.zodb_commit()
+                        # auto-committed (DiskCache)
                         return ts, result
 
                     # If we got here, user passed a date (not datetime) for RL non-live; no canonical source
@@ -1376,10 +1376,10 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], ZODBCacheMixin):
             if self._open_count == 0:
                 try:
                     if commit:
-                        self.zodb_commit()
+                        # auto-committed (DiskCache)
                 finally:
                     try:
-                        self.close_zodb()
+                        self.close_cache()
                     finally:
                         self._cache_ready = False
 

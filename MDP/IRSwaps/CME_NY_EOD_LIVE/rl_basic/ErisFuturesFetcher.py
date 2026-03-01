@@ -19,7 +19,7 @@ from pandas.errors import DtypeWarning
 from pandas.tseries.holiday import USFederalHolidayCalendar
 from pandas.tseries.offsets import CustomBusinessDay
 
-from Caching.ZODBCacheMixin import ZODBCacheMixin
+from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import get_fomc_meetings_list, get_short_end_curve_tickers
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_pydate
 
@@ -89,9 +89,9 @@ class BaseFetcher:
             self._logger.disabled = True
 
 
-class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
+class ErisFuturesFetcher(DiskCacheMixin, BaseFetcher):
     """
-    Adds ZODB-backed read-through caching for raw ERIS files (CSV/XLSX).
+    Adds DiskCache-backed read-through caching for raw ERIS files (CSV/XLSX).
     """
 
     def __init__(
@@ -115,7 +115,7 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
             info_verbose=info_verbose or False,
             warning_verbose=warning_verbose or False,
             error_verbose=error_verbose or False,
-            # ZODBCacheMixin args
+            # DiskCacheMixin args
             use_btree=True,
             force_refresh=force_refresh,
         )
@@ -143,10 +143,10 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
 
         self._cache_attr = cache_attr
         if cache_path is None:
-            cache_path = ZODBCacheMixin.default_cache_path("ErisFuturesFetcher-raw.fs")
+            cache_path = DiskCacheMixin.default_cache_path("ErisFuturesFetcher-raw.fs")
 
         # mapping: key (str) -> dict(file_name, content: bytes, fetched_at, workbook_type)
-        self.zodb_open_cache(cache_attr=self._cache_attr, path=cache_path)
+        self.open_cache(cache_attr=self._cache_attr, path=cache_path)
 
     def _cache_key(self, date: Optional[datetime.date], workbook_type: str) -> str:
         if hasattr(date, "date"):  # pandas.Timestamp compatibility
@@ -172,7 +172,7 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
                 return None, None
             return BytesIO(entry["content"]), entry["file_name"]
         except Exception as e:
-            self._logger.debug(f"ZODB load miss/error for {workbook_type}-{date}: {e}")
+            self._logger.debug(f"Cache load miss/error for {workbook_type}-{date}: {e}")
             return None, None
 
     def _stage_cache_write(
@@ -616,4 +616,4 @@ class ErisFuturesFetcher(ZODBCacheMixin, BaseFetcher):
             return curve
 
     def close(self) -> None:
-        self.close_zodb()
+        self.close_cache()

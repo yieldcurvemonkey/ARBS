@@ -5,7 +5,7 @@ from typing import List, Optional, Union, Literal, Tuple, Dict
 
 import pandas as pd
 
-from Caching.ZODBCacheMixin import ZODBCacheMixin
+from Caching.DiskCacheMixin import DiskCacheMixin
 
 
 def _series_sha1(s: pd.Series) -> str:
@@ -45,7 +45,7 @@ def _make_key(
     return re.sub(r"[^A-Za-z0-9_.-]", "_", base)[:200]
 
 
-class _RLCurveCache(ZODBCacheMixin):
+class _RLCurveCache(DiskCacheMixin):
 
     def __init__(
         self,
@@ -58,7 +58,7 @@ class _RLCurveCache(ZODBCacheMixin):
         super().__init__(use_btree=use_btree, force_refresh=force_refresh)
         self._cache_attr = cache_name
         self._path = path or self.default_cache_path(self._cache_attr)
-        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path)
+        self.open_cache(cache_attr=self._cache_attr, path=self._path)
 
     # TODO refactor: make general, pass in kwargs
 
@@ -78,7 +78,7 @@ class _RLCurveCache(ZODBCacheMixin):
     ):
         from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.rl_usd_sofr_mt_builder import rl_usd_sofr_mt_builder
 
-        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
+        self.open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
         mapping = getattr(self, self._cache_attr)
 
         key = _make_key(curve_id, snap, sofr_fixings, n_ser, n_sfr, n_plus_fomc_years)
@@ -99,7 +99,7 @@ class _RLCurveCache(ZODBCacheMixin):
         ).rl_pricing_curve.to_json()
 
         mapping[key] = result_json
-        self.zodb_commit()
+        # auto-committed (DiskCache)
         return result_json
 
     def get_rl_usd_sofr_stir(
@@ -115,7 +115,7 @@ class _RLCurveCache(ZODBCacheMixin):
     ):
         from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.rl_usd_curve_stir_builder import rl_usd_sofr_stir_builder
 
-        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
+        self.open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
         mapping = getattr(self, self._cache_attr)
 
         key = _make_key(curve_id, snap, sofr_fixings, n_ser, n_sfr, n_plus_fomc_years)
@@ -133,7 +133,7 @@ class _RLCurveCache(ZODBCacheMixin):
         ).rl_pricing_curve.to_json()
 
         mapping[key] = result_json
-        self.zodb_commit()
+        # auto-committed (DiskCache)
         return result_json
 
     def get_rl_usd_ois_stir(
@@ -149,7 +149,7 @@ class _RLCurveCache(ZODBCacheMixin):
     ):
         from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.rl_usd_curve_stir_builder import rl_usd_ois_stir_builder
 
-        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
+        self.open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
         mapping = getattr(self, self._cache_attr)
 
         key = _make_key(curve_id, snap, sofr_fixings, n_ser, n_sfr, n_plus_fomc_years)
@@ -167,7 +167,7 @@ class _RLCurveCache(ZODBCacheMixin):
         )
         result_json = curve.to_json()
         mapping[key] = result_json
-        self.zodb_commit()
+        # auto-committed (DiskCache)
         return result_json
 
     def get_gsquant_rl_basic(
@@ -179,7 +179,7 @@ class _RLCurveCache(ZODBCacheMixin):
     ):
         from MDP.IRSwaps.GSQUANT.rl_basic.build import build_rl_basic_gsquant_curve
 
-        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
+        self.open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
         mapping = getattr(self, self._cache_attr)
 
         key = f"{as_of}-GSQUANT-rl_basic_{curve_id}"
@@ -193,7 +193,7 @@ class _RLCurveCache(ZODBCacheMixin):
             "result": result_json,
             "pricing_location": pricing_location,
         }
-        self.zodb_commit()
+        # auto-committed (DiskCache)
         return key, result_json, pricing_location
 
     def _eris_key(self, curve_id: str, as_of: Union[datetime.date, str]) -> str:
@@ -210,7 +210,7 @@ class _RLCurveCache(ZODBCacheMixin):
     ) -> Tuple[str, str, Union[datetime.date, datetime.datetime]]:
         from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
 
-        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
+        self.open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
         mapping = getattr(self, self._cache_attr)
 
         key = self._eris_key(curve_id, as_of)
@@ -233,7 +233,7 @@ class _RLCurveCache(ZODBCacheMixin):
 
         if as_of != "live":
             mapping[key] = {"result": result_json, "timestamp": ts}
-            self.zodb_commit()
+            # auto-committed (DiskCache)
 
         return key, result_json, ts
 
@@ -247,7 +247,7 @@ class _RLCurveCache(ZODBCacheMixin):
     ) -> Dict[datetime.date, str]:
         from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
 
-        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
+        self.open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
         mapping = getattr(self, self._cache_attr)
 
         to_fetch: List[datetime.date] = []

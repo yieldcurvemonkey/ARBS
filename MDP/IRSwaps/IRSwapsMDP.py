@@ -1,17 +1,9 @@
 import datetime
 import threading
-import warnings
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 import pandas as pd
 import pytz
-
-warnings.filterwarnings(
-    "ignore",
-    category=UserWarning,
-    module=r"ZODB\.Connection",
-    message=r".*object you're saving is large.*",
-)
 
 from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
 from MDP.MarketDataProvider import MarketDataProvider
