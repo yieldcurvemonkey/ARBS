@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import Dict, List, Sequence
+from typing import Dict, List, Sequence, Tuple
 
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import CME_MONTH_CODE, _imm_cutoff, _next_contracts
 
@@ -24,6 +24,30 @@ UST_FUTURE_BARCHART_ROOTS: Dict[str, str] = {
 }
 
 UST_FUTURE_VALID_MONTHS: Sequence[int] = (3, 6, 9, 12)
+
+# Tick specifications: (tick_size, tick_value_usd) per contract root.
+# tick_size  = minimum price increment (fraction of a point)
+# tick_value = dollar value of one tick move per contract
+UST_FUTURE_TICK_SPECS: Dict[str, Tuple[float, float]] = {
+    "TU": (1.0 / 256.0, 7.8125),
+    "Z3N": (1.0 / 256.0, 7.8125),
+    "FV": (1.0 / 128.0, 7.8125),
+    "TY": (1.0 / 64.0, 15.625),
+    "UXY": (1.0 / 64.0, 15.625),
+    "US": (1.0 / 32.0, 31.25),
+    "WN": (1.0 / 32.0, 31.25),
+    "TWE": (1.0 / 32.0, 31.25),
+}
+
+# Reverse mapping: BarChart vendor root → internal root
+UST_FUTURE_BARCHART_TO_INTERNAL: Dict[str, str] = {
+    "ZT": "TU",
+    "ZF": "FV",
+    "ZN": "TY",
+    "ZB": "US",
+    "UB": "WN",
+    "TN": "UXY",
+}
 
 
 def normalize_root(root: str) -> str:

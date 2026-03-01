@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from Query.Base.BaseQuery import BaseQuery
+from Query.FixedRateBonds import adapter as _frb_adapter  # noqa: F401
 from Query.FixedRateBonds.FixedRateBondStructure import FixedRateBondStructure
 from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 

@@ -53,3 +53,7 @@ class USTFutureProductAdapter(ProductAdapter):
 
 
 register_product("USTFUTURE", USTFutureProductAdapter)
+
+from BT.position_handler import register_handler
+from Query.USTFutures.position_handler import USTFutureHandler
+register_handler("USTFUTURE", USTFutureHandler)

@@ -62,3 +62,7 @@ class STIRFutureOptionProductAdapter(ProductAdapter):
 
 
 register_product("STIRFUTUREOPTION", STIRFutureOptionProductAdapter)
+
+from BT.position_handler import register_handler
+from Query.STIRFutureOptions.position_handler import STIRFutureOptionHandler
+register_handler("STIRFUTUREOPTION", STIRFutureOptionHandler)

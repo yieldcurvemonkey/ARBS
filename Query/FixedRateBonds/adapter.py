@@ -24,3 +24,7 @@ class FRBProductAdapter(ProductAdapter):
 
 # Register on import
 register_product("FRB", FRBProductAdapter)
+
+from BT.position_handler import register_handler
+from Query.FixedRateBonds.position_handler import FinancedFixedRateBondHandler
+register_handler("FRB", FinancedFixedRateBondHandler)
