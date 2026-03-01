@@ -15,7 +15,7 @@ Main Components:
 
 Quick Start:
     from SDRUtils.data.builder import SDRDataBuilder
-    from SDRUtils.products.usd import classify_sofr_swap_trade
+    from SDRUtils.products.usd import classify_usd_swap_trade
     from SDRUtils.packages import detect_fly_trades_df, detect_curve_trades_df
 """
 

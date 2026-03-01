@@ -10,6 +10,7 @@ import {
   getMetricValueByKey,
   isSimilarTrade,
   percentileRank,
+  splitRowsByPlatform,
   zScore,
 } from '../rarity.utils';
 
@@ -49,6 +50,29 @@ describe('rarity.utils', () => {
     expect(result.totalCount).toBe(4);
     expect(result.bins.length).toBe(2);
     expect(result.bins[0].count + result.bins[1].count).toBe(4);
+  });
+
+  it('collapses flat distributions into a single non-empty bin', () => {
+    const result = computeHistogram([7, 7, 7], 20);
+    expect(result.totalCount).toBe(3);
+    expect(result.bins.length).toBe(1);
+    expect(result.bins[0].count).toBe(3);
+    expect(result.bins[0].cumulativePercent).toBe(100);
+  });
+
+  it('ignores non-finite values while preserving split counts', () => {
+    const result = computeHistogram([1, Number.POSITIVE_INFINITY, 2], 2, [true, false, false]);
+    expect(result.totalCount).toBe(2);
+    expect(result.bins.reduce((sum, bin) => sum + bin.custyCount, 0)).toBe(1);
+    expect(result.bins.reduce((sum, bin) => sum + bin.idbCount, 0)).toBe(1);
+  });
+
+  it('clips extreme tails for large samples while preserving counts', () => {
+    const values = [...Array.from({ length: 100 }, (_, index) => index + 1), 1_000_000];
+    const result = computeHistogram(values, 20);
+    expect(result.totalCount).toBe(101);
+    expect(result.bins.reduce((sum, bin) => sum + bin.count, 0)).toBe(101);
+    expect(result.bins[result.bins.length - 1].binEnd).toBeLessThan(1_000_000);
   });
 
   it('computes distribution stats', () => {
@@ -146,4 +170,50 @@ describe('rarity.utils', () => {
     });
     expect(getMetricValueByKey(row, 'rr_skew_bpvol')).toBeCloseTo(4.2, 5);
   });
+
+  it('falls back straddle vega to inferred outright leg metrics', () => {
+    const row = makeRow({
+      package_type: 'STRADDLE',
+      package_metrics: {},
+      assumed_incomplete_straddle: true as any,
+      legs_json: [
+        {
+          leg_metrics: {
+            outright_vega01: 16378,
+          },
+        } as any,
+      ],
+    });
+    expect(getMetricValueByKey(row, 'straddle_vega01')).toBeCloseTo(32756, 5);
+  });
+
+  it('splits combined rows using package_metrics platform fallback', () => {
+    const idbRow = makeRow({
+      package_id: 'idb-1',
+      package_metrics: { platform: 'BGCD' },
+      platform_identifier: null,
+      legs_json: [],
+    });
+    const custyRow = makeRow({
+      package_id: 'custy-1',
+      package_metrics: { platform: 'XOFF' },
+      platform_identifier: null,
+      legs_json: [],
+    });
+    const split = splitRowsByPlatform([idbRow, custyRow]);
+    expect(split.idb.map((row) => row.package_id)).toEqual(['idb-1']);
+    expect(split.custy.map((row) => row.package_id)).toEqual(['custy-1']);
+  });
+
+  it('treats mixed platform tokens as IDB when an IDB MIC is present', () => {
+    const mixedRow = makeRow({
+      package_id: 'mixed-1',
+      platform_identifier: 'BGCD XOFF',
+      package_metrics: {},
+    });
+    const split = splitRowsByPlatform([mixedRow]);
+    expect(split.idb.map((row) => row.package_id)).toEqual(['mixed-1']);
+    expect(split.custy).toHaveLength(0);
+  });
 });
+

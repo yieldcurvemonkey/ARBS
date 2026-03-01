@@ -1,5 +1,5 @@
 export type SparklineMode = "net_directional" | "vol_flow";
-export type VolFlowAxisMetric = "vega" | "gamma";
+export type VolFlowAxisMetric = "vega" | "gamma" | "notional";
 
 export type QuadrantTradeFlows = {
   packageId: string;

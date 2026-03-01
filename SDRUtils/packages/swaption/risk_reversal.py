@@ -51,6 +51,8 @@ def detect_risk_reversals_packages(
     notional_col: str = "notional",
     upi_col: str = "unique_product_identifier",
     event_action_col: str = "event_action",
+    package_indicator_col: str = "package_indicator",
+    package_price_col: str = "package_transaction_price",
     # Economic filters
     require_same_platform: bool = True,
     require_same_currency: bool = True,
@@ -96,6 +98,8 @@ def detect_risk_reversals_packages(
         notional_col: Column name for notional
         upi_col: Column name for unique product identifier
         event_action_col: Column name for event action
+        package_indicator_col: Column name for package indicator flag
+        package_price_col: Column name for package-level premium/price
         require_same_platform: Require same platform for matching
         require_same_currency: Require same currency for matching
         require_same_underlier: Require same underlier for matching
@@ -147,6 +151,13 @@ def detect_risk_reversals_packages(
     product_labels = cand[product_col].astype(str).to_numpy()
     upis = cand[upi_col].astype("string").to_numpy() if upi_col in cand.columns else None
     event_actions = cand[event_action_col].astype("string").to_numpy() if event_action_col in cand.columns else None
+    package_indicators = cand[package_indicator_col].to_numpy() if package_indicator_col in cand.columns else None
+    package_prices: Optional[np.ndarray] = None
+    if package_price_col in cand.columns:
+        package_prices = pd.to_numeric(
+            cand[package_price_col].astype("string").str.replace(",", "", regex=False),
+            errors="coerce",
+        ).to_numpy(dtype=np.float64)
 
     matched = np.zeros(len(cand), dtype=bool)
     pkg_ids = np.full(len(cand), "", dtype=object)
@@ -155,23 +166,6 @@ def detect_risk_reversals_packages(
     pkg_conf = np.full(len(cand), 0.0, dtype=np.float64)
     pkg_reason = np.full(len(cand), "", dtype=object)
     pkg_legs_count = np.full(len(cand), 0, dtype=np.int32)
-
-    def _cluster_values(values: np.ndarray, tol: float) -> List[List[int]]:
-        clusters: List[List[int]] = []
-        for idx, val in enumerate(values):
-            placed = False
-            for cluster in clusters:
-                cvals = values[cluster]
-                avg = float(np.nanmean(cvals))
-                if avg <= 0:
-                    continue
-                if abs(val - avg) / avg <= tol:
-                    cluster.append(idx)
-                    placed = True
-                    break
-            if not placed:
-                clusters.append([idx])
-        return clusters
 
     def _strike_groups(strikes: np.ndarray) -> List[List[int]]:
         if strike_tolerance <= 0:
@@ -216,6 +210,38 @@ def detect_risk_reversals_packages(
             return False
 
         return True
+
+    def _is_truthy_flag(value: Any) -> bool:
+        if value is None or pd.isna(value):
+            return False
+        if isinstance(value, (bool, np.bool_)):
+            return bool(value)
+        txt = str(value).strip().upper()
+        return txt in {"1", "TRUE", "T", "Y", "YES"}
+
+    def _has_package_evidence(indices: List[int]) -> bool:
+        has_indicator = False
+        if package_indicators is not None:
+            has_indicator = any(_is_truthy_flag(package_indicators[i]) for i in indices)
+
+        has_price = False
+        if package_prices is not None:
+            vals = package_prices[indices]
+            finite_vals = vals[np.isfinite(vals)]
+            has_price = bool(len(finite_vals) > 0 and np.any(np.abs(finite_vals) > 0.0))
+
+        return has_indicator or has_price
+
+    def _is_symmetric_wing_structure(ordered_groups: List[Tuple[float, List[int]]]) -> bool:
+        low_strike = float(ordered_groups[0][0])
+        mid_strike = float(ordered_groups[1][0])
+        high_strike = float(ordered_groups[2][0])
+        low_w = mid_strike - low_strike
+        high_w = high_strike - mid_strike
+        if low_w <= 0 or high_w <= 0:
+            return False
+        width_tol = max(strike_tolerance * 2.0, 0.0002)
+        return abs(low_w - high_w) <= width_tol
 
     def _extract_index_name(value: Any) -> str:
         if value is None or pd.isna(value):
@@ -317,35 +343,50 @@ def detect_risk_reversals_packages(
         if not _directional_ok(indices, ordered):
             return False
 
-        notional_groups = _cluster_values(notionals, notional_tolerance_pct)
-        if len(notional_groups) != 2:
+        low_wing_local_idx = ordered[0][1][0]
+        high_wing_local_idx = ordered[2][1][0]
+        middle_local_indices = list(middle_group)
+
+        low_wing_abs_idx = indices[low_wing_local_idx]
+        high_wing_abs_idx = indices[high_wing_local_idx]
+        middle_abs_indices = [indices[i] for i in middle_local_indices]
+
+        middle_dirs = {_direction(product_labels[i]) for i in middle_abs_indices}
+        if middle_dirs != {1, -1}:
             return False
 
-        group_means = [float(np.nanmean(notionals[group])) for group in notional_groups]
-        low_idx = int(np.argmin(group_means))  # Small notional group index
-        high_idx = int(np.argmax(group_means))  # Large notional group index
-        low_mean = group_means[low_idx]
-        high_mean = group_means[high_idx]
+        wing_notionals = np.array(
+            [abs(notional_vals[low_wing_abs_idx]), abs(notional_vals[high_wing_abs_idx])],
+            dtype=np.float64,
+        )
+        middle_notionals = np.array([abs(notional_vals[i]) for i in middle_abs_indices], dtype=np.float64)
 
-        if low_mean <= 0 or high_mean <= 0:
+        if np.any(np.isnan(wing_notionals)) or np.any(np.isnan(middle_notionals)):
             return False
 
-        # Relaxed notional ratio check.
-        # Reference script implies ATM < Wing is sufficient.
-        # Enforcing <= 0.5 ratio kills valid trades like 80M ATM / 100M Wing.
-        # We assume 0.95 to ensure they are distinct and smaller.
-        if low_mean > high_mean * 0.95:
+        wing_ref = float(np.nanmean(wing_notionals))
+        if wing_ref <= 0:
             return False
 
-        low_group_indices = set(notional_groups[low_idx])
-        middle_indices = {indices[idx] for idx in middle_group}
-
-        # The Middle Strike trades MUST be the ones with the Smaller Notional
-        if not middle_indices.issubset({indices[idx] for idx in low_group_indices}):
+        # Wings should be near-equal notionals in a classic RR.
+        wing_diff_ratio = abs(wing_notionals[0] - wing_notionals[1]) / wing_ref
+        if wing_diff_ratio > notional_tolerance_pct:
             return False
 
-        notional_counts = sorted(len(g) for g in notional_groups)
-        if notional_counts != [2, 2]:
+        relaxed_middle_ratio = max(middle_notional_max_ratio, 0.95)
+        if float(np.nanmax(middle_notionals)) <= wing_ref * relaxed_middle_ratio:
+            return True
+
+        # Edge case: middle leg notional is misreported (often shows up as a straddle-like leg).
+        # We only allow this if the strike geometry is symmetric and at least one package clue exists.
+        if not _is_symmetric_wing_structure(ordered):
+            return False
+        if not _has_package_evidence(indices):
+            return False
+
+        # Even with the data-error fallback, middle legs should not be materially larger than wings.
+        upper_middle_bound = wing_ref * (1.0 + notional_tolerance_pct)
+        if float(np.nanmax(middle_notionals)) > upper_middle_bound:
             return False
 
         return True
@@ -406,8 +447,8 @@ def detect_risk_reversals_packages(
                     confidence += 0.1
                 confidence = min(confidence, 1.0)
 
-                strike_values = sorted({strike_vals[i] for i in combo_list})
-                notional_values = sorted({abs(notional_vals[i]) for i in combo_list})
+                strike_values = sorted({float(strike_vals[i]) for i in combo_list})
+                notional_values = sorted({float(abs(notional_vals[i])) for i in combo_list})
                 reason = build_package_reason(
                     platform=str(platform),
                     time_delta_max_seconds=time_delta_max,

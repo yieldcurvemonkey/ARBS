@@ -160,7 +160,17 @@ export function buildVolFlowSparklineData(
     const flowGamma = Number.isFinite(trade.flowGamma01 as number)
       ? Math.abs(Number(trade.flowGamma01))
       : null;
-    const selectedFlowValue = flowMetric === "gamma" ? flowGamma : flowVega;
+    const flowNotional = Number.isFinite(trade.economicNotional as number)
+      ? Math.abs(Number(trade.economicNotional))
+      : Number.isFinite(trade.signedNotional as number)
+        ? Math.abs(Number(trade.signedNotional))
+        : null;
+    const selectedFlowValue =
+      flowMetric === "gamma"
+        ? flowGamma
+        : flowMetric === "notional"
+          ? flowNotional
+          : flowVega;
     const flowValue =
       selectedFlowValue !== null && Number.isFinite(selectedFlowValue)
         ? Math.abs(Number(selectedFlowValue))

@@ -63,10 +63,13 @@ IDB_PLATFORMS = {"BGCD", "ISWV", "TPSE"}
 
 # Default detection parameters
 DEFAULT_MIN_LEGS = 3  # Minimum legs for a ladder (distinguishes from vertical spread)
-DEFAULT_MIN_STRIKES = 2  # Minimum distinct strikes
+DEFAULT_MIN_STRIKES = 3  # Minimum distinct strikes
 DEFAULT_MIN_STRIKE_WIDTH_BPS = 15  # Minimum strike separation in basis points
 DEFAULT_NOTIONAL_RATIO_TOLERANCE = 0.15  # 15% tolerance for notional ratios
 DEFAULT_LADDER_ITERATION_TIMEOUT_SEC = 5.0  # Hard timeout per cluster iteration
+DEFAULT_LADDER_GROUP_TIMEOUT_SEC = 10.0  # Hard timeout per economic group
+DEFAULT_MAX_CLUSTER_SIZE_FOR_COMBINATIONS = 14  # Protect against combinatorial explosion
+DEFAULT_MAX_SUBSET_CHECKS_PER_ANCHOR = 5000  # Upper bound on subset checks per anchor
 
 
 def _get_platform_time_window(platform: str, override: Optional[int] = None) -> int:
@@ -150,6 +153,9 @@ def detect_ladder_packages(
     min_strike_width_bps: float = DEFAULT_MIN_STRIKE_WIDTH_BPS,
     notional_ratio_tolerance: float = DEFAULT_NOTIONAL_RATIO_TOLERANCE,
     ladder_iteration_timeout_seconds: Optional[float] = DEFAULT_LADDER_ITERATION_TIMEOUT_SEC,
+    ladder_group_timeout_seconds: Optional[float] = DEFAULT_LADDER_GROUP_TIMEOUT_SEC,
+    max_cluster_size_for_combinations: int = DEFAULT_MAX_CLUSTER_SIZE_FOR_COMBINATIONS,
+    max_subset_checks_per_anchor: int = DEFAULT_MAX_SUBSET_CHECKS_PER_ANCHOR,
     # Column names
     product_col: str = "product_type",
     package_col: str = "package_type",
@@ -190,10 +196,13 @@ def detect_ladder_packages(
         df: Classifications dataframe with swaption trades
         time_window_seconds: Override platform-specific time windows (None = auto)
         min_legs: Minimum legs to qualify as ladder (default 3)
-        min_strikes: Minimum distinct strikes (default 2)
+        min_strikes: Minimum distinct strikes (default 3)
         min_strike_width_bps: Minimum strike separation in bps (default 15)
         notional_ratio_tolerance: Tolerance for notional ratio matching (default 0.15)
         ladder_iteration_timeout_seconds: Hard timeout per cluster iteration in seconds (None to disable)
+        ladder_group_timeout_seconds: Hard timeout per economic group in seconds (None to disable)
+        max_cluster_size_for_combinations: Max cluster size for subset enumeration
+        max_subset_checks_per_anchor: Max subset checks per anchor trade
         product_col: Column name for product type
         package_col: Column name for package type
         exec_col: Column name for execution timestamp
@@ -248,6 +257,9 @@ def detect_ladder_packages(
         candidate_mask &= ~out[platform_col].isin(platform_blocklist)
 
     cand = out.loc[candidate_mask].copy()
+    cand["_strike_num"] = pd.to_numeric(cand[strike_col], errors="coerce")
+    cand["_notional_num"] = pd.to_numeric(cand[notional_col], errors="coerce")
+    cand = cand[cand["_strike_num"].notna() & cand["_notional_num"].notna()].copy()
     if len(cand) < min_legs:
         return out
 
@@ -257,8 +269,8 @@ def detect_ladder_packages(
 
     n = len(cand)
     tsec = cand["_t"].to_numpy(dtype=np.int64)
-    strike_vals = pd.to_numeric(cand[strike_col], errors="coerce").to_numpy(dtype=np.float64)
-    notional_vals = pd.to_numeric(cand[notional_col], errors="coerce").to_numpy(dtype=np.float64)
+    strike_vals = cand["_strike_num"].to_numpy(dtype=np.float64)
+    notional_vals = cand["_notional_num"].to_numpy(dtype=np.float64)
     tenor_vals = pd.to_numeric(cand[tenor_col], errors="coerce").to_numpy(dtype=np.float64)
     forward_vals = pd.to_numeric(cand[forward_col], errors="coerce").to_numpy(dtype=np.float64)
     trade_ids = cand[trade_id_col].astype(str).to_numpy()
@@ -455,13 +467,21 @@ def detect_ladder_packages(
             # Get platform for time window
             platform = str(platforms[indices[0]]) if platforms is not None else "UNKNOWN"
             time_window = _get_platform_time_window(platform, time_window_seconds)
+            group_deadline = None
+            if ladder_group_timeout_seconds is not None:
+                group_deadline = time.monotonic() + ladder_group_timeout_seconds
 
             # Sliding window to find clusters
             i = 0
             while i < len(indices):
+                if group_deadline is not None and time.monotonic() > group_deadline:
+                    break
+
                 iteration_deadline = None
                 if ladder_iteration_timeout_seconds is not None:
                     iteration_deadline = time.monotonic() + ladder_iteration_timeout_seconds
+                    if group_deadline is not None:
+                        iteration_deadline = min(iteration_deadline, group_deadline)
 
                 if matched[indices[i]]:
                     i += 1
@@ -485,94 +505,104 @@ def detect_ladder_packages(
 
                 # Try to validate as ladder
                 if len(cluster) >= min_legs:
-                    # Try largest possible cluster first, then smaller subsets
+                    # Try full cluster first; only then try bounded subset search.
                     timed_out = False
-                    for size in range(len(cluster), min_legs - 1, -1):
-                        for subset in itertools.combinations(cluster, size):
-                            if iteration_deadline is not None and time.monotonic() > iteration_deadline:
-                                timed_out = True
-                                break
-                            subset_list = list(subset)
-                            # Skip if any already matched
-                            if any(matched[idx] for idx in subset_list):
-                                continue
+                    found_ladder = False
+                    matched_subset: Optional[List[int]] = None
+                    ladder_info = _validate_ladder_cluster(cluster, platform)
+                    if ladder_info is not None:
+                        found_ladder = True
+                        matched_subset = list(cluster)
+                    elif len(cluster) <= max_cluster_size_for_combinations:
+                        subset_checks = 0
+                        for size in range(len(cluster), min_legs - 1, -1):
+                            for subset in itertools.combinations(cluster, size):
+                                if iteration_deadline is not None and time.monotonic() > iteration_deadline:
+                                    timed_out = True
+                                    break
+                                subset_checks += 1
+                                if max_subset_checks_per_anchor is not None and subset_checks > max_subset_checks_per_anchor:
+                                    timed_out = True
+                                    break
+                                subset_list = list(subset)
+                                # Skip if any already matched
+                                if any(matched[idx] for idx in subset_list):
+                                    continue
 
-                            ladder_info = _validate_ladder_cluster(subset_list, platform)
-                            if ladder_info is not None:
-                                # Found a valid ladder
-                                opt_type_str = ladder_info["opt_type"]
-                                pkg_type_str = f"{opt_type_str}_LADDER"
-
-                                # Calculate confidence
-                                exec_times = [tsec[idx] for idx in subset_list]
-                                identical_ts = len(set(exec_times)) == 1
-                                time_delta = ladder_info["time_delta"]
-
-                                if platform in IDB_PLATFORMS:
-                                    confidence = 0.9  # IDB = high confidence
-                                elif identical_ts:
-                                    confidence = 0.8  # Identical timestamps
-                                elif pkg_ind is not None and any(
-                                    pkg_ind[idx] == True or pkg_ind[idx] == "Y"
-                                    for idx in subset_list
-                                ):
-                                    confidence = 0.75  # Has package indicator
-                                else:
-                                    confidence = 0.6  # Customer platform, spread timestamps
-
-                                # Adjust confidence based on time delta
-                                if time_delta < 5:
-                                    confidence = min(confidence + 0.1, 1.0)
-
-                                # Generate package ID
-                                pid = compute_package_id(
-                                    [trade_ids[idx] for idx in subset_list],
-                                    platform,
-                                    int(min(exec_times) // 30),
-                                    pkg_type_str,
-                                )
-
-                                # Build reason string
-                                strikes_str = "/".join([f"{s * 100:.2f}%" for s in ladder_info["strikes"]])
-                                notionals_str = "/".join([f"${n / 1e6:.0f}mm" for n in ladder_info["notionals"]])
-
-                                reason = build_package_reason(
-                                    platform=platform,
-                                    time_delta_max_seconds=float(time_delta),
-                                    vega_cluster_spread_pct=None,
-                                    premium_mode=f"LADDER_{ladder_info['structure_label']}",
-                                    num_legs=len(subset_list),
-                                    identical_timestamps=identical_ts,
-                                    extra_info=f"strikes={strikes_str}; "
-                                              f"notionals={notionals_str}; "
-                                              f"structure={ladder_info['structure_label']}; "
-                                              f"direction={ladder_info['direction']}",
-                                )
-
-                                legs_list = [str(trade_ids[idx]) for idx in subset_list]
-
-                                # Mark trades
-                                for idx in subset_list:
-                                    matched[idx] = True
-                                    pkg_ids[idx] = pid
-                                    pkg_type[idx] = pkg_type_str
-                                    pkg_legs[idx] = legs_list
-                                    pkg_conf[idx] = confidence
-                                    pkg_reason[idx] = reason
-                                    pkg_legs_count[idx] = len(subset_list)
-                                    ladder_structure[idx] = ladder_info["structure_label"]
-                                    ladder_direction[idx] = ladder_info["direction"]
-                                    ladder_strikes[idx] = ladder_info["strikes"]
-                                    ladder_notionals[idx] = ladder_info["notionals"]
-
-                                # Found a ladder in this cluster, break out
+                                ladder_info = _validate_ladder_cluster(subset_list, platform)
+                                if ladder_info is not None:
+                                    found_ladder = True
+                                    matched_subset = subset_list
+                                    break
+                            if timed_out or found_ladder:
                                 break
 
-                        if timed_out:
-                            break
-                        # If we found a match for this size, break
-                        if any(matched[idx] for idx in cluster):
-                            break
+                    if found_ladder and matched_subset is not None and ladder_info is not None:
+                        # Found a valid ladder
+                        opt_type_str = ladder_info["opt_type"]
+                        pkg_type_str = f"{opt_type_str}_LADDER"
+
+                        # Calculate confidence
+                        exec_times = [tsec[idx] for idx in matched_subset]
+                        identical_ts = len(set(exec_times)) == 1
+                        time_delta = ladder_info["time_delta"]
+
+                        if platform in IDB_PLATFORMS:
+                            confidence = 0.9  # IDB = high confidence
+                        elif identical_ts:
+                            confidence = 0.8  # Identical timestamps
+                        elif pkg_ind is not None and any(
+                            pkg_ind[idx] == True or pkg_ind[idx] == "Y"
+                            for idx in matched_subset
+                        ):
+                            confidence = 0.75  # Has package indicator
+                        else:
+                            confidence = 0.6  # Customer platform, spread timestamps
+
+                        # Adjust confidence based on time delta
+                        if time_delta < 5:
+                            confidence = min(confidence + 0.1, 1.0)
+
+                        # Generate package ID
+                        pid = compute_package_id(
+                            [trade_ids[idx] for idx in matched_subset],
+                            platform,
+                            int(min(exec_times) // 30),
+                            pkg_type_str,
+                        )
+
+                        # Build reason string
+                        strikes_str = "/".join([f"{s * 100:.2f}%" for s in ladder_info["strikes"]])
+                        notionals_str = "/".join([f"${n / 1e6:.0f}mm" for n in ladder_info["notionals"]])
+
+                        reason = build_package_reason(
+                            platform=platform,
+                            time_delta_max_seconds=float(time_delta),
+                            vega_cluster_spread_pct=None,
+                            premium_mode=f"LADDER_{ladder_info['structure_label']}",
+                            num_legs=len(matched_subset),
+                            identical_timestamps=identical_ts,
+                            extra_info=f"strikes={strikes_str}; "
+                                      f"notionals={notionals_str}; "
+                                      f"structure={ladder_info['structure_label']}; "
+                                      f"direction={ladder_info['direction']}",
+                        )
+
+                        legs_list = [str(trade_ids[idx]) for idx in matched_subset]
+
+                        # Mark trades
+                        for idx in matched_subset:
+                            matched[idx] = True
+                            pkg_ids[idx] = pid
+                            pkg_type[idx] = pkg_type_str
+                            pkg_legs[idx] = legs_list
+                            pkg_conf[idx] = confidence
+                            pkg_reason[idx] = reason
+                            pkg_legs_count[idx] = len(matched_subset)
+                            ladder_structure[idx] = ladder_info["structure_label"]
+                            ladder_direction[idx] = ladder_info["direction"]
+                            ladder_strikes[idx] = ladder_info["strikes"]
+                            ladder_notionals[idx] = ladder_info["notionals"]
 
                     if timed_out:
                         i += 1

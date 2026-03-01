@@ -14,6 +14,10 @@ import { STRUCTURE_ANALYTICS } from './rarity.config';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_LOOKBACK_DAYS = 90;
+const HISTOGRAM_CLIP_MIN_SAMPLES = 50;
+const HISTOGRAM_CLIP_LOWER_Q = 0.01;
+const HISTOGRAM_CLIP_UPPER_Q = 0.99;
+const HISTOGRAM_CLIP_SPAN_RATIO = 3;
 
 const IDB_MIC_SET = new Set(['BGCD', 'ISWV', 'TPSE']);
 const CUSTY_MIC_SET = new Set(['BILT', 'XXXX', 'TWSF', 'BBSF', 'XOFF']);
@@ -133,51 +137,115 @@ export function computeHistogram(
   binCount = 20,
   custyMask?: boolean[],
 ): HistogramResult {
-  const cleanValues = values.filter((value) => Number.isFinite(value));
-  if (!cleanValues.length) {
+  const samples = values
+    .map((value, index) => ({
+      value,
+      isCusty: custyMask ? Boolean(custyMask[index]) : false,
+    }))
+    .filter((sample) => Number.isFinite(sample.value));
+  if (!samples.length) {
     return { bins: [], binWidth: 0, totalCount: 0 };
   }
+
+  const cleanValues = samples.map((sample) => sample.value as number);
   const min = Math.min(...cleanValues);
   const max = Math.max(...cleanValues);
   const safeBinCount = Math.max(1, binCount);
   const span = max - min;
-  const binWidth = span === 0 ? 1 : span / safeBinCount;
+  const sortedValues = [...cleanValues].sort((a, b) => a - b);
+  let rangeMin = min;
+  let rangeMax = max;
+
+  if (span > 0 && sortedValues.length >= HISTOGRAM_CLIP_MIN_SAMPLES) {
+    const clippedMin = quantile(sortedValues, HISTOGRAM_CLIP_LOWER_Q);
+    const clippedMax = quantile(sortedValues, HISTOGRAM_CLIP_UPPER_Q);
+    const clippedSpan = clippedMax - clippedMin;
+    if (
+      Number.isFinite(clippedMin) &&
+      Number.isFinite(clippedMax) &&
+      clippedSpan > 0 &&
+      span / clippedSpan >= HISTOGRAM_CLIP_SPAN_RATIO
+    ) {
+      rangeMin = clippedMin;
+      rangeMax = clippedMax;
+    }
+  }
+
+  let effectiveSpan = rangeMax - rangeMin;
+  if (effectiveSpan <= 0) {
+    rangeMin = min;
+    rangeMax = max;
+    effectiveSpan = span;
+  }
+
+  if (effectiveSpan === 0) {
+    const singleBin = {
+      binStart: rangeMin - 0.5,
+      binEnd: rangeMin + 0.5,
+      count: samples.length,
+      custyCount: 0,
+      idbCount: 0,
+      cumulativePercent: 100,
+    };
+
+    if (custyMask) {
+      samples.forEach((sample) => {
+        if (sample.isCusty) {
+          singleBin.custyCount += 1;
+        } else {
+          singleBin.idbCount += 1;
+        }
+      });
+    }
+
+    return {
+      bins: [singleBin],
+      binWidth: 1,
+      totalCount: samples.length,
+    };
+  }
+
+  const binWidth = effectiveSpan / safeBinCount;
   const bins = Array.from({ length: safeBinCount }, (_, index) => {
-    const start = span === 0 ? min - 0.5 : min + index * binWidth;
+    const start = rangeMin + index * binWidth;
     return {
       binStart: start,
-      binEnd: span === 0 ? min + 0.5 : start + binWidth,
+      binEnd: start + binWidth,
       count: 0,
       custyCount: 0,
       idbCount: 0,
       cumulativePercent: 0,
     };
   });
-  cleanValues.forEach((value, index) => {
-    const rawIndex = span === 0 ? 0 : Math.floor((value - min) / binWidth);
+
+  samples.forEach((sample) => {
+    const value = sample.value as number;
+    const clampedValue = Math.min(Math.max(value, rangeMin), rangeMax);
+    const rawIndex = Math.floor((clampedValue - rangeMin) / binWidth);
     const binIndex = Math.min(Math.max(rawIndex, 0), bins.length - 1);
     const bin = bins[binIndex];
     bin.count += 1;
     if (custyMask) {
-      if (custyMask[index]) {
+      if (sample.isCusty) {
         bin.custyCount += 1;
       } else {
         bin.idbCount += 1;
       }
     }
   });
+
   let cumulative = 0;
   bins.forEach((bin) => {
     cumulative += bin.count;
-    bin.cumulativePercent = (cumulative / cleanValues.length) * 100;
+    bin.cumulativePercent = (cumulative / samples.length) * 100;
   });
+
   return {
     bins,
     binWidth,
-    totalCount: cleanValues.length,
+    totalCount: samples.length,
   };
 }
-
 const quantile = (sorted: number[], q: number): number => {
   if (!sorted.length) return NaN;
   const pos = (sorted.length - 1) * q;
@@ -364,7 +432,7 @@ export function getMetricValue(row: TapeRow, metricConfig: MetricConfig): number
   } else {
     value = getRawMetricValue(row, key);
   }
-  if (value === null || Number.isNaN(value)) return null;
+  if (value === null || !Number.isFinite(value)) return null;
   if (absolute) return Math.abs(value);
   return value;
 }
@@ -375,6 +443,44 @@ export function getMetricValueByKey(row: TapeRow, key: string): number | null {
   );
   if (config) return getMetricValue(row, config);
   return getRawMetricValue(row, key);
+}
+
+function sumLegMetricSeries(row: TapeRow, metricKey: string): number | null {
+  const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
+  let total: number | null = null;
+  legs.forEach((leg) => {
+    const legMetrics = (leg as any)?.leg_metrics || {};
+    const value = parseMetricSeries((legMetrics as any)[metricKey]);
+    if (value === null) return;
+    total = total === null ? value : total + value;
+  });
+  return total;
+}
+
+function resolveStraddleFallbackMetricValue(row: TapeRow, key: string): number | null {
+  if (normalizePackageType(row.package_type) !== 'STRADDLE') return null;
+  if (key !== 'straddle_vega01') return null;
+
+  const metrics = row.package_metrics || {};
+  const isAssumedIncomplete = Boolean((row as any)?.assumed_incomplete_straddle);
+  const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
+  const firstLegMetrics = (legs[0] as any)?.leg_metrics || {};
+
+  const vegaCurveValue = parseMetricSeries((metrics as any).vega_curve_vega01);
+  if (vegaCurveValue !== null) return vegaCurveValue;
+
+  const summedOutrightVega = sumLegMetricSeries(row, 'outright_vega01');
+  if (summedOutrightVega !== null) {
+    if (isAssumedIncomplete && legs.length <= 1) return summedOutrightVega * 2;
+    return summedOutrightVega;
+  }
+
+  if (isAssumedIncomplete) {
+    const outrightVega = parseMetricSeries((firstLegMetrics as any).outright_vega01);
+    if (outrightVega !== null) return outrightVega * 2;
+  }
+
+  return null;
 }
 
 function getRawMetricValue(row: TapeRow, key: string): number | null {
@@ -395,6 +501,8 @@ function getRawMetricValue(row: TapeRow, key: string): number | null {
   if (Object.prototype.hasOwnProperty.call(legMetrics, key)) {
     return parseMetricSeries((legMetrics as any)[key]);
   }
+  const fallbackValue = resolveStraddleFallbackMetricValue(row, key);
+  if (fallbackValue !== null) return fallbackValue;
   return null;
 }
 
@@ -530,12 +638,18 @@ export function resolvePlatformIdentifier(row: TapeRow): string | null {
   const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
   const firstLeg = legs[0] as any;
   const metrics = firstLeg?.leg_metrics || {};
+  const packageMetrics = row.package_metrics || {};
   const platform =
     metrics.platform_identifier ||
     metrics.platform ||
+    metrics.mic ||
+    firstLeg?.platform ||
     firstLeg?.platform_identifier ||
+    (row as any).platform ||
     row.platform_identifier ||
-    row.package_metrics?.platform_identifier;
+    packageMetrics.platform_identifier ||
+    packageMetrics.platform ||
+    packageMetrics.mic;
   return platform ? String(platform) : null;
 }
 
@@ -544,6 +658,7 @@ export function normalizePlatformTokens(platform: string | null | undefined): st
   return platform
     .trim()
     .toUpperCase()
+    .replace(/[\[\]"']/g, ' ')
     .split(/[\s,;/]+/)
     .filter(Boolean);
 }
@@ -551,8 +666,9 @@ export function normalizePlatformTokens(platform: string | null | undefined): st
 export function isCustyPlatform(platform: string | null | undefined): boolean {
   const tokens = normalizePlatformTokens(platform);
   if (!tokens.length) return true;
+  if (tokens.some((token) => IDB_MIC_SET.has(token))) return false;
   if (tokens.some((token) => CUSTY_MIC_SET.has(token))) return true;
-  return !tokens.some((token) => IDB_MIC_SET.has(token));
+  return true;
 }
 
 export function getTradeDirection(row: TapeRow): string {
@@ -779,3 +895,4 @@ export function splitRowsByPlatform(rows: TapeRow[]): {
   });
   return { custy, idb, combined: rows };
 }
+

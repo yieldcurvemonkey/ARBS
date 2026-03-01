@@ -14,7 +14,7 @@ Modules:
     conditional_curve: Same expiry, different tail maturities
     vega_curve: Vega-matched straddles across tenors
     vega_buckets: Vega-similar trades within time proximity
-    delta_hedge: Swaption + SOFR swap hedge linkage
+    delta_hedge: Swaption + USD swap hedge linkage
     outright: Unexplained single-leg trades with ATMF enrichment
     linking: Second-pass linking of packages by time/vega overlap
     utils: Shared utilities for all detection modules

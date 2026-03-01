@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  FileSpreadsheet,
   Link2,
   RefreshCw,
   X,
@@ -30,6 +31,7 @@ import {
 } from "recharts";
 import { QuadrantSparkline } from "./VolGridFlow/QuadrantSparkline";
 import { VolGridFlowHistory } from "./VolGridFlow/VolGridFlowHistory";
+import { PointGridFlow } from "./VolGridFlow/PointGridFlow";
 import type {
   HistoryLookback,
   QuadrantDayAggregate,
@@ -196,6 +198,10 @@ type ManualLinkRow = {
   is_active?: boolean | null;
   created_at?: string | null;
   package_type?: string | null;
+};
+
+type ManualStraddleRow = {
+  package_id?: string | null;
 };
 
 type LegMetricValues = {
@@ -537,11 +543,13 @@ const VOL_FLOW_INTRADAY_LOOKBACK_DAYS: Record<
 const VOL_FLOW_AXIS_METRIC_OPTIONS: VolFlowAxisMetric[] = [
   "vega",
   "gamma",
+  "notional",
 ];
 const DEFAULT_VOL_FLOW_AXIS_METRIC: VolFlowAxisMetric = "vega";
 const VOL_FLOW_AXIS_METRIC_LABEL: Record<VolFlowAxisMetric, string> = {
   vega: "Vega01",
   gamma: "Gamma01",
+  notional: "Notional",
 };
 const VOL_FLOW_DIRECTION_FILTER_OPTIONS: VolFlowDirectionFilter[] = [
   "ALL",
@@ -569,6 +577,7 @@ const VOL_FLOW_INTRADAY_LOOKBACK_STORAGE_KEY =
 const VOL_FLOW_WINDOW_HOURS_STORAGE_KEY = "swaptionVolGridFlowWindowHours.v3";
 const VOL_FLOW_WINDOW_START_HOURS_STORAGE_KEY =
   "swaptionVolGridFlowWindowStartHours.v3";
+const VOL_FLOW_DETAIL_TAB_STORAGE_KEY = "swaptionVolGridFlowDetailTab.v1";
 const VOL_FLOW_OVERLAY_FETCH_LIMIT = 500;
 const VOL_FLOW_OVERLAY_FETCH_MAX_PAGES = 40;
 const POST_CLUSTER_WINDOW_MS = 2 * ONE_HOUR_MS;
@@ -1691,12 +1700,18 @@ function resolvePlatformIdentifier(row: TapeRow): string | null {
   const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
   const firstLeg = legs[0] as any;
   const metrics = firstLeg?.leg_metrics || {};
+  const packageMetrics = row.package_metrics || {};
   const platform =
     metrics.platform_identifier ||
     metrics.platform ||
+    metrics.mic ||
+    firstLeg?.platform ||
     firstLeg?.platform_identifier ||
+    (row as any).platform ||
     row.platform_identifier ||
-    row.package_metrics?.platform_identifier;
+    packageMetrics.platform_identifier ||
+    packageMetrics.platform ||
+    packageMetrics.mic;
   return platform ? String(platform) : null;
 }
 
@@ -1707,6 +1722,7 @@ function normalizePlatformTokens(
   return platform
     .trim()
     .toUpperCase()
+    .replace(/[\[\]"']/g, " ")
     .split(/[\s,;/]+/)
     .filter(Boolean);
 }
@@ -1719,11 +1735,13 @@ function isIdbPlatform(platform: string | null | undefined): boolean {
 function isCustyPlatform(platform: string | null | undefined): boolean {
   const tokens = normalizePlatformTokens(platform);
   if (!tokens.length) return true;
+  if (tokens.some((token) => IDB_MIC_SET.has(token))) return false;
   if (tokens.some((token) => CUSTY_MIC_SET.has(token))) return true;
-  return !tokens.some((token) => IDB_MIC_SET.has(token));
+  return true;
 }
 
 type VolFlowScope = "COMBINED" | "IDB" | "CUSTY";
+type VolGridFlowDetailTab = "QUADRANTS" | "GRID_POINTS";
 
 function filterRowsByVolFlowScope(rows: TapeRow[], flowScope: VolFlowScope) {
   if (flowScope === "COMBINED") return rows;
@@ -2567,6 +2585,13 @@ function resolveVolFlowWeight(
   packageType: string,
   flowMetric: VolFlowAxisMetric,
 ): number {
+  if (flowMetric === "notional") {
+    const economicNotional = resolveEconomicNotional(row, packageType);
+    if (economicNotional !== null && Number.isFinite(economicNotional)) {
+      return Math.abs(Number(economicNotional));
+    }
+    return 0;
+  }
   const greekKey = flowMetric === "gamma" ? "gamma01" : "vega01";
   const greek = resolvePackageGreek(row, packageType, greekKey);
   if (greek !== null && Number.isFinite(greek)) {
@@ -6382,6 +6407,15 @@ function LegsSubtable({
 
   if (isDeltaHedgePackage) {
     const swaptionLeg = displayLegs[0] ?? null;
+    const matchType = isValid(metrics.delta_hedge_match_type)
+      ? String(metrics.delta_hedge_match_type).toUpperCase()
+      : "SINGLE";
+    const isBarbell = matchType === "BARBELL";
+    const curveBuild = isValid(metrics.delta_hedge_curve_build)
+      ? String(metrics.delta_hedge_curve_build)
+      : null;
+
+    // Single-leg hedge fields (backward compatible)
     const hedgeSwapTradeId = isValid(metrics.delta_hedge_swap_trade_id)
       ? String(metrics.delta_hedge_swap_trade_id)
       : null;
@@ -6408,9 +6442,41 @@ function LegsSubtable({
             3,
           )}%`;
 
+    // Barbell-specific fields
+    const longLegTradeId = isValid(metrics.delta_hedge_long_leg_trade_id)
+      ? String(metrics.delta_hedge_long_leg_trade_id)
+      : null;
+    const longLegTenor = isValid(metrics.delta_hedge_long_leg_tenor)
+      ? String(metrics.delta_hedge_long_leg_tenor)
+      : null;
+    const longLegNotional = parseMetricNumber(metrics.delta_hedge_long_leg_notional);
+    const longLegDv01 = parseMetricNumber(metrics.delta_hedge_long_leg_dv01);
+    const shortLegTradeId = isValid(metrics.delta_hedge_short_leg_trade_id)
+      ? String(metrics.delta_hedge_short_leg_trade_id)
+      : null;
+    const shortLegTenor = isValid(metrics.delta_hedge_short_leg_tenor)
+      ? String(metrics.delta_hedge_short_leg_tenor)
+      : null;
+    const shortLegNotional = parseMetricNumber(metrics.delta_hedge_short_leg_notional);
+    const shortLegDv01 = parseMetricNumber(metrics.delta_hedge_short_leg_dv01);
+    const expectedRatio = parseMetricNumber(metrics.delta_hedge_expected_ratio);
+    const observedRatio = parseMetricNumber(metrics.delta_hedge_observed_ratio);
+
     return (
       <div className="space-y-3">
-        <div className="flex items-center justify-end gap-2 px-2">
+        <div className="flex items-center justify-between gap-2 px-2">
+          <div className="flex items-center gap-2">
+            {isBarbell && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-teal-500/40 bg-teal-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-teal-200">
+                Barbell {curveBuild ? `(${curveBuild})` : ""}
+              </span>
+            )}
+            {isBarbell && expectedRatio !== null && observedRatio !== null && (
+              <span className="text-[10px] text-slate-400">
+                ratio: expected {formatMetricValue(expectedRatio, 2)} / observed {formatMetricValue(observedRatio, 2)}
+              </span>
+            )}
+          </div>
           <button
             type="button"
             onClick={(e) => {
@@ -6433,7 +6499,7 @@ function LegsSubtable({
                 <th className="px-2 py-1 text-left">Type</th>
                 <th className="px-2 py-1 text-right">Strike / Rate</th>
                 <th className="px-2 py-1 text-right">Notional</th>
-                <th className="px-2 py-1 text-right">Premium</th>
+                <th className="px-2 py-1 text-right">{isBarbell ? "DV01" : "Premium"}</th>
                 <th className="px-2 py-1 text-right">Tenor</th>
                 <th className="px-2 py-1 text-right">Execution</th>
                 <th className="px-2 py-1 text-right">Match Window</th>
@@ -6443,6 +6509,7 @@ function LegsSubtable({
               </tr>
             </thead>
             <tbody className="text-slate-100">
+              {/* Swaption row */}
               <tr className="odd:bg-slate-900/40">
                 <td className="px-2 py-1 font-semibold text-slate-200">Swaption</td>
                 <td className="px-2 py-1 font-mono text-slate-300">
@@ -6471,7 +6538,73 @@ function LegsSubtable({
                 <td className="px-1 py-1 text-right font-mono text-slate-400">--</td>
                 <td className="py-1 pl-1 pr-4 text-right font-mono text-slate-400">--</td>
               </tr>
-              {hedgeSwapTradeId ? (
+
+              {/* Barbell: two swap legs */}
+              {isBarbell && (longLegTradeId || shortLegTradeId) ? (
+                <>
+                  {longLegTradeId && (
+                    <tr className="odd:bg-slate-900/40">
+                      <td className="px-2 py-1 font-semibold text-teal-200">Long Leg</td>
+                      <td className="px-2 py-1 font-mono text-slate-300">{longLegTradeId}</td>
+                      <td className="px-2 py-1 text-slate-300">SOFR_SWAP</td>
+                      <td className="px-1 py-1 text-right font-mono text-slate-400">--</td>
+                      <td className="px-1 py-1 text-right font-mono">
+                        {formatNotional(longLegNotional)}
+                      </td>
+                      <td className="px-1 py-1 text-right font-mono">
+                        {formatMetricValue(longLegDv01, 3)}
+                      </td>
+                      <td className="px-1 py-1 text-right font-mono">
+                        {longLegTenor || "--"}
+                      </td>
+                      <td className="px-1 py-1 text-right font-mono">
+                        {formatExecutionWindow(row.execution_start, row.execution_end)}
+                      </td>
+                      <td className="px-1 py-1 text-right font-mono">
+                        {hedgeMatchWindowSeconds !== null
+                          ? `${formatMetricValue(hedgeMatchWindowSeconds, 0)}s`
+                          : "--"}
+                      </td>
+                      <td className="px-1 py-1 text-right font-mono">
+                        {hedgeImpliedDelta !== null
+                          ? `${formatMetricValue(hedgeImpliedDelta, 3)}x`
+                          : "--"}
+                      </td>
+                      <td className="px-1 py-1 text-right font-mono text-slate-400">--</td>
+                      <td className="py-1 pl-1 pr-4 text-right font-mono text-slate-400">--</td>
+                    </tr>
+                  )}
+                  {shortLegTradeId && (
+                    <tr className="odd:bg-slate-900/40">
+                      <td className="px-2 py-1 font-semibold text-teal-200">Short Leg</td>
+                      <td className="px-2 py-1 font-mono text-slate-300">{shortLegTradeId}</td>
+                      <td className="px-2 py-1 text-slate-300">SOFR_SWAP</td>
+                      <td className="px-1 py-1 text-right font-mono text-slate-400">--</td>
+                      <td className="px-1 py-1 text-right font-mono">
+                        {formatNotional(shortLegNotional)}
+                      </td>
+                      <td className="px-1 py-1 text-right font-mono">
+                        {formatMetricValue(shortLegDv01, 3)}
+                      </td>
+                      <td className="px-1 py-1 text-right font-mono">
+                        {shortLegTenor || "--"}
+                      </td>
+                      <td className="px-1 py-1 text-right font-mono">
+                        {formatExecutionWindow(row.execution_start, row.execution_end)}
+                      </td>
+                      <td className="px-1 py-1 text-right font-mono text-slate-400">--</td>
+                      <td className="px-1 py-1 text-right font-mono text-slate-400">--</td>
+                      <td className="px-1 py-1 text-right font-mono">
+                        {observedRatio !== null ? formatMetricValue(observedRatio, 3) : "--"}
+                      </td>
+                      <td className="py-1 pl-1 pr-4 text-right font-mono">
+                        {hedgeDv01Check}
+                      </td>
+                    </tr>
+                  )}
+                </>
+              ) : !isBarbell && hedgeSwapTradeId ? (
+                /* Single: one swap leg (backward compatible) */
                 <tr className="odd:bg-slate-900/40">
                   <td className="px-2 py-1 font-semibold text-teal-200">Hedge Swap</td>
                   <td className="px-2 py-1 font-mono text-slate-300">{hedgeSwapTradeId}</td>
@@ -7880,7 +8013,11 @@ function QuadrantCell({
             ? Number(trade.signedNotional)
             : 0;
           const rawMetric =
-            volFlowMetric === "gamma" ? trade.flowGamma01 : trade.flowVega01;
+            volFlowMetric === "gamma"
+              ? trade.flowGamma01
+              : volFlowMetric === "notional"
+                ? trade.economicNotional
+                : trade.flowVega01;
           const metricValue =
             rawMetric !== null && Number.isFinite(rawMetric)
               ? Math.abs(Number(rawMetric))
@@ -7991,9 +8128,12 @@ function QuadrantCell({
   const formatVolFlowValue = useCallback(
     (value: number | null | undefined) => {
       if (!isValid(value)) return "--";
+      if (volFlowMetric === "notional") {
+        return formatNotional(Number(value));
+      }
       return `${formatMetricValue(Number(value), 3)} ${typeShareMetricLabel}`;
     },
-    [typeShareMetricLabel],
+    [typeShareMetricLabel, volFlowMetric],
   );
   const sparklineHeight = mode === "vol_flow" ? 120 : 72;
 
@@ -8184,6 +8324,8 @@ function QuadrantFlowDashboard({
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [excludeLargeCustyNotional, setExcludeLargeCustyNotional] =
     useState(true);
+  const [detailTab, setDetailTab] =
+    useState<VolGridFlowDetailTab>("QUADRANTS");
   const [viewMode] = useState<"TODAY" | "HISTORY">("TODAY");
   const [flowMode, setFlowMode] =
     useState<SparklineMode>("vol_flow");
@@ -8334,6 +8476,14 @@ function QuadrantFlowDashboard({
         todayAnchorDayStart,
         intradayAverageLookbackDays,
         "gamma",
+        volFlowDirectionFilter,
+      ),
+      notional: buildQuadrantIntradayAverageProfiles(
+        overlayScopedRows,
+        config,
+        todayAnchorDayStart,
+        intradayAverageLookbackDays,
+        "notional",
         volFlowDirectionFilter,
       ),
     }),
@@ -8531,6 +8681,24 @@ function QuadrantFlowDashboard({
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(VOL_FLOW_DETAIL_TAB_STORAGE_KEY);
+    if (stored === "QUADRANTS" || stored === "GRID_POINTS") {
+      setDetailTab(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(VOL_FLOW_DETAIL_TAB_STORAGE_KEY, detailTab);
+  }, [detailTab]);
+
+  useEffect(() => {
+    if (detailTab !== "QUADRANTS") {
+      setOverlayHistoryRows([]);
+      overlayHistoryFetchKeyRef.current = null;
+      return;
+    }
     const anchorDayStart = todayAnchorDayStart;
     if (anchorDayStart === null || !Number.isFinite(anchorDayStart)) {
       setOverlayHistoryRows([]);
@@ -8626,7 +8794,7 @@ function QuadrantFlowDashboard({
       cancelled = true;
       controller.abort();
     };
-  }, [flowScope, todayAnchorDayStart, intradayAverageLookbackDays]);
+  }, [detailTab, flowScope, todayAnchorDayStart, intradayAverageLookbackDays]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -8750,46 +8918,80 @@ function QuadrantFlowDashboard({
               <>Today {formatDateShort(latestTimestamp)}</>
             )}
           </div>
-          <div className="text-[10px] text-slate-500">
-            Boundaries: expiry {formatRate(config.expiryBoundaryYears, 2)}y{" "}
-            {"\u00b7"} tenor {formatRate(config.tenorBoundaryYears, 2)}y{" "}
-            {"\u00b7"} tolerance +/-{formatRate(config.boundaryToleranceYears, 2)}y
+          <div className="mt-2 inline-flex overflow-hidden rounded border border-slate-700">
+            <button
+              type="button"
+              onClick={() => setDetailTab("QUADRANTS")}
+              className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                detailTab === "QUADRANTS"
+                  ? "bg-slate-700 text-slate-100"
+                  : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              Quadrants
+            </button>
+            <button
+              type="button"
+              onClick={() => setDetailTab("GRID_POINTS")}
+              className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                detailTab === "GRID_POINTS"
+                  ? "bg-slate-700 text-slate-100"
+                  : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              Grid Points
+            </button>
           </div>
-          <div className="text-[10px] text-slate-500">
-            Legend:{" "}
-            {flowMode === "vol_flow" ? (
-              <>
-                <span className="text-amber-300">metric-weighted vol flow</span>{" "}
-                {"\u00b7"}{" "}
-                <span className="text-amber-100/70">
-                  dashed = {intradayAverageLookback} intraday avg (matching
-                  y-axis metric)
-                </span>
-                {"\u00b7"}{" "}
-                <span className="text-slate-400">
-                  type filter {VOL_FLOW_DIRECTION_FILTER_LABEL[volFlowDirectionFilter].toLowerCase()}
-                </span>
-                {"\u00b7"}{" "}
-                <span className="text-slate-400">
-                  type share {VOL_FLOW_TYPE_SHARE_BASIS_LABEL[volFlowTypeShareBasis].toLowerCase()}
-                </span>
-                {"\u00b7"}{" "}
-                <span className="text-slate-400">Y selector in each quadrant</span>
-              </>
-            ) : (
-              <>
-                <span className="text-cyan-300">receiver</span>{" "}
-                {"\u00b7"} <span className="text-emerald-300">payer</span>{" "}
-                {"\u00b7"} <span className="text-slate-400">balanced</span>
-              </>
-            )}
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
-            <div className="inline-flex overflow-hidden rounded border border-slate-700">
-              <span className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide bg-slate-700 text-slate-100">
-                Vol Flow
-              </span>
+          {detailTab === "QUADRANTS" ? (
+            <div className="text-[10px] text-slate-500">
+              Boundaries: expiry {formatRate(config.expiryBoundaryYears, 2)}y{" "}
+              {"\u00b7"} tenor {formatRate(config.tenorBoundaryYears, 2)}y{" "}
+              {"\u00b7"} tolerance +/-{formatRate(config.boundaryToleranceYears, 2)}y
             </div>
+          ) : (
+            <div className="text-[10px] text-slate-500">
+              Point-level view: current bpvol, current straddle premium, and 1d
+              changes vs prior ET session.
+            </div>
+          )}
+          {detailTab === "QUADRANTS" && (
+            <div className="text-[10px] text-slate-500">
+              Legend:{" "}
+              {flowMode === "vol_flow" ? (
+                <>
+                  <span className="text-amber-300">metric-weighted vol flow</span>{" "}
+                  {"\u00b7"}{" "}
+                  <span className="text-amber-100/70">
+                    dashed = {intradayAverageLookback} intraday avg (matching
+                    y-axis metric)
+                  </span>
+                  {"\u00b7"}{" "}
+                  <span className="text-slate-400">
+                    type filter {VOL_FLOW_DIRECTION_FILTER_LABEL[volFlowDirectionFilter].toLowerCase()}
+                  </span>
+                  {"\u00b7"}{" "}
+                  <span className="text-slate-400">
+                    type share {VOL_FLOW_TYPE_SHARE_BASIS_LABEL[volFlowTypeShareBasis].toLowerCase()}
+                  </span>
+                  {"\u00b7"}{" "}
+                  <span className="text-slate-400">Y selector in each quadrant</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-cyan-300">receiver</span>{" "}
+                  {"\u00b7"} <span className="text-emerald-300">payer</span>{" "}
+                  {"\u00b7"} <span className="text-slate-400">balanced</span>
+                </>
+              )}
+            </div>
+          )}
+          {detailTab === "QUADRANTS" && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
+              <div className="inline-flex overflow-hidden rounded border border-slate-700">
+                <span className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide bg-slate-700 text-slate-100">
+                  Vol Flow
+                </span>
+              </div>
             {flowMode === "vol_flow" && (
               <>
                 <label className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900/40 px-2 py-1 text-[10px] uppercase tracking-wide text-slate-400">
@@ -8843,7 +9045,7 @@ function QuadrantFlowDashboard({
                       }`}
                       title={`Type share weighted by ${
                         option === "RISK"
-                          ? "selected Y metric (Vega01/Gamma01)"
+                          ? "selected Y metric (Vega01/Gamma01/Notional)"
                           : "economic notional"
                       }`}
                     >
@@ -8913,9 +9115,10 @@ function QuadrantFlowDashboard({
                 </button>
               </>
             )}
-          </div>
+            </div>
+          )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex overflow-hidden rounded border border-slate-700">
             <button
               type="button"
@@ -8951,6 +9154,17 @@ function QuadrantFlowDashboard({
               Custy
             </button>
           </div>
+          <label className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-900/40 px-2 py-1 text-[10px] uppercase tracking-wide text-slate-300">
+            <input
+              type="checkbox"
+              checked={excludeLargeCustyNotional}
+              onChange={(event) =>
+                setExcludeLargeCustyNotional(event.target.checked)
+              }
+              className="h-3 w-3"
+            />
+            {COMICALLY_LARGE_CUSTY_TOGGLE_LABEL}
+          </label>
           <button
             type="button"
             onClick={() => setIsCollapsed((current) => !current)}
@@ -8958,26 +9172,30 @@ function QuadrantFlowDashboard({
           >
             {isCollapsed ? "Expand" : "Collapse"}
           </button>
-          <button
-            type="button"
-            onClick={() => setShowConfig((current) => !current)}
-            disabled={isCollapsed}
-            className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
-          >
-            {showConfig ? "Hide Config" : "Config"}
-          </button>
-          <button
-            type="button"
-            onClick={() => onConfigChange(DEFAULT_QUADRANT_CONFIG)}
-            disabled={isCollapsed}
-            className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
-          >
-            Reset
-          </button>
+          {detailTab === "QUADRANTS" && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowConfig((current) => !current)}
+                disabled={isCollapsed}
+                className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
+              >
+                {showConfig ? "Hide Config" : "Config"}
+              </button>
+              <button
+                type="button"
+                onClick={() => onConfigChange(DEFAULT_QUADRANT_CONFIG)}
+                disabled={isCollapsed}
+                className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
+              >
+                Reset
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      {!isCollapsed && showConfig && (
+      {!isCollapsed && detailTab === "QUADRANTS" && showConfig && (
         <div className="mt-3 grid gap-3 md:grid-cols-3">
           <label className="block text-[10px] uppercase tracking-wide text-slate-400">
             Expiry boundary (years)
@@ -9020,7 +9238,17 @@ function QuadrantFlowDashboard({
 
       {!isCollapsed && (
         <>
-          {viewMode === "TODAY" ? (
+          {detailTab === "GRID_POINTS" ? (
+            <PointGridFlow
+              platform={historyPlatform}
+              excludeLargeCustyNotional={excludeLargeCustyNotional}
+              formatters={{
+                formatNotional,
+                formatRate,
+                formatCount,
+              }}
+            />
+          ) : viewMode === "TODAY" ? (
             <>
               <div className="mt-4 grid gap-3 lg:grid-cols-2">
                 <QuadrantCell
@@ -11561,6 +11789,7 @@ export default function SwaptionTradeTape() {
   const latestRef = useRef<string | null>(null);
   const fetchInFlight = useRef(false);
   const queuedFetchRequestRef = useRef<FetchTapeRequest | null>(null);
+  const seenForcedStraddlePackageIdsRef = useRef<Set<string>>(new Set());
   const columnFilterPayload = useMemo(
     () => buildColumnFilterPayload(filters),
     [filters],
@@ -11991,6 +12220,7 @@ export default function SwaptionTradeTape() {
   }, [rows]);
 
   const manualLinkFetchRef = useRef<string | null>(null);
+  const manualStraddleFetchRef = useRef<string | null>(null);
 
   const fetchManualLinks = useCallback(async (startDate?: string | null) => {
     try {
@@ -12008,6 +12238,58 @@ export default function SwaptionTradeTape() {
     }
   }, []);
 
+  const fetchManualStraddles = useCallback(async (startDate?: string | null) => {
+    try {
+      const params = new URLSearchParams();
+      params.set("limit", "2000");
+      if (startDate) params.set("start_date", startDate);
+      const res = await fetch(
+        `/api/swaptions-tape/manual-straddles?${params.toString()}`,
+      );
+      if (!res.ok) return;
+      const payload = await res.json();
+      const ids = Array.isArray(payload?.rows)
+        ? payload.rows
+            .map((row: ManualStraddleRow) =>
+              String(row?.package_id || "").trim(),
+            )
+            .filter(Boolean)
+        : [];
+      setForcedStraddlePackageIds(normalizeSelectedPackageIds(ids));
+    } catch {
+      // Silent fail; manual straddle overrides are best effort.
+    }
+  }, []);
+
+  const removeManualStraddles = useCallback(
+    async (packageIds: string[]) => {
+      const ids = normalizeSelectedPackageIds(packageIds);
+      if (!ids.length) return;
+      try {
+        await fetch("/api/swaptions-tape/manual-straddles", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            package_ids: ids,
+            user: currentUser || undefined,
+          }),
+        });
+      } catch {
+        // Silent fail; stale IDs will be retried on next cleanup pass.
+      }
+    },
+    [currentUser],
+  );
+
+  useEffect(() => {
+    if (!rows.length) return;
+    const next = new Set(seenForcedStraddlePackageIdsRef.current);
+    rows.forEach((row) => {
+      if (row?.package_id) next.add(row.package_id);
+    });
+    seenForcedStraddlePackageIdsRef.current = next;
+  }, [rows]);
+
   useEffect(() => {
     if (!manualLinkStartDate) return;
     const prior = manualLinkFetchRef.current;
@@ -12023,14 +12305,31 @@ export default function SwaptionTradeTape() {
   }, [fetchManualLinks, manualLinkStartDate]);
 
   useEffect(() => {
-    if (!forcedStraddlePackageIds.length) return;
+    if (!manualLinkStartDate) return;
+    const prior = manualStraddleFetchRef.current;
+    if (prior) {
+      const priorTime = new Date(prior).getTime();
+      const nextTime = new Date(manualLinkStartDate).getTime();
+      if (!Number.isNaN(priorTime) && !Number.isNaN(nextTime)) {
+        if (nextTime >= priorTime) return;
+      }
+    }
+    manualStraddleFetchRef.current = manualLinkStartDate;
+    fetchManualStraddles(manualLinkStartDate);
+  }, [fetchManualStraddles, manualLinkStartDate]);
+
+  useEffect(() => {
+    if (loading || !forcedStraddlePackageIds.length) return;
     const availableIds = new Set(rows.map((row) => row.package_id));
     setForcedStraddlePackageIds((prev) => {
-      const next = prev.filter((id) => availableIds.has(id));
-      if (next.length === prev.length) return prev;
-      return next;
+      const seenIds = seenForcedStraddlePackageIdsRef.current;
+      const staleIds = prev.filter((id) => seenIds.has(id) && !availableIds.has(id));
+      if (!staleIds.length) return prev;
+      staleIds.forEach((id) => seenIds.delete(id));
+      void removeManualStraddles(staleIds);
+      return prev.filter((id) => availableIds.has(id));
     });
-  }, [forcedStraddlePackageIds.length, rows]);
+  }, [forcedStraddlePackageIds.length, loading, removeManualStraddles, rows]);
 
   const manualLinkIndex = useMemo(() => {
     const byTradeId = new Map<string, ManualLinkRow[]>();
@@ -12394,12 +12693,33 @@ export default function SwaptionTradeTape() {
       .map((row) => row.package_id);
   }, [resolvedRows, selectedPackageIds]);
 
-  const handleMakeStraddle = useCallback(() => {
+  const handleMakeStraddle = useCallback(async () => {
     if (!selectedForceableStraddleIds.length) return;
-    setForcedStraddlePackageIds((prev) =>
-      normalizeSelectedPackageIds([...prev, ...selectedForceableStraddleIds]),
-    );
-  }, [selectedForceableStraddleIds]);
+    const ids = normalizeSelectedPackageIds(selectedForceableStraddleIds);
+    try {
+      const res = await fetch("/api/swaptions-tape/manual-straddles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          package_ids: ids,
+          user: currentUser || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        console.error(
+          "Failed to persist manual straddle overrides",
+          payload?.error || res.statusText,
+        );
+        return;
+      }
+      setForcedStraddlePackageIds((prev) =>
+        normalizeSelectedPackageIds([...prev, ...ids]),
+      );
+    } catch (error) {
+      console.error("Failed to persist manual straddle overrides", error);
+    }
+  }, [currentUser, selectedForceableStraddleIds]);
 
   const handleSparklineTradeSelect = useCallback((packageId: string) => {
     if (!packageId) return;
@@ -12711,15 +13031,24 @@ export default function SwaptionTradeTape() {
     const sourceLabel = source === "HYBRID" ? "Hybrid" : "Manual";
     const normalizedPackageType = normalizePackageType(row.package_type || "");
     const isDeltaHedgePackage = normalizedPackageType === "DELTA_HEDGE";
+    const deltaHedgeMatchType =
+      isDeltaHedgePackage && isValid(row.package_metrics?.delta_hedge_match_type)
+        ? String(row.package_metrics!.delta_hedge_match_type).toUpperCase()
+        : null;
+    const isDeltaHedgeBarbell = deltaHedgeMatchType === "BARBELL";
     const packageLabel = normalizedPackageType || row.package_type || "N/A";
     const packageLabelWithMarker = isDeltaHedgePackage
-      ? `${packageLabel} Δ`
+      ? isDeltaHedgeBarbell
+        ? `${packageLabel} ΔΔ`
+        : `${packageLabel} Δ`
       : packageLabel;
     const displayLabel = assumedIncomplete
       ? `${packageLabelWithMarker}*`
       : packageLabelWithMarker;
     const deltaHedgeTooltip = isDeltaHedgePackage
-      ? "Swap-linked hedge package: swaption paired to a synthetic hedge swap row."
+      ? isDeltaHedgeBarbell
+        ? "Barbell hedge: swaption paired to two spot swap legs (decomposed forward delta)."
+        : "Swap-linked hedge package: swaption paired to a synthetic hedge swap row."
       : undefined;
     const inferredTooltip =
       row.assumed_straddle_reason ||
@@ -12856,6 +13185,111 @@ export default function SwaptionTradeTape() {
   const showVega = metricMode === "VEGA";
   const metricLabel = showVega ? "Vega" : "Notional";
   const metricColumnKey = showVega ? "metric-vega" : "metric-notional";
+  const handleExportToExcel = useCallback(() => {
+    if (!filteredRows.length || typeof window === "undefined") return;
+
+    const sanitizeCell = (value: unknown) => {
+      if (value === null || value === undefined) return "";
+      const normalized = String(value)
+        .replace(/\r?\n|\r/g, " ")
+        .trim();
+      if (!normalized) return "";
+      return /^[=+\-@]/.test(normalized) ? `'${normalized}` : normalized;
+    };
+    const escapeHtml = (value: string) =>
+      value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+
+    const headerCells = [
+      "Action",
+      "Package Type",
+      "Quadrant",
+      "Time",
+      "Platform",
+      metricLabel,
+      "Trade Label",
+      "Package ID",
+    ];
+
+    const dataRows = filteredRows.map((row) => {
+      const metrics = firstLegMetrics(row);
+      const display = resolveQuadrantDisplay(row, quadrantConfig);
+      const metricValue = showVega
+        ? formatMetricValue(resolveDisplayVega(row), 3)
+        : (() => {
+            const formattedNotional = formatNotional(resolveDisplayNotional(row));
+            const suffix =
+              isRowNotionalCapped(row) && formattedNotional !== "--" ? "+" : "";
+            return `${formattedNotional}${suffix}`;
+          })();
+      const cells = [
+        metrics.event_action || "",
+        row.package_type || "",
+        display.label,
+        formatExecutionWindow(row.execution_start, row.execution_end),
+        metrics.platform || "",
+        metricValue,
+        buildTradeLabel(row),
+        row.package_id,
+      ];
+      return `<tr>${cells
+        .map((cell) => `<td>${escapeHtml(sanitizeCell(cell))}</td>`)
+        .join("")}</tr>`;
+    });
+
+    const headerRow = `<tr>${headerCells
+      .map((cell) => `<th>${escapeHtml(cell)}</th>`)
+      .join("")}</tr>`;
+    const workbookContents = `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      table { border-collapse: collapse; }
+      th, td {
+        border: 1px solid #d1d5db;
+        padding: 4px 6px;
+        font-family: Calibri, Arial, sans-serif;
+        font-size: 11pt;
+        white-space: nowrap;
+      }
+      th {
+        background-color: #f3f4f6;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <table>${headerRow}${dataRows.join("")}</table>
+  </body>
+</html>`;
+
+    const workbookBlob = new Blob([`\uFEFF${workbookContents}`], {
+      type: "application/vnd.ms-excel;charset=utf-8;",
+    });
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const downloadUrl = window.URL.createObjectURL(workbookBlob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = `swaptions-trade-tape-${timestamp}.xls`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(downloadUrl);
+  }, [
+    buildTradeLabel,
+    filteredRows,
+    firstLegMetrics,
+    metricLabel,
+    quadrantConfig,
+    resolveDisplayNotional,
+    resolveDisplayVega,
+    showVega,
+  ]);
 
   const metricBody = (row: TapeRow) => {
     const value = showVega
@@ -12948,6 +13382,15 @@ export default function SwaptionTradeTape() {
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-3 text-xs text-gray-300">
+          <button
+            type="button"
+            onClick={handleExportToExcel}
+            disabled={!filteredRows.length}
+            className="inline-flex items-center gap-2 rounded border border-emerald-500/60 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <FileSpreadsheet className="h-3.5 w-3.5" />
+            Export to Excel
+          </button>
           <button
             type="button"
             onClick={() => setMethodologyModalOpen(true)}

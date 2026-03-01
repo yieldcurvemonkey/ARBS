@@ -10,6 +10,43 @@ from Query.STIRFutures._STIRFutureGenericPricer import _STIRFutureGenericPricer
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
 
 
+def _extract_stirf_contracts(stirf: rl.STIRFuture) -> int:
+    kwargs_obj = getattr(stirf, "_kwargs", None) or getattr(stirf, "kwargs", None)
+    if kwargs_obj is not None:
+        meta = getattr(kwargs_obj, "meta", None)
+        if isinstance(meta, dict) and meta.get("contracts") is not None:
+            try:
+                return int(meta["contracts"])
+            except Exception:
+                pass
+
+        leg1 = getattr(kwargs_obj, "leg1", None)
+        nominal = meta.get("nominal") if isinstance(meta, dict) else None
+        if isinstance(leg1, dict):
+            notional = leg1.get("notional")
+            try:
+                if nominal is not None and notional is not None and float(nominal) != 0.0:
+                    return int(round(abs(float(notional)) / float(nominal)))
+            except Exception:
+                pass
+
+    legacy_kwargs = getattr(stirf, "__dict__", {}).get("kwargs")
+    if isinstance(legacy_kwargs, dict) and legacy_kwargs.get("contracts") is not None:
+        try:
+            return int(legacy_kwargs["contracts"])
+        except Exception:
+            pass
+
+    contracts_attr = getattr(stirf, "contracts", None)
+    if contracts_attr is not None:
+        try:
+            return int(contracts_attr)
+        except Exception:
+            pass
+
+    return 1
+
+
 @dataclass
 class RLSTIRFuturePricer(_STIRFutureGenericPricer):
     _curve: str
@@ -162,8 +199,8 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
 
     def pv01(self, contracts=None, notional=None, stirf: rl.STIRFuture = None) -> float:
         if stirf is not None:
-            unit_bpv = -float(self.build_stirf().analytic_delta().real) 
-            return stirf.__dict__["kwargs"]["contracts"] * unit_bpv
+            unit_bpv = -float(self.build_stirf().analytic_delta().real)
+            return _extract_stirf_contracts(stirf) * unit_bpv
 
         # Use analytic_delta which for STIRFuture requires no arguments (based on docs)
         return -float(self.build_stirf(contracts=contracts or self._contracts, notional=notional or self._notional).analytic_delta().real)
@@ -280,12 +317,21 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
             RATESLIB_CURVE_DEFINITIONS[self._curve]["ReferenceRate"],
         )
 
-        return rl.STIRFuture(
-            effective=self._to_rl_dt(eff),
-            termination=self._to_rl_dt(mat),
-            spec=spec,
-            price=p,
-            contracts=int(c),
-            curves=self._curve,
-            leg2_fixings=fixings or self._meta_data.get("fixings", None),
-        )
+        stir_kwargs = {
+            "effective": self._to_rl_dt(eff),
+            "termination": self._to_rl_dt(mat),
+            "spec": spec,
+            "price": p,
+            "contracts": int(c),
+            "curves": self._curve,
+        }
+
+        meta_fixings = self._meta_data.get("fixings", None) if isinstance(self._meta_data, dict) else None
+        applied_fixings = fixings if fixings is not None else meta_fixings
+        if applied_fixings is not None:
+            try:
+                return rl.STIRFuture(**stir_kwargs, leg2_rate_fixings=applied_fixings)
+            except TypeError:
+                return rl.STIRFuture(**stir_kwargs, leg2_fixings=applied_fixings)
+
+        return rl.STIRFuture(**stir_kwargs)

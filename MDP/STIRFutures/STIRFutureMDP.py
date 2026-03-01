@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import importlib.util
 import itertools
 import os
 import random
@@ -348,6 +349,52 @@ def _curve_from_symbol(sym: str) -> Optional[str]:
     return _ROOT_TO_CURVE_MAP.get(root)
 
 
+def _socksio_available() -> bool:
+    return importlib.util.find_spec("socksio") is not None
+
+
+def _coerce_date(value: Any) -> datetime.date:
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+        return datetime.date(int(value.year), int(value.month), int(value.day))
+    raise ValueError(f"Could not coerce {type(value)} to date.")
+
+
+def _extract_stir_effective_termination(stir: rl.STIRFuture) -> Tuple[datetime.date, datetime.date]:
+    # rateslib 2.6+ keeps constructor args in _kwargs/kwargs with leg schedules.
+    kwargs_obj = getattr(stir, "_kwargs", None) or getattr(stir, "kwargs", None)
+    if kwargs_obj is not None:
+        for leg_name in ("leg1", "leg2"):
+            leg_args = getattr(kwargs_obj, leg_name, None)
+            if isinstance(leg_args, dict):
+                schedule = leg_args.get("schedule")
+                eff = getattr(schedule, "effective", None) if schedule is not None else None
+                term = getattr(schedule, "termination", None) if schedule is not None else None
+                if eff is not None and term is not None:
+                    return _coerce_date(eff), _coerce_date(term)
+
+    # Backward compatibility for older rateslib internal structure.
+    legacy_kwargs = getattr(stir, "__dict__", {}).get("kwargs")
+    if isinstance(legacy_kwargs, dict):
+        eff = legacy_kwargs.get("effective")
+        term = legacy_kwargs.get("termination")
+        if eff is not None and term is not None:
+            return _coerce_date(eff), _coerce_date(term)
+
+    # Last-resort fallback to leg schedules if available.
+    leg1 = getattr(stir, "leg1", None)
+    schedule = getattr(leg1, "schedule", None)
+    eff = getattr(schedule, "effective", None) if schedule is not None else None
+    term = getattr(schedule, "termination", None) if schedule is not None else None
+    if eff is not None and term is not None:
+        return _coerce_date(eff), _coerce_date(term)
+
+    raise ValueError("Unable to extract STIR future effective/termination dates from rateslib object.")
+
+
 def _build_socks5h(host: str) -> dict:
     user = os.getenv("NORDVPN_USER", "3G5mmfKXWfCGFGT4yDL34Tzn")
     pwd = os.getenv("NORDVPN_PASS", "VN33uViQZp6pXVzdgsGskhNg")
@@ -431,7 +478,10 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             "us.socks.nordhold.net",
             None,  # allow direct
         ]
+        self._socksio_enabled = _socksio_available()
         self._barchart_proxy_hosts: List[Optional[str]] = list(kwargs.get("barchart_proxy_hosts", default_hosts))
+        if not self._socksio_enabled:
+            self._barchart_proxy_hosts = [None]
         random.shuffle(self._barchart_proxy_hosts)
         self._barchart_proxy_ttl: int = int(kwargs.get("barchart_proxy_ttl", 60))
 
@@ -503,6 +553,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         # Use helper to get rateslib object just to extract correct dates/spec
         # This avoids duplicating the logic for IMM vs ZQ dates
         _, temp_stir = _stir_future_from_symbol(sym, price)
+        effective_date, maturity_date = _extract_stir_effective_termination(temp_stir)
 
         meta = dict(args)
         if curve_name == "USD-SOFR-1D":
@@ -525,8 +576,8 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
         return RLSTIRFuturePricer(
             rl_stirf_id=sym,
             reference_date=ref_date,
-            effective_date=temp_stir.__dict__["kwargs"]["effective"].date(),
-            maturity_date=temp_stir.__dict__["kwargs"]["termination"].date(),
+            effective_date=effective_date,
+            maturity_date=maturity_date,
             curve=curve_name,
             price=price,
             rate=100.0 - price,
@@ -587,6 +638,8 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             host = next(cycler)
             if host is None:
                 return None, None
+            if not self._socksio_enabled:
+                continue
             try:
                 proxies = _build_socks5h(host)
             except Exception:

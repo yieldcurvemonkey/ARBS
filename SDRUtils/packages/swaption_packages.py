@@ -406,6 +406,8 @@ def _run_risk_reversal_phase(
         tenor_col=config.tenor_col,
         forward_col=config.forward_col,
         notional_col=config.notional_col,
+        package_indicator_col=config.package_indicator_col,
+        package_price_col=config.package_price_col,
         require_same_platform=config.require_same_platform,
         require_same_currency=config.require_same_currency,
         require_same_underlier=config.require_same_underlier,
@@ -952,12 +954,20 @@ def _run_delta_hedge_phase(
     require_swap_package_indicator_for_delta_hedge: bool,
     delta_hedge_require_same_platform: bool,
     delta_hedge_check_dv01: bool,
+    # --- barbell parameters ---
+    enable_barbell: bool = True,
+    barbell_risk_models: Optional[Dict] = None,
+    barbell_tenor_tolerance: float = 1.0,
+    barbell_time_half_life: float = 30.0,
 ) -> pd.DataFrame:
     """
-    Phase 5.5: Detect swaption + SOFR swap delta-hedge packages.
+    Phase 5.5: Detect swaption + USD swap delta-hedge packages.
 
     Runs after vega-curve and before outright classification. This phase only
-    consumes still-unpackaged swaptions.
+    consumes still-unpackaged swaptions. Enhanced with barbell decomposition
+    to detect multi-leg spot swap hedges of forward swaption deltas.
+
+    Pricing consistency checks remain SOFR-pricer based where supported.
     """
     if swap_candidates_df is None or swap_candidates_df.empty:
         return df
@@ -990,6 +1000,10 @@ def _run_delta_hedge_phase(
         trade_label_col=config.trade_label_col,
         expiration_col=config.expiration_col,
         underlying_expiration_col=config.tail_maturity_col,
+        enable_barbell=enable_barbell,
+        barbell_risk_models=barbell_risk_models,
+        barbell_tenor_tolerance=barbell_tenor_tolerance,
+        barbell_time_half_life=barbell_time_half_life,
     )
 
 
@@ -1169,7 +1183,7 @@ def detect_and_link_swaption_packages_df(
     detect_ladders: bool = True,
     ladder_time_window_seconds: Optional[int] = 300,  # None = use platform-specific defaults
     ladder_min_legs: int = 3,
-    ladder_min_strikes: int = 2,
+    ladder_min_strikes: int = 3,
     ladder_min_strike_width_bps: float = 10.0,
     ladder_notional_ratio_tolerance: float = 0.15,
     # Conditional curve parameters
@@ -1190,6 +1204,11 @@ def detect_and_link_swaption_packages_df(
     delta_hedge_require_same_platform: bool = False,
     delta_hedge_check_dv01: bool = True,
     pricer: Optional["QLIRSwapCurve"] = None,
+    # Barbell decomposition parameters (delta-hedge enhancement)
+    enable_barbell: bool = True,
+    barbell_risk_models: Optional[Dict] = None,
+    barbell_tenor_tolerance: float = 1.0,
+    barbell_time_half_life: float = 30.0,
     # Outright/unexplained detection parameters
     detect_outrights: bool = True,
     outright_offset_tolerance_bps: float = 7.5,
@@ -1210,7 +1229,7 @@ def detect_and_link_swaption_packages_df(
     3b. Ladders (3+ legs / christmas trees - same tenor, 3+ strikes, asymmetric notionals)
     4. Conditional curve trades (same expiry, different tails)
     5. Vega curve trades (vega-matched straddles across tenors)
-    5.5. Delta-hedges (swaption + SOFR swap pairs)
+    5.5. Delta-hedges (swaption + USD swap pairs)
     6. Outrights (unexplained single-leg trades, enriched with ATMF offset)
 
     To add a new structure type (e.g., Iron Condors):
@@ -1249,13 +1268,13 @@ def detect_and_link_swaption_packages_df(
         detect_ladders: Whether to detect ladder/christmas tree structures (default True)
         ladder_time_window_seconds: Override platform-specific time windows (None = auto)
         ladder_min_legs: Minimum legs to qualify as ladder (default 3)
-        ladder_min_strikes: Minimum distinct strikes (default 2)
+        ladder_min_strikes: Minimum distinct strikes (default 3)
         ladder_min_strike_width_bps: Minimum strike separation in bps (default 15)
         ladder_notional_ratio_tolerance: Tolerance for notional ratio matching (default 0.15)
         conditional_curve_time_window_seconds: Max time gap between curve legs
         vega_curve_time_window_seconds: Max time gap between vega curve straddles
         detect_delta_hedges: Whether to run swaption/swap delta-hedge detection
-        swap_candidates_df: Raw SOFR swap candidates (same date slice as df)
+        swap_candidates_df: Raw USD swap candidates (same date slice as df)
         delta_hedge_timestamp_windows: Candidate time windows in seconds (searched in order)
         delta_hedge_tenor_tolerance_years: Max swaption/swap tenor mismatch in years
         delta_hedge_implied_delta_min: Minimum allowed implied-delta notional ratio
@@ -1409,6 +1428,10 @@ def detect_and_link_swaption_packages_df(
             require_swap_package_indicator_for_delta_hedge=require_swap_package_indicator_for_delta_hedge,
             delta_hedge_require_same_platform=delta_hedge_require_same_platform,
             delta_hedge_check_dv01=delta_hedge_check_dv01,
+            enable_barbell=enable_barbell,
+            barbell_risk_models=barbell_risk_models,
+            barbell_tenor_tolerance=barbell_tenor_tolerance,
+            barbell_time_half_life=barbell_time_half_life,
         )
 
     # Phase 6: Detect and enrich outright/unexplained trades

@@ -308,7 +308,12 @@ function SparklineTooltip({
   const timeLabel = formatSegmentTime(point.timestamp);
   const platform =
     point.platform === "idb" ? "IDB" : point.platform === "custy" ? "Custy" : "--";
-  const flowMetricLabel = volFlowMetric === "gamma" ? "gamma" : "vega";
+  const flowMetricLabel =
+    volFlowMetric === "gamma"
+      ? "gamma01"
+      : volFlowMetric === "notional"
+        ? "notional"
+        : "vega01";
   const tradeValueLabel =
     mode === "vol_flow"
       ? `Trade ${flowMetricLabel}: ${formatValue(point.tradeValue)}`

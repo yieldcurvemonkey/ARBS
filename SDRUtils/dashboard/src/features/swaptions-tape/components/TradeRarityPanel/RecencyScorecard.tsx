@@ -1,14 +1,17 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import { Settings } from 'lucide-react';
-import type { MetricConfig, SimilarityCriteria, StructureAnalyticsConfig } from './rarity.types';
+import type {
+  SimilarityCriteria,
+  StructureAnalyticsConfig,
+} from './rarity.types';
 import type { TapeRow } from '../../types/trade.types';
 import {
   computeRank,
   computeFrequencyByPredicate,
   findLastSimilarByStructure,
-  getMetricValue,
   getMetricValueByKey,
   isSimilarTrade,
+  getMetricsForStructure,
 } from './rarity.utils';
 
 type Formatters = {
@@ -19,30 +22,47 @@ type Formatters = {
   formatCount: (value: number | null | undefined) => string;
 };
 
+export type RecencyMetricMode = 'vega01' | 'gamma01' | 'notional';
+
 type RecencyScorecardProps = {
   selectedRow: TapeRow;
   rows: TapeRow[];
   config: StructureAnalyticsConfig;
-  primaryMetric: MetricConfig;
-  primaryValue: number | null;
+  recencyMetricMode: RecencyMetricMode;
   formatters: Formatters;
   primaryThreshold: number;
   sizeThresholdPct: number;
+  onRecencyMetricModeChange: (value: RecencyMetricMode) => void;
   onPrimaryThresholdChange: (value: number) => void;
   onSizeThresholdChange: (value: number) => void;
 };
 
 const LOOKBACK_DAYS = 90;
+const VEGA_KEYS = [
+  'straddle_vega01',
+  'rr_vega01',
+  'vs_vega01',
+  'outright_vega01',
+  'vega01',
+] as const;
+const GAMMA_KEYS = [
+  'straddle_gamma01',
+  'rr_gamma01',
+  'vs_gamma01',
+  'outright_gamma01',
+  'gamma01',
+] as const;
+const NOTIONAL_KEYS = ['total_notional', 'notional'] as const;
 
 export function RecencyScorecard({
   selectedRow,
   rows,
   config,
-  primaryMetric,
-  primaryValue,
+  recencyMetricMode,
   formatters,
   primaryThreshold,
   sizeThresholdPct,
+  onRecencyMetricModeChange,
   onPrimaryThresholdChange,
   onSizeThresholdChange,
 }: RecencyScorecardProps) {
@@ -52,6 +72,43 @@ export function RecencyScorecard({
     setSettingsOpen(false);
   }, [config.packageType]);
 
+  const recencyMetric = useMemo(() => {
+    const candidateKeys: readonly string[] =
+      recencyMetricMode === 'vega01'
+        ? VEGA_KEYS
+        : recencyMetricMode === 'gamma01'
+          ? GAMMA_KEYS
+          : NOTIONAL_KEYS;
+    const structureMetrics = getMetricsForStructure(selectedRow.package_type);
+    const structureMetric = structureMetrics.find((metric) =>
+      candidateKeys.includes(metric.key),
+    );
+
+    const rowMatch = candidateKeys.find(
+      (key) => getMetricValueByKey(selectedRow, key) !== null,
+    );
+    const populationMatch = candidateKeys.find((key) =>
+      rows.some((row) => getMetricValueByKey(row, key) !== null),
+    );
+
+    const resolvedKey = structureMetric?.key || rowMatch || populationMatch || candidateKeys[0];
+
+    return {
+      key: resolvedKey,
+      label:
+        recencyMetricMode === 'vega01'
+          ? 'Vega01'
+          : recencyMetricMode === 'gamma01'
+            ? 'Gamma01'
+            : 'Notional',
+      decimals: structureMetric?.decimals ?? 2,
+      unit:
+        structureMetric?.unit ||
+        (recencyMetricMode === 'notional' ? 'USD' : 'USD/bp'),
+    };
+  }, [recencyMetricMode, rows, selectedRow]);
+
+  const recencyValue = getMetricValueByKey(selectedRow, recencyMetric.key);
   const currentNotional = getMetricValueByKey(selectedRow, 'total_notional');
   const sizeThreshold =
     currentNotional !== null
@@ -61,128 +118,133 @@ export function RecencyScorecard({
   const primaryCriteria: SimilarityCriteria = useMemo(
     () => ({
       ...config.similarityCriteria,
+      metric: recencyMetric.key,
+      mode: 'absolute_range',
       threshold: primaryThreshold,
     }),
-    [config.similarityCriteria, primaryThreshold],
+    [config.similarityCriteria, primaryThreshold, recencyMetric.key],
   );
 
-  const primaryMetricDecimals = primaryMetric.decimals ?? 2;
-  const primaryThresholdLabel =
-    primaryCriteria.mode === 'percentage_of'
-      ? `+/-${(primaryThreshold * 100).toFixed(0)}%`
-      : `+/-${primaryThreshold}${primaryMetric.unit ? ` ${primaryMetric.unit}` : ''}`;
+  const recencyMetricDecimals = recencyMetric.decimals ?? 2;
+  const primaryThresholdLabel = `+/-${primaryThreshold}${
+    recencyMetric.unit ? ` ${recencyMetric.unit}` : ''
+  }`;
+  const formatRecencyValue = (value: number) =>
+    recencyMetricMode === 'notional'
+      ? formatters.formatNotional(value)
+      : formatters.formatMetricValue(value, recencyMetricDecimals);
 
-  const { lastSimilarPrimary, lastSimilarSize, frequencyPrimary, frequencySize, largestRecord, primaryRecord, bucketRank, daysSinceSize } =
-    useMemo(() => {
-      const lastPrimary = findLastSimilarByStructure(
-        selectedRow,
-        rows,
-        primaryCriteria,
-      );
-      const lastSize = sizeThreshold
-        ? findLastByPredicate(
-            selectedRow,
-            rows,
-            (candidate) => {
-              const notional = getMetricValueByKey(candidate, 'total_notional');
-              return notional !== null && Math.abs(notional) >= sizeThreshold;
-            },
-          )
-        : null;
+  const {
+    lastSimilarPrimary,
+    lastSimilarSize,
+    frequencyPrimary,
+    frequencySize,
+    largestRecord,
+    recencyMetricRecord,
+    bucketRank,
+    daysSinceSize,
+  } = useMemo(() => {
+    const lastPrimary = findLastSimilarByStructure(selectedRow, rows, primaryCriteria);
+    const lastSize = sizeThreshold
+      ? findLastByPredicate(selectedRow, rows, (candidate) => {
+          const notional = getMetricValueByKey(candidate, 'total_notional');
+          return notional !== null && Math.abs(notional) >= sizeThreshold;
+        })
+      : null;
 
-      const frequencyPrimary = computeFrequencyByPredicate(
-        selectedRow,
-        rows,
-        (candidate) => isSimilarTrade(selectedRow, candidate, primaryCriteria),
-        LOOKBACK_DAYS,
-      );
-
-      const frequencySize = sizeThreshold
-        ? computeFrequencyByPredicate(
-            selectedRow,
-            rows,
-            (candidate) => {
-              const notional = getMetricValueByKey(candidate, 'total_notional');
-              return notional !== null && Math.abs(notional) >= sizeThreshold;
-            },
-            LOOKBACK_DAYS,
-          )
-        : null;
-
-      const notionalValues = rows
-        .map((row) => ({ row, value: getMetricValueByKey(row, 'total_notional') }))
-        .filter((entry) => entry.value !== null) as Array<{ row: TapeRow; value: number }>;
-
-      const largestRecord = notionalValues.length
-        ? notionalValues.reduce((max, entry) =>
-            entry.value > max.value ? entry : max,
-          )
-        : null;
-
-      const primaryValues = rows
-        .map((row) => ({ row, value: getMetricValue(row, primaryMetric) }))
-        .filter((entry) => entry.value !== null) as Array<{ row: TapeRow; value: number }>;
-
-      const primaryRecord = primaryValues.length
-        ? primaryValues.reduce((max, entry) =>
-            entry.value > max.value ? entry : max,
-          )
-        : null;
-
-      const bucketRank = currentNotional !== null && notionalValues.length
-        ? computeRank(Math.abs(currentNotional), notionalValues.map((entry) => Math.abs(entry.value)))
-        : null;
-
-      const lastSizeRow = sizeThreshold
-        ? notionalValues
-            .filter((entry) => Math.abs(entry.value) >= sizeThreshold)
-            .sort(
-              (a, b) =>
-                new Date(b.row.execution_start).getTime() -
-                new Date(a.row.execution_start).getTime(),
-            )[0]
-        : null;
-
-      const daysSinceSize = lastSizeRow
-        ? Math.round(
-            (new Date(selectedRow.execution_start).getTime() -
-              new Date(lastSizeRow.row.execution_start).getTime()) /
-              (24 * 60 * 60 * 1000),
-          )
-        : null;
-
-      return {
-        lastSimilarPrimary: lastPrimary,
-        lastSimilarSize: lastSize,
-        frequencyPrimary,
-        frequencySize,
-        largestRecord: largestRecord
-          ? {
-              daysAgo: 0,
-              date: largestRecord.row.execution_start,
-              value: largestRecord.value,
-              tradeId: largestRecord.row.package_id,
-            }
-          : null,
-        primaryRecord: primaryRecord
-          ? {
-              daysAgo: 0,
-              date: primaryRecord.row.execution_start,
-              value: primaryRecord.value,
-              tradeId: primaryRecord.row.package_id,
-            }
-          : null,
-        bucketRank,
-        daysSinceSize,
-      };
-    }, [
+    const frequencyPrimary = computeFrequencyByPredicate(
       selectedRow,
       rows,
-      primaryCriteria,
-      sizeThreshold,
-      primaryMetric,
-      currentNotional,
-    ]);
+      (candidate) => isSimilarTrade(selectedRow, candidate, primaryCriteria),
+      LOOKBACK_DAYS,
+    );
+
+    const frequencySize = sizeThreshold
+      ? computeFrequencyByPredicate(
+          selectedRow,
+          rows,
+          (candidate) => {
+            const notional = getMetricValueByKey(candidate, 'total_notional');
+            return notional !== null && Math.abs(notional) >= sizeThreshold;
+          },
+          LOOKBACK_DAYS,
+        )
+      : null;
+
+    const notionalValues = rows
+      .map((row) => ({ row, value: getMetricValueByKey(row, 'total_notional') }))
+      .filter((entry) => entry.value !== null) as Array<{ row: TapeRow; value: number }>;
+
+    const largestRecord = notionalValues.length
+      ? notionalValues.reduce((max, entry) =>
+          entry.value > max.value ? entry : max,
+        )
+      : null;
+
+    const recencyMetricValues = rows
+      .map((row) => ({ row, value: getMetricValueByKey(row, recencyMetric.key) }))
+      .filter((entry) => entry.value !== null) as Array<{ row: TapeRow; value: number }>;
+
+    const recencyMetricRecord = recencyMetricValues.length
+      ? recencyMetricValues.reduce((max, entry) =>
+          entry.value > max.value ? entry : max,
+        )
+      : null;
+
+    const bucketRank = currentNotional !== null && notionalValues.length
+      ? computeRank(Math.abs(currentNotional), notionalValues.map((entry) => Math.abs(entry.value)))
+      : null;
+
+    const lastSizeRow = sizeThreshold
+      ? notionalValues
+          .filter((entry) => Math.abs(entry.value) >= sizeThreshold)
+          .sort(
+            (a, b) =>
+              new Date(b.row.execution_start).getTime() -
+              new Date(a.row.execution_start).getTime(),
+          )[0]
+      : null;
+
+    const daysSinceSize = lastSizeRow
+      ? Math.round(
+          (new Date(selectedRow.execution_start).getTime() -
+            new Date(lastSizeRow.row.execution_start).getTime()) /
+            (24 * 60 * 60 * 1000),
+        )
+      : null;
+
+    return {
+      lastSimilarPrimary: lastPrimary,
+      lastSimilarSize: lastSize,
+      frequencyPrimary,
+      frequencySize,
+      largestRecord: largestRecord
+        ? {
+            daysAgo: 0,
+            date: largestRecord.row.execution_start,
+            value: largestRecord.value,
+            tradeId: largestRecord.row.package_id,
+          }
+        : null,
+      recencyMetricRecord: recencyMetricRecord
+        ? {
+            daysAgo: 0,
+            date: recencyMetricRecord.row.execution_start,
+            value: recencyMetricRecord.value,
+            tradeId: recencyMetricRecord.row.package_id,
+          }
+        : null,
+      bucketRank,
+      daysSinceSize,
+    };
+  }, [
+    selectedRow,
+    rows,
+    primaryCriteria,
+    sizeThreshold,
+    recencyMetric.key,
+    currentNotional,
+  ]);
 
   const formatDate = (value?: string | null) => {
     if (!value) return '--';
@@ -237,9 +299,9 @@ export function RecencyScorecard({
       ? Math.abs(currentNotional) / Math.abs(largestRecord.value)
       : null;
 
-  const primaryRatio =
-    primaryRecord && primaryValue !== null
-      ? primaryValue / primaryRecord.value
+  const recencyMetricRatio =
+    recencyMetricRecord && recencyValue !== null
+      ? recencyValue / recencyMetricRecord.value
       : null;
 
   return (
@@ -257,6 +319,20 @@ export function RecencyScorecard({
       </div>
       {settingsOpen && (
         <div className="mt-2 grid gap-2 rounded border border-slate-800 bg-slate-950 p-2 text-[10px] text-slate-300">
+          <label className="flex items-center justify-between gap-2">
+            <span>Recency metric</span>
+            <select
+              value={recencyMetricMode}
+              onChange={(event) =>
+                onRecencyMetricModeChange(event.target.value as RecencyMetricMode)
+              }
+              className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] text-slate-100"
+            >
+              <option value="vega01">Vega01</option>
+              <option value="gamma01">Gamma01</option>
+              <option value="notional">Notional</option>
+            </select>
+          </label>
           <label className="flex items-center justify-between gap-2">
             <span>Primary threshold</span>
             <input
@@ -284,11 +360,11 @@ export function RecencyScorecard({
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
         <div className="space-y-2">
           {renderLastSimilar(
-            `Last similar by ${primaryMetric.label} (${primaryThresholdLabel})`,
+            `Last similar by ${recencyMetric.label} (${primaryThresholdLabel})`,
             lastSimilarPrimary,
-            (value) => formatters.formatMetricValue(value, primaryMetricDecimals),
+            formatRecencyValue,
           )}
-          {renderFrequency(`Frequency (${primaryMetric.label})`, frequencyPrimary)}
+          {renderFrequency(`Frequency (${recencyMetric.label})`, frequencyPrimary)}
         </div>
         <div className="space-y-2">
           {renderLastSimilar(
@@ -319,20 +395,19 @@ export function RecencyScorecard({
         )}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-[10px] uppercase tracking-wide text-slate-400">
-            {primaryMetric.label} record
+            {recencyMetric.label} record
           </span>
           <span className="font-mono text-slate-100">
-            {primaryRecord
-              ? `${formatters.formatMetricValue(
-                  primaryRecord.value,
-                  primaryMetricDecimals,
-                )} on ${formatDate(primaryRecord.date)}`
+            {recencyMetricRecord
+              ? `${formatRecencyValue(recencyMetricRecord.value)} on ${formatDate(
+                  recencyMetricRecord.date,
+                )}`
               : '--'}
           </span>
         </div>
-        {primaryRatio !== null && (
+        {recencyMetricRatio !== null && (
           <div className="text-[11px] text-slate-500">
-            Current print is {(primaryRatio * 100).toFixed(0)}% of record
+            Current print is {(recencyMetricRatio * 100).toFixed(0)}% of record
           </div>
         )}
         <div className="flex flex-wrap items-center justify-between gap-2">

@@ -1,11 +1,6 @@
-// ABOUTME: USD SOFR swaps SDR trade tape dashboard entry point.
-import { Suspense } from 'react'
-import SofrSwapsTradeTape from '@/features/sofr-swaps-tape/components/SofrSwapsTradeTape'
+// ABOUTME: Legacy SOFR route alias to canonical USD swaps tape page.
+import { redirect } from 'next/navigation'
 
 export default function SofrSwapsPage() {
-  return (
-    <Suspense fallback={<div className="p-4 text-sm text-gray-400">Loading...</div>}>
-      <SofrSwapsTradeTape />
-    </Suspense>
-  )
+  redirect('/usd-swaps')
 }

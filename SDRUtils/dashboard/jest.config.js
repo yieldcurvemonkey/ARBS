@@ -16,6 +16,8 @@ const config = {
   testMatch: [
     '**/__tests__/**/*.test.ts',
     '**/__tests__/**/*.test.tsx',
+    '**/*.route.test.ts',
+    '**/*.route.test.tsx',
   ],
   testTimeout: 30000,
   verbose: true,

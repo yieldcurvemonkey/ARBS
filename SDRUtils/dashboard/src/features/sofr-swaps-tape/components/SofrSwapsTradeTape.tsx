@@ -1,4 +1,4 @@
-// ABOUTME: USD SOFR swaps trade tape with parity modules and manual linking.
+// ABOUTME: USD swaps trade tape with parity modules and manual linking.
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -460,7 +460,7 @@ export default function SofrSwapsTradeTape() {
       }
       if (cursor) params.set('cursor', cursor)
       if (since) params.set('since', since)
-      const res = await fetch(`/api/sofr-swaps-tape?${params.toString()}`)
+      const res = await fetch(`/api/usd-swaps-tape?${params.toString()}`)
       const data = (await res.json()) as SofrSwapTapeResponse
       if (!res.ok) throw new Error((data as any)?.error || `Tape fetch failed (${res.status})`)
       setRows((prev) => {
@@ -515,7 +515,7 @@ export default function SofrSwapsTradeTape() {
     setManualBusy(true)
     setManualError(null)
     try {
-      const url = linkId ? `/api/sofr-swap/links/${linkId}` : '/api/sofr-swap/links'
+      const url = linkId ? `/api/usd-swap/links/${linkId}` : '/api/usd-swap/links'
       const body =
         method === 'POST'
           ? { trade_ids: selectedTradeIds, package_type: manualPackageType || null, comment: manualComment || null, link_reason: manualReason || null, user: manualUser, validate_only: validateOnly }
@@ -542,7 +542,7 @@ export default function SofrSwapsTradeTape() {
     const params = new URLSearchParams({ seriesKey: activeSeriesKey })
     const row = selectedRows[0]
     if (row?.package_type) params.set('packageType', row.package_type)
-    const res = await fetch(`/api/sofr-swaps-tape/timeseries?${params.toString()}`)
+    const res = await fetch(`/api/usd-swaps-tape/timeseries?${params.toString()}`)
     const data = await res.json()
     if (!res.ok) throw new Error(data?.error || `Timeseries fetch failed (${res.status})`)
     setTimeseriesRows(data.rows || [])
@@ -557,7 +557,7 @@ export default function SofrSwapsTradeTape() {
       tolerance: String(tolerance),
       platform: flowPlatform
     })
-    const res = await fetch(`/api/sofr-swaps-tape/flow-history?${params.toString()}`)
+    const res = await fetch(`/api/usd-swaps-tape/flow-history?${params.toString()}`)
     const data = (await res.json()) as FlowHistoryResponse
     if (!res.ok) throw new Error((data as any)?.error || `Flow fetch failed (${res.status})`)
     setFlowDays(data.days || [])

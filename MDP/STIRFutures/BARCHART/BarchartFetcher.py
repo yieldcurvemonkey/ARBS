@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import time
 import warnings
 from datetime import datetime, timedelta
 from functools import reduce
@@ -602,6 +603,166 @@ class BarchartFetcher(BaseFetcher):
             return df[(df.index >= start_date) & (df.index <= end_date)]
 
         return dict(dfs)
+
+    def get_historical_bid_offer_quotes(
+        self,
+        symbol: str,
+        start: Optional[datetime | str] = None,
+        end: Optional[datetime | str] = None,
+        maxrecords: Optional[int] = None,
+        order: Optional[Literal["asc", "desc"]] = "desc",
+        sessionfilter: Optional[str] = None,
+        exchange_id: Optional[bool] = False,
+        participant_id: Optional[bool] = False,
+        set_dt_index: Optional[bool] = True,
+        max_retries: Optional[int] = 3,
+        backoff_factor: Optional[int] = 1,
+    ) -> pd.DataFrame:
+        def _format_tick_dt(value: Optional[datetime | str]) -> Optional[str]:
+            if value is None:
+                return None
+            if isinstance(value, datetime):
+                return value.strftime("%Y%m%d%H%M%S")
+            out = str(value).strip()
+            return out or None
+
+        def _looks_like_datetime_col(col: pd.Series) -> bool:
+            parsed = pd.to_datetime(col, errors="coerce")
+            return parsed.notna().sum() > 0
+
+        def _assign_quote_columns(df: pd.DataFrame) -> pd.DataFrame:
+            if df.empty:
+                return df
+
+            has_symbol_col = False
+            if df.shape[1] >= 2:
+                first_col_is_dt = _looks_like_datetime_col(df.iloc[:, 0])
+                second_col_is_dt = _looks_like_datetime_col(df.iloc[:, 1])
+                has_symbol_col = (not first_col_is_dt) and second_col_is_dt
+
+            effective_cols = df.shape[1] - (1 if has_symbol_col else 0)
+            if effective_cols == 7:
+                quote_cols = ["DateTime", "TradingDay", "QuoteCondition", "BidPrice", "BidSize", "OfferPrice", "OfferSize"]
+            elif effective_cols == 8:
+                quote_cols = ["DateTime", "TradingDay", "ExchangeId", "QuoteCondition", "BidPrice", "BidSize", "OfferPrice", "OfferSize"]
+            elif effective_cols == 9:
+                quote_cols = [
+                    "DateTime",
+                    "TradingDay",
+                    "QuoteCondition",
+                    "BidPrice",
+                    "BidSize",
+                    "BidParticipantId",
+                    "OfferPrice",
+                    "OfferSize",
+                    "OfferParticipantId",
+                ]
+            elif effective_cols == 10:
+                quote_cols = [
+                    "DateTime",
+                    "TradingDay",
+                    "ExchangeId",
+                    "QuoteCondition",
+                    "BidPrice",
+                    "BidSize",
+                    "BidParticipantId",
+                    "OfferPrice",
+                    "OfferSize",
+                    "OfferParticipantId",
+                ]
+            else:
+                quote_cols = [f"Column{i}" for i in range(effective_cols)]
+
+            df.columns = (["Symbol"] if has_symbol_col else []) + quote_cols
+            return df
+
+        order_val = (order or "").lower()
+        if order_val and order_val not in {"asc", "desc"}:
+            raise ValueError("order must be either 'asc' or 'desc'.")
+
+        args = {
+            "symbol": symbol,
+            "type": "Q",
+        }
+        if order_val:
+            args["order"] = order_val
+        start_val = _format_tick_dt(start)
+        end_val = _format_tick_dt(end)
+        if start_val:
+            args["start"] = start_val
+        if end_val:
+            args["end"] = end_val
+        if maxrecords is not None:
+            args["maxrecords"] = int(maxrecords)
+        if sessionfilter is not None:
+            args["sessionfilter"] = sessionfilter
+        if exchange_id:
+            args["exchId"] = "true"
+        if participant_id:
+            args["participantID"] = "true"
+
+        url = f"https://www.barchart.com/proxies/historical/queryticks.ashx?{urlencode(args)}"
+        print(url)
+
+        retries = 0
+        while retries < max_retries:
+            try:
+                if retries > 0 or self._current_laravel_token is None or self._current_xsrf_token is None:
+                    self._fetch_session_tokens(dummy_symbol=symbol)
+
+                headers = {
+                    "dnt": "1",
+                    "referer": f"https://www.barchart.com/futures/quotes/{quote(symbol)}/interactive-chart",
+                    "sec-ch-ua": '"Not A(Brand";v="8", "Chromium";v="132", "Google Chrome";v="132"',
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": '"Windows"',
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+                    "cookie": f"laravel_token={self._current_laravel_token}",
+                    "x-xsrf-token": self._current_xsrf_token,
+                }
+
+                res = requests.get(url, headers=headers, proxies=self._proxies, timeout=self._global_timeout)
+                res.raise_for_status()
+
+                if not res.content:
+                    return pd.DataFrame()
+
+                df = self._parse_aspx_response_to_df(res.content)
+                if df is None or df.empty:
+                    return pd.DataFrame()
+
+                df = _assign_quote_columns(df)
+
+                if "DateTime" in df.columns:
+                    df["DateTime"] = pd.to_datetime(df["DateTime"], errors="coerce")
+                    df = df.dropna(subset=["DateTime"])
+
+                for col in ["TradingDay", "BidPrice", "BidSize", "OfferPrice", "OfferSize"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+                if set_dt_index and "DateTime" in df.columns:
+                    df = df.set_index("DateTime")
+                    df = df.sort_index()
+
+                return df
+
+            except requests.HTTPError as e:
+                status = e.response.status_code if e.response is not None else None
+                if status == 404:
+                    return pd.DataFrame()
+                self._logger.error(f"Barchart historical quotes bad status for {symbol}: {status}")
+            except pd.errors.EmptyDataError:
+                return pd.DataFrame()
+            except Exception as e:
+                self._logger.error(f"Barchart historical quotes error for {symbol}: {e}")
+
+            retries += 1
+            if retries < max_retries:
+                wait_time = backoff_factor * (2 ** (retries - 1))
+                time.sleep(wait_time)
+
+        raise ValueError(f"Barchart historical quotes - max retries exceeded for {symbol}")
 
     def get_option_quotes(
         self, symbols: List[str], max_concurrent_tasks: Optional[int] = 64, max_keepalive_connections: Optional[int] = 16, show_tqdm: Optional[bool] = True

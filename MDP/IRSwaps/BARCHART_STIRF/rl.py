@@ -1,6 +1,7 @@
 import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import threading
@@ -133,6 +134,188 @@ def _build_stirf_nodes(
     return nodes
 
 
+def _to_plot_bound(value: Optional[Union[str, datetime.date, datetime.datetime, pd.Timestamp]]) -> Optional[Union[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, pd.Timestamp):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime.datetime):
+        value = value.date()
+    if isinstance(value, datetime.date):
+        return rl.dt(value.year, value.month, value.day)
+    return value
+
+
+def _coerce_label_timestamp(value: Any) -> Optional[pd.Timestamp]:
+    if value is None:
+        return None
+
+    try:
+        if isinstance(value, pd.Timestamp):
+            return value
+
+        if isinstance(value, datetime.datetime):
+            return pd.Timestamp(value)
+
+        if isinstance(value, datetime.date):
+            return pd.Timestamp(datetime.datetime(value.year, value.month, value.day))
+
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            unit = "ms" if abs(float(value)) > 1e11 else "s"
+            return pd.to_datetime(value, unit=unit, utc=True)
+
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            return pd.Timestamp(raw)
+    except Exception:
+        return None
+
+    return None
+
+
+def _extract_curve_timestamp_for_label(curve: Any) -> Optional[pd.Timestamp]:
+    attr_candidates = (
+        "timestamp",
+        "as_of",
+        "curve_timestamp",
+        "timestamp_utc",
+        "snapshot_timestamp",
+        "pricing_timestamp",
+    )
+    for attr in attr_candidates:
+        ts = _coerce_label_timestamp(getattr(curve, attr, None))
+        if ts is not None:
+            return ts
+
+    for meta_attr in ("meta_data", "metadata", "_meta_data"):
+        meta = getattr(curve, meta_attr, None)
+        if isinstance(meta, dict):
+            for key in ("timestamp", "as_of", "timestamp_utc", "curve_timestamp", "snapshotTs", "snapshot_ts"):
+                ts = _coerce_label_timestamp(meta.get(key))
+                if ts is not None:
+                    return ts
+
+    # Fallback to curve anchor date (first node) when no explicit snapshot ts exists.
+    nodes = getattr(curve, "nodes", None)
+    keys = getattr(nodes, "keys", None)
+    if isinstance(keys, list) and keys:
+        ts = _coerce_label_timestamp(keys[0])
+        if ts is not None:
+            return ts
+
+    return None
+
+
+def _format_label_timestamp(ts: pd.Timestamp) -> str:
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert(pytz.timezone("America/New_York"))
+        if ts.hour == 0 and ts.minute == 0 and ts.second == 0:
+            return ts.strftime("%Y-%m-%d")
+        return ts.strftime("%Y-%m-%d %H:%M %Z")
+
+    if ts.hour == 0 and ts.minute == 0 and ts.second == 0:
+        return ts.strftime("%Y-%m-%d")
+    return ts.strftime("%Y-%m-%d %H:%M")
+
+
+def _build_curve_default_label(curve: Any, idx: int) -> str:
+    name_candidates = (
+        getattr(curve, "actual_curve_name", None),
+        getattr(curve, "curve_name", None),
+        getattr(curve, "name", None),
+        getattr(curve, "id", None),
+    )
+    base = ""
+    for n in name_candidates:
+        if n is None:
+            continue
+        s = str(n).strip()
+        if s:
+            base = s
+            break
+    if not base:
+        base = f"curve_{idx+1}"
+
+    ts = _extract_curve_timestamp_for_label(curve)
+    if ts is None:
+        return base
+
+    return f"{base} ({_format_label_timestamp(ts)})"
+
+
+def plot_overnight_forward_curves(
+    curves: Sequence[rl.Curve],
+    labels: Optional[Sequence[str]] = None,
+    tenor: str = "1d",
+    left: Optional[Union[str, datetime.date, datetime.datetime, pd.Timestamp]] = None,
+    right: Optional[Union[str, datetime.date, datetime.datetime, pd.Timestamp]] = None,
+    difference: bool = False,
+    title: Optional[str] = None,
+):
+    """
+    Overlay overnight forward curves from a list of rateslib curves on one figure.
+
+    Parameters
+    ----------
+    curves
+        Sequence of rateslib Curve objects.
+    labels
+        Optional labels matching `curves` length.
+    tenor
+        Forward tenor; defaults to "1d" for overnight forwards.
+    left, right
+        Optional plot bounds accepted by rateslib Curve.plot (tenor string or date-like).
+    difference
+        If True, plot comparator-minus-base differences.
+    title
+        Optional chart title.
+    """
+    curve_list = list(curves or [])
+    if not curve_list:
+        raise ValueError("`curves` must contain at least one rateslib curve.")
+
+    for idx, curve in enumerate(curve_list):
+        if not hasattr(curve, "plot"):
+            raise TypeError(f"`curves[{idx}]` must be a rateslib curve-like object with `.plot()`, got {type(curve)}")
+
+    if labels is None:
+        auto_labels: List[str] = []
+        for i, curve in enumerate(curve_list):
+            auto_labels.append(_build_curve_default_label(curve, i))
+        use_labels: Optional[List[str]] = auto_labels
+    else:
+        use_labels = [str(x) for x in labels]
+        if len(use_labels) != len(curve_list):
+            raise ValueError("`labels` length must match number of `curves`.")
+
+    plot_kwargs: Dict[str, Any] = {
+        "tenor": tenor,
+        "difference": bool(difference),
+    }
+    left_bound = _to_plot_bound(left)
+    right_bound = _to_plot_bound(right)
+    if left_bound is not None:
+        plot_kwargs["left"] = left_bound
+    if right_bound is not None:
+        plot_kwargs["right"] = right_bound
+    if len(curve_list) > 1:
+        plot_kwargs["comparators"] = curve_list[1:]
+    if use_labels:
+        plot_kwargs["labels"] = use_labels
+
+    fig, ax, lines = curve_list[0].plot(**plot_kwargs)
+    if title:
+        try:
+            ax.set_title(title)
+        except Exception:
+            pass
+    return fig, ax, lines
+
+
 def build_rl_stirf_turn_flies(
     turn_nodes: List[Union[datetime.date, datetime.datetime]], curve_id: str, spec: str, one_step: Optional[bool] = False
 ) -> Dict[str, rl.Fly]:
@@ -219,6 +402,39 @@ class BARCHART_STIRF_CURVE:
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "usd_irs_lt_2y",
             },
+            "USD-SOFR-1D-Q12xM12STIRT": {
+                "fetch_pricers_func": self.stirf_mdp.get_data,
+                "fetch_pricers_bulk_func": self.stirf_mdp.get_bulk_data,
+                "instruments": [
+                    "SERCM1",
+                    "SERCM2",
+                    "SERCM3",
+                    "SERCM4",
+                    "SERCM5",
+                    "SERCM6",
+                    "SERCM7",
+                    "SERCM8",
+                    "SERCM9",
+                    "SERCM10",
+                    "SERCM11",
+                    "SERCM12",
+                    "SFRCM1",
+                    "SFRCM2",
+                    "SFRCM3",
+                    "SFRCM4",
+                    "SFRCM5",
+                    "SFRCM6",
+                    "SFRCM7",
+                    "SFRCM8",
+                    "SFRCM9",
+                    "SFRCM10",
+                    "SFRCM11",
+                    "SFRCM12",
+                ],
+                "reference_key": "USD-SOFR-1D",
+                "max_tenor_from_timestamp_months": 36,
+                "rl_irs_spec": "usd_irs_lt_2y",
+            },
             "USD-OIS-Q12xM11STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_schwab_app.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_schwab_app.get_bulk_data,
@@ -267,6 +483,287 @@ class BARCHART_STIRF_CURVE:
                 "rl_irs_spec": "usd_irs_lt_2y",
                 "serff_skew": True,
             },
+            "USD-OIS-Q12xM12STIRT": {
+                "fetch_pricers_func": self.stirf_mdp_schwab_app.get_data,
+                "fetch_pricers_bulk_func": self.stirf_mdp_schwab_app.get_bulk_data,
+                "instruments": [
+                    "SERCM1",
+                    "SERCM2",
+                    "SERCM3",
+                    "SERCM4",
+                    "SERCM5",
+                    "SERCM6",
+                    "SERCM7",
+                    "SERCM8",
+                    "SERCM9",
+                    "SERCM10",
+                    "SERCM11",
+                    "SERCM12",
+                    "FFCM1",
+                    "FFCM2",
+                    "FFCM3",
+                    "FFCM4",
+                    "FFCM5",
+                    "FFCM6",
+                    "FFCM7",
+                    "FFCM8",
+                    "FFCM9",
+                    "FFCM10",
+                    "FFCM11",
+                    "FFCM12",
+                    "SFRCM1",
+                    "SFRCM2",
+                    "SFRCM3",
+                    "SFRCM4",
+                    "SFRCM5",
+                    "SFRCM6",
+                    "SFRCM7",
+                    "SFRCM8",
+                    "SFRCM9",
+                    "SFRCM10",
+                    "SFRCM11",
+                    "SFRCM12",
+                ],
+                "reference_key": "USD-OIS",
+                "node_reference_key": "USD-FEDFUNDS",
+                "sofr_reference_key": "USD-SOFR-1D",
+                "max_tenor_from_timestamp_months": 36,
+                "rl_irs_spec": "usd_irs_lt_2y",
+                "serff_skew": True,
+            },
+            "USD-OIS-Q12xM12STIRT-SERFFX": {
+                "fetch_pricers_func": self.stirf_mdp_schwab_app.get_data,
+                "fetch_pricers_bulk_func": self.stirf_mdp_schwab_app.get_bulk_data,
+                "instruments": [
+                    "SERCM1",
+                    "SERCM2",
+                    "SERCM3",
+                    "SERCM4",
+                    "SERCM5",
+                    "SERCM6",
+                    "SERCM7",
+                    "SERCM8",
+                    "SERCM9",
+                    "SERCM10",
+                    "SERCM11",
+                    "SERCM12",
+                    "FFCM1",
+                    "FFCM2",
+                    "FFCM3",
+                    "FFCM4",
+                    "FFCM5",
+                    "FFCM6",
+                    "FFCM7",
+                    "FFCM8",
+                    "FFCM9",
+                    "FFCM10",
+                    "FFCM11",
+                    "FFCM12",
+                    "SFRCM1",
+                    "SFRCM2",
+                    "SFRCM3",
+                    "SFRCM4",
+                    "SFRCM5",
+                    "SFRCM6",
+                    "SFRCM7",
+                    "SFRCM8",
+                    "SFRCM9",
+                    "SFRCM10",
+                    "SFRCM11",
+                    "SFRCM12",
+                ],
+                "reference_key": "USD-OIS",
+                "node_reference_key": "USD-FEDFUNDS",
+                "sofr_reference_key": "USD-SOFR-1D",
+                "max_tenor_from_timestamp_months": 36,
+                "rl_irs_spec": "usd_irs_lt_2y",
+                "serff_skew": True,
+                "serff_skew_extrapolate": True,
+                "serff_skew_extrap_roots": ["SR3"],
+                "serff_skew_extrap_mode": "log-linear",
+                "serff_skew_extrap_weight": 1e5,
+            },
+            "USD-OIS-Q12xM12STIRT-SERFFX-MIX23": {
+                "fetch_pricers_func": self.stirf_mdp_schwab_app.get_data,
+                "fetch_pricers_bulk_func": self.stirf_mdp_schwab_app.get_bulk_data,
+                "instruments": [
+                    "SERCM1",
+                    "SERCM2",
+                    "SERCM3",
+                    "SERCM4",
+                    "SERCM5",
+                    "SERCM6",
+                    "SERCM7",
+                    "SERCM8",
+                    "SERCM9",
+                    "SERCM10",
+                    "SERCM11",
+                    "SERCM12",
+                    "FFCM1",
+                    "FFCM2",
+                    "FFCM3",
+                    "FFCM4",
+                    "FFCM5",
+                    "FFCM6",
+                    "FFCM7",
+                    "FFCM8",
+                    "FFCM9",
+                    "FFCM10",
+                    "FFCM11",
+                    "FFCM12",
+                    "SFRCM1",
+                    "SFRCM2",
+                    "SFRCM3",
+                    "SFRCM4",
+                    "SFRCM5",
+                    "SFRCM6",
+                    "SFRCM7",
+                    "SFRCM8",
+                    "SFRCM9",
+                    "SFRCM10",
+                    "SFRCM11",
+                    "SFRCM12",
+                ],
+                "reference_key": "USD-OIS",
+                "node_reference_key": "USD-FEDFUNDS",
+                "sofr_reference_key": "USD-SOFR-1D",
+                "max_tenor_from_timestamp_months": 36,
+                "rl_irs_spec": "usd_irs_lt_2y",
+                "serff_skew": True,
+                "serff_skew_extrapolate": True,
+                "serff_skew_extrap_roots": ["SR3"],
+                "serff_skew_extrap_mode": "flat",
+                "serff_skew_extrap_min_years": 1.0,
+                "serff_skew_extrap_weight": 1e3,
+                "mixed_interpolation": True,
+                "mixed_spline_start_years": 2.0,
+                "mixed_spline_end_years": 3.0,
+                "mixed_spline_tail_days": 120,
+                "mixed_spline_drop_last_node": True,
+                "mixed_spline_endpoints": ("natural", "natural"),
+                "mixed_spline_add_boundary_nodes": True,
+            },
+            "USD-OIS-Q12xM12STIRT-MIX23": {
+                "fetch_pricers_func": self.stirf_mdp_schwab_app.get_data,
+                "fetch_pricers_bulk_func": self.stirf_mdp_schwab_app.get_bulk_data,
+                "instruments": [
+                    "SERCM1",
+                    "SERCM2",
+                    "SERCM3",
+                    "SERCM4",
+                    "SERCM5",
+                    "SERCM6",
+                    "SERCM7",
+                    "SERCM8",
+                    "SERCM9",
+                    "SERCM10",
+                    "SERCM11",
+                    "SERCM12",
+                    "FFCM1",
+                    "FFCM2",
+                    "FFCM3",
+                    "FFCM4",
+                    "FFCM5",
+                    "FFCM6",
+                    "FFCM7",
+                    "FFCM8",
+                    "FFCM9",
+                    "FFCM10",
+                    "FFCM11",
+                    "FFCM12",
+                    "SFRCM1",
+                    "SFRCM2",
+                    "SFRCM3",
+                    "SFRCM4",
+                    "SFRCM5",
+                    "SFRCM6",
+                    "SFRCM7",
+                    "SFRCM8",
+                    "SFRCM9",
+                    "SFRCM10",
+                    "SFRCM11",
+                    "SFRCM12",
+                ],
+                "reference_key": "USD-OIS",
+                "node_reference_key": "USD-FEDFUNDS",
+                "sofr_reference_key": "USD-SOFR-1D",
+                "max_tenor_from_timestamp_months": 36,
+                "rl_irs_spec": "usd_irs_lt_2y",
+                # Keep direct SER/FF anchoring on matched SR1 contracts only.
+                "serff_skew": True,
+                # Disable basis term-structure extrapolation into longer tenors.
+                "serff_skew_extrapolate": False,
+                "mixed_interpolation": True,
+                "mixed_spline_start_years": 2.0,
+                "mixed_spline_end_years": 3.0,
+                "mixed_spline_tail_days": 120,
+                "mixed_spline_drop_last_node": True,
+                "mixed_spline_endpoints": ("natural", "natural"),
+                "mixed_spline_add_boundary_nodes": True,
+            },
+            # "USD-OIS-Q12xM12STIRT-SERFFXCONST-MIX23": {
+            #     "fetch_pricers_func": self.stirf_mdp_schwab_app.get_data,
+            #     "fetch_pricers_bulk_func": self.stirf_mdp_schwab_app.get_bulk_data,
+            #     "instruments": [
+            #         "SERCM1",
+            #         "SERCM2",
+            #         "SERCM3",
+            #         "SERCM4",
+            #         "SERCM5",
+            #         "SERCM6",
+            #         "SERCM7",
+            #         "SERCM8",
+            #         "SERCM9",
+            #         "SERCM10",
+            #         "SERCM11",
+            #         "SERCM12",
+            #         "FFCM1",
+            #         "FFCM2",
+            #         "FFCM3",
+            #         "FFCM4",
+            #         "FFCM5",
+            #         "FFCM6",
+            #         "FFCM7",
+            #         "FFCM8",
+            #         "FFCM9",
+            #         "FFCM10",
+            #         "FFCM11",
+            #         "FFCM12",
+            #         "SFRCM1",
+            #         "SFRCM2",
+            #         "SFRCM3",
+            #         "SFRCM4",
+            #         "SFRCM5",
+            #         "SFRCM6",
+            #         "SFRCM7",
+            #         "SFRCM8",
+            #         "SFRCM9",
+            #         "SFRCM10",
+            #         "SFRCM11",
+            #         "SFRCM12",
+            #     ],
+            #     "reference_key": "USD-OIS",
+            #     "node_reference_key": "USD-FEDFUNDS",
+            #     "sofr_reference_key": "USD-SOFR-1D",
+            #     "max_tenor_from_timestamp_months": 36,
+            #     "rl_irs_spec": "usd_irs_lt_2y",
+            #     "serff_skew": True,
+            #     "serff_skew_direct_sr1": False,
+            #     "serff_skew_extrapolate": True,
+            #     "serff_skew_extrap_roots": ["SR3"],
+            #     # Flat extrapolation => longer tenors use the final SER/FF basis (CM12).
+            #     "serff_skew_extrap_mode": "flat",
+            #     "serff_skew_extrap_constant_from_last": True,
+            #     "serff_skew_extrap_min_years": 1.0,
+            #     "serff_skew_extrap_weight": 1e3,
+            #     "mixed_interpolation": True,
+            #     "mixed_spline_start_years": 2.0,
+            #     "mixed_spline_end_years": 3.0,
+            #     "mixed_spline_tail_days": 120,
+            #     "mixed_spline_drop_last_node": True,
+            #     "mixed_spline_endpoints": ("natural", "natural"),
+            #     "mixed_spline_add_boundary_nodes": True,
+            # },
             "EUR-ESTR-LONDON-Q12STIRT": {
                 "fetch_pricers_func": self.stirf_mdp_barchart.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_barchart.get_bulk_data,
@@ -405,6 +902,21 @@ class BARCHART_STIRF_CURVE:
                 str(cfg.get("rl_irs_spec", "")),
                 str(cfg.get("interpolation", "log_linear")),
                 str(int(bool(cfg.get("serff_skew", False)))),
+                str(int(bool(cfg.get("serff_skew_direct_sr1", True)))),
+                str(int(bool(cfg.get("serff_skew_extrapolate", False)))),
+                str(int(bool(cfg.get("serff_skew_extrap_constant_from_last", False)))),
+                ",".join(str(x).upper() for x in cfg.get("serff_skew_extrap_roots", [])),
+                str(cfg.get("serff_skew_extrap_mode", "linear")),
+                str(cfg.get("serff_skew_extrap_min_years", "")),
+                str(cfg.get("serff_skew_direct_weight", "")),
+                str(cfg.get("serff_skew_extrap_weight", "")),
+                str(int(bool(cfg.get("mixed_interpolation", False)))),
+                str(cfg.get("mixed_spline_start_years", "")),
+                str(cfg.get("mixed_spline_end_years", "")),
+                str(cfg.get("mixed_spline_tail_days", "")),
+                str(int(bool(cfg.get("mixed_spline_drop_last_node", False)))),
+                ",".join(str(x) for x in cfg.get("mixed_spline_endpoints", ())),
+                str(int(bool(cfg.get("mixed_spline_add_boundary_nodes", False)))),
                 str(cfg.get("max_tenor_from_timestamp_months", "")),
                 ",".join(str(x) for x in cfg.get("instruments", [])),
             ]
@@ -421,6 +933,22 @@ class BARCHART_STIRF_CURVE:
     def _curve_cache_path(self, curve_name: str, timestamp: datetime.datetime, cfg: Dict[str, Any]) -> Path:
         return self._curve_cache_dir / f"{self._curve_cache_key(curve_name, timestamp, cfg)}.json"
 
+    @staticmethod
+    def _attach_curve_context(curve: rl.Curve, *, curve_name: str, timestamp: datetime.datetime, cfg: Dict[str, Any]) -> rl.Curve:
+        # Attach lightweight metadata used by downstream plotting/reporting helpers.
+        try:
+            curve.timestamp = timestamp
+            curve.timestamp_utc = timestamp.astimezone(pytz.UTC)
+            # Keep explicit human-readable names alongside rateslib `id` (which stays reference-key based).
+            curve.curve_name = curve_name
+            curve.name = curve_name
+            curve.actual_curve_name = curve_name
+            curve.reference_key = cfg.get("reference_key")
+            curve.node_reference_key = cfg.get("node_reference_key", cfg.get("reference_key"))
+        except Exception:
+            pass
+        return curve
+
     def _curve_cache_get(self, curve_name: str, timestamp: datetime.datetime, cfg: Dict[str, Any]) -> Optional[rl.Curve]:
         key = self._curve_cache_key(curve_name, timestamp, cfg)
         S = BARCHART_STIRF_CURVE._CURVE_STATE
@@ -428,7 +956,7 @@ class BARCHART_STIRF_CURVE:
             curve_cache = S["curve_cache"]
             cached = curve_cache.get(key)
             if cached is not None:
-                return cached
+                return self._attach_curve_context(cached, curve_name=curve_name, timestamp=timestamp, cfg=cfg)
 
         cache_file = self._curve_cache_path(curve_name, timestamp, cfg)
         if not cache_file.exists():
@@ -438,6 +966,7 @@ class BARCHART_STIRF_CURVE:
             payload = json.loads(cache_file.read_text(encoding="utf-8"))
             curve_json = payload["curve_json"]
             curve = rl.from_json(curve_json)
+            curve = self._attach_curve_context(curve, curve_name=curve_name, timestamp=timestamp, cfg=cfg)
             with S["lock"]:
                 curve_cache = S["curve_cache"]
                 curve_cache[key] = curve
@@ -491,6 +1020,296 @@ class BARCHART_STIRF_CURVE:
         root = {"SER": "SR1", "SL": "SR1", "SFR": "SR3", "SQ": "SR3", "FF": "ZQ"}.get(root, root)
         return root, code
 
+    @staticmethod
+    def _tenor_years(start_date: datetime.date, end_date: Optional[datetime.date]) -> Optional[float]:
+        if end_date is None:
+            return None
+        days = (end_date - start_date).days
+        if days <= 0:
+            return None
+        return float(days) / 365.25
+
+    @staticmethod
+    def _serff_basis_interp(tenor_years: float, points: Sequence[Tuple[float, float]], extrap_mode: str = "linear") -> Optional[float]:
+        if tenor_years <= 0.0 or not points:
+            return None
+
+        sorted_points = sorted(points, key=lambda kv: kv[0])
+        if len(sorted_points) == 1:
+            return float(sorted_points[0][1])
+
+        mode = str(extrap_mode or "linear").strip().lower().replace("_", "-")
+        use_log_tenor = mode == "log-linear"
+
+        def _x(v: float) -> float:
+            if use_log_tenor:
+                if v <= 0.0:
+                    return 0.0
+                return float(math.log(v))
+            return float(v)
+
+        def _interp(x: float, x0: float, y0: float, x1: float, y1: float) -> float:
+            if x1 == x0:
+                return float(y1)
+            return float(y0 + (x - x0) * (y1 - y0) / (x1 - x0))
+
+        x_query = _x(float(tenor_years))
+
+        if tenor_years <= sorted_points[0][0]:
+            x0, y0 = sorted_points[0]
+            x1, y1 = sorted_points[1]
+            if mode == "flat":
+                return float(y0)
+            return _interp(x_query, _x(x0), y0, _x(x1), y1)
+
+        for i in range(1, len(sorted_points)):
+            x1, y1 = sorted_points[i]
+            if tenor_years <= x1:
+                x0, y0 = sorted_points[i - 1]
+                return _interp(x_query, _x(x0), y0, _x(x1), y1)
+
+        x0, y0 = sorted_points[-2]
+        x1, y1 = sorted_points[-1]
+        if mode == "flat":
+            return float(y1)
+        return _interp(x_query, _x(x0), y0, _x(x1), y1)
+
+    @classmethod
+    def _build_serff_basis_points(
+        cls,
+        *,
+        base_date: datetime.date,
+        ser_pricers_by_code: Dict[str, "RLSTIRFuturePricer"],
+        ff_pricers_by_code: Dict[str, "RLSTIRFuturePricer"],
+    ) -> List[Tuple[float, float]]:
+        points_by_tenor: Dict[float, float] = {}
+        for code, ser_pricer in ser_pricers_by_code.items():
+            ff_pricer = ff_pricers_by_code.get(code)
+            if ff_pricer is None:
+                continue
+
+            tenor_years = cls._tenor_years(base_date, getattr(ser_pricer, "_maturity_date", None))
+            if tenor_years is None:
+                continue
+
+            points_by_tenor[tenor_years] = float(ser_pricer._price - ff_pricer._price)
+
+        return sorted(points_by_tenor.items(), key=lambda kv: kv[0])
+
+    @staticmethod
+    def _coerce_date(value: Any) -> Optional[datetime.date]:
+        if isinstance(value, pd.Timestamp):
+            value = value.to_pydatetime()
+        if isinstance(value, datetime.datetime):
+            return value.date()
+        if isinstance(value, datetime.date):
+            return value
+        return None
+
+    @staticmethod
+    def _date_to_rl_dt(d: datetime.date):
+        return rl.dt(d.year, d.month, d.day)
+
+    @staticmethod
+    def _mixed_spline_window_dates(
+        *,
+        base_date: datetime.date,
+        start_years: float,
+        end_years: float,
+        tail_days: int = 0,
+    ) -> Optional[Tuple[datetime.date, datetime.date]]:
+        if end_years <= start_years:
+            return None
+        start_months = int(round(start_years * 12.0))
+        end_months = int(round(end_years * 12.0))
+        spline_left = (pd.Timestamp(base_date) + DateOffset(months=start_months)).date()
+        spline_right = (pd.Timestamp(base_date) + DateOffset(months=end_months)).date() + datetime.timedelta(days=max(0, int(tail_days)))
+        if spline_right <= spline_left:
+            return None
+        return spline_left, spline_right
+
+    @classmethod
+    def _ensure_mixed_support_nodes(
+        cls,
+        *,
+        nodes: Dict[Any, Any],
+        cfg: Dict[str, Any],
+        base_date: datetime.date,
+    ) -> Dict[Any, Any]:
+        if not bool(cfg.get("mixed_interpolation", False)):
+            return nodes
+        if not bool(cfg.get("mixed_spline_add_boundary_nodes", True)):
+            return nodes
+
+        out = dict(nodes)
+        start_years = float(cfg.get("mixed_spline_start_years", 2.0))
+        end_years = float(cfg.get("mixed_spline_end_years", 3.0))
+        tail_days = int(cfg.get("mixed_spline_tail_days", 0) or 0)
+        drop_last_node = bool(cfg.get("mixed_spline_drop_last_node", True))
+        endpoints_cfg = cfg.get("mixed_spline_endpoints", ("natural", "natural"))
+        if isinstance(endpoints_cfg, (list, tuple)) and len(endpoints_cfg) == 2:
+            endpoints = (str(endpoints_cfg[0]), str(endpoints_cfg[1]))
+        else:
+            endpoints = ("natural", "natural")
+
+        def _solvable(node_map: Dict[Any, Any]) -> bool:
+            t_knots = cls._build_mixed_spline_t(
+                node_dates=list(node_map.keys()),
+                base_date=base_date,
+                start_years=start_years,
+                end_years=end_years,
+                tail_days=tail_days,
+                drop_last_node=drop_last_node,
+            )
+            if t_knots is None:
+                return False
+            return cls._mixed_t_is_solvable(node_dates=list(node_map.keys()), t_knots=t_knots, endpoints=endpoints)
+
+        if _solvable(out):
+            return _sort_nodes(out)
+
+        window_no_tail = cls._mixed_spline_window_dates(base_date=base_date, start_years=start_years, end_years=end_years, tail_days=0)
+        window = cls._mixed_spline_window_dates(base_date=base_date, start_years=start_years, end_years=end_years, tail_days=tail_days)
+        if window is None:
+            return _sort_nodes(out)
+
+        left_date, right_date = window
+        candidate_dates: List[datetime.date] = [left_date]
+        if window_no_tail is not None:
+            candidate_dates.append(window_no_tail[1])
+        candidate_dates.append(right_date)
+
+        for d in candidate_dates:
+            out.setdefault(cls._date_to_rl_dt(d), 1.0)
+            if _solvable(out):
+                break
+
+        return _sort_nodes(out)
+
+    @classmethod
+    def _build_mixed_spline_t(
+        cls,
+        *,
+        node_dates: Sequence[Any],
+        base_date: datetime.date,
+        start_years: float,
+        end_years: float,
+        tail_days: int = 0,
+        drop_last_node: bool = True,
+    ) -> Optional[List[Any]]:
+        if end_years <= start_years:
+            return None
+
+        clean_nodes = sorted({d for d in (cls._coerce_date(x) for x in node_dates) if d is not None})
+        if not clean_nodes:
+            return None
+
+        window = cls._mixed_spline_window_dates(base_date=base_date, start_years=start_years, end_years=end_years, tail_days=tail_days)
+        if window is None:
+            return None
+        spline_left, spline_right = window
+
+        if spline_left < clean_nodes[0]:
+            spline_left = clean_nodes[0]
+        if spline_right <= spline_left:
+            return None
+
+        interior_dates = [d for d in clean_nodes if d > spline_left and d < spline_right]
+        # Mirror medium-term mixed-curve practice: hold one terminal node outside spline knots.
+        if drop_last_node and len(interior_dates) >= 1:
+            interior_dates = interior_dates[:-1]
+        interior = [cls._date_to_rl_dt(d) for d in interior_dates]
+        left = cls._date_to_rl_dt(spline_left)
+        right = cls._date_to_rl_dt(spline_right)
+
+        return [left, left, left, left] + interior + [right, right, right, right]
+
+    @classmethod
+    def _mixed_t_is_solvable(
+        cls,
+        *,
+        node_dates: Sequence[Any],
+        t_knots: Sequence[Any],
+        endpoints: Tuple[str, str],
+    ) -> bool:
+        if len(t_knots) < 8:
+            return False
+
+        clean_nodes = sorted(d for d in (cls._coerce_date(x) for x in node_dates) if d is not None)
+        if not clean_nodes:
+            return False
+
+        left_date = cls._coerce_date(t_knots[0])
+        if left_date is None:
+            return False
+
+        nodes_ge_left = sum(1 for d in clean_nodes if d >= left_date)
+        t_len = len(t_knots)
+        tau_extra = 0
+
+        left_ep = str(endpoints[0]).lower()
+        right_ep = str(endpoints[1]).lower()
+        if left_ep == "natural":
+            tau_extra += 1
+        elif left_ep == "not_a_knot":
+            t_len -= 1
+        else:
+            return False
+
+        if right_ep == "natural":
+            tau_extra += 1
+        elif right_ep == "not_a_knot":
+            t_len -= 1
+        else:
+            return False
+
+        n = t_len - 4
+        if n <= 0:
+            return False
+
+        return (nodes_ge_left + tau_extra) >= n
+
+    @classmethod
+    def _curve_interp_kwargs(
+        cls,
+        *,
+        nodes: Dict[Any, Any],
+        cfg: Dict[str, Any],
+        base_date: datetime.date,
+        interpolation: str,
+    ) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {"interpolation": interpolation}
+        if not bool(cfg.get("mixed_interpolation", False)):
+            return kwargs
+
+        start_years = float(cfg.get("mixed_spline_start_years", 2.0))
+        end_years = float(cfg.get("mixed_spline_end_years", 3.0))
+        tail_days = int(cfg.get("mixed_spline_tail_days", 0) or 0)
+        drop_last_node = bool(cfg.get("mixed_spline_drop_last_node", True))
+        t_knots = cls._build_mixed_spline_t(
+            node_dates=list(nodes.keys()),
+            base_date=base_date,
+            start_years=start_years,
+            end_years=end_years,
+            tail_days=tail_days,
+            drop_last_node=drop_last_node,
+        )
+        if t_knots is None:
+            return kwargs
+
+        endpoints_cfg = cfg.get("mixed_spline_endpoints", ("natural", "natural"))
+        if isinstance(endpoints_cfg, (list, tuple)) and len(endpoints_cfg) == 2:
+            endpoints = (str(endpoints_cfg[0]), str(endpoints_cfg[1]))
+        else:
+            endpoints = ("natural", "natural")
+
+        if not cls._mixed_t_is_solvable(node_dates=list(nodes.keys()), t_knots=t_knots, endpoints=endpoints):
+            return kwargs
+
+        kwargs["t"] = t_knots
+        kwargs["endpoints"] = endpoints
+        return kwargs
+
     @classmethod
     def _build_pricable_for_curve(cls, pricer: "RLSTIRFuturePricer", curve_key: str) -> rl.STIRFuture:
         root_and_code = cls._pricer_root_and_code(pricer)
@@ -539,6 +1358,91 @@ class BARCHART_STIRF_CURVE:
             session_open = session_open - datetime.timedelta(days=1)
         return session_open
 
+    @staticmethod
+    def _is_live_request(timestamp: Any) -> bool:
+        return isinstance(timestamp, str) and timestamp.lower() == "live"
+
+    @staticmethod
+    def _is_usd_curve(cfg: Dict[str, Any]) -> bool:
+        return str(cfg.get("reference_key", "")).upper().startswith("USD-")
+
+    @staticmethod
+    def _timestamp_to_date(timestamp: Any) -> datetime.date:
+        if isinstance(timestamp, pd.Timestamp):
+            timestamp = timestamp.to_pydatetime()
+
+        if isinstance(timestamp, datetime.datetime):
+            return timestamp.date()
+
+        if isinstance(timestamp, datetime.date):
+            return timestamp
+
+        if isinstance(timestamp, str):
+            if timestamp.lower() == "live":
+                return datetime.datetime.now(tz=pytz.timezone("America/New_York")).date()
+            return pd.Timestamp(timestamp).date()
+
+        return datetime.datetime.now(tz=pytz.timezone("America/New_York")).date()
+
+    @staticmethod
+    def _has_any_pricers(pricers: Optional[Dict[str, List[RLSTIRFuturePricer]]]) -> bool:
+        if not pricers:
+            return False
+        return any(bool(lst) for lst in pricers.values())
+
+    def _fetch_non_usd_live_with_latest_fallback(self, request: Dict[str, Any]) -> Dict[str, List[RLSTIRFuturePricer]]:
+        # Barchart "live" intraday can be empty outside active prints. Fall back to
+        # the most recent business-day snapshot.
+        last_error: Optional[Exception] = None
+        live_req = dict(request)
+        live_req["timestamp"] = "live"
+
+        try:
+            live_pricers = self.stirf_mdp_barchart.get_data(request=live_req)
+            if self._has_any_pricers(live_pricers):
+                return live_pricers
+        except Exception as exc:
+            last_error = exc
+
+        anchor_date = self._timestamp_to_date(request.get("timestamp"))
+        business_days_checked = 0
+        days_back = 0
+        max_business_day_lookback = 10
+        while business_days_checked < max_business_day_lookback:
+            candidate = anchor_date - datetime.timedelta(days=days_back)
+            days_back += 1
+
+            if candidate.weekday() >= 5:
+                continue
+
+            business_days_checked += 1
+            fallback_req = dict(request)
+            fallback_req["timestamp"] = candidate
+            try:
+                fallback_pricers = self.stirf_mdp_barchart.get_data(request=fallback_req)
+                if self._has_any_pricers(fallback_pricers):
+                    return fallback_pricers
+            except Exception as exc:
+                last_error = exc
+
+        if last_error is not None:
+            raise RuntimeError("Barchart live fetch returned no data and latest-available fallback failed.") from last_error
+        raise RuntimeError("Barchart live fetch returned no data and latest-available fallback produced no instruments.")
+
+    def _resolve_fetchers_for_request(
+        self,
+        *,
+        cfg: Dict[str, Any],
+        is_live_request: bool,
+    ) -> Tuple[Any, Optional[Any]]:
+        if not is_live_request:
+            return cfg["fetch_pricers_func"], cfg.get("fetch_pricers_bulk_func", None)
+
+        if self._is_usd_curve(cfg):
+            return self.stirf_mdp_schwab_app.get_data, self.stirf_mdp_schwab_app.get_bulk_data
+
+        return self._fetch_non_usd_live_with_latest_fallback, None
+
     def _build_curve_from_pricers(
         self,
         *,
@@ -552,6 +1456,10 @@ class BARCHART_STIRF_CURVE:
         interpolation = cfg.get("interpolation", "log_linear")
 
         def one_day_irs(eff_date, curve_key):
+            cal_name = RATESLIB_CURVE_DEFINITIONS[curve_key]["Calendar"]
+            bus_conv = str(RATESLIB_CURVE_DEFINITIONS[curve_key].get("BusinessConvention", "mf")).upper()
+            cal = rl.get_calendar(cal_name)
+            eff_date = cal.roll(eff_date, modifier=bus_conv, settlement=False)
             return rl.IRS(
                 effective=eff_date,
                 termination="1b",
@@ -591,6 +1499,21 @@ class BARCHART_STIRF_CURVE:
             serff_basis = {
                 code: float(ser_pricers_by_code[code]._price - ff_pricers_by_code[code]._price) for code in ser_pricers_by_code if code in ff_pricers_by_code
             }
+            serff_basis_points = self._build_serff_basis_points(
+                base_date=timestamp.date(),
+                ser_pricers_by_code=ser_pricers_by_code,
+                ff_pricers_by_code=ff_pricers_by_code,
+            )
+            serff_basis_last = float(serff_basis_points[-1][1]) if serff_basis_points else None
+            serff_direct_sr1 = bool(cfg.get("serff_skew_direct_sr1", True))
+            serff_extrapolate = bool(cfg.get("serff_skew_extrapolate", False))
+            serff_extrap_constant_from_last = bool(cfg.get("serff_skew_extrap_constant_from_last", False))
+            serff_extrap_mode = str(cfg.get("serff_skew_extrap_mode", "linear")).lower()
+            serff_extrap_min_years = float(cfg.get("serff_skew_extrap_min_years", 0.0) or 0.0)
+            serff_direct_weight = float(cfg.get("serff_skew_direct_weight", 1e7))
+            serff_extrap_weight = float(cfg.get("serff_skew_extrap_weight", 1e5))
+            serff_extrap_roots = {str(x).upper() for x in cfg.get("serff_skew_extrap_roots", ["SR3"])}
+            base_date = timestamp.date()
 
             nodes = _build_stirf_nodes(
                 timestamp=timestamp,
@@ -600,6 +1523,13 @@ class BARCHART_STIRF_CURVE:
                 max_tenor_from_timestamp_months=cfg["max_tenor_from_timestamp_months"],
             )
             nodes = _sort_nodes(nodes)
+            nodes = self._ensure_mixed_support_nodes(nodes=nodes, cfg=cfg, base_date=timestamp.date())
+            curve_interp_kwargs = self._curve_interp_kwargs(
+                nodes=nodes,
+                cfg=cfg,
+                base_date=timestamp.date(),
+                interpolation=interpolation,
+            )
 
             sofr_reference_key = cfg["sofr_reference_key"]
             rl_sofr_curve = rl.Curve(
@@ -608,7 +1538,7 @@ class BARCHART_STIRF_CURVE:
                 convention=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["DayCounter"],
                 calendar=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["Calendar"],
                 modifier=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["BusinessConvention"],
-                interpolation=interpolation,
+                **curve_interp_kwargs,
             )
 
             sofr_meeting_dates = sorted(k for k in nodes.keys())
@@ -630,10 +1560,30 @@ class BARCHART_STIRF_CURVE:
             skew_w: List[float] = []
             for p in base_pricers:
                 root_and_code = self._pricer_root_and_code(p)
-                if root_and_code and root_and_code[0] == "SR1" and root_and_code[1] in serff_basis:
+                basis_adjustment: Optional[float] = None
+                target_weight = 1.0
+
+                if serff_direct_sr1 and root_and_code and root_and_code[0] == "SR1" and root_and_code[1] in serff_basis:
+                    basis_adjustment = float(serff_basis[root_and_code[1]])
+                    target_weight = serff_direct_weight
+                elif serff_extrapolate and root_and_code and root_and_code[0] in serff_extrap_roots and serff_basis_points:
+                    tenor_years = self._tenor_years(base_date, getattr(p, "_maturity_date", None))
+                    if tenor_years is not None and tenor_years >= serff_extrap_min_years:
+                        if serff_extrap_constant_from_last and serff_basis_last is not None:
+                            basis_adjustment = float(serff_basis_last)
+                        else:
+                            basis_adjustment = self._serff_basis_interp(
+                                tenor_years=tenor_years,
+                                points=serff_basis_points,
+                                extrap_mode=serff_extrap_mode,
+                            )
+                        if basis_adjustment is not None:
+                            target_weight = serff_extrap_weight
+
+                if basis_adjustment is not None:
                     sofr_pricable = self._build_pricable_for_curve(p, curve_key=sofr_reference_key)
-                    skew_s.append(float(sofr_pricable.rate(solver=sofr_solver).real) + serff_basis[root_and_code[1]])
-                    skew_w.append(1e7)
+                    skew_s.append(float(sofr_pricable.rate(solver=sofr_solver).real) + float(basis_adjustment))
+                    skew_w.append(float(target_weight))
                 else:
                     skew_s.append(float(p._rate))
                     skew_w.append(1.0)
@@ -644,7 +1594,7 @@ class BARCHART_STIRF_CURVE:
                 convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
                 calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
                 modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
-                interpolation=interpolation,
+                **curve_interp_kwargs,
             )
 
             meeting_dates = sorted(k for k in nodes.keys())
@@ -669,6 +1619,13 @@ class BARCHART_STIRF_CURVE:
             max_tenor_from_timestamp_months=cfg["max_tenor_from_timestamp_months"],
         )
         nodes = _sort_nodes(nodes)
+        nodes = self._ensure_mixed_support_nodes(nodes=nodes, cfg=cfg, base_date=timestamp.date())
+        curve_interp_kwargs = self._curve_interp_kwargs(
+            nodes=nodes,
+            cfg=cfg,
+            base_date=timestamp.date(),
+            interpolation=interpolation,
+        )
 
         rl_curve = rl.Curve(
             nodes=nodes,
@@ -676,7 +1633,7 @@ class BARCHART_STIRF_CURVE:
             convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
             calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
             modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
-            interpolation=interpolation,
+            **curve_interp_kwargs,
         )
 
         instruments = [self._build_pricable_for_curve(p, curve_key=cfg["reference_key"]) for p in sorted_pricers]
@@ -725,6 +1682,10 @@ class BARCHART_STIRF_CURVE:
             raw_timestamps = list(timestamp)
             assert raw_timestamps, "timestamp list is empty"
             normalized_timestamps = [self._normalize_timestamp(ts) for ts in raw_timestamps]
+            live_by_timestamp: Dict[datetime.datetime, bool] = {}
+            for raw_ts, norm_ts in zip(raw_timestamps, normalized_timestamps):
+                is_live_ts = self._is_live_request(raw_ts)
+                live_by_timestamp[norm_ts] = bool(live_by_timestamp.get(norm_ts, False) or is_live_ts)
             local_kwargs = dict(kwargs)
             show_tqdm = bool(local_kwargs.pop("show_tqdm", True))
             auto_prime_bulk = bool(local_kwargs.pop("auto_prime_bulk", True))
@@ -777,11 +1738,21 @@ class BARCHART_STIRF_CURVE:
 
                 for ts_prime in prime_iter:
                     prime_req = dict(symbols=cfg["instruments"], timestamp=ts_prime, **prime_kwargs)
-                    cfg["fetch_pricers_func"](request=prime_req)
+                    fetch_pricers_func, _ = self._resolve_fetchers_for_request(
+                        cfg=cfg,
+                        is_live_request=bool(live_by_timestamp.get(ts_prime, False)),
+                    )
+                    fetch_pricers_func(request=prime_req)
 
             # Phase 2: fetch STIR pricers for all requested timestamps (prefer cache).
             pricers_by_ts: Dict[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]] = {}
-            fetch_pricers_bulk_func = cfg.get("fetch_pricers_bulk_func", None)
+            fetch_pricers_bulk_func = None
+            live_modes = {bool(live_by_timestamp.get(ts, False)) for ts in pending_timestamps}
+            if len(live_modes) == 1:
+                _, fetch_pricers_bulk_func = self._resolve_fetchers_for_request(
+                    cfg=cfg,
+                    is_live_request=next(iter(live_modes)),
+                )
             if fetch_pricers_bulk_func is not None:
                 bulk_kwargs = dict(local_kwargs)
                 if auto_prime_bulk:
@@ -804,7 +1775,11 @@ class BARCHART_STIRF_CURVE:
                         fetch_kwargs["force_refresh"] = False
                         fetch_kwargs["cache_full_intraday_fetch"] = True
                     pricer_req = dict(symbols=cfg["instruments"], timestamp=ts, **fetch_kwargs)
-                    ts_pricers = cfg["fetch_pricers_func"](request=pricer_req)
+                    fetch_pricers_func, _ = self._resolve_fetchers_for_request(
+                        cfg=cfg,
+                        is_live_request=bool(live_by_timestamp.get(ts, False)),
+                    )
+                    ts_pricers = fetch_pricers_func(request=pricer_req)
                 calibration_jobs.append((ts, ts_pricers))
 
             # Phase 3: parallel curve calibrations + tqdm progress.
@@ -817,8 +1792,10 @@ class BARCHART_STIRF_CURVE:
                     cal_iter = tqdm_mod.tqdm(calibration_jobs, desc=f"CALIBRATING {curve_name}")
                 for ts, ts_pricers in cal_iter:
                     built = self._build_curve_from_pricers(curve_name=curve_name, timestamp=ts, cfg=cfg, pricers=ts_pricers)
-                    self._curve_cache_put(curve_name, ts, cfg, built[0])
-                    out[ts] = built[0] if curve_only else built
+                    curve_obj, solver_obj = built
+                    curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
+                    self._curve_cache_put(curve_name, ts, cfg, curve_obj)
+                    out[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
             else:
                 with ThreadPoolExecutor(max_workers=cal_workers, thread_name_prefix="stir-curve-calib") as pool:
                     futures = {
@@ -831,11 +1808,14 @@ class BARCHART_STIRF_CURVE:
                     for fut in completed:
                         ts = futures[fut]
                         built = fut.result()
-                        self._curve_cache_put(curve_name, ts, cfg, built[0])
-                        out[ts] = built[0] if curve_only else built
+                        curve_obj, solver_obj = built
+                        curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
+                        self._curve_cache_put(curve_name, ts, cfg, curve_obj)
+                        out[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
 
             return out
 
+        is_live_request = self._is_live_request(timestamp)
         normalized_timestamp = self._normalize_timestamp(timestamp)
         force_refresh = bool(kwargs.get("force_refresh", False))
         if curve_only and not force_refresh:
@@ -844,7 +1824,10 @@ class BARCHART_STIRF_CURVE:
                 return cached_curve
 
         pricer_req = dict(symbols=cfg["instruments"], timestamp=normalized_timestamp, **kwargs)
-        pricers: Dict[str, List[RLSTIRFuturePricer]] = cfg["fetch_pricers_func"](request=pricer_req)
+        fetch_pricers_func, _ = self._resolve_fetchers_for_request(cfg=cfg, is_live_request=is_live_request)
+        pricers: Dict[str, List[RLSTIRFuturePricer]] = fetch_pricers_func(request=pricer_req)
         built = self._build_curve_from_pricers(curve_name=curve_name, timestamp=normalized_timestamp, cfg=cfg, pricers=pricers)
-        self._curve_cache_put(curve_name, normalized_timestamp, cfg, built[0])
-        return built[0] if curve_only else built
+        curve_obj, solver_obj = built
+        curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=normalized_timestamp, cfg=cfg)
+        self._curve_cache_put(curve_name, normalized_timestamp, cfg, curve_obj)
+        return curve_obj if curve_only else (curve_obj, solver_obj)

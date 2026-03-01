@@ -141,6 +141,19 @@ PACKAGE_METRIC_COLUMNS: dict[str, tuple[str, ...]] = {
         "delta_hedge_swap_dv01",
         "delta_hedge_swaption_dv01",
         "delta_hedge_dv01_check",
+        # Barbell decomposition columns
+        "delta_hedge_match_type",
+        "delta_hedge_curve_build",
+        "delta_hedge_long_leg_trade_id",
+        "delta_hedge_long_leg_tenor",
+        "delta_hedge_long_leg_notional",
+        "delta_hedge_long_leg_dv01",
+        "delta_hedge_short_leg_trade_id",
+        "delta_hedge_short_leg_tenor",
+        "delta_hedge_short_leg_notional",
+        "delta_hedge_short_leg_dv01",
+        "delta_hedge_expected_ratio",
+        "delta_hedge_observed_ratio",
     ),
 }
 
@@ -239,6 +252,7 @@ BOOL_COLUMNS: tuple[str, ...] = (
     "cleared",
     "package_indicator",
     "is_notional_capped",
+    "matched_ust_maturity",
 )
 
 TIMESTAMP_COLUMNS: tuple[str, ...] = ("execution_timestamp",)
@@ -302,6 +316,8 @@ LEG_UPSERT_UPDATE_COLUMNS: tuple[str, ...] = (
     "package_type",
     "package_indicator",
     "package_transaction_price",
+    "matched_ust_maturity",
+    "invoice_swap_ticker",
     "leg_metrics",
 )
 
@@ -367,6 +383,8 @@ CREATE TABLE IF NOT EXISTS {LEGS_TABLE} (
     package_type TEXT,
     package_indicator BOOLEAN,
     package_transaction_price NUMERIC,
+    matched_ust_maturity BOOLEAN,
+    invoice_swap_ticker TEXT,
     leg_metrics JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -423,6 +441,10 @@ ALTER TABLE {LEGS_TABLE}
     ADD COLUMN IF NOT EXISTS manual_link_id UUID REFERENCES {MANUAL_LINKS_TABLE}(link_id);
 ALTER TABLE {LEGS_TABLE}
     ADD COLUMN IF NOT EXISTS is_manually_linked BOOLEAN DEFAULT FALSE;
+ALTER TABLE {LEGS_TABLE}
+    ADD COLUMN IF NOT EXISTS matched_ust_maturity BOOLEAN;
+ALTER TABLE {LEGS_TABLE}
+    ADD COLUMN IF NOT EXISTS invoice_swap_ticker TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_swaption_packages_type_date ON {PACKAGES_TABLE}(package_type, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_swaption_packages_exec ON {PACKAGES_TABLE}(execution_start);
@@ -477,6 +499,8 @@ LEFT JOIN LATERAL (
             'exercise_style', l.exercise_style,
             'cleared', l.cleared,
             'package_type', l.package_type,
+            'matched_ust_maturity', l.matched_ust_maturity,
+            'invoice_swap_ticker', l.invoice_swap_ticker,
             'leg_metrics', l.leg_metrics
         ) ORDER BY l.leg_order
     ) AS legs_json
@@ -535,6 +559,8 @@ LEFT JOIN LATERAL (
             'exercise_style', l.exercise_style,
             'cleared', l.cleared,
             'package_type', l.package_type,
+            'matched_ust_maturity', l.matched_ust_maturity,
+            'invoice_swap_ticker', l.invoice_swap_ticker,
             'leg_metrics', l.leg_metrics,
             'is_manually_linked', l.is_manually_linked,
             'manual_link_id', l.manual_link_id
@@ -668,6 +694,15 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     for col in DATE_COLUMNS:
         if col in out.columns:
             out[col] = pd.to_datetime(out[col], errors="coerce").dt.date
+
+    # Keep matched-maturity metadata in explicit columns, not in trade_label text.
+    if "trade_label" in out.columns:
+        out["trade_label"] = (
+            out["trade_label"]
+            .astype("string")
+            .str.replace(r"\s*\[USTMAT[^\]]*\]\s*$", "", regex=True, case=False)
+            .str.strip()
+        )
 
     # Ensure package_id exists even for outrights
     if "package_id" not in out.columns:
@@ -926,6 +961,8 @@ def build_legs_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 "package_type": row.get("package_type"),
                 "package_indicator": row.get("package_indicator"),
                 "package_transaction_price": row.get("package_transaction_price"),
+                "matched_ust_maturity": row.get("matched_ust_maturity"),
+                "invoice_swap_ticker": row.get("invoice_swap_ticker"),
             }
             rec["leg_metrics"] = build_leg_metrics(row)
             legs.append(rec)

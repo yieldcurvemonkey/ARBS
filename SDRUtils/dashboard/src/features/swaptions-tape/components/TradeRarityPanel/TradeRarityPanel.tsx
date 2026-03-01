@@ -1,4 +1,4 @@
-﻿import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { TapeRow } from '../../types/trade.types';
 import type {
   MetricConfig,
@@ -41,12 +41,120 @@ export type TradeRarityPanelProps = {
 };
 
 const DEFAULT_SAMPLE_WARNING = 20;
+const DEFAULT_VISIBLE_METRIC_COUNT = 3;
 
 const basisOptions: Array<{ key: RarityDistributionBasis; label: string }> = [
   { key: 'combined', label: 'Combined' },
   { key: 'custy', label: 'Custy' },
   { key: 'idb', label: 'IDB' },
 ];
+
+type DistributionChartStyle = 'bar' | 'curve';
+type RecencyMetricMode = 'vega01' | 'gamma01' | 'notional';
+
+const RECENCY_THRESHOLD_DEFAULTS: Record<RecencyMetricMode, number> = {
+  vega01: 5000,
+  gamma01: 5000,
+  notional: 50_000_000,
+};
+
+const METRIC_TOKEN_OVERRIDES: Record<string, string> = {
+  bpvol: 'BPVol',
+  yr: 'Yr',
+  dv01: 'DV01',
+  vega01: 'Vega01',
+  gamma01: 'Gamma01',
+  theta01: 'Theta01',
+  atmf: 'ATMF',
+  atm: 'ATM',
+  rr: 'RR',
+  vs: 'VS',
+  fwd: 'Fwd',
+  bps: 'bps',
+  usd: 'USD',
+};
+
+const DEFAULT_METRIC_PREFERENCES: Array<(metric: MetricConfig) => boolean> = [
+  (metric) => metric.key === 'premium_bps' || metric.label === 'Premium (bps)',
+  (metric) => metric.key === 'total_notional' || metric.label === 'Notional',
+  (metric) => /vega01/i.test(metric.key) || metric.label === 'Vega01',
+];
+
+function humanizeMetricKey(key: string): string {
+  return key
+    .split('_')
+    .map((token) => {
+      const lower = token.toLowerCase();
+      if (METRIC_TOKEN_OVERRIDES[lower]) return METRIC_TOKEN_OVERRIDES[lower];
+      if (!token.length) return token;
+      return token[0].toUpperCase() + token.slice(1);
+    })
+    .join(' ');
+}
+
+function inferMetricConfig(key: string, packageType: string | null): MetricConfig {
+  const normalized = key.toLowerCase();
+  const isNotional = normalized.includes('notional');
+  const isPremium = normalized.includes('premium');
+  const isBps = normalized.includes('bps');
+  const isRatio = normalized.includes('ratio') || normalized.includes('delta');
+  const isCount = normalized.includes('count') || normalized.includes('seconds');
+  const isDuration = normalized.includes('years') || normalized.includes('tenor');
+  const isGreekMetric =
+    normalized.includes('dv01') ||
+    normalized.includes('vega01') ||
+    normalized.includes('gamma01') ||
+    normalized.includes('theta01');
+
+  const formatKind: MetricConfig['formatKind'] = isNotional
+    ? 'notional'
+    : isPremium
+      ? 'premium'
+      : isBps
+        ? 'bps'
+        : isCount
+          ? 'count'
+          : isRatio
+            ? 'ratio'
+            : 'metric';
+
+  const unit = isNotional || isPremium
+    ? 'USD'
+    : isBps
+      ? 'bps'
+      : isGreekMetric
+        ? 'USD/bp'
+        : isDuration
+          ? 'years'
+          : undefined;
+
+  const decimals = isNotional || isCount ? 0 : isRatio ? 3 : 2;
+
+  return {
+    key,
+    label: humanizeMetricKey(key),
+    unit,
+    decimals,
+    showFor: packageType ? [packageType] : [],
+    formatKind,
+    absolute: isNotional || isPremium || isGreekMetric,
+  };
+}
+
+function resolveDefaultMetricKeys(metrics: MetricConfig[]): string[] {
+  const selected: string[] = [];
+  DEFAULT_METRIC_PREFERENCES.forEach((matcher) => {
+    const match = metrics.find((metric) => matcher(metric));
+    if (!match || selected.includes(match.key)) return;
+    selected.push(match.key);
+  });
+  metrics.forEach((metric) => {
+    if (selected.length >= DEFAULT_VISIBLE_METRIC_COUNT) return;
+    if (selected.includes(metric.key)) return;
+    selected.push(metric.key);
+  });
+  return selected;
+}
 
 export const TradeRarityPanel = memo(function TradeRarityPanel({
   selectedRow,
@@ -61,25 +169,68 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
     () => ensurePremiumMetric([config.primaryMetric, ...config.secondaryMetrics]),
     [config.primaryMetric, config.secondaryMetrics],
   );
+  const selectedRowBasis = useMemo<RarityDistributionBasis>(() => {
+    const platform = resolvePlatformIdentifier(selectedRow);
+    return isCustyPlatform(platform) ? 'custy' : 'idb';
+  }, [selectedRow]);
 
-  const [basis, setBasis] = useState<RarityDistributionBasis>('combined');
+  const [basis, setBasis] = useState<RarityDistributionBasis>(selectedRowBasis);
   const [histogramMetricKey, setHistogramMetricKey] = useState(
     config.primaryMetric.key,
   );
   const [primaryThreshold, setPrimaryThreshold] = useState(
-    config.similarityCriteria.threshold,
+    RECENCY_THRESHOLD_DEFAULTS.vega01,
   );
   const [sizeThresholdPct, setSizeThresholdPct] = useState(80);
+  const [distributionChartStyle, setDistributionChartStyle] =
+    useState<DistributionChartStyle>('curve');
+  const [recencyMetricMode, setRecencyMetricMode] = useState<RecencyMetricMode>('vega01');
+  const [visibleMetricKeys, setVisibleMetricKeys] = useState<string[]>([]);
+  const previousPackageTypeRef = useRef<string>('');
 
   useEffect(() => {
-    setBasis('combined');
+    setBasis(selectedRowBasis);
     setHistogramMetricKey(config.primaryMetric.key);
-    setPrimaryThreshold(config.similarityCriteria.threshold);
-  }, [config.primaryMetric.key, config.similarityCriteria.threshold]);
+    setRecencyMetricMode('vega01');
+    setPrimaryThreshold(RECENCY_THRESHOLD_DEFAULTS.vega01);
+  }, [config.primaryMetric.key, selectedRow.package_id, selectedRowBasis]);
+
+  useEffect(() => {
+    setPrimaryThreshold(RECENCY_THRESHOLD_DEFAULTS[recencyMetricMode]);
+  }, [recencyMetricMode]);
 
   const rowsByBasis = useMemo(() => splitRowsByPlatform(timeseriesRows), [
     timeseriesRows,
   ]);
+
+  const discoveredMetrics = useMemo(() => {
+    const baseMetricKeys = new Set(baseMetrics.map((metric) => metric.key));
+    const discoveredKeys = new Set<string>();
+
+    [selectedRow, ...timeseriesRows].forEach((row) => {
+      const packageMetrics = row.package_metrics || {};
+      Object.keys(packageMetrics).forEach((key) => {
+        if (!baseMetricKeys.has(key)) discoveredKeys.add(key);
+      });
+
+      const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
+      legs.forEach((leg) => {
+        const legMetrics = (leg as any)?.leg_metrics || {};
+        Object.keys(legMetrics).forEach((key) => {
+          if (!baseMetricKeys.has(key)) discoveredKeys.add(key);
+        });
+      });
+    });
+
+    return Array.from(discoveredKeys)
+      .sort((left, right) => left.localeCompare(right))
+      .map((key) => inferMetricConfig(key, config.packageType));
+  }, [baseMetrics, config.packageType, selectedRow, timeseriesRows]);
+
+  const allMetrics = useMemo(() => {
+    if (!discoveredMetrics.length) return baseMetrics;
+    return [...baseMetrics, ...discoveredMetrics];
+  }, [baseMetrics, discoveredMetrics]);
 
   const activeRows = useMemo(() => {
     if (basis === 'custy') return rowsByBasis.custy;
@@ -92,11 +243,11 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
       string,
       { values: number[]; stats: ReturnType<typeof distributionStats> }
     > = {};
-    baseMetrics.forEach((metric) => {
+    allMetrics.forEach((metric) => {
       const values: number[] = [];
       activeRows.forEach((row) => {
         const value = getMetricValue(row, metric);
-        if (value === null || Number.isNaN(value)) return;
+        if (value === null || !Number.isFinite(value)) return;
         values.push(value);
       });
       map[metric.key] = {
@@ -105,7 +256,7 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
       };
     });
     return map;
-  }, [activeRows, baseMetrics]);
+  }, [activeRows, allMetrics]);
 
   const primaryMetric = config.primaryMetric;
   const primaryDistribution = distributions[primaryMetric.key];
@@ -124,15 +275,15 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
   }, [primaryKey]);
 
   const orderedMetrics = useMemo(() => {
-    if (!baseMetrics.length) return baseMetrics;
-    if (baseMetrics[0]?.key === primaryKey) return baseMetrics;
-    const primaryMetric = baseMetrics.find((metric) => metric.key === primaryKey);
-    if (!primaryMetric) return baseMetrics;
+    if (!allMetrics.length) return allMetrics;
+    if (allMetrics[0]?.key === primaryKey) return allMetrics;
+    const nextPrimaryMetric = allMetrics.find((metric) => metric.key === primaryKey);
+    if (!nextPrimaryMetric) return allMetrics;
     return [
-      primaryMetric,
-      ...baseMetrics.filter((metric) => metric.key !== primaryKey),
+      nextPrimaryMetric,
+      ...allMetrics.filter((metric) => metric.key !== primaryKey),
     ];
-  }, [baseMetrics, primaryKey]);
+  }, [allMetrics, primaryKey]);
 
   const metricDisplayValues: MetricDisplayValue[] = useMemo(() => {
     const fallbackDescriptor: { zone: RarityZone; descriptor: string } = {
@@ -191,6 +342,48 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
     });
   }, [distributions, formatters, orderedMetrics, primaryKey, selectedRow]);
 
+  const percentileMetricOptions = useMemo(
+    () =>
+      orderedMetrics.filter((metric) => {
+        if (metric.percentile === false) return false;
+        const distribution = distributions[metric.key];
+        return (distribution?.values.length ?? 0) > 0;
+      }),
+    [distributions, orderedMetrics],
+  );
+
+  useEffect(() => {
+    const availableKeys = new Set(percentileMetricOptions.map((metric) => metric.key));
+    const defaults = resolveDefaultMetricKeys(percentileMetricOptions);
+    setVisibleMetricKeys((current) => {
+      if (previousPackageTypeRef.current !== config.packageType) {
+        previousPackageTypeRef.current = config.packageType;
+        return defaults;
+      }
+      const retained = current.filter((key) => availableKeys.has(key));
+      return retained.length ? retained : defaults;
+    });
+  }, [config.packageType, percentileMetricOptions]);
+
+  const visibleMetricDisplayValues = useMemo(() => {
+    if (!metricDisplayValues.length) return [];
+    const byKey = new Map(metricDisplayValues.map((metric) => [metric.key, metric]));
+    return visibleMetricKeys
+      .map((key) => byKey.get(key))
+      .filter((metric): metric is MetricDisplayValue => Boolean(metric));
+  }, [metricDisplayValues, visibleMetricKeys]);
+
+  const toggleVisibleMetric = (metricKey: string) => {
+    setVisibleMetricKeys((current) => {
+      const isSelected = current.includes(metricKey);
+      if (isSelected) {
+        if (current.length <= 1) return current;
+        return current.filter((key) => key !== metricKey);
+      }
+      return [...current, metricKey];
+    });
+  };
+
   const histogramMetric =
     baseMetrics.find((metric) => metric.key === histogramMetricKey) ||
     primaryMetric;
@@ -206,7 +399,7 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
           : rowsByBasis.combined;
     sourceRows.forEach((row) => {
       const value = getMetricValue(row, histogramMetric);
-      if (value === null || Number.isNaN(value)) return;
+      if (value === null || !Number.isFinite(value)) return;
       values.push(value);
       if (basis === 'combined') {
         const platform = resolvePlatformIdentifier(row);
@@ -216,13 +409,26 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
     return { values, custyMask };
   }, [basis, histogramMetric, rowsByBasis]);
 
+  const histogramBinCount = useMemo(() => {
+    const sampleSize = histogramValues.values.length;
+    if (sampleSize <= 1) return 1;
+    const precisionBuckets = new Set(
+      histogramValues.values.map((value) => value.toPrecision(10)),
+    );
+    const uniqueCount = precisionBuckets.size;
+    if (uniqueCount <= 1) return 1;
+    const sqrtBins = Math.round(Math.sqrt(sampleSize));
+    const target = Math.max(8, Math.min(32, sqrtBins * 2));
+    return Math.max(1, Math.min(target, uniqueCount));
+  }, [histogramValues.values]);
+
   const histogram = useMemo(() => {
     return computeHistogram(
       histogramValues.values,
-      20,
+      histogramBinCount,
       basis === 'combined' ? histogramValues.custyMask : undefined,
     );
-  }, [basis, histogramValues]);
+  }, [basis, histogramBinCount, histogramValues]);
 
   const histogramStats = useMemo(
     () => distributionStats(histogramValues.values),
@@ -278,13 +484,13 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
     });
   }, [activeRows, config.histogramOverlay, histogram, histogramMetric.key]);
 
-  const derivedFootnotes = metricDisplayValues
+  const derivedFootnotes = visibleMetricDisplayValues
     .filter((metric) => metric.derived && metric.formula)
     .map((metric) => `(derived) ${metric.label} = ${metric.formula}`);
 
   const sampleWarnings = Array.from(
     new Set(
-      metricDisplayValues
+      visibleMetricDisplayValues
         .filter((metric) => metric.warning)
         .map((metric) => metric.warning as string),
     ),
@@ -310,18 +516,21 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
     return `${startLabel} - ${endLabel}`;
   }, [timeseriesRows]);
 
+  const recencyMetricLabel =
+    recencyMetricMode === 'vega01'
+      ? 'Vega01'
+      : recencyMetricMode === 'gamma01'
+        ? 'Gamma01'
+        : 'Notional';
+
   const similarityLabel = useMemo(() => {
-    const unitLabel = primaryMetric.unit ? ` ${primaryMetric.unit}` : '';
-    const thresholdLabel =
-      config.similarityCriteria.mode === 'percentage_of'
-        ? `+/-${(primaryThreshold * 100).toFixed(0)}%`
-        : `+/-${primaryThreshold}${unitLabel}`;
-    return `Similar defined as: same bucket, ${primaryMetric.label} within ${thresholdLabel}`;
+    const unitLabel = recencyMetricMode === 'notional' ? ' USD' : ' USD/bp';
+    const thresholdLabel = `+/-${primaryThreshold}${unitLabel}`;
+    return `Similar defined as: same bucket, ${recencyMetricLabel} within ${thresholdLabel}`;
   }, [
-    config.similarityCriteria.mode,
-    primaryMetric.label,
-    primaryMetric.unit,
     primaryThreshold,
+    recencyMetricLabel,
+    recencyMetricMode,
   ]);
 
   const metricOptions = baseMetrics.filter((metric) => {
@@ -367,9 +576,35 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
       {primaryFallbackNote && (
         <div className="mt-2 text-[11px] text-amber-300">{primaryFallbackNote}</div>
       )}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wide text-slate-500">
+          Percentile metrics
+        </span>
+        <div className="flex flex-wrap items-center gap-1">
+          {percentileMetricOptions.map((metric) => {
+            const isSelected = visibleMetricKeys.includes(metric.key);
+            const disableDeselect = isSelected && visibleMetricKeys.length <= 1;
+            return (
+              <button
+                key={metric.key}
+                type="button"
+                onClick={() => toggleVisibleMetric(metric.key)}
+                disabled={disableDeselect}
+                className={`rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition ${
+                  isSelected
+                    ? 'border-slate-500 bg-slate-700 text-slate-100'
+                    : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                } ${disableDeselect ? 'cursor-not-allowed opacity-60' : ''}`}
+              >
+                {metric.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <div className="mt-3">
         <PercentileRankBadges
-          metrics={metricDisplayValues}
+          metrics={visibleMetricDisplayValues}
           primaryKey={primaryKey}
         />
       </div>
@@ -388,6 +623,8 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
           skewDominance={skewDominance}
           metricOptions={metricOptions}
           onMetricChange={setHistogramMetricKey}
+          chartStyle={distributionChartStyle}
+          onChartStyleChange={setDistributionChartStyle}
           formatValue={(value) =>
             formatMetricDisplay(histogramMetric, value, selectedRow, formatters)
           }
@@ -397,11 +634,11 @@ export const TradeRarityPanel = memo(function TradeRarityPanel({
           selectedRow={selectedRow}
           rows={activeRows}
           config={config}
-          primaryMetric={primaryMetric}
-          primaryValue={primaryValue}
+          recencyMetricMode={recencyMetricMode}
           formatters={formatters}
           primaryThreshold={primaryThreshold}
           sizeThresholdPct={sizeThresholdPct}
+          onRecencyMetricModeChange={setRecencyMetricMode}
           onPrimaryThresholdChange={setPrimaryThreshold}
           onSizeThresholdChange={setSizeThresholdPct}
         />
@@ -432,7 +669,7 @@ function formatMetricDisplay(
   row: TapeRow,
   formatters: TradeRarityPanelFormatters,
 ): string {
-  if (value === null || Number.isNaN(value)) return '--';
+  if (value === null || !Number.isFinite(value)) return '--';
   if (metric.key === 'net_premium_sign') {
     return buildNetPremiumSignLabel(value);
   }

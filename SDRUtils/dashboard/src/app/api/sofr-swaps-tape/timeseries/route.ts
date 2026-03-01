@@ -5,6 +5,7 @@ import { resolveDisplayView, SofrSwapTapeRow } from '@/lib/sofr-swaps-tape'
 import { parseSeriesKey } from '@/lib/sofr-swaps-api-utils'
 
 const MAX_TIMESERIES_ROWS = 50_000
+const LEGS_TABLE = 'arbs_usd_swap_legs_v2'
 const IDB_MIC_CODES = ['BGCD', 'ISWV', 'TPSE']
 const FORWARD_YEARS_TOLERANCE = 0.06
 const TENOR_YEARS_TOLERANCE = 0.1
@@ -118,7 +119,7 @@ export async function GET(request: Request) {
        LEFT JOIN LATERAL (
          SELECT mode() WITHIN GROUP (ORDER BY platform_identifier) AS platform_identifier
                , mode() WITHIN GROUP (ORDER BY event_action) AS event_action
-         FROM arbs_sofr_swap_legs_v1 l
+         FROM ${LEGS_TABLE} l
          WHERE l.package_id = d.package_id
        ) plat ON TRUE
        ${whereClause}

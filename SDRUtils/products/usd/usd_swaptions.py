@@ -30,14 +30,19 @@ from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_y
 from SDRUtils.core.parsing import parse_notional
 from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_from_dates, tenor_to_label
 from SDRUtils.data.builder import SDRDataBuilder
+from SDRUtils.packages.mms import detect_mms_trades_df
 from SDRUtils.packages.swaption_packages import (
     SwaptionPackageDetectionConfig,
     detect_and_link_swaption_packages_df,
 )
 from SDRUtils.packages.utils import merge_package_legs_to_one_row, merge_vega_curve_packages
 from SDRUtils.products._swaptions.upi import _build_upi_df, make_swaption_desc_func
-from SDRUtils.products._swaps.filters import new_sofr_swap_trades
+from SDRUtils.products._swaps.filters import new_usd_swap_trades
+from SDRUtils.products.usd.usd_swaps import detect_invoice_swaps
 from SDRUtils.products.usd.base import USDProductBase
+
+_UNDERLIER_SCHEDULE_PATTERN = r"\b(?:CONSTANT|CUSTOM|AMORTIZING|ACCRETING)\b"
+_BESPOKE_UNDERLIER_SCHEDULES = {"CUSTOM", "AMORTIZING", "ACCRETING"}
 
 
 def _is_blank_series(series: pd.Series) -> pd.Series:
@@ -53,6 +58,33 @@ def _clean_text(value: object) -> str:
     if text.lower() in {"nan", "nat", "none"}:
         return ""
     return text
+
+
+def _extract_schedule_token(value: object) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip().upper()
+    if not text:
+        return None
+    match = re.search(_UNDERLIER_SCHEDULE_PATTERN, text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(0).upper()
+
+
+def _infer_underlier_schedule(row: pd.Series) -> str:
+    candidates = (
+        row.get("underlier_schedule"),
+        row.get("description"),
+        row.get("trade_label"),
+        row.get("upi_underlier_name"),
+        row.get("upi_fisn"),
+    )
+    for candidate in candidates:
+        token = _extract_schedule_token(candidate)
+        if token:
+            return token
+    return "CONSTANT"
 
 
 def _backfill_swaption_fields(package_df: pd.DataFrame) -> pd.DataFrame:
@@ -75,6 +107,18 @@ def _backfill_swaption_fields(package_df: pd.DataFrame) -> pd.DataFrame:
         else:
             missing_trade_label = _is_blank_series(out["trade_label"])
             out.loc[missing_trade_label, "trade_label"] = out.loc[missing_trade_label, "description"]
+
+    if "underlier_schedule" not in out.columns:
+        out["underlier_schedule"] = None
+    missing_underlier_schedule = _is_blank_series(out["underlier_schedule"])
+    if missing_underlier_schedule.any():
+        inferred_schedule = out.loc[missing_underlier_schedule].apply(_infer_underlier_schedule, axis=1)
+        out.loc[missing_underlier_schedule, "underlier_schedule"] = inferred_schedule
+    out["underlier_schedule"] = out["underlier_schedule"].apply(lambda value: _extract_schedule_token(value) or "CONSTANT")
+
+    if "is_bespoke_underlier" not in out.columns:
+        out["is_bespoke_underlier"] = False
+    out["is_bespoke_underlier"] = out["underlier_schedule"].isin(_BESPOKE_UNDERLIER_SCHEDULES)
 
     if "upi_fisn" in out.columns:
         fisn_text = out["upi_fisn"].fillna("").astype("string").str.lower()
@@ -144,6 +188,96 @@ def _backfill_swaption_fields(package_df: pd.DataFrame) -> pd.DataFrame:
                 axis=1,
             )
             out.loc[missing_trade_label, "trade_label"] = fallback_trade_label
+
+        label_has_schedule = out["trade_label"].astype("string").str.contains(
+            _UNDERLIER_SCHEDULE_PATTERN,
+            case=False,
+            na=False,
+            regex=True,
+        )
+        if "description" in out.columns:
+            description_has_schedule = out["description"].astype("string").str.contains(
+                _UNDERLIER_SCHEDULE_PATTERN,
+                case=False,
+                na=False,
+                regex=True,
+            )
+            use_description = (~label_has_schedule) & description_has_schedule
+            out.loc[use_description, "trade_label"] = out.loc[use_description, "description"]
+            label_has_schedule = out["trade_label"].astype("string").str.contains(
+                _UNDERLIER_SCHEDULE_PATTERN,
+                case=False,
+                na=False,
+                regex=True,
+            )
+
+        prepend_schedule = (~label_has_schedule) & out["trade_label"].astype("string").str.strip().ne("")
+        if prepend_schedule.any():
+            out.loc[prepend_schedule, "trade_label"] = (
+                out.loc[prepend_schedule, "underlier_schedule"].astype("string").str.upper()
+                + " "
+                + out.loc[prepend_schedule, "trade_label"].astype("string")
+            ).str.strip()
+
+    return out
+
+
+def _annotate_swaption_ust_maturity_labels(package_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add UST maturity/CTD annotations to dedicated columns.
+
+    Intentionally does not mutate `trade_label`.
+    """
+    out = package_df.copy()
+    if out.empty or "underlying_expiration_date" not in out.columns:
+        return out
+
+    try:
+        mms_input = out.copy()
+        mms_input["_swaption_mms_product_type"] = "SWAPTION"
+        mms_out = detect_mms_trades_df(
+            mms_input,
+            product_col="_swaption_mms_product_type",
+            product_values=("SWAPTION",),
+            swap_maturity_col="underlying_expiration_date",
+            only_tag_outrights=False,
+        )
+        mms_cols = [
+            "matched_ust_maturity",
+            "matched_ust_maturity_trade_confidence",
+            "ust_cusip",
+            "ust_oi",
+            "ust_security_type",
+            "ust_security_term",
+            "ust_issue_date",
+            "ust_original_security_term",
+            "ust_coupon",
+            "swap_maturity_date",
+        ]
+        for col in mms_cols:
+            if col in mms_out.columns:
+                out[col] = mms_out[col].values
+    except Exception:
+        if "matched_ust_maturity" not in out.columns:
+            out["matched_ust_maturity"] = False
+
+    if "matched_ust_maturity" not in out.columns:
+        out["matched_ust_maturity"] = False
+
+    try:
+        out = detect_invoice_swaps(
+            out,
+            execution_col="execution_timestamp",
+            effective_col="effective_date",
+            maturity_col="underlying_expiration_date",
+            confidence_col="matched_ust_maturity_trade_confidence",
+            require_high_confidence=True,
+            output_col="invoice_swap_ticker",
+            show_tqdm=False,
+        )
+    except Exception:
+        if "invoice_swap_ticker" not in out.columns:
+            out["invoice_swap_ticker"] = None
 
     return out
 
@@ -283,18 +417,18 @@ class USD_Swaptions(USDProductBase):
         if raw_sdr_trades_df.empty:
             return raw_sdr_trades_df
 
-        raw_sofr_swaps_df = pd.DataFrame()
+        raw_usd_swaps_df = pd.DataFrame()
         if detect_swaption_packages and detect_delta_hedges:
-            raw_sofr_swaps_df = sdr.grab_sdr_trades(
+            raw_usd_swaps_df = sdr.grab_sdr_trades(
                 start_timestamp=start,
                 end_timestamp=end,
                 agency="CFTC",
                 asset_class="RATES",
-                filter_func=new_sofr_swap_trades,
+                filter_func=new_usd_swap_trades,
             )
-            if not raw_sofr_swaps_df.empty:
-                swap_exec_dates = pd.to_datetime(raw_sofr_swaps_df["Event timestamp"], errors="coerce").dt.date
-                raw_sofr_swaps_df = raw_sofr_swaps_df.assign(_execution_date=swap_exec_dates)
+            if not raw_usd_swaps_df.empty:
+                swap_exec_dates = pd.to_datetime(raw_usd_swaps_df["Event timestamp"], errors="coerce").dt.date
+                raw_usd_swaps_df = raw_usd_swaps_df.assign(_execution_date=swap_exec_dates)
 
         if only_newt:
             raw_sdr_trades_df = raw_sdr_trades_df[(raw_sdr_trades_df["Action type"] == "NEWT") & (raw_sdr_trades_df["Event type"] == "TRAD")]
@@ -427,8 +561,8 @@ class USD_Swaptions(USDProductBase):
             # Detect swaption packages
             if detect_swaption_packages:
                 day_swap_df = pd.DataFrame()
-                if detect_delta_hedges and not raw_sofr_swaps_df.empty:
-                    day_swap_df = raw_sofr_swaps_df[raw_sofr_swaps_df["_execution_date"] == exec_date].copy()
+                if detect_delta_hedges and not raw_usd_swaps_df.empty:
+                    day_swap_df = raw_usd_swaps_df[raw_usd_swaps_df["_execution_date"] == exec_date].copy()
 
                 if detect_delta_hedges and not day_swap_df.empty:
                     package_df = detect_and_link_swaption_packages_df(
@@ -444,6 +578,8 @@ class USD_Swaptions(USDProductBase):
                         config=swaption_package_config,
                         pricer=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date)),
                     )
+
+            package_df = _annotate_swaption_ust_maturity_labels(package_df)
 
             # count = len(day_df)
             # date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"

@@ -8,6 +8,7 @@ import {
   clearManualLinkFromTrades,
   computeLinkMetrics,
   findManualLinkConflicts,
+  LEGS_TABLE,
   MANUAL_LINK_HISTORY_TABLE,
   MANUAL_LINKS_TABLE,
   normalizeIdList,
@@ -117,7 +118,7 @@ export async function GET(
                   fixed_rate,
                   execution_timestamp,
                   platform_identifier
-           FROM arbs_sofr_swap_legs_v1
+           FROM ${LEGS_TABLE}
            WHERE trade_id = ANY($1)
            ORDER BY execution_timestamp DESC`,
           [tradeIds]

@@ -2,6 +2,9 @@
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 
+const LEGS_TABLE = 'arbs_usd_swap_legs_v2'
+const PACKAGES_TABLE = 'arbs_usd_swap_packages_v2'
+
 type FlowHistoryRow = {
   trade_date: string | Date
   bucket: string
@@ -123,7 +126,7 @@ export async function GET(request: Request) {
         SELECT
           l.package_id,
           mode() WITHIN GROUP (ORDER BY l.platform_identifier) AS platform_identifier
-        FROM arbs_sofr_swap_legs_v1 l
+        FROM ${LEGS_TABLE} l
         GROUP BY l.package_id
       ),
       base AS (
@@ -143,7 +146,7 @@ export async function GET(request: Request) {
             ) THEN 'idb'
             ELSE 'custy'
           END AS platform_type
-        FROM arbs_sofr_swap_packages_v1 p
+        FROM ${PACKAGES_TABLE} p
         LEFT JOIN leg_info li ON li.package_id = p.package_id
         WHERE p.execution_start >= $1
           AND p.execution_start < $2::date + interval '1 day'

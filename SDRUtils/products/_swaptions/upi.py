@@ -10,6 +10,8 @@ from SDRUtils.config import USD_CONVENTIONS, get_conventions
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years
 from SDRUtils.core.tenors import forward_to_label, tenor_from_dates, tenor_to_label
 
+_SCHEDULE_TOKENS = ("CONSTANT", "CUSTOM", "AMORTIZING", "ACCRETING")
+
 
 def _norm_upi(x: object) -> str:
     return str(x).strip().strip("'").strip('"').upper()
@@ -94,14 +96,44 @@ def _vanilla_short(row: pd.Series) -> str:
     return "VANILLA"
 
 
+def _normalize_schedule_token(value: object) -> Optional[str]:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip().upper()
+    if not text:
+        return None
+    for token in _SCHEDULE_TOKENS:
+        if token in text:
+            return token.title()
+    return None
+
+
+def _infer_schedule_token(row: pd.Series) -> str:
+    direct_schedule = _normalize_schedule_token(row.get("swap_Attributes_NotionalSchedule"))
+    if direct_schedule:
+        return direct_schedule
+
+    fallback_fields = (
+        "swap_Derived_ShortName",
+        "swap_Derived_CFI_0_Attributes_1_Value",
+        "swap_Derived_CFI_1_Attributes_1_Value",
+    )
+    for field in fallback_fields:
+        inferred = _normalize_schedule_token(row.get(field))
+        if inferred:
+            return inferred
+
+    # Default conservative fallback for missing schedule metadata.
+    return "Constant"
+
+
 def _underlying_compact(row: pd.Series) -> str:
     rr = _clean_ref_rate(row.get("swap_Attributes_ReferenceRate"))
     term = _tenor(
         row.get("swap_Attributes_ReferenceRateTermValue"),
         row.get("swap_Attributes_ReferenceRateTermUnit"),
     )
-    sched = row.get("swap_Attributes_NotionalSchedule")
-    sched_s = None if sched is None or pd.isna(sched) else str(sched).strip().upper()
+    sched_s = _infer_schedule_token(row)
     # swap delivery type is redundant vs swaption settlement in your desired compact format,
     # so we intentionally do NOT include swap_Attributes_DeliveryType here.
     parts = [p for p in [rr, term, sched_s] if p]

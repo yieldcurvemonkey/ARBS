@@ -29,8 +29,8 @@ export default function RootLayout({
                 <Link href="/swaptions-tape" className="hover:text-white">
                   USD Swaption Tape
                 </Link>
-                <Link href="/sofr-swaps" className="hover:text-white">
-                  USD SOFR Swaps Tape
+                <Link href="/usd-swaps" className="hover:text-white">
+                  USD Swaps Tape
                 </Link>
                 <Link href="/vol-grid" className="hover:text-white">
                   Vol Grid

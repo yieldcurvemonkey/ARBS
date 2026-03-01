@@ -25,6 +25,7 @@ from SDRUtils.packages.swaption_packages import (
     _compute_package_id,
     _estimate_swaption_vega,
 )
+from SDRUtils.packages.swaption.ladder import detect_ladder_packages
 from SDRUtils.packages.swaption.delta_hedge import detect_delta_hedge_packages
 
 
@@ -1173,6 +1174,239 @@ class TestVerticalSpreadDetection:
 
         # Should NOT detect (different tenors)
         assert len(packaged) == 0
+
+
+class TestLadderDetection:
+    def test_ladder_default_requires_three_distinct_strikes(self):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        df = pd.DataFrame(
+            [
+                {
+                    "trade_id": "L1",
+                    "product_type": "SWAPTION_PAYER",
+                    "execution_timestamp": ts,
+                    "platform_identifier": "BILT",
+                    "notional_currency": "USD",
+                    "upi_underlier_name": "USD-SOFR-OIS Compound",
+                    "notional": 100_000_000,
+                    "strike": 0.0400,
+                    "expiration_date": pd.Timestamp("2027-01-08"),
+                    "tenor_years": 10.0,
+                    "forward_start_years": 1.0,
+                    "premium": 100_000.0,
+                },
+                {
+                    "trade_id": "L2",
+                    "product_type": "SWAPTION_PAYER",
+                    "execution_timestamp": ts + pd.Timedelta(seconds=1),
+                    "platform_identifier": "BILT",
+                    "notional_currency": "USD",
+                    "upi_underlier_name": "USD-SOFR-OIS Compound",
+                    "notional": 100_000_000,
+                    "strike": 0.0425,
+                    "expiration_date": pd.Timestamp("2027-01-08"),
+                    "tenor_years": 10.0,
+                    "forward_start_years": 1.0,
+                    "premium": 100_000.0,
+                },
+                {
+                    "trade_id": "L3",
+                    "product_type": "SWAPTION_PAYER",
+                    "execution_timestamp": ts + pd.Timedelta(seconds=2),
+                    "platform_identifier": "BILT",
+                    "notional_currency": "USD",
+                    "upi_underlier_name": "USD-SOFR-OIS Compound",
+                    "notional": 200_000_000,
+                    "strike": 0.0425,
+                    "expiration_date": pd.Timestamp("2027-01-08"),
+                    "tenor_years": 10.0,
+                    "forward_start_years": 1.0,
+                    "premium": 100_000.0,
+                },
+            ]
+        )
+
+        result = detect_and_link_swaption_packages_df(
+            df,
+            detect_risk_reversals=False,
+            detect_straddles=False,
+            detect_vertical_spreads=False,
+            detect_ladders=True,
+            detect_conditional_curve=False,
+            detect_vega_curve=False,
+            detect_delta_hedges=False,
+            detect_outrights=False,
+        )
+
+        assert not result["package_type"].astype("string").str.contains("LADDER", na=False).any()
+
+    def test_large_cluster_skips_combinatorial_subset_search(self, monkeypatch):
+        ts = pd.Timestamp("2026-01-08 10:00:00", tz="UTC")
+        rows = []
+        for i in range(20):
+            rows.append(
+                {
+                    "trade_id": f"LC{i:02d}",
+                    "product_type": "SWAPTION_PAYER",
+                    "execution_timestamp": ts + pd.Timedelta(seconds=i),
+                    "platform_identifier": "XXXX",
+                    "notional_currency": "USD",
+                    "upi_underlier_name": "USD-SOFR-OIS Compound",
+                    "notional": 100_000_000,
+                    "strike": 0.0300 + i * 0.0002,
+                    "expiration_date": pd.Timestamp("2027-01-08"),
+                    "tenor_years": 10.0,
+                    "forward_start_years": 1.0,
+                    "premium": 50_000.0,
+                }
+            )
+        df = pd.DataFrame(rows)
+
+        import itertools
+
+        original_combinations = itertools.combinations
+
+        def _guarded_combinations(iterable, r):
+            seq = list(iterable)
+            if len(seq) > 14:
+                raise AssertionError("combinations() should not run for clusters above cap")
+            return original_combinations(seq, r)
+
+        monkeypatch.setattr("SDRUtils.packages.swaption.ladder.itertools.combinations", _guarded_combinations)
+
+        result = detect_ladder_packages(df)
+
+        assert len(result) == len(df)
+        assert not result["package_type"].astype("string").str.contains("LADDER", na=False).any()
+
+
+# =============================================================================
+# Risk Reversal Edge-Case Tests
+# =============================================================================
+
+
+class TestRiskReversalEdgeCases:
+    """Tests for RR edge cases that can look like paired 1x1 verticals."""
+
+    @staticmethod
+    def _rr_data_error_shape(include_package_evidence: bool) -> pd.DataFrame:
+        base_ts = pd.Timestamp("2026-02-26 18:36:29", tz="UTC")
+
+        df = pd.DataFrame(
+            [
+                {
+                    "trade_id": "RR001",
+                    "product_type": "SWAPTION_PAYER",
+                    "execution_timestamp": base_ts,
+                    "platform_identifier": "BGCD",
+                    "notional_currency": "USD",
+                    "upi_underlier_name": "NA/Swap Fxd Flt USD",
+                    "trade_label": "USD-SOFR-OIS Compound 1D CONSTANT 5Yx30Y PAYER EURO VANILLA PHYS",
+                    "notional": 160_000_000,
+                    "strike": 0.04115,
+                    "expiration_date": pd.Timestamp("2031-02-26"),
+                    "tenor_years": 30.0274,
+                    "forward_start_years": 5.0027,
+                    "unique_product_identifier": "QZWXKVHB5F8V",
+                    "event_action": "NEWT-TRAD",
+                    "package_indicator": include_package_evidence,
+                    "package_transaction_price": 90_440_000.0 if include_package_evidence else np.nan,
+                },
+                {
+                    "trade_id": "RR002",
+                    "product_type": "SWAPTION_PAYER",
+                    "execution_timestamp": base_ts + pd.Timedelta(seconds=6),
+                    "platform_identifier": "BGCD",
+                    "notional_currency": "USD",
+                    "upi_underlier_name": "NA/Swap Fxd Flt USD",
+                    "trade_label": "USD-SOFR-OIS Compound 1D CONSTANT 5Yx30Y PAYER EURO VANILLA PHYS",
+                    "notional": 160_000_000,
+                    "strike": 0.05115,
+                    "expiration_date": pd.Timestamp("2031-02-26"),
+                    "tenor_years": 30.0274,
+                    "forward_start_years": 5.0027,
+                    "unique_product_identifier": "QZWXKVHB5F8V",
+                    "event_action": "NEWT-TRAD",
+                    "package_indicator": False,
+                    "package_transaction_price": np.nan,
+                },
+                {
+                    "trade_id": "RR003",
+                    "product_type": "SWAPTION_RECEIVER",
+                    "execution_timestamp": base_ts + pd.Timedelta(seconds=14),
+                    "platform_identifier": "BGCD",
+                    "notional_currency": "USD",
+                    "upi_underlier_name": "NA/Swap Fxd Flt USD",
+                    "trade_label": "USD-SOFR-OIS Compound 1D CONSTANT 5Yx30Y RECEIVER EURO VANILLA PHYS",
+                    "notional": 160_000_000,
+                    "strike": 0.03115,
+                    "expiration_date": pd.Timestamp("2031-02-26"),
+                    "tenor_years": 30.0274,
+                    "forward_start_years": 5.0027,
+                    "unique_product_identifier": "QZMMWR8JKZQ8",
+                    "event_action": "NEWT-TRAD",
+                    "package_indicator": False,
+                    "package_transaction_price": np.nan,
+                },
+                {
+                    "trade_id": "RR004",
+                    "product_type": "SWAPTION_RECEIVER",
+                    "execution_timestamp": base_ts + pd.Timedelta(seconds=33),
+                    "platform_identifier": "BGCD",
+                    "notional_currency": "USD",
+                    "upi_underlier_name": "NA/Swap Fxd Flt USD",
+                    "trade_label": "USD-SOFR-OIS Compound 1D CONSTANT 5Yx30Y RECEIVER EURO VANILLA PHYS",
+                    "notional": 160_000_000,
+                    "strike": 0.04115,
+                    "expiration_date": pd.Timestamp("2031-02-26"),
+                    "tenor_years": 30.0274,
+                    "forward_start_years": 5.0027,
+                    "unique_product_identifier": "QZMMWR8JKZQ8",
+                    "event_action": "NEWT-TRAD",
+                    "package_indicator": False,
+                    "package_transaction_price": np.nan,
+                },
+            ]
+        )
+        return df
+
+    def test_rr_edge_case_uniform_middle_notional_detects_rr(self):
+        """Package-evidenced 3-strike 4-leg shape should classify as RR, not two verticals."""
+        df = self._rr_data_error_shape(include_package_evidence=True)
+
+        result = detect_and_link_swaption_packages_df(
+            df,
+            detect_straddles=True,
+            detect_vertical_spreads=True,
+            detect_conditional_curve=False,
+            detect_vega_curve=False,
+            detect_ladders=False,
+            detect_delta_hedges=False,
+            detect_outrights=False,
+        )
+
+        assert (result["package_type"] == "RISK_REVERSAL").all()
+        assert result["package_id"].nunique() == 1
+        assert (result["package_legs_count"] == 4).all()
+
+    def test_rr_edge_case_without_package_evidence_stays_verticals(self):
+        """Fallback should not trigger without package evidence; remain 1x1 verticals."""
+        df = self._rr_data_error_shape(include_package_evidence=False)
+
+        result = detect_and_link_swaption_packages_df(
+            df,
+            detect_straddles=True,
+            detect_vertical_spreads=True,
+            detect_conditional_curve=False,
+            detect_vega_curve=False,
+            detect_ladders=False,
+            detect_delta_hedges=False,
+            detect_outrights=False,
+        )
+
+        assert not (result["package_type"] == "RISK_REVERSAL").any()
+        is_vertical = result["package_type"].astype("string").str.startswith("VERTICAL_SPREAD", na=False)
+        assert is_vertical.sum() == 4
 
 
 # =============================================================================

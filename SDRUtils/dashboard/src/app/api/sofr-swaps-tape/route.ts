@@ -5,6 +5,7 @@ import { resolveDisplayView, SofrSwapTapeRow } from '@/lib/sofr-swaps-tape'
 
 const DEFAULT_LIMIT = 200
 const MAX_LIMIT = 500
+const LEGS_TABLE = 'arbs_usd_swap_legs_v2'
 const COLUMN_FILTER_QUERY_KEY = 'columnFilters'
 const COLUMN_FILTER_OPERATOR_QUERY_KEY = 'columnFilterOp'
 const COLUMN_FILTER_FIELDS = [
@@ -613,7 +614,7 @@ export async function GET(request: Request) {
        LEFT JOIN LATERAL (
          SELECT mode() WITHIN GROUP (ORDER BY platform_identifier) AS platform_identifier
                , mode() WITHIN GROUP (ORDER BY event_action) AS event_action
-         FROM arbs_sofr_swap_legs_v1 l
+         FROM ${LEGS_TABLE} l
          WHERE l.package_id = d.package_id
        ) plat ON TRUE
        ${whereClause}
