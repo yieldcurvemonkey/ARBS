@@ -7,6 +7,7 @@ from Query.Base.BaseQuery import BaseQuery
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 from Query.IRSwaps.IRSwapValue import IRSwapValue
 from Query.IRSwaps._CME_INVOICE_SWAP_TICKERS import _CME_INVOICE_SWAP_TICKERS
+from Query.IRSwaps import adapter as _irs_adapter  # noqa: F401
 from utils.misc import human_format
 
 

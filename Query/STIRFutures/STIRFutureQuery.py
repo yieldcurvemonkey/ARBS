@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from Query.Base.BaseQuery import BaseQuery
+from Query.STIRFutures import adapter as _stirf_adapter  # noqa: F401
 from Query.STIRFutures.STIRFutureStructure import STIRFutureStructure
 from Query.STIRFutures.STIRFutureValue import STIRFutureValue
 

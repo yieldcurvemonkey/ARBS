@@ -3,16 +3,18 @@ from __future__ import annotations
 import datetime
 import re
 from dataclasses import replace
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, TYPE_CHECKING
 
 from MDP.FixedRateBonds.FixedRateBondsMDP import _alias_to_cusip
 from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
 from Query.Base.product_adapter import ProductAdapter, register_product
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps._IRSwapGenericObject import _IRSwapGenericObject
-from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure, IRSwapStructureFunctionMap
 from Query.IRSwaps.IRSwapValue import IRSwapValueFunctionMap
+
+if TYPE_CHECKING:
+    from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 
 _ALIAS_PATTERNS = (
     re.compile(r"^CT(\d+)$", re.IGNORECASE),  # on-the-run N-year
@@ -186,3 +188,7 @@ class IRSProductAdapter(ProductAdapter):
 
 # Register on import
 register_product("IRS", IRSProductAdapter)
+
+from BT.position_handler import register_handler
+from Query.IRSwaps.position_handler import SwapPositionHandler
+register_handler("IRS", SwapPositionHandler)
