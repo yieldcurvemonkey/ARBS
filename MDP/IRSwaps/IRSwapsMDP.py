@@ -1,4 +1,5 @@
 import datetime
+import threading
 import warnings
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
@@ -19,6 +20,10 @@ from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 
 
 class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
+    _BARCHART_STIRF_STATE: Dict[str, Any] = {
+        "builder": None,
+        "lock": threading.RLock(),
+    }
 
     def __init__(self, source: str = "CME_NY_EOD_LIVE-ql_basic", force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
         super().__init__(source, **kwargs)
@@ -43,6 +48,87 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
 
             self._rl_curve_cache = _RLCurveCache(cache_name="GSQUANT-RL_CURVE_CACHE")
+
+    def _get_barchart_stirf_curve_builder(self) -> Any:
+        from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
+
+        S = IRSwapsMDP._BARCHART_STIRF_STATE
+        with S["lock"]:
+            if S["builder"] is None:
+                S["builder"] = BARCHART_STIRF_CURVE()
+            return S["builder"]
+
+    @staticmethod
+    def _to_barchart_stirf_timestamp(
+        timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> Union[datetime.datetime, Literal["live"]]:
+        if timestamp == "live":
+            return "live"
+
+        if isinstance(timestamp, pd.Timestamp):
+            timestamp = timestamp.to_pydatetime()
+
+        if isinstance(timestamp, datetime.datetime):
+            if timestamp.tzinfo is None or timestamp.tzinfo.utcoffset(timestamp) is None:
+                return pytz.timezone("America/New_York").localize(timestamp)
+            return timestamp
+
+        if isinstance(timestamp, datetime.date):
+            return pytz.timezone("America/New_York").localize(datetime.datetime.combine(timestamp, datetime.time(hour=17, minute=0)))
+
+        raise TypeError("timestamp must be datetime.date, datetime.datetime, pd.Timestamp, or 'live'")
+
+    @staticmethod
+    def _dict_get_case_insensitive(mapping: Dict[Any, Any], key: str) -> Any:
+        if key in mapping:
+            return mapping[key]
+
+        needle = str(key).upper().strip()
+        for k, v in mapping.items():
+            if str(k).upper().strip() == needle:
+                return v
+        return None
+
+    def _resolve_barchart_stirf_curve_name(self, requested_curve_name: str, kwargs: Dict[str, Any], builder: Any) -> str:
+        cfgs: Dict[str, Dict[str, Any]] = dict(getattr(builder, "_STIRF_CURVE_CONFIGS", {}))
+        if requested_curve_name in cfgs:
+            return requested_curve_name
+
+        curve_names_arg = kwargs.pop("curve_names", None)
+        if curve_names_arg is not None:
+            resolved_name: Optional[str] = None
+            if isinstance(curve_names_arg, str):
+                resolved_name = curve_names_arg
+            elif isinstance(curve_names_arg, dict):
+                match = self._dict_get_case_insensitive(curve_names_arg, requested_curve_name)
+                if match is None and len(curve_names_arg) == 1:
+                    match = next(iter(curve_names_arg.values()))
+                if match is not None:
+                    resolved_name = str(match)
+            else:
+                raise TypeError("kwargs['curve_names'] must be a string or a dict")
+
+            if resolved_name is None:
+                raise ValueError(
+                    f"Could not resolve curve name for '{requested_curve_name}' from kwargs['curve_names']: {curve_names_arg}"
+                )
+            if resolved_name not in cfgs:
+                raise ValueError(f"BARCHART STIRF curve '{resolved_name}' not found in BARCHART_STIRF_CURVE configs")
+            return resolved_name
+
+        by_reference = [name for name, cfg in cfgs.items() if str(cfg.get("reference_key", "")).upper().strip() == requested_curve_name.upper().strip()]
+        if len(by_reference) == 1:
+            return by_reference[0]
+        if len(by_reference) > 1:
+            raise ValueError(
+                f"Multiple BARCHART STIRF curves map to reference curve '{requested_curve_name}': {by_reference}. "
+                "Pass kwargs['curve_names'] to disambiguate."
+            )
+
+        raise ValueError(
+            f"Could not resolve BARCHART STIRF curve for '{requested_curve_name}'. "
+            "Pass kwargs['curve_names'] with a concrete BARCHART curve config key."
+        )
 
     def get_pricer(self, request: dict) -> _IRSwapGenericCurve:
         curve = self.get_data(request)  # reuse the existing logic
@@ -730,6 +816,59 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 meta_data={"timestamp": timestamp, "id": curve_id, "pricing_location": pricing_location},
             )
 
+        elif self.source.upper() in ["BARCHART_STIRF-RL", "BARCHART_STIRF_RL"]:
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            local_kwargs = dict(kwargs)
+            builder = self._get_barchart_stirf_curve_builder()
+            resolved_curve_name = self._resolve_barchart_stirf_curve_name(
+                requested_curve_name=curve_name,
+                kwargs=local_kwargs,
+                builder=builder,
+            )
+
+            rl_timestamp = self._to_barchart_stirf_timestamp(timestamp)
+            rl_curve_handle = builder.build_curve(
+                curve_name=resolved_curve_name,
+                timestamp=rl_timestamp,
+                kwargs=local_kwargs,
+                curve_only=True,
+            )
+
+            reference_curve_name = str(getattr(rl_curve_handle, "id", "") or "")
+            if not reference_curve_name:
+                reference_curve_name = str(builder._STIRF_CURVE_CONFIGS[resolved_curve_name]["reference_key"])
+
+            if timestamp == "live":
+                ref = datetime.date.today()
+            elif isinstance(timestamp, pd.Timestamp):
+                ref = timestamp.date()
+            elif isinstance(timestamp, datetime.datetime):
+                ref = timestamp.date()
+            else:
+                ref = timestamp
+
+            fixings = _fetch_fixings(
+                as_of_date=ref,
+                curve_name=reference_curve_name,
+                force_refresh=self.force_refresh_fixings,
+            ).sort_index()
+            fixings = fixings[fixings.index.date < ref] * 100
+
+            ts_meta = getattr(rl_curve_handle, "timestamp", rl_timestamp)
+            curve_id = f"{self.source.upper()}-{resolved_curve_name}-{ts_meta}"
+            return RLIRSwapCurve(
+                rl_curve_id=reference_curve_name,
+                rl_curve_handle=rl_curve_handle,
+                fixings=fixings,
+                meta_data={
+                    "timestamp": ts_meta,
+                    "id": curve_id,
+                    "requested_curve_name": curve_name,
+                    "curve_name": resolved_curve_name,
+                },
+            )
+
         else:
             raise NotImplementedError(f"Curve Build '{self.source}' does not exist")
 
@@ -1038,6 +1177,14 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                     meta_data={"timestamp": ts_out, "id": curve_id},
                 )
 
+            return out
+
+        elif self.source.upper() in ["BARCHART_STIRF-RL", "BARCHART_STIRF_RL"]:
+            local_request = dict(request)
+            local_request.setdefault("force_refresh", bool(ignore_cache))
+
+            for t in timestamps:
+                out[t] = self._get_curve(curve_name=curve_name, timestamp=t, kwargs=dict(local_request))
             return out
 
         # ------- default / not implemented -------
