@@ -117,7 +117,7 @@ class FedInvestDataFetcher(BaseFetcher, DiskCacheMixin):
             if self._open_count == 0:
                 try:
                     if commit:
-                        # auto-committed (DiskCache)
+                        pass  # auto-committed (DiskCache)
                 finally:
                     try:
                         self.close_cache()
@@ -315,7 +315,7 @@ class FedInvestDataFetcher(BaseFetcher, DiskCacheMixin):
         for dt, df in fetched_dict.items():
             cache[pd.Timestamp(dt.date())] = df
         if fetched_dict:
-            # auto-committed (DiskCache)
+            pass  # auto-committed (DiskCache)
 
         out: Dict[datetime, pd.DataFrame] = {}
         for dt in dates:

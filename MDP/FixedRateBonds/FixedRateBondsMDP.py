@@ -1376,7 +1376,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], DiskCacheMixin):
             if self._open_count == 0:
                 try:
                     if commit:
-                        # auto-committed (DiskCache)
+                        pass  # auto-committed (DiskCache)
                 finally:
                     try:
                         self.close_cache()
