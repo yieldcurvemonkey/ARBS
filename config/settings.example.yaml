@@ -32,21 +32,15 @@ data:
 
 # ==================== Cache Configuration ====================
 cache:
-  backend: "zodb"  # zodb, redis, memory
-  
-  # File system cache (ZODB)
-  root_path: "${ARBS_CACHE_ROOT:~/.cache/arbs/zodb}"
-  
+  backend: "diskcache"  # diskcache, memory
+
+  # File system cache (DiskCache + DuckDB)
+  root_path: "${ARBS_CACHE_ROOT:~/.cache/arbs/diskcache}"
+
   # Cache options
-  use_btree: true
   force_refresh: false
-  pool_size: 32
-  max_size_gb: 100
-  
-  # Maintenance
-  pack_enabled: true
-  pack_interval_days: 7
-  cleanup_interval_hours: 24
+  size_limit_gb: 4  # per-cache LRU eviction limit
+  shards: 8  # FanoutCache shards for write concurrency
 
 # ==================== Backtest Configuration ====================
 backtest:

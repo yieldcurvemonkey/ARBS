@@ -12,7 +12,7 @@ import pandas as pd
 import pytz
 import requests
 
-from Caching.ZODBCacheMixin import ZODBCacheMixin
+from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.USTFutures.BARCHART.BarchartFetcher import BarchartFetcher
 from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
@@ -150,14 +150,14 @@ class _ProxyGuard:
         requests.get = self._orig_get
 
 
-class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
+class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     _UST_PRICER_CACHE = "USTFuturePricer_Cache"
     _UST_BASKET_CACHE = "USTFutureDeliveryBasket_Cache"
     _BARCHART_STATE: Dict[str, Any] = {}
 
     def __init__(self, source: str = "BARCHART_USTF-RL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
-        ZODBCacheMixin.__init__(self)
+        DiskCacheMixin.__init__(self)
         self._open_lock = threading.RLock()
         self._open_count = 0
         self._cache_ready = False
@@ -192,8 +192,8 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
     def _ensure_pricer_cache(self) -> None:
         if self._cache_ready and hasattr(self, self._UST_PRICER_CACHE):
             return
-        cache_path = ZODBCacheMixin.default_cache_path("USTFuturePricer_Cache")
-        self.zodb_open_cache(cache_attr=self._UST_PRICER_CACHE, path=cache_path, encode=None, decode=None)
+        cache_path = DiskCacheMixin.default_cache_path("USTFuturePricer_Cache")
+        self.open_cache(cache_attr=self._UST_PRICER_CACHE, path=cache_path, encode=None, decode=None)
         self._cache_ready = True
 
     def _threadsafe_cache_put(self, key: str, value: dict) -> None:
@@ -211,8 +211,8 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
     def _ensure_basket_cache(self) -> None:
         if self._basket_cache_ready and hasattr(self, self._UST_BASKET_CACHE):
             return
-        cache_path = ZODBCacheMixin.default_cache_path("USTFutureDeliveryBasket_Cache")
-        self.zodb_open_cache(cache_attr=self._UST_BASKET_CACHE, path=cache_path, encode=None, decode=None)
+        cache_path = DiskCacheMixin.default_cache_path("USTFutureDeliveryBasket_Cache")
+        self.open_cache(cache_attr=self._UST_BASKET_CACHE, path=cache_path, encode=None, decode=None)
         self._basket_cache_ready = True
 
     def _threadsafe_basket_cache_get(self, key: str):
@@ -710,10 +710,10 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             if self._open_count == 0:
                 try:
                     if commit:
-                        self.zodb_commit()
+                        pass  # auto-committed (DiskCache)
                 finally:
                     try:
-                        self.close_zodb()
+                        self.close_cache()
                     finally:
                         self._cache_ready = False
                         self._basket_cache_ready = False

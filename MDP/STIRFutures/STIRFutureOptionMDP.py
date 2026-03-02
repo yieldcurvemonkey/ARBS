@@ -22,7 +22,7 @@ import QuantLib as ql
 import rateslib as rl
 import requests
 
-from Caching.ZODBCacheMixin import ZODBCacheMixin
+from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher
 from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
@@ -855,7 +855,7 @@ def _nearest_index_position(index: pd.Index, target: pd.Timestamp) -> Optional[i
         return None
     return int(loc[0])
 
-class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
+class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     _STIR_OPTION_CACHE = "_stir_option_pricer_cache"
     _BARCHART_STATE: Dict[str, Any] = {}
     _CURVE_STATE: Dict[str, Any] = {}
@@ -863,7 +863,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
 
     def __init__(self, source: str = "STIRFO_DUAL-QL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
-        ZODBCacheMixin.__init__(self)
+        DiskCacheMixin.__init__(self)
 
         self.cache_full_intraday_fetch = bool(kwargs.get("cache_full_intraday_fetch", False))
         self._open_count = 0
@@ -919,8 +919,8 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
     def _ensure_pricer_cache(self) -> None:
         if self._cache_ready and hasattr(self, self._STIR_OPTION_CACHE):
             return
-        cache_path = ZODBCacheMixin.default_cache_path("STIRFutureOptionPricer_Cache")
-        self.zodb_open_cache(cache_attr=self._STIR_OPTION_CACHE, path=cache_path, encode=None, decode=None)
+        cache_path = DiskCacheMixin.default_cache_path("STIRFutureOptionPricer_Cache")
+        self.open_cache(cache_attr=self._STIR_OPTION_CACHE, path=cache_path, encode=None, decode=None)
         self._cache_ready = True
 
     def _threadsafe_cache_put(self, key: str, value: dict) -> None:
@@ -2312,10 +2312,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             if self._open_count == 0:
                 try:
                     if commit:
-                        self.zodb_commit()
+                        pass  # auto-committed (DiskCache)
                 finally:
                     try:
-                        self.close_zodb()
+                        self.close_cache()
                     finally:
                         self._cache_ready = False
 

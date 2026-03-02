@@ -18,7 +18,7 @@ import QuantLib as ql
 import rateslib as rl
 import requests
 
-from Caching.ZODBCacheMixin import ZODBCacheMixin
+from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
 from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import (
@@ -447,7 +447,7 @@ class _ProxyGuard:
 
 
 # ================================ MDP ========================================
-class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
+class STIRFutureMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     _STIR_PRICER_CACHE = "_stir_pricer_cache"
 
     # process-wide state so multiple instances reuse POP + fetcher/session
@@ -455,7 +455,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
 
     def __init__(self, source: str = "WEBULL_STIRF-RL", force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
-        ZODBCacheMixin.__init__(self)
+        DiskCacheMixin.__init__(self)
 
         self.force_refresh_fixings = force_refresh_fixings
         self.cache_full_intraday_fetch = bool(kwargs.get("cache_full_intraday_fetch", False))
@@ -500,8 +500,8 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
     def _ensure_pricer_cache(self) -> None:
         if self._cache_ready and hasattr(self, self._STIR_PRICER_CACHE):
             return
-        cache_path = ZODBCacheMixin.default_cache_path("STIRFuturePricer_Cache")
-        self.zodb_open_cache(cache_attr=self._STIR_PRICER_CACHE, path=cache_path, encode=None, decode=None)
+        cache_path = DiskCacheMixin.default_cache_path("STIRFuturePricer_Cache")
+        self.open_cache(cache_attr=self._STIR_PRICER_CACHE, path=cache_path, encode=None, decode=None)
         self._cache_ready = True
 
     def _threadsafe_cache_put(self, key: str, value: dict) -> None:
@@ -1196,10 +1196,10 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], ZODBCacheMixin):
             if self._open_count == 0:
                 try:
                     if commit:
-                        self.zodb_commit()
+                        pass  # auto-committed (DiskCache)
                 finally:
                     try:
-                        self.close_zodb()
+                        self.close_cache()
                     finally:
                         self._cache_ready = False
 

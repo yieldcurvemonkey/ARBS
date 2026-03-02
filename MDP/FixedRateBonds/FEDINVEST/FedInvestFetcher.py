@@ -10,7 +10,7 @@ import pandas as pd
 import tqdm
 import tqdm.asyncio
 
-from Caching.ZODBCacheMixin import ZODBCacheMixin
+from Caching.DiskCacheMixin import DiskCacheMixin
 
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -65,7 +65,7 @@ class BaseFetcher:
             self._logger.disabled = True
 
 
-class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
+class FedInvestDataFetcher(BaseFetcher, DiskCacheMixin):
     _FEDINVEST_CACHE = "_fedinvest_prices_cache"
 
     def __init__(
@@ -84,7 +84,7 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
             info_verbose=info_verbose,
             error_verbose=error_verbose,
         )
-        ZODBCacheMixin.__init__(self)
+        DiskCacheMixin.__init__(self)
 
         self._open_count = 0
         self._open_lock = threading.RLock()
@@ -93,8 +93,8 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
     def _ensure_cache(self):
         if self._cache_ready and hasattr(self, self._FEDINVEST_CACHE):
             return
-        cache_path = ZODBCacheMixin.default_cache_path("FedInvest_Prices_Cache")
-        self.zodb_open_cache(
+        cache_path = DiskCacheMixin.default_cache_path("FedInvest_Prices_Cache")
+        self.open_cache(
             cache_attr=self._FEDINVEST_CACHE,
             path=cache_path,
             encode=None,
@@ -117,10 +117,10 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
             if self._open_count == 0:
                 try:
                     if commit:
-                        self.zodb_commit()
+                        pass  # auto-committed (DiskCache)
                 finally:
                     try:
-                        self.close_zodb()
+                        self.close_cache()
                     finally:
                         self._cache_ready = False
 
@@ -315,12 +315,12 @@ class FedInvestDataFetcher(BaseFetcher, ZODBCacheMixin):
         for dt, df in fetched_dict.items():
             cache[pd.Timestamp(dt.date())] = df
         if fetched_dict:
-            self.zodb_commit()
+            pass  # auto-committed (DiskCache)
 
         out: Dict[datetime, pd.DataFrame] = {}
         for dt in dates:
             key = pd.Timestamp(dt.date())
             out[dt] = cache[key]
 
-        self.close_zodb()
+        self.close_cache()
         return out

@@ -17,7 +17,7 @@ from tqdm import tqdm
 import Query.FixedRateBonds.adapter  # noqa: F401  # ensure pricer adapters are registered
 # fmt: on
 from Caching.timeseries_cache import WriteOptions, append_timeseries, read_timeseries
-from Caching.ZODBCacheMixin import ZODBCacheMixin
+from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from Query.Base.query_resolution import resolve_query
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
@@ -89,7 +89,7 @@ def _build_row_for_query(
     return ref_dt, user_passed_col_name, float(value)
 
 
-class FixedRateBondsTB(ZODBCacheMixin, BaseTimeseriesTB):
+class FixedRateBondsTB(DiskCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_fixedratebonds_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING FIXED-RATE BONDS."
     _CACHE_VERSION = "v1"
@@ -112,7 +112,7 @@ class FixedRateBondsTB(ZODBCacheMixin, BaseTimeseriesTB):
         ts_row_group_size: int = 256_000,
         ts_compression: str = "zstd",
     ):
-        ZODBCacheMixin.__init__(
+        DiskCacheMixin.__init__(
             self,
             use_btree=use_btree,
             force_refresh=force_refresh,
@@ -131,7 +131,7 @@ class FixedRateBondsTB(ZODBCacheMixin, BaseTimeseriesTB):
         self._cache_attr = f"{self._CACHE_ATTR_BASE}_{self._CACHE_VERSION}"
 
         # mapping cache: key=(iso_date, query_fingerprint) -> (date, col, val)
-        self.zodb_open_cache(cache_attr=self._cache_attr, path=self._cache_path)
+        self.open_cache(cache_attr=self._cache_attr, path=self._cache_path)
 
         # >>> added
         self._use_ts_cache = bool(use_ts_cache)
@@ -149,8 +149,8 @@ class FixedRateBondsTB(ZODBCacheMixin, BaseTimeseriesTB):
 
     def close(self):
         if hasattr(self, self._cache_attr):
-            self._logger.debug(f"Closing ZODB connection for cache: {self._cache_attr}")
-            self.close_zodb()
+            self._logger.debug(f"Closing cache: {self._cache_attr}")
+            self.close_cache()
 
     def _cache_key(self, d: DateLike, q: FixedRateBondQuery) -> str:
         ns = _dt_to_epoch_ns(d)
@@ -275,7 +275,7 @@ class FixedRateBondsTB(ZODBCacheMixin, BaseTimeseriesTB):
                 # prefer TS cache hit first
                 hit_ts = any((row_d == d and row_c == q.col_name()) for (row_d, row_c, _v) in cached_rows)
 
-                # fall back to old ZODB row cache
+                # fall back to row cache
                 k = self._cache_key(d, q)
                 hit_row = (k in cache_map) and not (d == today or d == "live") and not bool(ignore_cache)
                 if hit_row and not hit_ts:
