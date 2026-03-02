@@ -1,13 +1,11 @@
 import datetime
 import hashlib
-import json
 import math
 import os
 import re
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 import pandas as pd
 import pytz
@@ -15,6 +13,7 @@ import rateslib as rl
 from pandas.tseries.offsets import DateOffset
 from itertools import islice
 
+from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
 from Query.IRSwaps._CENTRAL_BANK_DATES import _CENTRAL_BANK_DATES
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
@@ -24,12 +23,6 @@ _STIR_ROOT_CODE_RE = re.compile(
     r"^(SR1|SER|SL|SR3|SFR|SQ|ZQ|FF|RA|EB|IJ|RG|IM|TV|J8|JU|T0|IT|J2)([FGHJKMNQUVXZ]\d{2})$",
     re.IGNORECASE,
 )
-
-try:
-    from platformdirs import user_cache_dir as _user_cache_dir
-except Exception:
-    _user_cache_dir = None
-
 
 def _flatten_pricers(pricers: Dict[str, List["RLSTIRFuturePricer"]]) -> List["RLSTIRFuturePricer"]:
     # Each key maps to a list (often length 1). Keep all, preserve order.
@@ -308,6 +301,30 @@ def plot_overnight_forward_curves(
         plot_kwargs["labels"] = use_labels
 
     fig, ax, lines = curve_list[0].plot(**plot_kwargs)
+    try:
+        import matplotlib.dates as mdates
+        import matplotlib.ticker as mticker
+
+        # Increase major tick density so more x labels are shown.
+        x_sample = None
+        if lines:
+            x_data = lines[0].get_xdata()
+            if len(x_data):
+                x_sample = x_data[0]
+
+        is_date_axis = isinstance(x_sample, (datetime.date, datetime.datetime, pd.Timestamp))
+        if is_date_axis:
+            locator = mdates.AutoDateLocator(minticks=10, maxticks=20)
+            ax.xaxis.set_major_locator(locator)
+            ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+        else:
+            ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=14, min_n_ticks=8))
+
+        ax.tick_params(axis="x", labelrotation=45)
+        fig.tight_layout()
+    except Exception:
+        pass
+
     if title:
         try:
             ax.set_title(title)
@@ -338,21 +355,18 @@ def build_rl_stirf_turn_flies(
     return flies
 
 
-class BARCHART_STIRF_CURVE:
-    _CURVE_CACHE_MAX_ITEMS = 4096
+class BARCHART_STIRF_CURVE(DiskCacheMixin):
     _CURVE_CACHE_SCHEMA = 1
-    _CURVE_STATE: Dict[str, Any] = {}
+    _CURVE_CACHE_ATTR = "_barchart_stirf_curve_cache"
+    _CURVE_CACHE_STEM = "BARCHART_STIRF-RL_CURVE_CACHE"
 
     def __init__(self, curve_cache_dir: Optional[Union[str, Path]] = None):
+        DiskCacheMixin.__init__(self)
         self.stirf_mdp = STIRFutureMDP(source="BARCHART_TOS_LIVE_STIRF-RL")
         self.stirf_mdp_schwab_app = STIRFutureMDP(source="SCHWAB_APP_STIRF-RL")
         self.stirf_mdp_barchart = STIRFutureMDP(source="BARCHART_STIRF-RL")
-        self._curve_cache_dir = self._resolve_curve_cache_dir(base_cache_dir=curve_cache_dir)
-        if not BARCHART_STIRF_CURVE._CURVE_STATE:
-            BARCHART_STIRF_CURVE._CURVE_STATE = {
-                "curve_cache": {},
-                "lock": threading.RLock(),
-            }
+        self._curve_cache_path = self._resolve_curve_cache_path(base_cache_dir=curve_cache_dir)
+        self.open_cache(cache_attr=self._CURVE_CACHE_ATTR, path=self._curve_cache_path)
 
         # support mixed interpolation: https://quant.stackexchange.com/questions/81563/second-layer-instruments-in-rateslib
         self._STIRF_CURVE_CONFIGS = {
@@ -878,19 +892,15 @@ class BARCHART_STIRF_CURVE:
         }
 
     @staticmethod
-    def _resolve_curve_cache_dir(base_cache_dir: Optional[Union[str, Path]] = None) -> Path:
+    def _resolve_curve_cache_path(base_cache_dir: Optional[Union[str, Path]] = None) -> str:
         if base_cache_dir:
-            base = Path(base_cache_dir)
-        elif os.getenv("ARBS_CACHE_DIR"):
-            base = Path(os.getenv("ARBS_CACHE_DIR")) / "IRSwaps" / "BARCHART_STIRF"
-        elif _user_cache_dir:
-            base = Path(_user_cache_dir(appname="ARBS/MDP/IRSwaps/BARCHART_STIRF"))
-        else:
-            base = Path.home() / ".cache" / "arbs" / "MDP" / "IRSwaps" / "BARCHART_STIRF"
+            return str(Path(base_cache_dir).expanduser().resolve())
 
-        cache_dir = base / "curve_cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        return cache_dir
+        arbs_cache_dir = os.getenv("ARBS_CACHE_DIR")
+        if arbs_cache_dir:
+            return str((Path(arbs_cache_dir) / "IRSwaps" / "BARCHART_STIRF" / "curve_cache").resolve())
+
+        return DiskCacheMixin.default_cache_path(BARCHART_STIRF_CURVE._CURVE_CACHE_STEM)
 
     @staticmethod
     def _curve_cfg_hash(cfg: Dict[str, Any]) -> str:
@@ -930,8 +940,9 @@ class BARCHART_STIRF_CURVE:
         cfg_hash = cls._curve_cfg_hash(cfg)
         return re.sub(r"[^A-Za-z0-9_.-]", "_", f"v{cls._CURVE_CACHE_SCHEMA}_{curve_name}_{ts_str}_{cfg_hash}")
 
-    def _curve_cache_path(self, curve_name: str, timestamp: datetime.datetime, cfg: Dict[str, Any]) -> Path:
-        return self._curve_cache_dir / f"{self._curve_cache_key(curve_name, timestamp, cfg)}.json"
+    def _curve_cache_mapping(self):
+        self.open_cache(cache_attr=self._CURVE_CACHE_ATTR, path=self._curve_cache_path)
+        return getattr(self, self._CURVE_CACHE_ATTR)
 
     @staticmethod
     def _attach_curve_context(curve: rl.Curve, *, curve_name: str, timestamp: datetime.datetime, cfg: Dict[str, Any]) -> rl.Curve:
@@ -951,59 +962,34 @@ class BARCHART_STIRF_CURVE:
 
     def _curve_cache_get(self, curve_name: str, timestamp: datetime.datetime, cfg: Dict[str, Any]) -> Optional[rl.Curve]:
         key = self._curve_cache_key(curve_name, timestamp, cfg)
-        S = BARCHART_STIRF_CURVE._CURVE_STATE
-        with S["lock"]:
-            curve_cache = S["curve_cache"]
-            cached = curve_cache.get(key)
-            if cached is not None:
-                return self._attach_curve_context(cached, curve_name=curve_name, timestamp=timestamp, cfg=cfg)
-
-        cache_file = self._curve_cache_path(curve_name, timestamp, cfg)
-        if not cache_file.exists():
+        mapping = self._curve_cache_mapping()
+        payload = mapping.get(key)
+        if payload is None:
             return None
-
         try:
-            payload = json.loads(cache_file.read_text(encoding="utf-8"))
-            curve_json = payload["curve_json"]
+            if isinstance(payload, str):
+                curve_json = payload
+            elif isinstance(payload, dict):
+                curve_json = payload.get("curve_json")
+            else:
+                return None
+            if not curve_json:
+                return None
             curve = rl.from_json(curve_json)
-            curve = self._attach_curve_context(curve, curve_name=curve_name, timestamp=timestamp, cfg=cfg)
-            with S["lock"]:
-                curve_cache = S["curve_cache"]
-                curve_cache[key] = curve
-                while len(curve_cache) > self._CURVE_CACHE_MAX_ITEMS:
-                    curve_cache.pop(next(iter(curve_cache)))
-            return curve
+            return self._attach_curve_context(curve, curve_name=curve_name, timestamp=timestamp, cfg=cfg)
         except Exception:
             return None
 
     def _curve_cache_put(self, curve_name: str, timestamp: datetime.datetime, cfg: Dict[str, Any], curve: rl.Curve) -> None:
         key = self._curve_cache_key(curve_name, timestamp, cfg)
-        S = BARCHART_STIRF_CURVE._CURVE_STATE
-
-        with S["lock"]:
-            curve_cache = S["curve_cache"]
-            curve_cache[key] = curve
-            while len(curve_cache) > self._CURVE_CACHE_MAX_ITEMS:
-                curve_cache.pop(next(iter(curve_cache)))
-
-            cache_file = self._curve_cache_path(curve_name, timestamp, cfg)
-            ts_utc = timestamp.astimezone(pytz.utc).replace(microsecond=0)
-            payload = {
-                "schema": self._CURVE_CACHE_SCHEMA,
-                "curve_name": curve_name,
-                "timestamp_utc": ts_utc.isoformat(),
-                "curve_json": curve.to_json(),
-            }
-            tmp_file = cache_file.with_suffix(f"{cache_file.suffix}.tmp-{threading.get_ident()}")
-            try:
-                tmp_file.write_text(json.dumps(payload), encoding="utf-8")
-                tmp_file.replace(cache_file)
-            finally:
-                if tmp_file.exists():
-                    try:
-                        tmp_file.unlink()
-                    except Exception:
-                        pass
+        mapping = self._curve_cache_mapping()
+        ts_utc = timestamp.astimezone(pytz.utc).replace(microsecond=0)
+        mapping[key] = {
+            "schema": self._CURVE_CACHE_SCHEMA,
+            "curve_name": curve_name,
+            "timestamp_utc": ts_utc.isoformat(),
+            "curve_json": curve.to_json(),
+        }
 
     @staticmethod
     def _pricer_symbol(pricer: "RLSTIRFuturePricer") -> str:

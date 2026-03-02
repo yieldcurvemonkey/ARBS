@@ -855,6 +855,36 @@ def _nearest_index_position(index: pd.Index, target: pd.Timestamp) -> Optional[i
         return None
     return int(loc[0])
 
+
+def _asof_index_position(index: pd.Index, target: pd.Timestamp) -> Optional[int]:
+    """Return the last row at or before target (no look-ahead)."""
+    if len(index) == 0:
+        return None
+    if not isinstance(index, pd.DatetimeIndex):
+        return len(index) - 1
+
+    idx = index
+    t = pd.Timestamp(target)
+
+    if idx.tz is None:
+        if t.tzinfo is not None:
+            # For tz-aware requests against naive EOD bars, keep the request calendar date.
+            t = pd.Timestamp(t.date())
+    else:
+        if t.tzinfo is None:
+            t = t.tz_localize(idx.tz)
+        else:
+            t = t.tz_convert(idx.tz)
+
+    # EOD series are date buckets; ignore time-of-day when selecting as-of rows.
+    if (idx == idx.normalize()).all():
+        t = pd.Timestamp(t.date()) if idx.tz is None else t.normalize()
+
+    pos = int(idx.searchsorted(t, side="right") - 1)
+    if pos < 0:
+        return None
+    return pos
+
 class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     _STIR_OPTION_CACHE = "_stir_option_pricer_cache"
     _BARCHART_STATE: Dict[str, Any] = {}
@@ -981,7 +1011,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_get_data_v1",
+            "cache_version": "stirfo_get_data_v2",
             "source": str(self.source).upper(),
             "endpoint": ep,
             "request": self._cache_primitive(cache_req),
@@ -1663,7 +1693,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             if fut_df is None or fut_df.empty:
                 raise ValueError(f"Could not resolve ATM alias {raw!r}: missing underlying history for {contract}.")
 
-            pos = _nearest_index_position(fut_df.index, target_ts)
+            pos = _asof_index_position(fut_df.index, target_ts)
             if pos is None:
                 raise ValueError(f"Could not resolve ATM alias {raw!r}: no underlying row near {target_date}.")
             forward = _extract_row_price(fut_df.iloc[pos].to_dict(), price_mode=price_mode)
@@ -1690,7 +1720,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         end = target_date + datetime.timedelta(days=7)
 
         target_ts = pd.Timestamp(_NY_TZ.localize(datetime.datetime.combine(target_date, datetime.time(17, 0))))
-        pos_under = _nearest_index_position(underlying_df.index, target_ts)
+        pos_under = _asof_index_position(underlying_df.index, target_ts)
         if pos_under is None:
             raise ValueError(f"Could not resolve historical delta: no underlying row near {target_date} for {option_contract}")
         forward = _extract_row_price(underlying_df.iloc[pos_under].to_dict(), price_mode=price_mode)
@@ -1753,7 +1783,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             df = iv_data.get(bc_sym)
             if df is None or df.empty:
                 continue
-            pos = _nearest_index_position(df.index, target_ts)
+            pos = _asof_index_position(df.index, target_ts)
             if pos is None:
                 continue
             row = dict(df.iloc[pos].to_dict())
@@ -1807,7 +1837,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             df = data.get(bc_sym)
             if df is None or df.empty:
                 continue
-            pos = _nearest_index_position(df.index, target_ts)
+            pos = _asof_index_position(df.index, target_ts)
             if pos is None:
                 continue
             row = dict(df.iloc[pos].to_dict())
@@ -1867,7 +1897,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     ) -> Optional[float]:
         if underlying_df is None or underlying_df.empty:
             return None
-        pos = _nearest_index_position(underlying_df.index, row_dt)
+        pos = _asof_index_position(underlying_df.index, row_dt)
         if pos is None:
             return None
         return _extract_row_price(underlying_df.iloc[pos].to_dict(), price_mode=price_mode)
@@ -2010,7 +2040,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 if opt_df is None or opt_df.empty or fut_df is None or fut_df.empty:
                     continue
 
-                opt_pos = _nearest_index_position(opt_df.index, target_ts)
+                opt_pos = _asof_index_position(opt_df.index, target_ts)
                 if opt_pos is None:
                     continue
                 row_dt = pd.Timestamp(opt_df.index[opt_pos])

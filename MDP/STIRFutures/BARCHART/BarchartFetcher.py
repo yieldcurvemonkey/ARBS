@@ -74,6 +74,7 @@ class BarchartFetcher(BaseFetcher):
     _current_xsrf_token: str = None
     _BARCHART_MAX_RECORD = 5_000
     _SESSION_TOKEN_TTL_SECONDS = 60
+    _SESSION_TOKEN_POOL_SIZE = 3
     _SHARED_SESSION_TOKEN_CACHE: Dict[str, Dict[str, object]] = {}
     _SHARED_SESSION_TOKEN_CACHE_LOCK = threading.RLock()
     _STIR_ROOT_CODE_RE = re.compile(
@@ -111,6 +112,7 @@ class BarchartFetcher(BaseFetcher):
         warning_verbose: Optional[bool] = False,
         error_verbose: Optional[bool] = False,
         session_token_ttl_seconds: Optional[int] = None,
+        session_token_pool_size: Optional[int] = None,
         session_token_scope: Optional[str] = None,
     ):
         super().__init__(
@@ -122,7 +124,9 @@ class BarchartFetcher(BaseFetcher):
             error_verbose=error_verbose,
         )
         ttl = self._SESSION_TOKEN_TTL_SECONDS if session_token_ttl_seconds is None else int(session_token_ttl_seconds)
+        pool_size = self._SESSION_TOKEN_POOL_SIZE if session_token_pool_size is None else int(session_token_pool_size)
         self._session_token_ttl_seconds = max(1, ttl)
+        self._session_token_pool_size = max(1, pool_size)
         self._session_token_scope = session_token_scope
 
     @classmethod
@@ -161,20 +165,47 @@ class BarchartFetcher(BaseFetcher):
         self._current_laravel_token, self._current_xsrf_token = token_pair
         return token_pair
 
-    @classmethod
-    def _cached_session_token_unlocked(cls, cache_key: str) -> Optional[Tuple[str, str]]:
-        entry = cls._SHARED_SESSION_TOKEN_CACHE.get(cache_key)
-        if not entry:
-            return None
-        expires_at = float(entry.get("expires_at", 0.0))
-        if time.time() >= expires_at:
-            cls._SHARED_SESSION_TOKEN_CACHE.pop(cache_key, None)
-            return None
-        token_pair = entry.get("token_pair")
-        if not isinstance(token_pair, tuple) or len(token_pair) != 2:
-            cls._SHARED_SESSION_TOKEN_CACHE.pop(cache_key, None)
-            return None
-        return token_pair
+    @staticmethod
+    def _empty_token_slot() -> Dict[str, object]:
+        return {"token_pair": None, "expires_at": 0.0}
+
+    def _get_or_create_cache_entry_unlocked(self, cache_key: str) -> Dict[str, object]:
+        entry = self._SHARED_SESSION_TOKEN_CACHE.get(cache_key)
+        if not isinstance(entry, dict):
+            entry = {}
+            self._SHARED_SESSION_TOKEN_CACHE[cache_key] = entry
+
+        tokens = entry.get("tokens")
+        if not isinstance(tokens, list):
+            tokens = []
+        tokens = [slot if isinstance(slot, dict) else self._empty_token_slot() for slot in tokens]
+
+        target_size = int(self._session_token_pool_size)
+        if len(tokens) < target_size:
+            tokens.extend(self._empty_token_slot() for _ in range(target_size - len(tokens)))
+        elif len(tokens) > target_size:
+            tokens = tokens[:target_size]
+
+        rr_index = entry.get("rr_index", 0)
+        try:
+            rr_index = int(rr_index)
+        except Exception:
+            rr_index = 0
+
+        entry["tokens"] = tokens
+        entry["rr_index"] = rr_index % max(1, target_size)
+        return entry
+
+    @staticmethod
+    def _token_slot_is_valid(slot: Dict[str, object], now: float) -> bool:
+        token_pair = slot.get("token_pair")
+        if not (isinstance(token_pair, tuple) and len(token_pair) == 2):
+            return False
+        try:
+            expires_at = float(slot.get("expires_at", 0.0))
+        except Exception:
+            return False
+        return now < expires_at
 
     def _get_shared_session_token(
         self,
@@ -184,17 +215,22 @@ class BarchartFetcher(BaseFetcher):
         cache_key = self._session_cache_key()
 
         with self._SHARED_SESSION_TOKEN_CACHE_LOCK:
-            if not force_refresh:
-                cached = self._cached_session_token_unlocked(cache_key)
-                if cached is not None:
-                    return self._apply_session_token(cached)
+            entry = self._get_or_create_cache_entry_unlocked(cache_key)
+            tokens = entry["tokens"]  # type: ignore[index]
+            slot_count = max(1, len(tokens))
+            idx = int(entry.get("rr_index", 0)) % slot_count
+            slot = tokens[idx]
+            now = time.time()
 
-            token_pair = self._get_new_session_token(dummy_symbol=dummy_symbol)
-            self._SHARED_SESSION_TOKEN_CACHE[cache_key] = {
-                "token_pair": token_pair,
-                "expires_at": time.time() + float(self._session_token_ttl_seconds),
-                "updated_at": time.time(),
-            }
+            if force_refresh or not self._token_slot_is_valid(slot=slot, now=now):
+                token_pair = self._get_new_session_token(dummy_symbol=dummy_symbol)
+                slot["token_pair"] = token_pair
+                slot["expires_at"] = now + float(self._session_token_ttl_seconds)
+            else:
+                token_pair = slot["token_pair"]
+
+            entry["rr_index"] = (idx + 1) % slot_count
+            entry["updated_at"] = now
             return self._apply_session_token(token_pair)
 
     def _get_shared_session_token_pool(
@@ -203,8 +239,7 @@ class BarchartFetcher(BaseFetcher):
         dummy_symbol: Optional[str] = "BTC",
     ) -> List[Tuple[str, str]]:
         size = max(1, int(pool_size))
-        token_pair = self._get_shared_session_token(dummy_symbol=dummy_symbol, force_refresh=False)
-        return [token_pair] * size
+        return [self._get_shared_session_token(dummy_symbol=dummy_symbol, force_refresh=False) for _ in range(size)]
 
     def _get_new_session_token(self, dummy_symbol: Optional[str] = "BTC") -> Tuple[str, str]:
         """
@@ -248,7 +283,7 @@ class BarchartFetcher(BaseFetcher):
         """
         Fallback session token fetch which also sets the instance tokens.
         """
-        self._get_shared_session_token(dummy_symbol=dummy_symbol, force_refresh=False)
+        self._get_shared_session_token_pool(pool_size=self._session_token_pool_size, dummy_symbol=dummy_symbol)
 
     def _parse_aspx_response_to_df(self, response_content: bytes, columns: Optional[List[str]] = None):
         if isinstance(response_content, bytes):

@@ -27,9 +27,16 @@ def test_shared_session_token_cache_reused_across_instances(monkeypatch):
     fetcher_b._fetch_session_tokens(dummy_symbol="ETH")
 
     assert fetcher_a._session_cache_key() == fetcher_b._session_cache_key()
-    assert calls["count"] == 1
-    assert fetcher_a._current_laravel_token == "laravel-1"
-    assert fetcher_b._current_laravel_token == "laravel-1"
+    assert calls["count"] == 3
+
+    rotated = [
+        fetcher_a._get_shared_session_token()[0],
+        fetcher_b._get_shared_session_token()[0],
+        fetcher_a._get_shared_session_token()[0],
+        fetcher_b._get_shared_session_token()[0],
+    ]
+    assert rotated == ["laravel-1", "laravel-2", "laravel-3", "laravel-1"]
+    assert calls["count"] == 3
 
     BarchartFetcher.clear_shared_session_token_cache()
 
@@ -51,18 +58,18 @@ def test_shared_session_token_cache_ttl(monkeypatch):
 
     fetcher = BarchartFetcher(session_token_ttl_seconds=60)
     fetcher._fetch_session_tokens(dummy_symbol="BTC")
-    assert calls["count"] == 1
-    assert fetcher._current_laravel_token == "laravel-1"
+    assert calls["count"] == 3
+    assert fetcher._current_laravel_token == "laravel-3"
 
     now["t"] += 30
     fetcher._fetch_session_tokens(dummy_symbol="ETH")
-    assert calls["count"] == 1
-    assert fetcher._current_laravel_token == "laravel-1"
+    assert calls["count"] == 3
+    assert fetcher._current_laravel_token == "laravel-3"
 
     now["t"] += 31
     fetcher._fetch_session_tokens(dummy_symbol="BTC")
-    assert calls["count"] == 2
-    assert fetcher._current_laravel_token == "laravel-2"
+    assert calls["count"] == 6
+    assert fetcher._current_laravel_token == "laravel-6"
 
     BarchartFetcher.clear_shared_session_token_cache()
 
