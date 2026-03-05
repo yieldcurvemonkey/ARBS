@@ -5325,6 +5325,13 @@ function buildRichLabel(row: TapeRow): string {
       .includes("PAYER")
       ? "PAYER"
       : "RECEIVER";
+    const bermudanText = `${firstLeg.trade_label ?? ""} ${firstLeg.exercise_style ?? ""}`.toUpperCase();
+    const isBermudan = bermudanText.includes("BERM");
+
+    if (isBermudan) {
+      return `${underlying} ${direction}`.trim();
+    }
+
     const offsetRaw = legMetrics.outright_strike_offset_rounded_bps;
     if (isValid(offsetRaw)) {
       let offset = Number(offsetRaw);

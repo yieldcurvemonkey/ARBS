@@ -656,27 +656,45 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         """
         S = STIRFutureMDP._BARCHART_STATE
         with S["lock"]:
+            def _safe_close(fetcher: Optional[BarchartFetcher]) -> None:
+                if fetcher is None:
+                    return
+                try:
+                    fetcher.close()
+                except Exception:
+                    pass
+
+            def _build_fetcher(fetcher_proxies: Optional[dict], fetcher_host: Optional[str]) -> BarchartFetcher:
+                scope_host = fetcher_host if fetcher_host is not None else "direct"
+                return BarchartFetcher(
+                    proxies=fetcher_proxies,
+                    debug_verbose=False,
+                    error_verbose=True,
+                    session_token_ttl_seconds=max(1, int(S["ttl"])),
+                    session_token_scope=f"{self.__class__.__name__}:{scope_host}",
+                )
+
             proxies, host = self._get_cached_barchart_proxy()
             if proxies is None and host is None:
+                _safe_close(S.get("fetcher"))
                 proxies, host = self._choose_barchart_proxy()
                 S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
                 S["fetcher"] = None
 
             bcf = S["fetcher"]
             if bcf is None:
-                bcf = BarchartFetcher(proxies=proxies, debug_verbose=False, error_verbose=True)
+                bcf = _build_fetcher(proxies, host)
                 S["fetcher"] = bcf
 
             try:
-                with _ProxyGuard(proxies):
-                    bcf._fetch_session_tokens(dummy_symbol="BTC")
+                bcf._fetch_session_tokens(dummy_symbol="BTC")
             except Exception:
+                _safe_close(S.get("fetcher"))
                 proxies, host = self._choose_barchart_proxy()
                 S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
-                bcf = BarchartFetcher(proxies=proxies, debug_verbose=False, error_verbose=True)
+                bcf = _build_fetcher(proxies, host)
                 S["fetcher"] = bcf
-                with _ProxyGuard(proxies):
-                    bcf._fetch_session_tokens(dummy_symbol="BTC")
+                bcf._fetch_session_tokens(dummy_symbol="BTC")
 
             return bcf
 

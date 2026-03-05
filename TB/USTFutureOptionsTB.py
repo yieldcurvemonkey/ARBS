@@ -5,21 +5,21 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from Query.Base.BaseQuery import BaseQuery
 from Query.Base.query_resolution import resolve_for_request, resolve_query
-from Query.STIRFutureOptions.STIRFutureOptionQuery import STIRFutureOptionQuery
+from Query.USTFutureOptions.USTFutureOptionQuery import USTFutureOptionQuery
 from TB.BaseTimeseriesTB import BaseTimeseriesTB
 from TB.utils import DateLike, _canonicalize_value
 
 if TYPE_CHECKING:
-    from MDP.STIRFutures.STIRFutureOptionMDP import STIRFutureOptionMDP
+    from MDP.USTFutures.USTFutureOptionMDP import USTFutureOptionMDP
 
 
-class STIRFutureOptionsTB(BaseTimeseriesTB):
-    _DEFAULT_PRICING_MESSAGE = "PRICING STIR FUTURE OPTIONS."
+class USTFutureOptionsTB(BaseTimeseriesTB):
+    _DEFAULT_PRICING_MESSAGE = "PRICING UST FUTURE OPTIONS."
     _SUPPORTED_ENDPOINT = "option_snapshot"
 
     def __init__(
         self,
-        mdp: "STIRFutureOptionMDP",
+        mdp: "USTFutureOptionMDP",
         *,
         date_col: str = "Date",
         show_tqdm: bool = True,
@@ -32,12 +32,12 @@ class STIRFutureOptionsTB(BaseTimeseriesTB):
     def _flatten_queries(
         self,
         queries: List[Union[BaseQuery, List[BaseQuery]]],
-    ) -> List[STIRFutureOptionQuery]:
+    ) -> List[USTFutureOptionQuery]:
         flat = super()._flatten_queries(queries)
-        bad = [q for q in flat if not isinstance(q, STIRFutureOptionQuery)]
+        bad = [q for q in flat if not isinstance(q, USTFutureOptionQuery)]
         if bad:
             raise TypeError(
-                f"STIRFutureOptionsTB requires STIRFutureOptionQuery inputs, got: {type(bad[0]).__name__}"
+                f"USTFutureOptionsTB requires USTFutureOptionQuery inputs, got: {type(bad[0]).__name__}"
             )
         return flat
 
@@ -61,7 +61,7 @@ class STIRFutureOptionsTB(BaseTimeseriesTB):
             out.append(tok)
         return out
 
-    def _extract_query_symbols(self, q: STIRFutureOptionQuery, now: datetime.datetime) -> List[str]:
+    def _extract_query_symbols(self, q: USTFutureOptionQuery, now: datetime.datetime) -> List[str]:
         req = q.build_mdp_request(now)
         raw = req.get("symbols") or []
         if isinstance(raw, (list, tuple)):
@@ -72,7 +72,7 @@ class STIRFutureOptionsTB(BaseTimeseriesTB):
 
     def _query_group_spec(
         self,
-        q: STIRFutureOptionQuery,
+        q: USTFutureOptionQuery,
         now: datetime.datetime,
     ) -> Optional[Tuple[str, Dict[str, Any], str, str, Any, List[str]]]:
         req = dict(q.build_mdp_request(now))
@@ -139,7 +139,7 @@ class STIRFutureOptionsTB(BaseTimeseriesTB):
         self,
         *,
         reference_points: List[DateLike],
-        queries: List[STIRFutureOptionQuery],
+        queries: List[USTFutureOptionQuery],
         n_jobs: Optional[int],
         ignore_cache: Optional[bool],
     ) -> Any:
@@ -217,14 +217,14 @@ class STIRFutureOptionsTB(BaseTimeseriesTB):
 
     def _price_one(
         self,
-        q: STIRFutureOptionQuery,
+        q: USTFutureOptionQuery,
         *,
         ref_point: DateLike,
         now: datetime.datetime,
         bulk_data: Any,
         n_jobs: Optional[int],
         ignore_cache: Optional[bool],
-    ) -> Optional[Tuple[STIRFutureOptionQuery, float]]:
+    ) -> Optional[Tuple[USTFutureOptionQuery, float]]:
         if isinstance(bulk_data, dict):
             query_group_key = bulk_data.get("query_group_key") or {}
             result_by_ref_group = bulk_data.get("result_by_ref_group") or {}
@@ -260,3 +260,4 @@ class STIRFutureOptionsTB(BaseTimeseriesTB):
             n_jobs=n_jobs,
             ignore_cache=ignore_cache,
         )
+

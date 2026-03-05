@@ -27,176 +27,69 @@ from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher
 from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
-from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contracts
-from Query.STIRFutureOptions.backends.quantlib.QLSTIRFutureOptionPricer import QLSTIRFutureOptionPricer
-
-from MDP.STIRFutures.QuikStrikeSDK.core.QuikStrikeFetcher import QuikStrikeFetcher  
-from MDP.STIRFutures.QuikStrikeSDK.core.types.QuikVolProductID import QuikVolProductID  
-from MDP.STIRFutures.QuikStrikeSDK.core.types.QuikVolQuery import QuikVolQuery  
-from MDP.STIRFutures.QuikStrikeSDK.core.types.QuikVolValueType import QuikVolValueType  
-from MDP.STIRFutures.QuikStrikeSDK.core.utils.auth import walk_quikstrike_auth_flow  
+from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
+from Query.USTFutureOptions.backends.quantlib.QLUSTFutureOptionPricer import QLUSTFutureOptionPricer
+from definitions.USTFutures import UST_FUTURE_BARCHART_TO_INTERNAL
+from definitions.USTFutureOptions import (
+    ALL_OPTION_ROOTS,
+    MONTH_CODE_TO_NUM as _MONTH_CODE_TO_NUM,
+    decode_strike_token,
+    encode_strike_token,
+    is_weekly_root,
+    normalize_contract_code,
+    normalize_option_contract,
+    normalize_option_root,
+    normalize_strike_token,
+    option_expiry_date,
+    option_root_base_root,
+    parse_option_contract,
+    strike_step_for_contract as _strike_step_for_contract_def,
+    underlying_contract_for_option,
+)
 
 
 DateLike = Union[datetime.date, datetime.datetime, str, Literal["live"]]
-InstrumentLike = QLSTIRFutureOptionPricer
+InstrumentLike = QLUSTFutureOptionPricer
 
 _NY_TZ = pytz.timezone("America/New_York")
 _CHI_TZ = pytz.timezone("America/Chicago")
 _UTC_TZ = pytz.UTC
 
-_BBG_TO_BARCHART = {
-    "SER": "SL",
-    "FF": "QZ",
-    "SFR": "SQ",
-    "0Q": "MMA",
-    "2Q": "MMB",
-    "3Q": "MMC",
-    "4Q": "MMD",
-    "5Q": "MME",
-    "UHOA": "MNA",
-    "UMOA": "MNB",
-    "UUOA": "MNC",
-    "UZOA": "MND",
-    "VHTA": "MNE",
-    "VMTA": "MNF",
-    "VUTA": "MNG",
-    "VZTA": "MNH",
-    "S01": "MMI",
-    "S02": "MMJ",
-    "S03": "MMK",
-    "S04": "MML",
-    "S05": "",
-    "S21": "MMN",
-    "S22": "MMO",
-    "S23": "MMP",
-    "S24": "MMQ",
-    "S25": "",
-    "S31": "MMS",
-    "S32": "MMT",
-    "S33": "MMU",
-    "S34": "MMV",
-    "S35": "",
-}
-
-_ROOT_ALIAS_MAP = {
-    # SOFR 3M aliases
-    "SFR": "SFR",
-    "SR3": "SFR",
-    "SQ": "SFR",
-    # 1M SOFR aliases
-    "SER": "SER",
-    "SR1": "SER",
-    "SL": "SER",
-    # Fed Funds aliases
-    "FF": "FF",
-    "ZQ": "FF",
-    "QZ": "FF",
-    # Mid-curves (canonical BBG roots)
-    "0Q": "0Q",
-    "2Q": "2Q",
-    "3Q": "3Q",
-    "4Q": "4Q",
-    "5Q": "5Q",
-    # QuikStrike-like aliases for mid-curves
-    "S0": "0Q",
-    "S2": "2Q",
-    "S3": "3Q",
-    "S4": "4Q",
-    "S5": "5Q",
-    # 1Y serials
-    "UHOA": "UHOA",
-    "UMOA": "UMOA",
-    "UUOA": "UUOA",
-    "UZOA": "UZOA",
-    # 2Y serials
-    "VHTA": "VHTA",
-    "VMTA": "VMTA",
-    "VUTA": "VUTA",
-    "VZTA": "VZTA",
-    # Friday mid-curves
-    "S01": "S01",
-    "S02": "S02",
-    "S03": "S03",
-    "S04": "S04",
-    "S05": "S05",
-    "S21": "S21",
-    "S22": "S22",
-    "S23": "S23",
-    "S24": "S24",
-    "S25": "S25",
-    "S31": "S31",
-    "S32": "S32",
-    "S33": "S33",
-    "S34": "S34",
-    "S35": "S35",
-}
-for _bbg_root, _bc_root in _BBG_TO_BARCHART.items():
-    if _bc_root:
-        _ROOT_ALIAS_MAP[_bc_root] = _bbg_root
-
-_ROOT_TO_BARCHART = dict(_BBG_TO_BARCHART)
-
-_UNDERLYING_RULES: Dict[str, Tuple[int, Optional[str]]] = {
-    "SFR": (0, None),
-    "0Q": (1, None),
-    "2Q": (2, None),
-    "3Q": (3, None),
-    "4Q": (4, None),
-    "5Q": (5, None),
-    "UHOA": (1, "H"),
-    "UMOA": (1, "M"),
-    "UUOA": (1, "U"),
-    "UZOA": (1, "Z"),
-    "VHTA": (2, "H"),
-    "VMTA": (2, "M"),
-    "VUTA": (2, "U"),
-    "VZTA": (2, "Z"),
-    "S01": (1, None),
-    "S02": (1, None),
-    "S03": (1, None),
-    "S04": (1, None),
-    "S05": (1, None),
-    "S21": (2, None),
-    "S22": (2, None),
-    "S23": (2, None),
-    "S24": (2, None),
-    "S25": (2, None),
-    "S31": (3, None),
-    "S32": (3, None),
-    "S33": (3, None),
-    "S34": (3, None),
-    "S35": (3, None),
-}
-_SFR_UNDERLYING_ROOTS = set(_UNDERLYING_RULES.keys())
-_MONTH_CODE_TO_NUM = {"F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6, "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12}
-_NUM_TO_MONTH_CODE = {v: k for k, v in _MONTH_CODE_TO_NUM.items()}
-_QUARTERLY_MONTHS = (3, 6, 9, 12)
-
-_ROOT_TOKEN_PATTERN = "|".join(sorted([re.escape(r) for r in _ROOT_ALIAS_MAP.keys()], key=len, reverse=True))
+_ROOT_TOKEN_PATTERN = "|".join(re.escape(r) for r in ALL_OPTION_ROOTS)
 _OPTION_RE = re.compile(
-    rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{2}})\|(?P<strike>\d{{3,5}})(?P<right>[CPS])$",
+    rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{1,2}})\|(?P<strike>\d{{3,5}})(?P<right>[CPS])$",
     re.IGNORECASE,
 )
 _OPTION_ATM_RE = re.compile(
-    rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{2}})\|ATM(?P<right>[CPS])$",
+    rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{1,2}})\|ATM(?P<right>[CPS])$",
     re.IGNORECASE,
 )
 _OPTION_DELTA_RE = re.compile(
-    rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{2}})\|(?P<delta>\d{{1,2}}(?:\.\d+)?)D?(?P<right>[CP])$",
+    rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{1,2}})\|(?P<delta>\d{{1,2}}(?:\.\d+)?)D?(?P<right>[CP])$",
     re.IGNORECASE,
 )
 _OPTION_ATM_NATURAL_RE = re.compile(
-    rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{2}})\s+ATM\s+(?P<right>STRADDLE|CALL|PUT)$",
+    rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{1,2}})\s+ATM\s+(?P<right>STRADDLE|CALL|PUT)$",
     re.IGNORECASE,
 )
 _OPTION_DELTA_NATURAL_RE = re.compile(
-    rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{2}})\s+(?P<delta>\d{{1,2}}(?:\.\d+)?)\s*D(?:ELTA)?\s+(?P<right>STRADDLE|CALL|PUT)$",
+    rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{1,2}})\s+(?P<delta>\d{{1,2}}(?:\.\d+)?)\s*D(?:ELTA)?\s+(?P<right>STRADDLE|CALL|PUT)$",
     re.IGNORECASE,
 )
-_FUTURE_RE = re.compile(rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{2}})$", re.IGNORECASE)
-_CM_RE = re.compile(rf"^(?P<root>{_ROOT_TOKEN_PATTERN})?CM(?P<rank>\d+)$", re.IGNORECASE)
+_FUTURE_RE = re.compile(rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVXZ]\d{{1,2}})$", re.IGNORECASE)
+_USTF_CONTRACT_RE = re.compile(r"^(?P<root>[A-Z]{2,3})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", re.IGNORECASE)
 
 _DEFAULT_CURVE_NAME = "USD-SOFR-1D-Q12xM12STIRT"
+
+_FV01_FALLBACK_BY_INTERNAL_ROOT: Dict[str, float] = {
+    # Approximate futures price DV01 (price points per 1bp yield move), by complex.
+    "TU": 0.020,
+    "FV": 0.040,
+    "TY": 0.080,
+    "US": 0.160,
+    "WN": 0.160,
+    "UXY": 0.080,
+}
 
 
 def _socksio_available() -> bool:
@@ -331,7 +224,10 @@ def _right_word_to_token(right_word: str) -> str:
     raise ValueError(f"Unsupported option right token: {right_word}")
 
 
-def _format_strike4(strike: float) -> str:
+def _format_strike4(strike: float, contract: Optional[str] = None) -> str:
+    if contract:
+        return encode_strike_token(contract_or_root=contract, strike=float(strike))
+    # Backward-compatible fallback.
     return str(int(round(float(strike) * 100.0))).zfill(4)
 
 
@@ -344,13 +240,10 @@ def _atm_strike_from_forward(forward: float, step: float = 0.25) -> float:
 
 
 def _strike_step_for_contract(contract: str) -> float:
-    m = _FUTURE_RE.fullmatch((contract or "").strip().upper())
-    if m is None:
-        return 0.125
-    root = _ROOT_ALIAS_MAP[m.group("root").upper()]
-    if root in _SFR_UNDERLYING_ROOTS or root in {"SFR"}:
-        return 0.125
-    return 0.25
+    try:
+        return float(_strike_step_for_contract_def(contract))
+    except Exception:
+        return 0.25
 
 
 def _strike_ladder(center: float, step: float, half_width_steps: int) -> List[float]:
@@ -414,66 +307,24 @@ def _normalize_vendor_delta(value: Any) -> Optional[float]:
 
 
 def _contract_to_barchart_contract(contract: str) -> str:
-    m = _FUTURE_RE.fullmatch((contract or "").strip().upper())
-    if m is None:
-        raise ValueError(f"Invalid STIR future contract token: {contract}")
-    root = _ROOT_ALIAS_MAP[m.group("root").upper()]
-    barchart_root = _ROOT_TO_BARCHART.get(root, "")
-    if not barchart_root:
-        raise ValueError(f"Unsupported/disabled Barchart root mapping for {root}")
-    return f"{barchart_root}{m.group('code').upper()}"
+    return normalize_option_contract(contract)
 
 
 def _parse_contract_token(token: str) -> Dict[str, Any]:
-    t = (token or "").strip().upper()
-    m = _FUTURE_RE.fullmatch(t)
-    if m:
-        root = _ROOT_ALIAS_MAP[m.group("root").upper()]
-        code = m.group("code").upper()
+    t = str(token or "").strip().upper().replace("/", "")
+    if _FUTURE_RE.fullmatch(t):
         return {
             "contract_selector": "explicit",
-            "contract": f"{root}{code}",
+            "contract": normalize_option_contract(t),
             "cm_root": None,
             "cm_rank": None,
         }
-
-    m = _CM_RE.fullmatch(t)
-    if m:
-        raw_root = m.group("root")
-        root = _ROOT_ALIAS_MAP[(raw_root or "SFR").upper()]
-        rank = int(m.group("rank"))
-        if rank <= 0:
-            raise ValueError(f"CM rank must be >= 1: {token}")
-        return {
-            "contract_selector": "cm",
-            "contract": None,
-            "cm_root": root,
-            "cm_rank": rank,
-        }
-
-    raise ValueError(f"Invalid option contract token: {token}")
+    raise ValueError(f"Invalid UST option contract token: {token}")
 
 
 def _resolve_cm_contract(*, cm_root: str, cm_rank: int, as_of: datetime.date) -> str:
-    root = _ROOT_ALIAS_MAP[(cm_root or "SFR").upper()]
-    rank = int(cm_rank)
-    if rank <= 0:
-        raise ValueError(f"CM rank must be >= 1, got {cm_rank}")
-
-    # SOFR/midcurves use quarterly ladder with IMM cutoff. Monthly roots stay monthly.
-    use_imm = root in (_SFR_UNDERLYING_ROOTS | {"SFR"})
-    valid_months = [3, 6, 9, 12] if use_imm else list(range(1, 13))
-    cutoff = _imm_cutoff if use_imm else None
-    contracts = _next_contracts(
-        start_date=as_of,
-        prefix=root,
-        count=max(rank, 1),
-        valid_months=valid_months,
-        cutoff_fn=cutoff,
-    )
-    if len(contracts) < rank:
-        raise ValueError(f"Unable to resolve {root}CM{rank} at {as_of.isoformat()}")
-    return contracts[rank - 1]
+    _ = cm_root, cm_rank, as_of
+    raise NotImplementedError("UST future options do not support CM aliases.")
 
 
 def _resolve_contract_from_spec(spec: Dict[str, Any], as_of: datetime.date) -> str:
@@ -482,52 +333,25 @@ def _resolve_contract_from_spec(spec: Dict[str, Any], as_of: datetime.date) -> s
         c = spec.get("contract")
         if not c:
             raise ValueError(f"Missing explicit contract in spec: {spec}")
-        return str(c)
+        return normalize_option_contract(str(c), as_of=as_of)
     if selector == "cm":
-        root = str(spec.get("cm_root") or "SFR")
+        root = str(spec.get("cm_root") or "ZN")
         rank = int(spec.get("cm_rank") or 1)
         return _resolve_cm_contract(cm_root=root, cm_rank=rank, as_of=as_of)
     raise ValueError(f"Unsupported contract selector: {selector}")
 
 
 def _next_quarterly_code(month_code: str, year_2digit: int) -> Tuple[str, int]:
-    month_num = _MONTH_CODE_TO_NUM.get(month_code.upper(), 0)
-    next_q = next((m for m in _QUARTERLY_MONTHS if m >= month_num), None)
-    if next_q is None:
-        return "H", year_2digit + 1
-    if month_num in _QUARTERLY_MONTHS:
-        return month_code.upper(), year_2digit
-    return _NUM_TO_MONTH_CODE[next_q], year_2digit
+    _ = month_code, year_2digit
+    raise NotImplementedError("UST option underlying mapping is handled by definitions.USTFutureOptions.")
 
 
 def _option_contract_to_underlying_contract(contract: str) -> str:
-    m = _FUTURE_RE.fullmatch((contract or "").strip().upper())
-    if m is None:
-        raise ValueError(f"Invalid STIR option contract token: {contract}")
-
-    root = _ROOT_ALIAS_MAP[m.group("root").upper()]
-    code = m.group("code").upper()
-    opt_month = code[0]
-    opt_year = int(code[1:])
-
-    if root in _SFR_UNDERLYING_ROOTS:
-        rule = _UNDERLYING_RULES.get(root, (0, None))
-        year_offset, fixed_month = rule
-        if fixed_month:
-            ul_month = fixed_month
-            ul_year = opt_year + year_offset
-        else:
-            base_month, base_year = _next_quarterly_code(opt_month, opt_year)
-            ul_month = base_month
-            ul_year = base_year + year_offset
-        return f"SFR{ul_month}{ul_year % 100:02d}"
-
-    # Non-SOFR-underlying products default to same-root underlying contract.
-    return f"{root}{code}"
+    return underlying_contract_for_option(contract)
 
 
-def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
-    token = (symbol or "").strip().upper().replace("/", "")
+def _parse_option_request_symbol(symbol: str, *, as_of: Optional[datetime.date] = None) -> Dict[str, Any]:
+    token = str(symbol or "").strip().upper().replace("/", "")
 
     def _build(
         *,
@@ -564,10 +388,15 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
     if "|" in token:
         contract_part, leg_part = token.split("|", 1)
         contract_spec = _parse_contract_token(contract_part)
+        if contract_spec["contract_selector"] == "explicit":
+            contract_spec["contract"] = normalize_option_contract(contract_spec["contract"], as_of=as_of)
 
         m = re.fullmatch(r"(?P<strike>\d{3,5})(?P<right>[CPS])", leg_part)
         if m:
-            strike4 = str(int(m.group("strike"))).zfill(4)
+            strike4 = normalize_strike_token(
+                contract_or_root=str(contract_spec["contract"]),
+                strike_token=m.group("strike"),
+            )
             right = m.group("right").upper()
             return _build(contract_spec=contract_spec, selector="strike", right=right, strike4=strike4, delta=None)
 
@@ -585,20 +414,22 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
             return _build(contract_spec=contract_spec, selector="delta", right=right, strike4=None, delta=delta)
 
     m = re.fullmatch(
-        rf"(?P<contract>(?:{_ROOT_TOKEN_PATTERN})?(?:CM\d+)|(?:{_ROOT_TOKEN_PATTERN})[FGHJKMNQUVXZ]\d{{2}})\s+ATM\s+(?P<right>STRADDLE|CALL|PUT)",
+        rf"(?P<contract>(?:{_ROOT_TOKEN_PATTERN})[FGHJKMNQUVXZ]\d{{1,2}})\s+ATM\s+(?P<right>STRADDLE|CALL|PUT)",
         token,
     )
     if m:
         contract_spec = _parse_contract_token(m.group("contract"))
+        contract_spec["contract"] = normalize_option_contract(contract_spec["contract"], as_of=as_of)
         right = _right_word_to_token(m.group("right"))
         return _build(contract_spec=contract_spec, selector="atm", right=right, strike4=None, delta=None)
 
     m = re.fullmatch(
-        rf"(?P<contract>(?:{_ROOT_TOKEN_PATTERN})?(?:CM\d+)|(?:{_ROOT_TOKEN_PATTERN})[FGHJKMNQUVXZ]\d{{2}})\s+(?P<delta>\d{{1,2}}(?:\.\d+)?)\s*D(?:ELTA)?\s+(?P<right>STRADDLE|CALL|PUT)",
+        rf"(?P<contract>(?:{_ROOT_TOKEN_PATTERN})[FGHJKMNQUVXZ]\d{{1,2}})\s+(?P<delta>\d{{1,2}}(?:\.\d+)?)\s*D(?:ELTA)?\s+(?P<right>STRADDLE|CALL|PUT)",
         token,
     )
     if m:
         contract_spec = _parse_contract_token(m.group("contract"))
+        contract_spec["contract"] = normalize_option_contract(contract_spec["contract"], as_of=as_of)
         right = _right_word_to_token(m.group("right"))
         if right == "S":
             raise ValueError("Delta straddle alias is not supported; use explicit strikes or 25DC/25DP legs.")
@@ -607,7 +438,7 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
             raise ValueError(f"Delta alias must be in (0,100): {symbol}")
         return _build(contract_spec=contract_spec, selector="delta", right=right, strike4=None, delta=delta)
 
-    raise ValueError(f"Invalid STIR option symbol token: {symbol}")
+    raise ValueError(f"Invalid UST option symbol token: {symbol}")
 
 
 def _norm_option_symbol(symbol: str) -> str:
@@ -657,14 +488,12 @@ def _expand_straddle_symbol(symbol: str) -> List[str]:
 def _canonical_to_barchart_contract(symbol: str) -> str:
     token = _norm_option_symbol(symbol)
     fut = token.split("|", 1)[0]
-    return _contract_to_barchart_contract(fut)
+    return fut
 
 
 def _canonical_to_barchart_option(symbol: str) -> str:
     token = _norm_option_symbol(symbol)
-    _ = token.split("|", 1)[0]
-    bcontract = _canonical_to_barchart_contract(token)
-    return f"{bcontract}|{token.split('|', 1)[1]}"
+    return token
 
 
 def _canonical_contract(symbol: str) -> str:
@@ -677,8 +506,9 @@ def _canonical_underlying(symbol: str) -> str:
 
 def _strike_from_symbol(symbol: str) -> float:
     token = _norm_option_symbol(symbol)
-    strike4 = token.split("|", 1)[1][:-1]
-    return float(int(strike4)) / 100.0
+    contract, strike_right = token.split("|", 1)
+    strike_token = strike_right[:-1]
+    return float(decode_strike_token(contract_or_root=contract, strike_token=strike_token))
 
 
 def _right_from_symbol(symbol: str) -> str:
@@ -686,7 +516,7 @@ def _right_from_symbol(symbol: str) -> str:
 
 
 def _contract_code_from_symbol(symbol: str) -> str:
-    return _canonical_contract(symbol)[-3:]
+    return parse_option_contract(_canonical_contract(symbol))[1]
 
 
 def _ql_date_to_pydate(d: ql.Date) -> datetime.date:
@@ -696,15 +526,11 @@ def _ql_date_to_pydate(d: ql.Date) -> datetime.date:
 
 
 def _contract_expiry_date(code2: str) -> datetime.date:
-    m = re.fullmatch(r"([FGHJKMNQUVXZ])(\d{2})", (code2 or "").upper())
-    if m is None:
-        raise ValueError(f"Invalid SR3 contract code: {code2}")
-    month_code = m.group(1)
-    yy = int(m.group(2))
-    year = 2000 + yy
-    imm_code = f"{month_code}{yy % 10}"
-    qd = ql.IMM.date(imm_code, ql.Date(1, 1, year))
-    return _ql_date_to_pydate(qd)
+    norm = normalize_contract_code(code2)
+    month = _MONTH_CODE_TO_NUM[norm[0]]
+    year = 2000 + int(norm[1:])
+    # Monthly fallback when root context is unavailable.
+    return datetime.date(year, month, 1)
 
 
 def _time_to_expiry(val_date: datetime.date, exp_date: datetime.date) -> float:
@@ -762,6 +588,25 @@ def _bachelier_delta_from_calculator(
         return float(calc.deltaForward())
     except Exception:
         return float("nan")
+
+
+def _to_internal_ustf_contract(contract: str, *, as_of: Optional[datetime.date] = None) -> str:
+    token = str(contract or "").strip().upper().replace("/", "")
+    m = _USTF_CONTRACT_RE.fullmatch(token)
+    if m is None:
+        return token
+    root = m.group("root")
+    code = normalize_contract_code(m.group("code"), as_of=as_of)
+    internal_root = UST_FUTURE_BARCHART_TO_INTERNAL.get(root, root)
+    return f"{internal_root}{code}"
+
+
+def _fv01_fallback_for_contract(contract: str) -> float:
+    token = str(contract or "").strip().upper().replace("/", "")
+    m = _USTF_CONTRACT_RE.fullmatch(token)
+    root = m.group("root") if m is not None else token[:-3]
+    internal_root = UST_FUTURE_BARCHART_TO_INTERNAL.get(root, root)
+    return float(_FV01_FALLBACK_BY_INTERNAL_ROOT.get(internal_root, 0.050))
 
 
 def _bachelier_greeks_fd(
@@ -886,13 +731,12 @@ def _asof_index_position(index: pd.Index, target: pd.Timestamp) -> Optional[int]
         return None
     return pos
 
-class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
-    _STIR_OPTION_CACHE = "_stir_option_pricer_cache"
+class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
+    _UST_OPTION_CACHE = "_ust_option_pricer_cache"
     _BARCHART_STATE: Dict[str, Any] = {}
     _CURVE_STATE: Dict[str, Any] = {}
-    _QS_STATE: Dict[str, Any] = {}
 
-    def __init__(self, source: str = "STIRFO_DUAL-QL", **kwargs: Any):
+    def __init__(self, source: str = "BARCHART_USTFO-QL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
         DiskCacheMixin.__init__(self)
 
@@ -904,6 +748,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         self._barchart_fetcher: Optional[BarchartFetcher] = None
         self._barchart_lock = threading.RLock()
         self._barchart_proxies_static = kwargs.get("barchart_proxies")
+        self._fv01_memo: Dict[str, float] = {}
         self._curve_name_default = kwargs.get("curve_name_default", _DEFAULT_CURVE_NAME)
         self._socksio_enabled = _socksio_available()
         # Historical fetch windows are fixed to one month on either side of the request range.
@@ -927,8 +772,8 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         self._barchart_proxy_ttl: int = int(kwargs.get("barchart_proxy_ttl", 60))
         self._barchart_session_token_pool_size_cap: int = max(1, int(kwargs.get("barchart_session_token_pool_size_cap", 24)))
 
-        if not STIRFutureOptionMDP._BARCHART_STATE:
-            STIRFutureOptionMDP._BARCHART_STATE = {
+        if not USTFutureOptionMDP._BARCHART_STATE:
+            USTFutureOptionMDP._BARCHART_STATE = {
                 "proxies": None,
                 "host": None,
                 "chosen_at": 0.0,
@@ -938,35 +783,29 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 "lock": threading.RLock(),
             }
 
-        if not STIRFutureOptionMDP._CURVE_STATE:
-            STIRFutureOptionMDP._CURVE_STATE = {
+        if not USTFutureOptionMDP._CURVE_STATE:
+            USTFutureOptionMDP._CURVE_STATE = {
                 "builder": None,
-                "lock": threading.RLock(),
-            }
-        if not STIRFutureOptionMDP._QS_STATE:
-            STIRFutureOptionMDP._QS_STATE = {
-                "insid": None,
-                "qsid": None,
                 "lock": threading.RLock(),
             }
 
     def _ensure_pricer_cache(self) -> None:
-        if self._cache_ready and hasattr(self, self._STIR_OPTION_CACHE):
+        if self._cache_ready and hasattr(self, self._UST_OPTION_CACHE):
             return
-        cache_path = DiskCacheMixin.default_cache_path("STIRFutureOptionPricer_Cache")
-        self.open_cache(cache_attr=self._STIR_OPTION_CACHE, path=cache_path, encode=None, decode=None)
+        cache_path = DiskCacheMixin.default_cache_path("USTFutureOptionPricer_Cache")
+        self.open_cache(cache_attr=self._UST_OPTION_CACHE, path=cache_path, encode=None, decode=None)
         self._cache_ready = True
 
     def _threadsafe_cache_put(self, key: str, value: dict) -> None:
         with self._open_lock:
             self._ensure_pricer_cache()
-            cache = getattr(self, self._STIR_OPTION_CACHE)
+            cache = getattr(self, self._UST_OPTION_CACHE)
             cache[key] = value
 
     def _threadsafe_cache_get(self, key: str):
         with self._open_lock:
             self._ensure_pricer_cache()
-            cache = getattr(self, self._STIR_OPTION_CACHE)
+            cache = getattr(self, self._UST_OPTION_CACHE)
             return cache.get(key)
 
     def _cache_primitive(self, value: Any) -> Any:
@@ -1013,7 +852,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         out: List[Dict[str, Any]] = []
         for raw in _clean_symbols(symbols):
             try:
-                spec = _parse_option_request_symbol(raw)
+                spec = _parse_option_request_symbol(raw, as_of=as_of)
                 if as_of is not None:
                     resolved = _resolve_option_contract_aliases_for_date(OrderedDict([(raw, spec)]), as_of=as_of)
                     spec = resolved[raw]
@@ -1047,7 +886,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     ) -> str:
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_barchart_pricer_window_v1",
+            "cache_version": "ustfo_barchart_pricer_window_v2",
             "source": str(self.source).upper(),
             "symbols": sorted({str(s).upper() for s in leg_symbols}),
             "window_start": window_start.isoformat(),
@@ -1059,11 +898,11 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         }
         payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha1(payload_str.encode("utf-8")).hexdigest()
-        return f"STIRFO_BC_WINDOW::{digest}"
+        return f"USTFO_BC_WINDOW::{digest}"
 
     def _serialize_pricer_window(
         self,
-        pricers_by_symbol_date: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
+        pricers_by_symbol_date: Dict[str, Dict[datetime.date, QLUSTFutureOptionPricer]],
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {}
         for symbol, by_day in sorted(pricers_by_symbol_date.items(), key=lambda kv: str(kv[0])):
@@ -1074,7 +913,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     def _deserialize_pricer_window(
         self,
         cached: Any,
-    ) -> Optional[Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]]]:
+    ) -> Optional[Dict[str, Dict[datetime.date, QLUSTFutureOptionPricer]]]:
         if not isinstance(cached, dict):
             return None
         if int(cached.get("schema", 0)) != 1:
@@ -1082,7 +921,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         raw = cached.get("result")
         if not isinstance(raw, dict):
             return None
-        out: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]] = defaultdict(dict)
+        out: Dict[str, Dict[datetime.date, QLUSTFutureOptionPricer]] = defaultdict(dict)
         try:
             for symbol, plist in raw.items():
                 if not isinstance(plist, list):
@@ -1134,16 +973,16 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_get_data_v3",
+            "cache_version": "USTFO_GET_DATA_v3",
             "source": str(self.source).upper(),
             "endpoint": ep,
             "request": self._cache_primitive(cache_req),
         }
         payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha1(payload_str.encode("utf-8")).hexdigest()
-        return f"STIRFO_GET_DATA::{ep}::{digest}"
+        return f"USTFO_GET_DATA::{ep}::{digest}"
 
-    def _serialize_pricer(self, pr: QLSTIRFutureOptionPricer) -> Dict[str, Any]:
+    def _serialize_pricer(self, pr: QLUSTFutureOptionPricer) -> Dict[str, Any]:
         return {
             "symbol": pr.symbol(),
             "right": pr.right(),
@@ -1160,10 +999,11 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             "theta": pr.theta(),
             "forward": pr.forward(),
             "discount": pr.discount(),
+            "fv01": pr.fv01(),
             "meta_data": pr.meta(),
         }
 
-    def _deserialize_pricer(self, row: Dict[str, Any]) -> QLSTIRFutureOptionPricer:
+    def _deserialize_pricer(self, row: Dict[str, Any]) -> QLUSTFutureOptionPricer:
         quote_ts = row.get("quote_timestamp")
         if isinstance(quote_ts, pd.Timestamp):
             quote_ts = quote_ts.to_pydatetime()
@@ -1180,7 +1020,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         if not isinstance(expiry, datetime.date):
             raise ValueError(f"Invalid cached expiry_date: {expiry!r}")
 
-        return QLSTIRFutureOptionPricer(
+        fv01_raw = row.get("fv01")
+        fv01 = float(fv01_raw) if fv01_raw is not None else float("nan")
+
+        return QLUSTFutureOptionPricer(
             symbol=str(row["symbol"]),
             right=str(row["right"]),
             underlying_symbol=str(row["underlying_symbol"]),
@@ -1196,16 +1039,17 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             theta=float(row["theta"]),
             forward=float(row["forward"]),
             discount=float(row["discount"]),
+            fv01=fv01,
             meta_data=row.get("meta_data") or {},
         )
 
-    def _serialize_get_data_result(self, endpoint: str, result: Dict[str, List[QLSTIRFutureOptionPricer]]) -> Dict[str, Any]:
+    def _serialize_get_data_result(self, endpoint: str, result: Dict[str, List[QLUSTFutureOptionPricer]]) -> Dict[str, Any]:
         payload: Dict[str, Any] = {}
         for k, plist in result.items():
             payload[str(k)] = [self._serialize_pricer(p) for p in plist]
         return {"schema": 1, "endpoint": endpoint, "result": payload}
 
-    def _deserialize_get_data_result(self, cached: Dict[str, Any]) -> Optional[Dict[str, List[QLSTIRFutureOptionPricer]]]:
+    def _deserialize_get_data_result(self, cached: Dict[str, Any]) -> Optional[Dict[str, List[QLUSTFutureOptionPricer]]]:
         if not isinstance(cached, dict):
             return None
         if int(cached.get("schema", 0)) != 1:
@@ -1213,7 +1057,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         result_raw = cached.get("result")
         if not isinstance(result_raw, dict):
             return None
-        out: Dict[str, List[QLSTIRFutureOptionPricer]] = {}
+        out: Dict[str, List[QLUSTFutureOptionPricer]] = {}
         try:
             for k, plist in result_raw.items():
                 if not isinstance(plist, list):
@@ -1226,11 +1070,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     def _assert_endpoint_allowed(self, endpoint: str) -> None:
         src = self.source.upper()
         ep = endpoint.strip().lower()
-        if src == "STIRFO_DUAL-QL":
-            return
-        if src == "BARCHART_STIRFO-QL" and ep in {"option_snapshot", "option_timeseries"}:
-            return
-        if src == "QUIKSTRIKE_STIRFO-QL" and ep in {"qs_atm_term_structure", "qs_timeseries"}:
+        if src in {"USTFO_DUAL-QL", "BARCHART_USTFO-QL"} and ep in {"option_snapshot", "option_timeseries"}:
             return
         raise NotImplementedError(f"Endpoint '{endpoint}' is not available for source '{self.source}'")
 
@@ -1242,13 +1082,13 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         return min(target, int(self._barchart_session_token_pool_size_cap))
 
     def _get_cached_barchart_proxy(self) -> Tuple[Optional[dict], Optional[str]]:
-        S = STIRFutureOptionMDP._BARCHART_STATE
+        S = USTFutureOptionMDP._BARCHART_STATE
         if time.time() - float(S["chosen_at"]) < float(S["ttl"]):
             return S["proxies"], S["host"]
         return None, None
 
     def _choose_barchart_proxy(self) -> Tuple[Optional[dict], Optional[str]]:
-        S = STIRFutureOptionMDP._BARCHART_STATE
+        S = USTFutureOptionMDP._BARCHART_STATE
         cycler = S["cycler"]
         for _ in range(len(self._barchart_proxy_hosts)):
             host = next(cycler)
@@ -1296,7 +1136,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 return self._barchart_fetcher
 
         # Rotating sticky proxy path (same pattern as STIRFutureMDP).
-        S = STIRFutureOptionMDP._BARCHART_STATE
+        S = USTFutureOptionMDP._BARCHART_STATE
         with S["lock"]:
             def _build_fetcher(fetcher_proxies: Optional[dict], fetcher_host: Optional[str]) -> BarchartFetcher:
                 scope_host = fetcher_host if fetcher_host is not None else "direct"
@@ -1336,7 +1176,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             return bcf
 
     def _get_curve_builder(self) -> BARCHART_STIRF_CURVE:
-        S = STIRFutureOptionMDP._CURVE_STATE
+        S = USTFutureOptionMDP._CURVE_STATE
         with S["lock"]:
             if S["builder"] is None:
                 S["builder"] = BARCHART_STIRF_CURVE()
@@ -1345,6 +1185,85 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     def _curve_timestamp_for_request(self, ts_like: DateLike) -> datetime.datetime:
         d = _as_date(ts_like)
         return _NY_TZ.localize(datetime.datetime.combine(d, datetime.time(hour=17, minute=0)))
+
+    def _compute_fv01(
+        self,
+        underlying_contract: str,
+        forward: float,
+        as_of: datetime.date,
+    ) -> float:
+        """Compute the forward DV01 per bp of the underlying futures contract.
+
+        FV01 = DV01_CTD / CF_CTD, i.e. the change in futures price for a 1 bp
+        parallel yield shift on the cheapest-to-deliver bond.
+        """
+        internal_underlying = _to_internal_ustf_contract(underlying_contract, as_of=as_of)
+        memo_key = f"{internal_underlying}|{as_of.isoformat()}"
+        cached = self._fv01_memo.get(memo_key)
+        if cached is not None:
+            return cached
+
+        fallback_fv01 = _fv01_fallback_for_contract(internal_underlying)
+        fv01 = fallback_fv01
+
+        try:
+            ust_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
+            with ust_mdp:
+                basket_data = ust_mdp.get_delivery_basket(
+                    as_of=as_of,
+                    symbol=internal_underlying,
+                )
+
+            basket_pricers = basket_data["basket_pricers"]
+            cfs = basket_data["conversion_factors"]
+            delivery_raw = basket_data["delivery"]
+            if isinstance(delivery_raw, tuple) and len(delivery_raw) == 2:
+                d0, d1 = delivery_raw
+                if isinstance(d0, datetime.date) and not isinstance(d0, datetime.datetime):
+                    d0 = datetime.datetime.combine(d0, datetime.time())
+                if isinstance(d1, datetime.date) and not isinstance(d1, datetime.datetime):
+                    d1 = datetime.datetime.combine(d1, datetime.time())
+                delivery = (d0, d1)
+            else:
+                delivery = delivery_raw
+
+            bf = rl.BondFuture(
+                delivery=delivery,
+                basket=[pr.build_pricable() for pr in basket_pricers],
+                coupon=basket_data["contract_coupon"],
+                currency="usd",
+                calc_mode=basket_data["calc_mode"],
+            )
+            prices = [pr.clean_price() for pr in basket_pricers]
+            settlement = basket_pricers[0].settlement_date()
+            if isinstance(settlement, datetime.date) and not isinstance(settlement, datetime.datetime):
+                settlement = datetime.datetime.combine(settlement, datetime.time())
+            ctd_idx = int(
+                bf.ctd_index(future_price=forward, prices=prices, settlement=settlement)
+            )
+            ctd = basket_pricers[ctd_idx]
+            cf_ctd = float(cfs[ctd_idx])
+            if not math.isfinite(cf_ctd) or cf_ctd <= 0.0:
+                raise ValueError(f"Invalid CTD conversion factor for {internal_underlying}: {cf_ctd}")
+
+            moddur = float(ctd.mod_duration())
+            dirty_px = _to_float(ctd.dirty_price())
+            if dirty_px is None or dirty_px <= 0.0:
+                dirty_px = _to_float(ctd.clean_price())
+
+            if dirty_px is None or not math.isfinite(moddur) or not math.isfinite(dirty_px):
+                raise ValueError(
+                    f"Invalid CTD risk inputs for {internal_underlying}: moddur={moddur}, dirty_px={dirty_px}"
+                )
+
+            fv01_calc = moddur * dirty_px / 10000.0 / cf_ctd
+            if math.isfinite(fv01_calc) and fv01_calc > 0.0:
+                fv01 = float(fv01_calc)
+        except Exception:
+            fv01 = fallback_fv01
+
+        self._fv01_memo[memo_key] = fv01
+        return fv01
 
     def _discount_factor(
         self,
@@ -1390,24 +1309,6 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             return df, curve_err
         except Exception as exc:
             return 1.0, str(exc)
-
-    def _quikstrike_credentials(self, *, force_refresh: bool = False) -> Tuple[int, str]:
-        S = STIRFutureOptionMDP._QS_STATE
-        with S["lock"]:
-            if force_refresh or S["insid"] is None or S["qsid"] is None:
-                insid, qsid = walk_quikstrike_auth_flow()
-                S["insid"] = int(insid)
-                S["qsid"] = str(qsid)
-            return int(S["insid"]), str(S["qsid"])
-
-    def _quikstrike_client(self, *, force_refresh: bool = False) -> QuikStrikeFetcher:
-        insid, qsid = self._quikstrike_credentials(force_refresh=force_refresh)
-        return QuikStrikeFetcher(
-            cme_insid=insid,
-            cme_qsid=qsid,
-            run_selenium=False,
-            log_level=logging.ERROR,
-        )
 
     def _fetch_barchart_eod_series(
         self,
@@ -1490,9 +1391,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_kwargs: Optional[Dict[str, Any]],
         use_ql_calculator: bool,
         source: str,
-    ) -> Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]]:
+    ) -> Dict[str, Dict[datetime.date, QLUSTFutureOptionPricer]]:
         curve_memo: Dict[Tuple[str, datetime.date], Tuple[Any, Optional[str]]] = {}
-        out: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]] = defaultdict(dict)
+        out: Dict[str, Dict[datetime.date, QLUSTFutureOptionPricer]] = defaultdict(dict)
 
         for leg_symbol in leg_symbols:
             opt_bc = _canonical_to_barchart_option(leg_symbol)
@@ -1546,7 +1447,8 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_kwargs: Optional[Dict[str, Any]],
         use_ql_calculator: bool,
         source: str,
-    ) -> Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]]:
+        force_refresh: bool = False,
+    ) -> Dict[str, Dict[datetime.date, QLUSTFutureOptionPricer]]:
         window_start, window_end = self._historical_prefetch_window(start=request_start, end=request_end)
         key_symbols = list(cache_symbols) if cache_symbols is not None else list(leg_symbols)
         cache_key = self._build_barchart_pricer_window_cache_key(
@@ -1559,10 +1461,11 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             use_ql_calculator=use_ql_calculator,
         )
 
-        cached = self._threadsafe_cache_get(cache_key)
-        hit = self._deserialize_pricer_window(cached)
-        if hit is not None:
-            return hit
+        if not force_refresh:
+            cached = self._threadsafe_cache_get(cache_key)
+            hit = self._deserialize_pricer_window(cached)
+            if hit is not None:
+                return hit
 
         option_symbols_bc = sorted({_canonical_to_barchart_option(sym) for sym in leg_symbols})
         contracts = sorted({_contract_to_barchart_contract(_canonical_underlying(sym)) for sym in leg_symbols})
@@ -1590,9 +1493,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
     @staticmethod
     def _asof_pricer_for_date(
-        by_day: Dict[datetime.date, QLSTIRFutureOptionPricer],
+        by_day: Dict[datetime.date, QLUSTFutureOptionPricer],
         target_date: datetime.date,
-    ) -> Optional[QLSTIRFutureOptionPricer]:
+    ) -> Optional[QLUSTFutureOptionPricer]:
         if not by_day:
             return None
         keys = [d for d in by_day.keys() if d <= target_date]
@@ -1613,14 +1516,14 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         price_mode: str,
         source: str,
         use_ql_calculator: bool = False,
-    ) -> Optional[QLSTIRFutureOptionPricer]:
+    ) -> Optional[QLUSTFutureOptionPricer]:
         right = _right_from_symbol(canonical_symbol)
         if right not in {"C", "P"}:
             return None
 
         strike = _strike_from_symbol(canonical_symbol)
         contract_code = _contract_code_from_symbol(canonical_symbol)
-        expiry = _contract_expiry_date(contract_code)
+        expiry = option_expiry_date(_canonical_contract(canonical_symbol))
         tte = _time_to_expiry(valuation_ts.astimezone(_NY_TZ).date(), expiry)
 
         market_price = _extract_row_price(row, price_mode=price_mode)
@@ -1677,10 +1580,17 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             "vendor_row": dict(row),
         }
 
-        return QLSTIRFutureOptionPricer(
+        underlying = _canonical_underlying(canonical_symbol)
+        fv01 = self._compute_fv01(
+            underlying, forward, valuation_ts.astimezone(_NY_TZ).date()
+        )
+        metadata["fv01"] = float(fv01)
+        metadata["iv_normal_bps"] = float(iv_normal / fv01) if (math.isfinite(iv_normal) and fv01 > 0.0) else float("nan")
+
+        return QLUSTFutureOptionPricer(
             symbol=canonical_symbol,
             right=right,
-            underlying_symbol=_canonical_underlying(canonical_symbol),
+            underlying_symbol=underlying,
             strike=strike,
             quote_timestamp=valuation_ts,
             expiry_date=expiry,
@@ -1693,6 +1603,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             theta=float(theta) if theta == theta else float("nan"),
             forward=float(forward),
             discount=float(discount),
+            fv01=float(fv01),
             meta_data=metadata,
         )
 
@@ -1700,9 +1611,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         self,
         *,
         straddle_symbol: str,
-        call_pricer: QLSTIRFutureOptionPricer,
-        put_pricer: QLSTIRFutureOptionPricer,
-    ) -> QLSTIRFutureOptionPricer:
+        call_pricer: QLUSTFutureOptionPricer,
+        put_pricer: QLUSTFutureOptionPricer,
+    ) -> QLUSTFutureOptionPricer:
         total_vega = 0.0
         weighted_iv = 0.0
         for pr in (call_pricer, put_pricer):
@@ -1727,7 +1638,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             "vendor_legs": [call_pricer.meta().get("vendor_row"), put_pricer.meta().get("vendor_row")],
         }
 
-        return QLSTIRFutureOptionPricer(
+        # Propagate fv01 from the legs (same underlying, so identical).
+        fv01 = call_pricer.fv01() if math.isfinite(call_pricer.fv01()) else put_pricer.fv01()
+
+        return QLUSTFutureOptionPricer(
             symbol=straddle_symbol,
             right="S",
             underlying_symbol=call_pricer.underlying_symbol(),
@@ -1743,6 +1657,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             theta=call_pricer.theta() + put_pricer.theta(),
             forward=call_pricer.forward(),
             discount=min(call_pricer.discount(), put_pricer.discount()),
+            fv01=float(fv01),
             meta_data=metadata,
         )
 
@@ -1750,6 +1665,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         self,
         *,
         chain: Dict[str, pd.DataFrame],
+        contract: str,
         strike: float,
         right: str,
     ) -> Optional[Dict[str, Any]]:
@@ -1766,11 +1682,22 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 return dict(df_work.loc[mask].iloc[0].to_dict())
 
         if "symbol" in df_work.columns:
-            target = int(round(strike * 100))
-            pat = re.compile(rf"\|{target}(C|P)$", re.IGNORECASE)
-            rows = df_work[df_work["symbol"].astype(str).str.contains(pat, regex=True, na=False)]
-            if not rows.empty:
-                return dict(rows.iloc[0].to_dict())
+            right_tok = str(right).upper()
+            for _, row in df_work.iterrows():
+                raw_symbol = str(row.get("symbol", "")).strip().upper().replace("/", "")
+                if "|" not in raw_symbol or not raw_symbol.endswith(right_tok):
+                    continue
+                try:
+                    opt_contract, tail = raw_symbol.split("|", 1)
+                    strike_token = tail[:-1]
+                    norm_contract = normalize_option_contract(opt_contract)
+                    if norm_contract != normalize_option_contract(contract):
+                        continue
+                    decoded = decode_strike_token(contract_or_root=norm_contract, strike_token=strike_token)
+                    if abs(float(decoded) - float(strike)) < 1e-9:
+                        return dict(row.to_dict())
+                except Exception:
+                    continue
 
         return None
 
@@ -1875,7 +1802,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         self,
         *,
         candidate_symbols: List[str],
-        pricers_window: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
+        pricers_window: Dict[str, Dict[datetime.date, QLUSTFutureOptionPricer]],
         target_date: datetime.date,
         target_delta: float,
         right: str,
@@ -1934,7 +1861,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 strike = self._resolve_live_atm_strike(chain=chain, forward=forward, right=right)
                 if strike is None:
                     raise ValueError(f"Could not resolve ATM alias {raw!r}: no valid strikes in live chain.")
-                resolved[raw] = f"{contract}|{_format_strike4(strike)}{right}"
+                resolved[raw] = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
                 continue
 
             if selector == "delta":
@@ -1946,7 +1873,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 strike = self._resolve_live_delta_strike(chain=chain, target_delta=delta, right=right)
                 if strike is None:
                     raise ValueError(f"Could not resolve delta alias {raw!r}: no valid delta/strike rows.")
-                resolved[raw] = f"{contract}|{_format_strike4(strike)}{right}"
+                resolved[raw] = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
                 continue
 
             raise ValueError(f"Unsupported alias selector {selector!r} for symbol {raw!r}")
@@ -1996,8 +1923,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             if forward is None or forward <= 0.0:
                 raise ValueError(f"Could not resolve ATM alias {raw!r}: invalid underlying forward.")
 
-            atm_strike = _atm_strike_from_forward(float(forward), step=atm_strike_step)
-            resolved[raw] = f"{contract}|{_format_strike4(atm_strike)}{right}"
+            step = _strike_step_for_contract(contract) if atm_strike_step <= 0.0 else atm_strike_step
+            atm_strike = _atm_strike_from_forward(float(forward), step=step)
+            resolved[raw] = f"{contract}|{_format_strike4(atm_strike, contract=contract)}{right}"
 
         return resolved
 
@@ -2041,15 +1969,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 raise ValueError(f"Missing explicit contract in spec: {spec}")
             return [str(contract)]
 
-        if selector != "cm":
-            raise ValueError(f"Unsupported contract selector for historical window fetch: {selector}")
-
-        # Resolve CM aliases across the full requested window so one fetch can price all dates.
-        days = pd.bdate_range(window_start, window_end).date.tolist()
-        if not days:
-            days = [window_start]
-        resolved = [_resolve_contract_from_spec(spec, as_of=d) for d in days]
-        return self._dedupe_preserve_order(resolved)
+        raise ValueError(f"Unsupported contract selector for historical window fetch: {selector}")
 
     def _historical_atm_symbols_for_contract_window(
         self,
@@ -2076,12 +1996,13 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             forward = _extract_row_price(row.to_dict(), price_mode=price_mode)
             if forward is None or forward <= 0.0:
                 continue
-            atm_strike = _atm_strike_from_forward(float(forward), step=atm_strike_step)
-            out.append(f"{contract}|{_format_strike4(atm_strike)}{right}")
+            step = _strike_step_for_contract(contract) if atm_strike_step <= 0.0 else atm_strike_step
+            atm_strike = _atm_strike_from_forward(float(forward), step=step)
+            out.append(f"{contract}|{_format_strike4(atm_strike, contract=contract)}{right}")
 
         return self._dedupe_preserve_order(out)
 
-    def _option_snapshot(self, request: Dict[str, Any]) -> Dict[str, List[QLSTIRFutureOptionPricer]]:
+    def _option_snapshot(self, request: Dict[str, Any]) -> Dict[str, List[QLUSTFutureOptionPricer]]:
         symbols = _clean_symbols(request.get("symbols") or request.get("tickers") or [])
         if not symbols:
             raise ValueError("option_snapshot requires symbols")
@@ -2091,18 +2012,19 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         price_mode = str(request.get("price_mode", "mid_then_fallback"))
         use_ql_calculator = bool(request.get("use_ql_calculator", False))
         window_minutes = int(request.get("window_minutes", 2))
-        atm_strike_step = float(request.get("atm_strike_step", 0.25))
+        atm_strike_step = float(request.get("atm_strike_step", 0.0))
         bulk_timeseries = bool(request.get("bulk_timeseries", False))
+        force_refresh = bool(request.get("force_refresh", False))
         curve_name = str(request.get("curve_name", self._curve_name_default))
         curve_kwargs = dict(request.get("curve_kwargs") or {})
 
         parsed_requested_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         for raw in symbols:
-            parsed_requested_specs[raw] = _parse_option_request_symbol(raw)
+            parsed_requested_specs[raw] = _parse_option_request_symbol(raw, as_of=_as_date(ts))
         requested_specs = _resolve_option_contract_aliases_for_date(parsed_requested_specs, as_of=_as_date(ts))
 
         requested: "OrderedDict[str, str]"
-        cp_pricers: Dict[str, QLSTIRFutureOptionPricer] = {}
+        cp_pricers: Dict[str, QLUSTFutureOptionPricer] = {}
 
         if str(ts).strip().lower() == "live":
             ts_dt = _as_datetime("live")
@@ -2144,9 +2066,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 chain = chains.get(option_bcontract)
                 if chain is None:
                     continue
+                contract = _canonical_contract(leg_symbol)
                 strike = _strike_from_symbol(leg_symbol)
                 right = _right_from_symbol(leg_symbol)
-                row = self._extract_live_option_row(chain=chain, strike=strike, right=right)
+                row = self._extract_live_option_row(chain=chain, contract=contract, strike=strike, right=right)
                 if row is None:
                     continue
                 forward = _to_float(forward_map.get(underlying_bcontract))
@@ -2332,7 +2255,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                                     half_width=delta_candidate_half_width,
                                 )
                                 candidate_symbols.extend(
-                                    [f"{contract}|{_format_strike4(strike)}{right}" for strike in strike_subset]
+                                    [f"{contract}|{_format_strike4(strike, contract=contract)}{right}" for strike in strike_subset]
                                 )
                         else:
                             pos = _asof_index_position(fut_df.index, target_ts)
@@ -2351,7 +2274,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                                 half_width=delta_candidate_half_width,
                             )
                             candidate_symbols.extend(
-                                [f"{contract}|{_format_strike4(strike)}{right}" for strike in strike_subset]
+                                [f"{contract}|{_format_strike4(strike, contract=contract)}{right}" for strike in strike_subset]
                             )
 
                     candidate_symbols = self._dedupe_preserve_order(candidate_symbols)
@@ -2423,6 +2346,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     curve_kwargs=curve_kwargs,
                     use_ql_calculator=use_ql_calculator,
                     source="BARCHART_EOD_WINDOW",
+                    force_refresh=force_refresh,
                 )
             else:
                 pricers_window = {}
@@ -2456,7 +2380,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     if pr is not None:
                         cp_pricers[leg_symbol] = pr
 
-        result: Dict[str, List[QLSTIRFutureOptionPricer]] = {}
+        result: Dict[str, List[QLUSTFutureOptionPricer]] = {}
         for raw, norm in requested.items():
             if norm.endswith("S"):
                 c_key = f"{norm[:-1]}C"
@@ -2474,7 +2398,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         return result
 
-    def _option_timeseries(self, request: Dict[str, Any]) -> Dict[str, List[QLSTIRFutureOptionPricer]]:
+    def _option_timeseries(self, request: Dict[str, Any]) -> Dict[str, List[QLUSTFutureOptionPricer]]:
         symbols = _clean_symbols(request.get("symbols") or request.get("tickers") or [])
         if not symbols:
             raise ValueError("option_timeseries requires symbols")
@@ -2489,12 +2413,13 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         show_tqdm = bool(request.get("show_tqdm", False))
         price_mode = str(request.get("price_mode", "mid_then_fallback"))
         use_ql_calculator = bool(request.get("use_ql_calculator", False))
+        force_refresh = bool(request.get("force_refresh", False))
         curve_name = str(request.get("curve_name", self._curve_name_default))
         curve_kwargs = dict(request.get("curve_kwargs") or {})
 
         requested_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         for raw in symbols:
-            parsed = _parse_option_request_symbol(raw)
+            parsed = _parse_option_request_symbol(raw, as_of=start_date)
             if parsed["selector"] != "strike":
                 raise ValueError(
                     "option_timeseries currently supports explicit strike symbols only; "
@@ -2520,9 +2445,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             curve_kwargs=curve_kwargs,
             use_ql_calculator=use_ql_calculator,
             source="BARCHART_EOD_WINDOW",
+            force_refresh=force_refresh,
         )
 
-        result: Dict[str, List[QLSTIRFutureOptionPricer]] = {}
+        result: Dict[str, List[QLUSTFutureOptionPricer]] = {}
         for raw, norm in requested.items():
             if norm.endswith("S"):
                 c_key = f"{norm[:-1]}C"
@@ -2555,69 +2481,6 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         return result
 
-    def _qs_atm_term_structure(self, request: Dict[str, Any]) -> Dict[str, List[Any]]:
-        force_refresh = bool(request.get("force_refresh", False))
-        for attempt in (0, 1):
-            try:
-                qsf = self._quikstrike_client(force_refresh=force_refresh or attempt == 1)
-                out = qsf.fetch_latest_atm_term_structures([QuikVolProductID.SR3])
-                return {"qs_atm_term_structure": [out]}
-            except Exception:
-                if attempt == 1:
-                    raise
-        raise RuntimeError("QuikStrike ATM term structure fetch failed")
-
-    def _qs_timeseries(self, request: Dict[str, Any]) -> Dict[str, List[Any]]:
-        if "start" not in request or "end" not in request:
-            raise ValueError("qs_timeseries requires start and end")
-        if "queries" not in request:
-            raise ValueError("qs_timeseries requires queries")
-        force_refresh = bool(request.get("force_refresh", False))
-
-        start_dt = _as_datetime(request["start"]).replace(tzinfo=None)
-        end_dt = _as_datetime(request["end"]).replace(tzinfo=None)
-
-        qlist: List[QuikVolQuery] = []
-        for q in request.get("queries", []):
-            if not isinstance(q, dict):
-                raise ValueError("qs_timeseries queries must be dictionaries")
-            raw_symbol = str(q.get("globex_symbol", "")).strip().upper()
-            m = re.fullmatch(r"^(SR3|SFR|SQ)([FGHJKMNQUVXZ]\d{2})$", raw_symbol)
-            if not m:
-                raise ValueError(f"qs_timeseries supports SR3-only symbols; got {raw_symbol!r}")
-            globex_symbol = f"SR3{m.group(2)}"
-            vt_name = str(q.get("qv_value_type", "")).strip()
-            if not vt_name:
-                raise ValueError("qv_value_type is required for each qs_timeseries query")
-            try:
-                vt = QuikVolValueType[vt_name]
-            except KeyError as exc:
-                raise ValueError(f"Unknown QuikVolValueType: {vt_name}") from exc
-
-            qlist.append(
-                QuikVolQuery(
-                    globex_symbol=globex_symbol,
-                    qv_value_type=vt,
-                    delta=int(q.get("delta", 0) or 0),
-                    strike=float(q.get("strike", 0.0) or 0.0),
-                    option_type=q.get("option_type", "Straddle"),
-                )
-            )
-
-        for attempt in (0, 1):
-            try:
-                qsf = self._quikstrike_client(force_refresh=force_refresh or attempt == 1)
-                df = qsf.fetch_quikvol_timeseries(
-                    start_date=start_dt,
-                    end_date=end_dt,
-                    queries=qlist,
-                )
-                return {"qs_timeseries": [df]}
-            except Exception:
-                if attempt == 1:
-                    raise
-        raise RuntimeError("QuikStrike timeseries fetch failed")
-
     def get_pricer(self, request: Dict[str, Any]):
         return self.get_data(request)
 
@@ -2640,10 +2503,6 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 out = self._option_snapshot(request)
             elif endpoint == "option_timeseries":
                 out = self._option_timeseries(request)
-            elif endpoint == "qs_atm_term_structure":
-                out = self._qs_atm_term_structure(request)
-            elif endpoint == "qs_timeseries":
-                out = self._qs_timeseries(request)
             else:
                 raise NotImplementedError(f"Unsupported endpoint: {endpoint}")
 
@@ -2681,7 +2540,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 for ts_like, req in jobs:
                     results.append(_process_one(ts_like, req))
             else:
-                with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="stirfo-mdp") as pool:
+                with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="ustfo-mdp") as pool:
                     futs = {pool.submit(_process_one, ts_like, req): ts_like for ts_like, req in jobs}
                     for fut in as_completed(futs):
                         results.append(fut.result())
@@ -2725,3 +2584,4 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
     async def __aexit__(self, exc_type, exc, tb):
         self.__close__(commit=(exc_type is None))
+

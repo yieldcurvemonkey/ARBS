@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -59,14 +61,29 @@ def _exercise_style_short(code: object) -> Optional[str]:
     return {"EURO": "EURO", "BERM": "BERM", "AMER": "AMER"}.get(c, c)
 
 
+def _exercise_style_from_fisn(fisn: object) -> Optional[str]:
+    if fisn is None or pd.isna(fisn):
+        return None
+    text = str(fisn).strip().upper()
+    if "BRM" in text:
+        return "BERM"
+    if "EPN" in text:
+        return "EURO"
+    if "AMR" in text:
+        return "AMER"
+    return None
+
+
 def _settlement_short(x: object) -> Optional[str]:
     if x is None or pd.isna(x):
         return None
     s = str(x).strip().upper()
     if s in {"PHYS", "PHYSICAL"}:
         return "PHYS"
-    if s == "CASH":
+    if s == "CASH" or "CASH" in s or "NON-DELIVERABLE" in s or "NON DELIVERABLE" in s:
         return "CASH"
+    if "DELIVERABLE" in s:
+        return "PHYS"
     return s
 
 
@@ -81,6 +98,110 @@ def _title_ccy(x: object) -> Optional[str]:
     if x is None or pd.isna(x):
         return None
     return str(x).strip().upper()
+
+
+def _first_non_empty(*values: object) -> object:
+    for value in values:
+        if value is None or pd.isna(value):
+            continue
+        text = str(value).strip()
+        if not text or text.lower() in {"nan", "nat", "none"}:
+            continue
+        return value
+    return None
+
+
+def _parse_multiplier(value: object) -> Optional[float]:
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return float(str(value).strip())
+    except Exception:
+        return None
+
+
+def _bermudan_exercise_freq(period: object, multiplier: object) -> str:
+    if period is None or pd.isna(period):
+        return "UNK"
+    p = str(period).strip().upper()
+    if not p:
+        return "UNK"
+
+    mult = _parse_multiplier(multiplier)
+    if mult is None or mult <= 0:
+        mult = 1.0
+
+    months: Optional[float] = None
+    if p.startswith("MNTH") or p.startswith("MONTH"):
+        months = mult
+    elif p.startswith("QTR"):
+        months = 3.0 * mult
+    elif p.startswith("SEMI"):
+        months = 6.0 * mult
+    elif p.startswith("YEAR") or p.startswith("ANNU"):
+        months = 12.0 * mult
+
+    if months is None:
+        return "UNK"
+
+    rounded = int(round(months))
+    if abs(months - rounded) > 1e-6:
+        return "UNK"
+
+    return {
+        1: "MTHLY",
+        3: "QTRLY",
+        6: "SANN",
+        12: "ANN",
+    }.get(rounded, "UNK")
+
+
+def _direction_from_fisn(fisn: object) -> Optional[str]:
+    if fisn is None or pd.isna(fisn):
+        return None
+    text = str(fisn).strip().upper()
+    if not text:
+        return None
+    if re.search(r"\bCALL\b", text):
+        return "PAYER"
+    if re.search(r"\bPUT\b", text):
+        return "RECEIVER"
+    if re.search(r"[/ ]O\s+P\b", text):
+        return "RECEIVER"
+    return None
+
+
+def _format_absolute_strike_percent(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "UNK"
+    raw = str(value).replace(",", "").strip()
+    if not raw:
+        return "UNK"
+    try:
+        dec = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return "UNK"
+
+    pct = dec * Decimal("100")
+    text = format(pct, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if "." not in text:
+        text = f"{text}.00"
+    else:
+        frac_len = len(text.split(".", 1)[1])
+        if frac_len < 2:
+            text = text + ("0" * (2 - frac_len))
+    return f"{text}%"
+
+
+def _rounded_tenor_label(start: pd.Timestamp, end: pd.Timestamp, conventions) -> str:
+    if pd.isna(start) or pd.isna(end):
+        return "UNK"
+    if end <= start:
+        return "0M"
+    years = calculate_tenor_years(start, end, conventions=conventions)
+    return forward_to_label(years, effective_date=None, is_swaptions=True)
 
 
 def _vanilla_short(row: pd.Series) -> str:
@@ -261,14 +382,27 @@ def make_swaption_desc_func(
     trade_eff_col: str = "Effective Date",
     trade_exp_col: str = "Expiration Date",
     trade_mat_col: str = "Maturity date of the underlier",
+    trade_first_ex_col: str = "First exercise date",
+    trade_fisn_col: str = "UPI FISN",
+    trade_fixed_rate_leg2_col: str = "Fixed rate-Leg 2",
+    trade_fixed_rate_leg1_col: str = "Fixed rate-Leg 1",
+    trade_strike_col: str = "Strike Price",
+    trade_reset_period_leg1_col: str = "Floating rate reset frequency period-leg 1",
+    trade_reset_period_leg2_col: str = "Floating rate reset frequency period-leg 2",
+    trade_reset_mult_leg1_col: str = "Floating rate reset frequency period multiplier-leg 1",
+    trade_reset_mult_leg2_col: str = "Floating rate reset frequency period multiplier-leg 2",
 ):
     """
     Returns a function that can be applied row-wise to a trades df to produce a compact description
-    including tenor (1Y10Y or 1Y1Y1Y for midcurves).
+    with swaption tenor context.
 
     IMPORTANT: This function is meant for:
       df.apply(desc_fn, axis=1)
     because tenor uses trade dates.
+
+    Label formats:
+      - European/American: keep existing compact format (e.g. 1Yx10Y ...)
+      - Bermudan: [NC]nc[Window]x[Tail] BERM [Exercise_Freq] [Settlement] [Direction] [Absolute_Strike]
     """
 
     ref = _build_upi_df(base_dir)
@@ -303,8 +437,13 @@ def make_swaption_desc_func(
         under = _underlying_compact(r)
 
         # Role/exercise/settle/style from reference (CSV-only)
-        role = _option_role_short(r.get("swaption_Attributes_OptionType")) or "UNKNOWN"
-        ex = _exercise_style_short(r.get("swaption_Attributes_OptionExerciseStyle")) or "UNK"
+        fisn = trade_row.get(trade_fisn_col)
+        role = _direction_from_fisn(fisn) or _option_role_short(r.get("swaption_Attributes_OptionType")) or "UNKNOWN"
+        ex = (
+            _exercise_style_from_fisn(fisn)
+            or _exercise_style_short(r.get("swaption_Attributes_OptionExerciseStyle"))
+            or "UNK"
+        )
         style = _vanilla_short(r)  # currently "VANILLA"
         settle = _settlement_short(r.get("swaption_Derived_CFIDeliveryType")) or "UNK"
 
@@ -315,6 +454,7 @@ def make_swaption_desc_func(
         eff = pd.to_datetime(trade_row.get(trade_eff_col), errors="coerce")
         exp = pd.to_datetime(trade_row.get(trade_exp_col), errors="coerce")
         mat = pd.to_datetime(trade_row.get(trade_mat_col), errors="coerce")
+        first_ex = pd.to_datetime(trade_row.get(trade_first_ex_col), errors="coerce")
 
         conventions = USD_CONVENTIONS
         if ccy:
@@ -323,11 +463,36 @@ def make_swaption_desc_func(
             except ValueError:
                 conventions = USD_CONVENTIONS
 
+        is_bermudan = ex == "BERM"
+        if is_bermudan:
+            nc_label = _rounded_tenor_label(eff, first_ex, conventions)
+            window_label = _rounded_tenor_label(first_ex, exp, conventions)
+            tail_label = _rounded_tenor_label(exp, mat, conventions)
+            tenor = f"{nc_label}nc{window_label}x{tail_label}"
+
+            period = _first_non_empty(
+                trade_row.get(trade_reset_period_leg1_col),
+                trade_row.get(trade_reset_period_leg2_col),
+            )
+            mult = _first_non_empty(
+                trade_row.get(trade_reset_mult_leg1_col),
+                trade_row.get(trade_reset_mult_leg2_col),
+            )
+            freq = _bermudan_exercise_freq(period, mult)
+
+            strike_value = _first_non_empty(
+                trade_row.get(trade_fixed_rate_leg2_col),
+                trade_row.get(trade_fixed_rate_leg1_col),
+                trade_row.get(trade_strike_col),
+            )
+            strike_label = _format_absolute_strike_percent(strike_value)
+
+            return f"{under} {tenor} BERM {freq} {settle} {role} {strike_label}"
+
         tenor = None
         if pd.notna(asof) and pd.notna(eff) and pd.notna(exp) and pd.notna(mat):
 
             expiry_years = calculate_tenor_years(asof, exp, conventions=conventions)
-            tail_years = calculate_tenor_years(exp, mat, conventions=conventions)
             expiry_label = forward_to_label(expiry_years, exp, True)
             tail_label = tenor_from_dates(exp, mat)
 

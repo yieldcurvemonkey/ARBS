@@ -15,6 +15,9 @@ from Query.IRSwaps.IRSwapValue import IRSwapValue
 from Query.STIRFutureOptions.STIRFutureOptionQuery import STIRFutureOptionQuery
 from Query.STIRFutureOptions.STIRFutureOptionValue import STIRFutureOptionValue
 from Query.STIRFutureOptions.backends.quantlib.QLSTIRFutureOptionPricer import QLSTIRFutureOptionPricer
+from Query.USTFutureOptions.USTFutureOptionQuery import USTFutureOptionQuery
+from Query.USTFutureOptions.USTFutureOptionValue import USTFutureOptionValue
+from Query.USTFutureOptions.backends.quantlib.QLUSTFutureOptionPricer import QLUSTFutureOptionPricer
 from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
 from Query.STIRFutures.STIRFutureValue import STIRFutureValue
 from Query.STIRFutures._STIRFutureGenericPricable import _STIRFutureGenericPricable
@@ -23,9 +26,11 @@ from Query.USTFutures.USTFutureQuery import USTFutureQuery
 from Query.USTFutures.USTFutureValue import USTFutureValue
 from Query.USTFutures._USTFutureGenericPricable import _USTFutureGenericPricable
 from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
+from definitions.USTFutureOptions import decode_strike_token
 from TB.STIRFutureOptionsTB import STIRFutureOptionsTB
 from TB.STIRFuturesTB import STIRFuturesTB
 from TB.TimeseriesBuilder import TimeseriesBuilder, _safe_col_name
+from TB.USTFutureOptionsTB import USTFutureOptionsTB
 from TB.USTFuturesTB import USTFuturesTB
 
 
@@ -360,6 +365,30 @@ def _mk_option_pricer(symbol: str, price: float = 0.21) -> QLSTIRFutureOptionPri
     )
 
 
+def _mk_ust_option_pricer(symbol: str, price: float = 1.20) -> QLUSTFutureOptionPricer:
+    right = symbol[-1].upper()
+    contract, tail = symbol.split("|", 1)
+    strike = float(decode_strike_token(contract_or_root=contract, strike_token=tail[:-1]))
+    return QLUSTFutureOptionPricer(
+        symbol=symbol,
+        right=right,
+        underlying_symbol=contract,
+        strike=strike,
+        quote_timestamp=datetime.datetime(2026, 1, 2, 17, 0, tzinfo=datetime.timezone.utc),
+        expiry_date=datetime.date(2026, 12, 16),
+        market_price=price,
+        model_price=price,
+        iv_normal=1.0,
+        delta=0.5 if right == "C" else -0.5,
+        gamma=0.3,
+        vega=0.1,
+        theta=-0.02,
+        forward=112.5,
+        discount=0.99,
+        meta_data={},
+    )
+
+
 class _MockSTIRFutureMDP(MarketDataProvider):
     def __init__(self, price: float = 95.125):
         super().__init__(source="MOCK_STIR")
@@ -388,6 +417,16 @@ class _MockSTIRFutureOptionMDP(MarketDataProvider):
     def get_pricer(self, request: Dict[str, Any]) -> Dict[str, List[QLSTIRFutureOptionPricer]]:
         symbols = request.get("symbols", [])
         return {sym: [_mk_option_pricer(sym, price=self.price)] for sym in symbols}
+
+
+class _MockUSTFutureOptionMDP(MarketDataProvider):
+    def __init__(self, price: float = 1.20):
+        super().__init__(source="MOCK_UST_OPT")
+        self.price = float(price)
+
+    def get_pricer(self, request: Dict[str, Any]) -> Dict[str, List[QLUSTFutureOptionPricer]]:
+        symbols = request.get("symbols", [])
+        return {sym: [_mk_ust_option_pricer(sym, price=self.price)] for sym in symbols}
 
 
 @dataclass(frozen=True)
@@ -420,6 +459,7 @@ def _make_builder() -> Tuple[TimeseriesBuilder, _FakeRouter, _FakeRouter]:
         stirfutures_tb=STIRFuturesTB(_MockSTIRFutureMDP(), show_tqdm=False),
         ustfutures_tb=USTFuturesTB(_MockUSTFutureMDP(), show_tqdm=False),
         stirfutureoptions_tb=STIRFutureOptionsTB(_MockSTIRFutureOptionMDP(), show_tqdm=False),
+        ustfutureoptions_tb=USTFutureOptionsTB(_MockUSTFutureOptionMDP(), show_tqdm=False),
     )
     return tb, irs, frb
 
@@ -445,15 +485,18 @@ def test_stir_ust_option_integration_with_mock_mdps():
     q_stir = STIRFutureQuery(symbol="SR3H26", curve="USD-SOFR-1D", value=STIRFutureValue.PRICE)
     q_ust = USTFutureQuery(symbol="TYH26", value=USTFutureValue.PRICE)
     q_opt = STIRFutureOptionQuery(symbol="SR3H26|9700C", value=STIRFutureOptionValue.PRICE)
+    q_uopt = USTFutureOptionQuery(symbol="ZNM26|1125C", value=USTFutureOptionValue.PRICE)
 
-    out = tb.get_timeseries(start=START, end=END, queries=[q_stir, q_ust, q_opt])
+    out = tb.get_timeseries(start=START, end=END, queries=[q_stir, q_ust, q_opt, q_uopt])
 
     assert q_stir.col_name() in out.columns
     assert q_ust.col_name() in out.columns
     assert q_opt.col_name() in out.columns
+    assert q_uopt.col_name() in out.columns
     assert out[q_stir.col_name()].tolist() == pytest.approx([95.125] * len(out))
     assert out[q_ust.col_name()].tolist() == pytest.approx([110.5] * len(out))
     assert out[q_opt.col_name()].tolist() == pytest.approx([0.21] * len(out))
+    assert out[q_uopt.col_name()].tolist() == pytest.approx([1.20] * len(out))
 
 
 def test_unknown_product_without_router_or_mdp_raises_clear_error():

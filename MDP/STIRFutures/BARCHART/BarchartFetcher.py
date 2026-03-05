@@ -16,6 +16,7 @@ import pytz
 import requests
 import tqdm
 import tqdm.asyncio
+from requests.adapters import HTTPAdapter
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
@@ -75,6 +76,7 @@ class BarchartFetcher(BaseFetcher):
     _BARCHART_MAX_RECORD = 5_000
     _SESSION_TOKEN_TTL_SECONDS = 60
     _SESSION_TOKEN_POOL_SIZE = 3
+    _SESSION_TOKEN_FORCE_REFRESH_COOLDOWN_SECONDS = 5
     _SHARED_SESSION_TOKEN_CACHE: Dict[str, Dict[str, object]] = {}
     _SHARED_SESSION_TOKEN_CACHE_LOCK = threading.RLock()
     _STIR_ROOT_CODE_RE = re.compile(
@@ -114,6 +116,7 @@ class BarchartFetcher(BaseFetcher):
         session_token_ttl_seconds: Optional[int] = None,
         session_token_pool_size: Optional[int] = None,
         session_token_scope: Optional[str] = None,
+        session_token_force_refresh_cooldown_seconds: Optional[int] = None,
     ):
         super().__init__(
             global_timeout=global_timeout,
@@ -125,9 +128,39 @@ class BarchartFetcher(BaseFetcher):
         )
         ttl = self._SESSION_TOKEN_TTL_SECONDS if session_token_ttl_seconds is None else int(session_token_ttl_seconds)
         pool_size = self._SESSION_TOKEN_POOL_SIZE if session_token_pool_size is None else int(session_token_pool_size)
+        force_refresh_cooldown = (
+            self._SESSION_TOKEN_FORCE_REFRESH_COOLDOWN_SECONDS
+            if session_token_force_refresh_cooldown_seconds is None
+            else int(session_token_force_refresh_cooldown_seconds)
+        )
         self._session_token_ttl_seconds = max(1, ttl)
         self._session_token_pool_size = max(1, pool_size)
         self._session_token_scope = session_token_scope
+        self._session_token_force_refresh_cooldown_seconds = max(0, force_refresh_cooldown)
+
+        # Reuse one session for token fetches to avoid creating a new SOCKS pool per call.
+        self._token_session_lock = threading.RLock()
+        self._token_http_session = requests.Session()
+        adapter_pool_size = max(4, self._session_token_pool_size * 2)
+        adapter = HTTPAdapter(pool_connections=adapter_pool_size, pool_maxsize=adapter_pool_size)
+        self._token_http_session.mount("http://", adapter)
+        self._token_http_session.mount("https://", adapter)
+        session_proxies = {k: v for k, v in (self._proxies or {}).items() if v}
+        if session_proxies:
+            self._token_http_session.proxies.update(session_proxies)
+
+    def close(self) -> None:
+        with self._token_session_lock:
+            try:
+                self._token_http_session.close()
+            except Exception:
+                pass
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     @classmethod
     def _normalize_barchart_symbol(cls, symbol: str) -> str:
@@ -149,9 +182,11 @@ class BarchartFetcher(BaseFetcher):
             return ""
         parsed = urlparse(proxy_url)
         scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+        port = str(parsed.port or "")
         username = parsed.username or ""
         password = parsed.password or ""
-        return f"{scheme}|{username}|{password}"
+        return f"{scheme}|{host}|{port}|{username}|{password}"
 
     def _session_cache_key(self) -> str:
         if self._session_token_scope:
@@ -161,9 +196,29 @@ class BarchartFetcher(BaseFetcher):
         proxy_scope = f"{http_scope}|{https_scope}" if (http_scope or https_scope) else "direct"
         return f"default:{proxy_scope}"
 
+    @staticmethod
+    def _normalize_cookie_token(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        token = unquote(str(value)).strip()
+        if len(token) >= 2 and token[0] == token[-1] == '"':
+            token = token[1:-1]
+        return token or None
+
+    @classmethod
+    def _token_cookie_header(cls, token_pair: Tuple[str, str]) -> str:
+        laravel = cls._normalize_cookie_token(token_pair[0]) or ""
+        xsrf = cls._normalize_cookie_token(token_pair[1]) or ""
+        xsrf_cookie = quote(xsrf, safe="")
+        return f"laravel_token={laravel}; XSRF-TOKEN={xsrf_cookie}"
+
     def _apply_session_token(self, token_pair: Tuple[str, str]) -> Tuple[str, str]:
-        self._current_laravel_token, self._current_xsrf_token = token_pair
-        return token_pair
+        laravel = self._normalize_cookie_token(token_pair[0])
+        xsrf = self._normalize_cookie_token(token_pair[1])
+        if not laravel or not xsrf:
+            raise ValueError("Invalid Barchart token pair")
+        self._current_laravel_token, self._current_xsrf_token = laravel, xsrf
+        return laravel, xsrf
 
     @staticmethod
     def _empty_token_slot() -> Dict[str, object]:
@@ -219,18 +274,26 @@ class BarchartFetcher(BaseFetcher):
             tokens = entry["tokens"]  # type: ignore[index]
             slot_count = max(1, len(tokens))
             idx = int(entry.get("rr_index", 0)) % slot_count
-            slot = tokens[idx]
             now = time.time()
+            last_forced_refresh_at = float(entry.get("last_forced_refresh_at", 0.0) or 0.0)
+            force_refresh_cooldown = float(self._session_token_force_refresh_cooldown_seconds)
 
+            # Prevent refresh storms: only one forced refresh per cooldown window.
+            if force_refresh and force_refresh_cooldown > 0.0:
+                if now - last_forced_refresh_at < force_refresh_cooldown:
+                    force_refresh = False
+
+            slot = tokens[idx]
             if force_refresh or not self._token_slot_is_valid(slot=slot, now=now):
                 token_pair = self._get_new_session_token(dummy_symbol=dummy_symbol)
                 slot["token_pair"] = token_pair
                 slot["expires_at"] = now + float(self._session_token_ttl_seconds)
             else:
                 token_pair = slot["token_pair"]
-
             entry["rr_index"] = (idx + 1) % slot_count
             entry["updated_at"] = now
+            if force_refresh:
+                entry["last_forced_refresh_at"] = now
             return self._apply_session_token(token_pair)
 
     def _get_shared_session_token_pool(
@@ -254,11 +317,27 @@ class BarchartFetcher(BaseFetcher):
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+            "Connection": "close",
         }
-        interactive_chart_res = requests.get(interactive_chart_url, headers=interactive_chart_headers, proxies=self._proxies)
+        with self._token_session_lock:
+            self._token_http_session.cookies.clear()
+            interactive_chart_res = self._token_http_session.get(
+                interactive_chart_url,
+                headers=interactive_chart_headers,
+                timeout=self._global_timeout,
+            )
         interactive_chart_res.raise_for_status()
 
-        cookie_pairs = unquote(interactive_chart_res.headers["Set-Cookie"]).split("; ")
+        laravel_token = self._normalize_cookie_token(interactive_chart_res.cookies.get("laravel_token"))
+        xsrf_token = self._normalize_cookie_token(interactive_chart_res.cookies.get("XSRF-TOKEN"))
+        if laravel_token and xsrf_token:
+            return laravel_token, xsrf_token
+
+        set_cookie_header = interactive_chart_res.headers.get("Set-Cookie")
+        if not set_cookie_header:
+            raise ValueError("Barchart Session Token Cookie Parsing Error: missing Set-Cookie header")
+
+        cookie_pairs = unquote(set_cookie_header).split("; ")
         cleaned_cookie_pairs = []
         for pair in cookie_pairs:
             if ", " in pair:
@@ -272,7 +351,7 @@ class BarchartFetcher(BaseFetcher):
         for pair in cleaned_cookie_pairs:
             if "=" in pair:
                 key, value = pair.split("=", 1)
-                cookie_dict[key] = value
+                cookie_dict[key] = self._normalize_cookie_token(value)
 
         if "laravel_token" in cookie_dict and "XSRF-TOKEN" in cookie_dict:
             return cookie_dict["laravel_token"], cookie_dict["XSRF-TOKEN"]
@@ -313,8 +392,10 @@ class BarchartFetcher(BaseFetcher):
         session_token: Optional[Tuple[str, str]] = None,
     ) -> Tuple[str, pd.DataFrame] | Tuple[str, pd.DataFrame, str]:
 
-        # Use passed-in token (from the pool) or fallback to instance tokens.
-        token = session_token if session_token is not None else (self._current_laravel_token, self._current_xsrf_token)
+        if session_token is not None:
+            token = session_token
+        else:
+            token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=False)
 
         # Validate timezone info & consistency
         def _tz_ok(dt: Optional[datetime]) -> bool:
@@ -338,6 +419,7 @@ class BarchartFetcher(BaseFetcher):
         )
 
         def build_headers(token: Tuple[str, str]):
+            token_pair = self._apply_session_token(token)
             return {
                 "dnt": "1",
                 "referer": f"https://www.barchart.com/futures/quotes/{quote(symbol)}/interactive-chart",
@@ -345,12 +427,12 @@ class BarchartFetcher(BaseFetcher):
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"Windows"',
                 "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-                "cookie": f"laravel_token={token[0]}",
-                "x-xsrf-token": token[1],
+                "cookie": self._token_cookie_header(token_pair),
+                "x-xsrf-token": token_pair[1],
             }
 
         # Helper: fetch a single slice with retries, optionally with an end cursor
-        async def _fetch_slice(token: str, end_cursor: Optional[datetime]) -> Optional[pd.DataFrame]:
+        async def _fetch_slice(token: Tuple[str, str], end_cursor: Optional[datetime]) -> Optional[pd.DataFrame]:
             headers = build_headers(token=token)
 
             # build URL with optional &end
@@ -363,19 +445,23 @@ class BarchartFetcher(BaseFetcher):
                 url = base_url  # latest
 
             retries = 0
+            last_status_code: Optional[int] = None
             while retries < max_retries:
                 if retries > 0:
-                    self._logger.debug(f"Attempting to get a new session token for {symbol} after failed attempt.")
+                    # First retry rotates to the next token; later retries can force-refresh.
+                    should_force_refresh = retries >= 2
+                    if last_status_code in (401, 403):
+                        should_force_refresh = True
                     try:
-                        token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=True)
+                        token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=should_force_refresh)
                         headers = build_headers(token=token)
                     except Exception as token_e:
                         self._logger.error(f"Failed to get new token: {token_e}")
-                        pass
 
                 try:
                     resp = await client.get(url, headers=headers)
                     resp.raise_for_status()
+                    last_status_code = None
                     if not resp.content:
                         self._logger.debug(f"Empty content received for symbol {symbol}")
                         return None
@@ -402,10 +488,15 @@ class BarchartFetcher(BaseFetcher):
 
                 except httpx.HTTPStatusError:
                     status = getattr(resp, "status_code", "unknown")
+                    try:
+                        last_status_code = int(status)
+                    except Exception:
+                        last_status_code = None
                     self._logger.debug(f"Barchart Intraday - Bad Status for {symbol}: {status}")
                     if status == 404:
                         return None
                 except Exception as e:
+                    last_status_code = None
                     self._logger.debug(f"Barchart Intraday - Error for {symbol}: {str(e)}")
 
                 retries += 1
@@ -513,7 +604,10 @@ class BarchartFetcher(BaseFetcher):
         uid: Optional[str | int] = None,
         session_token: Optional[Tuple[str, str]] = None,
     ) -> Tuple[str, pd.DataFrame] | Tuple[str, pd.DataFrame, str]:
-        token = session_token if session_token is not None else (self._current_laravel_token, self._current_xsrf_token)
+        if session_token is not None:
+            token = session_token
+        else:
+            token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=False)
 
         try:
             url = (
@@ -523,6 +617,7 @@ class BarchartFetcher(BaseFetcher):
             )
 
             def _build_headers(token_pair: Tuple[str, str]) -> Dict[str, str]:
+                token_pair = self._apply_session_token(token_pair)
                 return {
                     "dnt": "1",
                     "referer": f"https://www.barchart.com/futures/quotes/{quote(symbol)}/interactive-chart",
@@ -530,23 +625,29 @@ class BarchartFetcher(BaseFetcher):
                     "sec-ch-ua-mobile": "?0",
                     "sec-ch-ua-platform": '"Windows"',
                     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-                    "cookie": f"laravel_token={token_pair[0]}",
+                    "cookie": self._token_cookie_header(token_pair),
                     "x-xsrf-token": token_pair[1],
                 }
 
             headers = _build_headers(token)
 
             retries = 0
+            last_status_code: Optional[int] = None
             while retries < max_retries:
                 try:
                     if retries > 0:
+                        # First retry rotates to the next token; later retries can force-refresh.
+                        should_force_refresh = retries >= 2
+                        if last_status_code in (401, 403):
+                            should_force_refresh = True
                         try:
-                            token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=True)
+                            token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=should_force_refresh)
                             headers = _build_headers(token)
                         except Exception as token_e:
                             self._logger.error(f"Failed to refresh token for {symbol}: {token_e}")
                     response = await client.get(url, headers=headers)
                     response.raise_for_status()
+                    last_status_code = None
                     df = self._parse_aspx_response_to_df(response.content, columns=columns)
 
                     if "Symbol" in df.columns:
@@ -572,6 +673,10 @@ class BarchartFetcher(BaseFetcher):
                     return symbol, None
 
                 except httpx.HTTPStatusError as e:
+                    try:
+                        last_status_code = int(response.status_code)
+                    except Exception:
+                        last_status_code = None
                     self._logger.error(f"Barchart EOD - Bad Status for {symbol}: {response.status_code}")
                     if response.status_code == 404:
                         if uid:
@@ -584,6 +689,7 @@ class BarchartFetcher(BaseFetcher):
                     await asyncio.sleep(wait_time)
 
                 except Exception as e:
+                    last_status_code = None
                     self._logger.error(f"Barchart EOD - Error for {symbol}: {str(e)}")
                     retries += 1
                     wait_time = backoff_factor * (2 ** (retries - 1))
@@ -626,7 +732,6 @@ class BarchartFetcher(BaseFetcher):
             barchart_symbols: List[str],
             start_date: datetime,
             end_date: datetime,
-            tokens_pool: List[Tuple[str, str]],
         ):
             semaphore = asyncio.Semaphore(max_concurrent_tasks)
             tasks = [
@@ -637,9 +742,8 @@ class BarchartFetcher(BaseFetcher):
                     start_date=start_date,
                     end_date=end_date,
                     set_dt_index=not one_df,
-                    session_token=tokens_pool[i % len(tokens_pool)],
                 )
-                for i, symbol in enumerate(barchart_symbols)
+                for symbol in barchart_symbols
             ]
             if show_tqdm:
                 return await tqdm.asyncio.tqdm.gather(*tasks, desc="FETCHING EOD DATA FROM BARCHART...")
@@ -650,7 +754,6 @@ class BarchartFetcher(BaseFetcher):
             barchart_symbols: List[str],
             start_date: datetime,
             end_date: datetime,
-            tokens_pool: List[Tuple[str, str]],
             interval: Optional[Literal[1, 5, 10, 15, 30, 60, 120, 240]] = None,
         ):
             semaphore = asyncio.Semaphore(max_concurrent_tasks)
@@ -663,9 +766,8 @@ class BarchartFetcher(BaseFetcher):
                     start_date=start_date,
                     end_date=end_date,
                     set_dt_index=not one_df,
-                    session_token=tokens_pool[i % len(tokens_pool)],
                 )
-                for i, symbol in enumerate(barchart_symbols)
+                for symbol in barchart_symbols
             ]
             if show_tqdm:
                 return await tqdm.asyncio.tqdm.gather(*tasks, desc="FETCHING INTRADAY DATA FROM BARCHART...")
@@ -678,14 +780,19 @@ class BarchartFetcher(BaseFetcher):
             interval: Optional[Literal[1, 5, 10, 15, 30, 60, 120, 240]] = None,
         ):
             pool_size = max(1, int(max_concurrent_tasks or 1))
-            tokens_pool = await asyncio.to_thread(self._get_shared_session_token_pool, pool_size, "BTC")
+            # Warm token slots for this proxy scope; requests still rotate per call.
+            await asyncio.to_thread(self._get_shared_session_token_pool, pool_size, "BTC")
 
             limits = httpx.Limits(
                 max_connections=max_concurrent_tasks,
                 max_keepalive_connections=max_keepalive_connections,
             )
             async with httpx.AsyncClient(
-                limits=limits, timeout=self._global_timeout, mounts=self._httpx_proxies, verify=False, http2=True, headers={"Connection": "close"}
+                limits=limits,
+                timeout=self._global_timeout,
+                mounts=self._httpx_proxies,
+                verify=False,
+                http2=True,
             ) as client:
                 if interval:
                     all_data = await build_intraday_tasks(
@@ -694,7 +801,6 @@ class BarchartFetcher(BaseFetcher):
                         start_date=start_date,
                         end_date=end_date,
                         interval=interval,
-                        tokens_pool=tokens_pool,
                     )
                 else:
                     all_data = await build_eod_tasks(
@@ -702,7 +808,6 @@ class BarchartFetcher(BaseFetcher):
                         barchart_symbols=barchart_symbols,
                         start_date=start_date,
                         end_date=end_date,
-                        tokens_pool=tokens_pool,
                     )
                 return all_data
 
@@ -841,7 +946,7 @@ class BarchartFetcher(BaseFetcher):
                     "sec-ch-ua-mobile": "?0",
                     "sec-ch-ua-platform": '"Windows"',
                     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-                    "cookie": f"laravel_token={self._current_laravel_token}",
+                    "cookie": self._token_cookie_header((self._current_laravel_token, self._current_xsrf_token)),
                     "x-xsrf-token": self._current_xsrf_token,
                 }
 
@@ -892,8 +997,11 @@ class BarchartFetcher(BaseFetcher):
         self, symbols: List[str], max_concurrent_tasks: Optional[int] = 64, max_keepalive_connections: Optional[int] = 16, show_tqdm: Optional[bool] = True
     ) -> Dict[str, Dict[Annotated[str, "call or put"], pd.DataFrame]]:
 
-        async def fetch_symbol(client: httpx.AsyncClient, symbol: str, session_token: tuple):
+        async def fetch_symbol(client: httpx.AsyncClient, symbol: str, session_token: Optional[Tuple[str, str]] = None):
             try:
+                if session_token is None:
+                    session_token = await asyncio.to_thread(self._get_shared_session_token, symbol, False)
+                session_token = self._apply_session_token(session_token)
                 fields_list = [
                     "strike",
                     "openPrice",
@@ -940,7 +1048,7 @@ class BarchartFetcher(BaseFetcher):
                     "sec-ch-ua-mobile": "?0",
                     "sec-ch-ua-platform": '"Windows"',
                     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-                    "cookie": f"laravel_token={session_token[0]}",
+                    "cookie": self._token_cookie_header(session_token),
                     "x-xsrf-token": session_token[1],
                 }
                 response = await client.get(url, headers=headers)
@@ -957,7 +1065,7 @@ class BarchartFetcher(BaseFetcher):
 
         async def run_all(symbols: list):
             pool_size = max(1, int(max_concurrent_tasks or 1))
-            tokens_pool = await asyncio.to_thread(self._get_shared_session_token_pool, pool_size, "BTC")
+            await asyncio.to_thread(self._get_shared_session_token_pool, pool_size, "BTC")
 
             limits = httpx.Limits(max_connections=max_concurrent_tasks, max_keepalive_connections=max_keepalive_connections)
             async with httpx.AsyncClient(
@@ -967,12 +1075,20 @@ class BarchartFetcher(BaseFetcher):
                 verify=False,
                 http2=True,
             ) as client:
-                tasks = [fetch_symbol(client, symbol, tokens_pool[i % len(tokens_pool)]) for i, symbol in enumerate(symbols)]
+                tasks = [fetch_symbol(client, symbol) for symbol in symbols]
                 if show_tqdm:
                     results = await tqdm.asyncio.tqdm.gather(*tasks, desc="FETCHING OPTION QUOTES...")
                 else:
                     results = await asyncio.gather(*tasks)
-                return dict(results)
+                out: Dict[str, Dict[str, pd.DataFrame]] = {}
+                for item in results:
+                    if not isinstance(item, tuple) or len(item) != 2:
+                        continue
+                    sym, payload = item
+                    if sym is None or payload is None:
+                        continue
+                    out[str(sym)] = payload
+                return out
 
         return asyncio.run(run_all(symbols))
 
@@ -1025,7 +1141,7 @@ class BarchartFetcher(BaseFetcher):
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-            "cookie": f"laravel_token={self._current_laravel_token}",
+            "cookie": self._token_cookie_header((self._current_laravel_token, self._current_xsrf_token)),
             "x-xsrf-token": self._current_xsrf_token,
         }
         res = requests.get(url, headers=headers)

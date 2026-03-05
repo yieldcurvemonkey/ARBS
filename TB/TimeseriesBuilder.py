@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from TB.IRSwapsTB import IRSwapsTB
     from TB.STIRFutureOptionsTB import STIRFutureOptionsTB
     from TB.STIRFuturesTB import STIRFuturesTB
+    from TB.USTFutureOptionsTB import USTFutureOptionsTB
     from TB.USTFuturesTB import USTFuturesTB
 
 
@@ -80,6 +81,7 @@ class TimeseriesBuilder:
         stirfutures_tb: Optional["STIRFuturesTB"] = None,
         ustfutures_tb: Optional["USTFuturesTB"] = None,
         stirfutureoptions_tb: Optional["STIRFutureOptionsTB"] = None,
+        ustfutureoptions_tb: Optional["USTFutureOptionsTB"] = None,
         fxforwards_tb: Optional[object] = None,
         date_col: str = "Date",
     ):
@@ -94,6 +96,8 @@ class TimeseriesBuilder:
             self._routers["USTFUTURE"] = ustfutures_tb
         if stirfutureoptions_tb is not None:
             self._routers["STIRFUTUREOPTION"] = stirfutureoptions_tb
+        if ustfutureoptions_tb is not None:
+            self._routers["USTFUTUREOPTION"] = ustfutureoptions_tb
         if fxforwards_tb is not None:
             self._routers["FXFORWARD"] = fxforwards_tb
 
