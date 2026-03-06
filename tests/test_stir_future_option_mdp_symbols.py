@@ -8,6 +8,7 @@ from MDP.STIRFutures.STIRFutureOptionMDP import (
     _canonical_underlying,
     _contract_code_from_symbol,
     _expand_straddle_symbol,
+    _format_strike4,
     _norm_option_symbol,
     _parse_option_request_symbol,
     _resolve_option_contract_aliases_for_date,
@@ -92,3 +93,17 @@ def test_midcurve_contract_mapping_and_underlying():
     # S0 alias should canonicalize to 0Q.
     sym_alias = _norm_option_symbol("S0H26|9700C")
     assert sym_alias == "0QH26|9700C"
+
+
+def test_sofr_style_fine_grid_tokens_use_vendor_encoding():
+    assert _format_strike4(96.0625, contract="SFRU26") == "9606"
+    assert _format_strike4(96.1875, contract="SFRU26") == "9618"
+    assert _format_strike4(96.3750, contract="SFRU26") == "9637"
+    assert _format_strike4(96.4375, contract="SFRU26") == "9643"
+    assert _format_strike4(96.6250, contract="SFRU26") == "9662"
+    assert _format_strike4(96.9375, contract="SFRU26") == "9693"
+
+    assert _strike_from_symbol("SFRU26|9637C") == pytest.approx(96.3750)
+    assert _strike_from_symbol("SFRU26|9643C") == pytest.approx(96.4375)
+    assert _strike_from_symbol("SFRU26|9662C") == pytest.approx(96.6250)
+    assert _canonical_to_barchart_option("SFRU26|9637C") == "SQU26|9637C"

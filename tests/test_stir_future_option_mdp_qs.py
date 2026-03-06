@@ -1,13 +1,17 @@
 import datetime
+import math
 
 import pandas as pd
 import pytest
+import pytz
 
 from MDP.STIRFutures.STIRFutureOptionMDP import (
+    STIRFutureOptionSABRSmile,
     STIRFutureOptionMDP,
     QuikVolProductID,
     QuikVolValueType,
 )
+from Query.STIRFutureOptions.backends.quantlib.QLSTIRFutureOptionPricer import QLSTIRFutureOptionPricer
 
 
 class _DummyQS:
@@ -27,6 +31,92 @@ class _DummyQS:
         self.end = end_date
         self.queries = queries
         return self.timeseries_df
+
+
+def _make_pricer(
+    *,
+    label: str,
+    right: str,
+    delta: int,
+    quote_ts: datetime.datetime,
+    iv_normal: float,
+    forward: float = 96.25,
+    underlying_symbol: str = "SFRM26",
+    expiry_date: datetime.date = datetime.date(2026, 6, 17),
+) -> QLSTIRFutureOptionPricer:
+    return QLSTIRFutureOptionPricer(
+        symbol=f"{underlying_symbol}|{9600 + delta:04d}{right}",
+        right=right,
+        underlying_symbol=underlying_symbol,
+        strike=forward,
+        quote_timestamp=quote_ts,
+        expiry_date=expiry_date,
+        market_price=1.0,
+        model_price=1.0,
+        iv_normal=iv_normal,
+        delta=0.0,
+        gamma=0.0,
+        vega=0.0,
+        theta=0.0,
+        forward=forward,
+        discount=1.0,
+        meta_data={
+            "qs_series_label": label,
+            "qs_query": {
+                "delta": delta,
+                "globex_symbol": "SR3_60",
+                "qv_value_type": "Call" if right == "C" else "Put",
+            },
+        },
+    )
+
+
+def _make_qs_payload(as_of: datetime.date):
+    ny = pytz.timezone("America/New_York")
+    prev_dt = ny.localize(datetime.datetime.combine(as_of - datetime.timedelta(days=1), datetime.time(16, 0)))
+    same_day = ny.localize(datetime.datetime.combine(as_of, datetime.time(16, 0)))
+    later_same_day = ny.localize(datetime.datetime.combine(as_of, datetime.time(16, 5)))
+
+    payload = {}
+    call_vols = {
+        5: 0.24,
+        10: 0.21,
+        15: 0.19,
+        20: 0.175,
+        25: 0.165,
+        30: 0.157,
+        35: 0.151,
+        40: 0.147,
+        45: 0.144,
+        50: 0.142,
+    }
+    put_vols = {
+        5: 0.155,
+        10: 0.148,
+        15: 0.144,
+        20: 0.141,
+        25: 0.140,
+        30: 0.140,
+        35: 0.141,
+        40: 0.143,
+        45: 0.145,
+        50: 0.142,
+    }
+
+    for delta, vol in call_vols.items():
+        label = f"SR3_60 {delta}D Call"
+        payload[label] = [
+            _make_pricer(label=label, right="C", delta=delta, quote_ts=prev_dt, iv_normal=vol * 0.98),
+            _make_pricer(label=label, right="C", delta=delta, quote_ts=same_day, iv_normal=vol),
+        ]
+    payload["SR3_60 25D Call"].append(
+        _make_pricer(label="SR3_60 25D Call", right="C", delta=25, quote_ts=later_same_day, iv_normal=0.166)
+    )
+
+    for delta, vol in put_vols.items():
+        label = f"SR3_60 {delta}D Put"
+        payload[label] = [_make_pricer(label=label, right="P", delta=delta, quote_ts=same_day, iv_normal=vol)]
+    return payload
 
 
 def test_qs_atm_term_structure_fetches_sr3(monkeypatch):
@@ -84,3 +174,111 @@ def test_strict_source_split_rejections():
     mdp_qs = STIRFutureOptionMDP(source="QUIKSTRIKE_STIRFO-QL")
     with pytest.raises(NotImplementedError):
         mdp_qs.get_data({"endpoint": "option_snapshot", "symbols": ["SR3Z30|9700C"]})
+
+
+def test_fetch_sabr_smile_strict_source_split_rejections():
+    with pytest.raises(NotImplementedError):
+        STIRFutureOptionMDP(source="QUIKSTRIKE_STIRFO-QL").fetch_sabr_smile(
+            {"globex_symbol": "SR3_60", "as_of": datetime.date(2026, 3, 19)}
+        )
+    with pytest.raises(ValueError):
+        STIRFutureOptionMDP(source="BARCHART_STIRFO-QL").fetch_sabr_smile(
+            {"globex_symbol": "SR3_60", "as_of": datetime.date(2026, 3, 19)}
+        )
+
+
+def test_fetch_sabr_smile_rejects_missing_as_of_and_invalid_symbol():
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+    with pytest.raises(ValueError):
+        mdp.fetch_sabr_smile({"globex_symbol": "SR3_60"})
+    with pytest.raises(ValueError):
+        mdp.fetch_sabr_smile({"globex_symbol": "TY_30", "as_of": datetime.date(2026, 3, 19)})
+
+
+def test_fetch_sabr_smile_builds_qs_queries_and_returns_rich_model(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 19)
+    seen = {}
+
+    def _stub_qs(request):
+        seen["request"] = request
+        return _make_qs_payload(as_of)
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+
+    smile = mdp.fetch_sabr_smile({"globex_symbol": "SR3_60", "as_of": as_of, "force_refresh": True})
+
+    assert seen["request"]["endpoint"] == "qs_timeseries"
+    assert seen["request"]["options"] is True
+    assert seen["request"]["start"] == as_of
+    assert seen["request"]["end"] == as_of
+    assert len(seen["request"]["queries"]) == 20
+    assert [q["qv_value_type"] for q in seen["request"]["queries"][:10]] == ["Call"] * 10
+    assert [q["qv_value_type"] for q in seen["request"]["queries"][10:]] == ["Put"] * 10
+    assert [q["delta"] for q in seen["request"]["queries"][:10]] == [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+
+    assert smile.source == "STIRFO_DUAL-QL"
+    assert smile.symbol == "SR3_60"
+    assert smile.underlying_contract == "SFRM26"
+    assert smile.params.beta == pytest.approx(0.5)
+    assert smile.params.forward_price == pytest.approx(96.25)
+    assert smile.params.forward_rate == pytest.approx(3.75)
+    assert len(smile.points) == 20
+    assert isinstance(smile, STIRFutureOptionSABRSmile)
+
+    sorted_strikes = [pt.strike_price for pt in smile.points]
+    assert sorted_strikes == sorted(sorted_strikes)
+
+    call_25 = next(pt for pt in smile.points if pt.right == "C" and pt.delta_abs == 25.0)
+    assert call_25.iv_normal_price == pytest.approx(0.166)
+    assert call_25.label == "SR3_60 25D Call"
+
+    probe_price = smile.points[len(smile.points) // 2].strike_price
+    probe_rate = smile.price_to_rate(probe_price)
+    vol_price = smile.normal_vol(probe_price, strike_space="price", vol_units="price")
+    vol_rate = smile.normal_vol(probe_rate, strike_space="rate", vol_units="price")
+
+    assert math.isfinite(vol_price)
+    assert vol_rate == pytest.approx(vol_price, rel=1e-10)
+    assert smile.normal_vol(probe_price, vol_units="bps") == pytest.approx(vol_price * 100.0, rel=1e-12)
+
+    delta_strike, delta_vol = smile.normal_vol_for_deltas(25, "C", strike_space_out="price", vol_units="bps")
+    assert delta_vol == pytest.approx(smile.normal_vol(delta_strike, strike_space="price", vol_units="bps"), rel=1e-12)
+
+
+def test_sabr_smile_cache_roundtrip_preserves_object_and_evaluator(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 19)
+    monkeypatch.setattr(mdp, "_qs_timeseries", lambda request: _make_qs_payload(as_of))
+
+    smile = mdp.fetch_sabr_smile({"globex_symbol": "SR3_60", "as_of": as_of})
+    payload = mdp._serialize_get_data_result("sabr_smile", {"sabr_smile": [smile]})
+    restored = mdp._deserialize_get_data_result(payload)
+
+    assert isinstance(restored, dict)
+    restored_smile = restored["sabr_smile"][0]
+    assert isinstance(restored_smile, STIRFutureOptionSABRSmile)
+
+    probe = smile.points[3].strike_price
+    assert restored_smile.normal_vol(probe) == pytest.approx(smile.normal_vol(probe), rel=1e-12)
+    assert restored_smile.price_to_rate(probe) == pytest.approx(smile.price_to_rate(probe), rel=1e-12)
+
+
+def test_select_sabr_smile_pricers_prefers_series_label_delta():
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+    ts = pytz.timezone("America/New_York").localize(datetime.datetime(2026, 3, 19, 16, 0))
+    pr = _make_pricer(label="SR3_60 10D Call", right="P", delta=5, quote_ts=ts, iv_normal=0.21)
+    pr._meta_data["qs_query"]["delta"] = 5
+    pr._meta_data["qs_series_label"] = "SR3_60 10D Call"
+
+    selected = mdp._select_sabr_smile_pricers(
+        pricers_by_series={
+            "SR3_60 10D Call": [pr],
+            "SR3_60 10D Put": [_make_pricer(label="SR3_60 10D Put", right="P", delta=10, quote_ts=ts, iv_normal=0.148)],
+        },
+        as_of=datetime.date(2026, 3, 19),
+        deltas=[10],
+    )
+
+    assert ("C", 10) in selected
+    assert ("P", 10) in selected

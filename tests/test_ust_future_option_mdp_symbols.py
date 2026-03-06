@@ -27,6 +27,8 @@ def test_root_alias_and_symbol_normalization():
     assert normalize_option_contract("TUM6", as_of=datetime.date(2026, 3, 4)) == "ZTM26"
     assert _norm_option_symbol("TYM6|1125c") == "ZNM26|1125C"
     assert _canonical_to_barchart_option("TYM6|1125C") == "ZNM26|1125C"
+    assert _canonical_to_barchart_option("USM26|12900C") == "ZBM26|1290C"
+    assert _canonical_to_barchart_option("USM26|12950P") == "ZBM26|1295P"
 
 
 def test_year_normalization_1_and_2_digit_inputs():

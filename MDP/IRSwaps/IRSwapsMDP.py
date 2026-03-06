@@ -369,6 +369,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             erisf = ErisFuturesFetcher(**self.config)
 
+            if "ignore_cache" in kwargs:
+                kwargs["force_refresh"] = kwargs.pop("ignore_cache")
+
             if timestamp == "live" or timestamp == datetime.date.today():
                 eff = ErisFuturesFetcher(**self.config)
                 ql_curve, ts = eff.fetch_intraday_discount_curve(show_tqdm=True, enable_extrapolation=True, return_intraday_timestamp=True, **kwargs)

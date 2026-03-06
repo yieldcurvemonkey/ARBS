@@ -15,6 +15,8 @@ from Query.IRSwaps.IRSwapValue import IRSwapValue
 from Query.STIRFutureOptions.STIRFutureOptionQuery import STIRFutureOptionQuery
 from Query.STIRFutureOptions.STIRFutureOptionValue import STIRFutureOptionValue
 from Query.STIRFutureOptions.backends.quantlib.QLSTIRFutureOptionPricer import QLSTIRFutureOptionPricer
+from Query.IRSwaptions.IRSwaptionQuery import IRSwaptionQuery
+from Query.IRSwaptions.IRSwaptionValue import IRSwaptionValue
 from Query.USTFutureOptions.USTFutureOptionQuery import USTFutureOptionQuery
 from Query.USTFutureOptions.USTFutureOptionValue import USTFutureOptionValue
 from Query.USTFutureOptions.backends.quantlib.QLUSTFutureOptionPricer import QLUSTFutureOptionPricer
@@ -478,6 +480,28 @@ def test_mixed_product_routing_joins_output_columns():
     assert not out.empty
     assert irs_q.col_name() in out.columns
     assert stir_q.col_name() in out.columns
+
+
+def test_irswaption_router_coverage():
+    irs_router = _FakeRouter(auto_cols=True, auto_value=0.045)
+    irswp_router = _FakeRouter(auto_cols=True, auto_value=0.012)
+    frb_router = _FakeRouter(auto_cols=True, auto_value=0.040)
+    tb = TimeseriesBuilder(
+        irswaps_tb=irs_router,
+        irswaptions_tb=irswp_router,
+        fixedratebonds_tb=frb_router,
+    )
+
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        expiry="1Y",
+        tail="5Y",
+        value=IRSwaptionValue.NVOL,
+    )
+    out = tb.get_timeseries(start=START, end=END, queries=[q])
+    assert q.col_name() in out.columns
+    assert len(irswp_router.received_queries) == 1
+    assert isinstance(irswp_router.received_queries[0], IRSwaptionQuery)
 
 
 def test_stir_ust_option_integration_with_mock_mdps():

@@ -5,6 +5,7 @@ import pytz
 import pytest
 
 from MDP.USTFutures.USTFutureOptionMDP import USTFutureOptionMDP
+from Query.USTFutureOptions.backends.quantlib.QLUSTFutureOptionPricer import QLUSTFutureOptionPricer
 
 
 class _DummyCurve:
@@ -17,6 +18,39 @@ class _DummyCurveBuilder:
     def build_curve(self, curve_name, timestamp, kwargs=None, curve_only=True):
         _ = curve_name, timestamp, kwargs, curve_only
         return _DummyCurve()
+
+
+def _mk_option_pricer(
+    *,
+    symbol: str,
+    quote_timestamp: datetime.datetime,
+    expiry_date: datetime.date,
+    iv_normal: float = 0.8,
+    forward: float = 112.90625,
+    fv01: float = 0.08,
+    delta: float = 0.0,
+    underlying_symbol: str = "ZNM26",
+) -> QLUSTFutureOptionPricer:
+    right = symbol[-1].upper()
+    return QLUSTFutureOptionPricer(
+        symbol=symbol,
+        right=right,
+        underlying_symbol=underlying_symbol,
+        strike=forward,
+        quote_timestamp=quote_timestamp,
+        expiry_date=expiry_date,
+        market_price=1.0,
+        model_price=1.0,
+        iv_normal=iv_normal,
+        delta=delta,
+        gamma=0.0,
+        vega=0.0,
+        theta=0.0,
+        forward=forward,
+        discount=1.0,
+        fv01=fv01,
+        meta_data={},
+    )
 
 
 def test_live_snapshot_mid_and_last_fallback(monkeypatch):
@@ -322,3 +356,137 @@ def test_historical_option_snapshot_request_cache_reuses_result(monkeypatch):
     out2 = mdp.get_data(req)
     assert "ZNM26|1125C" in out2
     assert dummy.calls == calls_after_first
+
+
+def test_fetch_sabr_smile_barchart_uses_option_snapshot(monkeypatch):
+    mdp = USTFutureOptionMDP(source="BARCHART_USTFO-QL")
+    as_of = datetime.date(2026, 3, 5)
+    ny = pytz.timezone("America/New_York")
+    quote_ts = ny.localize(datetime.datetime(2026, 3, 5, 17, 0))
+    expiry = datetime.date(2026, 4, 24)
+    seen = {}
+
+    call_vols = {5: 1.14, 10: 1.04, 15: 0.95, 20: 0.88, 25: 0.84, 30: 0.815, 35: 0.802, 40: 0.786, 45: 0.779, 50: 0.774}
+    put_vols = {5: 0.79, 10: 0.748, 15: 0.727, 20: 0.721, 25: 0.724, 30: 0.733, 35: 0.745, 40: 0.756, 45: 0.766, 50: 0.774}
+
+    def _stub_snapshot(request):
+        seen["request"] = request
+        out = {}
+        for delta, vol in call_vols.items():
+            out[f"TYM26|{delta}DC"] = [
+                _mk_option_pricer(
+                    symbol=f"ZNM26|{1120 + delta:04d}C",
+                    quote_timestamp=quote_ts,
+                    expiry_date=expiry,
+                    iv_normal=vol,
+                )
+            ]
+        for delta, vol in put_vols.items():
+            out[f"TYM26|{delta}DP"] = [
+                _mk_option_pricer(
+                    symbol=f"ZNM26|{1120 + delta:04d}P",
+                    quote_timestamp=quote_ts,
+                    expiry_date=expiry,
+                    iv_normal=vol,
+                )
+            ]
+        return out
+
+    class _DummyFuturePricer:
+        def yield_to_maturity_from_price(self, future_price: float, curves=None) -> float:
+            _ = curves
+            return 0.12 - 0.00068 * float(future_price)
+
+    monkeypatch.setattr(mdp, "_option_snapshot", _stub_snapshot)
+    monkeypatch.setattr(mdp, "_build_sabr_smile_conversion_pricer", lambda **kwargs: _DummyFuturePricer())
+
+    smile = mdp.fetch_sabr_smile({"symbol": "TYM26", "as_of": as_of, "force_refresh": True})
+
+    assert seen["request"]["endpoint"] == "option_snapshot"
+    assert seen["request"]["timestamp"] == as_of
+    assert seen["request"]["use_ql_calculator"] is True
+    assert len(seen["request"]["symbols"]) == 20
+    assert seen["request"]["symbols"][:3] == ["TYM26|5DC", "TYM26|10DC", "TYM26|15DC"]
+    assert smile.source == "BARCHART_USTFO-QL"
+    assert smile.globex_symbol == "TYM26"
+    assert smile.underlying_contract == "ZNM26"
+    assert smile.params.beta == pytest.approx(0.5)
+    assert len(smile.points) == 20
+
+    call_25 = next(pt for pt in smile.points if pt.right == "C" and pt.delta_abs == 25.0)
+    assert call_25.label == "TYM26|25DC"
+    assert call_25.iv_normal_price == pytest.approx(call_vols[25])
+
+
+def test_historical_delta_alias_resolution_uses_cme_strike_rules_for_monthly_contracts(monkeypatch):
+    mdp = USTFutureOptionMDP(source="BARCHART_USTFO-QL")
+    monkeypatch.setattr(mdp, "_get_curve_builder", lambda: _DummyCurveBuilder())
+
+    seen = {}
+
+    class _DummyBC:
+        def get_option_quotes(self, symbols, **kwargs):
+            _ = kwargs
+            seen["chain_symbols"] = list(symbols)
+            call_df = pd.DataFrame(
+                [
+                    {"strikePrice": 116.0, "delta": 0.11},
+                    {"strikePrice": 117.0, "delta": 0.06},
+                    {"strikePrice": 118.0, "delta": 0.03},
+                ]
+            )
+            put_df = pd.DataFrame(columns=call_df.columns)
+            return {"ZBM26": {"call": call_df, "put": put_df}}
+
+    monkeypatch.setattr(mdp, "_get_barchart_fetcher", lambda **kwargs: _DummyBC())
+
+    idx = pd.DatetimeIndex([pd.Timestamp("2026-02-27")])
+    monkeypatch.setattr(
+        mdp,
+        "_fetch_barchart_eod_series",
+        lambda **kwargs: {"ZBM26": pd.DataFrame({"Open": [117.25], "High": [117.50], "Low": [117.00], "Close": [117.25]}, index=idx)},
+    )
+
+    def _stub_resolve(*, candidate_symbols, **kwargs):
+        seen["candidate_symbols"] = list(candidate_symbols)
+        return candidate_symbols[0]
+
+    monkeypatch.setattr(mdp, "_resolve_historical_delta_from_pricers", _stub_resolve)
+
+    ny = pytz.timezone("America/New_York")
+    quote_ts = ny.localize(datetime.datetime(2026, 2, 27, 17, 0))
+
+    def _stub_window(*, leg_symbols, **kwargs):
+        return {
+            sym: {
+                datetime.date(2026, 2, 27): _mk_option_pricer(
+                    symbol=sym,
+                    quote_timestamp=quote_ts,
+                    expiry_date=datetime.date(2026, 4, 24),
+                    iv_normal=0.85,
+                )
+            }
+            for sym in leg_symbols
+        }
+
+    monkeypatch.setattr(mdp, "_get_or_build_barchart_pricer_window", _stub_window)
+
+    out = mdp.get_data(
+        {
+            "endpoint": "option_snapshot",
+            "symbols": ["USM26|5DC"],
+            "timestamp": datetime.date(2026, 2, 27),
+            "show_tqdm": False,
+            "force_refresh": True,
+        }
+    )
+
+    assert "USM26|5DC" in out
+    assert seen["chain_symbols"] == ["ZBM26"]
+    assert len(seen["candidate_symbols"]) == 5
+    assert "ZBM26|11700C" in seen["candidate_symbols"]
+    assert "ZBM26|11800C" in seen["candidate_symbols"]
+    assert "ZBM26|11750C" not in seen["candidate_symbols"]
+    strikes = [int(sym.split("|", 1)[1][:-1]) for sym in seen["candidate_symbols"]]
+    assert max(strikes) - min(strikes) == 400
+    assert all(strike % 100 == 0 for strike in strikes)

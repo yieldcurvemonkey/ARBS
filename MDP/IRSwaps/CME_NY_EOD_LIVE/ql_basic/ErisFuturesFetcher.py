@@ -364,6 +364,8 @@ class ErisFuturesFetcher(DiskCacheMixin, BaseFetcher):
         append_intraday: Optional[bool] = False,
         max_concurrent_tasks: Optional[int] = 64,
         max_keepalive_connections: Optional[int] = 5,
+        ignore_cache=False,
+        force_refresh=False,
     ) -> Dict[datetime.date, ql.DiscountCurve]:
         assert (start_date and end_date) or bdates, "Must Pass in 'start_date' and 'end_date' or 'bdates'"
 

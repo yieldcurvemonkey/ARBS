@@ -19,6 +19,7 @@ from TB.utils import DateLike
 
 if TYPE_CHECKING:
     from TB.FixedRateBondsTB import FixedRateBondsTB
+    from TB.IRSwaptionsTB import IRSwaptionsTB
     from TB.IRSwapsTB import IRSwapsTB
     from TB.STIRFutureOptionsTB import STIRFutureOptionsTB
     from TB.STIRFuturesTB import STIRFuturesTB
@@ -77,6 +78,7 @@ class TimeseriesBuilder:
         self,
         *,
         irswaps_tb: "IRSwapsTB",
+        irswaptions_tb: Optional["IRSwaptionsTB"] = None,
         fixedratebonds_tb: "FixedRateBondsTB",
         stirfutures_tb: Optional["STIRFuturesTB"] = None,
         ustfutures_tb: Optional["USTFuturesTB"] = None,
@@ -90,6 +92,9 @@ class TimeseriesBuilder:
             "IRS": irswaps_tb,
             "FRB": fixedratebonds_tb,
         }
+        if irswaptions_tb is not None:
+            self._routers["IRSWAPTION"] = irswaptions_tb
+            self._routers["IRSWAPTIONS"] = irswaptions_tb
         if stirfutures_tb is not None:
             self._routers["STIRFUTURE"] = stirfutures_tb
         if ustfutures_tb is not None:
@@ -128,7 +133,10 @@ class TimeseriesBuilder:
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
     ) -> pd.DataFrame:
-        tb = merged_routers.get(product)
+        alias_map = {"IRSWAPTIONS": "IRSWAPTION"}
+        canonical_product = alias_map.get(product, product)
+
+        tb = merged_routers.get(product) or merged_routers.get(canonical_product)
         if tb is not None:
             return tb.get_timeseries(  # type: ignore[attr-defined]
                 start,
@@ -140,8 +148,9 @@ class TimeseriesBuilder:
                 timestamps=timestamps,
             )
 
-        if product in merged_mdps:
-            generic_tb = self._get_generic_router(product, merged_mdps[product])
+        mdp_key = product if product in merged_mdps else canonical_product
+        if mdp_key in merged_mdps:
+            generic_tb = self._get_generic_router(canonical_product, merged_mdps[mdp_key])
             return generic_tb.get_timeseries(
                 start,
                 end,
@@ -152,7 +161,7 @@ class TimeseriesBuilder:
                 timestamps=timestamps,
             )
 
-        if product in {"FXFORWARD", "FXFORWARDS"}:
+        if canonical_product in {"FXFORWARD", "FXFORWARDS"}:
             raise NotImplementedError(
                 "FX forward timeseries queries are not supported yet: no FX-forward BaseQuery implementation is available."
             )

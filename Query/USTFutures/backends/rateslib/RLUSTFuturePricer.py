@@ -155,7 +155,7 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         bf = self.build_rateslib_object(curves=self._resolve_curves(curves))
         return float(bf.rate(curves=self._resolve_curves(curves), metric="future_price"))
 
-    def yield_to_maturity(self, ustf: RLUSTFuturePricable, curves: Optional[Any] = None) -> float:
+    def yield_to_maturity_from_price(self, future_price: float, curves: Optional[Any] = None) -> float:
         if not self._basket_pricers:
             if isinstance(self._meta_data, dict):
                 val = self._meta_data.get("yield")
@@ -163,7 +163,16 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
                     return float(val)
             return 0.0
         bf = self.build_rateslib_object(curves=self._resolve_curves(curves))
-        return bf.ytm(future_price=self._price)[self.ctd_index()]
+        idx = bf.ctd_index(
+            future_price=float(future_price),
+            prices=self._basket_prices(),
+            settlement=self._basket_settlement(),
+        )
+        return float(bf.ytm(future_price=float(future_price))[int(idx)])
+
+    def yield_to_maturity(self, ustf: RLUSTFuturePricable, curves: Optional[Any] = None) -> float:
+        future_price = self.price(ustf, curves=curves)
+        return self.yield_to_maturity_from_price(future_price=future_price, curves=curves)
 
     # def analytic_delta(self, curves: Optional[Any] = None, shift: float = 1e-4) -> float:
     #     if not self._basket_pricers:

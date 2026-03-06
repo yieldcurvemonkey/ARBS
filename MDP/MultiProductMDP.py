@@ -65,6 +65,13 @@ class MultiProductMDP(MarketDataProvider):
         source = f"MultiProduct[{','.join(sorted(mdps.keys()))}]"
         super().__init__(source, **kwargs)
 
+    @staticmethod
+    def _canonical_product(product: str) -> str:
+        alias_map = {
+            "IRSWAPTIONS": "IRSWAPTION",
+        }
+        return alias_map.get(product, product)
+
     @property
     def mdps(self) -> Dict[str, MarketDataProvider]:
         """Return the mapping of products to MDPs."""
@@ -99,9 +106,10 @@ class MultiProductMDP(MarketDataProvider):
         KeyError
             If no MDP is registered for the product
         """
-        if product not in self._mdps:
+        canonical = self._canonical_product(product)
+        if product not in self._mdps and canonical not in self._mdps:
             raise KeyError(f"No MDP registered for product '{product}'. " f"Available products: {sorted(self._mdps.keys())}")
-        return self._mdps[product]
+        return self._mdps.get(product, self._mdps[canonical])
 
     def get(self, product: str) -> MarketDataProvider:
         return self.get_mdp_for_product(product=product)
@@ -129,7 +137,7 @@ class MultiProductMDP(MarketDataProvider):
 
         # Extract product from request, use default if not specified
         req = dict(request)
-        product = req.pop("product", self._default_product)
+        product = self._canonical_product(req.pop("product", self._default_product))
 
         mdp = self.get_mdp_for_product(product)
         return mdp.get_pricer(req)
@@ -188,7 +196,9 @@ def ensure_multi_mdp(mdp: MDPLike) -> MultiProductMDP:
     if isinstance(mdp, MarketDataProvider) or hasattr(mdp, "get_pricer"):
         # For single MDP, try to infer product from MDP class name
         cls_name = type(mdp).__name__.upper()
-        if "IRSWAP" in cls_name or "IRS" in cls_name:
+        if "IRSWAPTION" in cls_name:
+            return MultiProductMDP({"IRSWAPTION": mdp}, default_product="IRSWAPTION")
+        elif "IRSWAP" in cls_name or "IRS" in cls_name:
             return MultiProductMDP({"IRS": mdp}, default_product="IRS")
         elif "STIR" in cls_name:
             return MultiProductMDP({"STIRFUTURE": mdp}, default_product="STIRFUTURE")

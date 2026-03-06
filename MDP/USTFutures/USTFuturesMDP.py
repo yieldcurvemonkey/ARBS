@@ -1,4 +1,5 @@
 import datetime
+import importlib
 import itertools
 import os
 import random
@@ -99,6 +100,10 @@ def _clean_symbols(symbols: Sequence[str]) -> List[str]:
     return out
 
 
+def _socksio_available() -> bool:
+    return importlib.util.find_spec("socksio") is not None
+
+
 def _build_socks5h(host: str) -> dict:
     user = os.getenv("NORDVPN_USER", "3G5mmfKXWfCGFGT4yDL34Tzn")
     pwd = os.getenv("NORDVPN_PASS", "VN33uViQZp6pXVzdgsGskhNg")
@@ -174,7 +179,10 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             "us.socks.nordhold.net",
             None,
         ]
+        self._socksio_enabled = _socksio_available()
         self._barchart_proxy_hosts: List[Optional[str]] = list(kwargs.get("barchart_proxy_hosts", default_hosts))
+        if not self._socksio_enabled:
+            self._barchart_proxy_hosts = [None]
         random.shuffle(self._barchart_proxy_hosts)
         self._barchart_proxy_ttl: int = int(kwargs.get("barchart_proxy_ttl", 60))
 
@@ -402,7 +410,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_id = request.get("curve_id", "USD-SOFR-1D")
         currency = request.get("currency", "USD")
         contract_coupon = request.get("contract_coupon", 6)
-        usts_mdp_source = request.get("usts_mdp_source")
+        usts_mdp_source = request.get("usts_mdp_source", "USTS_FEDINVEST_WSJ_LIVE-RL")
 
         if not symbols:
             raise ValueError("Request must include 'symbols' or 'tickers'.")
