@@ -6,8 +6,7 @@ import type {
   CalibrationObservation,
   CalibrationPresetKey,
   VolGridSessionMeta,
-  VolGridSurfaceResponse,
-  VolGridViewMode
+  VolGridSurfaceResponse
 } from '../types'
 import {
   CALIBRATION_PRESETS,
@@ -16,108 +15,21 @@ import {
   IDB_STRADDLES_PRESET,
   resolveSnapshotPreset
 } from '../constants'
-import { clamp } from '../utils'
-import { CellDetailPanel } from './CellDetailPanel'
+import {
+  formatChange,
+  formatDateTime,
+  formatNotional,
+  formatNumber,
+  formatTime
+} from '../utils'
+import { UnifiedGridCell } from './UnifiedGridCell'
+import { CellAnalyticsModal } from './CellAnalyticsModal'
+import { CellSettingsPopover } from './CellSettingsPopover'
 import { SummaryBar } from './SummaryBar'
 import { useCellDetail } from '../hooks/useCellDetail'
-
-const BASE_MODE_OPTIONS: Array<{ key: VolGridViewMode; label: string }> = [
-  { key: 'vol', label: 'VOL' },
-  { key: 'premium', label: 'PREMIUM' },
-  { key: 'change', label: 'CHANGE' },
-  { key: 'staleness', label: 'STALENESS' },
-  { key: 'confidence', label: 'CONFIDENCE' }
-]
-
-const STALENESS_COLORS: Record<string, string> = {
-  live: '#22c55e',
-  recent: '#f59e0b',
-  stale: '#ef4444',
-  very_stale: '#6b7280',
-  no_data: '#475569'
-}
+import { useCellDisplayConfig } from '../hooks/useCellDisplayConfig'
 
 const DEFAULT_PRESET: CalibrationPresetKey = 'idb_straddles'
-
-function formatNumber(value: number | null, digits = 1) {
-  if (value === null || !Number.isFinite(value)) return '--'
-  return value.toFixed(digits)
-}
-
-function formatChange(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return '--'
-  const sign = value > 0 ? '+' : value < 0 ? '-' : ''
-  return `${sign}${Math.abs(value).toFixed(1)}`
-}
-
-function formatPremiumBps(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return '--'
-  return `${value.toFixed(2)} bp`
-}
-
-function formatNotional(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return '--'
-  return `${(Math.abs(value) / 1_000_000).toFixed(0)}mm`
-}
-
-function formatTime(value: number | null) {
-  if (!value) return '--'
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  }).format(new Date(value))
-}
-
-function formatDate(value: number | null) {
-  if (!value) return '--'
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit'
-  }).format(new Date(value))
-}
-
-function formatDateTime(value: number | null) {
-  if (!value) return '--'
-  return `${formatDate(value)} ${formatTime(value)} ET`
-}
-
-function interpolateColor(low: number[], high: number[], t: number) {
-  const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
-  return `rgb(${mix(low[0], high[0])}, ${mix(low[1], high[1])}, ${mix(low[2], high[2])})`
-}
-
-function getHeatColor(value: number, min: number, max: number) {
-  if (!Number.isFinite(value)) return 'rgba(15, 23, 42, 0.8)'
-  const ratio = max > min ? (value - min) / (max - min) : 0.5
-  return interpolateColor([30, 64, 175], [245, 158, 11], clamp(ratio, 0, 1))
-}
-
-function getChangeColor(value: number, maxAbs: number) {
-  if (!Number.isFinite(value)) return 'rgba(15, 23, 42, 0.8)'
-  const ratio = maxAbs > 0 ? Math.abs(value) / maxAbs : 0
-  const base = value >= 0 ? [239, 68, 68] : [34, 197, 94]
-  return interpolateColor([30, 41, 59], base, clamp(ratio, 0, 1))
-}
-
-function getConfidenceColor(value: number) {
-  if (!Number.isFinite(value)) return 'rgba(15, 23, 42, 0.8)'
-  return interpolateColor([30, 41, 59], [14, 165, 233], clamp(value / 100, 0, 1))
-}
-
-function formatStaleness(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return '--'
-  if (value < 60) return `${Math.round(value)}m`
-  return `${(value / 60).toFixed(1)}h`
-}
-
-function formatConfidence(value: number) {
-  if (!Number.isFinite(value)) return '--'
-  return `${(value * 100).toFixed(0)}%`
-}
 
 function normalizeSelectablePreset(value: CalibrationPresetKey) {
   return resolveSnapshotPreset(value)
@@ -155,19 +67,20 @@ function getSessionAccent(session: VolGridSessionMeta | null) {
 
 export default function VolGridDashboard() {
   const [surface, setSurface] = useState<VolGridSurfaceResponse | null>(null)
-  const [mode, setMode] = useState<VolGridViewMode>('vol')
   const [preset, setPreset] = useState<CalibrationPresetKey>(DEFAULT_PRESET)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [feed, setFeed] = useState<CalibrationObservation[]>([])
   const [filteredOutCount, setFilteredOutCount] = useState(0)
   const [configOpen, setConfigOpen] = useState(false)
+  const [cellSettingsOpen, setCellSettingsOpen] = useState(false)
   const [configDraft, setConfigDraft] =
     useState<CalibrationFilterConfig>(IDB_STRADDLES_PRESET)
   const [specificPlatforms, setSpecificPlatforms] = useState('')
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
 
-  const includePremium = mode === 'premium'
+  const { config: displayConfig, toggleField, resetToDefaults } = useCellDisplayConfig()
+
   const selectedCell = useMemo(
     () => surface?.cells.find((cell) => cell.nodeKey === selectedNodeKey) ?? null,
     [surface, selectedNodeKey]
@@ -179,50 +92,17 @@ export default function VolGridDashboard() {
     surface?.meta.session.effectiveDate ?? null
   )
   const comparisonMeta = surface?.meta.comparison ?? null
-  const comparisonActive = mode === 'vs_mdp'
-  const availableModeOptions = useMemo(() => {
-    const options = [...BASE_MODE_OPTIONS]
-    if (comparisonMeta) {
-      options.push({ key: 'vs_mdp', label: 'VS MDP' })
-    }
-    return options
-  }, [comparisonMeta])
 
-  const viewStats = useMemo(() => {
-    if (!surface) return { min: 0, max: 0, maxAbsChange: 0 }
+  const volRange = useMemo(() => {
+    if (!surface) return { min: 0, max: 0 }
     const values = surface.cells
-      .map((cell) => {
-        switch (mode) {
-          case 'premium':
-            return cell.atmfPremiumBps
-          case 'change':
-            return cell.atmfVolChange
-          case 'staleness':
-            return cell.staleness
-          case 'confidence':
-            return cell.atmfVolConfidence * 100
-          case 'vs_mdp':
-            return cell.comparisonDiff
-          default:
-            return cell.atmfVol
-        }
-      })
-      .filter((value): value is number => value !== null && Number.isFinite(value))
-
+      .map((cell) => cell.atmfVol)
+      .filter((v): v is number => v !== null && Number.isFinite(v))
     return {
       min: values.length ? Math.min(...values) : 0,
-      max: values.length ? Math.max(...values) : 0,
-      maxAbsChange: values.length
-        ? Math.max(...values.map((value) => Math.abs(value)))
-        : 0
+      max: values.length ? Math.max(...values) : 0
     }
-  }, [surface, mode])
-
-  useEffect(() => {
-    if (mode === 'vs_mdp' && !comparisonMeta) {
-      setMode('vol')
-    }
-  }, [mode, comparisonMeta])
+  }, [surface])
 
   const loadConfig = useCallback(async () => {
     try {
@@ -247,7 +127,7 @@ export default function VolGridDashboard() {
     try {
       const params = new URLSearchParams({
         calibration_preset: preset,
-        include_premium: includePremium ? 'true' : 'false'
+        include_premium: 'true'
       })
       const res = await fetch(`/api/vol-grid/surface?${params.toString()}`)
       if (!res.ok) throw new Error('Surface fetch failed')
@@ -259,7 +139,7 @@ export default function VolGridDashboard() {
     } finally {
       setLoading(false)
     }
-  }, [preset, includePremium])
+  }, [preset])
 
   const loadFeed = useCallback(async () => {
     try {
@@ -365,22 +245,7 @@ export default function VolGridDashboard() {
         : surface.meta.snapshotKind === 'close_pca'
           ? 'Closing snapshot'
           : 'Live snapshot'
-    switch (surface.meta.session.mode) {
-      case 'live':
-        return `${prefix}: ${label}`
-      case 'eod_close':
-        return `${prefix}: ${label}`
-      case 'weekend_close':
-        return `${prefix}: ${label}`
-      case 'preopen_close':
-        return `${prefix}: ${label}`
-      case 'historical':
-        return `${prefix}: ${label}`
-      case 'prior_close':
-        return `${prefix}: ${label}`
-      default:
-        return `Snapshot: ${label}`
-    }
+    return `${prefix}: ${label}`
   }, [surface])
 
   const observationMessage = useMemo(() => {
@@ -443,6 +308,12 @@ export default function VolGridDashboard() {
                 ))}
               </select>
               <button
+                onClick={() => setCellSettingsOpen((open) => !open)}
+                className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-slate-500"
+              >
+                Cell Fields
+              </button>
+              <button
                 onClick={() => setConfigOpen((open) => !open)}
                 className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-slate-500"
               >
@@ -452,21 +323,6 @@ export default function VolGridDashboard() {
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              {availableModeOptions.map((option) => (
-                <button
-                  key={option.key}
-                  onClick={() => setMode(option.key)}
-                  className={`rounded-full px-4 py-1 text-xs font-semibold uppercase tracking-wide ${
-                    mode === option.key
-                      ? 'bg-amber-400 text-slate-900'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
             <div className="text-xs text-slate-400">{lastUpdateLabel}</div>
             {loading && <div className="text-xs text-slate-500">Refreshing...</div>}
             {error && <div className="text-xs text-rose-400">{error}</div>}
@@ -491,6 +347,14 @@ export default function VolGridDashboard() {
             <div className="mt-2 text-xs text-slate-500">
               {observationMessage}
             </div>
+          )}
+
+          {cellSettingsOpen && (
+            <CellSettingsPopover
+              config={displayConfig}
+              onToggle={toggleField}
+              onReset={resetToDefaults}
+            />
           )}
 
           {configOpen && (
@@ -647,7 +511,7 @@ export default function VolGridDashboard() {
             <div
               className="grid gap-[2px]"
               style={{
-                gridTemplateColumns: `120px repeat(${GRID_DEFINITION.tenors.length}, minmax(72px, 1fr))`
+                gridTemplateColumns: `100px repeat(${GRID_DEFINITION.tenors.length}, minmax(120px, 1fr))`
               }}
             >
               <div className="bg-slate-900 p-2 text-xs uppercase text-slate-400">
@@ -673,93 +537,22 @@ export default function VolGridDashboard() {
                       return (
                         <div
                           key={`${expiry}-${tenor}`}
-                          className="bg-slate-900/40 p-2 text-center text-xs text-slate-500"
+                          className="min-h-[110px] bg-slate-900/40 p-2 text-center text-xs text-slate-500"
                         >
                           --
                         </div>
                       )
                     }
-
-                    const value =
-                      mode === 'premium'
-                        ? cell.atmfPremiumBps
-                        : mode === 'change'
-                          ? cell.atmfVolChange
-                          : mode === 'staleness'
-                            ? cell.staleness
-                            : mode === 'confidence'
-                              ? cell.atmfVolConfidence * 100
-                              : mode === 'vs_mdp'
-                                ? cell.comparisonDiff
-                              : cell.atmfVol
-
-                    const background =
-                      mode === 'change' || mode === 'vs_mdp'
-                        ? getChangeColor(value ?? 0, viewStats.maxAbsChange)
-                        : mode === 'staleness'
-                          ? STALENESS_COLORS[cell.stalenessCategory]
-                          : mode === 'confidence'
-                            ? getConfidenceColor(value ?? 0)
-                            : getHeatColor(value ?? 0, viewStats.min, viewStats.max)
-
-                    const dotColor = STALENESS_COLORS[cell.stalenessCategory]
-                    const isSelected = selectedNodeKey === cell.nodeKey
-                    const isFresh =
-                      cell.atmfVolSource === 'direct_observation' &&
-                      cell.staleness !== null &&
-                      cell.staleness <= 5
-
-                    const tooltip = [
-                      `${cell.expiry}x${cell.tenor}`,
-                      `Surface vol: ${formatNumber(cell.atmfVol)} bpvol`,
-                      `EOD vol: ${formatNumber(cell.eodVol)} bpvol`,
-                      `Change: ${formatChange(cell.atmfVolChange)}`,
-                      `MDP close: ${formatNumber(cell.comparisonVol)} bpvol`,
-                      `PCA vs MDP: ${formatChange(cell.comparisonDiff)}`,
-                      `Premium: ${formatPremiumBps(cell.atmfPremiumBps)}`,
-                      `Confidence: ${formatConfidence(cell.atmfVolConfidence)}`,
-                      `Source: ${cell.atmfVolSource}`,
-                      `Regime: ${cell.regimeLabel ?? '--'}`
-                    ].join('\n')
-
                     return (
-                      <button
+                      <UnifiedGridCell
                         key={`${expiry}-${tenor}`}
-                        title={tooltip}
+                        cell={cell}
+                        isSelected={selectedNodeKey === cell.nodeKey}
+                        visibleFields={displayConfig.visibleFields}
+                        volMin={volRange.min}
+                        volMax={volRange.max}
                         onClick={() => setSelectedNodeKey(cell.nodeKey)}
-                        className={`relative min-h-[62px] p-2 text-center text-xs text-white transition ${
-                          isSelected ? 'ring-2 ring-sky-300' : ''
-                        } ${isFresh ? 'animate-pulse' : ''}`}
-                        style={{ backgroundColor: background }}
-                      >
-                        <div className="text-sm font-semibold">
-                          {mode === 'premium'
-                            ? formatPremiumBps(cell.atmfPremiumBps)
-                            : mode === 'change'
-                              ? formatChange(cell.atmfVolChange)
-                            : mode === 'staleness'
-                                ? formatStaleness(cell.staleness)
-                                : mode === 'confidence'
-                                  ? formatConfidence(cell.atmfVolConfidence)
-                                  : mode === 'vs_mdp'
-                                    ? formatChange(cell.comparisonDiff)
-                                  : formatNumber(cell.atmfVol, 1)}
-                        </div>
-                        <div className="mt-1 flex items-center justify-center gap-2 text-[10px] text-slate-200">
-                          <span>
-                            {mode === 'vs_mdp'
-                              ? `MDP ${formatNumber(cell.comparisonVol)}`
-                              : formatChange(cell.atmfVolChange)}
-                          </span>
-                          <span
-                            className="inline-block h-2 w-2 rounded-full"
-                            style={{ backgroundColor: dotColor }}
-                          />
-                        </div>
-                        <div className="mt-1 text-[10px] text-slate-200/85">
-                          {cell.regimeLabel ?? '--'}
-                        </div>
-                      </button>
+                      />
                     )
                   })}
                 </div>
@@ -784,8 +577,8 @@ export default function VolGridDashboard() {
               lastUpdate={surface?.meta.lastUpdate ?? null}
               session={session}
               hasData={surface?.meta.hasData ?? false}
-              comparisonActive={comparisonActive}
-              comparisonLabel={comparisonMeta ? 'PCA vs MDP' : null}
+              comparisonActive={false}
+              comparisonLabel={null}
             />
           </div>
 
@@ -830,7 +623,7 @@ export default function VolGridDashboard() {
         </div>
       </div>
 
-      <CellDetailPanel
+      <CellAnalyticsModal
         cell={selectedCell}
         detail={detail.data}
         loading={detail.loading}
