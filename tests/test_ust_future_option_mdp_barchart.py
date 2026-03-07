@@ -1,5 +1,6 @@
 import datetime
 
+import MDP.USTFutures.USTFutureOptionMDP as ustfo_module
 import pandas as pd
 import pytz
 import pytest
@@ -418,6 +419,67 @@ def test_fetch_sabr_smile_barchart_uses_option_snapshot(monkeypatch):
     assert call_25.iv_normal_price == pytest.approx(call_vols[25])
 
 
+def test_fetch_sabr_smile_barchart_seeds_single_symbol_option_snapshot_cache(monkeypatch):
+    mdp = USTFutureOptionMDP(source="BARCHART_USTFO-QL")
+    as_of = datetime.date(2026, 3, 5)
+    ny = pytz.timezone("America/New_York")
+    quote_ts = ny.localize(datetime.datetime(2026, 3, 5, 17, 0))
+    expiry = datetime.date(2026, 4, 24)
+    seen = {"calls": 0}
+
+    call_vols = {5: 1.14, 10: 1.04, 15: 0.95, 20: 0.88, 25: 0.84, 30: 0.815, 35: 0.802, 40: 0.786, 45: 0.779, 50: 0.774}
+    put_vols = {5: 0.79, 10: 0.748, 15: 0.727, 20: 0.721, 25: 0.724, 30: 0.733, 35: 0.745, 40: 0.756, 45: 0.766, 50: 0.774}
+
+    def _stub_snapshot(request):
+        seen["calls"] += 1
+        out = {}
+        for delta, vol in call_vols.items():
+            out[f"TYM26|{delta}DC"] = [
+                _mk_option_pricer(
+                    symbol=f"ZNM26|{1120 + delta:04d}C",
+                    quote_timestamp=quote_ts,
+                    expiry_date=expiry,
+                    iv_normal=vol,
+                )
+            ]
+        for delta, vol in put_vols.items():
+            out[f"TYM26|{delta}DP"] = [
+                _mk_option_pricer(
+                    symbol=f"ZNM26|{1120 + delta:04d}P",
+                    quote_timestamp=quote_ts,
+                    expiry_date=expiry,
+                    iv_normal=vol,
+                )
+            ]
+        return out
+
+    class _DummyFuturePricer:
+        def yield_to_maturity_from_price(self, future_price: float, curves=None) -> float:
+            _ = curves
+            return 0.12 - 0.00068 * float(future_price)
+
+    monkeypatch.setattr(mdp, "_option_snapshot", _stub_snapshot)
+    monkeypatch.setattr(mdp, "_build_sabr_smile_conversion_pricer", lambda **kwargs: _DummyFuturePricer())
+
+    smile = mdp.fetch_sabr_smile({"symbol": "TYM26", "as_of": as_of, "force_refresh": True})
+    assert len(smile.points) == 20
+    assert seen["calls"] == 1
+
+    out = mdp.get_data(
+        {
+            "endpoint": "option_snapshot",
+            "symbols": ["TYM26|25DC"],
+            "timestamp": as_of,
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        }
+    )
+
+    assert seen["calls"] == 1
+    assert "TYM26|25DC" in out
+    assert out["TYM26|25DC"][0].iv_normal() == pytest.approx(call_vols[25])
+
+
 def test_historical_delta_alias_resolution_uses_cme_strike_rules_for_monthly_contracts(monkeypatch):
     mdp = USTFutureOptionMDP(source="BARCHART_USTFO-QL")
     monkeypatch.setattr(mdp, "_get_curve_builder", lambda: _DummyCurveBuilder())
@@ -490,3 +552,99 @@ def test_historical_delta_alias_resolution_uses_cme_strike_rules_for_monthly_con
     strikes = [int(sym.split("|", 1)[1][:-1]) for sym in seen["candidate_symbols"]]
     assert max(strikes) - min(strikes) == 400
     assert all(strike % 100 == 0 for strike in strikes)
+
+
+def test_fetch_bulk_sabr_smile_barchart_reuses_shared_window_and_seeds_cache(monkeypatch):
+    mdp = USTFutureOptionMDP(source="BARCHART_USTFO-QL")
+    d1 = datetime.date(2026, 3, 4)
+    d2 = datetime.date(2026, 3, 5)
+    ny = pytz.timezone("America/New_York")
+    seen = {"eod_calls": 0, "window_calls": 0, "conversion_calls": 0}
+
+    class _DummyFuturePricer:
+        def yield_to_maturity_from_price(self, future_price: float, curves=None) -> float:
+            _ = curves
+            return 0.12 - 0.00068 * float(future_price)
+
+    monkeypatch.setattr(ustfo_module, "_cme_listed_strikes_for_contract_forward", lambda contract, forward, as_of: [112.5] if contract == "ZNM26" else [117.0])
+
+    bc_ty = ustfo_module._contract_to_barchart_contract("ZNM26")
+    bc_us = ustfo_module._contract_to_barchart_contract("ZBM26")
+    ty_strike = ustfo_module._format_strike4(112.5, contract="ZNM26")
+    us_strike = ustfo_module._format_strike4(117.0, contract="ZBM26")
+
+    def _stub_eod_series(symbols, start, end, show_tqdm):
+        _ = symbols, start, end, show_tqdm
+        seen["eod_calls"] += 1
+        idx = pd.DatetimeIndex([pd.Timestamp(d1), pd.Timestamp(d2)])
+        return {
+            bc_ty: pd.DataFrame({"Close": [112.5, 112.4375]}, index=idx),
+            bc_us: pd.DataFrame({"Close": [117.0, 116.9375]}, index=idx),
+        }
+
+    def _stub_window(**kwargs):
+        _ = kwargs
+        seen["window_calls"] += 1
+        expiry = datetime.date(2026, 4, 24)
+        ts1 = ny.localize(datetime.datetime.combine(d1, datetime.time(17, 0)))
+        ts2 = ny.localize(datetime.datetime.combine(d2, datetime.time(17, 0)))
+        return {
+            f"ZNM26|{ty_strike}C": {
+                d1: _mk_option_pricer(symbol=f"ZNM26|{ty_strike}C", quote_timestamp=ts1, expiry_date=expiry, iv_normal=0.84, underlying_symbol="ZNM26"),
+                d2: _mk_option_pricer(symbol=f"ZNM26|{ty_strike}C", quote_timestamp=ts2, expiry_date=expiry, iv_normal=0.845, forward=112.4375, underlying_symbol="ZNM26"),
+            },
+            f"ZNM26|{ty_strike}P": {
+                d1: _mk_option_pricer(symbol=f"ZNM26|{ty_strike}P", quote_timestamp=ts1, expiry_date=expiry, iv_normal=0.724, underlying_symbol="ZNM26"),
+                d2: _mk_option_pricer(symbol=f"ZNM26|{ty_strike}P", quote_timestamp=ts2, expiry_date=expiry, iv_normal=0.726, forward=112.4375, underlying_symbol="ZNM26"),
+            },
+            f"ZBM26|{us_strike}C": {
+                d1: _mk_option_pricer(symbol=f"ZBM26|{us_strike}C", quote_timestamp=ts1, expiry_date=expiry, iv_normal=0.92, forward=117.0, fv01=0.16, underlying_symbol="ZBM26"),
+                d2: _mk_option_pricer(symbol=f"ZBM26|{us_strike}C", quote_timestamp=ts2, expiry_date=expiry, iv_normal=0.925, forward=116.9375, fv01=0.16, underlying_symbol="ZBM26"),
+            },
+            f"ZBM26|{us_strike}P": {
+                d1: _mk_option_pricer(symbol=f"ZBM26|{us_strike}P", quote_timestamp=ts1, expiry_date=expiry, iv_normal=0.79, forward=117.0, fv01=0.16, underlying_symbol="ZBM26"),
+                d2: _mk_option_pricer(symbol=f"ZBM26|{us_strike}P", quote_timestamp=ts2, expiry_date=expiry, iv_normal=0.795, forward=116.9375, fv01=0.16, underlying_symbol="ZBM26"),
+            },
+        }
+
+    def _stub_conversion(requirements, *, force_refresh):
+        _ = force_refresh
+        seen["conversion_calls"] += 1
+        return {(underlying_contract, as_of): _DummyFuturePricer() for underlying_contract, as_of in requirements}
+
+    monkeypatch.setattr(mdp, "_fetch_barchart_eod_series", _stub_eod_series)
+    monkeypatch.setattr(mdp, "_get_or_build_barchart_pricer_window", _stub_window)
+    monkeypatch.setattr(mdp, "_build_bulk_sabr_smile_conversion_pricers", _stub_conversion)
+
+    out = mdp.fetch_bulk_sabr_smile(
+        {
+            "symbols": ["TYM26", "USM26"],
+            "timestamps": [d1, d2],
+            "force_refresh": True,
+        }
+    )
+
+    assert seen["eod_calls"] == 1
+    assert seen["window_calls"] == 1
+    assert seen["conversion_calls"] == 1
+    assert set(out.keys()) == {"TYM26", "USM26"}
+    assert out["TYM26"][d1].underlying_contract == "ZNM26"
+    assert out["USM26"][d2].underlying_contract == "ZBM26"
+
+    monkeypatch.setattr(
+        mdp,
+        "_option_snapshot",
+        lambda request: (_ for _ in ()).throw(AssertionError("_option_snapshot should not run after bulk SABR cache seeding")),
+    )
+    cached = mdp.get_data(
+        {
+            "endpoint": "option_snapshot",
+            "symbols": ["TYM26|25DC"],
+            "timestamp": d1,
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        }
+    )
+
+    assert "TYM26|25DC" in cached
+    assert cached["TYM26|25DC"][0].iv_normal() == pytest.approx(0.84)

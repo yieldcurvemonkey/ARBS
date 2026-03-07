@@ -6,6 +6,9 @@ import pytest
 import pytz
 
 import MDP.USTFutures.USTFutureOptionMDP as ustfo_module
+from MDP.STIRFutures.QuikStrikeSDK.core.types.QuikVolProductID import QuikVolProductID
+from MDP.STIRFutures.QuikStrikeSDK.core.types.QuikVolTimeseriesQueryBuilder import QuikVolTimeseriesQueryBuilder
+from MDP.STIRFutures.QuikStrikeSDK.core.types.QuikVolValueType import QuikVolValueType
 from MDP.USTFutures.USTFutureOptionMDP import (
     USTFutureOptionSABRSmile,
     USTFutureOptionMDP,
@@ -24,6 +27,7 @@ def _make_pricer(
     fv01: float = 0.08,
     underlying_symbol: str = "ZNH26",
     expiry_date: datetime.date = datetime.date(2026, 4, 3),
+    globex_symbol: str = "TY_30",
 ) -> QLUSTFutureOptionPricer:
     return QLUSTFutureOptionPricer(
         symbol=f"{underlying_symbol}|{delta}{right}",
@@ -46,14 +50,14 @@ def _make_pricer(
             "qs_series_label": label,
             "qs_query": {
                 "delta": delta,
-                "globex_symbol": "TY_30",
+                "globex_symbol": globex_symbol,
                 "qv_value_type": "Call" if right == "C" else "Put",
             },
         },
     )
 
 
-def _make_qs_payload(as_of: datetime.date):
+def _make_qs_payload(as_of: datetime.date, *, globex_symbol: str = "TY_30"):
     ny = pytz.timezone("America/New_York")
     prev_dt = ny.localize(datetime.datetime.combine(as_of - datetime.timedelta(days=1), datetime.time(16, 0)))
     same_day = ny.localize(datetime.datetime.combine(as_of, datetime.time(16, 0)))
@@ -86,19 +90,19 @@ def _make_qs_payload(as_of: datetime.date):
     }
 
     for delta, vol in call_vols.items():
-        label = f"TY_30 {delta}D Call"
+        label = f"{globex_symbol} {delta}D Call"
         payload[label] = [
-            _make_pricer(label=label, right="C", delta=delta, quote_ts=prev_dt, iv_normal=vol * 0.98),
-            _make_pricer(label=label, right="C", delta=delta, quote_ts=same_day, iv_normal=vol),
+            _make_pricer(label=label, right="C", delta=delta, quote_ts=prev_dt, iv_normal=vol * 0.98, globex_symbol=globex_symbol),
+            _make_pricer(label=label, right="C", delta=delta, quote_ts=same_day, iv_normal=vol, globex_symbol=globex_symbol),
         ]
-    payload["TY_30 25D Call"].append(
-        _make_pricer(label="TY_30 25D Call", right="C", delta=25, quote_ts=later_same_day, iv_normal=0.845)
+    payload[f"{globex_symbol} 25D Call"].append(
+        _make_pricer(label=f"{globex_symbol} 25D Call", right="C", delta=25, quote_ts=later_same_day, iv_normal=0.845, globex_symbol=globex_symbol)
     )
 
     for delta, vol in put_vols.items():
-        label = f"TY_30 {delta}D Put"
+        label = f"{globex_symbol} {delta}D Put"
         payload[label] = [
-            _make_pricer(label=label, right="P", delta=delta, quote_ts=same_day, iv_normal=vol),
+            _make_pricer(label=label, right="P", delta=delta, quote_ts=same_day, iv_normal=vol, globex_symbol=globex_symbol),
         ]
     return payload
 
@@ -195,6 +199,70 @@ def test_sabr_smile_cache_roundtrip_preserves_object_and_evaluator(monkeypatch):
     assert restored_smile.price_to_futures_ytm(probe) == pytest.approx(smile.price_to_futures_ytm(probe), rel=1e-12)
 
 
+def test_fetch_sabr_smile_dual_seeds_single_symbol_option_snapshot_cache(monkeypatch):
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 4)
+    seen = {"qs_calls": 0}
+
+    def _stub_qs(request):
+        seen["qs_calls"] += 1
+        return _make_qs_payload(as_of, globex_symbol="TY_03")
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+    monkeypatch.setattr(mdp, "_build_sabr_smile_conversion_pricer", lambda **kwargs: _DummyFuturePricer())
+
+    smile = mdp.fetch_sabr_smile({"globex_symbol": "TY_03", "as_of": as_of, "force_refresh": True})
+    assert smile.globex_symbol == "TY_03"
+    assert seen["qs_calls"] == 1
+
+    monkeypatch.setattr(
+        mdp,
+        "_option_snapshot",
+        lambda request: (_ for _ in ()).throw(AssertionError("_option_snapshot should not run after SABR cache seeding")),
+    )
+
+    out = mdp.get_data(
+        {
+            "endpoint": "option_snapshot",
+            "symbols": ["TY_03|25DC"],
+            "timestamp": as_of,
+            "show_tqdm": False,
+        }
+    )
+
+    assert "TY_03|25DC" in out
+    assert out["TY_03|25DC"][0].iv_normal() == pytest.approx(0.845)
+
+
+def test_fetch_sabr_smile_dual_cache_key_canonicalizes_zero_padded_cm_symbol(monkeypatch):
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 4)
+    seen = {"qs_calls": 0}
+
+    def _stub_qs(request):
+        seen["qs_calls"] += 1
+        return _make_qs_payload(as_of, globex_symbol="TY_03")
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+    monkeypatch.setattr(mdp, "_build_sabr_smile_conversion_pricer", lambda **kwargs: _DummyFuturePricer())
+
+    mdp.fetch_sabr_smile({"globex_symbol": "TY_03", "as_of": as_of, "force_refresh": True})
+    cached = mdp.fetch_sabr_smile({"globex_symbol": "TY_3", "as_of": as_of})
+
+    assert seen["qs_calls"] == 1
+    assert cached.globex_symbol == "TY_03"
+
+
+def test_quikvol_timeseries_query_builder_handles_short_dated_ust_cm_symbol():
+    payload = QuikVolTimeseriesQueryBuilder.build_elements_dict(
+        globex_symbol="TY_03",
+        qv_value_type=QuikVolValueType.Call,
+        delta=5,
+    )
+
+    assert payload["Elements"][0]["ProductId"] == QuikVolProductID.TY.value.underlying_pid
+
+
 def test_qs_timeseries_to_pricers_normalizes_delta_from_series_label(monkeypatch):
     mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
     ts = pytz.timezone("America/New_York").localize(datetime.datetime(2026, 3, 4, 16, 0))
@@ -278,3 +346,156 @@ def test_select_sabr_smile_pricers_prefers_series_label_delta():
 
     assert ("C", 10) in selected
     assert ("P", 10) in selected
+
+
+def test_fetch_bulk_sabr_smile_qs_multi_symbol_multi_date_batches_conversion_pricers(monkeypatch):
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    ny = pytz.timezone("America/New_York")
+    d1 = datetime.date(2026, 3, 4)
+    d2 = datetime.date(2026, 3, 5)
+    seen = {"qs_requests": [], "ustf_requests": []}
+
+    call_vols = {5: 1.14, 10: 1.04, 15: 0.95, 20: 0.88, 25: 0.84, 30: 0.815, 35: 0.802, 40: 0.786, 45: 0.779, 50: 0.774}
+    put_vols = {5: 0.79, 10: 0.748, 15: 0.727, 20: 0.721, 25: 0.724, 30: 0.733, 35: 0.745, 40: 0.756, 45: 0.766, 50: 0.774}
+
+    def _append_payload(payload, *, globex_symbol, underlying_symbol, as_of, forward, call_shift=0.0, put_shift=0.0):
+        same_day = ny.localize(datetime.datetime.combine(as_of, datetime.time(16, 0)))
+        later_same_day = ny.localize(datetime.datetime.combine(as_of, datetime.time(16, 5)))
+        for delta, vol in call_vols.items():
+            label = f"{globex_symbol} {delta}D Call"
+            payload.setdefault(label, []).append(
+                _make_pricer(
+                    label=label,
+                    right="C",
+                    delta=delta,
+                    quote_ts=same_day,
+                    iv_normal=vol + call_shift,
+                    forward=forward,
+                    underlying_symbol=underlying_symbol,
+                    globex_symbol=globex_symbol,
+                )
+            )
+        payload[f"{globex_symbol} 25D Call"].append(
+            _make_pricer(
+                label=f"{globex_symbol} 25D Call",
+                right="C",
+                delta=25,
+                quote_ts=later_same_day,
+                iv_normal=call_vols[25] + call_shift + 0.001,
+                forward=forward,
+                underlying_symbol=underlying_symbol,
+                globex_symbol=globex_symbol,
+            )
+        )
+        for delta, vol in put_vols.items():
+            label = f"{globex_symbol} {delta}D Put"
+            payload.setdefault(label, []).append(
+                _make_pricer(
+                    label=label,
+                    right="P",
+                    delta=delta,
+                    quote_ts=same_day,
+                    iv_normal=vol + put_shift,
+                    forward=forward,
+                    underlying_symbol=underlying_symbol,
+                    globex_symbol=globex_symbol,
+                )
+            )
+
+    def _stub_qs(request):
+        seen["qs_requests"].append(request)
+        payload = {}
+        _append_payload(payload, globex_symbol="TY_03", underlying_symbol="ZNH26", as_of=d1, forward=112.90625)
+        _append_payload(payload, globex_symbol="TY_03", underlying_symbol="ZNH26", as_of=d2, forward=112.87500, call_shift=0.01, put_shift=0.005)
+        _append_payload(payload, globex_symbol="FV_10", underlying_symbol="ZFM26", as_of=d1, forward=108.50000, call_shift=0.02, put_shift=0.01)
+        _append_payload(payload, globex_symbol="FV_10", underlying_symbol="ZFM26", as_of=d2, forward=108.43750, call_shift=0.03, put_shift=0.015)
+        return payload
+
+    class _DummyUSTFuturesMDP:
+        def __init__(self, source):
+            assert source == "BARCHART_USTF-RL"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            _ = exc_type, exc, tb
+            return False
+
+        def get_pricer(self, request):
+            seen["ustf_requests"].append(request)
+            return {symbol: _DummyFuturePricer() for symbol in request["symbols"]}
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+    monkeypatch.setattr(ustfo_module, "USTFuturesMDP", _DummyUSTFuturesMDP)
+
+    out = mdp.fetch_bulk_sabr_smile(
+        {
+            "globex_symbols": ["TY_03", "FV_10"],
+            "timestamps": [d1, d2],
+            "force_refresh": True,
+        }
+    )
+
+    assert len(seen["qs_requests"]) == 1
+    assert seen["qs_requests"][0]["start"] == d1
+    assert seen["qs_requests"][0]["end"] == d2
+    assert len(seen["qs_requests"][0]["queries"]) == 40
+    assert len(seen["ustf_requests"]) == 2
+    assert {req["timestamp"] for req in seen["ustf_requests"]} == {d1, d2}
+    assert all(len(req["symbols"]) == 2 for req in seen["ustf_requests"])
+    assert set(out.keys()) == {"TY_03", "FV_10"}
+    assert isinstance(out["TY_03"][d1], USTFutureOptionSABRSmile)
+    assert out["FV_10"][d2].underlying_contract == "ZFM26"
+
+
+def test_fetch_bulk_sabr_smile_qs_falls_back_to_missing_dates_for_short_cm(monkeypatch):
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    d1 = datetime.date(2026, 3, 4)
+    d2 = datetime.date(2026, 3, 5)
+    seen = {"requests": []}
+
+    def _merge_payloads(*payloads):
+        merged = {}
+        for payload in payloads:
+            for label, plist in payload.items():
+                merged.setdefault(label, []).extend(plist)
+        return merged
+
+    def _stub_qs(request):
+        seen["requests"].append(request)
+        if request["start"] != request["end"]:
+            return _merge_payloads(
+                _make_qs_payload(d2, globex_symbol="TY_05"),
+                _make_qs_payload(d2, globex_symbol="TY_07"),
+            )
+        return _merge_payloads(
+            _make_qs_payload(request["start"], globex_symbol="TY_05"),
+            _make_qs_payload(request["start"], globex_symbol="TY_07"),
+        )
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+    monkeypatch.setattr(
+        mdp,
+        "_build_bulk_sabr_smile_conversion_pricers",
+        lambda requirements, *, force_refresh: {
+            (underlying_contract, as_of): _DummyFuturePricer()
+            for underlying_contract, as_of in requirements
+        },
+    )
+
+    out = mdp.fetch_bulk_sabr_smile(
+        {
+            "globex_symbols": ["TY_05", "TY_07"],
+            "timestamps": [d1, d2],
+            "force_refresh": True,
+        }
+    )
+
+    assert len(seen["requests"]) == 2
+    assert seen["requests"][0]["start"] == d1
+    assert seen["requests"][0]["end"] == d2
+    assert seen["requests"][1]["start"] == d1
+    assert seen["requests"][1]["end"] == d1
+    assert isinstance(out["TY_05"][d1], USTFutureOptionSABRSmile)
+    assert isinstance(out["TY_07"][d2], USTFutureOptionSABRSmile)

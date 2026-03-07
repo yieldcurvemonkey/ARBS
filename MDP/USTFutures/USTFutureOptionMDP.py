@@ -1152,7 +1152,7 @@ def _normalize_qs_ust_globex_symbol(token: str) -> str:
         days = int(m_cm.group("days"))
         if days <= 0:
             raise ValueError(f"Invalid constant-maturity tenor in symbol {token!r}: days must be > 0")
-        return f"{root}_{days}"
+        return f"{root}_{days:02d}"
 
     raise ValueError(
         "qs_timeseries supports UST listed contracts "
@@ -1608,6 +1608,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 raise ValueError("sabr_smile requires 'globex_symbol' for USTFO_DUAL-QL")
             raw_symbol = str(request.get("globex_symbol", "")).strip().upper()
             symbol_info = _parse_qs_ust_globex_symbol(raw_symbol, as_of=as_of)
+            raw_symbol = str(symbol_info["globex_symbol"])
             if str(symbol_info.get("kind")) != "cm":
                 raise ValueError("sabr_smile currently supports constant-maturity aliases only for USTFO_DUAL-QL, e.g. TY_30")
         elif src == "BARCHART_USTFO-QL":
@@ -1870,6 +1871,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         selected: Dict[Tuple[str, int], QLUSTFutureOptionPricer],
         labels_by_key: Optional[Dict[Tuple[str, int], str]],
         force_refresh: bool,
+        conversion_pricer: Optional[Any] = None,
     ) -> USTFutureOptionSABRSmile:
         underlying_contract, forward_price, expiry_date, fv01 = self._ensure_sabr_smile_pricer_consistency(selected)
         time_to_expiry = (expiry_date - as_of).days / 365.0
@@ -1884,11 +1886,12 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             beta=0.5,
         )
 
-        conversion_pricer = self._build_sabr_smile_conversion_pricer(
-            underlying_contract=underlying_contract,
-            as_of=as_of,
-            force_refresh=force_refresh,
-        )
+        if conversion_pricer is None:
+            conversion_pricer = self._build_sabr_smile_conversion_pricer(
+                underlying_contract=underlying_contract,
+                as_of=as_of,
+                force_refresh=force_refresh,
+            )
         forward_futures_ytm = float(conversion_pricer.yield_to_maturity_from_price(float(forward_price)))
         params = USTFutureOptionSABRParams(
             alpha=float(params_seed.alpha),
@@ -1989,6 +1992,12 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 key: str((pr.meta() or {}).get("qs_series_label", pr.symbol()))
                 for key, pr in selected.items()
             }
+            self._seed_sabr_smile_option_snapshot_cache(
+                request_symbols=[str(request.get("globex_symbol", "")), raw_symbol, str(symbol_info.get("globex_symbol", ""))],
+                as_of=as_of,
+                selected=selected,
+                source_request=request,
+            )
         else:
             snapshot_request = self._build_sabr_smile_snapshot_request(
                 request_symbol=str(symbol_info["request_symbol"]),
@@ -1999,7 +2008,8 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 force_refresh=force_refresh,
                 show_tqdm=show_tqdm,
             )
-            snapshot = self._option_snapshot(snapshot_request)
+            snapshot = self.get_data(snapshot_request)
+            self._seed_option_snapshot_alias_cache(request=snapshot_request, result=snapshot, source_request=request)
             selected, labels_by_key = self._select_sabr_smile_snapshot_pricers(
                 pricers_by_symbol=snapshot,
                 as_of=as_of,
@@ -2013,6 +2023,723 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             labels_by_key=labels_by_key,
             force_refresh=force_refresh,
         )
+
+    def _normalize_bulk_sabr_smile_request(
+        self,
+        request: Dict[str, Any],
+    ) -> Tuple[List[Dict[str, Any]], List[datetime.date], List[int], str, Dict[str, Any], bool, bool]:
+        if "timestamps" not in request:
+            raise ValueError("fetch_bulk_sabr_smile requires 'timestamps'")
+        if "beta" in request:
+            raise ValueError("sabr_smile fixes beta=0.5; request must not include 'beta'")
+
+        timestamps_raw = request.get("timestamps")
+        if isinstance(timestamps_raw, (str, datetime.date, datetime.datetime)):
+            timestamp_items = [timestamps_raw]
+        else:
+            timestamp_items = list(timestamps_raw or [])
+        if not timestamp_items:
+            raise ValueError("timestamps is empty")
+
+        dates: List[datetime.date] = []
+        seen_dates: set[datetime.date] = set()
+        for item in timestamp_items:
+            if isinstance(item, str) and item.strip().lower() == "live":
+                raise ValueError("fetch_bulk_sabr_smile does not support 'live' timestamps")
+            dt = _as_date(item)
+            if dt in seen_dates:
+                continue
+            seen_dates.add(dt)
+            dates.append(dt)
+        if not dates:
+            raise ValueError("timestamps is empty")
+
+        src = str(self.source).upper()
+        input_symbols: List[str] = []
+        if src == "USTFO_DUAL-QL":
+            if any(key in request for key in ("symbols", "symbol", "contract")):
+                raise ValueError("fetch_bulk_sabr_smile for USTFO_DUAL-QL requires 'globex_symbols' or 'globex_symbol'")
+            raw_symbols = request.get("globex_symbols", request.get("globex_symbol"))
+        elif src == "BARCHART_USTFO-QL":
+            if "globex_symbols" in request or "globex_symbol" in request:
+                raise ValueError("fetch_bulk_sabr_smile for BARCHART_USTFO-QL requires 'symbols', 'symbol', or 'contract'")
+            raw_symbols = []
+            if "symbols" in request:
+                symbols_val = request.get("symbols")
+                if isinstance(symbols_val, str):
+                    raw_symbols.append(symbols_val)
+                else:
+                    raw_symbols.extend(list(symbols_val or []))
+            for key in ("symbol", "contract"):
+                if key in request and request.get(key) is not None:
+                    raw_symbols.append(request.get(key))
+        else:
+            raise NotImplementedError(
+                f"SABR smile fetcher is only available for sources 'USTFO_DUAL-QL' and 'BARCHART_USTFO-QL', got {self.source!r}"
+            )
+
+        if isinstance(raw_symbols, str):
+            raw_symbols = [raw_symbols]
+        for sym in list(raw_symbols or []):
+            token = str(sym).strip()
+            if token:
+                input_symbols.append(token)
+        if not input_symbols:
+            raise ValueError("fetch_bulk_sabr_smile requires at least one symbol")
+
+        ordered_symbols = self._dedupe_preserve_order([str(sym).strip().upper() for sym in input_symbols if str(sym).strip()])
+        if not ordered_symbols:
+            raise ValueError("fetch_bulk_sabr_smile requires at least one symbol")
+
+        base_req = dict(request)
+        for key in ("timestamps", "globex_symbols", "globex_symbol", "symbols", "symbol", "contract", "endpoint", "max_workers"):
+            base_req.pop(key, None)
+
+        symbol_rows: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        deltas: Optional[List[int]] = None
+        curve_name: Optional[str] = None
+        curve_kwargs: Optional[Dict[str, Any]] = None
+        force_refresh: Optional[bool] = None
+        show_tqdm: Optional[bool] = None
+
+        symbol_field = "globex_symbol" if src == "USTFO_DUAL-QL" else "symbol"
+        first_date = dates[0]
+        for input_symbol in ordered_symbols:
+            scalar_req = dict(base_req)
+            scalar_req[symbol_field] = input_symbol
+            scalar_req["as_of"] = first_date
+            raw_symbol, symbol_info, _, deltas_i, curve_name_i, curve_kwargs_i, force_refresh_i, show_tqdm_i = self._validate_sabr_smile_request(
+                scalar_req
+            )
+
+            for as_of in dates[1:]:
+                probe_req = dict(base_req)
+                probe_req[symbol_field] = input_symbol
+                probe_req["as_of"] = as_of
+                probe_raw_symbol, _, _, _, _, _, _, _ = self._validate_sabr_smile_request(probe_req)
+                if probe_raw_symbol != raw_symbol:
+                    raise ValueError(
+                        f"Bulk SABR symbol normalization is not stable across dates for {input_symbol!r}: "
+                        f"{raw_symbol!r} on {first_date.isoformat()} vs {probe_raw_symbol!r} on {as_of.isoformat()}"
+                    )
+
+            if deltas is None:
+                deltas = list(deltas_i)
+                curve_name = curve_name_i
+                curve_kwargs = dict(curve_kwargs_i)
+                force_refresh = bool(force_refresh_i)
+                show_tqdm = bool(show_tqdm_i)
+
+            row = symbol_rows.get(raw_symbol)
+            if row is None:
+                symbol_rows[raw_symbol] = {
+                    "raw_symbol": raw_symbol,
+                    "symbol_info": dict(symbol_info),
+                    "input_symbols": [input_symbol],
+                }
+            else:
+                row["input_symbols"] = self._dedupe_preserve_order(list(row.get("input_symbols") or []) + [input_symbol])
+
+        return (
+            list(symbol_rows.values()),
+            dates,
+            list(deltas or self._normalize_sabr_smile_deltas(None)),
+            str(curve_name or self._curve_name_default),
+            dict(curve_kwargs or {}),
+            bool(force_refresh),
+            bool(show_tqdm),
+        )
+
+    def _select_bulk_sabr_smile_qs_pricers(
+        self,
+        *,
+        pricers_by_series: Dict[str, List[QLUSTFutureOptionPricer]],
+        misses: Sequence[Dict[str, Any]],
+        deltas: Sequence[int],
+        strict: bool = True,
+    ) -> Tuple[
+        Dict[Tuple[str, datetime.date], Dict[Tuple[str, int], QLUSTFutureOptionPricer]],
+        Dict[Tuple[str, datetime.date], Dict[Tuple[str, int], str]],
+        List[Dict[str, Any]],
+    ]:
+        selected_by_request: Dict[Tuple[str, datetime.date], Dict[Tuple[str, int], QLUSTFutureOptionPricer]] = {}
+        labels_by_request: Dict[Tuple[str, datetime.date], Dict[Tuple[str, int], str]] = {}
+        pricer_buckets: Dict[Tuple[str, datetime.date, str, int], QLUSTFutureOptionPricer] = {}
+        label_buckets: Dict[Tuple[str, datetime.date, str, int], str] = {}
+        available_dates_by_symbol: Dict[str, set[datetime.date]] = defaultdict(set)
+        unresolved: List[Dict[str, Any]] = []
+
+        for series_name, plist in pricers_by_series.items():
+            series_label = str(series_name)
+            series_right = self._qs_right_from_label_and_query(label=series_label, query={})
+            series_delta = self._qs_delta_abs_from_label_and_query(label=series_label, query={})
+            for pr in plist:
+                quote_day = pr.quote_timestamp().astimezone(_NY_TZ).date()
+                meta = pr.meta() if callable(getattr(pr, "meta", None)) else {}
+                qs_query = dict((meta or {}).get("qs_query") or {})
+                label = str((meta or {}).get("qs_series_label", series_label))
+                delta_raw = series_delta if series_delta is not None else self._qs_delta_abs_from_label_and_query(label=label, query=qs_query)
+                right = series_right if series_right in {"C", "P"} else self._qs_right_from_label_and_query(label=label, query=qs_query)
+                if delta_raw is None:
+                    delta_raw = _to_float(qs_query.get("delta"))
+                if delta_raw is None or right not in {"C", "P"}:
+                    continue
+                globex_symbol = str(qs_query.get("globex_symbol", "")).strip().upper()
+                if not globex_symbol:
+                    head = str(label).strip().upper().split(" ", 1)[0]
+                    try:
+                        globex_symbol = _normalize_qs_ust_globex_symbol(head)
+                    except Exception:
+                        globex_symbol = head
+                if not globex_symbol:
+                    continue
+
+                key = (globex_symbol, quote_day, right, int(round(float(delta_raw))))
+                available_dates_by_symbol[globex_symbol].add(quote_day)
+                current = pricer_buckets.get(key)
+                if current is None or pr.quote_timestamp() > current.quote_timestamp():
+                    pricer_buckets[key] = pr
+                    label_buckets[key] = label
+
+        for miss in misses:
+            request_key = (str(miss["raw_symbol"]), miss["as_of"])
+            selected: Dict[Tuple[str, int], QLUSTFutureOptionPricer] = {}
+            labels: Dict[Tuple[str, int], str] = {}
+            globex_symbol = str(miss["symbol_info"]["globex_symbol"]).strip().upper()
+            missing: List[str] = []
+            for delta in deltas:
+                for right, side_label in (("C", "Call"), ("P", "Put")):
+                    bucket_key = (globex_symbol, miss["as_of"], right, int(delta))
+                    pr = pricer_buckets.get(bucket_key)
+                    if pr is None:
+                        missing.append(f"{int(delta)}D {side_label}")
+                        continue
+                    leg_key = (right, int(delta))
+                    selected[leg_key] = pr
+                    labels[leg_key] = label_buckets.get(bucket_key, str((pr.meta() or {}).get("qs_series_label", pr.symbol())))
+            if missing:
+                available_dates = ", ".join(sorted(d.isoformat() for d in available_dates_by_symbol.get(globex_symbol, set()))) or "none"
+                if strict:
+                    raise ValueError(
+                        f"Missing SABR smile legs for {miss['raw_symbol']} on {miss['as_of'].isoformat()}: {missing}. "
+                        f"Available quote dates: {available_dates}."
+                    )
+                unresolved.append(dict(miss, missing=missing, available_dates=available_dates))
+                continue
+            selected_by_request[request_key] = selected
+            labels_by_request[request_key] = labels
+
+        return selected_by_request, labels_by_request, unresolved
+
+    def _build_bulk_sabr_smile_conversion_pricers(
+        self,
+        requirements: Iterable[Tuple[str, datetime.date]],
+        *,
+        force_refresh: bool,
+    ) -> Dict[Tuple[str, datetime.date], Any]:
+        grouped: "OrderedDict[datetime.date, List[Tuple[str, str]]]" = OrderedDict()
+        for underlying_contract, as_of in requirements:
+            internal_symbol = _to_internal_ustf_contract(str(underlying_contract), as_of=as_of)
+            grouped.setdefault(as_of, [])
+            pair = (str(underlying_contract), internal_symbol)
+            if pair not in grouped[as_of]:
+                grouped[as_of].append(pair)
+
+        out: Dict[Tuple[str, datetime.date], Any] = {}
+        if not grouped:
+            return out
+
+        ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
+        with ustf_mdp:
+            for as_of, pairs in grouped.items():
+                internal_symbols = [internal_symbol for _, internal_symbol in pairs]
+                pricers = ustf_mdp.get_pricer(
+                    {
+                        "symbols": internal_symbols,
+                        "timestamp": as_of,
+                        "include_basket": True,
+                        "force_refresh": force_refresh,
+                    }
+                )
+                for underlying_contract, internal_symbol in pairs:
+                    if internal_symbol not in pricers:
+                        raise ValueError(f"Failed to build UST futures pricer for {internal_symbol}")
+                    out[(underlying_contract, as_of)] = pricers[internal_symbol]
+        return out
+
+    def _build_bulk_sabr_smile_snapshot_context(
+        self,
+        *,
+        request_symbols: Sequence[str],
+        deltas: Sequence[int],
+        window_start: datetime.date,
+        window_end: datetime.date,
+        request: Dict[str, Any],
+        curve_name: str,
+        curve_kwargs: Dict[str, Any],
+        show_tqdm: bool,
+        force_refresh: bool,
+    ) -> Dict[str, Any]:
+        start, end = self._historical_prefetch_window(start=window_start, end=window_end)
+        price_mode = str(request.get("price_mode", "mid_then_fallback"))
+        delta_candidate_half_width = max(2, int(request.get("delta_candidate_half_width", 8)))
+
+        alias_symbols: List[str] = []
+        alias_by_symbol: Dict[str, Dict[Tuple[str, int], str]] = {}
+        parsed_requested_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        for request_symbol in request_symbols:
+            per_symbol: Dict[Tuple[str, int], str] = {}
+            for delta in deltas:
+                for right in ("C", "P"):
+                    raw_alias = f"{request_symbol}|{int(delta)}D{right}"
+                    alias_symbols.append(raw_alias)
+                    per_symbol[(right, int(delta))] = raw_alias
+                    parsed_requested_specs[raw_alias] = _parse_option_request_symbol(raw_alias, as_of=window_start)
+            alias_by_symbol[request_symbol] = per_symbol
+
+        contracts_by_raw: "OrderedDict[str, List[str]]" = OrderedDict()
+        for raw, spec in parsed_requested_specs.items():
+            contracts = self._contracts_for_spec_window(
+                spec=spec,
+                window_start=window_start,
+                window_end=window_end,
+            )
+            contracts_by_raw[raw] = self._dedupe_preserve_order(contracts)
+
+        underlying_contracts = sorted(
+            {
+                _option_contract_to_underlying_contract(contract)
+                for contracts in contracts_by_raw.values()
+                for contract in contracts
+            }
+        )
+        contract_symbols_bc = sorted({_contract_to_barchart_contract(contract) for contract in underlying_contracts})
+        underlying_data = self._fetch_barchart_eod_series(
+            symbols=contract_symbols_bc,
+            start=start,
+            end=end,
+            show_tqdm=show_tqdm,
+        )
+
+        chains: Optional[Dict[str, Dict[str, pd.DataFrame]]] = None
+
+        def _ensure_delta_chains() -> Dict[str, Dict[str, pd.DataFrame]]:
+            nonlocal chains
+            if chains is not None:
+                return chains
+
+            option_contracts = sorted(
+                {
+                    _contract_to_barchart_contract(contract)
+                    for contracts in contracts_by_raw.values()
+                    for contract in contracts
+                }
+            )
+            if not option_contracts:
+                chains = {}
+                return chains
+
+            chain_concurrency = min(max(len(option_contracts), 1), 16)
+            bcf = self._get_barchart_fetcher(required_concurrency=chain_concurrency)
+            fetched = bcf.get_option_quotes(
+                symbols=option_contracts,
+                max_concurrent_tasks=chain_concurrency,
+                max_keepalive_connections=min(max(len(option_contracts), 1), 16),
+                show_tqdm=show_tqdm,
+            )
+            chains = fetched if isinstance(fetched, dict) else {}
+            return chains
+
+        delta_alias_meta: Dict[str, Dict[str, Any]] = {}
+        expanded_needed: "OrderedDict[str, str]" = OrderedDict()
+        for raw, spec in parsed_requested_specs.items():
+            right = str(spec["right"]).upper()
+            if right not in {"C", "P"}:
+                raise ValueError(f"Historical delta alias supports call/put only: {raw!r}")
+            target_delta = _to_float(spec.get("delta"))
+            if target_delta is None:
+                raise ValueError(f"Missing delta in historical alias spec: {raw!r}")
+
+            candidate_symbols: List[str] = []
+            for contract in contracts_by_raw.get(raw, []):
+                underlying_contract = _option_contract_to_underlying_contract(contract)
+                underlying_bcontract = _contract_to_barchart_contract(underlying_contract)
+                fut_df = underlying_data.get(underlying_bcontract)
+                if fut_df is None or fut_df.empty:
+                    continue
+
+                generated_from_rules = False
+                for row_dt, row in fut_df.iterrows():
+                    row_day = pd.Timestamp(row_dt).date()
+                    if row_day < window_start or row_day > window_end:
+                        continue
+                    forward = _extract_row_price(row.to_dict(), price_mode=price_mode)
+                    if forward is None or forward <= 0.0:
+                        continue
+                    strike_subset = _cme_listed_strikes_for_contract_forward(
+                        contract=contract,
+                        forward=float(forward),
+                        as_of=row_day,
+                    )
+                    if strike_subset:
+                        candidate_symbols.extend(
+                            [f"{contract}|{_format_strike4(strike, contract=contract)}{right}" for strike in strike_subset]
+                        )
+                        generated_from_rules = True
+
+                if generated_from_rules:
+                    continue
+
+                option_bcontract = _contract_to_barchart_contract(contract)
+                chain = _ensure_delta_chains().get(option_bcontract)
+                if chain is None:
+                    continue
+                side = "call" if right == "C" else "put"
+                listed_strikes = self._live_chain_strikes(chain, side)
+                if not listed_strikes:
+                    continue
+
+                for row_dt, row in fut_df.iterrows():
+                    row_day = pd.Timestamp(row_dt).date()
+                    if row_day < window_start or row_day > window_end:
+                        continue
+                    forward = _extract_row_price(row.to_dict(), price_mode=price_mode)
+                    if forward is None or forward <= 0.0:
+                        continue
+                    strike_subset = self._pick_centered_strike_slice(
+                        listed_strikes,
+                        center=float(forward),
+                        half_width=delta_candidate_half_width,
+                    )
+                    if strike_subset:
+                        candidate_symbols.extend(
+                            [f"{contract}|{_format_strike4(strike, contract=contract)}{right}" for strike in strike_subset]
+                        )
+
+            candidate_symbols = self._dedupe_preserve_order(candidate_symbols)
+            if not candidate_symbols:
+                raise ValueError(f"Could not resolve delta alias {raw!r}: no candidate strikes near forward.")
+
+            delta_alias_meta[raw] = {
+                "target_delta": float(target_delta),
+                "right": right,
+                "candidate_symbols": candidate_symbols,
+            }
+            for leg in candidate_symbols:
+                expanded_needed[leg] = leg
+
+        pricers_window = self._get_or_build_barchart_pricer_window(
+            leg_symbols=list(expanded_needed.keys()),
+            cache_symbols=["__BULK_TIMESERIES__"] + self._dedupe_preserve_order(alias_symbols),
+            request_start=window_start,
+            request_end=window_end,
+            show_tqdm=show_tqdm,
+            price_mode=price_mode,
+            curve_name=curve_name,
+            curve_kwargs=curve_kwargs,
+            use_ql_calculator=True,
+            source="BARCHART_EOD_WINDOW",
+            force_refresh=force_refresh,
+        ) if expanded_needed else {}
+
+        return {
+            "price_mode": price_mode,
+            "alias_by_symbol": alias_by_symbol,
+            "parsed_requested_specs": parsed_requested_specs,
+            "underlying_data": underlying_data,
+            "delta_alias_meta": delta_alias_meta,
+            "pricers_window": pricers_window,
+        }
+
+    def _select_bulk_sabr_smile_snapshot_pricers(
+        self,
+        *,
+        context: Dict[str, Any],
+        request_symbol: str,
+        as_of: datetime.date,
+    ) -> Tuple[
+        Dict[Tuple[str, int], QLUSTFutureOptionPricer],
+        Dict[Tuple[str, int], str],
+        Dict[str, List[QLUSTFutureOptionPricer]],
+    ]:
+        alias_by_symbol = dict(context["alias_by_symbol"])
+        parsed_requested_specs = dict(context["parsed_requested_specs"])
+        underlying_data = dict(context["underlying_data"])
+        delta_alias_meta = dict(context["delta_alias_meta"])
+        pricers_window = dict(context["pricers_window"])
+        price_mode = str(context["price_mode"])
+        target_ts = pd.Timestamp(_NY_TZ.localize(datetime.datetime.combine(as_of, datetime.time(17, 0))))
+
+        selected: Dict[Tuple[str, int], QLUSTFutureOptionPricer] = {}
+        labels_by_key: Dict[Tuple[str, int], str] = {}
+        seed_result: Dict[str, List[QLUSTFutureOptionPricer]] = {}
+
+        for key, raw_alias in alias_by_symbol.get(request_symbol, {}).items():
+            resolved_spec = _resolve_option_contract_aliases_for_date(
+                OrderedDict([(raw_alias, parsed_requested_specs[raw_alias])]),
+                as_of=as_of,
+            )[raw_alias]
+            target_contract = str(resolved_spec["contract"])
+            target_underlying_contract = _option_contract_to_underlying_contract(target_contract)
+            target_underlying_bcontract = _contract_to_barchart_contract(target_underlying_contract)
+            fut_df = underlying_data.get(target_underlying_bcontract)
+            if fut_df is None or fut_df.empty:
+                raise ValueError(
+                    f"Could not resolve delta alias {raw_alias!r}: missing underlying history for {target_contract}."
+                )
+            target_pos = _asof_index_position(fut_df.index, target_ts)
+            if target_pos is None:
+                raise ValueError(
+                    f"Could not resolve delta alias {raw_alias!r}: no underlying row near {as_of}."
+                )
+            target_forward = _extract_row_price(fut_df.iloc[target_pos].to_dict(), price_mode=price_mode)
+            if target_forward is None or target_forward <= 0.0:
+                raise ValueError(
+                    f"Could not resolve delta alias {raw_alias!r}: invalid underlying forward."
+                )
+
+            meta = delta_alias_meta[raw_alias]
+            resolved_leg = self._resolve_historical_delta_from_pricers(
+                candidate_symbols=meta["candidate_symbols"],
+                pricers_window=pricers_window,
+                target_date=as_of,
+                target_delta=float(meta["target_delta"]),
+                right=str(meta["right"]),
+                forward=float(target_forward),
+            )
+            if resolved_leg is None:
+                raise ValueError(
+                    f"Could not resolve delta alias {raw_alias!r}: no priced strikes available near {as_of} for {target_contract}."
+                )
+            pr = self._asof_pricer_for_date(pricers_window.get(resolved_leg, {}), as_of)
+            if pr is None:
+                raise ValueError(
+                    f"Could not resolve delta alias {raw_alias!r}: missing pricer for resolved leg {resolved_leg!r} on {as_of}."
+                )
+            selected[key] = pr
+            labels_by_key[key] = raw_alias
+            seed_result[raw_alias] = [pr]
+
+        missing: List[str] = []
+        for delta in sorted({k[1] for k in alias_by_symbol.get(request_symbol, {}).keys()}):
+            if ("C", int(delta)) not in selected:
+                missing.append(f"{int(delta)}D Call")
+            if ("P", int(delta)) not in selected:
+                missing.append(f"{int(delta)}D Put")
+        if missing:
+            raise ValueError(f"Missing SABR smile legs for {request_symbol} on {as_of.isoformat()}: {missing}.")
+
+        return selected, labels_by_key, seed_result
+
+    def fetch_bulk_sabr_smile(self, request: Dict[str, Any]) -> Dict[str, Dict[datetime.date, USTFutureOptionSABRSmile]]:
+        req = dict(request)
+        symbol_rows, dates, deltas, curve_name, curve_kwargs, force_refresh, show_tqdm = self._normalize_bulk_sabr_smile_request(req)
+        src = str(self.source).upper()
+        base_req = dict(req)
+        for key in ("timestamps", "globex_symbols", "globex_symbol", "symbols", "symbol", "contract", "endpoint", "max_workers"):
+            base_req.pop(key, None)
+
+        symbol_field = "globex_symbol" if src == "USTFO_DUAL-QL" else "symbol"
+        smiles_by_symbol: "OrderedDict[str, OrderedDict[datetime.date, USTFutureOptionSABRSmile]]" = OrderedDict(
+            (str(row["raw_symbol"]), OrderedDict()) for row in symbol_rows
+        )
+        misses: List[Dict[str, Any]] = []
+
+        with self:
+            for row in symbol_rows:
+                raw_symbol = str(row["raw_symbol"])
+                for as_of in dates:
+                    scalar_req = dict(base_req)
+                    scalar_req[symbol_field] = row["input_symbols"][0]
+                    scalar_req["as_of"] = as_of
+                    cache_key = self._build_get_data_cache_key("sabr_smile", scalar_req)
+                    if cache_key and not force_refresh:
+                        cached = self._threadsafe_cache_get(cache_key)
+                        hit = self._deserialize_get_data_result(cached)
+                        if hit is not None:
+                            smiles = hit.get("sabr_smile") or []
+                            if smiles:
+                                smiles_by_symbol[raw_symbol][as_of] = smiles[0]
+                                continue
+                    misses.append(
+                        {
+                            "raw_symbol": raw_symbol,
+                            "symbol_info": dict(row["symbol_info"]),
+                            "input_symbols": list(row["input_symbols"]),
+                            "as_of": as_of,
+                            "scalar_request": scalar_req,
+                        }
+                    )
+
+            assembled_inputs: List[Tuple[Dict[str, Any], Dict[Tuple[str, int], QLUSTFutureOptionPricer], Dict[Tuple[str, int], str], Dict[str, List[QLUSTFutureOptionPricer]]]] = []
+
+            if misses:
+                if src == "USTFO_DUAL-QL":
+                    queries: List[Dict[str, Any]] = []
+                    seen_queries: set[Tuple[str, str, int]] = set()
+                    for miss in misses:
+                        globex_symbol = str(miss["symbol_info"]["globex_symbol"]).strip().upper()
+                        for delta in deltas:
+                            for qv_type, right in (("Call", "C"), ("Put", "P")):
+                                qkey = (globex_symbol, right, int(delta))
+                                if qkey in seen_queries:
+                                    continue
+                                seen_queries.add(qkey)
+                                queries.append(
+                                    {
+                                        "globex_symbol": globex_symbol,
+                                        "qv_value_type": qv_type,
+                                        "delta": int(delta),
+                                        "option_type": qv_type,
+                                    }
+                                )
+                    qs_request = {
+                        "endpoint": "qs_timeseries",
+                        "start": min(miss["as_of"] for miss in misses),
+                        "end": max(miss["as_of"] for miss in misses),
+                        "queries": queries,
+                        "options": True,
+                        "curve_name": curve_name,
+                        "curve_kwargs": dict(curve_kwargs or {}),
+                        "force_refresh": force_refresh,
+                        "show_tqdm": show_tqdm,
+                    }
+                    pricers_by_series = self._qs_timeseries(qs_request)
+                    selected_by_request, labels_by_request, unresolved = self._select_bulk_sabr_smile_qs_pricers(
+                        pricers_by_series=pricers_by_series,
+                        misses=misses,
+                        deltas=deltas,
+                        strict=(len({miss["as_of"] for miss in misses}) == 1),
+                    )
+                    if unresolved:
+                        unresolved_by_date: "OrderedDict[datetime.date, List[Dict[str, Any]]]" = OrderedDict()
+                        for miss in unresolved:
+                            unresolved_by_date.setdefault(miss["as_of"], []).append(miss)
+
+                        for fallback_date, fallback_misses in unresolved_by_date.items():
+                            fallback_queries: List[Dict[str, Any]] = []
+                            fallback_seen_queries: set[Tuple[str, str, int]] = set()
+                            for miss in fallback_misses:
+                                globex_symbol = str(miss["symbol_info"]["globex_symbol"]).strip().upper()
+                                for delta in deltas:
+                                    for qv_type, right in (("Call", "C"), ("Put", "P")):
+                                        qkey = (globex_symbol, right, int(delta))
+                                        if qkey in fallback_seen_queries:
+                                            continue
+                                        fallback_seen_queries.add(qkey)
+                                        fallback_queries.append(
+                                            {
+                                                "globex_symbol": globex_symbol,
+                                                "qv_value_type": qv_type,
+                                                "delta": int(delta),
+                                                "option_type": qv_type,
+                                            }
+                                        )
+
+                            fallback_request = {
+                                "endpoint": "qs_timeseries",
+                                "start": fallback_date,
+                                "end": fallback_date,
+                                "queries": fallback_queries,
+                                "options": True,
+                                "curve_name": curve_name,
+                                "curve_kwargs": dict(curve_kwargs or {}),
+                                "force_refresh": force_refresh,
+                                "show_tqdm": show_tqdm,
+                            }
+                            fallback_pricers_by_series = self._qs_timeseries(fallback_request)
+                            fallback_selected, fallback_labels, _ = self._select_bulk_sabr_smile_qs_pricers(
+                                pricers_by_series=fallback_pricers_by_series,
+                                misses=fallback_misses,
+                                deltas=deltas,
+                                strict=True,
+                            )
+                            selected_by_request.update(fallback_selected)
+                            labels_by_request.update(fallback_labels)
+
+                    for miss in misses:
+                        request_key = (str(miss["raw_symbol"]), miss["as_of"])
+                        selected = selected_by_request[request_key]
+                        labels_by_key = labels_by_request[request_key]
+                        seed_symbols = self._dedupe_preserve_order(
+                            list(miss["input_symbols"]) + [str(miss["raw_symbol"]), str(miss["symbol_info"].get("globex_symbol", ""))]
+                        )
+                        self._seed_sabr_smile_option_snapshot_cache(
+                            request_symbols=seed_symbols,
+                            as_of=miss["as_of"],
+                            selected=selected,
+                            source_request=req,
+                        )
+                        assembled_inputs.append((miss, selected, labels_by_key, {}))
+                else:
+                    context = self._build_bulk_sabr_smile_snapshot_context(
+                        request_symbols=[str(row["raw_symbol"]) for row in symbol_rows],
+                        deltas=deltas,
+                        window_start=min(miss["as_of"] for miss in misses),
+                        window_end=max(miss["as_of"] for miss in misses),
+                        request=req,
+                        curve_name=curve_name,
+                        curve_kwargs=curve_kwargs,
+                        show_tqdm=show_tqdm,
+                        force_refresh=force_refresh,
+                    )
+                    seed_source_request: Dict[str, Any] = {}
+                    if "curve_name" in req:
+                        seed_source_request["curve_name"] = curve_name
+                    if "curve_kwargs" in req:
+                        seed_source_request["curve_kwargs"] = curve_kwargs
+
+                    for miss in misses:
+                        selected, labels_by_key, seed_result = self._select_bulk_sabr_smile_snapshot_pricers(
+                            context=context,
+                            request_symbol=str(miss["raw_symbol"]),
+                            as_of=miss["as_of"],
+                        )
+                        seed_request: Dict[str, Any] = {
+                            "endpoint": "option_snapshot",
+                            "timestamp": miss["as_of"],
+                            "use_ql_calculator": True,
+                        }
+                        if "curve_name" in seed_source_request:
+                            seed_request["curve_name"] = curve_name
+                        if "curve_kwargs" in seed_source_request:
+                            seed_request["curve_kwargs"] = curve_kwargs
+                        self._seed_option_snapshot_alias_cache(
+                            request=seed_request,
+                            result=seed_result,
+                            source_request=seed_source_request,
+                        )
+                        assembled_inputs.append((miss, selected, labels_by_key, seed_result))
+
+                conversion_requirements = []
+                for miss, selected, _, _ in assembled_inputs:
+                    underlying_contract, _, _, _ = self._ensure_sabr_smile_pricer_consistency(selected)
+                    conversion_requirements.append((underlying_contract, miss["as_of"]))
+                conversion_pricers = self._build_bulk_sabr_smile_conversion_pricers(
+                    conversion_requirements,
+                    force_refresh=force_refresh,
+                )
+
+                for miss, selected, labels_by_key, _ in assembled_inputs:
+                    underlying_contract, _, _, _ = self._ensure_sabr_smile_pricer_consistency(selected)
+                    conversion_pricer = conversion_pricers[(underlying_contract, miss["as_of"])]
+                    smile = self._assemble_sabr_smile_result(
+                        raw_symbol=str(miss["raw_symbol"]),
+                        as_of=miss["as_of"],
+                        selected=selected,
+                        labels_by_key=labels_by_key,
+                        force_refresh=force_refresh,
+                        conversion_pricer=conversion_pricer,
+                    )
+                    smiles_by_symbol[str(miss["raw_symbol"])][miss["as_of"]] = smile
+                    cache_key = self._build_get_data_cache_key("sabr_smile", miss["scalar_request"])
+                    if cache_key:
+                        self._threadsafe_cache_put(
+                            cache_key,
+                            self._serialize_get_data_result("sabr_smile", {"sabr_smile": [smile]}),
+                        )
+
+        return {symbol: dict(by_date) for symbol, by_date in smiles_by_symbol.items()}
 
     def _serialize_sabr_smile(self, smile: USTFutureOptionSABRSmile) -> Dict[str, Any]:
         return smile.to_dict()
@@ -2056,7 +2783,9 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             src = str(self.source).upper()
             if src == "USTFO_DUAL-QL":
                 if "globex_symbol" in cache_req:
-                    cache_req["globex_symbol"] = str(cache_req["globex_symbol"]).strip().upper()
+                    cache_req["globex_symbol"] = str(
+                        _parse_qs_ust_globex_symbol(str(cache_req["globex_symbol"]).strip().upper(), as_of=cache_req.get("as_of"))["globex_symbol"]
+                    )
             elif src == "BARCHART_USTFO-QL":
                 raw_contract = cache_req.get("symbol", cache_req.get("contract", cache_req.get("globex_symbol")))
                 if raw_contract is not None:
@@ -2076,7 +2805,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         payload = {
             "schema": 1,
-            "cache_version": "USTFO_GET_DATA_v5",
+            "cache_version": "USTFO_GET_DATA_v6",
             "source": str(self.source).upper(),
             "endpoint": ep,
             "request": self._cache_primitive(cache_req),
@@ -2177,6 +2906,92 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         except Exception:
             return None
         return out
+
+    def _seed_option_snapshot_alias_cache(
+        self,
+        *,
+        request: Dict[str, Any],
+        result: Dict[str, List[QLUSTFutureOptionPricer]],
+        source_request: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not isinstance(result, dict) or not result:
+            return
+
+        source_request = dict(source_request or {})
+        base_request: Dict[str, Any] = {
+            "endpoint": "option_snapshot",
+            "timestamp": request.get("timestamp", "live"),
+        }
+        if "use_ql_calculator" in request:
+            base_request["use_ql_calculator"] = bool(request.get("use_ql_calculator", False))
+        passthrough_fields = [
+            "price_mode",
+            "window_minutes",
+            "window_start",
+            "window_end",
+            "bulk_timeseries",
+            "atm_strike_step",
+            "delta_candidate_half_width",
+            "delta_vendor_candidate_half_width",
+        ]
+        for field in passthrough_fields:
+            if field in source_request:
+                base_request[field] = source_request[field]
+        if "curve_name" in source_request:
+            base_request["curve_name"] = request["curve_name"]
+        if "curve_kwargs" in source_request:
+            base_request["curve_kwargs"] = request["curve_kwargs"]
+
+        for raw_symbol, plist in result.items():
+            if not isinstance(plist, list) or not plist:
+                continue
+            single_request = dict(base_request)
+            single_request["symbols"] = [str(raw_symbol)]
+            cache_key = self._build_get_data_cache_key("option_snapshot", single_request)
+            if not cache_key:
+                continue
+            payload = self._serialize_get_data_result("option_snapshot", {str(raw_symbol): list(plist)})
+            self._threadsafe_cache_put(cache_key, payload)
+
+    def _seed_sabr_smile_option_snapshot_cache(
+        self,
+        *,
+        request_symbols: Sequence[str],
+        as_of: datetime.date,
+        selected: Dict[Tuple[str, int], QLUSTFutureOptionPricer],
+        source_request: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not selected:
+            return
+
+        symbols = self._dedupe_preserve_order(
+            [str(symbol).strip().upper() for symbol in request_symbols if str(symbol).strip()]
+        )
+        if not symbols:
+            return
+
+        result: Dict[str, List[QLUSTFutureOptionPricer]] = {}
+        for request_symbol in symbols:
+            for (right, delta), pr in selected.items():
+                right_token = str(right).upper()
+                if right_token not in {"C", "P"}:
+                    continue
+                result[f"{request_symbol}|{int(delta)}D{right_token}"] = [pr]
+        if not result:
+            return
+
+        source_request = dict(source_request or {})
+        seed_request: Dict[str, Any] = {
+            "endpoint": "option_snapshot",
+            "timestamp": as_of,
+        }
+        if "use_ql_calculator" in source_request:
+            seed_request["use_ql_calculator"] = bool(source_request.get("use_ql_calculator", False))
+        if "curve_name" in source_request:
+            seed_request["curve_name"] = source_request["curve_name"]
+        if "curve_kwargs" in source_request:
+            seed_request["curve_kwargs"] = source_request["curve_kwargs"]
+        self._seed_option_snapshot_alias_cache(request=seed_request, result=result, source_request=source_request)
 
     def _assert_endpoint_allowed(self, endpoint: str) -> None:
         src = self.source.upper()
@@ -4235,6 +5050,19 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         return self.get_bulk_data(request)
 
     def get_bulk_data(self, request: Dict[str, Any]):
+        endpoint = str(request.get("endpoint", "")).strip().lower()
+        if endpoint == "sabr_smile":
+            req = dict(request)
+            smiles_by_symbol = self.fetch_bulk_sabr_smile(req)
+            _, dates, _, _, _, _, _ = self._normalize_bulk_sabr_smile_request(req)
+            out: "OrderedDict[datetime.date, OrderedDict[str, List[USTFutureOptionSABRSmile]]]" = OrderedDict(
+                (as_of, OrderedDict()) for as_of in dates
+            )
+            for symbol, by_date in smiles_by_symbol.items():
+                for as_of, smile in by_date.items():
+                    out.setdefault(as_of, OrderedDict())[symbol] = [smile]
+            return {as_of: dict(rows) for as_of, rows in out.items()}
+
         timestamps_raw = request.get("timestamps")
         if timestamps_raw is None:
             raise ValueError("get_bulk_data requires timestamps")

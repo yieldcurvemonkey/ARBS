@@ -75,4 +75,6 @@ class _QuikVolTimeseriesFetcher(_BaseQuikStrikeFetcher):
                 records.append({"Date": dt, "Symbol": entry["Symbol"], "y": point["y"]})
 
         df = pd.DataFrame(records)
+        if df.empty:
+            return pd.DataFrame()
         return df.pivot(index="Date", columns="Symbol", values="y").rename_axis(columns=None)

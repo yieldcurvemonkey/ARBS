@@ -301,26 +301,26 @@ class FedInvestDataFetcher(BaseFetcher, DiskCacheMixin):
 
         self._ensure_cache()
         cache = getattr(self, self._FEDINVEST_CACHE)
+        date_keys = {dt: pd.Timestamp(dt.date()) for dt in dates}
 
-        if refresh_cache:
-            dates_to_fetch = dates
-        else:
-            cached = {d.date() for d in cache.keys()}
-            dates_to_fetch = [d for d in dates if d.date() not in cached]
+        try:
+            if refresh_cache:
+                dates_to_fetch = dates
+            else:
+                dates_to_fetch = [dt for dt in dates if date_keys[dt] not in cache]
 
-        if not dates_to_fetch:
-            return {dt: cache[pd.Timestamp(dt.date())] for dt in dates}
+            if not dates_to_fetch:
+                return {dt: cache[date_keys[dt]] for dt in dates}
 
-        fetched_dict = dict(asyncio.run(run_fetch_all(dates=dates_to_fetch)))
-        for dt, df in fetched_dict.items():
-            cache[pd.Timestamp(dt.date())] = df
-        if fetched_dict:
-            pass  # auto-committed (DiskCache)
+            fetched_dict = dict(asyncio.run(run_fetch_all(dates=dates_to_fetch)))
+            for dt, df in fetched_dict.items():
+                cache[pd.Timestamp(dt.date())] = df
+            if fetched_dict:
+                pass  # auto-committed (DiskCache)
 
-        out: Dict[datetime, pd.DataFrame] = {}
-        for dt in dates:
-            key = pd.Timestamp(dt.date())
-            out[dt] = cache[key]
-
-        self.close_cache()
-        return out
+            out: Dict[datetime, pd.DataFrame] = {}
+            for dt in dates:
+                out[dt] = cache[date_keys[dt]]
+            return out
+        finally:
+            self.close_cache()

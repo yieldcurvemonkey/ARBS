@@ -9,7 +9,7 @@ from Query.IRSwaptions import adapter as _irswp_adapter  # noqa: F401
 from Query.IRSwaptions.IRSwaptionStructure import IRSwaptionStructure
 from Query.IRSwaptions.IRSwaptionValue import IRSwaptionValue
 from Query.IRSwaptions.pricer import IRSwaptionPricable, leg_forward_rate, leg_model_vol, leg_tte_years
-from Query.IRSwaptions.utils import parse_midcurve_tail, resolve_strike_spec, to_date
+from Query.IRSwaptions.utils import normalize_tenor, parse_expiry_tail_shorthandle, parse_midcurve_tail, resolve_strike_spec, to_date
 
 
 def _is_explicit_date_mode(skw: Dict[str, Any]) -> bool:
@@ -19,12 +19,20 @@ def _is_explicit_date_mode(skw: Dict[str, Any]) -> bool:
     )
 
 
+def _normalize_tail_label(tail: str) -> str:
+    fwd, tenor = parse_midcurve_tail(tail)
+    if fwd is None:
+        return tenor
+    return f"{fwd}x{tenor}"
+
+
 @dataclass(frozen=True)
 class IRSwaptionQuery(BaseQuery):
     structure: IRSwaptionStructure = IRSwaptionStructure.RECEIVER
     value: Union[IRSwaptionValue, List[IRSwaptionValue]] = IRSwaptionValue.NVOL
 
     curve: Optional[str] = None
+    shorthand: Optional[str] = None
     expiry: Optional[str] = None
     tail: Optional[str] = None
     exercise_date: Optional[dt.date] = None
@@ -46,11 +54,33 @@ class IRSwaptionQuery(BaseQuery):
         object.__setattr__(self, "product", "IRSWAPTION")
         object.__setattr__(self, "structure_id", self.structure)
 
+        expiry = self.expiry
+        tail = self.tail
+        if self.shorthand is not None:
+            parsed_expiry, parsed_tail = parse_expiry_tail_shorthandle(self.shorthand)
+            if expiry is not None and normalize_tenor(expiry) != parsed_expiry:
+                raise ValueError(
+                    f"shorthand '{self.shorthand}' expiry '{parsed_expiry}' conflicts with explicit expiry '{expiry}'."
+                )
+            if tail is not None and _normalize_tail_label(tail) != parsed_tail:
+                raise ValueError(
+                    f"shorthand '{self.shorthand}' tail '{parsed_tail}' conflicts with explicit tail '{tail}'."
+                )
+            expiry = expiry or parsed_expiry
+            tail = tail or parsed_tail
+
+        if expiry is not None:
+            expiry = normalize_tenor(expiry)
+            object.__setattr__(self, "expiry", expiry)
+        if tail is not None:
+            tail = _normalize_tail_label(tail)
+            object.__setattr__(self, "tail", tail)
+
         skw = dict(self.structure_kwargs or {})
-        if self.expiry is not None and "expiry" not in skw:
-            skw["expiry"] = self.expiry
-        if self.tail is not None and "tail" not in skw:
-            skw["tail"] = self.tail
+        if expiry is not None and "expiry" not in skw:
+            skw["expiry"] = expiry
+        if tail is not None and "tail" not in skw:
+            skw["tail"] = tail
         if self.exercise_date is not None and "exercise_date" not in skw:
             skw["exercise_date"] = self.exercise_date
         if self.underlying_effective_date is not None and "underlying_effective_date" not in skw:
@@ -268,4 +298,3 @@ class IRSwaptionQueryWrapper:
             rw = q.risk_weight if q.risk_weight is not None else 1.0
             parts.append(f"{rw} * `{q.col_name()}`")
         return " + ".join(parts)
-

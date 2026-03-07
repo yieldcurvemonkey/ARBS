@@ -15,6 +15,7 @@ from Query.IRSwaptions.pricer import (
     leg_model_vol,
     leg_spot_npv,
     leg_tte_years,
+    leg_vega_01,
 )
 from Query.IRSwaptions.utils import parse_midcurve_tail, parse_side, resolve_strike_spec, to_date
 
@@ -59,29 +60,65 @@ class IRSwaptionStructureFunctionMap(BaseStructureFunctionMap[IRSwaptionStructur
         self._map = self._create_map()
 
     def _create_map(self) -> Dict[IRSwaptionStructure, Callable[..., Tuple[List[IRSwaptionPricable], List[float]]]]:
+        def wrap(builder: Callable[..., Tuple[List[IRSwaptionPricable], List[float]]]) -> Callable[..., Tuple[List[IRSwaptionPricable], List[float]]]:
+            def _wrapped(**kwargs: Any) -> Tuple[List[IRSwaptionPricable], List[float]]:
+                package, risk_weights = builder(**kwargs)
+                return self._apply_target_vega_01(package, risk_weights, kwargs)
+
+            return _wrapped
+
         return {
-            IRSwaptionStructure.RECEIVER: partial(self._build_receiver),
-            IRSwaptionStructure.PAYER: partial(self._build_payer),
-            IRSwaptionStructure.STRADDLE: partial(self._build_straddle),
-            IRSwaptionStructure.STRANGLE: partial(self._build_strangle),
-            IRSwaptionStructure.RECEIVER_SPREAD: partial(self._build_receiver_spread),
-            IRSwaptionStructure.PAYER_SPREAD: partial(self._build_payer_spread),
-            IRSwaptionStructure.RECEIVER_FLY: partial(self._build_receiver_fly),
-            IRSwaptionStructure.PAYER_FLY: partial(self._build_payer_fly),
-            IRSwaptionStructure.RECEIVER_1x2: partial(self._build_receiver_1x2),
-            IRSwaptionStructure.PAYER_1x2: partial(self._build_payer_1x2),
-            IRSwaptionStructure.RECEIVER_LADDER: partial(self._build_receiver_ladder),
-            IRSwaptionStructure.PAYER_LADDER: partial(self._build_payer_ladder),
-            IRSwaptionStructure.RISK_REVERSAL: partial(self._build_risk_reversal),
+            IRSwaptionStructure.RECEIVER: wrap(partial(self._build_receiver)),
+            IRSwaptionStructure.PAYER: wrap(partial(self._build_payer)),
+            IRSwaptionStructure.STRADDLE: wrap(partial(self._build_straddle)),
+            IRSwaptionStructure.STRANGLE: wrap(partial(self._build_strangle)),
+            IRSwaptionStructure.RECEIVER_SPREAD: wrap(partial(self._build_receiver_spread)),
+            IRSwaptionStructure.PAYER_SPREAD: wrap(partial(self._build_payer_spread)),
+            IRSwaptionStructure.RECEIVER_FLY: wrap(partial(self._build_receiver_fly)),
+            IRSwaptionStructure.PAYER_FLY: wrap(partial(self._build_payer_fly)),
+            IRSwaptionStructure.RECEIVER_1x2: wrap(partial(self._build_receiver_1x2)),
+            IRSwaptionStructure.PAYER_1x2: wrap(partial(self._build_payer_1x2)),
+            IRSwaptionStructure.RECEIVER_LADDER: wrap(partial(self._build_receiver_ladder)),
+            IRSwaptionStructure.PAYER_LADDER: wrap(partial(self._build_payer_ladder)),
+            IRSwaptionStructure.RISK_REVERSAL: wrap(partial(self._build_risk_reversal)),
         }
 
     @staticmethod
     def _default_notional(notional: Optional[float], vega: Optional[float]) -> float:
         if notional is not None:
             return abs(float(notional))
-        if vega is not None:
-            return max(abs(float(vega)) * 1_000_000.0, 1_000_000.0)
         return 100_000_000.0
+
+    @staticmethod
+    def _target_vega_01(kwargs: Dict[str, Any]) -> Optional[float]:
+        for key in ("vega_01", "vega01", "vega"):
+            if kwargs.get(key) is not None:
+                return abs(float(kwargs[key]))
+        return None
+
+    def _apply_target_vega_01(
+        self,
+        package: list[IRSwaptionPricable],
+        risk_weights: list[float],
+        kwargs: Dict[str, Any],
+    ) -> tuple[list[IRSwaptionPricable], list[float]]:
+        if kwargs.get("notional") is not None:
+            return package, risk_weights
+
+        target_vega_01 = self._target_vega_01(kwargs)
+        if target_vega_01 is None:
+            return package, risk_weights
+
+        context = self.common_kwargs["context"]
+        current = float(
+            sum(float(rw) * float(leg_vega_01(context, leg)) for rw, leg in zip(risk_weights, package))
+        )
+        if abs(current) < 1e-12:
+            raise ValueError("Cannot scale package to target vega_01 because current package vega_01 is zero.")
+
+        scale = target_vega_01 / abs(current)
+        scaled = [leg.with_notional(abs(float(leg.notional)) * scale) for leg in package]
+        return scaled, risk_weights
 
     def _resolve_dates(
         self,
@@ -488,4 +525,3 @@ class IRSwaptionStructureFunctionMap(BaseStructureFunctionMap[IRSwaptionStructur
             self._make_leg(option_type="receiver", strike=receiver_k, dates=dates, notional=n),
         ]
         return legs, self._apply_side(IRSwaptionStructure.RISK_REVERSAL, side)
-

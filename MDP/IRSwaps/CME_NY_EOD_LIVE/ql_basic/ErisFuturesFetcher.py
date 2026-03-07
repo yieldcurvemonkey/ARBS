@@ -486,6 +486,8 @@ class ErisFuturesFetcher(DiskCacheMixin, BaseFetcher):
         ] = "log_linear",
         enable_extrapolation: Optional[bool] = True,
         return_intraday_timestamp: Optional[bool] = True,
+        ignore_cache=False,
+        force_refresh=False,
     ) -> ql.DiscountCurve | pd.DataFrame | Tuple[ql.DiscountCurve, datetime.date]:
         async def build_tasks(
             client: httpx.AsyncClient,

@@ -282,3 +282,133 @@ def test_select_sabr_smile_pricers_prefers_series_label_delta():
 
     assert ("C", 10) in selected
     assert ("P", 10) in selected
+
+
+def test_fetch_bulk_sabr_smile_qs_multi_symbol_multi_date_single_call_and_get_bulk_shape(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+    ny = pytz.timezone("America/New_York")
+    d1 = datetime.date(2026, 3, 19)
+    d2 = datetime.date(2026, 3, 20)
+    seen = {"requests": []}
+
+    call_vols = {5: 0.24, 10: 0.21, 15: 0.19, 20: 0.175, 25: 0.165, 30: 0.157, 35: 0.151, 40: 0.147, 45: 0.144, 50: 0.142}
+    put_vols = {5: 0.155, 10: 0.148, 15: 0.144, 20: 0.141, 25: 0.140, 30: 0.140, 35: 0.141, 40: 0.143, 45: 0.145, 50: 0.142}
+
+    def _append_payload(payload, *, globex_symbol, underlying_symbol, as_of, forward, call_shift=0.0, put_shift=0.0):
+        same_day = ny.localize(datetime.datetime.combine(as_of, datetime.time(16, 0)))
+        later_same_day = ny.localize(datetime.datetime.combine(as_of, datetime.time(16, 5)))
+        for delta, vol in call_vols.items():
+            label = f"{globex_symbol} {delta}D Call"
+            pr = _make_pricer(
+                label=label,
+                right="C",
+                delta=delta,
+                quote_ts=same_day,
+                iv_normal=vol + call_shift,
+                forward=forward,
+                underlying_symbol=underlying_symbol,
+            )
+            pr._meta_data["qs_query"]["globex_symbol"] = globex_symbol
+            payload.setdefault(label, []).append(pr)
+        later_pr = _make_pricer(
+            label=f"{globex_symbol} 25D Call",
+            right="C",
+            delta=25,
+            quote_ts=later_same_day,
+            iv_normal=call_vols[25] + call_shift + 0.001,
+            forward=forward,
+            underlying_symbol=underlying_symbol,
+        )
+        later_pr._meta_data["qs_query"]["globex_symbol"] = globex_symbol
+        payload[f"{globex_symbol} 25D Call"].append(later_pr)
+        for delta, vol in put_vols.items():
+            label = f"{globex_symbol} {delta}D Put"
+            pr = _make_pricer(
+                label=label,
+                right="P",
+                delta=delta,
+                quote_ts=same_day,
+                iv_normal=vol + put_shift,
+                forward=forward,
+                underlying_symbol=underlying_symbol,
+            )
+            pr._meta_data["qs_query"]["globex_symbol"] = globex_symbol
+            payload.setdefault(label, []).append(pr)
+
+    def _stub_qs(request):
+        seen["requests"].append(request)
+        payload = {}
+        _append_payload(payload, globex_symbol="SR3_60", underlying_symbol="SFRM26", as_of=d1, forward=96.25)
+        _append_payload(payload, globex_symbol="SR3_60", underlying_symbol="SFRM26", as_of=d2, forward=96.20, call_shift=0.004, put_shift=0.002)
+        _append_payload(payload, globex_symbol="SR3_90", underlying_symbol="SFRU26", as_of=d1, forward=95.90, call_shift=0.006, put_shift=0.003)
+        _append_payload(payload, globex_symbol="SR3_90", underlying_symbol="SFRU26", as_of=d2, forward=95.85, call_shift=0.009, put_shift=0.004)
+        return payload
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+
+    out = mdp.fetch_bulk_sabr_smile(
+        {
+            "globex_symbols": ["SR3_60", "SR3_90"],
+            "timestamps": [d1, d2],
+            "force_refresh": True,
+        }
+    )
+
+    assert len(seen["requests"]) == 1
+    assert seen["requests"][0]["start"] == d1
+    assert seen["requests"][0]["end"] == d2
+    assert len(seen["requests"][0]["queries"]) == 40
+    assert set(out.keys()) == {"SR3_60", "SR3_90"}
+    assert isinstance(out["SR3_60"][d1], STIRFutureOptionSABRSmile)
+    assert out["SR3_60"][d1].underlying_contract == "SFRM26"
+    assert out["SR3_90"][d2].underlying_contract == "SFRU26"
+
+    bulk_out = mdp.get_bulk_data(
+        {
+            "endpoint": "sabr_smile",
+            "globex_symbols": ["SR3_60", "SR3_90"],
+            "timestamps": [d1, d2],
+        }
+    )
+
+    assert len(seen["requests"]) == 1
+    assert isinstance(bulk_out[d1]["SR3_60"][0], STIRFutureOptionSABRSmile)
+    assert isinstance(bulk_out[d2]["SR3_90"][0], STIRFutureOptionSABRSmile)
+
+
+def test_fetch_bulk_sabr_smile_qs_only_fetches_uncached_dates(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+    d1 = datetime.date(2026, 3, 24)
+    d2 = datetime.date(2026, 3, 25)
+    seen = {"requests": []}
+    cache_store = {}
+
+    def _stub_qs(request):
+        seen["requests"].append(request)
+        return _make_qs_payload(request["start"])
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+    monkeypatch.setattr(mdp, "_threadsafe_cache_get", lambda key: cache_store.get(key))
+    monkeypatch.setattr(mdp, "_threadsafe_cache_put", lambda key, value: cache_store.__setitem__(key, value))
+
+    seeded = mdp.fetch_sabr_smile({"globex_symbol": "SR3_60", "as_of": d1, "force_refresh": True})
+    assert seeded.symbol == "SR3_60"
+    cache_key = mdp._build_get_data_cache_key("sabr_smile", {"globex_symbol": "SR3_60", "as_of": d1})
+    mdp._threadsafe_cache_put(
+        cache_key,
+        mdp._serialize_get_data_result("sabr_smile", {"sabr_smile": [seeded]}),
+    )
+    seen["requests"].clear()
+
+    out = mdp.fetch_bulk_sabr_smile(
+        {
+            "globex_symbol": "SR3_60",
+            "timestamps": [d1, d2],
+        }
+    )
+
+    assert len(seen["requests"]) == 1
+    assert seen["requests"][0]["start"] == d2
+    assert seen["requests"][0]["end"] == d2
+    assert d1 in out["SR3_60"]
+    assert d2 in out["SR3_60"]

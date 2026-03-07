@@ -14,6 +14,7 @@ _TENOR_RE = re.compile(r"^\s*(\d+)\s*([DWMYdwm y])\s*$")
 _MIDCURVE_RE = re.compile(r"^\s*(\d+\s*[DWMYdwm y])\s*[xX]\s*(\d+\s*[DWMYdwm y])\s*$")
 _ATM_RE = re.compile(r"^\s*(ATMF|ATMS)\s*(?:([+-])\s*(\d+(?:\.\d+)?)\s*B?P?S?)?\s*$", re.IGNORECASE)
 _DELTA_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*D\s*$", re.IGNORECASE)
+_SHORTHANDLE_TOKEN_RE = re.compile(r"\d+[DWMYdwm y]")
 
 
 def to_date(value: dt.date | dt.datetime | str) -> dt.date:
@@ -61,6 +62,25 @@ def parse_midcurve_tail(tail: str) -> tuple[Optional[str], str]:
     fwd = normalize_tenor(m.group(1))
     tenor = normalize_tenor(m.group(2))
     return fwd, tenor
+
+
+def parse_expiry_tail_shorthandle(shorthandle: str) -> tuple[str, str]:
+    token = str(shorthandle or "").strip().upper().replace(" ", "")
+    if not token:
+        raise ValueError("Invalid shorthandle: empty input")
+
+    parts = [m.group(0).upper() for m in _SHORTHANDLE_TOKEN_RE.finditer(token)]
+    leftover = _SHORTHANDLE_TOKEN_RE.sub("", token)
+    if leftover and any(ch != "X" for ch in leftover):
+        raise ValueError(f"Invalid shorthandle: {shorthandle}")
+
+    if len(parts) == 2:
+        return normalize_tenor(parts[0]), normalize_tenor(parts[1])
+    if len(parts) == 3:
+        return normalize_tenor(parts[0]), f"{normalize_tenor(parts[1])}x{normalize_tenor(parts[2])}"
+    raise ValueError(
+        f"Invalid shorthandle '{shorthandle}'. Expected forms like '5Yx5Y', '5Y5Y', or '1Yx1Yx10Y'."
+    )
 
 
 def parse_side(side: str | None) -> int:
@@ -253,4 +273,3 @@ def resolve_strike_spec(
         )
 
     return strike_value_to_decimal(token)
-

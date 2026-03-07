@@ -83,7 +83,7 @@ def test_value_enum_metrics_with_deterministic_leg_metrics(monkeypatch):
     assert fmap.apply(IRSwaptionValue.SPOT_NPV) == pytest.approx(6.0)
     assert fmap.apply(IRSwaptionValue.FWD_NPV) == pytest.approx(6.6)
     assert fmap.apply(IRSwaptionValue.SPOT_PREM) == pytest.approx(0.06)
-    assert fmap.apply(IRSwaptionValue.FWD_PREM) == pytest.approx(0.066)
+    assert fmap.apply(IRSwaptionValue.FWD_PREM) == pytest.approx(6.6)
     assert fmap.apply(IRSwaptionValue.DV01) == pytest.approx(0.7)
     assert fmap.apply(IRSwaptionValue.DELTA) == pytest.approx(0.3)
     assert fmap.apply(IRSwaptionValue.GAMMA) == pytest.approx(0.2)

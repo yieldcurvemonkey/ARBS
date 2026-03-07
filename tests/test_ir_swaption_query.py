@@ -33,6 +33,48 @@ def test_value_list_expansion():
     assert out[1].value == IRSwaptionValue.SPOT_NPV
 
 
+def test_shorthand_parses_x_delimited():
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        shorthand="5Yx5Y",
+    )
+    assert q.expiry == "5Y"
+    assert q.tail == "5Y"
+    assert q.structure_kwargs["expiry"] == "5Y"
+    assert q.structure_kwargs["tail"] == "5Y"
+
+
+def test_shorthand_parses_compact():
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        shorthand="5y5y",
+    )
+    assert q.expiry == "5Y"
+    assert q.tail == "5Y"
+    assert q.structure_kwargs["expiry"] == "5Y"
+    assert q.structure_kwargs["tail"] == "5Y"
+
+
+def test_shorthand_parses_midcurve_three_token_form():
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        shorthand="1Yx1Yx10Y",
+    )
+    assert q.expiry == "1Y"
+    assert q.tail == "1Yx10Y"
+    assert q.structure_kwargs["expiry"] == "1Y"
+    assert q.structure_kwargs["tail"] == "1Yx10Y"
+
+
+def test_shorthand_conflict_with_explicit_tenor_raises():
+    with pytest.raises(ValueError, match="conflicts"):
+        IRSwaptionQuery(
+            curve="USD-SOFR-1D",
+            shorthand="5Yx5Y",
+            expiry="10Y",
+        )
+
+
 def test_side_and_risk_weight_algebra():
     q = IRSwaptionQuery(
         curve="USD-SOFR-1D",

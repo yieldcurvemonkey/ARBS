@@ -1,5 +1,6 @@
 import datetime
 
+import MDP.STIRFutures.STIRFutureOptionMDP as stirfo_module
 import pandas as pd
 import pytz
 import pytest
@@ -211,6 +212,62 @@ def test_live_snapshot_atm_and_25d_aliases(monkeypatch):
     assert atm.symbol() == "SFRZ30|9600S"
     assert atm.price() == pytest.approx(0.27)  # 0.16 call + 0.11 put
     assert d25.symbol() == "SFRZ30|9625C"
+
+
+def test_live_delta_alias_prices_candidates_instead_of_vendor_call_delta(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
+    ny = pytz.timezone("America/New_York")
+    quote_ts = ny.localize(datetime.datetime(2026, 3, 6, 11, 0))
+
+    class _DummyBC:
+        def get_option_quotes(self, symbols, **kwargs):
+            _ = kwargs
+            assert symbols == ["SQZ26"]
+            call_df = pd.DataFrame(
+                [
+                    {"strikePrice": 95.5625, "lastPrice": 1.1725, "delta": 0.047433, "tradeTime": 1772797200},
+                    {"strikePrice": 97.6250, "lastPrice": 0.0650, "delta": 0.947050, "tradeTime": 1772797200},
+                    {"strikePrice": 98.1875, "lastPrice": 0.0350, "delta": 0.971772, "tradeTime": 1772797200},
+                ]
+            )
+            put_df = pd.DataFrame(columns=call_df.columns)
+            return {"SQZ26": {"call": call_df, "put": put_df}}
+
+    def _stub_build_pricer_from_row(**kwargs):
+        sym = kwargs["canonical_symbol"]
+        delta_map = {
+            "SFRZ26|9556C": 0.9770,
+            "SFRZ26|9762C": 0.1423,
+            "SFRZ26|9818C": 0.0744,
+        }
+        if sym not in delta_map:
+            return None
+        return _mk_option_pricer(
+            symbol=sym,
+            quote_timestamp=quote_ts,
+            expiry_date=datetime.date(2026, 12, 16),
+            iv_normal=0.10,
+            forward=96.67,
+            delta=delta_map[sym],
+            underlying_symbol="SFRZ26",
+        )
+
+    monkeypatch.setattr(mdp, "_get_barchart_fetcher", lambda **kwargs: _DummyBC())
+    monkeypatch.setattr(mdp, "_fetch_barchart_intraday_prices", lambda **kwargs: {"SQZ26": 96.67})
+    monkeypatch.setattr(mdp, "_build_pricer_from_row", _stub_build_pricer_from_row)
+
+    out = mdp.get_data(
+        {
+            "endpoint": "option_snapshot",
+            "symbols": ["SFRZ26|5DC"],
+            "timestamp": "live",
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+            "force_refresh": True,
+        }
+    )
+
+    assert out["SFRZ26|5DC"][0].symbol() == "SFRZ26|9818C"
 
 
 def test_historical_snapshot_atm_alias_and_delta_rejection(monkeypatch):
@@ -463,6 +520,85 @@ def test_historical_option_snapshot_request_cache_reuses_result(monkeypatch):
     assert dummy.calls == calls_after_first
 
 
+def test_barchart_pricer_window_force_refresh_bypasses_cached_window(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
+    target_date = datetime.date(2026, 2, 27)
+    ny = pytz.timezone("America/New_York")
+
+    cached = {
+        "SFRZ30|9700C": {
+            target_date: _mk_option_pricer(
+                symbol="SFRZ30|9700C",
+                quote_timestamp=ny.localize(datetime.datetime(2026, 2, 27, 17, 0)),
+                expiry_date=datetime.date(2026, 12, 16),
+                iv_normal=0.10,
+                forward=96.25,
+                delta=0.20,
+                underlying_symbol="SFRZ30",
+            )
+        }
+    }
+    rebuilt = {
+        "SFRZ30|9700C": {
+            target_date: _mk_option_pricer(
+                symbol="SFRZ30|9700C",
+                quote_timestamp=ny.localize(datetime.datetime(2026, 2, 27, 17, 0)),
+                expiry_date=datetime.date(2026, 12, 16),
+                iv_normal=0.20,
+                forward=96.25,
+                delta=0.35,
+                underlying_symbol="SFRZ30",
+            )
+        }
+    }
+
+    seen = {"builds": 0}
+    cached_payload = mdp._serialize_pricer_window(cached)
+
+    monkeypatch.setattr(mdp, "_historical_prefetch_window", lambda start, end: (start, end))
+    monkeypatch.setattr(mdp, "_threadsafe_cache_get", lambda key: cached_payload)
+    monkeypatch.setattr(mdp, "_threadsafe_cache_put", lambda key, value: None)
+    monkeypatch.setattr(mdp, "_fetch_barchart_eod_series", lambda **kwargs: {})
+
+    def _stub_build(**kwargs):
+        seen["builds"] += 1
+        return rebuilt
+
+    monkeypatch.setattr(mdp, "_build_pricers_from_eod_window", _stub_build)
+
+    hit = mdp._get_or_build_barchart_pricer_window(
+        leg_symbols=["SFRZ30|9700C"],
+        cache_symbols=["SFRZ30|9700C"],
+        request_start=target_date,
+        request_end=target_date,
+        show_tqdm=False,
+        price_mode="mid_then_fallback",
+        curve_name="USD-SOFR-1D-Q12xM12STIRT",
+        curve_kwargs={},
+        use_ql_calculator=True,
+        source="BARCHART_EOD_WINDOW",
+        force_refresh=False,
+    )
+    assert hit["SFRZ30|9700C"][target_date].iv_normal() == pytest.approx(0.10)
+    assert seen["builds"] == 0
+
+    refreshed = mdp._get_or_build_barchart_pricer_window(
+        leg_symbols=["SFRZ30|9700C"],
+        cache_symbols=["SFRZ30|9700C"],
+        request_start=target_date,
+        request_end=target_date,
+        show_tqdm=False,
+        price_mode="mid_then_fallback",
+        curve_name="USD-SOFR-1D-Q12xM12STIRT",
+        curve_kwargs={},
+        use_ql_calculator=True,
+        source="BARCHART_EOD_WINDOW",
+        force_refresh=True,
+    )
+    assert refreshed["SFRZ30|9700C"][target_date].iv_normal() == pytest.approx(0.20)
+    assert seen["builds"] == 1
+
+
 def test_historical_delta_alias_uses_listed_sofr_strike_tokens(monkeypatch):
     mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
     monkeypatch.setattr(mdp, "_get_curve_builder", lambda: _DummyCurveBuilder())
@@ -536,6 +672,163 @@ def test_historical_delta_alias_uses_listed_sofr_strike_tokens(monkeypatch):
     assert "SFRU26|9662C" in seen["leg_symbols"]
 
 
+def test_historical_delta_alias_keeps_far_otm_call_candidates(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
+    monkeypatch.setattr(mdp, "_get_curve_builder", lambda: _DummyCurveBuilder())
+
+    seen = {}
+    ny = pytz.timezone("America/New_York")
+    quote_ts = ny.localize(datetime.datetime(2026, 3, 5, 17, 0))
+    target_date = datetime.date(2026, 3, 5)
+
+    class _DummyBC:
+        def get_option_quotes(self, symbols, **kwargs):
+            _ = kwargs
+            assert symbols == ["SQZ26"]
+            call_df = pd.DataFrame(
+                [
+                    {"strikePrice": 95.5625, "delta": 0.047433},
+                    {"strikePrice": 97.6250, "delta": 0.947050},
+                    {"strikePrice": 98.1875, "delta": 0.971772},
+                ]
+            )
+            put_df = pd.DataFrame(columns=call_df.columns)
+            return {"SQZ26": {"call": call_df, "put": put_df}}
+
+    def _stub_fetch_eod_series(*, symbols, start, end, show_tqdm):
+        _ = start, end, show_tqdm
+        idx = pd.DatetimeIndex([pd.Timestamp("2026-03-05")])
+        out = {}
+        for sym in symbols:
+            if sym == "SQZ26":
+                out[sym] = pd.DataFrame({"Open": [96.67], "High": [96.68], "Low": [96.66], "Close": [96.67]}, index=idx)
+        return out
+
+    def _stub_pricer_window(**kwargs):
+        seen["leg_symbols"] = list(kwargs["leg_symbols"])
+        return {
+            "SFRZ26|9762C": {
+                target_date: _mk_option_pricer(
+                    symbol="SFRZ26|9762C",
+                    quote_timestamp=quote_ts,
+                    expiry_date=datetime.date(2026, 12, 16),
+                    iv_normal=0.11,
+                    forward=96.67,
+                    delta=0.1423,
+                    underlying_symbol="SFRZ26",
+                )
+            },
+            "SFRZ26|9818C": {
+                target_date: _mk_option_pricer(
+                    symbol="SFRZ26|9818C",
+                    quote_timestamp=quote_ts,
+                    expiry_date=datetime.date(2026, 12, 16),
+                    iv_normal=0.10,
+                    forward=96.67,
+                    delta=0.0744,
+                    underlying_symbol="SFRZ26",
+                )
+            },
+        }
+
+    monkeypatch.setattr(mdp, "_get_barchart_fetcher", lambda **kwargs: _DummyBC())
+    monkeypatch.setattr(mdp, "_fetch_barchart_eod_series", _stub_fetch_eod_series)
+    monkeypatch.setattr(mdp, "_get_or_build_barchart_pricer_window", _stub_pricer_window)
+
+    out = mdp.get_data(
+        {
+            "endpoint": "option_snapshot",
+            "symbols": ["SFRZ26|5DC"],
+            "timestamp": target_date,
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+            "force_refresh": True,
+        }
+    )
+
+    assert "SFRZ26|9818C" in seen["leg_symbols"]
+    assert out["SFRZ26|5DC"][0].symbol() == "SFRZ26|9818C"
+
+
+def test_historical_delta_alias_wide_forward_slice_keeps_distinct_otm_puts(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
+    monkeypatch.setattr(mdp, "_get_curve_builder", lambda: _DummyCurveBuilder())
+
+    class _DummyBC:
+        def get_option_quotes(self, symbols, **kwargs):
+            _ = kwargs
+            assert symbols == ["SQZ26"]
+            call_df = pd.DataFrame(columns=["strikePrice", "delta"])
+            put_df = pd.DataFrame(
+                [
+                    {"strikePrice": 97.1250, "delta": -0.29},
+                    {"strikePrice": 97.2500, "delta": -0.25},
+                    {"strikePrice": 97.3750, "delta": -0.08},
+                ]
+            )
+            return {"SQZ26": {"call": call_df, "put": put_df}}
+
+    seen = {}
+    ny = pytz.timezone("America/New_York")
+    quote_ts = ny.localize(datetime.datetime(2026, 3, 5, 17, 0))
+    target_date = datetime.date(2026, 3, 5)
+
+    def _stub_fetch_eod_series(*, symbols, start, end, show_tqdm):
+        _ = start, end, show_tqdm
+        idx = pd.DatetimeIndex([pd.Timestamp("2026-03-05")])
+        out = {}
+        for sym in symbols:
+            if sym == "SQZ26":
+                out[sym] = pd.DataFrame({"Open": [96.67], "High": [96.68], "Low": [96.66], "Close": [96.67]}, index=idx)
+        return out
+
+    def _stub_pricer_window(**kwargs):
+        seen["leg_symbols"] = list(kwargs["leg_symbols"])
+        return {
+            "SFRZ26|9600P": {
+                target_date: _mk_option_pricer(
+                    symbol="SFRZ26|9600P",
+                    quote_timestamp=quote_ts,
+                    expiry_date=datetime.date(2026, 12, 16),
+                    iv_normal=0.63,
+                    forward=96.67,
+                    delta=-0.10,
+                    underlying_symbol="SFRZ26",
+                )
+            },
+            "SFRZ26|9637P": {
+                target_date: _mk_option_pricer(
+                    symbol="SFRZ26|9637P",
+                    quote_timestamp=quote_ts,
+                    expiry_date=datetime.date(2026, 12, 16),
+                    iv_normal=0.64,
+                    forward=96.67,
+                    delta=-0.25,
+                    underlying_symbol="SFRZ26",
+                )
+            },
+        }
+
+    monkeypatch.setattr(mdp, "_get_barchart_fetcher", lambda **kwargs: _DummyBC())
+    monkeypatch.setattr(mdp, "_fetch_barchart_eod_series", _stub_fetch_eod_series)
+    monkeypatch.setattr(mdp, "_get_or_build_barchart_pricer_window", _stub_pricer_window)
+
+    out = mdp.get_data(
+        {
+            "endpoint": "option_snapshot",
+            "symbols": ["SFRZ26|10DP", "SFRZ26|25DP"],
+            "timestamp": target_date,
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+            "force_refresh": True,
+        }
+    )
+
+    assert out["SFRZ26|10DP"][0].symbol() == "SFRZ26|9600P"
+    assert out["SFRZ26|25DP"][0].symbol() == "SFRZ26|9637P"
+    assert "SFRZ26|9600P" in seen["leg_symbols"]
+
+
 def test_fetch_sabr_smile_barchart_uses_option_snapshot(monkeypatch):
     mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
     as_of = datetime.date(2026, 3, 19)
@@ -579,6 +872,7 @@ def test_fetch_sabr_smile_barchart_uses_option_snapshot(monkeypatch):
     assert seen["request"]["endpoint"] == "option_snapshot"
     assert seen["request"]["timestamp"] == as_of
     assert seen["request"]["use_ql_calculator"] is True
+    assert seen["request"]["delta_ignore_deep_itm"] is True
     assert len(seen["request"]["symbols"]) == 20
     assert seen["request"]["symbols"][:3] == ["SR3Z30|5DC", "SR3Z30|10DC", "SR3Z30|15DC"]
     assert smile.source == "BARCHART_STIRFO-QL"
@@ -687,9 +981,92 @@ def test_fetch_sabr_smile_barchart_cm_alias_uses_option_snapshot(monkeypatch):
     smile = mdp.fetch_sabr_smile({"symbol": "SFRCM1", "as_of": as_of, "force_refresh": True})
 
     assert seen["request"]["symbols"][:3] == ["SFRCM1|5DC", "SFRCM1|10DC", "SFRCM1|15DC"]
+    assert seen["request"]["delta_ignore_deep_itm"] is True
     assert smile.symbol == "SFRCM1"
     assert smile.underlying_contract == "SFRH26"
     assert len(smile.points) == 20
     call_25 = next(pt for pt in smile.points if pt.right == "C" and pt.delta_abs == 25.0)
     assert call_25.label == "SFRCM1|25DC"
     assert call_25.strike_rate == pytest.approx(100.0 - call_25.strike_price)
+
+
+def test_fetch_bulk_sabr_smile_barchart_reuses_shared_window_and_seeds_cache(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
+    d1 = datetime.date(2026, 3, 19)
+    d2 = datetime.date(2026, 3, 20)
+    ny = pytz.timezone("America/New_York")
+    seen = {"eod_calls": 0, "window_calls": 0}
+
+    monkeypatch.setattr(stirfo_module, "_cme_listed_strikes_for_contract_forward", lambda contract, forward, as_of: [96.25] if contract == "SFRU26" else [95.75])
+
+    bc_u = stirfo_module._contract_to_barchart_contract("SFRU26")
+    bc_z = stirfo_module._contract_to_barchart_contract("SFRZ26")
+
+    def _stub_eod_series(symbols, start, end, show_tqdm):
+        _ = symbols, start, end, show_tqdm
+        seen["eod_calls"] += 1
+        idx = pd.DatetimeIndex([pd.Timestamp(d1), pd.Timestamp(d2)])
+        return {
+            bc_u: pd.DataFrame({"Close": [96.25, 96.20]}, index=idx),
+            bc_z: pd.DataFrame({"Close": [95.75, 95.70]}, index=idx),
+        }
+
+    def _stub_window(**kwargs):
+        _ = kwargs
+        seen["window_calls"] += 1
+        expiry = datetime.date(2026, 12, 16)
+        ts1 = ny.localize(datetime.datetime.combine(d1, datetime.time(17, 0)))
+        ts2 = ny.localize(datetime.datetime.combine(d2, datetime.time(17, 0)))
+        return {
+            "SFRU26|9625C": {
+                d1: _mk_option_pricer(symbol="SFRU26|9625C", quote_timestamp=ts1, expiry_date=expiry, iv_normal=0.165, underlying_symbol="SFRU26"),
+                d2: _mk_option_pricer(symbol="SFRU26|9625C", quote_timestamp=ts2, expiry_date=expiry, iv_normal=0.167, underlying_symbol="SFRU26"),
+            },
+            "SFRU26|9625P": {
+                d1: _mk_option_pricer(symbol="SFRU26|9625P", quote_timestamp=ts1, expiry_date=expiry, iv_normal=0.140, underlying_symbol="SFRU26"),
+                d2: _mk_option_pricer(symbol="SFRU26|9625P", quote_timestamp=ts2, expiry_date=expiry, iv_normal=0.141, underlying_symbol="SFRU26"),
+            },
+            "SFRZ26|9575C": {
+                d1: _mk_option_pricer(symbol="SFRZ26|9575C", quote_timestamp=ts1, expiry_date=expiry, iv_normal=0.172, forward=95.75, underlying_symbol="SFRZ26"),
+                d2: _mk_option_pricer(symbol="SFRZ26|9575C", quote_timestamp=ts2, expiry_date=expiry, iv_normal=0.174, forward=95.70, underlying_symbol="SFRZ26"),
+            },
+            "SFRZ26|9575P": {
+                d1: _mk_option_pricer(symbol="SFRZ26|9575P", quote_timestamp=ts1, expiry_date=expiry, iv_normal=0.146, forward=95.75, underlying_symbol="SFRZ26"),
+                d2: _mk_option_pricer(symbol="SFRZ26|9575P", quote_timestamp=ts2, expiry_date=expiry, iv_normal=0.148, forward=95.70, underlying_symbol="SFRZ26"),
+            },
+        }
+
+    monkeypatch.setattr(mdp, "_fetch_barchart_eod_series", _stub_eod_series)
+    monkeypatch.setattr(mdp, "_get_or_build_barchart_pricer_window", _stub_window)
+
+    out = mdp.fetch_bulk_sabr_smile(
+        {
+            "symbols": ["SFRU26", "SFRZ26"],
+            "timestamps": [d1, d2],
+            "force_refresh": True,
+        }
+    )
+
+    assert seen["eod_calls"] == 1
+    assert seen["window_calls"] == 1
+    assert set(out.keys()) == {"SFRU26", "SFRZ26"}
+    assert out["SFRU26"][d1].underlying_contract == "SFRU26"
+    assert out["SFRZ26"][d2].underlying_contract == "SFRZ26"
+
+    monkeypatch.setattr(
+        mdp,
+        "_option_snapshot",
+        lambda request: (_ for _ in ()).throw(AssertionError("_option_snapshot should not run after bulk SABR cache seeding")),
+    )
+    cached = mdp.get_data(
+        {
+            "endpoint": "option_snapshot",
+            "symbols": ["SFRU26|25DC"],
+            "timestamp": d1,
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        }
+    )
+
+    assert "SFRU26|25DC" in cached
+    assert cached["SFRU26|25DC"][0].iv_normal() == pytest.approx(0.165)

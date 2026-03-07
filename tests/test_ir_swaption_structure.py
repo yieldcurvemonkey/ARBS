@@ -1,8 +1,11 @@
 import datetime as dt
+import importlib
 
 import pytest
 
 from Query.IRSwaptions.IRSwaptionStructure import IRSwaptionStructure, IRSwaptionStructureFunctionMap
+
+structure_module = importlib.import_module("Query.IRSwaptions.IRSwaptionStructure")
 
 
 class _FakeCurve:
@@ -107,3 +110,18 @@ def test_payer_fly_risk_weights_regression(structure_map):
     )
     assert rws == [-1.0, 2.0, -1.0]
 
+
+def test_vega_01_target_scales_package_notional(monkeypatch, structure_map):
+    monkeypatch.setattr(structure_module, "leg_vega_01", lambda _ctx, leg: abs(float(leg.notional)) * 0.00032)
+
+    package, rws = structure_map.apply(
+        IRSwaptionStructure.PAYER,
+        expiry="1Y",
+        tail="10Y",
+        strike=0.04,
+        vega_01=50_000.0,
+    )
+
+    assert rws == [1.0]
+    assert len(package) == 1
+    assert abs(package[0].notional * 0.00032) == pytest.approx(50_000.0)
