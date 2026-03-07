@@ -11,7 +11,7 @@ export interface DialogProps {
   title?: string;
   children: ReactNode;
   className?: string;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '5xl';
 }
 
 /**
@@ -50,13 +50,14 @@ export function Dialog({ isOpen, onClose, title, children, className, size = 'md
     md: 'max-w-lg',
     lg: 'max-w-2xl',
     xl: 'max-w-4xl',
+    '5xl': 'max-w-6xl',
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black bg-opacity-50"
+        className="absolute inset-0 bg-black bg-opacity-50 backdrop-blur-sm"
         onClick={onClose}
         aria-hidden="true"
       />

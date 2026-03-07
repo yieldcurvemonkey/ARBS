@@ -189,3 +189,18 @@ export type VolGridViewMode =
   | 'staleness'
   | 'confidence'
   | 'vs_mdp'
+
+export type CellDisplayField =
+  | 'vol'
+  | 'premium'
+  | 'change'
+  | 'lastTradedTime'
+  | 'lastTradedLevel'
+
+export type CellDisplayConfig = {
+  visibleFields: CellDisplayField[]
+}
+
+export const DEFAULT_CELL_DISPLAY_CONFIG: CellDisplayConfig = {
+  visibleFields: ['vol', 'premium', 'change', 'lastTradedTime', 'lastTradedLevel']
+}

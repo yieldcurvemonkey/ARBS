@@ -75,3 +75,116 @@ export function toEasternDateKey(value: Date = new Date()): string {
 export function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
+
+// ── Formatting utilities ──
+
+export function formatNumber(value: number | null, digits = 1) {
+  if (value === null || !Number.isFinite(value)) return '--'
+  return value.toFixed(digits)
+}
+
+export function formatChange(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return '--'
+  const sign = value > 0 ? '+' : value < 0 ? '-' : ''
+  return `${sign}${Math.abs(value).toFixed(1)}`
+}
+
+export function formatPremiumBps(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return '--'
+  return `${value.toFixed(2)} bp`
+}
+
+export function formatNotional(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return '--'
+  return `${(Math.abs(value) / 1_000_000).toFixed(0)}mm`
+}
+
+export function formatTime(value: number | null) {
+  if (!value) return '--'
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).format(new Date(value))
+}
+
+export function formatDate(value: number | null) {
+  if (!value) return '--'
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit'
+  }).format(new Date(value))
+}
+
+export function formatDateTime(value: number | null) {
+  if (!value) return '--'
+  return `${formatDate(value)} ${formatTime(value)} ET`
+}
+
+export function formatStaleness(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return '--'
+  if (value < 60) return `${Math.round(value)}m`
+  return `${(value / 60).toFixed(1)}h`
+}
+
+export function formatConfidence(value: number) {
+  if (!Number.isFinite(value)) return '--'
+  return `${(value * 100).toFixed(0)}%`
+}
+
+export function formatTimestamp(value: number | null) {
+  if (!value) return '--'
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(value))
+}
+
+// ── Color utilities ──
+
+export const STALENESS_COLORS: Record<string, string> = {
+  live: '#22c55e',
+  recent: '#f59e0b',
+  stale: '#ef4444',
+  very_stale: '#6b7280',
+  no_data: '#475569'
+}
+
+export function interpolateColor(low: number[], high: number[], t: number) {
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
+  return `rgb(${mix(low[0], high[0])}, ${mix(low[1], high[1])}, ${mix(low[2], high[2])})`
+}
+
+export function getHeatColor(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return 'rgba(15, 23, 42, 0.8)'
+  const ratio = max > min ? (value - min) / (max - min) : 0.5
+  return interpolateColor([30, 64, 175], [245, 158, 11], clamp(ratio, 0, 1))
+}
+
+export function getChangeColor(value: number, maxAbs: number) {
+  if (!Number.isFinite(value)) return 'rgba(15, 23, 42, 0.8)'
+  const ratio = maxAbs > 0 ? Math.abs(value) / maxAbs : 0
+  const base = value >= 0 ? [239, 68, 68] : [34, 197, 94]
+  return interpolateColor([30, 41, 59], base, clamp(ratio, 0, 1))
+}
+
+export function getConfidenceColor(value: number) {
+  if (!Number.isFinite(value)) return 'rgba(15, 23, 42, 0.8)'
+  return interpolateColor([30, 41, 59], [14, 165, 233], clamp(value / 100, 0, 1))
+}
+
+export function getUnifiedCellBackground(value: number | null, min: number, max: number) {
+  if (value === null || !Number.isFinite(value)) return 'rgba(15, 23, 42, 0.6)'
+  const ratio = max > min ? (value - min) / (max - min) : 0.5
+  const t = clamp(ratio, 0, 1)
+  const r = Math.round(30 + (245 - 30) * t)
+  const g = Math.round(64 + (158 - 64) * t)
+  const b = Math.round(175 + (11 - 175) * t)
+  return `rgba(${r}, ${g}, ${b}, 0.3)`
+}
