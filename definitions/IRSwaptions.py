@@ -3,6 +3,24 @@ from __future__ import annotations
 # Ordered grid axes expected by QuantLib SwaptionVolatilityMatrix.
 EXPIRY_LABELS: list[str] = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "10y"]
 TAIL_LABELS: list[str] = ["1y", "2y", "5y", "10y", "20y", "30y"]
+EXTENDED_EXPIRY_LABELS: list[str] = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "10y", "20y"]
+EXTENDED_TAIL_LABELS: list[str] = ["1y", "2y", "3y", "5y", "7y", "10y", "20y", "30y"]
+
+
+def build_surface_node_keys(
+    expiry_labels: list[str] | None = None,
+    tail_labels: list[str] | None = None,
+) -> list[str]:
+    expiries = expiry_labels or EXPIRY_LABELS
+    tails = tail_labels or TAIL_LABELS
+    return [f"{expiry}_{tail}" for expiry in expiries for tail in tails]
+
+
+SURFACE_NODE_KEYS: list[str] = build_surface_node_keys()
+EXTENDED_SURFACE_NODE_KEYS: list[str] = build_surface_node_keys(
+    EXTENDED_EXPIRY_LABELS,
+    EXTENDED_TAIL_LABELS,
+)
 
 # GS Swaption Vol Dataset coverage.
 # NOTE: v1 ships with USD-SOFR-1D coverage only; additional curves can be
@@ -59,4 +77,3 @@ ASSET_IDS_MAP: dict[str, dict[str, str]] = {
         "MAZECH8T2R0KD91B": "6m 5y",
     }
 }
-

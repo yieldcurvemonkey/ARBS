@@ -1,10 +1,10 @@
 ﻿// ABOUTME: Returns calibration trades feeding the live vol grid.
 import { NextResponse } from 'next/server'
 import { fetchCalibrationTrades } from '@/lib/vol-grid/data'
-import { getCalibrationConfig, getCalibrationPreset } from '@/lib/vol-grid/config'
+import { getCalibrationPreset } from '@/lib/vol-grid/config'
 import { CALIBRATION_PRESETS } from '@/features/vol-grid/constants'
 import type { CalibrationPresetKey } from '@/features/vol-grid/types'
-import { toEasternDateKey } from '@/features/vol-grid/utils'
+import { resolveVolGridSession } from '@/lib/vol-grid/session'
 
 export const runtime = 'nodejs'
 
@@ -13,16 +13,22 @@ export async function GET(request: Request) {
   const dateParam = searchParams.get('date')
   const presetParam = searchParams.get('calibration_preset') as CalibrationPresetKey | null
 
-  const asOfDate = dateParam ?? toEasternDateKey(new Date())
   const preset = presetParam && CALIBRATION_PRESETS[presetParam]
     ? presetParam
     : getCalibrationPreset()
-  const config = getCalibrationConfig(preset)
 
   try {
-    const result = await fetchCalibrationTrades(asOfDate, config)
+    const session = await resolveVolGridSession(preset, dateParam ?? undefined)
+    const result = await fetchCalibrationTrades({
+      asOfDate: session.effectiveDate,
+      preset,
+      snapshotKinds: [
+        session.defaultSnapshotKind,
+        ...session.fallbackSnapshotKinds
+      ]
+    })
     return NextResponse.json({
-      asOfDate,
+      asOfDate: session.effectiveDate,
       calibrationPreset: preset,
       trades: result.calibrationTrades,
       filteredOutCount: result.filteredOutCount

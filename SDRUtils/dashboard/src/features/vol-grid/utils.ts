@@ -1,4 +1,20 @@
-﻿import { EXPIRY_POINTS, TENOR_POINTS } from './constants'
+import { EXPIRY_POINTS, TENOR_POINTS } from './constants'
+
+export function normalizeDateKey(value: string | Date | null | undefined): string | null {
+  if (value === null || value === undefined) return null
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10)
+  }
+
+  const text = String(value).trim()
+  if (!text) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text
+  }
+
+  const parsed = new Date(text)
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10)
+}
 
 export function parseTenorLabelToYears(label: string | null | undefined): number | null {
   if (!label) return null
@@ -37,6 +53,14 @@ export function resolveGridIndex(
 
 export function formatLabel(expiry: string, tenor: string) {
   return `${expiry}x${tenor}`
+}
+
+export function normalizeGridLabel(label: string | null | undefined) {
+  return String(label ?? '').trim().toLowerCase()
+}
+
+export function buildNodeKey(expiry: string, tenor: string) {
+  return `${normalizeGridLabel(expiry)}_${normalizeGridLabel(tenor)}`
 }
 
 export function toEasternDateKey(value: Date = new Date()): string {

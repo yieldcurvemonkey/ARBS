@@ -319,7 +319,7 @@ class IRSwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
 
     def _spot_prem(self, **kwargs: Any) -> float:
         mets = self._metrics(kwargs)
-        return self._weighted(mets, kwargs["risk_weights"], "SPOT_PREM")
+        return self._weighted(mets, kwargs["risk_weights"], "SPOT_PREM") * 10_000
 
     def _fwd_prem(self, **kwargs: Any) -> float:
         mets = self._metrics(kwargs)

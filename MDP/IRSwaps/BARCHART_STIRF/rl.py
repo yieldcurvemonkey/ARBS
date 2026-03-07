@@ -24,6 +24,7 @@ _STIR_ROOT_CODE_RE = re.compile(
     re.IGNORECASE,
 )
 
+
 def _flatten_pricers(pricers: Dict[str, List["RLSTIRFuturePricer"]]) -> List["RLSTIRFuturePricer"]:
     # Each key maps to a list (often length 1). Keep all, preserve order.
     out: List["RLSTIRFuturePricer"] = []
@@ -1421,8 +1422,19 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
         cfg: Dict[str, Any],
         is_live_request: bool,
     ) -> Tuple[Any, Optional[Any]]:
+        def _is_schwab_fetcher(fetcher: Any) -> bool:
+            return getattr(fetcher, "__self__", None) is self.stirf_mdp_schwab_app
+
         if not is_live_request:
-            return cfg["fetch_pricers_func"], cfg.get("fetch_pricers_bulk_func", None)
+            # return cfg["fetch_pricers_func"], cfg.get("fetch_pricers_bulk_func", None)
+            # Some USD curve configs use SCHWAB fetchers for live mode quality.
+            # Historical/as-of timestamps must stay on the non-SCHWAB pipeline.
+            fetch_pricers_func = cfg["fetch_pricers_func"]
+            fetch_pricers_bulk_func = cfg.get("fetch_pricers_bulk_func", None)
+            if self._is_usd_curve(cfg) and _is_schwab_fetcher(fetch_pricers_func):
+                return self.stirf_mdp.get_data, self.stirf_mdp.get_bulk_data
+
+            return fetch_pricers_func, fetch_pricers_bulk_func
 
         if self._is_usd_curve(cfg):
             return self.stirf_mdp_schwab_app.get_data, self.stirf_mdp_schwab_app.get_bulk_data
