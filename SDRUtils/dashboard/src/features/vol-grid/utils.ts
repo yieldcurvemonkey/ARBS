@@ -83,10 +83,10 @@ export function formatNumber(value: number | null, digits = 1) {
   return value.toFixed(digits)
 }
 
-export function formatChange(value: number | null) {
+export function formatChange(value: number | null, digits = 1) {
   if (value === null || !Number.isFinite(value)) return '--'
   const sign = value > 0 ? '+' : value < 0 ? '-' : ''
-  return `${sign}${Math.abs(value).toFixed(1)}`
+  return `${sign}${Math.abs(value).toFixed(digits)}`
 }
 
 export function formatPremiumBps(value: number | null) {
@@ -183,8 +183,8 @@ export function getUnifiedCellBackground(value: number | null, min: number, max:
   if (value === null || !Number.isFinite(value)) return 'rgba(15, 23, 42, 0.6)'
   const ratio = max > min ? (value - min) / (max - min) : 0.5
   const t = clamp(ratio, 0, 1)
-  const r = Math.round(30 + (245 - 30) * t)
-  const g = Math.round(64 + (158 - 64) * t)
-  const b = Math.round(175 + (11 - 175) * t)
-  return `rgba(${r}, ${g}, ${b}, 0.3)`
+  const r = Math.round(17 + (74 - 17) * t)
+  const g = Math.round(24 + (56 - 24) * t)
+  const b = Math.round(39 + (32 - 39) * t)
+  return `rgba(${r}, ${g}, ${b}, 0.96)`
 }

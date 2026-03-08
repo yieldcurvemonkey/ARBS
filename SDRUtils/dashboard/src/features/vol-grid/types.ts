@@ -32,6 +32,15 @@ export type CalibrationObservation = {
   deltaBpvol?: number | null
 }
 
+export type VolGridTimeseriesPoint = {
+  date: string
+  timestamp: number
+  nvol: number
+  dailyChange: number | null
+}
+
+export type VolGridHistorySource = 'mdp' | 'pca'
+
 export type VolGridTechnicalSignals = {
   autocorrelation1d: number | null
   maShortVsLong: string | null
@@ -52,6 +61,7 @@ export type VolGridCell = {
   atmfVolChangeTime: number | null
   atmfPremium: number | null
   atmfPremiumBps: number | null
+  atmfPremiumBpsChange: number | null
   lastObservation: CalibrationObservation | null
   observationCount: number
   staleness: number | null
@@ -169,17 +179,43 @@ export type VolumeStats = {
   avgNotional1w: number | null
   totalNotional1w: number | null
   lastTradeDate: string | null
+  lastTradeTimestamp: number | null
   daysSinceLastTrade: number | null
   rarityPercentile: number | null
+}
+
+export type VolGridTradeHistoryStats = {
+  tradeCount: number
+  firstTradeTimestamp: number | null
+  lastTradeTimestamp: number | null
+  totalNotional: number | null
+  avgNotional: number | null
+  medianNotional: number | null
+  totalPremium: number | null
+  avgPremium: number | null
+  medianPremium: number | null
+  avgBpvol: number | null
+  medianBpvol: number | null
+  tradesPerDay: number | null
+  avgGapMs: number | null
+  activeDays: number | null
+  platformBreakdown: Array<{
+    platform: string
+    count: number
+  }>
 }
 
 export type CellDetailResponse = {
   expiry: string
   tenor: string
-  timeseries: { date: string; nvol: number }[]
-  recentTrades: CalibrationObservation[]
+  timeseries: VolGridTimeseriesPoint[]
+  timeseriesBySource: Record<VolGridHistorySource, VolGridTimeseriesPoint[]>
+  defaultHistorySource: VolGridHistorySource
+  availableHistorySources: VolGridHistorySource[]
+  tradeHistory: CalibrationObservation[]
   volumeStats: VolumeStats
   technicalSignals: VolGridTechnicalSignals
+  tradeHistoryStats: VolGridTradeHistoryStats
 }
 
 export type VolGridViewMode =
@@ -190,6 +226,12 @@ export type VolGridViewMode =
   | 'confidence'
   | 'vs_mdp'
 
+export type VolGridHistoryRange = '1M' | '3M' | '6M' | '1Y' | 'ALL'
+
+export type VolGridHistoryMetric = 'nvol' | 'dailyChange'
+
+export type VolGridTradeTimelineMetric = 'bpvol' | 'notional' | 'premium'
+
 export type CellDisplayField =
   | 'vol'
   | 'premium'
@@ -197,10 +239,18 @@ export type CellDisplayField =
   | 'lastTradedTime'
   | 'lastTradedLevel'
 
+export type VolGridChangeMetric = 'vol' | 'premium'
+
+export type LastTradedLevelField = 'bpvol' | 'premiumBps'
+
 export type CellDisplayConfig = {
   visibleFields: CellDisplayField[]
+  changeMetric: VolGridChangeMetric
+  lastTradedLevelFields: LastTradedLevelField[]
 }
 
 export const DEFAULT_CELL_DISPLAY_CONFIG: CellDisplayConfig = {
-  visibleFields: ['vol', 'premium', 'change', 'lastTradedTime', 'lastTradedLevel']
+  visibleFields: ['vol', 'premium', 'change', 'lastTradedTime', 'lastTradedLevel'],
+  changeMetric: 'vol',
+  lastTradedLevelFields: ['bpvol', 'premiumBps']
 }

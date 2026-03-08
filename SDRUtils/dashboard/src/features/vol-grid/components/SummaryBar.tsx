@@ -19,10 +19,10 @@ function formatTime(value: number | null) {
   }).format(new Date(value))
 }
 
-function formatChange(value: number | null) {
+function formatChange(value: number | null, digits = 1) {
   if (value === null || !Number.isFinite(value)) return '--'
   const sign = value > 0 ? '+' : value < 0 ? '-' : ''
-  return `${sign}${Math.abs(value).toFixed(1)}`
+  return `${sign}${Math.abs(value).toFixed(digits)}`
 }
 
 export function SummaryBar({
@@ -88,7 +88,7 @@ export function SummaryBar({
       </div>
       <div>
         <div className="font-semibold text-slate-100">
-          {comparisonActive ? comparisonLabel ?? 'Close Basis' : 'Top Movers'}
+          {comparisonActive ? comparisonLabel ?? 'Close Basis' : 'Top dVol Movers'}
         </div>
         <div className="mt-1 flex flex-wrap gap-2">
           {topMovers.length === 0 && (
@@ -109,6 +109,7 @@ export function SummaryBar({
             >
               {cell.expiry}x{cell.tenor}{' '}
               {formatChange(comparisonActive ? cell.comparisonDiff : cell.atmfVolChange)}
+              {!comparisonActive && <span className="ml-1 text-slate-500">bpvol</span>}
             </span>
           ))}
         </div>

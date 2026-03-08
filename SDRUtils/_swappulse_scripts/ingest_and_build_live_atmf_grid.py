@@ -1248,6 +1248,12 @@ def build_live_grid(
         pricing_date=pricing_date,
         surface_type=surface_type,
     )
+    eod_premiums = compute_straddle_premiums(
+        eod_grid,
+        curve_name=curve_name,
+        pricing_date=pricing_date,
+        surface_type=surface_type,
+    )
     global_last_observation = (
         max((obs.execution_timestamp for obs in observations), default=None)
         if observations
@@ -1264,6 +1270,7 @@ def build_live_grid(
         direct_observations = node_groups.get(node_key, [])
         last_observation = _extract_last_observation(direct_observations)
         premium_quote = premiums.get(node_key)
+        eod_premium_quote = eod_premiums.get(node_key)
         source = "prior"
         if direct_observations:
             source = "direct_observation"
@@ -1281,6 +1288,17 @@ def build_live_grid(
             ),
             "premium": premium_quote.premium if premium_quote is not None else None,
             "premium_bps": premium_quote.premium_bps if premium_quote is not None else None,
+            "eod_premium": (
+                eod_premium_quote.premium if eod_premium_quote is not None else None
+            ),
+            "eod_premium_bps": (
+                eod_premium_quote.premium_bps if eod_premium_quote is not None else None
+            ),
+            "change_premium_bps": (
+                float(premium_quote.premium_bps - eod_premium_quote.premium_bps)
+                if premium_quote is not None and eod_premium_quote is not None
+                else None
+            ),
             "observation_count": len(direct_observations),
             "eod_bpvol": float(eod_grid[node_key]),
             "last_observation_time": (
@@ -1312,11 +1330,18 @@ def build_close_mdp_metadata(
         pricing_date=pricing_date,
         surface_type=surface_type,
     )
+    eod_premiums = compute_straddle_premiums(
+        eod_grid,
+        curve_name=curve_name,
+        pricing_date=pricing_date,
+        surface_type=surface_type,
+    )
     node_metadata: dict[str, Any] = {}
     for node in CORE_GRID_NODES:
         mdp_value = _parse_optional_float(mdp_grid.get(node.key))
         eod_value = _parse_optional_float(eod_grid.get(node.key))
         premium_quote = premiums.get(node.key)
+        eod_premium_quote = eod_premiums.get(node.key)
         node_metadata[node.key] = {
             "source": "mdp_close",
             "confidence": 1.0,
@@ -1328,6 +1353,17 @@ def build_close_mdp_metadata(
             "staleness_minutes": 0.0,
             "premium": premium_quote.premium if premium_quote is not None else None,
             "premium_bps": premium_quote.premium_bps if premium_quote is not None else None,
+            "eod_premium": (
+                eod_premium_quote.premium if eod_premium_quote is not None else None
+            ),
+            "eod_premium_bps": (
+                eod_premium_quote.premium_bps if eod_premium_quote is not None else None
+            ),
+            "change_premium_bps": (
+                float(premium_quote.premium_bps - eod_premium_quote.premium_bps)
+                if premium_quote is not None and eod_premium_quote is not None
+                else None
+            ),
             "observation_count": 0,
             "eod_bpvol": float(eod_grid[node.key]),
             "last_observation_time": None,

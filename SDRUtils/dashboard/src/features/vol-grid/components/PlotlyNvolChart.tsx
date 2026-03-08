@@ -1,24 +1,62 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 
-type PlotlyNvolChartProps = {
-  timeseries: { date: string; nvol: number }[]
-  title: string
-  height?: number
+type PlotlyNvolPoint = {
+  date: string
+  nvol: number | null
 }
 
-function computeSma(values: number[], period: number): (number | null)[] {
-  return values.map((_, i) => {
-    if (i < period - 1) return null
+type PlotlyNvolSeries = {
+  key: string
+  label: string
+  color: string
+  points: PlotlyNvolPoint[]
+}
+
+type PlotlyNvolChartProps = {
+  series: PlotlyNvolSeries[]
+  title: string
+  height?: number
+  showSma?: boolean
+  yAxisTitle?: string
+}
+
+function computeSma(values: Array<number | null>, period: number): Array<number | null> {
+  return values.map((_, index) => {
+    if (index < period - 1) return null
     let sum = 0
-    for (let j = i - period + 1; j <= i; j++) sum += values[j]
+    for (let cursor = index - period + 1; cursor <= index; cursor += 1) {
+      const value = values[cursor]
+      if (value === null || !Number.isFinite(value)) {
+        return null
+      }
+      sum += value
+    }
     return sum / period
   })
 }
 
-export function PlotlyNvolChart({ timeseries, title, height = 400 }: PlotlyNvolChartProps) {
+export function PlotlyNvolChart({
+  series,
+  title,
+  height = 380,
+  showSma = false,
+  yAxisTitle = 'NVOL (bpvol)'
+}: PlotlyNvolChartProps) {
   const rootRef = useRef<HTMLDivElement>(null)
+  const normalizedSeries = useMemo(
+    () =>
+      series
+        .map((entry) => ({
+          ...entry,
+          points: entry.points.filter(
+            (point) => point.nvol !== null && Number.isFinite(point.nvol)
+          ) as Array<{ date: string; nvol: number }>
+        }))
+        .filter((entry) => entry.points.length > 0),
+    [series]
+  )
 
   useEffect(() => {
     let disposed = false
@@ -30,30 +68,45 @@ export function PlotlyNvolChart({ timeseries, title, height = 400 }: PlotlyNvolC
       plotly = (plotlyModule as any).default ?? plotlyModule
       if (disposed || !container) return
 
-      const dates = timeseries.map((p) => p.date)
-      const nvols = timeseries.map((p) => p.nvol)
-      const sma20 = computeSma(nvols, 20)
+      const data = normalizedSeries.flatMap((entry, index) => {
+        const dates = entry.points.map((point) => point.date)
+        const values = entry.points.map((point) => point.nvol)
+        const traces: any[] = [
+          {
+            type: 'scatter',
+            mode: 'lines+markers',
+            name: entry.label,
+            x: dates,
+            y: values,
+            line: { color: entry.color, width: 2.2 },
+            marker: {
+              color: entry.color,
+              size: normalizedSeries.length > 1 ? 4 : 5,
+              line: { color: 'rgba(226,232,240,0.3)', width: 0.5 }
+            },
+            hovertemplate: `${entry.label}<br>Date %{x}<br>NVOL %{y:.2f} bpvol<extra></extra>`
+          }
+        ]
 
-      const data = [
-        {
-          type: 'scatter' as const,
-          mode: 'lines' as const,
-          name: 'NVOL',
-          x: dates,
-          y: nvols,
-          line: { color: '#f59e0b', width: 2 },
-          hovertemplate: 'NVOL: %{y:.1f}<br>Date: %{x}<extra></extra>'
-        },
-        {
-          type: 'scatter' as const,
-          mode: 'lines' as const,
-          name: 'SMA20',
-          x: dates,
-          y: sma20,
-          line: { color: '#38bdf8', width: 1.2, dash: 'dot' as const },
-          hovertemplate: 'SMA20: %{y:.1f}<br>Date: %{x}<extra></extra>'
+        if (showSma) {
+          traces.push({
+            type: 'scatter',
+            mode: 'lines',
+            name: `${entry.label} SMA20`,
+            x: dates,
+            y: computeSma(values, 20),
+            line: {
+              color: index === 0 ? '#94a3b8' : entry.color,
+              width: 1.15,
+              dash: 'dot'
+            },
+            opacity: 0.85,
+            hovertemplate: `${entry.label} SMA20<br>Date %{x}<br>NVOL %{y:.2f} bpvol<extra></extra>`
+          })
         }
-      ]
+
+        return traces
+      })
 
       const layout = {
         template: 'plotly_dark',
@@ -61,39 +114,63 @@ export function PlotlyNvolChart({ timeseries, title, height = 400 }: PlotlyNvolC
         plot_bgcolor: 'rgba(2, 6, 23, 0.65)',
         autosize: true,
         height,
-        margin: { t: 40, r: 16, b: 48, l: 56 },
-        title: { text: title, font: { size: 13, color: '#e2e8f0' } },
-        hovermode: 'x unified' as const,
+        margin: { t: 54, r: 24, b: 54, l: 72 },
+        title: {
+          text: title,
+          x: 0.01,
+          xanchor: 'left',
+          font: { size: 14, color: '#e2e8f0' }
+        },
+        hovermode: 'x unified',
+        hoverlabel: {
+          bgcolor: 'rgba(15, 23, 42, 0.94)',
+          bordercolor: 'rgba(148, 163, 184, 0.25)',
+          font: { color: '#e2e8f0', size: 11 }
+        },
         legend: {
-          orientation: 'h' as const,
+          orientation: 'h',
           x: 0,
-          y: 1.12,
-          bgcolor: 'rgba(15, 23, 42, 0.65)',
-          font: { color: '#94a3b8', size: 11 }
+          y: 1.16,
+          bgcolor: 'rgba(15, 23, 42, 0.55)',
+          bordercolor: 'rgba(148, 163, 184, 0.15)',
+          borderwidth: 1,
+          font: { color: '#cbd5e1', size: 11 }
         },
         xaxis: {
-          type: 'date' as const,
+          title: 'As Of Date',
+          type: 'date',
           showspikes: true,
-          spikesnap: 'cursor' as const,
-          spikemode: 'across' as const,
+          spikesnap: 'cursor',
+          spikemode: 'across',
           spikecolor: '#f8fafc',
           spikethickness: 0.55,
-          gridcolor: 'rgba(148, 163, 184, 0.15)'
+          showline: true,
+          linecolor: 'rgba(148, 163, 184, 0.35)',
+          tickfont: { color: '#94a3b8', size: 10 },
+          titlefont: { color: '#94a3b8', size: 11 },
+          gridcolor: 'rgba(148, 163, 184, 0.14)',
+          zerolinecolor: 'rgba(148, 163, 184, 0.14)'
         },
         yaxis: {
-          title: 'bpvol',
+          title: yAxisTitle,
           showspikes: true,
-          spikesnap: 'cursor' as const,
+          spikesnap: 'cursor',
           spikecolor: '#f8fafc',
           spikethickness: 0.55,
-          gridcolor: 'rgba(148, 163, 184, 0.15)'
+          showline: true,
+          linecolor: 'rgba(148, 163, 184, 0.35)',
+          tickfont: { color: '#94a3b8', size: 10 },
+          titlefont: { color: '#94a3b8', size: 11 },
+          gridcolor: 'rgba(148, 163, 184, 0.14)',
+          zerolinecolor: 'rgba(148, 163, 184, 0.14)'
         },
-        uirevision: 'vol-grid-nvol'
+        uirevision: `vol-grid-nvol-${title}`
       }
 
       const config = {
         responsive: true,
         displaylogo: false,
+        editable: true,
         modeBarButtonsToAdd: [
           'drawline',
           'drawopenpath',
@@ -107,7 +184,9 @@ export function PlotlyNvolChart({ timeseries, title, height = 400 }: PlotlyNvolC
       await plotly.react(container, data, layout, config)
     }
 
-    run().catch((err) => console.error('PlotlyNvolChart render error', err))
+    run().catch((renderError) => {
+      console.error('PlotlyNvolChart render error', renderError)
+    })
 
     return () => {
       disposed = true
@@ -115,11 +194,11 @@ export function PlotlyNvolChart({ timeseries, title, height = 400 }: PlotlyNvolC
         try {
           plotly.purge(container)
         } catch {
-          /* no-op */
+          // no-op
         }
       }
     }
-  }, [timeseries, title, height])
+  }, [height, normalizedSeries, showSma, title, yAxisTitle])
 
   return <div ref={rootRef} style={{ height }} className="w-full" />
 }

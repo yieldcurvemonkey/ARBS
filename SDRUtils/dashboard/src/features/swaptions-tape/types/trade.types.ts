@@ -26,6 +26,9 @@ export type TapeLeg = {
 export type TapeRow = {
   package_id: string;
   package_type: string | null;
+  reported_package_type?: string | null;
+  assumed_incomplete_straddle?: boolean;
+  assumed_straddle_reason?: string | null;
   package_source?: string | null;
   manual_link_id?: string | null;
   manual_package_id?: string | null;

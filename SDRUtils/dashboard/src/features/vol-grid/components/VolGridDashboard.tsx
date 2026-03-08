@@ -15,17 +15,12 @@ import {
   IDB_STRADDLES_PRESET,
   resolveSnapshotPreset
 } from '../constants'
-import {
-  formatChange,
-  formatDateTime,
-  formatNotional,
-  formatNumber,
-  formatTime
-} from '../utils'
+import { formatDateTime, formatNotional, formatNumber } from '../utils'
 import { UnifiedGridCell } from './UnifiedGridCell'
 import { CellAnalyticsModal } from './CellAnalyticsModal'
 import { CellSettingsPopover } from './CellSettingsPopover'
 import { SummaryBar } from './SummaryBar'
+import { VolGridSurface3D } from './VolGridSurface3D'
 import { useCellDetail } from '../hooks/useCellDetail'
 import { useCellDisplayConfig } from '../hooks/useCellDisplayConfig'
 
@@ -48,6 +43,16 @@ function formatSnapshotKindLabel(value: VolGridSurfaceResponse['meta']['snapshot
   }
 }
 
+function formatDisplayDateKey(value: string | null | undefined) {
+  if (!value) return '--'
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit'
+  }).format(new Date(`${value}T12:00:00Z`))
+}
+
 function getSessionAccent(session: VolGridSessionMeta | null) {
   switch (session?.mode) {
     case 'weekend_close':
@@ -65,21 +70,31 @@ function getSessionAccent(session: VolGridSessionMeta | null) {
   }
 }
 
+type DashboardTab = 'grid' | 'surface'
+
 export default function VolGridDashboard() {
   const [surface, setSurface] = useState<VolGridSurfaceResponse | null>(null)
   const [preset, setPreset] = useState<CalibrationPresetKey>(DEFAULT_PRESET)
+  const [activeTab, setActiveTab] = useState<DashboardTab>('grid')
+  const [selectedDate, setSelectedDate] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [feed, setFeed] = useState<CalibrationObservation[]>([])
   const [filteredOutCount, setFilteredOutCount] = useState(0)
   const [configOpen, setConfigOpen] = useState(false)
   const [cellSettingsOpen, setCellSettingsOpen] = useState(false)
+  const [feedOpen, setFeedOpen] = useState(false)
   const [configDraft, setConfigDraft] =
     useState<CalibrationFilterConfig>(IDB_STRADDLES_PRESET)
   const [specificPlatforms, setSpecificPlatforms] = useState('')
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
 
-  const { config: displayConfig, toggleField, resetToDefaults } = useCellDisplayConfig()
+  const {
+    config: displayConfig,
+    toggleField,
+    toggleLastTradedLevelField,
+    resetToDefaults
+  } = useCellDisplayConfig()
 
   const selectedCell = useMemo(
     () => surface?.cells.find((cell) => cell.nodeKey === selectedNodeKey) ?? null,
@@ -97,7 +112,7 @@ export default function VolGridDashboard() {
     if (!surface) return { min: 0, max: 0 }
     const values = surface.cells
       .map((cell) => cell.atmfVol)
-      .filter((v): v is number => v !== null && Number.isFinite(v))
+      .filter((value): value is number => value !== null && Number.isFinite(value))
     return {
       min: values.length ? Math.min(...values) : 0,
       max: values.length ? Math.max(...values) : 0
@@ -116,8 +131,8 @@ export default function VolGridDashboard() {
       if (data?.preset) {
         setPreset(normalizeSelectablePreset(data.preset as CalibrationPresetKey))
       }
-    } catch (err) {
-      console.error(err)
+    } catch (fetchError) {
+      console.error(fetchError)
     }
   }, [])
 
@@ -129,23 +144,29 @@ export default function VolGridDashboard() {
         calibration_preset: preset,
         include_premium: 'true'
       })
+      if (selectedDate) {
+        params.set('date', selectedDate)
+      }
       const res = await fetch(`/api/vol-grid/surface?${params.toString()}`)
       if (!res.ok) throw new Error('Surface fetch failed')
       const data = (await res.json()) as VolGridSurfaceResponse
       setSurface(data)
       setFilteredOutCount(data.meta.filteredOutCount)
-    } catch (err: any) {
-      setError(err?.message || 'Unable to load vol grid')
+    } catch (fetchError: any) {
+      setError(fetchError?.message || 'Unable to load vol grid')
     } finally {
       setLoading(false)
     }
-  }, [preset])
+  }, [preset, selectedDate])
 
   const loadFeed = useCallback(async () => {
     try {
       const params = new URLSearchParams({
         calibration_preset: preset
       })
+      if (selectedDate) {
+        params.set('date', selectedDate)
+      }
       const res = await fetch(`/api/vol-grid/calibration-trades?${params.toString()}`)
       if (!res.ok) return
       const data = await res.json()
@@ -155,10 +176,10 @@ export default function VolGridDashboard() {
       if (typeof data?.filteredOutCount === 'number') {
         setFilteredOutCount(data.filteredOutCount)
       }
-    } catch (err) {
-      console.error(err)
+    } catch (fetchError) {
+      console.error(fetchError)
     }
-  }, [preset])
+  }, [preset, selectedDate])
 
   useEffect(() => {
     loadConfig()
@@ -167,12 +188,20 @@ export default function VolGridDashboard() {
   useEffect(() => {
     loadSurface()
     loadFeed()
+  }, [loadFeed, loadSurface])
+
+  useEffect(() => {
+    if (selectedDate) return
     const interval = setInterval(() => {
       loadSurface()
       loadFeed()
     }, 5000)
     return () => clearInterval(interval)
-  }, [loadSurface, loadFeed])
+  }, [loadFeed, loadSurface, selectedDate])
+
+  useEffect(() => {
+    setSelectedNodeKey(null)
+  }, [preset, selectedDate])
 
   const handlePresetChange = async (value: CalibrationPresetKey) => {
     setPreset(value)
@@ -183,8 +212,8 @@ export default function VolGridDashboard() {
         body: JSON.stringify({ preset: value })
       })
       loadConfig()
-    } catch (err) {
-      console.error(err)
+    } catch (fetchError) {
+      console.error(fetchError)
     }
   }
 
@@ -210,8 +239,8 @@ export default function VolGridDashboard() {
       setConfigOpen(false)
       loadSurface()
       loadFeed()
-    } catch (err) {
-      console.error(err)
+    } catch (fetchError) {
+      console.error(fetchError)
     }
   }
 
@@ -230,8 +259,21 @@ export default function VolGridDashboard() {
     configDraft.packageTypes
   ) as Array<[keyof CalibrationFilterConfig['packageTypes'], boolean]>
   const curveLabel = surface?.curve
-    ? `Curve: ${surface.curve.curveName} (${surface.curve.source}) ${surface.curve.referenceDate ?? ''}`
+    ? `Curve: ${surface.curve.curveName} (${surface.curve.source})`
     : 'Curve: --'
+  const curveMetaLabel = useMemo(() => {
+    if (!surface?.curve) return null
+    const surfaceDate = formatDisplayDateKey(surface.asOfDate)
+    const referenceDate = surface.curve.referenceDate
+      ? formatDisplayDateKey(surface.curve.referenceDate)
+      : null
+
+    if (referenceDate && surface.curve.referenceDate && surface.curve.referenceDate !== surface.asOfDate) {
+      return `Surface date ${surfaceDate}. Base MDP reference ${referenceDate}.`
+    }
+
+    return `Surface date ${surfaceDate}.`
+  }, [surface])
   const session = surface?.meta.session ?? null
 
   const lastUpdateLabel = useMemo(() => {
@@ -268,11 +310,7 @@ export default function VolGridDashboard() {
     return 'No direct observations for this preset. Showing the prior surface.'
   }, [surface])
 
-  const feedTitle = !surface?.meta.hasData
-    ? 'Observation Feed'
-    : session?.isClosingView
-      ? 'Closing Observation Feed'
-      : 'Calibration Feed'
+  const feedTitle = 'Observation Feed'
   const feedEmptyMessage = !surface?.meta.hasData
     ? 'No stored live snapshot or EOD close history is available yet.'
     : session?.isClosingView
@@ -281,19 +319,60 @@ export default function VolGridDashboard() {
   const comparisonBanner = comparisonMeta
     ? `Comparing ${formatSnapshotKindLabel(surface?.meta.snapshotKind ?? null)} against ${formatSnapshotKindLabel(comparisonMeta.snapshotKind)}.`
     : null
+  const requestedDateMismatch =
+    Boolean(selectedDate) && Boolean(session?.effectiveDate) && session?.effectiveDate !== selectedDate
 
   return (
     <>
-      <div className="space-y-6 xl:[zoom:0.8]">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl">
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-xl xl:[zoom:0.8]">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight text-white">
                 ATMF Vol Grid
               </h1>
               <p className="text-sm text-slate-400">{curveLabel}</p>
+              {curveMetaLabel && (
+                <p className="mt-1 text-xs text-slate-500">{curveMetaLabel}</p>
+              )}
             </div>
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <div className="inline-flex overflow-hidden rounded-lg border border-slate-700">
+                {([
+                  ['grid', 'Grid'],
+                  ['surface', 'Surface 3D']
+                ] as Array<[DashboardTab, string]>).map(([tab, label]) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setActiveTab(tab)}
+                    className={`px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                      activeTab === tab
+                        ? 'bg-slate-700 text-slate-100'
+                        : 'text-slate-300 hover:bg-slate-800'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+                <span className="uppercase tracking-wide text-slate-500">Date</span>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(event) => setSelectedDate(event.target.value)}
+                  className="bg-transparent text-slate-100 outline-none"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => setSelectedDate('')}
+                disabled={!selectedDate}
+                className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Live
+              </button>
               <select
                 value={normalizeSelectablePreset(preset)}
                 onChange={(event) =>
@@ -326,10 +405,22 @@ export default function VolGridDashboard() {
             <div className="text-xs text-slate-400">{lastUpdateLabel}</div>
             {loading && <div className="text-xs text-slate-500">Refreshing...</div>}
             {error && <div className="text-xs text-rose-400">{error}</div>}
+            {selectedDate && (
+              <div className="rounded-full border border-slate-700 px-2.5 py-1 text-[11px] text-slate-300">
+                Requested date {selectedDate}
+              </div>
+            )}
           </div>
 
           {comparisonBanner && (
             <div className="mt-2 text-xs text-slate-500">{comparisonBanner}</div>
+          )}
+
+          {requestedDateMismatch && session && (
+            <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+              Requested {selectedDate}, showing latest stored surface on or before{' '}
+              {session.effectiveDate}.
+            </div>
           )}
 
           {session && surface?.meta.hasData && (
@@ -344,15 +435,14 @@ export default function VolGridDashboard() {
           )}
 
           {observationMessage && (
-            <div className="mt-2 text-xs text-slate-500">
-              {observationMessage}
-            </div>
+            <div className="mt-2 text-xs text-slate-500">{observationMessage}</div>
           )}
 
           {cellSettingsOpen && (
             <CellSettingsPopover
               config={displayConfig}
               onToggle={toggleField}
+              onToggleLastTradedLevelField={toggleLastTradedLevelField}
               onReset={resetToDefaults}
             />
           )}
@@ -506,121 +596,170 @@ export default function VolGridDashboard() {
           )}
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,1.2fr)]">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-            <div
-              className="grid gap-[2px]"
-              style={{
-                gridTemplateColumns: `100px repeat(${GRID_DEFINITION.tenors.length}, minmax(120px, 1fr))`
-              }}
-            >
-              <div className="bg-slate-900 p-2 text-xs uppercase text-slate-400">
-                Expiry \ Tenor
-              </div>
-              {GRID_DEFINITION.tenors.map((tenor) => (
+        {activeTab === 'grid' ? (
+          <div className={`grid gap-4 ${feedOpen ? 'xl:grid-cols-[minmax(0,1fr)_290px]' : 'grid-cols-1'}`}>
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
+              <div className="overflow-x-auto">
                 <div
-                  key={tenor}
-                  className="bg-slate-900 p-2 text-center text-xs uppercase text-slate-400"
+                  className="grid gap-[2px]"
+                  style={{
+                    minWidth: `${58 + GRID_DEFINITION.tenors.length * 82}px`,
+                    gridTemplateColumns: `58px repeat(${GRID_DEFINITION.tenors.length}, minmax(82px, 1fr))`
+                  }}
                 >
-                  {tenor}
-                </div>
-              ))}
-              {GRID_DEFINITION.expiries.map((expiry) => (
-                <div key={expiry} className="contents">
-                  <div className="bg-slate-900 p-2 text-xs uppercase text-slate-400">
-                    {expiry}
+                  <div className="bg-slate-900 px-2 py-1.5 text-[10px] uppercase leading-tight text-slate-400">
+                    Expiry \ Tenor
                   </div>
-                  {GRID_DEFINITION.tenors.map((tenor) => {
-                    const nodeKey = `${expiry.toLowerCase()}_${tenor.toLowerCase()}`
-                    const cell = cellMap.get(nodeKey)
-                    if (!cell) {
-                      return (
-                        <div
-                          key={`${expiry}-${tenor}`}
-                          className="min-h-[110px] bg-slate-900/40 p-2 text-center text-xs text-slate-500"
-                        >
-                          --
-                        </div>
-                      )
-                    }
-                    return (
-                      <UnifiedGridCell
-                        key={`${expiry}-${tenor}`}
-                        cell={cell}
-                        isSelected={selectedNodeKey === cell.nodeKey}
-                        visibleFields={displayConfig.visibleFields}
-                        volMin={volRange.min}
-                        volMax={volRange.max}
-                        onClick={() => setSelectedNodeKey(cell.nodeKey)}
-                      />
-                    )
-                  })}
+                  {GRID_DEFINITION.tenors.map((tenor) => (
+                    <div
+                      key={tenor}
+                      className="bg-slate-900 px-2 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+                    >
+                      {tenor}
+                    </div>
+                  ))}
+                  {GRID_DEFINITION.expiries.map((expiry) => (
+                    <div key={expiry} className="contents">
+                      <div className="bg-slate-900 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                        {expiry}
+                      </div>
+                      {GRID_DEFINITION.tenors.map((tenor) => {
+                        const nodeKey = `${expiry.toLowerCase()}_${tenor.toLowerCase()}`
+                        const cell = cellMap.get(nodeKey)
+                        if (!cell) {
+                          return (
+                            <div
+                              key={`${expiry}-${tenor}`}
+                              className="min-h-[90px] bg-slate-900/40 p-2 text-center text-xs text-slate-500"
+                            >
+                              --
+                            </div>
+                          )
+                        }
+                        return (
+                          <UnifiedGridCell
+                            key={`${expiry}-${tenor}`}
+                            cell={cell}
+                            isSelected={selectedNodeKey === cell.nodeKey}
+                            visibleFields={displayConfig.visibleFields}
+                            lastTradedLevelFields={displayConfig.lastTradedLevelFields}
+                            changeMetric={displayConfig.changeMetric}
+                            volMin={volRange.min}
+                            volMax={volRange.max}
+                            onClick={() => setSelectedNodeKey(cell.nodeKey)}
+                          />
+                        )
+                      })}
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-4 text-xs text-slate-400">
+                <span className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400" /> live (&lt;15m)
+                </span>
+                <span className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-amber-400" /> recent (&lt;1h)
+                </span>
+                <span className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-rose-500" /> stale (&lt;4h)
+                </span>
+                <span className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-slate-500" /> very stale
+                </span>
+              </div>
+              <SummaryBar
+                cells={gridCells}
+                lastUpdate={surface?.meta.lastUpdate ?? null}
+                session={session}
+                hasData={surface?.meta.hasData ?? false}
+                comparisonActive={false}
+                comparisonLabel={null}
+              />
             </div>
-            <div className="mt-3 flex flex-wrap gap-4 text-xs text-slate-400">
-              <span className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-emerald-400" /> live (&lt;15m)
-              </span>
-              <span className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-amber-400" /> recent (&lt;1h)
-              </span>
-              <span className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-rose-500" /> stale (&lt;4h)
-              </span>
-              <span className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-slate-500" /> very stale
-              </span>
+
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-200">{feedTitle}</h2>
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    {feed.length} mapped trade{feed.length === 1 ? '' : 's'} shown
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFeedOpen((open) => !open)}
+                  className="rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
+                >
+                  {feedOpen ? 'Collapse' : 'Expand'}
+                </button>
+              </div>
+              {feedOpen ? (
+                <>
+                  <div className="mt-3 max-h-[46rem] space-y-2 overflow-y-auto pr-1 text-xs text-slate-300">
+                {feed.length === 0 && (
+                  <div className="text-slate-500">{feedEmptyMessage}</div>
+                )}
+                {feed.map((trade) => (
+                  <div
+                    key={`${trade.packageId}-${trade.executionTimestamp}`}
+                    className="rounded-xl border border-slate-800/70 bg-slate-900/60 px-3 py-2"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-[11px] font-semibold text-slate-100">
+                          {formatDateTime(trade.executionTimestamp)}
+                        </div>
+                        <div className="truncate text-sm font-semibold text-white">
+                          {trade.tradeLabel}
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-400">
+                          {trade.platform ?? '--'} · {trade.expiry ?? '--'}x{trade.tenor ?? '--'} ·{' '}
+                          {formatNotional(trade.notional)}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-lg font-semibold text-white">
+                          {formatNumber(trade.bpvolYr, 2)}
+                        </div>
+                        <div className="text-[11px] text-slate-400">bpvol</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                  </div>
+                  <div className="mt-4 text-xs text-slate-500">
+                    Filtered out: {filteredOutCount} trades
+                  </div>
+                </>
+              ) : (
+                <div className="mt-3 text-[11px] text-slate-500">
+                  Feed hidden by default. Expand to inspect mapped trades.
+                </div>
+              )}
             </div>
-            <SummaryBar
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+              <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-200">
+                    ATMF Grid Volatility Surface
+                  </h2>
+                <div className="mt-1 text-[11px] text-slate-500">
+                  Rotatable 3D surface for {surface?.meta.session.effectiveDate ?? 'the current snapshot'}.
+                </div>
+                </div>
+                <div className="text-[11px] text-slate-500">dVol and dPrem remain visible in the grid view.</div>
+            </div>
+            <VolGridSurface3D
               cells={gridCells}
-              lastUpdate={surface?.meta.lastUpdate ?? null}
-              session={session}
-              hasData={surface?.meta.hasData ?? false}
-              comparisonActive={false}
-              comparisonLabel={null}
+              expiries={GRID_DEFINITION.expiries}
+              tenors={GRID_DEFINITION.tenors}
+              asOfDate={surface?.meta.session.effectiveDate ?? null}
             />
           </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-            <h2 className="text-sm font-semibold text-slate-200">
-              {feedTitle}
-            </h2>
-            <div className="mt-1 text-[11px] text-slate-500">
-              {feed.length} mapped trade{feed.length === 1 ? '' : 's'} shown
-            </div>
-            <div className="mt-2 max-h-[38rem] space-y-2 overflow-y-auto pr-1 text-xs text-slate-300">
-              {feed.length === 0 && (
-                <div className="text-slate-500">{feedEmptyMessage}</div>
-              )}
-              {feed.map((trade) => (
-                <div
-                  key={`${trade.packageId}-${trade.executionTimestamp}`}
-                  className="flex items-center justify-between gap-2 rounded-md bg-slate-900/60 p-2"
-                >
-                  <div>
-                    <div className="font-semibold text-slate-200">
-                      {formatTime(trade.executionTimestamp)} {trade.tradeLabel}
-                    </div>
-                    <div className="text-[11px] text-slate-400">
-                      {trade.platform ?? '--'} · {trade.expiry ?? '--'}x{trade.tenor ?? '--'} ·{' '}
-                      {formatNotional(trade.notional)}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-semibold">
-                      {formatNumber(trade.bpvolYr, 1)}
-                    </div>
-                    <div className="text-[11px] text-slate-400">bpvol</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 text-xs text-slate-500">
-              Filtered out: {filteredOutCount} trades
-            </div>
-          </div>
-        </div>
+        )}
       </div>
 
       <CellAnalyticsModal

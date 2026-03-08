@@ -177,7 +177,7 @@ class ErisFuturesFetcher(DiskCacheMixin, BaseFetcher):
         else:
             archives_path = f"archives/{date.year}/{date.month:02}-{calendar.month_name[date.month]}"
             file_name = f"Eris_{date.strftime('%Y%m%d')}_{workbook_type}.csv"
-            if diff_month(datetime.date.today(), date) < 3:
+            if diff_month(datetime.date.today(), date) <= 3:
                 eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{file_name}"
             else:
                 eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{archives_path}/{file_name}"
