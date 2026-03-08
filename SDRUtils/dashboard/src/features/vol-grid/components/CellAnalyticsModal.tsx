@@ -111,8 +111,8 @@ function formatHistorySourceLabel(source: VolGridHistorySource) {
 
 function getChangeTone(value: number | null) {
   if (value === null || !Number.isFinite(value)) return 'text-slate-100'
-  if (value > 0) return 'text-rose-300'
-  if (value < 0) return 'text-emerald-300'
+  if (value > 0) return 'text-emerald-300'
+  if (value < 0) return 'text-rose-300'
   return 'text-slate-100'
 }
 

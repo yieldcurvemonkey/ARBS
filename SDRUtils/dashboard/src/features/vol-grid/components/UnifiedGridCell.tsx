@@ -31,8 +31,8 @@ type UnifiedGridCellProps = {
 
 function getChangeTone(value: number | null) {
   if (value === null || !Number.isFinite(value)) return 'text-slate-300'
-  if (value > 0) return 'text-rose-300'
-  if (value < 0) return 'text-emerald-300'
+  if (value > 0) return 'text-emerald-300'
+  if (value < 0) return 'text-rose-300'
   return 'text-slate-200'
 }
 
@@ -62,12 +62,6 @@ export const UnifiedGridCell = memo(function UnifiedGridCell({
   onClick
 }: UnifiedGridCellProps) {
   const dotColor = STALENESS_COLORS[cell.stalenessCategory] ?? STALENESS_COLORS.no_data
-  const isFresh =
-    cell.atmfVolSource === 'direct_observation' &&
-    cell.staleness !== null &&
-    cell.staleness <= 5
-  const isStaleOrWorse =
-    cell.stalenessCategory === 'stale' || cell.stalenessCategory === 'very_stale'
   const lastTradeLabel = cell.lastObservation
     ? `${formatDate(cell.lastObservation.executionTimestamp)} ${formatTime(cell.lastObservation.executionTimestamp)} ET`
     : 'No trade history'
@@ -106,22 +100,26 @@ export const UnifiedGridCell = memo(function UnifiedGridCell({
     <button
       title={tooltip}
       onClick={onClick}
-      className={`relative flex min-h-[78px] flex-col overflow-hidden border px-2 py-1.5 text-left font-mono text-white transition ${
+      className={`relative flex min-h-[72px] flex-col overflow-hidden border px-2 py-1.5 text-left font-mono text-white transition ${
         isSelected
           ? 'border-sky-400/80 shadow-[inset_0_0_0_1px_rgba(56,189,248,0.45)]'
           : 'border-slate-800/90 hover:border-slate-600/80'
-      } ${isStaleOrWorse ? 'border-l-slate-500/80' : ''}`}
+      }`}
       style={{
         backgroundColor: getUnifiedCellBackground(cell.atmfVol, volMin, volMax)
       }}
     >
-      <span className="absolute inset-x-0 top-0 h-[2px]" style={{ backgroundColor: dotColor }} />
-
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           {visibleFields.includes('vol') && (
-            <div className="text-[18px] font-semibold leading-none tracking-tight text-slate-50 tabular-nums">
-              {formatNumber(cell.atmfVol, 2)}
+            <div className="flex items-center gap-1.5">
+              <div className="text-[18px] font-semibold leading-none tracking-tight text-slate-50 tabular-nums">
+                {formatNumber(cell.atmfVol, 2)}
+              </div>
+              <span
+                className="inline-block h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: dotColor }}
+              />
             </div>
           )}
           {visibleFields.includes('premium') && (
@@ -134,13 +132,13 @@ export const UnifiedGridCell = memo(function UnifiedGridCell({
         {visibleFields.includes('change') && (
           <div className="space-y-1 text-right text-[9px] leading-3 tabular-nums">
             <div>
-              <span className="mr-1 uppercase tracking-[0.16em] text-slate-500">dV</span>
+              <span className="mr-1 tracking-[0.1em] text-slate-500">&Delta;V</span>
               <span className={getChangeTone(cell.atmfVolChange)}>
                 {formatChange(cell.atmfVolChange, 1)}
               </span>
             </div>
             <div>
-              <span className="mr-1 uppercase tracking-[0.16em] text-slate-500">dP</span>
+              <span className="mr-1 tracking-[0.1em] text-slate-500">&Delta;P</span>
               <span className={getChangeTone(cell.atmfPremiumBpsChange)}>
                 {formatChange(cell.atmfPremiumBpsChange, 2)}
               </span>
@@ -151,10 +149,9 @@ export const UnifiedGridCell = memo(function UnifiedGridCell({
 
       {(visibleFields.includes('lastTradedTime') ||
         visibleFields.includes('lastTradedLevel')) && (
-        <div className="mt-auto border-t border-slate-800/80 pt-1.5">
+        <div className="mt-auto border-t border-slate-800/80 pt-1">
           <div className="flex items-end justify-between gap-2">
             <div className="min-w-0 text-[9px] leading-3 text-slate-400">
-              <div className="uppercase tracking-[0.18em] text-slate-500">Last</div>
               {visibleFields.includes('lastTradedTime') &&
                 (cell.lastObservation ? (
                   <>
