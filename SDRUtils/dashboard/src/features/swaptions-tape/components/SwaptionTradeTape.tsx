@@ -10708,6 +10708,8 @@ function ManualLinkModal({
   selectedRows,
   currentUser,
   onUserChange,
+  adminPassword,
+  onAdminPasswordChange,
   onClose,
   onCreated,
 }: {
@@ -10715,6 +10717,8 @@ function ManualLinkModal({
   selectedRows: TapeRow[];
   currentUser: string;
   onUserChange: (value: string) => void;
+  adminPassword: string;
+  onAdminPasswordChange: (value: string) => void;
   onClose: () => void;
   onCreated: (result?: { link_id: string; manual_package_id: string }) => void;
 }) {
@@ -10768,6 +10772,7 @@ function ManualLinkModal({
   const hasValidationErrors = visibleValidation.some(
     (item) => item.status === "error",
   );
+  const hasWritePassword = adminPassword.trim().length > 0;
 
   const addTag = useCallback(() => {
     const next = tagInput.trim();
@@ -10834,6 +10839,7 @@ function ManualLinkModal({
           link_reason: linkReason || undefined,
           tags,
           user: currentUser || undefined,
+          admin_password: adminPassword || undefined,
         }),
       });
       const payload = await res.json();
@@ -10863,6 +10869,7 @@ function ManualLinkModal({
     }
   }, [
     comment,
+    adminPassword,
     currentUser,
     linkReason,
     onClose,
@@ -11058,6 +11065,21 @@ function ManualLinkModal({
                   </label>
                   <label className="block">
                     <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                      Write Password
+                    </span>
+                    <input
+                      type="password"
+                      value={adminPassword}
+                      onChange={(event) =>
+                        onAdminPasswordChange(event.target.value)
+                      }
+                      autoComplete="current-password"
+                      className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                      placeholder="admin password"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wide text-slate-400">
                       Package Type
                     </span>
                     <select
@@ -11162,7 +11184,11 @@ function ManualLinkModal({
               ? "Select at least two trades to enable linking."
               : hasValidationErrors
                 ? "Resolve validation errors before creating the link."
-                : "Ready to create a manual link."}
+                : !currentUser
+                  ? "Enter a user to create the link."
+                  : !hasWritePassword
+                    ? "Enter the write password to create the link."
+                    : "Ready to create a manual link."}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -11179,7 +11205,13 @@ function ManualLinkModal({
                 submitting ||
                 selectedTradeIds.length < 2 ||
                 hasValidationErrors ||
-                !currentUser
+                !currentUser ||
+                !hasWritePassword
+              }
+              title={
+                !hasWritePassword
+                  ? "Enter the write password to create manual links"
+                  : undefined
               }
               className="rounded border border-emerald-500/60 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
             >
@@ -11197,6 +11229,8 @@ function ManualLinkDetailsModal({
   linkId,
   currentUser,
   onUserChange,
+  adminPassword,
+  onAdminPasswordChange,
   onClose,
   onUpdated,
 }: {
@@ -11204,6 +11238,8 @@ function ManualLinkDetailsModal({
   linkId: string | null;
   currentUser: string;
   onUserChange: (value: string) => void;
+  adminPassword: string;
+  onAdminPasswordChange: (value: string) => void;
   onClose: () => void;
   onUpdated: () => void;
 }) {
@@ -11227,6 +11263,7 @@ function ManualLinkDetailsModal({
   const metricEntries = linkDetail?.link_metrics
     ? Object.entries(linkDetail.link_metrics)
     : [];
+  const hasWritePassword = adminPassword.trim().length > 0;
 
   const addTag = useCallback(() => {
     const next = tagInput.trim();
@@ -11274,6 +11311,7 @@ function ManualLinkDetailsModal({
     try {
       const payload: Record<string, any> = {
         user: currentUser || undefined,
+        admin_password: adminPassword || undefined,
         package_type: packageType || undefined,
         link_reason: linkReason || undefined,
         comment: comment || undefined,
@@ -11305,6 +11343,7 @@ function ManualLinkDetailsModal({
     }
   }, [
     addTradesInput,
+    adminPassword,
     comment,
     currentUser,
     fetchLinkDetails,
@@ -11326,6 +11365,7 @@ function ManualLinkDetailsModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           user: currentUser || undefined,
+          admin_password: adminPassword || undefined,
           reason: deactivateReason || undefined,
         }),
       });
@@ -11341,7 +11381,7 @@ function ManualLinkDetailsModal({
     } finally {
       setDeactivating(false);
     }
-  }, [currentUser, deactivateReason, linkId, onClose, onUpdated]);
+  }, [adminPassword, currentUser, deactivateReason, linkId, onClose, onUpdated]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -11432,6 +11472,21 @@ function ManualLinkDetailsModal({
                           }
                           className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
                           placeholder="username or email"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                          Write Password
+                        </span>
+                        <input
+                          type="password"
+                          value={adminPassword}
+                          onChange={(event) =>
+                            onAdminPasswordChange(event.target.value)
+                          }
+                          autoComplete="current-password"
+                          className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
+                          placeholder="admin password"
                         />
                       </label>
                       <label className="block">
@@ -11557,7 +11612,17 @@ function ManualLinkDetailsModal({
                       <button
                         type="button"
                         onClick={handleSave}
-                        disabled={saving || !currentUser || !linkDetail}
+                        disabled={
+                          saving ||
+                          !currentUser ||
+                          !hasWritePassword ||
+                          !linkDetail
+                        }
+                        title={
+                          !hasWritePassword
+                            ? "Enter the write password to update manual links"
+                            : undefined
+                        }
                         className="rounded border border-emerald-500/60 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
                       >
                         {saving ? "Saving..." : "Save Changes"}
@@ -11580,7 +11645,17 @@ function ManualLinkDetailsModal({
                       <button
                         type="button"
                         onClick={handleDeactivate}
-                        disabled={deactivating || !currentUser || !linkDetail}
+                        disabled={
+                          deactivating ||
+                          !currentUser ||
+                          !hasWritePassword ||
+                          !linkDetail
+                        }
+                        title={
+                          !hasWritePassword
+                            ? "Enter the write password to deactivate manual links"
+                            : undefined
+                        }
                         className="rounded border border-rose-500/60 bg-rose-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-200 transition hover:bg-rose-500/20 disabled:opacity-50"
                       >
                         {deactivating ? "Deactivating..." : "Deactivate Link"}
@@ -11771,6 +11846,7 @@ export default function SwaptionTradeTape() {
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [detailLinkId, setDetailLinkId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
   const [showManualLinksOnly, setShowManualLinksOnly] = useState(false);
   const [metricMode, setMetricMode] = useState<"NOTIONAL" | "VEGA">(
     "NOTIONAL",
@@ -11830,6 +11906,7 @@ export default function SwaptionTradeTape() {
   const columnFilterOperatorRef = useRef(columnFilterOperator);
   const selectedPackageIdsKeyRef = useRef(selectedPackageIdsKey);
   const showSelectedOnlyRef = useRef(showSelectedOnly);
+  const hasWritePassword = adminPassword.trim().length > 0;
 
   const upsertRows = useCallback((incoming: TapeRow[], replace = false) => {
     setRows((prev) => {
@@ -12273,7 +12350,7 @@ export default function SwaptionTradeTape() {
   }, []);
 
   const removeManualStraddles = useCallback(
-    async (packageIds: string[]) => {
+    async (packageIds: string[], options?: { quiet?: boolean }) => {
       const ids = normalizeSelectedPackageIds(packageIds);
       if (!ids.length) return false;
       try {
@@ -12283,23 +12360,32 @@ export default function SwaptionTradeTape() {
           body: JSON.stringify({
             package_ids: ids,
             user: currentUser || undefined,
+            admin_password: adminPassword || undefined,
           }),
         });
         if (!res.ok) {
           const payload = await res.json().catch(() => ({}));
+          const message =
+            payload?.error || "Failed to remove manual straddle overrides";
           console.error(
             "Failed to remove manual straddle overrides",
-            payload?.error || res.statusText,
+            message || res.statusText,
           );
+          if (!options?.quiet) {
+            setError(message);
+          }
           return false;
         }
         return true;
       } catch {
+        if (!options?.quiet) {
+          setError("Failed to remove manual straddle overrides");
+        }
         console.error("Failed to remove manual straddle overrides");
         return false;
       }
     },
-    [currentUser],
+    [adminPassword, currentUser],
   );
 
   useEffect(() => {
@@ -12340,17 +12426,35 @@ export default function SwaptionTradeTape() {
   }, [fetchManualStraddles, manualLinkStartDate]);
 
   useEffect(() => {
-    if (loading || !forcedStraddlePackageIds.length) return;
+    if (loading || !forcedStraddlePackageIds.length || !hasWritePassword) return;
     const availableIds = new Set(rows.map((row) => row.package_id));
-    setForcedStraddlePackageIds((prev) => {
-      const seenIds = seenForcedStraddlePackageIdsRef.current;
-      const staleIds = prev.filter((id) => seenIds.has(id) && !availableIds.has(id));
-      if (!staleIds.length) return prev;
+    const seenIds = seenForcedStraddlePackageIdsRef.current;
+    const staleIds = forcedStraddlePackageIds.filter(
+      (id) => seenIds.has(id) && !availableIds.has(id),
+    );
+    if (!staleIds.length) return;
+
+    let cancelled = false;
+    void (async () => {
+      const removed = await removeManualStraddles(staleIds, { quiet: true });
+      if (!removed || cancelled) return;
       staleIds.forEach((id) => seenIds.delete(id));
-      void removeManualStraddles(staleIds);
-      return prev.filter((id) => availableIds.has(id));
-    });
-  }, [forcedStraddlePackageIds.length, loading, removeManualStraddles, rows]);
+      const staleIdSet = new Set(staleIds);
+      setForcedStraddlePackageIds((prev) =>
+        prev.filter((id) => !staleIdSet.has(id)),
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    forcedStraddlePackageIds,
+    hasWritePassword,
+    loading,
+    removeManualStraddles,
+    rows,
+  ]);
 
   const manualLinkIndex = useMemo(() => {
     const byTradeId = new Map<string, ManualLinkRow[]>();
@@ -12715,8 +12819,9 @@ export default function SwaptionTradeTape() {
   }, [forcedStraddlePackageIdSet, resolvedRows, selectedPackageIds]);
 
   const handleMakeStraddle = useCallback(async () => {
-    if (!selectedForceableStraddleIds.length) return;
+    if (!selectedForceableStraddleIds.length || !adminPassword.trim()) return;
     const ids = normalizeSelectedPackageIds(selectedForceableStraddleIds);
+    setError(null);
     try {
       const res = await fetch("/api/swaptions-tape/manual-straddles", {
         method: "POST",
@@ -12724,33 +12829,39 @@ export default function SwaptionTradeTape() {
         body: JSON.stringify({
           package_ids: ids,
           user: currentUser || undefined,
+          admin_password: adminPassword || undefined,
         }),
       });
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
+        const message =
+          payload?.error || "Failed to persist manual straddle overrides";
         console.error(
           "Failed to persist manual straddle overrides",
-          payload?.error || res.statusText,
+          message || res.statusText,
         );
+        setError(message);
         return;
       }
       setForcedStraddlePackageIds((prev) =>
         normalizeSelectedPackageIds([...prev, ...ids]),
       );
     } catch (error) {
+      setError("Failed to persist manual straddle overrides");
       console.error("Failed to persist manual straddle overrides", error);
     }
-  }, [currentUser, selectedForceableStraddleIds]);
+  }, [adminPassword, currentUser, selectedForceableStraddleIds]);
 
   const handleUndoMakeStraddle = useCallback(async () => {
-    if (!selectedUndoableStraddleIds.length) return;
+    if (!selectedUndoableStraddleIds.length || !adminPassword.trim()) return;
     const ids = normalizeSelectedPackageIds(selectedUndoableStraddleIds);
+    setError(null);
     const removed = await removeManualStraddles(ids);
     if (!removed) return;
 
     const idSet = new Set(ids);
     setForcedStraddlePackageIds((prev) => prev.filter((id) => !idSet.has(id)));
-  }, [removeManualStraddles, selectedUndoableStraddleIds]);
+  }, [adminPassword, removeManualStraddles, selectedUndoableStraddleIds]);
 
   const handleSparklineTradeSelect = useCallback((packageId: string) => {
     if (!packageId) return;
@@ -13441,8 +13552,26 @@ export default function SwaptionTradeTape() {
               placeholder="username or email"
             />
           </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] uppercase tracking-wide text-gray-400">
+              Write Password
+            </span>
+            <input
+              type="password"
+              value={adminPassword}
+              onChange={(event) => setAdminPassword(event.target.value)}
+              autoComplete="current-password"
+              className="rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-gray-100"
+              placeholder="admin password"
+            />
+          </div>
         </div>
       </div>
+      {error && (
+        <div className="rounded border border-rose-800/70 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
+          {error}
+        </div>
+      )}
       <QuadrantFlowDashboard
         rows={resolvedRows}
         config={quadrantConfig}
@@ -13523,10 +13652,12 @@ export default function SwaptionTradeTape() {
             <button
               type="button"
               onClick={handleMakeStraddle}
-              disabled={!selectedForceableStraddleIds.length}
+              disabled={!selectedForceableStraddleIds.length || !hasWritePassword}
               className="rounded border border-purple-500/60 bg-purple-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-purple-200 transition hover:bg-purple-500/20 disabled:opacity-50"
               title={
-                selectedForceableStraddleIds.length
+                !hasWritePassword
+                  ? "Enter the write password to make inferred straddles"
+                  : selectedForceableStraddleIds.length
                   ? "Mark selected OUTRIGHT rows as inferred straddles"
                   : "Select at least one OUTRIGHT row to mark as inferred straddle"
               }
@@ -13536,10 +13667,12 @@ export default function SwaptionTradeTape() {
             <button
               type="button"
               onClick={handleUndoMakeStraddle}
-              disabled={!selectedUndoableStraddleIds.length}
+              disabled={!selectedUndoableStraddleIds.length || !hasWritePassword}
               className="rounded border border-amber-500/60 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
               title={
-                selectedUndoableStraddleIds.length
+                !hasWritePassword
+                  ? "Enter the write password to undo inferred straddles"
+                  : selectedUndoableStraddleIds.length
                   ? "Remove the manual IDB inferred-straddle override from selected rows"
                   : "Select at least one manually inferred straddle to undo"
               }
@@ -13772,6 +13905,8 @@ export default function SwaptionTradeTape() {
         selectedRows={selectedRows}
         currentUser={currentUser}
         onUserChange={setCurrentUser}
+        adminPassword={adminPassword}
+        onAdminPasswordChange={setAdminPassword}
         onClose={() => setLinkModalOpen(false)}
         onCreated={handleLinkCreated}
       />
@@ -13780,6 +13915,8 @@ export default function SwaptionTradeTape() {
         linkId={detailLinkId}
         currentUser={currentUser}
         onUserChange={setCurrentUser}
+        adminPassword={adminPassword}
+        onAdminPasswordChange={setAdminPassword}
         onClose={closeManualLinkDetails}
         onUpdated={handleLinkUpdated}
       />

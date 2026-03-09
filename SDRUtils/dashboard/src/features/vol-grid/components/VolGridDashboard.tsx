@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { BookOpenText } from 'lucide-react'
 import type {
   CalibrationFilterConfig,
   CalibrationObservation,
@@ -27,6 +28,7 @@ import { CellAnalyticsModal } from './CellAnalyticsModal'
 import { CellSettingsPopover } from './CellSettingsPopover'
 import { SummaryBar } from './SummaryBar'
 import { VolGridSurface3D } from './VolGridSurface3D'
+import { VolGridMethodologyModal } from './VolGridMethodologyModal'
 import { useCellDetail } from '../hooks/useCellDetail'
 import { useCellDisplayConfig } from '../hooks/useCellDisplayConfig'
 
@@ -130,6 +132,7 @@ export default function VolGridDashboard({
   const [error, setError] = useState<string | null>(null)
   const [feed, setFeed] = useState<CalibrationObservation[]>([])
   const [filteredOutCount, setFilteredOutCount] = useState(0)
+  const [methodologyModalOpen, setMethodologyModalOpen] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
   const [cellSettingsOpen, setCellSettingsOpen] = useState(false)
   const [feedOpen, setFeedOpen] = useState(false)
@@ -493,6 +496,14 @@ export default function VolGridDashboard({
                 className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-slate-500"
               >
                 Configure
+              </button>
+              <button
+                type="button"
+                onClick={() => setMethodologyModalOpen(true)}
+                className="inline-flex items-center gap-2 rounded border border-sky-500/60 bg-sky-500/10 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-sky-100 transition hover:bg-sky-500/20"
+              >
+                <BookOpenText className="h-3.5 w-3.5" />
+                Methodology
               </button>
             </div>
           </div>
@@ -871,6 +882,10 @@ export default function VolGridDashboard({
         error={detail.error}
         session={session}
         onClose={() => setSelectedNodeKey(null)}
+      />
+      <VolGridMethodologyModal
+        isOpen={methodologyModalOpen}
+        onClose={() => setMethodologyModalOpen(false)}
       />
     </>
   )

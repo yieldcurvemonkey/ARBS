@@ -13,6 +13,10 @@ import {
   normalizeIdList,
   resolveLinkLegs
 } from '@/lib/manual-links'
+import {
+  isValidSimpleAdminPassword,
+  SIMPLE_ADMIN_AUTH_ERROR
+} from '@/lib/utils'
 
 type ManualLinkPayload = {
   trade_ids?: unknown
@@ -22,6 +26,7 @@ type ManualLinkPayload = {
   tags?: unknown
   user?: unknown
   validate_only?: unknown
+  admin_password?: unknown
 }
 
 const DEFAULT_LIST_LIMIT = 200
@@ -172,6 +177,16 @@ export async function POST(request: Request) {
     )
   }
 
+  const validateOnly =
+    payload.validate_only === true ||
+    String(payload.validate_only).toLowerCase() === 'true'
+  if (!validateOnly && !isValidSimpleAdminPassword(payload.admin_password)) {
+    return NextResponse.json(
+      { error: SIMPLE_ADMIN_AUTH_ERROR },
+      { status: 401 }
+    )
+  }
+
   const availability = await ensureManualLinkTables()
   if (availability) return availability
 
@@ -187,10 +202,6 @@ export async function POST(request: Request) {
       metrics,
       conflicts
     )
-
-    const validateOnly =
-      payload.validate_only === true ||
-      String(payload.validate_only).toLowerCase() === 'true'
 
     if (validateOnly) {
       return NextResponse.json({

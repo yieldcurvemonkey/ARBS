@@ -12,6 +12,10 @@ import {
   normalizeIdList,
   resolveLinkLegs
 } from '@/lib/manual-links'
+import {
+  isValidSimpleAdminPassword,
+  SIMPLE_ADMIN_AUTH_ERROR
+} from '@/lib/utils'
 
 type ManualLinkPatchPayload = {
   comment?: unknown
@@ -21,11 +25,13 @@ type ManualLinkPatchPayload = {
   add_trades?: unknown
   remove_trades?: unknown
   user?: unknown
+  admin_password?: unknown
 }
 
 type ManualLinkDeletePayload = {
   reason?: unknown
   user?: unknown
+  admin_password?: unknown
 }
 
 async function ensureManualLinkTables() {
@@ -168,6 +174,12 @@ export async function PATCH(
     return NextResponse.json(
       { error: 'user is required to update manual links.' },
       { status: 400 }
+    )
+  }
+  if (!isValidSimpleAdminPassword(payload.admin_password)) {
+    return NextResponse.json(
+      { error: SIMPLE_ADMIN_AUTH_ERROR },
+      { status: 401 }
     )
   }
 
@@ -339,6 +351,12 @@ export async function DELETE(
     return NextResponse.json(
       { error: 'user is required to deactivate manual links.' },
       { status: 400 }
+    )
+  }
+  if (!isValidSimpleAdminPassword(payload.admin_password)) {
+    return NextResponse.json(
+      { error: SIMPLE_ADMIN_AUTH_ERROR },
+      { status: 401 }
     )
   }
 

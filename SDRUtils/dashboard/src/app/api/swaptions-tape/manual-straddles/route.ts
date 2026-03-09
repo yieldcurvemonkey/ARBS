@@ -2,6 +2,10 @@
 // ABOUTME: Stores package-level override IDs so inferred straddle tagging survives reloads.
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
+import {
+  isValidSimpleAdminPassword,
+  SIMPLE_ADMIN_AUTH_ERROR
+} from '@/lib/utils'
 
 const MANUAL_STRADDLES_TABLE = 'arbs_swaption_manual_straddles_v1'
 const DEFAULT_LIST_LIMIT = 1000
@@ -10,6 +14,7 @@ const MAX_LIST_LIMIT = 5000
 type ManualStraddlePayload = {
   package_ids?: unknown
   user?: unknown
+  admin_password?: unknown
 }
 
 function normalizeText(value: unknown): string | null {
@@ -142,6 +147,12 @@ export async function POST(request: Request) {
       { status: 400 }
     )
   }
+  if (!isValidSimpleAdminPassword(payload.admin_password)) {
+    return NextResponse.json(
+      { error: SIMPLE_ADMIN_AUTH_ERROR },
+      { status: 401 }
+    )
+  }
   const user = normalizeText(payload.user)
 
   const tableError = await ensureManualStraddlesTable()
@@ -189,6 +200,12 @@ export async function DELETE(request: Request) {
     return NextResponse.json(
       { error: 'package_ids must include at least one package id.' },
       { status: 400 }
+    )
+  }
+  if (!isValidSimpleAdminPassword(payload.admin_password)) {
+    return NextResponse.json(
+      { error: SIMPLE_ADMIN_AUTH_ERROR },
+      { status: 401 }
     )
   }
 

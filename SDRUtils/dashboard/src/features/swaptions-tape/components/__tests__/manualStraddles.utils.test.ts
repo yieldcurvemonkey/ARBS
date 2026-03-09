@@ -3,6 +3,11 @@ import {
   getSelectedUndoableStraddleIds,
   type ManualStraddleSelectionRow
 } from '../manualStraddles.utils'
+import {
+  SIMPLE_ADMIN_PASSWORD,
+  isValidSimpleAdminPassword,
+  normalizeSimpleAdminPassword
+} from '../../../../lib/utils'
 
 const ROWS: ManualStraddleSelectionRow[] = [
   {
@@ -41,5 +46,22 @@ describe('manual straddle selection helpers', () => {
         new Set(['pkg-inferred', 'pkg-real-straddle'])
       )
     ).toEqual(['pkg-inferred'])
+  })
+})
+
+describe('simple admin auth helpers', () => {
+  test('normalizes non-empty password strings', () => {
+    expect(normalizeSimpleAdminPassword(` ${SIMPLE_ADMIN_PASSWORD} `)).toBe(
+      SIMPLE_ADMIN_PASSWORD
+    )
+    expect(normalizeSimpleAdminPassword('   ')).toBeNull()
+    expect(normalizeSimpleAdminPassword(null)).toBeNull()
+  })
+
+  test('accepts only the configured admin password', () => {
+    expect(isValidSimpleAdminPassword('admin')).toBe(true)
+    expect(isValidSimpleAdminPassword(' admin ')).toBe(true)
+    expect(isValidSimpleAdminPassword('ADMIN')).toBe(false)
+    expect(isValidSimpleAdminPassword(undefined)).toBe(false)
   })
 })
