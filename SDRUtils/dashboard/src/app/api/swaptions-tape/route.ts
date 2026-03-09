@@ -1,7 +1,11 @@
 // ABOUTME: Reads from arbs_swaption_master_tape_v2 with cursor pagination and fuzzy filtering for the Trade Tape.
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
-import { resolveDisplayView, TapeRow } from '@/lib/swaptions-tape'
+import {
+  DISPLAY_PACKAGE_TYPE_SQL,
+  resolveDisplayView,
+  TapeRow
+} from '@/lib/swaptions-tape'
 
 const DEFAULT_LIMIT = 200
 const MAX_LIMIT = 500
@@ -43,9 +47,9 @@ const TIME_FILTER_EXPRESSIONS = [
   ...buildTimeSearchExpressions('d.execution_end')
 ]
 
-const COLUMN_FILTER_EXPRESSIONS_V2: Record<string, string[]> = {
+const COLUMN_FILTER_EXPRESSIONS: Record<string, string[]> = {
   action: ['plat.event_action'],
-  package_type: ['d.package_type'],
+  package_type: [DISPLAY_PACKAGE_TYPE_SQL, 'plat.product_type', 'd.package_type'],
   time: TIME_FILTER_EXPRESSIONS,
   platform: [
     "COALESCE(plat.platform_identifier, d.package_metrics->>'platform_identifier')"
@@ -56,26 +60,11 @@ const COLUMN_FILTER_EXPRESSIONS_V2: Record<string, string[]> = {
     'd.manual_package_id',
     'd.tenor_label',
     'd.forward_label',
-    'd.package_type',
+    DISPLAY_PACKAGE_TYPE_SQL,
+    'plat.product_type',
     'd.user_comment',
     'd.link_reason',
     'd.tags::text',
-    'd.legs_json::text'
-  ]
-}
-const COLUMN_FILTER_EXPRESSIONS_V1: Record<string, string[]> = {
-  action: ['plat.event_action'],
-  package_type: ['d.package_type'],
-  time: TIME_FILTER_EXPRESSIONS,
-  platform: [
-    "COALESCE(plat.platform_identifier, d.package_metrics->>'platform_identifier')"
-  ],
-  notional: ['d.total_notional'],
-  label: [
-    'd.package_id',
-    'd.tenor_label',
-    'd.forward_label',
-    'd.package_type',
     'd.legs_json::text'
   ]
 }
@@ -621,10 +610,7 @@ export async function GET(request: Request) {
     searchParams.get(COLUMN_FILTER_OPERATOR_QUERY_KEY)
   )
   const limit = parseLimit(searchParams.get('limit'))
-  const { view, columns, hasManualFields } = await resolveDisplayView()
-  const columnFilterExpressions = hasManualFields
-    ? COLUMN_FILTER_EXPRESSIONS_V2
-    : COLUMN_FILTER_EXPRESSIONS_V1
+  const { sourceSql, platformLateralSql, columns } = await resolveDisplayView()
 
   if (cursor && since) {
     return NextResponse.json(
@@ -638,26 +624,26 @@ export async function GET(request: Request) {
 
   if (cursor) {
     params.push(cursor)
-    conditions.push(`execution_start < $${params.length}`)
+    conditions.push(`d.execution_start < $${params.length}`)
   }
 
   if (since) {
     params.push(since)
-    conditions.push(`execution_start > $${params.length}`)
+    conditions.push(`d.execution_start > $${params.length}`)
   }
 
   if (filter) {
     params.push(`%${filter}%`)
     const idx = params.length
     const filterClauses = [
-      `package_id ILIKE $${idx}`,
-      `tenor_label ILIKE $${idx}`,
-      `forward_label ILIKE $${idx}`,
-      `package_type ILIKE $${idx}`
+      `d.package_id ILIKE $${idx}`,
+      `d.tenor_label ILIKE $${idx}`,
+      `d.forward_label ILIKE $${idx}`,
+      `${DISPLAY_PACKAGE_TYPE_SQL} ILIKE $${idx}`,
+      `plat.product_type ILIKE $${idx}`,
+      `d.legs_json::text ILIKE $${idx}`,
+      `d.manual_package_id ILIKE $${idx}`
     ]
-    if (hasManualFields) {
-      filterClauses.push(`manual_package_id ILIKE $${idx}`)
-    }
     conditions.push(`(${filterClauses.join(' OR ')})`)
   }
 
@@ -665,7 +651,7 @@ export async function GET(request: Request) {
     columnFilters,
     columnFilterOperator,
     params,
-    columnFilterExpressions
+    COLUMN_FILTER_EXPRESSIONS
   )
   if (columnFilterClause) {
     conditions.push(columnFilterClause)
@@ -689,14 +675,9 @@ export async function GET(request: Request) {
   try {
     const result = await query(
       `SELECT ${columns}
-       FROM ${view} d
+       FROM ${sourceSql} d
        LEFT JOIN LATERAL (
-         SELECT mode() WITHIN GROUP (ORDER BY platform_identifier) AS platform_identifier
-               , mode() WITHIN GROUP (ORDER BY event_action) AS event_action
-               , mode() WITHIN GROUP (ORDER BY product_type) AS product_type
-               , mode() WITHIN GROUP (ORDER BY trade_label) AS trade_label
-         FROM arbs_swaption_legs_v1 l
-         WHERE l.package_id = d.package_id
+         ${platformLateralSql}
        ) plat ON TRUE
        ${whereClause}
        ORDER BY d.execution_start DESC

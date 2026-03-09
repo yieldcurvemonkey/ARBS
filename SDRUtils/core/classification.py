@@ -112,6 +112,17 @@ class SwaptionTradeClassification(TradeClassification):
     # option_start_years
 
 
+@dataclass
+class CapFloorTradeClassification(SwaptionTradeClassification):
+    """Cap/Floor-specific classification details."""
+
+    cap_floor_type: str = ""
+    reset_frequency: str = ""
+    num_caplets: Optional[int] = None
+    implied_vol_bps: Optional[float] = None
+    moneyness_bps: Optional[float] = None
+
+
 def classify_product_type(row: pd.Series) -> ProductType:
     upi_fisn = str(row.get("UPI FISN", "")).upper()
     upi_underlier = str(row.get("UPI Underlier Name", "")).upper()

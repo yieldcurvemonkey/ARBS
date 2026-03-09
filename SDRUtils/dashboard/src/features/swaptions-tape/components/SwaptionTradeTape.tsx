@@ -597,6 +597,8 @@ const PACKAGE_TONES: Record<string, string> = {
   VERTICAL_SPREAD_1X2: "!bg-cyan-900/30", // Cyan (High contrast with Blue and Emerald)
   RECEIVER_LADDER: "!bg-emerald-900/30", // Emerald (Distinct Green)
   CUSTY_RR_STRANGLE: "!bg-lime-900/30", // Lime (Bright Yellow-Green, replaces Pink)
+  CAP: "!bg-teal-900/30", // Teal
+  FLOOR: "!bg-indigo-900/30", // Indigo
   DELTA_HEDGE: "!bg-teal-900/30", // Teal (Distinct hedge package tone)
   OUTRIGHT: "!bg-gray-800/50", // Gray (Neutral, distinct from saturated colors)
 };
@@ -1361,6 +1363,31 @@ function normalizePackageType(type: string | null): string {
   return type.replace(/-/g, "_").toUpperCase();
 }
 
+function isCapFloorPackageType(type: string | null): boolean {
+  const normalized = normalizePackageType(type);
+  return normalized === "CAP" || normalized === "FLOOR";
+}
+
+function isOutrightLikePackageType(type: string | null): boolean {
+  const normalized = normalizePackageType(type);
+  return !normalized || normalized === "OUTRIGHT" || isCapFloorPackageType(normalized);
+}
+
+function resolveDisplayPackageType(row: TapeRow): string {
+  const reportedType = normalizePackageType(
+    row.reported_package_type ?? row.package_type,
+  );
+  if (reportedType && reportedType !== "OUTRIGHT") {
+    return reportedType;
+  }
+  const firstLeg = Array.isArray(row.legs_json) ? row.legs_json[0] : null;
+  const legProductType = normalizePackageType(firstLeg?.product_type ?? null);
+  if (isCapFloorPackageType(legProductType)) {
+    return legProductType;
+  }
+  return reportedType || "OUTRIGHT";
+}
+
 function packageTone(type: string | null): string {
   if (!type) return "!bg-gray-900/30";
   const normalized = normalizePackageType(type);
@@ -1389,11 +1416,11 @@ function isoDateKey(value: string | null | undefined): string | null {
 }
 
 function normalizeReportedPackageType(row: TapeRow): string {
-  return normalizePackageType(row.reported_package_type ?? row.package_type);
+  return resolveDisplayPackageType(row);
 }
 
 function baseReportedRow(row: TapeRow): TapeRow {
-  const reportedPackageType = row.reported_package_type ?? row.package_type ?? null;
+  const reportedPackageType = resolveDisplayPackageType(row) || row.package_type || null;
   return {
     ...row,
     package_type: reportedPackageType,
@@ -1874,6 +1901,34 @@ function formatTimestamp(value: string | null | undefined): string {
   return `${dateStr} ${timeStr}`;
 }
 
+function formatIsoDate(value: Date | string | null | undefined): string {
+  if (!value) return "--";
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    const directMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (directMatch) return directMatch[1];
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatCurrencyAmount(
+  value: number | null | undefined,
+  decimals = 2,
+): string {
+  if (!isValid(value)) return "--";
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) return "--";
+  return numeric.toLocaleString("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
 function isValid(value: any) {
   if (value === null || value === undefined) return false;
   if (typeof value === "number" && Number.isNaN(value)) return false;
@@ -1953,7 +2008,7 @@ function formatNotional(notional: number | null | undefined) {
 }
 
 function computeDisplayNotional(row: TapeRow): number | null {
-  const packageType = normalizePackageType(row.package_type);
+  const packageType = resolveDisplayPackageType(row);
   const isStraddle = packageType === "STRADDLE";
   const isRiskReversal = packageType === "RISK_REVERSAL";
   const legs = row.legs_json || [];
@@ -2465,7 +2520,7 @@ function buildQuadrantTradeBuckets(
     if (!isValid(notional)) return;
     const notionalValue = Number(notional);
     if (!Number.isFinite(notionalValue)) return;
-    const packageType = normalizePackageType(row.package_type) || "OUTRIGHT";
+    const packageType = resolveDisplayPackageType(row) || "OUTRIGHT";
     const economicNotionalRaw = resolveEconomicNotional(row, packageType);
     const economicNotional = Number.isFinite(economicNotionalRaw)
       ? Math.abs(economicNotionalRaw as number)
@@ -2660,7 +2715,7 @@ function buildQuadrantIntradayAverageProfiles(
     const classification = resolveQuadrantClassification(row, config);
     if (!isDisplayQuadrant(classification.quadrant)) return;
 
-    const packageType = normalizePackageType(row.package_type) || "OUTRIGHT";
+    const packageType = resolveDisplayPackageType(row) || "OUTRIGHT";
     const flowValue = resolveVolFlowWeight(row, packageType, flowMetric);
     if (!Number.isFinite(flowValue) || flowValue <= 0) return;
 
@@ -2807,7 +2862,7 @@ function buildQuadrantFlowState(
       }
     }
 
-    const packageType = normalizePackageType(row.package_type) || "OUTRIGHT";
+    const packageType = resolveDisplayPackageType(row) || "OUTRIGHT";
     const premium = computePackagePremium(row, packageType);
     if (premium !== null) {
       if (bucket.totalPremium === null) {
@@ -2945,7 +3000,7 @@ function buildQuadrantDayAggregate(
       }
     }
 
-    const packageType = normalizePackageType(row.package_type) || "OUTRIGHT";
+    const packageType = resolveDisplayPackageType(row) || "OUTRIGHT";
     const premium = computePackagePremium(row, packageType);
     if (premium !== null && Number.isFinite(premium)) {
       target.totalPremium += premium;
@@ -3082,11 +3137,13 @@ function extractLegDirection(leg: TapeLeg): "PAYER" | "RECEIVER" | null {
   const raw = `${leg.product_type ?? ""} ${leg.trade_label ?? ""}`.toUpperCase();
   if (raw.includes("PAYER")) return "PAYER";
   if (raw.includes("RECEIVER")) return "RECEIVER";
+  if (raw.startsWith("CAP ") || raw.includes(" CAP ")) return "PAYER";
+  if (raw.startsWith("FLOOR ") || raw.includes(" FLOOR ")) return "RECEIVER";
   return null;
 }
 
 function resolveRowDirection(row: TapeRow): SequenceDirection {
-  const packageType = normalizePackageType(row.package_type);
+  const packageType = resolveDisplayPackageType(row);
   if (
     packageType === "STRADDLE" ||
     packageType === "RISK_REVERSAL" ||
@@ -3329,7 +3386,7 @@ function buildSequenceSummary(rows: TapeRow[]): SequenceSummary {
 
   const bpvolValues = sortedMeta
     .map((meta) => {
-      const pkgType = normalizePackageType(meta.row.package_type);
+      const pkgType = resolveDisplayPackageType(meta.row);
       return resolvePackageBpvolYr(meta.row, pkgType);
     })
     .filter((value): value is number => isValid(value));
@@ -4789,7 +4846,7 @@ function resolvePackageBpvolYr(
       parseMetricNumber((metrics as any).vs_otm_bpvol_yr)
     );
   }
-  if (!packageType || packageType === "OUTRIGHT") {
+  if (isOutrightLikePackageType(packageType)) {
     return parseMetricNumber((legs[0] as any)?.leg_metrics?.outright_bpvol_yr);
   }
   return null;
@@ -4848,7 +4905,7 @@ function resolvePackageGreek(
     }
   }
 
-  if (!packageType || packageType === "OUTRIGHT") {
+  if (isOutrightLikePackageType(packageType)) {
     const legMetrics = (legs[0] as any)?.leg_metrics || {};
     if (key === "dv01") return parseMetricNumber(legMetrics.outright_dv01);
     if (key === "vega01") return parseMetricNumber(legMetrics.outright_vega01);
@@ -5314,15 +5371,22 @@ function resolveRiskReversalWidthBps(
 
 function buildRichLabel(row: TapeRow): string {
   const legs = row.legs_json || [];
-  const pkgType = (row.package_type || "").toUpperCase();
+  const pkgType = resolveDisplayPackageType(row);
   const metrics = row.package_metrics || {};
   const underlying = extractUnderlyingBase(legs[0]?.trade_label, row);
   const firstLeg = legs[0] || {};
   const legMetrics = firstLeg.leg_metrics || {};
   const style = STRADDLE_STYLE;
 
+  if (isCapFloorPackageType(pkgType)) {
+    const directLabel = String(firstLeg.trade_label ?? "").trim();
+    if (directLabel) return directLabel;
+    const strikePct = formatStrikeAbsolute(firstLeg.strike);
+    return `${underlying} ${pkgType} ${strikePct}`.trim();
+  }
+
   // OUTRIGHT
-  if (!pkgType || pkgType === "OUTRIGHT") {
+  if (isOutrightLikePackageType(pkgType)) {
     const direction = firstLeg.product_type
       ?.toString()
       .toUpperCase()
@@ -5483,7 +5547,7 @@ function LegsSubtable({
 }) {
   const searchParams = useSearchParams();
   const metrics = row.package_metrics || {};
-  const packageType = normalizePackageType(row.package_type);
+  const packageType = resolveDisplayPackageType(row);
   const legs = Array.isArray(row.legs_json) ? row.legs_json : [];
   const manualLinkId = row.manual_link_id;
   const manualColor = manualLinkColor(
@@ -5493,7 +5557,7 @@ function LegsSubtable({
   const isStraddle = packageType === "STRADDLE";
   const assumedIncompleteStraddle =
     isStraddle && isAssumedIncompleteStraddle(row);
-  const isOutright = !packageType || packageType === "OUTRIGHT";
+  const isOutright = isOutrightLikePackageType(packageType);
   const isRiskReversal = packageType === "RISK_REVERSAL";
   const isDeltaHedgePackage = packageType === "DELTA_HEDGE";
   const showStraddleSchema = isStraddle || isRiskReversal;
@@ -5551,7 +5615,7 @@ function LegsSubtable({
       ? combinedSeriesRows
       : [];
     return candidates.filter((candidate) => {
-      if (normalizePackageType(candidate.package_type) !== packageType) {
+      if (resolveDisplayPackageType(candidate) !== packageType) {
         return false;
       }
       const action = extractPrimaryAction(candidate);
@@ -6000,7 +6064,7 @@ function LegsSubtable({
         filterOutEmptyTrades(
           inferIncompleteStraddles(Array.from(fetchedRowsById.values())),
         ).forEach((rowItem) => {
-          if (normalizePackageType(rowItem.package_type) !== packageType) {
+          if (resolveDisplayPackageType(rowItem) !== packageType) {
             return;
           }
           const action = extractPrimaryAction(rowItem);
@@ -6099,6 +6163,31 @@ function LegsSubtable({
     const syntheticLeg = createSyntheticMissingStraddleLeg(baseLeg);
     return [baseLeg, syntheticLeg];
   }, [assumedIncompleteStraddle, normalizedLegs]);
+  const capletDiagnostics = useMemo(
+    () =>
+      displayLegs.flatMap((leg, legIndex) => {
+        const legNumber = isValid(leg.leg_order)
+          ? Number(leg.leg_order)
+          : legIndex + 1;
+        const capletDetails = Array.isArray(leg.leg_metrics?.caplet_details)
+          ? (leg.leg_metrics?.caplet_details as Array<Record<string, any>>)
+          : [];
+        return capletDetails.map((caplet, capletIndex) => ({
+          key: `${leg.trade_id || legNumber}-${capletIndex}`,
+          legNumber,
+          accrualStart: caplet?.accrual_start ?? null,
+          accrualEnd: caplet?.accrual_end ?? null,
+          forward: parseMetricNumber(caplet?.forward),
+          moneynessBps: parseMetricNumber(caplet?.moneyness_bps),
+          tFix: parseMetricNumber(caplet?.T_fix),
+          capletPrice: parseMetricNumber(caplet?.caplet_price),
+        }));
+      }),
+    [displayLegs],
+  );
+  const showCapletLegColumn = useMemo(() => {
+    return new Set(capletDiagnostics.map((detail) => detail.legNumber)).size > 1;
+  }, [capletDiagnostics]);
   const [ladderStrikeKey, ladderNotionalKey] =
     METRIC_SCHEMA.RECEIVER_LADDER.cols;
   const payerSkewValue = isRiskReversal
@@ -6905,6 +6994,65 @@ function LegsSubtable({
             Wing-to-Delta Notional Ratio:{" "}
             {formatMetricDisplay(riskReversalTotals?.wingToDeltaRatio, 3)}
           </span>
+        </div>
+      )}
+      {capletDiagnostics.length > 0 && (
+        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+          <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-400">
+            Caplet Diagnostics
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-xs">
+              <thead className="bg-slate-950/40 text-[11px] uppercase tracking-wide text-slate-400">
+                <tr>
+                  {showCapletLegColumn && (
+                    <th className="px-2 py-1 text-left">Leg</th>
+                  )}
+                  <th className="px-2 py-1 text-left">Period Start</th>
+                  <th className="px-2 py-1 text-left">Period End</th>
+                  <th className="px-2 py-1 text-right">Fwd</th>
+                  <th className="px-2 py-1 text-right">Moneyness</th>
+                  <th className="px-2 py-1 text-right">T_fix</th>
+                  <th className="py-1 pl-2 pr-4 text-right">Price</th>
+                </tr>
+              </thead>
+              <tbody className="text-slate-100">
+                {capletDiagnostics.map((detail) => (
+                  <tr key={detail.key} className="odd:bg-slate-900/40">
+                    {showCapletLegColumn && (
+                      <td className="px-2 py-1 font-mono text-slate-300">
+                        #{detail.legNumber}
+                      </td>
+                    )}
+                    <td className="px-2 py-1 font-mono text-slate-300">
+                      {formatIsoDate(detail.accrualStart)}
+                    </td>
+                    <td className="px-2 py-1 font-mono text-slate-300">
+                      {formatIsoDate(detail.accrualEnd)}
+                    </td>
+                    <td className="px-1 py-1 text-right font-mono">
+                      {detail.forward === null
+                        ? "--"
+                        : `${formatRate(detail.forward * 100, 3)}%`}
+                    </td>
+                    <td className="px-1 py-1 text-right font-mono">
+                      {detail.moneynessBps === null
+                        ? "--"
+                        : `${detail.moneynessBps > 0 ? "+" : ""}${formatRate(detail.moneynessBps, 1)}bp`}
+                    </td>
+                    <td className="px-1 py-1 text-right font-mono">
+                      {formatMetricValue(detail.tFix, 3)}
+                    </td>
+                    <td className="py-1 pl-1 pr-4 text-right font-mono">
+                      {detail.capletPrice === null
+                        ? "--"
+                        : `$${formatCurrencyAmount(detail.capletPrice, 2)}`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
       {canShowTimeseries && showTimeseries && (
@@ -9498,7 +9646,7 @@ function SequenceAnalysisPanel({
   const packageTypeKey = useMemo(() => {
     const types = new Set<string>();
     rows.forEach((row) => {
-      const normalized = normalizePackageType(row.package_type);
+        const normalized = resolveDisplayPackageType(row);
       types.add(normalized || "OUTRIGHT");
     });
     return types.size === 1 ? Array.from(types)[0] : null;
@@ -9570,7 +9718,7 @@ function SequenceAnalysisPanel({
           Array.from(fetchedRowsById.values()),
         )).filter(
           (historyRow) =>
-            (normalizePackageType(historyRow.package_type) || "OUTRIGHT") ===
+            (resolveDisplayPackageType(historyRow) || "OUTRIGHT") ===
             packageTypeKey,
         );
         const filteredRows = excludeLargeCustyNotional
@@ -9687,7 +9835,7 @@ function SequenceAnalysisPanel({
         if (timestamp === null || !Number.isFinite(timestamp)) return null;
         const notional = computeDisplayNotional(row);
         const direction = resolveRowDirection(row);
-        const packageType = normalizePackageType(row.package_type) || "OUTRIGHT";
+        const packageType = resolveDisplayPackageType(row) || "OUTRIGHT";
         const bpvol = resolvePackageBpvolYr(row, packageType);
         return {
           timestamp,
@@ -12607,7 +12755,7 @@ export default function SwaptionTradeTape() {
 
   const resolveDisplayVega = useCallback((row: TapeRow) => {
     const metrics = row.package_metrics || {};
-    const packageType = normalizePackageType(row.package_type);
+    const packageType = resolveDisplayPackageType(row);
     const vegaCurveValue = parseMetricSeries((metrics as any).vega_curve_vega01);
     if (vegaCurveValue !== null) return vegaCurveValue;
 
@@ -12675,7 +12823,7 @@ export default function SwaptionTradeTape() {
         case "action":
           return firstLegMetrics(row).event_action || "";
         case "package_type":
-          return row.package_type || "";
+          return resolveDisplayPackageType(row);
         case "quadrant":
           return buildQuadrantFilterValue(row, quadrantConfig);
         case "time":
@@ -13036,7 +13184,7 @@ export default function SwaptionTradeTape() {
     const tone = isActive
       ? assumedIncomplete
         ? INFERRED_INCOMPLETE_STRADDLE_TONE
-        : packageTone(row.package_type)
+        : packageTone(resolveDisplayPackageType(row))
       : "!bg-red-900/70 !text-red-100";
     const warning = hasActionWarning(row);
     const isManualLinked = !!row.manual_link_id || !!row.manual_package_id;
@@ -13171,7 +13319,7 @@ export default function SwaptionTradeTape() {
     );
     const source = row.package_source?.toUpperCase();
     const sourceLabel = source === "HYBRID" ? "Hybrid" : "Manual";
-    const normalizedPackageType = normalizePackageType(row.package_type || "");
+    const normalizedPackageType = resolveDisplayPackageType(row);
     const isDeltaHedgePackage = normalizedPackageType === "DELTA_HEDGE";
     const deltaHedgeMatchType =
       isDeltaHedgePackage && isValid(row.package_metrics?.delta_hedge_match_type)

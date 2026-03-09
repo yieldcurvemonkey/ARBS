@@ -10,9 +10,11 @@ package-type-specific analytics to stay extensible as new detections ship.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
 import os
+import sys
 import time
 from datetime import timedelta
 from typing import Any, Dict, Iterable, Optional
@@ -675,6 +677,35 @@ def _to_jsonable(val: Any) -> Any:
     return val
 
 
+def _to_db_value(val: Any) -> Any:
+    """Normalize pandas/numpy sentinels to DB-safe python scalars."""
+    if val is None:
+        return None
+    if isinstance(val, (pd.Timestamp,)):
+        if pd.isna(val):
+            return None
+        return val.to_pydatetime()
+    if isinstance(val, (pd.Timedelta,)):
+        if pd.isna(val):
+            return None
+        return val.to_pytimedelta()
+    if isinstance(val, str) and val.strip() == "NaT":
+        return None
+    if hasattr(val, "item"):
+        try:
+            val = val.item()
+        except Exception:
+            pass
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    try:
+        if pd.isna(val):
+            return None
+    except Exception:
+        pass
+    return val
+
+
 def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """Clean basic types so downstream inserts are predictable."""
     out = df.copy()
@@ -987,6 +1018,11 @@ def upsert_dataframe(
     json_cols_set = set(json_cols or [])
 
     records = df.to_dict(orient="records")
+    for rec in records:
+        for col, value in list(rec.items()):
+            if col in json_cols_set:
+                continue
+            rec[col] = _to_db_value(value)
     # Ensure JSON columns are serialized to JSON strings (avoid hstore inference)
     for rec in records:
         for col in json_cols_set:
@@ -1340,6 +1376,7 @@ def ingest_incremental_once(
     engine: Engine,
     *,
     cache_path: str,
+    ignore_cache: bool = True,
     only_newt: bool = False,
     dry_run: bool = False,
     cleanup_orphans: bool = True,
@@ -1385,6 +1422,7 @@ def ingest_incremental_once(
         print(f"  Classifier fetch end (forced EOD {market_timezone}): {fetch_end}")
     print(f"  Overlap: {overlap_seconds} seconds")
     print(f"  Cache: {cache_path}")
+    print(f"  Ignore cache: {ignore_cache}")
     print(f"  Only NEWT/TRAD: {only_newt}")
     print(f"  Dry run: {dry_run}")
     print()
@@ -1394,7 +1432,7 @@ def ingest_incremental_once(
         start=fetch_start,
         end=fetch_end,
         cache_path=cache_path,
-        ignore_cache=True,
+        ignore_cache=ignore_cache,
         only_newt=only_newt,
     )
 
@@ -1439,6 +1477,46 @@ def ingest_incremental_once(
     print_summary(raw_df, packages_df, legs_df, packages_written, legs_written)
 
 
+def _load_capfloor_ingest_module() -> Any:
+    """Import the cap/floor ingester without duplicating this module when run as a script."""
+    current_module = sys.modules.get(__name__)
+    if current_module is not None:
+        sys.modules.setdefault(
+            "SDRUtils._swappulse_scripts.ingest_usdswaptions",
+            current_module,
+        )
+    return importlib.import_module("SDRUtils._swappulse_scripts.ingest_usdcapfloors")
+
+
+def _ingest_capfloor_incremental_once(
+    engine: Engine,
+    *,
+    cache_path: str,
+    ignore_cache: bool,
+    only_newt: bool,
+    dry_run: bool,
+    cleanup_orphans: bool,
+    initial_lookback_minutes: int,
+    overlap_seconds: int,
+    market_timezone: str,
+) -> None:
+    capfloor_ingest = _load_capfloor_ingest_module()
+    capfloor_ingest.ensure_schema(engine)
+    capfloor_ingest.ingest_incremental_once(
+        engine,
+        cache_path=cache_path,
+        ignore_cache=ignore_cache,
+        only_newt=only_newt,
+        dry_run=dry_run,
+        cleanup_orphans=cleanup_orphans,
+        initial_lookback_minutes=initial_lookback_minutes,
+        overlap_seconds=overlap_seconds,
+        force_fetch_end_of_day=True,
+        force_fetch_full_market_day=True,
+        market_timezone=market_timezone,
+    )
+
+
 def main_incremental(
     cache_path: Optional[str] = None,
     only_newt: bool = False,
@@ -1446,19 +1524,36 @@ def main_incremental(
     cleanup_orphans: bool = True,
     initial_lookback_minutes: int = 24 * 60,
     overlap_seconds: int = 0,
+    include_capfloor: bool = False,
+    market_timezone: str = "America/New_York",
 ) -> None:
     cache_path = _resolve_cache_path(cache_path)
+    shared_cache_mode = include_capfloor
     engine = create_db_engine()
     ensure_schema(engine)
     ingest_incremental_once(
         engine,
         cache_path=cache_path,
+        ignore_cache=not shared_cache_mode,
         only_newt=only_newt,
         dry_run=dry_run,
         cleanup_orphans=cleanup_orphans,
         initial_lookback_minutes=initial_lookback_minutes,
         overlap_seconds=overlap_seconds,
     )
+    if include_capfloor:
+        print("Running cap/floor incremental ingestion alongside swaptions")
+        _ingest_capfloor_incremental_once(
+            engine,
+            cache_path=cache_path,
+            ignore_cache=False,
+            only_newt=only_newt,
+            dry_run=dry_run,
+            cleanup_orphans=cleanup_orphans,
+            initial_lookback_minutes=initial_lookback_minutes,
+            overlap_seconds=overlap_seconds,
+            market_timezone=market_timezone,
+        )
 
 
 def main_service(
@@ -1478,6 +1573,7 @@ def main_service(
     weekdays_only: bool = True,
     max_iterations: Optional[int] = None,
     stop_on_error: bool = False,
+    include_capfloor: bool = False,
 ) -> None:
     if interval_seconds <= 0:
         raise ValueError(f"interval_seconds must be > 0, got {interval_seconds}")
@@ -1506,6 +1602,9 @@ def main_service(
     print(f"  Dry run: {dry_run}")
     print(f"  Initial lookback: {initial_lookback_minutes} minutes")
     print(f"  Overlap: {overlap_seconds} seconds")
+    print(f"  Include cap/floor: {include_capfloor}")
+    if include_capfloor:
+        print("  Shared raw SDR cache mode: enabled")
     if smart_intervals:
         print("  Smart intervals: enabled")
         print(f"  Active interval: {active_interval_seconds} seconds")
@@ -1529,6 +1628,7 @@ def main_service(
             ingest_incremental_once(
                 engine,
                 cache_path=cache_path,
+                ignore_cache=not include_capfloor,
                 only_newt=only_newt,
                 dry_run=dry_run,
                 cleanup_orphans=cleanup_orphans,
@@ -1538,6 +1638,19 @@ def main_service(
                 force_fetch_full_market_day=True,
                 market_timezone=market_timezone,
             )
+            if include_capfloor:
+                print("Running cap/floor incremental ingestion alongside swaptions")
+                _ingest_capfloor_incremental_once(
+                    engine,
+                    cache_path=cache_path,
+                    ignore_cache=False,
+                    only_newt=only_newt,
+                    dry_run=dry_run,
+                    cleanup_orphans=cleanup_orphans,
+                    initial_lookback_minutes=initial_lookback_minutes,
+                    overlap_seconds=overlap_seconds,
+                    market_timezone=market_timezone,
+                )
         except Exception as exc:
             print(f"Service cycle {iteration} failed: {exc}")
             if stop_on_error:
@@ -1717,6 +1830,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Service mode only: exit after the first failed cycle.",
     )
+    parser.add_argument(
+        "--include-capfloor",
+        action="store_true",
+        help="Incremental/service: also run cap/floor ingestion each cycle.",
+    )
     return parser.parse_args()
 
 
@@ -1753,6 +1871,8 @@ if __name__ == "__main__":
             cleanup_orphans=cleanup_orphans,
             initial_lookback_minutes=args.initial_lookback_minutes,
             overlap_seconds=args.overlap_seconds,
+            include_capfloor=args.include_capfloor,
+            market_timezone=args.market_timezone,
         )
     else:
         main_service(
@@ -1772,4 +1892,5 @@ if __name__ == "__main__":
             weekdays_only=args.weekdays_only,
             max_iterations=args.max_iterations,
             stop_on_error=args.stop_on_error,
+            include_capfloor=args.include_capfloor,
         )

@@ -13,6 +13,7 @@ from SDRUtils.products.usd.usd_swaps import (
     classify_usd_swap_trade,
 )
 from SDRUtils.products.usd.sofr_swaps import USD_SOFR_SwapProduct, classify_sofr_swap_trade
+from SDRUtils.products.usd.usd_capfloors import USD_CapFloors
 from SDRUtils.products.usd.usd_swaptions import USD_Swaptions
 from SDRUtils.registry import registry
 from SDRUtils.products._swaps.filters import (
@@ -28,6 +29,7 @@ __all__ = [
     "USDProductBase",
     "USD_SwapProduct",
     "USD_SOFR_SwapProduct",
+    "USD_CapFloors",
     "USD_Swaptions",
     "classify_usd_swap_trade",
     "classify_sofr_swap_trade",
@@ -40,4 +42,5 @@ __all__ = [
 ]
 
 registry.register_product(USD_SwapProduct())
+registry.register_product(USD_CapFloors())
 registry.register_product(USD_Swaptions())

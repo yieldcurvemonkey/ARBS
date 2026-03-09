@@ -18,6 +18,8 @@ export const PACKAGE_TONES: Record<string, string> = {
   VERTICAL_SPREAD_1X2: "!bg-cyan-900/30",
   RECEIVER_LADDER: "!bg-emerald-900/30",
   CUSTY_RR_STRANGLE: "!bg-lime-900/30",
+  CAP: "!bg-teal-900/30",
+  FLOOR: "!bg-indigo-900/30",
   OUTRIGHT: "!bg-gray-800/50",
 };
 

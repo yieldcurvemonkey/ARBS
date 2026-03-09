@@ -2,7 +2,11 @@
 // This endpoint bypasses pagination and returns all matching trades directly.
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
-import { resolveDisplayView, TapeRow } from '@/lib/swaptions-tape'
+import {
+  DISPLAY_PACKAGE_TYPE_SQL,
+  resolveDisplayView,
+  TapeRow
+} from '@/lib/swaptions-tape'
 
 const MAX_TIMESERIES_ROWS = 50000
 const IDB_MIC_CODES = ['BGCD', 'ISWV', 'TPSE']
@@ -59,7 +63,7 @@ export async function GET(request: Request) {
         { status: 400 }
       )
     }
-    const { view, columns } = await resolveDisplayView()
+    const { sourceSql, platformLateralSql, columns } = await resolveDisplayView()
     const conditions: string[] = []
     const params: unknown[] = []
 
@@ -67,17 +71,13 @@ export async function GET(request: Request) {
     if (packageTypeParam) {
       const normalized = packageTypeParam.toUpperCase().replace(/-/g, '_')
       params.push(normalized)
-      if (normalized === 'OUTRIGHT') {
-        conditions.push(
-          `(d.package_type IS NULL OR UPPER(REPLACE(d.package_type, '-', '_')) = $${params.length})`
-        )
-      } else {
-        conditions.push(
-          `UPPER(REPLACE(d.package_type, '-', '_')) = $${params.length}`
-        )
-      }
+      conditions.push(
+        `UPPER(REPLACE(COALESCE(${DISPLAY_PACKAGE_TYPE_SQL}, ''), '-', '_')) = $${params.length}`
+      )
     } else {
-      conditions.push("d.package_type ILIKE 'STRADDLE'")
+      conditions.push(
+        `UPPER(REPLACE(COALESCE(${DISPLAY_PACKAGE_TYPE_SQL}, ''), '-', '_')) = 'STRADDLE'`
+      )
     }
 
     // Filter by action (NEWT-TRAD only)
@@ -119,12 +119,9 @@ export async function GET(request: Request) {
 
     const result = await query(
       `SELECT ${columns}
-       FROM ${view} d
+       FROM ${sourceSql} d
        LEFT JOIN LATERAL (
-         SELECT mode() WITHIN GROUP (ORDER BY platform_identifier) AS platform_identifier
-               , mode() WITHIN GROUP (ORDER BY event_action) AS event_action
-         FROM arbs_swaption_legs_v1 l
-         WHERE l.package_id = d.package_id
+         ${platformLateralSql}
        ) plat ON TRUE
        ${whereClause}
        ORDER BY d.execution_start ASC
