@@ -32,6 +32,10 @@ import {
 import { QuadrantSparkline } from "./VolGridFlow/QuadrantSparkline";
 import { VolGridFlowHistory } from "./VolGridFlow/VolGridFlowHistory";
 import { PointGridFlow } from "./VolGridFlow/PointGridFlow";
+import {
+  getSelectedForceableStraddleIds,
+  getSelectedUndoableStraddleIds,
+} from "./manualStraddles.utils";
 import type {
   HistoryLookback,
   QuadrantDayAggregate,
@@ -12271,9 +12275,9 @@ export default function SwaptionTradeTape() {
   const removeManualStraddles = useCallback(
     async (packageIds: string[]) => {
       const ids = normalizeSelectedPackageIds(packageIds);
-      if (!ids.length) return;
+      if (!ids.length) return false;
       try {
-        await fetch("/api/swaptions-tape/manual-straddles", {
+        const res = await fetch("/api/swaptions-tape/manual-straddles", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -12281,8 +12285,18 @@ export default function SwaptionTradeTape() {
             user: currentUser || undefined,
           }),
         });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          console.error(
+            "Failed to remove manual straddle overrides",
+            payload?.error || res.statusText,
+          );
+          return false;
+        }
+        return true;
       } catch {
-        // Silent fail; stale IDs will be retried on next cleanup pass.
+        console.error("Failed to remove manual straddle overrides");
+        return false;
       }
     },
     [currentUser],
@@ -12689,16 +12703,16 @@ export default function SwaptionTradeTape() {
   }, [filteredRows]);
 
   const selectedForceableStraddleIds = useMemo(() => {
-    if (!selectedPackageIds.length) return [];
-    const selectedIdSet = new Set(selectedPackageIds);
-    return resolvedRows
-      .filter((row) => selectedIdSet.has(row.package_id))
-      .filter((row) => {
-        const packageType = normalizePackageType(row.package_type || "");
-        return packageType === "OUTRIGHT" && !isAssumedIncompleteStraddle(row);
-      })
-      .map((row) => row.package_id);
+    return getSelectedForceableStraddleIds(resolvedRows, selectedPackageIds);
   }, [resolvedRows, selectedPackageIds]);
+
+  const selectedUndoableStraddleIds = useMemo(() => {
+    return getSelectedUndoableStraddleIds(
+      resolvedRows,
+      selectedPackageIds,
+      forcedStraddlePackageIdSet,
+    );
+  }, [forcedStraddlePackageIdSet, resolvedRows, selectedPackageIds]);
 
   const handleMakeStraddle = useCallback(async () => {
     if (!selectedForceableStraddleIds.length) return;
@@ -12727,6 +12741,16 @@ export default function SwaptionTradeTape() {
       console.error("Failed to persist manual straddle overrides", error);
     }
   }, [currentUser, selectedForceableStraddleIds]);
+
+  const handleUndoMakeStraddle = useCallback(async () => {
+    if (!selectedUndoableStraddleIds.length) return;
+    const ids = normalizeSelectedPackageIds(selectedUndoableStraddleIds);
+    const removed = await removeManualStraddles(ids);
+    if (!removed) return;
+
+    const idSet = new Set(ids);
+    setForcedStraddlePackageIds((prev) => prev.filter((id) => !idSet.has(id)));
+  }, [removeManualStraddles, selectedUndoableStraddleIds]);
 
   const handleSparklineTradeSelect = useCallback((packageId: string) => {
     if (!packageId) return;
@@ -13508,6 +13532,19 @@ export default function SwaptionTradeTape() {
               }
             >
               Make Straddle
+            </button>
+            <button
+              type="button"
+              onClick={handleUndoMakeStraddle}
+              disabled={!selectedUndoableStraddleIds.length}
+              className="rounded border border-amber-500/60 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
+              title={
+                selectedUndoableStraddleIds.length
+                  ? "Remove the manual IDB inferred-straddle override from selected rows"
+                  : "Select at least one manually inferred straddle to undo"
+              }
+            >
+              Undo IDB Inferred
             </button>
             <button
               type="button"

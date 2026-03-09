@@ -2,6 +2,7 @@ import { EXPIRY_POINTS, TENOR_POINTS } from './constants'
 import type {
   VolGridCell,
   VolGridHeatmapConfig,
+  VolGridHeatmapPalette,
   VolGridHeatmapRange
 } from './types'
 
@@ -185,6 +186,72 @@ export const STALENESS_COLORS: Record<string, string> = {
 }
 
 const NEUTRAL_CELL_BACKGROUND = 'rgba(15, 23, 42, 0.72)'
+type HeatmapPaletteDefinition = {
+  sequentialStops: Array<[number, number[]]>
+  negativeColor: number[]
+  positiveColor: number[]
+}
+
+const HEATMAP_PALETTE_DEFINITIONS: Record<
+  VolGridHeatmapPalette,
+  HeatmapPaletteDefinition
+> = {
+  icefire: {
+    sequentialStops: [
+      [0, [30, 60, 116]],
+      [0.28, [51, 99, 160]],
+      [0.55, [88, 146, 182]],
+      [0.78, [163, 104, 99]],
+      [1, [129, 38, 67]]
+    ],
+    negativeColor: [51, 99, 160],
+    positiveColor: [129, 38, 67]
+  },
+  blue: {
+    sequentialStops: [
+      [0, [15, 23, 42]],
+      [0.22, [30, 58, 138]],
+      [0.48, [37, 99, 235]],
+      [0.74, [56, 189, 248]],
+      [1, [186, 230, 253]]
+    ],
+    negativeColor: [30, 64, 175],
+    positiveColor: [56, 189, 248]
+  },
+  viridis: {
+    sequentialStops: [
+      [0, [68, 1, 84]],
+      [0.25, [59, 82, 139]],
+      [0.5, [33, 145, 140]],
+      [0.75, [94, 201, 98]],
+      [1, [253, 231, 37]]
+    ],
+    negativeColor: [68, 1, 84],
+    positiveColor: [253, 231, 37]
+  },
+  red_blue: {
+    sequentialStops: [
+      [0, [30, 64, 175]],
+      [0.3, [59, 130, 246]],
+      [0.55, [191, 219, 254]],
+      [0.8, [248, 113, 113]],
+      [1, [185, 28, 28]]
+    ],
+    negativeColor: [59, 130, 246],
+    positiveColor: [220, 38, 38]
+  },
+  teal_amber: {
+    sequentialStops: [
+      [0, [17, 94, 89]],
+      [0.28, [20, 184, 166]],
+      [0.55, [153, 246, 228]],
+      [0.78, [251, 191, 36]],
+      [1, [180, 83, 9]]
+    ],
+    negativeColor: [20, 184, 166],
+    positiveColor: [245, 158, 11]
+  }
+}
 
 export function interpolateColor(low: number[], high: number[], t: number) {
   const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
@@ -194,6 +261,31 @@ export function interpolateColor(low: number[], high: number[], t: number) {
 function interpolateRgbaColor(low: number[], high: number[], t: number, alpha = 0.96) {
   const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
   return `rgba(${mix(low[0], high[0])}, ${mix(low[1], high[1])}, ${mix(low[2], high[2])}, ${alpha})`
+}
+
+function interpolateScaleColor(stops: Array<[number, number[]]>, t: number) {
+  const clamped = clamp(t, 0, 1)
+
+  for (let index = 1; index < stops.length; index += 1) {
+    const [nextStop, nextColor] = stops[index]
+    if (clamped > nextStop) continue
+
+    const [prevStop, prevColor] = stops[index - 1]
+    const localT =
+      nextStop > prevStop ? (clamped - prevStop) / (nextStop - prevStop) : 0
+
+    return [
+      Math.round(prevColor[0] + (nextColor[0] - prevColor[0]) * localT),
+      Math.round(prevColor[1] + (nextColor[1] - prevColor[1]) * localT),
+      Math.round(prevColor[2] + (nextColor[2] - prevColor[2]) * localT)
+    ]
+  }
+
+  return stops[stops.length - 1][1]
+}
+
+function getHeatmapPaletteDefinition(palette: VolGridHeatmapPalette) {
+  return HEATMAP_PALETTE_DEFINITIONS[palette] ?? HEATMAP_PALETTE_DEFINITIONS.icefire
 }
 
 export function getHeatColor(value: number, min: number, max: number) {
@@ -218,18 +310,13 @@ function getSequentialHeatmapColor(
   value: number | null,
   min: number,
   max: number,
-  lowColor: number[],
-  highColor: number[],
+  stops: Array<[number, number[]]>,
   inverted: boolean
 ) {
   if (value === null || !Number.isFinite(value)) return NEUTRAL_CELL_BACKGROUND
   const ratio = max > min ? (value - min) / (max - min) : 0.5
-  const t = clamp(ratio, 0, 1)
-  return interpolateRgbaColor(
-    inverted ? highColor : lowColor,
-    inverted ? lowColor : highColor,
-    t
-  )
+  const color = interpolateScaleColor(stops, inverted ? 1 - ratio : ratio)
+  return `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.96)`
 }
 
 function getDivergingHeatmapColor(
@@ -259,6 +346,8 @@ export function getUnifiedCellBackground(
   range: VolGridHeatmapRange,
   highlightedNodeKeys: ReadonlySet<string> = new Set()
 ) {
+  const palette = getHeatmapPaletteDefinition(heatmap.palette)
+
   switch (heatmap.strategy) {
     case 'none':
       return NEUTRAL_CELL_BACKGROUND
@@ -268,16 +357,14 @@ export function getUnifiedCellBackground(
             cell.atmfPremiumBps,
             range.premiumMin,
             range.premiumMax,
-            [8, 47, 73],
-            [14, 165, 164],
+            palette.sequentialStops,
             heatmap.inverted
           )
         : getSequentialHeatmapColor(
             cell.atmfVol,
             range.volMin,
             range.volMax,
-            [16, 28, 49],
-            [180, 83, 9],
+            palette.sequentialStops,
             heatmap.inverted
           )
     case 'delta':
@@ -285,23 +372,24 @@ export function getUnifiedCellBackground(
         ? getDivergingHeatmapColor(
             cell.atmfPremiumBpsChange,
             range.premiumChangeMaxAbs,
-            [37, 99, 235],
-            [217, 70, 239],
+            palette.negativeColor,
+            palette.positiveColor,
             heatmap.inverted
           )
         : getDivergingHeatmapColor(
             cell.atmfVolChange,
             range.volChangeMaxAbs,
-            [20, 184, 166],
-            [249, 115, 22],
+            palette.negativeColor,
+            palette.positiveColor,
             heatmap.inverted
           )
     case 'custom': {
       if (!highlightedNodeKeys.size) return NEUTRAL_CELL_BACKGROUND
       const isTargeted = highlightedNodeKeys.has(cell.nodeKey)
       const shouldHighlight = heatmap.inverted ? !isTargeted : isTargeted
+      const highlightColor = heatmap.inverted ? palette.negativeColor : palette.positiveColor
       return shouldHighlight
-        ? 'rgba(250, 204, 21, 0.28)'
+        ? `rgba(${highlightColor[0]}, ${highlightColor[1]}, ${highlightColor[2]}, 0.28)`
         : 'rgba(10, 17, 30, 0.86)'
     }
     default:

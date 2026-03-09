@@ -245,9 +245,17 @@ export type VolGridHeatmapStrategy = 'absolute' | 'delta' | 'custom' | 'none'
 
 export type VolGridHeatmapMetric = 'vol' | 'premium'
 
+export type VolGridHeatmapPalette =
+  | 'icefire'
+  | 'blue'
+  | 'viridis'
+  | 'red_blue'
+  | 'teal_amber'
+
 export type VolGridHeatmapConfig = {
   strategy: VolGridHeatmapStrategy
   metric: VolGridHeatmapMetric
+  palette: VolGridHeatmapPalette
   inverted: boolean
   customTargets: string
 }
@@ -275,8 +283,9 @@ export const DEFAULT_CELL_DISPLAY_CONFIG: CellDisplayConfig = {
   changeMetric: 'vol',
   lastTradedLevelFields: ['bpvol', 'premiumBps'],
   heatmap: {
-    strategy: 'absolute',
+    strategy: 'none',
     metric: 'vol',
+    palette: 'icefire',
     inverted: false,
     customTargets: ''
   }

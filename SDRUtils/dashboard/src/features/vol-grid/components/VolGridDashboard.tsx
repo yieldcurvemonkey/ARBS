@@ -89,21 +89,29 @@ function formatHeatmapSummary(
   heatmap: VolGridHeatmapConfig,
   highlightedCount: number
 ) {
+  const paletteLabel =
+    heatmap.palette === 'red_blue'
+      ? 'red/blue'
+      : heatmap.palette === 'teal_amber'
+        ? 'teal/amber'
+        : heatmap.palette === 'blue'
+          ? 'blue'
+        : heatmap.palette
   switch (heatmap.strategy) {
     case 'none':
       return 'Heatmap: off'
     case 'absolute':
       return `Heatmap: absolute ${heatmap.metric === 'premium' ? 'premium' : 'vol'}${
         heatmap.inverted ? ' (inverse)' : ''
-      }`
+      } [${paletteLabel}]`
     case 'delta':
       return `Heatmap: delta ${heatmap.metric === 'premium' ? 'premium' : 'vol'}${
         heatmap.inverted ? ' (inverse)' : ''
-      }`
+      } [${paletteLabel}]`
     case 'custom':
       return `Heatmap: custom ${
         highlightedCount === 1 ? 'highlight' : 'highlights'
-      } (${highlightedCount})${heatmap.inverted ? ' (inverse)' : ''}`
+      } (${highlightedCount})${heatmap.inverted ? ' (inverse)' : ''} [${paletteLabel}]`
     default:
       return 'Heatmap: off'
   }
@@ -136,6 +144,7 @@ export default function VolGridDashboard({
     toggleLastTradedLevelField,
     setHeatmapStrategy,
     setHeatmapMetric,
+    setHeatmapPalette,
     toggleHeatmapInversion,
     setHeatmapCustomTargets,
     resetToDefaults
@@ -532,6 +541,7 @@ export default function VolGridDashboard({
               onToggleLastTradedLevelField={toggleLastTradedLevelField}
               onSetHeatmapStrategy={setHeatmapStrategy}
               onSetHeatmapMetric={setHeatmapMetric}
+              onSetHeatmapPalette={setHeatmapPalette}
               onToggleHeatmapInversion={toggleHeatmapInversion}
               onSetHeatmapCustomTargets={setHeatmapCustomTargets}
               onReset={resetToDefaults}

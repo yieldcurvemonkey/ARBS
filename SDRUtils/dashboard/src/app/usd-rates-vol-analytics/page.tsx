@@ -2,6 +2,13 @@ import Link from 'next/link'
 
 const ANALYTICS_PAGES = [
   {
+    href: '/usd-rates-vol-analytics/vol-tape',
+    title: 'Vol Tape',
+    eyebrow: 'SDR Tape',
+    description:
+      'Browse the USD swaption SDR vol tape with quadrant analytics, trade history, manual links, and export tooling.'
+  },
+  {
     href: '/usd-rates-vol-analytics/atmf-vol-grid',
     title: 'Live ATMF Vol Grid',
     eyebrow: 'Live Surface',
@@ -52,6 +59,9 @@ export default function UsdRatesVolAnalyticsPage() {
             `/usd-rates-vol-analytics`
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2">
+            `/usd-rates-vol-analytics/vol-tape`
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2">
             `/usd-rates-vol-analytics/atmf-vol-grid`
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2">
@@ -59,8 +69,8 @@ export default function UsdRatesVolAnalyticsPage() {
           </div>
         </div>
         <p className="mt-4 text-sm text-slate-500">
-          Legacy `/vol-grid` traffic is redirected to the ATMF subpage for backward
-          compatibility.
+          Legacy `/swaptions-tape` and `/vol-grid` traffic is redirected to nested
+          USD Rates Vol Analytics pages for backward compatibility.
         </p>
       </section>
     </div>

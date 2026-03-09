@@ -5,6 +5,7 @@ import type {
   CellDisplayField,
   LastTradedLevelField,
   VolGridHeatmapMetric,
+  VolGridHeatmapPalette,
   VolGridHeatmapStrategy
 } from '../types'
 
@@ -14,6 +15,7 @@ type CellSettingsPopoverProps = {
   onToggleLastTradedLevelField: (field: LastTradedLevelField) => void
   onSetHeatmapStrategy: (strategy: VolGridHeatmapStrategy) => void
   onSetHeatmapMetric: (metric: VolGridHeatmapMetric) => void
+  onSetHeatmapPalette: (palette: VolGridHeatmapPalette) => void
   onToggleHeatmapInversion: () => void
   onSetHeatmapCustomTargets: (customTargets: string) => void
   onReset: () => void
@@ -39,10 +41,10 @@ const HEATMAP_STRATEGY_OPTIONS: Array<{
   value: VolGridHeatmapStrategy
   label: string
 }> = [
+  { value: 'none', label: 'No Highlighting' },
   { value: 'absolute', label: 'Absolute Level' },
   { value: 'delta', label: '1d Change' },
-  { value: 'custom', label: 'Custom Nodes' },
-  { value: 'none', label: 'No Highlighting' }
+  { value: 'custom', label: 'Custom Nodes' }
 ]
 
 const HEATMAP_METRIC_OPTIONS: Array<{
@@ -53,12 +55,24 @@ const HEATMAP_METRIC_OPTIONS: Array<{
   { value: 'premium', label: 'Premium (bps)' }
 ]
 
+const HEATMAP_PALETTE_OPTIONS: Array<{
+  value: VolGridHeatmapPalette
+  label: string
+}> = [
+  { value: 'icefire', label: 'Icefire' },
+  { value: 'blue', label: 'Blue' },
+  { value: 'viridis', label: 'Viridis' },
+  { value: 'red_blue', label: 'Red / Blue' },
+  { value: 'teal_amber', label: 'Teal / Amber' }
+]
+
 export function CellSettingsPopover({
   config,
   onToggle,
   onToggleLastTradedLevelField,
   onSetHeatmapStrategy,
   onSetHeatmapMetric,
+  onSetHeatmapPalette,
   onToggleHeatmapInversion,
   onSetHeatmapCustomTargets,
   onReset
@@ -148,6 +162,22 @@ export function CellSettingsPopover({
               ))}
             </select>
           </label>
+          <label className="text-xs text-slate-400">
+            Palette
+            <select
+              value={config.heatmap.palette}
+              onChange={(event) =>
+                onSetHeatmapPalette(event.target.value as VolGridHeatmapPalette)
+              }
+              className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200"
+            >
+              {HEATMAP_PALETTE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-slate-300">
           <label className="flex items-center gap-2">
@@ -161,7 +191,7 @@ export function CellSettingsPopover({
             Inverse coloring
           </label>
           <div className="text-[11px] text-slate-500">
-            Absolute and delta modes use grid-wide scaling. Custom mode highlights explicit nodes only.
+            Absolute and delta modes use grid-wide scaling. Custom mode uses the selected palette for explicit-node highlights.
           </div>
         </div>
         {config.heatmap.strategy === 'custom' && (

@@ -1,11 +1,11 @@
-// ABOUTME: Root layout configuring app-wide fonts and metadata for the Swaption trade tape.
+// ABOUTME: Root layout configuring app-wide fonts and metadata for the dashboard.
 import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "yieldcurvemonkey's jungle",
-  description: "USD Swaptions SDR trade tape",
+  description: "USD rates analytics dashboards",
 };
 
 export default function RootLayout({
@@ -25,9 +25,6 @@ export default function RootLayout({
               <nav className="flex items-center gap-4 text-sm text-slate-300">
                 <Link href="/" className="hover:text-white">
                   Home
-                </Link>
-                <Link href="/swaptions-tape" className="hover:text-white">
-                  USD Swaption Tape
                 </Link>
                 <Link href="/usd-swaps" className="hover:text-white">
                   USD Swaps Tape
@@ -49,6 +46,12 @@ export default function RootLayout({
                         className="block rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 transition hover:bg-slate-900 hover:text-white"
                       >
                         Overview
+                      </Link>
+                      <Link
+                        href="/usd-rates-vol-analytics/vol-tape"
+                        className="mt-1 block rounded-lg px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-900 hover:text-white"
+                      >
+                        Vol Tape
                       </Link>
                       <Link
                         href="/usd-rates-vol-analytics/atmf-vol-grid"

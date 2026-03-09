@@ -1,12 +1,6 @@
-// ABOUTME: USD Swaptions SDR Trade Tape dashboard entry point.
-import { Suspense } from "react";
-
-import SwaptionTradeTape from "@/features/swaptions-tape/components/SwaptionTradeTape";
+// ABOUTME: Legacy swaptions-tape route retained as a redirect to the nested Vol Tape page.
+import { redirect } from "next/navigation";
 
 export default function SwaptionsTapePage() {
-  return (
-    <Suspense fallback={<div className="p-4 text-sm text-gray-400">Loading...</div>}>
-      <SwaptionTradeTape />
-    </Suspense>
-  );
+  redirect("/usd-rates-vol-analytics/vol-tape");
 }

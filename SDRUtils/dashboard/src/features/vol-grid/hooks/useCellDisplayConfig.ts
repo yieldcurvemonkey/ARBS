@@ -7,6 +7,7 @@ import type {
   LastTradedLevelField,
   VolGridChangeMetric,
   VolGridHeatmapMetric,
+  VolGridHeatmapPalette,
   VolGridHeatmapStrategy
 } from '../types'
 import { DEFAULT_CELL_DISPLAY_CONFIG } from '../types'
@@ -47,6 +48,14 @@ function loadConfig(): CellDisplayConfig {
       parsedHeatmap?.metric === 'vol' || parsedHeatmap?.metric === 'premium'
         ? parsedHeatmap.metric
         : DEFAULT_CELL_DISPLAY_CONFIG.heatmap.metric
+    const palette =
+      parsedHeatmap?.palette === 'icefire' ||
+      parsedHeatmap?.palette === 'blue' ||
+      parsedHeatmap?.palette === 'viridis' ||
+      parsedHeatmap?.palette === 'red_blue' ||
+      parsedHeatmap?.palette === 'teal_amber'
+        ? parsedHeatmap.palette
+        : DEFAULT_CELL_DISPLAY_CONFIG.heatmap.palette
 
     return {
       visibleFields: parsed.visibleFields,
@@ -60,6 +69,7 @@ function loadConfig(): CellDisplayConfig {
       heatmap: {
         strategy,
         metric,
+        palette,
         inverted:
           typeof parsedHeatmap?.inverted === 'boolean'
             ? parsedHeatmap.inverted
@@ -158,6 +168,20 @@ export function useCellDisplayConfig() {
     })
   }, [])
 
+  const setHeatmapPalette = useCallback((palette: VolGridHeatmapPalette) => {
+    setConfig((prev) => {
+      const next: CellDisplayConfig = {
+        ...prev,
+        heatmap: {
+          ...prev.heatmap,
+          palette
+        }
+      }
+      persistConfig(next)
+      return next
+    })
+  }, [])
+
   const toggleHeatmapInversion = useCallback(() => {
     setConfig((prev) => {
       const next: CellDisplayConfig = {
@@ -193,6 +217,7 @@ export function useCellDisplayConfig() {
     toggleLastTradedLevelField,
     setHeatmapStrategy,
     setHeatmapMetric,
+    setHeatmapPalette,
     toggleHeatmapInversion,
     setHeatmapCustomTargets,
     resetToDefaults
