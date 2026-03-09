@@ -21,7 +21,9 @@ export const POINT_GRID_EXPIRY_NODES: PointGridAxisNode[] = [
   { label: "2Y", years: 2 },
   { label: "3Y", years: 3 },
   { label: "5Y", years: 5 },
+  { label: "7Y", years: 7 },
   { label: "10Y", years: 10 },
+  { label: "15Y", years: 15 },
   { label: "20Y", years: 20 },
 ];
 

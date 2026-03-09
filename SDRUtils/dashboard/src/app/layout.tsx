@@ -32,9 +32,39 @@ export default function RootLayout({
                 <Link href="/usd-swaps" className="hover:text-white">
                   USD Swaps Tape
                 </Link>
-                <Link href="/vol-grid" className="hover:text-white">
-                  Vol Grid
-                </Link>
+                <div className="group relative">
+                  <Link
+                    href="/usd-rates-vol-analytics"
+                    className="inline-flex items-center gap-1 hover:text-white"
+                  >
+                    USD Rates Vol Analytics
+                    <span className="text-[10px] text-slate-500 transition group-hover:text-slate-300">
+                      v
+                    </span>
+                  </Link>
+                  <div className="pointer-events-none absolute left-0 top-full z-40 pt-2 opacity-0 transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+                    <div className="min-w-[14rem] rounded-xl border border-slate-800 bg-slate-950/95 p-2 shadow-2xl backdrop-blur">
+                      <Link
+                        href="/usd-rates-vol-analytics"
+                        className="block rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 transition hover:bg-slate-900 hover:text-white"
+                      >
+                        Overview
+                      </Link>
+                      <Link
+                        href="/usd-rates-vol-analytics/atmf-vol-grid"
+                        className="mt-1 block rounded-lg px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-900 hover:text-white"
+                      >
+                        Live ATMF Vol Grid
+                      </Link>
+                      <Link
+                        href="/usd-rates-vol-analytics/atmf-grid-volatility-surface"
+                        className="mt-1 block rounded-lg px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-900 hover:text-white"
+                      >
+                        Vol Plotter
+                      </Link>
+                    </div>
+                  </div>
+                </div>
                 <Link href="/usts-rv" className="hover:text-white">
                   UST RV
                 </Link>

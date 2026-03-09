@@ -20,13 +20,10 @@ from BT.query_portfolio import ResolvedQueryPosition
 from BT.triggers import Trigger
 from Query.Base.BaseQuery import BaseQuery
 from Query.Base.query_resolution import resolve_query
+from Query.STIRFutureOptions._risk import SOFR_OPTION_POINT_VALUE, option_quantity, resolve_pricer_for_leg
 
 if TYPE_CHECKING:
     from BT.query_engine import QueryDrivenBacktest
-
-# CME Rule 460A01.C: 0.01 IMM Index point = $25 per option contract.
-# 1.0 IMM Index point = $2,500 per option contract.
-SOFR_OPTION_POINT_VALUE = 2500.0
 
 
 class STIRFutureOptionHandler(PositionHandler):
@@ -50,19 +47,18 @@ class STIRFutureOptionHandler(PositionHandler):
         return query.product == "STIRFUTUREOPTION"
 
     @staticmethod
-    def _contracts_for_leg(leg: Any) -> int:
+    def _contracts_for_leg(leg: Any) -> float:
         """Extract contract count from a pricable instrument."""
-        if hasattr(leg, "quantity"):
-            q = leg.quantity
-            val = q() if callable(q) else q
-            return max(1, abs(int(val)))
-        return 1
+        return abs(float(option_quantity(leg)))
 
     @staticmethod
     def _leg_prices(pr: Any, package: list[Any]) -> list[float]:
         """Get raw option price in IMM Index points per leg."""
         if isinstance(pr, Mapping):
-            return [float(p.price()) for p in pr.values()]
+            out: list[float] = []
+            for idx, leg in enumerate(package):
+                out.append(float(resolve_pricer_for_leg(pr, leg, index=idx).price()))
+            return out
         return [float(pr.price(pk)) for pk in package]
 
     def build_position(
@@ -116,8 +112,7 @@ class STIRFutureOptionHandler(PositionHandler):
             return (current_price - entry_price) * SOFR_OPTION_POINT_VALUE
 
         # Per-leg PnL: (Δprice) × $2,500 × contracts × weight
-        current_package, _ = q.resolve_package(pricer_or_curve=pr)
-        resolved_package = self._resolved_pricables(pr, current_package, position.weights)
+        resolved_package = self._resolved_pricables(pr, position.package, position.weights)
         current_leg_prices = self._leg_prices(pr, resolved_package)
         weights = position.weights or [1.0] * len(current_leg_prices)
 

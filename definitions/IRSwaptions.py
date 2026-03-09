@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 # Ordered grid axes expected by QuantLib SwaptionVolatilityMatrix.
-EXPIRY_LABELS: list[str] = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "10y"]
+EXPIRY_LABELS: list[str] = [
+    "1m",
+    "3m",
+    "6m",
+    "1y",
+    "2y",
+    "3y",
+    "5y",
+    "7y",
+    "10y",
+    "15y",
+    "20y",
+]
 TAIL_LABELS: list[str] = ["1y", "2y", "5y", "10y", "20y", "30y"]
-EXTENDED_EXPIRY_LABELS: list[str] = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "10y", "20y"]
+EXTENDED_EXPIRY_LABELS: list[str] = EXPIRY_LABELS.copy()
 EXTENDED_TAIL_LABELS: list[str] = ["1y", "2y", "3y", "5y", "7y", "10y", "20y", "30y"]
 
 

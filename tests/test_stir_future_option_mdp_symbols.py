@@ -3,9 +3,13 @@ import datetime
 import pytest
 
 from MDP.STIRFutures.STIRFutureOptionMDP import (
+    STIRFutureOptionMDP,
+    STIRFutureOptionSmilePoint,
     _canonical_to_barchart_contract,
     _canonical_to_barchart_option,
     _canonical_underlying,
+    _cme_listed_abs_offset_grid_bps_for_contract_forward,
+    _cme_listed_strike_rule_for_contract,
     _contract_code_from_symbol,
     _expand_straddle_symbol,
     _format_strike4,
@@ -13,6 +17,7 @@ from MDP.STIRFutures.STIRFutureOptionMDP import (
     _parse_option_request_symbol,
     _resolve_option_contract_aliases_for_date,
     _right_from_symbol,
+    _snap_to_listed_strike_for_offset,
     _strike_from_symbol,
 )
 
@@ -53,6 +58,24 @@ def test_option_alias_parsing_atm_and_delta():
     assert delta["contract"] == "SFRZ27"
     assert delta["right"] == "C"
     assert delta["delta"] == pytest.approx(25.0)
+
+    offset_call = _parse_option_request_symbol("SFRZ27|25BPC")
+    assert offset_call["selector"] == "atmf_offset"
+    assert offset_call["right"] == "C"
+    assert offset_call["atm_offset_bps"] == pytest.approx(25.0)
+    assert offset_call["canonical"] == "SFRZ27|25BPC"
+
+    offset_call_alt = _parse_option_request_symbol("SFRZ27|ATMF-25")
+    assert offset_call_alt["selector"] == "atmf_offset"
+    assert offset_call_alt["right"] == "C"
+    assert offset_call_alt["atm_offset_bps"] == pytest.approx(25.0)
+    assert offset_call_alt["canonical"] == "SFRZ27|25BPC"
+
+    offset_put_alt = _parse_option_request_symbol("SFRZ27|ATMF+25")
+    assert offset_put_alt["selector"] == "atmf_offset"
+    assert offset_put_alt["right"] == "P"
+    assert offset_put_alt["atm_offset_bps"] == pytest.approx(-25.0)
+    assert offset_put_alt["canonical"] == "SFRZ27|25BPP"
 
     natural = _parse_option_request_symbol("SFRZ27 ATM straddle")
     assert natural["selector"] == "atm"
@@ -107,3 +130,83 @@ def test_sofr_style_fine_grid_tokens_use_vendor_encoding():
     assert _strike_from_symbol("SFRU26|9643C") == pytest.approx(96.4375)
     assert _strike_from_symbol("SFRU26|9662C") == pytest.approx(96.6250)
     assert _canonical_to_barchart_option("SFRU26|9637C") == "SQU26|9637C"
+
+
+def test_cme_listed_strike_rules_cover_front_and_back_contract_buckets():
+    as_of = datetime.date(2026, 3, 19)
+
+    assert _cme_listed_strike_rule_for_contract(contract="SFRU26", as_of=as_of)["fine_step"] == pytest.approx(0.0625)
+    assert _cme_listed_strike_rule_for_contract(contract="SFRM27", as_of=as_of)["fine_step"] == pytest.approx(0.125)
+    assert _cme_listed_strike_rule_for_contract(contract="0QM26", as_of=as_of)["fine_step"] == pytest.approx(0.0625)
+    assert _cme_listed_strike_rule_for_contract(contract="0QU26", as_of=as_of)["fine_step"] == pytest.approx(0.125)
+    assert _cme_listed_strike_rule_for_contract(contract="S01M26", as_of=as_of)["fine_step"] == pytest.approx(0.0625)
+    assert _cme_listed_strike_rule_for_contract(contract="3QU26", as_of=as_of)["fine_step"] == pytest.approx(0.125)
+
+
+def test_listed_offset_grid_and_snap_use_rate_space_signs():
+    as_of = datetime.date(2026, 3, 4)
+    atm_strike, abs_offsets, signed_offsets = _cme_listed_abs_offset_grid_bps_for_contract_forward(
+        contract="SFRU26",
+        forward=96.61,
+        as_of=as_of,
+    )
+
+    assert atm_strike == pytest.approx(96.625)
+    assert abs_offsets[:4] == pytest.approx([0.0, 6.25, 12.5, 18.75])
+    assert 150.0 in abs_offsets
+    assert 175.0 in abs_offsets
+    assert -12.5 in signed_offsets
+    assert 12.5 in signed_offsets
+
+    call_strike, call_offset = _snap_to_listed_strike_for_offset(
+        contract="SFRU26",
+        forward=96.61,
+        as_of=as_of,
+        right="C",
+        offset_bps=12.5,
+    )
+    put_strike, put_offset = _snap_to_listed_strike_for_offset(
+        contract="SFRU26",
+        forward=96.61,
+        as_of=as_of,
+        right="P",
+        offset_bps=12.5,
+    )
+
+    assert call_strike == pytest.approx(96.5)
+    assert put_strike == pytest.approx(96.75)
+    assert call_offset == pytest.approx(12.5)
+    assert put_offset == pytest.approx(-12.5)
+
+
+def test_sabr_smile_offset_request_normalization_uses_absolute_unique_bps():
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+
+    normalized = mdp._normalize_sabr_smile_point_request({"strike_offsets_bps": [-10, 10.0, -5, 5.0]})
+    assert normalized == {
+        "mode": "atm_offset_bps",
+        "strike_offsets_bps": [5.0, 10.0],
+        "auto_full_ladder": False,
+    }
+
+    listed = mdp._normalize_sabr_smile_point_request({"strike_offsets_bps": "listed"})
+    assert listed == {
+        "mode": "atm_offset_bps",
+        "strike_offsets_bps": [],
+        "auto_full_ladder": True,
+    }
+
+
+def test_sabr_smile_point_roundtrip_preserves_atm_offset_bps():
+    point = STIRFutureOptionSmilePoint(
+        label="SFRU26|9662C",
+        right="C",
+        delta_abs=25.0,
+        atm_offset_bps=12.5,
+        strike_price=96.5,
+        strike_rate=3.5,
+        iv_normal_price=0.155,
+        iv_normal_bps=15.5,
+    )
+
+    assert STIRFutureOptionSmilePoint.from_dict(point.to_dict()) == point

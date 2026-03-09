@@ -7,6 +7,14 @@ from typing import Callable, Dict, List, Optional, Tuple
 from Query.Base.BaseStructure import BaseStructureFunctionMap
 from Query.STIRFutureOptions._STIRFutureOptionGenericPricable import _STIRFutureOptionGenericPricable
 from Query.STIRFutureOptions._STIRFutureOptionGenericPricer import _STIRFutureOptionGenericPricer
+from Query.STIRFutureOptions._risk import (
+    dollar_dv01,
+    dollar_gamma_01,
+    dollar_vega_01,
+    option_quantity,
+    rebuild_leg_with_quantity,
+    resolve_pricer_for_leg,
+)
 
 
 class STIRFutureOptionStructure(Enum):
@@ -25,11 +33,94 @@ class STIRFutureOptionStructureFunctionMap(
     def _create_map(
         self,
     ) -> Dict[STIRFutureOptionStructure, Callable[..., Tuple[List[_STIRFutureOptionGenericPricable], List[float]]]]:
+        def wrap(
+            builder: Callable[..., Tuple[List[_STIRFutureOptionGenericPricable], List[float]]],
+        ) -> Callable[..., Tuple[List[_STIRFutureOptionGenericPricable], List[float]]]:
+            def _wrapped(**kwargs):
+                package, risk_weights = builder(**kwargs)
+                return self._apply_size_target(package=package, risk_weights=risk_weights, kwargs=kwargs)
+
+            return _wrapped
+
         return {
-            STIRFutureOptionStructure.OUTRIGHT: partial(self._build_outright),
-            STIRFutureOptionStructure.VERTICAL: partial(self._build_vertical),
-            STIRFutureOptionStructure.STRADDLE: partial(self._build_straddle),
+            STIRFutureOptionStructure.OUTRIGHT: wrap(partial(self._build_outright)),
+            STIRFutureOptionStructure.VERTICAL: wrap(partial(self._build_vertical)),
+            STIRFutureOptionStructure.STRADDLE: wrap(partial(self._build_straddle)),
         }
+
+    @staticmethod
+    def _size_targets(kwargs: Dict[str, object]) -> List[Tuple[str, float]]:
+        targets: List[Tuple[str, float]] = []
+        for key in ("contracts", "dv01", "gamma_01", "gamma01", "vega_01", "vega01"):
+            raw = kwargs.get(key)
+            if raw is None:
+                continue
+            targets.append((str(key), abs(float(raw))))
+        return targets
+
+    def _package_metric(
+        self,
+        *,
+        package: List[_STIRFutureOptionGenericPricable],
+        risk_weights: List[float],
+        metric: str,
+    ) -> float:
+        total = 0.0
+        pricers = self.common_kwargs["pricer"]
+        for idx, (rw, leg) in enumerate(zip(risk_weights, package)):
+            pricer = resolve_pricer_for_leg(pricers, leg, index=idx)
+            if metric == "dv01":
+                leg_metric = dollar_dv01(pricer)
+            elif metric in {"gamma_01", "gamma01"}:
+                leg_metric = dollar_gamma_01(pricer)
+            elif metric in {"vega_01", "vega01"}:
+                leg_metric = dollar_vega_01(pricer)
+            else:
+                raise KeyError(f"Unsupported STIR option size target '{metric}'")
+            total += float(rw) * float(option_quantity(leg)) * float(leg_metric)
+        return float(total)
+
+    def _scale_package(
+        self,
+        *,
+        package: List[_STIRFutureOptionGenericPricable],
+        scale: float,
+    ) -> List[_STIRFutureOptionGenericPricable]:
+        pricers = self.common_kwargs["pricer"]
+        scaled: List[_STIRFutureOptionGenericPricable] = []
+        for idx, leg in enumerate(package):
+            pricer = resolve_pricer_for_leg(pricers, leg, index=idx)
+            qty = abs(float(option_quantity(leg))) * float(scale)
+            scaled.append(rebuild_leg_with_quantity(pricer, leg, quantity=qty))
+        return scaled
+
+    def _apply_size_target(
+        self,
+        *,
+        package: List[_STIRFutureOptionGenericPricable],
+        risk_weights: List[float],
+        kwargs: Dict[str, object],
+    ) -> Tuple[List[_STIRFutureOptionGenericPricable], List[float]]:
+        targets = self._size_targets(kwargs)
+        if not targets:
+            return package, risk_weights
+        if len(targets) > 1:
+            labels = ", ".join(key for key, _ in targets)
+            raise ValueError(f"Specify only one STIR option size target, got: {labels}")
+
+        metric, target = targets[0]
+        if metric == "contracts":
+            return self._scale_package(package=package, scale=float(target)), risk_weights
+
+        if target == 0.0:
+            return self._scale_package(package=package, scale=0.0), risk_weights
+
+        current = self._package_metric(package=package, risk_weights=risk_weights, metric=metric)
+        if abs(current) < 1e-12:
+            raise ValueError(f"Cannot scale STIR option package to target {metric} because current package {metric} is zero.")
+
+        scale = float(target) / abs(float(current))
+        return self._scale_package(package=package, scale=scale), risk_weights
 
     def _keys(self) -> List[str]:
         return list(self.common_kwargs["pricer"].keys())

@@ -230,30 +230,82 @@ def conditional_mvn_update(
     staleness_weights: Mapping[str, Any] | pd.Series | Sequence[float] | np.ndarray | None = None,
     *,
     base_noise: float = 1.0,
+    observation_operator: np.ndarray | None = None,
+    observation_labels: Sequence[str] | None = None,
 ) -> ConditionalMVNUpdateResult:
+    """Bayesian conditional update of the surface given partial observations.
+
+    When *observation_operator* is ``None`` (the default), the function behaves
+    exactly as before: observations are keyed by core-grid node names and the
+    observation model is an identity-selection matrix.
+
+    When *observation_operator* is provided it must be an ``(n_obs, n_grid)``
+    array where each row maps one observation to a weighted combination of grid
+    nodes (e.g. bilinear interpolation weights for off-grid trades).  In this
+    mode *observations* must be a flat numeric array/series of observed values
+    aligned with the rows of *observation_operator*, and *staleness_weights*
+    must be an array of the same length.  *observation_labels* provides
+    human-readable identifiers for each observation row (used in the returned
+    ``observed_nodes`` list).
+    """
     eod_vector = _coerce_grid_vector(eod_grid, model.columns)
+
+    # ------------------------------------------------------------------
+    # Observation-operator path (continuous-coordinate observations)
+    # ------------------------------------------------------------------
+    if observation_operator is not None:
+        H = np.asarray(observation_operator, dtype=float)
+        n_obs = H.shape[0]
+        if n_obs == 0:
+            return _empty_update(model, eod_vector)
+        if H.shape[1] != len(model.columns):
+            raise ValueError(
+                f"observation_operator has {H.shape[1]} columns but model "
+                f"has {len(model.columns)} grid nodes."
+            )
+
+        observed_vector = np.asarray(observations, dtype=float).ravel()
+        if observed_vector.shape[0] != n_obs:
+            raise ValueError(
+                f"observations length {observed_vector.shape[0]} != "
+                f"observation_operator rows {n_obs}"
+            )
+
+        obs_labels = (
+            list(observation_labels)
+            if observation_labels is not None
+            else [f"obs_{i}" for i in range(n_obs)]
+        )
+
+        obs_weights = (
+            np.asarray(staleness_weights, dtype=float).ravel()
+            if staleness_weights is not None
+            else np.ones(n_obs, dtype=float)
+        )
+
+        delta_observed = observed_vector - H @ eod_vector
+        mean_observed = H @ model.mean
+        loadings_observed = H @ model.loadings
+        # Var(H @ eps) diagonal = sum(H^2 * residual_var, axis=1)
+        residual_observed = np.sum(
+            H ** 2 * model.residual_variance[np.newaxis, :], axis=1,
+        )
+
+        observation_noise = np.clip(base_noise * obs_weights, a_min=1e-8, a_max=None)
+        noise_diagonal = residual_observed + observation_noise
+
+        return _posterior_update(
+            model, eod_vector, delta_observed, mean_observed,
+            loadings_observed, noise_diagonal, obs_labels,
+        )
+
+    # ------------------------------------------------------------------
+    # Legacy path (observations keyed by core-grid node name)
+    # ------------------------------------------------------------------
     observation_series = _coerce_observation_series(observations)
 
     if observation_series.empty:
-        zero_delta = pd.Series(np.zeros(len(model.columns), dtype=float), index=model.columns)
-        zero_factors = pd.Series(
-            np.zeros(model.n_components, dtype=float),
-            index=[f"PC{i + 1}" for i in range(model.n_components)],
-        )
-        prior_cov = np.diag(model.eigenvalues.astype(float))
-        return ConditionalMVNUpdateResult(
-            live_grid=pd.Series(eod_vector.copy(), index=model.columns),
-            delta_grid=zero_delta,
-            confidence=pd.Series(np.zeros(len(model.columns), dtype=float), index=model.columns),
-            posterior_factors=zero_factors,
-            posterior_factor_cov=pd.DataFrame(
-                prior_cov,
-                index=zero_factors.index,
-                columns=zero_factors.index,
-            ),
-            observed_nodes=[],
-            observation_noise=pd.Series(dtype=float),
-        )
+        return _empty_update(model, eod_vector)
 
     unknown_nodes = sorted(set(observation_series.index) - set(model.columns))
     if unknown_nodes:
@@ -272,6 +324,48 @@ def conditional_mvn_update(
     observation_noise = np.clip(base_noise * observation_weights, a_min=1e-8, a_max=None)
     noise_diagonal = residual_observed + observation_noise
 
+    return _posterior_update(
+        model, eod_vector, delta_observed, mean_observed,
+        loadings_observed, noise_diagonal, observed_nodes,
+    )
+
+
+def _empty_update(
+    model: SurfacePCAModel,
+    eod_vector: np.ndarray,
+) -> ConditionalMVNUpdateResult:
+    """Return a no-observation result (prior only)."""
+    zero_delta = pd.Series(np.zeros(len(model.columns), dtype=float), index=model.columns)
+    zero_factors = pd.Series(
+        np.zeros(model.n_components, dtype=float),
+        index=[f"PC{i + 1}" for i in range(model.n_components)],
+    )
+    prior_cov = np.diag(model.eigenvalues.astype(float))
+    return ConditionalMVNUpdateResult(
+        live_grid=pd.Series(eod_vector.copy(), index=model.columns),
+        delta_grid=zero_delta,
+        confidence=pd.Series(np.zeros(len(model.columns), dtype=float), index=model.columns),
+        posterior_factors=zero_factors,
+        posterior_factor_cov=pd.DataFrame(
+            prior_cov,
+            index=zero_factors.index,
+            columns=zero_factors.index,
+        ),
+        observed_nodes=[],
+        observation_noise=pd.Series(dtype=float),
+    )
+
+
+def _posterior_update(
+    model: SurfacePCAModel,
+    eod_vector: np.ndarray,
+    delta_observed: np.ndarray,
+    mean_observed: np.ndarray,
+    loadings_observed: np.ndarray,
+    noise_diagonal: np.ndarray,
+    observed_labels: list[str],
+) -> ConditionalMVNUpdateResult:
+    """Shared posterior computation for both legacy and operator paths."""
     inverse_noise = np.diag(1.0 / noise_diagonal)
     inverse_lambda = np.diag(1.0 / np.clip(model.eigenvalues, a_min=1e-10, a_max=None))
 
@@ -298,6 +392,6 @@ def conditional_mvn_update(
         confidence=pd.Series(confidence, index=model.columns),
         posterior_factors=pd.Series(posterior_mean, index=factor_index),
         posterior_factor_cov=pd.DataFrame(posterior_cov, index=factor_index, columns=factor_index),
-        observed_nodes=observed_nodes,
-        observation_noise=pd.Series(noise_diagonal, index=observed_nodes),
+        observed_nodes=observed_labels,
+        observation_noise=pd.Series(noise_diagonal, index=observed_labels),
     )

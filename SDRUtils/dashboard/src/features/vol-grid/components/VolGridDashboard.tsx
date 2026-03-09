@@ -5,6 +5,7 @@ import type {
   CalibrationFilterConfig,
   CalibrationObservation,
   CalibrationPresetKey,
+  VolGridHeatmapConfig,
   VolGridSessionMeta,
   VolGridSurfaceResponse
 } from '../types'
@@ -15,7 +16,12 @@ import {
   IDB_STRADDLES_PRESET,
   resolveSnapshotPreset
 } from '../constants'
-import { formatDateTime, formatNotional, formatNumber } from '../utils'
+import {
+  formatDateTime,
+  formatNotional,
+  formatNumber,
+  parseHeatmapHighlightTargets
+} from '../utils'
 import { UnifiedGridCell } from './UnifiedGridCell'
 import { CellAnalyticsModal } from './CellAnalyticsModal'
 import { CellSettingsPopover } from './CellSettingsPopover'
@@ -25,6 +31,7 @@ import { useCellDetail } from '../hooks/useCellDetail'
 import { useCellDisplayConfig } from '../hooks/useCellDisplayConfig'
 
 const DEFAULT_PRESET: CalibrationPresetKey = 'idb_straddles'
+const EMPTY_GRID_CELLS: VolGridSurfaceResponse['cells'] = []
 
 function normalizeSelectablePreset(value: CalibrationPresetKey) {
   return resolveSnapshotPreset(value)
@@ -72,10 +79,44 @@ function getSessionAccent(session: VolGridSessionMeta | null) {
 
 type DashboardTab = 'grid' | 'surface'
 
-export default function VolGridDashboard() {
+type VolGridDashboardProps = {
+  initialTab?: DashboardTab
+  lockTab?: boolean
+  showDatePicker?: boolean
+}
+
+function formatHeatmapSummary(
+  heatmap: VolGridHeatmapConfig,
+  highlightedCount: number
+) {
+  switch (heatmap.strategy) {
+    case 'none':
+      return 'Heatmap: off'
+    case 'absolute':
+      return `Heatmap: absolute ${heatmap.metric === 'premium' ? 'premium' : 'vol'}${
+        heatmap.inverted ? ' (inverse)' : ''
+      }`
+    case 'delta':
+      return `Heatmap: delta ${heatmap.metric === 'premium' ? 'premium' : 'vol'}${
+        heatmap.inverted ? ' (inverse)' : ''
+      }`
+    case 'custom':
+      return `Heatmap: custom ${
+        highlightedCount === 1 ? 'highlight' : 'highlights'
+      } (${highlightedCount})${heatmap.inverted ? ' (inverse)' : ''}`
+    default:
+      return 'Heatmap: off'
+  }
+}
+
+export default function VolGridDashboard({
+  initialTab = 'grid',
+  lockTab = false,
+  showDatePicker = true
+}: VolGridDashboardProps) {
   const [surface, setSurface] = useState<VolGridSurfaceResponse | null>(null)
   const [preset, setPreset] = useState<CalibrationPresetKey>(DEFAULT_PRESET)
-  const [activeTab, setActiveTab] = useState<DashboardTab>('grid')
+  const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab)
   const [selectedDate, setSelectedDate] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -93,6 +134,10 @@ export default function VolGridDashboard() {
     config: displayConfig,
     toggleField,
     toggleLastTradedLevelField,
+    setHeatmapStrategy,
+    setHeatmapMetric,
+    toggleHeatmapInversion,
+    setHeatmapCustomTargets,
     resetToDefaults
   } = useCellDisplayConfig()
 
@@ -108,16 +153,42 @@ export default function VolGridDashboard() {
   )
   const comparisonMeta = surface?.meta.comparison ?? null
 
-  const volRange = useMemo(() => {
-    if (!surface) return { min: 0, max: 0 }
-    const values = surface.cells
+  const heatmapRange = useMemo(() => {
+    const cells = surface?.cells ?? EMPTY_GRID_CELLS
+    const volValues = cells
       .map((cell) => cell.atmfVol)
       .filter((value): value is number => value !== null && Number.isFinite(value))
+    const premiumValues = cells
+      .map((cell) => cell.atmfPremiumBps)
+      .filter((value): value is number => value !== null && Number.isFinite(value))
+    const volChangeValues = cells
+      .map((cell) => cell.atmfVolChange)
+      .filter((value): value is number => value !== null && Number.isFinite(value))
+    const premiumChangeValues = cells
+      .map((cell) => cell.atmfPremiumBpsChange)
+      .filter((value): value is number => value !== null && Number.isFinite(value))
     return {
-      min: values.length ? Math.min(...values) : 0,
-      max: values.length ? Math.max(...values) : 0
+      volMin: volValues.length ? Math.min(...volValues) : 0,
+      volMax: volValues.length ? Math.max(...volValues) : 0,
+      premiumMin: premiumValues.length ? Math.min(...premiumValues) : 0,
+      premiumMax: premiumValues.length ? Math.max(...premiumValues) : 0,
+      volChangeMaxAbs: volChangeValues.length
+        ? Math.max(...volChangeValues.map((value) => Math.abs(value)))
+        : 0,
+      premiumChangeMaxAbs: premiumChangeValues.length
+        ? Math.max(...premiumChangeValues.map((value) => Math.abs(value)))
+        : 0
     }
-  }, [surface])
+  }, [surface?.cells])
+
+  const highlightedNodeKeys = useMemo(
+    () => new Set(parseHeatmapHighlightTargets(displayConfig.heatmap.customTargets)),
+    [displayConfig.heatmap.customTargets]
+  )
+  const resolvedTab = lockTab ? initialTab : activeTab
+  const isGridView = resolvedTab === 'grid'
+  const isSurfaceView = resolvedTab === 'surface'
+  const pageTitle = isSurfaceView ? 'Vol Plotter' : 'Live ATMF Vol Grid'
 
   const loadConfig = useCallback(async () => {
     try {
@@ -187,17 +258,19 @@ export default function VolGridDashboard() {
 
   useEffect(() => {
     loadSurface()
-    loadFeed()
-  }, [loadFeed, loadSurface])
+    if (isGridView) {
+      loadFeed()
+    }
+  }, [isGridView, loadFeed, loadSurface])
 
   useEffect(() => {
-    if (selectedDate) return
+    if (selectedDate || isSurfaceView) return
     const interval = setInterval(() => {
       loadSurface()
       loadFeed()
     }, 5000)
     return () => clearInterval(interval)
-  }, [loadFeed, loadSurface, selectedDate])
+  }, [isSurfaceView, loadFeed, loadSurface, selectedDate])
 
   useEffect(() => {
     setSelectedNodeKey(null)
@@ -238,7 +311,9 @@ export default function VolGridDashboard() {
       })
       setConfigOpen(false)
       loadSurface()
-      loadFeed()
+      if (isGridView) {
+        loadFeed()
+      }
     } catch (fetchError) {
       console.error(fetchError)
     }
@@ -250,10 +325,14 @@ export default function VolGridDashboard() {
     setSpecificPlatforms((presetConfig.platforms.specificPlatforms ?? []).join(', '))
   }
 
-  const gridCells = surface?.cells ?? []
+  const gridCells = surface?.cells ?? EMPTY_GRID_CELLS
   const cellMap = useMemo(
     () => new Map(gridCells.map((cell) => [cell.nodeKey, cell])),
     [gridCells]
+  )
+  const heatmapSummary = useMemo(
+    () => formatHeatmapSummary(displayConfig.heatmap, highlightedNodeKeys.size),
+    [displayConfig.heatmap, highlightedNodeKeys]
   )
   const packageTypeEntries = Object.entries(
     configDraft.packageTypes
@@ -329,7 +408,7 @@ export default function VolGridDashboard() {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight text-white">
-                ATMF Vol Grid
+                {pageTitle}
               </h1>
               <p className="text-sm text-slate-400">{curveLabel}</p>
               {curveMetaLabel && (
@@ -337,42 +416,48 @@ export default function VolGridDashboard() {
               )}
             </div>
             <div className="flex flex-wrap items-center justify-end gap-3">
-              <div className="inline-flex overflow-hidden rounded-lg border border-slate-700">
-                {([
-                  ['grid', 'Grid'],
-                  ['surface', 'Surface 3D']
-                ] as Array<[DashboardTab, string]>).map(([tab, label]) => (
+              {!lockTab && (
+                <div className="inline-flex overflow-hidden rounded-lg border border-slate-700">
+                  {([
+                    ['grid', 'Grid'],
+                    ['surface', 'Surface 3D']
+                  ] as Array<[DashboardTab, string]>).map(([tab, label]) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setActiveTab(tab)}
+                      className={`px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                        activeTab === tab
+                          ? 'bg-slate-700 text-slate-100'
+                          : 'text-slate-300 hover:bg-slate-800'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {showDatePicker && (
+                <>
+                  <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+                    <span className="uppercase tracking-wide text-slate-500">Date</span>
+                    <input
+                      type="date"
+                      value={selectedDate}
+                      onChange={(event) => setSelectedDate(event.target.value)}
+                      className="bg-transparent text-slate-100 outline-none"
+                    />
+                  </label>
                   <button
-                    key={tab}
                     type="button"
-                    onClick={() => setActiveTab(tab)}
-                    className={`px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
-                      activeTab === tab
-                        ? 'bg-slate-700 text-slate-100'
-                        : 'text-slate-300 hover:bg-slate-800'
-                    }`}
+                    onClick={() => setSelectedDate('')}
+                    disabled={!selectedDate}
+                    className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {label}
+                    Live
                   </button>
-                ))}
-              </div>
-              <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
-                <span className="uppercase tracking-wide text-slate-500">Date</span>
-                <input
-                  type="date"
-                  value={selectedDate}
-                  onChange={(event) => setSelectedDate(event.target.value)}
-                  className="bg-transparent text-slate-100 outline-none"
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => setSelectedDate('')}
-                disabled={!selectedDate}
-                className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Live
-              </button>
+                </>
+              )}
               <select
                 value={normalizeSelectablePreset(preset)}
                 onChange={(event) =>
@@ -386,12 +471,14 @@ export default function VolGridDashboard() {
                   </option>
                 ))}
               </select>
-              <button
-                onClick={() => setCellSettingsOpen((open) => !open)}
-                className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-slate-500"
-              >
-                Cell Fields
-              </button>
+              {isGridView && (
+                <button
+                  onClick={() => setCellSettingsOpen((open) => !open)}
+                  className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-slate-500"
+                >
+                  Cell Fields
+                </button>
+              )}
               <button
                 onClick={() => setConfigOpen((open) => !open)}
                 className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-slate-500"
@@ -438,11 +525,15 @@ export default function VolGridDashboard() {
             <div className="mt-2 text-xs text-slate-500">{observationMessage}</div>
           )}
 
-          {cellSettingsOpen && (
+          {isGridView && cellSettingsOpen && (
             <CellSettingsPopover
               config={displayConfig}
               onToggle={toggleField}
               onToggleLastTradedLevelField={toggleLastTradedLevelField}
+              onSetHeatmapStrategy={setHeatmapStrategy}
+              onSetHeatmapMetric={setHeatmapMetric}
+              onToggleHeatmapInversion={toggleHeatmapInversion}
+              onSetHeatmapCustomTargets={setHeatmapCustomTargets}
               onReset={resetToDefaults}
             />
           )}
@@ -596,7 +687,7 @@ export default function VolGridDashboard() {
           )}
         </div>
 
-        {activeTab === 'grid' ? (
+        {isGridView ? (
           <div className={`grid gap-4 ${feedOpen ? 'xl:grid-cols-[minmax(0,1fr)_290px]' : 'grid-cols-1'}`}>
             <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-3">
               <div className="overflow-x-auto">
@@ -643,9 +734,9 @@ export default function VolGridDashboard() {
                             isSelected={selectedNodeKey === cell.nodeKey}
                             visibleFields={displayConfig.visibleFields}
                             lastTradedLevelFields={displayConfig.lastTradedLevelFields}
-                            changeMetric={displayConfig.changeMetric}
-                            volMin={volRange.min}
-                            volMax={volRange.max}
+                            heatmap={displayConfig.heatmap}
+                            heatmapRange={heatmapRange}
+                            highlightedNodeKeys={highlightedNodeKeys}
                             onClick={() => setSelectedNodeKey(cell.nodeKey)}
                           />
                         )
@@ -654,6 +745,7 @@ export default function VolGridDashboard() {
                   ))}
                 </div>
               </div>
+              <div className="mt-3 text-xs text-slate-500">{heatmapSummary}</div>
               <div className="mt-3 flex flex-wrap gap-4 text-xs text-slate-400">
                 <span className="flex items-center gap-2">
                   <span className="h-2 w-2 rounded-full bg-emerald-400" /> live (&lt;15m)
@@ -744,7 +836,7 @@ export default function VolGridDashboard() {
               <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-semibold text-slate-200">
-                    ATMF Grid Volatility Surface
+                    Vol Plotter
                   </h2>
                 <div className="mt-1 text-[11px] text-slate-500">
                   Rotatable 3D surface for {surface?.meta.session.effectiveDate ?? 'the current snapshot'}.

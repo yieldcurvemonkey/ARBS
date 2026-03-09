@@ -83,7 +83,7 @@ export function VolGridSurface3D({
           aspectratio: {
             x: 1.9,
             y: 1.55,
-            z: 0.42
+            z: 0.78
           },
           xaxis: {
             title: { text: 'Tenor', font: { color: '#94a3b8', size: 11 } },
@@ -111,7 +111,7 @@ export function VolGridSurface3D({
             nticks: 6
           },
           camera: {
-            eye: { x: 1.35, y: -1.45, z: 0.42 },
+            eye: { x: 1.25, y: -1.35, z: 0.72 },
             projection: {
               type: 'orthographic'
             }

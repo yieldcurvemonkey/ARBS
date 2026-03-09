@@ -10,6 +10,7 @@ from MDP.STIRFutures.STIRFutureOptionMDP import (
     STIRFutureOptionMDP,
     QuikVolProductID,
     QuikVolValueType,
+    _format_strike4,
 )
 from Query.STIRFutureOptions.backends.quantlib.QLSTIRFutureOptionPricer import QLSTIRFutureOptionPricer
 
@@ -117,6 +118,47 @@ def _make_qs_payload(as_of: datetime.date):
         label = f"SR3_60 {delta}D Put"
         payload[label] = [_make_pricer(label=label, right="P", delta=delta, quote_ts=same_day, iv_normal=vol)]
     return payload
+
+
+def _make_strike_pricer(
+    *,
+    label: str,
+    right: str,
+    strike: float,
+    quote_ts: datetime.datetime,
+    iv_normal: float,
+    delta: float,
+    forward: float = 96.61,
+    underlying_symbol: str = "SFRU26",
+    globex_symbol: str = "SR3U26",
+    expiry_date: datetime.date = datetime.date(2026, 9, 16),
+) -> QLSTIRFutureOptionPricer:
+    return QLSTIRFutureOptionPricer(
+        symbol=f"{underlying_symbol}|{_format_strike4(strike, contract=underlying_symbol)}{right}",
+        right=right,
+        underlying_symbol=underlying_symbol,
+        strike=strike,
+        quote_timestamp=quote_ts,
+        expiry_date=expiry_date,
+        market_price=1.0,
+        model_price=1.0,
+        iv_normal=iv_normal,
+        delta=delta,
+        gamma=0.0,
+        vega=0.0,
+        theta=0.0,
+        forward=forward,
+        discount=1.0,
+        meta_data={
+            "qs_series_label": label,
+            "qs_query": {
+                "globex_symbol": globex_symbol,
+                "qv_value_type": "VolByStrike",
+                "strike": strike,
+                "option_type": "Call" if right == "C" else "Put",
+            },
+        },
+    )
 
 
 def test_qs_atm_term_structure_fetches_sr3(monkeypatch):
@@ -246,6 +288,67 @@ def test_fetch_sabr_smile_builds_qs_queries_and_returns_rich_model(monkeypatch):
     assert delta_vol == pytest.approx(smile.normal_vol(delta_strike, strike_space="price", vol_units="bps"), rel=1e-12)
 
 
+def test_fetch_sabr_smile_offset_mode_uses_vol_by_strike_and_sets_atm_offsets(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 4)
+    ny = pytz.timezone("America/New_York")
+    seen = {}
+
+    monkeypatch.setattr(
+        mdp,
+        "_resolve_sabr_smile_underlying_forward",
+        lambda **kwargs: ("SFRU26", 96.61),
+    )
+
+    def _stub_qs(request):
+        seen["request"] = request
+        quote_ts = ny.localize(datetime.datetime.combine(as_of, datetime.time(16, 0)))
+        payload = {}
+        for query in request["queries"]:
+            right = "C" if query["option_type"] == "Call" else "P"
+            strike = float(query["strike"])
+            delta = 0.50 if abs(strike - 96.625) < 1e-10 and right == "C" else (
+                -0.50 if abs(strike - 96.625) < 1e-10 and right == "P" else (0.30 if right == "C" else -0.30)
+            )
+            label = f"{query['globex_symbol']} {strike:.4f} {query['option_type']}"
+            payload[label] = [
+                _make_strike_pricer(
+                    label=label,
+                    right=right,
+                    strike=strike,
+                    quote_ts=quote_ts,
+                    iv_normal=0.14 + abs(96.625 - strike) * 0.10,
+                    delta=delta,
+                )
+            ]
+        return payload
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+
+    smile = mdp.fetch_sabr_smile(
+        {
+            "globex_symbol": "SR3U26",
+            "as_of": as_of,
+            "strike_offsets_bps": [6.25, 12.5],
+            "force_refresh": True,
+        }
+    )
+
+    assert all(query["qv_value_type"] == "VolByStrike" for query in seen["request"]["queries"])
+    assert len(seen["request"]["queries"]) == 6
+    assert {round(float(query["strike"]), 8) for query in seen["request"]["queries"]} == {
+        96.5,
+        96.5625,
+        96.625,
+        96.6875,
+        96.75,
+    }
+
+    offsets = sorted(point.atm_offset_bps for point in smile.points)
+    assert offsets == pytest.approx([-12.5, -6.25, 0.0, 0.0, 6.25, 12.5])
+    assert smile.points[0].strike_price <= smile.points[-1].strike_price
+
+
 def test_sabr_smile_cache_roundtrip_preserves_object_and_evaluator(monkeypatch):
     mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
     as_of = datetime.date(2026, 3, 19)
@@ -262,6 +365,104 @@ def test_sabr_smile_cache_roundtrip_preserves_object_and_evaluator(monkeypatch):
     probe = smile.points[3].strike_price
     assert restored_smile.normal_vol(probe) == pytest.approx(smile.normal_vol(probe), rel=1e-12)
     assert restored_smile.price_to_rate(probe) == pytest.approx(smile.price_to_rate(probe), rel=1e-12)
+
+
+def test_qs_sabr_smile_common_cache_aliases_delta_and_offset_requests(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 4)
+    ny = pytz.timezone("America/New_York")
+    cache_store = {}
+
+    monkeypatch.setattr(
+        mdp,
+        "_resolve_sabr_smile_underlying_forward",
+        lambda **kwargs: ("SFRU26", 96.61),
+    )
+    monkeypatch.setattr(mdp, "_threadsafe_cache_get", lambda key: cache_store.get(key))
+    monkeypatch.setattr(mdp, "_threadsafe_cache_put", lambda key, value: cache_store.__setitem__(key, value))
+
+    def _stub_qs(request):
+        quote_ts = ny.localize(datetime.datetime.combine(request["start"], datetime.time(16, 0)))
+        payload = {}
+        for query in request["queries"]:
+            if query["qv_value_type"] == "VolByStrike":
+                right = "C" if query["option_type"] == "Call" else "P"
+                strike = float(query["strike"])
+                label = f"{query['globex_symbol']} {strike:.4f} {query['option_type']}"
+                if strike == 96.625:
+                    delta = 0.50 if right == "C" else -0.50
+                elif strike == 96.5625:
+                    delta = 0.25 if right == "C" else -0.25
+                elif strike == 96.5:
+                    delta = 0.40 if right == "C" else -0.40
+                else:
+                    delta = 0.25 if right == "C" else -0.25
+                payload[label] = [
+                    _make_strike_pricer(
+                        label=label,
+                        right=right,
+                        strike=strike,
+                        quote_ts=quote_ts,
+                        iv_normal=0.14 + abs(96.625 - strike) * 0.10,
+                        delta=delta,
+                    )
+                ]
+                continue
+
+            delta = int(query["delta"])
+            right = "C" if query["option_type"] == "Call" else "P"
+            if delta == 50:
+                strike = 96.625
+                delta_value = 0.50 if right == "C" else -0.50
+            elif delta == 40:
+                strike = 96.5 if right == "C" else 96.75
+                delta_value = 0.40 if right == "C" else -0.40
+            else:
+                strike = 96.5625 if right == "C" else 96.6875
+                delta_value = 0.25 if right == "C" else -0.25
+            label = f"{query['globex_symbol']} {delta}D {query['option_type']}"
+            pr = _make_strike_pricer(
+                label=label,
+                right=right,
+                strike=strike,
+                quote_ts=quote_ts,
+                iv_normal=0.14 + abs(96.625 - strike) * 0.10,
+                delta=delta_value,
+            )
+            pr._meta_data["qs_query"] = {
+                "globex_symbol": query["globex_symbol"],
+                "qv_value_type": query["qv_value_type"],
+                "delta": delta,
+                "option_type": query["option_type"],
+            }
+            payload[label] = [pr]
+        return payload
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+
+    delta_request = {
+        "endpoint": "sabr_smile",
+        "globex_symbol": "SR3U26",
+        "as_of": as_of,
+        "deltas": [25, 40, 50],
+        "force_refresh": True,
+    }
+    offset_request = {
+        "endpoint": "sabr_smile",
+        "globex_symbol": "SR3U26",
+        "as_of": as_of,
+        "strike_offsets_bps": [6.25, 12.5],
+    }
+
+    delta_smile = mdp.get_data(delta_request)["sabr_smile"][0]
+    offset_smile = mdp.get_data(offset_request)["sabr_smile"][0]
+
+    common_keys = [key for key in cache_store if key.startswith("STIRFO_SABR_COMMON::")]
+    assert len(common_keys) == 1
+    assert offset_smile.points == delta_smile.points
+
+    offset_cache_key = mdp._build_get_data_cache_key("sabr_smile", offset_request)
+    assert offset_cache_key in cache_store
 
 
 def test_select_sabr_smile_pricers_prefers_series_label_delta():

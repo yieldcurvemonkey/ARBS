@@ -241,16 +241,43 @@ export type CellDisplayField =
 
 export type VolGridChangeMetric = 'vol' | 'premium'
 
+export type VolGridHeatmapStrategy = 'absolute' | 'delta' | 'custom' | 'none'
+
+export type VolGridHeatmapMetric = 'vol' | 'premium'
+
+export type VolGridHeatmapConfig = {
+  strategy: VolGridHeatmapStrategy
+  metric: VolGridHeatmapMetric
+  inverted: boolean
+  customTargets: string
+}
+
+export type VolGridHeatmapRange = {
+  volMin: number
+  volMax: number
+  premiumMin: number
+  premiumMax: number
+  volChangeMaxAbs: number
+  premiumChangeMaxAbs: number
+}
+
 export type LastTradedLevelField = 'bpvol' | 'premiumBps'
 
 export type CellDisplayConfig = {
   visibleFields: CellDisplayField[]
   changeMetric: VolGridChangeMetric
   lastTradedLevelFields: LastTradedLevelField[]
+  heatmap: VolGridHeatmapConfig
 }
 
 export const DEFAULT_CELL_DISPLAY_CONFIG: CellDisplayConfig = {
   visibleFields: ['vol', 'premium', 'change', 'lastTradedTime', 'lastTradedLevel'],
   changeMetric: 'vol',
-  lastTradedLevelFields: ['bpvol', 'premiumBps']
+  lastTradedLevelFields: ['bpvol', 'premiumBps'],
+  heatmap: {
+    strategy: 'absolute',
+    metric: 'vol',
+    inverted: false,
+    customTargets: ''
+  }
 }

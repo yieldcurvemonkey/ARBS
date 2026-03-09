@@ -5,7 +5,8 @@ import type {
   CellDisplayField,
   LastTradedLevelField,
   VolGridCell,
-  VolGridChangeMetric
+  VolGridHeatmapConfig,
+  VolGridHeatmapRange
 } from '../types'
 import {
   STALENESS_COLORS,
@@ -23,9 +24,9 @@ type UnifiedGridCellProps = {
   isSelected: boolean
   visibleFields: CellDisplayField[]
   lastTradedLevelFields: LastTradedLevelField[]
-  changeMetric: VolGridChangeMetric
-  volMin: number
-  volMax: number
+  heatmap: VolGridHeatmapConfig
+  heatmapRange: VolGridHeatmapRange
+  highlightedNodeKeys: ReadonlySet<string>
   onClick: () => void
 }
 
@@ -56,9 +57,9 @@ export const UnifiedGridCell = memo(function UnifiedGridCell({
   isSelected,
   visibleFields,
   lastTradedLevelFields,
-  changeMetric,
-  volMin,
-  volMax,
+  heatmap,
+  heatmapRange,
+  highlightedNodeKeys,
   onClick
 }: UnifiedGridCellProps) {
   const dotColor = STALENESS_COLORS[cell.stalenessCategory] ?? STALENESS_COLORS.no_data
@@ -66,6 +67,10 @@ export const UnifiedGridCell = memo(function UnifiedGridCell({
     ? `${formatDate(cell.lastObservation.executionTimestamp)} ${formatTime(cell.lastObservation.executionTimestamp)} ET`
     : 'No trade history'
   const lastTradePremiumBps = deriveObservationPremiumBps(cell)
+  const backgroundColor = useMemo(
+    () => getUnifiedCellBackground(cell, heatmap, heatmapRange, highlightedNodeKeys),
+    [cell, heatmap, heatmapRange, highlightedNodeKeys]
+  )
   const lastTradeLevelLabel = useMemo(() => {
     if (!cell.lastObservation) return '--'
 
@@ -106,7 +111,7 @@ export const UnifiedGridCell = memo(function UnifiedGridCell({
           : 'border-slate-800/90 hover:border-slate-600/80'
       }`}
       style={{
-        backgroundColor: getUnifiedCellBackground(cell.atmfVol, volMin, volMax)
+        backgroundColor
       }}
     >
       <div className="flex items-start justify-between gap-2">

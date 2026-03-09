@@ -29,6 +29,10 @@ class STIRFutureOptionQuery(BaseQuery):
     value: Union[STIRFutureOptionValue, List[STIRFutureOptionValue]] = STIRFutureOptionValue.PRICE
 
     symbol: Optional[str] = None
+    contracts: Optional[float] = None
+    dv01: Optional[float] = None
+    gamma_01: Optional[float] = None
+    vega_01: Optional[float] = None
     structure_kwargs: Dict[str, Any] = field(default_factory=dict)
     value_kwargs: Dict[str, Any] = field(default_factory=dict)
     risk_weight: Optional[float] = None
@@ -43,6 +47,18 @@ class STIRFutureOptionQuery(BaseQuery):
         skw: Dict[str, Any] = dict(self.structure_kwargs or {})
         if self.symbol is not None and "symbol" not in skw:
             skw["symbol"] = self.symbol
+        if self.contracts is not None and "contracts" not in skw:
+            skw["contracts"] = self.contracts
+        if self.dv01 is not None and "dv01" not in skw:
+            skw["dv01"] = self.dv01
+        if self.gamma_01 is not None and "gamma_01" not in skw:
+            skw["gamma_01"] = self.gamma_01
+        if self.vega_01 is not None and "vega_01" not in skw:
+            skw["vega_01"] = self.vega_01
+
+        size_targets = [name for name in ("contracts", "dv01", "gamma_01", "vega_01") if skw.get(name) is not None]
+        if len(size_targets) > 1:
+            raise ValueError(f"Specify only one STIR option size target, got: {', '.join(size_targets)}")
 
         if self.structure == STIRFutureOptionStructure.OUTRIGHT:
             assert skw.get("symbol") is not None, "OUTRIGHT requires symbol"

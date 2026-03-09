@@ -1,4 +1,9 @@
 import { EXPIRY_POINTS, TENOR_POINTS } from './constants'
+import type {
+  VolGridCell,
+  VolGridHeatmapConfig,
+  VolGridHeatmapRange
+} from './types'
 
 export function normalizeDateKey(value: string | Date | null | undefined): string | null {
   if (value === null || value === undefined) return null
@@ -61,6 +66,29 @@ export function normalizeGridLabel(label: string | null | undefined) {
 
 export function buildNodeKey(expiry: string, tenor: string) {
   return `${normalizeGridLabel(expiry)}_${normalizeGridLabel(tenor)}`
+}
+
+export function parseHeatmapHighlightTargets(value: string | null | undefined): string[] {
+  if (!value) return []
+
+  const tokens = String(value)
+    .split(/[\n,;]+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+  const nodeKeys = new Set<string>()
+
+  for (const token of tokens) {
+    const normalized = token.replace(/\s+/g, ' ').trim()
+    const match =
+      normalized.match(
+        /^(\d+(?:\.\d+)?[dDwWmMyY])\s*(?:x|_|\/|-)\s*(\d+(?:\.\d+)?[dDwWmMyY])$/
+      ) ??
+      normalized.match(/^(\d+(?:\.\d+)?[dDwWmMyY])\s+(\d+(?:\.\d+)?[dDwWmMyY])$/)
+    if (!match) continue
+    nodeKeys.add(buildNodeKey(match[1], match[2]))
+  }
+
+  return Array.from(nodeKeys)
 }
 
 export function toEasternDateKey(value: Date = new Date()): string {
@@ -156,9 +184,16 @@ export const STALENESS_COLORS: Record<string, string> = {
   no_data: '#475569'
 }
 
+const NEUTRAL_CELL_BACKGROUND = 'rgba(15, 23, 42, 0.72)'
+
 export function interpolateColor(low: number[], high: number[], t: number) {
   const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
   return `rgb(${mix(low[0], high[0])}, ${mix(low[1], high[1])}, ${mix(low[2], high[2])})`
+}
+
+function interpolateRgbaColor(low: number[], high: number[], t: number, alpha = 0.96) {
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
+  return `rgba(${mix(low[0], high[0])}, ${mix(low[1], high[1])}, ${mix(low[2], high[2])}, ${alpha})`
 }
 
 export function getHeatColor(value: number, min: number, max: number) {
@@ -179,12 +214,97 @@ export function getConfidenceColor(value: number) {
   return interpolateColor([30, 41, 59], [14, 165, 233], clamp(value / 100, 0, 1))
 }
 
-export function getUnifiedCellBackground(value: number | null, min: number, max: number) {
-  if (value === null || !Number.isFinite(value)) return 'rgba(15, 23, 42, 0.6)'
+function getSequentialHeatmapColor(
+  value: number | null,
+  min: number,
+  max: number,
+  lowColor: number[],
+  highColor: number[],
+  inverted: boolean
+) {
+  if (value === null || !Number.isFinite(value)) return NEUTRAL_CELL_BACKGROUND
   const ratio = max > min ? (value - min) / (max - min) : 0.5
   const t = clamp(ratio, 0, 1)
-  const r = Math.round(17 + (74 - 17) * t)
-  const g = Math.round(24 + (56 - 24) * t)
-  const b = Math.round(39 + (32 - 39) * t)
-  return `rgba(${r}, ${g}, ${b}, 0.96)`
+  return interpolateRgbaColor(
+    inverted ? highColor : lowColor,
+    inverted ? lowColor : highColor,
+    t
+  )
+}
+
+function getDivergingHeatmapColor(
+  value: number | null,
+  maxAbs: number,
+  negativeColor: number[],
+  positiveColor: number[],
+  inverted: boolean
+) {
+  if (value === null || !Number.isFinite(value)) return NEUTRAL_CELL_BACKGROUND
+  const ratio = maxAbs > 0 ? Math.abs(value) / maxAbs : 0
+  const t = clamp(ratio, 0, 1)
+  const accentColor =
+    value >= 0
+      ? inverted
+        ? negativeColor
+        : positiveColor
+      : inverted
+        ? positiveColor
+        : negativeColor
+  return interpolateRgbaColor([15, 23, 42], accentColor, t)
+}
+
+export function getUnifiedCellBackground(
+  cell: VolGridCell,
+  heatmap: VolGridHeatmapConfig,
+  range: VolGridHeatmapRange,
+  highlightedNodeKeys: ReadonlySet<string> = new Set()
+) {
+  switch (heatmap.strategy) {
+    case 'none':
+      return NEUTRAL_CELL_BACKGROUND
+    case 'absolute':
+      return heatmap.metric === 'premium'
+        ? getSequentialHeatmapColor(
+            cell.atmfPremiumBps,
+            range.premiumMin,
+            range.premiumMax,
+            [8, 47, 73],
+            [14, 165, 164],
+            heatmap.inverted
+          )
+        : getSequentialHeatmapColor(
+            cell.atmfVol,
+            range.volMin,
+            range.volMax,
+            [16, 28, 49],
+            [180, 83, 9],
+            heatmap.inverted
+          )
+    case 'delta':
+      return heatmap.metric === 'premium'
+        ? getDivergingHeatmapColor(
+            cell.atmfPremiumBpsChange,
+            range.premiumChangeMaxAbs,
+            [37, 99, 235],
+            [217, 70, 239],
+            heatmap.inverted
+          )
+        : getDivergingHeatmapColor(
+            cell.atmfVolChange,
+            range.volChangeMaxAbs,
+            [20, 184, 166],
+            [249, 115, 22],
+            heatmap.inverted
+          )
+    case 'custom': {
+      if (!highlightedNodeKeys.size) return NEUTRAL_CELL_BACKGROUND
+      const isTargeted = highlightedNodeKeys.has(cell.nodeKey)
+      const shouldHighlight = heatmap.inverted ? !isTargeted : isTargeted
+      return shouldHighlight
+        ? 'rgba(250, 204, 21, 0.28)'
+        : 'rgba(10, 17, 30, 0.86)'
+    }
+    default:
+      return NEUTRAL_CELL_BACKGROUND
+  }
 }

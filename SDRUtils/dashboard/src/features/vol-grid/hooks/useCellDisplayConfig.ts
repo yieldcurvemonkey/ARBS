@@ -1,15 +1,25 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type {
   CellDisplayConfig,
   CellDisplayField,
   LastTradedLevelField,
-  VolGridChangeMetric
+  VolGridChangeMetric,
+  VolGridHeatmapMetric,
+  VolGridHeatmapStrategy
 } from '../types'
 import { DEFAULT_CELL_DISPLAY_CONFIG } from '../types'
 
 const STORAGE_KEY = 'vol-grid-cell-display-config'
+
+function persistConfig(config: CellDisplayConfig) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
+  } catch {
+    /* no-op */
+  }
+}
 
 function loadConfig(): CellDisplayConfig {
   try {
@@ -25,6 +35,18 @@ function loadConfig(): CellDisplayConfig {
             field === 'bpvol' || field === 'premiumBps'
         )
       : DEFAULT_CELL_DISPLAY_CONFIG.lastTradedLevelFields
+    const parsedHeatmap = parsed.heatmap
+    const strategy =
+      parsedHeatmap?.strategy === 'absolute' ||
+      parsedHeatmap?.strategy === 'delta' ||
+      parsedHeatmap?.strategy === 'custom' ||
+      parsedHeatmap?.strategy === 'none'
+        ? parsedHeatmap.strategy
+        : DEFAULT_CELL_DISPLAY_CONFIG.heatmap.strategy
+    const metric =
+      parsedHeatmap?.metric === 'vol' || parsedHeatmap?.metric === 'premium'
+        ? parsedHeatmap.metric
+        : DEFAULT_CELL_DISPLAY_CONFIG.heatmap.metric
 
     return {
       visibleFields: parsed.visibleFields,
@@ -34,7 +56,19 @@ function loadConfig(): CellDisplayConfig {
           : DEFAULT_CELL_DISPLAY_CONFIG.changeMetric,
       lastTradedLevelFields: lastTradedLevelFields.length
         ? lastTradedLevelFields
-        : DEFAULT_CELL_DISPLAY_CONFIG.lastTradedLevelFields
+        : DEFAULT_CELL_DISPLAY_CONFIG.lastTradedLevelFields,
+      heatmap: {
+        strategy,
+        metric,
+        inverted:
+          typeof parsedHeatmap?.inverted === 'boolean'
+            ? parsedHeatmap.inverted
+            : DEFAULT_CELL_DISPLAY_CONFIG.heatmap.inverted,
+        customTargets:
+          typeof parsedHeatmap?.customTargets === 'string'
+            ? parsedHeatmap.customTargets
+            : DEFAULT_CELL_DISPLAY_CONFIG.heatmap.customTargets
+      }
     }
   } catch {
     return DEFAULT_CELL_DISPLAY_CONFIG
@@ -42,7 +76,11 @@ function loadConfig(): CellDisplayConfig {
 }
 
 export function useCellDisplayConfig() {
-  const [config, setConfig] = useState<CellDisplayConfig>(loadConfig)
+  const [config, setConfig] = useState<CellDisplayConfig>(DEFAULT_CELL_DISPLAY_CONFIG)
+
+  useEffect(() => {
+    setConfig(loadConfig())
+  }, [])
 
   const toggleField = useCallback((field: CellDisplayField) => {
     setConfig((prev) => {
@@ -53,22 +91,23 @@ export function useCellDisplayConfig() {
           ? prev.visibleFields.filter((f) => f !== field)
           : [...prev.visibleFields, field],
         changeMetric: prev.changeMetric,
-        lastTradedLevelFields: prev.lastTradedLevelFields
+        lastTradedLevelFields: prev.lastTradedLevelFields,
+        heatmap: prev.heatmap
       }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      persistConfig(next)
       return next
     })
   }, [])
 
   const resetToDefaults = useCallback(() => {
     setConfig(DEFAULT_CELL_DISPLAY_CONFIG)
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_CELL_DISPLAY_CONFIG))
+    persistConfig(DEFAULT_CELL_DISPLAY_CONFIG)
   }, [])
 
   const setChangeMetric = useCallback((changeMetric: VolGridChangeMetric) => {
     setConfig((prev) => {
       const next: CellDisplayConfig = { ...prev, changeMetric }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      persistConfig(next)
       return next
     })
   }, [])
@@ -86,7 +125,63 @@ export function useCellDisplayConfig() {
           ? prev.lastTradedLevelFields.filter((entry) => entry !== field)
           : [...prev.lastTradedLevelFields, field]
       }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      persistConfig(next)
+      return next
+    })
+  }, [])
+
+  const setHeatmapStrategy = useCallback((strategy: VolGridHeatmapStrategy) => {
+    setConfig((prev) => {
+      const next: CellDisplayConfig = {
+        ...prev,
+        heatmap: {
+          ...prev.heatmap,
+          strategy
+        }
+      }
+      persistConfig(next)
+      return next
+    })
+  }, [])
+
+  const setHeatmapMetric = useCallback((metric: VolGridHeatmapMetric) => {
+    setConfig((prev) => {
+      const next: CellDisplayConfig = {
+        ...prev,
+        heatmap: {
+          ...prev.heatmap,
+          metric
+        }
+      }
+      persistConfig(next)
+      return next
+    })
+  }, [])
+
+  const toggleHeatmapInversion = useCallback(() => {
+    setConfig((prev) => {
+      const next: CellDisplayConfig = {
+        ...prev,
+        heatmap: {
+          ...prev.heatmap,
+          inverted: !prev.heatmap.inverted
+        }
+      }
+      persistConfig(next)
+      return next
+    })
+  }, [])
+
+  const setHeatmapCustomTargets = useCallback((customTargets: string) => {
+    setConfig((prev) => {
+      const next: CellDisplayConfig = {
+        ...prev,
+        heatmap: {
+          ...prev.heatmap,
+          customTargets
+        }
+      }
+      persistConfig(next)
       return next
     })
   }, [])
@@ -96,6 +191,10 @@ export function useCellDisplayConfig() {
     toggleField,
     setChangeMetric,
     toggleLastTradedLevelField,
+    setHeatmapStrategy,
+    setHeatmapMetric,
+    toggleHeatmapInversion,
+    setHeatmapCustomTargets,
     resetToDefaults
   }
 }

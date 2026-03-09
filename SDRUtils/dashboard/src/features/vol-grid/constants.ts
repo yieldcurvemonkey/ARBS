@@ -11,7 +11,10 @@ export const CORE_EXPIRY_POINTS = [
   { label: '2Y', years: 2 },
   { label: '3Y', years: 3 },
   { label: '5Y', years: 5 },
-  { label: '10Y', years: 10 }
+  { label: '7Y', years: 7 },
+  { label: '10Y', years: 10 },
+  { label: '15Y', years: 15 },
+  { label: '20Y', years: 20 }
 ] as const
 
 export const CORE_TENOR_POINTS = [
@@ -24,8 +27,7 @@ export const CORE_TENOR_POINTS = [
 ] as const
 
 export const EXPIRY_POINTS = [
-  ...CORE_EXPIRY_POINTS,
-  { label: '20Y', years: 20 }
+  ...CORE_EXPIRY_POINTS
 ] as const
 
 export const TENOR_POINTS = [

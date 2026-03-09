@@ -10,6 +10,7 @@ The pipeline is split into three modes:
 from __future__ import annotations
 
 import argparse
+import bisect
 import datetime as dt
 import json
 import math
@@ -23,6 +24,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import QuantLib as ql
+from scipy.interpolate import griddata
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from tqdm import tqdm
@@ -49,6 +51,7 @@ EOD_HISTORY_TABLE = "arbs_atmf_grid_eod_history_v1"
 PCA_MODELS_TABLE = "arbs_atmf_grid_pca_models_v1"
 SNAPSHOTS_TABLE = "arbs_live_atmf_grid_snapshots_v1"
 OBSERVATIONS_TABLE = "arbs_live_atmf_grid_observations_v1"
+MANUAL_STRADDLES_TABLE = "arbs_swaption_manual_straddles_v1"
 
 DEFAULT_CURVE_NAME = "USD-SOFR-1D"
 DEFAULT_SURFACE_TYPE = "atmf_normal"
@@ -60,10 +63,18 @@ DEFAULT_BASE_NOISE_BPVOL = 0.5
 DEFAULT_TENOR_WEIGHT = 0.7
 DEFAULT_INTERVAL_SECONDS = 60
 DEFAULT_PREMIUM_NOTIONAL = 100_000_000.0
+DIRECT_OBSERVATION_ANCHOR_MIN_WEIGHT = 0.95
+DIRECT_ANCHOR_PROPAGATION_LENGTH_SCALE = 0.7
+DIRECT_ANCHOR_PROPAGATION_PRIOR_WEIGHT = 1.0
 ET_ZONE = ZoneInfo("America/New_York")
 MARKET_CLOSE_HOUR_ET = 17
 IDB_MIC_CODES = {"BGCD", "ISWV", "TPSE"}
 ACTION_ALLOWLIST = ("NEWT", "MODI", "CORR")
+STRADDLE_STYLE = "EURO VANILLA PHYS"
+STRADDLE_SPLIT_FACTOR = 0.5
+ASSUMED_STRADDLE_MAX_STRIKE_OFFSET_BPS = 3.0
+ASSUMED_STRADDLE_MIN_RATIO_TO_REFERENCE = 1.45
+ASSUMED_STRADDLE_MAX_RATIO_TO_REFERENCE = 2.95
 
 SNAPSHOT_KIND_INTRADAY = "intraday"
 SNAPSHOT_KIND_CLOSE_PCA = "close_pca"
@@ -216,17 +227,30 @@ class StraddleObservation:
     staleness_weight: float = 1.0
     age_minutes: float = 0.0
     delta_bpvol: float | None = None
+    grid_weights: dict[str, float] | None = None
+    is_inferred_incomplete: bool = False
+    inferred_reason: str | None = None
+    source_package_type: str | None = None
+    is_manual_straddle: bool = False
 
     def to_trade_metadata(self) -> dict[str, Any]:
-        return {
+        meta: dict[str, Any] = {
             "forward_label": self.forward_label,
             "tenor_label": self.tenor_label,
             "forward_years": self.forward_years,
             "tenor_years": self.tenor_years,
+            "source_package_type": self.source_package_type,
+            "is_inferred_incomplete_straddle": self.is_inferred_incomplete,
+            "inferred_reason": self.inferred_reason,
+            "is_manual_straddle": self.is_manual_straddle,
         }
+        if self.grid_weights is not None:
+            meta["grid_weights"] = self.grid_weights
+            meta["weight_concentration"] = max(self.grid_weights.values()) if self.grid_weights else 1.0
+        return meta
 
     def to_calibration_observation(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "packageId": self.package_id,
             "executionTimestamp": int(self.execution_timestamp.timestamp() * 1000),
             "platform": self.platform_identifier,
@@ -244,6 +268,9 @@ class StraddleObservation:
             "stalenessWeight": self.staleness_weight,
             "deltaBpvol": self.delta_bpvol,
         }
+        if self.grid_weights is not None:
+            result["gridWeights"] = self.grid_weights
+        return result
 
 
 @dataclass(frozen=True)
@@ -348,6 +375,73 @@ def _parse_optional_float(value: Any) -> float | None:
     return parsed
 
 
+def _interpolate_surface_matrix(vol_matrix: np.ndarray) -> np.ndarray:
+    if not np.isnan(vol_matrix).any():
+        return vol_matrix
+
+    expiry_years = np.array([_label_to_years(label) for label in EXPIRY_LABELS], dtype=float)
+    tail_years = np.array([_label_to_years(label) for label in TAIL_LABELS], dtype=float)
+    log_expiry = np.log(expiry_years)
+    log_tail = np.log(tail_years)
+
+    known_mask = ~np.isnan(vol_matrix)
+    known_values = vol_matrix[known_mask]
+    if len(known_values) == 0:
+        raise ValueError("Surface grid is missing all core nodes.")
+
+    known_points = np.array(
+        [
+            (log_expiry[i], log_tail[j])
+            for i in range(len(EXPIRY_LABELS))
+            for j in range(len(TAIL_LABELS))
+            if known_mask[i, j]
+        ],
+        dtype=float,
+    )
+    grid_expiry, grid_tail = np.meshgrid(log_expiry, log_tail, indexing="ij")
+
+    def _run_griddata(method: str) -> np.ndarray:
+        try:
+            return griddata(
+                known_points,
+                known_values,
+                (grid_expiry, grid_tail),
+                method=method,
+            )
+        except Exception:
+            return np.full_like(vol_matrix, np.nan, dtype=float)
+
+    cubic = _run_griddata("cubic")
+    linear = _run_griddata("linear")
+    filled = np.where(np.isnan(cubic), linear, cubic)
+
+    # Final fallback to nearest-neighbor when cubic/linear cannot cover boundaries.
+    nearest = _run_griddata("nearest")
+    filled = np.where(np.isnan(filled), nearest, filled)
+    return np.where(np.isnan(vol_matrix), filled, vol_matrix)
+
+
+def _complete_surface_grid(grid_data: Mapping[str, Any]) -> dict[str, float]:
+    vol_matrix = np.full((len(EXPIRY_LABELS), len(TAIL_LABELS)), np.nan, dtype=float)
+    for expiry_index, expiry_label in enumerate(EXPIRY_LABELS):
+        for tail_index, tail_label in enumerate(TAIL_LABELS):
+            node_key = f"{expiry_label}_{tail_label}"
+            bpvol = _parse_optional_float(grid_data.get(node_key))
+            if bpvol is not None:
+                vol_matrix[expiry_index, tail_index] = float(bpvol)
+
+    completed = _interpolate_surface_matrix(vol_matrix)
+    out: dict[str, float] = {}
+    for expiry_index, expiry_label in enumerate(EXPIRY_LABELS):
+        for tail_index, tail_label in enumerate(TAIL_LABELS):
+            node_key = f"{expiry_label}_{tail_label}"
+            value = completed[expiry_index, tail_index]
+            if not np.isfinite(value):
+                raise ValueError(f"Missing bpvol for swaption node {node_key}")
+            out[node_key] = float(value)
+    return out
+
+
 def _extract_metric_number(metrics: Any, key: str) -> float | None:
     if not isinstance(metrics, Mapping) or key not in metrics:
         return None
@@ -383,6 +477,18 @@ def _now_et() -> dt.datetime:
     return dt.datetime.now(tz=ET_ZONE)
 
 
+def _log_status(message: str, *, level: str = "INFO") -> None:
+    timestamp = _now_et().isoformat()
+    tqdm.write(f"[{timestamp}] [{level}] {message}")
+
+
+def _format_date_span(dates: Iterable[dt.date]) -> str:
+    ordered = sorted(set(dates))
+    if not ordered:
+        return "empty"
+    return f"{ordered[0].isoformat()} -> {ordered[-1].isoformat()} ({len(ordered)} dates)"
+
+
 def _current_trade_date() -> dt.date:
     return _now_et().date()
 
@@ -415,6 +521,438 @@ def _build_trade_label(forward_label: str | None, tenor_label: str | None) -> st
     return f"{forward}x{tenor}"
 
 
+def _normalize_package_type(package_type: Any) -> str:
+    if package_type is None:
+        return ""
+    return str(package_type).strip().upper().replace("-", "_")
+
+
+def _row_package_metrics(row: Mapping[str, Any]) -> Mapping[str, Any]:
+    metrics = row.get("package_metrics")
+    return metrics if isinstance(metrics, Mapping) else {}
+
+
+def _row_legs(row: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    legs = row.get("legs_json")
+    if not isinstance(legs, list):
+        return []
+    return [leg for leg in legs if isinstance(leg, Mapping)]
+
+
+def _leg_metrics(leg: Mapping[str, Any]) -> Mapping[str, Any]:
+    metrics = leg.get("leg_metrics")
+    return metrics if isinstance(metrics, Mapping) else {}
+
+
+def _resolve_platform_identifier(row: Mapping[str, Any]) -> str | None:
+    platform_identifier = row.get("platform_identifier")
+    if platform_identifier:
+        return str(platform_identifier)
+
+    for leg in _row_legs(row):
+        metrics = _leg_metrics(leg)
+        for key in ("platform_identifier", "platform", "mic"):
+            value = metrics.get(key)
+            if value:
+                return str(value)
+        for key in ("platform_identifier", "platform"):
+            value = leg.get(key)
+            if value:
+                return str(value)
+
+    metrics = _row_package_metrics(row)
+    for key in ("platform_identifier", "platform", "mic"):
+        value = metrics.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _is_manual_package_row(row: Mapping[str, Any]) -> bool:
+    if row.get("manual_link_id"):
+        return True
+    package_source = row.get("package_source")
+    if package_source is None:
+        return False
+    return str(package_source).strip().upper() in {"MANUAL", "HYBRID"}
+
+
+def _extract_leg_direction(leg: Mapping[str, Any]) -> str | None:
+    raw = f"{leg.get('product_type') or ''} {leg.get('trade_label') or ''}".upper()
+    if "PAYER" in raw:
+        return "PAYER"
+    if "RECEIVER" in raw:
+        return "RECEIVER"
+    return None
+
+
+def _is_straddle_style_leg(leg: Mapping[str, Any]) -> bool:
+    raw = f"{leg.get('trade_label') or ''} {leg.get('product_type') or ''}".upper()
+    return STRADDLE_STYLE in raw
+
+
+def _is_atm_outright_leg(leg: Mapping[str, Any]) -> bool:
+    metrics = _leg_metrics(leg)
+    moneyness = str(metrics.get("outright_moneyness") or "").strip().upper()
+    if moneyness in {"ATM", "ATMF"}:
+        return True
+    rounded_offset = _extract_metric_number(metrics, "outright_strike_offset_rounded_bps")
+    if rounded_offset is not None:
+        return abs(rounded_offset) <= ASSUMED_STRADDLE_MAX_STRIKE_OFFSET_BPS
+    raw_offset = _extract_metric_number(metrics, "outright_strike_offset_bps")
+    if raw_offset is not None:
+        return abs(raw_offset) <= ASSUMED_STRADDLE_MAX_STRIKE_OFFSET_BPS
+    return False
+
+
+def _date_key(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        value = value.to_pydatetime()
+    if isinstance(value, dt.datetime):
+        return value.date().isoformat()
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    try:
+        return pd.Timestamp(value).date().isoformat()
+    except Exception:
+        return None
+
+
+def _resolve_row_forward_years(row: Mapping[str, Any]) -> float | None:
+    forward_years = _parse_optional_float(row.get("forward_start_years"))
+    if forward_years is not None:
+        return forward_years
+    forward_label = row.get("forward_label")
+    if not forward_label:
+        return None
+    try:
+        return _label_to_years(str(forward_label))
+    except ValueError:
+        return None
+
+
+def _resolve_row_tenor_years(row: Mapping[str, Any]) -> float | None:
+    tenor_years = _parse_optional_float(row.get("tenor_years"))
+    if tenor_years is not None:
+        return tenor_years
+    tenor_label = row.get("tenor_label")
+    if not tenor_label:
+        return None
+    try:
+        return _label_to_years(str(tenor_label))
+    except ValueError:
+        return None
+
+
+def _resolve_row_series_key(row: Mapping[str, Any]) -> str | None:
+    forward_label = row.get("forward_label")
+    tenor_label = row.get("tenor_label")
+    if not forward_label or not tenor_label:
+        return None
+    return f"{str(forward_label).strip().lower()}x{str(tenor_label).strip().lower()}"
+
+
+def _resolve_row_notional(
+    row: Mapping[str, Any],
+    *,
+    treat_as_straddle: bool,
+) -> float | None:
+    legs = _row_legs(row)
+    if treat_as_straddle and legs:
+        leg_notional = _parse_optional_float(legs[0].get("notional"))
+        if leg_notional is not None:
+            return leg_notional
+    total_notional = _parse_optional_float(row.get("total_notional"))
+    if total_notional is not None:
+        return total_notional
+    if legs:
+        return _parse_optional_float(legs[0].get("notional"))
+    return None
+
+
+def _resolve_display_notional(row: Mapping[str, Any]) -> float | None:
+    return _resolve_row_notional(
+        row,
+        treat_as_straddle=_normalize_package_type(row.get("package_type")) == "STRADDLE",
+    )
+
+
+def _resolve_row_straddle_bpvol(
+    row: Mapping[str, Any],
+    *,
+    assumed_incomplete: bool,
+) -> float | None:
+    metrics = _row_package_metrics(row)
+    direct_value = _extract_metric_number(metrics, "straddle_bpvol_yr")
+    if direct_value is not None:
+        return direct_value
+
+    legs = _row_legs(row)
+    if legs:
+        leg_value = _extract_metric_number(_leg_metrics(legs[0]), "straddle_bpvol_yr")
+        if leg_value is not None:
+            return leg_value
+
+    if assumed_incomplete and legs:
+        outright_bpvol = _extract_metric_number(_leg_metrics(legs[0]), "outright_bpvol_yr")
+        if outright_bpvol is not None:
+            return outright_bpvol * STRADDLE_SPLIT_FACTOR
+    return None
+
+
+def _resolve_row_straddle_premium(row: Mapping[str, Any]) -> float | None:
+    total: float | None = None
+    for leg in _row_legs(row):
+        premium_value = _parse_optional_float(leg.get("premium"))
+        if premium_value is None:
+            continue
+        premium_value *= STRADDLE_SPLIT_FACTOR
+        total = premium_value if total is None else total + premium_value
+    if total is not None:
+        return total
+    return _parse_optional_float(row.get("total_premium"))
+
+
+def _build_incomplete_straddle_signature(row: Mapping[str, Any]) -> str | None:
+    series_key = _resolve_row_series_key(row)
+    if not series_key:
+        return None
+    notional = _resolve_display_notional(row)
+    if notional is None or not math.isfinite(notional) or notional == 0:
+        return None
+    notional_bucket_mm = round(abs(notional) / 1_000_000.0)
+    return "|".join(
+        [
+            _date_key(row.get("execution_start")) or _date_key(row.get("as_of_date")) or "",
+            _date_key(row.get("expiration_date")) or "",
+            _date_key(row.get("underlying_expiration_date")) or "",
+            series_key,
+            str(notional_bucket_mm),
+        ]
+    )
+
+
+def _fallback_assumed_straddle_min_bpvol(forward_years: float | None) -> float:
+    if forward_years is None:
+        return 120.0
+    if forward_years <= 0.5:
+        return 130.0
+    if forward_years <= 1.0:
+        return 125.0
+    if forward_years <= 2.0:
+        return 120.0
+    if forward_years <= 5.0:
+        return 112.0
+    if forward_years <= 10.0:
+        return 100.0
+    return 90.0
+
+
+def _build_assumed_straddle_reason(
+    row: Mapping[str, Any],
+    *,
+    recent_reference_bpvol: float | None,
+    baseline_bpvol: float | None,
+) -> str | None:
+    if _normalize_package_type(row.get("package_type")) != "OUTRIGHT":
+        return None
+    if _is_manual_package_row(row):
+        return None
+    if _classify_platform(_resolve_platform_identifier(row)) != "idb":
+        return None
+
+    legs = _row_legs(row)
+    if len(legs) != 1:
+        return None
+    leg = legs[0]
+    if not _is_atm_outright_leg(leg) or not _is_straddle_style_leg(leg):
+        return None
+    if _extract_leg_direction(leg) is None:
+        return None
+
+    outright_bpvol = _extract_metric_number(_leg_metrics(leg), "outright_bpvol_yr")
+    if outright_bpvol is None or not math.isfinite(outright_bpvol) or outright_bpvol <= 0:
+        return None
+
+    series_key = _resolve_row_series_key(row) or "--"
+    if recent_reference_bpvol is not None and recent_reference_bpvol > 0:
+        ratio = outright_bpvol / recent_reference_bpvol
+        if ASSUMED_STRADDLE_MIN_RATIO_TO_REFERENCE <= ratio <= ASSUMED_STRADDLE_MAX_RATIO_TO_REFERENCE:
+            return (
+                f"IDB ATM outright bpvol ({outright_bpvol:.3f}) is {ratio:.2f}x the most recent "
+                f"{series_key} straddle bpvol ({recent_reference_bpvol:.3f}); flagged as intraday "
+                "incomplete straddle."
+            )
+
+    if baseline_bpvol is not None and baseline_bpvol > 0:
+        ratio = outright_bpvol / baseline_bpvol
+        if ASSUMED_STRADDLE_MIN_RATIO_TO_REFERENCE <= ratio <= ASSUMED_STRADDLE_MAX_RATIO_TO_REFERENCE:
+            return (
+                f"IDB ATM outright bpvol ({outright_bpvol:.3f}) is {ratio:.2f}x the "
+                f"{series_key} straddle baseline ({baseline_bpvol:.3f}); flagged as intraday "
+                "incomplete straddle."
+            )
+
+    fallback_threshold = _fallback_assumed_straddle_min_bpvol(_resolve_row_forward_years(row))
+    if outright_bpvol >= fallback_threshold:
+        return (
+            f"IDB ATM outright bpvol ({outright_bpvol:.3f}) exceeds fallback threshold "
+            f"({fallback_threshold:.3f}) with no reliable recent same-structure straddle "
+            "reference; flagged as intraday incomplete straddle."
+        )
+    return None
+
+
+def _build_straddle_observations_from_package_rows(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    manual_straddle_ids: set[str] | None = None,
+) -> list[StraddleObservation]:
+    manual_ids = manual_straddle_ids or set()
+    normalized_rows = [dict(row) for row in rows]
+
+    complete_signatures: set[str] = set()
+    signature_directions: dict[str, set[str]] = {}
+    recent_straddle_by_series: dict[str, tuple[float, float]] = {}
+    baseline_samples: dict[str, list[float]] = {}
+
+    for row in normalized_rows:
+        package_type = _normalize_package_type(row.get("package_type"))
+        signature = _build_incomplete_straddle_signature(row)
+        if package_type == "STRADDLE":
+            if signature:
+                complete_signatures.add(signature)
+            series_key = _resolve_row_series_key(row)
+            bpvol = _resolve_row_straddle_bpvol(row, assumed_incomplete=False)
+            if series_key and bpvol is not None and math.isfinite(bpvol) and bpvol > 0:
+                execution_timestamp = row.get("execution_start")
+                if isinstance(execution_timestamp, pd.Timestamp):
+                    execution_timestamp = execution_timestamp.to_pydatetime()
+                timestamp_value = (
+                    execution_timestamp.timestamp()
+                    if isinstance(execution_timestamp, dt.datetime)
+                    else 0.0
+                )
+                current = recent_straddle_by_series.get(series_key)
+                if current is None or timestamp_value >= current[1]:
+                    recent_straddle_by_series[series_key] = (bpvol, timestamp_value)
+                baseline_samples.setdefault(series_key, []).append(bpvol)
+            continue
+
+        if package_type != "OUTRIGHT":
+            continue
+        if _is_manual_package_row(row):
+            continue
+        if _classify_platform(_resolve_platform_identifier(row)) != "idb":
+            continue
+
+        legs = _row_legs(row)
+        if len(legs) != 1:
+            continue
+        leg = legs[0]
+        if not _is_atm_outright_leg(leg) or not _is_straddle_style_leg(leg):
+            continue
+        if not signature:
+            continue
+        direction = _extract_leg_direction(leg)
+        if direction is None:
+            continue
+        signature_directions.setdefault(signature, set()).add(direction)
+
+    baseline_by_series = {
+        series_key: float(np.median(samples))
+        for series_key, samples in baseline_samples.items()
+        if samples
+    }
+
+    observations: list[StraddleObservation] = []
+    for row in normalized_rows:
+        package_type = _normalize_package_type(row.get("package_type"))
+        package_id = str(row.get("package_id") or "")
+        is_manual_straddle = package_id in manual_ids
+        assumed_incomplete = False
+        inferred_reason: str | None = None
+
+        if package_type != "STRADDLE":
+            if is_manual_straddle:
+                assumed_incomplete = True
+                inferred_reason = (
+                    "Manually marked as intraday incomplete straddle from the trade-selection toolbar."
+                )
+            else:
+                signature = _build_incomplete_straddle_signature(row)
+                directions = signature_directions.get(signature or "", set())
+                if (
+                    signature
+                    and signature not in complete_signatures
+                    and len(directions) <= 1
+                ):
+                    series_key = _resolve_row_series_key(row)
+                    recent_reference = (
+                        recent_straddle_by_series.get(series_key, (None, 0.0))[0]
+                        if series_key
+                        else None
+                    )
+                    baseline = baseline_by_series.get(series_key) if series_key else None
+                    inferred_reason = _build_assumed_straddle_reason(
+                        row,
+                        recent_reference_bpvol=recent_reference,
+                        baseline_bpvol=baseline,
+                    )
+                    assumed_incomplete = inferred_reason is not None
+
+        if package_type != "STRADDLE" and not assumed_incomplete:
+            continue
+
+        observed_bpvol = _resolve_row_straddle_bpvol(
+            row,
+            assumed_incomplete=assumed_incomplete,
+        )
+        if observed_bpvol is None or not math.isfinite(observed_bpvol):
+            continue
+
+        execution_timestamp = row.get("execution_start")
+        if isinstance(execution_timestamp, pd.Timestamp):
+            execution_timestamp = execution_timestamp.to_pydatetime()
+        if execution_timestamp is None:
+            continue
+        if not isinstance(execution_timestamp, dt.datetime):
+            execution_timestamp = pd.Timestamp(execution_timestamp).to_pydatetime()
+        if execution_timestamp.tzinfo is None:
+            execution_timestamp = execution_timestamp.replace(tzinfo=dt.timezone.utc)
+
+        forward_label = row.get("forward_label")
+        tenor_label = row.get("tenor_label")
+        observations.append(
+            StraddleObservation(
+                package_id=package_id,
+                execution_timestamp=execution_timestamp,
+                forward_label=str(forward_label).lower() if forward_label else None,
+                tenor_label=str(tenor_label).lower() if tenor_label else None,
+                forward_years=_resolve_row_forward_years(row),
+                tenor_years=_resolve_row_tenor_years(row),
+                observed_bpvol=float(observed_bpvol),
+                premium=_resolve_row_straddle_premium(row),
+                notional=_resolve_row_notional(row, treat_as_straddle=True),
+                platform_identifier=_resolve_platform_identifier(row),
+                platform_type=_classify_platform(_resolve_platform_identifier(row)),
+                event_action=(str(row.get("event_action")) if row.get("event_action") else None),
+                trade_label=_build_trade_label(
+                    str(forward_label) if forward_label else None,
+                    str(tenor_label) if tenor_label else None,
+                ),
+                is_inferred_incomplete=assumed_incomplete,
+                inferred_reason=inferred_reason,
+                source_package_type=package_type or None,
+                is_manual_straddle=is_manual_straddle,
+            )
+        )
+
+    return observations
+
+
 def _grid_distance(
     forward_years: float,
     tenor_years: float,
@@ -442,6 +980,57 @@ def _nearest_node(
     if best_node is None or best_distance is None:
         raise ValueError("Unable to map observation to a grid node.")
     return best_node, best_distance
+
+
+def _compute_bilinear_weights(
+    forward_years: float,
+    tenor_years: float,
+    nodes: list[GridNode],
+) -> dict[str, float]:
+    """Compute bilinear interpolation weights in log-space for an off-grid observation.
+
+    Returns a dict ``{node_key: weight}`` with 1-4 non-zero entries that sum to 1.
+    When the observation falls exactly on a grid node the dict contains a single
+    entry with weight 1.0 (reproducing nearest-node behaviour).
+    """
+    expiry_set = sorted({n.expiry_years for n in nodes})
+    tenor_set = sorted({n.tenor_years for n in nodes})
+    node_map: dict[tuple[float, float], GridNode] = {
+        (n.expiry_years, n.tenor_years): n for n in nodes
+    }
+
+    # Bracket along the expiry axis
+    e_idx = bisect.bisect_right(expiry_set, forward_years) - 1
+    e_idx = max(0, min(e_idx, len(expiry_set) - 2))
+    e_lo, e_hi = expiry_set[e_idx], expiry_set[e_idx + 1]
+
+    # Bracket along the tenor axis
+    t_idx = bisect.bisect_right(tenor_set, tenor_years) - 1
+    t_idx = max(0, min(t_idx, len(tenor_set) - 2))
+    t_lo, t_hi = tenor_set[t_idx], tenor_set[t_idx + 1]
+
+    # Log-space interpolation fractions, clamped to [0, 1] for boundary safety
+    log_e_span = math.log(e_hi) - math.log(e_lo)
+    s = (math.log(forward_years) - math.log(e_lo)) / log_e_span if log_e_span > 0 else 0.0
+    s = max(0.0, min(1.0, s))
+
+    log_t_span = math.log(t_hi) - math.log(t_lo)
+    r = (math.log(tenor_years) - math.log(t_lo)) / log_t_span if log_t_span > 0 else 0.0
+    r = max(0.0, min(1.0, r))
+
+    weights: dict[str, float] = {}
+    for e_val, t_val, w in [
+        (e_lo, t_lo, (1.0 - s) * (1.0 - r)),
+        (e_lo, t_hi, (1.0 - s) * r),
+        (e_hi, t_lo, s * (1.0 - r)),
+        (e_hi, t_hi, s * r),
+    ]:
+        if w > 1e-10:
+            node = node_map.get((e_val, t_val))
+            if node is not None:
+                weights[node.key] = w
+
+    return weights
 
 
 def get_db_connection_string() -> str:
@@ -509,6 +1098,12 @@ def fetch_eod_grids(
     if not date_list:
         return {}
 
+    _log_status(
+        "Fetching EOD grids for "
+        f"{curve_name}/{surface_type}: {_format_date_span(date_list)} "
+        f"(force_refresh={force_refresh})"
+    )
+
     mdp = IRSwaptionMDP(source="GSQUANT-QL", force_refresh=force_refresh)
     request = {
         "endpoint": "swaption_snapshot",
@@ -520,12 +1115,27 @@ def fetch_eod_grids(
 
     try:
         contexts = mdp.bulk_get_data(request)
-        return {date: _extract_grid_from_context(context) for date, context in contexts.items()}
+        fetched = {date: _extract_grid_from_context(context) for date, context in contexts.items()}
+        _log_status(
+            f"Bulk EOD grid fetch succeeded: {len(fetched)}/{len(date_list)} dates returned"
+        )
+        return fetched
     except Exception as exc:
-        print(f"Bulk GS grid fetch failed, falling back to single-date requests: {exc}")
+        _log_status(
+            "Bulk GS grid fetch failed, falling back to single-date requests: "
+            f"{exc}",
+            level="WARN",
+        )
 
     out: dict[dt.date, dict[str, float]] = {}
-    for date in tqdm(date_list, desc="Fetching GS EOD grids", leave=False):
+    failures: list[tuple[dt.date, str]] = []
+    progress = tqdm(
+        date_list,
+        desc="Fetching GS EOD grids",
+        unit="day",
+        leave=True,
+    )
+    for date in progress:
         try:
             context = mdp.get_data(
                 {
@@ -536,9 +1146,27 @@ def fetch_eod_grids(
                     "ignore_cache": force_refresh,
                 }
             )
-        except Exception:
+        except Exception as exc:
+            failures.append((date, str(exc)))
+            progress.set_postfix_str(f"ok={len(out)}/{len(date_list)} fail={len(failures)}")
             continue
         out[date] = _extract_grid_from_context(context)
+        progress.set_postfix_str(f"ok={len(out)}/{len(date_list)} fail={len(failures)}")
+
+    if failures:
+        sample = ", ".join(
+            f"{date.isoformat()} ({reason})"
+            for date, reason in failures[:3]
+        )
+        extra = "" if len(failures) <= 3 else f", +{len(failures) - 3} more"
+        _log_status(
+            "Single-date EOD fetch skipped "
+            f"{len(failures)} date(s): {sample}{extra}",
+            level="WARN",
+        )
+    _log_status(
+        f"Single-date EOD fetch complete: fetched={len(out)} missing={len(failures)}"
+    )
     return out
 
 
@@ -624,7 +1252,7 @@ def load_eod_history_df(
 
     rows: list[pd.Series] = []
     for _, row in result.iterrows():
-        grid_data = row["grid_data"] or {}
+        grid_data = _complete_surface_grid(row["grid_data"] or {})
         rows.append(pd.Series(grid_data, name=pd.Timestamp(row["as_of_date"])))
 
     df = pd.DataFrame(rows).reindex(columns=SURFACE_NODE_KEYS)
@@ -665,7 +1293,7 @@ def load_latest_eod_grid(
             f"No EOD ATMF grid found for {curve_name} on or before {on_or_before.isoformat()}."
         )
 
-    return row["as_of_date"], {key: float(value) for key, value in (row["grid_data"] or {}).items()}
+    return row["as_of_date"], _complete_surface_grid(row["grid_data"] or {})
 
 
 def load_exact_eod_grid(
@@ -697,7 +1325,7 @@ def load_exact_eod_grid(
 
     if row is None:
         return None
-    return {key: float(value) for key, value in (row["grid_data"] or {}).items()}
+    return _complete_surface_grid(row["grid_data"] or {})
 
 
 def snapshot_exists(
@@ -813,6 +1441,12 @@ def ensure_history_and_model(
 ) -> tuple[SurfacePCAModel, float]:
     start_date = (pd.Timestamp(anchor_eod_date) - pd.tseries.offsets.BDay(lookback_business_days)).date()
     required_dates = _business_dates(start_date, anchor_eod_date)
+    _log_status(
+        "Ensuring EOD history/PCA model for "
+        f"{curve_name}/{surface_type}: anchor={anchor_eod_date.isoformat()} "
+        f"window={start_date.isoformat()} -> {anchor_eod_date.isoformat()} "
+        f"({len(required_dates)} business dates, force_refresh={force_refresh})"
+    )
 
     existing_df = load_eod_history_df(
         engine,
@@ -823,11 +1457,20 @@ def ensure_history_and_model(
     )
     existing_dates = {timestamp.date() for timestamp in existing_df.index}
     missing_dates = [date for date in required_dates if date not in existing_dates]
+    _log_status(
+        f"History availability: existing={len(existing_df)} required={len(required_dates)} "
+        f"missing={len(missing_dates)}"
+    )
 
-    if missing_dates or force_refresh:
+    dates_to_fetch = required_dates if force_refresh else missing_dates
+    if dates_to_fetch:
+        _log_status(
+            "Requesting EOD grids for "
+            f"{_format_date_span(dates_to_fetch)}"
+        )
         fetched = fetch_eod_grids(
             curve_name,
-            missing_dates or required_dates,
+            dates_to_fetch,
             surface_type=surface_type,
             force_refresh=force_refresh,
         )
@@ -839,12 +1482,22 @@ def ensure_history_and_model(
             start_date=start_date,
             end_date=anchor_eod_date,
         )
+        _log_status(
+            f"History refresh complete: fetched={len(fetched)} stored_rows={len(existing_df)}"
+        )
+    else:
+        _log_status("History already complete for requested window")
 
     model = load_pca_model(engine, curve_name, surface_type)
     if model is not None and model.training_end >= anchor_eod_date and not force_refresh:
         total_variance = float(np.sum(model.total_variance))
         explained_ratio = (
             float(np.sum(model.eigenvalues) / total_variance) if total_variance > 0 else 0.0
+        )
+        _log_status(
+            "Reusing PCA model: "
+            f"training={model.training_start.isoformat()} -> {model.training_end.isoformat()} "
+            f"components={model.n_components} explained={explained_ratio:.4f}"
         )
         return model, explained_ratio
 
@@ -853,17 +1506,44 @@ def ensure_history_and_model(
             f"Not enough EOD history to fit PCA model: {len(existing_df)} rows available."
         )
 
+    _log_status(
+        f"Fitting PCA model on {len(existing_df)} EOD grids with {n_components} component(s)"
+    )
     model, _ = fit_surface_pca_from_eod_grids(existing_df, n_components=n_components)
     explained_ratio = store_pca_model(engine, curve_name, surface_type, model)
+    _log_status(
+        "Stored PCA model: "
+        f"training={model.training_start.isoformat()} -> {model.training_end.isoformat()} "
+        f"components={model.n_components} explained={explained_ratio:.4f}"
+    )
     return model, explained_ratio
+
+
+def _manual_straddles_table_exists(engine: Engine) -> bool:
+    sql = text("SELECT to_regclass(:table_name) AS rel")
+    with engine.begin() as conn:
+        row = conn.execute(sql, {"table_name": MANUAL_STRADDLES_TABLE}).mappings().first()
+    return bool(row and row.get("rel"))
 
 
 def fetch_straddle_observations(
     engine: Engine,
     as_of_date: dt.date,
 ) -> list[StraddleObservation]:
+    manual_table_exists = _manual_straddles_table_exists(engine)
+    manual_join = (
+        f"LEFT JOIN {MANUAL_STRADDLES_TABLE} ms ON ms.package_id = p.package_id"
+        if manual_table_exists
+        else ""
+    )
+    manual_select = (
+        "CASE WHEN ms.package_id IS NOT NULL THEN TRUE ELSE FALSE END AS is_manual_straddle"
+        if manual_table_exists
+        else "FALSE AS is_manual_straddle"
+    )
+
     sql = text(
-        """
+        f"""
         WITH leg_rollup AS (
             SELECT
                 l.package_id,
@@ -874,7 +1554,13 @@ def fetch_straddle_observations(
         )
         SELECT
             p.package_id,
+            p.package_type,
+            p.package_source,
+            p.manual_link_id,
+            p.as_of_date,
             p.execution_start,
+            p.expiration_date,
+            p.underlying_expiration_date,
             p.forward_label,
             p.tenor_label,
             p.forward_start_years,
@@ -883,68 +1569,46 @@ def fetch_straddle_observations(
             p.total_premium,
             p.package_metrics,
             lr.platform_identifier,
-            lr.event_action
+            lr.event_action,
+            COALESCE(legs.legs_json, '[]'::jsonb) AS legs_json,
+            {manual_select}
         FROM arbs_swaption_packages_v1 p
         LEFT JOIN leg_rollup lr
           ON lr.package_id = p.package_id
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'trade_id', l.trade_id,
+                    'leg_order', l.leg_order,
+                    'product_type', l.product_type,
+                    'trade_label', l.trade_label,
+                    'notional', l.notional,
+                    'premium', l.premium,
+                    'platform_identifier', l.platform_identifier,
+                    'leg_metrics', l.leg_metrics
+                ) ORDER BY l.leg_order
+            ) AS legs_json
+            FROM arbs_swaption_legs_v1 l
+            WHERE l.package_id = p.package_id
+        ) legs ON TRUE
+        {manual_join}
         WHERE (p.execution_start AT TIME ZONE 'America/New_York')::date = :as_of_date
-          AND upper(replace(coalesce(p.package_type, ''), '-', '_')) = 'STRADDLE'
+          AND upper(replace(coalesce(p.package_type, ''), '-', '_')) IN ('STRADDLE', 'OUTRIGHT')
         ORDER BY p.execution_start ASC
         """
     )
     with engine.begin() as conn:
         rows = conn.execute(sql, {"as_of_date": as_of_date}).mappings().all()
 
-    out: list[StraddleObservation] = []
-    for row in rows:
-        metrics = row["package_metrics"] or {}
-        observed_bpvol = _extract_metric_number(metrics, "straddle_bpvol_yr")
-        if observed_bpvol is None:
-            continue
-
-        execution_timestamp = row["execution_start"]
-        if isinstance(execution_timestamp, pd.Timestamp):
-            execution_timestamp = execution_timestamp.to_pydatetime()
-        if execution_timestamp is None:
-            continue
-        if execution_timestamp.tzinfo is None:
-            execution_timestamp = execution_timestamp.replace(tzinfo=dt.timezone.utc)
-
-        forward_label = row["forward_label"]
-        tenor_label = row["tenor_label"]
-        forward_years = _parse_optional_float(row["forward_start_years"])
-        if forward_years is None and forward_label:
-            try:
-                forward_years = _label_to_years(str(forward_label))
-            except ValueError:
-                forward_years = None
-        tenor_years = _parse_optional_float(row["tenor_years"])
-        if tenor_years is None and tenor_label:
-            try:
-                tenor_years = _label_to_years(str(tenor_label))
-            except ValueError:
-                tenor_years = None
-
-        platform_identifier = row["platform_identifier"]
-        event_action = row["event_action"]
-        out.append(
-            StraddleObservation(
-                package_id=str(row["package_id"]),
-                execution_timestamp=execution_timestamp,
-                forward_label=str(forward_label).lower() if forward_label else None,
-                tenor_label=str(tenor_label).lower() if tenor_label else None,
-                forward_years=forward_years,
-                tenor_years=tenor_years,
-                observed_bpvol=float(observed_bpvol),
-                premium=_parse_optional_float(row["total_premium"]),
-                notional=_parse_optional_float(row["total_notional"]),
-                platform_identifier=platform_identifier,
-                platform_type=_classify_platform(platform_identifier),
-                event_action=event_action,
-                trade_label=_build_trade_label(forward_label, tenor_label),
-            )
-        )
-    return out
+    manual_straddle_ids = {
+        str(row["package_id"])
+        for row in rows
+        if row.get("is_manual_straddle")
+    }
+    return _build_straddle_observations_from_package_rows(
+        rows,
+        manual_straddle_ids=manual_straddle_ids,
+    )
 
 
 def filter_observations_for_preset(
@@ -979,6 +1643,7 @@ def map_observations_to_grid(
     observations: list[StraddleObservation],
     *,
     tenor_weight: float,
+    use_continuous_observations: bool = True,
 ) -> list[StraddleObservation]:
     mapped: list[StraddleObservation] = []
     for observation in observations:
@@ -987,12 +1652,7 @@ def map_observations_to_grid(
         if observation.forward_years <= 0 or observation.tenor_years <= 0:
             continue
 
-        core_node, core_distance = _nearest_node(
-            observation.forward_years,
-            observation.tenor_years,
-            CORE_GRID_NODES,
-            tenor_weight,
-        )
+        # Display grid mapping always uses nearest-node.
         display_node, display_distance = _nearest_node(
             observation.forward_years,
             observation.tenor_years,
@@ -1000,17 +1660,52 @@ def map_observations_to_grid(
             tenor_weight,
         )
 
-        mapped.append(
-            StraddleObservation(
-                **{
-                    **observation.__dict__,
-                    "core_node_key": core_node.key,
-                    "display_node_key": display_node.key,
-                    "mapping_distance": core_distance,
-                    "display_mapping_distance": display_distance,
-                }
+        if use_continuous_observations:
+            # Bilinear interpolation weights across core grid.
+            weights = _compute_bilinear_weights(
+                observation.forward_years,
+                observation.tenor_years,
+                CORE_GRID_NODES,
             )
-        )
+            # Primary node = highest weight (backward-compat with core_node_key).
+            primary_key = max(weights, key=weights.get) if weights else None
+            primary_node, primary_distance = _nearest_node(
+                observation.forward_years,
+                observation.tenor_years,
+                CORE_GRID_NODES,
+                tenor_weight,
+            )
+            mapped.append(
+                StraddleObservation(
+                    **{
+                        **observation.__dict__,
+                        "core_node_key": primary_node.key,
+                        "display_node_key": display_node.key,
+                        "mapping_distance": primary_distance,
+                        "display_mapping_distance": display_distance,
+                        "grid_weights": weights,
+                    }
+                )
+            )
+        else:
+            # Legacy nearest-node path.
+            core_node, core_distance = _nearest_node(
+                observation.forward_years,
+                observation.tenor_years,
+                CORE_GRID_NODES,
+                tenor_weight,
+            )
+            mapped.append(
+                StraddleObservation(
+                    **{
+                        **observation.__dict__,
+                        "core_node_key": core_node.key,
+                        "display_node_key": display_node.key,
+                        "mapping_distance": core_distance,
+                        "display_mapping_distance": display_distance,
+                    }
+                )
+            )
     return mapped
 
 
@@ -1067,6 +1762,68 @@ def aggregate_observations_by_node(
         effective_noise_weights[node_key] = float(effective_noise / max(base_noise_bpvol, 1e-8))
 
     return aggregated_values, effective_noise_weights, node_to_observations
+
+
+def build_observation_operator(
+    observations: list[StraddleObservation],
+    model_columns: list[str],
+    *,
+    base_noise_bpvol: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], dict[str, list[StraddleObservation]]]:
+    """Build the observation operator matrix H for continuous-coordinate observations.
+
+    Returns
+    -------
+    observed_values : ndarray, shape (n_obs,)
+        The bpvol values of each observation.
+    noise_weights : ndarray, shape (n_obs,)
+        Per-observation staleness weights (fed to ``conditional_mvn_update``
+        as ``staleness_weights``).
+    H : ndarray, shape (n_obs, n_grid)
+        Observation operator matrix -- each row maps one trade to its weighted
+        combination of core grid nodes via bilinear interpolation.
+    observation_labels : list[str]
+        Human-readable label for each observation row.
+    node_to_observations : dict[str, list[StraddleObservation]]
+        Mapping from each influenced node key to the list of observations
+        contributing to it (for metadata/audit).
+    """
+    column_index = {col: idx for idx, col in enumerate(model_columns)}
+    n_grid = len(model_columns)
+
+    valid_obs: list[StraddleObservation] = []
+    for obs in observations:
+        if obs.grid_weights:
+            valid_obs.append(obs)
+
+    n_obs = len(valid_obs)
+    if n_obs == 0:
+        return (
+            np.empty(0, dtype=float),
+            np.empty(0, dtype=float),
+            np.empty((0, n_grid), dtype=float),
+            [],
+            {},
+        )
+
+    H = np.zeros((n_obs, n_grid), dtype=float)
+    observed_values = np.empty(n_obs, dtype=float)
+    noise_weights = np.empty(n_obs, dtype=float)
+    labels: list[str] = []
+    node_to_observations: dict[str, list[StraddleObservation]] = {}
+
+    for i, obs in enumerate(valid_obs):
+        observed_values[i] = obs.observed_bpvol
+        noise_weights[i] = max(obs.staleness_weight, 1e-6)
+        labels.append(obs.trade_label or obs.package_id)
+
+        for node_key, weight in obs.grid_weights.items():
+            col_idx = column_index.get(node_key)
+            if col_idx is not None:
+                H[i, col_idx] = weight
+            node_to_observations.setdefault(node_key, []).append(obs)
+
+    return observed_values, noise_weights, H, labels, node_to_observations
 
 
 def _build_vol_handle_from_grid(
@@ -1219,6 +1976,144 @@ def _extract_last_observation(
     return max(node_observations, key=lambda obs: obs.execution_timestamp)
 
 
+def _observation_weight_on_node(
+    observation: StraddleObservation,
+    *,
+    node_key: str | None = None,
+) -> float:
+    target_node = node_key or observation.core_node_key
+    if not target_node:
+        return 0.0
+    if observation.grid_weights is None:
+        return 1.0
+    return float(observation.grid_weights.get(target_node, 0.0))
+
+
+def _build_direct_node_anchors(
+    observations: list[StraddleObservation],
+    *,
+    base_noise_bpvol: float,
+    min_weight: float = DIRECT_OBSERVATION_ANCHOR_MIN_WEIGHT,
+) -> tuple[dict[str, float], dict[str, float], dict[str, list[StraddleObservation]]]:
+    direct_observations = [
+        observation
+        for observation in observations
+        if observation.core_node_key
+        and _observation_weight_on_node(observation) >= float(min_weight)
+    ]
+    if not direct_observations:
+        return {}, {}, {}
+    return aggregate_observations_by_node(
+        direct_observations,
+        base_noise_bpvol=base_noise_bpvol,
+    )
+
+
+def _apply_direct_node_anchors(
+    update: ConditionalMVNUpdateResult,
+    *,
+    eod_grid: Mapping[str, float],
+    anchored_values: Mapping[str, float],
+) -> ConditionalMVNUpdateResult:
+    if not anchored_values:
+        return update
+
+    anchored_live_grid = update.live_grid.copy()
+    anchored_delta_grid = update.delta_grid.copy()
+    for node_key, anchored_value in anchored_values.items():
+        if node_key not in anchored_live_grid.index or node_key not in eod_grid:
+            continue
+        anchored_live_grid[node_key] = float(anchored_value)
+        anchored_delta_grid[node_key] = float(anchored_value) - float(eod_grid[node_key])
+
+    return replace(
+        update,
+        live_grid=anchored_live_grid,
+        delta_grid=anchored_delta_grid,
+    )
+
+
+def _propagate_direct_node_anchor_residuals(
+    base_live_grid: Mapping[str, float],
+    anchored_values: Mapping[str, float],
+    *,
+    tenor_weight: float,
+    length_scale: float = DIRECT_ANCHOR_PROPAGATION_LENGTH_SCALE,
+    prior_weight: float = DIRECT_ANCHOR_PROPAGATION_PRIOR_WEIGHT,
+) -> tuple[dict[str, float], dict[str, str | None], dict[str, float]]:
+    if not anchored_values:
+        return {}, {}, {}
+
+    node_map = {node.key: node for node in CORE_GRID_NODES if node.key in base_live_grid}
+    anchor_nodes: list[tuple[str, GridNode, float]] = []
+    for node_key, anchored_value in anchored_values.items():
+        node = node_map.get(node_key)
+        base_value = _parse_optional_float(base_live_grid.get(node_key))
+        if node is None or base_value is None:
+            continue
+        anchor_nodes.append((node_key, node, float(anchored_value) - float(base_value)))
+
+    if not anchor_nodes:
+        return {}, {}, {}
+
+    scale = max(float(length_scale), 1e-6)
+    baseline = max(float(prior_weight), 0.0)
+    residuals: dict[str, float] = {}
+    last_propagated_from: dict[str, str | None] = {}
+    propagation_factor: dict[str, float] = {}
+
+    for node_key, target_node in node_map.items():
+        weighted_sum = 0.0
+        total_weight = 0.0
+        best_anchor_key: str | None = None
+        best_anchor_weight = 0.0
+
+        for anchor_key, anchor_node, anchor_residual in anchor_nodes:
+            distance = _grid_distance(
+                anchor_node.expiry_years,
+                anchor_node.tenor_years,
+                target_node,
+                tenor_weight,
+            )
+            weight = math.exp(-distance / scale)
+            weighted_sum += weight * anchor_residual
+            total_weight += weight
+            if weight > best_anchor_weight:
+                best_anchor_weight = weight
+                best_anchor_key = anchor_key
+
+        denominator = baseline + total_weight
+        residuals[node_key] = weighted_sum / denominator if denominator > 0 else 0.0
+        last_propagated_from[node_key] = best_anchor_key
+        propagation_factor[node_key] = total_weight / denominator if denominator > 0 else 0.0
+
+    return residuals, last_propagated_from, propagation_factor
+
+
+def _apply_residual_adjustments(
+    update: ConditionalMVNUpdateResult,
+    *,
+    eod_grid: Mapping[str, float],
+    residual_adjustments: Mapping[str, float],
+) -> ConditionalMVNUpdateResult:
+    if not residual_adjustments:
+        return update
+
+    adjusted_live_grid = update.live_grid.copy()
+    adjusted_delta_grid = update.delta_grid.copy()
+    for node_key, residual in residual_adjustments.items():
+        if node_key not in adjusted_live_grid.index or node_key not in eod_grid:
+            continue
+        adjusted_live_grid[node_key] = float(adjusted_live_grid[node_key]) + float(residual)
+        adjusted_delta_grid[node_key] = float(adjusted_live_grid[node_key]) - float(eod_grid[node_key])
+
+    return replace(
+        update,
+        live_grid=adjusted_live_grid,
+        delta_grid=adjusted_delta_grid,
+    )
+
+
 def build_live_grid(
     model: SurfacePCAModel,
     eod_grid: Mapping[str, float],
@@ -1228,17 +2123,62 @@ def build_live_grid(
     curve_name: str,
     surface_type: str,
     pricing_date: dt.date,
+    tenor_weight: float = DEFAULT_TENOR_WEIGHT,
+    use_continuous_observations: bool = True,
 ) -> tuple[ConditionalMVNUpdateResult, dict[str, Any], dict[str, PremiumQuote], dt.datetime | None]:
-    observed_values, staleness_weights, node_groups = aggregate_observations_by_node(
+    # Determine whether any observation carries grid_weights.
+    has_grid_weights = any(obs.grid_weights for obs in observations)
+
+    if use_continuous_observations and has_grid_weights:
+        # --- Continuous observation operator path ---
+        obs_values, obs_noise, H, obs_labels, node_groups = build_observation_operator(
+            observations,
+            model.columns,
+            base_noise_bpvol=base_noise_bpvol,
+        )
+        update = conditional_mvn_update(
+            model,
+            eod_grid,
+            obs_values,
+            obs_noise,
+            base_noise=base_noise_bpvol,
+            observation_operator=H,
+            observation_labels=obs_labels,
+        )
+    else:
+        # --- Legacy nearest-node path ---
+        observed_values, staleness_weights, node_groups = aggregate_observations_by_node(
+            observations,
+            base_noise_bpvol=base_noise_bpvol,
+        )
+        update = conditional_mvn_update(
+            model,
+            eod_grid,
+            observed_values,
+            staleness_weights,
+            base_noise=base_noise_bpvol,
+        )
+
+    direct_anchor_values, _, direct_node_groups = _build_direct_node_anchors(
         observations,
         base_noise_bpvol=base_noise_bpvol,
     )
-    update = conditional_mvn_update(
-        model,
-        eod_grid,
-        observed_values,
-        staleness_weights,
-        base_noise=base_noise_bpvol,
+    propagated_anchor_residuals, propagated_anchor_sources, propagated_anchor_factors = (
+        _propagate_direct_node_anchor_residuals(
+            update.live_grid,
+            direct_anchor_values,
+            tenor_weight=tenor_weight,
+        )
+    )
+    update = _apply_residual_adjustments(
+        update,
+        eod_grid=eod_grid,
+        residual_adjustments=propagated_anchor_residuals,
+    )
+    update = _apply_direct_node_anchors(
+        update,
+        eod_grid=eod_grid,
+        anchored_values=direct_anchor_values,
     )
 
     live_grid = {key: float(value) for key, value in update.live_grid.items()}
@@ -1267,10 +2207,34 @@ def build_live_grid(
 
     node_metadata: dict[str, Any] = {}
     for node_key in model.columns:
-        direct_observations = node_groups.get(node_key, [])
-        last_observation = _extract_last_observation(direct_observations)
+        contributing = node_groups.get(node_key, [])
+        direct_observations = direct_node_groups.get(node_key, [])
+        propagated_from_node = propagated_anchor_sources.get(node_key)
+        propagated_observations = (
+            direct_node_groups.get(propagated_from_node, [])
+            if propagated_from_node is not None
+            else []
+        )
+        last_observation = _extract_last_observation(direct_observations) or _extract_last_observation(
+            contributing
+        ) or _extract_last_observation(
+            propagated_observations
+        )
         premium_quote = premiums.get(node_key)
         eod_premium_quote = eod_premiums.get(node_key)
+
+        # Compute weighted observation count (sum of weights from all trades).
+        weighted_count = 0.0
+        contributing_trades: list[dict[str, Any]] = []
+        for obs in contributing:
+            w = (obs.grid_weights or {}).get(node_key, 1.0)
+            weighted_count += w
+            contributing_trades.append({
+                "package_id": obs.package_id,
+                "weight": w,
+                "trade_label": obs.trade_label,
+            })
+
         source = "prior"
         if direct_observations:
             source = "direct_observation"
@@ -1282,9 +2246,13 @@ def build_live_grid(
             "confidence": float(update.confidence[node_key]),
             "change_bpvol": float(update.delta_grid[node_key]),
             "staleness_minutes": (
-                min(obs.age_minutes for obs in direct_observations)
-                if direct_observations
-                else global_age_minutes
+                min(obs.age_minutes for obs in contributing)
+                if contributing
+                else (
+                    min(obs.age_minutes for obs in propagated_observations)
+                    if propagated_observations
+                    else global_age_minutes
+                )
             ),
             "premium": premium_quote.premium if premium_quote is not None else None,
             "premium_bps": premium_quote.premium_bps if premium_quote is not None else None,
@@ -1299,7 +2267,16 @@ def build_live_grid(
                 if premium_quote is not None and eod_premium_quote is not None
                 else None
             ),
-            "observation_count": len(direct_observations),
+            "observation_count": len(contributing),
+            "direct_observation_count": len(direct_observations),
+            "weighted_observation_count": weighted_count,
+            "last_propagated_from": (
+                propagated_from_node
+                if source == "propagated" and propagated_from_node is not None
+                else None
+            ),
+            "propagation_factor": float(propagated_anchor_factors.get(node_key, 0.0)),
+            "contributing_trades": contributing_trades,
             "eod_bpvol": float(eod_grid[node_key]),
             "last_observation_time": (
                 last_observation.execution_timestamp.isoformat()
@@ -1637,6 +2614,7 @@ def build_snapshot_for_preset(
     snapshot_kind: str = SNAPSHOT_KIND_INTRADAY,
     write_observations: bool = True,
     snapshot_ts: dt.datetime | None = None,
+    use_continuous_observations: bool = True,
 ) -> dict[str, Any]:
     if snapshot_ts is None:
         snapshot_ts = _now_et()
@@ -1654,7 +2632,19 @@ def build_snapshot_for_preset(
         ),
         as_of_ts=snapshot_ts,
     )
-    mapped = map_observations_to_grid(selected, tenor_weight=tenor_weight)
+    mapped = map_observations_to_grid(
+        selected,
+        tenor_weight=tenor_weight,
+        use_continuous_observations=use_continuous_observations,
+    )
+    inferred_count = sum(1 for observation in selected if observation.is_inferred_incomplete)
+    manual_count = sum(1 for observation in selected if observation.is_manual_straddle)
+    _log_status(
+        f"Building {preset}[{snapshot_kind}] snapshot: raw={len(raw_observations)} "
+        f"selected={len(selected)} mapped={len(mapped)} filtered_out={filtered_out_count} "
+        f"inferred={inferred_count} manual={manual_count} "
+        f"continuous_obs={use_continuous_observations}"
+    )
     mapped = compute_staleness_weights(
         mapped,
         as_of_ts=snapshot_ts,
@@ -1679,6 +2669,8 @@ def build_snapshot_for_preset(
         curve_name=curve_name,
         surface_type=surface_type,
         pricing_date=eod_as_of_date,
+        tenor_weight=tenor_weight,
+        use_continuous_observations=use_continuous_observations,
     )
 
     calibration_config = {
@@ -1688,6 +2680,7 @@ def build_snapshot_for_preset(
         "baseNoiseBpvol": base_noise_bpvol,
         "tenorWeight": tenor_weight,
         "snapshotKind": snapshot_kind,
+        "useContinuousObservations": use_continuous_observations,
     }
     if write_observations:
         replace_observations(
@@ -1980,9 +2973,16 @@ def run_live_cycle(
     tenor_weight: float,
     force_refresh: bool,
     presets: list[str],
+    use_continuous_observations: bool = True,
 ) -> list[dict[str, Any]]:
     trade_date = _current_trade_date()
     anchor_eod_date = _previous_business_day(trade_date)
+    _log_status(
+        "Starting live cycle: "
+        f"trade_date={trade_date.isoformat()} "
+        f"anchor_eod_date={anchor_eod_date.isoformat()} "
+        f"lookback_business_days={lookback_business_days}"
+    )
     model, explained_ratio = ensure_history_and_model(
         engine,
         curve_name,
@@ -1998,8 +2998,20 @@ def run_live_cycle(
         surface_type,
         on_or_before=anchor_eod_date,
     )
+    _log_status(
+        f"Using anchor EOD surface date {eod_date.isoformat()} with PCA explained variance "
+        f"{explained_ratio:.4f}"
+    )
 
     raw_observations = fetch_straddle_observations(engine, trade_date)
+    inferred_count = sum(1 for observation in raw_observations if observation.is_inferred_incomplete)
+    manual_count = sum(1 for observation in raw_observations if observation.is_manual_straddle)
+    idb_count = sum(1 for observation in raw_observations if observation.platform_type == "idb")
+    custy_count = sum(1 for observation in raw_observations if observation.platform_type == "custy")
+    _log_status(
+        f"Loaded {len(raw_observations)} raw observations for {trade_date.isoformat()} "
+        f"(idb={idb_count}, custy={custy_count}, inferred={inferred_count}, manual={manual_count})"
+    )
     results: list[dict[str, Any]] = []
     for preset in presets:
         summary = build_snapshot_for_preset(
@@ -2015,6 +3027,7 @@ def run_live_cycle(
             max_staleness_minutes=max_staleness_minutes,
             base_noise_bpvol=base_noise_bpvol,
             tenor_weight=tenor_weight,
+            use_continuous_observations=use_continuous_observations,
         )
         summary["explained_variance_ratio"] = explained_ratio
         results.append(summary)
@@ -2142,6 +3155,7 @@ def main_once(args: argparse.Namespace) -> None:
         tenor_weight=args.tenor_weight,
         force_refresh=args.force_refresh,
         presets=args.presets,
+        use_continuous_observations=args.use_continuous_observations,
     )
     for result in results:
         print(
@@ -2155,9 +3169,19 @@ def main_service(args: argparse.Namespace) -> None:
     engine = create_db_engine()
     ensure_schema(engine)
     interval_seconds = max(int(args.interval_seconds), 30)
+    _log_status(
+        "Starting live-grid service: "
+        f"curve={args.curve_name} surface={args.surface_type} "
+        f"interval={interval_seconds}s lookback_business_days={args.lookback_business_days} "
+        f"presets={','.join(args.presets)} continuous_obs={args.use_continuous_observations}"
+    )
+
+    cycle_number = 0
 
     while True:
+        cycle_number += 1
         started = time.time()
+        _log_status(f"Cycle {cycle_number} started")
         try:
             results = run_live_cycle(
                 engine,
@@ -2171,18 +3195,31 @@ def main_service(args: argparse.Namespace) -> None:
                 tenor_weight=args.tenor_weight,
                 force_refresh=args.force_refresh,
                 presets=args.presets,
+                use_continuous_observations=args.use_continuous_observations,
             )
             for result in results:
-                print(
-                    f"[{_now_et().isoformat()}] {result['preset']}[{result['snapshot_kind']}]: "
+                last_observation_ts = result.get("last_observation_ts")
+                last_observation_label = (
+                    last_observation_ts.isoformat()
+                    if isinstance(last_observation_ts, dt.datetime)
+                    else (str(last_observation_ts) if last_observation_ts else "--")
+                )
+                _log_status(
+                    f"{result['preset']}[{result['snapshot_kind']}]: "
                     f"obs={result['observation_count']} "
-                    f"filtered={result['filtered_out_count']}"
+                    f"filtered={result['filtered_out_count']} "
+                    f"explained={result.get('explained_variance_ratio', 0.0):.4f} "
+                    f"last_obs={last_observation_label}"
                 )
         except Exception as exc:
-            print(f"[{_now_et().isoformat()}] live-grid cycle failed: {exc}")
+            _log_status(f"Cycle {cycle_number} failed: {exc}", level="ERROR")
 
         elapsed = time.time() - started
-        time.sleep(max(interval_seconds - elapsed, 5))
+        sleep_seconds = max(interval_seconds - elapsed, 5)
+        _log_status(
+            f"Cycle {cycle_number} finished in {elapsed:.1f}s; sleeping {sleep_seconds:.1f}s"
+        )
+        time.sleep(sleep_seconds)
 
 
 def parse_args() -> argparse.Namespace:
@@ -2231,6 +3268,13 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated preset list.",
     )
     parser.add_argument("--force-refresh", action="store_true")
+    parser.add_argument(
+        "--no-continuous-obs",
+        dest="use_continuous_observations",
+        action="store_false",
+        default=True,
+        help="Disable continuous-coordinate observation layer (use legacy nearest-node).",
+    )
     args = parser.parse_args()
     args.presets = [
         preset.strip()

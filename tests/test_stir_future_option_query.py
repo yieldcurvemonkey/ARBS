@@ -103,11 +103,78 @@ def test_value_map_weighted_aggregation():
 
     assert value_map.apply(STIRFutureOptionValue.PRICE) == pytest.approx(0.13)
     assert value_map.apply(STIRFutureOptionValue.NPV) == pytest.approx(0.13)
+    assert value_map.apply(STIRFutureOptionValue.DV01) == pytest.approx(7.5)
     assert value_map.apply(STIRFutureOptionValue.DELTA) == pytest.approx(0.30)
     assert value_map.apply(STIRFutureOptionValue.GAMMA) == pytest.approx(0.40)
+    assert value_map.apply(STIRFutureOptionValue.GAMMA_01) == pytest.approx(0.10)
     assert value_map.apply(STIRFutureOptionValue.VEGA) == pytest.approx(0.05)
+    assert value_map.apply(STIRFutureOptionValue.VEGA_01) == pytest.approx(1.25)
     assert value_map.apply(STIRFutureOptionValue.THETA) == pytest.approx(-0.01)
     assert value_map.apply(STIRFutureOptionValue.IV_NORMAL_BPS) == pytest.approx(20.0)
+
+
+def test_explicit_contract_sizing_scales_package_metrics():
+    pricer = _mk_pricer(symbol="SR3Z30|9700C", right="C", price=0.21, delta=0.60, gamma=1.2, vega=0.11, theta=-0.03, iv_normal=0.90)
+    pricer_map = {"SR3Z30|9700C": [pricer]}
+
+    q = STIRFutureOptionQuery(
+        structure=STIRFutureOptionStructure.OUTRIGHT,
+        value=STIRFutureOptionValue.NPV,
+        symbol="SR3Z30|9700C",
+        contracts=10,
+    )
+    package, weights = q.resolve_package(pricer_or_curve=pricer_map)
+    value_map = q.build_value_map(pricer_or_curve=pricer_map, package=package, risk_weights=weights)
+
+    assert package[0].quantity() == pytest.approx(10.0)
+    assert value_map.apply(STIRFutureOptionValue.PRICE) == pytest.approx(0.21)
+    assert value_map.apply(STIRFutureOptionValue.NPV) == pytest.approx(2.10)
+    assert value_map.apply(STIRFutureOptionValue.DV01) == pytest.approx(150.0)
+    assert value_map.apply(STIRFutureOptionValue.DELTA) == pytest.approx(6.0)
+    assert value_map.apply(STIRFutureOptionValue.GAMMA) == pytest.approx(12.0)
+    assert value_map.apply(STIRFutureOptionValue.GAMMA_01) == pytest.approx(3.0)
+    assert value_map.apply(STIRFutureOptionValue.VEGA) == pytest.approx(1.10)
+    assert value_map.apply(STIRFutureOptionValue.VEGA_01) == pytest.approx(27.5)
+    assert value_map.apply(STIRFutureOptionValue.THETA) == pytest.approx(-0.30)
+    assert value_map.apply(STIRFutureOptionValue.IV_NORMAL_BPS) == pytest.approx(90.0)
+
+
+@pytest.mark.parametrize(
+    ("size_kwargs", "expected_quantity"),
+    [
+        ({"dv01": 150.0}, 10.0),
+        ({"gamma_01": 3.0}, 10.0),
+        ({"vega_01": 27.5}, 10.0),
+    ],
+)
+def test_dollar_risk_targets_scale_contract_quantity(size_kwargs, expected_quantity):
+    pricer = _mk_pricer(symbol="SR3Z30|9700C", right="C", price=0.21, delta=0.60, gamma=1.2, vega=0.11, theta=-0.03, iv_normal=0.90)
+    pricer_map = {"SR3Z30|9700C": [pricer]}
+
+    q = STIRFutureOptionQuery(
+        structure=STIRFutureOptionStructure.OUTRIGHT,
+        value=STIRFutureOptionValue.NPV,
+        symbol="SR3Z30|9700C",
+        **size_kwargs,
+    )
+    package, weights = q.resolve_package(pricer_or_curve=pricer_map)
+    value_map = q.build_value_map(pricer_or_curve=pricer_map, package=package, risk_weights=weights)
+
+    assert package[0].quantity() == pytest.approx(expected_quantity)
+    assert value_map.apply(STIRFutureOptionValue.DV01) == pytest.approx(150.0)
+    assert value_map.apply(STIRFutureOptionValue.GAMMA_01) == pytest.approx(3.0)
+    assert value_map.apply(STIRFutureOptionValue.VEGA_01) == pytest.approx(27.5)
+
+
+def test_multiple_size_targets_raise_explicit_error():
+    with pytest.raises(ValueError, match="Specify only one STIR option size target"):
+        STIRFutureOptionQuery(
+            structure=STIRFutureOptionStructure.OUTRIGHT,
+            value=STIRFutureOptionValue.PRICE,
+            symbol="SR3Z30|9700C",
+            contracts=10,
+            dv01=150.0,
+        )
 
 
 def test_build_mdp_request_endpoint_and_symbols_wiring():

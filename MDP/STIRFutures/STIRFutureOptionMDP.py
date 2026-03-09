@@ -34,6 +34,7 @@ from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contracts
 from Query.STIRFutureOptions.backends.quantlib.QLSTIRFutureOptionPricer import QLSTIRFutureOptionPricer
 from Query.STIRFutureOptions.STIRFutureOptionValue import STIRFutureOptionValue
+from Query.STIRFutureOptions._risk import dollar_dv01, dollar_gamma_01, dollar_vega_01
 
 from MDP.STIRFutures.QuikStrikeSDK.core.QuikStrikeFetcher import QuikStrikeFetcher  
 from MDP.STIRFutures.QuikStrikeSDK.core.types.QuikVolProductID import QuikVolProductID  
@@ -173,6 +174,36 @@ _UNDERLYING_RULES: Dict[str, Tuple[int, Optional[str]]] = {
     "S35": (3, None),
 }
 _SFR_UNDERLYING_ROOTS = set(_UNDERLYING_RULES.keys())
+_MIDCURVE_1Y2Y_ROOTS = {
+    "0Q",
+    "2Q",
+    "UHOA",
+    "UMOA",
+    "UUOA",
+    "UZOA",
+    "VHTA",
+    "VMTA",
+    "VUTA",
+    "VZTA",
+}
+_MIDCURVE_WEEKLY_ROOTS = {
+    "S01",
+    "S02",
+    "S03",
+    "S04",
+    "S05",
+    "S21",
+    "S22",
+    "S23",
+    "S24",
+    "S25",
+    "S31",
+    "S32",
+    "S33",
+    "S34",
+    "S35",
+}
+_MIDCURVE_BACK_STYLE_ROOTS = {"3Q", "4Q", "5Q"}
 _MONTH_CODE_TO_NUM = {"F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6, "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12}
 _NUM_TO_MONTH_CODE = {v: k for k, v in _MONTH_CODE_TO_NUM.items()}
 _QUARTERLY_MONTHS = (3, 6, 9, 12)
@@ -266,6 +297,7 @@ class STIRFutureOptionSmilePoint:
     label: str
     right: str
     delta_abs: float
+    atm_offset_bps: float
     strike_price: float
     strike_rate: float
     iv_normal_price: float
@@ -276,6 +308,7 @@ class STIRFutureOptionSmilePoint:
             "label": str(self.label),
             "right": str(self.right),
             "delta_abs": float(self.delta_abs),
+            "atm_offset_bps": float(self.atm_offset_bps),
             "strike_price": float(self.strike_price),
             "strike_rate": float(self.strike_rate),
             "iv_normal_price": float(self.iv_normal_price),
@@ -288,6 +321,7 @@ class STIRFutureOptionSmilePoint:
             label=str(row["label"]),
             right=str(row["right"]),
             delta_abs=float(row["delta_abs"]),
+            atm_offset_bps=float(row.get("atm_offset_bps", float("nan"))),
             strike_price=float(row["strike_price"]),
             strike_rate=float(row["strike_rate"]),
             iv_normal_price=float(row["iv_normal_price"]),
@@ -703,6 +737,106 @@ def _calibrate_sabr_normal_from_delta_points(
     )
 
 
+def _calibrate_sabr_normal_from_strike_points(
+    *,
+    forward: float,
+    time_to_expiry: float,
+    market_points: Sequence[Tuple[float, float]],
+    beta: float = 0.5,
+) -> STIRFutureOptionSABRParams:
+    if not math.isfinite(forward) or forward <= 0.0:
+        raise ValueError(f"Invalid forward for SABR calibration: {forward}")
+    if not math.isfinite(time_to_expiry) or time_to_expiry <= 0.0:
+        raise ValueError(f"Invalid time_to_expiry for SABR calibration: {time_to_expiry}")
+    if len(market_points) < 6:
+        raise ValueError("SABR calibration requires at least 6 valid strike-vol points.")
+
+    strikes: List[float] = []
+    vols: List[float] = []
+    for strike, vol_normal in market_points:
+        strike_val = float(strike)
+        vol_val = float(vol_normal)
+        if not math.isfinite(strike_val) or strike_val <= 0.0:
+            continue
+        if not math.isfinite(vol_val) or vol_val <= 0.0:
+            continue
+        strikes.append(strike_val)
+        vols.append(vol_val)
+
+    if len(strikes) < 6:
+        raise ValueError("SABR calibration requires at least 6 strike-vol points after filtering.")
+
+    strikes_arr = np.asarray(strikes, dtype=float)
+    vols_arr = np.asarray(vols, dtype=float)
+    order = np.argsort(strikes_arr)
+    strikes_arr = strikes_arr[order]
+    vols_arr = vols_arr[order]
+
+    collapsed_strikes, collapsed_vols = _collapse_duplicate_strikes(strikes_arr, vols_arr)
+    if collapsed_strikes.size == 0:
+        raise ValueError("No SABR calibration points remain after collapsing duplicate strikes.")
+
+    atm_idx = int(np.argmin(np.abs(collapsed_strikes - float(forward))))
+    atm_vol = float(collapsed_vols[atm_idx])
+    if not math.isfinite(atm_vol) or atm_vol <= 0.0:
+        raise ValueError(f"Invalid ATM normal vol seed for SABR calibration: {atm_vol}")
+
+    near_forward_width = 2.0 * atm_vol * math.sqrt(float(time_to_expiry))
+    weights = np.ones_like(vols_arr, dtype=float)
+    weights[np.abs(strikes_arr - float(forward)) <= near_forward_width] *= 2.0
+
+    def _objective(x: np.ndarray) -> float:
+        alpha, rho, nu = (float(x[0]), float(x[1]), float(x[2]))
+        if alpha <= 0.0 or nu <= 0.0 or abs(rho) >= 1.0:
+            return 1e12
+        try:
+            model = np.array(
+                [
+                    _sabr_normal_vol(
+                        strike=float(k),
+                        forward=float(forward),
+                        time_to_expiry=float(time_to_expiry),
+                        alpha=alpha,
+                        beta=float(beta),
+                        rho=rho,
+                        nu=nu,
+                    )
+                    for k in strikes_arr
+                ],
+                dtype=float,
+            )
+        except Exception:
+            return 1e12
+        if not np.all(np.isfinite(model)):
+            return 1e12
+        err = model - vols_arr
+        return float(np.sum(weights * err * err))
+
+    alpha0 = float(atm_vol / (float(forward) ** float(beta)))
+    result = minimize(
+        _objective,
+        x0=np.asarray([alpha0, -0.1, 0.3], dtype=float),
+        method="Nelder-Mead",
+        options={"maxiter": 10000, "xatol": 1e-10, "fatol": 1e-12},
+    )
+
+    alpha_cal, rho_cal, nu_cal = (float(result.x[0]), float(result.x[1]), float(result.x[2]))
+    if alpha_cal <= 0.0 or nu_cal <= 0.0 or abs(rho_cal) >= 1.0:
+        raise ValueError(f"SABR calibration returned invalid params: {result.x!r}")
+
+    return STIRFutureOptionSABRParams(
+        alpha=alpha_cal,
+        beta=float(beta),
+        rho=rho_cal,
+        nu=nu_cal,
+        forward_price=float(forward),
+        forward_rate=100.0 - float(forward),
+        time_to_expiry=float(time_to_expiry),
+        expiry_date=datetime.date.today(),
+        as_of=datetime.date.today(),
+    )
+
+
 def _socksio_available() -> bool:
     return importlib.util.find_spec("socksio") is not None
 
@@ -895,8 +1029,7 @@ def _strike_step_for_contract(contract: str) -> float:
 
 
 def _strike_ladder(center: float, step: float, half_width_steps: int) -> List[float]:
-    base = round(center / step) * step
-    return [base + i * step for i in range(-half_width_steps, half_width_steps + 1)]
+    return [round(float(center) + i * float(step), 8) for i in range(-half_width_steps, half_width_steps + 1)]
 
 
 def _contract_month_distance(contract: str, as_of: datetime.date) -> Optional[int]:
@@ -909,29 +1042,57 @@ def _contract_month_distance(contract: str, as_of: datetime.date) -> Optional[in
     return (year - as_of.year) * 12 + (month - as_of.month)
 
 
-def _cme_listed_strikes_for_contract_forward(
+def _cme_listed_strike_rule_for_contract(
+    *,
+    contract: str,
+    as_of: datetime.date,
+) -> Optional[Dict[str, float]]:
+    if not _is_sofr_style_option_contract(contract):
+        return None
+
+    root = _contract_root(contract)
+    month_distance = _contract_month_distance(contract, as_of=as_of)
+    if root is None or month_distance is None:
+        return None
+
+    fine_step: float
+    if root in _MIDCURVE_WEEKLY_ROOTS:
+        fine_step = 0.0625
+    elif root in _MIDCURVE_1Y2Y_ROOTS:
+        fine_step = 0.0625 if month_distance <= 5 else 0.125
+    elif root in _MIDCURVE_BACK_STYLE_ROOTS:
+        fine_step = 0.125
+    elif root == "SFR":
+        fine_step = 0.0625 if month_distance <= 7 else 0.125
+    else:
+        fine_step = 0.125
+
+    return {
+        "fine_step": float(fine_step),
+        "coarse_step": 0.25,
+        "fine_range": 1.5,
+        "coarse_range": 5.5,
+    }
+
+
+def _cme_listed_strike_grid_for_contract_forward(
     *,
     contract: str,
     forward: float,
     as_of: datetime.date,
-) -> Optional[List[float]]:
-    if not _is_sofr_style_option_contract(contract):
+) -> Optional[Dict[str, Any]]:
+    rule = _cme_listed_strike_rule_for_contract(contract=contract, as_of=as_of)
+    if rule is None:
         return None
 
-    month_distance = _contract_month_distance(contract, as_of=as_of)
-    if month_distance is None:
-        return None
+    fine_step = float(rule["fine_step"])
+    coarse_step = float(rule["coarse_step"])
+    fine_half_width_steps = int(round(float(rule["fine_range"]) / fine_step))
+    coarse_half_width_steps = int(round(float(rule["coarse_range"]) / coarse_step))
 
-    is_front_eight = month_distance <= 7
-    fine_step = 0.0625 if is_front_eight else 0.125
-    fine_half_width_steps = int(round(1.5 / fine_step))
-    coarse_step = 0.25
-    coarse_half_width_steps = int(round(5.5 / coarse_step))
-
-    fine_atm = _atm_strike_from_forward(float(forward), step=float(fine_step))
-    coarse_atm = _atm_strike_from_forward(float(forward), step=float(coarse_step))
-    ladders = list(_strike_ladder(center=float(fine_atm), step=float(fine_step), half_width_steps=int(fine_half_width_steps)))
-    ladders.extend(_strike_ladder(center=float(coarse_atm), step=float(coarse_step), half_width_steps=int(coarse_half_width_steps)))
+    fine_atm = _atm_strike_from_forward(float(forward), step=fine_step)
+    ladders = list(_strike_ladder(center=float(fine_atm), step=fine_step, half_width_steps=int(fine_half_width_steps)))
+    ladders.extend(_strike_ladder(center=float(fine_atm), step=coarse_step, half_width_steps=int(coarse_half_width_steps)))
 
     out: List[float] = []
     seen = set()
@@ -941,7 +1102,98 @@ def _cme_listed_strikes_for_contract_forward(
             continue
         seen.add(key)
         out.append(float(strike))
-    return out
+
+    return {
+        "atm_strike": float(fine_atm),
+        "strikes": out,
+        "fine_step": fine_step,
+        "coarse_step": coarse_step,
+    }
+
+
+def _cme_listed_strikes_for_contract_forward(
+    *,
+    contract: str,
+    forward: float,
+    as_of: datetime.date,
+) -> Optional[List[float]]:
+    grid = _cme_listed_strike_grid_for_contract_forward(
+        contract=contract,
+        forward=forward,
+        as_of=as_of,
+    )
+    if grid is None:
+        return None
+    return list(grid["strikes"])
+
+
+def _cme_listed_abs_offset_grid_bps_for_contract_forward(
+    *,
+    contract: str,
+    forward: float,
+    as_of: datetime.date,
+) -> Optional[Tuple[float, List[float], List[float]]]:
+    grid = _cme_listed_strike_grid_for_contract_forward(
+        contract=contract,
+        forward=forward,
+        as_of=as_of,
+    )
+    if grid is None:
+        return None
+
+    atm_strike = float(grid["atm_strike"])
+    strikes = [float(s) for s in grid["strikes"]]
+    signed_offsets = sorted({round((atm_strike - strike) * 100.0, 8) for strike in strikes})
+    abs_offsets = sorted({round(abs(offset), 8) for offset in signed_offsets})
+    return atm_strike, abs_offsets, signed_offsets
+
+
+def _snap_to_listed_strike_for_offset(
+    *,
+    contract: str,
+    forward: float,
+    as_of: datetime.date,
+    right: str,
+    offset_bps: float,
+) -> Tuple[float, float]:
+    grid = _cme_listed_strike_grid_for_contract_forward(
+        contract=contract,
+        forward=forward,
+        as_of=as_of,
+    )
+    if grid is None:
+        raise ValueError(f"No listed strike rule available for offset-based SABR smile on {contract}")
+
+    atm_strike = float(grid["atm_strike"])
+    listed_strikes = [float(s) for s in grid["strikes"]]
+    right_token = str(right or "").strip().upper()
+    if right_token not in {"C", "P"}:
+        raise ValueError(f"Unsupported option right for offset strike snapping: {right}")
+
+    target_signed_offset = float(offset_bps)
+    if right_token == "C" and target_signed_offset < 0.0:
+        target_signed_offset = abs(target_signed_offset)
+    if right_token == "P" and target_signed_offset > 0.0:
+        target_signed_offset = -abs(target_signed_offset)
+
+    side_candidates = (
+        [strike for strike in listed_strikes if strike <= atm_strike + 1e-12]
+        if right_token == "C"
+        else [strike for strike in listed_strikes if strike >= atm_strike - 1e-12]
+    )
+    if not side_candidates:
+        side_candidates = list(listed_strikes)
+
+    target_strike = atm_strike - target_signed_offset / 100.0
+    snapped = min(
+        side_candidates,
+        key=lambda strike: (
+            abs(float(strike) - float(target_strike)),
+            abs(float(atm_strike) - float(strike)),
+        ),
+    )
+    actual_offset = round((atm_strike - float(snapped)) * 100.0, 8)
+    return float(snapped), float(actual_offset)
 
 
 def _estimate_bachelier_strike_for_target_delta(
@@ -1203,6 +1455,7 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
         right: str,
         strike4: Optional[str],
         delta: Optional[float],
+        atm_offset_bps: Optional[float],
     ) -> Dict[str, Any]:
         if contract_spec["contract_selector"] == "explicit":
             contract_ref = str(contract_spec["contract"])
@@ -1213,6 +1466,8 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
             canonical = f"{contract_ref}|{strike4}{right}"
         elif selector == "atm":
             canonical = f"{contract_ref}|ATM{right}"
+        elif selector == "atmf_offset":
+            canonical = f"{contract_ref}|{abs(float(atm_offset_bps)):g}BP{right}"
         else:
             canonical = f"{contract_ref}|{float(delta):g}D{right}"
 
@@ -1226,6 +1481,7 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
             "canonical": canonical,
             "strike4": strike4,
             "delta": delta,
+            "atm_offset_bps": atm_offset_bps,
         }
 
     if "|" in token:
@@ -1236,12 +1492,45 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
         if m:
             strike4 = str(int(m.group("strike"))).zfill(4)
             right = m.group("right").upper()
-            return _build(contract_spec=contract_spec, selector="strike", right=right, strike4=strike4, delta=None)
+            return _build(contract_spec=contract_spec, selector="strike", right=right, strike4=strike4, delta=None, atm_offset_bps=None)
 
         m = re.fullmatch(r"ATM(?P<right>[CPS])", leg_part)
         if m:
             right = m.group("right").upper()
-            return _build(contract_spec=contract_spec, selector="atm", right=right, strike4=None, delta=None)
+            return _build(contract_spec=contract_spec, selector="atm", right=right, strike4=None, delta=None, atm_offset_bps=None)
+
+        m = re.fullmatch(r"(?P<offset>\d{1,4}(?:\.\d+)?)BP(?P<right>[CP])", leg_part)
+        if m:
+            right = m.group("right").upper()
+            offset_bps = abs(float(m.group("offset")))
+            if offset_bps <= 0.0:
+                raise ValueError(f"ATMF offset alias must be > 0: {symbol}")
+            signed_offset = offset_bps if right == "C" else -offset_bps
+            return _build(
+                contract_spec=contract_spec,
+                selector="atmf_offset",
+                right=right,
+                strike4=None,
+                delta=None,
+                atm_offset_bps=signed_offset,
+            )
+
+        m = re.fullmatch(r"ATMF(?P<sign>[+-])(?P<offset>\d{1,4}(?:\.\d+)?)", leg_part)
+        if m:
+            price_sign = m.group("sign")
+            offset_bps = abs(float(m.group("offset")))
+            if offset_bps <= 0.0:
+                raise ValueError(f"ATMF offset alias must be > 0: {symbol}")
+            right = "C" if price_sign == "-" else "P"
+            signed_offset = offset_bps if right == "C" else -offset_bps
+            return _build(
+                contract_spec=contract_spec,
+                selector="atmf_offset",
+                right=right,
+                strike4=None,
+                delta=None,
+                atm_offset_bps=signed_offset,
+            )
 
         m = re.fullmatch(r"(?P<delta>\d{1,2}(?:\.\d+)?)D?(?P<right>[CP])", leg_part)
         if m:
@@ -1249,7 +1538,7 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
             delta = float(m.group("delta"))
             if delta <= 0.0 or delta >= 100.0:
                 raise ValueError(f"Delta alias must be in (0,100): {symbol}")
-            return _build(contract_spec=contract_spec, selector="delta", right=right, strike4=None, delta=delta)
+            return _build(contract_spec=contract_spec, selector="delta", right=right, strike4=None, delta=delta, atm_offset_bps=None)
 
     m = re.fullmatch(
         rf"(?P<contract>(?:{_ROOT_TOKEN_PATTERN})?(?:CM\d+)|(?:{_ROOT_TOKEN_PATTERN})[FGHJKMNQUVXZ]\d{{2}})\s+ATM\s+(?P<right>STRADDLE|CALL|PUT)",
@@ -1258,7 +1547,7 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
     if m:
         contract_spec = _parse_contract_token(m.group("contract"))
         right = _right_word_to_token(m.group("right"))
-        return _build(contract_spec=contract_spec, selector="atm", right=right, strike4=None, delta=None)
+        return _build(contract_spec=contract_spec, selector="atm", right=right, strike4=None, delta=None, atm_offset_bps=None)
 
     m = re.fullmatch(
         rf"(?P<contract>(?:{_ROOT_TOKEN_PATTERN})?(?:CM\d+)|(?:{_ROOT_TOKEN_PATTERN})[FGHJKMNQUVXZ]\d{{2}})\s+(?P<delta>\d{{1,2}}(?:\.\d+)?)\s*D(?:ELTA)?\s+(?P<right>STRADDLE|CALL|PUT)",
@@ -1272,7 +1561,7 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
         delta = float(m.group("delta"))
         if delta <= 0.0 or delta >= 100.0:
             raise ValueError(f"Delta alias must be in (0,100): {symbol}")
-        return _build(contract_spec=contract_spec, selector="delta", right=right, strike4=None, delta=delta)
+        return _build(contract_spec=contract_spec, selector="delta", right=right, strike4=None, delta=delta, atm_offset_bps=None)
 
     raise ValueError(f"Invalid STIR option symbol token: {symbol}")
 
@@ -1297,10 +1586,13 @@ def _resolve_option_contract_aliases_for_date(
         right = str(spec["right"]).upper()
         delta = _to_float(spec.get("delta"))
         strike4 = spec.get("strike4")
+        atm_offset_bps = _to_float(spec.get("atm_offset_bps"))
         if selector == "strike":
             canonical = f"{resolved_contract}|{strike4}{right}"
         elif selector == "atm":
             canonical = f"{resolved_contract}|ATM{right}"
+        elif selector == "atmf_offset":
+            canonical = f"{resolved_contract}|{abs(float(atm_offset_bps)):g}BP{right}"
         elif selector == "delta":
             canonical = f"{resolved_contract}|{float(delta):g}D{right}"
         else:
@@ -1697,6 +1989,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                         "cm_rank": spec.get("cm_rank"),
                         "strike4": spec.get("strike4"),
                         "delta": _to_float(spec.get("delta")),
+                        "atm_offset_bps": _to_float(spec.get("atm_offset_bps")),
                         "canonical": str(spec.get("canonical")),
                     }
                 )
@@ -1783,10 +2076,53 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             out.append(delta)
         return sorted(set(out))
 
+    @staticmethod
+    def _normalize_sabr_smile_strike_offsets_bps(raw: Any) -> Tuple[List[float], bool]:
+        if raw is None:
+            return [], True
+        if isinstance(raw, str):
+            token = raw.strip().lower()
+            if token in {"", "listed", "full", "auto"}:
+                return [], True
+            values = [raw]
+        elif np.isscalar(raw):
+            values = [raw]
+        else:
+            values = list(raw)
+
+        if len(values) == 0:
+            return [], True
+
+        out: List[float] = []
+        for value in values:
+            offset = abs(float(value))
+            if not math.isfinite(offset):
+                raise ValueError(f"SABR smile strike offsets must be finite bps values: {value!r}")
+            out.append(round(offset, 8))
+        return sorted(set(out)), False
+
+    def _normalize_sabr_smile_point_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        has_offsets = "strike_offsets_bps" in request
+        has_deltas = "deltas" in request
+        if has_offsets and has_deltas:
+            raise ValueError("sabr_smile does not allow both 'deltas' and 'strike_offsets_bps'")
+        if has_offsets:
+            offsets_bps, auto_full = self._normalize_sabr_smile_strike_offsets_bps(request.get("strike_offsets_bps"))
+            return {
+                "mode": "atm_offset_bps",
+                "strike_offsets_bps": list(offsets_bps),
+                "auto_full_ladder": bool(auto_full),
+            }
+        return {
+            "mode": "delta",
+            "deltas": self._normalize_sabr_smile_deltas(request.get("deltas")),
+            "auto_full_ladder": False,
+        }
+
     def _validate_sabr_smile_request(
         self,
         request: Dict[str, Any],
-    ) -> Tuple[str, Dict[str, Any], datetime.date, List[int], str, Dict[str, Any], bool, bool]:
+    ) -> Tuple[str, Dict[str, Any], datetime.date, Dict[str, Any], str, Dict[str, Any], bool, bool]:
         if "as_of" not in request:
             raise ValueError("sabr_smile requires 'as_of'")
         if "beta" in request:
@@ -1838,12 +2174,12 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 f"SABR smile fetcher is only available for sources 'STIRFO_DUAL-QL' and 'BARCHART_STIRFO-QL', got {self.source!r}"
             )
 
-        deltas = self._normalize_sabr_smile_deltas(request.get("deltas"))
+        point_request = self._normalize_sabr_smile_point_request(request)
         curve_name = str(request.get("curve_name", self._curve_name_default))
         curve_kwargs = dict(request.get("curve_kwargs") or {})
         force_refresh = bool(request.get("force_refresh", False))
         show_tqdm = bool(request.get("show_tqdm", False))
-        return raw_symbol, symbol_info, as_of, deltas, curve_name, curve_kwargs, force_refresh, show_tqdm
+        return raw_symbol, symbol_info, as_of, point_request, curve_name, curve_kwargs, force_refresh, show_tqdm
 
     def _build_sabr_smile_qs_request(
         self,
@@ -1914,6 +2250,339 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             "force_refresh": force_refresh,
             "show_tqdm": show_tqdm,
         }
+
+    @staticmethod
+    def _sabr_smile_point_mode(point_request: Dict[str, Any]) -> str:
+        return str((point_request or {}).get("mode", "delta")).strip().lower()
+
+    def _resolve_sabr_smile_underlying_forward(
+        self,
+        *,
+        contract: str,
+        as_of: datetime.date,
+        show_tqdm: bool,
+        price_mode: str = "mid_then_fallback",
+    ) -> Tuple[str, float]:
+        underlying_contract = _option_contract_to_underlying_contract(contract)
+        bcontract = _contract_to_barchart_contract(underlying_contract)
+        data = self._fetch_barchart_eod_series(
+            symbols=[bcontract],
+            start=as_of,
+            end=as_of,
+            show_tqdm=show_tqdm,
+        )
+        fut_df = data.get(bcontract)
+        if fut_df is None or fut_df.empty:
+            raise ValueError(f"Could not resolve SABR smile forward: missing underlying history for {contract}")
+
+        target_ts = pd.Timestamp(_NY_TZ.localize(datetime.datetime.combine(as_of, datetime.time(17, 0))))
+        pos = _asof_index_position(fut_df.index, target_ts)
+        if pos is None:
+            raise ValueError(f"Could not resolve SABR smile forward: no underlying row near {as_of.isoformat()} for {contract}")
+        forward = _extract_row_price(fut_df.iloc[pos].to_dict(), price_mode=price_mode)
+        if forward is None or forward <= 0.0:
+            raise ValueError(f"Could not resolve SABR smile forward: invalid underlying price for {contract}")
+        return underlying_contract, float(forward)
+
+    def _build_sabr_smile_offset_leg_specs(
+        self,
+        *,
+        contract: str,
+        forward: float,
+        as_of: datetime.date,
+        offset_magnitudes_bps: Sequence[float],
+        auto_full_ladder: bool,
+    ) -> List[Dict[str, Any]]:
+        offset_info = _cme_listed_abs_offset_grid_bps_for_contract_forward(
+            contract=contract,
+            forward=float(forward),
+            as_of=as_of,
+        )
+        if offset_info is None:
+            raise ValueError(f"Offset-based SABR smile is not supported for contract {contract}")
+
+        atm_strike, abs_offsets, _ = offset_info
+        requested_abs_offsets = list(abs_offsets) if auto_full_ladder else sorted(set([0.0] + [float(x) for x in offset_magnitudes_bps]))
+        out: List[Dict[str, Any]] = []
+        seen_symbols: set[str] = set()
+
+        for right, signed_offsets in (
+            ("C", [0.0] + [float(x) for x in requested_abs_offsets if float(x) > 0.0]),
+            ("P", [0.0] + [-float(x) for x in requested_abs_offsets if float(x) > 0.0]),
+        ):
+            for signed_offset in signed_offsets:
+                snapped_strike, actual_offset = _snap_to_listed_strike_for_offset(
+                    contract=contract,
+                    forward=float(forward),
+                    as_of=as_of,
+                    right=right,
+                    offset_bps=float(signed_offset),
+                )
+                canonical_symbol = f"{contract}|{_format_strike4(snapped_strike, contract=contract)}{right}"
+                if canonical_symbol in seen_symbols:
+                    continue
+                seen_symbols.add(canonical_symbol)
+                out.append(
+                    {
+                        "right": right,
+                        "label": canonical_symbol,
+                        "canonical_symbol": canonical_symbol,
+                        "requested_atm_offset_bps": float(actual_offset),
+                        "requested_delta_abs": None,
+                        "atm_strike": float(atm_strike),
+                        "strike_price": float(snapped_strike),
+                    }
+                )
+        return out
+
+    @staticmethod
+    def _build_sabr_smile_leg_selection(
+        *,
+        label: str,
+        right: str,
+        pricer: QLSTIRFutureOptionPricer,
+        requested_delta_abs: Optional[float],
+        requested_atm_offset_bps: Optional[float],
+        canonical_symbol: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return {
+            "label": str(label),
+            "right": str(right).upper(),
+            "pricer": pricer,
+            "requested_delta_abs": None if requested_delta_abs is None else float(requested_delta_abs),
+            "requested_atm_offset_bps": None if requested_atm_offset_bps is None else float(requested_atm_offset_bps),
+            "canonical_symbol": str(canonical_symbol) if canonical_symbol else None,
+        }
+
+    def _selected_sabr_smile_legs_from_delta_map(
+        self,
+        *,
+        selected_pricers: Dict[Tuple[str, int], QLSTIRFutureOptionPricer],
+        labels_by_key: Optional[Dict[Tuple[str, int], str]],
+    ) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        labels_by_key = dict(labels_by_key or {})
+        for key in sorted(selected_pricers.keys(), key=lambda item: (item[0], item[1])):
+            right, delta = key
+            pr = selected_pricers[key]
+            label = labels_by_key.get(key)
+            if not label:
+                label = str((pr.meta() or {}).get("qs_series_label", pr.symbol()))
+            out.append(
+                self._build_sabr_smile_leg_selection(
+                    label=label,
+                    right=str(right),
+                    pricer=pr,
+                    requested_delta_abs=float(delta),
+                    requested_atm_offset_bps=None,
+                )
+            )
+        return out
+
+    @staticmethod
+    def _pricer_delta_abs(pr: QLSTIRFutureOptionPricer, *, fallback: Optional[float] = None) -> float:
+        delta_val = _to_float(pr.delta())
+        if delta_val is not None and math.isfinite(float(delta_val)):
+            out = abs(float(delta_val))
+            if out <= 1.0:
+                out *= 100.0
+            if out > 0.0:
+                return float(out)
+        if fallback is not None:
+            return float(abs(float(fallback)))
+        return float("nan")
+
+    def _canonicalize_sabr_smile_leg(
+        self,
+        *,
+        as_of: datetime.date,
+        right: str,
+        pricer: QLSTIRFutureOptionPricer,
+        requested_delta_abs: Optional[float],
+        label: str,
+        canonical_symbol: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        try:
+            option_contract = _canonical_contract(pricer.symbol())
+        except Exception:
+            option_contract = str(pricer.underlying_symbol()).upper()
+        forward = float(pricer.forward())
+        raw_strike = float(pricer.strike())
+        strike_price = raw_strike
+        atm_strike = _atm_strike_from_forward(float(forward), step=_strike_step_for_contract(option_contract))
+        if math.isfinite(raw_strike) and raw_strike > 0.0:
+            offset_info = _cme_listed_abs_offset_grid_bps_for_contract_forward(
+                contract=option_contract,
+                forward=float(forward),
+                as_of=as_of,
+            )
+            if offset_info is not None:
+                grid_atm, _, _ = offset_info
+                atm_strike = float(grid_atm)
+                strike_price, _ = _snap_to_listed_strike_for_offset(
+                    contract=option_contract,
+                    forward=float(forward),
+                    as_of=as_of,
+                    right=right,
+                    offset_bps=(float(atm_strike) - float(raw_strike)) * 100.0,
+                )
+        actual_symbol = canonical_symbol or f"{option_contract}|{_format_strike4(strike_price, contract=option_contract)}{str(right).upper()}"
+        atm_offset_bps = round((float(atm_strike) - float(strike_price)) * 100.0, 8)
+        return {
+            "label": str(label),
+            "right": str(right).upper(),
+            "canonical_symbol": str(actual_symbol),
+            "strike_price": float(strike_price),
+            "atm_offset_bps": float(atm_offset_bps),
+            "delta_abs": self._pricer_delta_abs(pricer, fallback=requested_delta_abs),
+            "pricer": pricer,
+        }
+
+    def _build_sabr_smile_common_cache_key(
+        self,
+        *,
+        as_of: datetime.date,
+        curve_name: str,
+        curve_kwargs: Dict[str, Any],
+        canonical_legs: Sequence[str],
+    ) -> Optional[str]:
+        legs = sorted({str(symbol).upper() for symbol in canonical_legs if str(symbol).strip()})
+        if not legs:
+            return None
+        payload = {
+            "schema": 1,
+            "cache_version": "stirfo_sabr_smile_common_v1",
+            "source": str(self.source).upper(),
+            "as_of": as_of.isoformat(),
+            "curve_name": str(curve_name),
+            "curve_kwargs": self._cache_primitive(curve_kwargs or {}),
+            "legs": legs,
+        }
+        payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha1(payload_str.encode("utf-8")).hexdigest()
+        return f"STIRFO_SABR_COMMON::{digest}"
+
+    @staticmethod
+    def _sabr_smile_with_symbol(
+        smile: STIRFutureOptionSABRSmile,
+        *,
+        symbol: str,
+    ) -> STIRFutureOptionSABRSmile:
+        if str(smile.symbol) == str(symbol):
+            return smile
+        return STIRFutureOptionSABRSmile(
+            source=str(smile.source),
+            symbol=str(symbol),
+            underlying_contract=str(smile.underlying_contract),
+            quote_timestamp=smile.quote_timestamp,
+            params=smile.params,
+            points=tuple(smile.points),
+        )
+
+    def _load_sabr_smile_common_cache(
+        self,
+        *,
+        common_key: Optional[str],
+    ) -> Optional[STIRFutureOptionSABRSmile]:
+        if not common_key:
+            return None
+        cached = self._threadsafe_cache_get(common_key)
+        hit = self._deserialize_get_data_result(cached)
+        if hit is None:
+            return None
+        smiles = hit.get("sabr_smile") or []
+        return smiles[0] if smiles else None
+
+    def _store_sabr_smile_common_cache(
+        self,
+        *,
+        common_key: Optional[str],
+        smile: STIRFutureOptionSABRSmile,
+    ) -> None:
+        if not common_key:
+            return
+        self._threadsafe_cache_put(
+            common_key,
+            self._serialize_get_data_result("sabr_smile", {"sabr_smile": [smile]}),
+        )
+
+    def _finalize_sabr_smile_result(
+        self,
+        *,
+        raw_symbol: str,
+        as_of: datetime.date,
+        selected_legs: Sequence[Dict[str, Any]],
+        curve_name: str,
+        curve_kwargs: Dict[str, Any],
+        force_refresh: bool,
+    ) -> Tuple[STIRFutureOptionSABRSmile, Optional[str]]:
+        normalized_legs = self._normalize_sabr_smile_selected_legs(as_of=as_of, selected_legs=selected_legs)
+        common_key = self._build_sabr_smile_common_cache_key(
+            as_of=as_of,
+            curve_name=curve_name,
+            curve_kwargs=curve_kwargs,
+            canonical_legs=[str(leg["canonical_symbol"]) for leg in normalized_legs],
+        )
+        if not force_refresh:
+            cached_smile = self._load_sabr_smile_common_cache(common_key=common_key)
+            if cached_smile is not None:
+                return self._sabr_smile_with_symbol(cached_smile, symbol=raw_symbol), common_key
+        return (
+            self._assemble_sabr_smile_result(
+                raw_symbol=raw_symbol,
+                as_of=as_of,
+                selected_legs=selected_legs,
+            ),
+            common_key,
+        )
+
+    def _resolve_sabr_smile_contract(
+        self,
+        *,
+        symbol_info: Dict[str, Any],
+        as_of: datetime.date,
+    ) -> str:
+        src = str(self.source).upper()
+        kind = str(symbol_info.get("kind", "")).strip().lower()
+        if src == "STIRFO_DUAL-QL":
+            if kind == "listed":
+                return str(symbol_info["canonical_contract"])
+            return _resolve_cm_contract(
+                cm_root=_ROOT_ALIAS_MAP[str(symbol_info["root_globex"]).upper()],
+                cm_rank=1,
+                as_of=as_of,
+            )
+        if src == "BARCHART_STIRFO-QL":
+            if kind == "listed":
+                return str(symbol_info["contract"])
+            return _resolve_cm_contract(
+                cm_root=str(symbol_info["cm_root"]),
+                cm_rank=int(symbol_info["cm_rank"]),
+                as_of=as_of,
+            )
+        raise NotImplementedError(f"Unsupported SABR smile source for contract resolution: {self.source!r}")
+
+    def _resolve_sabr_smile_forward_from_underlying_data(
+        self,
+        *,
+        contract: str,
+        as_of: datetime.date,
+        underlying_data: Dict[str, pd.DataFrame],
+        price_mode: str,
+    ) -> float:
+        underlying_contract = _option_contract_to_underlying_contract(contract)
+        bcontract = _contract_to_barchart_contract(underlying_contract)
+        fut_df = underlying_data.get(bcontract)
+        if fut_df is None or fut_df.empty:
+            raise ValueError(f"Could not resolve SABR smile forward: missing underlying history for {contract}")
+        target_ts = pd.Timestamp(_NY_TZ.localize(datetime.datetime.combine(as_of, datetime.time(17, 0))))
+        pos = _asof_index_position(fut_df.index, target_ts)
+        if pos is None:
+            raise ValueError(f"Could not resolve SABR smile forward: no underlying row near {as_of.isoformat()} for {contract}")
+        forward = _extract_row_price(fut_df.iloc[pos].to_dict(), price_mode=price_mode)
+        if forward is None or forward <= 0.0:
+            raise ValueError(f"Could not resolve SABR smile forward: invalid underlying price for {contract}")
+        return float(forward)
 
     def _select_sabr_smile_pricers(
         self,
@@ -2003,27 +2672,117 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             raise ValueError(f"Missing SABR smile legs for {as_of.isoformat()}: {missing}. Available quote dates: {av}.")
         return selected, labels_by_key
 
-    @staticmethod
-    def _coerce_sabr_leg_market_points(
-        selected_pricers: Dict[Tuple[str, int], QLSTIRFutureOptionPricer],
-    ) -> Tuple[List[Tuple[float, float, str]], List[Tuple[str, int, QLSTIRFutureOptionPricer]]]:
-        market_points: List[Tuple[float, float, str]] = []
-        ordered: List[Tuple[str, int, QLSTIRFutureOptionPricer]] = []
-        for key in sorted(selected_pricers.keys(), key=lambda item: (item[0], item[1])):
-            right, delta = key
-            pr = selected_pricers[key]
-            iv_normal = float(pr.iv_normal())
-            if not math.isfinite(iv_normal) or iv_normal <= 0.0:
-                raise ValueError(f"Invalid normal vol for SABR smile leg {delta}D{right}: {iv_normal}")
-            market_points.append((float(delta) / 100.0, iv_normal, str(right)))
-            ordered.append((str(right), int(delta), pr))
-        return market_points, ordered
+    def _select_sabr_smile_qs_offset_legs(
+        self,
+        *,
+        pricers_by_series: Dict[str, List[QLSTIRFutureOptionPricer]],
+        as_of: datetime.date,
+        requested_legs: Sequence[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        selected: Dict[Tuple[str, float], QLSTIRFutureOptionPricer] = {}
+        available_dates: set[datetime.date] = set()
+
+        for series_name, plist in pricers_by_series.items():
+            for pr in plist:
+                quote_day = pr.quote_timestamp().astimezone(_NY_TZ).date()
+                available_dates.add(quote_day)
+                if quote_day != as_of:
+                    continue
+                meta = pr.meta() if callable(getattr(pr, "meta", None)) else {}
+                qs_query = dict((meta or {}).get("qs_query") or {})
+                label = str((meta or {}).get("qs_series_label", series_name))
+                right = self._qs_right_from_label_and_query(label=label, query=qs_query)
+                strike_raw = _to_float(qs_query.get("strike"))
+                if right not in {"C", "P"} or strike_raw is None:
+                    continue
+                key = (right, round(float(strike_raw), 8))
+                current = selected.get(key)
+                if current is None or pr.quote_timestamp() > current.quote_timestamp():
+                    selected[key] = pr
+
+        out: List[Dict[str, Any]] = []
+        missing: List[str] = []
+        for spec in requested_legs:
+            right = str(spec["right"]).upper()
+            strike = round(float(spec["strike_price"]), 8)
+            pr = selected.get((right, strike))
+            if pr is None:
+                missing.append(str(spec["canonical_symbol"]))
+                continue
+            out.append(
+                self._build_sabr_smile_leg_selection(
+                    label=str(spec["label"]),
+                    right=right,
+                    pricer=pr,
+                    requested_delta_abs=None,
+                    requested_atm_offset_bps=_to_float(spec.get("requested_atm_offset_bps")),
+                    canonical_symbol=str(spec["canonical_symbol"]),
+                )
+            )
+
+        if missing:
+            av = ", ".join(sorted(d.isoformat() for d in available_dates)) or "none"
+            raise ValueError(f"Missing SABR smile strike legs for {as_of.isoformat()}: {missing}. Available quote dates: {av}.")
+        return out
+
+    def _select_sabr_smile_explicit_legs_from_pricer_window(
+        self,
+        *,
+        requested_legs: Sequence[Dict[str, Any]],
+        pricers_window: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
+        target_date: datetime.date,
+    ) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        missing: List[str] = []
+        requested_atm_offset = False
+        for spec in requested_legs:
+            canonical_symbol = str(spec["canonical_symbol"])
+            pr = self._asof_pricer_for_date(pricers_window.get(canonical_symbol, {}), target_date)
+            if pr is None:
+                missing.append(canonical_symbol)
+                continue
+            out.append(
+                self._build_sabr_smile_leg_selection(
+                    label=str(spec["label"]),
+                    right=str(spec["right"]),
+                    pricer=pr,
+                    requested_delta_abs=None,
+                    requested_atm_offset_bps=_to_float(spec.get("requested_atm_offset_bps")),
+                    canonical_symbol=canonical_symbol,
+                )
+            )
+            requested_atm_offset = _to_float(spec.get("requested_atm_offset_bps")) is not None 
+        
+        if missing and not requested_atm_offset:
+            raise ValueError(f"Missing SABR smile strike legs for {target_date.isoformat()}: {missing}.")
+        return out
+
+    def _normalize_sabr_smile_selected_legs(
+        self,
+        *,
+        as_of: datetime.date,
+        selected_legs: Sequence[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for leg in selected_legs:
+            out.append(
+                self._canonicalize_sabr_smile_leg(
+                    as_of=as_of,
+                    right=str(leg["right"]),
+                    pricer=leg["pricer"],
+                    requested_delta_abs=_to_float(leg.get("requested_delta_abs")),
+                    label=str(leg["label"]),
+                    canonical_symbol=leg.get("canonical_symbol"),
+                )
+            )
+        out.sort(key=lambda row: (float(row["strike_price"]), str(row["right"])))
+        return out
 
     @staticmethod
     def _ensure_sabr_smile_pricer_consistency(
-        selected_pricers: Dict[Tuple[str, int], QLSTIRFutureOptionPricer],
+        selected_legs: Sequence[Dict[str, Any]],
     ) -> Tuple[str, float, datetime.date]:
-        pricers = list(selected_pricers.values())
+        pricers = [leg["pricer"] for leg in selected_legs]
         if not pricers:
             raise ValueError("No option pricers available for SABR smile calibration.")
         ref_underlying = str(pricers[0].underlying_symbol()).upper()
@@ -2043,16 +2802,20 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         *,
         raw_symbol: str,
         as_of: datetime.date,
-        selected: Dict[Tuple[str, int], QLSTIRFutureOptionPricer],
-        labels_by_key: Optional[Dict[Tuple[str, int], str]],
+        selected_legs: Sequence[Dict[str, Any]],
     ) -> STIRFutureOptionSABRSmile:
-        underlying_contract, forward_price, expiry_date = self._ensure_sabr_smile_pricer_consistency(selected)
+        normalized_legs = self._normalize_sabr_smile_selected_legs(as_of=as_of, selected_legs=selected_legs)
+        underlying_contract, forward_price, expiry_date = self._ensure_sabr_smile_pricer_consistency(normalized_legs)
         time_to_expiry = (expiry_date - as_of).days / 365.0
         if time_to_expiry <= 0.0:
             raise ValueError(f"SABR smile requires positive time to expiry, got {time_to_expiry} for {expiry_date.isoformat()}")
 
-        market_points, ordered_legs = self._coerce_sabr_leg_market_points(selected)
-        params_seed = _calibrate_sabr_normal_from_delta_points(
+        market_points = [
+            (float(leg["strike_price"]), float(leg["pricer"].iv_normal()))
+            for leg in normalized_legs
+            if math.isfinite(float(leg["pricer"].iv_normal())) and float(leg["pricer"].iv_normal()) > 0.0
+        ]
+        params_seed = _calibrate_sabr_normal_from_strike_points(
             forward=float(forward_price),
             time_to_expiry=float(time_to_expiry),
             market_points=market_points,
@@ -2071,26 +2834,18 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         )
 
         points: List[STIRFutureOptionSmilePoint] = []
-        latest_quote = max(pr.quote_timestamp() for pr in selected.values())
-        labels_by_key = dict(labels_by_key or {})
-        for right, delta, pr in ordered_legs:
-            strike_price = _normal_delta_to_strike(
-                delta_abs=float(delta) / 100.0,
-                vol_normal=float(pr.iv_normal()),
-                forward=float(forward_price),
-                time_to_expiry=float(time_to_expiry),
-                right=str(right),
-            )
+        latest_quote = max(leg["pricer"].quote_timestamp() for leg in normalized_legs)
+        for leg in normalized_legs:
+            pr = leg["pricer"]
+            strike_price = float(leg["strike_price"])
             strike_rate = 100.0 - float(strike_price)
             iv_normal_bps = float(pr.iv_normal_bps()) if math.isfinite(float(pr.iv_normal_bps())) else float(pr.iv_normal()) * 100.0
-            label = labels_by_key.get((str(right), int(delta)))
-            if not label:
-                label = str((pr.meta() or {}).get("qs_series_label", pr.symbol()))
             points.append(
                 STIRFutureOptionSmilePoint(
-                    label=label,
-                    right=str(right),
-                    delta_abs=float(delta),
+                    label=str(leg["label"]),
+                    right=str(leg["right"]),
+                    delta_abs=float(leg["delta_abs"]),
+                    atm_offset_bps=float(leg["atm_offset_bps"]),
                     strike_price=float(strike_price),
                     strike_rate=float(strike_rate),
                     iv_normal_price=float(pr.iv_normal()),
@@ -2153,51 +2908,130 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             payload = self._serialize_get_data_result("option_snapshot", {str(raw_symbol): list(plist)})
             self._threadsafe_cache_put(cache_key, payload)
 
-    def _build_sabr_smile_result(self, request: Dict[str, Any]) -> STIRFutureOptionSABRSmile:
-        raw_symbol, symbol_info, as_of, deltas, curve_name, curve_kwargs, force_refresh, show_tqdm = self._validate_sabr_smile_request(request)
-        labels_by_key: Dict[Tuple[str, int], str]
-        if str(self.source).upper() == "STIRFO_DUAL-QL":
-            qs_request = self._build_sabr_smile_qs_request(
-                globex_symbol=str(symbol_info["globex_symbol"]),
-                as_of=as_of,
-                deltas=deltas,
-                curve_name=curve_name,
-                curve_kwargs=curve_kwargs,
-                force_refresh=force_refresh,
-                show_tqdm=show_tqdm,
-            )
-            pricers_by_series = self._qs_timeseries(qs_request)
-            selected = self._select_sabr_smile_pricers(pricers_by_series=pricers_by_series, as_of=as_of, deltas=deltas)
-            labels_by_key = {key: str((pr.meta() or {}).get("qs_series_label", pr.symbol())) for key, pr in selected.items()}
-        else:
-            snapshot_request = self._build_sabr_smile_snapshot_request(
-                request_symbol=str(symbol_info["request_symbol"]),
-                as_of=as_of,
-                deltas=deltas,
-                curve_name=curve_name,
-                curve_kwargs=curve_kwargs,
-                force_refresh=force_refresh,
-                show_tqdm=show_tqdm,
-            )
-            snapshot = self.get_data(snapshot_request)
-            self._seed_option_snapshot_alias_cache(request=snapshot_request, result=snapshot, source_request=request)
-            selected, labels_by_key = self._select_sabr_smile_snapshot_pricers(
-                pricers_by_symbol=snapshot,
-                as_of=as_of,
-                deltas=deltas,
-            )
+    def _build_sabr_smile_result(self, request: Dict[str, Any]) -> Tuple[STIRFutureOptionSABRSmile, Optional[str]]:
+        raw_symbol, symbol_info, as_of, point_request, curve_name, curve_kwargs, force_refresh, show_tqdm = self._validate_sabr_smile_request(request)
+        mode = self._sabr_smile_point_mode(point_request)
+        selected_legs: List[Dict[str, Any]]
 
-        return self._assemble_sabr_smile_result(
+        if str(self.source).upper() == "STIRFO_DUAL-QL":
+            if mode == "delta":
+                deltas = list(point_request["deltas"])
+                qs_request = self._build_sabr_smile_qs_request(
+                    globex_symbol=str(symbol_info["globex_symbol"]),
+                    as_of=as_of,
+                    deltas=deltas,
+                    curve_name=curve_name,
+                    curve_kwargs=curve_kwargs,
+                    force_refresh=force_refresh,
+                    show_tqdm=show_tqdm,
+                )
+                pricers_by_series = self._qs_timeseries(qs_request)
+                selected = self._select_sabr_smile_pricers(pricers_by_series=pricers_by_series, as_of=as_of, deltas=deltas)
+                labels_by_key = {key: str((pr.meta() or {}).get("qs_series_label", pr.symbol())) for key, pr in selected.items()}
+                selected_legs = self._selected_sabr_smile_legs_from_delta_map(
+                    selected_pricers=selected,
+                    labels_by_key=labels_by_key,
+                )
+            else:
+                contract = self._resolve_sabr_smile_contract(symbol_info=symbol_info, as_of=as_of)
+                _, forward = self._resolve_sabr_smile_underlying_forward(contract=contract, as_of=as_of, show_tqdm=show_tqdm)
+                requested_legs = self._build_sabr_smile_offset_leg_specs(
+                    contract=contract,
+                    forward=float(forward),
+                    as_of=as_of,
+                    offset_magnitudes_bps=list(point_request.get("strike_offsets_bps") or []),
+                    auto_full_ladder=bool(point_request.get("auto_full_ladder", False)),
+                )
+                qs_request = {
+                    "endpoint": "qs_timeseries",
+                    "start": as_of,
+                    "end": as_of,
+                    "queries": [
+                        {
+                            "globex_symbol": str(symbol_info["globex_symbol"]),
+                            "qv_value_type": "VolByStrike",
+                            "strike": float(spec["strike_price"]),
+                            "option_type": "Call" if str(spec["right"]).upper() == "C" else "Put",
+                        }
+                        for spec in requested_legs
+                    ],
+                    "options": True,
+                    "curve_name": curve_name,
+                    "curve_kwargs": dict(curve_kwargs or {}),
+                    "force_refresh": force_refresh,
+                    "show_tqdm": show_tqdm,
+                }
+                pricers_by_series = self._qs_timeseries(qs_request)
+                selected_legs = self._select_sabr_smile_qs_offset_legs(
+                    pricers_by_series=pricers_by_series,
+                    as_of=as_of,
+                    requested_legs=requested_legs,
+                )
+        else:
+            if mode == "delta":
+                deltas = list(point_request["deltas"])
+                snapshot_request = self._build_sabr_smile_snapshot_request(
+                    request_symbol=str(symbol_info["request_symbol"]),
+                    as_of=as_of,
+                    deltas=deltas,
+                    curve_name=curve_name,
+                    curve_kwargs=curve_kwargs,
+                    force_refresh=force_refresh,
+                    show_tqdm=show_tqdm,
+                )
+                snapshot = self.get_data(snapshot_request)
+                self._seed_option_snapshot_alias_cache(request=snapshot_request, result=snapshot, source_request=request)
+                selected, labels_by_key = self._select_sabr_smile_snapshot_pricers(
+                    pricers_by_symbol=snapshot,
+                    as_of=as_of,
+                    deltas=deltas,
+                )
+                selected_legs = self._selected_sabr_smile_legs_from_delta_map(
+                    selected_pricers=selected,
+                    labels_by_key=labels_by_key,
+                )
+            else:
+                contract = self._resolve_sabr_smile_contract(symbol_info=symbol_info, as_of=as_of)
+                _, forward = self._resolve_sabr_smile_underlying_forward(contract=contract, as_of=as_of, show_tqdm=show_tqdm)
+                requested_legs = self._build_sabr_smile_offset_leg_specs(
+                    contract=contract,
+                    forward=float(forward),
+                    as_of=as_of,
+                    offset_magnitudes_bps=list(point_request.get("strike_offsets_bps") or []),
+                    auto_full_ladder=bool(point_request.get("auto_full_ladder", False)),
+                )
+                price_mode = str(request.get("price_mode", "mid_then_fallback"))
+                pricers_window = self._get_or_build_barchart_pricer_window(
+                    leg_symbols=[str(spec["canonical_symbol"]) for spec in requested_legs],
+                    cache_symbols=[str(spec["canonical_symbol"]) for spec in requested_legs],
+                    request_start=as_of,
+                    request_end=as_of,
+                    show_tqdm=show_tqdm,
+                    price_mode=price_mode,
+                    curve_name=curve_name,
+                    curve_kwargs=curve_kwargs,
+                    use_ql_calculator=True,
+                    source="BARCHART_EOD_WINDOW",
+                    force_refresh=force_refresh,
+                )
+                selected_legs = self._select_sabr_smile_explicit_legs_from_pricer_window(
+                    requested_legs=requested_legs,
+                    pricers_window=pricers_window,
+                    target_date=as_of,
+                )
+        return self._finalize_sabr_smile_result(
             raw_symbol=raw_symbol,
             as_of=as_of,
-            selected=selected,
-            labels_by_key=labels_by_key,
+            selected_legs=selected_legs,
+            curve_name=curve_name,
+            curve_kwargs=curve_kwargs,
+            force_refresh=force_refresh,
         )
 
     def _normalize_bulk_sabr_smile_request(
         self,
         request: Dict[str, Any],
-    ) -> Tuple[List[Dict[str, Any]], List[datetime.date], List[int], str, Dict[str, Any], bool, bool]:
+    ) -> Tuple[List[Dict[str, Any]], List[datetime.date], Dict[str, Any], str, Dict[str, Any], bool, bool]:
         if "timestamps" not in request:
             raise ValueError("fetch_bulk_sabr_smile requires 'timestamps'")
         if "beta" in request:
@@ -2266,7 +3100,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             base_req.pop(key, None)
 
         symbol_rows: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-        deltas: Optional[List[int]] = None
+        point_request = self._normalize_sabr_smile_point_request(request)
         curve_name: Optional[str] = None
         curve_kwargs: Optional[Dict[str, Any]] = None
         force_refresh: Optional[bool] = None
@@ -2293,8 +3127,8 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                         f"{raw_symbol!r} on {first_date.isoformat()} vs {probe_raw_symbol!r} on {as_of.isoformat()}"
                     )
 
-            if deltas is None:
-                deltas = list(deltas_i)
+            if curve_name is None:
+                point_request = dict(deltas_i)
                 curve_name = curve_name_i
                 curve_kwargs = dict(curve_kwargs_i)
                 force_refresh = bool(force_refresh_i)
@@ -2313,7 +3147,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         return (
             list(symbol_rows.values()),
             dates,
-            list(deltas or self._normalize_sabr_smile_deltas(None)),
+            dict(point_request),
             str(curve_name or self._curve_name_default),
             dict(curve_kwargs or {}),
             bool(force_refresh),
@@ -2401,21 +3235,169 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         return selected_by_request, labels_by_request, unresolved
 
+    def _select_bulk_sabr_smile_qs_offset_legs(
+        self,
+        *,
+        pricers_by_series: Dict[str, List[QLSTIRFutureOptionPricer]],
+        misses: Sequence[Dict[str, Any]],
+        requested_legs_by_request: Dict[Tuple[str, datetime.date], List[Dict[str, Any]]],
+        strict: bool = True,
+    ) -> Tuple[
+        Dict[Tuple[str, datetime.date], List[Dict[str, Any]]],
+        List[Dict[str, Any]],
+    ]:
+        selected_by_request: Dict[Tuple[str, datetime.date], List[Dict[str, Any]]] = {}
+        pricer_buckets: Dict[Tuple[str, datetime.date, str, float], QLSTIRFutureOptionPricer] = {}
+        available_dates_by_symbol: Dict[str, set[datetime.date]] = defaultdict(set)
+        unresolved: List[Dict[str, Any]] = []
+
+        for series_name, plist in pricers_by_series.items():
+            for pr in plist:
+                quote_day = pr.quote_timestamp().astimezone(_NY_TZ).date()
+                meta = pr.meta() if callable(getattr(pr, "meta", None)) else {}
+                qs_query = dict((meta or {}).get("qs_query") or {})
+                label = str((meta or {}).get("qs_series_label", series_name))
+                right = self._qs_right_from_label_and_query(label=label, query=qs_query)
+                strike_raw = _to_float(qs_query.get("strike"))
+                if strike_raw is None or right not in {"C", "P"}:
+                    continue
+                globex_symbol = str(qs_query.get("globex_symbol", "")).strip().upper()
+                if not globex_symbol:
+                    head = str(label).strip().upper().split(" ", 1)[0]
+                    try:
+                        globex_symbol = _normalize_qs_stir_globex_symbol(head)
+                    except Exception:
+                        globex_symbol = head
+                if not globex_symbol:
+                    continue
+
+                key = (globex_symbol, quote_day, right, round(float(strike_raw), 8))
+                available_dates_by_symbol[globex_symbol].add(quote_day)
+                current = pricer_buckets.get(key)
+                if current is None or pr.quote_timestamp() > current.quote_timestamp():
+                    pricer_buckets[key] = pr
+
+        for miss in misses:
+            request_key = (str(miss["raw_symbol"]), miss["as_of"])
+            globex_symbol = str(miss["symbol_info"]["globex_symbol"]).strip().upper()
+            requested_legs = list(requested_legs_by_request.get(request_key) or [])
+            selected_legs: List[Dict[str, Any]] = []
+            missing: List[str] = []
+            for spec in requested_legs:
+                right = str(spec["right"]).upper()
+                strike = round(float(spec["strike_price"]), 8)
+                pr = pricer_buckets.get((globex_symbol, miss["as_of"], right, strike))
+                if pr is None:
+                    missing.append(str(spec["canonical_symbol"]))
+                    continue
+                selected_legs.append(
+                    self._build_sabr_smile_leg_selection(
+                        label=str(spec["label"]),
+                        right=right,
+                        pricer=pr,
+                        requested_delta_abs=None,
+                        requested_atm_offset_bps=_to_float(spec.get("requested_atm_offset_bps")),
+                        canonical_symbol=str(spec["canonical_symbol"]),
+                    )
+                )
+            if missing:
+                available_dates = ", ".join(sorted(d.isoformat() for d in available_dates_by_symbol.get(globex_symbol, set()))) or "none"
+                if strict:
+                    raise ValueError(
+                        f"Missing SABR smile strike legs for {miss['raw_symbol']} on {miss['as_of'].isoformat()}: {missing}. "
+                        f"Available quote dates: {available_dates}."
+                    )
+                unresolved.append(dict(miss, missing=missing, available_dates=available_dates))
+                continue
+            selected_by_request[request_key] = selected_legs
+
+        return selected_by_request, unresolved
+
     def _build_bulk_sabr_smile_snapshot_context(
         self,
         *,
-        request_symbols: Sequence[str],
-        deltas: Sequence[int],
-        window_start: datetime.date,
-        window_end: datetime.date,
+        symbol_rows: Sequence[Dict[str, Any]],
+        dates: Sequence[datetime.date],
+        point_request: Dict[str, Any],
         request: Dict[str, Any],
         curve_name: str,
         curve_kwargs: Dict[str, Any],
         show_tqdm: bool,
         force_refresh: bool,
     ) -> Dict[str, Any]:
+        if not dates:
+            raise ValueError("Bulk SABR smile context requires at least one date")
+        window_start = min(dates)
+        window_end = max(dates)
         start, end = self._historical_prefetch_window(start=window_start, end=window_end)
         price_mode = str(request.get("price_mode", "mid_then_fallback"))
+        mode = self._sabr_smile_point_mode(point_request)
+        request_symbols = [str(row["raw_symbol"]) for row in symbol_rows]
+
+        if mode == "atm_offset_bps":
+            contracts_by_request: Dict[Tuple[str, datetime.date], str] = {}
+            underlying_symbols = sorted(
+                {
+                    _contract_to_barchart_contract(_option_contract_to_underlying_contract(self._resolve_sabr_smile_contract(symbol_info=row["symbol_info"], as_of=as_of)))
+                    for row in symbol_rows
+                    for as_of in dates
+                }
+            )
+            underlying_data = self._fetch_barchart_eod_series(
+                symbols=underlying_symbols,
+                start=start,
+                end=end,
+                show_tqdm=show_tqdm,
+            ) if underlying_symbols else {}
+
+            requested_legs_by_request: Dict[Tuple[str, datetime.date], List[Dict[str, Any]]] = {}
+            expanded_needed: "OrderedDict[str, str]" = OrderedDict()
+            for row in symbol_rows:
+                raw_symbol = str(row["raw_symbol"])
+                symbol_info = dict(row["symbol_info"])
+                for as_of in dates:
+                    contract = self._resolve_sabr_smile_contract(symbol_info=symbol_info, as_of=as_of)
+                    contracts_by_request[(raw_symbol, as_of)] = contract
+                    forward = self._resolve_sabr_smile_forward_from_underlying_data(
+                        contract=contract,
+                        as_of=as_of,
+                        underlying_data=underlying_data,
+                        price_mode=price_mode,
+                    )
+                    requested_legs = self._build_sabr_smile_offset_leg_specs(
+                        contract=contract,
+                        forward=float(forward),
+                        as_of=as_of,
+                        offset_magnitudes_bps=list(point_request.get("strike_offsets_bps") or []),
+                        auto_full_ladder=bool(point_request.get("auto_full_ladder", False)),
+                    )
+                    requested_legs_by_request[(raw_symbol, as_of)] = requested_legs
+                    for spec in requested_legs:
+                        expanded_needed[str(spec["canonical_symbol"])] = str(spec["canonical_symbol"])
+
+            pricers_window = self._get_or_build_barchart_pricer_window(
+                leg_symbols=list(expanded_needed.keys()),
+                cache_symbols=list(expanded_needed.keys()),
+                request_start=window_start,
+                request_end=window_end,
+                show_tqdm=show_tqdm,
+                price_mode=price_mode,
+                curve_name=curve_name,
+                curve_kwargs=curve_kwargs,
+                use_ql_calculator=True,
+                source="BARCHART_EOD_WINDOW",
+                force_refresh=force_refresh,
+            ) if expanded_needed else {}
+
+            return {
+                "mode": mode,
+                "price_mode": price_mode,
+                "contracts_by_request": contracts_by_request,
+                "underlying_data": underlying_data,
+                "requested_legs_by_request": requested_legs_by_request,
+                "pricers_window": pricers_window,
+            }
+
         delta_candidate_half_width = max(2, int(request.get("delta_candidate_half_width", 8)))
 
         alias_symbols: List[str] = []
@@ -2423,7 +3405,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         parsed_requested_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         for request_symbol in request_symbols:
             per_symbol: Dict[Tuple[str, int], str] = {}
-            for delta in deltas:
+            for delta in point_request["deltas"]:
                 for right in ("C", "P"):
                     raw_alias = f"{request_symbol}|{int(delta)}D{right}"
                     alias_symbols.append(raw_alias)
@@ -2577,6 +3559,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         ) if expanded_needed else {}
 
         return {
+            "mode": mode,
             "price_mode": price_mode,
             "alias_by_symbol": alias_by_symbol,
             "parsed_requested_specs": parsed_requested_specs,
@@ -2667,8 +3650,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
     def fetch_bulk_sabr_smile(self, request: Dict[str, Any]) -> Dict[str, Dict[datetime.date, STIRFutureOptionSABRSmile]]:
         req = dict(request)
-        symbol_rows, dates, deltas, curve_name, curve_kwargs, force_refresh, show_tqdm = self._normalize_bulk_sabr_smile_request(req)
+        symbol_rows, dates, point_request, curve_name, curve_kwargs, force_refresh, show_tqdm = self._normalize_bulk_sabr_smile_request(req)
         src = str(self.source).upper()
+        mode = self._sabr_smile_point_mode(point_request)
         base_req = dict(req)
         for key in ("timestamps", "globex_symbols", "globex_symbol", "symbols", "symbol", "contract", "endpoint", "max_workers"):
             base_req.pop(key, None)
@@ -2702,114 +3686,227 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                             "input_symbols": list(row["input_symbols"]),
                             "as_of": as_of,
                             "scalar_request": scalar_req,
+                            "cache_key": cache_key,
                         }
                     )
 
             if misses:
+                selected_legs_by_request: Dict[Tuple[str, datetime.date], List[Dict[str, Any]]] = {}
+                seed_results_by_request: Dict[Tuple[str, datetime.date], Dict[str, List[QLSTIRFutureOptionPricer]]] = {}
                 if src == "STIRFO_DUAL-QL":
-                    queries: List[Dict[str, Any]] = []
-                    seen_queries: set[Tuple[str, str, int]] = set()
-                    for miss in misses:
-                        globex_symbol = str(miss["symbol_info"]["globex_symbol"]).strip().upper()
-                        for delta in deltas:
-                            for qv_type, right in (("Call", "C"), ("Put", "P")):
-                                qkey = (globex_symbol, right, int(delta))
+                    if mode == "delta":
+                        deltas = list(point_request["deltas"])
+                        queries: List[Dict[str, Any]] = []
+                        seen_queries: set[Tuple[str, str, int]] = set()
+                        for miss in misses:
+                            globex_symbol = str(miss["symbol_info"]["globex_symbol"]).strip().upper()
+                            for delta in deltas:
+                                for qv_type, right in (("Call", "C"), ("Put", "P")):
+                                    qkey = (globex_symbol, right, int(delta))
+                                    if qkey in seen_queries:
+                                        continue
+                                    seen_queries.add(qkey)
+                                    queries.append(
+                                        {
+                                            "globex_symbol": globex_symbol,
+                                            "qv_value_type": qv_type,
+                                            "delta": int(delta),
+                                            "option_type": qv_type,
+                                        }
+                                    )
+                        qs_request = {
+                            "endpoint": "qs_timeseries",
+                            "start": min(miss["as_of"] for miss in misses),
+                            "end": max(miss["as_of"] for miss in misses),
+                            "queries": queries,
+                            "options": True,
+                            "curve_name": curve_name,
+                            "curve_kwargs": dict(curve_kwargs or {}),
+                            "force_refresh": force_refresh,
+                            "show_tqdm": show_tqdm,
+                        }
+                        pricers_by_series = self._qs_timeseries(qs_request)
+                        selected_by_request, labels_by_request, unresolved = self._select_bulk_sabr_smile_qs_pricers(
+                            pricers_by_series=pricers_by_series,
+                            misses=misses,
+                            deltas=deltas,
+                            strict=(len({miss["as_of"] for miss in misses}) == 1),
+                        )
+                        if unresolved:
+                            unresolved_by_date: "OrderedDict[datetime.date, List[Dict[str, Any]]]" = OrderedDict()
+                            for miss in unresolved:
+                                unresolved_by_date.setdefault(miss["as_of"], []).append(miss)
+
+                            for fallback_date, fallback_misses in unresolved_by_date.items():
+                                fallback_queries: List[Dict[str, Any]] = []
+                                fallback_seen_queries: set[Tuple[str, str, int]] = set()
+                                for miss in fallback_misses:
+                                    globex_symbol = str(miss["symbol_info"]["globex_symbol"]).strip().upper()
+                                    for delta in deltas:
+                                        for qv_type, right in (("Call", "C"), ("Put", "P")):
+                                            qkey = (globex_symbol, right, int(delta))
+                                            if qkey in fallback_seen_queries:
+                                                continue
+                                            fallback_seen_queries.add(qkey)
+                                            fallback_queries.append(
+                                                {
+                                                    "globex_symbol": globex_symbol,
+                                                    "qv_value_type": qv_type,
+                                                    "delta": int(delta),
+                                                    "option_type": qv_type,
+                                                }
+                                            )
+
+                                fallback_request = {
+                                    "endpoint": "qs_timeseries",
+                                    "start": fallback_date,
+                                    "end": fallback_date,
+                                    "queries": fallback_queries,
+                                    "options": True,
+                                    "curve_name": curve_name,
+                                    "curve_kwargs": dict(curve_kwargs or {}),
+                                    "force_refresh": force_refresh,
+                                    "show_tqdm": show_tqdm,
+                                }
+                                fallback_pricers_by_series = self._qs_timeseries(fallback_request)
+                                fallback_selected, fallback_labels, _ = self._select_bulk_sabr_smile_qs_pricers(
+                                    pricers_by_series=fallback_pricers_by_series,
+                                    misses=fallback_misses,
+                                    deltas=deltas,
+                                    strict=True,
+                                )
+                                selected_by_request.update(fallback_selected)
+                                labels_by_request.update(fallback_labels)
+
+                        for miss in misses:
+                            request_key = (str(miss["raw_symbol"]), miss["as_of"])
+                            selected_legs_by_request[request_key] = self._selected_sabr_smile_legs_from_delta_map(
+                                selected_pricers=selected_by_request[request_key],
+                                labels_by_key=labels_by_request[request_key],
+                            )
+                    else:
+                        price_mode = str(req.get("price_mode", "mid_then_fallback"))
+                        start, end = self._historical_prefetch_window(
+                            start=min(miss["as_of"] for miss in misses),
+                            end=max(miss["as_of"] for miss in misses),
+                        )
+                        underlying_symbols = sorted(
+                            {
+                                _contract_to_barchart_contract(
+                                    _option_contract_to_underlying_contract(
+                                        self._resolve_sabr_smile_contract(symbol_info=miss["symbol_info"], as_of=miss["as_of"])
+                                    )
+                                )
+                                for miss in misses
+                            }
+                        )
+                        underlying_data = self._fetch_barchart_eod_series(
+                            symbols=underlying_symbols,
+                            start=start,
+                            end=end,
+                            show_tqdm=show_tqdm,
+                        ) if underlying_symbols else {}
+                        requested_legs_by_request: Dict[Tuple[str, datetime.date], List[Dict[str, Any]]] = {}
+                        queries: List[Dict[str, Any]] = []
+                        seen_queries: set[Tuple[str, str, float]] = set()
+                        for miss in misses:
+                            request_key = (str(miss["raw_symbol"]), miss["as_of"])
+                            contract = self._resolve_sabr_smile_contract(symbol_info=miss["symbol_info"], as_of=miss["as_of"])
+                            forward = self._resolve_sabr_smile_forward_from_underlying_data(
+                                contract=contract,
+                                as_of=miss["as_of"],
+                                underlying_data=underlying_data,
+                                price_mode=price_mode,
+                            )
+                            requested_legs = self._build_sabr_smile_offset_leg_specs(
+                                contract=contract,
+                                forward=float(forward),
+                                as_of=miss["as_of"],
+                                offset_magnitudes_bps=list(point_request.get("strike_offsets_bps") or []),
+                                auto_full_ladder=bool(point_request.get("auto_full_ladder", False)),
+                            )
+                            requested_legs_by_request[request_key] = requested_legs
+                            globex_symbol = str(miss["symbol_info"]["globex_symbol"]).strip().upper()
+                            for spec in requested_legs:
+                                qkey = (globex_symbol, str(spec["right"]).upper(), round(float(spec["strike_price"]), 8))
                                 if qkey in seen_queries:
                                     continue
                                 seen_queries.add(qkey)
                                 queries.append(
                                     {
                                         "globex_symbol": globex_symbol,
-                                        "qv_value_type": qv_type,
-                                        "delta": int(delta),
-                                        "option_type": qv_type,
+                                        "qv_value_type": "VolByStrike",
+                                        "strike": float(spec["strike_price"]),
+                                        "option_type": "Call" if str(spec["right"]).upper() == "C" else "Put",
                                     }
                                 )
-                    qs_request = {
-                        "endpoint": "qs_timeseries",
-                        "start": min(miss["as_of"] for miss in misses),
-                        "end": max(miss["as_of"] for miss in misses),
-                        "queries": queries,
-                        "options": True,
-                        "curve_name": curve_name,
-                        "curve_kwargs": dict(curve_kwargs or {}),
-                        "force_refresh": force_refresh,
-                        "show_tqdm": show_tqdm,
-                    }
-                    pricers_by_series = self._qs_timeseries(qs_request)
-                    selected_by_request, labels_by_request, unresolved = self._select_bulk_sabr_smile_qs_pricers(
-                        pricers_by_series=pricers_by_series,
-                        misses=misses,
-                        deltas=deltas,
-                        strict=(len({miss["as_of"] for miss in misses}) == 1),
-                    )
-                    if unresolved:
-                        unresolved_by_date: "OrderedDict[datetime.date, List[Dict[str, Any]]]" = OrderedDict()
-                        for miss in unresolved:
-                            unresolved_by_date.setdefault(miss["as_of"], []).append(miss)
+                        qs_request = {
+                            "endpoint": "qs_timeseries",
+                            "start": min(miss["as_of"] for miss in misses),
+                            "end": max(miss["as_of"] for miss in misses),
+                            "queries": queries,
+                            "options": True,
+                            "curve_name": curve_name,
+                            "curve_kwargs": dict(curve_kwargs or {}),
+                            "force_refresh": force_refresh,
+                            "show_tqdm": show_tqdm,
+                        }
+                        pricers_by_series = self._qs_timeseries(qs_request)
+                        selected_legs_by_request, unresolved = self._select_bulk_sabr_smile_qs_offset_legs(
+                            pricers_by_series=pricers_by_series,
+                            misses=misses,
+                            requested_legs_by_request=requested_legs_by_request,
+                            strict=(len({miss["as_of"] for miss in misses}) == 1),
+                        )
+                        if unresolved:
+                            unresolved_by_date: "OrderedDict[datetime.date, List[Dict[str, Any]]]" = OrderedDict()
+                            for miss in unresolved:
+                                unresolved_by_date.setdefault(miss["as_of"], []).append(miss)
 
-                        for fallback_date, fallback_misses in unresolved_by_date.items():
-                            fallback_queries: List[Dict[str, Any]] = []
-                            fallback_seen_queries: set[Tuple[str, str, int]] = set()
-                            for miss in fallback_misses:
-                                globex_symbol = str(miss["symbol_info"]["globex_symbol"]).strip().upper()
-                                for delta in deltas:
-                                    for qv_type, right in (("Call", "C"), ("Put", "P")):
-                                        qkey = (globex_symbol, right, int(delta))
+                            for fallback_date, fallback_misses in unresolved_by_date.items():
+                                fallback_queries: List[Dict[str, Any]] = []
+                                fallback_seen_queries: set[Tuple[str, str, float]] = set()
+                                for miss in fallback_misses:
+                                    request_key = (str(miss["raw_symbol"]), miss["as_of"])
+                                    globex_symbol = str(miss["symbol_info"]["globex_symbol"]).strip().upper()
+                                    for spec in requested_legs_by_request[request_key]:
+                                        qkey = (globex_symbol, str(spec["right"]).upper(), round(float(spec["strike_price"]), 8))
                                         if qkey in fallback_seen_queries:
                                             continue
                                         fallback_seen_queries.add(qkey)
                                         fallback_queries.append(
                                             {
                                                 "globex_symbol": globex_symbol,
-                                                "qv_value_type": qv_type,
-                                                "delta": int(delta),
-                                                "option_type": qv_type,
+                                                "qv_value_type": "VolByStrike",
+                                                "strike": float(spec["strike_price"]),
+                                                "option_type": "Call" if str(spec["right"]).upper() == "C" else "Put",
                                             }
                                         )
 
-                            fallback_request = {
-                                "endpoint": "qs_timeseries",
-                                "start": fallback_date,
-                                "end": fallback_date,
-                                "queries": fallback_queries,
-                                "options": True,
-                                "curve_name": curve_name,
-                                "curve_kwargs": dict(curve_kwargs or {}),
-                                "force_refresh": force_refresh,
-                                "show_tqdm": show_tqdm,
-                            }
-                            fallback_pricers_by_series = self._qs_timeseries(fallback_request)
-                            fallback_selected, fallback_labels, _ = self._select_bulk_sabr_smile_qs_pricers(
-                                pricers_by_series=fallback_pricers_by_series,
-                                misses=fallback_misses,
-                                deltas=deltas,
-                                strict=True,
-                            )
-                            selected_by_request.update(fallback_selected)
-                            labels_by_request.update(fallback_labels)
-
-                    for miss in misses:
-                        request_key = (str(miss["raw_symbol"]), miss["as_of"])
-                        smile = self._assemble_sabr_smile_result(
-                            raw_symbol=str(miss["raw_symbol"]),
-                            as_of=miss["as_of"],
-                            selected=selected_by_request[request_key],
-                            labels_by_key=labels_by_request[request_key],
-                        )
-                        smiles_by_symbol[str(miss["raw_symbol"])][miss["as_of"]] = smile
-                        cache_key = self._build_get_data_cache_key("sabr_smile", miss["scalar_request"])
-                        if cache_key:
-                            self._threadsafe_cache_put(
-                                cache_key,
-                                self._serialize_get_data_result("sabr_smile", {"sabr_smile": [smile]}),
-                            )
+                                fallback_request = {
+                                    "endpoint": "qs_timeseries",
+                                    "start": fallback_date,
+                                    "end": fallback_date,
+                                    "queries": fallback_queries,
+                                    "options": True,
+                                    "curve_name": curve_name,
+                                    "curve_kwargs": dict(curve_kwargs or {}),
+                                    "force_refresh": force_refresh,
+                                    "show_tqdm": show_tqdm,
+                                }
+                                fallback_pricers_by_series = self._qs_timeseries(fallback_request)
+                                fallback_selected, _ = self._select_bulk_sabr_smile_qs_offset_legs(
+                                    pricers_by_series=fallback_pricers_by_series,
+                                    misses=fallback_misses,
+                                    requested_legs_by_request=requested_legs_by_request,
+                                    strict=True,
+                                )
+                                selected_legs_by_request.update(fallback_selected)
                 else:
                     context = self._build_bulk_sabr_smile_snapshot_context(
-                        request_symbols=[str(row["raw_symbol"]) for row in symbol_rows],
-                        deltas=deltas,
-                        window_start=min(miss["as_of"] for miss in misses),
-                        window_end=max(miss["as_of"] for miss in misses),
+                        symbol_rows=symbol_rows,
+                        dates=dates,
+                        point_request=point_request,
                         request=req,
                         curve_name=curve_name,
                         curve_kwargs=curve_kwargs,
@@ -2823,11 +3920,28 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                         seed_source_request["curve_kwargs"] = curve_kwargs
 
                     for miss in misses:
-                        selected, labels_by_key, seed_result = self._select_bulk_sabr_smile_snapshot_pricers(
-                            context=context,
-                            request_symbol=str(miss["raw_symbol"]),
-                            as_of=miss["as_of"],
-                        )
+                        request_key = (str(miss["raw_symbol"]), miss["as_of"])
+                        if mode == "delta":
+                            selected, labels_by_key, seed_result = self._select_bulk_sabr_smile_snapshot_pricers(
+                                context=context,
+                                request_symbol=str(miss["raw_symbol"]),
+                                as_of=miss["as_of"],
+                            )
+                            selected_legs_by_request[request_key] = self._selected_sabr_smile_legs_from_delta_map(
+                                selected_pricers=selected,
+                                labels_by_key=labels_by_key,
+                            )
+                            seed_results_by_request[request_key] = seed_result
+                        else:
+                            selected_legs_by_request[request_key] = self._select_sabr_smile_explicit_legs_from_pricer_window(
+                                requested_legs=context["requested_legs_by_request"][request_key],
+                                pricers_window=context["pricers_window"],
+                                target_date=miss["as_of"],
+                            )
+
+                for miss in misses:
+                    request_key = (str(miss["raw_symbol"]), miss["as_of"])
+                    if request_key in seed_results_by_request:
                         seed_request: Dict[str, Any] = {
                             "endpoint": "option_snapshot",
                             "timestamp": miss["as_of"],
@@ -2839,22 +3953,28 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                             seed_request["curve_kwargs"] = curve_kwargs
                         self._seed_option_snapshot_alias_cache(
                             request=seed_request,
-                            result=seed_result,
+                            result=seed_results_by_request[request_key],
                             source_request=seed_source_request,
                         )
-                        smile = self._assemble_sabr_smile_result(
-                            raw_symbol=str(miss["raw_symbol"]),
-                            as_of=miss["as_of"],
-                            selected=selected,
-                            labels_by_key=labels_by_key,
+
+                    smile, common_key = self._finalize_sabr_smile_result(
+                        raw_symbol=str(miss["raw_symbol"]),
+                        as_of=miss["as_of"],
+                        selected_legs=selected_legs_by_request[request_key],
+                        curve_name=curve_name,
+                        curve_kwargs=curve_kwargs,
+                        force_refresh=force_refresh,
+                    )
+                    smiles_by_symbol[str(miss["raw_symbol"])][miss["as_of"]] = smile
+
+                    cache_key = miss.get("cache_key")
+                    if cache_key:
+                        self._threadsafe_cache_put(
+                            cache_key,
+                            self._serialize_get_data_result("sabr_smile", {"sabr_smile": [smile]}),
                         )
-                        smiles_by_symbol[str(miss["raw_symbol"])][miss["as_of"]] = smile
-                        cache_key = self._build_get_data_cache_key("sabr_smile", miss["scalar_request"])
-                        if cache_key:
-                            self._threadsafe_cache_put(
-                                cache_key,
-                                self._serialize_get_data_result("sabr_smile", {"sabr_smile": [smile]}),
-                            )
+                    if common_key and (force_refresh or self._threadsafe_cache_get(common_key) is None):
+                        self._store_sabr_smile_common_cache(common_key=common_key, smile=smile)
 
         return {symbol: dict(by_date) for symbol, by_date in smiles_by_symbol.items()}
 
@@ -2916,7 +4036,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                         cache_req["symbol"] = f"{str(contract_spec['cm_root']).upper()}CM{int(contract_spec['cm_rank'])}"
                 cache_req.pop("contract", None)
                 cache_req.pop("globex_symbol", None)
-            cache_req["deltas"] = self._normalize_sabr_smile_deltas(cache_req.get("deltas"))
+            point_request = self._normalize_sabr_smile_point_request(cache_req)
+            cache_req["point_request"] = self._cache_primitive(point_request)
+            cache_req.pop("deltas", None)
+            cache_req.pop("strike_offsets_bps", None)
 
         if symbols_raw:
             cache_req["symbol_specs"] = self._normalize_symbols_for_cache(symbols=symbols_raw, as_of=as_of_for_symbols)
@@ -2925,7 +4048,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_get_data_v6",
+            "cache_version": "stirfo_get_data_v7",
             "source": str(self.source).upper(),
             "endpoint": ep,
             "request": self._cache_primitive(cache_req),
@@ -3633,6 +4756,56 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             return None
         return min(strikes, key=lambda k: abs(float(k) - float(forward)))
 
+    def _resolve_live_atmf_offset_strike(
+        self,
+        *,
+        chain: Dict[str, pd.DataFrame],
+        contract: str,
+        forward: float,
+        right: str,
+        atm_offset_bps: float,
+    ) -> Optional[float]:
+        r = str(right).upper()
+        if r not in {"C", "P"}:
+            return None
+        atm_strike = self._resolve_live_atm_strike(chain=chain, forward=forward, right="S")
+        if atm_strike is None:
+            atm_strike = self._resolve_live_atm_strike(chain=chain, forward=forward, right=r)
+        if atm_strike is None:
+            return None
+
+        side = "call" if r == "C" else "put"
+        strikes = self._live_chain_strikes(chain, side)
+        if not strikes:
+            try:
+                strike, _ = _snap_to_listed_strike_for_offset(
+                    contract=contract,
+                    forward=float(forward),
+                    as_of=datetime.datetime.now(_NY_TZ).date(),
+                    right=r,
+                    offset_bps=float(atm_offset_bps),
+                )
+                return float(strike)
+            except Exception:
+                return None
+
+        signed_offset = abs(float(atm_offset_bps)) if r == "C" else -abs(float(atm_offset_bps))
+        side_candidates = (
+            [strike for strike in strikes if strike <= atm_strike + 1e-12]
+            if r == "C"
+            else [strike for strike in strikes if strike >= atm_strike - 1e-12]
+        )
+        if not side_candidates:
+            side_candidates = list(strikes)
+        target_strike = float(atm_strike) - signed_offset / 100.0
+        return min(
+            side_candidates,
+            key=lambda strike: (
+                abs(float(strike) - float(target_strike)),
+                abs(float(atm_strike) - float(strike)),
+            ),
+        )
+
     def _resolve_live_delta_strike(self, *, chain: Dict[str, pd.DataFrame], target_delta: float, right: str) -> Optional[float]:
         r = str(right).upper()
         side = "call" if r == "C" else "put"
@@ -3865,6 +5038,22 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 resolved[raw] = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
                 continue
 
+            if selector == "atmf_offset":
+                offset_bps = _to_float(spec.get("atm_offset_bps"))
+                if offset_bps is None:
+                    raise ValueError(f"Could not resolve ATMF offset alias {raw!r}: missing offset")
+                strike = self._resolve_live_atmf_offset_strike(
+                    chain=chain,
+                    contract=contract,
+                    forward=float(forward),
+                    right=right,
+                    atm_offset_bps=float(offset_bps),
+                )
+                if strike is None:
+                    raise ValueError(f"Could not resolve ATMF offset alias {raw!r}: no valid listed strikes.")
+                resolved[raw] = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
+                continue
+
             if selector == "delta":
                 if right not in {"C", "P"}:
                     raise ValueError(f"Delta alias supports call/put only: {raw}")
@@ -3908,7 +5097,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     "Callers should resolve delta after fetching window pricers."
                 )
 
-            if selector != "atm":
+            if selector not in {"atm", "atmf_offset"}:
                 raise ValueError(f"Unsupported alias selector {selector!r} for symbol {raw!r}")
 
             underlying_contract = _option_contract_to_underlying_contract(contract)
@@ -3924,8 +5113,22 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             if forward is None or forward <= 0.0:
                 raise ValueError(f"Could not resolve ATM alias {raw!r}: invalid underlying forward.")
 
-            atm_strike = _atm_strike_from_forward(float(forward), step=atm_strike_step)
-            resolved[raw] = f"{contract}|{_format_strike4(atm_strike, contract=contract)}{right}"
+            if selector == "atm":
+                atm_strike = _atm_strike_from_forward(float(forward), step=atm_strike_step)
+                resolved[raw] = f"{contract}|{_format_strike4(atm_strike, contract=contract)}{right}"
+                continue
+
+            offset_bps = _to_float(spec.get("atm_offset_bps"))
+            if offset_bps is None:
+                raise ValueError(f"Could not resolve ATMF offset alias {raw!r}: missing offset")
+            strike, _ = _snap_to_listed_strike_for_offset(
+                contract=contract,
+                forward=float(forward),
+                as_of=target_date,
+                right=right,
+                offset_bps=float(offset_bps),
+            )
+            resolved[raw] = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
 
         return resolved
 
@@ -4006,6 +5209,45 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 continue
             atm_strike = _atm_strike_from_forward(float(forward), step=atm_strike_step)
             out.append(f"{contract}|{_format_strike4(atm_strike, contract=contract)}{right}")
+
+        return self._dedupe_preserve_order(out)
+
+    def _historical_atmf_offset_symbols_for_contract_window(
+        self,
+        *,
+        contract: str,
+        right: str,
+        atm_offset_bps: float,
+        underlying_data: Dict[str, pd.DataFrame],
+        window_start: datetime.date,
+        window_end: datetime.date,
+        price_mode: str,
+    ) -> List[str]:
+        underlying_contract = _option_contract_to_underlying_contract(contract)
+        bcontract = _contract_to_barchart_contract(underlying_contract)
+        fut_df = underlying_data.get(bcontract)
+        if fut_df is None or fut_df.empty:
+            return []
+
+        out: List[str] = []
+        for row_dt, row in fut_df.iterrows():
+            row_day = pd.Timestamp(row_dt).date()
+            if row_day < window_start or row_day > window_end:
+                continue
+            forward = _extract_row_price(row.to_dict(), price_mode=price_mode)
+            if forward is None or forward <= 0.0:
+                continue
+            try:
+                strike, _ = _snap_to_listed_strike_for_offset(
+                    contract=contract,
+                    forward=float(forward),
+                    as_of=row_day,
+                    right=right,
+                    offset_bps=float(atm_offset_bps),
+                )
+            except Exception:
+                continue
+            out.append(f"{contract}|{_format_strike4(strike, contract=contract)}{right}")
 
         return self._dedupe_preserve_order(out)
 
@@ -4497,6 +5739,24 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                             for norm in atm_symbols:
                                 for leg in _expand_straddle_symbol(norm):
                                     expanded_needed[leg] = leg
+                        continue
+                    if selector == "atmf_offset":
+                        offset_bps = _to_float(spec.get("atm_offset_bps"))
+                        if offset_bps is None:
+                            raise ValueError(f"Missing ATMF offset in historical alias spec: {raw!r}")
+                        for contract in contracts:
+                            offset_symbols = self._historical_atmf_offset_symbols_for_contract_window(
+                                contract=contract,
+                                right=right,
+                                atm_offset_bps=float(offset_bps),
+                                underlying_data=underlying_data,
+                                window_start=req_window_start,
+                                window_end=req_window_end,
+                                price_mode=price_mode,
+                            )
+                            for norm in offset_symbols:
+                                for leg in _expand_straddle_symbol(norm):
+                                    expanded_needed[leg] = leg
 
             for norm in resolved_non_delta.values():
                 for leg in _expand_straddle_symbol(norm):
@@ -4600,7 +5860,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             if parsed["selector"] != "strike":
                 raise ValueError(
                     "option_timeseries currently supports explicit strike symbols only; "
-                    f"got alias {raw!r}. Use option_snapshot for ATM/delta aliases."
+                    f"got alias {raw!r}. Use option_snapshot for ATM/delta/ATMF-offset aliases."
                 )
             requested_specs[raw] = parsed
         requested_specs = _resolve_option_contract_aliases_for_date(requested_specs, as_of=start_date)
@@ -4959,12 +6219,18 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             return float(pricer.price())
         if value == STIRFutureOptionValue.NPV:
             return float(pricer.npv(pricer.build_pricable(quantity=1.0)))
+        if value == STIRFutureOptionValue.DV01:
+            return float(dollar_dv01(pricer))
         if value == STIRFutureOptionValue.DELTA:
             return float(pricer.delta())
         if value == STIRFutureOptionValue.GAMMA:
             return float(pricer.gamma())
+        if value == STIRFutureOptionValue.GAMMA_01:
+            return float(dollar_gamma_01(pricer))
         if value == STIRFutureOptionValue.VEGA:
             return float(pricer.vega())
+        if value == STIRFutureOptionValue.VEGA_01:
+            return float(dollar_vega_01(pricer))
         if value == STIRFutureOptionValue.THETA:
             return float(pricer.theta())
         if value == STIRFutureOptionValue.IV_NORMAL_BPS:
@@ -5159,12 +6425,15 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             elif endpoint == "qs_timeseries":
                 out = self._qs_timeseries(request)
             elif endpoint == "sabr_smile":
-                out = {"sabr_smile": [self._build_sabr_smile_result(request)]}
+                smile, common_key = self._build_sabr_smile_result(request)
+                out = {"sabr_smile": [smile]}
             else:
                 raise NotImplementedError(f"Unsupported endpoint: {endpoint}")
 
             if cache_key:
                 self._threadsafe_cache_put(cache_key, self._serialize_get_data_result(endpoint, out))
+            if endpoint == "sabr_smile" and common_key and (force_refresh or self._threadsafe_cache_get(common_key) is None):
+                self._store_sabr_smile_common_cache(common_key=common_key, smile=smile)
             return out
 
     def get_bulk_pricer(self, request: Dict[str, Any]):

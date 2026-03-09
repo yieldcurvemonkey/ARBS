@@ -169,16 +169,7 @@ export function PlotlyNvolChart({
 
       const config = {
         responsive: true,
-        displaylogo: false,
-        editable: true,
-        modeBarButtonsToAdd: [
-          'drawline',
-          'drawopenpath',
-          'drawclosedpath',
-          'drawcircle',
-          'drawrect',
-          'eraseshape'
-        ]
+        displaylogo: false
       }
 
       await plotly.react(container, data, layout, config)
