@@ -12,6 +12,7 @@ from MDP.STIRFutures.QuikStrikeSDK.core.types.QuikVolValueType import QuikVolVal
 from MDP.USTFutures.USTFutureOptionMDP import (
     USTFutureOptionSABRSmile,
     USTFutureOptionMDP,
+    _parse_qs_ust_globex_symbol,
 )
 from Query.USTFutureOptions.backends.quantlib.QLUSTFutureOptionPricer import QLUSTFutureOptionPricer
 
@@ -263,6 +264,157 @@ def test_quikvol_timeseries_query_builder_handles_short_dated_ust_cm_symbol():
     assert payload["Elements"][0]["ProductId"] == QuikVolProductID.TY.value.underlying_pid
 
 
+def test_quikvol_timeseries_query_builder_handles_ultra_ust_cm_symbols():
+    ultra_bond = QuikVolTimeseriesQueryBuilder.build_elements_dict(
+        globex_symbol="UL_07",
+        qv_value_type=QuikVolValueType.Call,
+        delta=5,
+    )
+    ultra_ten = QuikVolTimeseriesQueryBuilder.build_elements_dict(
+        globex_symbol="TN_07",
+        qv_value_type=QuikVolValueType.Call,
+        delta=5,
+    )
+
+    assert ultra_bond["Elements"][0]["ProductId"] == QuikVolProductID.UL.value.underlying_pid
+    assert ultra_ten["Elements"][0]["ProductId"] == QuikVolProductID.OTN.value.underlying_pid
+    ultra_ten_option = QuikVolTimeseriesQueryBuilder.build_elements_dict(
+        globex_symbol="OTN_07",
+        qv_value_type=QuikVolValueType.Call,
+        delta=5,
+    )
+    legacy_ultra_ten_option = QuikVolTimeseriesQueryBuilder.build_elements_dict(
+        globex_symbol="TNO_07",
+        qv_value_type=QuikVolValueType.Call,
+        delta=5,
+    )
+    assert ultra_ten_option["Elements"][0]["ProductId"] == QuikVolProductID.OTN.value.underlying_pid
+    assert legacy_ultra_ten_option["Elements"][0]["ProductId"] == QuikVolProductID.OTN.value.underlying_pid
+
+
+def test_parse_qs_ust_globex_symbol_supports_ultra_aliases():
+    ultra_bond = _parse_qs_ust_globex_symbol("WN_7", as_of=datetime.date(2026, 3, 4))
+    ultra_ten = _parse_qs_ust_globex_symbol("UXY_7", as_of=datetime.date(2026, 3, 4))
+    ultra_ten_option = _parse_qs_ust_globex_symbol("OTN_30", as_of=datetime.date(2026, 3, 4))
+    legacy_ultra_ten_option = _parse_qs_ust_globex_symbol("TNO_30", as_of=datetime.date(2026, 3, 4))
+
+    assert ultra_bond["globex_symbol"] == "UL_07"
+    assert ultra_bond["qs_globex_symbol"] == "UL_07"
+    assert ultra_bond["root_globex"] == "UL"
+    assert ultra_bond["cm_days"] == 7
+    assert ultra_ten["globex_symbol"] == "TN_07"
+    assert ultra_ten["qs_globex_symbol"] == "OTN_07"
+    assert ultra_ten["root_globex"] == "TN"
+    assert ultra_ten["cm_days"] == 7
+    assert ultra_ten_option["globex_symbol"] == "TN_30"
+    assert ultra_ten_option["qs_globex_symbol"] == "OTN_30"
+    assert ultra_ten_option["root_globex"] == "TN"
+    assert ultra_ten_option["cm_days"] == 30
+    assert legacy_ultra_ten_option["globex_symbol"] == "TN_30"
+    assert legacy_ultra_ten_option["qs_globex_symbol"] == "OTN_30"
+    assert legacy_ultra_ten_option["root_globex"] == "TN"
+    assert legacy_ultra_ten_option["cm_days"] == 30
+
+
+def test_qs_timeseries_uses_otn_transport_symbol_for_tn_alias(monkeypatch):
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    captured = {}
+
+    class _DummyQsFetcher:
+        def fetch_quikvol_timeseries(self, start_date, end_date, queries):
+            captured["queries"] = queries
+            return pd.DataFrame()
+
+    monkeypatch.setattr(mdp, "_quikstrike_client", lambda **kwargs: _DummyQsFetcher())
+    monkeypatch.setattr(mdp, "_fetch_barchart_eod_series", lambda **kwargs: {})
+
+    mdp._qs_timeseries(
+        {
+            "start": datetime.date(2026, 3, 5),
+            "end": datetime.date(2026, 3, 5),
+            "queries": [
+                {
+                    "globex_symbol": "TN_30",
+                    "qv_value_type": "Call",
+                    "delta": 5,
+                    "option_type": "Call",
+                }
+            ],
+            "show_tqdm": False,
+        }
+    )
+
+    assert [q.globex_symbol for q in captured["queries"]] == ["OTN_30"]
+
+
+def test_qs_timeseries_bulk_symbol_split_uses_fresh_quikstrike_sessions(monkeypatch):
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    seen = {"force_refresh": [], "batches": []}
+
+    class _DummyQsFetcher:
+        def __init__(self, batch_id):
+            self._batch_id = batch_id
+
+        def fetch_quikvol_timeseries(self, start_date, end_date, queries):
+            seen["batches"].append(
+                {
+                    "batch_id": self._batch_id,
+                    "start": start_date,
+                    "end": end_date,
+                    "symbols": [q.globex_symbol for q in queries],
+                }
+            )
+            return pd.DataFrame(
+                {f"batch_{self._batch_id}": [self._batch_id]},
+                index=pd.DatetimeIndex([pd.Timestamp("2026-03-05")]),
+            )
+
+    def _stub_client(*, force_refresh=False):
+        seen["force_refresh"].append(force_refresh)
+        return _DummyQsFetcher(len(seen["force_refresh"]))
+
+    monkeypatch.setattr(mdp, "_quikstrike_client", _stub_client)
+    monkeypatch.setattr(mdp, "_fetch_barchart_eod_series", lambda **kwargs: {})
+
+    out = mdp._qs_timeseries(
+        {
+            "start": datetime.date(2026, 3, 5),
+            "end": datetime.date(2026, 3, 5),
+            "queries": [
+                {"globex_symbol": "TY_30", "qv_value_type": "Call", "delta": 10, "option_type": "Call"},
+                {"globex_symbol": "TY_30", "qv_value_type": "Put", "delta": 10, "option_type": "Put"},
+                {"globex_symbol": "FV_10", "qv_value_type": "Call", "delta": 10, "option_type": "Call"},
+                {"globex_symbol": "FV_10", "qv_value_type": "Put", "delta": 10, "option_type": "Put"},
+            ],
+            "fresh_quikstrike_session_per_symbol": True,
+            "show_tqdm": False,
+        }
+    )
+
+    assert seen["force_refresh"] == [True, True]
+    assert [batch["symbols"] for batch in seen["batches"]] == [["TY_30", "TY_30"], ["FV_10", "FV_10"]]
+    assert list(out["qs_timeseries"][0].columns) == ["batch_1", "batch_2"]
+
+
+@pytest.mark.parametrize("raw_symbol", ["TNO_30", "OTN_30"])
+def test_fetch_sabr_smile_normalizes_ultra_ten_aliases_to_tn(monkeypatch, raw_symbol):
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 5)
+    seen = {}
+
+    def _stub_qs(request):
+        seen["request"] = request
+        return _make_qs_payload(as_of, globex_symbol="TN_30")
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+    monkeypatch.setattr(mdp, "_build_sabr_smile_conversion_pricer", lambda **kwargs: _DummyFuturePricer())
+
+    smile = mdp.fetch_sabr_smile({"globex_symbol": raw_symbol, "as_of": as_of, "force_refresh": True})
+
+    assert {q["globex_symbol"] for q in seen["request"]["queries"]} == {"TN_30"}
+    assert smile.globex_symbol == "TN_30"
+
+
 def test_qs_timeseries_to_pricers_normalizes_delta_from_series_label(monkeypatch):
     mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
     ts = pytz.timezone("America/New_York").localize(datetime.datetime(2026, 3, 4, 16, 0))
@@ -441,6 +593,7 @@ def test_fetch_bulk_sabr_smile_qs_multi_symbol_multi_date_batches_conversion_pri
     assert seen["qs_requests"][0]["start"] == d1
     assert seen["qs_requests"][0]["end"] == d2
     assert len(seen["qs_requests"][0]["queries"]) == 40
+    assert seen["qs_requests"][0]["fresh_quikstrike_session_per_symbol"] is True
     assert len(seen["ustf_requests"]) == 2
     assert {req["timestamp"] for req in seen["ustf_requests"]} == {d1, d2}
     assert all(len(req["symbols"]) == 2 for req in seen["ustf_requests"])
@@ -495,7 +648,9 @@ def test_fetch_bulk_sabr_smile_qs_falls_back_to_missing_dates_for_short_cm(monke
     assert len(seen["requests"]) == 2
     assert seen["requests"][0]["start"] == d1
     assert seen["requests"][0]["end"] == d2
+    assert seen["requests"][0]["fresh_quikstrike_session_per_symbol"] is True
     assert seen["requests"][1]["start"] == d1
     assert seen["requests"][1]["end"] == d1
+    assert seen["requests"][1]["fresh_quikstrike_session_per_symbol"] is True
     assert isinstance(out["TY_05"][d1], USTFutureOptionSABRSmile)
     assert isinstance(out["TY_07"][d2], USTFutureOptionSABRSmile)

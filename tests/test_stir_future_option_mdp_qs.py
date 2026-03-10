@@ -208,6 +208,55 @@ def test_qs_timeseries_query_translation_and_root_enforcement(monkeypatch):
         )
 
 
+def test_qs_timeseries_bulk_symbol_split_uses_fresh_quikstrike_sessions(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+    seen = {"force_refresh": [], "batches": []}
+
+    class _DummyQsFetcher:
+        def __init__(self, batch_id):
+            self._batch_id = batch_id
+
+        def fetch_quikvol_timeseries(self, start_date, end_date, queries):
+            seen["batches"].append(
+                {
+                    "batch_id": self._batch_id,
+                    "start": start_date,
+                    "end": end_date,
+                    "symbols": [q.globex_symbol for q in queries],
+                }
+            )
+            return pd.DataFrame(
+                {f"batch_{self._batch_id}": [self._batch_id]},
+                index=pd.DatetimeIndex([pd.Timestamp("2026-03-19")]),
+            )
+
+    def _stub_client(*, force_refresh=False):
+        seen["force_refresh"].append(force_refresh)
+        return _DummyQsFetcher(len(seen["force_refresh"]))
+
+    monkeypatch.setattr(mdp, "_quikstrike_client", _stub_client)
+    monkeypatch.setattr(mdp, "_fetch_barchart_eod_series", lambda **kwargs: {})
+
+    out = mdp._qs_timeseries(
+        {
+            "start": datetime.date(2026, 3, 19),
+            "end": datetime.date(2026, 3, 19),
+            "queries": [
+                {"globex_symbol": "SR3_60", "qv_value_type": "Call", "delta": 10, "option_type": "Call"},
+                {"globex_symbol": "SR3_60", "qv_value_type": "Put", "delta": 10, "option_type": "Put"},
+                {"globex_symbol": "SR3_90", "qv_value_type": "Call", "delta": 10, "option_type": "Call"},
+                {"globex_symbol": "SR3_90", "qv_value_type": "Put", "delta": 10, "option_type": "Put"},
+            ],
+            "fresh_quikstrike_session_per_symbol": True,
+            "show_tqdm": False,
+        }
+    )
+
+    assert seen["force_refresh"] == [True, True]
+    assert [batch["symbols"] for batch in seen["batches"]] == [["SR3_60", "SR3_60"], ["SR3_90", "SR3_90"]]
+    assert list(out["qs_timeseries"][0].columns) == ["batch_1", "batch_2"]
+
+
 def test_strict_source_split_rejections():
     mdp_barchart = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
     with pytest.raises(NotImplementedError):
@@ -559,6 +608,7 @@ def test_fetch_bulk_sabr_smile_qs_multi_symbol_multi_date_single_call_and_get_bu
     assert seen["requests"][0]["start"] == d1
     assert seen["requests"][0]["end"] == d2
     assert len(seen["requests"][0]["queries"]) == 40
+    assert seen["requests"][0]["fresh_quikstrike_session_per_symbol"] is True
     assert set(out.keys()) == {"SR3_60", "SR3_90"}
     assert isinstance(out["SR3_60"][d1], STIRFutureOptionSABRSmile)
     assert out["SR3_60"][d1].underlying_contract == "SFRM26"
@@ -611,5 +661,6 @@ def test_fetch_bulk_sabr_smile_qs_only_fetches_uncached_dates(monkeypatch):
     assert len(seen["requests"]) == 1
     assert seen["requests"][0]["start"] == d2
     assert seen["requests"][0]["end"] == d2
+    assert seen["requests"][0]["fresh_quikstrike_session_per_symbol"] is True
     assert d1 in out["SR3_60"]
     assert d2 in out["SR3_60"]

@@ -3720,6 +3720,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                             "end": max(miss["as_of"] for miss in misses),
                             "queries": queries,
                             "options": True,
+                            "fresh_quikstrike_session_per_symbol": True,
                             "curve_name": curve_name,
                             "curve_kwargs": dict(curve_kwargs or {}),
                             "force_refresh": force_refresh,
@@ -3763,6 +3764,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                                     "end": fallback_date,
                                     "queries": fallback_queries,
                                     "options": True,
+                                    "fresh_quikstrike_session_per_symbol": True,
                                     "curve_name": curve_name,
                                     "curve_kwargs": dict(curve_kwargs or {}),
                                     "force_refresh": force_refresh,
@@ -3846,6 +3848,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                             "end": max(miss["as_of"] for miss in misses),
                             "queries": queries,
                             "options": True,
+                            "fresh_quikstrike_session_per_symbol": True,
                             "curve_name": curve_name,
                             "curve_kwargs": dict(curve_kwargs or {}),
                             "force_refresh": force_refresh,
@@ -3889,6 +3892,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                                     "end": fallback_date,
                                     "queries": fallback_queries,
                                     "options": True,
+                                    "fresh_quikstrike_session_per_symbol": True,
                                     "curve_name": curve_name,
                                     "curve_kwargs": dict(curve_kwargs or {}),
                                     "force_refresh": force_refresh,
@@ -6277,6 +6281,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             raise ValueError("qs_timeseries requires queries")
 
         force_refresh = bool(request.get("force_refresh", False))
+        fresh_quikstrike_session_per_symbol = bool(request.get("fresh_quikstrike_session_per_symbol", False))
         show_tqdm = bool(request.get("show_tqdm", False))
         use_ql_calculator = bool(request.get("use_ql_calculator", False))
         curve_name = str(request.get("curve_name", self._curve_name_default))
@@ -6363,30 +6368,57 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         else:
             underlying_data = {}
 
-        for attempt in (0, 1):
-            try:
-                qsf = self._quikstrike_client(force_refresh=force_refresh or attempt == 1)
-                df = qsf.fetch_quikvol_timeseries(
-                    start_date=start_dt,
-                    end_date=end_dt,
-                    queries=qlist,
-                )
-                pricers_by_series = self._qs_timeseries_to_pricers(
-                    df=df,
-                    query_meta=query_meta,
-                    underlying_data=underlying_data,
-                    curve_name=curve_name,
-                    curve_kwargs=curve_kwargs,
-                    use_ql_calculator=use_ql_calculator,
-                )
-                if return_options:
-                    return pricers_by_series
-                if value_enum is not None:
-                    return {"qs_timeseries": [self._qs_pricers_to_value_df(pricers_by_series=pricers_by_series, value=value_enum)]}
-                return {"qs_timeseries": [df]}
-            except Exception:
-                if attempt == 1:
-                    raise
+        query_batches: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        if fresh_quikstrike_session_per_symbol:
+            for query, meta in zip(qlist, query_meta):
+                batch_key = str(meta.get("globex_symbol") or getattr(query, "globex_symbol", "")).strip().upper()
+                batch = query_batches.setdefault(batch_key, {"queries": [], "query_meta": []})
+                batch["queries"].append(query)
+                batch["query_meta"].append(meta)
+        else:
+            query_batches["__all__"] = {"queries": qlist, "query_meta": query_meta}
+
+        fetched_frames: List[pd.DataFrame] = []
+        pricers_by_series: "OrderedDict[str, List[Any]]" = OrderedDict()
+        for batch in query_batches.values():
+            for attempt in (0, 1):
+                try:
+                    qsf = self._quikstrike_client(
+                        force_refresh=force_refresh or fresh_quikstrike_session_per_symbol or attempt == 1
+                    )
+                    batch_df = qsf.fetch_quikvol_timeseries(
+                        start_date=start_dt,
+                        end_date=end_dt,
+                        queries=batch["queries"],
+                    )
+                    fetched_frames.append(batch_df)
+                    if return_options or value_enum is not None:
+                        batch_pricers_by_series = self._qs_timeseries_to_pricers(
+                            df=batch_df,
+                            query_meta=batch["query_meta"],
+                            underlying_data=underlying_data,
+                            curve_name=curve_name,
+                            curve_kwargs=curve_kwargs,
+                            use_ql_calculator=use_ql_calculator,
+                        )
+                        for series_label, batch_pricers in batch_pricers_by_series.items():
+                            pricers_by_series.setdefault(series_label, []).extend(batch_pricers)
+                    break
+                except Exception:
+                    if attempt == 1:
+                        raise
+
+        if return_options:
+            return pricers_by_series
+        if value_enum is not None:
+            return {"qs_timeseries": [self._qs_pricers_to_value_df(pricers_by_series=pricers_by_series, value=value_enum)]}
+        if not fetched_frames:
+            return {"qs_timeseries": [pd.DataFrame()]}
+        if len(fetched_frames) == 1:
+            return {"qs_timeseries": [fetched_frames[0]]}
+        merged_df = pd.concat(fetched_frames, axis=1).sort_index()
+        merged_df.index.name = fetched_frames[0].index.name
+        return {"qs_timeseries": [merged_df]}
         raise RuntimeError("QuikStrike timeseries fetch failed")
 
     def fetch_sabr_smile(self, request: Dict[str, Any]) -> STIRFutureOptionSABRSmile:

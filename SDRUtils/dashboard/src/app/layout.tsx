@@ -65,6 +65,12 @@ export default function RootLayout({
                       >
                         Vol Plotter
                       </Link>
+                      <Link
+                        href="/usd-rates-vol-analytics/listed-vs-otc"
+                        className="mt-1 block rounded-lg px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-900 hover:text-white"
+                      >
+                        Listed vs OTC Vol
+                      </Link>
                     </div>
                   </div>
                 </div>

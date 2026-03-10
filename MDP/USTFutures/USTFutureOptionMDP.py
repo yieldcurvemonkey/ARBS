@@ -111,12 +111,23 @@ _QS_UST_ROOT_ALIAS_TO_GLOBEX: Dict[str, str] = {
     "ZN": "TY",
     "US": "US",
     "ZB": "US",
+    "WN": "UL",
+    "UL": "UL",
+    "UXY": "TN",
+    "OTN": "TN",
+    "TNO": "TN",
+    "TN": "TN",
 }
 _QS_UST_GLOBEX_TO_BARCHART_ROOT: Dict[str, str] = {
     "TU": "ZT",
     "FV": "ZF",
     "TY": "ZN",
     "US": "ZB",
+    "UL": "UB",
+    "TN": "TN",
+}
+_QS_UST_GLOBEX_TO_QS_OPTION_ROOT: Dict[str, str] = {
+    "TN": "OTN",
 }
 _QS_PRICE_VALUE_TYPES = {
     "ATMPRICE",
@@ -1162,13 +1173,30 @@ def _normalize_qs_ust_globex_symbol(token: str) -> str:
     )
 
 
+def _qs_option_symbol_for_ust_globex_symbol(token: str) -> str:
+    sym = _normalize_qs_ust_globex_symbol(token)
+    m_listed = re.fullmatch(r"^(?P<root>[A-Z]{2})(?P<code>[FGHJKMNQUVXZ]\d{2})$", sym)
+    if m_listed is not None:
+        qs_root = _QS_UST_GLOBEX_TO_QS_OPTION_ROOT.get(m_listed.group("root"), m_listed.group("root"))
+        return f"{qs_root}{m_listed.group('code')}"
+
+    m_cm = re.fullmatch(r"^(?P<root>[A-Z]{2})_(?P<days>\d{1,3})$", sym)
+    if m_cm is not None:
+        qs_root = _QS_UST_GLOBEX_TO_QS_OPTION_ROOT.get(m_cm.group("root"), m_cm.group("root"))
+        return f"{qs_root}_{int(m_cm.group('days')):02d}"
+
+    return sym
+
+
 def _parse_qs_ust_globex_symbol(token: str, *, as_of: Optional[datetime.date] = None) -> Dict[str, Any]:
     sym = _normalize_qs_ust_globex_symbol(token)
+    qs_sym = _qs_option_symbol_for_ust_globex_symbol(sym)
     m_listed = re.fullmatch(r"^(?P<root>[A-Z]{2})(?P<code>[FGHJKMNQUVXZ]\d{2})$", sym)
     if m_listed is not None:
         return {
             "kind": "listed",
             "globex_symbol": sym,
+            "qs_globex_symbol": qs_sym,
             "root_globex": m_listed.group("root"),
             "cm_days": None,
             "barchart_contract": normalize_option_contract(sym, as_of=as_of),
@@ -1179,6 +1207,7 @@ def _parse_qs_ust_globex_symbol(token: str, *, as_of: Optional[datetime.date] = 
         return {
             "kind": "cm",
             "globex_symbol": sym,
+            "qs_globex_symbol": qs_sym,
             "root_globex": m_cm.group("root"),
             "cm_days": int(m_cm.group("days")),
             "barchart_contract": None,
@@ -2599,6 +2628,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                         "end": max(miss["as_of"] for miss in misses),
                         "queries": queries,
                         "options": True,
+                        "fresh_quikstrike_session_per_symbol": True,
                         "curve_name": curve_name,
                         "curve_kwargs": dict(curve_kwargs or {}),
                         "force_refresh": force_refresh,
@@ -2642,6 +2672,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                                 "end": fallback_date,
                                 "queries": fallback_queries,
                                 "options": True,
+                                "fresh_quikstrike_session_per_symbol": True,
                                 "curve_name": curve_name,
                                 "curve_kwargs": dict(curve_kwargs or {}),
                                 "force_refresh": force_refresh,
@@ -4890,6 +4921,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             raise ValueError("qs_timeseries requires queries")
 
         force_refresh = bool(request.get("force_refresh", False))
+        fresh_quikstrike_session_per_symbol = bool(request.get("fresh_quikstrike_session_per_symbol", False))
         show_tqdm = bool(request.get("show_tqdm", False))
         use_ql_calculator = bool(request.get("use_ql_calculator", False))
         curve_name = str(request.get("curve_name", self._curve_name_default))
@@ -4924,6 +4956,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             raw_symbol = str(q.get("globex_symbol", "")).strip().upper()
             symbol_info = _parse_qs_ust_globex_symbol(raw_symbol, as_of=start_date)
             globex_symbol = str(symbol_info["globex_symbol"])
+            qs_globex_symbol = str(symbol_info.get("qs_globex_symbol", globex_symbol)).strip().upper()
             vt_name = str(q.get("qv_value_type", "")).strip()
             if not vt_name:
                 raise ValueError("qv_value_type is required for each qs_timeseries query")
@@ -4946,7 +4979,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
             qlist.append(
                 QuikVolQuery(
-                    globex_symbol=globex_symbol,
+                    globex_symbol=qs_globex_symbol,
                     qv_value_type=vt,
                     delta=delta,
                     strike=strike,
@@ -4956,6 +4989,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             query_meta.append(
                 {
                     "globex_symbol": globex_symbol,
+                    "qs_globex_symbol": qs_globex_symbol,
                     "barchart_contract": barchart_contract,
                     "kind": symbol_info.get("kind"),
                     "root_globex": symbol_info.get("root_globex"),
@@ -4978,30 +5012,57 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         else:
             underlying_data = {}
 
-        for attempt in (0, 1):
-            try:
-                qsf = self._quikstrike_client(force_refresh=force_refresh or attempt == 1)
-                df = qsf.fetch_quikvol_timeseries(
-                    start_date=start_dt,
-                    end_date=end_dt,
-                    queries=qlist,
-                )
-                pricers_by_series = self._qs_timeseries_to_pricers(
-                    df=df,
-                    query_meta=query_meta,
-                    underlying_data=underlying_data,
-                    curve_name=curve_name,
-                    curve_kwargs=curve_kwargs,
-                    use_ql_calculator=use_ql_calculator,
-                )
-                if return_options:
-                    return pricers_by_series
-                if value_enum is not None:
-                    return {"qs_timeseries": [self._qs_pricers_to_value_df(pricers_by_series=pricers_by_series, value=value_enum)]}
-                return {"qs_timeseries": [df]}
-            except Exception:
-                if attempt == 1:
-                    raise
+        query_batches: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        if fresh_quikstrike_session_per_symbol:
+            for query, meta in zip(qlist, query_meta):
+                batch_key = str(meta.get("globex_symbol") or getattr(query, "globex_symbol", "")).strip().upper()
+                batch = query_batches.setdefault(batch_key, {"queries": [], "query_meta": []})
+                batch["queries"].append(query)
+                batch["query_meta"].append(meta)
+        else:
+            query_batches["__all__"] = {"queries": qlist, "query_meta": query_meta}
+
+        fetched_frames: List[pd.DataFrame] = []
+        pricers_by_series: "OrderedDict[str, List[Any]]" = OrderedDict()
+        for batch in query_batches.values():
+            for attempt in (0, 1):
+                try:
+                    qsf = self._quikstrike_client(
+                        force_refresh=force_refresh or fresh_quikstrike_session_per_symbol or attempt == 1
+                    )
+                    batch_df = qsf.fetch_quikvol_timeseries(
+                        start_date=start_dt,
+                        end_date=end_dt,
+                        queries=batch["queries"],
+                    )
+                    fetched_frames.append(batch_df)
+                    if return_options or value_enum is not None:
+                        batch_pricers_by_series = self._qs_timeseries_to_pricers(
+                            df=batch_df,
+                            query_meta=batch["query_meta"],
+                            underlying_data=underlying_data,
+                            curve_name=curve_name,
+                            curve_kwargs=curve_kwargs,
+                            use_ql_calculator=use_ql_calculator,
+                        )
+                        for series_label, batch_pricers in batch_pricers_by_series.items():
+                            pricers_by_series.setdefault(series_label, []).extend(batch_pricers)
+                    break
+                except Exception:
+                    if attempt == 1:
+                        raise
+
+        if return_options:
+            return pricers_by_series
+        if value_enum is not None:
+            return {"qs_timeseries": [self._qs_pricers_to_value_df(pricers_by_series=pricers_by_series, value=value_enum)]}
+        if not fetched_frames:
+            return {"qs_timeseries": [pd.DataFrame()]}
+        if len(fetched_frames) == 1:
+            return {"qs_timeseries": [fetched_frames[0]]}
+        merged_df = pd.concat(fetched_frames, axis=1).sort_index()
+        merged_df.index.name = fetched_frames[0].index.name
+        return {"qs_timeseries": [merged_df]}
         raise RuntimeError("QuikStrike timeseries fetch failed")
 
     def fetch_sabr_smile(self, request: Dict[str, Any]) -> USTFutureOptionSABRSmile:

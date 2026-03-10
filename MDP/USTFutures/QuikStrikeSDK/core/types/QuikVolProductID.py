@@ -78,6 +78,20 @@ class QuikVolProductID(Enum):
         calculator_underlying_contract_event_target=QuikVolCalulatorContractEventTarget.US.value,
         latest_atm_term_structure_event_target=QuikVolTermStructureEventTarget.US.value,
     )  # U.S. Treasury Bond Futures
+    UL = _QuikVolProductIDValue(
+        underlying_pid=16,
+        calculator_asset_class_event_target=QuikVolCalulatorAssetClassEventTarget.Rates.value,
+        calculator_underlying_contract_event_target=None,
+        latest_atm_term_structure_event_target=QuikVolTermStructureEventTarget.UL.value,
+    )  # Ultra 30-Year U.S. Treasury Bond Futures
+    OTN = _QuikVolProductIDValue(
+        underlying_pid=401,
+        calculator_asset_class_event_target=QuikVolCalulatorAssetClassEventTarget.Rates.value,
+        calculator_underlying_contract_event_target=None,
+        latest_atm_term_structure_event_target=QuikVolTermStructureEventTarget.TN.value,
+    )  # Ultra 10-Year U.S. Treasury Note Futures
+    TN = OTN
+    TNO = OTN
 
     # Energy
     CL = _QuikVolProductIDValue(

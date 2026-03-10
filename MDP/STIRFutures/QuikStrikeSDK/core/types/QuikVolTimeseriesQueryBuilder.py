@@ -5,6 +5,10 @@ from MDP.STIRFutures.QuikStrikeSDK.core.types.QuikVolProductID import QuikVolPro
 
 
 class QuikVolTimeseriesQueryBuilder:
+    _PRODUCT_ROOT_ALIASES = {
+        "TN": "OTN",
+        "TNO": "OTN",
+    }
 
     @staticmethod
     def _product_root(globex_symbol: str) -> str:
@@ -12,14 +16,18 @@ class QuikVolTimeseriesQueryBuilder:
         if not sym:
             raise KeyError(globex_symbol)
         if "_" in sym:
-            return sym.split("_", 1)[0]
+            root = sym.split("_", 1)[0]
+            return QuikVolTimeseriesQueryBuilder._PRODUCT_ROOT_ALIASES.get(root, root)
         m_cm = re.fullmatch(r"(?P<root>[A-Z0-9]+)CM\d+", sym)
         if m_cm is not None:
-            return str(m_cm.group("root"))
+            root = str(m_cm.group("root"))
+            return QuikVolTimeseriesQueryBuilder._PRODUCT_ROOT_ALIASES.get(root, root)
         m_listed = re.fullmatch(r"(?P<root>[A-Z0-9]+)[FGHJKMNQUVXZ]\d{1,2}", sym)
         if m_listed is not None:
-            return str(m_listed.group("root"))
-        return sym[:-3] if len(sym) > 3 else sym
+            root = str(m_listed.group("root"))
+            return QuikVolTimeseriesQueryBuilder._PRODUCT_ROOT_ALIASES.get(root, root)
+        root = sym[:-3] if len(sym) > 3 else sym
+        return QuikVolTimeseriesQueryBuilder._PRODUCT_ROOT_ALIASES.get(root, root)
 
     @staticmethod
     def build_elements_dict(globex_symbol: str, qv_value_type: Any, delta: Optional[int] = 0, strike: Optional[float] = 0):

@@ -1308,28 +1308,62 @@ def print_summary(
         print(f"  Avg legs per package: {packages_df['legs_count'].mean():.2f}")
 
 
-def main(
-    start: Optional[pd.Timestamp] = None,
-    end: Optional[pd.Timestamp] = None,
-    days: int = 7,
-    cache_path: Optional[str] = None,
-    ignore_cache: bool = False,
-    only_newt: bool = False,
-    dry_run: bool = False,
-) -> None:
+def _normalize_range_inputs(
+    start: Optional[pd.Timestamp],
+    end: Optional[pd.Timestamp],
+    days: int,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
     if end is None:
-        end = pd.Timestamp.now(tz="UTC")
+        end_ts = pd.Timestamp.now(tz="UTC")
     else:
-        end = _to_utc_timestamp(end)
+        end_ts = _to_utc_timestamp(end)
     if start is None:
-        start = end - timedelta(days=days)
+        start_ts = end_ts - timedelta(days=days)
     else:
-        start = _to_utc_timestamp(start)
-    if start > end:
-        raise ValueError(f"Start timestamp must be <= end timestamp. Got start={start}, end={end}")
+        start_ts = _to_utc_timestamp(start)
+    if start_ts > end_ts:
+        raise ValueError(f"Start timestamp must be <= end timestamp. Got start={start_ts}, end={end_ts}")
+    return start_ts, end_ts
 
-    cache_path = _resolve_cache_path(cache_path)
 
+def _iter_daily_windows(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    current_start = _to_utc_timestamp(start)
+    end_ts = _to_utc_timestamp(end)
+    while current_start <= end_ts:
+        next_midnight = current_start.normalize() + pd.Timedelta(days=1)
+        current_end = min(end_ts, next_midnight - pd.Timedelta(nanoseconds=1))
+        windows.append((current_start, current_end))
+        current_start = next_midnight
+    return windows
+
+
+def _print_daily_range_error_summary(errors: list[dict[str, str]]) -> None:
+    if not errors:
+        return
+    print("=" * 60)
+    print("DAILY-RANGE ERROR SUMMARY")
+    print("=" * 60)
+    for error in errors:
+        print(
+            f"{error['date']} [{error['component']}]: {error['message']}"
+        )
+    print()
+
+
+def _run_swaption_range_window(
+    *,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    cache_path: str,
+    ignore_cache: bool,
+    only_newt: bool,
+    dry_run: bool,
+    engine: Optional[Engine] = None,
+) -> None:
     print("Swaption ingestion")
     print(f"  Range: {start} -> {end}")
     print(f"  Cache: {cache_path}")
@@ -1359,17 +1393,45 @@ def main(
         print_summary(raw_df, packages_df, legs_df, 0, 0)
         return
 
-    engine = create_db_engine()
-    ensure_schema(engine)
+    active_engine = engine
+    if active_engine is None:
+        active_engine = create_db_engine()
+        ensure_schema(active_engine)
 
     packages_df, legs_df, packages_written, legs_written = ingest_to_postgres(
         raw_df,
-        engine,
+        active_engine,
         start=start,
         end=end,
     )
 
     print_summary(raw_df, packages_df, legs_df, packages_written, legs_written)
+
+
+def main(
+    start: Optional[pd.Timestamp] = None,
+    end: Optional[pd.Timestamp] = None,
+    days: int = 7,
+    cache_path: Optional[str] = None,
+    ignore_cache: bool = False,
+    only_newt: bool = False,
+    dry_run: bool = False,
+) -> None:
+    start, end = _normalize_range_inputs(start, end, days)
+    cache_path = _resolve_cache_path(cache_path)
+    engine = None
+    if not dry_run:
+        engine = create_db_engine()
+        ensure_schema(engine)
+    _run_swaption_range_window(
+        start=start,
+        end=end,
+        cache_path=cache_path,
+        ignore_cache=ignore_cache,
+        only_newt=only_newt,
+        dry_run=dry_run,
+        engine=engine,
+    )
 
 
 def ingest_incremental_once(
@@ -1515,6 +1577,171 @@ def _ingest_capfloor_incremental_once(
         force_fetch_full_market_day=True,
         market_timezone=market_timezone,
     )
+
+
+def _run_capfloor_range_window(
+    *,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    cache_path: str,
+    ignore_cache: bool,
+    only_newt: bool,
+    dry_run: bool,
+    engine: Optional[Engine] = None,
+    capfloor_ingest: Optional[Any] = None,
+) -> None:
+    capfloor_module = capfloor_ingest or _load_capfloor_ingest_module()
+
+    print("Cap/floor ingestion")
+    print(f"  Range: {start} -> {end}")
+    print(f"  Cache: {cache_path}")
+    print(f"  Ignore cache: {ignore_cache}")
+    print(f"  Only NEWT/TRAD: {only_newt}")
+    print(f"  Dry run: {dry_run}")
+    print()
+
+    print("Building classification dataframe...")
+    raw_df = capfloor_module.build_classification_dataframe(
+        start=start,
+        end=end,
+        cache_path=cache_path,
+        ignore_cache=ignore_cache,
+        only_newt=only_newt,
+    )
+
+    if raw_df.empty:
+        print("No cap/floor trades found in date range.")
+        return
+
+    cleaned = capfloor_module.normalize_dataframe(raw_df)
+    packages_df = capfloor_module.build_packages_dataframe(cleaned)
+    legs_df = capfloor_module.build_legs_dataframe(cleaned)
+    if dry_run:
+        print("Dry run enabled; skipping database writes.")
+        capfloor_module.print_summary(raw_df, packages_df, legs_df, 0, 0)
+        return
+
+    active_engine = engine
+    if active_engine is None:
+        active_engine = capfloor_module.create_db_engine()
+        capfloor_module.ensure_schema(active_engine)
+    else:
+        capfloor_module.ensure_schema(active_engine)
+
+    packages_df, legs_df, packages_written, legs_written = capfloor_module.ingest_to_postgres(
+        raw_df,
+        active_engine,
+        start=start,
+        end=end,
+    )
+    capfloor_module.print_summary(
+        raw_df,
+        packages_df,
+        legs_df,
+        packages_written,
+        legs_written,
+    )
+
+
+def main_daily_range(
+    start: Optional[pd.Timestamp] = None,
+    end: Optional[pd.Timestamp] = None,
+    days: int = 7,
+    cache_path: Optional[str] = None,
+    ignore_cache: bool = False,
+    only_newt: bool = False,
+    dry_run: bool = False,
+    include_capfloor: bool = False,
+    continue_on_error: bool = False,
+) -> None:
+    start, end = _normalize_range_inputs(start, end, days)
+    cache_path = _resolve_cache_path(cache_path)
+    windows = _iter_daily_windows(start, end)
+
+    print("Starting daily-range swaption ingestion")
+    print(f"  Full range: {start} -> {end}")
+    print(f"  Cache: {cache_path}")
+    print(f"  Ignore cache: {ignore_cache}")
+    print(f"  Only NEWT/TRAD: {only_newt}")
+    print(f"  Dry run: {dry_run}")
+    print(f"  Include cap/floor: {include_capfloor}")
+    print(f"  Continue on error: {continue_on_error}")
+    print(f"  Daily windows: {len(windows)}")
+    print()
+
+    engine: Optional[Engine] = None
+    capfloor_ingest: Optional[Any] = None
+    errors: list[dict[str, str]] = []
+    if not dry_run:
+        engine = create_db_engine()
+        ensure_schema(engine)
+    if include_capfloor:
+        capfloor_ingest = _load_capfloor_ingest_module()
+        if not dry_run and engine is not None:
+            capfloor_ingest.ensure_schema(engine)
+
+    for index, (window_start, window_end) in enumerate(windows, start=1):
+        print("=" * 60)
+        print(f"Daily window {index}/{len(windows)}")
+        print(f"  {window_start} -> {window_end}")
+        print("=" * 60)
+        window_date = window_start.date().isoformat()
+        try:
+            _run_swaption_range_window(
+                start=window_start,
+                end=window_end,
+                cache_path=cache_path,
+                ignore_cache=ignore_cache,
+                only_newt=only_newt,
+                dry_run=dry_run,
+                engine=engine,
+            )
+        except Exception as exc:
+            error_entry = {
+                "date": window_date,
+                "component": "SWAPTION",
+                "message": str(exc),
+            }
+            errors.append(error_entry)
+            print(
+                f"Daily window failed for {window_date} [SWAPTION]: {exc}"
+            )
+            print()
+            if not continue_on_error:
+                _print_daily_range_error_summary(errors)
+                raise
+            continue
+        if include_capfloor:
+            try:
+                print("Running cap/floor daily-range ingestion alongside swaptions")
+                _run_capfloor_range_window(
+                    start=window_start,
+                    end=window_end,
+                    cache_path=cache_path,
+                    ignore_cache=ignore_cache,
+                    only_newt=only_newt,
+                    dry_run=dry_run,
+                    engine=engine,
+                    capfloor_ingest=capfloor_ingest,
+                )
+            except Exception as exc:
+                error_entry = {
+                    "date": window_date,
+                    "component": "CAPFLOOR",
+                    "message": str(exc),
+                }
+                errors.append(error_entry)
+                print(
+                    f"Daily window failed for {window_date} [CAPFLOOR]: {exc}"
+                )
+                print()
+                if not continue_on_error:
+                    _print_daily_range_error_summary(errors)
+                    raise
+                continue
+        print()
+
+    _print_daily_range_error_summary(errors)
 
 
 def main_incremental(
@@ -1726,9 +1953,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest USD swaption classifications into SwapPulse Postgres.")
     parser.add_argument(
         "--mode",
-        choices=("range", "incremental", "service"),
+        choices=("range", "daily-range", "incremental", "service"),
         default=os.getenv("SWAPPULSE_INGEST_MODE", "incremental"),
-        help="range=explicit date range, incremental=single catch-up run, service=continuous loop.",
+        help="range=single explicit date range, daily-range=write one UTC day at a time, incremental=single catch-up run, service=continuous loop.",
     )
     parser.add_argument("--days", type=int, default=7, help="Days to look back when --start is not provided in range mode.")
     parser.add_argument("--start", type=str, help="Start timestamp (e.g. 2026-02-04 or 2026-02-04T12:00:00Z).")
@@ -1833,7 +2060,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--include-capfloor",
         action="store_true",
-        help="Incremental/service: also run cap/floor ingestion each cycle.",
+        help="Daily-range/incremental/service: also run cap/floor ingestion for the same windows.",
+    )
+    parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Daily-range only: log failed days, skip them, and continue with later windows.",
     )
     return parser.parse_args()
 
@@ -1862,6 +2094,18 @@ if __name__ == "__main__":
             ignore_cache=args.ignore_cache,
             only_newt=args.only_newt,
             dry_run=args.dry_run,
+        )
+    elif args.mode == "daily-range":
+        main_daily_range(
+            start=parsed_start,
+            end=parsed_end,
+            days=args.days,
+            cache_path=args.cache_path,
+            ignore_cache=args.ignore_cache,
+            only_newt=args.only_newt,
+            dry_run=args.dry_run,
+            include_capfloor=args.include_capfloor,
+            continue_on_error=args.continue_on_error,
         )
     elif args.mode == "incremental":
         main_incremental(
