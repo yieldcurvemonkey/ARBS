@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Optional
 
 import numpy as np
 import QuantLib as ql
-from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 
 
 class NormalSabrVolCube:
     """
     Swaption volatility cube using pre-calibrated normal SABR parameters.
 
-    Interpolates SABR params (alpha, beta, nu, rho) and forward rates across the
-    (option_expiry, swap_tenor) surface via Delaunay triangulation, then
-    evaluates the Hagan normal SABR expansion analytically at any strike.
+    Interpolates SABR params (alpha, nu, rho) and forward rates across the
+    (option_expiry, swap_tenor) surface via Gaussian Process regression in
+    log-space, then evaluates the Hagan normal SABR expansion analytically
+    at any strike.
+
+    Beta is treated as a constant (typically ~0.50 across all nodes) and is
+    stored as the mean of all calibrated beta values rather than interpolated.
 
     Parameters
     ----------
@@ -43,7 +49,8 @@ class NormalSabrVolCube:
 
         keys = list(sabr_params_map.keys())
         points: list[list[float]] = []
-        param_arrays: dict[str, list[float]] = {p: [] for p in ["alpha", "beta", "nu", "rho"]}
+        param_arrays: dict[str, list[float]] = {p: [] for p in ["alpha", "nu", "rho"]}
+        beta_list: list[float] = []
         fwd_list: list[float] = []
 
         for k in keys:
@@ -53,20 +60,47 @@ class NormalSabrVolCube:
             points.append([T, swap_yrs])
             for p in param_arrays:
                 param_arrays[p].append(sabr_params_map[k][p])
+            beta_list.append(sabr_params_map[k]["beta"])
             fwd_list.append(sabr_params_map[k]["atmf_rate"])
 
         pts = np.array(points)
 
-        self._interps: dict[str, LinearNDInterpolator] = {}
-        self._extrap: dict[str, NearestNDInterpolator] = {}
+        # Log-space transform for GP training coordinates
+        log_pts = np.log(pts)
+        self._log_min = log_pts.min(axis=0)
+        self._log_max = log_pts.max(axis=0)
+
+        # Beta is near-constant across all nodes — store as scalar
+        self._beta = float(np.mean(beta_list))
+
+        # Fit independent GPs for alpha, nu, rho, and forward rate
+        kernel = (
+            ConstantKernel(1.0, constant_value_bounds=(1e-3, 1e3))
+            * Matern(nu=2.5, length_scale=[1.0, 1.0], length_scale_bounds=(1e-2, 1e2))
+            + WhiteKernel(noise_level=1e-6, noise_level_bounds=(1e-10, 1e-2))
+        )
+
+        self._gps: dict[str, GaussianProcessRegressor] = {}
         for p in param_arrays:
             vals = np.array(param_arrays[p])
-            self._interps[p] = LinearNDInterpolator(pts, vals)
-            self._extrap[p] = NearestNDInterpolator(pts, vals)
+            gp = GaussianProcessRegressor(
+                kernel=kernel,
+                n_restarts_optimizer=3,
+                normalize_y=True,
+                alpha=1e-8,
+            )
+            gp.fit(log_pts, vals)
+            self._gps[p] = gp
 
         fwd_vals = np.array(fwd_list)
-        self._fwd_interp = LinearNDInterpolator(pts, fwd_vals)
-        self._fwd_extrap = NearestNDInterpolator(pts, fwd_vals)
+        gp_fwd = GaussianProcessRegressor(
+            kernel=kernel,
+            n_restarts_optimizer=3,
+            normalize_y=True,
+            alpha=1e-8,
+        )
+        gp_fwd.fit(log_pts, fwd_vals)
+        self._gps["fwd"] = gp_fwd
 
     @staticmethod
     def _tenor_to_years(tenor: str) -> float:
@@ -81,24 +115,25 @@ class NormalSabrVolCube:
         end = self.cal.advance(self.today, p)
         return self.dc.yearFraction(self.today, end)
 
-    def _query(
-        self,
-        interp: LinearNDInterpolator,
-        extrap: NearestNDInterpolator,
-        pt: np.ndarray,
-    ) -> float:
-        val = interp(pt)
-        if np.isnan(val):
-            val = extrap(pt)
-        return float(val)
+    def _gp_predict(self, gp: GaussianProcessRegressor, pt_log: np.ndarray) -> float:
+        """Predict a single value from a fitted GP, clamping input to the training bounding box."""
+        clamped = np.clip(pt_log, self._log_min, self._log_max)
+        return float(gp.predict(clamped.reshape(1, -1))[0])
 
     def _interpolate_params(self, pt: np.ndarray) -> tuple[float, float, float, float, float]:
-        a = self._query(self._interps["alpha"], self._extrap["alpha"], pt)
-        b = self._query(self._interps["beta"], self._extrap["beta"], pt)
-        nu = self._query(self._interps["nu"], self._extrap["nu"], pt)
-        rho = self._query(self._interps["rho"], self._extrap["rho"], pt)
-        fwd = self._query(self._fwd_interp, self._fwd_extrap, pt)
-        return a, b, nu, rho, fwd
+        pt_log = np.log(np.clip(pt.ravel()[:2], a_min=1e-10, a_max=None))
+
+        a = self._gp_predict(self._gps["alpha"], pt_log)
+        nu = self._gp_predict(self._gps["nu"], pt_log)
+        rho = self._gp_predict(self._gps["rho"], pt_log)
+        fwd = self._gp_predict(self._gps["fwd"], pt_log)
+
+        # Safety clamps for SABR parameter constraints
+        a = max(a, 1e-6)
+        nu = max(nu, 0.0)
+        rho = np.clip(rho, -0.9999, 0.9999)
+
+        return a, self._beta, nu, rho, fwd
 
     def smile_section(
         self,
