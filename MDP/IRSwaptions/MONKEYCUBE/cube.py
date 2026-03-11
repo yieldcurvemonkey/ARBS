@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import math
 import re
+import warnings
 from typing import Any, Optional
 
 import numpy as np
 import QuantLib as ql
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 
@@ -91,7 +93,9 @@ class NormalSabrVolCube:
                 normalize_y=True,
                 alpha=1e-8,
             )
-            gp.fit(log_pts, vals)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", ConvergenceWarning)
+                gp.fit(log_pts, vals)
             self._gps[p] = gp
 
         fwd_vals = np.array(fwd_list)
@@ -101,7 +105,9 @@ class NormalSabrVolCube:
             normalize_y=True,
             alpha=1e-8,
         )
-        gp_fwd.fit(log_pts, fwd_vals)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ConvergenceWarning)
+            gp_fwd.fit(log_pts, fwd_vals)
         self._gps["fwd"] = gp_fwd
 
     @staticmethod

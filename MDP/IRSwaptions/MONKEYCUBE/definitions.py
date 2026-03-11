@@ -7,12 +7,17 @@ import os
 _DEFAULT_DATA_DIR = os.path.normpath(
     os.path.join(
         os.path.dirname(__file__),
-        "..", "..", "..", "..",
-        "project-oasis", "private", "YCMONKEY_USD_VOL_CUBE_GAMMA_MIX",
+        "..",
+        "..",
+        "..",
+        "..",
+        "project-oasis",
+        "private",
+        "YCMONKEY_USD_VOL_CUBE_GAMMA_MIX",
     )
 )
 
-print(_DEFAULT_DATA_DIR)
+
 def resolve_data_dir(override: str | None = None) -> str:
     """Resolve the SABR parameter data directory.
 

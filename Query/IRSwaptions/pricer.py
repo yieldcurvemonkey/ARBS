@@ -29,6 +29,21 @@ def _py_to_ql_date(d: dt.date) -> ql.Date:
     return ql.Date(d.day, d.month, d.year)
 
 
+def _curve_day_counter(context: IRSwaptionMarketContext) -> ql.DayCounter:
+    return context.curve.daycounter() if hasattr(context.curve, "daycounter") else ql.Actual365Fixed()
+
+
+def _curve_calendar(context: IRSwaptionMarketContext) -> ql.Calendar:
+    if hasattr(context.curve, "calendar"):
+        try:
+            cal = context.curve.calendar()
+            if isinstance(cal, ql.Calendar):
+                return cal
+        except Exception:
+            pass
+    return ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+
+
 def _signed_swap_notional(option_type: str, abs_notional: float) -> float:
     token = str(option_type).strip().lower()
     if token in {"payer", "call", "c"}:
@@ -120,6 +135,38 @@ def _curve_eval_date(context: IRSwaptionMarketContext) -> ql.Date:
     return _py_to_ql_date(context.as_of_date)
 
 
+def _active_eval_date(context: IRSwaptionMarketContext) -> ql.Date:
+    try:
+        d = ql.Settings.instance().evaluationDate
+        if isinstance(d, ql.Date) and d.serialNumber() > 0:
+            return d
+    except Exception:
+        pass
+    return _curve_eval_date(context)
+
+
+def _exact_strike_pricing_engine(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> Optional[ql.PricingEngine]:
+    vol = leg_cube_vol(context, leg)
+    if vol is None:
+        return None
+
+    vol_surface = ql.ConstantSwaptionVolatility(
+        _active_eval_date(context),
+        _curve_calendar(context),
+        ql.ModifiedFollowing,
+        float(vol),
+        _curve_day_counter(context),
+        ql.Normal,
+        0.0,
+    )
+    vol_handle = ql.SwaptionVolatilityStructureHandle(vol_surface)
+    vol_handle.enableExtrapolation()
+    try:
+        return ql.BachelierSwaptionEngine(context.curve_handle, vol_handle)
+    except TypeError:
+        return ql.BachelierSwaptionEngine(context.curve_handle, vol_handle, _curve_day_counter(context))
+
+
 def _swaption_side_sign(swpt: ql.Swaption) -> float:
     try:
         return 1.0 if float(swpt.underlying().fixedLegBPS()) > 0.0 else -1.0
@@ -138,7 +185,8 @@ def build_ql_swaption(
     underlying = build_underlying_swap(context, leg, curve_handle=ch)
     ex = ql.EuropeanExercise(_py_to_ql_date(leg.exercise_date))
     swpt = ql.Swaption(underlying, ex)
-    swpt.setPricingEngine(pricing_engine or context.pricing_engine)
+    engine = pricing_engine or _exact_strike_pricing_engine(context, leg) or context.pricing_engine
+    swpt.setPricingEngine(engine)
     return swpt
 
 
@@ -213,13 +261,10 @@ def leg_theta_1d(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> f
     # Some QuantLib/Python setups keep term structures anchored to a fixed reference date,
     # so moving evaluationDate by +1d can leave NPV unchanged. Fallback: reduce option
     # time-to-expiry by 1 day while holding today's market context fixed.
-    bumped_ex = leg.exercise_date - dt.timedelta(days=1)
-    if bumped_ex < context.as_of_date:
-        bumped_ex = context.as_of_date
-    if bumped_ex >= leg.exercise_date:
+    rolled_leg = _roll_exercise_date_back_one_day(context, leg)
+    if rolled_leg is None:
         return theta
 
-    rolled_leg = replace(leg, exercise_date=bumped_ex)
     with _temporary_eval_date(today):
         npv_roll = float(build_ql_swaption(context, rolled_leg).NPV())
     return npv_roll - npv_0
@@ -247,6 +292,18 @@ def leg_gamma_01(context: IRSwaptionMarketContext, leg: IRSwaptionPricable, *, b
     return abs((g_up - g_dn) / (2.0 * bump)) / 10_000.0
 
 
+def _roll_exercise_date_back_one_day(
+    context: IRSwaptionMarketContext,
+    leg: IRSwaptionPricable,
+) -> Optional[IRSwaptionPricable]:
+    bumped_ex = leg.exercise_date - dt.timedelta(days=1)
+    if bumped_ex < context.as_of_date:
+        bumped_ex = context.as_of_date
+    if bumped_ex >= leg.exercise_date:
+        return None
+    return replace(leg, exercise_date=bumped_ex)
+
+
 def leg_charm(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
     today = _curve_eval_date(context)
     next_day = today + 1
@@ -254,7 +311,17 @@ def leg_charm(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> floa
         d0 = float(build_ql_swaption(context, leg).delta())
     with _temporary_eval_date(next_day):
         d1 = float(build_ql_swaption(context, leg).delta())
-    return d1 - d0
+    charm = d1 - d0
+    if abs(charm) > 1e-14:
+        return charm
+
+    rolled_leg = _roll_exercise_date_back_one_day(context, leg)
+    if rolled_leg is None:
+        return charm
+
+    with _temporary_eval_date(today):
+        d_roll = float(build_ql_swaption(context, rolled_leg).delta())
+    return d_roll - d0
 
 
 def leg_veta(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
@@ -264,7 +331,17 @@ def leg_veta(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float
         v0 = float(build_ql_swaption(context, leg).vega())
     with _temporary_eval_date(next_day):
         v1 = float(build_ql_swaption(context, leg).vega())
-    return v1 - v0
+    veta = v1 - v0
+    if abs(veta) > 1e-14:
+        return veta
+
+    rolled_leg = _roll_exercise_date_back_one_day(context, leg)
+    if rolled_leg is None:
+        return veta
+
+    with _temporary_eval_date(today):
+        v_roll = float(build_ql_swaption(context, rolled_leg).vega())
+    return v_roll - v0
 
 
 def leg_metrics(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> dict[str, float]:
