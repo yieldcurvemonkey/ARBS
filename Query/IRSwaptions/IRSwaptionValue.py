@@ -9,9 +9,11 @@ from Query.Base.BaseValue import BaseValueFunctionMap
 from Query.IRSwaptions.pricer import (
     IRSwaptionPricable,
     build_underlying_swap,
+    leg_cube_vol,
     leg_forward_rate,
     leg_metrics,
     leg_model_vol,
+    leg_swap_length_years,
     leg_tte_years,
 )
 
@@ -35,6 +37,8 @@ class IRSwaptionValue(Enum):
     THETA_1D = auto()
     CHARM = auto()
     VETA = auto()
+    SABR_NVOL = auto()
+    SABR_PARAMS = auto()
 
 
 class IRSwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
@@ -67,6 +71,8 @@ class IRSwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
             IRSwaptionValue.THETA_1D: self._theta_1d,
             IRSwaptionValue.CHARM: self._charm,
             IRSwaptionValue.VETA: self._veta,
+            IRSwaptionValue.SABR_NVOL: self._sabr_nvol,
+            IRSwaptionValue.SABR_PARAMS: self._sabr_params,
         }
 
     @staticmethod
@@ -356,3 +362,62 @@ class IRSwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
     def _veta(self, **kwargs: Any) -> float:
         mets = self._metrics(kwargs)
         return self._weighted(mets, kwargs["risk_weights"], "VETA")
+
+    def _sabr_nvol(self, **kwargs: Any) -> float:
+        """Normal vol from SABR cube at exact strike. Requires vol_cube in context metadata."""
+        context = kwargs["context"]
+        package = kwargs["package"]
+        rws = kwargs["risk_weights"]
+
+        cube = (context.metadata or {}).get("vol_cube")
+        if cube is None:
+            raise ValueError(
+                "SABR_NVOL requires a vol cube in market context metadata. "
+                "Use source='MONKEYCUBE-QL' to enable the SABR cube."
+            )
+
+        vols: list[float] = []
+        for leg in package:
+            cv = leg_cube_vol(context, leg)
+            vols.append(float(cv) * 10_000.0 if cv is not None else 0.0)
+
+        if len(vols) == 1:
+            return vols[0]
+        denom = sum(abs(float(rw)) for rw in rws) or 1.0
+        return float(sum(abs(float(rw)) * v for rw, v in zip(rws, vols)) / denom)
+
+    def _sabr_params(self, **kwargs: Any) -> float:
+        """Return interpolated SABR params at the first leg's (expiry, tenor) point.
+
+        Returns alpha as the float value; full params dict is stored in context metadata
+        under 'last_sabr_params' for downstream access.
+        """
+        context = kwargs["context"]
+        package = kwargs["package"]
+
+        cube = (context.metadata or {}).get("vol_cube")
+        if cube is None:
+            raise ValueError(
+                "SABR_PARAMS requires a vol cube in market context metadata. "
+                "Use source='MONKEYCUBE-QL' to enable the SABR cube."
+            )
+
+        leg = package[0]
+        option_time = leg_tte_years(context, leg)
+        swap_years = leg_swap_length_years(context, leg)
+
+        import numpy as np
+
+        pt = np.array([[option_time, swap_years]])
+        a, b, nu, rho, fwd = cube._interpolate_params(pt)
+        params = {
+            "alpha": a,
+            "beta": b,
+            "nu": nu,
+            "rho": rho,
+            "atmf_rate": fwd,
+            "expiry_time": option_time,
+            "swap_years": swap_years,
+        }
+        context.metadata["last_sabr_params"] = params
+        return a
