@@ -103,6 +103,8 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
 
         if "GSQUANT" not in self.VOL_PROVIDERS:
             self.VOL_PROVIDERS["GSQUANT"] = self._gsquant_vol_provider
+        if "MONKEYCUBE" not in self.VOL_PROVIDERS:
+            self.VOL_PROVIDERS["MONKEYCUBE"] = self._monkeycube_vol_provider
         if "QL" not in self.ENGINE_FACTORIES:
             self.ENGINE_FACTORIES["QL"] = self._ql_engine_factory
 
@@ -118,6 +120,20 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
         from MDP.IRSwaptions.GSQUANT.ql.grid import get_atmf_grid
 
         return get_atmf_grid(curve=curve_name, dates=dates, surface_type=surface_type)
+
+    @staticmethod
+    def _monkeycube_vol_provider(
+        *,
+        curve_name: str,
+        dates: list[dt.date],
+        surface_type: str,
+        **kwargs: Any,
+    ) -> dict[dt.date, ql.SwaptionVolatilityStructureHandle]:
+        from MDP.IRSwaptions.MONKEYCUBE.provider import get_sabr_vol_surfaces
+
+        return get_sabr_vol_surfaces(
+            curve_name=curve_name, dates=dates, surface_type=surface_type, **kwargs
+        )
 
     @staticmethod
     def _ql_engine_factory(
@@ -306,6 +322,19 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
                 day_counter=day_counter,
             )
 
+            metadata: dict[str, Any] = {
+                "curve_source": self.curve_source,
+                "surface_type": surface_type,
+                "as_of_date": d.isoformat(),
+            }
+
+            if provider.upper() == "MONKEYCUBE":
+                from MDP.IRSwaptions.MONKEYCUBE.provider import get_cached_cube
+
+                vol_cube = get_cached_cube(curve_name, d)
+                if vol_cube is not None:
+                    metadata["vol_cube"] = vol_cube
+
             ctx = IRSwaptionMarketContext(
                 curve_name=curve_name,
                 as_of_date=d,
@@ -318,11 +347,7 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
                 engine=engine.upper(),
                 surface_type=surface_type,
                 source=f"{provider.upper()}-{engine.upper()}",
-                metadata={
-                    "curve_source": self.curve_source,
-                    "surface_type": surface_type,
-                    "as_of_date": d.isoformat(),
-                },
+                metadata=metadata,
             )
             k = self._cache_key(curve_name=curve_name, d=d, provider=provider, engine=engine, surface_type=surface_type)
             self._cache_put(k, ctx)

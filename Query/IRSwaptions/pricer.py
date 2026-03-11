@@ -89,10 +89,24 @@ def leg_forward_rate(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) 
     return abs(float(context.curve.fair_rate(par_swap)))
 
 
+def leg_cube_vol(context: IRSwaptionMarketContext, leg: IRSwaptionPricable, *, strike: Optional[float] = None) -> Optional[float]:
+    """Query SABR vol cube if available in context metadata. Returns vol in decimal or None."""
+    cube = (context.metadata or {}).get("vol_cube")
+    if cube is None:
+        return None
+    option_time = leg_tte_years(context, leg)
+    swap_years = leg_swap_length_years(context, leg)
+    k = float(leg.strike if strike is None else strike)
+    return float(cube.volatility_at_point(option_time, swap_years, k))
+
+
 def leg_model_vol(context: IRSwaptionMarketContext, leg: IRSwaptionPricable, *, strike: Optional[float] = None) -> float:
+    k = float(leg.strike if strike is None else strike)
+    cube_v = leg_cube_vol(context, leg, strike=k)
+    if cube_v is not None:
+        return cube_v
     option_time = leg_tte_years(context, leg)
     swap_length = leg_swap_length_years(context, leg)
-    k = float(leg.strike if strike is None else strike)
     return float(context.vol_handle.volatility(option_time, swap_length, k, True))
 
 
@@ -142,6 +156,9 @@ def leg_fwd_npv(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> fl
 
 
 def leg_implied_normal_vol_bps(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    cube_v = leg_cube_vol(context, leg)
+    if cube_v is not None:
+        return float(cube_v) * 10_000.0
     with _temporary_eval_date(_curve_eval_date(context)):
         swpt = build_ql_swaption(context, leg)
         npv = float(swpt.NPV())
