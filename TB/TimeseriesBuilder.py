@@ -19,6 +19,7 @@ from TB.utils import DateLike
 
 if TYPE_CHECKING:
     from TB.FixedRateBondsTB import FixedRateBondsTB
+    from TB.STIRCapFloorsTB import STIRCapFloorsTB
     from TB.IRSwaptionsTB import IRSwaptionsTB
     from TB.IRSwapsTB import IRSwapsTB
     from TB.STIRFutureOptionsTB import STIRFutureOptionsTB
@@ -82,6 +83,7 @@ class TimeseriesBuilder:
         fixedratebonds_tb: Optional["FixedRateBondsTB"] = None,
         stirfutures_tb: Optional["STIRFuturesTB"] = None,
         ustfutures_tb: Optional["USTFuturesTB"] = None,
+        stircapfloors_tb: Optional["STIRCapFloorsTB"] = None,
         stirfutureoptions_tb: Optional["STIRFutureOptionsTB"] = None,
         ustfutureoptions_tb: Optional["USTFutureOptionsTB"] = None,
         fxforwards_tb: Optional[object] = None,
@@ -99,6 +101,9 @@ class TimeseriesBuilder:
             self._routers["STIRFUTURE"] = stirfutures_tb
         if ustfutures_tb is not None:
             self._routers["USTFUTURE"] = ustfutures_tb
+        if stircapfloors_tb is not None:
+            self._routers["STIRCAPFLOOR"] = stircapfloors_tb
+            self._routers["STIRCAPFLOORS"] = stircapfloors_tb
         if stirfutureoptions_tb is not None:
             self._routers["STIRFUTUREOPTION"] = stirfutureoptions_tb
         if ustfutureoptions_tb is not None:
@@ -133,7 +138,7 @@ class TimeseriesBuilder:
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
     ) -> pd.DataFrame:
-        alias_map = {"IRSWAPTIONS": "IRSWAPTION"}
+        alias_map = {"IRSWAPTIONS": "IRSWAPTION", "STIRCAPFLOORS": "STIRCAPFLOOR"}
         canonical_product = alias_map.get(product, product)
 
         tb = merged_routers.get(product) or merged_routers.get(canonical_product)

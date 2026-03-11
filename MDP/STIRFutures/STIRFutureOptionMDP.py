@@ -33,6 +33,7 @@ from MDP.sabr_calibration import (
     _sabr_normal_vol,
     calibrate_sabr_normal,
 )
+from MDP.STIRFutures import _sofr_option_contracts as _shared_sofr_option_contracts
 from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher
 from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contracts
@@ -1661,6 +1662,37 @@ def _asof_index_position(index: pd.Index, target: pd.Timestamp) -> Optional[int]
     if pos < 0:
         return None
     return pos
+
+
+# Rebind the contract/strike helpers to the shared helper module so new
+# products can depend on one implementation instead of this monolithic MDP.
+_to_float = _shared_sofr_option_contracts._to_float
+_right_word_to_token = _shared_sofr_option_contracts._right_word_to_token
+_is_sofr_style_option_contract = _shared_sofr_option_contracts._is_sofr_style_option_contract
+_decode_sofr_style_strike_token = _shared_sofr_option_contracts._decode_sofr_style_strike_token
+_format_strike4 = _shared_sofr_option_contracts._format_strike4
+_cme_listed_strike_rule_for_contract = _shared_sofr_option_contracts._cme_listed_strike_rule_for_contract
+_cme_listed_abs_offset_grid_bps_for_contract_forward = (
+    _shared_sofr_option_contracts._cme_listed_abs_offset_grid_bps_for_contract_forward
+)
+_snap_to_listed_strike_for_offset = _shared_sofr_option_contracts._snap_to_listed_strike_for_offset
+_contract_to_barchart_contract = _shared_sofr_option_contracts._contract_to_barchart_contract
+_parse_contract_token = _shared_sofr_option_contracts._parse_contract_token
+_resolve_cm_contract = _shared_sofr_option_contracts._resolve_cm_contract
+_resolve_contract_from_spec = _shared_sofr_option_contracts._resolve_contract_from_spec
+_option_contract_to_underlying_contract = _shared_sofr_option_contracts._option_contract_to_underlying_contract
+_parse_option_request_symbol = _shared_sofr_option_contracts._parse_option_request_symbol
+_norm_option_symbol = _shared_sofr_option_contracts._norm_option_symbol
+_resolve_option_contract_aliases_for_date = _shared_sofr_option_contracts._resolve_option_contract_aliases_for_date
+_expand_straddle_symbol = _shared_sofr_option_contracts._expand_straddle_symbol
+_canonical_to_barchart_contract = _shared_sofr_option_contracts._canonical_to_barchart_contract
+_canonical_to_barchart_option = _shared_sofr_option_contracts._canonical_to_barchart_option
+_canonical_contract = _shared_sofr_option_contracts._canonical_contract
+_canonical_underlying = _shared_sofr_option_contracts._canonical_underlying
+_strike_from_symbol = _shared_sofr_option_contracts._strike_from_symbol
+_right_from_symbol = _shared_sofr_option_contracts._right_from_symbol
+_contract_code_from_symbol = _shared_sofr_option_contracts._contract_code_from_symbol
+_contract_expiry_date = _shared_sofr_option_contracts._contract_expiry_date
 
 class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     _STIR_OPTION_CACHE = "_stir_option_pricer_cache"
