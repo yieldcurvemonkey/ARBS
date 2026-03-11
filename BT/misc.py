@@ -13,6 +13,7 @@ def ql_cal_date_range(
     freq: Optional[str] = "1b",
     open_time: Optional[datetime.time] = datetime.time(7, 00),
     close_time: Optional[datetime.time] = datetime.time(15, 00),
+    to_date=False,
 ):
     if type(start) == datetime.datetime and start.tzinfo is not None:
         assert str(start.tzinfo) == str(end.tzinfo), "must be from same tz!"
@@ -29,7 +30,9 @@ def ql_cal_date_range(
             if ts.time() >= open_time and ts.time() <= close_time:
                 time_filtered_range.append(ts)
         return time_filtered_range
-
+    
+    if to_date:
+        return [d.date() for d in date_filtered_range] 
     return date_filtered_range
 
 

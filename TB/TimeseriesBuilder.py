@@ -4,7 +4,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, Any, DefaultDict, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 
 import pandas as pd
-import tqdm
+from tqdm.auto import tqdm as _tqdm
 
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base.BaseQuery import BaseQuery
@@ -77,9 +77,9 @@ class TimeseriesBuilder:
     def __init__(
         self,
         *,
-        irswaps_tb: "IRSwapsTB",
+        irswaps_tb: Optional["IRSwapsTB"] = None,
         irswaptions_tb: Optional["IRSwaptionsTB"] = None,
-        fixedratebonds_tb: "FixedRateBondsTB",
+        fixedratebonds_tb: Optional["FixedRateBondsTB"] = None,
         stirfutures_tb: Optional["STIRFuturesTB"] = None,
         ustfutures_tb: Optional["USTFuturesTB"] = None,
         stirfutureoptions_tb: Optional["STIRFutureOptionsTB"] = None,
@@ -382,7 +382,7 @@ class TimeseriesBuilder:
 
             ref_points = pd.bdate_range(start, end).date.tolist()
             rows = []
-            for d in tqdm.tqdm(ref_points, desc="PRICING ASSET SWAPS..."):
+            for d in _tqdm(ref_points, desc="PRICING ASSET SWAPS..."):
                 for q in irswap_asw_queries:
                     try:
                         curve = irs_mdp.get_pricer({"curve_name": q.curve, "timestamp": d})

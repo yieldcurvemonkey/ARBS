@@ -431,6 +431,47 @@ class _MockUSTFutureOptionMDP(MarketDataProvider):
         return {sym: [_mk_ust_option_pricer(sym, price=self.price)] for sym in symbols}
 
 
+class _FlakyUSTFutureOptionMDP(_MockUSTFutureOptionMDP):
+    def __init__(self, price: float = 1.20, fail_dates: Optional[set[datetime.date]] = None):
+        super().__init__(price=price)
+        self.fail_dates = set(fail_dates or set())
+
+    def get_pricer(self, request: Dict[str, Any]) -> Dict[str, List[QLUSTFutureOptionPricer]]:
+        ts = request.get("timestamp")
+        if isinstance(ts, datetime.datetime):
+            ts = ts.date()
+        if ts in self.fail_dates:
+            raise ValueError(f"synthetic ust option failure for {ts}")
+        return super().get_pricer(request)
+
+
+class _ForceRefreshOnceUSTFutureOptionMDP(_MockUSTFutureOptionMDP):
+    def __init__(self, price: float = 1.20):
+        super().__init__(price=price)
+        self.force_refresh_calls = 0
+        self.force_refresh_flags: List[bool] = []
+
+    def get_pricer(self, request: Dict[str, Any]) -> Dict[str, List[QLUSTFutureOptionPricer]]:
+        force_refresh = bool(request.get("force_refresh", False))
+        self.force_refresh_flags.append(force_refresh)
+        if force_refresh:
+            self.force_refresh_calls += 1
+            if self.force_refresh_calls > 1:
+                raise ValueError("unexpected second forced refresh")
+        return super().get_pricer(request)
+
+
+class _RecordingDualUSTFutureOptionMDP(_MockUSTFutureOptionMDP):
+    def __init__(self, price: float = 1.20):
+        super().__init__(price=price)
+        self.source = "USTFO_DUAL-QL"
+        self.requests: List[Dict[str, Any]] = []
+
+    def get_pricer(self, request: Dict[str, Any]) -> Dict[str, List[QLUSTFutureOptionPricer]]:
+        self.requests.append(dict(request))
+        return super().get_pricer(request)
+
+
 @dataclass(frozen=True)
 class _UnsupportedProductQuery(BaseQuery):
     fake_product: str = "UNKNOWN"
@@ -521,6 +562,100 @@ def test_stir_ust_option_integration_with_mock_mdps():
     assert out[q_ust.col_name()].tolist() == pytest.approx([110.5] * len(out))
     assert out[q_opt.col_name()].tolist() == pytest.approx([0.21] * len(out))
     assert out[q_uopt.col_name()].tolist() == pytest.approx([1.20] * len(out))
+
+
+def test_timeseries_builder_survives_single_ust_option_date_failure():
+    fail_date = datetime.date(2025, 1, 8)
+    irswp_router = _FakeRouter(auto_cols=True, auto_value=0.012)
+    tb = TimeseriesBuilder(
+        irswaptions_tb=irswp_router,
+        ustfutureoptions_tb=USTFutureOptionsTB(
+            _FlakyUSTFutureOptionMDP(fail_dates={fail_date}),
+            show_tqdm=False,
+        ),
+    )
+
+    q_irswp = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        expiry="1Y",
+        tail="5Y",
+        value=IRSwaptionValue.NVOL,
+    )
+    q_uopt = USTFutureOptionQuery(symbol="ZNM26|1125C", value=USTFutureOptionValue.PRICE)
+
+    out = tb.get_timeseries(start=START, end=END, queries=[q_irswp, q_uopt])
+
+    assert q_irswp.col_name() in out.columns
+    assert q_uopt.col_name() in out.columns
+    assert fail_date in out.index
+    assert pd.isna(out.loc[fail_date, q_uopt.col_name()])
+    assert out.loc[fail_date, q_irswp.col_name()] == pytest.approx(0.012)
+
+    surviving_dates = [d for d in out.index if d != fail_date]
+    assert out.loc[surviving_dates, q_uopt.col_name()].tolist() == pytest.approx([1.20] * len(surviving_dates))
+
+
+def test_ust_option_tb_ignore_cache_only_forces_first_window_fetch():
+    mdp = _ForceRefreshOnceUSTFutureOptionMDP()
+    tb = TimeseriesBuilder(
+        ustfutureoptions_tb=USTFutureOptionsTB(
+            mdp,
+            show_tqdm=False,
+        ),
+    )
+
+    q_uopt = USTFutureOptionQuery(symbol="ZNM26|1125C", value=USTFutureOptionValue.PRICE)
+
+    out = tb.get_timeseries(start=START, end=END, queries=[q_uopt], ignore_cache=True)
+
+    assert q_uopt.col_name() in out.columns
+    assert out[q_uopt.col_name()].tolist() == pytest.approx([1.20] * len(out))
+    assert mdp.force_refresh_calls == 1
+    assert mdp.force_refresh_flags.count(True) == 1
+
+
+def test_ust_option_tb_dual_cm_queries_use_scalar_option_snapshot_requests():
+    mdp = _RecordingDualUSTFutureOptionMDP()
+    ust_tb = USTFutureOptionsTB(
+        mdp,
+        show_tqdm=False,
+    )
+
+    q_uopt = USTFutureOptionQuery(symbol="TY_30|25DC", value=USTFutureOptionValue.PRICE)
+
+    bulk = ust_tb._bulk_fetch(
+        reference_points=[START, END],
+        queries=[q_uopt],
+        n_jobs=None,
+        ignore_cache=False,
+    )
+    result_by_ref_group = bulk["result_by_ref_group"]
+
+    assert len(result_by_ref_group) == 2
+    assert all(req.get("endpoint") == "option_snapshot" for req in mdp.requests)
+    assert all("window_start" not in req for req in mdp.requests)
+    assert all("window_end" not in req for req in mdp.requests)
+    assert all("bulk_timeseries" not in req for req in mdp.requests)
+
+
+def test_ust_option_tb_forwards_show_tqdm_to_mdp_requests():
+    mdp = _RecordingDualUSTFutureOptionMDP()
+    ust_tb = USTFutureOptionsTB(
+        mdp,
+        show_tqdm=True,
+    )
+
+    q_uopt = USTFutureOptionQuery(symbol="TY_30|25DC", value=USTFutureOptionValue.PRICE)
+
+    _ = ust_tb._bulk_fetch(
+        reference_points=[START, END],
+        queries=[q_uopt],
+        n_jobs=None,
+        ignore_cache=False,
+    )
+
+    assert mdp.requests
+    assert all(req.get("show_tqdm") is True for req in mdp.requests)
 
 
 def test_unknown_product_without_router_or_mdp_raises_clear_error():

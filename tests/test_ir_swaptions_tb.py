@@ -64,3 +64,22 @@ def test_tb_bulk_grouping_cache_and_wrapper_columns(monkeypatch):
     _ = tb.get_timeseries(start, end, [q1, q2], ignore_cache=True)
     assert mdp.calls > calls_after_first
 
+
+def test_tb_show_tqdm_uses_progress_wrapper(monkeypatch):
+    mdp = _FakeMDP()
+    tb = IRSwaptionsTB(mdp=mdp, show_tqdm=True)
+    seen = []
+
+    def _record_tqdm(iterable, *args, **kwargs):
+        seen.append({"desc": kwargs.get("desc"), "disable": kwargs.get("disable")})
+        return iterable
+
+    monkeypatch.setattr("TB.IRSwaptionsTB._build_row_for_query", lambda context, q, ref_dt: (ref_dt, q.col_name(), 1.0))
+    monkeypatch.setattr("TB.IRSwaptionsTB._tqdm", _record_tqdm)
+
+    q = IRSwaptionQuery(curve="USD-SOFR-1D", expiry="1Y", tail="5Y")
+    out = tb.get_timeseries(dt.date(2026, 3, 2), dt.date(2026, 3, 2), [q], ignore_cache=True)
+
+    assert not out.empty
+    assert seen
+    assert any(item["disable"] is False for item in seen)

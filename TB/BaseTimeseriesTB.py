@@ -3,7 +3,7 @@ from abc import ABC
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
-import tqdm
+from tqdm.auto import tqdm as _tqdm
 
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base.BaseQuery import BaseQuery
@@ -157,7 +157,7 @@ class BaseTimeseriesTB(ABC):
         return out
 
     def _iter_reference_points(self, reference_points: List[DateLike], queries: List[BaseQuery]):
-        return tqdm.tqdm(
+        return _tqdm(
             reference_points,
             desc=self._pricing_message(queries),
             disable=not self._show_tqdm,

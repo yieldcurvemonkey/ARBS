@@ -1,5 +1,6 @@
 import datetime
 import json
+import re
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -11,6 +12,9 @@ from TB.utils import DateLike, _canonicalize_value
 
 if TYPE_CHECKING:
     from MDP.USTFutures.USTFutureOptionMDP import USTFutureOptionMDP
+
+
+_BULK_FETCH_FAILED = object()
 
 
 class USTFutureOptionsTB(BaseTimeseriesTB):
@@ -60,6 +64,26 @@ class USTFutureOptionsTB(BaseTimeseriesTB):
             seen.add(tok)
             out.append(tok)
         return out
+
+    @staticmethod
+    def _is_dual_cm_alias(symbol: str) -> bool:
+        token = str(symbol).strip().upper()
+        if not token:
+            return False
+        base = token.split("|", 1)[0]
+        return re.fullmatch(r"[A-Z]{2,3}_\d{1,3}", base) is not None
+
+    def _use_scalar_option_snapshot(
+        self,
+        *,
+        base_req: Dict[str, Any],
+        symbols: List[str],
+    ) -> bool:
+        if str(base_req.get("endpoint", self._SUPPORTED_ENDPOINT)).strip().lower() != self._SUPPORTED_ENDPOINT:
+            return False
+        if str(getattr(self.mdp, "source", "")).strip().upper() != "USTFO_DUAL-QL":
+            return False
+        return any(self._is_dual_cm_alias(symbol) for symbol in symbols)
 
     def _extract_query_symbols(self, q: USTFutureOptionQuery, now: datetime.datetime) -> List[str]:
         req = q.build_mdp_request(now)
@@ -187,27 +211,63 @@ class USTFutureOptionsTB(BaseTimeseriesTB):
             time_key = str(grp["time_key"])
             time_mode = str(grp["time_mode"])
             fixed_time = grp["fixed_time"]
+            scalar_option_snapshot = self._use_scalar_option_snapshot(base_req=base_req, symbols=symbols)
 
-            for (window_start, window_end), refs in refs_by_window.items():
-                for rp in refs:
-                    now = self._to_now(rp)
-                    req = dict(base_req)
-                    req["symbols"] = symbols
-                    if time_mode == "dynamic_now":
-                        req[time_key] = now
-                    elif time_mode == "fixed":
-                        req[time_key] = fixed_time
-                    else:
-                        req[time_key] = now.date()
+            def _build_request(rp: DateLike, *, force_refresh: bool) -> Dict[str, Any]:
+                now = self._to_now(rp)
+                req = dict(base_req)
+                req["symbols"] = symbols
+                if time_mode == "dynamic_now":
+                    req[time_key] = now
+                elif time_mode == "fixed":
+                    req[time_key] = fixed_time
+                else:
+                    req[time_key] = now.date()
+                if not scalar_option_snapshot:
                     req["window_start"] = window_start
                     req["window_end"] = window_end
                     req["bulk_timeseries"] = True
-                    # req["show_tqdm"] = self._show_tqdm
-                    req["show_tqdm"] = False
-                    req["use_ql_calculator"] = True 
-                    if ignore_cache:
-                        req["force_refresh"] = True
-                    result_by_ref_group[(rp, group_key)] = self.mdp.get_pricer(req)
+                req["show_tqdm"] = self._show_tqdm
+                req["use_ql_calculator"] = True
+                if force_refresh:
+                    req["force_refresh"] = True
+                return req
+
+            if scalar_option_snapshot:
+                for rp in reference_points:
+                    try:
+                        result_by_ref_group[(rp, group_key)] = self.mdp.get_pricer(
+                            _build_request(rp, force_refresh=bool(ignore_cache))
+                        )
+                    except Exception:
+                        result_by_ref_group[(rp, group_key)] = _BULK_FETCH_FAILED
+                continue
+
+            for (window_start, window_end), refs in refs_by_window.items():
+                prefetched_ref: Optional[DateLike] = None
+                prefetched_success = False
+                if ignore_cache and refs:
+                    prefetched_ref = refs[0]
+                    try:
+                        result_by_ref_group[(prefetched_ref, group_key)] = self.mdp.get_pricer(
+                            _build_request(prefetched_ref, force_refresh=True)
+                        )
+                        prefetched_success = True
+                    except Exception:
+                        # Preserve the rest of the window; later per-date reads can still
+                        # fall back to cache or a single non-forced request.
+                        result_by_ref_group[(prefetched_ref, group_key)] = _BULK_FETCH_FAILED
+
+                for rp in refs:
+                    if prefetched_success and prefetched_ref == rp:
+                        continue
+                    try:
+                        result_by_ref_group[(rp, group_key)] = self.mdp.get_pricer(
+                            _build_request(rp, force_refresh=False)
+                        )
+                    except Exception:
+                        # Preserve the rest of the window; the row-level path will leave this slice as missing.
+                        result_by_ref_group[(rp, group_key)] = _BULK_FETCH_FAILED
 
         return {
             "result_by_ref_group": result_by_ref_group,
@@ -231,6 +291,8 @@ class USTFutureOptionsTB(BaseTimeseriesTB):
             group_key = query_group_key.get(id(q))
             if group_key is not None:
                 pricer = result_by_ref_group.get((ref_point, group_key))
+                if pricer is _BULK_FETCH_FAILED:
+                    return None
                 if pricer is not None:
                     try:
                         q_resolved = resolve_for_request(q, timestamp=now, pricer_or_curve=pricer)

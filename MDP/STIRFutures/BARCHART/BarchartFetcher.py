@@ -74,6 +74,7 @@ class BarchartFetcher(BaseFetcher):
     _current_laravel_token: str = None
     _current_xsrf_token: str = None
     _BARCHART_MAX_RECORD = 5_000
+    _SOCKS5_AUTH_RETRY_SLEEP_SECONDS = 60
     _SESSION_TOKEN_TTL_SECONDS = 60
     _SESSION_TOKEN_POOL_SIZE = 3
     _SESSION_TOKEN_FORCE_REFRESH_COOLDOWN_SECONDS = 5
@@ -224,6 +225,60 @@ class BarchartFetcher(BaseFetcher):
     def _empty_token_slot() -> Dict[str, object]:
         return {"token_pair": None, "expires_at": 0.0}
 
+    @staticmethod
+    def _is_socks5_auth_error(exc: Exception) -> bool:
+        message = str(exc or "").lower()
+        return "socks5 authentication failed" in message or "socks authentication failed" in message
+
+    def _proxy_auth_retry_sleep_seconds(self) -> int:
+        return max(0, int(self._SOCKS5_AUTH_RETRY_SLEEP_SECONDS))
+
+    def _get_shared_session_token_with_proxy_retry(
+        self,
+        dummy_symbol: Optional[str] = "BTC",
+        force_refresh: bool = False,
+        log_context: str = "Barchart session token fetch",
+        max_proxy_auth_retries: int = 1,
+    ) -> Tuple[str, str]:
+        retries = 0
+        max_retries = max(0, int(max_proxy_auth_retries))
+        while True:
+            try:
+                return self._get_shared_session_token(dummy_symbol=dummy_symbol, force_refresh=force_refresh)
+            except Exception as exc:
+                if retries >= max_retries or not self._is_socks5_auth_error(exc):
+                    raise
+                retries += 1
+                wait_seconds = self._proxy_auth_retry_sleep_seconds()
+                self._logger.warning(
+                    f"{log_context} - SOCKS5 authentication failed for {dummy_symbol}: {exc}. "
+                    f"Waiting {wait_seconds} seconds before retrying proxy authentication."
+                )
+                time.sleep(wait_seconds)
+
+    async def _get_shared_session_token_with_proxy_retry_async(
+        self,
+        dummy_symbol: Optional[str] = "BTC",
+        force_refresh: bool = False,
+        log_context: str = "Barchart session token fetch",
+        max_proxy_auth_retries: int = 1,
+    ) -> Tuple[str, str]:
+        retries = 0
+        max_retries = max(0, int(max_proxy_auth_retries))
+        while True:
+            try:
+                return self._get_shared_session_token(dummy_symbol=dummy_symbol, force_refresh=force_refresh)
+            except Exception as exc:
+                if retries >= max_retries or not self._is_socks5_auth_error(exc):
+                    raise
+                retries += 1
+                wait_seconds = self._proxy_auth_retry_sleep_seconds()
+                self._logger.warning(
+                    f"{log_context} - SOCKS5 authentication failed for {dummy_symbol}: {exc}. "
+                    f"Waiting {wait_seconds} seconds before retrying proxy authentication."
+                )
+                await asyncio.sleep(wait_seconds)
+
     def _get_or_create_cache_entry_unlocked(self, cache_key: str) -> Dict[str, object]:
         entry = self._SHARED_SESSION_TOKEN_CACHE.get(cache_key)
         if not isinstance(entry, dict):
@@ -302,7 +357,7 @@ class BarchartFetcher(BaseFetcher):
         dummy_symbol: Optional[str] = "BTC",
     ) -> List[Tuple[str, str]]:
         size = max(1, int(pool_size))
-        return [self._get_shared_session_token(dummy_symbol=dummy_symbol, force_refresh=False) for _ in range(size)]
+        return [self._get_shared_session_token_with_proxy_retry(dummy_symbol=dummy_symbol, force_refresh=False) for _ in range(size)]
 
     def _get_new_session_token(self, dummy_symbol: Optional[str] = "BTC") -> Tuple[str, str]:
         """
@@ -392,10 +447,7 @@ class BarchartFetcher(BaseFetcher):
         session_token: Optional[Tuple[str, str]] = None,
     ) -> Tuple[str, pd.DataFrame] | Tuple[str, pd.DataFrame, str]:
 
-        if session_token is not None:
-            token = session_token
-        else:
-            token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=False)
+        token = session_token
 
         # Validate timezone info & consistency
         def _tz_ok(dt: Optional[datetime]) -> bool:
@@ -447,18 +499,19 @@ class BarchartFetcher(BaseFetcher):
             retries = 0
             last_status_code: Optional[int] = None
             while retries < max_retries:
-                if retries > 0:
-                    # First retry rotates to the next token; later retries can force-refresh.
-                    should_force_refresh = retries >= 2
-                    if last_status_code in (401, 403):
-                        should_force_refresh = True
-                    try:
-                        token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=should_force_refresh)
-                        headers = build_headers(token=token)
-                    except Exception as token_e:
-                        self._logger.error(f"Failed to get new token: {token_e}")
-
                 try:
+                    if retries > 0:
+                        # First retry rotates to the next token; later retries can force-refresh.
+                        should_force_refresh = retries >= 2
+                        if last_status_code in (401, 403):
+                            should_force_refresh = True
+                        token = await self._get_shared_session_token_with_proxy_retry_async(
+                            dummy_symbol=symbol,
+                            force_refresh=should_force_refresh,
+                            log_context="Barchart Intraday token refresh",
+                        )
+                        headers = build_headers(token=token)
+
                     resp = await client.get(url, headers=headers)
                     resp.raise_for_status()
                     last_status_code = None
@@ -508,6 +561,13 @@ class BarchartFetcher(BaseFetcher):
             return None
 
         try:
+            if token is None:
+                token = await self._get_shared_session_token_with_proxy_retry_async(
+                    dummy_symbol=symbol,
+                    force_refresh=False,
+                    log_context="Barchart Intraday token fetch",
+                )
+
             # Cursoring: start with end_date (if provided), else latest (None)
             # Each slice returns up to MAX_RECORD rows ending at `end_cursor` (inclusive), going backwards.
             # We page backward until we cross start_date or can’t get more.
@@ -604,12 +664,16 @@ class BarchartFetcher(BaseFetcher):
         uid: Optional[str | int] = None,
         session_token: Optional[Tuple[str, str]] = None,
     ) -> Tuple[str, pd.DataFrame] | Tuple[str, pd.DataFrame, str]:
-        if session_token is not None:
-            token = session_token
-        else:
-            token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=False)
+        token = session_token
 
         try:
+            if token is None:
+                token = await self._get_shared_session_token_with_proxy_retry_async(
+                    dummy_symbol=symbol,
+                    force_refresh=False,
+                    log_context="Barchart EOD token fetch",
+                )
+
             url = (
                 f"https://www.barchart.com/proxies/timeseries/historical/queryeod.ashx?"
                 f"symbol={quote(symbol)}&data=daily&maxrecords={self._BARCHART_MAX_RECORD}"
@@ -640,11 +704,12 @@ class BarchartFetcher(BaseFetcher):
                         should_force_refresh = retries >= 2
                         if last_status_code in (401, 403):
                             should_force_refresh = True
-                        try:
-                            token = self._get_shared_session_token(dummy_symbol=symbol, force_refresh=should_force_refresh)
-                            headers = _build_headers(token)
-                        except Exception as token_e:
-                            self._logger.error(f"Failed to refresh token for {symbol}: {token_e}")
+                        token = await self._get_shared_session_token_with_proxy_retry_async(
+                            dummy_symbol=symbol,
+                            force_refresh=should_force_refresh,
+                            log_context="Barchart EOD token refresh",
+                        )
+                        headers = _build_headers(token)
                     response = await client.get(url, headers=headers)
                     response.raise_for_status()
                     last_status_code = None

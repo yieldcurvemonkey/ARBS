@@ -217,7 +217,10 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
         out: dict[Any, _IRSwapGenericCurve] = {}
         for d in dates:
             req = {"curve_name": curve_name, "timestamp": d, "ignore_cache": bool(ignore_cache)}
-            curve = self._curve_mdp.get_data(req)
+            try:
+                curve = self._curve_mdp.get_data(req)
+            except Exception:
+                continue
             if curve is not None:
                 out[d] = curve
 
@@ -270,19 +273,29 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
             dates=misses,
             ignore_cache=ignore_cache,
         )
-        vol_map = vol_provider(curve_name=curve_name, dates=misses, surface_type=surface_type, **request_kwargs)
+        try:
+            vol_map = vol_provider(curve_name=curve_name, dates=misses, surface_type=surface_type, **request_kwargs)
+        except Exception:
+            vol_map = {}
+            for d in misses:
+                try:
+                    one = vol_provider(curve_name=curve_name, dates=[d], surface_type=surface_type, **request_kwargs)
+                except Exception:
+                    continue
+                if isinstance(one, dict):
+                    vol_map.update(one)
 
         for d in misses:
             curve = self._extract_curve_for_date(curve_map, d)
             if curve is None:
-                raise ValueError(f"IRSwapsMDP returned no curve for {curve_name} on {d.isoformat()}")
+                continue
             if not hasattr(curve, "handle") or not hasattr(curve, "index"):
                 raise TypeError(
                     f"IRSwaptionMDP requires a QuantLib curve backend with handle()/index() methods. Got {type(curve).__name__}"
                 )
             vol_handle = vol_map.get(d)
             if vol_handle is None:
-                raise ValueError(f"Vol provider '{provider}' returned no surface for {curve_name} on {d.isoformat()}")
+                continue
 
             curve_handle = curve.handle()
             swap_index = curve.index()

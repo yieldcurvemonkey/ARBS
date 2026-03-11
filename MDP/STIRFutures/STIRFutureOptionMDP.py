@@ -24,11 +24,15 @@ import pytz
 import QuantLib as ql
 import rateslib as rl
 import requests
-from scipy.optimize import minimize
-from scipy.stats import norm
 
 from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
+from MDP.sabr_calibration import (
+    _collapse_duplicate_strikes,
+    _normal_delta_to_strike,
+    _sabr_normal_vol,
+    calibrate_sabr_normal,
+)
 from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher
 from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contracts
@@ -263,9 +267,10 @@ class STIRFutureOptionSABRParams:
     time_to_expiry: float
     expiry_date: datetime.date
     as_of: datetime.date
+    calibration_rmse: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "alpha": float(self.alpha),
             "beta": float(self.beta),
             "rho": float(self.rho),
@@ -276,6 +281,9 @@ class STIRFutureOptionSABRParams:
             "expiry_date": self.expiry_date.isoformat(),
             "as_of": self.as_of.isoformat(),
         }
+        if self.calibration_rmse is not None:
+            payload["calibration_rmse"] = float(self.calibration_rmse)
+        return payload
 
     @classmethod
     def from_dict(cls, row: Dict[str, Any]) -> "STIRFutureOptionSABRParams":
@@ -289,6 +297,7 @@ class STIRFutureOptionSABRParams:
             time_to_expiry=float(row["time_to_expiry"]),
             expiry_date=datetime.date.fromisoformat(str(row["expiry_date"])),
             as_of=datetime.date.fromisoformat(str(row["as_of"])),
+            calibration_rmse=float(row["calibration_rmse"]) if row.get("calibration_rmse") is not None else None,
         )
 
 
@@ -526,113 +535,13 @@ class STIRFutureOptionSABRSmile:
         return strikes, vols
 
 
-def _normal_delta_to_strike(
-    *,
-    delta_abs: float,
-    vol_normal: float,
-    forward: float,
-    time_to_expiry: float,
-    right: str,
-) -> float:
-    right_token = str(right or "").strip().upper()
-    if right_token not in {"C", "P"}:
-        raise ValueError(f"Unsupported option right for delta inversion: {right}")
-    target = float(delta_abs)
-    if target <= 0.0 or target >= 1.0:
-        raise ValueError(f"delta_abs must be in (0,1): {delta_abs}")
-    scale = float(vol_normal) * math.sqrt(max(float(time_to_expiry), 1e-12))
-    call_delta = target if right_token == "C" else (1.0 - target)
-    return float(forward) - scale * float(norm.ppf(call_delta))
-
-
-def _sabr_normal_vol(
-    *,
-    strike: float,
-    forward: float,
-    time_to_expiry: float,
-    alpha: float,
-    beta: float,
-    rho: float,
-    nu: float,
-) -> float:
-    eps = 1e-12
-    f = float(forward)
-    k = float(strike)
-    t = max(float(time_to_expiry), 0.0)
-    a = float(alpha)
-    b = float(beta)
-    r = float(rho)
-    n = float(nu)
-
-    if abs(f - k) < eps:
-        correction = (
-            ((b - 1.0) * (b - 2.0) * a * a) / (24.0 * (f ** (2.0 - 2.0 * b)))
-            + (r * b * n * a) / (4.0 * (f ** (1.0 - b)))
-            + ((2.0 - 3.0 * r * r) * n * n) / 24.0
-        )
-        return a * (f ** b) * (1.0 + correction * t)
-
-    log_fk = math.log(f / k)
-    f_mid = math.sqrt(f * k)
-
-    if abs(b - 1.0) < eps:
-        zeta = (n / a) * log_fk
-    else:
-        zeta = (n / a) * ((f ** (1.0 - b) - k ** (1.0 - b)) / (1.0 - b))
-
-    disc = math.sqrt(max(1.0 - 2.0 * r * zeta + zeta * zeta, 1e-18))
-    x_zeta = math.log((disc + zeta - r) / (1.0 - r))
-    zeta_over_x = 1.0 if abs(x_zeta) < eps else zeta / x_zeta
-
-    if abs(b) < eps:
-        prefactor = a
-    elif abs(b - 1.0) < eps:
-        prefactor = a * (f - k) / log_fk
-    else:
-        prefactor = a * (1.0 - b) * (f - k) / (f ** (1.0 - b) - k ** (1.0 - b))
-
-    correction = (
-        ((b - 1.0) * (b - 2.0) * a * a) / (24.0 * (f_mid ** (2.0 - 2.0 * b)))
-        + (r * b * n * a) / (4.0 * (f_mid ** (1.0 - b)))
-        + ((2.0 - 3.0 * r * r) * n * n) / 24.0
-    )
-    return prefactor * zeta_over_x * (1.0 + correction * t)
-
-
-def _collapse_duplicate_strikes(
-    strikes: np.ndarray,
-    vols: np.ndarray,
-    *,
-    tol: float = 1e-10,
-) -> Tuple[np.ndarray, np.ndarray]:
-    if strikes.size == 0:
-        return strikes, vols
-    order = np.argsort(strikes)
-    srt_strikes = strikes[order]
-    srt_vols = vols[order]
-    out_strikes: List[float] = []
-    out_vols: List[float] = []
-    bucket: List[float] = [float(srt_vols[0])]
-    anchor = float(srt_strikes[0])
-    for strike, vol in zip(srt_strikes[1:], srt_vols[1:]):
-        if abs(float(strike) - anchor) <= tol:
-            bucket.append(float(vol))
-            continue
-        out_strikes.append(anchor)
-        out_vols.append(float(sum(bucket) / len(bucket)))
-        anchor = float(strike)
-        bucket = [float(vol)]
-    out_strikes.append(anchor)
-    out_vols.append(float(sum(bucket) / len(bucket)))
-    return np.asarray(out_strikes, dtype=float), np.asarray(out_vols, dtype=float)
-
-
 def _calibrate_sabr_normal_from_delta_points(
     *,
     forward: float,
     time_to_expiry: float,
     market_points: Sequence[Tuple[float, float, str]],
     beta: float = 0.5,
+    calibration_method: str = "nelder-mead",
 ) -> STIRFutureOptionSABRParams:
     if not math.isfinite(forward) or forward <= 0.0:
         raise ValueError(f"Invalid forward for SABR calibration: {forward}")
@@ -666,63 +575,14 @@ def _calibrate_sabr_normal_from_delta_points(
     if len(strikes) < 6:
         raise ValueError("SABR calibration requires at least 6 strike-vol points after delta inversion.")
 
-    strikes_arr = np.asarray(strikes, dtype=float)
-    vols_arr = np.asarray(vols, dtype=float)
-    order = np.argsort(strikes_arr)
-    strikes_arr = strikes_arr[order]
-    vols_arr = vols_arr[order]
-
-    collapsed_strikes, collapsed_vols = _collapse_duplicate_strikes(strikes_arr, vols_arr)
-    if collapsed_strikes.size == 0:
-        raise ValueError("No SABR calibration points remain after collapsing duplicate strikes.")
-
-    atm_idx = int(np.argmin(np.abs(collapsed_strikes - float(forward))))
-    atm_vol = float(collapsed_vols[atm_idx])
-    if not math.isfinite(atm_vol) or atm_vol <= 0.0:
-        raise ValueError(f"Invalid ATM normal vol seed for SABR calibration: {atm_vol}")
-
-    near_forward_width = 2.0 * atm_vol * math.sqrt(float(time_to_expiry))
-    weights = np.ones_like(vols_arr, dtype=float)
-    weights[np.abs(strikes_arr - float(forward)) <= near_forward_width] *= 2.0
-
-    def _objective(x: np.ndarray) -> float:
-        alpha, rho, nu = (float(x[0]), float(x[1]), float(x[2]))
-        if alpha <= 0.0 or nu <= 0.0 or abs(rho) >= 1.0:
-            return 1e12
-        try:
-            model = np.array(
-                [
-                    _sabr_normal_vol(
-                        strike=float(k),
-                        forward=float(forward),
-                        time_to_expiry=float(time_to_expiry),
-                        alpha=alpha,
-                        beta=float(beta),
-                        rho=rho,
-                        nu=nu,
-                    )
-                    for k in strikes_arr
-                ],
-                dtype=float,
-            )
-        except Exception:
-            return 1e12
-        if not np.all(np.isfinite(model)):
-            return 1e12
-        err = model - vols_arr
-        return float(np.sum(weights * err * err))
-
-    alpha0 = float(atm_vol / (float(forward) ** float(beta)))
-    result = minimize(
-        _objective,
-        x0=np.asarray([alpha0, -0.1, 0.3], dtype=float),
-        method="Nelder-Mead",
-        options={"maxiter": 10000, "xatol": 1e-10, "fatol": 1e-12},
+    alpha_cal, rho_cal, nu_cal, rmse = calibrate_sabr_normal(
+        forward=float(forward),
+        time_to_expiry=float(time_to_expiry),
+        strikes_arr=strikes,
+        vols_arr=vols,
+        beta=float(beta),
+        method=calibration_method,
     )
-
-    alpha_cal, rho_cal, nu_cal = (float(result.x[0]), float(result.x[1]), float(result.x[2]))
-    if alpha_cal <= 0.0 or nu_cal <= 0.0 or abs(rho_cal) >= 1.0:
-        raise ValueError(f"SABR calibration returned invalid params: {result.x!r}")
 
     return STIRFutureOptionSABRParams(
         alpha=alpha_cal,
@@ -734,6 +594,7 @@ def _calibrate_sabr_normal_from_delta_points(
         time_to_expiry=float(time_to_expiry),
         expiry_date=datetime.date.today(),
         as_of=datetime.date.today(),
+        calibration_rmse=rmse,
     )
 
 
@@ -743,6 +604,7 @@ def _calibrate_sabr_normal_from_strike_points(
     time_to_expiry: float,
     market_points: Sequence[Tuple[float, float]],
     beta: float = 0.5,
+    calibration_method: str = "nelder-mead",
 ) -> STIRFutureOptionSABRParams:
     if not math.isfinite(forward) or forward <= 0.0:
         raise ValueError(f"Invalid forward for SABR calibration: {forward}")
@@ -766,63 +628,14 @@ def _calibrate_sabr_normal_from_strike_points(
     if len(strikes) < 6:
         raise ValueError("SABR calibration requires at least 6 strike-vol points after filtering.")
 
-    strikes_arr = np.asarray(strikes, dtype=float)
-    vols_arr = np.asarray(vols, dtype=float)
-    order = np.argsort(strikes_arr)
-    strikes_arr = strikes_arr[order]
-    vols_arr = vols_arr[order]
-
-    collapsed_strikes, collapsed_vols = _collapse_duplicate_strikes(strikes_arr, vols_arr)
-    if collapsed_strikes.size == 0:
-        raise ValueError("No SABR calibration points remain after collapsing duplicate strikes.")
-
-    atm_idx = int(np.argmin(np.abs(collapsed_strikes - float(forward))))
-    atm_vol = float(collapsed_vols[atm_idx])
-    if not math.isfinite(atm_vol) or atm_vol <= 0.0:
-        raise ValueError(f"Invalid ATM normal vol seed for SABR calibration: {atm_vol}")
-
-    near_forward_width = 2.0 * atm_vol * math.sqrt(float(time_to_expiry))
-    weights = np.ones_like(vols_arr, dtype=float)
-    weights[np.abs(strikes_arr - float(forward)) <= near_forward_width] *= 2.0
-
-    def _objective(x: np.ndarray) -> float:
-        alpha, rho, nu = (float(x[0]), float(x[1]), float(x[2]))
-        if alpha <= 0.0 or nu <= 0.0 or abs(rho) >= 1.0:
-            return 1e12
-        try:
-            model = np.array(
-                [
-                    _sabr_normal_vol(
-                        strike=float(k),
-                        forward=float(forward),
-                        time_to_expiry=float(time_to_expiry),
-                        alpha=alpha,
-                        beta=float(beta),
-                        rho=rho,
-                        nu=nu,
-                    )
-                    for k in strikes_arr
-                ],
-                dtype=float,
-            )
-        except Exception:
-            return 1e12
-        if not np.all(np.isfinite(model)):
-            return 1e12
-        err = model - vols_arr
-        return float(np.sum(weights * err * err))
-
-    alpha0 = float(atm_vol / (float(forward) ** float(beta)))
-    result = minimize(
-        _objective,
-        x0=np.asarray([alpha0, -0.1, 0.3], dtype=float),
-        method="Nelder-Mead",
-        options={"maxiter": 10000, "xatol": 1e-10, "fatol": 1e-12},
+    alpha_cal, rho_cal, nu_cal, rmse = calibrate_sabr_normal(
+        forward=float(forward),
+        time_to_expiry=float(time_to_expiry),
+        strikes_arr=strikes,
+        vols_arr=vols,
+        beta=float(beta),
+        method=calibration_method,
     )
-
-    alpha_cal, rho_cal, nu_cal = (float(result.x[0]), float(result.x[1]), float(result.x[2]))
-    if alpha_cal <= 0.0 or nu_cal <= 0.0 or abs(rho_cal) >= 1.0:
-        raise ValueError(f"SABR calibration returned invalid params: {result.x!r}")
 
     return STIRFutureOptionSABRParams(
         alpha=alpha_cal,
@@ -834,6 +647,7 @@ def _calibrate_sabr_normal_from_strike_points(
         time_to_expiry=float(time_to_expiry),
         expiry_date=datetime.date.today(),
         as_of=datetime.date.today(),
+        calibration_rmse=rmse,
     )
 
 
@@ -2122,7 +1936,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     def _validate_sabr_smile_request(
         self,
         request: Dict[str, Any],
-    ) -> Tuple[str, Dict[str, Any], datetime.date, Dict[str, Any], str, Dict[str, Any], bool, bool]:
+    ) -> Tuple[str, Dict[str, Any], datetime.date, Dict[str, Any], str, Dict[str, Any], bool, bool, str]:
         if "as_of" not in request:
             raise ValueError("sabr_smile requires 'as_of'")
         if "beta" in request:
@@ -2179,7 +1993,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_kwargs = dict(request.get("curve_kwargs") or {})
         force_refresh = bool(request.get("force_refresh", False))
         show_tqdm = bool(request.get("show_tqdm", False))
-        return raw_symbol, symbol_info, as_of, point_request, curve_name, curve_kwargs, force_refresh, show_tqdm
+        calibration_method = str(request.get("calibration_method", "nelder-mead")).strip().lower().replace("_", "-")
+        if calibration_method not in {"nelder-mead", "de-gn"}:
+            raise ValueError(f"Unsupported SABR calibration_method: {request.get('calibration_method')!r}")
+        return raw_symbol, symbol_info, as_of, point_request, curve_name, curve_kwargs, force_refresh, show_tqdm, calibration_method
 
     def _build_sabr_smile_qs_request(
         self,
@@ -2445,17 +2262,19 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_name: str,
         curve_kwargs: Dict[str, Any],
         canonical_legs: Sequence[str],
+        calibration_method: str,
     ) -> Optional[str]:
         legs = sorted({str(symbol).upper() for symbol in canonical_legs if str(symbol).strip()})
         if not legs:
             return None
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_sabr_smile_common_v1",
+            "cache_version": "stirfo_sabr_smile_common_v2",
             "source": str(self.source).upper(),
             "as_of": as_of.isoformat(),
             "curve_name": str(curve_name),
             "curve_kwargs": self._cache_primitive(curve_kwargs or {}),
+            "calibration_method": str(calibration_method).strip().lower(),
             "legs": legs,
         }
         payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -2515,6 +2334,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_name: str,
         curve_kwargs: Dict[str, Any],
         force_refresh: bool,
+        calibration_method: str,
     ) -> Tuple[STIRFutureOptionSABRSmile, Optional[str]]:
         normalized_legs = self._normalize_sabr_smile_selected_legs(as_of=as_of, selected_legs=selected_legs)
         common_key = self._build_sabr_smile_common_cache_key(
@@ -2522,6 +2342,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             curve_name=curve_name,
             curve_kwargs=curve_kwargs,
             canonical_legs=[str(leg["canonical_symbol"]) for leg in normalized_legs],
+            calibration_method=calibration_method,
         )
         if not force_refresh:
             cached_smile = self._load_sabr_smile_common_cache(common_key=common_key)
@@ -2532,6 +2353,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 raw_symbol=raw_symbol,
                 as_of=as_of,
                 selected_legs=selected_legs,
+                calibration_method=calibration_method,
             ),
             common_key,
         )
@@ -2803,6 +2625,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         raw_symbol: str,
         as_of: datetime.date,
         selected_legs: Sequence[Dict[str, Any]],
+        calibration_method: str = "nelder-mead",
     ) -> STIRFutureOptionSABRSmile:
         normalized_legs = self._normalize_sabr_smile_selected_legs(as_of=as_of, selected_legs=selected_legs)
         underlying_contract, forward_price, expiry_date = self._ensure_sabr_smile_pricer_consistency(normalized_legs)
@@ -2820,6 +2643,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             time_to_expiry=float(time_to_expiry),
             market_points=market_points,
             beta=0.5,
+            calibration_method=calibration_method,
         )
         params = STIRFutureOptionSABRParams(
             alpha=float(params_seed.alpha),
@@ -2831,6 +2655,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             time_to_expiry=float(time_to_expiry),
             expiry_date=expiry_date,
             as_of=as_of,
+            calibration_rmse=params_seed.calibration_rmse,
         )
 
         points: List[STIRFutureOptionSmilePoint] = []
@@ -2909,7 +2734,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             self._threadsafe_cache_put(cache_key, payload)
 
     def _build_sabr_smile_result(self, request: Dict[str, Any]) -> Tuple[STIRFutureOptionSABRSmile, Optional[str]]:
-        raw_symbol, symbol_info, as_of, point_request, curve_name, curve_kwargs, force_refresh, show_tqdm = self._validate_sabr_smile_request(request)
+        raw_symbol, symbol_info, as_of, point_request, curve_name, curve_kwargs, force_refresh, show_tqdm, calibration_method = self._validate_sabr_smile_request(request)
         mode = self._sabr_smile_point_mode(point_request)
         selected_legs: List[Dict[str, Any]]
 
@@ -3026,12 +2851,13 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             curve_name=curve_name,
             curve_kwargs=curve_kwargs,
             force_refresh=force_refresh,
+            calibration_method=calibration_method,
         )
 
     def _normalize_bulk_sabr_smile_request(
         self,
         request: Dict[str, Any],
-    ) -> Tuple[List[Dict[str, Any]], List[datetime.date], Dict[str, Any], str, Dict[str, Any], bool, bool]:
+    ) -> Tuple[List[Dict[str, Any]], List[datetime.date], Dict[str, Any], str, Dict[str, Any], bool, bool, str]:
         if "timestamps" not in request:
             raise ValueError("fetch_bulk_sabr_smile requires 'timestamps'")
         if "beta" in request:
@@ -3105,6 +2931,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_kwargs: Optional[Dict[str, Any]] = None
         force_refresh: Optional[bool] = None
         show_tqdm: Optional[bool] = None
+        calibration_method: Optional[str] = None
 
         symbol_field = "globex_symbol" if src == "STIRFO_DUAL-QL" else "symbol"
         first_date = dates[0]
@@ -3112,7 +2939,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             scalar_req = dict(base_req)
             scalar_req[symbol_field] = input_symbol
             scalar_req["as_of"] = first_date
-            raw_symbol, symbol_info, _, deltas_i, curve_name_i, curve_kwargs_i, force_refresh_i, show_tqdm_i = self._validate_sabr_smile_request(
+            raw_symbol, symbol_info, _, deltas_i, curve_name_i, curve_kwargs_i, force_refresh_i, show_tqdm_i, calibration_method_i = self._validate_sabr_smile_request(
                 scalar_req
             )
 
@@ -3120,7 +2947,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 probe_req = dict(base_req)
                 probe_req[symbol_field] = input_symbol
                 probe_req["as_of"] = as_of
-                probe_raw_symbol, _, _, _, _, _, _, _ = self._validate_sabr_smile_request(probe_req)
+                probe_raw_symbol, _, _, _, _, _, _, _, _ = self._validate_sabr_smile_request(probe_req)
                 if probe_raw_symbol != raw_symbol:
                     raise ValueError(
                         f"Bulk SABR symbol normalization is not stable across dates for {input_symbol!r}: "
@@ -3133,6 +2960,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 curve_kwargs = dict(curve_kwargs_i)
                 force_refresh = bool(force_refresh_i)
                 show_tqdm = bool(show_tqdm_i)
+                calibration_method = str(calibration_method_i)
 
             row = symbol_rows.get(raw_symbol)
             if row is None:
@@ -3152,6 +2980,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             dict(curve_kwargs or {}),
             bool(force_refresh),
             bool(show_tqdm),
+            str(calibration_method or "nelder-mead"),
         )
 
     def _select_bulk_sabr_smile_qs_pricers(
@@ -3650,7 +3479,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
     def fetch_bulk_sabr_smile(self, request: Dict[str, Any]) -> Dict[str, Dict[datetime.date, STIRFutureOptionSABRSmile]]:
         req = dict(request)
-        symbol_rows, dates, point_request, curve_name, curve_kwargs, force_refresh, show_tqdm = self._normalize_bulk_sabr_smile_request(req)
+        symbol_rows, dates, point_request, curve_name, curve_kwargs, force_refresh, show_tqdm, calibration_method = self._normalize_bulk_sabr_smile_request(req)
         src = str(self.source).upper()
         mode = self._sabr_smile_point_mode(point_request)
         base_req = dict(req)
@@ -3968,6 +3797,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                         curve_name=curve_name,
                         curve_kwargs=curve_kwargs,
                         force_refresh=force_refresh,
+                        calibration_method=calibration_method,
                     )
                     smiles_by_symbol[str(miss["raw_symbol"])][miss["as_of"]] = smile
 
@@ -4021,6 +3851,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         if ep == "sabr_smile":
             if "as_of" in cache_req:
                 cache_req["as_of"] = _as_date(cache_req["as_of"])
+            cache_req["calibration_method"] = str(cache_req.get("calibration_method", "nelder-mead")).strip().lower().replace("_", "-")
             src = str(self.source).upper()
             if src == "STIRFO_DUAL-QL":
                 if "globex_symbol" in cache_req:
@@ -6476,7 +6307,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         if endpoint == "sabr_smile":
             req = dict(request)
             smiles_by_symbol = self.fetch_bulk_sabr_smile(req)
-            _, dates, _, _, _, _, _ = self._normalize_bulk_sabr_smile_request(req)
+            _, dates, _, _, _, _, _, _ = self._normalize_bulk_sabr_smile_request(req)
             out: "OrderedDict[datetime.date, OrderedDict[str, List[STIRFutureOptionSABRSmile]]]" = OrderedDict(
                 (as_of, OrderedDict()) for as_of in dates
             )

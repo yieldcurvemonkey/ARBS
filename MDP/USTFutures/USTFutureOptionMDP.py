@@ -24,11 +24,15 @@ import pytz
 import QuantLib as ql
 import rateslib as rl
 import requests
-from scipy.optimize import minimize
-from scipy.stats import norm
 
 from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
+from MDP.sabr_calibration import (
+    _collapse_duplicate_strikes,
+    _normal_delta_to_strike,
+    _sabr_normal_vol,
+    calibrate_sabr_normal,
+)
 from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher
 from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contracts
@@ -126,6 +130,14 @@ _QS_UST_GLOBEX_TO_BARCHART_ROOT: Dict[str, str] = {
     "UL": "UB",
     "TN": "TN",
 }
+_QS_UST_GLOBEX_TO_STRIKE_CODEC_ROOT: Dict[str, str] = {
+    "TU": "ZT",
+    "FV": "ZF",
+    "TY": "ZN",
+    "US": "ZB",
+    "UL": "ZB",
+    "TN": "ZN",
+}
 _QS_UST_GLOBEX_TO_QS_OPTION_ROOT: Dict[str, str] = {
     "TN": "OTN",
 }
@@ -154,9 +166,10 @@ class USTFutureOptionSABRParams:
     time_to_expiry: float
     expiry_date: datetime.date
     as_of: datetime.date
+    calibration_rmse: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "alpha": float(self.alpha),
             "beta": float(self.beta),
             "rho": float(self.rho),
@@ -167,6 +180,9 @@ class USTFutureOptionSABRParams:
             "expiry_date": self.expiry_date.isoformat(),
             "as_of": self.as_of.isoformat(),
         }
+        if self.calibration_rmse is not None:
+            payload["calibration_rmse"] = float(self.calibration_rmse)
+        return payload
 
     @classmethod
     def from_dict(cls, row: Dict[str, Any]) -> "USTFutureOptionSABRParams":
@@ -180,6 +196,7 @@ class USTFutureOptionSABRParams:
             time_to_expiry=float(row["time_to_expiry"]),
             expiry_date=datetime.date.fromisoformat(str(row["expiry_date"])),
             as_of=datetime.date.fromisoformat(str(row["as_of"])),
+            calibration_rmse=float(row["calibration_rmse"]) if row.get("calibration_rmse") is not None else None,
         )
 
 
@@ -342,116 +359,13 @@ class USTFutureOptionSABRSmile:
         return float(vols[0]) if scalar else vols
 
 
-def _normal_delta_to_strike(
-    *,
-    delta_abs: float,
-    vol_normal: float,
-    forward: float,
-    time_to_expiry: float,
-    right: str,
-) -> float:
-    right_token = str(right or "").strip().upper()
-    if right_token not in {"C", "P"}:
-        raise ValueError(f"Unsupported option right for delta inversion: {right}")
-    target = float(delta_abs)
-    if target <= 0.0 or target >= 1.0:
-        raise ValueError(f"delta_abs must be in (0,1): {delta_abs}")
-    scale = float(vol_normal) * math.sqrt(max(float(time_to_expiry), 1e-12))
-    if right_token == "C":
-        call_delta = target
-    else:
-        call_delta = 1.0 - target
-    return float(forward) - scale * float(norm.ppf(call_delta))
-
-
-def _sabr_normal_vol(
-    *,
-    strike: float,
-    forward: float,
-    time_to_expiry: float,
-    alpha: float,
-    beta: float,
-    rho: float,
-    nu: float,
-) -> float:
-    eps = 1e-12
-    f = float(forward)
-    k = float(strike)
-    t = max(float(time_to_expiry), 0.0)
-    a = float(alpha)
-    b = float(beta)
-    r = float(rho)
-    n = float(nu)
-
-    if abs(f - k) < eps:
-        correction = (
-            ((b - 1.0) * (b - 2.0) * a * a) / (24.0 * (f ** (2.0 - 2.0 * b)))
-            + (r * b * n * a) / (4.0 * (f ** (1.0 - b)))
-            + ((2.0 - 3.0 * r * r) * n * n) / 24.0
-        )
-        return a * (f ** b) * (1.0 + correction * t)
-
-    log_fk = math.log(f / k)
-    f_mid = math.sqrt(f * k)
-
-    if abs(b - 1.0) < eps:
-        zeta = (n / a) * log_fk
-    else:
-        zeta = (n / a) * ((f ** (1.0 - b) - k ** (1.0 - b)) / (1.0 - b))
-
-    disc = math.sqrt(max(1.0 - 2.0 * r * zeta + zeta * zeta, 1e-18))
-    x_zeta = math.log((disc + zeta - r) / (1.0 - r))
-    zeta_over_x = 1.0 if abs(x_zeta) < eps else zeta / x_zeta
-
-    if abs(b) < eps:
-        prefactor = a
-    elif abs(b - 1.0) < eps:
-        prefactor = a * (f - k) / log_fk
-    else:
-        prefactor = a * (1.0 - b) * (f - k) / (f ** (1.0 - b) - k ** (1.0 - b))
-
-    correction = (
-        ((b - 1.0) * (b - 2.0) * a * a) / (24.0 * (f_mid ** (2.0 - 2.0 * b)))
-        + (r * b * n * a) / (4.0 * (f_mid ** (1.0 - b)))
-        + ((2.0 - 3.0 * r * r) * n * n) / 24.0
-    )
-    return prefactor * zeta_over_x * (1.0 + correction * t)
-
-
-def _collapse_duplicate_strikes(
-    strikes: np.ndarray,
-    vols: np.ndarray,
-    *,
-    tol: float = 1e-10,
-) -> Tuple[np.ndarray, np.ndarray]:
-    if strikes.size == 0:
-        return strikes, vols
-    order = np.argsort(strikes)
-    srt_strikes = strikes[order]
-    srt_vols = vols[order]
-    out_strikes: List[float] = []
-    out_vols: List[float] = []
-    bucket: List[float] = [float(srt_vols[0])]
-    anchor = float(srt_strikes[0])
-    for strike, vol in zip(srt_strikes[1:], srt_vols[1:]):
-        if abs(float(strike) - anchor) <= tol:
-            bucket.append(float(vol))
-            continue
-        out_strikes.append(anchor)
-        out_vols.append(float(sum(bucket) / len(bucket)))
-        anchor = float(strike)
-        bucket = [float(vol)]
-    out_strikes.append(anchor)
-    out_vols.append(float(sum(bucket) / len(bucket)))
-    return np.asarray(out_strikes, dtype=float), np.asarray(out_vols, dtype=float)
-
-
 def _calibrate_sabr_normal_from_delta_points(
     *,
     forward: float,
     time_to_expiry: float,
     market_points: Sequence[Tuple[float, float, str]],
     beta: float = 0.5,
+    calibration_method: str = "nelder-mead",
 ) -> USTFutureOptionSABRParams:
     if not math.isfinite(forward) or forward <= 0.0:
         raise ValueError(f"Invalid forward for SABR calibration: {forward}")
@@ -485,63 +399,14 @@ def _calibrate_sabr_normal_from_delta_points(
     if len(strikes) < 6:
         raise ValueError("SABR calibration requires at least 6 strike-vol points after delta inversion.")
 
-    strikes_arr = np.asarray(strikes, dtype=float)
-    vols_arr = np.asarray(vols, dtype=float)
-    order = np.argsort(strikes_arr)
-    strikes_arr = strikes_arr[order]
-    vols_arr = vols_arr[order]
-
-    collapsed_strikes, collapsed_vols = _collapse_duplicate_strikes(strikes_arr, vols_arr)
-    if collapsed_strikes.size == 0:
-        raise ValueError("No SABR calibration points remain after collapsing duplicate strikes.")
-
-    atm_idx = int(np.argmin(np.abs(collapsed_strikes - float(forward))))
-    atm_vol = float(collapsed_vols[atm_idx])
-    if not math.isfinite(atm_vol) or atm_vol <= 0.0:
-        raise ValueError(f"Invalid ATM normal vol seed for SABR calibration: {atm_vol}")
-
-    near_forward_width = 2.0 * atm_vol * math.sqrt(float(time_to_expiry))
-    weights = np.ones_like(vols_arr, dtype=float)
-    weights[np.abs(strikes_arr - float(forward)) <= near_forward_width] *= 2.0
-
-    def _objective(x: np.ndarray) -> float:
-        alpha, rho, nu = (float(x[0]), float(x[1]), float(x[2]))
-        if alpha <= 0.0 or nu <= 0.0 or abs(rho) >= 1.0:
-            return 1e12
-        try:
-            model = np.array(
-                [
-                    _sabr_normal_vol(
-                        strike=float(k),
-                        forward=float(forward),
-                        time_to_expiry=float(time_to_expiry),
-                        alpha=alpha,
-                        beta=float(beta),
-                        rho=rho,
-                        nu=nu,
-                    )
-                    for k in strikes_arr
-                ],
-                dtype=float,
-            )
-        except Exception:
-            return 1e12
-        if not np.all(np.isfinite(model)):
-            return 1e12
-        err = model - vols_arr
-        return float(np.sum(weights * err * err))
-
-    alpha0 = float(atm_vol / (float(forward) ** float(beta)))
-    result = minimize(
-        _objective,
-        x0=np.asarray([alpha0, -0.1, 0.3], dtype=float),
-        method="Nelder-Mead",
-        options={"maxiter": 10000, "xatol": 1e-10, "fatol": 1e-12},
+    alpha_cal, rho_cal, nu_cal, rmse = calibrate_sabr_normal(
+        forward=float(forward),
+        time_to_expiry=float(time_to_expiry),
+        strikes_arr=strikes,
+        vols_arr=vols,
+        beta=float(beta),
+        method=calibration_method,
     )
-
-    alpha_cal, rho_cal, nu_cal = (float(result.x[0]), float(result.x[1]), float(result.x[2]))
-    if alpha_cal <= 0.0 or nu_cal <= 0.0 or abs(rho_cal) >= 1.0:
-        raise ValueError(f"SABR calibration returned invalid params: {result.x!r}")
 
     return USTFutureOptionSABRParams(
         alpha=alpha_cal,
@@ -553,6 +418,7 @@ def _calibrate_sabr_normal_from_delta_points(
         time_to_expiry=float(time_to_expiry),
         expiry_date=datetime.date.today(),
         as_of=datetime.date.today(),
+        calibration_rmse=rmse,
     )
 
 
@@ -1216,6 +1082,85 @@ def _parse_qs_ust_globex_symbol(token: str, *, as_of: Optional[datetime.date] = 
     raise ValueError(f"Unsupported qs_timeseries UST symbol: {token!r}")
 
 
+def _parse_qs_ust_option_request_symbol(symbol: str, *, as_of: Optional[datetime.date] = None) -> Dict[str, Any]:
+    token = str(symbol or "").strip().upper().replace("/", "")
+
+    def _build(
+        *,
+        symbol_info: Dict[str, Any],
+        selector: str,
+        right: str,
+        delta: Optional[float],
+    ) -> Dict[str, Any]:
+        base_symbol = str(symbol_info["globex_symbol"])
+        if selector == "atm":
+            canonical = f"{base_symbol}|ATM{right}"
+        else:
+            canonical = f"{base_symbol}|{float(delta):g}D{right}"
+        return {
+            "selector": selector,
+            "right": right,
+            "delta": delta,
+            "globex_symbol": base_symbol,
+            "symbol_info": symbol_info,
+            "canonical": canonical,
+        }
+
+    if "|" in token:
+        contract_part, leg_part = token.split("|", 1)
+        symbol_info = _parse_qs_ust_globex_symbol(contract_part, as_of=as_of)
+        if str(symbol_info.get("kind")) != "cm":
+            raise ValueError(f"UST dual-source CM alias requires a constant-maturity globex symbol: {symbol!r}")
+
+        m = re.fullmatch(r"ATM(?P<right>[CPS])", leg_part)
+        if m:
+            return _build(symbol_info=symbol_info, selector="atm", right=m.group("right").upper(), delta=None)
+
+        m = re.fullmatch(r"(?P<delta>\d{1,2}(?:\.\d+)?)D?(?P<right>[CP])", leg_part)
+        if m:
+            delta = float(m.group("delta"))
+            if delta <= 0.0 or delta >= 100.0:
+                raise ValueError(f"Delta alias must be in (0,100): {symbol}")
+            return _build(
+                symbol_info=symbol_info,
+                selector="delta",
+                right=m.group("right").upper(),
+                delta=delta,
+            )
+
+    m = re.fullmatch(r"(?P<base>[A-Z0-9_]+)\s+ATM\s+(?P<right>STRADDLE|CALL|PUT)", token)
+    if m:
+        symbol_info = _parse_qs_ust_globex_symbol(m.group("base"), as_of=as_of)
+        if str(symbol_info.get("kind")) != "cm":
+            raise ValueError(f"UST dual-source CM alias requires a constant-maturity globex symbol: {symbol!r}")
+        return _build(
+            symbol_info=symbol_info,
+            selector="atm",
+            right=_right_word_to_token(m.group("right")),
+            delta=None,
+        )
+
+    m = re.fullmatch(
+        r"(?P<base>[A-Z0-9_]+)\s+(?P<delta>\d{1,2}(?:\.\d+)?)\s*D(?:ELTA)?\s+(?P<right>CALL|PUT)",
+        token,
+    )
+    if m:
+        symbol_info = _parse_qs_ust_globex_symbol(m.group("base"), as_of=as_of)
+        if str(symbol_info.get("kind")) != "cm":
+            raise ValueError(f"UST dual-source CM alias requires a constant-maturity globex symbol: {symbol!r}")
+        delta = float(m.group("delta"))
+        if delta <= 0.0 or delta >= 100.0:
+            raise ValueError(f"Delta alias must be in (0,100): {symbol}")
+        return _build(
+            symbol_info=symbol_info,
+            selector="delta",
+            right=_right_word_to_token(m.group("right")),
+            delta=delta,
+        )
+
+    raise ValueError(f"Invalid UST dual-source CM option alias: {symbol}")
+
+
 def _qs_front_barchart_contract_for_date(*, root_globex: str, as_of: datetime.date) -> str:
     root = str(root_globex or "").strip().upper()
     prefix = _QS_UST_GLOBEX_TO_BARCHART_ROOT.get(root)
@@ -1229,6 +1174,20 @@ def _qs_front_barchart_contract_for_date(*, root_globex: str, as_of: datetime.da
         cutoff_fn=_imm_cutoff,
     )[0]
     return str(front).upper()
+
+
+def _qs_strike_codec_reference(*, globex_symbol: str, underlying_contract: Optional[str] = None) -> str:
+    token = str(globex_symbol or "").strip().upper()
+    if token:
+        try:
+            symbol_info = _parse_qs_ust_globex_symbol(token)
+            root_globex = str(symbol_info.get("root_globex", "")).strip().upper()
+            codec_root = _QS_UST_GLOBEX_TO_STRIKE_CODEC_ROOT.get(root_globex)
+            if codec_root:
+                return codec_root
+        except Exception:
+            pass
+    return str(underlying_contract or token).strip().upper()
 
 
 def _bachelier_delta_from_calculator(
@@ -1623,7 +1582,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     def _validate_sabr_smile_request(
         self,
         request: Dict[str, Any],
-    ) -> Tuple[str, Dict[str, Any], datetime.date, List[int], str, Dict[str, Any], bool, bool]:
+    ) -> Tuple[str, Dict[str, Any], datetime.date, List[int], str, Dict[str, Any], bool, bool, str]:
         if "as_of" not in request:
             raise ValueError("sabr_smile requires 'as_of'")
         if "beta" in request:
@@ -1671,7 +1630,10 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_kwargs = dict(request.get("curve_kwargs") or {})
         force_refresh = bool(request.get("force_refresh", False))
         show_tqdm = bool(request.get("show_tqdm", False))
-        return raw_symbol, symbol_info, as_of, deltas, curve_name, curve_kwargs, force_refresh, show_tqdm
+        calibration_method = str(request.get("calibration_method", "nelder-mead")).strip().lower().replace("_", "-")
+        if calibration_method not in {"nelder-mead", "de-gn"}:
+            raise ValueError(f"Unsupported SABR calibration_method: {request.get('calibration_method')!r}")
+        return raw_symbol, symbol_info, as_of, deltas, curve_name, curve_kwargs, force_refresh, show_tqdm, calibration_method
 
     def _build_sabr_smile_qs_request(
         self,
@@ -1838,14 +1800,21 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     ) -> Tuple[List[Tuple[float, float, str]], List[Tuple[str, int, QLUSTFutureOptionPricer]]]:
         market_points: List[Tuple[float, float, str]] = []
         ordered: List[Tuple[str, int, QLUSTFutureOptionPricer]] = []
+        invalid_legs: List[str] = []
         for key in sorted(selected_pricers.keys(), key=lambda item: (item[0], item[1])):
             right, delta = key
             pr = selected_pricers[key]
             iv_normal = float(pr.iv_normal())
             if not math.isfinite(iv_normal) or iv_normal <= 0.0:
-                raise ValueError(f"Invalid normal vol for SABR smile leg {delta}D{right}: {iv_normal}")
+                invalid_legs.append(f"{delta}D{right}={iv_normal}")
+                continue
             market_points.append((float(delta) / 100.0, iv_normal, str(right)))
             ordered.append((str(right), int(delta), pr))
+        if invalid_legs and len(market_points) < 6:
+            raise ValueError(
+                "Not enough valid SABR smile legs after filtering invalid normal vols: "
+                + ", ".join(invalid_legs)
+            )
         return market_points, ordered
 
     @staticmethod
@@ -1876,32 +1845,72 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         underlying_contract: str,
         as_of: datetime.date,
         force_refresh: bool,
+        price_hint: Optional[float] = None,
     ) -> Any:
         internal_symbol = _to_internal_ustf_contract(underlying_contract, as_of=as_of)
         ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
         with ustf_mdp:
-            pricers = ustf_mdp.get_pricer(
-                {
-                    "symbols": [internal_symbol],
-                    "timestamp": as_of,
-                    "include_basket": True,
-                    "force_refresh": force_refresh,
-                }
+            return self._build_ustf_conversion_pricer_from_basket(
+                ustf_mdp=ustf_mdp,
+                internal_symbol=internal_symbol,
+                as_of=as_of,
+                force_refresh=force_refresh,
+                price_hint=price_hint,
             )
-        if internal_symbol not in pricers:
-            raise ValueError(f"Failed to build UST futures pricer for {internal_symbol}")
-        return pricers[internal_symbol]
 
-    def _assemble_sabr_smile_result(
+    def _build_ustf_conversion_pricer_from_basket(
         self,
         *,
-        raw_symbol: str,
+        ustf_mdp: USTFuturesMDP,
+        internal_symbol: str,
+        as_of: datetime.date,
+        force_refresh: bool,
+        price_hint: Optional[float],
+    ) -> Any:
+        basket_data = ustf_mdp.get_delivery_basket(
+            as_of=as_of,
+            symbol=internal_symbol,
+            ignore_cache=bool(force_refresh),
+        )
+        price = _to_float(price_hint)
+        if price is None or not math.isfinite(price) or price <= 0.0:
+            # The SABR conversion pricer is only used for price->yield transforms.
+            price = 100.0
+        ts_dt = _CHI_TZ.localize(datetime.datetime.combine(as_of, datetime.time(14, 0)))
+        return ustf_mdp._build_pricer(
+            symbol=internal_symbol,
+            price=float(price),
+            ts_dt=ts_dt,
+            delivery=basket_data["delivery"],
+            basket_pricers=basket_data["basket_pricers"],
+            conversion_factors=basket_data["conversion_factors"],
+            contract_coupon=basket_data.get("contract_coupon"),
+            calc_mode=basket_data.get("calc_mode"),
+            meta_data={
+                "symbol": internal_symbol,
+                "timestamp": ts_dt.isoformat(),
+                "price": float(price),
+                "schema": 1,
+                "basket_only": True,
+            },
+        )
+
+    def _prepare_sabr_smile_inputs(
+        self,
+        *,
         as_of: datetime.date,
         selected: Dict[Tuple[str, int], QLUSTFutureOptionPricer],
-        labels_by_key: Optional[Dict[Tuple[str, int], str]],
-        force_refresh: bool,
-        conversion_pricer: Optional[Any] = None,
-    ) -> USTFutureOptionSABRSmile:
+        calibration_method: str,
+    ) -> Tuple[
+        str,
+        float,
+        datetime.date,
+        float,
+        float,
+        datetime.datetime,
+        USTFutureOptionSABRParams,
+        List[Tuple[str, int, QLUSTFutureOptionPricer]],
+    ]:
         underlying_contract, forward_price, expiry_date, fv01 = self._ensure_sabr_smile_pricer_consistency(selected)
         time_to_expiry = (expiry_date - as_of).days / 365.0
         if time_to_expiry <= 0.0:
@@ -1913,6 +1922,44 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             time_to_expiry=float(time_to_expiry),
             market_points=market_points,
             beta=0.5,
+            calibration_method=calibration_method,
+        )
+        latest_quote = max(pr.quote_timestamp() for pr in selected.values())
+        return (
+            underlying_contract,
+            float(forward_price),
+            expiry_date,
+            float(fv01),
+            float(time_to_expiry),
+            latest_quote,
+            params_seed,
+            ordered_legs,
+        )
+
+    def _assemble_sabr_smile_result(
+        self,
+        *,
+        raw_symbol: str,
+        as_of: datetime.date,
+        selected: Dict[Tuple[str, int], QLUSTFutureOptionPricer],
+        labels_by_key: Optional[Dict[Tuple[str, int], str]],
+        force_refresh: bool,
+        conversion_pricer: Optional[Any] = None,
+        calibration_method: str = "nelder-mead",
+    ) -> USTFutureOptionSABRSmile:
+        (
+            underlying_contract,
+            forward_price,
+            expiry_date,
+            fv01,
+            time_to_expiry,
+            latest_quote,
+            params_seed,
+            ordered_legs,
+        ) = self._prepare_sabr_smile_inputs(
+            as_of=as_of,
+            selected=selected,
+            calibration_method=calibration_method,
         )
 
         if conversion_pricer is None:
@@ -1920,6 +1967,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 underlying_contract=underlying_contract,
                 as_of=as_of,
                 force_refresh=force_refresh,
+                price_hint=forward_price,
             )
         forward_futures_ytm = float(conversion_pricer.yield_to_maturity_from_price(float(forward_price)))
         params = USTFutureOptionSABRParams(
@@ -1932,11 +1980,11 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             time_to_expiry=float(time_to_expiry),
             expiry_date=expiry_date,
             as_of=as_of,
+            calibration_rmse=params_seed.calibration_rmse,
         )
 
         points: List[USTFutureOptionSmilePoint] = []
         strike_prices: List[float] = []
-        latest_quote = max(pr.quote_timestamp() for pr in selected.values())
         labels_by_key = dict(labels_by_key or {})
         for right, delta, pr in ordered_legs:
             strike_price = _normal_delta_to_strike(
@@ -2003,7 +2051,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         )
 
     def _build_sabr_smile_result(self, request: Dict[str, Any]) -> USTFutureOptionSABRSmile:
-        raw_symbol, symbol_info, as_of, deltas, curve_name, curve_kwargs, force_refresh, show_tqdm = self._validate_sabr_smile_request(request)
+        raw_symbol, symbol_info, as_of, deltas, curve_name, curve_kwargs, force_refresh, show_tqdm, calibration_method = self._validate_sabr_smile_request(request)
         labels_by_key: Dict[Tuple[str, int], str]
         if str(symbol_info.get("kind")) == "cm":
             qs_request = self._build_sabr_smile_qs_request(
@@ -2045,18 +2093,28 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 deltas=deltas,
             )
 
-        return self._assemble_sabr_smile_result(
+        smile = self._assemble_sabr_smile_result(
             raw_symbol=raw_symbol,
             as_of=as_of,
             selected=selected,
             labels_by_key=labels_by_key,
             force_refresh=force_refresh,
+            calibration_method=calibration_method,
         )
+        if str(symbol_info.get("kind")) == "cm":
+            self._seed_sabr_smile_option_snapshot_cache(
+                request_symbols=[str(request.get("globex_symbol", "")), raw_symbol, str(symbol_info.get("globex_symbol", ""))],
+                as_of=as_of,
+                selected=selected,
+                source_request=request,
+                smile=smile,
+            )
+        return smile
 
     def _normalize_bulk_sabr_smile_request(
         self,
         request: Dict[str, Any],
-    ) -> Tuple[List[Dict[str, Any]], List[datetime.date], List[int], str, Dict[str, Any], bool, bool]:
+    ) -> Tuple[List[Dict[str, Any]], List[datetime.date], List[int], str, Dict[str, Any], bool, bool, str]:
         if "timestamps" not in request:
             raise ValueError("fetch_bulk_sabr_smile requires 'timestamps'")
         if "beta" in request:
@@ -2130,6 +2188,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_kwargs: Optional[Dict[str, Any]] = None
         force_refresh: Optional[bool] = None
         show_tqdm: Optional[bool] = None
+        calibration_method: Optional[str] = None
 
         symbol_field = "globex_symbol" if src == "USTFO_DUAL-QL" else "symbol"
         first_date = dates[0]
@@ -2137,7 +2196,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             scalar_req = dict(base_req)
             scalar_req[symbol_field] = input_symbol
             scalar_req["as_of"] = first_date
-            raw_symbol, symbol_info, _, deltas_i, curve_name_i, curve_kwargs_i, force_refresh_i, show_tqdm_i = self._validate_sabr_smile_request(
+            raw_symbol, symbol_info, _, deltas_i, curve_name_i, curve_kwargs_i, force_refresh_i, show_tqdm_i, calibration_method_i = self._validate_sabr_smile_request(
                 scalar_req
             )
 
@@ -2145,7 +2204,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 probe_req = dict(base_req)
                 probe_req[symbol_field] = input_symbol
                 probe_req["as_of"] = as_of
-                probe_raw_symbol, _, _, _, _, _, _, _ = self._validate_sabr_smile_request(probe_req)
+                probe_raw_symbol, _, _, _, _, _, _, _, _ = self._validate_sabr_smile_request(probe_req)
                 if probe_raw_symbol != raw_symbol:
                     raise ValueError(
                         f"Bulk SABR symbol normalization is not stable across dates for {input_symbol!r}: "
@@ -2158,6 +2217,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 curve_kwargs = dict(curve_kwargs_i)
                 force_refresh = bool(force_refresh_i)
                 show_tqdm = bool(show_tqdm_i)
+                calibration_method = str(calibration_method_i)
 
             row = symbol_rows.get(raw_symbol)
             if row is None:
@@ -2177,6 +2237,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             dict(curve_kwargs or {}),
             bool(force_refresh),
             bool(show_tqdm),
+            str(calibration_method or "nelder-mead"),
         )
 
     def _select_bulk_sabr_smile_qs_pricers(
@@ -2262,17 +2323,16 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
     def _build_bulk_sabr_smile_conversion_pricers(
         self,
-        requirements: Iterable[Tuple[str, datetime.date]],
+        requirements: Iterable[Tuple[str, datetime.date, float]],
         *,
         force_refresh: bool,
     ) -> Dict[Tuple[str, datetime.date], Any]:
-        grouped: "OrderedDict[datetime.date, List[Tuple[str, str]]]" = OrderedDict()
-        for underlying_contract, as_of in requirements:
-            internal_symbol = _to_internal_ustf_contract(str(underlying_contract), as_of=as_of)
-            grouped.setdefault(as_of, [])
-            pair = (str(underlying_contract), internal_symbol)
-            if pair not in grouped[as_of]:
-                grouped[as_of].append(pair)
+        grouped: "OrderedDict[Tuple[str, datetime.date], Dict[str, Any]]" = OrderedDict()
+        for underlying_contract, as_of, price_hint in requirements:
+            grouped[(str(underlying_contract), as_of)] = {
+                "internal_symbol": _to_internal_ustf_contract(str(underlying_contract), as_of=as_of),
+                "price_hint": price_hint,
+            }
 
         out: Dict[Tuple[str, datetime.date], Any] = {}
         if not grouped:
@@ -2280,20 +2340,17 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
         with ustf_mdp:
-            for as_of, pairs in grouped.items():
-                internal_symbols = [internal_symbol for _, internal_symbol in pairs]
-                pricers = ustf_mdp.get_pricer(
-                    {
-                        "symbols": internal_symbols,
-                        "timestamp": as_of,
-                        "include_basket": True,
-                        "force_refresh": force_refresh,
-                    }
-                )
-                for underlying_contract, internal_symbol in pairs:
-                    if internal_symbol not in pricers:
-                        raise ValueError(f"Failed to build UST futures pricer for {internal_symbol}")
-                    out[(underlying_contract, as_of)] = pricers[internal_symbol]
+            for (underlying_contract, as_of), row in grouped.items():
+                try:
+                    out[(underlying_contract, as_of)] = self._build_ustf_conversion_pricer_from_basket(
+                        ustf_mdp=ustf_mdp,
+                        internal_symbol=str(row["internal_symbol"]),
+                        as_of=as_of,
+                        force_refresh=force_refresh,
+                        price_hint=_to_float(row.get("price_hint")),
+                    )
+                except Exception:
+                    continue
         return out
 
     def _build_bulk_sabr_smile_snapshot_context(
@@ -2562,7 +2619,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
     def fetch_bulk_sabr_smile(self, request: Dict[str, Any]) -> Dict[str, Dict[datetime.date, USTFutureOptionSABRSmile]]:
         req = dict(request)
-        symbol_rows, dates, deltas, curve_name, curve_kwargs, force_refresh, show_tqdm = self._normalize_bulk_sabr_smile_request(req)
+        symbol_rows, dates, deltas, curve_name, curve_kwargs, force_refresh, show_tqdm, calibration_method = self._normalize_bulk_sabr_smile_request(req)
         src = str(self.source).upper()
         base_req = dict(req)
         for key in ("timestamps", "globex_symbols", "globex_symbol", "symbols", "symbol", "contract", "endpoint", "max_workers"):
@@ -2641,6 +2698,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                         deltas=deltas,
                         strict=(len({miss["as_of"] for miss in misses}) == 1),
                     )
+                    unresolved_request_keys: set[Tuple[str, datetime.date]] = set()
                     if unresolved:
                         unresolved_by_date: "OrderedDict[datetime.date, List[Dict[str, Any]]]" = OrderedDict()
                         for miss in unresolved:
@@ -2678,18 +2736,31 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                                 "force_refresh": force_refresh,
                                 "show_tqdm": show_tqdm,
                             }
-                            fallback_pricers_by_series = self._qs_timeseries(fallback_request)
-                            fallback_selected, fallback_labels, _ = self._select_bulk_sabr_smile_qs_pricers(
+                            try:
+                                fallback_pricers_by_series = self._qs_timeseries(fallback_request)
+                            except Exception:
+                                unresolved_request_keys.update(
+                                    (str(miss["raw_symbol"]), miss["as_of"]) for miss in fallback_misses
+                                )
+                                continue
+                            fallback_selected, fallback_labels, fallback_unresolved = self._select_bulk_sabr_smile_qs_pricers(
                                 pricers_by_series=fallback_pricers_by_series,
                                 misses=fallback_misses,
                                 deltas=deltas,
-                                strict=True,
+                                strict=False,
                             )
                             selected_by_request.update(fallback_selected)
                             labels_by_request.update(fallback_labels)
+                            unresolved_request_keys.update(
+                                (str(miss["raw_symbol"]), miss["as_of"]) for miss in fallback_unresolved
+                            )
 
                     for miss in misses:
                         request_key = (str(miss["raw_symbol"]), miss["as_of"])
+                        if request_key in unresolved_request_keys:
+                            continue
+                        if request_key not in selected_by_request or request_key not in labels_by_request:
+                            continue
                         selected = selected_by_request[request_key]
                         labels_by_key = labels_by_request[request_key]
                         seed_symbols = self._dedupe_preserve_order(
@@ -2744,16 +2815,41 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
                 conversion_requirements = []
                 for miss, selected, _, _ in assembled_inputs:
-                    underlying_contract, _, _, _ = self._ensure_sabr_smile_pricer_consistency(selected)
-                    conversion_requirements.append((underlying_contract, miss["as_of"]))
+                    underlying_contract, forward_price, _, _ = self._ensure_sabr_smile_pricer_consistency(selected)
+                    conversion_requirements.append((underlying_contract, miss["as_of"], forward_price))
                 conversion_pricers = self._build_bulk_sabr_smile_conversion_pricers(
                     conversion_requirements,
                     force_refresh=force_refresh,
                 )
 
+                use_ql_calculator = bool(req.get("use_ql_calculator", False))
                 for miss, selected, labels_by_key, _ in assembled_inputs:
                     underlying_contract, _, _, _ = self._ensure_sabr_smile_pricer_consistency(selected)
-                    conversion_pricer = conversion_pricers[(underlying_contract, miss["as_of"])]
+                    conversion_pricer = conversion_pricers.get((underlying_contract, miss["as_of"]))
+                    if conversion_pricer is None:
+                        try:
+                            atm_pricers = self._build_sabr_calibrated_atm_pricers(
+                                raw_symbol=str(miss["raw_symbol"]),
+                                as_of=miss["as_of"],
+                                selected=selected,
+                                curve_name=curve_name,
+                                curve_kwargs=curve_kwargs,
+                                use_ql_calculator=use_ql_calculator,
+                                calibration_method=calibration_method,
+                            )
+                        except Exception:
+                            continue
+                        self._seed_sabr_smile_option_snapshot_cache(
+                            request_symbols=self._dedupe_preserve_order(
+                                list(miss["input_symbols"])
+                                + [str(miss["raw_symbol"]), str(miss["symbol_info"].get("globex_symbol", ""))]
+                            ),
+                            as_of=miss["as_of"],
+                            selected=selected,
+                            source_request=req,
+                            atm_pricers=atm_pricers,
+                        )
+                        continue
                     smile = self._assemble_sabr_smile_result(
                         raw_symbol=str(miss["raw_symbol"]),
                         as_of=miss["as_of"],
@@ -2761,8 +2857,19 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                         labels_by_key=labels_by_key,
                         force_refresh=force_refresh,
                         conversion_pricer=conversion_pricer,
+                        calibration_method=calibration_method,
                     )
                     smiles_by_symbol[str(miss["raw_symbol"])][miss["as_of"]] = smile
+                    self._seed_sabr_smile_option_snapshot_cache(
+                        request_symbols=self._dedupe_preserve_order(
+                            list(miss["input_symbols"])
+                            + [str(miss["raw_symbol"]), str(miss["symbol_info"].get("globex_symbol", ""))]
+                        ),
+                        as_of=miss["as_of"],
+                        selected=selected,
+                        source_request=req,
+                        smile=smile,
+                    )
                     cache_key = self._build_get_data_cache_key("sabr_smile", miss["scalar_request"])
                     if cache_key:
                         self._threadsafe_cache_put(
@@ -2811,6 +2918,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         if ep == "sabr_smile":
             if "as_of" in cache_req:
                 cache_req["as_of"] = _as_date(cache_req["as_of"])
+            cache_req["calibration_method"] = str(cache_req.get("calibration_method", "nelder-mead")).strip().lower().replace("_", "-")
             src = str(self.source).upper()
             if src == "USTFO_DUAL-QL":
                 if "globex_symbol" in cache_req:
@@ -2984,6 +3092,188 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             payload = self._serialize_get_data_result("option_snapshot", {str(raw_symbol): list(plist)})
             self._threadsafe_cache_put(cache_key, payload)
 
+    def _build_sabr_atm_pricers_from_params(
+        self,
+        *,
+        globex_symbol: str,
+        underlying_contract: str,
+        valuation_ts: datetime.datetime,
+        expiry: datetime.date,
+        forward: float,
+        time_to_expiry: float,
+        fv01: float,
+        alpha: float,
+        beta: float,
+        rho: float,
+        nu: float,
+        curve_name: str,
+        curve_kwargs: Optional[Dict[str, Any]],
+        use_ql_calculator: bool,
+        meta_source: str,
+        meta_flags: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[QLUSTFutureOptionPricer, QLUSTFutureOptionPricer]:
+        strike_codec_ref = _qs_strike_codec_reference(
+            globex_symbol=globex_symbol,
+            underlying_contract=underlying_contract,
+        )
+        strike = _atm_strike_from_forward(
+            float(forward),
+            step=_strike_step_for_contract(strike_codec_ref),
+        )
+        try:
+            strike4 = _format_strike4(strike, contract=strike_codec_ref)
+        except Exception:
+            strike4 = _format_strike4(strike)
+        iv_normal = float(
+            _sabr_normal_vol(
+                strike=float(strike),
+                forward=float(forward),
+                time_to_expiry=float(time_to_expiry),
+                alpha=float(alpha),
+                beta=float(beta),
+                rho=float(rho),
+                nu=float(nu),
+            )
+        )
+        curve_memo: Dict[Tuple[str, datetime.date], Tuple[Any, Optional[str]]] = {}
+        discount, curve_error = self._discount_factor(
+            valuation_ts=valuation_ts,
+            expiry_date=expiry,
+            curve_name=curve_name,
+            curve_kwargs=curve_kwargs,
+            memo=curve_memo,
+        )
+        base_meta = {
+            "schema": 1,
+            "source": str(meta_source),
+            "globex_symbol": str(globex_symbol),
+            "underlying_symbol": str(underlying_contract),
+            "curve_name": curve_name,
+            "curve_error": curve_error,
+            "discount": float(discount),
+            "tte": float(time_to_expiry),
+            "atm_alias": True,
+            "fv01": float(fv01),
+            "iv_normal_bps": float(iv_normal / fv01) if fv01 > 0.0 else float("nan"),
+        }
+        if meta_flags:
+            base_meta.update(dict(meta_flags))
+
+        def _build(right: str) -> QLUSTFutureOptionPricer:
+            market_price = _bachelier_price(
+                right=right,
+                strike=float(strike),
+                forward=float(forward),
+                vol_normal=float(iv_normal),
+                tte=float(time_to_expiry),
+                discount=float(discount),
+            )
+            delta, gamma, vega, theta = _bachelier_greeks_fd(
+                right=right,
+                strike=float(strike),
+                forward=float(forward),
+                vol_normal=float(iv_normal),
+                tte=float(time_to_expiry),
+                discount=float(discount),
+                use_ql_calculator=use_ql_calculator,
+            )
+            return QLUSTFutureOptionPricer(
+                symbol=f"{underlying_contract}|{strike4}{right}",
+                right=right,
+                underlying_symbol=underlying_contract,
+                strike=float(strike),
+                quote_timestamp=valuation_ts,
+                expiry_date=expiry,
+                market_price=float(market_price),
+                model_price=float(market_price),
+                iv_normal=float(iv_normal),
+                delta=float(delta) if math.isfinite(delta) else float("nan"),
+                gamma=float(gamma) if math.isfinite(gamma) else float("nan"),
+                vega=float(vega) if math.isfinite(vega) else float("nan"),
+                theta=float(theta) if math.isfinite(theta) else float("nan"),
+                forward=float(forward),
+                discount=float(discount),
+                fv01=float(fv01),
+                meta_data=dict(base_meta),
+            )
+
+        return _build("C"), _build("P")
+
+    def _build_sabr_calibrated_atm_pricers(
+        self,
+        *,
+        raw_symbol: str,
+        as_of: datetime.date,
+        selected: Dict[Tuple[str, int], QLUSTFutureOptionPricer],
+        curve_name: str,
+        curve_kwargs: Optional[Dict[str, Any]],
+        use_ql_calculator: bool,
+        calibration_method: str,
+    ) -> Tuple[QLUSTFutureOptionPricer, QLUSTFutureOptionPricer]:
+        (
+            underlying_contract,
+            forward_price,
+            expiry_date,
+            fv01,
+            time_to_expiry,
+            latest_quote,
+            params_seed,
+            _,
+        ) = self._prepare_sabr_smile_inputs(
+            as_of=as_of,
+            selected=selected,
+            calibration_method=calibration_method,
+        )
+        return self._build_sabr_atm_pricers_from_params(
+            globex_symbol=str(raw_symbol),
+            underlying_contract=underlying_contract,
+            valuation_ts=latest_quote,
+            expiry=expiry_date,
+            forward=float(forward_price),
+            time_to_expiry=float(time_to_expiry),
+            fv01=float(fv01),
+            alpha=float(params_seed.alpha),
+            beta=float(params_seed.beta),
+            rho=float(params_seed.rho),
+            nu=float(params_seed.nu),
+            curve_name=curve_name,
+            curve_kwargs=curve_kwargs,
+            use_ql_calculator=use_ql_calculator,
+            meta_source="SABR_SMILE_SYNTH_ATM_NO_CONVERSION",
+            meta_flags={
+                "synthetic_from_sabr_smile": False,
+                "synthetic_from_sabr_delta_calibration": True,
+                "conversion_pricer_missing": True,
+            },
+        )
+
+    def _build_sabr_smile_atm_pricers(
+        self,
+        *,
+        smile: USTFutureOptionSABRSmile,
+        curve_name: str,
+        curve_kwargs: Optional[Dict[str, Any]],
+        use_ql_calculator: bool,
+    ) -> Tuple[QLUSTFutureOptionPricer, QLUSTFutureOptionPricer]:
+        return self._build_sabr_atm_pricers_from_params(
+            globex_symbol=str(smile.globex_symbol),
+            underlying_contract=str(smile.underlying_contract),
+            valuation_ts=smile.quote_timestamp,
+            expiry=smile.params.expiry_date,
+            forward=float(smile.params.forward_price),
+            time_to_expiry=max(float(smile.params.time_to_expiry), 0.0),
+            fv01=float(smile.fv01),
+            alpha=float(smile.params.alpha),
+            beta=float(smile.params.beta),
+            rho=float(smile.params.rho),
+            nu=float(smile.params.nu),
+            curve_name=curve_name,
+            curve_kwargs=curve_kwargs,
+            use_ql_calculator=use_ql_calculator,
+            meta_source="SABR_SMILE_SYNTH_ATM",
+            meta_flags={"synthetic_from_sabr_smile": True},
+        )
+
     def _seed_sabr_smile_option_snapshot_cache(
         self,
         *,
@@ -2991,8 +3281,10 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         as_of: datetime.date,
         selected: Dict[Tuple[str, int], QLUSTFutureOptionPricer],
         source_request: Optional[Dict[str, Any]] = None,
+        smile: Optional[USTFutureOptionSABRSmile] = None,
+        atm_pricers: Optional[Tuple[QLUSTFutureOptionPricer, QLUSTFutureOptionPricer]] = None,
     ) -> None:
-        if not selected:
+        if not selected and smile is None and atm_pricers is None:
             return
 
         symbols = self._dedupe_preserve_order(
@@ -3008,8 +3300,6 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 if right_token not in {"C", "P"}:
                     continue
                 result[f"{request_symbol}|{int(delta)}D{right_token}"] = [pr]
-        if not result:
-            return
 
         source_request = dict(source_request or {})
         seed_request: Dict[str, Any] = {
@@ -3022,7 +3312,121 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             seed_request["curve_name"] = source_request["curve_name"]
         if "curve_kwargs" in source_request:
             seed_request["curve_kwargs"] = source_request["curve_kwargs"]
+        if smile is not None or atm_pricers is not None:
+            curve_name = str(source_request.get("curve_name", self._curve_name_default))
+            curve_kwargs = dict(source_request.get("curve_kwargs") or {})
+            if atm_pricers is None:
+                use_ql_calculator = bool(source_request.get("use_ql_calculator", False))
+                call_pricer, put_pricer = self._build_sabr_smile_atm_pricers(
+                    smile=smile,
+                    curve_name=curve_name,
+                    curve_kwargs=curve_kwargs,
+                    use_ql_calculator=use_ql_calculator,
+                )
+            else:
+                call_pricer, put_pricer = atm_pricers
+            for request_symbol in symbols:
+                result[f"{request_symbol}|ATMC"] = [call_pricer]
+                result[f"{request_symbol}|ATMP"] = [put_pricer]
+                result[f"{request_symbol}|ATMS"] = [
+                    self._synthesize_straddle(
+                        straddle_symbol=f"{request_symbol}|ATMS",
+                        call_pricer=call_pricer,
+                        put_pricer=put_pricer,
+                    )
+                ]
+        if not result:
+            return
         self._seed_option_snapshot_alias_cache(request=seed_request, result=result, source_request=source_request)
+
+    def _get_cached_option_snapshot_symbol(
+        self,
+        *,
+        request: Dict[str, Any],
+        raw_symbol: str,
+    ) -> Optional[List[QLUSTFutureOptionPricer]]:
+        single_request = dict(request)
+        single_request.pop("symbols", None)
+        single_request.pop("tickers", None)
+        single_request["symbols"] = [str(raw_symbol)]
+        cache_key = self._build_get_data_cache_key("option_snapshot", single_request)
+        if not cache_key:
+            return None
+        cached = self._threadsafe_cache_get(cache_key)
+        hit = self._deserialize_get_data_result(cached)
+        if not hit:
+            return None
+        out = hit.get(str(raw_symbol))
+        if not out:
+            return None
+        return out
+
+    def _option_snapshot_dual_cm_aliases(
+        self,
+        *,
+        request: Dict[str, Any],
+        symbols: Sequence[str],
+    ) -> Dict[str, List[QLUSTFutureOptionPricer]]:
+        if not symbols:
+            return {}
+
+        ts = request.get("timestamp", "live")
+        as_of = _as_date(ts)
+        req_window_start = _as_date(request.get("window_start", as_of))
+        req_window_end = _as_date(request.get("window_end", as_of))
+        if req_window_end < req_window_start:
+            raise ValueError(
+                f"option_snapshot requires window_end >= window_start; "
+                f"got {req_window_start.isoformat()}..{req_window_end.isoformat()}"
+            )
+
+        parsed: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        result: Dict[str, List[QLUSTFutureOptionPricer]] = {}
+        missing: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        extra_deltas: List[int] = []
+
+        for raw in symbols:
+            spec = _parse_qs_ust_option_request_symbol(raw, as_of=as_of)
+            parsed[raw] = spec
+            if spec["selector"] == "delta":
+                extra_deltas.append(int(round(float(spec["delta"]))))
+            cached = self._get_cached_option_snapshot_symbol(request=request, raw_symbol=raw)
+            if cached:
+                result[str(raw)] = cached
+            else:
+                missing[str(raw)] = spec
+
+        if missing:
+            window_dates = pd.bdate_range(req_window_start, req_window_end).date.tolist()
+            if not window_dates:
+                window_dates = [req_window_start]
+
+            bulk_request = dict(request)
+            for key in ("symbols", "tickers", "symbol", "contract", "globex_symbol", "endpoint"):
+                bulk_request.pop(key, None)
+            bulk_request["globex_symbols"] = self._dedupe_preserve_order(
+                [str(spec["globex_symbol"]) for spec in missing.values()]
+            )
+            bulk_request["timestamps"] = window_dates
+            bulk_request["deltas"] = self._normalize_sabr_smile_deltas(
+                self._normalize_sabr_smile_deltas(None) + extra_deltas
+            )
+            self.fetch_bulk_sabr_smile(bulk_request)
+
+            unresolved: List[str] = []
+            for raw in missing.keys():
+                cached = self._get_cached_option_snapshot_symbol(request=request, raw_symbol=raw)
+                if cached:
+                    result[str(raw)] = cached
+                else:
+                    unresolved.append(str(raw))
+            if unresolved:
+                raise ValueError(
+                    "Could not resolve dual-source constant-maturity option aliases: "
+                    + ", ".join(unresolved)
+                )
+
+        return result
 
     def _assert_endpoint_allowed(self, endpoint: str) -> None:
         src = self.source.upper()
@@ -3997,8 +4401,31 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_name = str(request.get("curve_name", self._curve_name_default))
         curve_kwargs = dict(request.get("curve_kwargs") or {})
 
+        dual_cm_symbols: List[str] = []
+        plain_symbols: List[str] = []
+        if str(self.source).upper() == "USTFO_DUAL-QL":
+            as_of = _as_date(ts)
+            for raw in symbols:
+                try:
+                    spec = _parse_qs_ust_option_request_symbol(raw, as_of=as_of)
+                except Exception:
+                    plain_symbols.append(raw)
+                    continue
+                if str(spec.get("symbol_info", {}).get("kind")) == "cm":
+                    dual_cm_symbols.append(raw)
+                else:
+                    plain_symbols.append(raw)
+        else:
+            plain_symbols = list(symbols)
+
+        result: Dict[str, List[QLUSTFutureOptionPricer]] = {}
+        if dual_cm_symbols:
+            result.update(self._option_snapshot_dual_cm_aliases(request=request, symbols=dual_cm_symbols))
+        if not plain_symbols:
+            return result
+
         parsed_requested_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-        for raw in symbols:
+        for raw in plain_symbols:
             parsed_requested_specs[raw] = _parse_option_request_symbol(raw, as_of=_as_date(ts))
         requested_specs = _resolve_option_contract_aliases_for_date(parsed_requested_specs, as_of=_as_date(ts))
 
@@ -4473,7 +4900,6 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     if pr is not None:
                         cp_pricers[leg_symbol] = pr
 
-        result: Dict[str, List[QLUSTFutureOptionPricer]] = {}
         for raw, norm in requested.items():
             if norm.endswith("S"):
                 c_key = f"{norm[:-1]}C"
@@ -4795,8 +5221,12 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     model_price = market_price
 
                 if math.isfinite(strike) and strike > 0.0:
+                    strike_codec_ref = _qs_strike_codec_reference(
+                        globex_symbol=globex_symbol,
+                        underlying_contract=underlying_contract,
+                    )
                     try:
-                        selector = _format_strike4(strike, contract=underlying_contract)
+                        selector = _format_strike4(strike, contract=strike_codec_ref)
                     except Exception:
                         selector = _format_strike4(strike)
                 elif delta_abs is not None and float(delta_abs) > 0.0:
@@ -5115,7 +5545,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         if endpoint == "sabr_smile":
             req = dict(request)
             smiles_by_symbol = self.fetch_bulk_sabr_smile(req)
-            _, dates, _, _, _, _, _ = self._normalize_bulk_sabr_smile_request(req)
+            _, dates, _, _, _, _, _, _ = self._normalize_bulk_sabr_smile_request(req)
             out: "OrderedDict[datetime.date, OrderedDict[str, List[USTFutureOptionSABRSmile]]]" = OrderedDict(
                 (as_of, OrderedDict()) for as_of in dates
             )

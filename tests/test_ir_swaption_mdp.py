@@ -141,3 +141,45 @@ def test_single_and_bulk_shapes_provider_engine_dispatch_and_cache(monkeypatch):
     assert provider_calls["n"] > provider_before
     assert curve_calls["n"] >= 2
     assert engine_calls["n"] >= 2
+
+
+def test_bulk_get_data_skips_single_date_curve_failures(monkeypatch):
+    mdp = IRSwaptionMDP(source="GSQUANT-QL")
+
+    d1 = dt.date(2026, 2, 13)
+    d2 = dt.date(2026, 2, 16)
+
+    def _bulk_curve(req):
+        raise RuntimeError("synthetic bulk curve failure")
+
+    def _single_curve(req):
+        if req["timestamp"] == d2:
+            raise AssertionError("synthetic holiday failure")
+        return _FakeCurve(req["timestamp"])
+
+    def _provider(*, curve_name, dates, surface_type, **kwargs):
+        _ = curve_name, surface_type, kwargs
+        if len(dates) > 1 and d2 in dates:
+            raise ValueError("synthetic bulk vol failure")
+        return {d: _make_vol_handle(d) for d in dates if d != d2}
+
+    def _engine(**kwargs):
+        _ = kwargs
+        return object()
+
+    monkeypatch.setattr(mdp._curve_mdp, "bulk_get_data", _bulk_curve)
+    monkeypatch.setattr(mdp._curve_mdp, "get_data", _single_curve)
+    mdp.VOL_PROVIDERS["PARTIALPROV"] = _provider
+    mdp.ENGINE_FACTORIES["PARTIALENG"] = _engine
+
+    out = mdp.bulk_get_data(
+        {
+            "endpoint": "swaption_snapshot",
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [d1, d2],
+            "surface_type": "atmf_normal",
+            "source": "PARTIALPROV-PARTIALENG",
+        }
+    )
+
+    assert set(out.keys()) == {d1}

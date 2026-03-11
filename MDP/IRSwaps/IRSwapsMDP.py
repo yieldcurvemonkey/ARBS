@@ -1183,11 +1183,19 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             return out
 
         # ------- default / not implemented -------
-        # Fallback: do one-by-one via existing get_data (still avoids concurrent callers hitting cache separately)
-        raise "should not be here"
-        # for t in timestamps:
-        #     out[t] = self.get_data({"curve_name": curve_name, "timestamp": t, **request})
-        # return out
+        # Fallback: build curves one-by-one for sources without a dedicated bulk implementation.
+        for t in timestamps:
+            single_request = dict(request)
+            single_request["curve_name"] = curve_name
+            single_request["timestamp"] = t
+            single_request["ignore_cache"] = bool(ignore_cache)
+            try:
+                curve = self.get_data(single_request)
+            except Exception:
+                continue
+            if curve is not None:
+                out[t] = curve
+        return out
 
 
 def _normalize_leg(s: str) -> str:

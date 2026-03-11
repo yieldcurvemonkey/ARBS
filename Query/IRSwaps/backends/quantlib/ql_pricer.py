@@ -101,24 +101,37 @@ def build_ql_irswap(
         else:
             eff = datetime_to_ql_date(effective_date)
             term = datetime_to_ql_date(maturity_date)
+            if term <= eff:
+                raise ValueError(f"maturity_date must be after effective_date; got {effective_date} -> {maturity_date}")
 
             if is_ois:
-                swap: ql.OvernightIndexedSwap = ql.MakeOIS(
-                    fwdStart=ql.Period("-0D"),
-                    swapTenor=ql.Period("-0D"),
-                    effectiveDate=eff,
-                    terminationDate=term,
-                    fixedRate=fixed_rate / 100.0,
-                    overnightIndex=swap_index or QUANTLIB_CURVE_DEFINITIONS[curve]["ReferenceRate"](curve_handle),
-                    calendar=QUANTLIB_CURVE_DEFINITIONS[curve]["Calendar"],
-                    paymentCalendar=QUANTLIB_CURVE_DEFINITIONS[curve]["Calendar"],
-                    fixedLegDayCount=QUANTLIB_CURVE_DEFINITIONS[curve]["DayCounter"],
-                    fixedLegConvention=QUANTLIB_CURVE_DEFINITIONS[curve]["BusinessConvention"],
-                    paymentFrequency=QUANTLIB_CURVE_DEFINITIONS[curve]["PaymentFrequency"],
-                    paymentLag=QUANTLIB_CURVE_DEFINITIONS[curve]["PaymentLag"],
-                    nominal=abs(nominal),
-                    receiveFixed=receive_fixed_flag,
-                    endOfMonth=False,  # has to be dynamic e.g. true for short swap, false for longer dated swaps
+                # For explicit-date OIS trades, generate the payment schedule forward from the
+                # supplied effective date. Backward generation can create a tiny front stub
+                # (for example Apr 3 -> Apr 6) that QuantLib then rejects while expanding the
+                # overnight coupons.
+                payment_schedule = ql.Schedule(
+                    eff,
+                    term,
+                    ql.Period(QUANTLIB_CURVE_DEFINITIONS[curve]["PaymentFrequency"]),
+                    QUANTLIB_CURVE_DEFINITIONS[curve]["Calendar"],
+                    QUANTLIB_CURVE_DEFINITIONS[curve]["BusinessConvention"],
+                    ql.Unadjusted,
+                    ql.DateGeneration.Forward,
+                    False,
+                )
+                swap_type = ql.Swap.Receiver if receive_fixed_flag else ql.Swap.Payer
+                swap: ql.OvernightIndexedSwap = ql.OvernightIndexedSwap(
+                    swap_type,
+                    abs(nominal),
+                    payment_schedule,
+                    fixed_rate / 100.0,
+                    QUANTLIB_CURVE_DEFINITIONS[curve]["DayCounter"],
+                    swap_index or QUANTLIB_CURVE_DEFINITIONS[curve]["ReferenceRate"](curve_handle),
+                    0.0,
+                    QUANTLIB_CURVE_DEFINITIONS[curve]["PaymentLag"],
+                    QUANTLIB_CURVE_DEFINITIONS[curve]["BusinessConvention"],
+                    QUANTLIB_CURVE_DEFINITIONS[curve]["Calendar"],
+                    False,
                 )
             else:
                 swap: ql.VanillaSwap = ql.MakeVanillaSwap(

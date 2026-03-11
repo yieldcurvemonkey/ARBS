@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 
 import pandas as pd
+from tqdm.auto import tqdm as _tqdm
 
 from Caching.DiskCacheMixin import DiskCacheMixin
 from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP, IRSwaptionMarketContext
@@ -190,7 +191,12 @@ class IRSwaptionsTB(DiskCacheMixin, BaseTimeseriesTB):
 
         new_rows_with_meta: list[tuple[tuple[DateLike, str, float], IRSwaptionQuery, str, DateLike]] = []
 
-        for curve_name, missing_dates in to_fetch.items():
+        curve_iter = _tqdm(
+            list(to_fetch.items()),
+            desc=self._pricing_message(flat),
+            disable=not self._show_tqdm,
+        )
+        for curve_name, missing_dates in curve_iter:
             if not missing_dates:
                 continue
 
@@ -221,7 +227,13 @@ class IRSwaptionsTB(DiskCacheMixin, BaseTimeseriesTB):
                 max_workers = int(n_jobs) if n_jobs and n_jobs > 1 else 1
                 with ThreadPoolExecutor(max_workers=max_workers) as ex:
                     fut_map = {ex.submit(_build_row_for_query, ctx, q, d): (d, q, ctx) for d, q, ctx in tasks}
-                    for fut in as_completed(fut_map):
+                    for fut in _tqdm(
+                        as_completed(fut_map),
+                        total=len(fut_map),
+                        desc=f"VALUING IRSWAPTIONS [{curve_name}]",
+                        disable=not self._show_tqdm,
+                        leave=False,
+                    ):
                         d, q, _ctx = fut_map[fut]
                         try:
                             row = fut.result()
@@ -229,7 +241,12 @@ class IRSwaptionsTB(DiskCacheMixin, BaseTimeseriesTB):
                         except Exception as exc:
                             self._logger.exception(f"Swaption pricing failed for curve='{curve_name}', date='{d}', query='{q}'. Error: {exc}")
             else:
-                for d, q, ctx in tasks:
+                for d, q, ctx in _tqdm(
+                    tasks,
+                    desc=f"VALUING IRSWAPTIONS [{curve_name}]",
+                    disable=not self._show_tqdm,
+                    leave=False,
+                ):
                     try:
                         row = _build_row_for_query(ctx, q, d)
                         new_rows_with_meta.append((row, q, curve_name, d))
