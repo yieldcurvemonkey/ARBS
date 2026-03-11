@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Literal, Optional
 
@@ -86,18 +88,23 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
         source: str = "GSQUANT-QL",
         *,
         curve_source: str = "ERIS_EOD_LIVE-QL_BASIC",
+        data_dir: Optional[str] = None,
         cache_stem: Optional[str] = None,
         force_refresh: bool = False,
         **kwargs: Any,
     ):
         self.curve_source = curve_source
+        self._default_request_kwargs: dict[str, Any] = {}
+        if data_dir is not None:
+            self._default_request_kwargs["data_dir"] = str(data_dir)
         self._provider_name, self._engine_name = _parse_source_token(source)
         self._runtime_cache: dict[str, IRSwaptionMarketContext] = {}
         self._curve_mdp = IRSwapsMDP(source=curve_source, **kwargs)
 
         DiskCacheMixin.__init__(self, source=source, force_refresh=force_refresh, **kwargs)
 
-        stem = cache_stem or f"IRSwaptionMDP_{self._CACHE_VERSION}_{source}_{curve_source}"
+        default_req_token = self._request_kwargs_token(self._default_request_kwargs)
+        stem = cache_stem or f"IRSwaptionMDP_{self._CACHE_VERSION}_{source}_{curve_source}_{default_req_token}"
         path = self.default_cache_path(stem=stem)
         self.open_cache(cache_attr=self._CACHE_ATTR, path=path)
 
@@ -157,6 +164,7 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
         provider: str,
         engine: str,
         surface_type: str,
+        request_token: str = "",
     ) -> str:
         return "|".join(
             [
@@ -167,8 +175,38 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
                 engine.upper(),
                 str(surface_type).lower(),
                 str(self.curve_source).upper(),
+                str(request_token),
             ]
         )
+
+    @staticmethod
+    def _normalize_request_value(value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, dt.datetime):
+            return value.isoformat()
+        if isinstance(value, dt.date):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {
+                str(k): IRSwaptionMDP._normalize_request_value(v)
+                for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))
+            }
+        if isinstance(value, (list, tuple, set)):
+            return [IRSwaptionMDP._normalize_request_value(v) for v in value]
+        return repr(value)
+
+    def _request_kwargs_token(self, request_kwargs: dict[str, Any]) -> str:
+        if not request_kwargs:
+            return "default"
+        payload = self._normalize_request_value(request_kwargs)
+        blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+
+    def _merge_request_kwargs(self, request_kwargs: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(self._default_request_kwargs)
+        merged.update(request_kwargs or {})
+        return merged
 
     def _cache_get(self, key: str) -> Optional[IRSwaptionMarketContext]:
         if key in self._runtime_cache:
@@ -261,11 +299,20 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
         request_kwargs: dict[str, Any],
     ) -> dict[dt.date, IRSwaptionMarketContext]:
         out: dict[dt.date, IRSwaptionMarketContext] = {}
+        effective_request_kwargs = self._merge_request_kwargs(request_kwargs)
+        request_token = self._request_kwargs_token(effective_request_kwargs)
 
         misses: list[dt.date] = []
         if not ignore_cache:
             for d in dates:
-                k = self._cache_key(curve_name=curve_name, d=d, provider=provider, engine=engine, surface_type=surface_type)
+                k = self._cache_key(
+                    curve_name=curve_name,
+                    d=d,
+                    provider=provider,
+                    engine=engine,
+                    surface_type=surface_type,
+                    request_token=request_token,
+                )
                 hit = self._cache_get(k)
                 if hit is not None:
                     out[d] = hit
@@ -290,12 +337,22 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
             ignore_cache=ignore_cache,
         )
         try:
-            vol_map = vol_provider(curve_name=curve_name, dates=misses, surface_type=surface_type, **request_kwargs)
+            vol_map = vol_provider(
+                curve_name=curve_name,
+                dates=misses,
+                surface_type=surface_type,
+                **effective_request_kwargs,
+            )
         except Exception:
             vol_map = {}
             for d in misses:
                 try:
-                    one = vol_provider(curve_name=curve_name, dates=[d], surface_type=surface_type, **request_kwargs)
+                    one = vol_provider(
+                        curve_name=curve_name,
+                        dates=[d],
+                        surface_type=surface_type,
+                        **effective_request_kwargs,
+                    )
                 except Exception:
                     continue
                 if isinstance(one, dict):
@@ -327,6 +384,8 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
                 "surface_type": surface_type,
                 "as_of_date": d.isoformat(),
             }
+            if "data_dir" in effective_request_kwargs:
+                metadata["data_dir"] = effective_request_kwargs["data_dir"]
 
             if provider.upper() == "MONKEYCUBE":
                 from MDP.IRSwaptions.MONKEYCUBE.provider import get_cached_cube
@@ -349,7 +408,14 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
                 source=f"{provider.upper()}-{engine.upper()}",
                 metadata=metadata,
             )
-            k = self._cache_key(curve_name=curve_name, d=d, provider=provider, engine=engine, surface_type=surface_type)
+            k = self._cache_key(
+                curve_name=curve_name,
+                d=d,
+                provider=provider,
+                engine=engine,
+                surface_type=surface_type,
+                request_token=request_token,
+            )
             self._cache_put(k, ctx)
             out[d] = ctx
 
@@ -373,6 +439,7 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
         ignore_cache = bool(req.pop("ignore_cache", False))
         source = str(req.pop("source", self.source))
         provider, engine = _parse_source_token(source)
+        request_kwargs = self._merge_request_kwargs(req)
 
         return {
             "curve_name": str(curve_name),
@@ -381,7 +448,7 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
             "engine": engine,
             "surface_type": surface_type,
             "ignore_cache": ignore_cache,
-            "kwargs": req,
+            "kwargs": request_kwargs,
         }
 
     def _parse_bulk_request(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -406,6 +473,7 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
         ignore_cache = bool(req.pop("ignore_cache", False))
         source = str(req.pop("source", self.source))
         provider, engine = _parse_source_token(source)
+        request_kwargs = self._merge_request_kwargs(req)
 
         return {
             "curve_name": str(curve_name),
@@ -414,7 +482,7 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
             "engine": engine,
             "surface_type": surface_type,
             "ignore_cache": ignore_cache,
-            "kwargs": req,
+            "kwargs": request_kwargs,
         }
 
     def get_pricer(self, request: dict[str, Any]) -> IRSwaptionMarketContext:

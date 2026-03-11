@@ -12,7 +12,7 @@ _DEFAULT_DATA_DIR = os.path.normpath(
     )
 )
 
-
+print(_DEFAULT_DATA_DIR)
 def resolve_data_dir(override: str | None = None) -> str:
     """Resolve the SABR parameter data directory.
 

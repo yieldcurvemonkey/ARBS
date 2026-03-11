@@ -66,6 +66,46 @@ def test_shorthand_parses_midcurve_three_token_form():
     assert q.structure_kwargs["tail"] == "1Yx10Y"
 
 
+def test_atmf_plus_offset_infers_payer_for_outright():
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        shorthand="1Yx1Y",
+        strike="ATMF+100",
+    )
+    assert q.structure == IRSwaptionStructure.PAYER
+    assert q.structure_id == IRSwaptionStructure.PAYER
+
+
+def test_atmf_minus_offset_infers_receiver_for_outright():
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        shorthand="1Yx1Y",
+        strike="ATMF-100",
+        structure=IRSwaptionStructure.PAYER,
+    )
+    assert q.structure == IRSwaptionStructure.RECEIVER
+    assert q.structure_id == IRSwaptionStructure.RECEIVER
+
+
+def test_atmf_offset_inference_uses_structure_kwargs_strike():
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        shorthand="1Yx1Y",
+        structure_kwargs={"strike": "ATMF+50"},
+    )
+    assert q.structure == IRSwaptionStructure.PAYER
+
+
+def test_atmf_offset_does_not_override_non_outright_structure():
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        shorthand="1Yx1Y",
+        structure=IRSwaptionStructure.STRADDLE,
+        strike="ATMF+100",
+    )
+    assert q.structure == IRSwaptionStructure.STRADDLE
+
+
 def test_shorthand_conflict_with_explicit_tenor_raises():
     with pytest.raises(ValueError, match="conflicts"):
         IRSwaptionQuery(

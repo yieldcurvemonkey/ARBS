@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Union
 
@@ -24,6 +25,25 @@ def _normalize_tail_label(tail: str) -> str:
     if fwd is None:
         return tenor
     return f"{fwd}x{tenor}"
+
+
+_ATMF_OFFSET_RE = re.compile(r"^\s*(ATMF|ATMS)\s*([+-])\s*(\d+(?:\.\d+)?)\s*B?P?S?\s*$", re.IGNORECASE)
+
+
+def _infer_outright_structure(
+    structure: IRSwaptionStructure,
+    strike_spec: float | str | None,
+) -> IRSwaptionStructure:
+    if structure not in {IRSwaptionStructure.RECEIVER, IRSwaptionStructure.PAYER}:
+        return structure
+    if not isinstance(strike_spec, str):
+        return structure
+
+    match = _ATMF_OFFSET_RE.match(str(strike_spec))
+    if not match:
+        return structure
+
+    return IRSwaptionStructure.PAYER if match.group(2) == "+" else IRSwaptionStructure.RECEIVER
 
 
 @dataclass(frozen=True)
@@ -52,7 +72,6 @@ class IRSwaptionQuery(BaseQuery):
 
     def __post_init__(self):
         object.__setattr__(self, "product", "IRSWAPTION")
-        object.__setattr__(self, "structure_id", self.structure)
 
         expiry = self.expiry
         tail = self.tail
@@ -91,6 +110,10 @@ class IRSwaptionQuery(BaseQuery):
             skw["strike"] = self.strike
         if "side" not in skw:
             skw["side"] = self.side
+
+        inferred_structure = _infer_outright_structure(self.structure, skw.get("strike", self.strike))
+        object.__setattr__(self, "structure", inferred_structure)
+        object.__setattr__(self, "structure_id", inferred_structure)
 
         if not _is_explicit_date_mode(skw):
             if skw.get("expiry") is None or skw.get("tail") is None:

@@ -183,3 +183,52 @@ def test_bulk_get_data_skips_single_date_curve_failures(monkeypatch):
     )
 
     assert set(out.keys()) == {d1}
+
+
+def test_constructor_data_dir_flows_to_monkeycube_and_partitions_cache(monkeypatch):
+    mdp = IRSwaptionMDP(
+        source="MONKEYCUBE-QL",
+        curve_source="ERIS_EOD_LIVE-QL_BASIC",
+        data_dir=r"C:\cube\one",
+    )
+
+    provider_calls = []
+
+    def _bulk_curve(req):
+        ts = req["timestamps"]
+        return {d: _FakeCurve(d) for d in ts}
+
+    def _provider(*, curve_name, dates, surface_type, **kwargs):
+        _ = curve_name, surface_type
+        provider_calls.append(dict(kwargs))
+        return {d: _make_vol_handle(d) for d in dates}
+
+    def _engine(**kwargs):
+        _ = kwargs
+        return object()
+
+    monkeypatch.setattr(mdp._curve_mdp, "bulk_get_data", _bulk_curve)
+    mdp.VOL_PROVIDERS["MONKEYCUBE"] = _provider
+    mdp.ENGINE_FACTORIES["QL"] = _engine
+
+    d = dt.date(2026, 3, 6)
+    base_req = {
+        "endpoint": "swaption_snapshot",
+        "curve_name": "USD-SOFR-1D",
+        "timestamp": d,
+    }
+
+    ctx1 = mdp.get_data(dict(base_req))
+    assert provider_calls[-1]["data_dir"] == r"C:\cube\one"
+    assert ctx1.metadata["data_dir"] == r"C:\cube\one"
+
+    _ = mdp.get_data(dict(base_req))
+    assert len(provider_calls) == 1
+
+    ctx2 = mdp.get_data({**base_req, "data_dir": r"C:\cube\two"})
+    assert provider_calls[-1]["data_dir"] == r"C:\cube\two"
+    assert ctx2.metadata["data_dir"] == r"C:\cube\two"
+    assert len(provider_calls) == 2
+
+    _ = mdp.get_data({**base_req, "data_dir": r"C:\cube\two"})
+    assert len(provider_calls) == 2

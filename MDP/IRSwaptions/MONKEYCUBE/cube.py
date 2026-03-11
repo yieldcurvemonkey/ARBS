@@ -26,7 +26,9 @@ class NormalSabrVolCube:
     ----------
     sabr_params_map : dict
         Keyed by "{expiry}x{tenor}" (e.g., "1Yx10Y"). Each value is a dict
-        with keys: alpha, beta, nu, rho, atmf_rate. All in normal SABR scale.
+        with keys: alpha, beta, nu, rho, atmf_rate. Current MonkeyCube JSON
+        files yield normal-vol outputs in bp-vol units, so this wrapper
+        normalizes returned vols to decimal before exposing them downstream.
     cal : ql.Calendar
         Business day calendar.
     dc : ql.DayCounter
@@ -135,6 +137,14 @@ class NormalSabrVolCube:
 
         return a, self._beta, nu, rho, fwd
 
+    @staticmethod
+    def _normalize_normal_vol(vol: float) -> float:
+        v = float(vol)
+        # MonkeyCube SABR files currently yield normal vols in bp-vol units
+        # (e.g. ~78 instead of 0.0078). Downstream IR swaption pricing expects
+        # decimal vols, so normalize only these clearly out-of-scale values.
+        return v / 10_000.0 if abs(v) > 1.0 else v
+
     def smile_section(
         self,
         opt_tenor: str | ql.Period,
@@ -194,7 +204,7 @@ class NormalSabrVolCube:
         if vol_type is None:
             vol_type = ql.Normal
         smile = self.smile_section(opt_tenor, swap_tenor)
-        return float(smile.volatility(strike, vol_type))
+        return self._normalize_normal_vol(float(smile.volatility(strike, vol_type)))
 
     def volatility_at_point(
         self,
@@ -225,7 +235,7 @@ class NormalSabrVolCube:
         pt = np.array([[option_time, swap_years]])
         a, b, nu, rho, fwd = self._interpolate_params(pt)
         smile = ql.SabrSmileSection(option_time, fwd, [a, b, nu, rho], 0.0, ql.Normal)
-        return float(smile.volatility(strike, ql.Normal))
+        return self._normalize_normal_vol(float(smile.volatility(strike, ql.Normal)))
 
     def atm_vol(
         self,
@@ -237,7 +247,7 @@ class NormalSabrVolCube:
         if vol_type is None:
             vol_type = ql.Normal
         smile = self.smile_section(opt_tenor, swap_tenor)
-        return float(smile.volatility(smile.atmLevel(), vol_type))
+        return self._normalize_normal_vol(float(smile.volatility(smile.atmLevel(), vol_type)))
 
     def sabr_params_at(
         self,
@@ -289,5 +299,5 @@ class NormalSabrVolCube:
                 pt = np.array([[T, swap_yrs]])
                 a, b, nu, rho, fwd = self._interpolate_params(pt)
                 smile = ql.SabrSmileSection(T, fwd, [a, b, nu, rho], 0.0, ql.Normal)
-                matrix[i, j] = float(smile.volatility(smile.atmLevel(), ql.Normal))
+                matrix[i, j] = self._normalize_normal_vol(float(smile.volatility(smile.atmLevel(), ql.Normal)))
         return matrix
