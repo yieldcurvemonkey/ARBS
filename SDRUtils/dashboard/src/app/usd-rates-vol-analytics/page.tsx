@@ -23,11 +23,11 @@ const ANALYTICS_PAGES = [
       'Inspect the ATMF surface on a dedicated page with the surface view, date picker, and calibration controls.'
   },
   {
-    href: '/usd-rates-vol-analytics/listed-vs-otc',
-    title: 'Listed vs OTC Vol',
-    eyebrow: 'Listed Options',
+    href: '/usd-rates-vol-analytics/listed-vs-otc-ustf',
+    title: 'Listed vs OTC Vol (USTF)',
+    eyebrow: 'USTF vs OTC',
     description:
-      'Compare UST and SOFR listed option ATM normal vol against matched OTC swaption ATMF vol and realized futures vol.'
+      'Compare UST futures option ATM normal vol against matched OTC swaption ATMF vol. Timeseries, term structure, and vol smile analytics.'
   }
 ]
 
@@ -75,7 +75,7 @@ export default function UsdRatesVolAnalyticsPage() {
             `/usd-rates-vol-analytics/atmf-grid-volatility-surface`
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2">
-            `/usd-rates-vol-analytics/listed-vs-otc`
+            `/usd-rates-vol-analytics/listed-vs-otc-ustf`
           </div>
         </div>
         <p className="mt-4 text-sm text-slate-500">
