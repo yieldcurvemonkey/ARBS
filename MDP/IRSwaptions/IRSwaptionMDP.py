@@ -42,8 +42,23 @@ class IRSwaptionMarketContext:
         return dict(self.metadata or {})
 
 
+_KNOWN_COMPOSITE_PROVIDERS: set[str] = {
+    "GSQUANT-MC-ENHANCED",
+}
+
+
 def _parse_source_token(source: str) -> tuple[str, str]:
-    token = (source or "GSQUANT-QL").strip().replace("_", "-")
+    token = (source or "GSQUANT-QL").strip().replace("_", "-").upper()
+    # Check for known composite provider names (longest match first).
+    for composite in sorted(_KNOWN_COMPOSITE_PROVIDERS, key=len, reverse=True):
+        if token.startswith(composite):
+            remainder = token[len(composite):]
+            provider = composite.replace("-", "_")
+            if remainder.startswith("-") and len(remainder) > 1:
+                engine = remainder[1:]
+            else:
+                engine = "QL"
+            return provider, engine
     parts = [p for p in token.split("-") if p]
     if len(parts) < 2:
         raise ValueError(f"Invalid source '{source}'. Expected format '<provider>-<engine>' e.g. 'GSQUANT-QL'.")
@@ -112,6 +127,8 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
             self.VOL_PROVIDERS["GSQUANT"] = self._gsquant_vol_provider
         if "MONKEYCUBE" not in self.VOL_PROVIDERS:
             self.VOL_PROVIDERS["MONKEYCUBE"] = self._monkeycube_vol_provider
+        if "GSQUANT_MC_ENHANCED" not in self.VOL_PROVIDERS:
+            self.VOL_PROVIDERS["GSQUANT_MC_ENHANCED"] = self._gsquant_mc_enhanced_vol_provider
         if "QL" not in self.ENGINE_FACTORIES:
             self.ENGINE_FACTORIES["QL"] = self._ql_engine_factory
 
@@ -139,6 +156,20 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
         from MDP.IRSwaptions.MONKEYCUBE.provider import get_sabr_vol_surfaces
 
         return get_sabr_vol_surfaces(
+            curve_name=curve_name, dates=dates, surface_type=surface_type, **kwargs
+        )
+
+    @staticmethod
+    def _gsquant_mc_enhanced_vol_provider(
+        *,
+        curve_name: str,
+        dates: list[dt.date],
+        surface_type: str,
+        **kwargs: Any,
+    ) -> dict[dt.date, ql.SwaptionVolatilityStructureHandle]:
+        from MDP.IRSwaptions.GSQUANT_MC_ENHANCED.provider import get_enhanced_vol_surfaces
+
+        return get_enhanced_vol_surfaces(
             curve_name=curve_name, dates=dates, surface_type=surface_type, **kwargs
         )
 
@@ -391,6 +422,13 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
                 from MDP.IRSwaptions.MONKEYCUBE.provider import get_cached_cube
 
                 vol_cube = get_cached_cube(curve_name, d)
+                if vol_cube is not None:
+                    metadata["vol_cube"] = vol_cube
+
+            if provider.upper() == "GSQUANT_MC_ENHANCED":
+                from MDP.IRSwaptions.GSQUANT_MC_ENHANCED.provider import get_cached_enhanced_cube
+
+                vol_cube = get_cached_enhanced_cube(curve_name, d)
                 if vol_cube is not None:
                     metadata["vol_cube"] = vol_cube
 
