@@ -36,22 +36,26 @@ def _recalibrate_alpha(
     T: float,
     alpha_guess: float,
 ) -> float:
-    """Solve for SABR alpha (bp-vol scale) so that ATM normal vol matches *target_atm_vol_decimal*."""
-    target_raw = target_atm_vol_decimal * 10_000.0  # convert to bp-vol scale
+    """Solve for SABR alpha so that the normalized ATM normal vol matches *target_atm_vol_decimal*.
+
+    Both sides of the comparison are in decimal (e.g., 0.0078 for 78bp).
+    ``_normalize_normal_vol`` is applied to the raw SabrSmileSection output
+    to handle either decimal or bp-vol scale from the SABR expansion.
+    """
 
     def objective(alpha: float) -> float:
         smile = ql.SabrSmileSection(T, fwd, [alpha, beta, nu, rho], 0.0, ql.Normal)
         raw_atm = float(smile.volatility(smile.atmLevel(), ql.Normal))
-        return raw_atm - target_raw
+        return NormalSabrVolCube._normalize_normal_vol(raw_atm) - target_atm_vol_decimal
 
     lo = max(alpha_guess * 0.01, 1e-8)
     hi = alpha_guess * 10.0
     try:
-        return float(brentq(objective, lo, hi, maxiter=200, xtol=1e-10))
+        return float(brentq(objective, lo, hi, maxiter=200, xtol=1e-12))
     except ValueError:
         lo = 1e-8
         hi = alpha_guess * 100.0
-        return float(brentq(objective, lo, hi, maxiter=200, xtol=1e-10))
+        return float(brentq(objective, lo, hi, maxiter=200, xtol=1e-12))
 
 
 class EnhancedSabrVolCube:
