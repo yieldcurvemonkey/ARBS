@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import math
 from typing import Any, Iterable, Optional
 
 import numpy as np
 import QuantLib as ql
-from scipy.optimize import brentq
 
 from definitions.IRSwaptions import EXPIRY_LABELS, TAIL_LABELS
 from MDP.IRSwaptions.MONKEYCUBE.cube import NormalSabrVolCube
@@ -26,10 +26,16 @@ def _label_to_ql_period(label: str) -> ql.Period:
     raise ValueError(f"Unsupported tenor label: {label}")
 
 
-def _sabr_atm_vol_raw(alpha: float, beta: float, nu: float, rho: float, fwd: float, T: float) -> float:
-    """Evaluate the raw ATM normal vol from ql.SabrSmileSection (no normalization)."""
-    smile = ql.SabrSmileSection(T, fwd, [alpha, beta, nu, rho], 0.0, ql.Normal)
-    return float(smile.volatility(smile.atmLevel(), ql.Normal))
+def _sabr_atm_vol_normalized(
+    alpha: float, beta: float, nu: float, rho: float, fwd: float, T: float,
+) -> float:
+    """ATM normal vol from ql.SabrSmileSection, normalized to decimal."""
+    try:
+        smile = ql.SabrSmileSection(T, fwd, [alpha, beta, nu, rho], 0.0, ql.Normal)
+        raw = float(smile.volatility(smile.atmLevel(), ql.Normal))
+    except Exception:
+        return float("nan")
+    return NormalSabrVolCube._normalize_normal_vol(raw)
 
 
 def _recalibrate_alpha(
@@ -41,37 +47,41 @@ def _recalibrate_alpha(
     fwd: float,
     T: float,
     alpha_guess: float,
+    max_iter: int = 30,
+    tol: float = 1e-10,
 ) -> float:
-    """Solve for SABR alpha so that the ATM normal vol matches *target_atm_vol_decimal*.
+    """Solve for SABR alpha so that the normalized ATM vol matches *target_atm_vol_decimal*.
 
-    Determines the output scale regime (decimal vs bp-vol) from *alpha_guess*
-    and works in raw SABR output space to keep the objective smooth and
-    monotonic — avoids the discontinuity in ``_normalize_normal_vol`` at 1.0.
+    Uses multiplicative fixed-point iteration: since normal SABR ATM vol is
+    approximately proportional to alpha, ``alpha_new = alpha * (target / vol)``
+    converges in a few iterations.  This avoids brentq bracketing issues
+    caused by the Hagan expansion producing NaN / negative vols at large
+    alpha when nu²T is significant.
     """
-    # Determine scale regime from the guess: is the raw SABR output in bp-vol
-    # (>1.0, needing /10_000) or already in decimal (<1.0)?
-    guess_raw = _sabr_atm_vol_raw(alpha_guess, beta, nu, rho, fwd, T)
-    if abs(guess_raw) > 1.0:
-        # bp-vol regime: raw output is ~78 for 78bp → target in same scale
-        target_raw = target_atm_vol_decimal * 10_000.0
-    else:
-        # decimal regime: raw output is ~0.0078 for 78bp → target already matches
-        target_raw = target_atm_vol_decimal
+    target = target_atm_vol_decimal
+    if target <= 0 or not math.isfinite(target):
+        return alpha_guess
 
-    def objective(alpha: float) -> float:
-        return _sabr_atm_vol_raw(alpha, beta, nu, rho, fwd, T) - target_raw
+    alpha = alpha_guess
+    guess_vol = _sabr_atm_vol_normalized(alpha, beta, nu, rho, fwd, T)
+    if not math.isfinite(guess_vol) or guess_vol <= 0:
+        return alpha_guess
 
-    # Use absolute bounds that cover the full reasonable alpha range, combined
-    # with relative bounds from the guess.
-    lo = max(min(alpha_guess * 0.01, 1e-4), 1e-8)
-    hi = max(alpha_guess * 20.0, 1.0)
-    try:
-        return float(brentq(objective, lo, hi, maxiter=200, xtol=1e-12))
-    except ValueError:
-        # Widen to absolute extremes.
-        lo = 1e-8
-        hi = max(alpha_guess * 200.0, 5.0)
-        return float(brentq(objective, lo, hi, maxiter=200, xtol=1e-12))
+    # Initial proportional jump.
+    alpha *= target / guess_vol
+
+    for _ in range(max_iter):
+        vol = _sabr_atm_vol_normalized(alpha, beta, nu, rho, fwd, T)
+        if not math.isfinite(vol) or vol <= 0:
+            # Halve step toward the guess if we overshot into a degenerate region.
+            alpha = (alpha + alpha_guess) / 2.0
+            continue
+        ratio = target / vol
+        if abs(ratio - 1.0) < tol:
+            break
+        alpha *= ratio
+
+    return alpha
 
 
 class EnhancedSabrVolCube:
