@@ -26,6 +26,12 @@ def _label_to_ql_period(label: str) -> ql.Period:
     raise ValueError(f"Unsupported tenor label: {label}")
 
 
+def _sabr_atm_vol_raw(alpha: float, beta: float, nu: float, rho: float, fwd: float, T: float) -> float:
+    """Evaluate the raw ATM normal vol from ql.SabrSmileSection (no normalization)."""
+    smile = ql.SabrSmileSection(T, fwd, [alpha, beta, nu, rho], 0.0, ql.Normal)
+    return float(smile.volatility(smile.atmLevel(), ql.Normal))
+
+
 def _recalibrate_alpha(
     *,
     target_atm_vol_decimal: float,
@@ -36,25 +42,35 @@ def _recalibrate_alpha(
     T: float,
     alpha_guess: float,
 ) -> float:
-    """Solve for SABR alpha so that the normalized ATM normal vol matches *target_atm_vol_decimal*.
+    """Solve for SABR alpha so that the ATM normal vol matches *target_atm_vol_decimal*.
 
-    Both sides of the comparison are in decimal (e.g., 0.0078 for 78bp).
-    ``_normalize_normal_vol`` is applied to the raw SabrSmileSection output
-    to handle either decimal or bp-vol scale from the SABR expansion.
+    Determines the output scale regime (decimal vs bp-vol) from *alpha_guess*
+    and works in raw SABR output space to keep the objective smooth and
+    monotonic — avoids the discontinuity in ``_normalize_normal_vol`` at 1.0.
     """
+    # Determine scale regime from the guess: is the raw SABR output in bp-vol
+    # (>1.0, needing /10_000) or already in decimal (<1.0)?
+    guess_raw = _sabr_atm_vol_raw(alpha_guess, beta, nu, rho, fwd, T)
+    if abs(guess_raw) > 1.0:
+        # bp-vol regime: raw output is ~78 for 78bp → target in same scale
+        target_raw = target_atm_vol_decimal * 10_000.0
+    else:
+        # decimal regime: raw output is ~0.0078 for 78bp → target already matches
+        target_raw = target_atm_vol_decimal
 
     def objective(alpha: float) -> float:
-        smile = ql.SabrSmileSection(T, fwd, [alpha, beta, nu, rho], 0.0, ql.Normal)
-        raw_atm = float(smile.volatility(smile.atmLevel(), ql.Normal))
-        return NormalSabrVolCube._normalize_normal_vol(raw_atm) - target_atm_vol_decimal
+        return _sabr_atm_vol_raw(alpha, beta, nu, rho, fwd, T) - target_raw
 
-    lo = max(alpha_guess * 0.01, 1e-8)
-    hi = alpha_guess * 10.0
+    # Use absolute bounds that cover the full reasonable alpha range, combined
+    # with relative bounds from the guess.
+    lo = max(min(alpha_guess * 0.01, 1e-4), 1e-8)
+    hi = max(alpha_guess * 20.0, 1.0)
     try:
         return float(brentq(objective, lo, hi, maxiter=200, xtol=1e-12))
     except ValueError:
+        # Widen to absolute extremes.
         lo = 1e-8
-        hi = alpha_guess * 100.0
+        hi = max(alpha_guess * 200.0, 5.0)
         return float(brentq(objective, lo, hi, maxiter=200, xtol=1e-12))
 
 
@@ -136,11 +152,21 @@ class EnhancedSabrVolCube:
                         T=T,
                         alpha_guess=alpha_mc,
                     )
-                except Exception:
+                except Exception as exc:
                     logger.warning(
-                        "Alpha re-calibration failed at (%s, %s); keeping MONKEYCUBE alpha.",
+                        "Alpha re-calibration failed at (%s, %s): %s "
+                        "[target=%.6f, alpha_mc=%.6f, beta=%.4f, nu=%.4f, rho=%.4f, fwd=%.6f, T=%.4f]; "
+                        "keeping MONKEYCUBE alpha.",
                         exp_label,
                         tail_label,
+                        exc,
+                        target_vol_decimal,
+                        alpha_mc,
+                        beta,
+                        nu,
+                        rho,
+                        fwd,
+                        T,
                     )
                     alpha_new = alpha_mc
                 self._recalibrated_alphas[(i, j)] = alpha_new
