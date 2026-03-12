@@ -236,6 +236,220 @@ def plot_rnd_comparison(
     return fig
 
 
+def plot_distribution_change(
+    snap_before: ImpliedDistributionSnapshot,
+    snap_after: ImpliedDistributionSnapshot,
+    *,
+    figsize: tuple = (18, 14),
+) -> plt.Figure:
+    """Multi-panel dashboard showing how the implied distribution changed between two dates.
+
+    Panels:
+        Top-left:   Overlaid BL densities with shaded gain/loss regions
+        Top-right:  Overlaid GM composite densities with components
+        Mid-left:   Grouped bar chart of 25bp bin probabilities (before vs after)
+        Mid-right:  Scenario weight changes (paired horizontal bars with delta annotation)
+        Bottom:     Summary statistics delta table
+    """
+    bl1, bl2 = snap_before.bl_result, snap_after.bl_result
+    gm1, gm2 = snap_before.gm_result, snap_after.gm_result
+    date1, date2 = snap_before.as_of, snap_after.as_of
+    label1 = str(date1)
+    label2 = str(date2)
+
+    fig, axes = plt.subplots(3, 2, figsize=figsize, gridspec_kw={"height_ratios": [3, 3, 2]})
+    fig.suptitle(
+        f"Distribution Change — {snap_before.symbol}:  {label1}  →  {label2}",
+        fontsize=14,
+        fontweight="bold",
+    )
+
+    # ── Top-left: Overlaid BL densities ──────────────────────────────────
+    ax = axes[0, 0]
+    if bl1 is not None and bl2 is not None:
+        # Interpolate both onto a common grid
+        lo = min(bl1.strike_grid_rate[0], bl2.strike_grid_rate[0])
+        hi = max(bl1.strike_grid_rate[-1], bl2.strike_grid_rate[-1])
+        common = np.linspace(lo, hi, 2000)
+        d1 = np.interp(common, bl1.strike_grid_rate, bl1.rnd_density)
+        d2 = np.interp(common, bl2.strike_grid_rate, bl2.rnd_density)
+
+        ax.plot(common, d1, color="#1f77b4", linewidth=1.5, label=label1)
+        ax.plot(common, d2, color="#d62728", linewidth=1.5, label=label2)
+        diff = d2 - d1
+        ax.fill_between(common, d1, d2, where=diff > 0, alpha=0.25, color="green", label="Density gain")
+        ax.fill_between(common, d1, d2, where=diff < 0, alpha=0.25, color="red", label="Density loss")
+        ax.axvline(bl1.input.forward_rate, color="#1f77b4", linestyle="--", linewidth=0.8, alpha=0.6)
+        ax.axvline(bl2.input.forward_rate, color="#d62728", linestyle="--", linewidth=0.8, alpha=0.6)
+
+        vis_lo = min(bl1.percentile(1), bl2.percentile(1))
+        vis_hi = max(bl1.percentile(99), bl2.percentile(99))
+        ax.set_xlim(vis_lo, vis_hi)
+        ax.legend(fontsize=7)
+    else:
+        ax.text(0.5, 0.5, "BL not computed", ha="center", va="center", transform=ax.transAxes)
+    ax.set_title("Risk-Neutral Density Shift")
+    ax.set_xlabel("Rate (%)")
+    ax.set_ylabel("Density")
+    ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+    ax.grid(True, alpha=0.3)
+
+    # ── Top-right: Overlaid GM composite densities ───────────────────────
+    ax = axes[0, 1]
+    if gm1 is not None and gm2 is not None:
+        ax.plot(gm1.strike_grid_rate, gm1.composite_density, color="#1f77b4", linewidth=2, label=f"Composite {label1}")
+        ax.plot(gm2.strike_grid_rate, gm2.composite_density, color="#d62728", linewidth=2, label=f"Composite {label2}")
+        # Show date2 components (dashed)
+        for j, (scenario, w) in enumerate(zip(gm2.scenarios, gm2.weights)):
+            if w < 0.02:
+                continue
+            ax.plot(
+                gm2.strike_grid_rate,
+                gm2.component_densities[j] * w,
+                linestyle=":",
+                linewidth=0.8,
+                color=_COLORS[j % len(_COLORS)],
+                alpha=0.6,
+            )
+        ax.axvline(gm1.input.forward_rate, color="#1f77b4", linestyle="--", linewidth=0.8, alpha=0.6)
+        ax.axvline(gm2.input.forward_rate, color="#d62728", linestyle="--", linewidth=0.8, alpha=0.6)
+        ax.legend(fontsize=7)
+    else:
+        ax.text(0.5, 0.5, "GM not computed", ha="center", va="center", transform=ax.transAxes)
+    ax.set_title("Gaussian Mixture Shift")
+    ax.set_xlabel("Rate (%)")
+    ax.set_ylabel("Density")
+    ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+    ax.grid(True, alpha=0.3)
+
+    # ── Mid-left: Grouped bar chart of bin probabilities ─────────────────
+    ax = axes[1, 0]
+    if bl1 is not None and bl2 is not None:
+        # Find common bins (union of labels present in either)
+        all_labels = sorted(set(bl1.bin_labels) | set(bl2.bin_labels), key=lambda x: float(x))
+        prob_map1 = dict(zip(bl1.bin_labels, bl1.bin_probabilities))
+        prob_map2 = dict(zip(bl2.bin_labels, bl2.bin_probabilities))
+        # Filter to bins with at least 0.5% in either date
+        filtered = [(lbl, prob_map1.get(lbl, 0.0), prob_map2.get(lbl, 0.0)) for lbl in all_labels]
+        filtered = [(lbl, p1, p2) for lbl, p1, p2 in filtered if max(p1, p2) >= 0.005]
+        if filtered:
+            labels_f = [f[0] for f in filtered]
+            p1s = np.array([f[1] for f in filtered]) * 100
+            p2s = np.array([f[2] for f in filtered]) * 100
+            x = np.arange(len(labels_f))
+            w = 0.35
+            ax.bar(x - w / 2, p1s, w, color="#1f77b4", alpha=0.8, label=label1)
+            ax.bar(x + w / 2, p2s, w, color="#d62728", alpha=0.8, label=label2)
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels_f, rotation=45, fontsize=7)
+            ax.legend(fontsize=8)
+    else:
+        ax.text(0.5, 0.5, "BL not computed", ha="center", va="center", transform=ax.transAxes)
+    ax.set_title("Probability Mass by Rate Bin (25bp)")
+    ax.set_ylabel("Probability (%)")
+    ax.set_xlabel("Rate bin midpoint (%)")
+    ax.grid(True, axis="y", alpha=0.3)
+
+    # ── Mid-right: Scenario weight deltas ────────────────────────────────
+    ax = axes[1, 1]
+    if gm1 is not None and gm2 is not None:
+        labels_s = [s.label for s in gm2.scenarios]
+        w1_map = {s.label: float(w) for s, w in zip(gm1.scenarios, gm1.weights)}
+        w1s = np.array([w1_map.get(lbl, 0.0) for lbl in labels_s]) * 100
+        w2s = np.array([float(w) for w in gm2.weights]) * 100
+        deltas = w2s - w1s
+
+        y = np.arange(len(labels_s))
+        bar_h = 0.35
+        ax.barh(y - bar_h / 2, w1s, bar_h, color="#1f77b4", alpha=0.8, label=label1)
+        ax.barh(y + bar_h / 2, w2s, bar_h, color="#d62728", alpha=0.8, label=label2)
+        # Annotate delta
+        for i, (w1, w2, d) in enumerate(zip(w1s, w2s, deltas)):
+            x_pos = max(w1, w2) + 1
+            sign = "+" if d >= 0 else ""
+            color = "green" if d >= 0 else "red"
+            if abs(d) >= 0.5:
+                ax.text(x_pos, i, f"{sign}{d:.1f}pp", va="center", fontsize=7, color=color, fontweight="bold")
+        ax.set_yticks(list(y))
+        ax.set_yticklabels(labels_s, fontsize=8)
+        ax.set_xlabel("Weight (%)")
+        ax.legend(fontsize=8)
+    else:
+        ax.text(0.5, 0.5, "GM not computed", ha="center", va="center", transform=ax.transAxes)
+    ax.set_title("Scenario Weight Changes")
+    ax.grid(True, axis="x", alpha=0.3)
+
+    # ── Bottom: Summary stats delta table ────────────────────────────────
+    for bottom_ax in [axes[2, 0], axes[2, 1]]:
+        bottom_ax.axis("off")
+    ax = axes[2, 0]
+
+    rows = []
+    if bl1 is not None and bl2 is not None:
+        rows.append(("Forward Rate", f"{bl1.input.forward_rate:.3f}%", f"{bl2.input.forward_rate:.3f}%", f"{bl2.input.forward_rate - bl1.input.forward_rate:+.3f}%"))
+        rows.append(("Mean Rate", f"{bl1.mean_rate:.3f}%", f"{bl2.mean_rate:.3f}%", f"{bl2.mean_rate - bl1.mean_rate:+.3f}%"))
+        rows.append(("Std Dev", f"{bl1.std_rate:.3f}%", f"{bl2.std_rate:.3f}%", f"{bl2.std_rate - bl1.std_rate:+.3f}%"))
+        rows.append(("Skewness", f"{bl1.skewness:.3f}", f"{bl2.skewness:.3f}", f"{bl2.skewness - bl1.skewness:+.3f}"))
+        rows.append(("Kurtosis", f"{bl1.kurtosis:.3f}", f"{bl2.kurtosis:.3f}", f"{bl2.kurtosis - bl1.kurtosis:+.3f}"))
+        rows.append(("5th Pctl", f"{bl1.percentile(5):.3f}%", f"{bl2.percentile(5):.3f}%", f"{bl2.percentile(5) - bl1.percentile(5):+.3f}%"))
+        rows.append(("95th Pctl", f"{bl1.percentile(95):.3f}%", f"{bl2.percentile(95):.3f}%", f"{bl2.percentile(95) - bl1.percentile(95):+.3f}%"))
+
+    if rows:
+        col_labels = ["Metric", label1, label2, "Δ"]
+        table = ax.table(
+            cellText=rows,
+            colLabels=col_labels,
+            loc="center",
+            cellLoc="center",
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1, 1.4)
+        # Color delta column
+        for i in range(len(rows)):
+            cell = table[i + 1, 3]
+            val_str = rows[i][3]
+            if val_str.startswith("+"):
+                cell.set_text_props(color="green", fontweight="bold")
+            elif val_str.startswith("-"):
+                cell.set_text_props(color="red", fontweight="bold")
+        ax.set_title("Distribution Summary", fontsize=11, pad=10)
+
+    # Scenario weight table on the right
+    ax2 = axes[2, 1]
+    if gm1 is not None and gm2 is not None:
+        gm_rows = []
+        labels_s = [s.label for s in gm2.scenarios]
+        w1_map = {s.label: float(w) for s, w in zip(gm1.scenarios, gm1.weights)}
+        for s, w2 in zip(gm2.scenarios, gm2.weights):
+            w1 = w1_map.get(s.label, 0.0)
+            d = float(w2) - w1
+            sign = "+" if d >= 0 else ""
+            gm_rows.append((s.label, f"{w1:.1%}", f"{float(w2):.1%}", f"{sign}{d:.1%}"))
+        if gm_rows:
+            col_labels = ["Scenario", label1, label2, "Δ"]
+            table2 = ax2.table(
+                cellText=gm_rows,
+                colLabels=col_labels,
+                loc="center",
+                cellLoc="center",
+            )
+            table2.auto_set_font_size(False)
+            table2.set_fontsize(9)
+            table2.scale(1, 1.4)
+            for i in range(len(gm_rows)):
+                cell = table2[i + 1, 3]
+                val_str = gm_rows[i][3]
+                if val_str.startswith("+"):
+                    cell.set_text_props(color="green", fontweight="bold")
+                elif val_str.startswith("-"):
+                    cell.set_text_props(color="red", fontweight="bold")
+            ax2.set_title("Scenario Weight Changes", fontsize=11, pad=10)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    return fig
+
+
 def plot_snapshot_dashboard(
     snapshot: ImpliedDistributionSnapshot,
     *,
