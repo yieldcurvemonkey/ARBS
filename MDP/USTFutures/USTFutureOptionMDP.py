@@ -43,7 +43,7 @@ from MDP.USTFutures.QuikStrikeSDK.core.QuikStrikeFetcher import QuikStrikeFetche
 from MDP.USTFutures.QuikStrikeSDK.core.types.QuikVolQuery import QuikVolQuery
 from MDP.USTFutures.QuikStrikeSDK.core.types.QuikVolValueType import QuikVolValueType
 from MDP.USTFutures.QuikStrikeSDK.core.utils.auth import walk_quikstrike_auth_flow
-from definitions.USTFutures import UST_FUTURE_BARCHART_TO_INTERNAL
+from definitions.USTFutures import UST_FUTURE_BARCHART_TO_INTERNAL, normalize_barchart_ust_future_price
 from definitions.USTFutureOptions import (
     ALL_OPTION_ROOTS,
     MONTH_CODE_TO_NUM as _MONTH_CODE_TO_NUM,
@@ -153,6 +153,21 @@ _QS_PRICE_VALUE_TYPES = {
     "BUTTERFLYPRICE",
     "PRICEBYSTRIKE",
 }
+_BARCHART_PRICE_FIELDS = (
+    "bidPrice",
+    "BidPrice",
+    "askPrice",
+    "OfferPrice",
+    "lastPrice",
+    "Open",
+    "open",
+    "High",
+    "high",
+    "Low",
+    "low",
+    "Close",
+    "close",
+)
 
 
 @dataclass(frozen=True)
@@ -1301,6 +1316,29 @@ def _extract_row_price(row: Dict[str, Any], price_mode: str = "mid_then_fallback
     return None
 
 
+def _normalize_barchart_quote_row(symbol: str, row: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(row or {})
+    for key in _BARCHART_PRICE_FIELDS:
+        value = _to_float(out.get(key))
+        if value is None:
+            continue
+        out[key] = normalize_barchart_ust_future_price(symbol, value)
+    return out
+
+
+def _normalize_barchart_quote_frame(symbol: str, df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    for key in _BARCHART_PRICE_FIELDS:
+        if key not in out.columns:
+            continue
+        out[key] = pd.to_numeric(out[key], errors="coerce").map(
+            lambda value: normalize_barchart_ust_future_price(symbol, float(value)) if pd.notna(value) else value
+        )
+    return out
+
+
 def _nearest_index_position(index: pd.Index, target: pd.Timestamp) -> Optional[int]:
     if len(index) == 0:
         return None
@@ -1513,7 +1551,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     ) -> str:
         payload = {
             "schema": 1,
-            "cache_version": "ustfo_barchart_pricer_window_v2",
+            "cache_version": "ustfo_barchart_pricer_window_v3",
             "source": str(self.source).upper(),
             "symbols": sorted({str(s).upper() for s in leg_symbols}),
             "window_start": window_start.isoformat(),
@@ -2944,7 +2982,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         payload = {
             "schema": 1,
-            "cache_version": "USTFO_GET_DATA_v6",
+            "cache_version": "USTFO_GET_DATA_v7",
             "source": str(self.source).upper(),
             "endpoint": ep,
             "request": self._cache_primitive(cache_req),
@@ -3718,7 +3756,12 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             max_concurrent_tasks=mc,
             max_keepalive_connections=mk,
         )
-        return out if isinstance(out, dict) else {}
+        if not isinstance(out, dict):
+            return {}
+        return {
+            str(symbol): _normalize_barchart_quote_frame(str(symbol), df)
+            for symbol, df in out.items()
+        }
 
     def _fetch_barchart_intraday_prices(
         self,
@@ -3756,8 +3799,8 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             idx = _nearest_index_position(df.index, target)
             if idx is None:
                 continue
-            row = df.iloc[idx]
-            val = _extract_row_price(row.to_dict(), price_mode="mid_then_fallback")
+            row = _normalize_barchart_quote_row(str(sym), df.iloc[idx].to_dict())
+            val = _extract_row_price(row, price_mode="mid_then_fallback")
             if val is not None and val > 0.0:
                 px[sym] = float(val)
         return px

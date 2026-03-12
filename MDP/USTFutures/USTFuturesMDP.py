@@ -18,7 +18,7 @@ from MDP.MarketDataProvider import MarketDataProvider
 from MDP.USTFutures.BARCHART.BarchartFetcher import BarchartFetcher
 from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
 from Query.USTFutures.backends.rateslib.RLUSTFuturePricer import RLUSTFuturePricer
-from definitions.USTFutures import to_barchart_root
+from definitions.USTFutures import normalize_barchart_ust_future_price, to_barchart_root
 
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 
@@ -47,6 +47,7 @@ _CME_QUARTERLY_MONTH_CODES = {
     "U": [7, 8, 9],
     "Z": [10, 11, 12],
 }
+_USTF_CACHE_VERSION = "USTF_GET_DATA_v2"
 
 
 def _normalize_symbol(sym: str) -> Optional[str]:
@@ -319,7 +320,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         barchart_syms = [_to_barchart_symbol(t) for t in tickers]
         bcf = self._get_barchart_fetcher()
-        return bcf.barchart_timeseries_api(
+        df = bcf.barchart_timeseries_api(
             barchart_symbols=barchart_syms,
             start_date=start,
             end_date=end,
@@ -328,6 +329,16 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             show_tqdm=show_tqdm,
             max_concurrent_tasks=len(barchart_syms) + 1,
         )
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            df = df.copy()
+            for col in df.columns:
+                series = pd.to_numeric(df[col], errors="coerce")
+                df[col] = series.map(
+                    lambda value, symbol=str(col): normalize_barchart_ust_future_price(symbol, float(value))
+                    if pd.notna(value)
+                    else value
+                )
+        return df
 
     @staticmethod
     def _parse_reference_date(timestamp: Any) -> datetime.date:
@@ -442,7 +453,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                                 sym = f"{sym}{m_code}{int(timestamp.strftime("%y"))}"
                                 break
                 
-                cache_key = f"{ts_iso}-{sym}-{self.source}"
+                cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}"
                 cached = None if force_refresh else self._threadsafe_cache_get(cache_key)
                 if cached is not None:
                     ref_dt = self._parse_reference_date(cached.get("timestamp"))
@@ -519,8 +530,8 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                         calc_mode=basket_data.get("calc_mode") if basket_data else None,
                         meta_data=args,
                     )
-                    cache_key = f"{ts_iso}-{sym}-{self.source}"
-                    cache_key2 = f"{args['timestamp']}-{sym}-{self.source}"
+                    cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}"
+                    cache_key2 = f"{_USTF_CACHE_VERSION}::{args['timestamp']}-{sym}-{self.source}"
                     self._threadsafe_cache_put(cache_key, args)
                     self._threadsafe_cache_put(cache_key2, args)
 

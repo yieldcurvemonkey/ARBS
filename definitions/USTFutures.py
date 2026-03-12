@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime
+import math
+import re
 from typing import Dict, List, Sequence, Tuple
 
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import CME_MONTH_CODE, _imm_cutoff, _next_contracts
@@ -49,6 +51,8 @@ UST_FUTURE_BARCHART_TO_INTERNAL: Dict[str, str] = {
     "TN": "UXY",
 }
 
+_BARCHART_COMPACT_32NDS_ROOTS = {"UB"}
+
 
 def normalize_root(root: str) -> str:
     key = (root or "").strip().upper()
@@ -62,6 +66,22 @@ def normalize_root(root: str) -> str:
 def to_barchart_root(root: str) -> str:
     norm = normalize_root(root)
     return UST_FUTURE_BARCHART_ROOTS.get(norm, norm)
+
+
+def normalize_barchart_ust_future_price(symbol: str, price: float) -> float:
+    token = (symbol or "").strip().upper().replace("/", "")
+    match = re.match(r"^(?P<root>[A-Z]{1,3})(?:[FGHJKMNQUVXZ]\d{1,2})?$", token) if token else None
+    root = match.group("root") if match else token
+
+    value = float(price)
+    if root not in _BARCHART_COMPACT_32NDS_ROOTS:
+        return value
+    if not math.isfinite(value) or value <= 0.0 or value >= 100.0:
+        return value
+
+    whole = math.floor(value)
+    frac_32nds = round((value - whole) * 100.0, 6)
+    return 100.0 + whole + (frac_32nds / 32.0)
 
 
 def build_contract_symbol(root: str, month_code: str) -> str:
