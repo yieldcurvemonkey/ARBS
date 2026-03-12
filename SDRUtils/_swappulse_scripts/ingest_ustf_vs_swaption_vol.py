@@ -25,8 +25,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP
-from MDP.IRSwaptions.MONKEYCUBE import get_cached_cube
 from MDP.USTFutures.USTFutureOptionMDP import USTFutureOptionMDP
+from Query.Base.query_resolution import resolve_query
+from Query.IRSwaptions import IRSwaptionQuery, IRSwaptionStructure, IRSwaptionValue
+from Query.IRSwaptions.utils import solve_strike_for_target_delta
 
 
 USTF_SNAPSHOTS_TABLE = "arbs_ustf_vol_snapshots_v2"
@@ -34,9 +36,12 @@ SWAPTION_SNAPSHOTS_TABLE = "arbs_swaption_vol_snapshots_v2"
 COMPARISON_TABLE = "arbs_ustf_vs_swaption_comparison_v2"
 
 DEFAULT_CURVE_NAME = "USD-SOFR-1D"
+DEFAULT_SWAPTION_SOURCE = "GSQUANT_MC_ENHANCED-QL"
 DEFAULT_LOOKBACK_BUSINESS_DAYS = 126
 DEFAULT_INTERVAL_SECONDS = 300
 MAX_BULK_SABR_SYMBOLS_PER_REQUEST = 3
+OTM_DELTA_BUCKETS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+OTM_STRIKE_OFFSET_BUCKETS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100]
 
 MONKEYCUBE_DATA_DIR = (
     r"C:\Users\chris\clee\ARBS\MDP\IRSwaptions\MONKEYCUBE\YCMONKEY_USD_VOL_CUBE_GAMMA_MIX"
@@ -66,26 +71,28 @@ USTF_GLOBEX_ROOT: dict[str, str] = {
 
 ROLLING_EXPIRIES: OrderedDict[str, int] = OrderedDict(
     [
-        ("1W", 7),
-        ("2W", 14),
+        # ("1W", 7),
+        # ("2W", 14),
         ("1M", 30),
         ("2M", 60),
         ("3M", 90),
-        ("6M", 180),
+        # ("6M", 180),
     ]
 )
 
 USTF_TO_SWAPTION_EXPIRY: dict[str, str] = {
-    "1W": "1M",
-    "2W": "1M",
+    # "1W": "1M",
+    # "2W": "1M",
     "1M": "1M",
-    "2M": "3M",
+    "2M": "2M",
     "3M": "3M",
-    "6M": "6M",
+    # "6M": "6M",
 }
 
-SWAPTION_EXPIRY_LABELS = ["1M", "3M", "6M", "1Y"]
+SWAPTION_EXPIRY_LABELS = ["1M", "2M", "3M", "6M", "1Y"]
 SWAPTION_TAIL_LABELS = ["2Y", "5Y", "7Y", "10Y", "20Y", "30Y"]
+USTF_OTM_SIDE_SPECS = (("call", "C", 1.0), ("put", "P", -1.0))
+SWAPTION_OTM_SIDE_SPECS = (("payer", "payer", 1.0), ("receiver", "receiver", -1.0))
 
 SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS {USTF_SNAPSHOTS_TABLE} (
@@ -106,6 +113,8 @@ CREATE TABLE IF NOT EXISTS {USTF_SNAPSHOTS_TABLE} (
     underlying_contract TEXT,
     source              TEXT NOT NULL,
     smile_points        JSONB NOT NULL DEFAULT '[]'::jsonb,
+    delta_otm_vols      JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    strike_offset_otm_vols JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (as_of_date, product, expiry_label)
@@ -123,6 +132,8 @@ CREATE TABLE IF NOT EXISTS {SWAPTION_SNAPSHOTS_TABLE} (
     sabr_nu             DOUBLE PRECISION,
     expiry_time         DOUBLE PRECISION,
     source              TEXT NOT NULL,
+    delta_otm_vols      JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    strike_offset_otm_vols JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (as_of_date, expiry_label, tail_label)
@@ -149,6 +160,15 @@ CREATE INDEX IF NOT EXISTS idx_swaption_vol_snapshots_v2_lookup
     ON {SWAPTION_SNAPSHOTS_TABLE}(as_of_date DESC, expiry_label, tail_label);
 CREATE INDEX IF NOT EXISTS idx_ustf_vs_swaption_v2_lookup
     ON {COMPARISON_TABLE}(as_of_date DESC, product, expiry_label);
+
+ALTER TABLE {USTF_SNAPSHOTS_TABLE}
+    ADD COLUMN IF NOT EXISTS delta_otm_vols JSONB NOT NULL DEFAULT '{{}}'::jsonb;
+ALTER TABLE {USTF_SNAPSHOTS_TABLE}
+    ADD COLUMN IF NOT EXISTS strike_offset_otm_vols JSONB NOT NULL DEFAULT '{{}}'::jsonb;
+ALTER TABLE {SWAPTION_SNAPSHOTS_TABLE}
+    ADD COLUMN IF NOT EXISTS delta_otm_vols JSONB NOT NULL DEFAULT '{{}}'::jsonb;
+ALTER TABLE {SWAPTION_SNAPSHOTS_TABLE}
+    ADD COLUMN IF NOT EXISTS strike_offset_otm_vols JSONB NOT NULL DEFAULT '{{}}'::jsonb;
 """
 
 
@@ -200,6 +220,19 @@ def _safe_ratio(numerator: float | None, denominator: float | None) -> float | N
     if not math.isfinite(numerator) or not math.isfinite(denominator) or abs(denominator) < 1e-12:
         return None
     return numerator / denominator
+
+
+def _safe_difference(value: float | None, base: float | None) -> float | None:
+    if value is None or base is None:
+        return None
+    if not math.isfinite(value) or not math.isfinite(base):
+        return None
+    return value - base
+
+
+def _safe_bps_difference(value: float | None, base: float | None) -> float | None:
+    diff = _safe_difference(value, base)
+    return None if diff is None else diff * 10_000.0
 
 
 def _json_dumps(value: Any) -> str:
@@ -272,13 +305,243 @@ def _fetch_bulk_sabr_smiles_batched(
             {
                 "globex_symbols": symbol_batch,
                 "timestamps": [as_of_date],
-                "force_refresh": force_refresh,
+                "force_refresh": False,
                 "show_tqdm": False,
             }
         )
         for request_symbol, by_date in (batch_smiles or {}).items():
             merged.setdefault(str(request_symbol), {}).update(by_date or {})
     return merged
+
+
+def _build_ustf_delta_otm_payload(smile: Any) -> dict[str, dict[str, Any]]:
+    forward_price = _safe_float(smile.params.forward_price)
+    forward_futures_ytm = _safe_float(smile.params.forward_futures_ytm)
+    point_lookup: dict[tuple[str, int], Any] = {}
+
+    for point in smile.points or ():
+        right = str(getattr(point, "right", "")).upper()
+        side = "call" if right == "C" else "put" if right == "P" else None
+        delta_abs = _safe_float(getattr(point, "delta_abs", None))
+        if side is None or delta_abs is None:
+            continue
+        point_lookup[(side, int(round(delta_abs)))] = point
+
+    payload: dict[str, dict[str, Any]] = {}
+    for side, right, _ in USTF_OTM_SIDE_SPECS:
+        side_payload: dict[str, Any] = {}
+        for delta in OTM_DELTA_BUCKETS:
+            point = point_lookup.get((side, delta))
+            if point is None:
+                continue
+            strike_price = _safe_float(getattr(point, "strike_price", None))
+            strike_futures_ytm = _safe_float(getattr(point, "strike_futures_ytm", None))
+            vol_bps = (
+                _safe_float(smile.normal_vol(strike_price, strike_space="price", vol_units="bps"))
+                if strike_price is not None
+                else None
+            )
+            vol_price = (
+                _safe_float(smile.normal_vol(strike_price, strike_space="price", vol_units="price"))
+                if strike_price is not None
+                else None
+            )
+            side_payload[f"{delta}d"] = {
+                "selector": f"{delta}d",
+                "side": side,
+                "right": right,
+                "delta_abs": float(delta),
+                "vol_bps": vol_bps,
+                "vol_price": vol_price,
+                "market_vol_bps": _safe_float(getattr(point, "iv_normal_bps", None)),
+                "market_vol_price": _safe_float(getattr(point, "iv_normal_price", None)),
+                "strike_price": strike_price,
+                "strike_price_offset": _safe_difference(strike_price, forward_price),
+                "strike_futures_ytm": strike_futures_ytm,
+                "strike_futures_ytm_offset_bps": _safe_bps_difference(
+                    strike_futures_ytm,
+                    forward_futures_ytm,
+                ),
+                "label": str(getattr(point, "label", "")),
+            }
+        if side_payload:
+            payload[side] = side_payload
+
+    return payload
+
+
+def _build_ustf_strike_offset_otm_payload(smile: Any) -> dict[str, dict[str, Any]]:
+    forward_price = _safe_float(smile.params.forward_price)
+    forward_futures_ytm = _safe_float(smile.params.forward_futures_ytm)
+    fv01 = _safe_float(smile.fv01)
+    if forward_price is None or fv01 is None or abs(fv01) < 1e-12:
+        return {}
+
+    payload: dict[str, dict[str, Any]] = {}
+    for side, right, sign in USTF_OTM_SIDE_SPECS:
+        side_payload: dict[str, Any] = {}
+        for offset_bps in OTM_STRIKE_OFFSET_BUCKETS:
+            signed_offset_bps = float(sign) * float(offset_bps)
+            strike_price = forward_price + signed_offset_bps * fv01 / 10_000.0
+            strike_futures_ytm = _safe_float(smile.price_to_futures_ytm(strike_price))
+            side_payload[str(offset_bps)] = {
+                "selector": str(offset_bps),
+                "side": side,
+                "right": right,
+                "offset_bps": float(offset_bps),
+                "signed_offset_bps": signed_offset_bps,
+                "vol_bps": _safe_float(
+                    smile.normal_vol(strike_price, strike_space="price", vol_units="bps")
+                ),
+                "vol_price": _safe_float(
+                    smile.normal_vol(strike_price, strike_space="price", vol_units="price")
+                ),
+                "strike_price": _safe_float(strike_price),
+                "strike_price_offset": _safe_difference(strike_price, forward_price),
+                "strike_futures_ytm": strike_futures_ytm,
+                "strike_futures_ytm_offset_bps": _safe_bps_difference(
+                    strike_futures_ytm,
+                    forward_futures_ytm,
+                ),
+            }
+        payload[side] = side_payload
+
+    return payload
+
+
+def _solve_swaption_delta_otm_point(
+    *,
+    cube: Any,
+    expiry_label: str,
+    tail_label: str,
+    atmf_rate: float | None,
+    expiry_time: float | None,
+    option_type: str,
+    target_delta_abs: int,
+) -> dict[str, float] | None:
+    if atmf_rate is None or expiry_time is None or expiry_time <= 0.0:
+        return None
+
+    try:
+        current_vol = _safe_float(cube.atm_vol(expiry_label, tail_label))
+    except Exception:
+        return None
+    if current_vol is None or current_vol <= 0.0:
+        return None
+
+    strike_rate: float | None = None
+    for _ in range(8):
+        try:
+            next_strike = _safe_float(
+                solve_strike_for_target_delta(
+                    target_delta_abs=target_delta_abs,
+                    option_type=option_type,
+                    forward=atmf_rate,
+                    vol_normal=current_vol,
+                    tte=expiry_time,
+                )
+            )
+        except Exception:
+            return None
+        if next_strike is None:
+            return None
+
+        try:
+            next_vol = _safe_float(cube.volatility(expiry_label, tail_label, next_strike))
+        except Exception:
+            return None
+        if next_vol is None or next_vol <= 0.0:
+            return None
+
+        if strike_rate is not None and abs(next_strike - strike_rate) < 1e-10:
+            strike_rate = next_strike
+            current_vol = next_vol
+            break
+
+        strike_rate = next_strike
+        current_vol = next_vol
+
+    if strike_rate is None:
+        return None
+
+    return {
+        "strike_rate": strike_rate,
+        "vol_decimal": current_vol,
+        "vol_bps": current_vol * 10_000.0,
+        "strike_offset_bps": (strike_rate - atmf_rate) * 10_000.0,
+    }
+
+
+def _build_swaption_delta_otm_payload(
+    *,
+    cube: Any,
+    expiry_label: str,
+    tail_label: str,
+    atmf_rate: float | None,
+    expiry_time: float | None,
+) -> dict[str, dict[str, Any]]:
+    payload: dict[str, dict[str, Any]] = {}
+    for side, option_type, _ in SWAPTION_OTM_SIDE_SPECS:
+        side_payload: dict[str, Any] = {}
+        for delta in OTM_DELTA_BUCKETS:
+            node = _solve_swaption_delta_otm_point(
+                cube=cube,
+                expiry_label=expiry_label,
+                tail_label=tail_label,
+                atmf_rate=atmf_rate,
+                expiry_time=expiry_time,
+                option_type=option_type,
+                target_delta_abs=delta,
+            )
+            if node is None:
+                continue
+            side_payload[f"{delta}d"] = {
+                "selector": f"{delta}d",
+                "side": side,
+                "option_type": option_type,
+                "delta_abs": float(delta),
+                **node,
+            }
+        if side_payload:
+            payload[side] = side_payload
+
+    return payload
+
+
+def _build_swaption_strike_offset_otm_payload(
+    *,
+    cube: Any,
+    expiry_label: str,
+    tail_label: str,
+    atmf_rate: float | None,
+) -> dict[str, dict[str, Any]]:
+    if atmf_rate is None:
+        return {}
+
+    payload: dict[str, dict[str, Any]] = {}
+    for side, option_type, sign in SWAPTION_OTM_SIDE_SPECS:
+        side_payload: dict[str, Any] = {}
+        for offset_bps in OTM_STRIKE_OFFSET_BUCKETS:
+            signed_offset_bps = float(sign) * float(offset_bps)
+            strike_rate = atmf_rate + signed_offset_bps / 10_000.0
+            try:
+                vol_decimal = _safe_float(cube.volatility(expiry_label, tail_label, strike_rate))
+            except Exception:
+                vol_decimal = None
+            side_payload[str(offset_bps)] = {
+                "selector": str(offset_bps),
+                "side": side,
+                "option_type": option_type,
+                "offset_bps": float(offset_bps),
+                "signed_offset_bps": signed_offset_bps,
+                "strike_rate": strike_rate,
+                "strike_offset_bps": signed_offset_bps,
+                "vol_decimal": vol_decimal,
+                "vol_bps": None if vol_decimal is None else vol_decimal * 10_000.0,
+            }
+        payload[side] = side_payload
+
+    return payload
 
 
 def _build_ustf_snapshot_row(
@@ -298,6 +561,8 @@ def _build_ustf_snapshot_row(
     )
     actual_expiry_days = max((smile.params.expiry_date - as_of_date).days, 0)
     smile_points_list = [pt.to_dict() for pt in smile.points] if smile.points else []
+    delta_otm_payload = _build_ustf_delta_otm_payload(smile)
+    strike_offset_otm_payload = _build_ustf_strike_offset_otm_payload(smile)
     return {
         "as_of_date": as_of_date,
         "product": product,
@@ -316,6 +581,8 @@ def _build_ustf_snapshot_row(
         "underlying_contract": str(smile.underlying_contract),
         "source": str(smile.source),
         "smile_points": _json_dumps(smile_points_list),
+        "delta_otm_vols": _json_dumps(delta_otm_payload),
+        "strike_offset_otm_vols": _json_dumps(strike_offset_otm_payload),
     }
 
 
@@ -327,12 +594,12 @@ def _fetch_ustf_snapshot_rows(
     request_map = _build_ustf_request_map()
     all_symbols = list(request_map.keys())
 
-    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL", force_refresh=force_refresh)
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL", force_refresh=False)
     smiles = _fetch_bulk_sabr_smiles_batched(
         mdp=mdp,
         globex_symbols=all_symbols,
         as_of_date=as_of_date,
-        force_refresh=force_refresh,
+        force_refresh=False,
     )
 
     rows: list[dict[str, Any]] = []
@@ -360,6 +627,41 @@ def _fetch_ustf_snapshot_rows(
 # Swaption Snapshot Fetching (MONKEYCUBE)
 # ---------------------------------------------------------------------------
 
+def _extract_swaption_vol_cube(market_context: Any) -> Any | None:
+    if market_context is None or not hasattr(market_context, "meta"):
+        return None
+    metadata = market_context.meta()
+    if not isinstance(metadata, dict):
+        return None
+    return metadata.get("vol_cube")
+
+
+def _resolve_swaption_atm_nvol_bps(
+    *,
+    market_context: Any,
+    as_of_date: dt.date,
+    expiry_label: str,
+    tail_label: str,
+) -> float | None:
+    query = IRSwaptionQuery(
+        expiry=expiry_label,
+        tail=tail_label,
+        structure=IRSwaptionStructure.STRADDLE,
+    )
+    resolved_query = resolve_query(
+        query,
+        timestamp=as_of_date,
+        pricer_or_curve=market_context,
+    )
+    package, risk_weights = resolved_query.resolve_package(pricer_or_curve=market_context)
+    value_map = resolved_query.build_value_map(
+        pricer_or_curve=market_context,
+        package=package,
+        risk_weights=risk_weights,
+    )
+    return _safe_float(value_map.apply(IRSwaptionValue.NVOL))
+
+
 def _fetch_swaption_snapshot_rows(
     *,
     as_of_date: dt.date,
@@ -367,22 +669,23 @@ def _fetch_swaption_snapshot_rows(
     force_refresh: bool,
 ) -> list[dict[str, Any]]:
     mdp = IRSwaptionMDP(
-        source="MONKEYCUBE-QL",
+        source=DEFAULT_SWAPTION_SOURCE,
         curve_source="ERIS_EOD_LIVE-QL_BASIC",
         data_dir=MONKEYCUBE_DATA_DIR,
         force_refresh=force_refresh,
     )
-    mdp.get_data(
+    market_context = mdp.get_data(
         {
             "curve_name": curve_name,
             "timestamp": as_of_date,
             "ignore_cache": force_refresh,
         }
     )
-    cube = get_cached_cube(curve_name, as_of_date)
+    cube = _extract_swaption_vol_cube(market_context)
     if cube is None:
         _log_status(
-            f"No MONKEYCUBE cube found for {as_of_date.isoformat()}",
+            f"No swaption SABR cube found for {as_of_date.isoformat()} "
+            f"from {getattr(market_context, 'source', DEFAULT_SWAPTION_SOURCE)}",
             level="WARN",
         )
         return []
@@ -392,8 +695,27 @@ def _fetch_swaption_snapshot_rows(
         for tail_label in SWAPTION_TAIL_LABELS:
             try:
                 params = cube.sabr_params_at(expiry_label, tail_label)
-                atm_vol_raw = cube.atm_vol(expiry_label, tail_label)
-                atm_nvol_bps = _safe_float(atm_vol_raw * 10_000.0) if atm_vol_raw is not None else None
+                atm_nvol_bps = _resolve_swaption_atm_nvol_bps(
+                    market_context=market_context,
+                    as_of_date=as_of_date,
+                    expiry_label=expiry_label,
+                    tail_label=tail_label,
+                )
+                atmf_rate = _safe_float(params.get("atmf_rate"))
+                expiry_time = _safe_float(params.get("expiry_time"))
+                delta_otm_payload = _build_swaption_delta_otm_payload(
+                    cube=cube,
+                    expiry_label=expiry_label,
+                    tail_label=tail_label,
+                    atmf_rate=atmf_rate,
+                    expiry_time=expiry_time,
+                )
+                strike_offset_otm_payload = _build_swaption_strike_offset_otm_payload(
+                    cube=cube,
+                    expiry_label=expiry_label,
+                    tail_label=tail_label,
+                    atmf_rate=atmf_rate,
+                )
             except Exception as exc:
                 _log_status(
                     f"Failed to fetch swaption {expiry_label}x{tail_label} on "
@@ -407,13 +729,15 @@ def _fetch_swaption_snapshot_rows(
                     "expiry_label": expiry_label,
                     "tail_label": tail_label,
                     "atm_nvol_bps": atm_nvol_bps,
-                    "atmf_rate": _safe_float(params.get("atmf_rate")),
+                    "atmf_rate": atmf_rate,
                     "sabr_alpha": _safe_float(params.get("alpha")),
                     "sabr_beta": _safe_float(params.get("beta")),
                     "sabr_rho": _safe_float(params.get("rho")),
                     "sabr_nu": _safe_float(params.get("nu")),
-                    "expiry_time": _safe_float(params.get("expiry_time")),
-                    "source": "MONKEYCUBE-QL",
+                    "expiry_time": expiry_time,
+                    "source": str(getattr(market_context, "source", DEFAULT_SWAPTION_SOURCE)),
+                    "delta_otm_vols": _json_dumps(delta_otm_payload),
+                    "strike_offset_otm_vols": _json_dumps(strike_offset_otm_payload),
                 }
             )
     return rows
@@ -487,12 +811,15 @@ def _persist_daily_rows(
             as_of_date, product, expiry_label, expiry_days,
             atm_nvol_bps, atm_nvol_price, forward_price, forward_yield, fv01,
             sabr_alpha, sabr_beta, sabr_rho, sabr_nu, time_to_expiry,
-            underlying_contract, source, smile_points
+            underlying_contract, source, smile_points, delta_otm_vols, strike_offset_otm_vols
         ) VALUES (
             :as_of_date, :product, :expiry_label, :expiry_days,
             :atm_nvol_bps, :atm_nvol_price, :forward_price, :forward_yield, :fv01,
             :sabr_alpha, :sabr_beta, :sabr_rho, :sabr_nu, :time_to_expiry,
-            :underlying_contract, :source, CAST(:smile_points AS JSONB)
+            :underlying_contract, :source,
+            CAST(:smile_points AS JSONB),
+            CAST(:delta_otm_vols AS JSONB),
+            CAST(:strike_offset_otm_vols AS JSONB)
         )
         ON CONFLICT (as_of_date, product, expiry_label) DO UPDATE SET
             expiry_days = EXCLUDED.expiry_days,
@@ -509,6 +836,8 @@ def _persist_daily_rows(
             underlying_contract = EXCLUDED.underlying_contract,
             source = EXCLUDED.source,
             smile_points = EXCLUDED.smile_points,
+            delta_otm_vols = EXCLUDED.delta_otm_vols,
+            strike_offset_otm_vols = EXCLUDED.strike_offset_otm_vols,
             updated_at = NOW()
         """
     )
@@ -519,12 +848,12 @@ def _persist_daily_rows(
             as_of_date, expiry_label, tail_label,
             atm_nvol_bps, atmf_rate,
             sabr_alpha, sabr_beta, sabr_rho, sabr_nu, expiry_time,
-            source
+            source, delta_otm_vols, strike_offset_otm_vols
         ) VALUES (
             :as_of_date, :expiry_label, :tail_label,
             :atm_nvol_bps, :atmf_rate,
             :sabr_alpha, :sabr_beta, :sabr_rho, :sabr_nu, :expiry_time,
-            :source
+            :source, CAST(:delta_otm_vols AS JSONB), CAST(:strike_offset_otm_vols AS JSONB)
         )
         ON CONFLICT (as_of_date, expiry_label, tail_label) DO UPDATE SET
             atm_nvol_bps = EXCLUDED.atm_nvol_bps,
@@ -535,6 +864,8 @@ def _persist_daily_rows(
             sabr_nu = EXCLUDED.sabr_nu,
             expiry_time = EXCLUDED.expiry_time,
             source = EXCLUDED.source,
+            delta_otm_vols = EXCLUDED.delta_otm_vols,
+            strike_offset_otm_vols = EXCLUDED.strike_offset_otm_vols,
             updated_at = NOW()
         """
     )
@@ -612,6 +943,42 @@ def run_daily_ingest(
 
 
 # ---------------------------------------------------------------------------
+# Range Execution Helper
+# ---------------------------------------------------------------------------
+
+def _run_daily_ingest_for_range(
+    engine: Engine,
+    *,
+    as_of_date: dt.date,
+    curve_name: str,
+    force_refresh: bool = False,
+) -> bool:
+    started = time.time()
+    try:
+        result = run_daily_ingest(
+            engine,
+            as_of_date=as_of_date,
+            curve_name=curve_name,
+            force_refresh=force_refresh,
+        )
+    except Exception as exc:
+        elapsed = time.time() - started
+        _log_status(
+            f"{as_of_date.isoformat()}: failed after {elapsed:.1f}s with error: {exc}",
+            level="ERROR",
+        )
+        return False
+
+    elapsed = time.time() - started
+    _log_status(
+        f"{result['as_of_date']}: ustf={result['ustf_rows']} "
+        f"swaption={result['swaption_rows']} comparison={result['comparison_rows']} "
+        f"in {elapsed:.1f}s"
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
 # CLI Modes
 # ---------------------------------------------------------------------------
 
@@ -641,29 +1008,23 @@ def main_range(args: argparse.Namespace) -> None:
     )
     success_count = 0
     failure_count = 0
+    failed_dates: list[str] = []
     for as_of_date in dates:
-        started = time.time()
-        try:
-            result = run_daily_ingest(
-                engine,
-                as_of_date=as_of_date,
-                curve_name=args.curve_name,
-                force_refresh=args.force_refresh,
-            )
-            elapsed = time.time() - started
+        if _run_daily_ingest_for_range(
+            engine,
+            as_of_date=as_of_date,
+            curve_name=args.curve_name,
+            force_refresh=args.force_refresh,
+        ):
             success_count += 1
-            _log_status(
-                f"{result['as_of_date']}: ustf={result['ustf_rows']} "
-                f"swaption={result['swaption_rows']} comparison={result['comparison_rows']} "
-                f"in {elapsed:.1f}s"
-            )
-        except Exception as exc:
-            elapsed = time.time() - started
-            failure_count += 1
-            _log_status(
-                f"{as_of_date.isoformat()}: failed after {elapsed:.1f}s with error: {exc}",
-                level="ERROR",
-            )
+            continue
+        failure_count += 1
+        failed_dates.append(as_of_date.isoformat())
+    if failed_dates:
+        _log_status(
+            f"Failed backfill dates: {', '.join(failed_dates)}",
+            level="WARN",
+        )
     _log_status(
         f"USTF-vs-swaption backfill complete: success={success_count} failure={failure_count}"
     )

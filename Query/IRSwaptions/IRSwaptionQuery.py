@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Union
 
@@ -10,7 +9,14 @@ from Query.IRSwaptions import adapter as _irswp_adapter  # noqa: F401
 from Query.IRSwaptions.IRSwaptionStructure import IRSwaptionStructure
 from Query.IRSwaptions.IRSwaptionValue import IRSwaptionValue
 from Query.IRSwaptions.pricer import IRSwaptionPricable, leg_forward_rate, leg_model_vol, leg_tte_years
-from Query.IRSwaptions.utils import normalize_tenor, parse_expiry_tail_shorthandle, parse_midcurve_tail, resolve_strike_spec, to_date
+from Query.IRSwaptions.utils import (
+    infer_option_type_from_strike_spec,
+    normalize_tenor,
+    parse_expiry_tail_shorthandle,
+    parse_midcurve_tail,
+    resolve_strike_spec,
+    to_date,
+)
 
 
 def _is_explicit_date_mode(skw: Dict[str, Any]) -> bool:
@@ -27,23 +33,18 @@ def _normalize_tail_label(tail: str) -> str:
     return f"{fwd}x{tenor}"
 
 
-_ATMF_OFFSET_RE = re.compile(r"^\s*(ATMF|ATMS)\s*([+-])\s*(\d+(?:\.\d+)?)\s*B?P?S?\s*$", re.IGNORECASE)
-
-
 def _infer_outright_structure(
     structure: IRSwaptionStructure,
     strike_spec: float | str | None,
 ) -> IRSwaptionStructure:
     if structure not in {IRSwaptionStructure.RECEIVER, IRSwaptionStructure.PAYER}:
         return structure
-    if not isinstance(strike_spec, str):
-        return structure
-
-    match = _ATMF_OFFSET_RE.match(str(strike_spec))
-    if not match:
-        return structure
-
-    return IRSwaptionStructure.PAYER if match.group(2) == "+" else IRSwaptionStructure.RECEIVER
+    inferred_option_type = infer_option_type_from_strike_spec(strike_spec)
+    if inferred_option_type == "payer":
+        return IRSwaptionStructure.PAYER
+    if inferred_option_type == "receiver":
+        return IRSwaptionStructure.RECEIVER
+    return structure
 
 
 @dataclass(frozen=True)

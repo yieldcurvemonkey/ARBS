@@ -115,14 +115,39 @@ def leg_cube_vol(context: IRSwaptionMarketContext, leg: IRSwaptionPricable, *, s
     return float(cube.volatility_at_point(option_time, swap_years, k))
 
 
-def leg_model_vol(context: IRSwaptionMarketContext, leg: IRSwaptionPricable, *, strike: Optional[float] = None) -> float:
+def _use_enhanced_atm_surface(
+    context: IRSwaptionMarketContext,
+    leg: IRSwaptionPricable,
+    *,
+    strike: Optional[float] = None,
+) -> bool:
+    if str(getattr(context, "provider", "")).upper() != "GSQUANT_MC_ENHANCED":
+        return False
     k = float(leg.strike if strike is None else strike)
-    cube_v = leg_cube_vol(context, leg, strike=k)
-    if cube_v is not None:
-        return cube_v
+    fwd = leg_forward_rate(context, leg)
+    return abs(k - fwd) <= 1e-10
+
+
+def _surface_model_vol(
+    context: IRSwaptionMarketContext,
+    leg: IRSwaptionPricable,
+    *,
+    strike: Optional[float] = None,
+) -> float:
+    k = float(leg.strike if strike is None else strike)
     option_time = leg_tte_years(context, leg)
     swap_length = leg_swap_length_years(context, leg)
     return float(context.vol_handle.volatility(option_time, swap_length, k, True))
+
+
+def leg_model_vol(context: IRSwaptionMarketContext, leg: IRSwaptionPricable, *, strike: Optional[float] = None) -> float:
+    k = float(leg.strike if strike is None else strike)
+    if _use_enhanced_atm_surface(context, leg, strike=k):
+        return _surface_model_vol(context, leg, strike=k)
+    cube_v = leg_cube_vol(context, leg, strike=k)
+    if cube_v is not None:
+        return cube_v
+    return _surface_model_vol(context, leg, strike=k)
 
 
 def _curve_eval_date(context: IRSwaptionMarketContext) -> ql.Date:
@@ -146,6 +171,8 @@ def _active_eval_date(context: IRSwaptionMarketContext) -> ql.Date:
 
 
 def _exact_strike_pricing_engine(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> Optional[ql.PricingEngine]:
+    if _use_enhanced_atm_surface(context, leg):
+        return None
     vol = leg_cube_vol(context, leg)
     if vol is None:
         return None
@@ -205,7 +232,7 @@ def leg_fwd_npv(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> fl
 
 def leg_implied_normal_vol_bps(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
     cube_v = leg_cube_vol(context, leg)
-    if cube_v is not None:
+    if cube_v is not None and not _use_enhanced_atm_surface(context, leg):
         return float(cube_v) * 10_000.0
     with _temporary_eval_date(_curve_eval_date(context)):
         swpt = build_ql_swaption(context, leg)

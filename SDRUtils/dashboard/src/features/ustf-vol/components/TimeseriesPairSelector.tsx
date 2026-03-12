@@ -2,11 +2,11 @@
 
 import type { AssetType, SeriesConfig, TimeRange, TimeseriesMode } from '../types'
 import {
-  USTF_PRODUCTS,
+  STANDARD_PAIRS,
+  SWAPTION_EXPIRIES,
   SWAPTION_TAILS,
   USTF_EXPIRIES,
-  SWAPTION_EXPIRIES,
-  STANDARD_PAIRS,
+  USTF_PRODUCTS,
 } from '../constants'
 
 type Props = {
@@ -22,6 +22,24 @@ type Props = {
 
 const RANGES: TimeRange[] = ['1M', '3M', '6M', '1Y', 'ALL']
 
+const LABEL_CLASS =
+  'text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500'
+const SELECT_CLASS =
+  'h-8 rounded-md border border-slate-700/80 bg-slate-950/80 px-3 text-[12px] text-slate-100 outline-none transition focus:border-slate-500'
+
+function segmentButtonClass(active: boolean): string {
+  return [
+    'px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition',
+    active
+      ? 'bg-slate-100 text-slate-950'
+      : 'bg-slate-950/70 text-slate-300 hover:bg-slate-900 hover:text-white',
+  ].join(' ')
+}
+
+function quickPickClass(): string {
+  return 'rounded-md border border-slate-700/80 bg-slate-950/80 px-3 py-1.5 text-[11px] font-medium text-slate-300 transition hover:border-slate-500 hover:text-white'
+}
+
 function SeriesRow({
   label,
   config,
@@ -36,75 +54,80 @@ function SeriesRow({
   const expiries = config.type === 'ustf' ? USTF_EXPIRIES : SWAPTION_EXPIRIES
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="w-16 text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</span>
-
-      {/* Type toggle */}
-      <div className="flex overflow-hidden rounded-lg border border-slate-700">
-        {(['ustf', 'swaption'] as AssetType[]).map((t) => (
-          <button
-            key={t}
-            onClick={() =>
-              onChange({
-                type: t,
-                product: t === 'ustf' ? 'TY' : undefined,
-                expiry: t === 'ustf' ? '1M' : '1M',
-                tail: t === 'swaption' ? '7Y' : undefined,
-              })
-            }
-            className={`px-3 py-1.5 text-xs font-semibold ${
-              config.type === t
-                ? 'bg-slate-100 text-slate-950'
-                : 'bg-slate-900/70 text-slate-300 hover:text-white'
-            }`}
-          >
-            {t === 'ustf' ? 'USTF' : 'Swpn'}
-          </button>
-        ))}
+    <div className="grid gap-3 rounded-lg border border-slate-800/80 bg-slate-950/45 p-3 lg:grid-cols-[96px_minmax(0,1fr)]">
+      <div className="flex items-center">
+        <span className={LABEL_CLASS}>{label}</span>
       </div>
 
-      {/* Product / Tail */}
-      {config.type === 'ustf' ? (
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex overflow-hidden rounded-md border border-slate-700/80">
+          {(['ustf', 'swaption'] as AssetType[]).map((assetType) => (
+            <button
+              key={assetType}
+              type="button"
+              onClick={() =>
+                onChange({
+                  type: assetType,
+                  product: assetType === 'ustf' ? 'TY' : undefined,
+                  expiry: '1M',
+                  tail: assetType === 'swaption' ? '7Y' : undefined,
+                })
+              }
+              className={segmentButtonClass(config.type === assetType)}
+            >
+              {assetType === 'ustf' ? 'USTF' : 'OTC'}
+            </button>
+          ))}
+        </div>
+
+        {config.type === 'ustf' ? (
+          <select
+            value={config.product ?? 'TY'}
+            onChange={(event) => onChange({ ...config, product: event.target.value as any })}
+            className={SELECT_CLASS}
+          >
+            {USTF_PRODUCTS.map((product) => (
+              <option key={product} value={product}>
+                {product}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <select
+            value={config.tail ?? '7Y'}
+            onChange={(event) => onChange({ ...config, tail: event.target.value as any })}
+            className={SELECT_CLASS}
+          >
+            {SWAPTION_TAILS.map((tail) => (
+              <option key={tail} value={tail}>
+                {tail}
+              </option>
+            ))}
+          </select>
+        )}
+
         <select
-          value={config.product ?? 'TY'}
-          onChange={(e) => onChange({ ...config, product: e.target.value as any })}
-          className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-xs text-slate-200"
+          value={config.expiry}
+          onChange={(event) => onChange({ ...config, expiry: event.target.value })}
+          className={SELECT_CLASS}
         >
-          {USTF_PRODUCTS.map((p) => (
-            <option key={p} value={p}>{p}</option>
+          {expiries.map((expiry) => (
+            <option key={expiry} value={expiry}>
+              {expiry}
+            </option>
           ))}
         </select>
-      ) : (
-        <select
-          value={config.tail ?? '7Y'}
-          onChange={(e) => onChange({ ...config, tail: e.target.value as any })}
-          className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-xs text-slate-200"
-        >
-          {SWAPTION_TAILS.map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
-      )}
 
-      {/* Expiry */}
-      <select
-        value={config.expiry}
-        onChange={(e) => onChange({ ...config, expiry: e.target.value })}
-        className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-xs text-slate-200"
-      >
-        {expiries.map((e) => (
-          <option key={e} value={e}>{e}</option>
-        ))}
-      </select>
-
-      {onClear && (
-        <button
-          onClick={onClear}
-          className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-xs text-slate-400 hover:text-white"
-        >
-          Clear
-        </button>
-      )}
+        {onClear ? (
+          <button
+            type="button"
+            onClick={onClear}
+            className="rounded-md border border-slate-700/80 bg-slate-950/80 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400 transition hover:border-slate-500 hover:text-white"
+          >
+            Clear
+          </button>
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -120,25 +143,28 @@ export function TimeseriesPairSelector({
   onRangeChange,
 }: Props) {
   return (
-    <div className="space-y-3">
-      {/* Quick picks */}
-      <div className="flex flex-wrap gap-1.5">
-        {STANDARD_PAIRS.map((pair) => (
-          <button
-            key={pair.label}
-            onClick={() => {
-              onSeries1Change(pair.series1)
-              onSeries2Change(pair.series2)
-            }}
-            className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-[11px] font-medium text-slate-300 transition hover:border-sky-400/50 hover:text-white"
-          >
-            {pair.label}
-          </button>
-        ))}
+    <div className="space-y-4">
+      <div className="rounded-lg border border-slate-800/80 bg-slate-950/45 p-3">
+        <div className={LABEL_CLASS}>Standard comparison map</div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {STANDARD_PAIRS.map((pair) => (
+            <button
+              key={pair.label}
+              type="button"
+              onClick={() => {
+                onSeries1Change(pair.series1)
+                onSeries2Change(pair.series2)
+              }}
+              className={quickPickClass()}
+            >
+              {pair.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Series rows */}
       <SeriesRow label="Series 1" config={series1} onChange={onSeries1Change} />
+
       {series2 ? (
         <SeriesRow
           label="Series 2"
@@ -148,50 +174,42 @@ export function TimeseriesPairSelector({
         />
       ) : (
         <button
-          onClick={() =>
-            onSeries2Change({ type: 'swaption', expiry: '1M', tail: '7Y' })
-          }
-          className="text-xs text-sky-400 hover:text-sky-300"
+          type="button"
+          onClick={() => onSeries2Change({ type: 'swaption', expiry: '1M', tail: '7Y' })}
+          className="rounded-md border border-dashed border-slate-700/80 bg-slate-950/45 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400 transition hover:border-slate-500 hover:text-white"
         >
-          + Add Series 2
+          Add comparison leg
         </button>
       )}
 
-      {/* Mode & Range */}
-      <div className="flex flex-wrap items-center gap-4">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">Mode</span>
-          <div className="flex overflow-hidden rounded-lg border border-slate-700">
-            {(['overlay', 'spread'] as TimeseriesMode[]).map((m) => (
+      <div className="grid gap-3 rounded-lg border border-slate-800/80 bg-slate-950/45 p-3 xl:grid-cols-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className={LABEL_CLASS}>Display mode</span>
+          <div className="flex overflow-hidden rounded-md border border-slate-700/80">
+            {(['overlay', 'spread'] as TimeseriesMode[]).map((viewMode) => (
               <button
-                key={m}
-                onClick={() => onModeChange(m)}
-                className={`px-3 py-1 text-xs font-semibold ${
-                  mode === m
-                    ? 'bg-slate-100 text-slate-950'
-                    : 'bg-slate-900/70 text-slate-300 hover:text-white'
-                }`}
+                key={viewMode}
+                type="button"
+                onClick={() => onModeChange(viewMode)}
+                className={segmentButtonClass(mode === viewMode)}
               >
-                {m === 'overlay' ? 'Overlay' : 'Spread'}
+                {viewMode}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">Range</span>
-          <div className="flex overflow-hidden rounded-lg border border-slate-700">
-            {RANGES.map((r) => (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className={LABEL_CLASS}>Lookback</span>
+          <div className="flex flex-wrap overflow-hidden rounded-md border border-slate-700/80">
+            {RANGES.map((timeRange) => (
               <button
-                key={r}
-                onClick={() => onRangeChange(r)}
-                className={`px-2.5 py-1 text-xs font-semibold ${
-                  range === r
-                    ? 'bg-slate-100 text-slate-950'
-                    : 'bg-slate-900/70 text-slate-300 hover:text-white'
-                }`}
+                key={timeRange}
+                type="button"
+                onClick={() => onRangeChange(timeRange)}
+                className={segmentButtonClass(range === timeRange)}
               >
-                {r}
+                {timeRange}
               </button>
             ))}
           </div>

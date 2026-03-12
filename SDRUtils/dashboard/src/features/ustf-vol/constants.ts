@@ -8,6 +8,29 @@ export const USTF_EXPIRIES: UstfExpiry[] = ['1W', '2W', '1M', '2M', '3M', '6M']
 
 export const SWAPTION_EXPIRIES: SwaptionExpiry[] = ['1M', '3M', '6M', '1Y']
 
+export const TIMESERIES_DELTA_BUCKETS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50] as const
+
+export const TIMESERIES_STRIKE_OFFSET_BUCKETS = [
+  5,
+  10,
+  15,
+  20,
+  25,
+  30,
+  35,
+  40,
+  45,
+  50,
+  55,
+  60,
+  65,
+  70,
+  75,
+  80,
+  90,
+  100,
+] as const
+
 export const USTF_SWAP_TAIL_MAP: Record<UstfProduct, SwaptionTail> = {
   TU: '2Y',
   FV: '5Y',

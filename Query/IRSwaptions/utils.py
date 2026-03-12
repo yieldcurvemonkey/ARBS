@@ -13,7 +13,10 @@ from scipy.stats import norm
 _TENOR_RE = re.compile(r"^\s*(\d+)\s*([DWMYdwm y])\s*$")
 _MIDCURVE_RE = re.compile(r"^\s*(\d+\s*[DWMYdwm y])\s*[xX]\s*(\d+\s*[DWMYdwm y])\s*$")
 _ATM_RE = re.compile(r"^\s*(ATMF|ATMS)\s*(?:([+-])\s*(\d+(?:\.\d+)?)\s*B?P?S?)?\s*$", re.IGNORECASE)
-_DELTA_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*D\s*$", re.IGNORECASE)
+_DELTA_RE = re.compile(
+    r"^\s*(?P<delta>\d+(?:\.\d+)?)\s*D(?:\s*(?P<side>PAYER|PAY|P|RECEIVER|REC|R))?\s*$",
+    re.IGNORECASE,
+)
 _SHORTHANDLE_TOKEN_RE = re.compile(r"\d+[DWMYdwm y]")
 
 
@@ -101,6 +104,42 @@ def option_type_to_ql(option_type: str) -> int:
     raise ValueError(f"Invalid option type '{option_type}'. Expected payer/receiver.")
 
 
+def normalize_option_type(option_type: str) -> str:
+    token = str(option_type).strip().lower()
+    if token in {"payer", "pay", "p", "call", "c"}:
+        return "payer"
+    if token in {"receiver", "rec", "r", "put"}:
+        return "receiver"
+    raise ValueError(f"Invalid option type '{option_type}'. Expected payer/receiver.")
+
+
+def infer_option_type_from_strike_spec(strike_spec: float | int | str | None) -> Optional[str]:
+    if not isinstance(strike_spec, str):
+        return None
+
+    token = str(strike_spec).strip().upper().replace(" ", "")
+    if not token:
+        return None
+
+    m_atm = _ATM_RE.match(token)
+    if m_atm:
+        sign = m_atm.group(2)
+        if sign == "+":
+            return "payer"
+        if sign == "-":
+            return "receiver"
+        return None
+
+    m_delta = _DELTA_RE.match(token)
+    if not m_delta:
+        return None
+
+    side = m_delta.group("side")
+    if not side:
+        return None
+    return normalize_option_type(side)
+
+
 def strike_value_to_decimal(value: float | int | str) -> float:
     if isinstance(value, str):
         num = float(value.strip())
@@ -160,10 +199,10 @@ def _normal_delta(
     t = max(float(tte), 1e-12)
     d = (float(forward) - float(strike)) / (sigma * math.sqrt(t))
     call_delta = float(norm.cdf(d))
-    token = str(option_type).strip().lower()
-    if token in {"payer", "call", "c"}:
+    token = normalize_option_type(option_type)
+    if token == "payer":
         return call_delta
-    if token in {"receiver", "put", "p"}:
+    if token == "receiver":
         return call_delta - 1.0
     raise ValueError(f"Invalid option type '{option_type}'.")
 
@@ -182,7 +221,7 @@ def solve_strike_for_target_delta(
     if target <= 0.0 or target >= 1.0:
         raise ValueError(f"target_delta_abs must be in (0,100), got {target_delta_abs}")
 
-    sign_target = target if str(option_type).strip().lower() in {"payer", "call", "c"} else -target
+    sign_target = target if normalize_option_type(option_type) == "payer" else -target
 
     def f(k: float) -> float:
         return _normal_delta(
@@ -264,9 +303,10 @@ def resolve_strike_spec(
     if m_delta:
         if vol_normal is None or tte is None:
             raise ValueError(f"Delta strike '{strike_spec}' requires vol_normal and tte inputs.")
+        delta_option_type = infer_option_type_from_strike_spec(token) or option_type
         return solve_strike_for_target_delta(
-            target_delta_abs=float(m_delta.group(1)),
-            option_type=option_type,
+            target_delta_abs=float(m_delta.group("delta")),
+            option_type=delta_option_type,
             forward=float(forward if forward is not None else atmf),
             vol_normal=float(vol_normal),
             tte=float(tte),

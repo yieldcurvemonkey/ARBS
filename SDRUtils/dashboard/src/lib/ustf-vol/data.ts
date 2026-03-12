@@ -1,6 +1,8 @@
 import { query } from '@/lib/db'
 import type {
   AssetType,
+  ComparisonSnapshotResponse,
+  SeriesConfig,
   SeriesStats,
   SmileDateSlice,
   SmilePoint,
@@ -12,11 +14,20 @@ import type {
   TimeseriesResponse,
   TermStructureResponse,
   SmileResponse,
+  UstfTimeseriesMultiResponse,
+  UstfTimeseriesSeries,
 } from '@/features/ustf-vol/types'
 import {
+  STANDARD_PAIRS,
   USTF_PRODUCTS,
   SWAPTION_TAILS,
 } from '@/features/ustf-vol/constants'
+import {
+  formatSeriesConfigLabel,
+  getLatestSnapshotDate,
+  getSeriesConfigKey,
+  getSeriesVolMetric,
+} from '@/features/ustf-vol/utils'
 
 const USTF_TABLE = 'arbs_ustf_vol_snapshots_v2'
 const SWAPTION_TABLE = 'arbs_swaption_vol_snapshots_v2'
@@ -30,6 +41,45 @@ function parseNumber(value: unknown): number | null {
   if (value === null || value === undefined) return null
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function formatDbDate(value: unknown): string | null {
+  if (!value) return null
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed
+    }
+
+    const parsed = new Date(trimmed)
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10)
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10)
+  }
+
+  return null
+}
+
+function formatDbTimestamp(value: unknown): string | null {
+  if (!value) return null
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+
+    const parsed = new Date(trimmed)
+    return Number.isNaN(parsed.getTime()) ? trimmed : parsed.toISOString()
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString()
+  }
+
+  return null
 }
 
 function rangeToInterval(range: TimeRange): string {
@@ -55,6 +105,84 @@ function computeStats(values: Array<number | null>): SeriesStats {
   const stdev = Math.sqrt(variance)
   const zScore = stdev > 1e-12 ? (latest - mean) / stdev : null
   return { latest, mean, min, max, stdev, zScore, count: clean.length }
+}
+
+function computeSeriesZScore(
+  currentValue: number | null,
+  historyValues: Array<number | null>
+): number | null {
+  if (currentValue === null || !Number.isFinite(currentValue)) {
+    return null
+  }
+
+  const clean = historyValues.filter((value): value is number => value !== null && Number.isFinite(value))
+  if (clean.length === 0) {
+    return null
+  }
+
+  const mean = clean.reduce((sum, value) => sum + value, 0) / clean.length
+  const variance = clean.reduce((sum, value) => sum + (value - mean) ** 2, 0) / clean.length
+  const stdev = Math.sqrt(variance)
+  return stdev > 1e-12 ? (currentValue - mean) / stdev : null
+}
+
+function timestampToMillis(value: string | null): number {
+  if (!value) {
+    return Number.NEGATIVE_INFINITY
+  }
+
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed
+}
+
+function parseJsonObject(value: unknown): Record<string, any> | null {
+  if (value === null || value === undefined) return null
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+    } catch {
+      return null
+    }
+  }
+
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, any>
+  }
+
+  return null
+}
+
+function extractOtmNodeVolBps(
+  payloadValue: unknown,
+  side: string,
+  selector: string
+): number | null {
+  const payload = parseJsonObject(payloadValue)
+  const sideBucket = payload ? parseJsonObject(payload[side]) : null
+  const node = sideBucket ? parseJsonObject(sideBucket[selector]) : null
+  return node ? parseNumber(node.vol_bps) : null
+}
+
+function extractSeriesValue(
+  config: SeriesConfig,
+  row: Record<string, unknown>
+): number | null {
+  const metric = getSeriesVolMetric(config)
+  if (metric.kind === 'atm') {
+    return parseNumber(row.atm_nvol_bps)
+  }
+
+  if (metric.kind === 'delta_otm') {
+    return extractOtmNodeVolBps(row.delta_otm_vols, metric.side, `${metric.delta}d`)
+  }
+
+  return extractOtmNodeVolBps(
+    row.strike_offset_otm_vols,
+    metric.side,
+    String(metric.offsetBps)
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -136,27 +264,41 @@ type TimeseriesParams = {
   range: TimeRange
 }
 
+type TimeseriesCollectionParams = {
+  series: SeriesConfig[]
+  range?: TimeRange
+  startDate?: string
+  endDate?: string
+}
+
+type SeriesWindow = {
+  interval?: string
+  startDate?: string
+  endDate?: string
+}
+
 export async function fetchTimeseries(params: TimeseriesParams): Promise<TimeseriesResponse> {
   const interval = rangeToInterval(params.range)
   const hasSeries2 = params.series2Type && params.series2Expiry
 
-  // Build series1 query
-  const s1 = await fetchSingleSeries(
-    params.series1Type,
-    params.series1Product,
-    params.series1Expiry,
-    params.series1Tail,
-    interval,
-  )
+  const series1Config: SeriesConfig = {
+    type: params.series1Type,
+    product: params.series1Product as SeriesConfig['product'],
+    expiry: params.series1Expiry,
+    tail: params.series1Tail as SeriesConfig['tail'],
+  }
+  const s1 = await fetchSingleSeries(series1Config, interval)
 
   let s2: Map<string, number | null> | null = null
   if (hasSeries2) {
     s2 = await fetchSingleSeries(
-      params.series2Type!,
-      params.series2Product,
-      params.series2Expiry!,
-      params.series2Tail,
-      interval,
+      {
+        type: params.series2Type!,
+        product: params.series2Product as SeriesConfig['product'],
+        expiry: params.series2Expiry!,
+        tail: params.series2Tail as SeriesConfig['tail'],
+      },
+      interval
     )
   }
 
@@ -173,9 +315,14 @@ export async function fetchTimeseries(params: TimeseriesParams): Promise<Timeser
     return { date, series1: v1, series2: v2, spread }
   })
 
-  const series1Label = buildSeriesLabel(params.series1Type, params.series1Product, params.series1Expiry, params.series1Tail)
+  const series1Label = buildSeriesLabel(series1Config)
   const series2Label = hasSeries2
-    ? buildSeriesLabel(params.series2Type!, params.series2Product, params.series2Expiry!, params.series2Tail)
+    ? buildSeriesLabel({
+        type: params.series2Type!,
+        product: params.series2Product as SeriesConfig['product'],
+        expiry: params.series2Expiry!,
+        tail: params.series2Tail as SeriesConfig['tail'],
+      })
     : null
 
   return {
@@ -190,49 +337,279 @@ export async function fetchTimeseries(params: TimeseriesParams): Promise<Timeser
   }
 }
 
+export async function fetchTimeseriesCollection(
+  params: TimeseriesCollectionParams
+): Promise<UstfTimeseriesMultiResponse> {
+  const uniqueSeries = Array.from(
+    new Map(params.series.map((config) => [getSeriesConfigKey(config), config])).values()
+  )
+
+  const seriesWindow: SeriesWindow =
+    params.startDate || params.endDate
+      ? {
+          startDate: params.startDate,
+          endDate: params.endDate,
+        }
+      : {
+          interval: rangeToInterval(params.range ?? '6M'),
+        }
+
+  const series = await Promise.all(
+    uniqueSeries.map(async (config): Promise<UstfTimeseriesSeries> => {
+      const points = await fetchSingleSeriesPoints(config, seriesWindow)
+
+      return {
+        id: getSeriesConfigKey(config),
+        label: formatSeriesConfigLabel(config),
+        config,
+        points,
+        stats: computeStats(points.map((point) => point.value)),
+      }
+    })
+  )
+
+  const allDates = series.flatMap((entry) => entry.points.map((point) => point.asOf)).sort()
+  const warnings = series
+    .filter((entry) => entry.points.length === 0)
+    .map((entry) => `No data returned for ${entry.label}.`)
+
+  return {
+    startDate: allDates[0] ?? null,
+    endDate: allDates.at(-1) ?? null,
+    asOfDate: allDates.at(-1) ?? null,
+    series,
+    warnings,
+  }
+}
+
+export async function fetchComparisonSnapshot(): Promise<ComparisonSnapshotResponse> {
+  const params: Array<string> = []
+  const filters = STANDARD_PAIRS.map((pair) => {
+    params.push(
+      pair.series1.product,
+      pair.series1.expiry,
+      pair.series2.expiry,
+      pair.series2.tail
+    )
+    const base = params.length - 3
+    return `(
+      product = $${base}
+      AND expiry_label = $${base + 1}
+      AND swaption_expiry_label = $${base + 2}
+      AND swaption_tail_label = $${base + 3}
+    )`
+  })
+
+  const res = await query(
+    `SELECT
+        as_of_date::text AS as_of_date,
+        product,
+        expiry_label,
+        swaption_expiry_label,
+        swaption_tail_label,
+        ustf_atm_nvol_bps,
+        swaption_atm_nvol_bps,
+        updated_at
+     FROM ${COMPARISON_TABLE}
+     WHERE ${filters.join(' OR ')}
+     ORDER BY as_of_date`,
+    params
+  )
+
+  type SnapshotHistoryRow = {
+    asOfDate: string
+    updatedAt: string | null
+    listedVol: number | null
+    otcVol: number | null
+    spread: number | null
+  }
+
+  const historyByPair = new Map<string, SnapshotHistoryRow[]>()
+
+  for (const row of res.rows) {
+    const asOfDate = formatDbDate(row.as_of_date)
+    if (!asOfDate) {
+      continue
+    }
+
+    const pairKey = [
+      String(row.product ?? ''),
+      String(row.expiry_label ?? ''),
+      String(row.swaption_expiry_label ?? ''),
+      String(row.swaption_tail_label ?? ''),
+    ].join('|')
+    const listedVol = parseNumber(row.ustf_atm_nvol_bps)
+    const otcVol = parseNumber(row.swaption_atm_nvol_bps)
+    const spread =
+      listedVol !== null && otcVol !== null
+        ? listedVol - otcVol
+        : null
+
+    const entry: SnapshotHistoryRow = {
+      asOfDate,
+      updatedAt: formatDbTimestamp(row.updated_at),
+      listedVol,
+      otcVol,
+      spread,
+    }
+
+    const history = historyByPair.get(pairKey)
+    if (history) {
+      history.push(entry)
+    } else {
+      historyByPair.set(pairKey, [entry])
+    }
+  }
+
+  const rows = STANDARD_PAIRS.map((pair) => {
+    const pairKey = [
+      pair.series1.product,
+      pair.series1.expiry,
+      pair.series2.expiry,
+      pair.series2.tail,
+    ].join('|')
+    const history = historyByPair.get(pairKey) ?? []
+
+    let latestRow: SnapshotHistoryRow | null = null
+    for (const candidate of history) {
+      if (!latestRow) {
+        latestRow = candidate
+        continue
+      }
+
+      const candidateMillis = timestampToMillis(candidate.updatedAt)
+      const latestMillis = timestampToMillis(latestRow.updatedAt)
+      if (
+        candidateMillis > latestMillis ||
+        (candidateMillis === latestMillis && candidate.asOfDate > latestRow.asOfDate)
+      ) {
+        latestRow = candidate
+      }
+    }
+
+    return {
+      pairLabel: pair.label,
+      asOfDate: latestRow?.asOfDate ?? null,
+      updatedAt: latestRow?.updatedAt ?? null,
+      listedLabel: formatSeriesConfigLabel(pair.series1),
+      otcLabel: formatSeriesConfigLabel(pair.series2),
+      listedVol: latestRow?.listedVol ?? null,
+      otcVol: latestRow?.otcVol ?? null,
+      spread: latestRow?.spread ?? null,
+      spreadZScore: computeSeriesZScore(
+        latestRow?.spread ?? null,
+        history.map((entry) => entry.spread)
+      ),
+    }
+  })
+
+  const latestUpdatedAt =
+    rows
+      .map((row) => row.updatedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1) ?? null
+
+  return {
+    latestDate: getLatestSnapshotDate(rows),
+    latestUpdatedAt,
+    rows,
+  }
+}
+
 async function fetchSingleSeries(
-  type: AssetType,
-  product: string | undefined,
-  expiry: string,
-  tail: string | undefined,
+  config: SeriesConfig,
   interval: string,
 ): Promise<Map<string, number | null>> {
   const result = new Map<string, number | null>()
+  const points = await fetchSingleSeriesPoints(config, { interval })
 
-  if (type === 'ustf') {
-    if (!product) return result
-    const res = await query(
-      `SELECT as_of_date, atm_nvol_bps FROM ${USTF_TABLE}
-       WHERE product = $1 AND expiry_label = $2
-         AND as_of_date >= CURRENT_DATE - $3::interval
-       ORDER BY as_of_date`,
-      [product, expiry, interval]
-    )
-    for (const row of res.rows) {
-      result.set(String(row.as_of_date).slice(0, 10), parseNumber(row.atm_nvol_bps))
-    }
-  } else {
-    if (!tail) return result
-    const res = await query(
-      `SELECT as_of_date, atm_nvol_bps FROM ${SWAPTION_TABLE}
-       WHERE expiry_label = $1 AND tail_label = $2
-         AND as_of_date >= CURRENT_DATE - $3::interval
-       ORDER BY as_of_date`,
-      [expiry, tail, interval]
-    )
-    for (const row of res.rows) {
-      result.set(String(row.as_of_date).slice(0, 10), parseNumber(row.atm_nvol_bps))
-    }
+  for (const point of points) {
+    result.set(point.asOf, point.value)
   }
 
   return result
 }
 
-function buildSeriesLabel(type: AssetType, product?: string, expiry?: string, tail?: string): string {
-  if (type === 'ustf') {
-    return `${expiry} ${product} ATM`
+function buildSeriesLabel(config: SeriesConfig): string {
+  return formatSeriesConfigLabel(config)
+}
+
+async function fetchSingleSeriesPoints(
+  config: SeriesConfig,
+  window: SeriesWindow
+): Promise<Array<{ asOf: string; value: number | null }>> {
+  const rows: Array<{ asOf: string; value: number | null }> = []
+
+  if (config.type === 'ustf') {
+    if (!config.product) return rows
+
+    const params: Array<string> = [config.product, config.expiry]
+    const filters = ['product = $1', 'expiry_label = $2']
+
+    if (window.startDate) {
+      params.push(window.startDate)
+      filters.push(`as_of_date >= $${params.length}::date`)
+    } else if (window.interval) {
+      params.push(window.interval)
+      filters.push(`as_of_date >= CURRENT_DATE - $${params.length}::interval`)
+    }
+
+    if (window.endDate) {
+      params.push(window.endDate)
+      filters.push(`as_of_date <= $${params.length}::date`)
+    }
+
+    const res = await query(
+      `SELECT as_of_date::text AS as_of_date, atm_nvol_bps, delta_otm_vols, strike_offset_otm_vols
+       FROM ${USTF_TABLE}
+       WHERE ${filters.join(' AND ')}
+       ORDER BY as_of_date`,
+      params
+    )
+
+    for (const row of res.rows) {
+      const asOf = formatDbDate(row.as_of_date)
+      if (!asOf) continue
+      rows.push({ asOf, value: extractSeriesValue(config, row) })
+    }
+
+    return rows
   }
-  return `${expiry}x${tail} Swpn`
+
+  if (!config.tail) return rows
+
+  const params: Array<string> = [config.expiry, config.tail]
+  const filters = ['expiry_label = $1', 'tail_label = $2']
+
+  if (window.startDate) {
+    params.push(window.startDate)
+    filters.push(`as_of_date >= $${params.length}::date`)
+  } else if (window.interval) {
+    params.push(window.interval)
+    filters.push(`as_of_date >= CURRENT_DATE - $${params.length}::interval`)
+  }
+
+  if (window.endDate) {
+    params.push(window.endDate)
+    filters.push(`as_of_date <= $${params.length}::date`)
+  }
+
+  const res = await query(
+    `SELECT as_of_date::text AS as_of_date, atm_nvol_bps, delta_otm_vols, strike_offset_otm_vols
+     FROM ${SWAPTION_TABLE}
+     WHERE ${filters.join(' AND ')}
+     ORDER BY as_of_date`,
+    params
+  )
+
+  for (const row of res.rows) {
+    const asOf = formatDbDate(row.as_of_date)
+    if (!asOf) continue
+    rows.push({ asOf, value: extractSeriesValue(config, row) })
+  }
+
+  return rows
 }
 
 // ---------------------------------------------------------------------------

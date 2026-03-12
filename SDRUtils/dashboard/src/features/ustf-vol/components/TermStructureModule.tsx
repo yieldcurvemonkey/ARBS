@@ -6,8 +6,22 @@ import { SERIES_COLORS, SWAPTION_EXPIRIES, USTF_EXPIRIES } from '../constants'
 import { useUstfTermStructure } from '../hooks/useUstfTermStructure'
 import type { AssetType } from '../types'
 
+const LABEL_CLASS =
+  'text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500'
+const INPUT_CLASS =
+  'h-8 rounded-md border border-slate-700/80 bg-slate-950/80 px-3 text-[12px] text-slate-100 outline-none transition focus:border-slate-500'
+
 function today(): string {
   return new Date().toISOString().slice(0, 10)
+}
+
+function segmentButtonClass(active: boolean): string {
+  return [
+    'px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition',
+    active
+      ? 'bg-slate-100 text-slate-950'
+      : 'bg-slate-950/70 text-slate-300 hover:bg-slate-900 hover:text-white',
+  ].join(' ')
 }
 
 export function TermStructureModule() {
@@ -30,14 +44,14 @@ export function TermStructureModule() {
 
   const traces = useMemo(() => {
     if (!data?.dates?.length) return []
-    return data.dates.map((slice, idx) => ({
+    return data.dates.map((slice, index) => ({
       type: 'scatter' as const,
       mode: 'lines+markers' as const,
       name: slice.date,
-      x: slice.points.map((p) => p.label),
-      y: slice.points.map((p) => p.vol),
-      line: { color: SERIES_COLORS[idx % SERIES_COLORS.length], width: 2.5 },
-      marker: { size: 7, color: SERIES_COLORS[idx % SERIES_COLORS.length] },
+      x: slice.points.map((point) => point.label),
+      y: slice.points.map((point) => point.vol),
+      line: { color: SERIES_COLORS[index % SERIES_COLORS.length], width: 2.5 },
+      marker: { size: 7, color: SERIES_COLORS[index % SERIES_COLORS.length] },
       hovertemplate: `${slice.date}<br>%{x}<br>%{y:.2f} bpvol<extra></extra>`,
     }))
   }, [data])
@@ -55,21 +69,21 @@ export function TermStructureModule() {
       const layout = {
         template: 'plotly_dark',
         paper_bgcolor: 'rgba(2, 6, 23, 0)',
-        plot_bgcolor: 'rgba(2, 6, 23, 0.65)',
+        plot_bgcolor: 'rgba(2, 6, 23, 0.72)',
         autosize: true,
         height: 420,
-        margin: { t: 40, r: 24, b: 54, l: 72 },
+        margin: { t: 32, r: 20, b: 48, l: 64 },
         hovermode: 'x unified' as const,
         hoverlabel: {
-          bgcolor: 'rgba(15, 23, 42, 0.94)',
-          bordercolor: 'rgba(148, 163, 184, 0.25)',
+          bgcolor: 'rgba(15, 23, 42, 0.96)',
+          bordercolor: 'rgba(148, 163, 184, 0.22)',
           font: { color: '#e2e8f0', size: 11 },
         },
         legend: {
           orientation: 'h' as const,
           x: 0,
-          y: 1.12,
-          bgcolor: 'rgba(15, 23, 42, 0.55)',
+          y: 1.1,
+          bgcolor: 'rgba(15, 23, 42, 0.78)',
           bordercolor: 'rgba(148, 163, 184, 0.15)',
           borderwidth: 1,
           font: { color: '#cbd5e1', size: 11 },
@@ -77,19 +91,19 @@ export function TermStructureModule() {
         xaxis: {
           type: 'category' as const,
           showline: true,
-          linecolor: 'rgba(148, 163, 184, 0.35)',
+          linecolor: 'rgba(148, 163, 184, 0.3)',
           tickfont: { color: '#94a3b8', size: 11 },
-          gridcolor: 'rgba(148, 163, 184, 0.14)',
+          gridcolor: 'rgba(71, 85, 105, 0.18)',
           title: assetType === 'ustf' ? 'Product' : 'Tail',
           titlefont: { color: '#94a3b8', size: 11 },
         },
         yaxis: {
           title: 'NVOL (bpvol)',
           showline: true,
-          linecolor: 'rgba(148, 163, 184, 0.35)',
+          linecolor: 'rgba(148, 163, 184, 0.3)',
           tickfont: { color: '#94a3b8', size: 10 },
           titlefont: { color: '#94a3b8', size: 11 },
-          gridcolor: 'rgba(148, 163, 184, 0.14)',
+          gridcolor: 'rgba(71, 85, 105, 0.18)',
         },
         uirevision: 'ustf-term-structure',
       }
@@ -101,120 +115,126 @@ export function TermStructureModule() {
     return () => {
       disposed = true
       if (plotly && container) {
-        try { plotly.purge(container) } catch { /* no-op */ }
+        try {
+          plotly.purge(container)
+        } catch {
+          // no-op
+        }
       }
     }
   }, [traces, assetType])
 
   const addDate = () => {
-    const d = dateInput.trim()
-    if (d && !dates.includes(d) && dates.length < 5) {
-      setDates([...dates, d].sort())
+    const nextDate = dateInput.trim()
+    if (nextDate && !dates.includes(nextDate) && dates.length < 5) {
+      setDates([...dates, nextDate].sort())
       setDateInput('')
     }
   }
 
-  const removeDate = (d: string) => {
-    setDates(dates.filter((x) => x !== d))
+  const removeDate = (dateToRemove: string) => {
+    setDates(dates.filter((date) => date !== dateToRemove))
   }
 
   return (
     <div className="space-y-4">
-      {/* Controls */}
-      <div className="flex flex-wrap items-center gap-4">
-        {/* Asset type toggle */}
-        <div className="flex overflow-hidden rounded-lg border border-slate-700">
-          {(['ustf', 'swaption'] as AssetType[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => {
-                setAssetType(t)
-                setExpiry('1M')
-              }}
-              className={`px-3 py-1.5 text-xs font-semibold ${
-                assetType === t
-                  ? 'bg-slate-100 text-slate-950'
-                  : 'bg-slate-900/70 text-slate-300 hover:text-white'
-              }`}
-            >
-              {t === 'ustf' ? 'USTF' : 'Swaption'}
-            </button>
-          ))}
+      <div className="grid gap-3 rounded-lg border border-slate-800/80 bg-slate-950/45 p-3 xl:grid-cols-[auto_auto_auto_1fr]">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className={LABEL_CLASS}>Asset</span>
+          <div className="flex overflow-hidden rounded-md border border-slate-700/80">
+            {(['ustf', 'swaption'] as AssetType[]).map((nextAssetType) => (
+              <button
+                key={nextAssetType}
+                type="button"
+                onClick={() => {
+                  setAssetType(nextAssetType)
+                  setExpiry('1M')
+                }}
+                className={segmentButtonClass(assetType === nextAssetType)}
+              >
+                {nextAssetType === 'ustf' ? 'USTF' : 'OTC'}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Expiry */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">Expiry</span>
+        <div className="flex items-center gap-3">
+          <span className={LABEL_CLASS}>Expiry</span>
           <select
             value={expiry}
-            onChange={(e) => setExpiry(e.target.value)}
-            className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-xs text-slate-200"
+            onChange={(event) => setExpiry(event.target.value)}
+            className={INPUT_CLASS}
           >
-            {expiries.map((e) => (
-              <option key={e} value={e}>{e}</option>
+            {expiries.map((currentExpiry) => (
+              <option key={currentExpiry} value={currentExpiry}>
+                {currentExpiry}
+              </option>
             ))}
           </select>
         </div>
 
-        {/* Strike offset */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">Strike Offset (bps)</span>
+        <div className="flex items-center gap-3">
+          <span className={LABEL_CLASS}>Strike</span>
           <input
             type="number"
             value={strikeOffsetBps}
-            onChange={(e) => setStrikeOffsetBps(Number(e.target.value) || 0)}
-            className="w-20 rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-xs text-slate-200"
+            onChange={(event) => setStrikeOffsetBps(Number(event.target.value) || 0)}
+            className={`${INPUT_CLASS} w-24 font-mono tabular-nums`}
           />
         </div>
       </div>
 
-      {/* Date picker */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-slate-400">Dates</span>
-        {dates.map((d) => (
-          <span
-            key={d}
-            className="flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 text-xs text-slate-200"
-          >
-            {d}
-            <button
-              onClick={() => removeDate(d)}
-              className="ml-0.5 text-slate-500 hover:text-white"
+      <div className="rounded-lg border border-slate-800/80 bg-slate-950/45 p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={LABEL_CLASS}>Dates</span>
+          {dates.map((date) => (
+            <span
+              key={date}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-700/80 bg-slate-950/80 px-2.5 py-1 font-mono text-[11px] text-slate-200"
             >
-              x
-            </button>
-          </span>
-        ))}
-        {dates.length < 5 && (
-          <div className="flex items-center gap-1">
-            <input
-              type="date"
-              value={dateInput}
-              onChange={(e) => setDateInput(e.target.value)}
-              className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1 text-xs text-slate-200"
-            />
-            <button
-              onClick={addDate}
-              className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1 text-xs text-sky-400 hover:text-sky-300"
-            >
-              Add
-            </button>
-          </div>
-        )}
+              {date}
+              <button
+                type="button"
+                onClick={() => removeDate(date)}
+                className="text-slate-500 transition hover:text-white"
+              >
+                x
+              </button>
+            </span>
+          ))}
+
+          {dates.length < 5 ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="date"
+                value={dateInput}
+                onChange={(event) => setDateInput(event.target.value)}
+                className={INPUT_CLASS}
+              />
+              <button
+                type="button"
+                onClick={addDate}
+                className="rounded-md border border-slate-700/80 bg-slate-950/80 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-300 transition hover:border-slate-500 hover:text-white"
+              >
+                Add
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
 
-      {error && (
-        <div className="rounded-xl border border-rose-800/50 bg-rose-950/30 px-4 py-2 text-sm text-rose-300">
+      {error ? (
+        <div className="rounded-lg border border-rose-900/50 bg-rose-950/35 px-4 py-2 text-sm text-rose-200">
           {error}
         </div>
-      )}
+      ) : null}
 
-      <div className="relative">
-        {loading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/50 backdrop-blur-sm">
+      <div className="relative overflow-hidden rounded-lg border border-slate-800/80 bg-slate-950/65 p-2">
+        {loading ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/55 backdrop-blur-sm">
             <div className="text-sm text-slate-400">Loading...</div>
           </div>
-        )}
+        ) : null}
         <div ref={chartRef} style={{ height: 420 }} className="w-full" />
       </div>
     </div>

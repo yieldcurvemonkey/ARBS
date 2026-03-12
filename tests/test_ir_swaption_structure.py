@@ -125,3 +125,27 @@ def test_vega_01_target_scales_package_notional(monkeypatch, structure_map):
     assert rws == [1.0]
     assert len(package) == 1
     assert abs(package[0].notional * 0.00032) == pytest.approx(50_000.0)
+
+
+def test_delta_strike_suffix_overrides_resolution_option_type(structure_map):
+    dates = (dt.date(2027, 3, 5), dt.date(2027, 3, 5), dt.date(2028, 3, 4))
+
+    payer_delta_strike = structure_map._resolve_strike(
+        "25DP",
+        option_type="receiver",
+        exercise_date=dates[0],
+        underlying_effective_date=dates[1],
+        underlying_maturity_date=dates[2],
+        notional=100_000_000.0,
+    )
+    receiver_delta_strike = structure_map._resolve_strike(
+        "25DR",
+        option_type="payer",
+        exercise_date=dates[0],
+        underlying_effective_date=dates[1],
+        underlying_maturity_date=dates[2],
+        notional=100_000_000.0,
+    )
+
+    assert payer_delta_strike > 0.04
+    assert receiver_delta_strike < 0.04

@@ -106,6 +106,24 @@ def test_atmf_offset_does_not_override_non_outright_structure():
     assert q.structure == IRSwaptionStructure.STRADDLE
 
 
+@pytest.mark.parametrize(
+    ("strike_spec", "expected_structure"),
+    [
+        ("25DP", IRSwaptionStructure.PAYER),
+        ("25DR", IRSwaptionStructure.RECEIVER),
+    ],
+)
+def test_delta_strike_infers_outright_direction(strike_spec, expected_structure):
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        shorthand="1Yx1Y",
+        strike=strike_spec,
+        structure=IRSwaptionStructure.RECEIVER,
+    )
+    assert q.structure == expected_structure
+    assert q.structure_id == expected_structure
+
+
 def test_shorthand_conflict_with_explicit_tenor_raises():
     with pytest.raises(ValueError, match="conflicts"):
         IRSwaptionQuery(
@@ -184,6 +202,59 @@ def test_trade_date_conversion_hydrates_explicit_dates_and_strike(monkeypatch):
     assert skw["underlying_effective_date"] == dt.date(2027, 3, 2)
     assert skw["underlying_maturity_date"] == dt.date(2032, 2, 29) or skw["underlying_maturity_date"] == dt.date(2032, 3, 1)
     assert resolved.strike == pytest.approx(0.0410, rel=0, abs=1e-8)
+
+
+@pytest.mark.parametrize(
+    ("strike_spec", "expected_structure", "expected_strike"),
+    [
+        ("25DP", IRSwaptionStructure.PAYER, 0.042023469250588245),
+        ("25DR", IRSwaptionStructure.RECEIVER, 0.037976530749411756),
+    ],
+)
+def test_trade_date_delta_strike_resolution(monkeypatch, strike_spec, expected_structure, expected_strike):
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        expiry="1Y",
+        tail="1Y",
+        strike=strike_spec,
+        trade_date=dt.date(2026, 3, 2),
+    )
+
+    class _FakeCurve:
+        @staticmethod
+        def calendar_advance(d, tenor):
+            token = str(tenor).upper()
+            if token.endswith("Y"):
+                return d + dt.timedelta(days=365 * int(token[:-1]))
+            raise ValueError(token)
+
+        @staticmethod
+        def build_irswap(**kwargs):
+            return kwargs
+
+        @staticmethod
+        def fair_rate(_swap):
+            return 0.0400
+
+    class _FakeVol:
+        @staticmethod
+        def volatility(*args, **kwargs):
+            _ = args, kwargs
+            return 0.0030
+
+    class _FakeContext:
+        curve = _FakeCurve()
+        vol_handle = _FakeVol()
+
+    monkeypatch.setattr(query_module, "leg_model_vol", lambda *a, **k: 0.0030)
+    monkeypatch.setattr(query_module, "leg_tte_years", lambda *a, **k: 1.0)
+    monkeypatch.setattr(query_module, "leg_forward_rate", lambda *a, **k: 0.0400)
+
+    resolved = q.resolve_query(dt.date(2026, 3, 5), pricer_or_curve=_FakeContext())
+
+    assert q.structure == expected_structure
+    assert resolved.structure == expected_structure
+    assert resolved.strike == pytest.approx(expected_strike, rel=0, abs=1e-8)
 
 
 def test_wrapper_expression_generation():

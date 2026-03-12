@@ -6,7 +6,17 @@ import pytest
 
 from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMarketContext
 from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
-from Query.IRSwaptions.pricer import IRSwaptionPricable, leg_charm, leg_metrics, leg_spot_npv, leg_theta_1d, leg_veta
+from Query.IRSwaptions.pricer import (
+    IRSwaptionPricable,
+    leg_charm,
+    leg_forward_rate,
+    leg_implied_normal_vol_bps,
+    leg_metrics,
+    leg_model_vol,
+    leg_spot_npv,
+    leg_theta_1d,
+    leg_veta,
+)
 
 
 pricer_module = importlib.import_module("Query.IRSwaptions.pricer")
@@ -98,7 +108,13 @@ class _StrikeSkewCube:
         return 0.0090 if strike >= 0.03 else 0.0110
 
 
-def _make_context(as_of: dt.date, *, with_cube: bool) -> IRSwaptionMarketContext:
+def _make_context(
+    as_of: dt.date,
+    *,
+    with_cube: bool,
+    provider: str = "TEST",
+    source: str = "TEST-QL",
+) -> IRSwaptionMarketContext:
     ql_date = ql.Date(as_of.day, as_of.month, as_of.year)
     ql.Settings.instance().evaluationDate = ql_date
 
@@ -121,10 +137,10 @@ def _make_context(as_of: dt.date, *, with_cube: bool) -> IRSwaptionMarketContext
         swap_index=swap_index,
         vol_handle=vol_handle,
         pricing_engine=engine,
-        provider="TEST",
+        provider=provider,
         engine="QL",
         surface_type="atmf_normal",
-        source="TEST-QL",
+        source=source,
         metadata=metadata,
     )
 
@@ -163,3 +179,51 @@ def test_cube_backed_pricing_uses_strike_specific_vols_for_premiums():
     assert leg_spot_npv(ctx_cube, payer) != pytest.approx(leg_spot_npv(ctx_cube, receiver))
     assert receiver_metrics["NVOL"] > payer_metrics["NVOL"]
     assert receiver_metrics["FWD_PREM"] > payer_metrics["FWD_PREM"]
+
+
+def test_enhanced_provider_uses_surface_for_atm_queries():
+    as_of = dt.date(2026, 3, 10)
+    ctx_gsquant = _make_context(as_of, with_cube=False)
+    ctx_enhanced = _make_context(
+        as_of,
+        with_cube=True,
+        provider="GSQUANT_MC_ENHANCED",
+        source="GSQUANT_MC_ENHANCED-QL",
+    )
+
+    atm_strike = leg_forward_rate(
+        ctx_gsquant,
+        IRSwaptionPricable(
+            option_type="payer",
+            exercise_date=dt.date(2027, 3, 10),
+            underlying_effective_date=dt.date(2027, 3, 10),
+            underlying_maturity_date=dt.date(2028, 3, 10),
+            strike=0.0,
+            notional=1.0,
+        ),
+    )
+
+    atm_leg = IRSwaptionPricable(
+        option_type="payer",
+        exercise_date=dt.date(2027, 3, 10),
+        underlying_effective_date=dt.date(2027, 3, 10),
+        underlying_maturity_date=dt.date(2028, 3, 10),
+        strike=atm_strike,
+        notional=100_000_000.0,
+    )
+    otm_leg = IRSwaptionPricable(
+        option_type="payer",
+        exercise_date=dt.date(2027, 3, 10),
+        underlying_effective_date=dt.date(2027, 3, 10),
+        underlying_maturity_date=dt.date(2028, 3, 10),
+        strike=0.04,
+        notional=100_000_000.0,
+    )
+
+    assert leg_model_vol(ctx_enhanced, atm_leg) == pytest.approx(0.01)
+    assert leg_implied_normal_vol_bps(ctx_enhanced, atm_leg) == pytest.approx(
+        leg_implied_normal_vol_bps(ctx_gsquant, atm_leg)
+    )
+    assert leg_spot_npv(ctx_enhanced, atm_leg) == pytest.approx(leg_spot_npv(ctx_gsquant, atm_leg))
+
+    assert leg_model_vol(ctx_enhanced, otm_leg) == pytest.approx(0.0090)

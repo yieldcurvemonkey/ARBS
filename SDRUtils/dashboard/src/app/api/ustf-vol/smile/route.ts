@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server'
 import { fetchSmile } from '@/lib/ustf-vol/data'
 import type { AssetType, SmileXAxis } from '@/features/ustf-vol/types'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
