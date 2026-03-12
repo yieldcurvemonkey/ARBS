@@ -37,6 +37,7 @@ from RVUtils.ImpliedDistribution._types import (
 )
 from RVUtils.ImpliedDistribution.implied_distribution import SFRImpliedDistribution
 from RVUtils.ImpliedDistribution.plotting import (
+    plot_distribution_change,
     plot_gaussian_mixture,
     plot_rnd_comparison,
     plot_rnd_density,
@@ -54,6 +55,7 @@ __all__ = [
     "BreedenLitzenbergerResult",
     "GaussianMixtureResult",
     "ImpliedDistributionSnapshot",
+    "plot_distribution_change",
     "plot_rnd_density",
     "plot_scenario_probabilities",
     "plot_gaussian_mixture",

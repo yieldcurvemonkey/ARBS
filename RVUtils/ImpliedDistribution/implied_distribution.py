@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import datetime
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -145,6 +145,24 @@ class SFRImpliedDistribution:
 
                 warnings.warn(f"Failed to extract distribution for {as_of}: {exc}")
         return results
+
+    def compare(
+        self,
+        smile_before: "STIRFutureOptionSABRSmile",
+        smile_after: "STIRFutureOptionSABRSmile",
+        *,
+        scenario_config: Optional[FedScenarioConfig] = None,
+        run_bl: bool = True,
+        run_gm: bool = True,
+    ) -> Tuple["ImpliedDistributionSnapshot", "ImpliedDistributionSnapshot"]:
+        """Extract distributions from two smiles (same contract, different dates).
+
+        Returns (snapshot_before, snapshot_after) for use with
+        ``plot_distribution_change()``.
+        """
+        snap_before = self.extract(smile_before, scenario_config=scenario_config, run_bl=run_bl, run_gm=run_gm)
+        snap_after = self.extract(smile_after, scenario_config=scenario_config, run_bl=run_bl, run_gm=run_gm)
+        return snap_before, snap_after
 
     @staticmethod
     def scenario_weights_to_dataframe(
