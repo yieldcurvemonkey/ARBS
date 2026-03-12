@@ -27,6 +27,7 @@ Usage::
     plot_snapshot_dashboard(snapshot)
 """
 
+from RVUtils.ImpliedDistribution._strip_utils import STRIP_PRESETS, resolve_strip_symbols
 from RVUtils.ImpliedDistribution._types import (
     BreedenLitzenbergerResult,
     FedScenarioConfig,
@@ -34,6 +35,7 @@ from RVUtils.ImpliedDistribution._types import (
     ImpliedDistributionSnapshot,
     RNDInput,
     ScenarioDefinition,
+    StripComparisonResult,
 )
 from RVUtils.ImpliedDistribution.implied_distribution import SFRImpliedDistribution
 from RVUtils.ImpliedDistribution.plotting import (
@@ -45,6 +47,7 @@ from RVUtils.ImpliedDistribution.plotting import (
     plot_scenario_weights_bar,
     plot_scenario_weights_timeseries,
     plot_snapshot_dashboard,
+    plot_strip_distribution_change,
 )
 
 __all__ = [
@@ -55,6 +58,9 @@ __all__ = [
     "BreedenLitzenbergerResult",
     "GaussianMixtureResult",
     "ImpliedDistributionSnapshot",
+    "StripComparisonResult",
+    "STRIP_PRESETS",
+    "resolve_strip_symbols",
     "plot_distribution_change",
     "plot_rnd_density",
     "plot_scenario_probabilities",
@@ -63,4 +69,5 @@ __all__ = [
     "plot_scenario_weights_timeseries",
     "plot_rnd_comparison",
     "plot_snapshot_dashboard",
+    "plot_strip_distribution_change",
 ]
