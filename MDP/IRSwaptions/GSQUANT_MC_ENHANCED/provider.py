@@ -327,9 +327,10 @@ def get_enhanced_vol_surfaces(
         gs_atm_matrix = np.empty((len(EXPIRY_LABELS), len(TAIL_LABELS)), dtype=float)
         for i, exp in enumerate(EXPIRY_LABELS):
             T_period = _label_to_ql_period(exp)
+            option_date = gs_handle.optionDateFromTenor(T_period)
             for j, tail in enumerate(TAIL_LABELS):
                 S_period = _label_to_ql_period(tail)
-                gs_atm_matrix[i, j] = float(gs_handle.volatility(T_period, S_period, 0.0, True))
+                gs_atm_matrix[i, j] = float(gs_handle.volatility(option_date, S_period, 0.0, True))
 
         enhanced = EnhancedSabrVolCube(
             base_cube=mc_cube,
