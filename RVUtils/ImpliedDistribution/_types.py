@@ -101,6 +101,32 @@ class ImpliedDistributionSnapshot:
     gm_result: Optional[GaussianMixtureResult]
 
 
+@dataclass(frozen=True)
+class StripComparisonResult:
+    """Combined result comparing implied distributions across a strip of contracts."""
+
+    symbols: List[str]
+    date_before: datetime.date
+    date_after: datetime.date
+    snapshots_before: Dict[str, ImpliedDistributionSnapshot]
+    snapshots_after: Dict[str, ImpliedDistributionSnapshot]
+    strip_label: Optional[str] = None  # e.g. "whites", "2y", or None for custom
+
+    @property
+    def n_contracts(self) -> int:
+        return len(self.symbols)
+
+    def forward_rates(self) -> Dict[str, Tuple[float, float]]:
+        """Return {symbol: (fwd_before, fwd_after)} for contracts with BL results."""
+        result: Dict[str, Tuple[float, float]] = {}
+        for sym in self.symbols:
+            bl1 = self.snapshots_before.get(sym)
+            bl2 = self.snapshots_after.get(sym)
+            if bl1 and bl1.bl_result and bl2 and bl2.bl_result:
+                result[sym] = (bl1.bl_result.input.forward_rate, bl2.bl_result.input.forward_rate)
+        return result
+
+
 @dataclass
 class FedScenarioConfig:
     """Configurable scenario definitions for Gaussian mixture decomposition."""

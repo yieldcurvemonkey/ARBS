@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Optional
+from typing import Dict, Optional, Sequence
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,6 +13,7 @@ from RVUtils.ImpliedDistribution._types import (
     BreedenLitzenbergerResult,
     GaussianMixtureResult,
     ImpliedDistributionSnapshot,
+    StripComparisonResult,
 )
 
 
@@ -475,3 +476,386 @@ def plot_snapshot_dashboard(
 
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     return fig
+
+
+def plot_strip_distribution_change(
+    result: StripComparisonResult,
+    *,
+    figsize: Optional[tuple] = None,
+    show_components: bool = False,
+) -> plt.Figure:
+    """Multi-panel dashboard comparing implied distributions across a strip of contracts.
+
+    Layout:
+        Row 0:       Forward curve shift (left) + scenario weight heatmap (right)
+        Rows 1..N:   Per-contract density shift (left) + scenario weight bars (right)
+        Bottom row:  Summary statistics table
+
+    Parameters
+    ----------
+    result : StripComparisonResult
+        Output of ``SFRImpliedDistribution.compare_strip()``.
+    figsize : tuple, optional
+        Figure size. Auto-scaled if None.
+    show_components : bool
+        If True, show individual GM components on density panels.
+    """
+    n = result.n_contracts
+    strip_title = result.strip_label.upper() if result.strip_label else "Custom Strip"
+    label1 = str(result.date_before)
+    label2 = str(result.date_after)
+
+    # Layout: 1 summary row + N contract rows + 1 table row
+    n_rows = 1 + n + 1
+    if figsize is None:
+        figsize = (20, 3.5 * n_rows)
+
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(n_rows, 2, hspace=0.4, wspace=0.3, height_ratios=[3] + [3] * n + [2.5])
+
+    fig.suptitle(
+        f"Strip Distribution Change \u2014 {strip_title}:  {label1}  \u2192  {label2}",
+        fontsize=15,
+        fontweight="bold",
+        y=0.995,
+    )
+
+    # ── Row 0, Left: Forward rate curve shift ────────────────────────────
+    ax_fwd = fig.add_subplot(gs[0, 0])
+    fwd1_vals = []
+    fwd2_vals = []
+    fwd_syms = []
+    for sym in result.symbols:
+        snap1 = result.snapshots_before.get(sym)
+        snap2 = result.snapshots_after.get(sym)
+        bl1 = snap1.bl_result if snap1 else None
+        bl2 = snap2.bl_result if snap2 else None
+        if bl1 and bl2:
+            fwd_syms.append(sym)
+            fwd1_vals.append(bl1.input.forward_rate)
+            fwd2_vals.append(bl2.input.forward_rate)
+
+    if fwd_syms:
+        x = np.arange(len(fwd_syms))
+        ax_fwd.plot(x, fwd1_vals, "o-", color="#1f77b4", linewidth=2, markersize=7, label=label1)
+        ax_fwd.plot(x, fwd2_vals, "s-", color="#d62728", linewidth=2, markersize=7, label=label2)
+        # Annotate deltas
+        for i, (f1, f2) in enumerate(zip(fwd1_vals, fwd2_vals)):
+            delta = f2 - f1
+            sign = "+" if delta >= 0 else ""
+            color = "green" if delta <= 0 else "red"  # lower rate = easing = green
+            ax_fwd.annotate(
+                f"{sign}{delta:.2f}%",
+                xy=(i, f2),
+                xytext=(0, 12),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8,
+                fontweight="bold",
+                color=color,
+            )
+        ax_fwd.set_xticks(x)
+        ax_fwd.set_xticklabels(fwd_syms, fontsize=9)
+        ax_fwd.legend(fontsize=9)
+    ax_fwd.set_title("Forward Rate Curve Shift", fontsize=11)
+    ax_fwd.set_ylabel("Rate (%)")
+    ax_fwd.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+    ax_fwd.grid(True, alpha=0.3)
+
+    # ── Row 0, Right: Scenario weight change heatmap ─────────────────────
+    ax_heat = fig.add_subplot(gs[0, 1])
+    _plot_strip_weight_heatmap(result, ax=ax_heat, label1=label1, label2=label2)
+
+    # ── Rows 1..N: Per-contract density shift + weight bars ──────────────
+    for i, sym in enumerate(result.symbols):
+        row = i + 1
+        snap1 = result.snapshots_before.get(sym)
+        snap2 = result.snapshots_after.get(sym)
+
+        # Left: BL density overlay
+        ax_dens = fig.add_subplot(gs[row, 0])
+        _plot_contract_density_shift(snap1, snap2, sym=sym, ax=ax_dens, label1=label1, label2=label2)
+
+        # Right: GM weight comparison
+        ax_wt = fig.add_subplot(gs[row, 1])
+        _plot_contract_weight_comparison(snap1, snap2, sym=sym, ax=ax_wt, label1=label1, label2=label2)
+
+    # ── Bottom row: Summary table ────────────────────────────────────────
+    ax_tbl = fig.add_subplot(gs[n_rows - 1, :])
+    ax_tbl.axis("off")
+    _plot_strip_summary_table(result, ax=ax_tbl, label1=label1, label2=label2)
+
+    return fig
+
+
+def _plot_strip_weight_heatmap(
+    result: StripComparisonResult,
+    *,
+    ax: plt.Axes,
+    label1: str,
+    label2: str,
+) -> None:
+    """Scenario weight delta heatmap: contracts on y-axis, scenarios on x-axis."""
+    # Collect scenario labels from the first available GM result
+    scenario_labels = None
+    for sym in result.symbols:
+        for snap_dict in [result.snapshots_after, result.snapshots_before]:
+            snap = snap_dict.get(sym)
+            if snap and snap.gm_result:
+                scenario_labels = [s.label for s in snap.gm_result.scenarios]
+                break
+        if scenario_labels:
+            break
+
+    if scenario_labels is None:
+        ax.text(0.5, 0.5, "No GM results available", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title("Scenario Weight Changes (\u0394pp)")
+        return
+
+    n_syms = len(result.symbols)
+    n_scen = len(scenario_labels)
+    delta_matrix = np.full((n_syms, n_scen), np.nan)
+
+    for i, sym in enumerate(result.symbols):
+        snap1 = result.snapshots_before.get(sym)
+        snap2 = result.snapshots_after.get(sym)
+        gm1 = snap1.gm_result if snap1 else None
+        gm2 = snap2.gm_result if snap2 else None
+        if gm1 and gm2:
+            w1_map = {s.label: float(w) for s, w in zip(gm1.scenarios, gm1.weights)}
+            w2_map = {s.label: float(w) for s, w in zip(gm2.scenarios, gm2.weights)}
+            for j, lbl in enumerate(scenario_labels):
+                w1 = w1_map.get(lbl, 0.0)
+                w2 = w2_map.get(lbl, 0.0)
+                delta_matrix[i, j] = (w2 - w1) * 100  # percentage points
+
+    # Plot heatmap
+    vmax = np.nanmax(np.abs(delta_matrix)) if not np.all(np.isnan(delta_matrix)) else 10
+    vmax = max(vmax, 1.0)
+    im = ax.imshow(delta_matrix, cmap="RdYlGn_r", aspect="auto", vmin=-vmax, vmax=vmax)
+
+    ax.set_xticks(range(n_scen))
+    ax.set_xticklabels([_shorten_scenario_label(lbl) for lbl in scenario_labels], fontsize=7, rotation=45, ha="right")
+    ax.set_yticks(range(n_syms))
+    ax.set_yticklabels(result.symbols, fontsize=9)
+
+    # Annotate cells
+    for i in range(n_syms):
+        for j in range(n_scen):
+            val = delta_matrix[i, j]
+            if not np.isnan(val) and abs(val) >= 0.5:
+                sign = "+" if val > 0 else ""
+                ax.text(j, i, f"{sign}{val:.1f}", ha="center", va="center", fontsize=7, fontweight="bold")
+
+    plt.colorbar(im, ax=ax, label="\u0394 Weight (pp)", shrink=0.8)
+    ax.set_title(f"Scenario Weight Changes ({label1} \u2192 {label2})", fontsize=11)
+
+
+def _shorten_scenario_label(label: str) -> str:
+    """Shorten scenario labels for heatmap display."""
+    # e.g. "3 cuts (3.58%)" -> "3 cuts"
+    paren_idx = label.find("(")
+    if paren_idx > 0:
+        return label[:paren_idx].strip()
+    return label
+
+
+def _plot_contract_density_shift(
+    snap1: Optional[ImpliedDistributionSnapshot],
+    snap2: Optional[ImpliedDistributionSnapshot],
+    *,
+    sym: str,
+    ax: plt.Axes,
+    label1: str,
+    label2: str,
+) -> None:
+    """Single-contract BL density overlay (compact version)."""
+    bl1 = snap1.bl_result if snap1 else None
+    bl2 = snap2.bl_result if snap2 else None
+
+    if bl1 is not None and bl2 is not None:
+        # Common grid
+        lo = min(bl1.strike_grid_rate[0], bl2.strike_grid_rate[0])
+        hi = max(bl1.strike_grid_rate[-1], bl2.strike_grid_rate[-1])
+        common = np.linspace(lo, hi, 1500)
+        d1 = np.interp(common, bl1.strike_grid_rate, bl1.rnd_density)
+        d2 = np.interp(common, bl2.strike_grid_rate, bl2.rnd_density)
+
+        ax.plot(common, d1, color="#1f77b4", linewidth=1.5, label=label1)
+        ax.plot(common, d2, color="#d62728", linewidth=1.5, label=label2)
+        diff = d2 - d1
+        ax.fill_between(common, d1, d2, where=diff > 0, alpha=0.2, color="green")
+        ax.fill_between(common, d1, d2, where=diff < 0, alpha=0.2, color="red")
+
+        # Forward lines
+        ax.axvline(bl1.input.forward_rate, color="#1f77b4", linestyle="--", linewidth=0.7, alpha=0.5)
+        ax.axvline(bl2.input.forward_rate, color="#d62728", linestyle="--", linewidth=0.7, alpha=0.5)
+
+        # Set visible range
+        vis_lo = min(bl1.percentile(1), bl2.percentile(1))
+        vis_hi = max(bl1.percentile(99), bl2.percentile(99))
+        ax.set_xlim(vis_lo, vis_hi)
+
+        # Annotations
+        delta_fwd = bl2.input.forward_rate - bl1.input.forward_rate
+        delta_std = bl2.std_rate - bl1.std_rate
+        info_text = f"\u0394fwd={delta_fwd:+.2f}%  \u0394\u03c3={delta_std:+.3f}%"
+        ax.text(
+            0.02, 0.95, info_text, transform=ax.transAxes,
+            fontsize=7, va="top", ha="left",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="wheat", alpha=0.7),
+        )
+        ax.legend(fontsize=7, loc="upper right")
+    elif bl1 is not None or bl2 is not None:
+        bl = bl1 or bl2
+        lbl = label1 if bl1 else label2
+        ax.plot(bl.strike_grid_rate, bl.rnd_density, color="black", linewidth=1.5, label=lbl)
+        ax.legend(fontsize=7)
+    else:
+        ax.text(0.5, 0.5, "No BL data", ha="center", va="center", transform=ax.transAxes)
+
+    ax.set_title(f"{sym} \u2014 Density Shift", fontsize=10)
+    ax.set_xlabel("Rate (%)", fontsize=8)
+    ax.set_ylabel("Density", fontsize=8)
+    ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+    ax.grid(True, alpha=0.3)
+
+
+def _plot_contract_weight_comparison(
+    snap1: Optional[ImpliedDistributionSnapshot],
+    snap2: Optional[ImpliedDistributionSnapshot],
+    *,
+    sym: str,
+    ax: plt.Axes,
+    label1: str,
+    label2: str,
+) -> None:
+    """Single-contract scenario weight comparison (paired horizontal bars)."""
+    gm1 = snap1.gm_result if snap1 else None
+    gm2 = snap2.gm_result if snap2 else None
+
+    if gm1 is not None and gm2 is not None:
+        labels_s = [s.label for s in gm2.scenarios]
+        w1_map = {s.label: float(w) for s, w in zip(gm1.scenarios, gm1.weights)}
+        w1s = np.array([w1_map.get(lbl, 0.0) for lbl in labels_s]) * 100
+        w2s = np.array([float(w) for w in gm2.weights]) * 100
+        deltas = w2s - w1s
+
+        y = np.arange(len(labels_s))
+        bar_h = 0.35
+        ax.barh(y - bar_h / 2, w1s, bar_h, color="#1f77b4", alpha=0.8, label=label1)
+        ax.barh(y + bar_h / 2, w2s, bar_h, color="#d62728", alpha=0.8, label=label2)
+
+        for i, (w1, w2, d) in enumerate(zip(w1s, w2s, deltas)):
+            x_pos = max(w1, w2) + 1
+            if abs(d) >= 0.5:
+                sign = "+" if d >= 0 else ""
+                color = "green" if d >= 0 else "red"
+                ax.text(x_pos, i, f"{sign}{d:.1f}pp", va="center", fontsize=7, color=color, fontweight="bold")
+
+        ax.set_yticks(list(y))
+        ax.set_yticklabels([_shorten_scenario_label(lbl) for lbl in labels_s], fontsize=7)
+        ax.set_xlabel("Weight (%)", fontsize=8)
+        ax.legend(fontsize=7, loc="lower right")
+    elif gm1 is not None or gm2 is not None:
+        gm = gm1 or gm2
+        lbl = label1 if gm1 else label2
+        labels_s = [s.label for s in gm.scenarios]
+        ws = gm.weights * 100
+        y = np.arange(len(labels_s))
+        ax.barh(y, ws, color="#1f77b4" if gm1 else "#d62728", alpha=0.8, label=lbl)
+        ax.set_yticks(list(y))
+        ax.set_yticklabels([_shorten_scenario_label(lbl) for lbl in labels_s], fontsize=7)
+        ax.legend(fontsize=7)
+    else:
+        ax.text(0.5, 0.5, "No GM data", ha="center", va="center", transform=ax.transAxes)
+
+    ax.set_title(f"{sym} \u2014 Scenario Weights", fontsize=10)
+    ax.grid(True, axis="x", alpha=0.3)
+
+
+def _plot_strip_summary_table(
+    result: StripComparisonResult,
+    *,
+    ax: plt.Axes,
+    label1: str,
+    label2: str,
+) -> None:
+    """Summary statistics table across the strip."""
+    rows = []
+    for sym in result.symbols:
+        snap1 = result.snapshots_before.get(sym)
+        snap2 = result.snapshots_after.get(sym)
+        bl1 = snap1.bl_result if snap1 else None
+        bl2 = snap2.bl_result if snap2 else None
+
+        if bl1 and bl2:
+            rows.append([
+                sym,
+                f"{bl1.input.forward_rate:.3f}%",
+                f"{bl2.input.forward_rate:.3f}%",
+                f"{bl2.input.forward_rate - bl1.input.forward_rate:+.3f}%",
+                f"{bl1.mean_rate:.3f}%",
+                f"{bl2.mean_rate:.3f}%",
+                f"{bl2.mean_rate - bl1.mean_rate:+.3f}%",
+                f"{bl1.std_rate:.3f}%",
+                f"{bl2.std_rate:.3f}%",
+                f"{bl2.std_rate - bl1.std_rate:+.3f}%",
+            ])
+        elif bl1 or bl2:
+            bl = bl1 or bl2
+            is_before = bl1 is not None
+            fwd = f"{bl.input.forward_rate:.3f}%"
+            mean = f"{bl.mean_rate:.3f}%"
+            std = f"{bl.std_rate:.3f}%"
+            rows.append([
+                sym,
+                fwd if is_before else "\u2014",
+                "\u2014" if is_before else fwd,
+                "\u2014",
+                mean if is_before else "\u2014",
+                "\u2014" if is_before else mean,
+                "\u2014",
+                std if is_before else "\u2014",
+                "\u2014" if is_before else std,
+                "\u2014",
+            ])
+
+    if not rows:
+        ax.text(0.5, 0.5, "No BL data for summary", ha="center", va="center", transform=ax.transAxes)
+        return
+
+    col_labels = [
+        "Contract",
+        f"Fwd\n{label1}", f"Fwd\n{label2}", "\u0394Fwd",
+        f"Mean\n{label1}", f"Mean\n{label2}", "\u0394Mean",
+        f"Std\n{label1}", f"Std\n{label2}", "\u0394Std",
+    ]
+    table = ax.table(
+        cellText=rows,
+        colLabels=col_labels,
+        loc="center",
+        cellLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1, 1.5)
+
+    # Color delta columns (indices 3, 6, 9)
+    delta_cols = [3, 6, 9]
+    for i in range(len(rows)):
+        for dc in delta_cols:
+            cell = table[i + 1, dc]
+            val_str = rows[i][dc]
+            if val_str.startswith("+"):
+                cell.set_text_props(color="red", fontweight="bold")  # rate increase = hawkish
+            elif val_str.startswith("-"):
+                cell.set_text_props(color="green", fontweight="bold")  # rate decrease = dovish
+
+    # Header styling
+    for j in range(len(col_labels)):
+        cell = table[0, j]
+        cell.set_text_props(fontweight="bold", fontsize=7)
+        cell.set_facecolor("#e6e6e6")
+
+    ax.set_title(f"Strip Summary \u2014 {label1} \u2192 {label2}", fontsize=11, pad=15)

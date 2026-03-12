@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import datetime
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
@@ -43,6 +43,7 @@ from RVUtils.ImpliedDistribution._gaussian_mixture import extract_gaussian_mixtu
 from RVUtils.ImpliedDistribution._types import (
     FedScenarioConfig,
     ImpliedDistributionSnapshot,
+    StripComparisonResult,
 )
 
 if TYPE_CHECKING:
@@ -163,6 +164,167 @@ class SFRImpliedDistribution:
         snap_before = self.extract(smile_before, scenario_config=scenario_config, run_bl=run_bl, run_gm=run_gm)
         snap_after = self.extract(smile_after, scenario_config=scenario_config, run_bl=run_bl, run_gm=run_gm)
         return snap_before, snap_after
+
+    def compare_strip(
+        self,
+        smiles_before: Dict[str, "STIRFutureOptionSABRSmile"],
+        smiles_after: Dict[str, "STIRFutureOptionSABRSmile"],
+        *,
+        symbols: Optional[Union[str, Sequence[str]]] = None,
+        as_of: Optional[datetime.date] = None,
+        scenario_config: Optional[FedScenarioConfig] = None,
+        run_bl: bool = True,
+        run_gm: bool = True,
+    ) -> StripComparisonResult:
+        """Compare implied distributions across a strip/bundle between two dates.
+
+        Parameters
+        ----------
+        smiles_before : dict
+            {symbol: STIRFutureOptionSABRSmile} for the earlier date.
+        smiles_after : dict
+            {symbol: STIRFutureOptionSABRSmile} for the later date.
+        symbols : str or list of str, optional
+            Strip preset (``"whites"``, ``"reds"``, ``"greens"``, ``"blues"``,
+            ``"2y"``, ``"3y"``) or explicit symbol list. If None, uses the
+            union of keys from both smile dicts (sorted).
+        as_of : date, optional
+            Reference date for resolving preset bundle names. Required when
+            ``symbols`` is a preset string.
+        scenario_config : FedScenarioConfig, optional
+            Override the instance-level scenario config.
+        run_bl, run_gm : bool
+            Which approaches to run.
+
+        Returns
+        -------
+        StripComparisonResult
+
+        Usage::
+
+            from RVUtils.ImpliedDistribution import SFRImpliedDistribution, resolve_strip_symbols
+
+            # Option A: preset bundle
+            syms = resolve_strip_symbols("whites", as_of=date2)
+            smiles_d1 = {s: mdp.fetch_sabr_smile({...}) for s in syms}
+            smiles_d2 = {s: mdp.fetch_sabr_smile({...}) for s in syms}
+            result = dist.compare_strip(smiles_d1, smiles_d2, symbols="whites", as_of=date2)
+
+            # Option B: explicit symbols
+            result = dist.compare_strip(smiles_d1, smiles_d2, symbols=["SFRZ26", "SFRZ27"])
+
+            # Option C: infer from dict keys
+            result = dist.compare_strip(smiles_d1, smiles_d2)
+        """
+        strip_label: Optional[str] = None
+
+        if symbols is not None:
+            if isinstance(symbols, str) and not symbols.upper().startswith("SFR"):
+                # Preset name
+                from RVUtils.ImpliedDistribution._strip_utils import resolve_strip_symbols
+
+                strip_label = symbols.lower()
+                sym_list = resolve_strip_symbols(symbols, as_of=as_of)
+            elif isinstance(symbols, str):
+                sym_list = [symbols.upper()]
+            else:
+                sym_list = list(symbols)
+        else:
+            # Infer from smile dict keys
+            sym_list = sorted(set(smiles_before.keys()) | set(smiles_after.keys()))
+
+        snapshots_before: Dict[str, ImpliedDistributionSnapshot] = {}
+        snapshots_after: Dict[str, ImpliedDistributionSnapshot] = {}
+
+        for sym in sym_list:
+            if sym in smiles_before:
+                try:
+                    snapshots_before[sym] = self.extract(
+                        smiles_before[sym],
+                        scenario_config=scenario_config,
+                        run_bl=run_bl,
+                        run_gm=run_gm,
+                    )
+                except Exception as exc:
+                    import warnings
+
+                    warnings.warn(f"Failed to extract distribution for {sym} (before): {exc}")
+
+            if sym in smiles_after:
+                try:
+                    snapshots_after[sym] = self.extract(
+                        smiles_after[sym],
+                        scenario_config=scenario_config,
+                        run_bl=run_bl,
+                        run_gm=run_gm,
+                    )
+                except Exception as exc:
+                    import warnings
+
+                    warnings.warn(f"Failed to extract distribution for {sym} (after): {exc}")
+
+        # Determine dates from first available snapshot
+        date_before = next(
+            (s.as_of for s in snapshots_before.values()), datetime.date.min
+        )
+        date_after = next(
+            (s.as_of for s in snapshots_after.values()), datetime.date.min
+        )
+
+        return StripComparisonResult(
+            symbols=sym_list,
+            date_before=date_before,
+            date_after=date_after,
+            snapshots_before=snapshots_before,
+            snapshots_after=snapshots_after,
+            strip_label=strip_label,
+        )
+
+    @staticmethod
+    def strip_summary_to_dataframe(
+        result: StripComparisonResult,
+    ) -> pd.DataFrame:
+        """Convert a strip comparison to a summary DataFrame.
+
+        Returns DataFrame indexed by symbol with columns for forward rate,
+        mean, std, skew, kurtosis at both dates, plus deltas.
+        """
+        rows = []
+        for sym in result.symbols:
+            snap1 = result.snapshots_before.get(sym)
+            snap2 = result.snapshots_after.get(sym)
+            row: Dict[str, Any] = {"symbol": sym}
+
+            bl1 = snap1.bl_result if snap1 else None
+            bl2 = snap2.bl_result if snap2 else None
+
+            if bl1:
+                row["fwd_before"] = bl1.input.forward_rate
+                row["mean_before"] = bl1.mean_rate
+                row["std_before"] = bl1.std_rate
+                row["skew_before"] = bl1.skewness
+            if bl2:
+                row["fwd_after"] = bl2.input.forward_rate
+                row["mean_after"] = bl2.mean_rate
+                row["std_after"] = bl2.std_rate
+                row["skew_after"] = bl2.skewness
+            if bl1 and bl2:
+                row["fwd_delta"] = bl2.input.forward_rate - bl1.input.forward_rate
+                row["mean_delta"] = bl2.mean_rate - bl1.mean_rate
+                row["std_delta"] = bl2.std_rate - bl1.std_rate
+                row["skew_delta"] = bl2.skewness - bl1.skewness
+
+            gm1 = snap1.gm_result if snap1 else None
+            gm2 = snap2.gm_result if snap2 else None
+            if gm1:
+                for s, w in zip(gm1.scenarios, gm1.weights):
+                    row[f"w_{s.label}_before"] = float(w)
+            if gm2:
+                for s, w in zip(gm2.scenarios, gm2.weights):
+                    row[f"w_{s.label}_after"] = float(w)
+
+            rows.append(row)
+        return pd.DataFrame(rows).set_index("symbol") if rows else pd.DataFrame()
 
     @staticmethod
     def scenario_weights_to_dataframe(
