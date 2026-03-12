@@ -3,6 +3,7 @@ import datetime as dt
 import QuantLib as ql
 import pytest
 
+from definitions.IRSwaptions import EXPIRY_LABELS, TAIL_LABELS
 from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP
 
 
@@ -232,3 +233,71 @@ def test_constructor_data_dir_flows_to_monkeycube_and_partitions_cache(monkeypat
 
     _ = mdp.get_data({**base_req, "data_dir": r"C:\cube\two"})
     assert len(provider_calls) == 2
+
+
+def test_enhanced_provider_uses_option_dates_for_gsquant_atm_lookup(monkeypatch):
+    import MDP.IRSwaptions.GSQUANT.ql.grid as gsquant_grid
+    import MDP.IRSwaptions.GSQUANT_MC_ENHANCED.provider as enhanced_provider
+    import MDP.IRSwaptions.MONKEYCUBE.provider as monkeycube_provider
+
+    d = dt.date(2026, 3, 6)
+
+    class _RecordingHandle:
+        def __init__(self):
+            self.option_date_calls: list[ql.Period] = []
+            self.volatility_calls: list[tuple[ql.Date, ql.Period, float, bool]] = []
+
+        def optionDateFromTenor(self, tenor: ql.Period) -> ql.Date:
+            self.option_date_calls.append(tenor)
+            return ql.Date(d.day, d.month, d.year)
+
+        def volatility(
+            self,
+            option_date: ql.Date,
+            swap_tenor: ql.Period,
+            strike: float,
+            extrapolate: bool = False,
+        ) -> float:
+            assert isinstance(option_date, ql.Date)
+            assert isinstance(swap_tenor, ql.Period)
+            self.volatility_calls.append((option_date, swap_tenor, strike, extrapolate))
+            return 0.01
+
+    class _DummyEnhancedCube:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    handle = _RecordingHandle()
+    cube = object()
+
+    monkeypatch.setattr(
+        gsquant_grid,
+        "get_atmf_grid",
+        lambda curve, dates, surface_type: {d: handle},
+    )
+    monkeypatch.setattr(
+        monkeycube_provider,
+        "get_sabr_vol_surfaces",
+        lambda **kwargs: {d: object()},
+    )
+    monkeypatch.setattr(
+        monkeycube_provider,
+        "get_cached_cube",
+        lambda curve_name, as_of: cube if curve_name == "USD-SOFR-1D" and as_of == d else None,
+    )
+    monkeypatch.setattr(enhanced_provider, "EnhancedSabrVolCube", _DummyEnhancedCube)
+
+    enhanced_provider.clear_enhanced_cube_cache()
+    out = enhanced_provider.get_enhanced_vol_surfaces(
+        curve_name="USD-SOFR-1D",
+        dates=[d],
+        surface_type="atmf_normal",
+        data_dir=r"C:\cube\one",
+    )
+
+    assert out[d] is handle
+    assert len(handle.option_date_calls) == len(EXPIRY_LABELS)
+    assert len(handle.volatility_calls) == len(EXPIRY_LABELS) * len(TAIL_LABELS)
+    assert all(call[2] == 0.0 for call in handle.volatility_calls)
+    assert all(call[3] is True for call in handle.volatility_calls)
+    assert enhanced_provider.get_cached_enhanced_cube("USD-SOFR-1D", d) is not None
