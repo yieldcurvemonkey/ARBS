@@ -40,9 +40,22 @@ import pandas as pd
 from RVUtils.ImpliedDistribution._breeden_litzenberger import extract_rnd_breeden_litzenberger
 from RVUtils.ImpliedDistribution._data_prep import smile_to_rnd_input
 from RVUtils.ImpliedDistribution._gaussian_mixture import extract_gaussian_mixture
+from RVUtils.ImpliedDistribution._joint_calibration import calibrate_joint_distribution
+from RVUtils.ImpliedDistribution._joint_export import (
+    conditional_distribution_to_dataframe as _conditional_distribution_to_dataframe,
+    joint_delta_to_dataframe as _joint_delta_to_dataframe,
+    joint_marginal_to_dataframe as _joint_marginal_to_dataframe,
+    joint_pair_matrix_to_dataframe as _joint_pair_matrix_to_dataframe,
+    joint_state_probabilities_to_dataframe as _joint_state_probabilities_to_dataframe,
+    linear_combination_to_dataframe as _linear_combination_to_dataframe,
+    top_pair_cell_changes_to_dataframe as _top_pair_cell_changes_to_dataframe,
+)
 from RVUtils.ImpliedDistribution._types import (
     FedScenarioConfig,
+    FOMCPathStateConfig,
     ImpliedDistributionSnapshot,
+    JointDistributionComparison,
+    JointDistributionSnapshot,
     StripComparisonResult,
 )
 
@@ -280,6 +293,112 @@ class SFRImpliedDistribution:
             strip_label=strip_label,
         )
 
+    def extract_joint(
+        self,
+        smiles_by_symbol: Dict[str, "STIRFutureOptionSABRSmile"],
+        *,
+        state_config: FOMCPathStateConfig,
+        run_bl: bool = True,
+        run_legacy_gm: bool = True,
+    ) -> JointDistributionSnapshot:
+        """Calibrate a shared common-state joint distribution across a basket."""
+        if not smiles_by_symbol:
+            raise ValueError("extract_joint requires at least one smile")
+
+        rnd_inputs_by_symbol: Dict[str, Any] = {}
+        contract_snapshots: Dict[str, ImpliedDistributionSnapshot] = {}
+
+        for symbol, smile in smiles_by_symbol.items():
+            sym = str(symbol).upper()
+            rnd_inputs_by_symbol[sym] = smile_to_rnd_input(smile, use_sabr_vols=self.use_sabr_vols)
+            if run_bl or run_legacy_gm:
+                try:
+                    contract_snapshots[sym] = self.extract(
+                        smile,
+                        run_bl=run_bl,
+                        run_gm=run_legacy_gm,
+                    )
+                except Exception as exc:
+                    import warnings
+
+                    warnings.warn(f"Failed to build legacy marginal snapshot for {sym}: {exc}")
+                    contract_snapshots[sym] = ImpliedDistributionSnapshot(
+                        symbol=sym,
+                        as_of=smile.params.as_of,
+                        bl_result=None,
+                        gm_result=None,
+                    )
+            else:
+                contract_snapshots[sym] = ImpliedDistributionSnapshot(
+                    symbol=sym,
+                    as_of=smile.params.as_of,
+                    bl_result=None,
+                    gm_result=None,
+                )
+
+        return calibrate_joint_distribution(
+            rnd_inputs_by_symbol,
+            contract_snapshots=contract_snapshots,
+            state_config=state_config,
+            optimize_stds=self.optimize_mixture_stds,
+            initial_std_bps=self.initial_mixture_std_bps,
+        )
+
+    def compare_joint(
+        self,
+        smiles_before: Dict[str, "STIRFutureOptionSABRSmile"],
+        smiles_after: Dict[str, "STIRFutureOptionSABRSmile"],
+        *,
+        symbols: Optional[Union[str, Sequence[str]]] = None,
+        as_of: Optional[datetime.date] = None,
+        state_config: FOMCPathStateConfig,
+        run_bl: bool = True,
+        run_legacy_gm: bool = True,
+    ) -> JointDistributionComparison:
+        """Compare a shared common-state joint distribution across two dates."""
+        if symbols is not None:
+            if isinstance(symbols, str) and not symbols.upper().startswith("SFR"):
+                from RVUtils.ImpliedDistribution._strip_utils import resolve_strip_symbols
+
+                sym_list = resolve_strip_symbols(symbols, as_of=as_of)
+            elif isinstance(symbols, str):
+                sym_list = [symbols.upper()]
+            else:
+                sym_list = [str(sym).upper() for sym in symbols]
+        else:
+            sym_list = sorted(set(smiles_before.keys()) & set(smiles_after.keys()))
+
+        if not sym_list:
+            raise ValueError("compare_joint requires at least one symbol present on both dates")
+
+        missing_before = [sym for sym in sym_list if sym not in smiles_before]
+        missing_after = [sym for sym in sym_list if sym not in smiles_after]
+        if missing_before or missing_after:
+            raise ValueError(
+                f"Joint comparison requires all selected symbols on both dates. "
+                f"Missing before={missing_before}, missing after={missing_after}"
+            )
+
+        snap_before = self.extract_joint(
+            {sym: smiles_before[sym] for sym in sym_list},
+            state_config=state_config,
+            run_bl=run_bl,
+            run_legacy_gm=run_legacy_gm,
+        )
+        snap_after = self.extract_joint(
+            {sym: smiles_after[sym] for sym in sym_list},
+            state_config=state_config,
+            run_bl=run_bl,
+            run_legacy_gm=run_legacy_gm,
+        )
+        return JointDistributionComparison(
+            symbols=sym_list,
+            date_before=snap_before.as_of,
+            date_after=snap_after.as_of,
+            snapshot_before=snap_before,
+            snapshot_after=snap_after,
+        )
+
     @staticmethod
     def strip_summary_to_dataframe(
         result: StripComparisonResult,
@@ -368,3 +487,64 @@ class SFRImpliedDistribution:
                 }
             )
         return pd.DataFrame(rows).set_index("date") if rows else pd.DataFrame()
+
+    @staticmethod
+    def joint_state_probabilities_to_dataframe(snapshot: JointDistributionSnapshot) -> pd.DataFrame:
+        return _joint_state_probabilities_to_dataframe(snapshot)
+
+    @staticmethod
+    def joint_pair_matrix_to_dataframe(
+        snapshot: JointDistributionSnapshot,
+        *,
+        symbol_x: str,
+        symbol_y: str,
+    ) -> pd.DataFrame:
+        return _joint_pair_matrix_to_dataframe(snapshot, symbol_x=symbol_x, symbol_y=symbol_y)
+
+    @staticmethod
+    def joint_marginal_to_dataframe(snapshot: JointDistributionSnapshot, *, symbol: str) -> pd.DataFrame:
+        return _joint_marginal_to_dataframe(snapshot, symbol=symbol)
+
+    @staticmethod
+    def conditional_distribution_to_dataframe(
+        snapshot: JointDistributionSnapshot,
+        *,
+        target_symbol: str,
+        given_symbol: str,
+        given_values: Optional[Sequence[float]] = None,
+        given_range: Optional[Tuple[float, float]] = None,
+    ) -> pd.DataFrame:
+        return _conditional_distribution_to_dataframe(
+            snapshot,
+            target_symbol=target_symbol,
+            given_symbol=given_symbol,
+            given_values=given_values,
+            given_range=given_range,
+        )
+
+    @staticmethod
+    def linear_combination_to_dataframe(
+        snapshot: JointDistributionSnapshot,
+        *,
+        weights: Dict[str, float],
+    ) -> pd.DataFrame:
+        return _linear_combination_to_dataframe(snapshot, weights=weights)
+
+    @staticmethod
+    def joint_delta_to_dataframe(
+        comparison: JointDistributionComparison,
+        *,
+        symbol_x: str,
+        symbol_y: str,
+    ) -> pd.DataFrame:
+        return _joint_delta_to_dataframe(comparison, symbol_x=symbol_x, symbol_y=symbol_y)
+
+    @staticmethod
+    def top_pair_cell_changes_to_dataframe(
+        comparison: JointDistributionComparison,
+        *,
+        symbol_x: str,
+        symbol_y: str,
+        n: int = 10,
+    ) -> pd.DataFrame:
+        return _top_pair_cell_changes_to_dataframe(comparison, symbol_x=symbol_x, symbol_y=symbol_y, n=n)

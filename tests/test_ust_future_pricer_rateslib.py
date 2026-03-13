@@ -76,6 +76,42 @@ def test_ust_proxy_fallback_when_socksio_missing(monkeypatch):
     assert mdp._choose_barchart_proxy() == (None, None)
 
 
+def test_ust_get_barchart_fetcher_builds_fresh_instance_each_call(monkeypatch):
+    USTFuturesMDP._BARCHART_STATE = {}
+    mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
+    created = []
+
+    class _DummyFetcher:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.seed_calls = 0
+            created.append(self)
+
+        def _fetch_session_tokens(self, dummy_symbol="BTC"):  # noqa: ARG002
+            self.seed_calls += 1
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("MDP.USTFutures.USTFuturesMDP.BarchartFetcher", _DummyFetcher)
+    monkeypatch.setattr(
+        mdp,
+        "_choose_barchart_proxy",
+        lambda: (
+            {"http": "http://proxy-user:proxy-pass@atlanta:8080", "https": "http://proxy-user:proxy-pass@atlanta:8080"},
+            "atlanta.us.socks.nordhold.net",
+        ),
+    )
+
+    fetcher_a = mdp._get_barchart_fetcher()
+    fetcher_b = mdp._get_barchart_fetcher()
+
+    assert fetcher_a is not fetcher_b
+    assert len(created) == 2
+    assert [fetcher.seed_calls for fetcher in created] == [1, 1]
+    assert fetcher_a.kwargs["proxies"] == fetcher_b.kwargs["proxies"]
+
+
 def test_ust_get_pricer_defaults_bond_source_when_basket_requested(monkeypatch):
     mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
     seen = {}

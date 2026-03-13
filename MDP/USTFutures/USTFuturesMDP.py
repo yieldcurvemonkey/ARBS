@@ -193,7 +193,6 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 "host": None,
                 "chosen_at": 0.0,
                 "ttl": self._barchart_proxy_ttl,
-                "fetcher": None,
                 "cycler": itertools.cycle(self._barchart_proxy_hosts),
                 "lock": threading.RLock(),
             }
@@ -282,24 +281,17 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
             proxies, host = self._get_cached_barchart_proxy()
             if proxies is None and host is None:
-                _safe_close(S.get("fetcher"))
                 proxies, host = self._choose_barchart_proxy()
                 S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
-                S["fetcher"] = None
 
-            bcf = S["fetcher"]
-            if bcf is None:
-                bcf = _build_fetcher(proxies, host)
-                S["fetcher"] = bcf
-
+            bcf = _build_fetcher(proxies, host)
             try:
                 bcf._fetch_session_tokens(dummy_symbol="BTC")
             except Exception:
-                _safe_close(S.get("fetcher"))
+                _safe_close(bcf)
                 proxies, host = self._choose_barchart_proxy()
                 S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
                 bcf = _build_fetcher(proxies, host)
-                S["fetcher"] = bcf
                 bcf._fetch_session_tokens(dummy_symbol="BTC")
 
             return bcf
@@ -320,15 +312,21 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         barchart_syms = [_to_barchart_symbol(t) for t in tickers]
         bcf = self._get_barchart_fetcher()
-        df = bcf.barchart_timeseries_api(
-            barchart_symbols=barchart_syms,
-            start_date=start,
-            end_date=end,
-            interval=interval,
-            one_df=True,
-            show_tqdm=show_tqdm,
-            max_concurrent_tasks=len(barchart_syms) + 1,
-        )
+        try:
+            df = bcf.barchart_timeseries_api(
+                barchart_symbols=barchart_syms,
+                start_date=start,
+                end_date=end,
+                interval=interval,
+                one_df=True,
+                show_tqdm=show_tqdm,
+                max_concurrent_tasks=len(barchart_syms) + 1,
+            )
+        finally:
+            try:
+                bcf.close()
+            except Exception:
+                pass
         if isinstance(df, pd.DataFrame) and not df.empty:
             df = df.copy()
             for col in df.columns:

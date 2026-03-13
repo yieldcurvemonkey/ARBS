@@ -4,7 +4,7 @@ import re
 import threading
 import time
 import warnings
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import reduce
 from io import StringIO
 from typing import Annotated, Dict, List, Literal, Optional, Tuple
@@ -138,6 +138,7 @@ class BarchartFetcher(BaseFetcher):
         self._session_token_pool_size = max(1, pool_size)
         self._session_token_scope = session_token_scope
         self._session_token_force_refresh_cooldown_seconds = max(0, force_refresh_cooldown)
+        self._last_history_status_by_symbol: Dict[str, Dict[str, object]] = {}
 
         # Reuse one session for token fetches to avoid creating a new SOCKS pool per call.
         self._token_session_lock = threading.RLock()
@@ -156,6 +157,9 @@ class BarchartFetcher(BaseFetcher):
                 self._token_http_session.close()
             except Exception:
                 pass
+
+    def get_history_statuses(self) -> Dict[str, Dict[str, object]]:
+        return dict(self._last_history_status_by_symbol)
 
     def __del__(self):
         try:
@@ -665,6 +669,7 @@ class BarchartFetcher(BaseFetcher):
         session_token: Optional[Tuple[str, str]] = None,
     ) -> Tuple[str, pd.DataFrame] | Tuple[str, pd.DataFrame, str]:
         token = session_token
+        saw_429 = False
 
         try:
             if token is None:
@@ -727,12 +732,23 @@ class BarchartFetcher(BaseFetcher):
                         if end_date:
                             df = df[df["Date"] <= end_date] if not set_dt_index else df[df.index <= end_date]
 
+                    self._last_history_status_by_symbol[str(symbol)] = {
+                        "status_code": 200,
+                        "reason": "ok",
+                        "saw_429": saw_429,
+                    }
+
                     if uid:
                         return symbol, df, uid
                     return symbol, df
 
                 except pd.errors.EmptyDataError:
                     self._logger.error(f"Barchart EOD - Empty data error: No columns to parse from file for symbol {symbol}")
+                    self._last_history_status_by_symbol[str(symbol)] = {
+                        "status_code": None,
+                        "reason": "empty_data",
+                        "saw_429": saw_429,
+                    }
                     if uid:
                         return symbol, None, uid
                     return symbol, None
@@ -742,8 +758,15 @@ class BarchartFetcher(BaseFetcher):
                         last_status_code = int(response.status_code)
                     except Exception:
                         last_status_code = None
+                    if response.status_code == 429:
+                        saw_429 = True
                     self._logger.error(f"Barchart EOD - Bad Status for {symbol}: {response.status_code}")
                     if response.status_code == 404:
+                        self._last_history_status_by_symbol[str(symbol)] = {
+                            "status_code": 404,
+                            "reason": "http_404",
+                            "saw_429": saw_429,
+                        }
                         if uid:
                             return symbol, None, uid
                         return symbol, None
@@ -761,9 +784,22 @@ class BarchartFetcher(BaseFetcher):
                     self._logger.debug(f"Barchart EOD - Throttled for {symbol}. Waiting for {wait_time} seconds before retrying...")
                     await asyncio.sleep(wait_time)
 
+            self._last_history_status_by_symbol[str(symbol)] = {
+                "status_code": last_status_code,
+                "reason": "max_retries_exceeded",
+                "saw_429": saw_429,
+            }
             raise ValueError(f"Barchart EOD - Max retries exceeded for {symbol}")
 
         except Exception as e:
+            self._last_history_status_by_symbol.setdefault(
+                str(symbol),
+                {
+                    "status_code": None,
+                    "reason": "exception",
+                    "saw_429": saw_429,
+                },
+            )
             self._logger.error(e)
             if uid:
                 return symbol, None, uid
@@ -897,6 +933,121 @@ class BarchartFetcher(BaseFetcher):
             return df[(df.index >= start_date) & (df.index <= end_date)]
 
         return dict(dfs)
+
+    @staticmethod
+    def _coerce_history_boundary(value: Optional[datetime | date | str]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return datetime.combine(value, datetime.min.time())
+        token = str(value).strip()
+        if not token:
+            return None
+        parsed = pd.to_datetime(token, errors="coerce")
+        if pd.isna(parsed):
+            raise ValueError(f"Invalid Barchart history boundary: {value!r}")
+        if isinstance(parsed, pd.Timestamp):
+            return parsed.to_pydatetime()
+        return parsed
+
+    @staticmethod
+    def _normalize_history_dataframe(symbol: str, df: Optional[pd.DataFrame]) -> pd.DataFrame:
+        columns = [
+            "symbol",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "openinterest",
+            "delta",
+            "gamma",
+            "theta",
+            "vega",
+            "impliedVolatility",
+        ]
+        if df is None or df.empty:
+            empty = pd.DataFrame(columns=columns)
+            empty.index.name = "date"
+            return empty
+
+        normalized = df.copy()
+        if "Date" in normalized.columns:
+            normalized["Date"] = pd.to_datetime(normalized["Date"], errors="coerce")
+            normalized = normalized.set_index("Date")
+        if normalized.index.name is None:
+            normalized.index.name = "Date"
+
+        rename_map = {
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Volume": "volume",
+            "Open Interest": "openinterest",
+            "Delta": "delta",
+            "Gamma": "gamma",
+            "Theta": "theta",
+            "Vega": "vega",
+            "Implied Volatility": "impliedVolatility",
+            "ImpliedVolatility": "impliedVolatility",
+            "symbol": "symbol",
+            "Symbol": "symbol",
+        }
+        normalized = normalized.rename(columns=rename_map)
+
+        if "symbol" not in normalized.columns:
+            normalized["symbol"] = symbol
+        else:
+            normalized["symbol"] = normalized["symbol"].fillna(symbol)
+
+        for column in columns:
+            if column not in normalized.columns:
+                normalized[column] = 0.0 if column not in {"symbol"} else symbol
+
+        numeric_columns = [column for column in columns if column != "symbol"]
+        for column in numeric_columns:
+            normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+
+        normalized.index = pd.to_datetime(normalized.index, errors="coerce")
+        normalized = normalized[~normalized.index.isna()].sort_index()
+        normalized.index.name = "date"
+        return normalized[columns]
+
+    def fetch_futures_options_timeseries(
+        self,
+        *,
+        start: datetime | date | str,
+        end: datetime | date | str,
+        symbols: List[str],
+        max_concurrent_tasks: Optional[int] = 32,
+        max_keepalive_connections: Optional[int] = 16,
+        show_tqdm: Optional[bool] = False,
+    ) -> Dict[str, pd.DataFrame]:
+        start_dt = self._coerce_history_boundary(start)
+        end_dt = self._coerce_history_boundary(end)
+        if start_dt is None or end_dt is None:
+            raise ValueError("fetch_futures_options_timeseries requires start and end")
+        if end_dt < start_dt:
+            raise ValueError("fetch_futures_options_timeseries requires end >= start")
+        self._last_history_status_by_symbol.clear()
+
+        fetched = self.barchart_timeseries_api(
+            barchart_symbols=symbols,
+            start_date=start_dt,
+            end_date=end_dt,
+            interval=None,
+            max_concurrent_tasks=max_concurrent_tasks,
+            max_keepalive_connections=max_keepalive_connections,
+            one_df=False,
+            show_tqdm=show_tqdm,
+        )
+        return {
+            str(symbol): self._normalize_history_dataframe(str(symbol), frame)
+            for symbol, frame in fetched.items()
+        }
 
     def get_historical_bid_offer_quotes(
         self,

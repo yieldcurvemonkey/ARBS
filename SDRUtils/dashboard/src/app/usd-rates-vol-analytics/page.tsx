@@ -28,6 +28,13 @@ const ANALYTICS_PAGES = [
     eyebrow: 'USTF vs OTC',
     description:
       'Compare UST futures option ATM normal vol against matched OTC swaption ATMF vol. Timeseries, term structure, and vol smile analytics.'
+  },
+  {
+    href: '/usd-rates-vol-analytics/open-interest-and-volume-dashboard',
+    title: 'Open Interest and Volume',
+    eyebrow: 'Listed OI / Vol',
+    description:
+      'Track historical listed option open interest and volume in a spreadsheet-style matrix with linked timeseries, formulas, and constant-maturity / delta / offset aliases.'
   }
 ]
 
@@ -76,6 +83,9 @@ export default function UsdRatesVolAnalyticsPage() {
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2">
             `/usd-rates-vol-analytics/listed-vs-otc-ustf`
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2">
+            `/usd-rates-vol-analytics/open-interest-and-volume-dashboard`
           </div>
         </div>
         <p className="mt-4 text-sm text-slate-500">

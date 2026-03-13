@@ -15,9 +15,12 @@ from definitions.USTFutureOptions import (
 from MDP.USTFutures.USTFutureOptionMDP import (
     _canonical_to_barchart_option,
     _canonical_underlying,
+    _cme_listed_abs_offset_grid_bps_for_contract_forward,
     _expand_straddle_symbol,
     _norm_option_symbol,
     _parse_option_request_symbol,
+    _parse_qs_ust_option_request_symbol,
+    _snap_to_listed_strike_for_offset,
     _strike_from_symbol,
 )
 
@@ -92,3 +95,62 @@ def test_parse_and_expand_alias_symbols():
 
     assert _expand_straddle_symbol("ZNM26|1125S") == ["ZNM26|1125C", "ZNM26|1125P"]
     assert _strike_from_symbol("BN1H26|11270C") == pytest.approx(112.75)
+
+
+def test_parse_ust_atmf_offset_aliases_and_snap_to_listed_strikes():
+    as_of = datetime.date(2026, 3, 4)
+
+    offset_call = _parse_option_request_symbol("ZNM6|25BPC", as_of=as_of)
+    assert offset_call["selector"] == "atmf_offset"
+    assert offset_call["contract"] == "ZNM26"
+    assert offset_call["right"] == "C"
+    assert offset_call["atm_offset_bps"] == pytest.approx(25.0)
+    assert offset_call["canonical"] == "ZNM26|25BPC"
+
+    offset_call_alt = _parse_option_request_symbol("ZNM6|ATMF-25", as_of=as_of)
+    assert offset_call_alt["selector"] == "atmf_offset"
+    assert offset_call_alt["right"] == "C"
+    assert offset_call_alt["atm_offset_bps"] == pytest.approx(25.0)
+    assert offset_call_alt["canonical"] == "ZNM26|25BPC"
+
+    offset_put_alt = _parse_option_request_symbol("ZNM6|ATMF+25", as_of=as_of)
+    assert offset_put_alt["selector"] == "atmf_offset"
+    assert offset_put_alt["right"] == "P"
+    assert offset_put_alt["atm_offset_bps"] == pytest.approx(-25.0)
+    assert offset_put_alt["canonical"] == "ZNM26|25BPP"
+
+    atm_strike, abs_offsets, signed_offsets = _cme_listed_abs_offset_grid_bps_for_contract_forward(
+        contract="ZNM26",
+        forward=112.61,
+        as_of=as_of,
+    )
+    assert atm_strike == pytest.approx(112.5)
+    assert 50.0 in abs_offsets
+    assert -50.0 in signed_offsets
+    assert 50.0 in signed_offsets
+
+    call_strike, call_offset = _snap_to_listed_strike_for_offset(
+        contract="ZNM26",
+        forward=112.61,
+        as_of=as_of,
+        right="C",
+        offset_bps=50.0,
+    )
+    put_strike, put_offset = _snap_to_listed_strike_for_offset(
+        contract="ZNM26",
+        forward=112.61,
+        as_of=as_of,
+        right="P",
+        offset_bps=50.0,
+    )
+    assert call_strike <= atm_strike <= put_strike
+    assert call_offset == pytest.approx(abs(call_offset))
+    assert put_offset == pytest.approx(-abs(put_offset))
+
+
+def test_parse_qs_constant_maturity_ust_offset_aliases():
+    parsed = _parse_qs_ust_option_request_symbol("TU_30|ATMF-25", as_of=datetime.date(2026, 3, 4))
+    assert parsed["selector"] == "atmf_offset"
+    assert parsed["right"] == "C"
+    assert parsed["atm_offset_bps"] == pytest.approx(25.0)
+    assert parsed["canonical"].endswith("|25BPC")

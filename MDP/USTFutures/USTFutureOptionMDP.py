@@ -662,6 +662,80 @@ def _cme_listed_strikes_for_contract_forward(
     return [float(x) for x in _strike_ladder(center=float(atm), step=float(step), half_width_steps=int(half_width_steps))]
 
 
+def _cme_listed_abs_offset_grid_bps_for_contract_forward(
+    *,
+    contract: str,
+    forward: float,
+    as_of: datetime.date,
+) -> Optional[Tuple[float, List[float], List[float]]]:
+    strikes = _cme_listed_strikes_for_contract_forward(
+        contract=contract,
+        forward=forward,
+        as_of=as_of,
+    )
+    if not strikes:
+        return None
+
+    step = _strike_step_for_contract(contract)
+    atm_strike = _atm_strike_from_forward(float(forward), step=step)
+    signed_offsets = sorted({round((atm_strike - float(strike)) * 100.0, 8) for strike in strikes})
+    abs_offsets = sorted({round(abs(offset), 8) for offset in signed_offsets})
+    return float(atm_strike), abs_offsets, signed_offsets
+
+
+def _snap_to_listed_strike_for_offset(
+    *,
+    contract: str,
+    forward: float,
+    as_of: datetime.date,
+    right: str,
+    offset_bps: float,
+) -> Tuple[float, float]:
+    offset_info = _cme_listed_abs_offset_grid_bps_for_contract_forward(
+        contract=contract,
+        forward=forward,
+        as_of=as_of,
+    )
+    if offset_info is None:
+        raise ValueError(f"No listed strike rule available for offset-based alias resolution on {contract}")
+
+    atm_strike, _, signed_offsets = offset_info
+    listed_strikes = _cme_listed_strikes_for_contract_forward(
+        contract=contract,
+        forward=forward,
+        as_of=as_of,
+    ) or []
+    right_token = str(right or "").strip().upper()
+    if right_token not in {"C", "P"}:
+        raise ValueError(f"Unsupported option right for offset strike snapping: {right}")
+
+    target_signed_offset = float(offset_bps)
+    if right_token == "C" and target_signed_offset < 0.0:
+        target_signed_offset = abs(target_signed_offset)
+    if right_token == "P" and target_signed_offset > 0.0:
+        target_signed_offset = -abs(target_signed_offset)
+
+    target_strike = float(atm_strike) - target_signed_offset / 100.0
+    side_candidates = (
+        [strike for strike in listed_strikes if strike <= float(atm_strike) + 1e-12]
+        if right_token == "C"
+        else [strike for strike in listed_strikes if strike >= float(atm_strike) - 1e-12]
+    )
+    if not side_candidates:
+        side_candidates = list(listed_strikes)
+    snapped = min(
+        side_candidates,
+        key=lambda strike: (
+            abs(float(strike) - float(target_strike)),
+            abs(float(atm_strike) - float(strike)),
+        ),
+    )
+    actual_offset = round((float(atm_strike) - float(snapped)) * 100.0, 8)
+    if round(actual_offset, 8) not in {round(v, 8) for v in signed_offsets}:
+        actual_offset = target_signed_offset
+    return float(snapped), float(actual_offset)
+
+
 def _estimate_bachelier_strike_for_target_delta(
     *,
     right: str,
@@ -771,6 +845,7 @@ def _parse_option_request_symbol(symbol: str, *, as_of: Optional[datetime.date] 
         right: str,
         strike4: Optional[str],
         delta: Optional[float],
+        atm_offset_bps: Optional[float],
     ) -> Dict[str, Any]:
         if contract_spec["contract_selector"] == "explicit":
             contract_ref = str(contract_spec["contract"])
@@ -781,6 +856,8 @@ def _parse_option_request_symbol(symbol: str, *, as_of: Optional[datetime.date] 
             canonical = f"{contract_ref}|{strike4}{right}"
         elif selector == "atm":
             canonical = f"{contract_ref}|ATM{right}"
+        elif selector == "atmf_offset":
+            canonical = f"{contract_ref}|{abs(float(atm_offset_bps)):g}BP{right}"
         else:
             canonical = f"{contract_ref}|{float(delta):g}D{right}"
 
@@ -794,6 +871,7 @@ def _parse_option_request_symbol(symbol: str, *, as_of: Optional[datetime.date] 
             "canonical": canonical,
             "strike4": strike4,
             "delta": delta,
+            "atm_offset_bps": atm_offset_bps,
         }
 
     if "|" in token:
@@ -809,12 +887,51 @@ def _parse_option_request_symbol(symbol: str, *, as_of: Optional[datetime.date] 
                 strike_token=m.group("strike"),
             )
             right = m.group("right").upper()
-            return _build(contract_spec=contract_spec, selector="strike", right=right, strike4=strike4, delta=None)
+            return _build(
+                contract_spec=contract_spec,
+                selector="strike",
+                right=right,
+                strike4=strike4,
+                delta=None,
+                atm_offset_bps=None,
+            )
 
         m = re.fullmatch(r"ATM(?P<right>[CPS])", leg_part)
         if m:
             right = m.group("right").upper()
-            return _build(contract_spec=contract_spec, selector="atm", right=right, strike4=None, delta=None)
+            return _build(contract_spec=contract_spec, selector="atm", right=right, strike4=None, delta=None, atm_offset_bps=None)
+
+        m = re.fullmatch(r"(?P<offset>\d{1,4}(?:\.\d+)?)BP(?P<right>[CP])", leg_part)
+        if m:
+            right = m.group("right").upper()
+            offset_bps = abs(float(m.group("offset")))
+            if offset_bps <= 0.0:
+                raise ValueError(f"ATMF offset alias must be > 0: {symbol}")
+            signed_offset = offset_bps if right == "C" else -offset_bps
+            return _build(
+                contract_spec=contract_spec,
+                selector="atmf_offset",
+                right=right,
+                strike4=None,
+                delta=None,
+                atm_offset_bps=signed_offset,
+            )
+
+        m = re.fullmatch(r"ATMF(?P<sign>[+-])(?P<offset>\d{1,4}(?:\.\d+)?)", leg_part)
+        if m:
+            offset_bps = abs(float(m.group("offset")))
+            if offset_bps <= 0.0:
+                raise ValueError(f"ATMF offset alias must be > 0: {symbol}")
+            right = "C" if m.group("sign") == "-" else "P"
+            signed_offset = offset_bps if right == "C" else -offset_bps
+            return _build(
+                contract_spec=contract_spec,
+                selector="atmf_offset",
+                right=right,
+                strike4=None,
+                delta=None,
+                atm_offset_bps=signed_offset,
+            )
 
         m = re.fullmatch(r"(?P<delta>\d{1,2}(?:\.\d+)?)D?(?P<right>[CP])", leg_part)
         if m:
@@ -822,7 +939,7 @@ def _parse_option_request_symbol(symbol: str, *, as_of: Optional[datetime.date] 
             delta = float(m.group("delta"))
             if delta <= 0.0 or delta >= 100.0:
                 raise ValueError(f"Delta alias must be in (0,100): {symbol}")
-            return _build(contract_spec=contract_spec, selector="delta", right=right, strike4=None, delta=delta)
+            return _build(contract_spec=contract_spec, selector="delta", right=right, strike4=None, delta=delta, atm_offset_bps=None)
 
     m = re.fullmatch(
         rf"(?P<contract>(?:{_ROOT_TOKEN_PATTERN})[FGHJKMNQUVXZ]\d{{1,2}})\s+ATM\s+(?P<right>STRADDLE|CALL|PUT)",
@@ -832,7 +949,7 @@ def _parse_option_request_symbol(symbol: str, *, as_of: Optional[datetime.date] 
         contract_spec = _parse_contract_token(m.group("contract"))
         contract_spec["contract"] = normalize_option_contract(contract_spec["contract"], as_of=as_of)
         right = _right_word_to_token(m.group("right"))
-        return _build(contract_spec=contract_spec, selector="atm", right=right, strike4=None, delta=None)
+        return _build(contract_spec=contract_spec, selector="atm", right=right, strike4=None, delta=None, atm_offset_bps=None)
 
     m = re.fullmatch(
         rf"(?P<contract>(?:{_ROOT_TOKEN_PATTERN})[FGHJKMNQUVXZ]\d{{1,2}})\s+(?P<delta>\d{{1,2}}(?:\.\d+)?)\s*D(?:ELTA)?\s+(?P<right>STRADDLE|CALL|PUT)",
@@ -847,7 +964,7 @@ def _parse_option_request_symbol(symbol: str, *, as_of: Optional[datetime.date] 
         delta = float(m.group("delta"))
         if delta <= 0.0 or delta >= 100.0:
             raise ValueError(f"Delta alias must be in (0,100): {symbol}")
-        return _build(contract_spec=contract_spec, selector="delta", right=right, strike4=None, delta=delta)
+        return _build(contract_spec=contract_spec, selector="delta", right=right, strike4=None, delta=delta, atm_offset_bps=None)
 
     raise ValueError(f"Invalid UST option symbol token: {symbol}")
 
@@ -878,6 +995,8 @@ def _resolve_option_contract_aliases_for_date(
             canonical = f"{resolved_contract}|ATM{right}"
         elif selector == "delta":
             canonical = f"{resolved_contract}|{float(delta):g}D{right}"
+        elif selector == "atmf_offset":
+            canonical = f"{resolved_contract}|{abs(float(spec.get('atm_offset_bps'))):g}BP{right}"
         else:
             raise ValueError(f"Unsupported selector in option spec: {selector}")
 
@@ -1106,16 +1225,20 @@ def _parse_qs_ust_option_request_symbol(symbol: str, *, as_of: Optional[datetime
         selector: str,
         right: str,
         delta: Optional[float],
+        atm_offset_bps: Optional[float],
     ) -> Dict[str, Any]:
         base_symbol = str(symbol_info["globex_symbol"])
         if selector == "atm":
             canonical = f"{base_symbol}|ATM{right}"
+        elif selector == "atmf_offset":
+            canonical = f"{base_symbol}|{abs(float(atm_offset_bps)):g}BP{right}"
         else:
             canonical = f"{base_symbol}|{float(delta):g}D{right}"
         return {
             "selector": selector,
             "right": right,
             "delta": delta,
+            "atm_offset_bps": atm_offset_bps,
             "globex_symbol": base_symbol,
             "symbol_info": symbol_info,
             "canonical": canonical,
@@ -1129,7 +1252,44 @@ def _parse_qs_ust_option_request_symbol(symbol: str, *, as_of: Optional[datetime
 
         m = re.fullmatch(r"ATM(?P<right>[CPS])", leg_part)
         if m:
-            return _build(symbol_info=symbol_info, selector="atm", right=m.group("right").upper(), delta=None)
+            return _build(
+                symbol_info=symbol_info,
+                selector="atm",
+                right=m.group("right").upper(),
+                delta=None,
+                atm_offset_bps=None,
+            )
+
+        m = re.fullmatch(r"(?P<offset>\d{1,4}(?:\.\d+)?)BP(?P<right>[CP])", leg_part)
+        if m:
+            delta = None
+            right = m.group("right").upper()
+            offset_bps = abs(float(m.group("offset")))
+            if offset_bps <= 0.0:
+                raise ValueError(f"ATMF offset alias must be > 0: {symbol}")
+            signed_offset = offset_bps if right == "C" else -offset_bps
+            return _build(
+                symbol_info=symbol_info,
+                selector="atmf_offset",
+                right=right,
+                delta=delta,
+                atm_offset_bps=signed_offset,
+            )
+
+        m = re.fullmatch(r"ATMF(?P<sign>[+-])(?P<offset>\d{1,4}(?:\.\d+)?)", leg_part)
+        if m:
+            offset_bps = abs(float(m.group("offset")))
+            if offset_bps <= 0.0:
+                raise ValueError(f"ATMF offset alias must be > 0: {symbol}")
+            right = "C" if m.group("sign") == "-" else "P"
+            signed_offset = offset_bps if right == "C" else -offset_bps
+            return _build(
+                symbol_info=symbol_info,
+                selector="atmf_offset",
+                right=right,
+                delta=None,
+                atm_offset_bps=signed_offset,
+            )
 
         m = re.fullmatch(r"(?P<delta>\d{1,2}(?:\.\d+)?)D?(?P<right>[CP])", leg_part)
         if m:
@@ -1141,6 +1301,7 @@ def _parse_qs_ust_option_request_symbol(symbol: str, *, as_of: Optional[datetime
                 selector="delta",
                 right=m.group("right").upper(),
                 delta=delta,
+                atm_offset_bps=None,
             )
 
     m = re.fullmatch(r"(?P<base>[A-Z0-9_]+)\s+ATM\s+(?P<right>STRADDLE|CALL|PUT)", token)
@@ -1153,6 +1314,7 @@ def _parse_qs_ust_option_request_symbol(symbol: str, *, as_of: Optional[datetime
             selector="atm",
             right=_right_word_to_token(m.group("right")),
             delta=None,
+            atm_offset_bps=None,
         )
 
     m = re.fullmatch(
@@ -1171,6 +1333,7 @@ def _parse_qs_ust_option_request_symbol(symbol: str, *, as_of: Optional[datetime
             selector="delta",
             right=_right_word_to_token(m.group("right")),
             delta=delta,
+            atm_offset_bps=None,
         )
 
     raise ValueError(f"Invalid UST dual-source CM option alias: {symbol}")
@@ -1437,7 +1600,6 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 "host": None,
                 "chosen_at": 0.0,
                 "ttl": self._barchart_proxy_ttl,
-                "fetcher": None,
                 "cycler": itertools.cycle(self._barchart_proxy_hosts),
                 "lock": threading.RLock(),
             }
@@ -2465,12 +2627,18 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
             chain_concurrency = min(max(len(option_contracts), 1), 16)
             bcf = self._get_barchart_fetcher(required_concurrency=chain_concurrency)
-            fetched = bcf.get_option_quotes(
-                symbols=option_contracts,
-                max_concurrent_tasks=chain_concurrency,
-                max_keepalive_connections=min(max(len(option_contracts), 1), 16),
-                show_tqdm=show_tqdm,
-            )
+            try:
+                fetched = bcf.get_option_quotes(
+                    symbols=option_contracts,
+                    max_concurrent_tasks=chain_concurrency,
+                    max_keepalive_connections=min(max(len(option_contracts), 1), 16),
+                    show_tqdm=show_tqdm,
+                )
+            finally:
+                try:
+                    bcf.close()
+                except Exception:
+                    pass
             chains = fetched if isinstance(fetched, dict) else {}
             return chains
 
@@ -3521,22 +3689,19 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         # Explicit static proxy path (caller-provided).
         if self._barchart_proxies_static is not None:
             with self._barchart_lock:
-                if self._barchart_fetcher is None:
-                    self._barchart_fetcher = BarchartFetcher(
-                        proxies=self._barchart_proxies_static,
-                        debug_verbose=False,
-                        error_verbose=True,
-                        session_token_ttl_seconds=max(1, int(self._barchart_proxy_ttl)),
-                        session_token_pool_size=desired_pool_size,
-                        session_token_scope=f"{self.__class__.__name__}:static",
-                    )
-                else:
-                    self._barchart_fetcher._session_token_pool_size = desired_pool_size
+                bcf = BarchartFetcher(
+                    proxies=self._barchart_proxies_static,
+                    debug_verbose=False,
+                    error_verbose=True,
+                    session_token_ttl_seconds=max(1, int(self._barchart_proxy_ttl)),
+                    session_token_pool_size=desired_pool_size,
+                    session_token_scope=f"{self.__class__.__name__}:static",
+                )
                 try:
-                    self._barchart_fetcher._fetch_session_tokens(dummy_symbol="BTC")
+                    bcf._fetch_session_tokens(dummy_symbol="BTC")
                 except Exception:
                     pass
-                return self._barchart_fetcher
+                return bcf
 
         # Rotating sticky proxy path (same pattern as STIRFutureMDP).
         S = USTFutureOptionMDP._BARCHART_STATE
@@ -3554,26 +3719,17 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
             proxies, host = self._get_cached_barchart_proxy()
             if proxies is None and host is None:
-                _safe_close(S.get("fetcher"))
                 proxies, host = self._choose_barchart_proxy()
                 S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
-                S["fetcher"] = None
 
-            bcf = S["fetcher"]
-            if bcf is None:
-                bcf = _build_fetcher(proxies, host)
-                S["fetcher"] = bcf
-            else:
-                bcf._session_token_pool_size = desired_pool_size
-
+            bcf = _build_fetcher(proxies, host)
             try:
                 bcf._fetch_session_tokens(dummy_symbol="BTC")
             except Exception:
-                _safe_close(S.get("fetcher"))
+                _safe_close(bcf)
                 proxies, host = self._choose_barchart_proxy()
                 S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
                 bcf = _build_fetcher(proxies, host)
-                S["fetcher"] = bcf
                 bcf._fetch_session_tokens(dummy_symbol="BTC")
 
             return bcf
@@ -3746,16 +3902,22 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         mc = int(max_concurrent_tasks or min(max(len(symbols), 1), 32))
         mk = int(max_keepalive_connections or min(max(len(symbols), 1), 32))
         bcf = self._get_barchart_fetcher(required_concurrency=mc)
-        out = bcf.barchart_timeseries_api(
-            barchart_symbols=symbols,
-            start_date=start_dt,
-            end_date=end_dt,
-            interval=None,
-            one_df=False,
-            show_tqdm=show_tqdm,
-            max_concurrent_tasks=mc,
-            max_keepalive_connections=mk,
-        )
+        try:
+            out = bcf.barchart_timeseries_api(
+                barchart_symbols=symbols,
+                start_date=start_dt,
+                end_date=end_dt,
+                interval=None,
+                one_df=False,
+                show_tqdm=show_tqdm,
+                max_concurrent_tasks=mc,
+                max_keepalive_connections=mk,
+            )
+        finally:
+            try:
+                bcf.close()
+            except Exception:
+                pass
         if not isinstance(out, dict):
             return {}
         return {
@@ -3778,16 +3940,22 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         ts_chi = timestamp.astimezone(_CHI_TZ)
         start = ts_chi - datetime.timedelta(minutes=window_minutes)
         end = ts_chi + datetime.timedelta(minutes=window_minutes)
-        out = bcf.barchart_timeseries_api(
-            barchart_symbols=contracts,
-            start_date=start,
-            end_date=end,
-            interval=1,
-            one_df=False,
-            show_tqdm=show_tqdm,
-            max_concurrent_tasks=mc,
-            max_keepalive_connections=mc,
-        )
+        try:
+            out = bcf.barchart_timeseries_api(
+                barchart_symbols=contracts,
+                start_date=start,
+                end_date=end,
+                interval=1,
+                one_df=False,
+                show_tqdm=show_tqdm,
+                max_concurrent_tasks=mc,
+                max_keepalive_connections=mc,
+            )
+        finally:
+            try:
+                bcf.close()
+            except Exception:
+                pass
         if not isinstance(out, dict):
             return {}
 
@@ -4302,6 +4470,20 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 resolved[raw] = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
                 continue
 
+            if selector == "atmf_offset":
+                atm_offset_bps = _to_float(spec.get("atm_offset_bps"))
+                if atm_offset_bps is None:
+                    raise ValueError(f"Could not resolve ATMF offset alias {raw!r}: missing atm_offset_bps")
+                strike, _ = _snap_to_listed_strike_for_offset(
+                    contract=contract,
+                    forward=float(forward),
+                    as_of=datetime.datetime.now(_NY_TZ).date(),
+                    right=right,
+                    offset_bps=float(atm_offset_bps),
+                )
+                resolved[raw] = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
+                continue
+
             raise ValueError(f"Unsupported alias selector {selector!r} for symbol {raw!r}")
 
         return resolved
@@ -4333,7 +4515,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     "Callers should resolve delta after fetching window pricers."
                 )
 
-            if selector != "atm":
+            if selector not in {"atm", "atmf_offset"}:
                 raise ValueError(f"Unsupported alias selector {selector!r} for symbol {raw!r}")
 
             underlying_contract = _option_contract_to_underlying_contract(contract)
@@ -4349,9 +4531,23 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             if forward is None or forward <= 0.0:
                 raise ValueError(f"Could not resolve ATM alias {raw!r}: invalid underlying forward.")
 
-            step = _strike_step_for_contract(contract) if atm_strike_step <= 0.0 else atm_strike_step
-            atm_strike = _atm_strike_from_forward(float(forward), step=step)
-            resolved[raw] = f"{contract}|{_format_strike4(atm_strike, contract=contract)}{right}"
+            if selector == "atm":
+                step = _strike_step_for_contract(contract) if atm_strike_step <= 0.0 else atm_strike_step
+                atm_strike = _atm_strike_from_forward(float(forward), step=step)
+                resolved[raw] = f"{contract}|{_format_strike4(atm_strike, contract=contract)}{right}"
+                continue
+
+            atm_offset_bps = _to_float(spec.get("atm_offset_bps"))
+            if atm_offset_bps is None:
+                raise ValueError(f"Could not resolve ATMF offset alias {raw!r}: missing atm_offset_bps")
+            strike, _ = _snap_to_listed_strike_for_offset(
+                contract=contract,
+                forward=float(forward),
+                as_of=target_date,
+                right=right,
+                offset_bps=float(atm_offset_bps),
+            )
+            resolved[raw] = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
 
         return resolved
 
@@ -4483,12 +4679,18 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             )
             chain_concurrency = min(max(len(option_contracts), 1), 32)
             bcf = self._get_barchart_fetcher(required_concurrency=chain_concurrency)
-            chains = bcf.get_option_quotes(
-                symbols=option_contracts,
-                max_concurrent_tasks=chain_concurrency,
-                max_keepalive_connections=min(max(len(option_contracts), 1), 16),
-                show_tqdm=show_tqdm,
-            )
+            try:
+                chains = bcf.get_option_quotes(
+                    symbols=option_contracts,
+                    max_concurrent_tasks=chain_concurrency,
+                    max_keepalive_connections=min(max(len(option_contracts), 1), 16),
+                    show_tqdm=show_tqdm,
+                )
+            finally:
+                try:
+                    bcf.close()
+                except Exception:
+                    pass
             forward_map = self._fetch_barchart_intraday_prices(
                 contracts=underlying_contracts,
                 timestamp=ts_dt,
@@ -4635,12 +4837,18 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
                     chain_concurrency = min(max(len(option_contracts), 1), 16)
                     bcf = self._get_barchart_fetcher(required_concurrency=chain_concurrency)
-                    fetched = bcf.get_option_quotes(
-                        symbols=option_contracts,
-                        max_concurrent_tasks=chain_concurrency,
-                        max_keepalive_connections=min(max(len(option_contracts), 1), 16),
-                        show_tqdm=show_tqdm,
-                    )
+                    try:
+                        fetched = bcf.get_option_quotes(
+                            symbols=option_contracts,
+                            max_concurrent_tasks=chain_concurrency,
+                            max_keepalive_connections=min(max(len(option_contracts), 1), 16),
+                            show_tqdm=show_tqdm,
+                        )
+                    finally:
+                        try:
+                            bcf.close()
+                        except Exception:
+                            pass
                     chains = fetched if isinstance(fetched, dict) else {}
                     return chains
 
@@ -4985,7 +5193,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             if parsed["selector"] != "strike":
                 raise ValueError(
                     "option_timeseries currently supports explicit strike symbols only; "
-                    f"got alias {raw!r}. Use option_snapshot for ATM/delta aliases."
+                    f"got alias {raw!r}. Use option_snapshot for ATM/delta/ATMF-offset aliases."
                 )
             requested_specs[raw] = parsed
         requested_specs = _resolve_option_contract_aliases_for_date(requested_specs, as_of=start_date)

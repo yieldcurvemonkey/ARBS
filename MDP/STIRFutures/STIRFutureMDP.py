@@ -491,7 +491,6 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 "host": None,  # str | None
                 "chosen_at": 0.0,
                 "ttl": self._barchart_proxy_ttl,
-                "fetcher": None,  # BarchartFetcher
                 "cycler": itertools.cycle(self._barchart_proxy_hosts),
                 "lock": threading.RLock(),
             }
@@ -651,7 +650,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
     def _get_barchart_fetcher(self) -> BarchartFetcher:
         """
-        Sticky proxy (TTL) + fetcher reuse + token seeding.
+        Sticky proxy (TTL) + fresh fetcher per call + token seeding.
         Rotates once on token failure.
         """
         S = STIRFutureMDP._BARCHART_STATE
@@ -676,24 +675,17 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
             proxies, host = self._get_cached_barchart_proxy()
             if proxies is None and host is None:
-                _safe_close(S.get("fetcher"))
                 proxies, host = self._choose_barchart_proxy()
                 S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
-                S["fetcher"] = None
 
-            bcf = S["fetcher"]
-            if bcf is None:
-                bcf = _build_fetcher(proxies, host)
-                S["fetcher"] = bcf
-
+            bcf = _build_fetcher(proxies, host)
             try:
                 bcf._fetch_session_tokens(dummy_symbol="BTC")
             except Exception:
-                _safe_close(S.get("fetcher"))
+                _safe_close(bcf)
                 proxies, host = self._choose_barchart_proxy()
                 S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
                 bcf = _build_fetcher(proxies, host)
-                S["fetcher"] = bcf
                 bcf._fetch_session_tokens(dummy_symbol="BTC")
 
             return bcf
@@ -762,23 +754,29 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         except RuntimeError:
             running = False
 
-        if not running:
-            df = _call()
-        else:
-            holder: Dict[str, Any] = {"df": None, "err": None}
+        try:
+            if not running:
+                df = _call()
+            else:
+                holder: Dict[str, Any] = {"df": None, "err": None}
 
-            def _worker():
-                try:
-                    holder["df"] = _call()
-                except Exception as e:
-                    holder["err"] = e
+                def _worker():
+                    try:
+                        holder["df"] = _call()
+                    except Exception as e:
+                        holder["err"] = e
 
-            th = threading.Thread(target=_worker, daemon=True)
-            th.start()
-            th.join()
-            if holder["err"] is not None:
-                raise holder["err"]
-            df = holder["df"]
+                th = threading.Thread(target=_worker, daemon=True)
+                th.start()
+                th.join()
+                if holder["err"] is not None:
+                    raise holder["err"]
+                df = holder["df"]
+        finally:
+            try:
+                bcf.close()
+            except Exception:
+                pass
 
         if df is None or df.empty:
             return pd.DataFrame()

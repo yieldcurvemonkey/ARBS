@@ -105,6 +105,43 @@ def test_live_snapshot_mid_and_last_fallback(monkeypatch):
     assert p2.price() == 0.80  # last fallback
 
 
+def test_ustfo_get_barchart_fetcher_builds_fresh_instance_each_call(monkeypatch):
+    USTFutureOptionMDP._BARCHART_STATE = {}
+    mdp = USTFutureOptionMDP(source="BARCHART_USTFO-QL")
+    created = []
+
+    class _DummyFetcher:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.seed_calls = 0
+            created.append(self)
+
+        def _fetch_session_tokens(self, dummy_symbol="BTC"):  # noqa: ARG002
+            self.seed_calls += 1
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(ustfo_module, "BarchartFetcher", _DummyFetcher)
+    monkeypatch.setattr(
+        mdp,
+        "_choose_barchart_proxy",
+        lambda: (
+            {"http": "http://proxy-user:proxy-pass@atlanta:8080", "https": "http://proxy-user:proxy-pass@atlanta:8080"},
+            "atlanta.us.socks.nordhold.net",
+        ),
+    )
+
+    fetcher_a = mdp._get_barchart_fetcher(required_concurrency=8)
+    fetcher_b = mdp._get_barchart_fetcher(required_concurrency=8)
+
+    assert fetcher_a is not fetcher_b
+    assert len(created) == 2
+    assert [fetcher.seed_calls for fetcher in created] == [1, 1]
+    assert fetcher_a.kwargs["proxies"] == fetcher_b.kwargs["proxies"]
+    assert fetcher_a.kwargs["session_token_pool_size"] == 8
+
+
 def test_option_timeseries_underlying_alignment_and_straddle_synthesis(monkeypatch):
     mdp = USTFutureOptionMDP(source="BARCHART_USTFO-QL")
     monkeypatch.setattr(mdp, "_get_curve_builder", lambda: _DummyCurveBuilder())

@@ -95,6 +95,43 @@ def test_stir_mdp_fetch_window_is_central_for_non_central_request(monkeypatch):
 
 
 @pytest.mark.skipif(STIRFutureMDP is None, reason="STIRFutureMDP optional dependencies not available")
+def test_stir_mdp_get_barchart_fetcher_builds_fresh_instance_each_call(monkeypatch):
+    STIRFutureMDP._BARCHART_STATE = {}
+    mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
+    created = []
+
+    class _DummyFetcher:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.seed_calls = 0
+            created.append(self)
+
+        def _fetch_session_tokens(self, dummy_symbol="BTC"):  # noqa: ARG002
+            self.seed_calls += 1
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("MDP.STIRFutures.STIRFutureMDP.BarchartFetcher", _DummyFetcher)
+    monkeypatch.setattr(
+        mdp,
+        "_choose_barchart_proxy",
+        lambda: (
+            {"http": "http://proxy-user:proxy-pass@atlanta:8080", "https": "http://proxy-user:proxy-pass@atlanta:8080"},
+            "atlanta.us.socks.nordhold.net",
+        ),
+    )
+
+    fetcher_a = mdp._get_barchart_fetcher()
+    fetcher_b = mdp._get_barchart_fetcher()
+
+    assert fetcher_a is not fetcher_b
+    assert len(created) == 2
+    assert [fetcher.seed_calls for fetcher in created] == [1, 1]
+    assert fetcher_a.kwargs["proxies"] == fetcher_b.kwargs["proxies"]
+
+
+@pytest.mark.skipif(STIRFutureMDP is None, reason="STIRFutureMDP optional dependencies not available")
 def test_stir_mdp_matches_central_quote_for_eastern_timestamp(monkeypatch):
     mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
     mem_cache = {}

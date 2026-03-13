@@ -71,6 +71,12 @@ export default function RootLayout({
                       >
                         Listed vs OTC Vol (USTF)
                       </Link>
+                      <Link
+                        href="/usd-rates-vol-analytics/open-interest-and-volume-dashboard"
+                        className="mt-1 block rounded-lg px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-900 hover:text-white"
+                      >
+                        Open Interest and Volume
+                      </Link>
                     </div>
                   </div>
                 </div>
