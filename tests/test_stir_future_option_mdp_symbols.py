@@ -7,9 +7,11 @@ from MDP.STIRFutures.STIRFutureOptionMDP import (
     STIRFutureOptionSmilePoint,
     _canonical_to_barchart_contract,
     _canonical_to_barchart_option,
+    _canonical_to_schwab_option_symbol,
     _canonical_underlying,
     _cme_listed_abs_offset_grid_bps_for_contract_forward,
     _cme_listed_strike_rule_for_contract,
+    _contract_to_schwab_future_symbol,
     _contract_code_from_symbol,
     _expand_straddle_symbol,
     _format_strike4,
@@ -35,6 +37,14 @@ def test_symbol_components_and_barchart_mapping():
     assert _strike_from_symbol(sym) == pytest.approx(97.50)
     assert _canonical_to_barchart_contract(sym) == "SQZ30"
     assert _canonical_to_barchart_option(sym) == "SQZ30|9750C"
+
+
+def test_symbol_components_and_schwab_mapping():
+    assert _contract_to_schwab_future_symbol("SFRZ27") == "/SR3Z27"
+    assert _contract_to_schwab_future_symbol("SERM27") == "/SR1M27"
+    assert _canonical_to_schwab_option_symbol("SFRZ27|9700C") == "./SR3Z27C97"
+    assert _canonical_to_schwab_option_symbol("SFRZ27|9662C") == "./SR3Z27C96.625"
+    assert _canonical_to_schwab_option_symbol("0QH26|9700P") == "./0QH26P97"
 
 
 def test_straddle_expansion():
@@ -136,6 +146,8 @@ def test_cme_listed_strike_rules_cover_front_and_back_contract_buckets():
     as_of = datetime.date(2026, 3, 19)
 
     assert _cme_listed_strike_rule_for_contract(contract="SFRU26", as_of=as_of)["fine_step"] == pytest.approx(0.0625)
+    assert _cme_listed_strike_rule_for_contract(contract="SFRZ26", as_of=as_of)["fine_step"] == pytest.approx(0.0625)
+    assert _cme_listed_strike_rule_for_contract(contract="SFRH27", as_of=as_of)["fine_step"] == pytest.approx(0.0625)
     assert _cme_listed_strike_rule_for_contract(contract="SFRM27", as_of=as_of)["fine_step"] == pytest.approx(0.125)
     assert _cme_listed_strike_rule_for_contract(contract="0QM26", as_of=as_of)["fine_step"] == pytest.approx(0.0625)
     assert _cme_listed_strike_rule_for_contract(contract="0QU26", as_of=as_of)["fine_step"] == pytest.approx(0.125)
@@ -195,6 +207,39 @@ def test_sabr_smile_offset_request_normalization_uses_absolute_unique_bps():
         "strike_offsets_bps": [],
         "auto_full_ladder": True,
     }
+
+
+def test_sabr_smile_listed_auto_full_ladder_caps_to_225bps():
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+
+    legs = mdp._build_sabr_smile_offset_leg_specs(
+        contract="SFRZ26",
+        forward=97.0,
+        as_of=datetime.date(2026, 3, 2),
+        offset_magnitudes_bps=[],
+        auto_full_ladder=True,
+    )
+
+    assert len(legs) == 56
+    abs_offsets = sorted({round(abs(float(leg["requested_atm_offset_bps"])), 8) for leg in legs})
+    assert abs_offsets[-1] == pytest.approx(225.0)
+    assert 225.0 in abs_offsets
+    assert 250.0 not in abs_offsets
+
+
+def test_sabr_smile_explicit_offsets_are_not_capped():
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+
+    legs = mdp._build_sabr_smile_offset_leg_specs(
+        contract="SFRZ26",
+        forward=97.0,
+        as_of=datetime.date(2026, 3, 2),
+        offset_magnitudes_bps=[25.0, 300.0],
+        auto_full_ladder=False,
+    )
+
+    abs_offsets = sorted({round(abs(float(leg["requested_atm_offset_bps"])), 8) for leg in legs})
+    assert abs_offsets == pytest.approx([0.0, 25.0, 300.0])
 
 
 def test_sabr_smile_point_roundtrip_preserves_atm_offset_bps():

@@ -121,7 +121,11 @@ class STIRFutureOptionQuery(BaseQuery):
             return f"{self.risk_weight} * `{col}`"
         return col
 
-    def build_mdp_request(self, now: datetime.datetime) -> Dict[str, Any]:
+    def build_mdp_request(self, now: datetime.datetime = None) -> Dict[str, Any]:
+        if now is None:
+            assert self.market_request["timestamp"] is not None, "must pass in timestamp in market request"
+            now = datetime.date.today() if str(self.market_request["timestamp"]).lower() == "live" else self.market_request["timestamp"] 
+
         req = dict(self.market_request or {})
         if self.mdp_time_key not in req:
             req[self.mdp_time_key] = now.date()

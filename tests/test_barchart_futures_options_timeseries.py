@@ -42,6 +42,9 @@ def test_fetch_futures_options_timeseries_normalizes_history_frames(monkeypatch)
     assert captured["barchart_symbols"] == ["SQZ27|9700C"]
     assert captured["start_date"] == datetime.datetime(2026, 3, 3)
     assert captured["end_date"] == datetime.datetime(2026, 3, 4)
+    assert captured["max_concurrent_tasks"] == 8
+    assert captured["max_keepalive_connections"] == 8
+    assert captured["max_requests_per_second"] == 6
 
     df = out["SQZ27|9700C"]
     assert list(df.columns) == [

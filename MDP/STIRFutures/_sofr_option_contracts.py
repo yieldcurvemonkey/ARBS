@@ -244,6 +244,24 @@ def _contract_month_distance(contract: str, as_of: datetime.date) -> Optional[in
     return (year - as_of.year) * 12 + (month - as_of.month)
 
 
+def _front_sfr_option_contracts(as_of: datetime.date) -> List[str]:
+    serial_months = [m for m in range(1, 13) if m not in _QUARTERLY_MONTHS]
+    serials = _next_contracts(
+        start_date=as_of,
+        prefix="SFR",
+        count=4,
+        valid_months=serial_months,
+    )
+    quarterlies = _next_contracts(
+        start_date=as_of,
+        prefix="SFR",
+        count=4,
+        valid_months=_QUARTERLY_MONTHS,
+        cutoff_fn=_imm_cutoff,
+    )
+    return list(dict.fromkeys([*serials, *quarterlies]))
+
+
 def _cme_listed_strike_rule_for_contract(
     *,
     contract: str,
@@ -265,7 +283,7 @@ def _cme_listed_strike_rule_for_contract(
     elif root in _MIDCURVE_BACK_STYLE_ROOTS:
         fine_step = 0.125
     elif root == "SFR":
-        fine_step = 0.0625 if month_distance <= 7 else 0.125
+        fine_step = 0.0625 if str(contract).strip().upper() in set(_front_sfr_option_contracts(as_of)) else 0.125
     else:
         fine_step = 0.125
 

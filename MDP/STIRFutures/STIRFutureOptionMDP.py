@@ -35,6 +35,7 @@ from MDP.sabr_calibration import (
 )
 from MDP.STIRFutures import _sofr_option_contracts as _shared_sofr_option_contracts
 from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher
+from MDP.STIRFutures.SCHWAB.schwab_simple import get_quotes as schwab_get_quotes
 from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contracts
 from Query.STIRFutureOptions.backends.quantlib.QLSTIRFutureOptionPricer import QLSTIRFutureOptionPricer
@@ -212,6 +213,11 @@ _MIDCURVE_BACK_STYLE_ROOTS = {"3Q", "4Q", "5Q"}
 _MONTH_CODE_TO_NUM = {"F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6, "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12}
 _NUM_TO_MONTH_CODE = {v: k for k, v in _MONTH_CODE_TO_NUM.items()}
 _QUARTERLY_MONTHS = (3, 6, 9, 12)
+_SCHWAB_ROOT_MAP = {
+    "SFR": "SR3",
+    "SER": "SR1",
+    "FF": "ZQ",
+}
 
 _ROOT_TOKEN_PATTERN = "|".join(sorted([re.escape(r) for r in _ROOT_ALIAS_MAP.keys()], key=len, reverse=True))
 _OPTION_RE = re.compile(
@@ -238,6 +244,7 @@ _FUTURE_RE = re.compile(rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVX
 _CM_RE = re.compile(rf"^(?P<root>{_ROOT_TOKEN_PATTERN})?CM(?P<rank>\d+)$", re.IGNORECASE)
 
 _DEFAULT_CURVE_NAME = "USD-SOFR-1D-Q12xM12STIRT"
+_SABR_SMILE_LISTED_OFFSET_CAP_BPS = 250.0
 _QS_STIR_ROOT_ALIAS_TO_GLOBEX: Dict[str, str] = {
     "SR3": "SR3",
     "SFR": "SR3",
@@ -823,6 +830,40 @@ def _format_strike4(strike: float, *, contract: Optional[str] = None) -> str:
     else:
         scaled = int(round(strike_val * 100.0))
     return str(scaled).zfill(4)
+
+
+def _contract_code(contract: str) -> str:
+    m = _FUTURE_RE.fullmatch((contract or "").strip().upper())
+    if m is None:
+        raise ValueError(f"Invalid STIR contract token: {contract}")
+    return m.group("code").upper()
+
+
+def _format_schwab_strike(strike: float) -> str:
+    return f"{float(strike):.4f}".rstrip("0").rstrip(".")
+
+
+def _contract_to_schwab_future_symbol(contract: str) -> str:
+    root = _contract_root(contract)
+    if root is None:
+        raise ValueError(f"Invalid STIR future contract token: {contract}")
+    code = _contract_code(contract)
+    return f"/{_SCHWAB_ROOT_MAP.get(root, root)}{code}"
+
+
+def _canonical_to_schwab_option_symbol(symbol: str) -> str:
+    token = _norm_option_symbol(symbol)
+    contract = _canonical_contract(token)
+    right = _right_from_symbol(token)
+    if right not in {"C", "P"}:
+        raise ValueError(f"Schwab option quotes require an explicit call/put leg, got {symbol!r}")
+
+    root = _contract_root(contract)
+    if root is None:
+        raise ValueError(f"Invalid STIR option contract token: {contract}")
+    code = _contract_code(contract)
+    strike = _strike_from_symbol(token)
+    return f"./{_SCHWAB_ROOT_MAP.get(root, root)}{code}{right}{_format_schwab_strike(strike)}"
 
 
 def _atm_strike_from_forward(forward: float, step: float = 0.25) -> float:
@@ -1601,12 +1642,16 @@ def _extract_row_price(row: Dict[str, Any], price_mode: str = "mid_then_fallback
     if price_mode != "mid_then_fallback":
         raise ValueError(f"Unsupported price_mode: {price_mode}")
 
-    bid = _to_float(row.get("bidPrice", row.get("BidPrice")))
-    ask = _to_float(row.get("askPrice", row.get("OfferPrice")))
+    mid = _to_float(row.get("mid", row.get("Mid")))
+    if mid is not None and mid > 0.0:
+        return mid
+
+    bid = _to_float(row.get("bidPrice", row.get("BidPrice", row.get("bid", row.get("Bid")))))
+    ask = _to_float(row.get("askPrice", row.get("OfferPrice", row.get("ask", row.get("Ask")))))
     if bid is not None and ask is not None and bid > 0.0 and ask > 0.0:
         return 0.5 * (bid + ask)
 
-    for key in ("lastPrice", "Close", "close", "Open", "open"):
+    for key in ("lastPrice", "last", "mark", "Close", "close", "Open", "open"):
         v = _to_float(row.get(key))
         if v is not None and v > 0.0:
             return v
@@ -1705,6 +1750,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         DiskCacheMixin.__init__(self)
 
         self.cache_full_intraday_fetch = bool(kwargs.get("cache_full_intraday_fetch", False))
+        self._schwab_app_key = kwargs.get("schwab_app_key") or os.getenv("SCHWABDEV_APP_KEY") or os.getenv("SCHWAB_APP_KEY") or "zm3GYiQREbtrpBHACURcNzFJIObUq2aX"
+        self._schwab_app_secret = kwargs.get("schwab_app_secret") or os.getenv("SCHWABDEV_APP_SECRET") or os.getenv("SCHWAB_APP_SECRET") or "SznUHXvKPZUnmxG9"
+        self._schwab_scope = kwargs.get("schwab_scope", "pystonk")
         self._open_count = 0
         self._open_lock = threading.RLock()
         self._cache_ready = False
@@ -2075,7 +2123,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         self,
         *,
         request_symbol: str,
-        as_of: datetime.date,
+        as_of: DateLike,
         deltas: Sequence[int],
         curve_name: str,
         curve_kwargs: Dict[str, Any],
@@ -2132,6 +2180,22 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             raise ValueError(f"Could not resolve SABR smile forward: invalid underlying price for {contract}")
         return underlying_contract, float(forward)
 
+    def _resolve_sabr_smile_live_underlying_forward(
+        self,
+        *,
+        contract: str,
+        price_mode: str = "mid_then_fallback",
+    ) -> Tuple[str, float]:
+        underlying_contract = _option_contract_to_underlying_contract(contract)
+        forward_map = self._fetch_schwab_live_underlying_forwards(
+            contracts=[underlying_contract],
+            price_mode=price_mode,
+        )
+        forward = _to_float(forward_map.get(underlying_contract))
+        if forward is None or forward <= 0.0:
+            raise ValueError(f"Could not resolve SABR smile live forward: missing Schwab live price for {contract}")
+        return underlying_contract, float(forward)
+
     def _build_sabr_smile_offset_leg_specs(
         self,
         *,
@@ -2150,7 +2214,11 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             raise ValueError(f"Offset-based SABR smile is not supported for contract {contract}")
 
         atm_strike, abs_offsets, _ = offset_info
-        requested_abs_offsets = list(abs_offsets) if auto_full_ladder else sorted(set([0.0] + [float(x) for x in offset_magnitudes_bps]))
+        requested_abs_offsets = (
+            [float(offset) for offset in abs_offsets if float(offset) <= _SABR_SMILE_LISTED_OFFSET_CAP_BPS + 1e-9]
+            if auto_full_ladder
+            else sorted(set([0.0] + [float(x) for x in offset_magnitudes_bps]))
+        )
         out: List[Dict[str, Any]] = []
         seen_symbols: set[str] = set()
 
@@ -2366,19 +2434,22 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_kwargs: Dict[str, Any],
         force_refresh: bool,
         calibration_method: str,
+        enable_common_cache: bool = True,
     ) -> Tuple[STIRFutureOptionSABRSmile, Optional[str]]:
         normalized_legs = self._normalize_sabr_smile_selected_legs(as_of=as_of, selected_legs=selected_legs)
-        common_key = self._build_sabr_smile_common_cache_key(
-            as_of=as_of,
-            curve_name=curve_name,
-            curve_kwargs=curve_kwargs,
-            canonical_legs=[str(leg["canonical_symbol"]) for leg in normalized_legs],
-            calibration_method=calibration_method,
-        )
-        if not force_refresh:
-            cached_smile = self._load_sabr_smile_common_cache(common_key=common_key)
-            if cached_smile is not None:
-                return self._sabr_smile_with_symbol(cached_smile, symbol=raw_symbol), common_key
+        common_key: Optional[str] = None
+        if enable_common_cache:
+            common_key = self._build_sabr_smile_common_cache_key(
+                as_of=as_of,
+                curve_name=curve_name,
+                curve_kwargs=curve_kwargs,
+                canonical_legs=[str(leg["canonical_symbol"]) for leg in normalized_legs],
+                calibration_method=calibration_method,
+            )
+            if not force_refresh:
+                cached_smile = self._load_sabr_smile_common_cache(common_key=common_key)
+                if cached_smile is not None:
+                    return self._sabr_smile_with_symbol(cached_smile, symbol=raw_symbol), common_key
         return (
             self._assemble_sabr_smile_result(
                 raw_symbol=raw_symbol,
@@ -2610,6 +2681,48 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             raise ValueError(f"Missing SABR smile strike legs for {target_date.isoformat()}: {missing}.")
         return out
 
+    def _select_sabr_smile_explicit_legs_from_snapshot(
+        self,
+        *,
+        requested_legs: Sequence[Dict[str, Any]],
+        pricers_by_symbol: Dict[str, List[QLSTIRFutureOptionPricer]],
+        target_date: datetime.date,
+    ) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        missing: List[str] = []
+        requested_atm_offset = False
+        available_dates: set[datetime.date] = set()
+
+        for spec in requested_legs:
+            canonical_symbol = str(spec["canonical_symbol"])
+            chosen: Optional[QLSTIRFutureOptionPricer] = None
+            for pr in pricers_by_symbol.get(canonical_symbol, []):
+                quote_day = pr.quote_timestamp().astimezone(_NY_TZ).date()
+                available_dates.add(quote_day)
+                if quote_day != target_date:
+                    continue
+                if chosen is None or pr.quote_timestamp() > chosen.quote_timestamp():
+                    chosen = pr
+            if chosen is None:
+                missing.append(canonical_symbol)
+                continue
+            out.append(
+                self._build_sabr_smile_leg_selection(
+                    label=str(spec["label"]),
+                    right=str(spec["right"]),
+                    pricer=chosen,
+                    requested_delta_abs=None,
+                    requested_atm_offset_bps=_to_float(spec.get("requested_atm_offset_bps")),
+                    canonical_symbol=canonical_symbol,
+                )
+            )
+            requested_atm_offset = requested_atm_offset or _to_float(spec.get("requested_atm_offset_bps")) is not None
+
+        if missing and not requested_atm_offset:
+            av = ", ".join(sorted(d.isoformat() for d in available_dates)) or "none"
+            raise ValueError(f"Missing SABR smile strike legs for {target_date.isoformat()}: {missing}. Available quote dates: {av}.")
+        return out
+
     def _normalize_sabr_smile_selected_legs(
         self,
         *,
@@ -2646,9 +2759,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 raise ValueError("SABR smile legs do not agree on underlying contract.")
             if pr.expiry_date() != ref_expiry:
                 raise ValueError("SABR smile legs do not agree on expiry date.")
-            # if not math.isclose(float(pr.forward()), ref_forward, rel_tol=0.0, abs_tol=1e-8):
-            #     print(float(pr.forward()), ref_forward)
-            #     raise ValueError("SABR smile legs do not agree on forward price.")
+            if not math.isclose(float(pr.forward()), ref_forward, rel_tol=0.0, abs_tol=1e-8):
+                print(float(pr.forward()), ref_forward)
+                raise ValueError("SABR smile legs do not agree on forward price.")
         return ref_underlying, ref_forward, ref_expiry
 
     def _assemble_sabr_smile_result(
@@ -2767,6 +2880,8 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
     def _build_sabr_smile_result(self, request: Dict[str, Any]) -> Tuple[STIRFutureOptionSABRSmile, Optional[str]]:
         raw_symbol, symbol_info, as_of, point_request, curve_name, curve_kwargs, force_refresh, show_tqdm, calibration_method = self._validate_sabr_smile_request(request)
+        as_of_raw = request.get("as_of")
+        as_of_live = isinstance(as_of_raw, str) and as_of_raw.strip().lower() == "live"
         mode = self._sabr_smile_point_mode(point_request)
         selected_legs: List[Dict[str, Any]]
 
@@ -2829,7 +2944,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 deltas = list(point_request["deltas"])
                 snapshot_request = self._build_sabr_smile_snapshot_request(
                     request_symbol=str(symbol_info["request_symbol"]),
-                    as_of=as_of,
+                    as_of="live" if as_of_live else as_of,
                     deltas=deltas,
                     curve_name=curve_name,
                     curve_kwargs=curve_kwargs,
@@ -2849,7 +2964,19 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 )
             else:
                 contract = self._resolve_sabr_smile_contract(symbol_info=symbol_info, as_of=as_of)
-                _, forward = self._resolve_sabr_smile_underlying_forward(contract=contract, as_of=as_of, show_tqdm=show_tqdm)
+                price_mode = str(request.get("price_mode", "mid_then_fallback"))
+                if as_of_live:
+                    _, forward = self._resolve_sabr_smile_live_underlying_forward(
+                        contract=contract,
+                        price_mode=price_mode,
+                    )
+                else:
+                    _, forward = self._resolve_sabr_smile_underlying_forward(
+                        contract=contract,
+                        as_of=as_of,
+                        show_tqdm=show_tqdm,
+                        price_mode=price_mode,
+                    )
                 requested_legs = self._build_sabr_smile_offset_leg_specs(
                     contract=contract,
                     forward=float(forward),
@@ -2857,25 +2984,43 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     offset_magnitudes_bps=list(point_request.get("strike_offsets_bps") or []),
                     auto_full_ladder=bool(point_request.get("auto_full_ladder", False)),
                 )
-                price_mode = str(request.get("price_mode", "mid_then_fallback"))
-                pricers_window = self._get_or_build_barchart_pricer_window(
-                    leg_symbols=[str(spec["canonical_symbol"]) for spec in requested_legs],
-                    cache_symbols=[str(spec["canonical_symbol"]) for spec in requested_legs],
-                    request_start=as_of,
-                    request_end=as_of,
-                    show_tqdm=show_tqdm,
-                    price_mode=price_mode,
-                    curve_name=curve_name,
-                    curve_kwargs=curve_kwargs,
-                    use_ql_calculator=True,
-                    source="BARCHART_EOD_WINDOW",
-                    force_refresh=force_refresh,
-                )
-                selected_legs = self._select_sabr_smile_explicit_legs_from_pricer_window(
-                    requested_legs=requested_legs,
-                    pricers_window=pricers_window,
-                    target_date=as_of,
-                )
+                if as_of_live:
+                    snapshot_request = {
+                        "endpoint": "option_snapshot",
+                        "symbols": [str(spec["canonical_symbol"]) for spec in requested_legs],
+                        "timestamp": "live",
+                        "curve_name": curve_name,
+                        "curve_kwargs": dict(curve_kwargs or {}),
+                        "price_mode": price_mode,
+                        "use_ql_calculator": True,
+                        "force_refresh": force_refresh,
+                        "show_tqdm": show_tqdm,
+                    }
+                    snapshot = self.get_data(snapshot_request)
+                    selected_legs = self._select_sabr_smile_explicit_legs_from_snapshot(
+                        requested_legs=requested_legs,
+                        pricers_by_symbol=snapshot,
+                        target_date=as_of,
+                    )
+                else:
+                    pricers_window = self._get_or_build_barchart_pricer_window(
+                        leg_symbols=[str(spec["canonical_symbol"]) for spec in requested_legs],
+                        cache_symbols=[str(spec["canonical_symbol"]) for spec in requested_legs],
+                        request_start=as_of,
+                        request_end=as_of,
+                        show_tqdm=show_tqdm,
+                        price_mode=price_mode,
+                        curve_name=curve_name,
+                        curve_kwargs=curve_kwargs,
+                        use_ql_calculator=True,
+                        source="BARCHART_EOD_WINDOW",
+                        force_refresh=force_refresh,
+                    )
+                    selected_legs = self._select_sabr_smile_explicit_legs_from_pricer_window(
+                        requested_legs=requested_legs,
+                        pricers_window=pricers_window,
+                        target_date=as_of,
+                    )
         return self._finalize_sabr_smile_result(
             raw_symbol=raw_symbol,
             as_of=as_of,
@@ -2884,6 +3029,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             curve_kwargs=curve_kwargs,
             force_refresh=force_refresh,
             calibration_method=calibration_method,
+            enable_common_cache=not as_of_live,
         )
 
     def _normalize_bulk_sabr_smile_request(
@@ -3870,11 +4016,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         if ep == "option_snapshot":
             ts = cache_req.get("timestamp", "live")
             if isinstance(ts, str) and ts.strip().lower() == "live":
-                # Avoid stale caches for live snapshots unless explicitly opted in.
-                if not self.cache_full_intraday_fetch:
-                    return None
-                live_bucket = datetime.datetime.now(_NY_TZ).replace(second=0, microsecond=0)
-                cache_req["timestamp"] = live_bucket
+                return None
             else:
                 as_of_for_symbols = _as_date(ts)
                 cache_req["timestamp"] = as_of_for_symbols
@@ -3887,6 +4029,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             as_of_for_symbols = cache_req.get("start")
 
         if ep == "sabr_smile":
+            raw_as_of = cache_req.get("as_of")
+            if isinstance(raw_as_of, str) and raw_as_of.strip().lower() == "live":
+                return None
             if "as_of" in cache_req:
                 cache_req["as_of"] = _as_date(cache_req["as_of"])
             cache_req["calibration_method"] = str(cache_req.get("calibration_method", "nelder-mead")).strip().lower().replace("_", "-")
@@ -3921,7 +4066,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_get_data_v7",
+            "cache_version": "stirfo_get_data_v8",
             "source": str(self.source).upper(),
             "endpoint": ep,
             "request": self._cache_primitive(cache_req),
@@ -4200,11 +4345,13 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         show_tqdm: bool,
         max_concurrent_tasks: Optional[int] = None,
         max_keepalive_connections: Optional[int] = None,
+        max_requests_per_second: Optional[int] = None,
     ) -> Dict[str, pd.DataFrame]:
         start_dt = datetime.datetime.combine(start, datetime.time(0, 0))
         end_dt = datetime.datetime.combine(end, datetime.time(23, 59))
-        mc = int(max_concurrent_tasks or min(max(len(symbols), 1), 32))
-        mk = int(max_keepalive_connections or min(max(len(symbols), 1), 32))
+        mc = int(max_concurrent_tasks or min(max(len(symbols), 1), 6))
+        mk = int(max_keepalive_connections or mc)
+        mr = int(max_requests_per_second or min(mc, 4))
         bcf = self._get_barchart_fetcher(required_concurrency=mc)
         try:
             out = bcf.barchart_timeseries_api(
@@ -4216,6 +4363,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 show_tqdm=show_tqdm,
                 max_concurrent_tasks=mc,
                 max_keepalive_connections=mk,
+                max_requests_per_second=mr,
             )
         finally:
             try:
@@ -4396,6 +4544,330 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             return None
         return by_day[max(keys)]
 
+    def _fetch_schwab_quotes(self, *, symbols: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+        req_symbols = self._dedupe_preserve_order([str(sym).strip() for sym in symbols if str(sym).strip()])
+        if not req_symbols:
+            return {}
+
+        quote_kwargs: Dict[str, Any] = {"symbols": req_symbols}
+        if self._schwab_app_key and self._schwab_app_secret:
+            quote_kwargs["app_key"] = self._schwab_app_key
+            quote_kwargs["app_secret"] = self._schwab_app_secret
+            quote_kwargs["scope"] = self._schwab_scope
+
+        quotes = schwab_get_quotes(**quote_kwargs)
+        return dict(quotes) if isinstance(quotes, dict) else {}
+
+    @staticmethod
+    def _lookup_schwab_quote(quotes: Dict[str, Dict[str, Any]], symbol: str) -> Optional[Dict[str, Any]]:
+        raw = str(symbol or "").strip()
+        if not raw:
+            return None
+        if isinstance(quotes.get(raw), dict):
+            return dict(quotes[raw])
+        upper = raw.upper()
+        if isinstance(quotes.get(upper), dict):
+            return dict(quotes[upper])
+        return None
+
+    @staticmethod
+    def _quote_time_to_dt(quote_time: Any, fallback: datetime.datetime) -> datetime.datetime:
+        qt = _to_float(quote_time)
+        if qt is None or qt <= 0.0:
+            return fallback
+        try:
+            return pd.to_datetime(int(qt), unit="ms", utc=True).to_pydatetime()
+        except Exception:
+            return fallback
+
+    @staticmethod
+    def _resolve_live_atm_strike_from_grid(
+        *,
+        contract: str,
+        forward: float,
+        valuation_date: datetime.date,
+    ) -> Optional[float]:
+        grid = _cme_listed_strike_grid_for_contract_forward(
+            contract=contract,
+            forward=float(forward),
+            as_of=valuation_date,
+        )
+        if grid is not None:
+            return float(grid["atm_strike"])
+        try:
+            return float(_atm_strike_from_forward(float(forward), step=_strike_step_for_contract(contract)))
+        except Exception:
+            return None
+
+    def _fetch_schwab_live_underlying_forwards(
+        self,
+        *,
+        contracts: Sequence[str],
+        price_mode: str,
+    ) -> Dict[str, float]:
+        contract_symbols = {str(contract): _contract_to_schwab_future_symbol(str(contract)) for contract in contracts}
+        quotes = self._fetch_schwab_quotes(symbols=list(contract_symbols.values()))
+        out: Dict[str, float] = {}
+        for contract, schwab_symbol in contract_symbols.items():
+            q = self._lookup_schwab_quote(quotes, schwab_symbol)
+            if not q:
+                continue
+            price = _extract_row_price(q, price_mode=price_mode)
+            if price is not None and price > 0.0:
+                out[contract] = float(price)
+        return out
+
+    def _build_schwab_live_option_chains(
+        self,
+        *,
+        canonical_symbols: Sequence[str],
+    ) -> Tuple[Dict[str, Dict[str, pd.DataFrame]], Dict[str, Dict[str, Any]]]:
+        explicit_symbols: List[str] = []
+        quote_symbols: Dict[str, str] = {}
+        for sym in canonical_symbols:
+            token = _norm_option_symbol(sym)
+            if _right_from_symbol(token) not in {"C", "P"}:
+                continue
+            explicit_symbols.append(token)
+            quote_symbols[token] = _canonical_to_schwab_option_symbol(token)
+
+        if not quote_symbols:
+            return {}, {}
+
+        quotes = self._fetch_schwab_quotes(symbols=list(quote_symbols.values()))
+        rows_by_symbol: Dict[str, Dict[str, Any]] = {}
+        rows_by_contract: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+        for canonical_symbol in self._dedupe_preserve_order(explicit_symbols):
+            schwab_symbol = quote_symbols[canonical_symbol]
+            q = self._lookup_schwab_quote(quotes, schwab_symbol)
+            if not q:
+                continue
+
+            contract = _canonical_contract(canonical_symbol)
+            right = _right_from_symbol(canonical_symbol)
+            side = "call" if right == "C" else "put"
+            row = {
+                "symbol": canonical_symbol,
+                "schwabSymbol": schwab_symbol,
+                "strikePrice": float(_strike_from_symbol(canonical_symbol)),
+                "bid": _to_float(q.get("bid")),
+                "ask": _to_float(q.get("ask")),
+                "mid": _to_float(q.get("mid")),
+                "last": _to_float(q.get("last")),
+                "mark": _to_float(q.get("mark")),
+                "bidSize": _to_float(q.get("bidSize")),
+                "askSize": _to_float(q.get("askSize")),
+                "netChange": _to_float(q.get("netChange")),
+                "quoteTime": _to_float(q.get("quoteTime")),
+            }
+            rows_by_symbol[canonical_symbol] = dict(row)
+            bucket = rows_by_contract.setdefault(contract, {"call": [], "put": []})
+            bucket[side].append(dict(row))
+
+        chains: Dict[str, Dict[str, pd.DataFrame]] = {}
+        for contract, side_rows in rows_by_contract.items():
+            chains[contract] = {
+                "call": pd.DataFrame(side_rows["call"]),
+                "put": pd.DataFrame(side_rows["put"]),
+            }
+        return chains, rows_by_symbol
+
+    def _option_snapshot_live_schwab(
+        self,
+        *,
+        requested_specs: "OrderedDict[str, Dict[str, Any]]",
+        valuation_ts: datetime.datetime,
+        curve_name: str,
+        curve_kwargs: Optional[Dict[str, Any]],
+        price_mode: str,
+        use_ql_calculator: bool,
+        delta_ignore_deep_itm: bool,
+    ) -> Tuple["OrderedDict[str, str]", Dict[str, QLSTIRFutureOptionPricer]]:
+        valuation_date = valuation_ts.astimezone(_NY_TZ).date()
+        curve_memo: Dict[Tuple[str, datetime.date], Tuple[Any, Optional[str]]] = {}
+        cp_pricers: Dict[str, QLSTIRFutureOptionPricer] = {}
+
+        underlying_contracts = sorted(
+            {
+                _option_contract_to_underlying_contract(str(spec["contract"]))
+                for spec in requested_specs.values()
+            }
+        )
+        forward_map = self._fetch_schwab_live_underlying_forwards(
+            contracts=underlying_contracts,
+            price_mode=price_mode,
+        )
+
+        non_delta_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        delta_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        for raw, spec in requested_specs.items():
+            if str(spec.get("selector")) == "delta":
+                delta_specs[raw] = spec
+            else:
+                non_delta_specs[raw] = spec
+
+        resolved_non_delta: "OrderedDict[str, str]" = OrderedDict()
+        quote_universe: "OrderedDict[str, str]" = OrderedDict()
+        for raw, spec in non_delta_specs.items():
+            selector = str(spec["selector"])
+            contract = str(spec["contract"])
+            right = str(spec["right"]).upper()
+
+            if selector == "strike":
+                resolved_symbol = str(spec["canonical"])
+            else:
+                underlying_contract = _option_contract_to_underlying_contract(contract)
+                forward = _to_float(forward_map.get(underlying_contract))
+                if forward is None or forward <= 0.0:
+                    raise ValueError(f"Could not resolve alias {raw!r}: missing Schwab live forward for {contract}")
+
+                if selector == "atm":
+                    strike = self._resolve_live_atm_strike_from_grid(
+                        contract=contract,
+                        forward=float(forward),
+                        valuation_date=valuation_date,
+                    )
+                    if strike is None:
+                        raise ValueError(f"Could not resolve ATM alias {raw!r}: no listed strike rule for {contract}")
+                    resolved_symbol = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
+                elif selector == "atmf_offset":
+                    offset_bps = _to_float(spec.get("atm_offset_bps"))
+                    if offset_bps is None:
+                        raise ValueError(f"Could not resolve ATMF offset alias {raw!r}: missing offset")
+                    strike, _ = _snap_to_listed_strike_for_offset(
+                        contract=contract,
+                        forward=float(forward),
+                        as_of=valuation_date,
+                        right=right,
+                        offset_bps=float(offset_bps),
+                    )
+                    resolved_symbol = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
+                else:
+                    raise ValueError(f"Unsupported live alias selector {selector!r} for symbol {raw!r}")
+
+            resolved_non_delta[raw] = resolved_symbol
+            for leg_symbol in _expand_straddle_symbol(resolved_symbol):
+                quote_universe[leg_symbol] = leg_symbol
+
+        delta_candidate_symbols: Dict[str, List[str]] = {}
+        delta_meta: Dict[str, Dict[str, Any]] = {}
+        for raw, spec in delta_specs.items():
+            contract = str(spec["contract"])
+            right = str(spec["right"]).upper()
+            if right not in {"C", "P"}:
+                raise ValueError(f"Delta alias supports call/put only: {raw!r}")
+
+            target_delta = _to_float(spec.get("delta"))
+            if target_delta is None:
+                raise ValueError(f"Could not resolve delta alias {raw!r}: missing delta")
+
+            underlying_contract = _option_contract_to_underlying_contract(contract)
+            forward = _to_float(forward_map.get(underlying_contract))
+            if forward is None or forward <= 0.0:
+                raise ValueError(f"Could not resolve delta alias {raw!r}: missing Schwab live forward for {contract}")
+
+            strike_candidates = _cme_listed_strikes_for_contract_forward(
+                contract=contract,
+                forward=float(forward),
+                as_of=valuation_date,
+            )
+            if not strike_candidates:
+                raise ValueError(f"Could not resolve delta alias {raw!r}: no listed strike rule for {contract}")
+            strike_candidates = self._pick_otm_strike_slice(
+                list(strike_candidates),
+                forward=float(forward),
+                right=right,
+                count=self._delta_otm_candidate_count(target_delta=float(target_delta), base_count=8),
+                itm_buffer=self._delta_itm_buffer_count(
+                    target_delta=float(target_delta),
+                    ignore_deep_itm=bool(delta_ignore_deep_itm),
+                ),
+            )
+            candidate_symbols = self._dedupe_preserve_order(
+                [f"{contract}|{_format_strike4(strike, contract=contract)}{right}" for strike in strike_candidates]
+            )
+            if not candidate_symbols:
+                raise ValueError(f"Could not resolve delta alias {raw!r}: no candidate listed strikes for {contract}")
+            delta_candidate_symbols[raw] = candidate_symbols
+            delta_meta[raw] = {
+                "contract": contract,
+                "right": right,
+                "target_delta": float(target_delta),
+                "forward": float(forward),
+            }
+            for sym in candidate_symbols:
+                quote_universe[sym] = sym
+
+        chains, rows_by_symbol = self._build_schwab_live_option_chains(
+            canonical_symbols=list(quote_universe.keys()),
+        )
+
+        resolved_delta: "OrderedDict[str, str]" = OrderedDict()
+        for raw, meta in delta_meta.items():
+            contract = str(meta["contract"])
+            chain = chains.get(contract, {"call": pd.DataFrame(), "put": pd.DataFrame()})
+            resolved_live = self._resolve_live_delta_from_chain_pricers(
+                contract=contract,
+                chain=chain,
+                target_delta=float(meta["target_delta"]),
+                right=str(meta["right"]),
+                forward=float(meta["forward"]),
+                valuation_ts=valuation_ts,
+                curve_name=curve_name,
+                curve_kwargs=curve_kwargs,
+                curve_memo=curve_memo,
+                price_mode=price_mode,
+                use_ql_calculator=use_ql_calculator,
+                base_candidate_count=8,
+                ignore_deep_itm=delta_ignore_deep_itm,
+                source="SCHWAB_LIVE",
+            )
+            if resolved_live is None:
+                raise ValueError(f"Could not resolve delta alias {raw!r}: no priced Schwab live strikes available.")
+            resolved_leg, pr = resolved_live
+            resolved_delta[raw] = resolved_leg
+            cp_pricers[resolved_leg] = pr
+
+        requested: "OrderedDict[str, str]" = OrderedDict()
+        for raw in requested_specs.keys():
+            if raw in resolved_non_delta:
+                requested[raw] = resolved_non_delta[raw]
+            elif raw in resolved_delta:
+                requested[raw] = resolved_delta[raw]
+
+        expanded_needed: "OrderedDict[str, str]" = OrderedDict()
+        for norm in requested.values():
+            for leg_symbol in _expand_straddle_symbol(norm):
+                expanded_needed[leg_symbol] = leg_symbol
+
+        for leg_symbol in expanded_needed:
+            if leg_symbol in cp_pricers:
+                continue
+            row = rows_by_symbol.get(leg_symbol)
+            if row is None:
+                continue
+            underlying_contract = _canonical_underlying(leg_symbol)
+            forward = _to_float(forward_map.get(underlying_contract))
+            if forward is None or forward <= 0.0:
+                continue
+            quote_ts = self._quote_time_to_dt(row.get("quoteTime"), valuation_ts)
+            pr = self._build_pricer_from_row(
+                canonical_symbol=leg_symbol,
+                row=row,
+                valuation_ts=quote_ts,
+                forward=float(forward),
+                curve_name=curve_name,
+                curve_kwargs=curve_kwargs,
+                curve_memo=curve_memo,
+                price_mode=price_mode,
+                source="SCHWAB_LIVE",
+                use_ql_calculator=use_ql_calculator,
+            )
+            if pr is not None:
+                cp_pricers[leg_symbol] = pr
+
+        return requested, cp_pricers
+
     def _build_pricer_from_row(
         self,
         *,
@@ -4563,9 +5035,8 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 return dict(df_work.loc[mask].iloc[0].to_dict())
 
         if "symbol" in df_work.columns:
-            target = _format_strike4(strike, contract=contract)
-            pat = re.compile(rf"\|{re.escape(target)}(C|P)$", re.IGNORECASE)
-            rows = df_work[df_work["symbol"].astype(str).str.contains(pat, regex=True, na=False)]
+            suffix = f"|{_format_strike4(strike, contract=contract)}{str(right).upper()}"
+            rows = df_work[df_work["symbol"].astype(str).str.upper().str.endswith(suffix, na=False)]
             if not rows.empty:
                 return dict(rows.iloc[0].to_dict())
 
@@ -4721,6 +5192,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         curve_memo: Dict[Tuple[str, datetime.date], Tuple[Any, Optional[str]]],
         price_mode: str,
         use_ql_calculator: bool,
+        source: str = "BARCHART_LIVE",
         base_candidate_count: int = 8,
         ignore_deep_itm: bool = False,
     ) -> Optional[Tuple[str, QLSTIRFutureOptionPricer]]:
@@ -4772,7 +5244,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 curve_kwargs=curve_kwargs,
                 curve_memo=curve_memo,
                 price_mode=price_mode,
-                source="BARCHART_LIVE",
+                source=source,
                 use_ql_calculator=use_ql_calculator,
             )
             if pr is None:
@@ -5150,138 +5622,149 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         if str(ts).strip().lower() == "live":
             ts_dt = _as_datetime("live")
-            option_contracts = sorted({_contract_to_barchart_contract(str(spec["contract"])) for spec in requested_specs.values()})
-            underlying_contracts = sorted(
-                {_contract_to_barchart_contract(_option_contract_to_underlying_contract(str(spec["contract"]))) for spec in requested_specs.values()}
-            )
-            chain_concurrency = min(max(len(option_contracts), 1), 32)
-            bcf = self._get_barchart_fetcher(required_concurrency=chain_concurrency)
-            try:
-                chains = bcf.get_option_quotes(
-                    symbols=option_contracts,
-                    max_concurrent_tasks=chain_concurrency,
-                    max_keepalive_connections=min(max(len(option_contracts), 1), 16),
-                    show_tqdm=show_tqdm,
-                )
-            finally:
-                try:
-                    bcf.close()
-                except Exception:
-                    pass
-            forward_map = self._fetch_barchart_intraday_prices(
-                contracts=underlying_contracts,
-                timestamp=ts_dt,
-                window_minutes=window_minutes,
-                show_tqdm=show_tqdm,
-            )
-
-            non_delta_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-            delta_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-            for raw, spec in requested_specs.items():
-                if str(spec.get("selector")) == "delta":
-                    delta_specs[raw] = spec
-                else:
-                    non_delta_specs[raw] = spec
-
-            resolved_non_delta: "OrderedDict[str, str]" = OrderedDict()
-            if non_delta_specs:
-                resolved_non_delta = self._resolve_snapshot_requested_symbols_live(
-                    requested_specs=non_delta_specs,
-                    chains=chains,
-                    forward_map=forward_map,
-                )
-
-            curve_memo: Dict[Tuple[str, datetime.date], Tuple[Any, Optional[str]]] = {}
-            resolved_delta: "OrderedDict[str, str]" = OrderedDict()
-            for raw, spec in delta_specs.items():
-                right = str(spec["right"]).upper()
-                if right not in {"C", "P"}:
-                    raise ValueError(f"Delta alias supports call/put only: {raw!r}")
-
-                delta = _to_float(spec.get("delta"))
-                if delta is None:
-                    raise ValueError(f"Could not resolve delta alias {raw!r}: missing delta")
-
-                contract = str(spec["contract"])
-                option_bcontract = _contract_to_barchart_contract(contract)
-                underlying_contract = _option_contract_to_underlying_contract(contract)
-                underlying_bcontract = _contract_to_barchart_contract(underlying_contract)
-                chain = chains.get(option_bcontract)
-                forward = _to_float(forward_map.get(underlying_bcontract))
-                if chain is None or forward is None or forward <= 0.0:
-                    raise ValueError(f"Could not resolve delta alias {raw!r}: missing live chain/forward for {contract}")
-
-                resolved_live = self._resolve_live_delta_from_chain_pricers(
-                    contract=contract,
-                    chain=chain,
-                    target_delta=float(delta),
-                    right=right,
-                    forward=float(forward),
+            if str(self.source).upper() == "BARCHART_STIRFO-QL":
+                requested, cp_pricers = self._option_snapshot_live_schwab(
+                    requested_specs=requested_specs,
                     valuation_ts=ts_dt,
                     curve_name=curve_name,
                     curve_kwargs=curve_kwargs,
-                    curve_memo=curve_memo,
                     price_mode=price_mode,
                     use_ql_calculator=use_ql_calculator,
-                    base_candidate_count=8,
-                    ignore_deep_itm=delta_ignore_deep_itm,
+                    delta_ignore_deep_itm=delta_ignore_deep_itm,
                 )
-                if resolved_live is None:
-                    raise ValueError(f"Could not resolve delta alias {raw!r}: no priced live strikes available.")
-                resolved_leg, pr = resolved_live
-                resolved_delta[raw] = resolved_leg
-                cp_pricers[resolved_leg] = pr
-
-            requested = OrderedDict()
-            for raw in requested_specs.keys():
-                if raw in resolved_non_delta:
-                    requested[raw] = resolved_non_delta[raw]
-                elif raw in resolved_delta:
-                    requested[raw] = resolved_delta[raw]
-
-            expanded_needed: "OrderedDict[str, str]" = OrderedDict()
-            for norm in requested.values():
-                for leg in _expand_straddle_symbol(norm):
-                    expanded_needed[leg] = leg
-
-            for leg_symbol in expanded_needed:
-                if leg_symbol in cp_pricers:
-                    continue
-                option_bcontract = _canonical_to_barchart_contract(leg_symbol)
-                underlying_bcontract = _contract_to_barchart_contract(_canonical_underlying(leg_symbol))
-                chain = chains.get(option_bcontract)
-                if chain is None:
-                    continue
-                contract = _canonical_contract(leg_symbol)
-                strike = _strike_from_symbol(leg_symbol)
-                right = _right_from_symbol(leg_symbol)
-                row = self._extract_live_option_row(chain=chain, contract=contract, strike=strike, right=right)
-                if row is None:
-                    continue
-                forward = _to_float(forward_map.get(underlying_bcontract))
-                if forward is None or forward <= 0.0:
-                    continue
-                quote_ts = ts_dt
-                trade_time = _to_float(row.get("tradeTime"))
-                if trade_time is not None and trade_time > 0:
+            else:
+                option_contracts = sorted({_contract_to_barchart_contract(str(spec["contract"])) for spec in requested_specs.values()})
+                underlying_contracts = sorted(
+                    {_contract_to_barchart_contract(_option_contract_to_underlying_contract(str(spec["contract"]))) for spec in requested_specs.values()}
+                )
+                chain_concurrency = min(max(len(option_contracts), 1), 32)
+                bcf = self._get_barchart_fetcher(required_concurrency=chain_concurrency)
+                try:
+                    chains = bcf.get_option_quotes(
+                        symbols=option_contracts,
+                        max_concurrent_tasks=chain_concurrency,
+                        max_keepalive_connections=min(max(len(option_contracts), 1), 16),
+                        show_tqdm=show_tqdm,
+                    )
+                finally:
                     try:
-                        quote_ts = pd.to_datetime(int(trade_time), unit="s", utc=True).to_pydatetime()
+                        bcf.close()
                     except Exception:
-                        quote_ts = ts_dt
-                pr = self._build_pricer_from_row(
-                    canonical_symbol=leg_symbol,
-                    row=row,
-                    valuation_ts=quote_ts,
-                    forward=forward,
-                    curve_name=curve_name,
-                    curve_kwargs=curve_kwargs,
-                    curve_memo=curve_memo,
-                    price_mode=price_mode,
-                    source="BARCHART_LIVE",
-                    use_ql_calculator=use_ql_calculator,
+                        pass
+                forward_map = self._fetch_barchart_intraday_prices(
+                    contracts=underlying_contracts,
+                    timestamp=ts_dt,
+                    window_minutes=window_minutes,
+                    show_tqdm=show_tqdm,
                 )
-                if pr is not None:
-                    cp_pricers[leg_symbol] = pr
+
+                non_delta_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+                delta_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+                for raw, spec in requested_specs.items():
+                    if str(spec.get("selector")) == "delta":
+                        delta_specs[raw] = spec
+                    else:
+                        non_delta_specs[raw] = spec
+
+                resolved_non_delta: "OrderedDict[str, str]" = OrderedDict()
+                if non_delta_specs:
+                    resolved_non_delta = self._resolve_snapshot_requested_symbols_live(
+                        requested_specs=non_delta_specs,
+                        chains=chains,
+                        forward_map=forward_map,
+                    )
+
+                curve_memo: Dict[Tuple[str, datetime.date], Tuple[Any, Optional[str]]] = {}
+                resolved_delta: "OrderedDict[str, str]" = OrderedDict()
+                for raw, spec in delta_specs.items():
+                    right = str(spec["right"]).upper()
+                    if right not in {"C", "P"}:
+                        raise ValueError(f"Delta alias supports call/put only: {raw!r}")
+
+                    delta = _to_float(spec.get("delta"))
+                    if delta is None:
+                        raise ValueError(f"Could not resolve delta alias {raw!r}: missing delta")
+
+                    contract = str(spec["contract"])
+                    option_bcontract = _contract_to_barchart_contract(contract)
+                    underlying_contract = _option_contract_to_underlying_contract(contract)
+                    underlying_bcontract = _contract_to_barchart_contract(underlying_contract)
+                    chain = chains.get(option_bcontract)
+                    forward = _to_float(forward_map.get(underlying_bcontract))
+                    if chain is None or forward is None or forward <= 0.0:
+                        raise ValueError(f"Could not resolve delta alias {raw!r}: missing live chain/forward for {contract}")
+
+                    resolved_live = self._resolve_live_delta_from_chain_pricers(
+                        contract=contract,
+                        chain=chain,
+                        target_delta=float(delta),
+                        right=right,
+                        forward=float(forward),
+                        valuation_ts=ts_dt,
+                        curve_name=curve_name,
+                        curve_kwargs=curve_kwargs,
+                        curve_memo=curve_memo,
+                        price_mode=price_mode,
+                        use_ql_calculator=use_ql_calculator,
+                        base_candidate_count=8,
+                        ignore_deep_itm=delta_ignore_deep_itm,
+                    )
+                    if resolved_live is None:
+                        raise ValueError(f"Could not resolve delta alias {raw!r}: no priced live strikes available.")
+                    resolved_leg, pr = resolved_live
+                    resolved_delta[raw] = resolved_leg
+                    cp_pricers[resolved_leg] = pr
+
+                requested = OrderedDict()
+                for raw in requested_specs.keys():
+                    if raw in resolved_non_delta:
+                        requested[raw] = resolved_non_delta[raw]
+                    elif raw in resolved_delta:
+                        requested[raw] = resolved_delta[raw]
+
+                expanded_needed: "OrderedDict[str, str]" = OrderedDict()
+                for norm in requested.values():
+                    for leg in _expand_straddle_symbol(norm):
+                        expanded_needed[leg] = leg
+
+                for leg_symbol in expanded_needed:
+                    if leg_symbol in cp_pricers:
+                        continue
+                    option_bcontract = _canonical_to_barchart_contract(leg_symbol)
+                    underlying_bcontract = _contract_to_barchart_contract(_canonical_underlying(leg_symbol))
+                    chain = chains.get(option_bcontract)
+                    if chain is None:
+                        continue
+                    contract = _canonical_contract(leg_symbol)
+                    strike = _strike_from_symbol(leg_symbol)
+                    right = _right_from_symbol(leg_symbol)
+                    row = self._extract_live_option_row(chain=chain, contract=contract, strike=strike, right=right)
+                    if row is None:
+                        continue
+                    forward = _to_float(forward_map.get(underlying_bcontract))
+                    if forward is None or forward <= 0.0:
+                        continue
+                    quote_ts = ts_dt
+                    trade_time = _to_float(row.get("tradeTime"))
+                    if trade_time is not None and trade_time > 0:
+                        try:
+                            quote_ts = pd.to_datetime(int(trade_time), unit="s", utc=True).to_pydatetime()
+                        except Exception:
+                            quote_ts = ts_dt
+                    pr = self._build_pricer_from_row(
+                        canonical_symbol=leg_symbol,
+                        row=row,
+                        valuation_ts=quote_ts,
+                        forward=forward,
+                        curve_name=curve_name,
+                        curve_kwargs=curve_kwargs,
+                        curve_memo=curve_memo,
+                        price_mode=price_mode,
+                        source="BARCHART_LIVE",
+                        use_ql_calculator=use_ql_calculator,
+                    )
+                    if pr is not None:
+                        cp_pricers[leg_symbol] = pr
         else:
             target_date = _as_date(ts)
             req_window_start_raw = request.get("window_start", target_date)

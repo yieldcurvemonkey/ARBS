@@ -1,9 +1,11 @@
 import asyncio
 import logging
+import random
 import re
 import threading
 import time
 import warnings
+from collections import deque
 from datetime import date, datetime, timedelta
 from functools import reduce
 from io import StringIO
@@ -68,6 +70,37 @@ class BaseFetcher:
             self._logger.setLevel(logging.WARNING)
         else:
             self._logger.disabled = True
+
+
+class AsyncRateLimiter:
+    """
+    Simple sliding-window async rate limiter.
+    Example: max_calls=8, period=1.0 -> at most 8 requests per second.
+    """
+
+    def __init__(self, max_calls: int, period: float = 1.0):
+        self.max_calls = max(1, int(max_calls))
+        self.period = max(float(period), 0.01)
+        self._calls = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        loop = asyncio.get_running_loop()
+
+        while True:
+            async with self._lock:
+                now = loop.time()
+
+                while self._calls and (now - self._calls[0]) >= self.period:
+                    self._calls.popleft()
+
+                if len(self._calls) < self.max_calls:
+                    self._calls.append(now)
+                    return
+
+                sleep_for = self.period - (now - self._calls[0])
+
+            await asyncio.sleep(max(sleep_for, 0.01))
 
 
 class BarchartFetcher(BaseFetcher):
@@ -436,6 +469,24 @@ class BarchartFetcher(BaseFetcher):
 
         return df
 
+    @staticmethod
+    def _history_retry_sleep_seconds(
+        attempt: int,
+        *,
+        backoff_factor: float,
+        retry_after: Optional[str] = None,
+        jitter: float = 0.5,
+    ) -> float:
+        if retry_after:
+            try:
+                return max(float(retry_after), 0.0)
+            except (TypeError, ValueError):
+                pass
+        base_sleep = max(float(backoff_factor), 0.0) * (2 ** max(int(attempt) - 1, 0))
+        if jitter > 0.0:
+            base_sleep += random.uniform(0.0, float(jitter))
+        return max(base_sleep, 0.0)
+
     async def _fetch_intraday_timeseries(
         self,
         client: httpx.AsyncClient,
@@ -663,10 +714,11 @@ class BarchartFetcher(BaseFetcher):
         end_date: Optional[datetime] = None,
         columns: Optional[List[str]] = ["Symbol", "Date", "Open", "High", "Low", "Close", "Volume", "Open Interest"],
         set_dt_index: Optional[bool] = True,
-        max_retries: Optional[int] = 3,
-        backoff_factor: Optional[int] = 1,
+        max_retries: Optional[int] = 5,
+        backoff_factor: Optional[float] = 1.5,
         uid: Optional[str | int] = None,
         session_token: Optional[Tuple[str, str]] = None,
+        rate_limiter: Optional[AsyncRateLimiter] = None,
     ) -> Tuple[str, pd.DataFrame] | Tuple[str, pd.DataFrame, str]:
         token = session_token
         saw_429 = False
@@ -699,14 +751,14 @@ class BarchartFetcher(BaseFetcher):
                 }
 
             headers = _build_headers(token)
-
-            retries = 0
+            max_attempts = max(1, int(max_retries or 1))
             last_status_code: Optional[int] = None
-            while retries < max_retries:
+
+            for attempt in range(1, max_attempts + 1):
                 try:
-                    if retries > 0:
+                    if attempt > 1:
                         # First retry rotates to the next token; later retries can force-refresh.
-                        should_force_refresh = retries >= 2
+                        should_force_refresh = attempt >= 3
                         if last_status_code in (401, 403):
                             should_force_refresh = True
                         token = await self._get_shared_session_token_with_proxy_retry_async(
@@ -715,7 +767,37 @@ class BarchartFetcher(BaseFetcher):
                             log_context="Barchart EOD token refresh",
                         )
                         headers = _build_headers(token)
+
+                    if rate_limiter is not None:
+                        await rate_limiter.acquire()
+
                     response = await client.get(url, headers=headers)
+
+                    if response.status_code == 429:
+                        saw_429 = True
+                        last_status_code = 429
+                        sleep_for = self._history_retry_sleep_seconds(
+                            attempt,
+                            backoff_factor=float(backoff_factor or 0.0),
+                            retry_after=response.headers.get("Retry-After"),
+                        )
+                        self._logger.warning(
+                            f"Barchart EOD - 429 for {symbol} on attempt {attempt}/{max_attempts}. "
+                            f"Sleeping {sleep_for:.2f}s"
+                        )
+                        if attempt < max_attempts:
+                            await asyncio.sleep(sleep_for)
+                            continue
+                        self._last_history_status_by_symbol[str(symbol)] = {
+                            "status_code": 429,
+                            "reason": "max_retries_exceeded",
+                            "saw_429": saw_429,
+                        }
+                        self._logger.error(f"Barchart EOD - Max retries exceeded for {symbol}: HTTP 429")
+                        if uid:
+                            return symbol, None, uid
+                        return symbol, None
+
                     response.raise_for_status()
                     last_status_code = None
                     df = self._parse_aspx_response_to_df(response.content, columns=columns)
@@ -754,14 +836,14 @@ class BarchartFetcher(BaseFetcher):
                     return symbol, None
 
                 except httpx.HTTPStatusError as e:
+                    status = e.response.status_code if e.response is not None else last_status_code
                     try:
-                        last_status_code = int(response.status_code)
+                        last_status_code = int(status) if status is not None else None
                     except Exception:
                         last_status_code = None
-                    if response.status_code == 429:
+                    if last_status_code == 429:
                         saw_429 = True
-                    self._logger.error(f"Barchart EOD - Bad Status for {symbol}: {response.status_code}")
-                    if response.status_code == 404:
+                    if last_status_code == 404:
                         self._last_history_status_by_symbol[str(symbol)] = {
                             "status_code": 404,
                             "reason": "http_404",
@@ -771,25 +853,61 @@ class BarchartFetcher(BaseFetcher):
                             return symbol, None, uid
                         return symbol, None
 
-                    retries += 1
-                    wait_time = backoff_factor * (2 ** (retries - 1))
-                    self._logger.debug(f"Barchart EOD - Throttled for {symbol}. Waiting for {wait_time} seconds before retrying...")
-                    await asyncio.sleep(wait_time)
+                    if attempt < max_attempts:
+                        sleep_for = self._history_retry_sleep_seconds(
+                            attempt,
+                            backoff_factor=float(backoff_factor or 0.0),
+                            retry_after=e.response.headers.get("Retry-After") if e.response is not None else None,
+                        )
+                        self._logger.warning(
+                            f"Barchart EOD - HTTP {last_status_code} for {symbol} on attempt {attempt}/{max_attempts}. "
+                            f"Sleeping {sleep_for:.2f}s"
+                        )
+                        await asyncio.sleep(sleep_for)
+                        continue
+
+                    self._last_history_status_by_symbol[str(symbol)] = {
+                        "status_code": last_status_code,
+                        "reason": "max_retries_exceeded",
+                        "saw_429": saw_429,
+                    }
+                    self._logger.error(f"Barchart EOD - Max retries exceeded for {symbol}: {e}")
+                    if uid:
+                        return symbol, None, uid
+                    return symbol, None
 
                 except Exception as e:
                     last_status_code = None
-                    self._logger.error(f"Barchart EOD - Error for {symbol}: {str(e)}")
-                    retries += 1
-                    wait_time = backoff_factor * (2 ** (retries - 1))
-                    self._logger.debug(f"Barchart EOD - Throttled for {symbol}. Waiting for {wait_time} seconds before retrying...")
-                    await asyncio.sleep(wait_time)
+                    if attempt < max_attempts:
+                        sleep_for = self._history_retry_sleep_seconds(
+                            attempt,
+                            backoff_factor=float(backoff_factor or 0.0),
+                        )
+                        self._logger.warning(
+                            f"Barchart EOD - Error for {symbol} on attempt {attempt}/{max_attempts}: {e}. "
+                            f"Sleeping {sleep_for:.2f}s"
+                        )
+                        await asyncio.sleep(sleep_for)
+                        continue
+
+                    self._last_history_status_by_symbol[str(symbol)] = {
+                        "status_code": last_status_code,
+                        "reason": "max_retries_exceeded",
+                        "saw_429": saw_429,
+                    }
+                    self._logger.error(f"Barchart EOD - Max retries exceeded for {symbol}: {e}")
+                    if uid:
+                        return symbol, None, uid
+                    return symbol, None
 
             self._last_history_status_by_symbol[str(symbol)] = {
                 "status_code": last_status_code,
                 "reason": "max_retries_exceeded",
                 "saw_429": saw_429,
             }
-            raise ValueError(f"Barchart EOD - Max retries exceeded for {symbol}")
+            if uid:
+                return symbol, None, uid
+            return symbol, None
 
         except Exception as e:
             self._last_history_status_by_symbol.setdefault(
@@ -820,21 +938,25 @@ class BarchartFetcher(BaseFetcher):
         start_date: datetime,
         end_date: datetime,
         interval: Optional[Literal[1, 5, 10, 15, 30, 60, 120, 240]] = None,
-        max_concurrent_tasks: Optional[int] = 64,
-        max_keepalive_connections: Optional[int] = 16,
+        max_concurrent_tasks: Optional[int] = 8,
+        max_keepalive_connections: Optional[int] = 8,
+        max_requests_per_second: Optional[int] = 6,
         one_df: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
         merge_val_col: Optional[Literal["Open", "High", "Low", "Close", "Volume", "Open Interest"]] = "Close",
     ):
         barchart_symbols = [self._normalize_barchart_symbol(s) for s in barchart_symbols]
+        effective_max_concurrent = max(1, int(max_concurrent_tasks or 1))
+        effective_max_keepalive = max(1, int(max_keepalive_connections or effective_max_concurrent))
 
         async def build_eod_tasks(
             client: httpx.AsyncClient,
             barchart_symbols: List[str],
             start_date: datetime,
             end_date: datetime,
+            rate_limiter: Optional[AsyncRateLimiter],
         ):
-            semaphore = asyncio.Semaphore(max_concurrent_tasks)
+            semaphore = asyncio.Semaphore(effective_max_concurrent)
             tasks = [
                 self._fetch_eod_timeseries_with_semaphore(
                     semaphore=semaphore,
@@ -843,6 +965,7 @@ class BarchartFetcher(BaseFetcher):
                     start_date=start_date,
                     end_date=end_date,
                     set_dt_index=not one_df,
+                    rate_limiter=rate_limiter,
                 )
                 for symbol in barchart_symbols
             ]
@@ -857,7 +980,7 @@ class BarchartFetcher(BaseFetcher):
             end_date: datetime,
             interval: Optional[Literal[1, 5, 10, 15, 30, 60, 120, 240]] = None,
         ):
-            semaphore = asyncio.Semaphore(max_concurrent_tasks)
+            semaphore = asyncio.Semaphore(effective_max_concurrent)
             tasks = [
                 self._fetch_intraday_timeseries_with_semaphore(
                     semaphore=semaphore,
@@ -880,13 +1003,18 @@ class BarchartFetcher(BaseFetcher):
             end_date: datetime,
             interval: Optional[Literal[1, 5, 10, 15, 30, 60, 120, 240]] = None,
         ):
-            pool_size = max(1, int(max_concurrent_tasks or 1))
+            pool_size = effective_max_concurrent
             # Warm token slots for this proxy scope; requests still rotate per call.
             await asyncio.to_thread(self._get_shared_session_token_pool, pool_size, "BTC")
+            rate_limiter = (
+                AsyncRateLimiter(max_calls=max_requests_per_second, period=1.0)
+                if max_requests_per_second is not None
+                else None
+            )
 
             limits = httpx.Limits(
-                max_connections=max_concurrent_tasks,
-                max_keepalive_connections=max_keepalive_connections,
+                max_connections=effective_max_concurrent,
+                max_keepalive_connections=effective_max_keepalive,
             )
             async with httpx.AsyncClient(
                 limits=limits,
@@ -909,6 +1037,7 @@ class BarchartFetcher(BaseFetcher):
                         barchart_symbols=barchart_symbols,
                         start_date=start_date,
                         end_date=end_date,
+                        rate_limiter=rate_limiter,
                     )
                 return all_data
 
@@ -1022,8 +1151,9 @@ class BarchartFetcher(BaseFetcher):
         start: datetime | date | str,
         end: datetime | date | str,
         symbols: List[str],
-        max_concurrent_tasks: Optional[int] = 32,
-        max_keepalive_connections: Optional[int] = 16,
+        max_concurrent_tasks: Optional[int] = 8,
+        max_keepalive_connections: Optional[int] = 8,
+        max_requests_per_second: Optional[int] = 6,
         show_tqdm: Optional[bool] = False,
     ) -> Dict[str, pd.DataFrame]:
         start_dt = self._coerce_history_boundary(start)
@@ -1041,6 +1171,7 @@ class BarchartFetcher(BaseFetcher):
             interval=None,
             max_concurrent_tasks=max_concurrent_tasks,
             max_keepalive_connections=max_keepalive_connections,
+            max_requests_per_second=max_requests_per_second,
             one_df=False,
             show_tqdm=show_tqdm,
         )
