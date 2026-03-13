@@ -76,6 +76,10 @@ class SFRImpliedDistribution:
         ghost_extension_bps: float = 5.0,
         bin_width_bps: float = 25.0,
         use_sabr_vols: bool = True,
+        sabr_extrapolation: bool = True,
+        sabr_rate_floor: float = 0.0,
+        sabr_rate_ceiling_nstdev: float = 6.0,
+        sabr_n_strikes: int = 200,
         optimize_mixture_stds: bool = True,
         initial_mixture_std_bps: float = 30.0,
     ):
@@ -86,6 +90,10 @@ class SFRImpliedDistribution:
         self.ghost_extension_bps = ghost_extension_bps
         self.bin_width_bps = bin_width_bps
         self.use_sabr_vols = use_sabr_vols
+        self.sabr_extrapolation = sabr_extrapolation
+        self.sabr_rate_floor = sabr_rate_floor
+        self.sabr_rate_ceiling_nstdev = sabr_rate_ceiling_nstdev
+        self.sabr_n_strikes = sabr_n_strikes
         self.optimize_mixture_stds = optimize_mixture_stds
         self.initial_mixture_std_bps = initial_mixture_std_bps
 
@@ -98,7 +106,14 @@ class SFRImpliedDistribution:
         run_gm: bool = True,
     ) -> ImpliedDistributionSnapshot:
         """Extract implied distribution from a single smile snapshot."""
-        rnd_input = smile_to_rnd_input(smile, use_sabr_vols=self.use_sabr_vols)
+        rnd_input = smile_to_rnd_input(
+            smile,
+            use_sabr_vols=self.use_sabr_vols,
+            sabr_extrapolation=self.sabr_extrapolation,
+            sabr_rate_floor=self.sabr_rate_floor,
+            sabr_rate_ceiling_nstdev=self.sabr_rate_ceiling_nstdev,
+            sabr_n_strikes=self.sabr_n_strikes,
+        )
 
         bl_result = None
         gm_result = None
@@ -310,7 +325,14 @@ class SFRImpliedDistribution:
 
         for symbol, smile in smiles_by_symbol.items():
             sym = str(symbol).upper()
-            rnd_inputs_by_symbol[sym] = smile_to_rnd_input(smile, use_sabr_vols=self.use_sabr_vols)
+            rnd_inputs_by_symbol[sym] = smile_to_rnd_input(
+                smile,
+                use_sabr_vols=self.use_sabr_vols,
+                sabr_extrapolation=self.sabr_extrapolation,
+                sabr_rate_floor=self.sabr_rate_floor,
+                sabr_rate_ceiling_nstdev=self.sabr_rate_ceiling_nstdev,
+                sabr_n_strikes=self.sabr_n_strikes,
+            )
             if run_bl or run_legacy_gm:
                 try:
                     contract_snapshots[sym] = self.extract(

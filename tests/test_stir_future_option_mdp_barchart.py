@@ -346,6 +346,11 @@ def test_live_snapshot_atm_and_25d_aliases(monkeypatch):
     assert atm.symbol() == "SFRZ30|9600S"
     assert atm.price() == pytest.approx(0.27)  # 0.16 call + 0.11 put
     assert d25.symbol() == "SFRZ30|9625C"
+    assert atm.meta()["raw_quote_legs"] == {
+        "SFRZ30|9600C": _quote(bid=0.15, ask=0.17, last=0.16),
+        "SFRZ30|9600P": _quote(bid=0.10, ask=0.12, last=0.11),
+    }
+    assert d25.meta()["raw_quote"] == _quote(bid=0.11, ask=0.13, last=0.12)
 
 
 def test_live_snapshot_atmf_offset_aliases(monkeypatch):

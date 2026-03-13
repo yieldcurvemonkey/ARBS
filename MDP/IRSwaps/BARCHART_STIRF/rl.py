@@ -371,7 +371,7 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
 
         # support mixed interpolation: https://quant.stackexchange.com/questions/81563/second-layer-instruments-in-rateslib
         self._STIRF_CURVE_CONFIGS = {
-            "USD-SOFR-1D-Q8STIRT": {
+            "USD-SOFR-1D-Q12STIRT": {
                 "fetch_pricers_func": self.stirf_mdp.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp.get_bulk_data,
                 "instruments": [
@@ -389,7 +389,7 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
                     "SFRCM12",
                 ],
                 "reference_key": "USD-SOFR-1D",
-                "max_tenor_from_timestamp_months": 24,
+                "max_tenor_from_timestamp_months": 36,
                 "rl_irs_spec": "usd_irs_lt_2y",
             },
             "USD-SOFR-1D-Q12x3STIRT": {

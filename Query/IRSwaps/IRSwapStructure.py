@@ -12,7 +12,7 @@ import QuantLib as ql
 from rateslib.scheduling import get_imm, next_imm
 
 from Query.Base.BaseStructure import BaseStructureFunctionMap
-from Query.IRSwaps._CENTRAL_BANK_DATES import _CENTRAL_BANK_DATES
+from Query.IRSwaps._CENTRAL_BANK_DATES import resolve_central_bank_tenor
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve, _IRSwapGenericObject
 from Query.IRSwaps.backends.quantlib.utils import ql_date_to_pydate
 
@@ -105,15 +105,22 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
             effective_date = self._to_dt(imm_date, current_curve.reference_date())
             maturity_date = self._to_dt(mat_date, effective_date)
             fwd, tenor = None, None
-        elif isinstance(tenor, str) and tenor.lower() in _CENTRAL_BANK_DATES[current_curve.id()]:
-            effective_date = _CENTRAL_BANK_DATES[current_curve.id()][tenor.lower()][0]
-            maturity_date = _CENTRAL_BANK_DATES[current_curve.id()][tenor.lower()][1]
-            fwd, tenor = None, None
-        elif isinstance(tenor, str) and "x" in tenor:
-            fwd, tenor = tenor.split("x")
-            fwd, tenor = fwd, tenor
         else:
-            if tenor:
+            if isinstance(tenor, str):
+                ref_date = current_curve.reference_date()
+                if isinstance(ref_date, ql.Date):
+                    ref_date = ql_date_to_pydate(ref_date)
+
+                central_bank_dates = resolve_central_bank_tenor(current_curve.id(), tenor, as_of=ref_date)
+                if central_bank_dates is not None:
+                    effective_date, maturity_date = central_bank_dates
+                    fwd, tenor = None, None
+                elif "x" in tenor:
+                    fwd, tenor = tenor.split("x")
+                    fwd, tenor = fwd, tenor
+                else:
+                    fwd, tenor = "0D", tenor if tenor else None
+            elif tenor:
                 fwd, tenor = "0D", tenor if tenor else None
             elif effective_date and maturity_date:
                 fwd, tenor = None, None

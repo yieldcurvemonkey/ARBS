@@ -1,5 +1,8 @@
 import datetime
 import logging
+import re
+import pandas as pd
+from typing import Dict, Optional, Tuple
 
 from definitions.IRSwaps import CURVE_DEFINITIONS
 
@@ -293,3 +296,111 @@ def _load_central_bank_dates():
 
 
 _CENTRAL_BANK_DATES = _load_central_bank_dates()
+
+
+_CURVE_TO_CB = {
+    "USD-SOFR-1D": "FOMC",
+    "USD-FEDFUNDS": "FOMC",
+    "USD-OIS": "FOMC",
+    "EUR-ESTR": "ECB",
+    "JPY-TONA": "BOJ",
+    "JPY-TONAR": "BOJ",
+    "GBP-SONIA": "BOE",
+    "CAD-CORRA": "BOC",
+    "CHF-SARON": "SNB",
+}
+
+_PRIMARY_CURVE_BY_CB = {
+    "FOMC": "USD-SOFR-1D",
+    "ECB": "EUR-ESTR",
+    "BOJ": "JPY-TONA",
+    "BOE": "GBP-SONIA",
+    "BOC": "CAD-CORRA",
+    "SNB": "CHF-SARON",
+}
+
+_EXPLICIT_CB_TOKEN_RE = re.compile(r"^(?P<cb>[a-z]+)_(?P<label>[a-z]{3}\d{2})$", re.IGNORECASE)
+_RANKED_CB_TOKEN_RE = re.compile(r"^(?P<cb>[a-z]+)_(?P<rank>\d+)$", re.IGNORECASE)
+
+
+def central_bank_for_curve(curve_id: Optional[str]) -> Optional[str]:
+    if curve_id is None:
+        return None
+    return _CURVE_TO_CB.get(str(curve_id).strip().upper())
+
+
+def central_bank_date_map(curve_id: Optional[str]) -> Dict[str, Tuple[datetime.date, datetime.date]]:
+    if curve_id is None:
+        return {}
+
+    curve_key = str(curve_id).strip().upper()
+    direct = _CENTRAL_BANK_DATES.get(curve_key)
+    if direct:
+        return direct
+
+    cb_name = central_bank_for_curve(curve_key)
+    if cb_name is None:
+        return {}
+
+    primary_curve = _PRIMARY_CURVE_BY_CB.get(cb_name)
+    if primary_curve:
+        primary_dates = _CENTRAL_BANK_DATES.get(primary_curve)
+        if primary_dates:
+            return primary_dates
+
+    for candidate_curve, meeting_map in _CENTRAL_BANK_DATES.items():
+        if central_bank_for_curve(candidate_curve) == cb_name:
+            return meeting_map
+
+    return {}
+
+
+def resolve_central_bank_tenor(
+    curve_id: Optional[str],
+    token: Optional[str],
+    *,
+    as_of: Optional[datetime.date] = None,
+) -> Optional[Tuple[datetime.date, datetime.date]]:
+    if not isinstance(token, str):
+        return None
+
+    tenor_token = token.strip().lower()
+    if not tenor_token:
+        return None
+
+    meeting_map = central_bank_date_map(curve_id)
+    if tenor_token in meeting_map:
+        return meeting_map[tenor_token]
+
+    explicit = _EXPLICIT_CB_TOKEN_RE.match(tenor_token)
+    ranked = _RANKED_CB_TOKEN_RE.match(tenor_token)
+    if explicit is None and ranked is None:
+        return None
+
+    expected_cb = central_bank_for_curve(curve_id)
+    if expected_cb is None:
+        raise ValueError(f"Central-bank tenor '{token}' is not supported for curve '{curve_id}'.")
+
+    requested_cb = (explicit or ranked).group("cb").upper()
+    if requested_cb != expected_cb:
+        raise ValueError(f"Central-bank tenor '{token}' does not match curve '{curve_id}' ({expected_cb}).")
+
+    if explicit is not None:
+        label = explicit.group("label").lower()
+        resolved = meeting_map.get(label)
+        if resolved is None:
+            raise ValueError(f"Unknown central-bank tenor '{token}' for curve '{curve_id}'.")
+        return resolved
+
+    rank = int(ranked.group("rank"))
+    if rank <= 0:
+        raise ValueError(f"Central-bank tenor rank must be >= 1 in '{token}'.")
+
+    as_of_date = as_of or datetime.date.today()
+    upcoming = sorted(
+        ((pd.Timestamp(effective), pd.Timestamp(maturity)) for effective, maturity in meeting_map.values() if pd.Timestamp(effective) >= pd.Timestamp(as_of_date)),
+        key=lambda pair: pair[0],
+    )
+    if rank > len(upcoming):
+        raise ValueError(f"Central-bank tenor '{token}' cannot be resolved for {as_of_date.isoformat()} on curve '{curve_id}'.")
+    return upcoming[rank - 1]

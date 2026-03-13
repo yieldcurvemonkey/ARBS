@@ -4659,6 +4659,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 "askSize": _to_float(q.get("askSize")),
                 "netChange": _to_float(q.get("netChange")),
                 "quoteTime": _to_float(q.get("quoteTime")),
+                "rawQuote": dict(q),
             }
             rows_by_symbol[canonical_symbol] = dict(row)
             bucket = rows_by_contract.setdefault(contract, {"call": [], "put": []})
@@ -4925,6 +4926,11 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         vendor_vega = _to_float(row.get("vega", row.get("Vega")))
         vendor_theta = _to_float(row.get("theta", row.get("Theta")))
 
+        vendor_row = dict(row)
+        raw_quote = vendor_row.pop("rawQuote", None)
+        if not isinstance(raw_quote, dict):
+            raw_quote = dict(vendor_row)
+
         metadata = {
             "schema": 1,
             "source": source,
@@ -4942,7 +4948,8 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             "vendor_gamma": vendor_gamma,
             "vendor_vega": vendor_vega,
             "vendor_theta": vendor_theta,
-            "vendor_row": dict(row),
+            "vendor_row": vendor_row,
+            "raw_quote": dict(raw_quote),
         }
 
         return QLSTIRFutureOptionPricer(
@@ -4984,6 +4991,14 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             vals = [v for v in [call_pricer.iv_normal(), put_pricer.iv_normal()] if math.isfinite(v)]
             iv = float(sum(vals) / len(vals)) if vals else float("nan")
 
+        raw_quote_legs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        for pr in (call_pricer, put_pricer):
+            meta = pr.meta()
+            meta_dict = meta if isinstance(meta, dict) else {}
+            raw_quote = meta_dict.get("raw_quote", meta_dict.get("vendor_quote", meta_dict.get("vendor_row")))
+            if isinstance(raw_quote, dict):
+                raw_quote_legs[str(pr.symbol())] = dict(raw_quote)
+
         metadata = {
             "schema": 1,
             "source": "SYNTH_STRADDLE",
@@ -4993,6 +5008,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             "curve_name": call_pricer.meta().get("curve_name"),
             "curve_error": call_pricer.meta().get("curve_error") or put_pricer.meta().get("curve_error"),
             "vendor_legs": [call_pricer.meta().get("vendor_row"), put_pricer.meta().get("vendor_row")],
+            "raw_quote_legs": dict(raw_quote_legs),
         }
 
         return QLSTIRFutureOptionPricer(

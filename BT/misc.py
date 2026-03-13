@@ -10,30 +10,42 @@ def ql_cal_date_range(
     ql_cal: ql.Calendar,
     start: datetime.datetime,
     end: datetime.datetime,
-    freq: Optional[str] = "1b",
-    open_time: Optional[datetime.time] = datetime.time(7, 00),
-    close_time: Optional[datetime.time] = datetime.time(15, 00),
-    to_date=False,
+    freq: str = "1b",
+    open_time: datetime.time = datetime.time(7, 0),
+    close_time: datetime.time = datetime.time(15, 0),
+    to_date: bool = False,
 ):
-    if type(start) == datetime.datetime and start.tzinfo is not None:
+    if isinstance(start, datetime.datetime) and start.tzinfo is not None:
         assert str(start.tzinfo) == str(end.tzinfo), "must be from same tz!"
-        # assert start.time() == end.time(), "must be same closes!"
 
     def _to_ql_date(dt: datetime.datetime):
         return ql.Date(dt.day, dt.month, dt.year)
 
+    def _in_session(ts: pd.Timestamp) -> bool:
+        t = ts.time()
+        if open_time <= close_time:
+            return open_time <= t <= close_time
+        else:
+            # overnight session, e.g. 17:00 -> 16:00 next day
+            return t >= open_time or t <= close_time
+
+    def _session_date(ts: pd.Timestamp) -> pd.Timestamp:
+        # For overnight sessions, times after open belong to next calendar day
+        if open_time > close_time and ts.time() >= open_time:
+            return ts + pd.Timedelta(days=1)
+        return ts
+
     pd_range = pd.date_range(start=start, end=end, freq=freq)
-    date_filtered_range = [d for d in pd_range if ql_cal.isBusinessDay(_to_ql_date(d))]
-    if "min" in freq or "hr" in freq:
-        time_filtered_range = []
-        for ts in date_filtered_range:
-            if ts.time() >= open_time and ts.time() <= close_time:
-                time_filtered_range.append(ts)
-        return time_filtered_range
-    
+
+    filtered = []
+    for ts in pd_range:
+        session_dt = _session_date(ts)
+        if ql_cal.isBusinessDay(_to_ql_date(session_dt)) and _in_session(ts):
+            filtered.append(ts)
+
     if to_date:
-        return [d.date() for d in date_filtered_range] 
-    return date_filtered_range
+        return [d.date() for d in filtered]
+    return filtered
 
 
 def _to_ql(d: datetime.date) -> ql.Date:
