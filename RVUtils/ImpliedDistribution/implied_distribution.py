@@ -133,6 +133,7 @@ class SFRImpliedDistribution:
                 n_ghost_points=self.n_ghost_points,
                 ghost_extension_bps=self.ghost_extension_bps,
                 bin_width_bps=self.bin_width_bps,
+                rate_floor=self.sabr_rate_floor,
             )
 
         if run_gm and config is not None:
