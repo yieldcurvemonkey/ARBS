@@ -17,7 +17,7 @@ from pandas.tseries.offsets import BDay
 
 import rateslib as rl
 
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.LayeredCacheMixin import LayeredCacheMixin
 from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
 
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
@@ -34,7 +34,7 @@ def is_business_day(date: pd.Timestamp | datetime.date):
     return bool(len(pd.bdate_range(date, date)))
 
 
-class CMEFetcher(BaseFetcher, DiskCacheMixin):
+class CMEFetcher(BaseFetcher, LayeredCacheMixin):
     _base_cme_ftp_url = "https://www.cmegroup.com/ftp"
     _base_cme_ftp_headers = {
         "authority": "www.cmegroup.com",
@@ -75,10 +75,10 @@ class CMEFetcher(BaseFetcher, DiskCacheMixin):
             warning_verbose=warning_verbose,
             error_verbose=error_verbose,
         )
-        DiskCacheMixin.__init__(self)
+        LayeredCacheMixin.__init__(self)
 
     def _ensure_cache(self):
-        cache_path = DiskCacheMixin.default_cache_path("CMEFetcher_curve_reports")
+        cache_path = LayeredCacheMixin.default_cache_path("CMEFetcher_curve_reports")
         self.open_cache(
             cache_attr="_curve_report_cache",
             path=cache_path,

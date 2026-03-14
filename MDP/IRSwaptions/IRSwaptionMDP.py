@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Iterable, Literal, Optional
 
 import QuantLib as ql
 
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.LayeredCacheMixin import LayeredCacheMixin
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
@@ -91,7 +91,7 @@ def _normalize_dates(values: Iterable[DateLike]) -> list[dt.date]:
     return sorted(out)
 
 
-class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext]):
+class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContext]):
     _CACHE_VERSION = "v1"
     _CACHE_ATTR = "_irswaption_mdp_cache"
 
@@ -116,7 +116,7 @@ class IRSwaptionMDP(DiskCacheMixin, MarketDataProvider[IRSwaptionMarketContext])
         self._runtime_cache: dict[str, IRSwaptionMarketContext] = {}
         self._curve_mdp = IRSwapsMDP(source=curve_source, **kwargs)
 
-        DiskCacheMixin.__init__(self, source=source, force_refresh=force_refresh, **kwargs)
+        LayeredCacheMixin.__init__(self, source=source, force_refresh=force_refresh, **kwargs)
 
         default_req_token = self._request_kwargs_token(self._default_request_kwargs)
         stem = cache_stem or f"IRSwaptionMDP_{self._CACHE_VERSION}_{source}_{curve_source}_{default_req_token}"

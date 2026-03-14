@@ -10,7 +10,7 @@ import pandas as pd
 import tqdm
 import tqdm.asyncio
 
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.LayeredCacheMixin import LayeredCacheMixin
 
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -65,7 +65,7 @@ class BaseFetcher:
             self._logger.disabled = True
 
 
-class FedInvestDataFetcher(BaseFetcher, DiskCacheMixin):
+class FedInvestDataFetcher(BaseFetcher, LayeredCacheMixin):
     _FEDINVEST_CACHE = "_fedinvest_prices_cache"
 
     def __init__(
@@ -84,7 +84,7 @@ class FedInvestDataFetcher(BaseFetcher, DiskCacheMixin):
             info_verbose=info_verbose,
             error_verbose=error_verbose,
         )
-        DiskCacheMixin.__init__(self)
+        LayeredCacheMixin.__init__(self)
 
         self._open_count = 0
         self._open_lock = threading.RLock()
@@ -93,7 +93,7 @@ class FedInvestDataFetcher(BaseFetcher, DiskCacheMixin):
     def _ensure_cache(self):
         if self._cache_ready and hasattr(self, self._FEDINVEST_CACHE):
             return
-        cache_path = DiskCacheMixin.default_cache_path("FedInvest_Prices_Cache")
+        cache_path = LayeredCacheMixin.default_cache_path("FedInvest_Prices_Cache")
         self.open_cache(
             cache_attr=self._FEDINVEST_CACHE,
             path=cache_path,

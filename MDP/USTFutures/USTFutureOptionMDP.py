@@ -25,7 +25,7 @@ import QuantLib as ql
 import rateslib as rl
 import requests
 
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.LayeredCacheMixin import LayeredCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.sabr_calibration import (
     _collapse_duplicate_strikes,
@@ -1575,7 +1575,7 @@ def _asof_index_position(index: pd.Index, target: pd.Timestamp) -> Optional[int]
         return None
     return pos
 
-class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
+class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
     _UST_OPTION_CACHE = "_ust_option_pricer_cache"
     _BARCHART_STATE: Dict[str, Any] = {}
     _CURVE_STATE: Dict[str, Any] = {}
@@ -1583,7 +1583,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
     def __init__(self, source: str = "BARCHART_USTFO-QL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
-        DiskCacheMixin.__init__(self)
+        LayeredCacheMixin.__init__(self)
 
         self.cache_full_intraday_fetch = bool(kwargs.get("cache_full_intraday_fetch", False))
         self._schwab_app_key = kwargs.get("schwab_app_key") or os.getenv("SCHWABDEV_APP_KEY") or os.getenv("SCHWAB_APP_KEY") or "zm3GYiQREbtrpBHACURcNzFJIObUq2aX"
@@ -1648,7 +1648,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     def _ensure_pricer_cache(self) -> None:
         if self._cache_ready and hasattr(self, self._UST_OPTION_CACHE):
             return
-        cache_path = DiskCacheMixin.default_cache_path("USTFutureOptionPricer_Cache")
+        cache_path = LayeredCacheMixin.default_cache_path("USTFutureOptionPricer_Cache")
         self.open_cache(cache_attr=self._UST_OPTION_CACHE, path=cache_path, encode=None, decode=None)
         self._cache_ready = True
 

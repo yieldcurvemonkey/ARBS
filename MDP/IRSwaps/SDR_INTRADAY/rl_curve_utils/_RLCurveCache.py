@@ -5,7 +5,7 @@ from typing import List, Optional, Union, Literal, Tuple, Dict
 
 import pandas as pd
 
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.LayeredCacheMixin import LayeredCacheMixin
 
 
 def _series_sha1(s: pd.Series) -> str:
@@ -45,7 +45,7 @@ def _make_key(
     return re.sub(r"[^A-Za-z0-9_.-]", "_", base)[:200]
 
 
-class _RLCurveCache(DiskCacheMixin):
+class _RLCurveCache(LayeredCacheMixin):
 
     def __init__(
         self,

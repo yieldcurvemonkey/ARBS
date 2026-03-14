@@ -11,7 +11,7 @@ from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 import pandas as pd
 from tqdm.auto import tqdm as _tqdm
 
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.LayeredCacheMixin import LayeredCacheMixin
 from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP, IRSwaptionMarketContext
 from Query.Base.query_resolution import resolve_query
 import Query.IRSwaptions.adapter  # noqa: F401
@@ -100,7 +100,7 @@ def _build_row_for_query(
     return ref_dt, col, float(value)
 
 
-class IRSwaptionsTB(DiskCacheMixin, BaseTimeseriesTB):
+class IRSwaptionsTB(LayeredCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_irswaptions_tb_cache"
     _CACHE_VERSION = "v1"
     _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPTIONS."
@@ -116,7 +116,7 @@ class IRSwaptionsTB(DiskCacheMixin, BaseTimeseriesTB):
         show_tqdm: bool = True,
         logger: Optional[logging.Logger] = None,
     ):
-        DiskCacheMixin.__init__(
+        LayeredCacheMixin.__init__(
             self,
             use_btree=use_btree,
             force_refresh=force_refresh,
