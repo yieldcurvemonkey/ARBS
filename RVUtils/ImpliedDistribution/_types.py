@@ -419,10 +419,23 @@ class JointDistributionComparison:
 
 @dataclass
 class FedScenarioConfig:
-    """Configurable scenario definitions for Gaussian mixture decomposition."""
+    """Configurable scenario definitions for Gaussian mixture decomposition.
+
+    Parameters
+    ----------
+    scenarios : list of ScenarioDefinition
+        The scenario definitions (mean rates and optional fixed std devs).
+    bin_width_bps : float
+        Width of rate bins for BL scenario probabilities.
+    scenarios_only : bool
+        When True, the distribution is represented solely by the GM scenario
+        weights (which sum to 1.0).  BL extraction is skipped, eliminating
+        unrealistic tail mass at negative rates that the BL spline can produce.
+    """
 
     scenarios: List[ScenarioDefinition]
     bin_width_bps: float = 25.0
+    scenarios_only: bool = False
 
     @staticmethod
     def default_sofr_scenarios(
@@ -430,6 +443,7 @@ class FedScenarioConfig:
         cut_size_bps: float = 25.0,
         n_cuts_range: Sequence[int] = (0, 1, 2, 3, 5),
         default_std_bps: Optional[float] = None,
+        scenarios_only: bool = False,
     ) -> "FedScenarioConfig":
         """Build standard Fed cut/hike scenarios.
 
@@ -447,4 +461,4 @@ class FedScenarioConfig:
                 label = f"{n} cut{'s' if n > 1 else ''} ({mean:.2f}%)"
             std = default_std_bps / 100.0 if default_std_bps is not None else None
             scenarios.append(ScenarioDefinition(label=label, mean_rate=mean, std_rate=std))
-        return FedScenarioConfig(scenarios=scenarios)
+        return FedScenarioConfig(scenarios=scenarios, scenarios_only=scenarios_only)

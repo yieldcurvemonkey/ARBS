@@ -207,6 +207,30 @@ def plot_scenario_weights_timeseries(
     return fig
 
 
+def _plot_discrete_scenario_bars(
+    gm: GaussianMixtureResult,
+    *,
+    ax: plt.Axes,
+    title: Optional[str] = None,
+    color: str = "steelblue",
+) -> None:
+    """Plot discrete scenario probabilities as bars at their mean rates."""
+    labels = [s.label for s in gm.scenarios]
+    weights = gm.weights * 100
+    x = np.arange(len(labels))
+    colors = [_COLORS[i % len(_COLORS)] for i in range(len(labels))]
+    ax.bar(x, weights, color=colors, edgecolor="white", linewidth=0.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, fontsize=8, ha="right")
+    ax.set_ylabel("Probability (%)")
+    ax.set_title(title or "Scenario Probabilities")
+    ax.grid(True, axis="y", alpha=0.3)
+    # Annotate
+    for i, w in enumerate(weights):
+        if w >= 1.0:
+            ax.text(i, w + 0.3, f"{w:.1f}%", ha="center", fontsize=7)
+
+
 def plot_rnd_comparison(
     bl: BreedenLitzenbergerResult,
     gm: GaussianMixtureResult,
@@ -265,7 +289,7 @@ def plot_distribution_change(
         fontweight="bold",
     )
 
-    # ── Top-left: Overlaid BL densities ──────────────────────────────────
+    # ── Top-left: Overlaid BL densities (or GM fallback) ─────────────────
     ax = axes[0, 0]
     if bl1 is not None and bl2 is not None:
         # Interpolate both onto a common grid
@@ -287,9 +311,25 @@ def plot_distribution_change(
         vis_hi = max(bl1.percentile(99), bl2.percentile(99))
         ax.set_xlim(vis_lo, vis_hi)
         ax.legend(fontsize=7)
+    elif gm1 is not None and gm2 is not None:
+        # scenarios_only fallback: use GM composite densities
+        lo = min(gm1.strike_grid_rate[0], gm2.strike_grid_rate[0])
+        hi = max(gm1.strike_grid_rate[-1], gm2.strike_grid_rate[-1])
+        common = np.linspace(lo, hi, 2000)
+        d1 = np.interp(common, gm1.strike_grid_rate, gm1.composite_density)
+        d2 = np.interp(common, gm2.strike_grid_rate, gm2.composite_density)
+
+        ax.plot(common, d1, color="#1f77b4", linewidth=1.5, label=label1)
+        ax.plot(common, d2, color="#d62728", linewidth=1.5, label=label2)
+        diff = d2 - d1
+        ax.fill_between(common, d1, d2, where=diff > 0, alpha=0.25, color="green", label="Density gain")
+        ax.fill_between(common, d1, d2, where=diff < 0, alpha=0.25, color="red", label="Density loss")
+        ax.axvline(gm1.input.forward_rate, color="#1f77b4", linestyle="--", linewidth=0.8, alpha=0.6)
+        ax.axvline(gm2.input.forward_rate, color="#d62728", linestyle="--", linewidth=0.8, alpha=0.6)
+        ax.legend(fontsize=7)
     else:
-        ax.text(0.5, 0.5, "BL not computed", ha="center", va="center", transform=ax.transAxes)
-    ax.set_title("Risk-Neutral Density Shift")
+        ax.text(0.5, 0.5, "Not computed", ha="center", va="center", transform=ax.transAxes)
+    ax.set_title("Risk-Neutral Density Shift" + (" (GM)" if bl1 is None and gm1 is not None else ""))
     ax.set_xlabel("Rate (%)")
     ax.set_ylabel("Density")
     ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
@@ -323,7 +363,7 @@ def plot_distribution_change(
     ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
     ax.grid(True, alpha=0.3)
 
-    # ── Mid-left: Grouped bar chart of bin probabilities ─────────────────
+    # ── Mid-left: Grouped bar chart of bin probabilities (or GM fallback)
     ax = axes[1, 0]
     if bl1 is not None and bl2 is not None:
         # Find common bins (union of labels present in either)
@@ -344,11 +384,28 @@ def plot_distribution_change(
             ax.set_xticks(x)
             ax.set_xticklabels(labels_f, rotation=45, fontsize=7)
             ax.legend(fontsize=8)
+        ax.set_title("Probability Mass by Rate Bin (25bp)")
+        ax.set_xlabel("Rate bin midpoint (%)")
+    elif gm1 is not None and gm2 is not None:
+        # scenarios_only fallback: grouped bars of GM scenario weights
+        labels_s = [s.label for s in gm2.scenarios]
+        w1_map = {s.label: float(w) for s, w in zip(gm1.scenarios, gm1.weights)}
+        w1s = np.array([w1_map.get(lbl, 0.0) for lbl in labels_s]) * 100
+        w2s = np.array([float(w) for w in gm2.weights]) * 100
+        x = np.arange(len(labels_s))
+        w = 0.35
+        ax.bar(x - w / 2, w1s, w, color="#1f77b4", alpha=0.8, label=label1)
+        ax.bar(x + w / 2, w2s, w, color="#d62728", alpha=0.8, label=label2)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels_s, rotation=30, fontsize=7, ha="right")
+        ax.legend(fontsize=8)
+        ax.set_title("Scenario Probability Change")
+        ax.set_xlabel("Scenario")
     else:
-        ax.text(0.5, 0.5, "BL not computed", ha="center", va="center", transform=ax.transAxes)
-    ax.set_title("Probability Mass by Rate Bin (25bp)")
+        ax.text(0.5, 0.5, "Not computed", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title("Probability Mass by Rate Bin (25bp)")
+        ax.set_xlabel("Rate bin midpoint (%)")
     ax.set_ylabel("Probability (%)")
-    ax.set_xlabel("Rate bin midpoint (%)")
     ax.grid(True, axis="y", alpha=0.3)
 
     # ── Mid-right: Scenario weight deltas ────────────────────────────────
@@ -394,6 +451,13 @@ def plot_distribution_change(
         rows.append(("Kurtosis", f"{bl1.kurtosis:.3f}", f"{bl2.kurtosis:.3f}", f"{bl2.kurtosis - bl1.kurtosis:+.3f}"))
         rows.append(("5th Pctl", f"{bl1.percentile(5):.3f}%", f"{bl2.percentile(5):.3f}%", f"{bl2.percentile(5) - bl1.percentile(5):+.3f}%"))
         rows.append(("95th Pctl", f"{bl1.percentile(95):.3f}%", f"{bl2.percentile(95):.3f}%", f"{bl2.percentile(95) - bl1.percentile(95):+.3f}%"))
+    elif gm1 is not None and gm2 is not None:
+        # scenarios_only fallback: derive stats from GM weights
+        fwd1, fwd2 = gm1.input.forward_rate, gm2.input.forward_rate
+        mean1 = float(np.dot(gm1.weights, [s.mean_rate for s in gm1.scenarios]))
+        mean2 = float(np.dot(gm2.weights, [s.mean_rate for s in gm2.scenarios]))
+        rows.append(("Forward Rate", f"{fwd1:.3f}%", f"{fwd2:.3f}%", f"{fwd2 - fwd1:+.3f}%"))
+        rows.append(("Mean Rate", f"{mean1:.3f}%", f"{mean2:.3f}%", f"{mean2 - mean1:+.3f}%"))
 
     if rows:
         col_labels = ["Metric", label1, label2, "Δ"]
@@ -456,13 +520,25 @@ def plot_snapshot_dashboard(
     *,
     figsize: tuple = (18, 10),
 ) -> plt.Figure:
-    """Full 2x2 dashboard: RND density, scenario probs, GM components, weights bar."""
+    """Full 2x2 dashboard: RND density, scenario probs, GM components, weights bar.
+
+    When ``scenarios_only`` is active (bl_result is None, gm_result present),
+    the left panels show the GM composite density and discrete scenario weights
+    instead of the BL-derived panels.
+    """
     fig, axes = plt.subplots(2, 2, figsize=figsize)
     fig.suptitle(f"Implied Distribution — {snapshot.symbol} as of {snapshot.as_of}", fontsize=14, fontweight="bold")
+
+    scenarios_only = snapshot.bl_result is None and snapshot.gm_result is not None
 
     if snapshot.bl_result is not None:
         plot_rnd_density(snapshot.bl_result, ax=axes[0, 0], title="Risk-Neutral Density (BL)")
         plot_scenario_probabilities(snapshot.bl_result, ax=axes[1, 0], title="Scenario Probabilities (25bp bins)")
+    elif scenarios_only:
+        # Fall back to GM composite density
+        plot_gaussian_mixture(snapshot.gm_result, ax=axes[0, 0], title="Risk-Neutral Density (GM)")
+        # Discrete scenario weight bars
+        _plot_discrete_scenario_bars(snapshot.gm_result, ax=axes[1, 0], title="Scenario Probabilities")
     else:
         for ax in [axes[0, 0], axes[1, 0]]:
             ax.text(0.5, 0.5, "BL not computed", ha="center", va="center", transform=ax.transAxes)
