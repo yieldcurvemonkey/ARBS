@@ -106,6 +106,13 @@ class SFRImpliedDistribution:
         run_gm: bool = True,
     ) -> ImpliedDistributionSnapshot:
         """Extract implied distribution from a single smile snapshot."""
+        config = scenario_config or self.scenario_config
+
+        # scenarios_only: skip BL, use only GM scenario weights as the distribution
+        if config is not None and config.scenarios_only:
+            run_bl = False
+            run_gm = True
+
         rnd_input = smile_to_rnd_input(
             smile,
             use_sabr_vols=self.use_sabr_vols,
@@ -128,7 +135,6 @@ class SFRImpliedDistribution:
                 bin_width_bps=self.bin_width_bps,
             )
 
-        config = scenario_config or self.scenario_config
         if run_gm and config is not None:
             gm_result = extract_gaussian_mixture(
                 rnd_input,
