@@ -7,9 +7,16 @@ table.  Idempotent: uses ON CONFLICT … DO UPDATE so re-running is safe.
 
 Usage
 -----
-    python -m Caching.migrate_to_postgres              # migrate all caches
-    python -m Caching.migrate_to_postgres --dry-run     # count entries only
-    python -m Caching.migrate_to_postgres --dir /path   # migrate specific dir
+    python -m Caching.migrate_to_postgres                  # migrate all caches
+    python -m Caching.migrate_to_postgres --dry-run         # count entries only
+    python -m Caching.migrate_to_postgres --dir /path       # migrate specific dir
+    python -m Caching.migrate_to_postgres --skip-vacuum     # skip post-migration VACUUM
+
+After bulk upserts complete, the script automatically runs
+``VACUUM (VERBOSE, ANALYZE)`` on the cache table to reclaim dead tuples
+and refresh planner statistics.  Use ``--skip-vacuum`` to disable this
+(not recommended — autovacuum will eventually clean up, but with more
+bloat in the interim).
 """
 from __future__ import annotations
 
@@ -143,6 +150,35 @@ def migrate_directory(
     }
 
 
+def _post_migration_vacuum(engine: "Engine") -> None:
+    """
+    Run VACUUM (ANALYZE) on the cache table after bulk migration.
+
+    Bulk upserts generate dead tuples for every existing row that was
+    overwritten.  A manual VACUUM reclaims that space immediately rather
+    than waiting for autovacuum's next pass, and ANALYZE refreshes planner
+    statistics so our indexes are used optimally.
+
+    NOTE: VACUUM cannot run inside a transaction block, so we use the
+    raw psycopg2 connection with autocommit=True.
+    """
+    from Caching.pg_backend import TABLE
+
+    logger.info("Running VACUUM (ANALYZE) on %s …", TABLE)
+    t0 = time.time()
+    raw_conn = engine.raw_connection()
+    try:
+        raw_conn.autocommit = True
+        cur = raw_conn.cursor()
+        cur.execute(f"VACUUM (VERBOSE, ANALYZE) {TABLE}")
+        cur.close()
+    except Exception:
+        logger.warning("VACUUM (ANALYZE) failed — autovacuum will handle it eventually", exc_info=True)
+    finally:
+        raw_conn.close()
+    logger.info("VACUUM (ANALYZE) completed in %.1fs", time.time() - t0)
+
+
 def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Migrate warm diskcache to Postgres L2")
     parser.add_argument(
@@ -159,6 +195,11 @@ def main(argv: Optional[list[str]] = None) -> None:
     )
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument("--dry-run", action="store_true", help="Count entries without writing")
+    parser.add_argument(
+        "--skip-vacuum",
+        action="store_true",
+        help="Skip post-migration VACUUM ANALYZE (not recommended)",
+    )
     args = parser.parse_args(argv)
 
     if args.dir:
@@ -193,6 +234,12 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     for r in results:
         logger.info("  %-40s  keys=%d  migrated=%d  errors=%d", r["namespace"], r["total_keys"], r["migrated"], r["errors"])
+
+    # Post-migration: reclaim dead tuples and refresh planner stats
+    if not args.dry_run and not args.skip_vacuum and total_migrated > 0:
+        from Caching.pg_backend import get_engine
+
+        _post_migration_vacuum(get_engine())
 
 
 if __name__ == "__main__":

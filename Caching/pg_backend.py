@@ -22,6 +22,16 @@ own engine — this is correct for SQLAlchemy.  The Supabase pooler endpoint
 (port 6543 / Supavisor) multiplexes these upstream connections so total DB
 connections stay bounded even under heavy parallelism.
 
+Autovacuum Tuning
+-----------------
+The ``SCHEMA_SQL`` DDL includes ``ALTER TABLE … SET`` to lower the per-table
+autovacuum thresholds.  Our workload is upsert-heavy (``ON CONFLICT DO UPDATE``);
+each overwrite creates a dead tuple under Postgres MVCC.  The default
+``autovacuum_vacuum_scale_factor`` of 0.20 would let ~2.8 M dead tuples
+accumulate in a 14 M-row table before vacuum fires.  We lower it to 0.02
+(~280 K dead tuples) to keep heap and index bloat bounded.  The migration
+script also runs a manual ``VACUUM (ANALYZE)`` after bulk loads.
+
 Future: Real-time Invalidation
 -------------------------------
 For sub-second cross-node invalidation, a LISTEN/NOTIFY channel can be added.
@@ -66,6 +76,18 @@ CREATE INDEX IF NOT EXISTS idx_{TABLE}_ns
 -- (e.g. DELETE FROM … WHERE updated_at < NOW() - INTERVAL '7 days').
 CREATE INDEX IF NOT EXISTS idx_{TABLE}_ns_updated
     ON {TABLE} (cache_ns, updated_at);
+
+-- Autovacuum tuning: our workload is upsert-heavy (ON CONFLICT DO UPDATE),
+-- which generates dead tuples on every overwrite.  The default scale_factor
+-- of 0.20 means vacuum won't fire until 20 % of rows are dead — for a 14 M
+-- row table that's ~2.8 M dead tuples of bloat.  Lowering to 0.02 triggers
+-- vacuum after ~280 K dead tuples, keeping index and heap bloat bounded.
+ALTER TABLE {TABLE} SET (
+    autovacuum_vacuum_scale_factor  = 0.02,
+    autovacuum_vacuum_threshold     = 1000,
+    autovacuum_analyze_scale_factor = 0.01,
+    autovacuum_analyze_threshold    = 500
+);
 """
 
 # ---------------------------------------------------------------------------
