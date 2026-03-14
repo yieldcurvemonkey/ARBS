@@ -1,0 +1,247 @@
+"""
+PostgresCacheBackend — MutableMapping backed by a Supabase/Postgres KV table.
+
+Provides the L2 (remote) layer for the layered cache architecture.
+Values are pickle-serialized to BYTEA, keyed by (namespace, key).
+"""
+from __future__ import annotations
+
+import logging
+import os
+import pickle
+import threading
+from collections.abc import MutableMapping
+from typing import Any, Iterator, Optional
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+
+logger = logging.getLogger(__name__)
+
+TABLE = "arbs_kv_cache_v1"
+
+SCHEMA_SQL = f"""
+CREATE TABLE IF NOT EXISTS {TABLE} (
+    cache_ns   TEXT        NOT NULL,
+    cache_key  TEXT        NOT NULL,
+    value_bytes BYTEA      NOT NULL,
+    size_bytes  INTEGER    NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (cache_ns, cache_key)
+);
+"""
+
+# ---------------------------------------------------------------------------
+# Shared engine singleton
+# ---------------------------------------------------------------------------
+
+_engine: Optional[Engine] = None
+_engine_lock = threading.Lock()
+_schema_ensured = False
+
+
+def _get_connection_string() -> str:
+    url = os.getenv("DATABASE_URL")
+    if url:
+        return url
+    host = os.getenv("SWAPPULSE_DB_HOST", "aws-0-us-east-1.pooler.supabase.com")
+    port = os.getenv("SWAPPULSE_DB_PORT", "6543")
+    dbname = os.getenv("SWAPPULSE_DB_NAME", "postgres")
+    user = os.getenv("SWAPPULSE_DB_USER", "postgres.rdobtpugtnmefxplgwyp")
+    password = os.getenv("SWAPPULSE_DB_PASSWORD", "")
+    return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
+
+
+def get_engine() -> Engine:
+    global _engine
+    if _engine is not None:
+        return _engine
+    with _engine_lock:
+        if _engine is not None:
+            return _engine
+        _engine = create_engine(
+            _get_connection_string(),
+            pool_size=5,
+            max_overflow=10,
+            pool_timeout=30,
+            pool_recycle=1800,
+        )
+        return _engine
+
+
+def ensure_schema(engine: Optional[Engine] = None) -> None:
+    global _schema_ensured
+    if _schema_ensured:
+        return
+    eng = engine or get_engine()
+    with eng.begin() as conn:
+        conn.execute(text(SCHEMA_SQL))
+    _schema_ensured = True
+
+
+# ---------------------------------------------------------------------------
+# PostgresCacheBackend
+# ---------------------------------------------------------------------------
+
+
+class PostgresCacheBackend(MutableMapping):
+    """
+    MutableMapping backed by a single Postgres table, scoped by namespace.
+
+    Each (cache_ns, cache_key) pair maps to a pickled value stored as BYTEA.
+    Thread-safe: all operations use short-lived connections from the pool.
+    """
+
+    def __init__(self, namespace: str, engine: Optional[Engine] = None) -> None:
+        self._ns = namespace
+        self._engine = engine or get_engine()
+        ensure_schema(self._engine)
+
+    # -- read ---------------------------------------------------------------
+
+    def __getitem__(self, key: str) -> Any:
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                text(f"SELECT value_bytes FROM {TABLE} WHERE cache_ns = :ns AND cache_key = :k"),
+                {"ns": self._ns, "k": str(key)},
+            ).fetchone()
+        if row is None:
+            raise KeyError(key)
+        return pickle.loads(row[0])
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    # -- write --------------------------------------------------------------
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        blob = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+        size = len(blob)
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(f"""
+                    INSERT INTO {TABLE} (cache_ns, cache_key, value_bytes, size_bytes)
+                    VALUES (:ns, :k, :v, :sz)
+                    ON CONFLICT (cache_ns, cache_key) DO UPDATE
+                    SET value_bytes = EXCLUDED.value_bytes,
+                        size_bytes  = EXCLUDED.size_bytes,
+                        updated_at  = NOW()
+                """),
+                {"ns": self._ns, "k": str(key), "v": blob, "sz": size},
+            )
+
+    # -- delete -------------------------------------------------------------
+
+    def __delitem__(self, key: str) -> None:
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                text(f"DELETE FROM {TABLE} WHERE cache_ns = :ns AND cache_key = :k"),
+                {"ns": self._ns, "k": str(key)},
+            )
+        if result.rowcount == 0:
+            raise KeyError(key)
+
+    # -- iteration / membership ---------------------------------------------
+
+    def __contains__(self, key: object) -> bool:
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                text(f"SELECT 1 FROM {TABLE} WHERE cache_ns = :ns AND cache_key = :k"),
+                {"ns": self._ns, "k": str(key)},
+            ).fetchone()
+        return row is not None
+
+    def __iter__(self) -> Iterator[str]:
+        with self._engine.begin() as conn:
+            rows = conn.execute(
+                text(f"SELECT cache_key FROM {TABLE} WHERE cache_ns = :ns ORDER BY cache_key"),
+                {"ns": self._ns},
+            ).fetchall()
+        return iter(r[0] for r in rows)
+
+    def __len__(self) -> int:
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                text(f"SELECT COUNT(*) FROM {TABLE} WHERE cache_ns = :ns"),
+                {"ns": self._ns},
+            ).fetchone()
+        return row[0] if row else 0
+
+    def clear(self) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(f"DELETE FROM {TABLE} WHERE cache_ns = :ns"),
+                {"ns": self._ns},
+            )
+
+    # -- bulk operations (for migration) ------------------------------------
+
+    def bulk_put(self, items: list[tuple[str, Any]], batch_size: int = 500) -> int:
+        """
+        Bulk-insert (key, value) pairs. Uses psycopg2 execute_values for speed.
+        Returns the number of rows upserted.
+        """
+        if not items:
+            return 0
+
+        total = 0
+        raw_conn = self._engine.raw_connection()
+        try:
+            cur = raw_conn.cursor()
+            for i in range(0, len(items), batch_size):
+                batch = items[i : i + batch_size]
+                values = []
+                for k, v in batch:
+                    blob = pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
+                    values.append((self._ns, str(k), blob, len(blob)))
+
+                from psycopg2.extras import execute_values
+
+                execute_values(
+                    cur,
+                    f"""
+                    INSERT INTO {TABLE} (cache_ns, cache_key, value_bytes, size_bytes)
+                    VALUES %s
+                    ON CONFLICT (cache_ns, cache_key) DO UPDATE
+                    SET value_bytes = EXCLUDED.value_bytes,
+                        size_bytes  = EXCLUDED.size_bytes,
+                        updated_at  = NOW()
+                    """,
+                    values,
+                    page_size=batch_size,
+                )
+                total += len(batch)
+            raw_conn.commit()
+        except Exception:
+            raw_conn.rollback()
+            raise
+        finally:
+            raw_conn.close()
+        return total
+
+    # -- diagnostics --------------------------------------------------------
+
+    def stats(self) -> dict[str, Any]:
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                text(f"""
+                    SELECT COUNT(*) AS cnt,
+                           COALESCE(SUM(size_bytes), 0) AS total_bytes,
+                           MIN(created_at) AS oldest,
+                           MAX(updated_at) AS newest
+                    FROM {TABLE}
+                    WHERE cache_ns = :ns
+                """),
+                {"ns": self._ns},
+            ).fetchone()
+        return {
+            "namespace": self._ns,
+            "count": row[0],
+            "total_bytes": row[1],
+            "oldest": row[2],
+            "newest": row[3],
+        }
