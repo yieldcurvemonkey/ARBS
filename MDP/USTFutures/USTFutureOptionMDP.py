@@ -35,7 +35,7 @@ from MDP.sabr_calibration import (
 )
 from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher
 from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
-from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contracts
+from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contracts, get_quotes as schwab_get_quotes
 from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
 from Query.USTFutureOptions.backends.quantlib.QLUSTFutureOptionPricer import QLUSTFutureOptionPricer
 from Query.USTFutureOptions.USTFutureOptionValue import USTFutureOptionValue
@@ -43,7 +43,7 @@ from MDP.USTFutures.QuikStrikeSDK.core.QuikStrikeFetcher import QuikStrikeFetche
 from MDP.USTFutures.QuikStrikeSDK.core.types.QuikVolQuery import QuikVolQuery
 from MDP.USTFutures.QuikStrikeSDK.core.types.QuikVolValueType import QuikVolValueType
 from MDP.USTFutures.QuikStrikeSDK.core.utils.auth import walk_quikstrike_auth_flow
-from definitions.USTFutures import UST_FUTURE_BARCHART_TO_INTERNAL, normalize_barchart_ust_future_price
+from definitions.USTFutures import UST_FUTURE_BARCHART_TO_INTERNAL, normalize_barchart_ust_future_price, to_barchart_root
 from definitions.USTFutureOptions import (
     ALL_OPTION_ROOTS,
     MONTH_CODE_TO_NUM as _MONTH_CODE_TO_NUM,
@@ -1034,6 +1034,29 @@ def _canonical_to_barchart_option(symbol: str) -> str:
     return token
 
 
+def _format_schwab_option_strike(strike: float) -> str:
+    return f"{float(strike):.6f}".rstrip("0").rstrip(".")
+
+
+def _contract_to_schwab_future_symbol(contract: str) -> str:
+    token = str(contract or "").strip().upper().replace("/", "")
+    m = _USTF_CONTRACT_RE.fullmatch(token)
+    if m is None:
+        return f"/{token}"
+    root = m.group("root")
+    code = normalize_contract_code(m.group("code"))
+    internal_root = UST_FUTURE_BARCHART_TO_INTERNAL.get(root, root)
+    return f"/{to_barchart_root(internal_root)}{code}"
+
+
+def _canonical_to_schwab_option_symbol(symbol: str) -> str:
+    token = _norm_option_symbol(symbol)
+    contract, tail = token.split("|", 1)
+    right = tail[-1]
+    strike = _strike_from_symbol(token)
+    return f"./O{contract}{right}{_format_schwab_option_strike(strike)}"
+
+
 def _decode_vendor_option_strike_token(*, contract: str, strike_token: str) -> float:
     norm_contract = normalize_option_contract(contract)
     try:
@@ -1467,12 +1490,12 @@ def _extract_row_price(row: Dict[str, Any], price_mode: str = "mid_then_fallback
     if price_mode != "mid_then_fallback":
         raise ValueError(f"Unsupported price_mode: {price_mode}")
 
-    bid = _to_float(row.get("bidPrice", row.get("BidPrice")))
-    ask = _to_float(row.get("askPrice", row.get("OfferPrice")))
+    bid = _to_float(row.get("bidPrice", row.get("BidPrice", row.get("bid"))))
+    ask = _to_float(row.get("askPrice", row.get("OfferPrice", row.get("ask"))))
     if bid is not None and ask is not None and bid > 0.0 and ask > 0.0:
         return 0.5 * (bid + ask)
 
-    for key in ("lastPrice", "Close", "close", "Open", "open"):
+    for key in ("lastPrice", "last", "mark", "mid", "Close", "close", "Open", "open"):
         v = _to_float(row.get(key))
         if v is not None and v > 0.0:
             return v
@@ -1563,9 +1586,15 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         DiskCacheMixin.__init__(self)
 
         self.cache_full_intraday_fetch = bool(kwargs.get("cache_full_intraday_fetch", False))
+        self._schwab_app_key = kwargs.get("schwab_app_key") or os.getenv("SCHWABDEV_APP_KEY") or os.getenv("SCHWAB_APP_KEY") or "zm3GYiQREbtrpBHACURcNzFJIObUq2aX"
+        self._schwab_app_secret = kwargs.get("schwab_app_secret") or os.getenv("SCHWABDEV_APP_SECRET") or os.getenv("SCHWAB_APP_SECRET") or "SznUHXvKPZUnmxG9"
+        self._schwab_scope = kwargs.get("schwab_scope", "pystonk")
         self._open_count = 0
         self._open_lock = threading.RLock()
         self._cache_ready = False
+        # Keep immutable SABR smiles hot in-process so repeat requests stay fast
+        # even if the disk cache read path is temporarily flaky.
+        self._sabr_smile_memo: Dict[str, USTFutureOptionSABRSmile] = {}
 
         self._barchart_fetcher: Optional[BarchartFetcher] = None
         self._barchart_lock = threading.RLock()
@@ -1634,6 +1663,22 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             self._ensure_pricer_cache()
             cache = getattr(self, self._UST_OPTION_CACHE)
             return cache.get(key)
+
+    def _threadsafe_sabr_smile_memo_get(self, key: Optional[str]) -> Optional[USTFutureOptionSABRSmile]:
+        if not key:
+            return None
+        with self._open_lock:
+            return self._sabr_smile_memo.get(key)
+
+    def _threadsafe_sabr_smile_memo_put(
+        self,
+        key: Optional[str],
+        smile: Optional[USTFutureOptionSABRSmile],
+    ) -> None:
+        if not key or smile is None:
+            return
+        with self._open_lock:
+            self._sabr_smile_memo[key] = smile
 
     def _cache_primitive(self, value: Any) -> Any:
         if isinstance(value, datetime.datetime):
@@ -2846,11 +2891,16 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     scalar_req["as_of"] = as_of
                     cache_key = self._build_get_data_cache_key("sabr_smile", scalar_req)
                     if cache_key and not force_refresh:
+                        memo_hit = self._threadsafe_sabr_smile_memo_get(cache_key)
+                        if memo_hit is not None:
+                            smiles_by_symbol[raw_symbol][as_of] = memo_hit
+                            continue
                         cached = self._threadsafe_cache_get(cache_key)
                         hit = self._deserialize_get_data_result(cached)
                         if hit is not None:
                             smiles = hit.get("sabr_smile") or []
                             if smiles:
+                                self._threadsafe_sabr_smile_memo_put(cache_key, smiles[0])
                                 smiles_by_symbol[raw_symbol][as_of] = smiles[0]
                                 continue
                     misses.append(
@@ -3078,6 +3128,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     )
                     cache_key = self._build_get_data_cache_key("sabr_smile", miss["scalar_request"])
                     if cache_key:
+                        self._threadsafe_sabr_smile_memo_put(cache_key, smile)
                         self._threadsafe_cache_put(
                             cache_key,
                             self._serialize_get_data_result("sabr_smile", {"sabr_smile": [smile]}),
@@ -3097,6 +3148,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             return None
 
         cache_req = dict(request)
+        cache_req.pop("endpoint", None)
         cache_req.pop("show_tqdm", None)
         cache_req.pop("force_refresh", None)
         symbols_raw = cache_req.get("symbols") or cache_req.get("tickers") or []
@@ -3125,6 +3177,9 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             if "as_of" in cache_req:
                 cache_req["as_of"] = _as_date(cache_req["as_of"])
             cache_req["calibration_method"] = str(cache_req.get("calibration_method", "nelder-mead")).strip().lower().replace("_", "-")
+            cache_req["curve_name"] = str(cache_req.get("curve_name", self._curve_name_default))
+            cache_req["curve_kwargs"] = dict(cache_req.get("curve_kwargs") or {})
+            cache_req["deltas"] = self._normalize_sabr_smile_deltas(cache_req.get("deltas"))
             src = str(self.source).upper()
             if src == "USTFO_DUAL-QL":
                 if "globex_symbol" in cache_req:
@@ -3140,8 +3195,11 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     cache_req["symbol"] = normalize_option_contract(token, as_of=cache_req.get("as_of"))
                 cache_req.pop("contract", None)
                 cache_req.pop("globex_symbol", None)
-            if "deltas" in cache_req and cache_req["deltas"] is not None:
-                cache_req["deltas"] = self._normalize_sabr_smile_deltas(cache_req.get("deltas"))
+            cache_req = {
+                key: value
+                for key, value in cache_req.items()
+                if key in {"as_of", "calibration_method", "curve_kwargs", "curve_name", "deltas", "globex_symbol", "symbol"}
+            }
 
         if symbols_raw:
             cache_req["symbol_specs"] = self._normalize_symbols_for_cache(symbols=symbols_raw, as_of=as_of_for_symbols)
@@ -3480,6 +3538,192 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             meta_flags={"synthetic_from_sabr_smile": True},
         )
 
+    def _build_sabr_smile_strike_pricer(
+        self,
+        *,
+        smile: USTFutureOptionSABRSmile,
+        right: str,
+        strike: float,
+        iv_normal: float,
+        curve_name: str,
+        curve_kwargs: Optional[Dict[str, Any]],
+        use_ql_calculator: bool,
+        meta_source: str,
+        meta_flags: Optional[Dict[str, Any]] = None,
+    ) -> QLUSTFutureOptionPricer:
+        right_token = str(right or "").strip().upper()
+        if right_token not in {"C", "P"}:
+            raise ValueError(f"Unsupported option right for SABR smile strike pricer: {right!r}")
+
+        underlying_contract = str(smile.underlying_contract)
+        globex_symbol = str(smile.globex_symbol)
+        valuation_ts = smile.quote_timestamp
+        expiry = smile.params.expiry_date
+        forward = float(smile.params.forward_price)
+        time_to_expiry = max(float(smile.params.time_to_expiry), 0.0)
+        fv01 = float(smile.fv01)
+        strike_value = float(strike)
+        iv_normal_value = float(iv_normal)
+
+        strike_codec_ref = _qs_strike_codec_reference(
+            globex_symbol=globex_symbol,
+            underlying_contract=underlying_contract,
+        )
+        try:
+            strike4 = _format_strike4(strike_value, contract=strike_codec_ref)
+        except Exception:
+            strike4 = _format_strike4(strike_value)
+
+        curve_memo: Dict[Tuple[str, datetime.date], Tuple[Any, Optional[str]]] = {}
+        discount, curve_error = self._discount_factor(
+            valuation_ts=valuation_ts,
+            expiry_date=expiry,
+            curve_name=curve_name,
+            curve_kwargs=curve_kwargs,
+            memo=curve_memo,
+        )
+        base_meta = {
+            "schema": 1,
+            "source": str(meta_source),
+            "globex_symbol": globex_symbol,
+            "underlying_symbol": underlying_contract,
+            "curve_name": curve_name,
+            "curve_error": curve_error,
+            "discount": float(discount),
+            "tte": float(time_to_expiry),
+            "fv01": fv01,
+            "iv_normal_bps": float(iv_normal_value / fv01) if fv01 > 0.0 else float("nan"),
+        }
+        if meta_flags:
+            base_meta.update(dict(meta_flags))
+
+        market_price = _bachelier_price(
+            right=right_token,
+            strike=strike_value,
+            forward=forward,
+            vol_normal=iv_normal_value,
+            tte=float(time_to_expiry),
+            discount=float(discount),
+        )
+        delta, gamma, vega, theta = _bachelier_greeks_fd(
+            right=right_token,
+            strike=strike_value,
+            forward=forward,
+            vol_normal=iv_normal_value,
+            tte=float(time_to_expiry),
+            discount=float(discount),
+            use_ql_calculator=use_ql_calculator,
+        )
+        return QLUSTFutureOptionPricer(
+            symbol=f"{underlying_contract}|{strike4}{right_token}",
+            right=right_token,
+            underlying_symbol=underlying_contract,
+            strike=strike_value,
+            quote_timestamp=valuation_ts,
+            expiry_date=expiry,
+            market_price=float(market_price),
+            model_price=float(market_price),
+            iv_normal=iv_normal_value,
+            delta=float(delta) if math.isfinite(delta) else float("nan"),
+            gamma=float(gamma) if math.isfinite(gamma) else float("nan"),
+            vega=float(vega) if math.isfinite(vega) else float("nan"),
+            theta=float(theta) if math.isfinite(theta) else float("nan"),
+            forward=forward,
+            discount=float(discount),
+            fv01=fv01,
+            meta_data=dict(base_meta),
+        )
+
+    def _build_dual_cm_alias_pricers_from_sabr_smile(
+        self,
+        *,
+        raw_symbol: str,
+        spec: Dict[str, Any],
+        smile: USTFutureOptionSABRSmile,
+        request: Dict[str, Any],
+    ) -> Optional[List[QLUSTFutureOptionPricer]]:
+        curve_name = str(request.get("curve_name", self._curve_name_default))
+        curve_kwargs = dict(request.get("curve_kwargs") or {})
+        use_ql_calculator = bool(request.get("use_ql_calculator", False))
+        selector = str(spec.get("selector", "")).strip().lower()
+        right = str(spec.get("right", "")).strip().upper()
+
+        if selector == "atm":
+            call_pricer, put_pricer = self._build_sabr_smile_atm_pricers(
+                smile=smile,
+                curve_name=curve_name,
+                curve_kwargs=curve_kwargs,
+                use_ql_calculator=use_ql_calculator,
+            )
+            if right == "C":
+                return [call_pricer]
+            if right == "P":
+                return [put_pricer]
+            if right == "S":
+                return [self._synthesize_straddle(straddle_symbol=str(raw_symbol), call_pricer=call_pricer, put_pricer=put_pricer)]
+            return None
+
+        if selector == "delta":
+            delta_abs = _to_float(spec.get("delta"))
+            if delta_abs is None or right not in {"C", "P"}:
+                return None
+            point = next(
+                (
+                    pt
+                    for pt in smile.points
+                    if str(pt.right).upper() == right and abs(float(pt.delta_abs) - float(delta_abs)) <= 1e-8
+                ),
+                None,
+            )
+            if point is None:
+                return None
+            return [
+                self._build_sabr_smile_strike_pricer(
+                    smile=smile,
+                    right=right,
+                    strike=float(point.strike_price),
+                    iv_normal=float(point.iv_normal_price),
+                    curve_name=curve_name,
+                    curve_kwargs=curve_kwargs,
+                    use_ql_calculator=use_ql_calculator,
+                    meta_source="SABR_SMILE_SYNTH_DELTA",
+                    meta_flags={
+                        "synthetic_from_sabr_smile": True,
+                        "delta_alias": True,
+                        "delta_abs": float(point.delta_abs),
+                        "requested_symbol": str(raw_symbol),
+                        "qs_series_label": str(point.label),
+                    },
+                )
+            ]
+
+        if selector == "atmf_offset":
+            offset_bps = _to_float(spec.get("atm_offset_bps"))
+            if offset_bps is None or right not in {"C", "P"}:
+                return None
+            strike = float(smile.params.forward_price) - float(offset_bps) / 100.0
+            iv_normal = float(smile.normal_vol(strike, strike_space="price", vol_units="price"))
+            return [
+                self._build_sabr_smile_strike_pricer(
+                    smile=smile,
+                    right=right,
+                    strike=strike,
+                    iv_normal=iv_normal,
+                    curve_name=curve_name,
+                    curve_kwargs=curve_kwargs,
+                    use_ql_calculator=use_ql_calculator,
+                    meta_source="SABR_SMILE_SYNTH_ATMF_OFFSET",
+                    meta_flags={
+                        "synthetic_from_sabr_smile": True,
+                        "atmf_offset_alias": True,
+                        "atm_offset_bps": float(offset_bps),
+                        "requested_symbol": str(raw_symbol),
+                    },
+                )
+            ]
+
+        return None
+
     def _seed_sabr_smile_option_snapshot_cache(
         self,
         *,
@@ -3617,15 +3861,29 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             bulk_request["deltas"] = self._normalize_sabr_smile_deltas(
                 self._normalize_sabr_smile_deltas(None) + extra_deltas
             )
-            self.fetch_bulk_sabr_smile(bulk_request)
+            smiles_by_symbol = self.fetch_bulk_sabr_smile(bulk_request)
 
             unresolved: List[str] = []
-            for raw in missing.keys():
+            for raw, spec in missing.items():
                 cached = self._get_cached_option_snapshot_symbol(request=request, raw_symbol=raw)
                 if cached:
                     result[str(raw)] = cached
-                else:
-                    unresolved.append(str(raw))
+                    continue
+
+                smile = (smiles_by_symbol.get(str(spec.get("globex_symbol"))) or {}).get(as_of)
+                if smile is not None:
+                    synthetic = self._build_dual_cm_alias_pricers_from_sabr_smile(
+                        raw_symbol=str(raw),
+                        spec=dict(spec),
+                        smile=smile,
+                        request=request,
+                    )
+                    if synthetic:
+                        result[str(raw)] = synthetic
+                        self._seed_option_snapshot_alias_cache(request=request, result={str(raw): list(synthetic)}, source_request=request)
+                        continue
+
+                unresolved.append(str(raw))
             if unresolved:
                 raise ValueError(
                     "Could not resolve dual-source constant-maturity option aliases: "
@@ -4097,6 +4355,143 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             return None
         return by_day[max(keys)]
 
+    def _fetch_schwab_quotes(self, *, symbols: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+        req_symbols = self._dedupe_preserve_order([str(sym).strip() for sym in symbols if str(sym).strip()])
+        if not req_symbols:
+            return {}
+
+        quote_kwargs: Dict[str, Any] = {"symbols": req_symbols}
+        if self._schwab_app_key and self._schwab_app_secret:
+            quote_kwargs["app_key"] = self._schwab_app_key
+            quote_kwargs["app_secret"] = self._schwab_app_secret
+            quote_kwargs["scope"] = self._schwab_scope
+
+        quotes = schwab_get_quotes(**quote_kwargs)
+        return dict(quotes) if isinstance(quotes, dict) else {}
+
+    @staticmethod
+    def _lookup_schwab_quote(quotes: Dict[str, Dict[str, Any]], symbol: str) -> Optional[Dict[str, Any]]:
+        raw = str(symbol or "").strip()
+        if not raw:
+            return None
+        if isinstance(quotes.get(raw), dict):
+            return dict(quotes[raw])
+        upper = raw.upper()
+        if isinstance(quotes.get(upper), dict):
+            return dict(quotes[upper])
+        return None
+
+    @staticmethod
+    def _quote_time_to_dt(quote_time: Any, fallback: datetime.datetime) -> datetime.datetime:
+        qt = _to_float(quote_time)
+        if qt is None or qt <= 0.0:
+            return fallback
+        try:
+            return pd.to_datetime(int(qt), unit="ms", utc=True).to_pydatetime()
+        except Exception:
+            return fallback
+
+    @staticmethod
+    def _resolve_live_atm_strike_from_grid(
+        *,
+        contract: str,
+        forward: float,
+        valuation_date: datetime.date,
+    ) -> Optional[float]:
+        listed = _cme_listed_strikes_for_contract_forward(
+            contract=contract,
+            forward=float(forward),
+            as_of=valuation_date,
+        )
+        if listed:
+            return min((float(strike) for strike in listed), key=lambda strike: abs(strike - float(forward)))
+        try:
+            return float(_atm_strike_from_forward(float(forward), step=_strike_step_for_contract(contract)))
+        except Exception:
+            return None
+
+    def _fetch_schwab_live_underlying_forwards(
+        self,
+        *,
+        contracts: Sequence[str],
+        price_mode: str,
+    ) -> Dict[str, float]:
+        contract_symbols = {str(contract): _contract_to_schwab_future_symbol(str(contract)) for contract in contracts}
+        quotes = self._fetch_schwab_quotes(symbols=list(contract_symbols.values()))
+        out: Dict[str, float] = {}
+        for contract, schwab_symbol in contract_symbols.items():
+            q = self._lookup_schwab_quote(quotes, schwab_symbol)
+            if not q:
+                continue
+            row = {
+                "bidPrice": _to_float(q.get("bid")),
+                "askPrice": _to_float(q.get("ask")),
+                "lastPrice": _to_float(q.get("last")),
+                "mark": _to_float(q.get("mark")),
+                "mid": _to_float(q.get("mid")),
+            }
+            price = _extract_row_price(row, price_mode=price_mode)
+            if price is not None and price > 0.0:
+                out[contract] = float(price)
+        return out
+
+    def _build_schwab_live_option_chains(
+        self,
+        *,
+        canonical_symbols: Sequence[str],
+    ) -> Tuple[Dict[str, Dict[str, pd.DataFrame]], Dict[str, Dict[str, Any]]]:
+        explicit_symbols: List[str] = []
+        quote_symbols: Dict[str, str] = {}
+        for sym in canonical_symbols:
+            token = _norm_option_symbol(sym)
+            if _right_from_symbol(token) not in {"C", "P"}:
+                continue
+            explicit_symbols.append(token)
+            quote_symbols[token] = _canonical_to_schwab_option_symbol(token)
+
+        if not quote_symbols:
+            return {}, {}
+
+        quotes = self._fetch_schwab_quotes(symbols=list(quote_symbols.values()))
+        rows_by_symbol: Dict[str, Dict[str, Any]] = {}
+        rows_by_contract: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+
+        for canonical_symbol in self._dedupe_preserve_order(explicit_symbols):
+            schwab_symbol = quote_symbols[canonical_symbol]
+            q = self._lookup_schwab_quote(quotes, schwab_symbol)
+            if not q:
+                continue
+
+            contract = _canonical_contract(canonical_symbol)
+            right = _right_from_symbol(canonical_symbol)
+            side = "call" if right == "C" else "put"
+            row = {
+                "symbol": canonical_symbol,
+                "schwabSymbol": schwab_symbol,
+                "strikePrice": float(_strike_from_symbol(canonical_symbol)),
+                "bidPrice": _to_float(q.get("bid")),
+                "askPrice": _to_float(q.get("ask")),
+                "mid": _to_float(q.get("mid")),
+                "lastPrice": _to_float(q.get("last")),
+                "mark": _to_float(q.get("mark")),
+                "bidSize": _to_float(q.get("bidSize")),
+                "askSize": _to_float(q.get("askSize")),
+                "netChange": _to_float(q.get("netChange")),
+                "quoteTime": _to_float(q.get("quoteTime")),
+                "rawQuote": dict(q),
+            }
+            rows_by_symbol[canonical_symbol] = dict(row)
+            bucket = rows_by_contract.setdefault(contract, {"call": [], "put": []})
+            bucket[side].append(dict(row))
+
+        chains: Dict[str, Dict[str, pd.DataFrame]] = {}
+        for contract, side_rows in rows_by_contract.items():
+            chains[contract] = {
+                "call": pd.DataFrame(side_rows["call"]),
+                "put": pd.DataFrame(side_rows["put"]),
+            }
+        return chains, rows_by_symbol
+
     def _build_pricer_from_row(
         self,
         *,
@@ -4154,6 +4549,11 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         vendor_vega = _to_float(row.get("vega", row.get("Vega")))
         vendor_theta = _to_float(row.get("theta", row.get("Theta")))
 
+        vendor_row = dict(row)
+        raw_quote = vendor_row.pop("rawQuote", None)
+        if not isinstance(raw_quote, dict):
+            raw_quote = dict(vendor_row)
+
         metadata = {
             "schema": 1,
             "source": source,
@@ -4171,7 +4571,8 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             "vendor_gamma": vendor_gamma,
             "vendor_vega": vendor_vega,
             "vendor_theta": vendor_theta,
-            "vendor_row": dict(row),
+            "vendor_row": vendor_row,
+            "raw_quote": dict(raw_quote),
         }
 
         underlying = _canonical_underlying(canonical_symbol)
@@ -4221,6 +4622,14 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             vals = [v for v in [call_pricer.iv_normal(), put_pricer.iv_normal()] if math.isfinite(v)]
             iv = float(sum(vals) / len(vals)) if vals else float("nan")
 
+        raw_quote_legs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        for pr in (call_pricer, put_pricer):
+            meta = pr.meta()
+            meta_dict = meta if isinstance(meta, dict) else {}
+            raw_quote = meta_dict.get("raw_quote", meta_dict.get("vendor_quote", meta_dict.get("vendor_row")))
+            if isinstance(raw_quote, dict):
+                raw_quote_legs[str(pr.symbol())] = dict(raw_quote)
+
         metadata = {
             "schema": 1,
             "source": "SYNTH_STRADDLE",
@@ -4230,6 +4639,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             "curve_name": call_pricer.meta().get("curve_name"),
             "curve_error": call_pricer.meta().get("curve_error") or put_pricer.meta().get("curve_error"),
             "vendor_legs": [call_pricer.meta().get("vendor_row"), put_pricer.meta().get("vendor_row")],
+            "raw_quote_legs": dict(raw_quote_legs),
         }
 
         # Propagate fv01 from the legs (same underlying, so identical).
@@ -4391,6 +4801,330 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         lo = max(0, center_idx - half_width)
         hi = min(len(strikes), center_idx + half_width + 1)
         return list(strikes[lo:hi])
+
+    @staticmethod
+    def _delta_otm_candidate_count(*, target_delta: float, base_count: int) -> int:
+        delta_abs = abs(float(target_delta))
+        if not math.isfinite(delta_abs) or delta_abs <= 0.0:
+            return max(1, int(base_count))
+        return max(int(base_count), int(math.ceil(125.0 / delta_abs)))
+
+    @staticmethod
+    def _delta_itm_buffer_count(*, target_delta: float, ignore_deep_itm: bool) -> int:
+        if not bool(ignore_deep_itm):
+            return 4
+        delta_abs = abs(float(target_delta))
+        if not math.isfinite(delta_abs) or delta_abs <= 0.0:
+            return 0
+        if delta_abs <= 10.0:
+            return 0
+        if delta_abs <= 20.0:
+            return 1
+        return 2
+
+    @staticmethod
+    def _pick_otm_strike_slice(strikes: List[float], *, forward: float, right: str, count: int, itm_buffer: int) -> List[float]:
+        if not strikes:
+            return []
+        ordered = sorted(float(s) for s in strikes)
+        n = max(1, int(count))
+        fwd = float(forward)
+        right_token = str(right).upper()
+        buffer_count = max(0, int(itm_buffer))
+        if right_token == "C":
+            start_idx = next((i for i, strike in enumerate(ordered) if strike >= fwd), len(ordered) - 1)
+            lo = max(0, start_idx - buffer_count)
+            hi = min(len(ordered), start_idx + n)
+            return ordered[lo:hi]
+        if right_token == "P":
+            end_idx = next((i for i in range(len(ordered) - 1, -1, -1) if ordered[i] <= fwd), 0)
+            lo = max(0, end_idx - n + 1)
+            hi = min(len(ordered), end_idx + buffer_count + 1)
+            return ordered[lo:hi]
+        return ordered[:n]
+
+    def _resolve_live_delta_from_chain_pricers(
+        self,
+        *,
+        contract: str,
+        chain: Dict[str, pd.DataFrame],
+        target_delta: float,
+        right: str,
+        forward: float,
+        valuation_ts: datetime.datetime,
+        curve_name: str,
+        curve_kwargs: Optional[Dict[str, Any]],
+        curve_memo: Dict[Tuple[str, datetime.date], Tuple[Any, Optional[str]]],
+        price_mode: str,
+        use_ql_calculator: bool,
+        source: str = "SCHWAB_LIVE",
+        base_candidate_count: int = 8,
+        ignore_deep_itm: bool = False,
+    ) -> Optional[Tuple[str, QLUSTFutureOptionPricer]]:
+        side = "call" if str(right).upper() == "C" else "put"
+        rule_strikes = _cme_listed_strikes_for_contract_forward(
+            contract=contract,
+            forward=float(forward),
+            as_of=valuation_ts.astimezone(_NY_TZ).date(),
+        )
+        listed_strikes = self._live_chain_strikes(chain, side)
+        strike_candidates: List[float] = []
+        seen_strikes = set()
+        for strike in list(rule_strikes or []) + list(listed_strikes):
+            key = round(float(strike), 8)
+            if key in seen_strikes:
+                continue
+            seen_strikes.add(key)
+            strike_candidates.append(float(strike))
+        strike_candidates.sort()
+        strike_candidates = self._pick_otm_strike_slice(
+            strike_candidates,
+            forward=float(forward),
+            right=str(right).upper(),
+            count=self._delta_otm_candidate_count(target_delta=float(target_delta), base_count=int(base_candidate_count)),
+            itm_buffer=self._delta_itm_buffer_count(target_delta=float(target_delta), ignore_deep_itm=bool(ignore_deep_itm)),
+        )
+        candidate_symbols = [
+            f"{contract}|{_format_strike4(strike, contract=contract)}{str(right).upper()}"
+            for strike in strike_candidates
+        ]
+        candidate_symbols = self._dedupe_preserve_order(candidate_symbols)
+        if not candidate_symbols:
+            return None
+
+        target = float(target_delta) / 100.0
+        best: Optional[Tuple[float, float, str, QLUSTFutureOptionPricer]] = None
+
+        for sym in candidate_symbols:
+            strike = _strike_from_symbol(sym)
+            row = self._extract_live_option_row(chain=chain, contract=contract, strike=strike, right=right)
+            if row is None:
+                continue
+            pr = self._build_pricer_from_row(
+                canonical_symbol=sym,
+                row=row,
+                valuation_ts=valuation_ts,
+                forward=float(forward),
+                curve_name=curve_name,
+                curve_kwargs=curve_kwargs,
+                curve_memo=curve_memo,
+                price_mode=price_mode,
+                source=source,
+                use_ql_calculator=use_ql_calculator,
+            )
+            if pr is None:
+                continue
+            delta_val = _to_float(pr.delta())
+            if delta_val is None or not math.isfinite(delta_val):
+                continue
+
+            if str(right).upper() == "C":
+                err = abs(float(delta_val) - target)
+            else:
+                err = min(abs(float(delta_val) + target), abs(abs(float(delta_val)) - target))
+            dist = abs(float(strike) - float(forward))
+            if best is None or err < best[0] or (abs(err - best[0]) < 1e-12 and dist < best[1]):
+                best = (err, dist, sym, pr)
+
+        if best is None:
+            return None
+        return best[2], best[3]
+
+    def _option_snapshot_live_schwab(
+        self,
+        *,
+        requested_specs: "OrderedDict[str, Dict[str, Any]]",
+        valuation_ts: datetime.datetime,
+        curve_name: str,
+        curve_kwargs: Optional[Dict[str, Any]],
+        price_mode: str,
+        use_ql_calculator: bool,
+        delta_ignore_deep_itm: bool,
+    ) -> Tuple["OrderedDict[str, str]", Dict[str, QLUSTFutureOptionPricer]]:
+        valuation_date = valuation_ts.astimezone(_NY_TZ).date()
+        curve_memo: Dict[Tuple[str, datetime.date], Tuple[Any, Optional[str]]] = {}
+        cp_pricers: Dict[str, QLUSTFutureOptionPricer] = {}
+
+        underlying_contracts = sorted(
+            {
+                _option_contract_to_underlying_contract(str(spec["contract"]))
+                for spec in requested_specs.values()
+            }
+        )
+        forward_map = self._fetch_schwab_live_underlying_forwards(
+            contracts=underlying_contracts,
+            price_mode=price_mode,
+        )
+
+        non_delta_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        delta_specs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        for raw, spec in requested_specs.items():
+            if str(spec.get("selector")) == "delta":
+                delta_specs[raw] = spec
+            else:
+                non_delta_specs[raw] = spec
+
+        resolved_non_delta: "OrderedDict[str, str]" = OrderedDict()
+        quote_universe: "OrderedDict[str, str]" = OrderedDict()
+        for raw, spec in non_delta_specs.items():
+            selector = str(spec["selector"])
+            contract = str(spec["contract"])
+            right = str(spec["right"]).upper()
+
+            if selector == "strike":
+                resolved_symbol = str(spec["canonical"])
+            else:
+                underlying_contract = _option_contract_to_underlying_contract(contract)
+                forward = _to_float(forward_map.get(underlying_contract))
+                if forward is None or forward <= 0.0:
+                    raise ValueError(f"Could not resolve alias {raw!r}: missing Schwab live forward for {contract}")
+
+                if selector == "atm":
+                    strike = self._resolve_live_atm_strike_from_grid(
+                        contract=contract,
+                        forward=float(forward),
+                        valuation_date=valuation_date,
+                    )
+                    if strike is None:
+                        raise ValueError(f"Could not resolve ATM alias {raw!r}: no listed strike rule for {contract}")
+                    resolved_symbol = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
+                elif selector == "atmf_offset":
+                    offset_bps = _to_float(spec.get("atm_offset_bps"))
+                    if offset_bps is None:
+                        raise ValueError(f"Could not resolve ATMF offset alias {raw!r}: missing offset")
+                    strike, _ = _snap_to_listed_strike_for_offset(
+                        contract=contract,
+                        forward=float(forward),
+                        as_of=valuation_date,
+                        right=right,
+                        offset_bps=float(offset_bps),
+                    )
+                    resolved_symbol = f"{contract}|{_format_strike4(strike, contract=contract)}{right}"
+                else:
+                    raise ValueError(f"Unsupported live alias selector {selector!r} for symbol {raw!r}")
+
+            resolved_non_delta[raw] = resolved_symbol
+            for leg_symbol in _expand_straddle_symbol(resolved_symbol):
+                quote_universe[leg_symbol] = leg_symbol
+
+        delta_candidate_symbols: Dict[str, List[str]] = {}
+        delta_meta: Dict[str, Dict[str, Any]] = {}
+        for raw, spec in delta_specs.items():
+            contract = str(spec["contract"])
+            right = str(spec["right"]).upper()
+            if right not in {"C", "P"}:
+                raise ValueError(f"Delta alias supports call/put only: {raw!r}")
+
+            target_delta = _to_float(spec.get("delta"))
+            if target_delta is None:
+                raise ValueError(f"Could not resolve delta alias {raw!r}: missing delta")
+
+            underlying_contract = _option_contract_to_underlying_contract(contract)
+            forward = _to_float(forward_map.get(underlying_contract))
+            if forward is None or forward <= 0.0:
+                raise ValueError(f"Could not resolve delta alias {raw!r}: missing Schwab live forward for {contract}")
+
+            strike_candidates = _cme_listed_strikes_for_contract_forward(
+                contract=contract,
+                forward=float(forward),
+                as_of=valuation_date,
+            )
+            if not strike_candidates:
+                raise ValueError(f"Could not resolve delta alias {raw!r}: no listed strike rule for {contract}")
+            strike_candidates = self._pick_otm_strike_slice(
+                list(strike_candidates),
+                forward=float(forward),
+                right=right,
+                count=self._delta_otm_candidate_count(target_delta=float(target_delta), base_count=8),
+                itm_buffer=self._delta_itm_buffer_count(
+                    target_delta=float(target_delta),
+                    ignore_deep_itm=bool(delta_ignore_deep_itm),
+                ),
+            )
+            candidate_symbols = self._dedupe_preserve_order(
+                [f"{contract}|{_format_strike4(strike, contract=contract)}{right}" for strike in strike_candidates]
+            )
+            if not candidate_symbols:
+                raise ValueError(f"Could not resolve delta alias {raw!r}: no candidate listed strikes for {contract}")
+            delta_candidate_symbols[raw] = candidate_symbols
+            delta_meta[raw] = {
+                "contract": contract,
+                "right": right,
+                "target_delta": float(target_delta),
+                "forward": float(forward),
+            }
+            for sym in candidate_symbols:
+                quote_universe[sym] = sym
+
+        chains, rows_by_symbol = self._build_schwab_live_option_chains(
+            canonical_symbols=list(quote_universe.keys()),
+        )
+
+        resolved_delta: "OrderedDict[str, str]" = OrderedDict()
+        for raw, meta in delta_meta.items():
+            contract = str(meta["contract"])
+            chain = chains.get(contract, {"call": pd.DataFrame(), "put": pd.DataFrame()})
+            resolved_live = self._resolve_live_delta_from_chain_pricers(
+                contract=contract,
+                chain=chain,
+                target_delta=float(meta["target_delta"]),
+                right=str(meta["right"]),
+                forward=float(meta["forward"]),
+                valuation_ts=valuation_ts,
+                curve_name=curve_name,
+                curve_kwargs=curve_kwargs,
+                curve_memo=curve_memo,
+                price_mode=price_mode,
+                use_ql_calculator=use_ql_calculator,
+                source="SCHWAB_LIVE",
+                base_candidate_count=8,
+                ignore_deep_itm=delta_ignore_deep_itm,
+            )
+            if resolved_live is None:
+                raise ValueError(f"Could not resolve delta alias {raw!r}: no priced Schwab live strikes available.")
+            resolved_leg, pr = resolved_live
+            resolved_delta[raw] = resolved_leg
+            cp_pricers[resolved_leg] = pr
+
+        requested: "OrderedDict[str, str]" = OrderedDict()
+        for raw in requested_specs.keys():
+            if raw in resolved_non_delta:
+                requested[raw] = resolved_non_delta[raw]
+            elif raw in resolved_delta:
+                requested[raw] = resolved_delta[raw]
+
+        expanded_needed: "OrderedDict[str, str]" = OrderedDict()
+        for norm in requested.values():
+            for leg_symbol in _expand_straddle_symbol(norm):
+                expanded_needed[leg_symbol] = leg_symbol
+
+        for leg_symbol in expanded_needed:
+            if leg_symbol in cp_pricers:
+                continue
+            row = rows_by_symbol.get(leg_symbol)
+            if row is None:
+                continue
+            underlying_contract = _canonical_underlying(leg_symbol)
+            forward = _to_float(forward_map.get(underlying_contract))
+            if forward is None or forward <= 0.0:
+                continue
+            quote_ts = self._quote_time_to_dt(row.get("quoteTime"), valuation_ts)
+            pr = self._build_pricer_from_row(
+                canonical_symbol=leg_symbol,
+                row=row,
+                valuation_ts=quote_ts,
+                forward=float(forward),
+                curve_name=curve_name,
+                curve_kwargs=curve_kwargs,
+                curve_memo=curve_memo,
+                price_mode=price_mode,
+                source="SCHWAB_LIVE",
+                use_ql_calculator=use_ql_calculator,
+            )
+            if pr is not None:
+                cp_pricers[leg_symbol] = pr
+
+        return requested, cp_pricers
 
     def _resolve_historical_delta_from_pricers(
         self,
@@ -4633,10 +5367,10 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         show_tqdm = bool(request.get("show_tqdm", False))
         price_mode = str(request.get("price_mode", "mid_then_fallback"))
         use_ql_calculator = bool(request.get("use_ql_calculator", False))
-        window_minutes = int(request.get("window_minutes", 2))
         atm_strike_step = float(request.get("atm_strike_step", 0.0))
         bulk_timeseries = bool(request.get("bulk_timeseries", False))
         force_refresh = bool(request.get("force_refresh", False))
+        delta_ignore_deep_itm = bool(request.get("delta_ignore_deep_itm", False))
         curve_name = str(request.get("curve_name", self._curve_name_default))
         curve_kwargs = dict(request.get("curve_kwargs") or {})
 
@@ -4672,81 +5406,15 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         cp_pricers: Dict[str, QLUSTFutureOptionPricer] = {}
 
         if str(ts).strip().lower() == "live":
-            ts_dt = _as_datetime("live")
-            option_contracts = sorted({_contract_to_barchart_contract(str(spec["contract"])) for spec in requested_specs.values()})
-            underlying_contracts = sorted(
-                {_contract_to_barchart_contract(_option_contract_to_underlying_contract(str(spec["contract"]))) for spec in requested_specs.values()}
-            )
-            chain_concurrency = min(max(len(option_contracts), 1), 32)
-            bcf = self._get_barchart_fetcher(required_concurrency=chain_concurrency)
-            try:
-                chains = bcf.get_option_quotes(
-                    symbols=option_contracts,
-                    max_concurrent_tasks=chain_concurrency,
-                    max_keepalive_connections=min(max(len(option_contracts), 1), 16),
-                    show_tqdm=show_tqdm,
-                )
-            finally:
-                try:
-                    bcf.close()
-                except Exception:
-                    pass
-            forward_map = self._fetch_barchart_intraday_prices(
-                contracts=underlying_contracts,
-                timestamp=ts_dt,
-                window_minutes=window_minutes,
-                show_tqdm=show_tqdm,
-            )
-
-            requested = self._resolve_snapshot_requested_symbols_live(
+            requested, cp_pricers = self._option_snapshot_live_schwab(
                 requested_specs=requested_specs,
-                chains=chains,
-                forward_map=forward_map,
+                valuation_ts=_as_datetime("live"),
+                curve_name=curve_name,
+                curve_kwargs=curve_kwargs,
+                price_mode=price_mode,
+                use_ql_calculator=use_ql_calculator,
+                delta_ignore_deep_itm=delta_ignore_deep_itm,
             )
-
-            expanded_needed: "OrderedDict[str, str]" = OrderedDict()
-            for norm in requested.values():
-                for leg in _expand_straddle_symbol(norm):
-                    expanded_needed[leg] = leg
-
-            curve_memo: Dict[Tuple[str, datetime.date], Tuple[Any, Optional[str]]] = {}
-
-            for leg_symbol in expanded_needed:
-                option_bcontract = _canonical_to_barchart_contract(leg_symbol)
-                underlying_bcontract = _contract_to_barchart_contract(_canonical_underlying(leg_symbol))
-                chain = chains.get(option_bcontract)
-                if chain is None:
-                    continue
-                contract = _canonical_contract(leg_symbol)
-                strike = _strike_from_symbol(leg_symbol)
-                right = _right_from_symbol(leg_symbol)
-                row = self._extract_live_option_row(chain=chain, contract=contract, strike=strike, right=right)
-                if row is None:
-                    continue
-                forward = _to_float(forward_map.get(underlying_bcontract))
-                if forward is None or forward <= 0.0:
-                    continue
-                quote_ts = ts_dt
-                trade_time = _to_float(row.get("tradeTime"))
-                if trade_time is not None and trade_time > 0:
-                    try:
-                        quote_ts = pd.to_datetime(int(trade_time), unit="s", utc=True).to_pydatetime()
-                    except Exception:
-                        quote_ts = ts_dt
-                pr = self._build_pricer_from_row(
-                    canonical_symbol=leg_symbol,
-                    row=row,
-                    valuation_ts=quote_ts,
-                    forward=forward,
-                    curve_name=curve_name,
-                    curve_kwargs=curve_kwargs,
-                    curve_memo=curve_memo,
-                    price_mode=price_mode,
-                    source="BARCHART_LIVE",
-                    use_ql_calculator=use_ql_calculator,
-                )
-                if pr is not None:
-                    cp_pricers[leg_symbol] = pr
         else:
             target_date = _as_date(ts)
             req_window_start_raw = request.get("window_start", target_date)
@@ -5767,10 +6435,18 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         force_refresh = bool(request.get("force_refresh", False))
         cache_key = self._build_get_data_cache_key(endpoint, request)
         with self:
+            if endpoint == "sabr_smile" and cache_key and not force_refresh:
+                memo_hit = self._threadsafe_sabr_smile_memo_get(cache_key)
+                if memo_hit is not None:
+                    return {"sabr_smile": [memo_hit]}
             if cache_key and not force_refresh:
                 cached = self._threadsafe_cache_get(cache_key)
                 hit = self._deserialize_get_data_result(cached)
                 if hit is not None:
+                    if endpoint == "sabr_smile":
+                        smiles = hit.get("sabr_smile") or []
+                        if smiles:
+                            self._threadsafe_sabr_smile_memo_put(cache_key, smiles[0])
                     return hit
 
             if endpoint == "option_snapshot":
@@ -5785,6 +6461,10 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 raise NotImplementedError(f"Unsupported endpoint: {endpoint}")
 
             if cache_key:
+                if endpoint == "sabr_smile":
+                    smiles = out.get("sabr_smile") or []
+                    if smiles:
+                        self._threadsafe_sabr_smile_memo_put(cache_key, smiles[0])
                 self._threadsafe_cache_put(cache_key, self._serialize_get_data_result(endpoint, out))
             return out
 

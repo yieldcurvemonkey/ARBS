@@ -1,9 +1,13 @@
+import contextlib
 import datetime
+import io
+import sys
 import threading
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 import pandas as pd
 import pytz
+import tqdm 
 
 from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
 from MDP.MarketDataProvider import MarketDataProvider
@@ -15,6 +19,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
     _BARCHART_STIRF_STATE: Dict[str, Any] = {
         "builder": None,
         "lock": threading.RLock(),
+        "io_lock": threading.RLock(),
     }
 
     def __init__(self, source: str = "CME_NY_EOD_LIVE-ql_basic", force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
@@ -49,6 +54,52 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             if S["builder"] is None:
                 S["builder"] = BARCHART_STIRF_CURVE()
             return S["builder"]
+
+    @staticmethod
+    def _should_suppress_ratelibs_solver_output(line: str) -> bool:
+        return "SUCCESS: `conv_tol` reached" in line and "(levenberg_marquardt)" in line
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _suppress_ratelibs_solver_output() -> Any:
+        class _FilteredWriteStream(io.TextIOBase):
+            def __init__(self, stream: Any):
+                self._stream = stream
+                self._buffer = ""
+
+            def write(self, s: str) -> int:
+                if not s:
+                    return 0
+
+                self._buffer += s
+                while "\n" in self._buffer:
+                    line, self._buffer = self._buffer.split("\n", 1)
+                    self._emit(line + "\n")
+                return len(s)
+
+            def flush(self) -> None:
+                if self._buffer:
+                    self._emit(self._buffer)
+                    self._buffer = ""
+                self._stream.flush()
+
+            def _emit(self, line: str) -> None:
+                if not IRSwapsMDP._should_suppress_ratelibs_solver_output(line):
+                    self._stream.write(line)
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self._stream, name)
+
+        S = IRSwapsMDP._BARCHART_STIRF_STATE
+        stdout = _FilteredWriteStream(sys.stdout)
+        stderr = _FilteredWriteStream(sys.stderr)
+        with S["io_lock"]:
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                try:
+                    yield
+                finally:
+                    stdout.flush()
+                    stderr.flush()
 
     @staticmethod
     def _to_barchart_stirf_timestamp(
@@ -120,6 +171,61 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         raise ValueError(
             f"Could not resolve BARCHART STIRF curve for '{requested_curve_name}'. "
             "Pass kwargs['curve_names'] with a concrete BARCHART curve config key."
+        )
+
+    @staticmethod
+    def _barchart_stirf_reference_date(
+        timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> datetime.date:
+        if timestamp == "live":
+            return datetime.date.today()
+        if isinstance(timestamp, pd.Timestamp):
+            return timestamp.date()
+        if isinstance(timestamp, datetime.datetime):
+            return timestamp.date()
+        return timestamp
+
+    def _build_barchart_stirf_rl_curve(
+        self,
+        *,
+        requested_curve_name: str,
+        resolved_curve_name: str,
+        request_timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+        rl_curve_handle: Any,
+        builder: Any,
+        fixings_cache: Optional[Dict[tuple[datetime.date, str], pd.Series]] = None,
+    ) -> "_IRSwapGenericCurve":
+        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+        reference_curve_name = str(getattr(rl_curve_handle, "id", "") or "")
+        if not reference_curve_name:
+            reference_curve_name = str(builder._STIRF_CURVE_CONFIGS[resolved_curve_name]["reference_key"])
+
+        ref = self._barchart_stirf_reference_date(request_timestamp)
+        fixings_key = (ref, reference_curve_name)
+        fixings = None if fixings_cache is None else fixings_cache.get(fixings_key)
+        if fixings is None:
+            fixings = _fetch_fixings(
+                as_of_date=ref,
+                curve_name=reference_curve_name,
+                force_refresh=self.force_refresh_fixings,
+            ).sort_index()
+            fixings = fixings[fixings.index.date < ref] * 100
+            if fixings_cache is not None:
+                fixings_cache[fixings_key] = fixings
+
+        ts_meta = getattr(rl_curve_handle, "timestamp", request_timestamp)
+        curve_id = f"{self.source.upper()}-{resolved_curve_name}-{ts_meta}"
+        return RLIRSwapCurve(
+            rl_curve_id=reference_curve_name,
+            rl_curve_handle=rl_curve_handle,
+            fixings=fixings,
+            meta_data={
+                "timestamp": ts_meta,
+                "id": curve_id,
+                "requested_curve_name": requested_curve_name,
+                "curve_name": resolved_curve_name,
+            },
         )
 
     def get_pricer(self, request: dict) -> _IRSwapGenericCurve:
@@ -812,8 +918,6 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
 
         elif self.source.upper() in ["BARCHART_STIRF-RL", "BARCHART_STIRF_RL"]:
-            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
-
             local_kwargs = dict(kwargs)
             builder = self._get_barchart_stirf_curve_builder()
             resolved_curve_name = self._resolve_barchart_stirf_curve_name(
@@ -823,45 +927,20 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
 
             rl_timestamp = self._to_barchart_stirf_timestamp(timestamp)
-            rl_curve_handle = builder.build_curve(
-                curve_name=resolved_curve_name,
-                timestamp=rl_timestamp,
-                kwargs=local_kwargs,
-                curve_only=True,
-            )
+            with self._suppress_ratelibs_solver_output():
+                rl_curve_handle = builder.build_curve(
+                    curve_name=resolved_curve_name,
+                    timestamp=rl_timestamp,
+                    kwargs=local_kwargs,
+                    curve_only=True,
+                )
 
-            reference_curve_name = str(getattr(rl_curve_handle, "id", "") or "")
-            if not reference_curve_name:
-                reference_curve_name = str(builder._STIRF_CURVE_CONFIGS[resolved_curve_name]["reference_key"])
-
-            if timestamp == "live":
-                ref = datetime.date.today()
-            elif isinstance(timestamp, pd.Timestamp):
-                ref = timestamp.date()
-            elif isinstance(timestamp, datetime.datetime):
-                ref = timestamp.date()
-            else:
-                ref = timestamp
-
-            fixings = _fetch_fixings(
-                as_of_date=ref,
-                curve_name=reference_curve_name,
-                force_refresh=self.force_refresh_fixings,
-            ).sort_index()
-            fixings = fixings[fixings.index.date < ref] * 100
-
-            ts_meta = getattr(rl_curve_handle, "timestamp", rl_timestamp)
-            curve_id = f"{self.source.upper()}-{resolved_curve_name}-{ts_meta}"
-            return RLIRSwapCurve(
-                rl_curve_id=reference_curve_name,
+            return self._build_barchart_stirf_rl_curve(
+                requested_curve_name=curve_name,
+                resolved_curve_name=resolved_curve_name,
+                request_timestamp=timestamp,
                 rl_curve_handle=rl_curve_handle,
-                fixings=fixings,
-                meta_data={
-                    "timestamp": ts_meta,
-                    "id": curve_id,
-                    "requested_curve_name": curve_name,
-                    "curve_name": resolved_curve_name,
-                },
+                builder=builder,
             )
 
         else:
@@ -1177,9 +1256,57 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         elif self.source.upper() in ["BARCHART_STIRF-RL", "BARCHART_STIRF_RL"]:
             local_request = dict(request)
             local_request.setdefault("force_refresh", bool(ignore_cache))
+            if "live" not in timestamps:
+                builder = self._get_barchart_stirf_curve_builder()
+                bulk_request = dict(local_request)
+                bulk_request["cache_full_intraday_fetch"] = True
+                bulk_request.setdefault("show_tqdm", False)
+                resolved_curve_name = self._resolve_barchart_stirf_curve_name(
+                    requested_curve_name=curve_name,
+                    kwargs=bulk_request,
+                    builder=builder,
+                )
 
-            for t in timestamps:
-                out[t] = self._get_curve(curve_name=curve_name, timestamp=t, kwargs=dict(local_request))
+                rl_timestamps: List[datetime.datetime] = []
+                timestamps_by_rl_timestamp: Dict[datetime.datetime, List[Union[datetime.date, datetime.datetime, Literal["live"]]]] = {}
+                for t in timestamps:
+                    rl_timestamp = self._to_barchart_stirf_timestamp(t)
+                    assert rl_timestamp != "live"
+                    rl_timestamps.append(rl_timestamp)
+                    timestamps_by_rl_timestamp.setdefault(rl_timestamp, []).append(t)
+
+                try:
+                    with self._suppress_ratelibs_solver_output():
+                        built_curves = builder.build_curve(
+                            curve_name=resolved_curve_name,
+                            timestamp=rl_timestamps,
+                            kwargs=bulk_request,
+                            curve_only=True,
+                        )
+                    fixings_cache: Dict[tuple[datetime.date, str], pd.Series] = {}
+                    for rl_timestamp, original_timestamps in timestamps_by_rl_timestamp.items():
+                        rl_curve_handle = built_curves.get(rl_timestamp)
+                        if rl_curve_handle is None:
+                            continue
+                        curve = self._build_barchart_stirf_rl_curve(
+                            requested_curve_name=curve_name,
+                            resolved_curve_name=resolved_curve_name,
+                            request_timestamp=original_timestamps[0],
+                            rl_curve_handle=rl_curve_handle,
+                            builder=builder,
+                            fixings_cache=fixings_cache,
+                        )
+                        for original_timestamp in original_timestamps:
+                            out[original_timestamp] = curve
+                    return out
+                except Exception:
+                    pass
+
+            for t in tqdm.tqdm(timestamps, desc=f"Building curves for {self.source}"):
+                try:
+                    out[t] = self._get_curve(curve_name=curve_name, timestamp=t, kwargs=dict(local_request) | {"cache_full_intraday_fetch": True})
+                except Exception:
+                    continue
             return out
 
         # ------- default / not implemented -------

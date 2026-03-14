@@ -31,6 +31,8 @@ def _mk_option_pricer(
     fv01: float = 0.08,
     delta: float = 0.0,
     underlying_symbol: str = "ZNM26",
+    market_price: float = 1.0,
+    meta_data=None,
 ) -> QLUSTFutureOptionPricer:
     right = symbol[-1].upper()
     return QLUSTFutureOptionPricer(
@@ -40,7 +42,7 @@ def _mk_option_pricer(
         strike=forward,
         quote_timestamp=quote_timestamp,
         expiry_date=expiry_date,
-        market_price=1.0,
+        market_price=market_price,
         model_price=1.0,
         iv_normal=iv_normal,
         delta=delta,
@@ -50,45 +52,51 @@ def _mk_option_pricer(
         forward=forward,
         discount=1.0,
         fv01=fv01,
-        meta_data={},
+        meta_data={} if meta_data is None else meta_data,
     )
+
+
+def _quote(
+    *,
+    bid=None,
+    ask=None,
+    last=None,
+    quote_time=1760000000000,
+    mark=None,
+    bid_size=None,
+    ask_size=None,
+):
+    mid = None
+    if bid is not None and ask is not None:
+        mid = (float(bid) + float(ask)) / 2.0
+    return {
+        "bid": bid,
+        "ask": ask,
+        "mid": mid,
+        "last": last,
+        "bidSize": bid_size,
+        "askSize": ask_size,
+        "mark": mark,
+        "netChange": None,
+        "quoteTime": quote_time,
+    }
 
 
 def test_live_snapshot_mid_and_last_fallback(monkeypatch):
     mdp = USTFutureOptionMDP(source="BARCHART_USTFO-QL")
     monkeypatch.setattr(mdp, "_get_curve_builder", lambda: _DummyCurveBuilder())
 
-    class _DummyBC:
-        def get_option_quotes(self, symbols, **kwargs):
-            _ = kwargs
-            assert symbols == ["ZNM26"]
-            call_df = pd.DataFrame(
-                [
-                    {
-                        "strikePrice": 112.5,
-                        "bidPrice": 1.20,
-                        "askPrice": 1.24,
-                        "lastPrice": 1.22,
-                        "tradeTime": 1760000000,
-                    },
-                    {
-                        "strikePrice": 113.0,
-                        "bidPrice": 0.0,
-                        "askPrice": 0.0,
-                        "lastPrice": 0.80,
-                        "tradeTime": 1760000000,
-                    },
-                ]
-            )
-            put_df = pd.DataFrame(columns=call_df.columns)
-            return {"ZNM26": {"call": call_df, "put": put_df}}
+    def _stub_quotes(**kwargs):
+        symbols = set(kwargs["symbols"])
+        if symbols == {"/ZNM26"}:
+            return {"/ZNM26": _quote(bid=112.40, ask=112.60, last=112.50)}
+        assert symbols == {"./OZNM26C112.5", "./OZNM26C113"}
+        return {
+            "./OZNM26C112.5": _quote(bid=1.20, ask=1.24, last=1.22),
+            "./OZNM26C113": _quote(last=0.80),
+        }
 
-        def barchart_timeseries_api(self, **kwargs):
-            assert kwargs["interval"] == 1
-            idx = pd.DatetimeIndex([pytz.timezone("America/Chicago").localize(datetime.datetime(2026, 3, 4, 10, 30))])
-            return {"ZNM26": pd.DataFrame({"Open": [112.4], "High": [112.6], "Low": [112.3], "Close": [112.5]}, index=idx)}
-
-    monkeypatch.setattr(mdp, "_get_barchart_fetcher", lambda **kwargs: _DummyBC())
+    monkeypatch.setattr(ustfo_module, "schwab_get_quotes", _stub_quotes)
 
     out = mdp.get_data(
         {
@@ -103,6 +111,8 @@ def test_live_snapshot_mid_and_last_fallback(monkeypatch):
     p2 = out["ZNM26|1130C"][0]
     assert p1.price() == 1.22  # mid from bid/ask
     assert p2.price() == 0.80  # last fallback
+    assert p1.meta()["raw_quote"] == _quote(bid=1.20, ask=1.24, last=1.22)
+    assert p2.meta()["raw_quote"] == _quote(last=0.80)
 
 
 def test_ustfo_get_barchart_fetcher_builds_fresh_instance_each_call(monkeypatch):
@@ -210,32 +220,23 @@ def test_live_snapshot_atm_and_25d_aliases(monkeypatch):
     mdp = USTFutureOptionMDP(source="BARCHART_USTFO-QL")
     monkeypatch.setattr(mdp, "_get_curve_builder", lambda: _DummyCurveBuilder())
 
-    class _DummyBC:
-        def get_option_quotes(self, symbols, **kwargs):
-            _ = kwargs
-            assert symbols == ["ZNM26"]
-            call_df = pd.DataFrame(
-                [
-                    {"strikePrice": 112.0, "bidPrice": 1.55, "askPrice": 1.60, "lastPrice": 1.57, "delta": 0.74, "tradeTime": 1760000000},
-                    {"strikePrice": 112.5, "bidPrice": 1.20, "askPrice": 1.24, "lastPrice": 1.22, "delta": 0.50, "tradeTime": 1760000000},
-                    {"strikePrice": 113.0, "bidPrice": 0.85, "askPrice": 0.89, "lastPrice": 0.87, "delta": 0.24, "tradeTime": 1760000000},
-                ]
-            )
-            put_df = pd.DataFrame(
-                [
-                    {"strikePrice": 112.0, "bidPrice": 0.40, "askPrice": 0.44, "lastPrice": 0.42, "delta": -0.26, "tradeTime": 1760000000},
-                    {"strikePrice": 112.5, "bidPrice": 0.70, "askPrice": 0.74, "lastPrice": 0.72, "delta": -0.50, "tradeTime": 1760000000},
-                    {"strikePrice": 113.0, "bidPrice": 1.10, "askPrice": 1.14, "lastPrice": 1.12, "delta": -0.76, "tradeTime": 1760000000},
-                ]
-            )
-            return {"ZNM26": {"call": call_df, "put": put_df}}
+    def _stub_quotes(**kwargs):
+        symbols = set(kwargs["symbols"])
+        if symbols == {"/ZNM26"}:
+            return {"/ZNM26": _quote(bid=112.45, ask=112.55, last=112.50)}
+        assert "./OZNM26C112.5" in symbols
+        assert "./OZNM26C113" in symbols
+        assert "./OZNM26P112.5" in symbols
+        return {
+            "./OZNM26C112": _quote(bid=1.55, ask=1.60, last=1.57),
+            "./OZNM26C112.5": _quote(bid=1.20, ask=1.24, last=1.22),
+            "./OZNM26C113": _quote(bid=0.85, ask=0.89, last=0.87),
+            "./OZNM26P112": _quote(bid=0.40, ask=0.44, last=0.42),
+            "./OZNM26P112.5": _quote(bid=0.70, ask=0.74, last=0.72),
+            "./OZNM26P113": _quote(bid=1.10, ask=1.14, last=1.12),
+        }
 
-        def barchart_timeseries_api(self, **kwargs):
-            assert kwargs["interval"] == 1
-            idx = pd.DatetimeIndex([pytz.timezone("America/Chicago").localize(datetime.datetime(2026, 3, 4, 10, 30))])
-            return {"ZNM26": pd.DataFrame({"Open": [112.45], "High": [112.55], "Low": [112.40], "Close": [112.50]}, index=idx)}
-
-    monkeypatch.setattr(mdp, "_get_barchart_fetcher", lambda **kwargs: _DummyBC())
+    monkeypatch.setattr(ustfo_module, "schwab_get_quotes", _stub_quotes)
 
     out = mdp.get_data(
         {
@@ -251,28 +252,28 @@ def test_live_snapshot_atm_and_25d_aliases(monkeypatch):
     assert atm.symbol() == "ZNM26|1125S"
     assert atm.price() == pytest.approx(1.94)  # 1.22 call + 0.72 put
     assert d25.symbol() == "ZNM26|1130C"
+    assert atm.meta()["raw_quote_legs"] == {
+        "ZNM26|1125C": _quote(bid=1.20, ask=1.24, last=1.22),
+        "ZNM26|1125P": _quote(bid=0.70, ask=0.74, last=0.72),
+    }
+    assert d25.meta()["raw_quote"] == _quote(bid=0.85, ask=0.89, last=0.87)
 
 
 def test_weekly_symbol_handling_and_underlying_mapping(monkeypatch):
     mdp = USTFutureOptionMDP(source="BARCHART_USTFO-QL")
     monkeypatch.setattr(mdp, "_get_curve_builder", lambda: _DummyCurveBuilder())
 
-    class _DummyBC:
-        def get_option_quotes(self, symbols, **kwargs):
-            _ = kwargs
-            assert symbols == ["BN1H26"]
-            call_df = pd.DataFrame(
-                [{"strikePrice": 112.75, "bidPrice": 1.10, "askPrice": 1.14, "lastPrice": 1.12, "tradeTime": 1760000000}]
-            )
-            put_df = pd.DataFrame(columns=call_df.columns)
-            return {"BN1H26": {"call": call_df, "put": put_df}}
+    seen = []
 
-        def barchart_timeseries_api(self, **kwargs):
-            assert kwargs["barchart_symbols"] == ["ZNM26"]
-            idx = pd.DatetimeIndex([pytz.timezone("America/Chicago").localize(datetime.datetime(2026, 3, 4, 10, 30))])
-            return {"ZNM26": pd.DataFrame({"Open": [112.70], "High": [112.80], "Low": [112.60], "Close": [112.75]}, index=idx)}
+    def _stub_quotes(**kwargs):
+        symbols = set(kwargs["symbols"])
+        seen.append(list(kwargs["symbols"]))
+        if symbols == {"/ZNM26"}:
+            return {"/ZNM26": _quote(bid=112.70, ask=112.80, last=112.75)}
+        assert symbols == {"./OBN1H26C112.75"}
+        return {"./OBN1H26C112.75": _quote(bid=1.10, ask=1.14, last=1.12)}
 
-    monkeypatch.setattr(mdp, "_get_barchart_fetcher", lambda **kwargs: _DummyBC())
+    monkeypatch.setattr(ustfo_module, "schwab_get_quotes", _stub_quotes)
 
     out = mdp.get_data(
         {
@@ -287,6 +288,60 @@ def test_weekly_symbol_handling_and_underlying_mapping(monkeypatch):
     assert p.symbol() == "BN1H26|11270C"
     assert p.underlying_symbol() == "ZNM26"
     assert p.forward() == pytest.approx(112.75)
+    assert seen[0] == ["/ZNM26"]
+    assert seen[1] == ["./OBN1H26C112.75"]
+
+
+def test_live_delta_alias_prices_candidates_instead_of_vendor_call_delta(monkeypatch):
+    mdp = USTFutureOptionMDP(source="BARCHART_USTFO-QL")
+    ny = pytz.timezone("America/New_York")
+    quote_ts = ny.localize(datetime.datetime(2026, 3, 6, 11, 0))
+
+    def _stub_build_pricer_from_row(**kwargs):
+        sym = kwargs["canonical_symbol"]
+        delta_map = {
+            "ZNM26|1125C": 0.1423,
+            "ZNM26|1130C": 0.0744,
+        }
+        if sym not in delta_map:
+            return None
+        return _mk_option_pricer(
+            symbol=sym,
+            quote_timestamp=quote_ts,
+            expiry_date=datetime.date(2026, 5, 22),
+            iv_normal=0.80,
+            forward=112.67,
+            delta=delta_map[sym],
+            underlying_symbol="ZNM26",
+            market_price=ustfo_module._extract_row_price(kwargs["row"]),
+        )
+
+    def _stub_quotes(**kwargs):
+        symbols = set(kwargs["symbols"])
+        if symbols == {"/ZNM26"}:
+            return {"/ZNM26": _quote(bid=112.66, ask=112.68, last=112.67, quote_time=1772797200000)}
+        assert "./OZNM26C112.5" in symbols
+        assert "./OZNM26C113" in symbols
+        return {
+            "./OZNM26C112.5": _quote(last=1.05, quote_time=1772797200000),
+            "./OZNM26C113": _quote(last=0.76, quote_time=1772797200000),
+        }
+
+    monkeypatch.setattr(ustfo_module, "schwab_get_quotes", _stub_quotes)
+    monkeypatch.setattr(mdp, "_build_pricer_from_row", _stub_build_pricer_from_row)
+
+    out = mdp.get_data(
+        {
+            "endpoint": "option_snapshot",
+            "symbols": ["ZNM26|10DC"],
+            "timestamp": "live",
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+            "force_refresh": True,
+        }
+    )
+
+    assert out["ZNM26|10DC"][0].symbol() == "ZNM26|1130C"
 
 
 def test_historical_snapshot_atm_alias_and_delta_resolution(monkeypatch):
@@ -647,7 +702,11 @@ def test_fetch_bulk_sabr_smile_barchart_reuses_shared_window_and_seeds_cache(mon
     def _stub_conversion(requirements, *, force_refresh):
         _ = force_refresh
         seen["conversion_calls"] += 1
-        return {(underlying_contract, as_of): _DummyFuturePricer() for underlying_contract, as_of in requirements}
+        out = {}
+        for requirement in requirements:
+            underlying_contract, as_of = requirement[:2]
+            out[(underlying_contract, as_of)] = _DummyFuturePricer()
+        return out
 
     monkeypatch.setattr(mdp, "_fetch_barchart_eod_series", _stub_eod_series)
     monkeypatch.setattr(mdp, "_get_or_build_barchart_pricer_window", _stub_window)

@@ -484,6 +484,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             self._barchart_proxy_hosts = [None]
         random.shuffle(self._barchart_proxy_hosts)
         self._barchart_proxy_ttl: int = int(kwargs.get("barchart_proxy_ttl", 60))
+        self._barchart_session_token_pool_size_cap: int = max(1, int(kwargs.get("barchart_session_token_pool_size_cap", 24)))
 
         if not STIRFutureMDP._BARCHART_STATE:
             STIRFutureMDP._BARCHART_STATE = {
@@ -648,11 +649,25 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         return None, None
 
-    def _get_barchart_fetcher(self) -> BarchartFetcher:
+    def _bounded_session_token_pool_size(self, concurrency: Optional[int]) -> int:
+        if concurrency is None:
+            target = 1
+        else:
+            target = max(1, int(concurrency))
+        return min(target, int(self._barchart_session_token_pool_size_cap))
+
+    def _get_barchart_fetcher(
+        self,
+        *,
+        required_concurrency: Optional[int] = None,
+        force_rotate_proxy: bool = False,
+        clear_session_tokens: bool = False,
+    ) -> BarchartFetcher:
         """
         Sticky proxy (TTL) + fresh fetcher per call + token seeding.
         Rotates once on token failure.
         """
+        desired_pool_size = self._bounded_session_token_pool_size(required_concurrency)
         S = STIRFutureMDP._BARCHART_STATE
         with S["lock"]:
             def _safe_close(fetcher: Optional[BarchartFetcher]) -> None:
@@ -670,10 +685,19 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     debug_verbose=False,
                     error_verbose=True,
                     session_token_ttl_seconds=max(1, int(S["ttl"])),
+                    session_token_pool_size=desired_pool_size,
                     session_token_scope=f"{self.__class__.__name__}:{scope_host}",
                 )
 
-            proxies, host = self._get_cached_barchart_proxy()
+            if clear_session_tokens:
+                BarchartFetcher.clear_shared_session_token_cache()
+
+            if force_rotate_proxy:
+                proxies, host = self._choose_barchart_proxy()
+                S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
+            else:
+                proxies, host = self._get_cached_barchart_proxy()
+
             if proxies is None and host is None:
                 proxies, host = self._choose_barchart_proxy()
                 S["proxies"], S["host"], S["chosen_at"] = proxies, host, time.time()
@@ -723,23 +747,24 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
             end = ts_chi + datetime.timedelta(minutes=window_minutes)
 
         barchart_syms = [_to_barchart_symbol(_normalize_symbol(t) or t) for t in tickers]
-        bcf = self._get_barchart_fetcher()
+        max_concurrent_tasks = min(len(barchart_syms), 36) + 1
+        max_keepalive_connections = max(36, min(len(barchart_syms), 36)) + 1
 
-        def _call():
+        def _call(fetcher: BarchartFetcher):
             try:
-                return bcf.barchart_timeseries_api(
+                return fetcher.barchart_timeseries_api(
                     barchart_symbols=barchart_syms,
                     start_date=start,
                     end_date=end,
                     interval=1,
                     one_df=True,
                     show_tqdm=show_tqdm,
-                    max_concurrent_tasks=min(len(barchart_syms), 36) + 1,
-                    max_keepalive_connections=max(36, min(len(barchart_syms), 36)) + 1,
+                    max_concurrent_tasks=max_concurrent_tasks,
+                    max_keepalive_connections=max_keepalive_connections,
                     # max_concurrent_tasks=1,
                 )
             except TypeError:
-                return bcf.barchart_timeseries_api(
+                return fetcher.barchart_timeseries_api(
                     barchart_symbols=barchart_syms,
                     start_date=start,
                     end_date=end,
@@ -754,29 +779,50 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
         except RuntimeError:
             running = False
 
-        try:
+        def _run_fetch(fetcher: BarchartFetcher) -> Any:
             if not running:
-                df = _call()
-            else:
-                holder: Dict[str, Any] = {"df": None, "err": None}
+                return _call(fetcher)
 
-                def _worker():
-                    try:
-                        holder["df"] = _call()
-                    except Exception as e:
-                        holder["err"] = e
+            holder: Dict[str, Any] = {"df": None, "err": None}
 
-                th = threading.Thread(target=_worker, daemon=True)
-                th.start()
-                th.join()
-                if holder["err"] is not None:
-                    raise holder["err"]
-                df = holder["df"]
-        finally:
+            def _worker():
+                try:
+                    holder["df"] = _call(fetcher)
+                except Exception as e:
+                    holder["err"] = e
+
+            th = threading.Thread(target=_worker, daemon=True)
+            th.start()
+            th.join()
+            if holder["err"] is not None:
+                raise holder["err"]
+            return holder["df"]
+
+        df = None
+        last_exc: Optional[Exception] = None
+        for retry_idx, fetcher_kwargs in enumerate(
+            (
+                {"force_rotate_proxy": False, "clear_session_tokens": False},
+                {"force_rotate_proxy": True, "clear_session_tokens": True},
+            )
+        ):
+            bcf = self._get_barchart_fetcher(required_concurrency=max_concurrent_tasks, **fetcher_kwargs)
             try:
-                bcf.close()
-            except Exception:
-                pass
+                df = _run_fetch(bcf)
+            except Exception as exc:
+                last_exc = exc
+                df = None
+            finally:
+                try:
+                    bcf.close()
+                except Exception:
+                    pass
+
+            if df is not None and not df.empty:
+                break
+
+            if retry_idx == 1 and last_exc is not None:
+                raise last_exc
 
         if df is None or df.empty:
             return pd.DataFrame()

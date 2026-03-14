@@ -62,6 +62,7 @@ def test_barchart_fetcher_parses_intraday_as_central_and_returns_request_tz():
 def test_stir_mdp_fetch_window_is_central_for_non_central_request(monkeypatch):
     mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
     captured = {}
+    requested_concurrency = []
 
     class _DummyFetcher:
         def barchart_timeseries_api(self, **kwargs):
@@ -71,7 +72,11 @@ def test_stir_mdp_fetch_window_is_central_for_non_central_request(monkeypatch):
                 index=pd.DatetimeIndex([kwargs["end_date"]]),
             )
 
-    monkeypatch.setattr(mdp, "_get_barchart_fetcher", lambda: _DummyFetcher())
+    monkeypatch.setattr(
+        mdp,
+        "_get_barchart_fetcher",
+        lambda *, required_concurrency=None, force_rotate_proxy=False, clear_session_tokens=False: requested_concurrency.append(required_concurrency) or _DummyFetcher(),
+    )
 
     ny = pytz.timezone("America/New_York")
     ts_ny = ny.localize(datetime.datetime(2025, 1, 2, 11, 30))
@@ -91,6 +96,65 @@ def test_stir_mdp_fetch_window_is_central_for_non_central_request(monkeypatch):
     assert getattr(end.tzinfo, "zone", None) == "America/Chicago"
     assert (start.hour, start.minute) == (10, 28)
     assert (end.hour, end.minute) == (10, 32)
+    assert requested_concurrency == [2]
+    assert list(out.columns) == ["SR3H26"]
+
+
+@pytest.mark.skipif(STIRFutureMDP is None, reason="STIRFutureMDP optional dependencies not available")
+def test_stir_mdp_retries_empty_barchart_fetch_with_proxy_rotation_and_token_refresh(monkeypatch):
+    mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
+    fetcher_requests = []
+    closed = []
+
+    class _DummyFetcher:
+        def __init__(self, idx):
+            self.idx = idx
+
+        def barchart_timeseries_api(self, **kwargs):
+            if self.idx == 0:
+                return pd.DataFrame()
+            return pd.DataFrame({"SQH26": [95.05]}, index=pd.DatetimeIndex([kwargs["end_date"]]))
+
+        def close(self):
+            closed.append(self.idx)
+            return None
+
+    def _fake_get_barchart_fetcher(*, required_concurrency=None, force_rotate_proxy=False, clear_session_tokens=False):
+        fetcher_requests.append(
+            {
+                "required_concurrency": required_concurrency,
+                "force_rotate_proxy": force_rotate_proxy,
+                "clear_session_tokens": clear_session_tokens,
+            }
+        )
+        return _DummyFetcher(len(fetcher_requests) - 1)
+
+    monkeypatch.setattr(mdp, "_get_barchart_fetcher", _fake_get_barchart_fetcher)
+
+    chi = pytz.timezone("America/Chicago")
+    ts_chi = chi.localize(datetime.datetime(2025, 1, 2, 10, 30))
+    out = mdp._fetch_barchart_timeseries(
+        tickers=["SR3H26"],
+        ts_dt=ts_chi,
+        show_tqdm=False,
+        interval=1,
+        window_minutes=2,
+        full_day_intraday=False,
+    )
+
+    assert fetcher_requests == [
+        {
+            "required_concurrency": 2,
+            "force_rotate_proxy": False,
+            "clear_session_tokens": False,
+        },
+        {
+            "required_concurrency": 2,
+            "force_rotate_proxy": True,
+            "clear_session_tokens": True,
+        },
+    ]
+    assert closed == [0, 1]
     assert list(out.columns) == ["SR3H26"]
 
 
@@ -122,13 +186,14 @@ def test_stir_mdp_get_barchart_fetcher_builds_fresh_instance_each_call(monkeypat
         ),
     )
 
-    fetcher_a = mdp._get_barchart_fetcher()
-    fetcher_b = mdp._get_barchart_fetcher()
+    fetcher_a = mdp._get_barchart_fetcher(required_concurrency=8)
+    fetcher_b = mdp._get_barchart_fetcher(required_concurrency=8)
 
     assert fetcher_a is not fetcher_b
     assert len(created) == 2
     assert [fetcher.seed_calls for fetcher in created] == [1, 1]
     assert fetcher_a.kwargs["proxies"] == fetcher_b.kwargs["proxies"]
+    assert fetcher_a.kwargs["session_token_pool_size"] == 8
 
 
 @pytest.mark.skipif(STIRFutureMDP is None, reason="STIRFutureMDP optional dependencies not available")

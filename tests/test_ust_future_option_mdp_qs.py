@@ -335,6 +335,82 @@ def test_fetch_sabr_smile_dual_cache_key_canonicalizes_zero_padded_cm_symbol(mon
     assert cached.globex_symbol == "TY_03"
 
 
+def test_fetch_sabr_smile_cache_key_ignores_endpoint_field():
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 4)
+
+    assert mdp._build_get_data_cache_key("sabr_smile", {"globex_symbol": "TY_30", "as_of": as_of}) == mdp._build_get_data_cache_key(
+        "sabr_smile",
+        {"endpoint": "sabr_smile", "globex_symbol": "TY_30", "as_of": as_of},
+    )
+
+
+def test_fetch_sabr_smile_cache_key_ignores_option_snapshot_passthrough_fields():
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 4)
+
+    base_key = mdp._build_get_data_cache_key("sabr_smile", {"globex_symbol": "TY_30", "as_of": as_of})
+    enriched_key = mdp._build_get_data_cache_key(
+        "sabr_smile",
+        {
+            "globex_symbol": "TY_30",
+            "as_of": as_of,
+            "timestamp": as_of,
+            "window_start": as_of,
+            "window_end": as_of,
+            "use_ql_calculator": True,
+            "show_tqdm": True,
+        },
+    )
+
+    assert base_key == enriched_key
+
+
+def test_fetch_sabr_smile_cache_key_canonicalizes_implicit_defaults():
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 4)
+
+    implicit_key = mdp._build_get_data_cache_key("sabr_smile", {"globex_symbol": "TY_30", "as_of": as_of})
+    explicit_key = mdp._build_get_data_cache_key(
+        "sabr_smile",
+        {
+            "globex_symbol": "TY_30",
+            "as_of": as_of,
+            "curve_name": mdp._curve_name_default,
+            "curve_kwargs": {},
+            "deltas": [5, 10, 15, 20, 25, 30, 35, 40, 45, 50],
+            "calibration_method": "nelder-mead",
+        },
+    )
+
+    assert implicit_key == explicit_key
+
+
+def test_fetch_sabr_smile_uses_in_memory_memo_when_disk_cache_read_misses(monkeypatch):
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 4)
+    seen = {"qs_calls": 0}
+    cache_store = {}
+
+    def _stub_qs(request):
+        seen["qs_calls"] += 1
+        return _make_qs_payload(as_of, globex_symbol="TY_30")
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+    monkeypatch.setattr(mdp, "_build_sabr_smile_conversion_pricer", lambda **kwargs: _DummyFuturePricer())
+    monkeypatch.setattr(mdp, "_threadsafe_cache_get", lambda key: None)
+    monkeypatch.setattr(mdp, "_threadsafe_cache_put", lambda key, value: cache_store.__setitem__(key, value))
+
+    first = mdp.fetch_sabr_smile({"globex_symbol": "TY_30", "as_of": as_of, "force_refresh": True})
+    cached = mdp.fetch_sabr_smile({"globex_symbol": "TY_30", "as_of": as_of})
+    cache_key = mdp._build_get_data_cache_key("sabr_smile", {"globex_symbol": "TY_30", "as_of": as_of})
+
+    assert seen["qs_calls"] == 1
+    assert cache_key in cache_store
+    assert cached.globex_symbol == "TY_30"
+    assert cached.normal_vol(cached.points[3].strike_price) == pytest.approx(first.normal_vol(first.points[3].strike_price))
+
+
 def test_option_snapshot_dual_cm_atm_alias_prefetches_full_window_once(monkeypatch):
     mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
     d1 = datetime.date(2026, 3, 4)
@@ -445,6 +521,52 @@ def test_option_snapshot_dual_cm_atm_alias_survives_missing_conversion_pricer(mo
     )
 
     assert call_out["TY_30|ATMC"][0].meta()["conversion_pricer_missing"] is True
+
+
+def test_option_snapshot_dual_cm_aliases_rehydrate_from_cached_sabr_smile(monkeypatch):
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 6)
+    cache_store = {}
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", lambda request: _make_qs_payload(as_of, globex_symbol="TY_30"))
+    monkeypatch.setattr(mdp, "_build_sabr_smile_conversion_pricer", lambda **kwargs: _DummyFuturePricer())
+    monkeypatch.setattr(mdp, "_threadsafe_cache_get", lambda key: cache_store.get(key))
+    monkeypatch.setattr(mdp, "_threadsafe_cache_put", lambda key, value: cache_store.__setitem__(key, value))
+
+    mdp.fetch_sabr_smile(
+        {
+            "globex_symbol": "TY_30",
+            "as_of": as_of,
+            "force_refresh": True,
+            "use_ql_calculator": True,
+        }
+    )
+
+    for key in list(cache_store):
+        if "::option_snapshot::" in key:
+            cache_store.pop(key, None)
+
+    monkeypatch.setattr(
+        mdp,
+        "_qs_timeseries",
+        lambda request: (_ for _ in ()).throw(AssertionError("_qs_timeseries should not run when cached SABR smile can rehydrate aliases")),
+    )
+
+    out = mdp.get_data(
+        {
+            "endpoint": "option_snapshot",
+            "symbols": ["TY_30|ATMS", "TY_30|25DC"],
+            "timestamp": as_of,
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        }
+    )
+
+    assert "TY_30|ATMS" in out
+    assert "TY_30|25DC" in out
+    assert math.isfinite(out["TY_30|ATMS"][0].iv_normal_bps())
+    assert out["TY_30|25DC"][0].iv_normal() == pytest.approx(0.845)
+    assert out["TY_30|25DC"][0].meta()["synthetic_from_sabr_smile"] is True
 
 
 def test_quikvol_timeseries_query_builder_handles_short_dated_ust_cm_symbol():
@@ -909,6 +1031,44 @@ def test_fetch_bulk_sabr_smile_qs_multi_symbol_multi_date_batches_conversion_pri
     assert set(out.keys()) == {"TY_03", "FV_10"}
     assert isinstance(out["TY_03"][d1], USTFutureOptionSABRSmile)
     assert out["FV_10"][d2].underlying_contract == "ZFM26"
+
+
+def test_fetch_bulk_sabr_smile_qs_uses_in_memory_memo_when_disk_cache_read_misses(monkeypatch):
+    mdp = USTFutureOptionMDP(source="USTFO_DUAL-QL")
+    as_of = datetime.date(2026, 3, 4)
+    seen = {"qs_requests": []}
+    cache_store = {}
+
+    def _stub_qs(request):
+        seen["qs_requests"].append(request)
+        return _make_qs_payload(as_of, globex_symbol="TY_03")
+
+    monkeypatch.setattr(mdp, "_qs_timeseries", _stub_qs)
+    monkeypatch.setattr(mdp, "_threadsafe_cache_get", lambda key: None)
+    monkeypatch.setattr(mdp, "_threadsafe_cache_put", lambda key, value: cache_store.__setitem__(key, value))
+    monkeypatch.setattr(
+        mdp,
+        "_build_bulk_sabr_smile_conversion_pricers",
+        lambda requirements, *, force_refresh: {
+            (underlying_contract, req_as_of): _DummyFuturePricer()
+            for underlying_contract, req_as_of, _ in requirements
+        },
+    )
+
+    first = mdp.fetch_bulk_sabr_smile(
+        {
+            "globex_symbols": ["TY_03"],
+            "timestamps": [as_of],
+            "force_refresh": True,
+        }
+    )
+    cached = mdp.fetch_bulk_sabr_smile({"globex_symbols": ["TY_03"], "timestamps": [as_of]})
+    cache_key = mdp._build_get_data_cache_key("sabr_smile", {"globex_symbol": "TY_03", "as_of": as_of})
+
+    assert len(seen["qs_requests"]) == 1
+    assert cache_key in cache_store
+    assert isinstance(cached["TY_03"][as_of], USTFutureOptionSABRSmile)
+    assert cached["TY_03"][as_of].params.forward_price == pytest.approx(first["TY_03"][as_of].params.forward_price)
 
 
 def test_fetch_bulk_sabr_smile_qs_falls_back_to_missing_dates_for_short_cm(monkeypatch):

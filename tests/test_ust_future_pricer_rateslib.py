@@ -138,3 +138,41 @@ def test_ust_get_pricer_defaults_bond_source_when_basket_requested(monkeypatch):
     assert "TYM26" in out
     assert seen["usts_mdp_source"] == "USTS_FEDINVEST_WSJ_LIVE-RL"
     assert seen["basket_source"] == "RL_CME_TCF"
+
+
+def test_ust_get_pricer_live_quotes_use_globex_symbols(monkeypatch):
+    mdp = USTFuturesMDP(source="SCHWAB_APP_USTF-RL")
+    seen = {}
+
+    def _stub_quotes(**kwargs):
+        seen["symbols"] = list(kwargs["symbols"])
+        return {
+            "/ZNM26": {"bid": 112.40, "ask": 112.60, "last": 112.50, "quoteTime": 1773422799796},
+            "/UBM26": {"bid": 124.10, "ask": 124.18, "last": 124.14, "quoteTime": 1773422799796},
+        }
+
+    monkeypatch.setattr(ustf_mdp_module, "get_quotes", _stub_quotes)
+    monkeypatch.setattr(mdp, "get_delivery_basket", lambda **kwargs: (_ for _ in ()).throw(AssertionError("basket fetch not expected")))
+    monkeypatch.setattr(
+        mdp,
+        "_build_pricer",
+        lambda **kwargs: {
+            "symbol": kwargs["symbol"],
+            "price": kwargs["price"],
+            "timestamp": kwargs["meta_data"]["timestamp"],
+        },
+    )
+
+    out = mdp.get_pricer(
+        {
+            "symbols": ["TYM26", "WNM26"],
+            "timestamp": "live",
+            "include_basket": False,
+        }
+    )
+
+    assert seen["symbols"] == ["/ZNM26", "/UBM26"]
+    assert out["TYM26"]["symbol"] == "TYM26"
+    assert out["WNM26"]["symbol"] == "WNM26"
+    assert out["TYM26"]["price"] == pytest.approx(112.50)
+    assert out["WNM26"]["price"] == pytest.approx(124.14)

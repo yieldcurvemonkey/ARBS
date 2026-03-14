@@ -14,6 +14,7 @@ import pytz
 import requests
 
 from Caching.DiskCacheMixin import DiskCacheMixin
+from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import get_quotes
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.USTFutures.BARCHART.BarchartFetcher import BarchartFetcher
 from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
@@ -101,6 +102,35 @@ def _clean_symbols(symbols: Sequence[str]) -> List[str]:
     return out
 
 
+def _to_tos_symbol(sym: str) -> str:
+    norm = _normalize_symbol(sym) or str(sym or "").strip().upper().replace("/", "")
+    m = re.match(r"^(?P<root>[A-Z]{1,3})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", norm)
+    if not m:
+        return f"/{norm}" if norm else str(sym)
+    root = m.group("root")
+    code = m.group("code")
+    return f"/{to_barchart_root(root)}{code}"
+
+
+def _from_tos_symbol(sym: str) -> str:
+    s = (sym or "").strip().upper()
+    if s.startswith("/"):
+        s = s[1:]
+    return _normalize_symbol(s) or s
+
+
+def _should_use_live_quotes(timestamp: DateLike) -> bool:
+    if timestamp == "live":
+        return True
+    if isinstance(timestamp, datetime.date) and not isinstance(timestamp, datetime.datetime):
+        return timestamp == datetime.date.today()
+    if isinstance(timestamp, datetime.datetime):
+        ts_dt = _as_datetime(timestamp)
+        now = datetime.datetime.now(pytz.UTC)
+        return abs((ts_dt.astimezone(pytz.UTC) - now).total_seconds()) <= 15 * 60
+    return False
+
+
 def _socksio_available() -> bool:
     return importlib.util.find_spec("socksio") is not None
 
@@ -164,6 +194,9 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     def __init__(self, source: str = "BARCHART_USTF-RL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
         DiskCacheMixin.__init__(self)
+        self._schwab_app_key = kwargs.get("schwab_app_key") or os.getenv("SCHWABDEV_APP_KEY") or os.getenv("SCHWAB_APP_KEY") or "zm3GYiQREbtrpBHACURcNzFJIObUq2aX"
+        self._schwab_app_secret = kwargs.get("schwab_app_secret") or os.getenv("SCHWABDEV_APP_SECRET") or os.getenv("SCHWAB_APP_SECRET") or "SznUHXvKPZUnmxG9"
+        self._schwab_scope = kwargs.get("schwab_scope", "pystonk")
         self._open_lock = threading.RLock()
         self._open_count = 0
         self._cache_ready = False
@@ -338,6 +371,56 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 )
         return df
 
+    def _fetch_tos_live_quotes(self, tickers: List[str], ts_dt: datetime.datetime) -> pd.DataFrame:
+        tos_map = {ticker: _to_tos_symbol(ticker) for ticker in tickers}
+        quote_kwargs: Dict[str, Any] = {"symbols": list(tos_map.values())}
+        if self._schwab_app_key and self._schwab_app_secret:
+            quote_kwargs["app_key"] = self._schwab_app_key
+            quote_kwargs["app_secret"] = self._schwab_app_secret
+            quote_kwargs["scope"] = self._schwab_scope
+
+        quotes = get_quotes(**quote_kwargs)
+        if not quotes:
+            return pd.DataFrame()
+
+        rows: Dict[str, Tuple[datetime.datetime, float]] = {}
+        for orig_sym, tos_sym in tos_map.items():
+            q = quotes.get(tos_sym)
+            if not q:
+                q = quotes.get(_from_tos_symbol(tos_sym))
+            if not q:
+                continue
+
+            price = q.get("last")
+            if price is None:
+                price = q.get("mid")
+            if price is None:
+                price = q.get("mark")
+            if price is None:
+                price = q.get("bid")
+            if price is None:
+                price = q.get("ask")
+            if price is None:
+                continue
+
+            quote_time = q.get("quoteTime")
+            if quote_time is None:
+                quote_ts = ts_dt
+            else:
+                quote_ts = pd.to_datetime(quote_time, unit="ms", utc=True).tz_convert(ts_dt.tzinfo)
+
+            normalized_price = normalize_barchart_ust_future_price(
+                _to_barchart_symbol(orig_sym),
+                float(price),
+            )
+            rows[orig_sym] = (quote_ts, float(normalized_price))
+
+        if not rows:
+            return pd.DataFrame()
+
+        latest_ts = max(ts for ts, _ in rows.values())
+        return pd.DataFrame({sym: [px] for sym, (_, px) in rows.items()}, index=[latest_ts])
+
     @staticmethod
     def _parse_reference_date(timestamp: Any) -> datetime.date:
         if isinstance(timestamp, str):
@@ -426,6 +509,11 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
 
         ts_dt = _as_datetime(timestamp)
         ts_iso = ts_dt.isoformat()
+        src = str(self.source).upper()
+        live_quote_sources = {"BARCHART_TOS_LIVE_USTF-RL", "SCHWAB_APP_USTF-RL"}
+        if src not in {"BARCHART_USTF-RL", *live_quote_sources}:
+            raise NotImplementedError(f"Unsupported source {self.source}")
+        use_live = src in live_quote_sources and _should_use_live_quotes(timestamp)
 
         with self:
             out: Dict[str, InstrumentLike] = {}
@@ -435,8 +523,8 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                 if len(sym) <= 3:
                     import rateslib as rl
 
-                    if rl.dt(timestamp.year, timestamp.month, timestamp.day) >= rl.get_imm(year=timestamp.year, month=timestamp.month):
-                        contract_imm_date = rl.next_imm(start=rl.dt(timestamp.year, timestamp.month, timestamp.day))
+                    if rl.dt(ts_dt.year, ts_dt.month, ts_dt.day) >= rl.get_imm(year=ts_dt.year, month=ts_dt.month):
+                        contract_imm_date = rl.next_imm(start=rl.dt(ts_dt.year, ts_dt.month, ts_dt.day))
                         if contract_imm_date.month == 3:
                             sym = f"{sym}{'H'}{int(contract_imm_date.strftime("%y"))}"
                         elif contract_imm_date.month == 6:
@@ -447,12 +535,12 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                             sym = f"{sym}{'Z'}{int(contract_imm_date.strftime("%y"))}"
                     else:
                         for m_code, month_nums in _CME_QUARTERLY_MONTH_CODES.items():
-                            if timestamp.month in month_nums:
-                                sym = f"{sym}{m_code}{int(timestamp.strftime("%y"))}"
+                            if ts_dt.month in month_nums:
+                                sym = f"{sym}{m_code}{int(ts_dt.strftime("%y"))}"
                                 break
                 
                 cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}"
-                cached = None if force_refresh else self._threadsafe_cache_get(cache_key)
+                cached = None if (force_refresh or use_live) else self._threadsafe_cache_get(cache_key)
                 if cached is not None:
                     ref_dt = self._parse_reference_date(cached.get("timestamp"))
                     basket_data = None
@@ -480,11 +568,15 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                     missing.append(sym)
 
             if missing:
-                df = self._fetch_barchart_timeseries(missing, ts_dt, show_tqdm=show_tqdm, interval=interval)
+                if use_live:
+                    df = self._fetch_tos_live_quotes(missing, ts_dt)
+                else:
+                    df = self._fetch_barchart_timeseries(missing, ts_dt, show_tqdm=show_tqdm, interval=interval)
                 if df.empty:
-                    raise ValueError("No data returned from Barchart for requested UST futures.")
+                    raise ValueError(f"No data returned from {src} for requested UST futures.")
 
-                df = df.rename(columns={c: _from_barchart_symbol(str(c)) for c in df.columns})
+                if not use_live:
+                    df = df.rename(columns={c: _from_barchart_symbol(str(c)) for c in df.columns})
                 latest = df.iloc[-1]
 
                 for sym in missing:
@@ -528,10 +620,11 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
                         calc_mode=basket_data.get("calc_mode") if basket_data else None,
                         meta_data=args,
                     )
-                    cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}"
-                    cache_key2 = f"{_USTF_CACHE_VERSION}::{args['timestamp']}-{sym}-{self.source}"
-                    self._threadsafe_cache_put(cache_key, args)
-                    self._threadsafe_cache_put(cache_key2, args)
+                    if not use_live:
+                        cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}"
+                        cache_key2 = f"{_USTF_CACHE_VERSION}::{args['timestamp']}-{sym}-{self.source}"
+                        self._threadsafe_cache_put(cache_key, args)
+                        self._threadsafe_cache_put(cache_key2, args)
 
             if not out:
                 raise ValueError("No matching UST futures prices for requested symbols.")
