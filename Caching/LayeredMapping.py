@@ -152,12 +152,37 @@ class LayeredMapping(MutableMapping):
                 return False
         return False
 
-    # -- iteration (L1 only — iterating L2 would be expensive) --------------
+    # -- iteration (union of L1 + L2 when l2_read is enabled) ---------------
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self._l1)
+        if not self._l2_read:
+            return iter(self._l1)
+        try:
+            l2_keys = set(self._l2)
+        except Exception:
+            logger.debug("L2 iteration error; falling back to L1-only", exc_info=True)
+            return iter(self._l1)
+        # Union: all L1 keys + any L2-only keys not yet in L1.
+        # L1 keys come first (fast/local), then L2 remainder.
+        l1_keys = set(self._l1)
+        return iter(list(l1_keys) + [k for k in l2_keys if k not in l1_keys])
 
     def __len__(self) -> int:
+        if not self._l2_read:
+            return len(self._l1)
+        try:
+            l2_keys = set(self._l2)
+        except Exception:
+            logger.debug("L2 len error; falling back to L1-only", exc_info=True)
+            return len(self._l1)
+        return len(set(self._l1) | l2_keys)
+
+    def keys_l1_only(self) -> Iterator[str]:
+        """Iterate L1 keys only — use when you explicitly want local-only."""
+        return iter(self._l1)
+
+    def len_l1_only(self) -> int:
+        """L1 key count only — use when you explicitly want local-only."""
         return len(self._l1)
 
     # -- clear both layers --------------------------------------------------

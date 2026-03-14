@@ -75,6 +75,7 @@ CREATE INDEX IF NOT EXISTS idx_{TABLE}_ns_updated
 _engine: Optional[Engine] = None
 _engine_lock = threading.Lock()
 _schema_ensured = False
+_schema_lock = threading.Lock()
 
 
 def _get_connection_string() -> str:
@@ -114,10 +115,15 @@ def ensure_schema(engine: Optional[Engine] = None) -> None:
     global _schema_ensured
     if _schema_ensured:
         return
-    eng = engine or get_engine()
-    with eng.begin() as conn:
-        conn.execute(text(SCHEMA_SQL))
-    _schema_ensured = True
+    with _schema_lock:
+        # Double-check after acquiring the lock (another thread may have
+        # completed DDL while we were waiting).
+        if _schema_ensured:
+            return
+        eng = engine or get_engine()
+        with eng.begin() as conn:
+            conn.execute(text(SCHEMA_SQL))
+        _schema_ensured = True
 
 
 # ---------------------------------------------------------------------------

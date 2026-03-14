@@ -124,17 +124,57 @@ class TestLayeredMapping:
         lm = LayeredMapping(l1, l2, l2_read=False)
         assert "k" not in lm
 
-    def test_iter_returns_l1_keys(self):
+    def test_iter_unions_l1_and_l2(self):
         l1 = DictBackend({"a": 1, "b": 2})
         l2 = DictBackend({"c": 3})
         lm = LayeredMapping(l1, l2)
-        assert sorted(lm) == ["a", "b"]
+        assert sorted(lm) == ["a", "b", "c"]
 
-    def test_len_returns_l1_length(self):
+    def test_iter_deduplicates_overlapping_keys(self):
+        l1 = DictBackend({"a": 1, "b": 2})
+        l2 = DictBackend({"b": 20, "c": 3})
+        lm = LayeredMapping(l1, l2)
+        assert sorted(lm) == ["a", "b", "c"]
+
+    def test_iter_l1_only_when_l2_read_disabled(self):
+        l1 = DictBackend({"a": 1})
+        l2 = DictBackend({"b": 2, "c": 3})
+        lm = LayeredMapping(l1, l2, l2_read=False)
+        assert sorted(lm) == ["a"]
+
+    def test_iter_fresh_worker_empty_l1(self):
+        """Critical: fresh worker with empty L1 must see all L2 keys."""
+        l1 = DictBackend()  # empty — just booted
+        l2 = DictBackend({"price_A": 100, "price_B": 200, "price_C": 300})
+        lm = LayeredMapping(l1, l2)
+        assert sorted(lm) == ["price_A", "price_B", "price_C"]
+        assert len(lm) == 3
+
+    def test_len_unions_l1_and_l2(self):
         l1 = DictBackend({"a": 1})
         l2 = DictBackend({"a": 1, "b": 2, "c": 3})
         lm = LayeredMapping(l1, l2)
+        assert len(lm) == 3
+
+    def test_len_l1_only_when_l2_read_disabled(self):
+        l1 = DictBackend({"a": 1})
+        l2 = DictBackend({"a": 1, "b": 2, "c": 3})
+        lm = LayeredMapping(l1, l2, l2_read=False)
         assert len(lm) == 1
+
+    def test_iter_l2_error_falls_back_to_l1(self):
+        l1 = DictBackend({"a": 1})
+        l2 = MagicMock()
+        l2.__iter__ = MagicMock(side_effect=ConnectionError("db down"))
+        lm = LayeredMapping(l1, l2)
+        assert sorted(lm) == ["a"]
+
+    def test_keys_l1_only_helper(self):
+        l1 = DictBackend({"a": 1})
+        l2 = DictBackend({"b": 2, "c": 3})
+        lm = LayeredMapping(l1, l2)
+        assert sorted(lm.keys_l1_only()) == ["a"]
+        assert lm.len_l1_only() == 1
 
     def test_clear_both(self):
         l1 = DictBackend({"a": 1})
