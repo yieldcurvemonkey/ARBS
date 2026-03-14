@@ -9,7 +9,7 @@ Implementation follows JPM Technical Appendix A (2026 Outlook).
 """
 
 import math
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 from scipy.integrate import trapezoid
@@ -28,6 +28,7 @@ def extract_rnd_breeden_litzenberger(
     ghost_extension_bps: float = 5.0,
     bin_width_bps: float = 25.0,
     grid_points: int = 2000,
+    rate_floor: Optional[float] = 0.0,
 ) -> BreedenLitzenbergerResult:
     """Extract risk-neutral density via Breeden-Litzenberger with smoothing spline.
 
@@ -47,6 +48,9 @@ def extract_rnd_breeden_litzenberger(
         Width of rate bins for scenario probabilities.
     grid_points : int
         Number of points in fine evaluation grid.
+    rate_floor : float or None
+        If set, zero out density below this rate and renormalize.
+        Default 0.0 (SOFR cannot go negative). Set to None to disable.
     """
     strikes = rnd_input.strikes_price
     premiums = rnd_input.call_premiums
@@ -88,6 +92,16 @@ def extract_rnd_breeden_litzenberger(
     # strike_grid is ascending in price → descending in rate, so flip
     rate_grid = (100.0 - strike_grid)[::-1]
     rnd_rate = rnd_price[::-1]
+
+    # 6b. Truncate at rate floor (e.g. 0% for SOFR — negative rates impossible)
+    if rate_floor is not None:
+        floor_mask = rate_grid >= rate_floor
+        rate_grid = rate_grid[floor_mask]
+        rnd_rate = rnd_rate[floor_mask]
+        # Renormalize so density integrates to 1.0
+        total_mass = trapezoid(rnd_rate, rate_grid)
+        if total_mass > 1e-10:
+            rnd_rate = rnd_rate / total_mass
 
     # 7. CDF via trapezoidal integration
     dx = np.diff(rate_grid)
