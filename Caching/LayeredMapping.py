@@ -4,12 +4,23 @@ LayeredMapping — L1 (disk) + L2 (Postgres) read-through / write-through cache.
 Implements MutableMapping so it can be used as a drop-in wherever FanoutCache
 is used today.  On read miss from L1 the value is fetched from L2 and backfilled
 into L1.  Writes go to both layers synchronously (write-through).
+
+Distributed Invalidation
+------------------------
+In a multi-node deployment every node maintains its own L1 (diskcache).  If Node A
+writes a new value, Node B's L1 still holds the stale copy and will never miss.
+To bound staleness, ``l1_ttl_seconds`` sets a per-entry Time-To-Live on L1.
+When diskcache expires the entry the next read becomes an L1 miss, triggers an
+L2 fetch, and backfills a fresh copy with a new TTL.
+
+For real-time invalidation, a future enhancement can layer Postgres
+LISTEN/NOTIFY on top of this TTL floor (see pg_backend.py docstring).
 """
 from __future__ import annotations
 
 import logging
 from collections.abc import MutableMapping
-from typing import Any, Iterator
+from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +39,11 @@ class LayeredMapping(MutableMapping):
         Whether to read from L2 on L1 miss (default True).
     l2_write : bool
         Whether to write-through to L2 on set (default True).
+    l1_ttl_seconds : int | None
+        If set, L1 entries expire after this many seconds.  On expiry the
+        next read triggers an L2 fetch and backfills L1 with a fresh TTL.
+        Requires the L1 backend to support ``.set(key, value, expire=…)``
+        (diskcache.FanoutCache does).  ``None`` means no TTL (infinite).
     """
 
     def __init__(
@@ -37,16 +53,29 @@ class LayeredMapping(MutableMapping):
         *,
         l2_read: bool = True,
         l2_write: bool = True,
+        l1_ttl_seconds: Optional[int] = None,
     ) -> None:
         self._l1 = l1
         self._l2 = l2
         self._l2_read = l2_read
         self._l2_write = l2_write
+        self._l1_ttl = l1_ttl_seconds
+        # Detect whether L1 supports .set(key, val, expire=…) (FanoutCache does)
+        self._l1_has_set = callable(getattr(l1, "set", None))
+
+    # -- internal: TTL-aware L1 write ---------------------------------------
+
+    def _l1_put(self, key: str, value: Any) -> None:
+        """Write to L1, applying TTL if configured."""
+        if self._l1_ttl is not None and self._l1_has_set:
+            self._l1.set(key, value, expire=self._l1_ttl)  # type: ignore[attr-defined]
+        else:
+            self._l1[key] = value
 
     # -- read ---------------------------------------------------------------
 
     def __getitem__(self, key: str) -> Any:
-        # Fast path: L1 hit
+        # Fast path: L1 hit (expired entries raise KeyError in FanoutCache)
         try:
             return self._l1[key]
         except KeyError:
@@ -55,7 +84,7 @@ class LayeredMapping(MutableMapping):
         if not self._l2_read:
             raise KeyError(key)
 
-        # L1 miss → try L2
+        # L1 miss (or expired) → try L2
         try:
             value = self._l2[key]
         except KeyError:
@@ -64,9 +93,9 @@ class LayeredMapping(MutableMapping):
             logger.debug("L2 read error for key=%s", key, exc_info=True)
             raise KeyError(key)
 
-        # Backfill L1
+        # Backfill L1 with fresh TTL
         try:
-            self._l1[key] = value
+            self._l1_put(key, value)
         except Exception:
             logger.debug("L1 backfill error for key=%s", key, exc_info=True)
 
@@ -81,7 +110,7 @@ class LayeredMapping(MutableMapping):
     # -- write --------------------------------------------------------------
 
     def __setitem__(self, key: str, value: Any) -> None:
-        self._l1[key] = value
+        self._l1_put(key, value)
         if self._l2_write:
             try:
                 self._l2[key] = value

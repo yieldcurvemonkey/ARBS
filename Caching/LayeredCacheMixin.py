@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Optional, TypeVar
 
 from Caching.CodecMapping import CodecMapping, DecodeFn, EncodeFn
 from Caching.DiskCacheMixin import DiskCacheMixin
@@ -55,11 +55,18 @@ class LayeredCacheMixin(DiskCacheMixin):
         Read-through from L2 on L1 miss.
     L2_WRITE : bool
         Write-through to L2 on every set.
+    L1_TTL_SECONDS : int | None
+        Time-to-live for L1 (disk) entries in seconds.  After expiry the
+        next read triggers an L2 fetch, bounding cross-node staleness.
+        ``None`` (default) means no TTL — suitable for single-node or
+        when data is immutable / append-only (e.g. historical EOD caches).
+        Recommended starting point for mutable caches: 300 (5 min).
     """
 
     L2_ENABLED: bool = True
     L2_READ: bool = True
     L2_WRITE: bool = True
+    L1_TTL_SECONDS: Optional[int] = None
 
     def __init__(self: T, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -109,7 +116,11 @@ class LayeredCacheMixin(DiskCacheMixin):
                         logger.debug("L2 clear failed for ns=%s", ns, exc_info=True)
 
                 mapping: Any = LayeredMapping(
-                    l1, l2, l2_read=self.L2_READ, l2_write=self.L2_WRITE
+                    l1,
+                    l2,
+                    l2_read=self.L2_READ,
+                    l2_write=self.L2_WRITE,
+                    l1_ttl_seconds=self.L1_TTL_SECONDS,
                 )
             except Exception:
                 logger.warning(

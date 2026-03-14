@@ -14,6 +14,7 @@ Covers:
 import json
 import os
 import threading
+import time
 import tempfile
 from collections.abc import MutableMapping
 from pathlib import Path
@@ -373,6 +374,124 @@ class TestLayeredCacheMixinMockedL2:
             t.join()
         assert len(errors) == 0, f"Errors: {errors}"
         assert len(results) == 10
+
+
+# ---------------------------------------------------------------------------
+# L1 TTL invalidation tests
+# ---------------------------------------------------------------------------
+
+
+class TestL1TTL:
+    """Test that L1 entries expire and trigger L2 re-fetch."""
+
+    def test_ttl_none_means_no_expiry(self):
+        l1, l2 = DictBackend(), DictBackend()
+        lm = LayeredMapping(l1, l2, l1_ttl_seconds=None)
+        lm["k"] = "v"
+        # Without TTL, plain dict __setitem__ is used
+        assert l1["k"] == "v"
+
+    def test_ttl_uses_set_on_fanoutcache(self, tmp_path):
+        """When L1 is a real FanoutCache, .set(expire=…) is used.
+
+        Simulates the distributed scenario: Node A writes "original",
+        then Node B updates L2 directly to "updated_by_node_b".  After
+        L1 TTL expires on Node A, the stale L1 entry is evicted and
+        the fresh L2 value is returned.
+        """
+        import diskcache
+
+        fc = diskcache.FanoutCache(str(tmp_path / "fc"), shards=1)
+        l2 = DictBackend()
+        lm = LayeredMapping(fc, l2, l1_ttl_seconds=2)
+
+        # Node A writes (propagates to both L1 and L2)
+        lm["k"] = "original"
+        assert lm["k"] == "original"
+
+        # Simulate Node B updating L2 directly (bypasses Node A's L1)
+        l2["k"] = "updated_by_node_b"
+
+        # Node A still sees stale L1 value (not expired yet)
+        assert lm["k"] == "original"
+
+        # Wait for L1 to expire (generous margin for Windows timer)
+        time.sleep(3)
+
+        # L1 expired → falls through to L2 → gets Node B's update
+        assert lm["k"] == "updated_by_node_b"
+        fc.close()
+
+    def test_ttl_backfill_also_has_ttl(self, tmp_path):
+        """Backfilled entries from L2 should also get TTL on L1."""
+        import diskcache
+
+        fc = diskcache.FanoutCache(str(tmp_path / "fc"), shards=1)
+        l2 = DictBackend({"remote": "val"})
+        lm = LayeredMapping(fc, l2, l1_ttl_seconds=2)
+
+        # Trigger L2 read-through → L1 backfill with TTL
+        assert lm["remote"] == "val"
+        assert fc["remote"] == "val"  # backfilled
+
+        # Wait for the backfill entry to expire
+        time.sleep(3)
+
+        # Should miss L1 and re-fetch from L2
+        l2["remote"] = "updated"
+        assert lm["remote"] == "updated"
+        fc.close()
+
+    def test_ttl_with_l1_dict_fallback(self):
+        """When L1 is a plain dict (no .set method), TTL is silently ignored."""
+        l1, l2 = DictBackend(), DictBackend()
+        lm = LayeredMapping(l1, l2, l1_ttl_seconds=60)
+        lm["k"] = "v"
+        # Falls back to __setitem__ since dict has no .set(expire=…)
+        assert l1["k"] == "v"
+
+    def test_l1_has_set_detection(self):
+        """Verify _l1_has_set detects FanoutCache-like backends."""
+        l1_dict = DictBackend()
+        l2 = DictBackend()
+        lm_dict = LayeredMapping(l1_dict, l2)
+        # dict has no .set
+        assert not lm_dict._l1_has_set
+
+    def test_l1_has_set_detection_fanoutcache(self, tmp_path):
+        import diskcache
+
+        fc = diskcache.FanoutCache(str(tmp_path / "fc"), shards=1)
+        l2 = DictBackend()
+        lm_fc = LayeredMapping(fc, l2)
+        assert lm_fc._l1_has_set
+        fc.close()
+
+
+class TestLayeredCacheMixinTTL:
+    """Test TTL config propagation through the mixin."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_pg(self):
+        _FakePgBackend._stores.clear()
+        with patch("Caching.LayeredCacheMixin.PostgresCacheBackend", _FakePgBackend):
+            yield
+        _FakePgBackend._stores.clear()
+
+    def test_ttl_propagated_to_layered_mapping(self, cache_dir):
+        obj = LayeredTester()
+        obj.L1_TTL_SECONDS = 300
+        obj.open_cache(cache_attr="c", path=cache_dir)
+        mapping = getattr(obj, "c")
+        assert isinstance(mapping, LayeredMapping)
+        assert mapping._l1_ttl == 300
+
+    def test_ttl_none_by_default(self, cache_dir):
+        obj = LayeredTester()
+        obj.open_cache(cache_attr="c", path=cache_dir)
+        mapping = getattr(obj, "c")
+        assert isinstance(mapping, LayeredMapping)
+        assert mapping._l1_ttl is None
 
 
 # ---------------------------------------------------------------------------

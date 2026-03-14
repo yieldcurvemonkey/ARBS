@@ -3,6 +3,32 @@ PostgresCacheBackend — MutableMapping backed by a Supabase/Postgres KV table.
 
 Provides the L2 (remote) layer for the layered cache architecture.
 Values are pickle-serialized to BYTEA, keyed by (namespace, key).
+
+Serialization Note (BYTEA vs JSONB)
+------------------------------------
+Pickle→BYTEA was chosen because the platform caches arbitrary Python objects
+(QuantLib handles, scipy interpolators, numpy arrays, custom dataclasses) that
+cannot be JSON-serialized.  The trade-off is that BYTEA columns are opaque to
+SQL and BI tools.  For namespaces that store JSON-safe payloads, a future
+enhancement can introduce per-namespace codec overrides that write to a JSONB
+column instead, enabling direct SQL sub-field queries.
+
+Connection Pooling
+------------------
+The module-level ``get_engine()`` singleton ensures that all cache backends in
+a single Python process share one SQLAlchemy connection pool.  In multi-process
+deployments (e.g. ``warm_ustfo_cache_parallel.py``), each process creates its
+own engine — this is correct for SQLAlchemy.  The Supabase pooler endpoint
+(port 6543 / Supavisor) multiplexes these upstream connections so total DB
+connections stay bounded even under heavy parallelism.
+
+Future: Real-time Invalidation
+-------------------------------
+For sub-second cross-node invalidation, a LISTEN/NOTIFY channel can be added.
+On L2 write, the backend would ``NOTIFY arbs_cache_invalidate, 'ns:key'``;
+worker nodes would maintain a listener thread that pops stale keys from their
+local L1 FanoutCache.  This is complementary to the TTL-based invalidation
+already implemented in LayeredMapping.
 """
 from __future__ import annotations
 
@@ -30,6 +56,16 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (cache_ns, cache_key)
 );
+
+-- Namespace-only index: speeds up per-namespace iteration, COUNT, and DELETE.
+-- Also prepares for future Postgres declarative partitioning by cache_ns.
+CREATE INDEX IF NOT EXISTS idx_{TABLE}_ns
+    ON {TABLE} (cache_ns);
+
+-- Partial index on updated_at: supports TTL-based cleanup queries
+-- (e.g. DELETE FROM … WHERE updated_at < NOW() - INTERVAL '7 days').
+CREATE INDEX IF NOT EXISTS idx_{TABLE}_ns_updated
+    ON {TABLE} (cache_ns, updated_at);
 """
 
 # ---------------------------------------------------------------------------
@@ -66,6 +102,10 @@ def get_engine() -> Engine:
             max_overflow=10,
             pool_timeout=30,
             pool_recycle=1800,
+            # Emit a lightweight SELECT 1 before handing a connection to the
+            # caller.  Prevents stale/broken connections from Supavisor idle
+            # timeout (default 60 s) from surfacing as runtime errors.
+            pool_pre_ping=True,
         )
         return _engine
 
