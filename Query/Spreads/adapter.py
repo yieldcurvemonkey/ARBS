@@ -118,19 +118,13 @@ class SpreadValueFunctionMap(BaseValueFunctionMap[SpreadValue, float]):
         package: List[SpreadLegPair] = kw["package"]
         rws: List[float] = kw["risk_weights"]
         pa = kw["pricer_a"]
-        total = sum(rws[i] * pa.fair_rate(pair.inst_a) for i, pair in enumerate(package))
-        n_legs = len(package)
-        scale = 1.0 if n_legs == 1 else 10_000
-        return total * scale
+        return sum(rws[i] * pa.fair_rate(pair.inst_a) for i, pair in enumerate(package))
 
     def _leg_b_rate(self, **kw) -> float:
         package: List[SpreadLegPair] = kw["package"]
         rws: List[float] = kw["risk_weights"]
         pb = kw["pricer_b"]
-        total = sum(rws[i] * pb.fair_rate(pair.inst_b) for i, pair in enumerate(package))
-        n_legs = len(package)
-        scale = 1.0 if n_legs == 1 else 10_000
-        return total * scale
+        return sum(rws[i] * pb.fair_rate(pair.inst_b) for i, pair in enumerate(package))
 
     def _pv01(self, **kw) -> float:
         package: List[SpreadLegPair] = kw["package"]

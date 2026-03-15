@@ -10,6 +10,11 @@ def _basis_request_splitter(request: Dict[str, Any]) -> Tuple[Dict[str, Any], Di
     curve_b = request.get("curve_b", "USD-FEDFUNDS")
     req_a = {"curve_name": curve_a, "timestamp": ts}
     req_b = {"curve_name": curve_b, "timestamp": ts}
+    # Forward any additional keys to both child requests
+    for k, v in request.items():
+        if k not in ("curve_a", "curve_b", "timestamp"):
+            req_a[k] = v
+            req_b[k] = v
     return req_a, req_b
 
 
