@@ -76,6 +76,32 @@ def fetch_live_candlesticks(series_ticker: str, ticker: str, start: datetime.dat
     return parse_candlestick_response(resp.json())
 
 
+def fetch_event_markets(event_ticker: str, **_: Any) -> list:
+    url = f"{KALSHI_BASE_URL}/events/{event_ticker}?with_nested_markets=true"
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.json().get("markets", [])
+
+
+def fetch_orderbook(ticker: str, depth: int = 0, api_key_id: str = "", private_key_pem: str = "") -> Dict[str, pd.DataFrame]:
+    path = f"/trade-api/v2/markets/{ticker}/orderbook"
+    qs = f"?depth={depth}" if depth > 0 else ""
+    url = f"{KALSHI_BASE_URL}/markets/{ticker}/orderbook{qs}"
+    headers = build_kalshi_auth_headers("GET", path, api_key_id, private_key_pem)
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    book = resp.json().get("orderbook_fp", {})
+    return {
+        "yes": _parse_book_side(book.get("yes_dollars", [])),
+        "no": _parse_book_side(book.get("no_dollars", [])),
+    }
+
+
+def _parse_book_side(levels: list) -> pd.DataFrame:
+    rows = [{"price": float(lvl[0]), "quantity": float(lvl[1])} for lvl in levels]
+    return pd.DataFrame(rows, columns=["price", "quantity"])
+
+
 def fetch_event_candlesticks(series_ticker: str, event_ticker: str, start: datetime.datetime, end: datetime.datetime, period_interval: int = 1440, api_key_id: str = "", private_key_pem: str = "") -> pd.DataFrame:
     path = f"/trade-api/v2/series/{series_ticker}/events/{event_ticker}/candlesticks"
     params = urlencode({"start_ts": int(start.timestamp()), "end_ts": int(end.timestamp()), "period_interval": period_interval})

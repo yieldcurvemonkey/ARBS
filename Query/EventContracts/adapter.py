@@ -16,6 +16,9 @@ class EventContractValueFunctionMap(BaseValueFunctionMap[EventContractValue, flo
             EventContractValue.PROBABILITY: self._probability,
             EventContractValue.VOLUME: self._volume,
             EventContractValue.OPEN_INTEREST: self._open_interest,
+            EventContractValue.MARKET_IMPACT_AVG_PRICE: self._market_impact_avg_price,
+            EventContractValue.MARKET_IMPACT_SLIPPAGE: self._market_impact_slippage,
+            EventContractValue.MARKET_IMPACT_TOTAL_COST: self._market_impact_total_cost,
         }
 
     def _price(self, **kw) -> float:
@@ -29,6 +32,27 @@ class EventContractValueFunctionMap(BaseValueFunctionMap[EventContractValue, flo
 
     def _open_interest(self, **kw) -> float:
         return kw["pricer"].latest_open_interest() or 0.0
+
+    def _market_impact_avg_price(self, **kw) -> float:
+        result = kw["pricer"].market_impact(
+            quantity=kw.get("quantity", 100),
+            side=kw.get("side", "yes"),
+        )
+        return result["avg_price"] or 0.0
+
+    def _market_impact_slippage(self, **kw) -> float:
+        result = kw["pricer"].market_impact(
+            quantity=kw.get("quantity", 100),
+            side=kw.get("side", "yes"),
+        )
+        return result["slippage"] or 0.0
+
+    def _market_impact_total_cost(self, **kw) -> float:
+        result = kw["pricer"].market_impact(
+            quantity=kw.get("quantity", 100),
+            side=kw.get("side", "yes"),
+        )
+        return result["total_cost"] or 0.0
 
 
 class _EventContractStructureMap:
