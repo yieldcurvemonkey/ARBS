@@ -26,6 +26,16 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
     def id(self):
         return self._rl_curve_id
 
+    def _curve_definition_id(self) -> str:
+        if isinstance(self._meta_data, dict):
+            reference_curve_name = self._meta_data.get("reference_curve_name")
+            if isinstance(reference_curve_name, str) and reference_curve_name:
+                return reference_curve_name
+        return self._rl_curve_id
+
+    def _curve_definition(self) -> dict[str, Any]:
+        return RATESLIB_CURVE_DEFINITIONS[self._curve_definition_id()]
+
     def reference_date(self) -> datetime:
         return next(iter(self._rl_curve_handle.nodes.nodes.keys()))
 
@@ -33,11 +43,12 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return self._rl_curve_handle.meta.calendar
 
     def calendar_advance(self, dt1: Union[datetime.date, rl.dt], dt2: str):
+        curve_def = self._curve_definition()
         return rl.add_tenor(
             datetime.datetime(dt1.year, dt1.month, dt1.day),
             tenor=dt2,
-            modifier=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["BusinessConvention"],
-            calendar=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["Calendar"],
+            modifier=curve_def["BusinessConvention"],
+            calendar=curve_def["Calendar"],
         )
 
     def handle(self) -> rl.Curve:
@@ -65,13 +76,14 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return irswap.rate(curves=self._rl_curve_handle).real / 100
 
     def npv(self, irswap: rl.IRS):
+        curve_def = self._curve_definition()
         return (
             rl.IRS(
                 effective=self.effective_date(irswap),
                 termination=self.maturity_date(irswap),
                 fixed_rate=irswap.fixed_rate * 100,
                 curves=self._rl_curve_handle,
-                spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
+                spec=curve_def["ReferenceRate"],
                 notional=self.notional(irswap),
                 leg2_fixings=self._fixings,
             )
@@ -94,7 +106,8 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         raise NotImplementedError("rateslib not implemented")
 
     def carry_bps_running(self, irswap: rl.IRS, horizon: str):
-        if self.effective_date(irswap=irswap) > self.calendar_advance(self.reference_date(), f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["SettlementDays"]}b"):
+        curve_def = self._curve_definition()
+        if self.effective_date(irswap=irswap) > self.calendar_advance(self.reference_date(), f"{curve_def['SettlementDays']}b"):
             return 0
         fwd_irs = self.build_irswap(fwd=horizon, maturity_date=self.maturity_date(irswap))
         return (self.fair_rate(fwd_irs) - self.fair_rate(irswap)) * 10_000
@@ -125,11 +138,12 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         notional=None,
         bpv=None,
     ):
+        curve_def = self._curve_definition()
         if fwd:
             if fwd == "0D":
                 rl_effective = self.calendar_advance(
                     self.reference_date(),
-                    f"{RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]['SettlementDays']}b",
+                    f"{curve_def['SettlementDays']}b",
                 )
             else:
                 rl_effective = self.calendar_advance(self.reference_date(), fwd)
@@ -140,7 +154,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             unit_delta = rl.IRS(
                 effective=rl.dt(rl_effective.year, rl_effective.month, rl_effective.day),
                 termination=tenor or rl.dt(maturity_date.year, maturity_date.month, maturity_date.day),
-                spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
+                spec=curve_def["ReferenceRate"],
                 curves=self._rl_curve_handle,
                 notional=1,
                 leg2_fixings=self._fixings,
@@ -155,7 +169,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                 irswap=rl.IRS(
                     effective=rl.dt(rl_effective.year, rl_effective.month, rl_effective.day),
                     termination=tenor or rl.dt(maturity_date.year, maturity_date.month, maturity_date.day),
-                    spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
+                    spec=curve_def["ReferenceRate"],
                     curves=self._rl_curve_handle,
                     notional=1,
                     leg2_fixings=self._fixings,
@@ -165,7 +179,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return rl.IRS(
             effective=rl.dt(rl_effective.year, rl_effective.month, rl_effective.day),
             termination=tenor or rl.dt(maturity_date.year, maturity_date.month, maturity_date.day),
-            spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
+            spec=curve_def["ReferenceRate"],
             curves=self._rl_curve_handle,
             fixed_rate=fixed_rate,
             notional=notional,
@@ -192,11 +206,12 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         )
 
     def build_stirf(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None, is_ser: Optional[bool] = False):
+        curve_def = self._curve_definition()
         if bpv and not notional:
             unit_delta = rl.IRS(
                 effective=fwd or effective_date,
                 termination=tenor or maturity_date,
-                spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate"],
+                spec=curve_def["ReferenceRate"],
                 curves=self._rl_curve_handle,
                 notional=1,
             ).analytic_delta(self._rl_curve_handle)
@@ -210,6 +225,6 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             termination=tenor or maturity_date,
             price=(100 - fixed_rate),
             curves=self._rl_curve_handle,
-            spec=RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate2"] if not is_ser else RATESLIB_CURVE_DEFINITIONS[self._rl_curve_id]["ReferenceRate3"],
+            spec=curve_def["ReferenceRate2"] if not is_ser else curve_def["ReferenceRate3"],
             contracts=int(notional / 1_000_000),
         )

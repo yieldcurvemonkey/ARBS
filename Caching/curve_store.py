@@ -40,8 +40,8 @@ DEFAULT_COMPRESSION = "zstd"
 _CHI = pytz.timezone("America/Chicago")
 _UTC = pytz.UTC
 
-# Session reference: CME STIR futures regular hours 07:00-15:00 CT
-_SESSION_OPEN_HOUR = 7
+# Session reference: CME STIR futures regular hours 06:00-17:00 CT
+_SESSION_OPEN_HOUR = 6
 _SESSION_OPEN_MINUTE = 0
 
 
@@ -62,6 +62,7 @@ class CurveSnapshot:
     cfg_hash: str
     reference_key: str
     interpolation: str
+    source_variant: str = field(default="", kw_only=True)
     node_dates: list[datetime.date]  # sorted
     discount_factors: list[float]  # parallel to node_dates
 
@@ -113,6 +114,7 @@ class CurveSnapshot:
             cfg_hash=key_cfg_hash,
             reference_key=reference_key,
             interpolation=interpolation,
+            source_variant="BARCHART_STIRF",
             node_dates=node_dates,
             discount_factors=discount_factors,
         )
@@ -158,6 +160,64 @@ class CurveSnapshot:
             cfg_hash=cfg_hash,
             reference_key=reference_key,
             interpolation=interpolation,
+            source_variant="BARCHART_STIRF",
+            node_dates=node_dates,
+            discount_factors=discount_factors,
+        )
+
+    @classmethod
+    def from_eris_df(
+        cls,
+        df: "pd.DataFrame",
+        *,
+        trading_date: datetime.date,
+        curve_name: str = "USD-SOFR-1D",
+        source_variant: str = "ERIS_RL_BASIC",
+        interpolation: str = "log_linear",
+        timestamp_utc: Optional[datetime.datetime] = None,
+    ) -> "CurveSnapshot":
+        """Build a snapshot from an Eris discount factor DataFrame."""
+        import pandas as pd_local
+
+        df = df.copy()
+        df["Date"] = pd_local.to_datetime(df["Date"], errors="coerce")
+        df["DiscountFactor"] = pd_local.to_numeric(
+            df["DiscountFactor"], errors="coerce"
+        )
+        df = df.dropna(subset=["Date", "DiscountFactor"]).sort_values("Date")
+
+        node_dates = [d.date() for d in df["Date"]]
+        discount_factors = df["DiscountFactor"].tolist()
+
+        if timestamp_utc is None:
+            et = pytz.timezone("America/New_York")
+            ts_local_et = et.localize(
+                datetime.datetime(
+                    trading_date.year,
+                    trading_date.month,
+                    trading_date.day,
+                    15,
+                    0,
+                )
+            )
+            timestamp_utc = ts_local_et.astimezone(_UTC)
+        elif timestamp_utc.tzinfo is None:
+            timestamp_utc = _UTC.localize(timestamp_utc)
+        else:
+            timestamp_utc = timestamp_utc.astimezone(_UTC)
+
+        ts_local = timestamp_utc.astimezone(_CHI)
+
+        return cls(
+            timestamp_utc=timestamp_utc,
+            timestamp_local=ts_local,
+            trading_date=trading_date,
+            session_minute=_compute_session_minute(ts_local),
+            curve_name=curve_name,
+            cfg_hash="",
+            reference_key=curve_name,
+            interpolation=interpolation,
+            source_variant=source_variant,
             node_dates=node_dates,
             discount_factors=discount_factors,
         )
@@ -293,12 +353,13 @@ class CurveStore:
             return pd.DataFrame()
 
         tables = [pq.read_table(f) for f in pq_files]
+        tables = [_ensure_raw_table_columns(t) for t in tables]
         if len(tables) == 1:
             table = tables[0]
         else:
-            table = pa.concat_tables(tables)
+            table = pa.concat_tables(tables, promote_options="default")
 
-        df = table.to_pandas()
+        df = _ensure_raw_df_columns(table.to_pandas())
         return df.sort_values("timestamp_utc").reset_index(drop=True)
 
     def read_raw_nodes(
@@ -352,7 +413,7 @@ class CurveStore:
 
         query = f"""
             SELECT *
-            FROM read_parquet('{glob_pattern}', hive_partitioning=true)
+            FROM read_parquet('{glob_pattern}', hive_partitioning=true, union_by_name=true)
             {where_clause}
             ORDER BY timestamp_utc
         """
@@ -364,7 +425,7 @@ class CurveStore:
         if "date" in df.columns:
             df.drop(columns=["date"], inplace=True)
 
-        return df
+        return _ensure_raw_df_columns(df)
 
     def read_analytics(
         self,
@@ -484,6 +545,53 @@ class CurveStore:
 
         return curve
 
+    @staticmethod
+    def reconstruct_ql_curve(
+        row: dict,
+        *,
+        ql_dc: Any = None,
+        ql_cal: Any = None,
+        interpolation_algo: str = "df_log_linear",
+        enable_extrapolation: bool = True,
+    ) -> Any:
+        """Reconstruct a QuantLib DiscountCurve from a raw store row."""
+        import pandas as pd_local
+
+        from Query.IRSwaps.backends.quantlib.ql_curve_building_utils import (
+            build_ql_discount_curve,
+        )
+
+        if ql_dc is None or ql_cal is None:
+            import QuantLib as ql
+
+            if ql_dc is None:
+                ql_dc = ql.Actual360()
+            if ql_cal is None:
+                ql_cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+
+        node_dates_raw = row["node_dates"]
+        dfs_raw = row["discount_factors"]
+
+        dates = [_to_date(d) for d in node_dates_raw]
+        datetime_series = pd_local.Series(
+            [datetime.datetime(d.year, d.month, d.day) for d in dates]
+        )
+        df_series = pd_local.Series([float(v) for v in dfs_raw])
+
+        ql_curve = build_ql_discount_curve(
+            datetime_series=datetime_series,
+            discount_factor_series=df_series,
+            ql_dc=ql_dc,
+            ql_cal=ql_cal,
+            interpolation_algo=interpolation_algo,
+        )
+        if enable_extrapolation:
+            ql_curve.enableExtrapolation()
+        elif hasattr(ql_curve, "disableExtrapolation"):
+            ql_curve.disableExtrapolation()
+
+        return ql_curve
+
     @classmethod
     def reconstruct_curves_batch(
         cls,
@@ -521,6 +629,37 @@ class CurveStore:
                 for fut in as_completed(futures):
                     ts, curve = fut.result()
                     result[ts] = curve
+
+        return result
+
+    @classmethod
+    def reconstruct_ql_curves_batch(
+        cls,
+        df: pd.DataFrame,
+        *,
+        ql_dc: Any = None,
+        ql_cal: Any = None,
+        interpolation_algo: str = "df_log_linear",
+        enable_extrapolation: bool = True,
+    ) -> Dict[datetime.date, Any]:
+        """Batch reconstruct QL DiscountCurves keyed by trading_date."""
+        if df.empty:
+            return {}
+
+        rows = df.to_dict("records")
+        result: Dict[datetime.date, Any] = {}
+
+        for row in rows:
+            trading_date = row.get("trading_date")
+            if trading_date is None:
+                continue
+            result[_to_date(trading_date)] = cls.reconstruct_ql_curve(
+                row,
+                ql_dc=ql_dc,
+                ql_cal=ql_cal,
+                interpolation_algo=interpolation_algo,
+                enable_extrapolation=enable_extrapolation,
+            )
 
         return result
 
@@ -594,10 +733,29 @@ _RAW_SCHEMA = pa.schema(
         pa.field("cfg_hash", pa.dictionary(pa.int8(), pa.utf8())),
         pa.field("reference_key", pa.dictionary(pa.int8(), pa.utf8())),
         pa.field("interpolation", pa.dictionary(pa.int8(), pa.utf8())),
+        pa.field("source_variant", pa.dictionary(pa.int8(), pa.utf8())),
         pa.field("node_dates", pa.list_(pa.date32())),
         pa.field("discount_factors", pa.list_(pa.float64())),
     ]
 )
+
+
+def _ensure_raw_table_columns(table: pa.Table) -> pa.Table:
+    arrays = []
+    for field_ in _RAW_SCHEMA:
+        if field_.name in table.column_names:
+            arrays.append(table[field_.name])
+        else:
+            arrays.append(pa.array([None] * table.num_rows, type=field_.type))
+    return pa.table({name: arr for name, arr in zip(_RAW_SCHEMA.names, arrays)})
+
+
+def _ensure_raw_df_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for name in _RAW_SCHEMA.names:
+        if name not in df.columns:
+            df[name] = None
+    return df.loc[:, _RAW_SCHEMA.names]
 
 
 def _snapshots_to_arrow_table(snapshots: Sequence[CurveSnapshot]) -> pa.Table:
@@ -610,6 +768,7 @@ def _snapshots_to_arrow_table(snapshots: Sequence[CurveSnapshot]) -> pa.Table:
     chash = []
     rkey = []
     interp = []
+    svar = []
     ndates = []
     dfs = []
 
@@ -623,6 +782,7 @@ def _snapshots_to_arrow_table(snapshots: Sequence[CurveSnapshot]) -> pa.Table:
         chash.append(s.cfg_hash)
         rkey.append(s.reference_key)
         interp.append(s.interpolation)
+        svar.append(s.source_variant)
         ndates.append(s.node_dates)
         dfs.append(s.discount_factors)
 
@@ -635,6 +795,7 @@ def _snapshots_to_arrow_table(snapshots: Sequence[CurveSnapshot]) -> pa.Table:
         pa.array(chash).dictionary_encode(),
         pa.array(rkey).dictionary_encode(),
         pa.array(interp).dictionary_encode(),
+        pa.array(svar).dictionary_encode(),
         pa.array(ndates, type=pa.list_(pa.date32())),
         pa.array(dfs, type=pa.list_(pa.float64())),
     ]

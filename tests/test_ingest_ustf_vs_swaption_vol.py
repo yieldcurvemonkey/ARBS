@@ -176,11 +176,23 @@ def test_fetch_swaption_snapshot_rows_uses_context_cube_and_source(monkeypatch):
     assert json.loads(rows[0]["strike_offset_otm_vols"])["payer"]["10"]["vol_bps"] is None
 
 
-def test_fetch_swaption_snapshot_rows_warns_when_context_cube_missing(monkeypatch):
+def test_fetch_swaption_snapshot_rows_falls_back_to_surface_when_context_cube_missing(monkeypatch):
     logged_messages: list[tuple[str, str]] = []
+    captured_atm_resolution: dict[str, object] = {}
+
+    class FakeCurve:
+        @staticmethod
+        def calendar_advance(as_of_date, tenor):
+            if tenor == "1M":
+                return dt.date(2026, 4, 6)
+            if tenor == "2Y":
+                return dt.date(2028, 4, 6)
+            raise AssertionError(f"Unexpected tenor {tenor} from {as_of_date}")
 
     class FakeContext:
         source = "GSQUANT-QL"
+        as_of_date = dt.date(2026, 3, 6)
+        curve = FakeCurve()
 
         def meta(self):
             return {}
@@ -196,8 +208,57 @@ def test_fetch_swaption_snapshot_rows_warns_when_context_cube_missing(monkeypatc
     def _stub_log_status(message, *, level="INFO"):
         logged_messages.append((level, message))
 
+    def _stub_leg_forward_rate(market_context, leg):
+        assert market_context.as_of_date == dt.date(2026, 3, 6)
+        assert leg.exercise_date == dt.date(2026, 4, 6)
+        assert leg.underlying_maturity_date == dt.date(2028, 4, 6)
+        return 0.0375
+
+    def _stub_leg_tte_years(market_context, leg):
+        assert market_context.as_of_date == dt.date(2026, 3, 6)
+        assert leg.strike == pytest.approx(0.0375)
+        return 0.08
+
+    def _stub_leg_model_vol(market_context, leg, *, strike=None):
+        assert market_context.as_of_date == dt.date(2026, 3, 6)
+        strike_rate = float(leg.strike if strike is None else strike)
+        return 0.0077 + abs(strike_rate - 0.0375)
+
+    def _stub_solve_strike_for_target_delta(*, target_delta_abs, option_type, forward, vol_normal, tte):
+        assert forward == pytest.approx(0.0375)
+        assert vol_normal > 0.0
+        assert tte == pytest.approx(0.08)
+        bump = float(target_delta_abs) / 10_000.0
+        return forward + bump if option_type == "payer" else forward - bump
+
+    def _stub_resolve_swaption_atm_nvol_bps(
+        *,
+        market_context,
+        as_of_date,
+        expiry_label,
+        tail_label,
+        fallback_vol_decimal=None,
+    ):
+        captured_atm_resolution.update(
+            {
+                "context": market_context,
+                "as_of_date": as_of_date,
+                "expiry_label": expiry_label,
+                "tail_label": tail_label,
+                "fallback_vol_decimal": fallback_vol_decimal,
+            }
+        )
+        return 77.0
+
     monkeypatch.setattr(ingest_mod, "IRSwaptionMDP", FakeMDP)
     monkeypatch.setattr(ingest_mod, "_log_status", _stub_log_status)
+    monkeypatch.setattr(ingest_mod, "leg_forward_rate", _stub_leg_forward_rate)
+    monkeypatch.setattr(ingest_mod, "leg_tte_years", _stub_leg_tte_years)
+    monkeypatch.setattr(ingest_mod, "leg_model_vol", _stub_leg_model_vol)
+    monkeypatch.setattr(ingest_mod, "solve_strike_for_target_delta", _stub_solve_strike_for_target_delta)
+    monkeypatch.setattr(ingest_mod, "_resolve_swaption_atm_nvol_bps", _stub_resolve_swaption_atm_nvol_bps)
+    monkeypatch.setattr(ingest_mod, "SWAPTION_EXPIRY_LABELS", ["1M"])
+    monkeypatch.setattr(ingest_mod, "SWAPTION_TAIL_LABELS", ["2Y"])
 
     rows = ingest_mod._fetch_swaption_snapshot_rows(
         as_of_date=dt.date(2026, 3, 6),
@@ -205,10 +266,31 @@ def test_fetch_swaption_snapshot_rows_warns_when_context_cube_missing(monkeypatc
         force_refresh=False,
     )
 
-    assert rows == []
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["as_of_date"] == dt.date(2026, 3, 6)
+    assert row["expiry_label"] == "1M"
+    assert row["tail_label"] == "2Y"
+    assert row["atm_nvol_bps"] == pytest.approx(77.0)
+    assert row["atmf_rate"] == pytest.approx(0.0375)
+    assert row["sabr_alpha"] is None
+    assert row["sabr_beta"] is None
+    assert row["sabr_rho"] is None
+    assert row["sabr_nu"] is None
+    assert row["expiry_time"] == pytest.approx(0.08)
+
+    delta_payload = json.loads(row["delta_otm_vols"])
+    offset_payload = json.loads(row["strike_offset_otm_vols"])
+    assert delta_payload["payer"]["10d"]["strike_rate"] == pytest.approx(0.0385)
+    assert delta_payload["payer"]["10d"]["vol_bps"] == pytest.approx(87.0)
+    assert offset_payload["receiver"]["25"]["strike_rate"] == pytest.approx(0.035)
+    assert offset_payload["receiver"]["25"]["vol_bps"] == pytest.approx(102.0)
+
+    assert captured_atm_resolution["fallback_vol_decimal"] == pytest.approx(0.0077)
     assert (
         "WARN",
-        "No swaption SABR cube found for 2026-03-06 from GSQUANT-QL",
+        "No swaption SABR cube found for 2026-03-06 from GSQUANT-QL; "
+        "falling back to surface-only pricing with flat extrapolation",
     ) in logged_messages
 
 

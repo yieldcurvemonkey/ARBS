@@ -1,10 +1,16 @@
+import contextlib
 import datetime
 import hashlib
+import io
+import logging
 import math
+import multiprocessing as mp
 import os
+import pickle
 import re
+import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
@@ -23,6 +29,33 @@ from Query.STIRFutures.backends.rateslib.RLSTIRFuturePricer import RLSTIRFutureP
 _STIR_ROOT_CODE_RE = re.compile(
     r"^(SR1|SER|SL|SR3|SFR|SQ|ZQ|FF|RA|EB|IJ|RG|IM|TV|J8|JU|T0|IT|J2)([FGHJKMNQUVXZ]\d{2})$",
     re.IGNORECASE,
+)
+_CALIBRATION_EXECUTORS = frozenset({"thread", "process"})
+_CALIBRATION_CFG_KEYS = frozenset(
+    {
+        "interpolation",
+        "max_tenor_from_timestamp_months",
+        "mixed_interpolation",
+        "mixed_spline_add_boundary_nodes",
+        "mixed_spline_drop_last_node",
+        "mixed_spline_end_years",
+        "mixed_spline_endpoints",
+        "mixed_spline_start_years",
+        "mixed_spline_tail_days",
+        "node_reference_key",
+        "reference_key",
+        "rl_irs_spec",
+        "serff_skew",
+        "serff_skew_direct_sr1",
+        "serff_skew_direct_weight",
+        "serff_skew_extrap_constant_from_last",
+        "serff_skew_extrap_min_years",
+        "serff_skew_extrap_mode",
+        "serff_skew_extrap_roots",
+        "serff_skew_extrap_weight",
+        "serff_skew_extrapolate",
+        "sofr_reference_key",
+    }
 )
 
 
@@ -127,6 +160,326 @@ def _build_stirf_nodes(
         nodes[_as_node_ts(d, base_ts=base_ts)] = 1.0
 
     return nodes
+
+
+def _should_suppress_solver_output(line: str) -> bool:
+    return "SUCCESS: `conv_tol` reached" in line and "(levenberg_marquardt)" in line
+
+
+@contextlib.contextmanager
+def _suppress_solver_output() -> Iterable[None]:
+    class _FilteredWriteStream(io.TextIOBase):
+        def __init__(self, stream: Any):
+            self._stream = stream
+            self._buffer = ""
+
+        def writable(self) -> bool:
+            return True
+
+        def write(self, s: str) -> int:
+            if not s:
+                return 0
+            self._buffer += s
+            while "\n" in self._buffer:
+                line, self._buffer = self._buffer.split("\n", 1)
+                if not _should_suppress_solver_output(line):
+                    self._stream.write(line + "\n")
+            return len(s)
+
+        def flush(self) -> None:
+            if self._buffer and not _should_suppress_solver_output(self._buffer):
+                self._stream.write(self._buffer)
+            self._buffer = ""
+            self._stream.flush()
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._stream, name)
+
+    stdout = _FilteredWriteStream(sys.stdout)
+    stderr = _FilteredWriteStream(sys.stderr)
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            yield
+        finally:
+            stdout.flush()
+            stderr.flush()
+
+
+def _emit_calibration_status(
+    *,
+    curve_name: str,
+    executor_mode: str,
+    workers: int,
+    jobs: int,
+    show_tqdm: bool,
+    tqdm_mod: Any,
+) -> None:
+    message = (
+        f"[BARCHART_STIRF] calibration_executor={executor_mode} "
+        f"workers={workers} jobs={jobs} curve={curve_name}"
+    )
+    if show_tqdm and tqdm_mod is not None:
+        try:
+            tqdm_mod.tqdm.write(message)
+            return
+        except Exception:
+            pass
+    logging.getLogger(__name__).info(message)
+
+
+def _validate_spawn_process_pool_environment() -> None:
+    main_mod = sys.modules.get("__main__")
+    main_file = getattr(main_mod, "__file__", None)
+    if not isinstance(main_file, str) or not main_file or main_file.startswith("<") or not os.path.exists(main_file):
+        raise RuntimeError(
+            "Process-pool calibration requires an importable __main__ module when using spawn. "
+            "Interactive stdin/REPL sessions are not supported."
+        )
+
+
+def _reduced_calibration_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    reduced = {key: cfg[key] for key in _CALIBRATION_CFG_KEYS if key in cfg}
+    bad_keys = [key for key, value in reduced.items() if callable(value)]
+    if bad_keys:
+        raise TypeError(f"Calibration config contains non-picklable callables: {bad_keys}")
+    try:
+        pickle.dumps(reduced)
+    except Exception as exc:
+        raise TypeError("Reduced calibration config is not pickleable") from exc
+    return reduced
+
+
+def _build_curve_from_pricers_core(
+    *,
+    curve_name: str,
+    timestamp: datetime.datetime,
+    cfg: Dict[str, Any],
+    pricers: Dict[str, List["RLSTIRFuturePricer"]],
+) -> Tuple[rl.Curve, rl.Solver]:
+    curve_cls = BARCHART_STIRF_CURVE
+    sorted_pricers = _sort_pricers_for_solver(pricers)
+    node_reference_key = cfg.get("node_reference_key", cfg["reference_key"])
+    interpolation = cfg.get("interpolation", "log_linear")
+
+    def one_day_irs(eff_date, curve_key):
+        cal_name = RATESLIB_CURVE_DEFINITIONS[curve_key]["Calendar"]
+        bus_conv = str(RATESLIB_CURVE_DEFINITIONS[curve_key].get("BusinessConvention", "mf")).upper()
+        cal = rl.get_calendar(cal_name)
+        eff_date = cal.roll(eff_date, modifier=bus_conv, settlement=False)
+        return rl.IRS(
+            effective=eff_date,
+            termination="1b",
+            spec=cfg["rl_irs_spec"],
+            stub=None,
+            curves=curve_key,
+        )
+
+    def butterfly(d0, d1, d2, curve_key):
+        return rl.Spread(
+            rl.Spread(one_day_irs(d0, curve_key), one_day_irs(d1, curve_key)),
+            rl.Spread(one_day_irs(d1, curve_key), one_day_irs(d2, curve_key)),
+        )
+
+    if cfg.get("serff_skew", False):
+        ff_pricers_by_code: Dict[str, RLSTIRFuturePricer] = {}
+        ser_pricers_by_code: Dict[str, RLSTIRFuturePricer] = {}
+        base_pricers: List[RLSTIRFuturePricer] = []
+
+        for p in sorted_pricers:
+            root_and_code = curve_cls._pricer_root_and_code(p)
+            if root_and_code is None:
+                base_pricers.append(p)
+                continue
+
+            root, code = root_and_code
+            if root == "ZQ":
+                ff_pricers_by_code[code] = p
+                continue
+
+            base_pricers.append(p)
+            if root == "SR1":
+                ser_pricers_by_code[code] = p
+
+        serff_basis = {
+            code: float(ser_pricers_by_code[code]._price - ff_pricers_by_code[code]._price)
+            for code in ser_pricers_by_code
+            if code in ff_pricers_by_code
+        }
+        serff_basis_points = curve_cls._build_serff_basis_points(
+            base_date=timestamp.date(),
+            ser_pricers_by_code=ser_pricers_by_code,
+            ff_pricers_by_code=ff_pricers_by_code,
+        )
+        serff_basis_last = float(serff_basis_points[-1][1]) if serff_basis_points else None
+        serff_direct_sr1 = bool(cfg.get("serff_skew_direct_sr1", True))
+        serff_extrapolate = bool(cfg.get("serff_skew_extrapolate", False))
+        serff_extrap_constant_from_last = bool(cfg.get("serff_skew_extrap_constant_from_last", False))
+        serff_extrap_mode = str(cfg.get("serff_skew_extrap_mode", "linear")).lower()
+        serff_extrap_min_years = float(cfg.get("serff_skew_extrap_min_years", 0.0) or 0.0)
+        serff_direct_weight = float(cfg.get("serff_skew_direct_weight", 1e7))
+        serff_extrap_weight = float(cfg.get("serff_skew_extrap_weight", 1e5))
+        serff_extrap_roots = {str(x).upper() for x in cfg.get("serff_skew_extrap_roots", ["SR3"])}
+        base_date = timestamp.date()
+
+        nodes = _build_stirf_nodes(
+            timestamp=timestamp,
+            pricers={"BASE": base_pricers},
+            central_bank_dates=_CENTRAL_BANK_DATES,
+            reference_key=node_reference_key,
+            max_tenor_from_timestamp_months=cfg["max_tenor_from_timestamp_months"],
+        )
+        nodes = _sort_nodes(nodes)
+        nodes = curve_cls._ensure_mixed_support_nodes(nodes=nodes, cfg=cfg, base_date=timestamp.date())
+        curve_interp_kwargs = curve_cls._curve_interp_kwargs(
+            nodes=nodes,
+            cfg=cfg,
+            base_date=timestamp.date(),
+            interpolation=interpolation,
+        )
+
+        sofr_reference_key = cfg["sofr_reference_key"]
+        rl_sofr_curve = rl.Curve(
+            nodes=nodes,
+            id=sofr_reference_key,
+            convention=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["DayCounter"],
+            calendar=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["Calendar"],
+            modifier=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["BusinessConvention"],
+            **curve_interp_kwargs,
+        )
+
+        sofr_meeting_dates = sorted(k for k in nodes.keys())
+        sofr_bflies = [
+            butterfly(sofr_meeting_dates[i - 1], sofr_meeting_dates[i], sofr_meeting_dates[i + 1], sofr_reference_key)
+            for i in range(1, len(sofr_meeting_dates) - 1)
+        ]
+        sofr_solver = rl.Solver(
+            curves=[rl_sofr_curve],
+            instruments=[curve_cls._build_pricable_for_curve(p, curve_key=sofr_reference_key) for p in base_pricers] + sofr_bflies,
+            s=[p._rate for p in base_pricers] + [0.0] * len(sofr_bflies),
+            id=f"{curve_name}-SOFR-ANCHOR",
+            weights=[1.0] * len(base_pricers) + [1e-8] * len(sofr_bflies),
+            func_tol=1e-5,
+            conv_tol=1e-5,
+        )
+
+        skew_s: List[float] = []
+        skew_w: List[float] = []
+        for p in base_pricers:
+            root_and_code = curve_cls._pricer_root_and_code(p)
+            basis_adjustment: Optional[float] = None
+            target_weight = 1.0
+
+            if serff_direct_sr1 and root_and_code and root_and_code[0] == "SR1" and root_and_code[1] in serff_basis:
+                basis_adjustment = float(serff_basis[root_and_code[1]])
+                target_weight = serff_direct_weight
+            elif serff_extrapolate and root_and_code and root_and_code[0] in serff_extrap_roots and serff_basis_points:
+                tenor_years = curve_cls._tenor_years(base_date, getattr(p, "_maturity_date", None))
+                if tenor_years is not None and tenor_years >= serff_extrap_min_years:
+                    if serff_extrap_constant_from_last and serff_basis_last is not None:
+                        basis_adjustment = float(serff_basis_last)
+                    else:
+                        basis_adjustment = curve_cls._serff_basis_interp(
+                            tenor_years=tenor_years,
+                            points=serff_basis_points,
+                            extrap_mode=serff_extrap_mode,
+                        )
+                    if basis_adjustment is not None:
+                        target_weight = serff_extrap_weight
+
+            if basis_adjustment is not None:
+                sofr_pricable = curve_cls._build_pricable_for_curve(p, curve_key=sofr_reference_key)
+                skew_s.append(float(sofr_pricable.rate(solver=sofr_solver).real) + float(basis_adjustment))
+                skew_w.append(float(target_weight))
+            else:
+                skew_s.append(float(p._rate))
+                skew_w.append(1.0)
+
+        rl_curve = rl.Curve(
+            nodes=nodes,
+            id=cfg["reference_key"],
+            convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
+            calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
+            modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
+            **curve_interp_kwargs,
+        )
+
+        meeting_dates = sorted(k for k in nodes.keys())
+        bflies = [butterfly(meeting_dates[i - 1], meeting_dates[i], meeting_dates[i + 1], cfg["reference_key"]) for i in range(1, len(meeting_dates) - 1)]
+        rl_solver = rl.Solver(
+            curves=[rl_curve],
+            instruments=[curve_cls._build_pricable_for_curve(p, curve_key=cfg["reference_key"]) for p in base_pricers] + bflies,
+            s=skew_s + [0.0] * len(bflies),
+            id=curve_name,
+            weights=skew_w + [1e-8] * len(bflies),
+            func_tol=1e-5,
+            conv_tol=1e-5,
+        )
+
+        return rl_curve, rl_solver
+
+    nodes = _build_stirf_nodes(
+        timestamp=timestamp,
+        pricers=pricers,
+        central_bank_dates=_CENTRAL_BANK_DATES,
+        reference_key=node_reference_key,
+        max_tenor_from_timestamp_months=cfg["max_tenor_from_timestamp_months"],
+    )
+    nodes = _sort_nodes(nodes)
+    nodes = curve_cls._ensure_mixed_support_nodes(nodes=nodes, cfg=cfg, base_date=timestamp.date())
+    curve_interp_kwargs = curve_cls._curve_interp_kwargs(
+        nodes=nodes,
+        cfg=cfg,
+        base_date=timestamp.date(),
+        interpolation=interpolation,
+    )
+
+    rl_curve = rl.Curve(
+        nodes=nodes,
+        id=cfg["reference_key"],
+        convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
+        calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
+        modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
+        **curve_interp_kwargs,
+    )
+
+    instruments = [curve_cls._build_pricable_for_curve(p, curve_key=cfg["reference_key"]) for p in sorted_pricers]
+    s = [p._rate for p in sorted_pricers]
+
+    meeting_dates = sorted(k for k in nodes.keys())
+    bflies = [butterfly(meeting_dates[i - 1], meeting_dates[i], meeting_dates[i + 1], cfg["reference_key"]) for i in range(1, len(meeting_dates) - 1)]
+    pseudo_targets = [0.0] * len(bflies)
+
+    instruments = instruments + bflies
+    s = s + pseudo_targets
+    weights = [1.0] * len(sorted_pricers) + [1e-8] * len(bflies)
+
+    rl_solver = rl.Solver(
+        curves=[rl_curve],
+        instruments=instruments,
+        s=s,
+        id=curve_name,
+        weights=weights,
+        func_tol=1e-5,
+        conv_tol=1e-5,
+    )
+
+    return rl_curve, rl_solver
+
+
+def _process_curve_calibration_job(
+    curve_name: str,
+    timestamp: datetime.datetime,
+    cfg: Dict[str, Any],
+    pricers: Dict[str, List["RLSTIRFuturePricer"]],
+) -> Tuple[datetime.datetime, rl.Curve]:
+    with _suppress_solver_output():
+        curve_obj, _ = _build_curve_from_pricers_core(
+            curve_name=curve_name,
+            timestamp=timestamp,
+            cfg=cfg,
+            pricers=pricers,
+        )
+    return timestamp, curve_obj
 
 
 def _to_plot_bound(value: Optional[Union[str, datetime.date, datetime.datetime, pd.Timestamp]]) -> Optional[Union[str, Any]]:
@@ -605,7 +958,7 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
                 "serff_skew_extrap_mode": "log-linear",
                 "serff_skew_extrap_weight": 1e5,
             },
-            "USD-OIS-Q12xM12STIRT-SERFFX-MIX23": {
+            "USD-OIS-Q12xM12STIRT-SERFFX-MIX23": { # main fomc swap curve
                 "fetch_pricers_func": self.stirf_mdp_schwab_app.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp_schwab_app.get_bulk_data,
                 "instruments": [
@@ -973,6 +1326,63 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
             pass
         return curve
 
+    def _curve_from_bundle_nodes(
+        self,
+        *,
+        curve_name: str,
+        timestamp: datetime.datetime,
+        cfg: Dict[str, Any],
+        bundle_date: datetime.date,
+        node_values: Dict[str, float],
+    ) -> rl.Curve:
+        raw_nodes = {pd.Timestamp(node_ts): float(v) for node_ts, v in node_values.items()}
+        sorted_nodes = _sort_nodes({rl.dt(d.year, d.month, d.day): v for d, v in raw_nodes.items()})
+        curve_obj = rl.Curve(
+            nodes=sorted_nodes,
+            id=cfg["reference_key"],
+            convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
+            calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
+            modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
+            **self._curve_interp_kwargs(
+                nodes=sorted_nodes,
+                cfg=cfg,
+                base_date=bundle_date,
+                interpolation=cfg.get("interpolation", "log_linear"),
+            ),
+        )
+        curve_obj = self._attach_curve_context(
+            curve_obj,
+            curve_name=curve_name,
+            timestamp=timestamp,
+            cfg=cfg,
+        )
+        self._mem_cache_put(self._curve_cache_key(curve_name, timestamp, cfg), curve_obj)
+        return curve_obj
+
+    def _curve_cache_bundle_get(
+        self,
+        curve_name: str,
+        timestamp: datetime.datetime,
+        cfg: Dict[str, Any],
+    ) -> Optional[rl.Curve]:
+        bundle_date = self._trading_date_for_timestamp(timestamp)
+        bundle_nodes = self._curve_cache_daily_bundle_get(curve_name, bundle_date, cfg)
+        if not isinstance(bundle_nodes, dict):
+            return None
+        node_values = bundle_nodes.get(timestamp.isoformat())
+        if not isinstance(node_values, dict):
+            return None
+        try:
+            return self._curve_from_bundle_nodes(
+                curve_name=curve_name,
+                timestamp=timestamp,
+                cfg=cfg,
+                bundle_date=bundle_date,
+                node_values=node_values,
+            )
+        except Exception:
+            return None
+
     def _curve_cache_get(self, curve_name: str, timestamp: datetime.datetime, cfg: Dict[str, Any]) -> Optional[rl.Curve]:
         key = self._curve_cache_key(curve_name, timestamp, cfg)
         # Check in-memory cache first (avoids diskcache I/O + rl.from_json).
@@ -982,21 +1392,21 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
         mapping = self._curve_cache_mapping()
         payload = mapping.get(key)
         if payload is None:
-            return None
+            return self._curve_cache_bundle_get(curve_name, timestamp, cfg)
         try:
             if isinstance(payload, str):
                 curve_json = payload
             elif isinstance(payload, dict):
                 curve_json = payload.get("curve_json")
             else:
-                return None
+                return self._curve_cache_bundle_get(curve_name, timestamp, cfg)
             if not curve_json:
-                return None
+                return self._curve_cache_bundle_get(curve_name, timestamp, cfg)
             curve = rl.from_json(curve_json)
             self._mem_cache_put(key, curve)
             return self._attach_curve_context(curve, curve_name=curve_name, timestamp=timestamp, cfg=cfg)
         except Exception:
-            return None
+            return self._curve_cache_bundle_get(curve_name, timestamp, cfg)
 
     def _curve_cache_put(self, curve_name: str, timestamp: datetime.datetime, cfg: Dict[str, Any], curve: rl.Curve) -> None:
         key = self._curve_cache_key(curve_name, timestamp, cfg)
@@ -1509,6 +1919,14 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
         return session_open
 
     @staticmethod
+    def _trading_date_for_timestamp(timestamp: datetime.datetime) -> datetime.date:
+        chi = pytz.timezone("America/Chicago")
+        ts_chi = timestamp.astimezone(chi)
+        if ts_chi.hour >= 17:
+            return (ts_chi + datetime.timedelta(days=1)).date()
+        return ts_chi.date()
+
+    @staticmethod
     def _is_live_request(timestamp: Any) -> bool:
         return isinstance(timestamp, str) and timestamp.lower() == "live"
 
@@ -1612,213 +2030,12 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
         cfg: Dict[str, Any],
         pricers: Dict[str, List[RLSTIRFuturePricer]],
     ) -> Tuple[rl.Curve, rl.Solver]:
-        sorted_pricers = _sort_pricers_for_solver(pricers)
-        node_reference_key = cfg.get("node_reference_key", cfg["reference_key"])
-        interpolation = cfg.get("interpolation", "log_linear")
-
-        def one_day_irs(eff_date, curve_key):
-            cal_name = RATESLIB_CURVE_DEFINITIONS[curve_key]["Calendar"]
-            bus_conv = str(RATESLIB_CURVE_DEFINITIONS[curve_key].get("BusinessConvention", "mf")).upper()
-            cal = rl.get_calendar(cal_name)
-            eff_date = cal.roll(eff_date, modifier=bus_conv, settlement=False)
-            return rl.IRS(
-                effective=eff_date,
-                termination="1b",
-                spec=cfg["rl_irs_spec"],
-                # Use inferred stub for 1-business-day pseudo IRS constraints.
-                # Some specs with shortfront can fail on specific month-end dates.
-                stub=None,
-                curves=curve_key,
-            )
-
-        def butterfly(d0, d1, d2, curve_key):
-            return rl.Spread(
-                rl.Spread(one_day_irs(d0, curve_key), one_day_irs(d1, curve_key)),
-                rl.Spread(one_day_irs(d1, curve_key), one_day_irs(d2, curve_key)),
-            )
-
-        if cfg.get("serff_skew", False):
-            ff_pricers_by_code: Dict[str, RLSTIRFuturePricer] = {}
-            ser_pricers_by_code: Dict[str, RLSTIRFuturePricer] = {}
-            base_pricers: List[RLSTIRFuturePricer] = []
-
-            for p in sorted_pricers:
-                root_and_code = self._pricer_root_and_code(p)
-                if root_and_code is None:
-                    base_pricers.append(p)
-                    continue
-
-                root, code = root_and_code
-                if root == "ZQ":
-                    ff_pricers_by_code[code] = p
-                    continue
-
-                base_pricers.append(p)
-                if root == "SR1":
-                    ser_pricers_by_code[code] = p
-
-            serff_basis = {
-                code: float(ser_pricers_by_code[code]._price - ff_pricers_by_code[code]._price) for code in ser_pricers_by_code if code in ff_pricers_by_code
-            }
-            serff_basis_points = self._build_serff_basis_points(
-                base_date=timestamp.date(),
-                ser_pricers_by_code=ser_pricers_by_code,
-                ff_pricers_by_code=ff_pricers_by_code,
-            )
-            serff_basis_last = float(serff_basis_points[-1][1]) if serff_basis_points else None
-            serff_direct_sr1 = bool(cfg.get("serff_skew_direct_sr1", True))
-            serff_extrapolate = bool(cfg.get("serff_skew_extrapolate", False))
-            serff_extrap_constant_from_last = bool(cfg.get("serff_skew_extrap_constant_from_last", False))
-            serff_extrap_mode = str(cfg.get("serff_skew_extrap_mode", "linear")).lower()
-            serff_extrap_min_years = float(cfg.get("serff_skew_extrap_min_years", 0.0) or 0.0)
-            serff_direct_weight = float(cfg.get("serff_skew_direct_weight", 1e7))
-            serff_extrap_weight = float(cfg.get("serff_skew_extrap_weight", 1e5))
-            serff_extrap_roots = {str(x).upper() for x in cfg.get("serff_skew_extrap_roots", ["SR3"])}
-            base_date = timestamp.date()
-
-            nodes = _build_stirf_nodes(
-                timestamp=timestamp,
-                pricers={"BASE": base_pricers},
-                central_bank_dates=_CENTRAL_BANK_DATES,
-                reference_key=node_reference_key,
-                max_tenor_from_timestamp_months=cfg["max_tenor_from_timestamp_months"],
-            )
-            nodes = _sort_nodes(nodes)
-            nodes = self._ensure_mixed_support_nodes(nodes=nodes, cfg=cfg, base_date=timestamp.date())
-            curve_interp_kwargs = self._curve_interp_kwargs(
-                nodes=nodes,
-                cfg=cfg,
-                base_date=timestamp.date(),
-                interpolation=interpolation,
-            )
-
-            sofr_reference_key = cfg["sofr_reference_key"]
-            rl_sofr_curve = rl.Curve(
-                nodes=nodes,
-                id=sofr_reference_key,
-                convention=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["DayCounter"],
-                calendar=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["Calendar"],
-                modifier=RATESLIB_CURVE_DEFINITIONS[sofr_reference_key]["BusinessConvention"],
-                **curve_interp_kwargs,
-            )
-
-            sofr_meeting_dates = sorted(k for k in nodes.keys())
-            sofr_bflies = [
-                butterfly(sofr_meeting_dates[i - 1], sofr_meeting_dates[i], sofr_meeting_dates[i + 1], sofr_reference_key)
-                for i in range(1, len(sofr_meeting_dates) - 1)
-            ]
-            sofr_solver = rl.Solver(
-                curves=[rl_sofr_curve],
-                instruments=[self._build_pricable_for_curve(p, curve_key=sofr_reference_key) for p in base_pricers] + sofr_bflies,
-                s=[p._rate for p in base_pricers] + [0.0] * len(sofr_bflies),
-                id=f"{curve_name}-SOFR-ANCHOR",
-                weights=[1.0] * len(base_pricers) + [1e-8] * len(sofr_bflies),
-                func_tol=1e-5,
-                conv_tol=1e-5,
-            )
-
-            skew_s: List[float] = []
-            skew_w: List[float] = []
-            for p in base_pricers:
-                root_and_code = self._pricer_root_and_code(p)
-                basis_adjustment: Optional[float] = None
-                target_weight = 1.0
-
-                if serff_direct_sr1 and root_and_code and root_and_code[0] == "SR1" and root_and_code[1] in serff_basis:
-                    basis_adjustment = float(serff_basis[root_and_code[1]])
-                    target_weight = serff_direct_weight
-                elif serff_extrapolate and root_and_code and root_and_code[0] in serff_extrap_roots and serff_basis_points:
-                    tenor_years = self._tenor_years(base_date, getattr(p, "_maturity_date", None))
-                    if tenor_years is not None and tenor_years >= serff_extrap_min_years:
-                        if serff_extrap_constant_from_last and serff_basis_last is not None:
-                            basis_adjustment = float(serff_basis_last)
-                        else:
-                            basis_adjustment = self._serff_basis_interp(
-                                tenor_years=tenor_years,
-                                points=serff_basis_points,
-                                extrap_mode=serff_extrap_mode,
-                            )
-                        if basis_adjustment is not None:
-                            target_weight = serff_extrap_weight
-
-                if basis_adjustment is not None:
-                    sofr_pricable = self._build_pricable_for_curve(p, curve_key=sofr_reference_key)
-                    skew_s.append(float(sofr_pricable.rate(solver=sofr_solver).real) + float(basis_adjustment))
-                    skew_w.append(float(target_weight))
-                else:
-                    skew_s.append(float(p._rate))
-                    skew_w.append(1.0)
-
-            rl_curve = rl.Curve(
-                nodes=nodes,
-                id=cfg["reference_key"],
-                convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
-                calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
-                modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
-                **curve_interp_kwargs,
-            )
-
-            meeting_dates = sorted(k for k in nodes.keys())
-            bflies = [butterfly(meeting_dates[i - 1], meeting_dates[i], meeting_dates[i + 1], cfg["reference_key"]) for i in range(1, len(meeting_dates) - 1)]
-            rl_solver = rl.Solver(
-                curves=[rl_curve],
-                instruments=[self._build_pricable_for_curve(p, curve_key=cfg["reference_key"]) for p in base_pricers] + bflies,
-                s=skew_s + [0.0] * len(bflies),
-                id=curve_name,
-                weights=skew_w + [1e-8] * len(bflies),
-                func_tol=1e-5,
-                conv_tol=1e-5,
-            )
-
-            return rl_curve, rl_solver
-
-        nodes = _build_stirf_nodes(
+        return _build_curve_from_pricers_core(
+            curve_name=curve_name,
             timestamp=timestamp,
-            pricers=pricers,
-            central_bank_dates=_CENTRAL_BANK_DATES,
-            reference_key=node_reference_key,
-            max_tenor_from_timestamp_months=cfg["max_tenor_from_timestamp_months"],
-        )
-        nodes = _sort_nodes(nodes)
-        nodes = self._ensure_mixed_support_nodes(nodes=nodes, cfg=cfg, base_date=timestamp.date())
-        curve_interp_kwargs = self._curve_interp_kwargs(
-            nodes=nodes,
             cfg=cfg,
-            base_date=timestamp.date(),
-            interpolation=interpolation,
+            pricers=pricers,
         )
-
-        rl_curve = rl.Curve(
-            nodes=nodes,
-            id=cfg["reference_key"],
-            convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
-            calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
-            modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
-            **curve_interp_kwargs,
-        )
-
-        instruments = [self._build_pricable_for_curve(p, curve_key=cfg["reference_key"]) for p in sorted_pricers]
-        s = [p._rate for p in sorted_pricers]
-
-        meeting_dates = sorted(k for k in nodes.keys())
-        bflies = [butterfly(meeting_dates[i - 1], meeting_dates[i], meeting_dates[i + 1], cfg["reference_key"]) for i in range(1, len(meeting_dates) - 1)]
-        pseudo_targets = [0.0] * len(bflies)
-
-        instruments = instruments + bflies
-        s = s + pseudo_targets
-        weights = [1.0] * len(sorted_pricers) + [1e-8] * len(bflies)
-
-        rl_solver = rl.Solver(
-            curves=[rl_curve],
-            instruments=instruments,
-            s=s,
-            id=curve_name,
-            weights=weights,
-            func_tol=1e-5,
-            conv_tol=1e-5,
-        )
-
-        return rl_curve, rl_solver
 
     def build_curve(
         self,
@@ -1848,6 +2065,17 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
                 is_live_ts = self._is_live_request(raw_ts)
                 live_by_timestamp[norm_ts] = bool(live_by_timestamp.get(norm_ts, False) or is_live_ts)
             local_kwargs = dict(kwargs)
+            calibration_executor = str(local_kwargs.pop("calibration_executor", "thread") or "thread").strip().lower()
+            if calibration_executor not in _CALIBRATION_EXECUTORS:
+                raise ValueError(
+                    f"Unsupported calibration_executor '{calibration_executor}'. "
+                    f"Expected one of {sorted(_CALIBRATION_EXECUTORS)}."
+                )
+            if calibration_executor == "process":
+                if not curve_only:
+                    raise ValueError("Process-pool calibration only supports curve_only=True for bulk historical runs.")
+                if any(live_by_timestamp.values()):
+                    raise ValueError("Process-pool calibration only supports bulk historical runs, not live timestamps.")
             show_tqdm = bool(local_kwargs.pop("show_tqdm", True))
             auto_prime_bulk = bool(local_kwargs.pop("auto_prime_bulk", True))
             stirf_fetch_max_workers = local_kwargs.pop("stirf_fetch_max_workers", None)
@@ -1869,7 +2097,7 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
                 # --- [OPTIMIZATION] Check Daily Bundles first ---
                 by_date: Dict[datetime.date, List[datetime.datetime]] = {}
                 for ts in unique_timestamps:
-                    by_date.setdefault(ts.date(), []).append(ts)
+                    by_date.setdefault(self._trading_date_for_timestamp(ts), []).append(ts)
 
                 remaining_unique_timestamps: List[datetime.datetime] = []
                 for dt, d_timestamps in by_date.items():
@@ -1879,24 +2107,14 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
                             ts_iso = ts.isoformat()
                             node_values = bundle_nodes.get(ts_iso)
                             if node_values is not None:
-                                # Solver bypass: build rl.Curve directly from nodes.
-                                # Convert ISO keys back to pd.Timestamp.
-                                raw_nodes = {pd.Timestamp(nt): float(v) for nt, v in node_values.items()}
-                                # We need nodes dict sorted by date for rateslib.
-                                sorted_nodes = _sort_nodes({rl.dt(d.year, d.month, d.day): v for d, v in raw_nodes.items()})
-                                
-                                curve_obj = rl.Curve(
-                                    nodes=sorted_nodes,
-                                    id=cfg["reference_key"],
-                                    convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
-                                    calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
-                                    modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
-                                    **self._curve_interp_kwargs(nodes=sorted_nodes, cfg=cfg, base_date=dt, interpolation=cfg.get("interpolation", "log_linear"))
+                                curve_obj = self._curve_from_bundle_nodes(
+                                    curve_name=curve_name,
+                                    timestamp=ts,
+                                    cfg=cfg,
+                                    bundle_date=dt,
+                                    node_values=node_values,
                                 )
-                                curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
                                 out[ts] = curve_obj if curve_only else (curve_obj, None)
-                                # Pre-populate memory cache to avoid even bundle checks next time.
-                                self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
                                 continue
                             remaining_unique_timestamps.append(ts)
                     else:
@@ -1989,8 +2207,44 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
             # Phase 3: parallel curve calibrations + tqdm progress.
             cal_workers = int(calibration_max_workers or len(calibration_jobs))
             cal_workers = max(1, min(cal_workers, len(calibration_jobs)))
+            fresh_curves: Dict[datetime.datetime, rl.Curve] = {}
+            _emit_calibration_status(
+                curve_name=curve_name,
+                executor_mode=calibration_executor,
+                workers=cal_workers,
+                jobs=len(calibration_jobs),
+                show_tqdm=show_tqdm,
+                tqdm_mod=tqdm_mod,
+            )
 
-            if cal_workers == 1:
+            if calibration_executor == "process":
+                reduced_cfg = _reduced_calibration_cfg(cfg)
+                _validate_spawn_process_pool_environment()
+                with ProcessPoolExecutor(
+                    max_workers=cal_workers,
+                    mp_context=mp.get_context("spawn"),
+                ) as pool:
+                    futures = {
+                        pool.submit(
+                            _process_curve_calibration_job,
+                            curve_name,
+                            ts,
+                            reduced_cfg,
+                            ts_pricers,
+                        ): ts
+                        for ts, ts_pricers in calibration_jobs
+                    }
+                    completed = as_completed(futures)
+                    if tqdm_mod is not None:
+                        completed = tqdm_mod.tqdm(completed, total=len(futures), desc=f"CALIBRATING {curve_name}")
+                    for fut in completed:
+                        ts = futures[fut]
+                        _, curve_obj = fut.result()
+                        curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
+                        self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
+                        fresh_curves[ts] = curve_obj
+                        out[ts] = curve_obj if curve_only else (curve_obj, None)
+            elif cal_workers == 1:
                 cal_iter: Iterable[Tuple[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]]] = calibration_jobs
                 if tqdm_mod is not None:
                     cal_iter = tqdm_mod.tqdm(calibration_jobs, desc=f"CALIBRATING {curve_name}")
@@ -1998,7 +2252,8 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
                     built = self._build_curve_from_pricers(curve_name=curve_name, timestamp=ts, cfg=cfg, pricers=ts_pricers)
                     curve_obj, solver_obj = built
                     curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
-                    self._curve_cache_put(curve_name, ts, cfg, curve_obj)
+                    self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
+                    fresh_curves[ts] = curve_obj
                     out[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
             else:
                 with ThreadPoolExecutor(max_workers=cal_workers, thread_name_prefix="stir-curve-calib") as pool:
@@ -2014,7 +2269,8 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
                         built = fut.result()
                         curve_obj, solver_obj = built
                         curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
-                        self._curve_cache_put(curve_name, ts, cfg, curve_obj)
+                        self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
+                        fresh_curves[ts] = curve_obj
                         out[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
 
             # --- [OPTIMIZATION] Save Daily Bundles after successful bulk build ---
@@ -2024,8 +2280,12 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
                 for ts, val in out.items():
                     curve_to_save = val if curve_only else val[0]
                     if isinstance(curve_to_save, rl.Curve):
-                        curves_to_bundle.setdefault(ts.date(), {})[ts] = curve_to_save
-                
+                        curves_to_bundle.setdefault(self._trading_date_for_timestamp(ts), {})[ts] = curve_to_save
+
+                fresh_curves_by_day: Dict[datetime.date, Dict[datetime.datetime, rl.Curve]] = {}
+                for ts, curve_obj in fresh_curves.items():
+                    fresh_curves_by_day.setdefault(self._trading_date_for_timestamp(ts), {})[ts] = curve_obj
+
                 for dt, day_curves in curves_to_bundle.items():
                     # Only bundle if we have a significant number of points (e.g. > 10) to avoid overhead for shallow calls.
                     if len(day_curves) > 10:
@@ -2033,18 +2293,31 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
                             self._curve_cache_daily_bundle_put(curve_name, dt, cfg, day_curves)
                         except Exception:
                             pass
+                        continue
+
+                    for ts, curve_obj in fresh_curves_by_day.get(dt, {}).items():
+                        self._curve_cache_put(curve_name, ts, cfg, curve_obj)
 
             return out
 
         is_live_request = self._is_live_request(timestamp)
         normalized_timestamp = self._normalize_timestamp(timestamp)
-        force_refresh = bool(kwargs.get("force_refresh", False))
+        local_kwargs = dict(kwargs)
+        calibration_executor = str(local_kwargs.pop("calibration_executor", "thread") or "thread").strip().lower()
+        if calibration_executor not in _CALIBRATION_EXECUTORS:
+            raise ValueError(
+                f"Unsupported calibration_executor '{calibration_executor}'. "
+                f"Expected one of {sorted(_CALIBRATION_EXECUTORS)}."
+            )
+        if calibration_executor == "process":
+            raise ValueError("Process-pool calibration only supports bulk historical runs with curve_only=True.")
+        force_refresh = bool(local_kwargs.get("force_refresh", False))
         if curve_only and not force_refresh:
             cached_curve = self._curve_cache_get(curve_name, normalized_timestamp, cfg)
             if cached_curve is not None:
                 return cached_curve
 
-        pricer_req = dict(symbols=cfg["instruments"], timestamp=normalized_timestamp, **kwargs)
+        pricer_req = dict(symbols=cfg["instruments"], timestamp=normalized_timestamp, **local_kwargs)
         fetch_pricers_func, _ = self._resolve_fetchers_for_request(cfg=cfg, is_live_request=is_live_request)
         pricers: Dict[str, List[RLSTIRFuturePricer]] = fetch_pricers_func(request=pricer_req)
         built = self._build_curve_from_pricers(curve_name=curve_name, timestamp=normalized_timestamp, cfg=cfg, pricers=pricers)

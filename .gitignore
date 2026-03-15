@@ -230,3 +230,4 @@ _temp_raw_raw_trades.csv
 /sdr_cache
 /notebooks/data
 /.claude
+/tmp

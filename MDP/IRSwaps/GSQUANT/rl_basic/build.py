@@ -159,7 +159,56 @@ GSQUANT_CURVE_MAP = {
             "extrapolation": datetime.timedelta(days=360 * 1.25),
             "reference_key": "USD-OIS-STIR"
         }
-    },  
+    },
+    "USD-SOFR-1D-STIR-CME": {
+        "rl_basic": {
+            "base_tenors": [
+                "USD Swap SOFR 1m ATM 0b to 1m CME Cleared",
+                "USD Swap SOFR 2m ATM 0b to 2m CME Cleared",
+                "USD Swap SOFR 3m ATM 0b to 3m CME Cleared",
+                "USD Swap SOFR 6m ATM 0b to 6m CME Cleared",
+                "USD Swap SOFR 9m ATM 0b to 9m CME Cleared",
+
+                "USD Swap SOFR ATM frb1 to frb2 CME Cleared",
+                "USD Swap SOFR ATM frb2 to frb3 CME Cleared",
+                "USD Swap SOFR ATM frb3 to frb4 CME Cleared",
+                "USD Swap SOFR ATM frb4 to frb5 CME Cleared",
+                "USD Swap SOFR ATM frb5 to frb6 CME Cleared",
+                "USD Swap SOFR ATM frb6 to frb7 CME Cleared",
+
+                "USD Swap SOFR 3m ATM imm1 to 3m CME Cleared",
+                "USD Swap SOFR 3m ATM imm2 to 3m CME Cleared",
+                "USD Swap SOFR 3m ATM imm3 to 3m CME Cleared",
+                "USD Swap SOFR 3m ATM imm4 to 3m CME Cleared",
+
+                "USD Swap SOFR 6m ATM imm1 to 6m CME Cleared",
+                "USD Swap SOFR 6m ATM imm2 to 6m CME Cleared",
+                "USD Swap SOFR 6m ATM imm3 to 6m CME Cleared",
+                "USD Swap SOFR 6m ATM imm4 to 6m CME Cleared",
+                
+                "USD Swap SOFR 1y ATM 0b to 1y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 2y CME Cleared",
+                "USD Swap SOFR 1y ATM 0b to 3y CME Cleared",
+
+                "USD Swap SOFR 1y ATM imm1 to 1y CME Cleared",
+                "USD Swap SOFR 1y ATM imm1 to 2y CME Cleared",
+                
+                "USD Swap SOFR 1y ATM imm2 to 1y CME Cleared",
+                "USD Swap SOFR 1y ATM imm2 to 2y CME Cleared",
+                
+                "USD Swap SOFR 1y ATM imm3 to 1y CME Cleared",
+                "USD Swap SOFR 1y ATM imm3 to 2y CME Cleared",
+                
+                "USD Swap SOFR 1y ATM imm4 to 1y CME Cleared",
+                "USD Swap SOFR 1y ATM imm4 to 2y CME Cleared",
+                
+                "USD Swap SOFR 1y ATM 1y to 1y CME Cleared",
+                "USD Swap SOFR 1y ATM 2y to 1y CME Cleared",
+                "USD Swap SOFR 1y ATM 1y to 2y CME Cleared",
+            ],
+            "reference_key": "USD-SOFR-1D",
+        }
+    }, 
     "EUR-ESTR": {
         "rl_basic": {
             "base_tenors": [

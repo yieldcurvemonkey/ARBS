@@ -17,6 +17,7 @@ import math
 import os
 import time
 from collections import OrderedDict
+from dataclasses import replace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -28,6 +29,7 @@ from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP
 from MDP.USTFutures.USTFutureOptionMDP import USTFutureOptionMDP
 from Query.Base.query_resolution import resolve_query
 from Query.IRSwaptions import IRSwaptionQuery, IRSwaptionStructure, IRSwaptionValue
+from Query.IRSwaptions.pricer import IRSwaptionPricable, leg_forward_rate, leg_model_vol, leg_tte_years
 from Query.IRSwaptions.utils import solve_strike_for_target_delta
 
 
@@ -443,21 +445,35 @@ def _build_ustf_strike_offset_otm_payload(smile: Any) -> dict[str, dict[str, Any
 
 def _solve_swaption_delta_otm_point(
     *,
-    cube: Any,
+    cube: Any | None,
+    market_context: Any | None = None,
+    reference_leg: IRSwaptionPricable | None = None,
     expiry_label: str,
     tail_label: str,
     atmf_rate: float | None,
     expiry_time: float | None,
     option_type: str,
     target_delta_abs: int,
+    atm_vol_decimal: float | None = None,
 ) -> dict[str, float] | None:
     if atmf_rate is None or expiry_time is None or expiry_time <= 0.0:
         return None
 
-    try:
-        current_vol = _safe_float(cube.atm_vol(expiry_label, tail_label))
-    except Exception:
-        return None
+    current_vol = atm_vol_decimal
+    if current_vol is None and cube is not None:
+        try:
+            current_vol = _safe_float(cube.atm_vol(expiry_label, tail_label))
+        except Exception:
+            current_vol = None
+    if current_vol is None:
+        current_vol = _resolve_swaption_strike_vol(
+            cube=cube,
+            market_context=market_context,
+            reference_leg=reference_leg,
+            expiry_label=expiry_label,
+            tail_label=tail_label,
+            strike_rate=atmf_rate,
+        )
     if current_vol is None or current_vol <= 0.0:
         return None
 
@@ -478,10 +494,14 @@ def _solve_swaption_delta_otm_point(
         if next_strike is None:
             return None
 
-        try:
-            next_vol = _safe_float(cube.volatility(expiry_label, tail_label, next_strike))
-        except Exception:
-            return None
+        next_vol = _resolve_swaption_strike_vol(
+            cube=cube,
+            market_context=market_context,
+            reference_leg=reference_leg,
+            expiry_label=expiry_label,
+            tail_label=tail_label,
+            strike_rate=next_strike,
+        )
         if next_vol is None or next_vol <= 0.0:
             return None
 
@@ -504,13 +524,82 @@ def _solve_swaption_delta_otm_point(
     }
 
 
+def _build_swaption_surface_fallback_node(
+    *,
+    market_context: Any,
+    expiry_label: str,
+    tail_label: str,
+) -> dict[str, Any]:
+    curve = getattr(market_context, "curve", None)
+    if curve is None or not hasattr(curve, "calendar_advance"):
+        raise TypeError("Swaption surface fallback requires a market context with curve.calendar_advance().")
+
+    as_of_date = getattr(market_context, "as_of_date", None)
+    if not isinstance(as_of_date, dt.date):
+        raise TypeError("Swaption surface fallback requires a market context with a valid as_of_date.")
+
+    exercise_date = curve.calendar_advance(as_of_date, expiry_label)
+    underlying_effective_date = exercise_date
+    underlying_maturity_date = curve.calendar_advance(underlying_effective_date, tail_label)
+
+    base_leg = IRSwaptionPricable(
+        option_type="payer",
+        exercise_date=exercise_date,
+        underlying_effective_date=underlying_effective_date,
+        underlying_maturity_date=underlying_maturity_date,
+        strike=0.0,
+        notional=1.0,
+    )
+    atmf_rate = _safe_float(leg_forward_rate(market_context, base_leg))
+    if atmf_rate is None:
+        raise ValueError(f"Failed to derive ATMF rate for swaption {expiry_label}x{tail_label}.")
+
+    reference_leg = replace(base_leg, strike=atmf_rate)
+    expiry_time = _safe_float(leg_tte_years(market_context, reference_leg))
+    atm_vol_decimal = _safe_float(leg_model_vol(market_context, reference_leg, strike=atmf_rate))
+    return {
+        "reference_leg": reference_leg,
+        "atmf_rate": atmf_rate,
+        "expiry_time": expiry_time,
+        "atm_vol_decimal": atm_vol_decimal,
+    }
+
+
+def _resolve_swaption_strike_vol(
+    *,
+    cube: Any | None,
+    market_context: Any | None,
+    reference_leg: IRSwaptionPricable | None,
+    expiry_label: str,
+    tail_label: str,
+    strike_rate: float,
+) -> float | None:
+    if cube is not None:
+        try:
+            return _safe_float(cube.volatility(expiry_label, tail_label, strike_rate))
+        except Exception:
+            return None
+
+    if market_context is None or reference_leg is None:
+        return None
+
+    try:
+        strike_leg = replace(reference_leg, strike=float(strike_rate))
+        return _safe_float(leg_model_vol(market_context, strike_leg, strike=float(strike_rate)))
+    except Exception:
+        return None
+
+
 def _build_swaption_delta_otm_payload(
     *,
-    cube: Any,
+    cube: Any | None,
+    market_context: Any | None = None,
+    reference_leg: IRSwaptionPricable | None = None,
     expiry_label: str,
     tail_label: str,
     atmf_rate: float | None,
     expiry_time: float | None,
+    atm_vol_decimal: float | None = None,
 ) -> dict[str, dict[str, Any]]:
     payload: dict[str, dict[str, Any]] = {}
     for side, option_type, _ in SWAPTION_OTM_SIDE_SPECS:
@@ -518,12 +607,15 @@ def _build_swaption_delta_otm_payload(
         for delta in OTM_DELTA_BUCKETS:
             node = _solve_swaption_delta_otm_point(
                 cube=cube,
+                market_context=market_context,
+                reference_leg=reference_leg,
                 expiry_label=expiry_label,
                 tail_label=tail_label,
                 atmf_rate=atmf_rate,
                 expiry_time=expiry_time,
                 option_type=option_type,
                 target_delta_abs=delta,
+                atm_vol_decimal=atm_vol_decimal,
             )
             if node is None:
                 continue
@@ -542,7 +634,9 @@ def _build_swaption_delta_otm_payload(
 
 def _build_swaption_strike_offset_otm_payload(
     *,
-    cube: Any,
+    cube: Any | None,
+    market_context: Any | None = None,
+    reference_leg: IRSwaptionPricable | None = None,
     expiry_label: str,
     tail_label: str,
     atmf_rate: float | None,
@@ -556,10 +650,14 @@ def _build_swaption_strike_offset_otm_payload(
         for offset_bps in OTM_STRIKE_OFFSET_BUCKETS:
             signed_offset_bps = float(sign) * float(offset_bps)
             strike_rate = atmf_rate + signed_offset_bps / 10_000.0
-            try:
-                vol_decimal = _safe_float(cube.volatility(expiry_label, tail_label, strike_rate))
-            except Exception:
-                vol_decimal = None
+            vol_decimal = _resolve_swaption_strike_vol(
+                cube=cube,
+                market_context=market_context,
+                reference_leg=reference_leg,
+                expiry_label=expiry_label,
+                tail_label=tail_label,
+                strike_rate=strike_rate,
+            )
             side_payload[str(offset_bps)] = {
                 "selector": str(offset_bps),
                 "side": side,
@@ -681,24 +779,33 @@ def _resolve_swaption_atm_nvol_bps(
     as_of_date: dt.date,
     expiry_label: str,
     tail_label: str,
+    fallback_vol_decimal: float | None = None,
 ) -> float | None:
-    query = IRSwaptionQuery(
-        expiry=expiry_label,
-        tail=tail_label,
-        structure=IRSwaptionStructure.STRADDLE,
-    )
-    resolved_query = resolve_query(
-        query,
-        timestamp=as_of_date,
-        pricer_or_curve=market_context,
-    )
-    package, risk_weights = resolved_query.resolve_package(pricer_or_curve=market_context)
-    value_map = resolved_query.build_value_map(
-        pricer_or_curve=market_context,
-        package=package,
-        risk_weights=risk_weights,
-    )
-    return _safe_float(value_map.apply(IRSwaptionValue.NVOL))
+    try:
+        query = IRSwaptionQuery(
+            expiry=expiry_label,
+            tail=tail_label,
+            structure=IRSwaptionStructure.STRADDLE,
+        )
+        resolved_query = resolve_query(
+            query,
+            timestamp=as_of_date,
+            pricer_or_curve=market_context,
+        )
+        package, risk_weights = resolved_query.resolve_package(pricer_or_curve=market_context)
+        value_map = resolved_query.build_value_map(
+            pricer_or_curve=market_context,
+            package=package,
+            risk_weights=risk_weights,
+        )
+        resolved = _safe_float(value_map.apply(IRSwaptionValue.NVOL))
+        if resolved is not None or fallback_vol_decimal is None:
+            return resolved
+    except Exception:
+        if fallback_vol_decimal is None:
+            raise
+
+    return None if fallback_vol_decimal is None else fallback_vol_decimal * 10_000.0
 
 
 def _fetch_swaption_snapshot_rows(
@@ -724,33 +831,55 @@ def _fetch_swaption_snapshot_rows(
     if cube is None:
         _log_status(
             f"No swaption SABR cube found for {as_of_date.isoformat()} "
-            f"from {getattr(market_context, 'source', DEFAULT_SWAPTION_SOURCE)}",
+            f"from {getattr(market_context, 'source', DEFAULT_SWAPTION_SOURCE)}; "
+            "falling back to surface-only pricing with flat extrapolation",
             level="WARN",
         )
-        return []
 
     rows: list[dict[str, Any]] = []
     for expiry_label in SWAPTION_EXPIRY_LABELS:
         for tail_label in SWAPTION_TAIL_LABELS:
             try:
-                params = cube.sabr_params_at(expiry_label, tail_label)
+                params: dict[str, Any] = {}
+                reference_leg: IRSwaptionPricable | None = None
+                atm_vol_decimal: float | None = None
+                if cube is not None:
+                    params = cube.sabr_params_at(expiry_label, tail_label)
+                    atmf_rate = _safe_float(params.get("atmf_rate"))
+                    expiry_time = _safe_float(params.get("expiry_time"))
+                    atm_vol_decimal = _safe_float(cube.atm_vol(expiry_label, tail_label))
+                else:
+                    surface_node = _build_swaption_surface_fallback_node(
+                        market_context=market_context,
+                        expiry_label=expiry_label,
+                        tail_label=tail_label,
+                    )
+                    reference_leg = surface_node["reference_leg"]
+                    atmf_rate = _safe_float(surface_node.get("atmf_rate"))
+                    expiry_time = _safe_float(surface_node.get("expiry_time"))
+                    atm_vol_decimal = _safe_float(surface_node.get("atm_vol_decimal"))
+
                 atm_nvol_bps = _resolve_swaption_atm_nvol_bps(
                     market_context=market_context,
                     as_of_date=as_of_date,
                     expiry_label=expiry_label,
                     tail_label=tail_label,
+                    fallback_vol_decimal=atm_vol_decimal if cube is None else None,
                 )
-                atmf_rate = _safe_float(params.get("atmf_rate"))
-                expiry_time = _safe_float(params.get("expiry_time"))
                 delta_otm_payload = _build_swaption_delta_otm_payload(
                     cube=cube,
+                    market_context=market_context if cube is None else None,
+                    reference_leg=reference_leg,
                     expiry_label=expiry_label,
                     tail_label=tail_label,
                     atmf_rate=atmf_rate,
                     expiry_time=expiry_time,
+                    atm_vol_decimal=atm_vol_decimal,
                 )
                 strike_offset_otm_payload = _build_swaption_strike_offset_otm_payload(
                     cube=cube,
+                    market_context=market_context if cube is None else None,
+                    reference_leg=reference_leg,
                     expiry_label=expiry_label,
                     tail_label=tail_label,
                     atmf_rate=atmf_rate,

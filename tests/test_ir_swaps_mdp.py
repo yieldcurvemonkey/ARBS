@@ -1,10 +1,12 @@
 import datetime as dt
 
 import pandas as pd
+import pytest
 import QuantLib as ql
 
 import MDP.IRSwaps.IRSwapsMDP as irswaps_mdp_module
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
 from Query.IRSwaps.backends.quantlib.ql_pricer import build_ql_irswap
 
 
@@ -141,3 +143,146 @@ def test_barchart_stirf_bulk_get_data_suppresses_rateslib_solver_logs(monkeypatc
     assert builder.calls[0]["kwargs"]["cache_full_intraday_fetch"] is True
     assert "SUCCESS: `conv_tol` reached" not in captured.out
     assert "SUCCESS: `conv_tol` reached" not in captured.err
+
+
+def test_barchart_stirf_bulk_get_data_forwards_parallelism_and_tqdm(monkeypatch):
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    builder = _FakeBarchartBuilder()
+    d1 = dt.date(2026, 3, 3)
+    d2 = dt.date(2026, 3, 4)
+
+    monkeypatch.setattr(mdp, "_get_barchart_stirf_curve_builder", lambda: builder)
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+
+    out = mdp.bulk_get_data(
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [d1, d2],
+            "n_jobs": 3,
+            "show_tqdm": True,
+        }
+    )
+
+    assert set(out) == {d1, d2}
+    assert len(builder.calls) == 1
+    assert builder.calls[0]["kwargs"]["show_tqdm"] is True
+    assert builder.calls[0]["kwargs"]["calibration_max_workers"] == 3
+
+
+def test_barchart_stirf_bulk_get_data_forwards_process_executor(monkeypatch):
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    builder = _FakeBarchartBuilder()
+    d1 = dt.date(2026, 3, 3)
+    d2 = dt.date(2026, 3, 4)
+
+    monkeypatch.setattr(mdp, "_get_barchart_stirf_curve_builder", lambda: builder)
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+
+    out = mdp.bulk_get_data(
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [d1, d2],
+            "n_jobs": 4,
+            "show_tqdm": True,
+            "calibration_executor": "process",
+        }
+    )
+
+    assert set(out) == {d1, d2}
+    assert len(builder.calls) == 1
+    assert builder.calls[0]["kwargs"]["show_tqdm"] is True
+    assert builder.calls[0]["kwargs"]["calibration_max_workers"] == 4
+    assert builder.calls[0]["kwargs"]["calibration_executor"] == "process"
+
+
+def test_barchart_stirf_bulk_get_data_process_failure_raises(monkeypatch):
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    builder = _FakeBarchartBuilder()
+    d1 = dt.date(2026, 3, 3)
+    d2 = dt.date(2026, 3, 4)
+
+    def _boom(*args, **kwargs):
+        raise ValueError("synthetic process pool failure")
+
+    builder.build_curve = _boom
+
+    monkeypatch.setattr(mdp, "_get_barchart_stirf_curve_builder", lambda: builder)
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+
+    try:
+        mdp.bulk_get_data(
+            {
+                "curve_name": "USD-SOFR-1D",
+                "timestamps": [d1, d2],
+                "calibration_executor": "process",
+            }
+        )
+    except RuntimeError as exc:
+        assert "Process-pool calibration failed" in str(exc)
+    else:
+        raise AssertionError("Expected process-mode bulk_get_data to raise on builder failure")
+
+
+@pytest.mark.parametrize(
+    ("curve_name", "reference_curve_name"),
+    [
+        ("USD-SOFR-1D-STIR-CME", "USD-SOFR-1D"),
+        ("USD-OIS-STIR-LCH", "USD-OIS-STIR"),
+    ],
+)
+def test_gsquant_rl_alias_curves_use_reference_curve_for_fixings_and_conventions(monkeypatch, curve_name, reference_curve_name):
+    pytest.importorskip("gs_quant")
+    rateslib = pytest.importorskip("rateslib")
+    import Query.IRSwaps.backends.rateslib.RLIRSwapCurve as rl_curve_module
+
+    mdp = IRSwapsMDP(source="GSQUANT-RL")
+    fixings_curve_names = []
+
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "get_gsquant_rl_basic",
+        lambda **kwargs: ("curve-cache-id", "{}", "NYC"),
+    )
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: fixings_curve_names.append(kwargs["curve_name"]) or pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+    monkeypatch.setattr(rateslib, "from_json", lambda serialized: object())
+
+    add_tenor_call = {}
+
+    def _stub_add_tenor(date, tenor, modifier, calendar):
+        add_tenor_call["tenor"] = tenor
+        add_tenor_call["modifier"] = modifier
+        add_tenor_call["calendar"] = calendar
+        return date
+
+    monkeypatch.setattr(rl_curve_module.rl, "add_tenor", _stub_add_tenor)
+
+    curve = mdp.get_pricer({"curve_name": curve_name, "timestamp": dt.date(2026, 3, 3)})
+    curve.calendar_advance(dt.date(2026, 3, 3), "1b")
+
+    curve_def = RATESLIB_CURVE_DEFINITIONS[reference_curve_name]
+    assert fixings_curve_names == [reference_curve_name]
+    assert curve.id() == curve_name
+    assert curve.meta()["curve_name"] == curve_name
+    assert curve.meta()["requested_curve_name"] == curve_name
+    assert curve.meta()["reference_curve_name"] == reference_curve_name
+    assert add_tenor_call == {
+        "tenor": "1b",
+        "modifier": curve_def["BusinessConvention"],
+        "calendar": curve_def["Calendar"],
+    }

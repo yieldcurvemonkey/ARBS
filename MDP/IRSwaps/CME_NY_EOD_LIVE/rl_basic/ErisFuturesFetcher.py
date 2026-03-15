@@ -554,6 +554,23 @@ class ErisFuturesFetcher(DiskCacheMixin, BaseFetcher):
                     curve = _df_to_curve(df, tday, intraday_ts, curve_id_prefix=curve_id)
                     curves[tday] = curve
 
+                    try:
+                        from Caching.curve_store import CurveSnapshot, CurveStore
+
+                        snap = CurveSnapshot.from_eris_df(
+                            df,
+                            trading_date=tday,
+                            curve_name="USD-SOFR-1D",
+                            source_variant=(
+                                "ERIS_RL_BASIC_NOJUMPS"
+                                if no_jumps_just_interp
+                                else "ERIS_RL_BASIC"
+                            ),
+                        )
+                        CurveStore.default().write_day("USD-SOFR-1D", tday, [snap])
+                    except Exception:
+                        pass
+
                     if staged_payload:
                         d, wbt, fname, raw = staged_payload
                         self._stage_cache_write(staged, d, wbt, fname, raw)

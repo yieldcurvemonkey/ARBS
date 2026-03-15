@@ -146,6 +146,13 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 return v
         return None
 
+    @staticmethod
+    def _resolve_gsquant_reference_curve_name(curve_name: str) -> str:
+        from MDP.IRSwaps.GSQUANT.rl_basic.build import GSQUANT_CURVE_MAP
+
+        curve_cfg = GSQUANT_CURVE_MAP.get(curve_name, {}).get("rl_basic", {})
+        return str(curve_cfg.get("reference_key") or curve_name)
+
     def _resolve_barchart_stirf_curve_name(self, requested_curve_name: str, kwargs: Dict[str, Any], builder: Any) -> str:
         cfgs: Dict[str, Dict[str, Any]] = dict(getattr(builder, "_STIRF_CURVE_CONFIGS", {}))
         if requested_curve_name in cfgs:
@@ -916,19 +923,28 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
+            reference_curve_name = self._resolve_gsquant_reference_curve_name(curve_name)
+
             curve_id, rl_curve_serialized, pricing_location = self._rl_curve_cache.get_gsquant_rl_basic(
                 curve_id=curve_name, as_of=timestamp, force_refresh=kwargs.get("force_refresh", False)
             )
             rl_curve_handle = from_json(rl_curve_serialized)
 
-            fixings = _fetch_fixings(as_of_date=timestamp, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            fixings = _fetch_fixings(as_of_date=timestamp, curve_name=reference_curve_name, force_refresh=self.force_refresh_fixings).sort_index()
             fixings: pd.Series = fixings[fixings.index.date < timestamp] * 100
 
             return RLIRSwapCurve(
                 rl_curve_id=curve_name,
                 rl_curve_handle=rl_curve_handle,
                 fixings=fixings,
-                meta_data={"timestamp": timestamp, "id": curve_id, "pricing_location": pricing_location},
+                meta_data={
+                    "timestamp": timestamp,
+                    "id": curve_id,
+                    "pricing_location": pricing_location,
+                    "curve_name": curve_name,
+                    "requested_curve_name": curve_name,
+                    "reference_curve_name": reference_curve_name,
+                },
             )
 
         elif self.source.upper() in ["BARCHART_STIRF-RL", "BARCHART_STIRF_RL"]:
@@ -967,7 +983,15 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         curve_name: str = request.pop("curve_name", None)
         timestamps_in: Iterable[Union[datetime.date, datetime.datetime, Literal["live"]]] = request.pop("timestamps", None)
         ignore_cache = bool(request.pop("ignore_cache", False))
-        n_jobs = int(request.pop("n_jobs", 1))
+        n_jobs_raw = request.pop("n_jobs", None)
+        n_jobs = int(n_jobs_raw) if n_jobs_raw is not None else 1
+        n_jobs_requested = n_jobs_raw is not None
+        calibration_executor = str(request.pop("calibration_executor", "thread") or "thread").strip().lower()
+        if calibration_executor not in {"thread", "process"}:
+            raise ValueError(
+                f"Unsupported calibration_executor '{calibration_executor}'. "
+                "Expected one of ['process', 'thread']."
+            )
 
         if not curve_name or timestamps_in is None:
             raise ValueError("Request must contain 'curve_name' and 'timestamps'.")
@@ -1059,6 +1083,80 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             today = datetime.date.today()
             past_dates = [d for d in bdates if d < today]
             today_dates = [d for d in bdates if d == today]
+
+            if not ignore_cache and past_dates:
+                try:
+                    import pandas as _pd
+
+                    store = self._get_curve_store()
+                    day_dfs = []
+                    for d in past_dates:
+                        day_df = store.read_raw_day(curve_name, d)
+                        if not day_df.empty:
+                            day_dfs.append(day_df)
+
+                    if len(day_dfs) >= len(past_dates):
+                        parquet_df = _pd.concat(day_dfs, ignore_index=True)
+                        curves_by_ts = store.reconstruct_curves_batch(parquet_df, cfg=None)
+
+                        parquet_by_date = {}
+                        for ts_key, rl_curve in curves_by_ts.items():
+                            if hasattr(ts_key, "date"):
+                                td = ts_key.date() if callable(ts_key.date) else ts_key.date
+                            else:
+                                td = _to_date(ts_key)
+                            parquet_by_date[td] = rl_curve
+
+                        for ref_date in past_dates:
+                            rl_curve = parquet_by_date.get(ref_date)
+                            if rl_curve is None:
+                                continue
+
+                            fixings_series = _fetch_fixings(
+                                as_of_date=ref_date,
+                                curve_name=curve_name,
+                                force_refresh=self.force_refresh_fixings,
+                            ).sort_index()
+                            fixings_series = (
+                                fixings_series[fixings_series.index.date < ref_date] * 100.0
+                            )
+
+                            out[ref_date] = RLIRSwapCurve(
+                                rl_curve_id=curve_name,
+                                rl_curve_handle=rl_curve,
+                                fixings=fixings_series,
+                                meta_data={"timestamp": ref_date},
+                            )
+
+                        if len([d for d in past_dates if d in out]) >= len(past_dates):
+                            for ref_date in today_dates:
+                                _, rl_json_live, ts_live = self._rl_curve_cache.get_eris_eod_live_rl_basic(
+                                    curve_id=f"{self.source}-{curve_name}-live",
+                                    as_of="live",
+                                    force_refresh=True if ignore_cache else False,
+                                    fetcher_kwargs={"show_tqdm": True},
+                                )
+                                fixings_series = _fetch_fixings(
+                                    as_of_date=ref_date,
+                                    curve_name=curve_name,
+                                    force_refresh=self.force_refresh_fixings,
+                                ).sort_index()
+                                fixings_series = (
+                                    fixings_series[fixings_series.index.date < ref_date] * 100.0
+                                )
+                                out[ref_date] = RLIRSwapCurve(
+                                    rl_curve_id=curve_name,
+                                    rl_curve_handle=from_json(rl_json_live),
+                                    fixings=fixings_series,
+                                    meta_data={"timestamp": ts_live},
+                                )
+                            return out
+                except Exception as _tier0_exc:
+                    import logging as _logging
+
+                    _logging.getLogger(__name__).debug(
+                        "Eris CurveStore Tier 0 fast path failed: %s", _tier0_exc,
+                    )
 
             built_json: Dict[datetime.date, str] = {}
             if past_dates:
@@ -1270,11 +1368,16 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         elif self.source.upper() in ["BARCHART_STIRF-RL", "BARCHART_STIRF_RL"]:
             local_request = dict(request)
             local_request.setdefault("force_refresh", bool(ignore_cache))
+            if calibration_executor == "process" and "live" in timestamps:
+                raise ValueError("Process-pool calibration only supports bulk historical BARCHART STIRF runs, not live timestamps.")
             if "live" not in timestamps:
                 builder = self._get_barchart_stirf_curve_builder()
                 bulk_request = dict(local_request)
                 bulk_request["cache_full_intraday_fetch"] = True
                 bulk_request.setdefault("show_tqdm", False)
+                bulk_request["calibration_executor"] = calibration_executor
+                if n_jobs_requested:
+                    bulk_request.setdefault("calibration_max_workers", n_jobs)
                 resolved_curve_name = self._resolve_barchart_stirf_curve_name(
                     requested_curve_name=curve_name,
                     kwargs=bulk_request,
@@ -1408,7 +1511,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                         for original_timestamp in original_timestamps:
                             out[original_timestamp] = curve
                     return out
-                except Exception:
+                except Exception as exc:
+                    if calibration_executor == "process":
+                        raise RuntimeError("Process-pool calibration failed for BARCHART STIRF bulk_get_data.") from exc
                     pass
 
             for t in tqdm.tqdm(timestamps, desc=f"Building curves for {self.source}"):

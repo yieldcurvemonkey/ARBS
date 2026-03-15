@@ -11,10 +11,17 @@ def ql_cal_date_range(
     start: datetime.datetime,
     end: datetime.datetime,
     freq: Optional[str] = "1b",
-    open_time: Optional[datetime.time] = datetime.time(7, 00),
-    close_time: Optional[datetime.time] = datetime.time(15, 00),
+    open_time: Optional[datetime.time] = None,
+    close_time: Optional[datetime.time] = None,
+    cme_session: Optional[bool] = False,
     to_date=False,
 ):
+    if cme_session:
+        assert open_time is None and close_time is None, "cme_session cannot be used with open_time or close_time"
+        assert (
+            "cst" in str(start.tzinfo).lower() or "central" in str(start.tzinfo).lower() or "chicago" in str(start.tzinfo).lower()
+        ), "timestamp must be in CST timezone for CME hours"
+
     if type(start) == datetime.datetime and start.tzinfo is not None:
         assert str(start.tzinfo) == str(end.tzinfo), "must be from same tz!"
         # assert start.time() == end.time(), "must be same closes!"
@@ -27,8 +34,13 @@ def ql_cal_date_range(
     if "min" in freq or "hr" in freq:
         time_filtered_range = []
         for ts in date_filtered_range:
-            if ts.time() >= open_time and ts.time() <= close_time:
-                time_filtered_range.append(ts)
+            if open_time is not None and close_time is not None:
+                if ts.time() >= open_time and ts.time() <= close_time:
+                    time_filtered_range.append(ts)
+            if cme_session:
+                if ts.time() >= datetime.time(17, 0) or ts.time() <= datetime.time(16, 0):
+                    time_filtered_range.append(ts)
+
         return time_filtered_range
 
     if to_date:

@@ -113,6 +113,8 @@ class FixingsFetcher(BaseFetcher):
         # hard code alias
         if "USD-OIS" in curve:
             curve = "USD-OIS"
+        if "SOFR" in curve:
+            curve = "USD-SOFR-1D"
 
         if use_fred:
             curve = f"{curve}_FRED"
