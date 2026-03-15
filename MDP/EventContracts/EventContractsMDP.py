@@ -1,4 +1,5 @@
 from __future__ import annotations
+import datetime
 from typing import Any, Dict, Optional
 import pandas as pd
 from MDP.MarketDataProvider import MarketDataProvider
@@ -53,11 +54,22 @@ class EventContractsMDP(MarketDataProvider):
         else:
             return self._fetch_polymarket(request)
 
+    @staticmethod
+    def _resolve_datetime(request: Dict[str, Any], key: str, ts_key: str) -> Optional[datetime.datetime]:
+        """Resolve a datetime from either a datetime value or a unix timestamp."""
+        val = request.get(key)
+        if val is not None:
+            return val
+        ts = request.get(ts_key)
+        if ts is not None:
+            return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+        return None
+
     def _fetch_kalshi(self, request: Dict[str, Any]) -> EventContractPricer:
         from MDP.EventContracts.kalshi_fetcher import fetch_historical_candlesticks, fetch_live_candlesticks
         ticker = request["ticker"]
-        start = request.get("start")
-        end = request.get("end")
+        start = self._resolve_datetime(request, "start", "start_ts")
+        end = self._resolve_datetime(request, "end", "end_ts")
         period = request.get("period_interval", 1440)
         api_key = request.get("api_key_id")
         private_key = request.get("private_key_pem")
@@ -70,9 +82,11 @@ class EventContractsMDP(MarketDataProvider):
 
     def _fetch_polymarket(self, request: Dict[str, Any]) -> EventContractPricer:
         from MDP.EventContracts.polymarket_fetcher import fetch_price_history
-        market_id = request["market_id"]
-        start = request.get("start")
-        end = request.get("end")
+        market_id = request.get("market_id") or request.get("token_id")
+        if market_id is None:
+            raise KeyError("Polymarket request must include 'market_id' or 'token_id'")
+        start = self._resolve_datetime(request, "start", "start_ts")
+        end = self._resolve_datetime(request, "end", "end_ts")
         interval = request.get("interval", "1d")
         fidelity = request.get("fidelity", 1)
         data = fetch_price_history(market_id=market_id, start=start, end=end, interval=interval, fidelity=fidelity)
