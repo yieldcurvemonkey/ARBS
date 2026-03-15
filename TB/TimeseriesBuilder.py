@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, DefaultDict, Dict, Iterable, List, Mappin
 import pandas as pd
 from tqdm.auto import tqdm as _tqdm
 
+from MDP.IRSwapSpreads.IRSwapSpreadsMDP import IRSwapSpreadsMDP
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base.BaseQuery import BaseQuery
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
@@ -177,6 +178,61 @@ class TimeseriesBuilder:
             f"Available: {available}"
         )
 
+    @staticmethod
+    def _get_irswap_spreads_mdp(merged_mdps: Mapping[str, MarketDataProvider]) -> Optional[MarketDataProvider]:
+        for key in ("IRSWAPSPREADS", "IRSWAPSPREAD", "SWAPSPREADS"):
+            mdp = merged_mdps.get(key)
+            if mdp is not None:
+                return mdp
+        return None
+
+    def _price_irswap_spread_queries_with_mdp(
+        self,
+        *,
+        mdp: MarketDataProvider,
+        queries: List[IRSwapQuery],
+        start: DateLike,
+        end: DateLike,
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+        desc: str,
+    ) -> pd.DataFrame:
+        if not queries:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+        generic_tb = self._get_generic_router("IRSWAPSPREAD", mdp)
+        reference_points = generic_tb._build_reference_points(
+            start=start,
+            end=end,
+            freq=freq,
+            timestamps=timestamps,
+        )
+
+        rows = []
+        for ref_point in _tqdm(reference_points, desc=desc):
+            for q in queries:
+                try:
+                    pricer = mdp.get_pricer(IRSwapSpreadsMDP.build_request_from_query(q, ref_point))
+                    default = (
+                        f"{getattr(q, 'curve', 'IRS')}."
+                        f"{getattr(q, 'tenor', '')}."
+                        f"{getattr(getattr(q, 'value', None), 'name', 'SPREAD')}"
+                    )
+                    rows.append((ref_point, _safe_col_name(q, default), float(pricer.value_bps())))
+                except Exception:
+                    continue
+
+        if not rows:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+        df = (
+            pd.DataFrame(rows, columns=[self._date_col, "Column", "Value"])
+            .pivot(index=self._date_col, columns="Column", values="Value")
+            .sort_index()
+        )
+        df.index.name = self._date_col
+        return df
+
     def _append_product_frame(
         self,
         per_product_frames: List[Tuple[str, pd.DataFrame]],
@@ -285,130 +341,157 @@ class TimeseriesBuilder:
 
         irs_router = merged_routers.get("IRS")
         frb_router = merged_routers.get("FRB")
+        spread_mdp = self._get_irswap_spreads_mdp(merged_mdps)
 
         if irswap_spread_queries:
-            if irs_router is None or frb_router is None:
-                raise KeyError("IRS/FRB routers must be registered for MMSS/SPREADOVER evaluation.")
+            if spread_mdp is not None:
+                spread_df = self._price_irswap_spread_queries_with_mdp(
+                    mdp=spread_mdp,
+                    queries=irswap_spread_queries,
+                    start=start,
+                    end=end,
+                    freq=freq,
+                    timestamps=timestamps,
+                    desc="PRICING SWAP SPREADS...",
+                )
+                if not spread_df.empty:
+                    per_product_frames.append(("SWAPSPREADS", pd.concat({"SWAPSPREADS": spread_df}, axis=1)))
+            else:
+                if irs_router is None or frb_router is None:
+                    raise KeyError("IRS/FRB routers must be registered for MMSS/SPREADOVER evaluation.")
 
-            irss_frb_qs = []
-            irrs_irs_qs = []
-            pair_specs = []
+                irss_frb_qs = []
+                irrs_irs_qs = []
+                pair_specs = []
 
-            _CT_RE = re.compile(r"(?i)\bct\s*(\d+)\b")
-            _Y_RE = re.compile(r"(?i)\b(\d+)\s*y\b")
+                _CT_RE = re.compile(r"(?i)\bct\s*(\d+)\b")
+                _Y_RE = re.compile(r"(?i)\b(\d+)\s*y\b")
 
-            for q in irswap_spread_queries:
-                if q.value == IRSwapValue.MMSS:
-                    q_frb = FixedRateBondQuery(cusip=q.tenor, value=FixedRateBondValue.YTM)
-                    q_irs = IRSwapQuery(curve=q.curve, tenor=q.tenor, value=IRSwapValue.RATE)
-                    op = "swap_minus_cash"
-                elif q.value == IRSwapValue.SPREADOVER:
-                    t = str(q.tenor)
-                    if _CT_RE.search(t):
-                        q_frb = FixedRateBondQuery(cusip=t, value=FixedRateBondValue.YTM)
-                        q_irs = IRSwapQuery(curve=q.curve, tenor=_ct_alias_to_y(t), value=IRSwapValue.RATE)
-                    elif _Y_RE.search(t):
-                        q_frb = FixedRateBondQuery(cusip=_y_alias_to_ct(t), value=FixedRateBondValue.YTM)
-                        q_irs = IRSwapQuery(curve=q.curve, tenor=t, value=IRSwapValue.RATE)
+                for q in irswap_spread_queries:
+                    if q.value == IRSwapValue.MMSS:
+                        q_frb = FixedRateBondQuery(cusip=q.tenor, value=FixedRateBondValue.YTM)
+                        q_irs = IRSwapQuery(curve=q.curve, tenor=q.tenor, value=IRSwapValue.RATE)
+                        op = "swap_minus_cash"
+                    elif q.value == IRSwapValue.SPREADOVER:
+                        t = str(q.tenor)
+                        if _CT_RE.search(t):
+                            q_frb = FixedRateBondQuery(cusip=t, value=FixedRateBondValue.YTM)
+                            q_irs = IRSwapQuery(curve=q.curve, tenor=_ct_alias_to_y(t), value=IRSwapValue.RATE)
+                        elif _Y_RE.search(t):
+                            q_frb = FixedRateBondQuery(cusip=_y_alias_to_ct(t), value=FixedRateBondValue.YTM)
+                            q_irs = IRSwapQuery(curve=q.curve, tenor=t, value=IRSwapValue.RATE)
+                        else:
+                            raise NotImplementedError(f"Unrecognized SPREADOVER tenor: {t!r}")
+                        op = "swap_minus_cash"
                     else:
-                        raise NotImplementedError(f"Unrecognized SPREADOVER tenor: {t!r}")
-                    op = "swap_minus_cash"
-                else:
-                    raise NotImplementedError(f"Unhandled spread type: {q.value}")
+                        raise NotImplementedError(f"Unhandled spread type: {q.value}")
 
-                irss_frb_qs.append(q_frb)
-                irrs_irs_qs.append(q_irs)
+                    irss_frb_qs.append(q_frb)
+                    irrs_irs_qs.append(q_irs)
 
-                irs_col = _safe_col_name(
-                    q_irs,
-                    f"{getattr(q_irs,'curve','IRS')}.{getattr(q_irs,'tenor','')}.{IRSwapValue.RATE.name}",
+                    irs_col = _safe_col_name(
+                        q_irs,
+                        f"{getattr(q_irs,'curve','IRS')}.{getattr(q_irs,'tenor','')}.{IRSwapValue.RATE.name}",
+                    )
+                    frb_col = _safe_col_name(
+                        q_frb,
+                        f"{getattr(q_frb,'cusip','CUSIP')}.{FixedRateBondValue.YTM.name}",
+                    )
+                    spread_name = _safe_col_name(
+                        q,
+                        f"{getattr(q,'curve','IRS')}.{getattr(q,'tenor','')}.{getattr(q,'value',IRSwapValue.MMSS).name}",
+                    )
+                    pair_specs.append(
+                        {
+                            "spread_name": spread_name,
+                            "irs_col": irs_col,
+                            "frb_col": frb_col,
+                            "op": op,
+                        }
+                    )
+
+                irs_df = irs_router.get_timeseries(  # type: ignore[attr-defined]
+                    start,
+                    end,
+                    irrs_irs_qs,
+                    n_jobs=n_jobs,
+                    ignore_cache=ignore_cache,
+                    freq=freq,
+                    timestamps=timestamps,
                 )
-                frb_col = _safe_col_name(
-                    q_frb,
-                    f"{getattr(q_frb,'cusip','CUSIP')}.{FixedRateBondValue.YTM.name}",
-                )
-                spread_name = _safe_col_name(
-                    q,
-                    f"{getattr(q,'curve','IRS')}.{getattr(q,'tenor','')}.{getattr(q,'value',IRSwapValue.MMSS).name}",
-                )
-                pair_specs.append(
-                    {
-                        "spread_name": spread_name,
-                        "irs_col": irs_col,
-                        "frb_col": frb_col,
-                        "op": op,
-                    }
+                cash_df = frb_router.get_timeseries(  # type: ignore[attr-defined]
+                    start,
+                    end,
+                    irss_frb_qs,
+                    n_jobs=n_jobs,
+                    ignore_cache=ignore_cache,
+                    freq=freq,
+                    timestamps=timestamps,
                 )
 
-            irs_df = irs_router.get_timeseries(  # type: ignore[attr-defined]
-                start,
-                end,
-                irrs_irs_qs,
-                n_jobs=n_jobs,
-                ignore_cache=ignore_cache,
-                freq=freq,
-                timestamps=timestamps,
-            )
-            cash_df = frb_router.get_timeseries(  # type: ignore[attr-defined]
-                start,
-                end,
-                irss_frb_qs,
-                n_jobs=n_jobs,
-                ignore_cache=ignore_cache,
-                freq=freq,
-                timestamps=timestamps,
-            )
-
-            spread_cols: Dict[str, pd.Series] = {}
-            idx = irs_df.index.union(cash_df.index)
-            for spec in pair_specs:
-                a = irs_df[spec["irs_col"]].reindex(idx) if spec["irs_col"] in irs_df.columns else pd.Series(index=idx, dtype="float64")
-                b = cash_df[spec["frb_col"]].reindex(idx) if spec["frb_col"] in cash_df.columns else pd.Series(index=idx, dtype="float64")
-                if spec["op"] == "swap_minus_cash":
-                    if "outright" in str(spec["irs_col"]).lower():
-                        spread = (a - b) * 100
+                spread_cols: Dict[str, pd.Series] = {}
+                idx = irs_df.index.union(cash_df.index)
+                for spec in pair_specs:
+                    a = irs_df[spec["irs_col"]].reindex(idx) if spec["irs_col"] in irs_df.columns else pd.Series(index=idx, dtype="float64")
+                    b = cash_df[spec["frb_col"]].reindex(idx) if spec["frb_col"] in cash_df.columns else pd.Series(index=idx, dtype="float64")
+                    if spec["op"] == "swap_minus_cash":
+                        if "outright" in str(spec["irs_col"]).lower():
+                            spread = (a - b) * 100
+                        else:
+                            spread = a - b
                     else:
-                        spread = a - b
-                else:
-                    raise ValueError(f"Unknown op: {spec['op']}")
-                spread_cols[spec["spread_name"]] = spread
+                        raise ValueError(f"Unknown op: {spec['op']}")
+                    spread_cols[spec["spread_name"]] = spread
 
-            if spread_cols:
-                spread_df = pd.DataFrame(spread_cols).sort_index()
-                spread_df.index.name = self._date_col
-                per_product_frames.append(("SWAPSPREADS", pd.concat({"SWAPSPREADS": spread_df}, axis=1)))
+                if spread_cols:
+                    spread_df = pd.DataFrame(spread_cols).sort_index()
+                    spread_df.index.name = self._date_col
+                    per_product_frames.append(("SWAPSPREADS", pd.concat({"SWAPSPREADS": spread_df}, axis=1)))
 
         if irswap_asw_queries:
-            if irs_router is None or frb_router is None:
-                raise KeyError("IRS/FRB routers must be registered for ASW evaluation.")
+            if spread_mdp is not None:
+                df = self._price_irswap_spread_queries_with_mdp(
+                    mdp=spread_mdp,
+                    queries=irswap_asw_queries,
+                    start=start,
+                    end=end,
+                    freq=freq,
+                    timestamps=timestamps,
+                    desc="PRICING ASSET SWAPS...",
+                )
+                if not df.empty:
+                    self._append_product_frame(per_product_frames, product="IRS__ASW", df=df)
+            else:
+                if irs_router is None or frb_router is None:
+                    raise KeyError("IRS/FRB routers must be registered for ASW evaluation.")
 
-            irs_mdp = irs_router.mdp  # type: ignore[attr-defined]
-            frb_mdp = frb_router.mdp  # type: ignore[attr-defined]
+                irs_mdp = irs_router.mdp  # type: ignore[attr-defined]
+                frb_mdp = frb_router.mdp  # type: ignore[attr-defined]
 
-            ref_points = pd.bdate_range(start, end).date.tolist()
-            rows = []
-            for d in _tqdm(ref_points, desc="PRICING ASSET SWAPS..."):
-                for q in irswap_asw_queries:
-                    try:
-                        curve = irs_mdp.get_pricer({"curve_name": q.curve, "timestamp": d})
-                        ql_curve = curve
+                ref_points = pd.bdate_range(start, end).date.tolist()
+                rows = []
+                for d in _tqdm(ref_points, desc="PRICING ASSET SWAPS..."):
+                    for q in irswap_asw_queries:
+                        try:
+                            curve = irs_mdp.get_pricer({"curve_name": q.curve, "timestamp": d})
+                            ql_curve = curve
 
-                        alias = str(q.tenor)
-                        frb_pricers = frb_mdp.get_pricer({"cusips": [alias], "timestamp": d})
-                        if not frb_pricers:
+                            alias = str(q.tenor)
+                            frb_pricers = frb_mdp.get_pricer({"cusips": [alias], "timestamp": d})
+                            if not frb_pricers:
+                                continue
+                            frb_pricer = next(iter(frb_pricers.values()))
+
+                            _ = getattr(ql_curve, "index")() if hasattr(ql_curve, "index") else None
+                            asw_bps = _fair_asw_spread_bps(ql_curve, frb_pricer, par_par_asw=q.value == IRSwapValue.PAR_PAR_ASW)
+                            col = _safe_col_name(q, default=f"ASW[{q.curve}:{alias}]")
+                            rows.append((d, col, float(asw_bps)))
+                        except Exception:
                             continue
-                        frb_pricer = next(iter(frb_pricers.values()))
 
-                        _ = getattr(ql_curve, "index")() if hasattr(ql_curve, "index") else None
-                        asw_bps = _fair_asw_spread_bps(ql_curve, frb_pricer, par_par_asw=q.value == IRSwapValue.PAR_PAR_ASW)
-                        col = _safe_col_name(q, default=f"ASW[{q.curve}:{alias}]")
-                        rows.append((d, col, float(asw_bps)))
-                    except Exception:
-                        continue
-
-            if rows:
-                df = pd.DataFrame(rows, columns=[self._date_col, "Column", "Value"]).pivot(index=self._date_col, columns="Column", values="Value").sort_index()
-                per_product_frames.append(("IRS__ASW", df))
+                if rows:
+                    df = pd.DataFrame(rows, columns=[self._date_col, "Column", "Value"]).pivot(index=self._date_col, columns="Column", values="Value").sort_index()
+                    self._append_product_frame(per_product_frames, product="IRS__ASW", df=df)
 
         if not per_product_frames:
             return pd.DataFrame().set_index(pd.Index([], name=self._date_col))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any, Dict, Optional
 import pandas as pd
+import datetime
 from MDP.MarketDataProvider import MarketDataProvider
 
 
@@ -28,7 +29,13 @@ class IRClearingHouseBasisSwapsMDP(MarketDataProvider):
         start: date, end: date
     """
 
-    def __init__(self, coverage_path: str, gs_client_id: str, gs_secret_key: str, **kwargs: Any):
+    def __init__(
+        self,
+        coverage_path: str = r"C:\Users\chris\clee\ARBS\MDP\IRSwaps\GSQUANT\COVERAGE\IR_SWAP_RATES_V1_STANDARD_COVERAGE.xlsx",
+        gs_client_id: Optional[str] = None,
+        gs_secret_key: Optional[str] = None,
+        **kwargs: Any,
+    ):
         super().__init__(source="GSQUANT_CH_BASIS", **kwargs)
         self._coverage_path = coverage_path
         self._gs_client_id = gs_client_id
@@ -42,19 +49,31 @@ class IRClearingHouseBasisSwapsMDP(MarketDataProvider):
 
     def get_pricer(self, request: Any) -> ClearingHouseBasisPricer:
         from MDP.IRClearingHouseBasisSwaps.gs_quant_fetcher import find_asset_pair, fetch_clearing_house_basis
+
         coverage = self._load_coverage()
-        tenor = request.get("tenor", "5y")
+        tenor = request["tenor"]
         ccy = request.get("ccy", "USD")
         index = request.get("index", "SOFR")
         ch_a = request.get("clearing_house_a", "LCH")
         ch_b = request.get("clearing_house_b", "CME")
         start = request.get("start")
         end = request.get("end")
+        if start is None:
+            start = request.get("start_date")
+        if end is None:
+            end = request.get("end_date")
+        if start is None or end is None:
+            raise ValueError("Request must include start/end or start_date/end_date.")
+
         pair = find_asset_pair(coverage, ccy=ccy, index=index, tenor=tenor, clearing_house_a=ch_a, clearing_house_b=ch_b)
+
         basis_data = fetch_clearing_house_basis(
-            asset_id_a=pair["asset_id_a"], asset_id_b=pair["asset_id_b"],
-            start=start, end=end,
-            gs_client_id=self._gs_client_id, gs_secret_key=self._gs_secret_key,
+            asset_id_a=pair["asset_id_a"],
+            asset_id_b=pair["asset_id_b"],
+            start=start,
+            end=end,
+            gs_client_id=self._gs_client_id,
+            gs_secret_key=self._gs_secret_key,
         )
         return ClearingHouseBasisPricer(
             basis_data=basis_data,
