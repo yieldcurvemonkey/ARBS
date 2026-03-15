@@ -74,3 +74,13 @@ def fetch_live_candlesticks(series_ticker: str, ticker: str, start: datetime.dat
     resp = requests.get(url, headers=headers, timeout=30)
     resp.raise_for_status()
     return parse_candlestick_response(resp.json())
+
+
+def fetch_event_candlesticks(series_ticker: str, event_ticker: str, start: datetime.datetime, end: datetime.datetime, period_interval: int = 1440, api_key_id: str = "", private_key_pem: str = "") -> pd.DataFrame:
+    path = f"/trade-api/v2/series/{series_ticker}/events/{event_ticker}/candlesticks"
+    params = urlencode({"start_ts": int(start.timestamp()), "end_ts": int(end.timestamp()), "period_interval": period_interval})
+    url = f"{KALSHI_BASE_URL}/series/{series_ticker}/events/{event_ticker}/candlesticks?{params}"
+    headers = build_kalshi_auth_headers("GET", path, api_key_id, private_key_pem)
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    return parse_candlestick_response(resp.json())
