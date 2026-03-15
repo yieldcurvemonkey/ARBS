@@ -31,42 +31,44 @@ class SpreadStructureFunctionMap(BaseStructureFunctionMap[SpreadStructure, Sprea
             SpreadStructure.FLY: self._build_fly,
         }
 
-    def _filter_build_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract only the kwargs relevant for build_irswap (bpv, notional)."""
-        out = {}
-        if "bpv" in kwargs:
-            out["bpv"] = kwargs["bpv"]
-        elif "notional" in kwargs:
-            out["notional"] = kwargs["notional"]
-        return out
+    def _leg_build_kwargs(self, *, prefix: str, tenor: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        build_kw: Dict[str, Any] = {"tenor": tenor}
+        for field in ("effective_date", "maturity_date", "fixed_rate", "notional", "bpv"):
+            prefixed = kwargs.get(f"{prefix}_{field}")
+            shared = kwargs.get(field)
+            value = prefixed if prefixed is not None else shared
+            if value is not None:
+                build_kw[field] = value
+        return build_kw
 
-    def _build_leg_pair(self, tenor: str, build_kwargs: Dict[str, Any]) -> SpreadLegPair:
-        build_kw = {"tenor": tenor, **build_kwargs}
+    def _build_leg_pair(self, prefix: str, tenor: str, kwargs: Dict[str, Any]) -> SpreadLegPair:
+        build_kw = self._leg_build_kwargs(prefix=prefix, tenor=tenor, kwargs=kwargs)
         inst_a = self._pricer_a.build_irswap(**build_kw)
         inst_b = self._pricer_b.build_irswap(**build_kw)
         return SpreadLegPair(inst_a=inst_a, inst_b=inst_b, tenor=tenor)
 
     def _build_outright(self, **kwargs) -> Tuple[List[SpreadLegPair], List[float]]:
         tenor = kwargs.get("tenor", "5Y")
-        bkw = self._filter_build_kwargs(kwargs)
-        pair = self._build_leg_pair(tenor, bkw)
+        pair = self._build_leg_pair("", tenor, kwargs)
         return [pair], [1.0]
 
     def _build_curve(self, **kwargs) -> Tuple[List[SpreadLegPair], List[float]]:
         ft = kwargs["front_tenor"]
         bt = kwargs["back_tenor"]
-        bkw = self._filter_build_kwargs(kwargs)
-        front_pair = self._build_leg_pair(ft, bkw)
-        back_pair = self._build_leg_pair(bt, bkw)
+        front_pair = self._build_leg_pair("front", ft, kwargs)
+        back_pair = self._build_leg_pair("back", bt, kwargs)
         return [front_pair, back_pair], [-1.0, 1.0]
 
     def _build_fly(self, **kwargs) -> Tuple[List[SpreadLegPair], List[float]]:
         ft = kwargs["front_tenor"]
         belly = kwargs["belly_tenor"]
         bt = kwargs["back_tenor"]
-        bkw = self._filter_build_kwargs(kwargs)
         return (
-            [self._build_leg_pair(ft, bkw), self._build_leg_pair(belly, bkw), self._build_leg_pair(bt, bkw)],
+            [
+                self._build_leg_pair("front", ft, kwargs),
+                self._build_leg_pair("belly", belly, kwargs),
+                self._build_leg_pair("back", bt, kwargs),
+            ],
             [-0.5, 1.0, -0.5],
         )
 

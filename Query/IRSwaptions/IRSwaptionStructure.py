@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import replace
 from enum import Enum, auto
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import QuantLib as ql
 from scipy.optimize import brentq, newton
 
 from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMarketContext
@@ -17,7 +19,7 @@ from Query.IRSwaptions.pricer import (
     leg_tte_years,
     leg_vega_01,
 )
-from Query.IRSwaptions.utils import parse_midcurve_tail, parse_side, resolve_strike_spec, to_date
+from Query.IRSwaptions.utils import normalize_premium_type, parse_midcurve_tail, parse_side, resolve_strike_spec, to_date
 
 
 class IRSwaptionStructure(Enum):
@@ -63,7 +65,8 @@ class IRSwaptionStructureFunctionMap(BaseStructureFunctionMap[IRSwaptionStructur
         def wrap(builder: Callable[..., Tuple[List[IRSwaptionPricable], List[float]]]) -> Callable[..., Tuple[List[IRSwaptionPricable], List[float]]]:
             def _wrapped(**kwargs: Any) -> Tuple[List[IRSwaptionPricable], List[float]]:
                 package, risk_weights = builder(**kwargs)
-                return self._apply_target_vega_01(package, risk_weights, kwargs)
+                package, risk_weights = self._apply_target_vega_01(package, risk_weights, kwargs)
+                return self._apply_premium_overrides(package, kwargs), risk_weights
 
             return _wrapped
 
@@ -119,6 +122,95 @@ class IRSwaptionStructureFunctionMap(BaseStructureFunctionMap[IRSwaptionStructur
         scale = target_vega_01 / abs(current)
         scaled = [leg.with_notional(abs(float(leg.notional)) * scale) for leg in package]
         return scaled, risk_weights
+
+    @staticmethod
+    def _py_to_ql_date(value: dt.date) -> ql.Date:
+        return ql.Date(value.day, value.month, value.year)
+
+    @classmethod
+    def _premium_inputs(
+        cls,
+        kwargs: Dict[str, Any],
+        n_legs: int,
+    ) -> tuple[list[Optional[float]], list[Optional[str]]]:
+        premiums = kwargs.get("premiums")
+        if premiums is not None:
+            if not isinstance(premiums, (list, tuple)) or len(premiums) != n_legs:
+                raise ValueError(f"premiums must contain exactly {n_legs} entries for this swaption structure.")
+            raw_values = [None if value is None else float(value) for value in premiums]
+        else:
+            premium = kwargs.get("premium")
+            if premium is None:
+                raw_values = [None] * n_legs
+            else:
+                if n_legs != 1:
+                    raise ValueError("Scalar premium/upfront override is only valid for outright swaption queries.")
+                raw_values = [float(premium)]
+
+        if kwargs.get("premium_type") is not None and kwargs.get("premium_types") is not None:
+            raise ValueError("Specify only one of premium_type or premium_types for swaption premium overrides.")
+
+        premium_types = kwargs.get("premium_types")
+        if premium_types is not None:
+            if not isinstance(premium_types, (list, tuple)) or len(premium_types) != n_legs:
+                raise ValueError(f"premium_types must contain exactly {n_legs} entries for this swaption structure.")
+            return raw_values, [
+                None if value is None else normalize_premium_type(premium_type)
+                for value, premium_type in zip(raw_values, premium_types)
+            ]
+
+        premium_type = kwargs.get("premium_type")
+        return raw_values, [
+            None if value is None else normalize_premium_type(premium_type, default="spot_cash")
+            for value in raw_values
+        ]
+
+    @classmethod
+    def _premium_override_cash_value(
+        cls,
+        *,
+        context: IRSwaptionMarketContext,
+        leg: IRSwaptionPricable,
+        premium: float,
+        premium_type: str,
+    ) -> float:
+        amount = abs(float(premium))
+        if premium_type == "spot_cash":
+            return amount
+
+        notional = abs(float(leg.notional))
+        if premium_type == "spot_bps":
+            return amount / 10_000.0 * notional
+        if premium_type == "fwd_bps":
+            discount = float(context.curve_handle.discount(cls._py_to_ql_date(leg.exercise_date)))
+            return amount / 10_000.0 * notional * discount
+        raise ValueError(f"Unsupported premium_type '{premium_type}'.")
+
+    @classmethod
+    def _apply_premium_overrides(
+        cls,
+        package: list[IRSwaptionPricable],
+        kwargs: Dict[str, Any],
+    ) -> list[IRSwaptionPricable]:
+        context = kwargs["context"]
+        raw_overrides, premium_types = cls._premium_inputs(kwargs, len(package))
+        overrides = [
+            None
+            if premium is None or premium_type is None
+            else cls._premium_override_cash_value(
+                context=context,
+                leg=leg,
+                premium=float(premium),
+                premium_type=str(premium_type),
+            )
+            for leg, premium, premium_type in zip(package, raw_overrides, premium_types)
+        ]
+        if not any(value is not None for value in overrides):
+            return package
+        return [
+            replace(leg, premium_override=(None if premium is None else float(premium)))
+            for leg, premium in zip(package, overrides)
+        ]
 
     def _resolve_dates(
         self,

@@ -7,12 +7,13 @@ from enum import Enum, auto
 from typing import Any, Callable, Dict, Tuple
 
 from Query.Base.BaseValue import BaseValueFunctionMap
+from Query.Base.bachelier import bachelier_greeks_fd, implied_normal_vol
 from Query.STIRFutureOptions._STIRFutureOptionGenericPricable import _STIRFutureOptionGenericPricable
 from Query.STIRFutureOptions._STIRFutureOptionGenericPricer import _STIRFutureOptionGenericPricer
 from Query.STIRFutureOptions._risk import (
-    dollar_dv01,
-    dollar_gamma_01,
-    dollar_vega_01,
+    SOFR_OPTION_BP_SIZE,
+    SOFR_OPTION_BP_VALUE,
+    SOFR_OPTION_BP_SQUARED_VALUE,
     option_quantity,
     resolve_pricer_for_leg,
 )
@@ -201,35 +202,88 @@ class STIRFutureOptionValueFunctionMap(BaseValueFunctionMap[STIRFutureOptionValu
             return float("nan")
         return min(sizes)
 
+    @staticmethod
+    def _premium_override(leg: _STIRFutureOptionGenericPricable) -> float | None:
+        if not hasattr(leg, "premium_override"):
+            return None
+        override = leg.premium_override
+        value = override() if callable(override) else override
+        if value is None:
+            return None
+        return abs(float(value))
+
+    @classmethod
+    def _effective_metrics(
+        cls,
+        pr: _STIRFutureOptionGenericPricer,
+        leg: _STIRFutureOptionGenericPricable,
+    ) -> Dict[str, float]:
+        premium_override = cls._premium_override(leg)
+        if premium_override is None:
+            return {
+                "price": float(pr.price()),
+                "delta": float(pr.delta()),
+                "gamma": float(pr.gamma()),
+                "vega": float(pr.vega()),
+                "theta": float(pr.theta()),
+                "iv_normal_bps": float(pr.iv_normal_bps()),
+            }
+
+        tte = max((leg.expiry_date() - pr.quote_timestamp().date()).days / 365.0, 1e-12)
+        iv = implied_normal_vol(
+            right=leg.right(),
+            strike=float(leg.strike()),
+            forward=float(pr.forward()),
+            tte=float(tte),
+            price=float(premium_override),
+            discount=float(pr.discount()),
+        )
+        delta, gamma, vega, theta = bachelier_greeks_fd(
+            right=leg.right(),
+            strike=float(leg.strike()),
+            forward=float(pr.forward()),
+            vol_normal=float(iv),
+            tte=float(tte),
+            discount=float(pr.discount()),
+        )
+        return {
+            "price": float(premium_override),
+            "delta": float(delta),
+            "gamma": float(gamma),
+            "vega": float(vega),
+            "theta": float(theta),
+            "iv_normal_bps": float(iv) / SOFR_OPTION_BP_SIZE if math.isfinite(iv) else float("nan"),
+        }
+
     def _price(self, **kwargs: Any) -> float:
-        return sum(rw * pr.price() for rw, pr, _, _ in self._iter_components(**kwargs))
+        return sum(rw * self._effective_metrics(pr, leg)["price"] for rw, pr, leg, _ in self._iter_components(**kwargs))
 
     def _npv(self, **kwargs: Any) -> float:
-        return sum(rw * pr.npv(pk) for rw, pr, pk, _ in self._iter_components(**kwargs))
+        return sum(rw * qty * self._effective_metrics(pr, pk)["price"] for rw, pr, pk, qty in self._iter_components(**kwargs))
 
     def _dv01(self, **kwargs: Any) -> float:
-        return sum(rw * qty * dollar_dv01(pr) for rw, pr, _, qty in self._iter_components(**kwargs))
+        return sum(rw * qty * self._effective_metrics(pr, leg)["delta"] * SOFR_OPTION_BP_VALUE for rw, pr, leg, qty in self._iter_components(**kwargs))
 
     def _delta(self, **kwargs: Any) -> float:
-        return sum(rw * qty * pr.delta() for rw, pr, _, qty in self._iter_components(**kwargs))
+        return sum(rw * qty * self._effective_metrics(pr, leg)["delta"] for rw, pr, leg, qty in self._iter_components(**kwargs))
 
     def _gamma(self, **kwargs: Any) -> float:
-        return sum(rw * qty * pr.gamma() for rw, pr, _, qty in self._iter_components(**kwargs))
+        return sum(rw * qty * self._effective_metrics(pr, leg)["gamma"] for rw, pr, leg, qty in self._iter_components(**kwargs))
 
     def _gamma_01(self, **kwargs: Any) -> float:
-        return sum(rw * qty * dollar_gamma_01(pr) for rw, pr, _, qty in self._iter_components(**kwargs))
+        return sum(rw * qty * self._effective_metrics(pr, leg)["gamma"] * SOFR_OPTION_BP_SQUARED_VALUE for rw, pr, leg, qty in self._iter_components(**kwargs))
 
     def _vega(self, **kwargs: Any) -> float:
-        return sum(rw * qty * pr.vega() for rw, pr, _, qty in self._iter_components(**kwargs))
+        return sum(rw * qty * self._effective_metrics(pr, leg)["vega"] for rw, pr, leg, qty in self._iter_components(**kwargs))
 
     def _vega_01(self, **kwargs: Any) -> float:
-        return sum(rw * qty * dollar_vega_01(pr) for rw, pr, _, qty in self._iter_components(**kwargs))
+        return sum(rw * qty * self._effective_metrics(pr, leg)["vega"] * SOFR_OPTION_BP_VALUE for rw, pr, leg, qty in self._iter_components(**kwargs))
 
     def _theta(self, **kwargs: Any) -> float:
-        return sum(rw * qty * pr.theta() for rw, pr, _, qty in self._iter_components(**kwargs))
+        return sum(rw * qty * self._effective_metrics(pr, leg)["theta"] for rw, pr, leg, qty in self._iter_components(**kwargs))
 
     def _iv_normal_bps(self, **kwargs: Any) -> float:
-        return sum(rw * pr.iv_normal_bps() for rw, pr, _, _ in self._iter_components(**kwargs))
+        return sum(rw * self._effective_metrics(pr, leg)["iv_normal_bps"] for rw, pr, leg, _ in self._iter_components(**kwargs))
 
     def _bid(self, **kwargs: Any) -> float:
         return self._aggregate_side_quote(side="bid", **kwargs)

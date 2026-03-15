@@ -39,6 +39,12 @@ from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import _imm_cutoff, _next_contr
 from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
 from Query.USTFutureOptions.backends.quantlib.QLUSTFutureOptionPricer import QLUSTFutureOptionPricer
 from Query.USTFutureOptions.USTFutureOptionValue import USTFutureOptionValue
+from Query.Base.bachelier import (
+    bachelier_greeks_fd as _shared_bachelier_greeks_fd,
+    bachelier_price as _shared_bachelier_price,
+    implied_normal_vol as _shared_implied_normal_vol,
+    ql_option_type as _shared_ql_option_type,
+)
 from MDP.USTFutures.QuikStrikeSDK.core.QuikStrikeFetcher import QuikStrikeFetcher
 from MDP.USTFutures.QuikStrikeSDK.core.types.QuikVolQuery import QuikVolQuery
 from MDP.USTFutures.QuikStrikeSDK.core.types.QuikVolValueType import QuikVolValueType
@@ -1111,17 +1117,11 @@ def _time_to_expiry(val_date: datetime.date, exp_date: datetime.date) -> float:
 
 
 def _ql_option_type(right: str) -> int:
-    r = str(right).upper()
-    if r == "C":
-        return ql.Option.Call
-    if r == "P":
-        return ql.Option.Put
-    raise ValueError(f"Unsupported option right for QuantLib Bachelier: {right}")
+    return _shared_ql_option_type(right)
 
 
 def _bachelier_price(right: str, strike: float, forward: float, vol_normal: float, tte: float, discount: float) -> float:
-    stddev = max(vol_normal, 0.0) * math.sqrt(max(tte, 1e-12))
-    return float(ql.bachelierBlackFormula(_ql_option_type(right), float(strike), float(forward), float(stddev), float(discount)))
+    return _shared_bachelier_price(right, strike, forward, vol_normal, tte, discount)
 
 
 def _black76_price(right: str, strike: float, forward: float, vol_lognormal: float, tte: float, discount: float) -> float:
@@ -1154,21 +1154,7 @@ def _black76_strike_for_target_delta(
 
 
 def _implied_normal_vol(right: str, strike: float, forward: float, tte: float, price: float, discount: float) -> float:
-    if tte <= 0.0 or price <= 0.0:
-        return float("nan")
-    try:
-        return float(
-            ql.bachelierBlackFormulaImpliedVolChoi(
-                _ql_option_type(right),
-                float(strike),
-                float(forward),
-                float(tte),
-                float(price),
-                float(discount),
-            )
-        )
-    except Exception:
-        return float("nan")
+    return _shared_implied_normal_vol(right, strike, forward, tte, price, discount)
 
 
 def _normalize_qs_ust_globex_symbol(token: str) -> str:

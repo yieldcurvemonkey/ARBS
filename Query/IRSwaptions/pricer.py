@@ -20,6 +20,7 @@ class IRSwaptionPricable(_GenericPricable):
     strike: float
     notional: float
     label: Optional[str] = None
+    premium_override: Optional[float] = None
 
     def with_notional(self, notional: float) -> "IRSwaptionPricable":
         return replace(self, notional=float(notional))
@@ -194,6 +195,71 @@ def _exact_strike_pricing_engine(context: IRSwaptionMarketContext, leg: IRSwapti
         return ql.BachelierSwaptionEngine(context.curve_handle, vol_handle, _curve_day_counter(context))
 
 
+def _premium_override_value(leg: IRSwaptionPricable) -> Optional[float]:
+    if leg.premium_override is None:
+        return None
+    return abs(float(leg.premium_override))
+
+
+def _override_implied_normal_vol(
+    context: IRSwaptionMarketContext,
+    leg: IRSwaptionPricable,
+) -> Optional[float]:
+    premium_override = _premium_override_value(leg)
+    if premium_override is None:
+        return None
+    if premium_override <= 0.0:
+        return 0.0
+
+    with _temporary_eval_date(_curve_eval_date(context)):
+        swpt = build_ql_swaption(
+            context,
+            leg,
+            pricing_engine=_exact_strike_pricing_engine(context, leg) or context.pricing_engine,
+            allow_override_engine=False,
+        )
+        try:
+            return float(
+                swpt.impliedVolatility(
+                    float(premium_override),
+                    context.curve_handle,
+                    0.01,
+                    1e-8,
+                    1000,
+                    1e-8,
+                    5.0,
+                    ql.Normal,
+                )
+            )
+        except Exception:
+            return None
+
+
+def _override_pricing_engine(
+    context: IRSwaptionMarketContext,
+    leg: IRSwaptionPricable,
+) -> Optional[ql.PricingEngine]:
+    override_vol = _override_implied_normal_vol(context, leg)
+    if override_vol is None:
+        return None
+
+    vol_surface = ql.ConstantSwaptionVolatility(
+        _active_eval_date(context),
+        _curve_calendar(context),
+        ql.ModifiedFollowing,
+        float(max(override_vol, 0.0)),
+        _curve_day_counter(context),
+        ql.Normal,
+        0.0,
+    )
+    vol_handle = ql.SwaptionVolatilityStructureHandle(vol_surface)
+    vol_handle.enableExtrapolation()
+    try:
+        return ql.BachelierSwaptionEngine(context.curve_handle, vol_handle)
+    except TypeError:
+        return ql.BachelierSwaptionEngine(context.curve_handle, vol_handle, _curve_day_counter(context))
+
+
 def _swaption_side_sign(swpt: ql.Swaption) -> float:
     try:
         return 1.0 if float(swpt.underlying().fixedLegBPS()) > 0.0 else -1.0
@@ -207,17 +273,25 @@ def build_ql_swaption(
     *,
     curve_handle: Optional[ql.YieldTermStructureHandle] = None,
     pricing_engine: Optional[ql.PricingEngine] = None,
+    allow_override_engine: bool = True,
 ) -> ql.Swaption:
     ch = curve_handle or context.curve_handle
     underlying = build_underlying_swap(context, leg, curve_handle=ch)
     ex = ql.EuropeanExercise(_py_to_ql_date(leg.exercise_date))
     swpt = ql.Swaption(underlying, ex)
-    engine = pricing_engine or _exact_strike_pricing_engine(context, leg) or context.pricing_engine
+    engine = pricing_engine
+    if engine is None and allow_override_engine:
+        engine = _override_pricing_engine(context, leg)
+    if engine is None:
+        engine = _exact_strike_pricing_engine(context, leg) or context.pricing_engine
     swpt.setPricingEngine(engine)
     return swpt
 
 
 def leg_spot_npv(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    premium_override = _premium_override_value(leg)
+    if premium_override is not None:
+        return float(premium_override)
     with _temporary_eval_date(_curve_eval_date(context)):
         return float(build_ql_swaption(context, leg).NPV())
 
@@ -231,6 +305,9 @@ def leg_fwd_npv(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> fl
 
 
 def leg_implied_normal_vol_bps(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    override_vol = _override_implied_normal_vol(context, leg)
+    if override_vol is not None:
+        return float(override_vol) * 10_000.0
     cube_v = leg_cube_vol(context, leg)
     if cube_v is not None and not _use_enhanced_atm_surface(context, leg):
         return float(cube_v) * 10_000.0

@@ -46,6 +46,17 @@ class SpreadQuery(BaseQuery):
 
         # Build structure_kwargs from tenor
         skw = dict(self.structure_kwargs or {})
+        if skw.get("fixed_rate") is None and skw.get("coupon") is not None:
+            skw["fixed_rate"] = skw["coupon"]
+        if skw.get("front_fixed_rate") is None and skw.get("front_coupon") is not None:
+            skw["front_fixed_rate"] = skw["front_coupon"]
+        if skw.get("back_fixed_rate") is None and skw.get("back_coupon") is not None:
+            skw["back_fixed_rate"] = skw["back_coupon"]
+        if skw.get("mid_fixed_rate") is None:
+            if skw.get("belly_coupon") is not None:
+                skw["mid_fixed_rate"] = skw["belly_coupon"]
+            elif skw.get("mid_coupon") is not None:
+                skw["mid_fixed_rate"] = skw["mid_coupon"]
         if self.tenor and "tenor" not in skw:
             skw["tenor"] = self.tenor
         if self.structure == SpreadStructure.CURVE and "/" in (self.tenor or ""):

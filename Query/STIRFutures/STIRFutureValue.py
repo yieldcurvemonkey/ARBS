@@ -42,6 +42,29 @@ def calc_spread_rate(
     return sum([risk_weights[i] * pr.fair_rate(pk) for i, (pr, pk) in enumerate(zip(pricer.values(), package))])
 
 
+def _package_price(pr: _STIRFutureGenericPricer, pk: _STIRFutureGenericPricable) -> float:
+    if isinstance(pk, dict) and pk.get("price") is not None:
+        return float(pk["price"])
+
+    price_attr = getattr(pk, "price", None)
+    if callable(price_attr):
+        try:
+            return float(price_attr())
+        except TypeError:
+            pass
+    elif price_attr is not None:
+        return float(price_attr)
+
+    return float(pr.price())
+
+
+def _package_pv01(pr: _STIRFutureGenericPricer, pk: _STIRFutureGenericPricable) -> float:
+    try:
+        return float(pr.pv01(stirf=pk))
+    except TypeError:
+        return float(pr.pv01(pk))
+
+
 class STIRFutureValueFunctionMap(BaseValueFunctionMap[STIRFutureValue, float]):
     def __init__(
         self,
@@ -65,18 +88,21 @@ class STIRFutureValueFunctionMap(BaseValueFunctionMap[STIRFutureValue, float]):
         return calc_spread_rate(kwargs["pricer"], kwargs["package"], kwargs["risk_weights"]) * _stir_structure_legs_mapper[len(kwargs["package"])][1]
 
     def _npv(self, **kwargs: Any) -> float:
-        # return sum(pr.npv(pk) for pr, pk in zip(kwargs["pricer"].values(), kwargs["package"]))
-        return sum(rw * pr.npv() for rw, pr in zip(kwargs["risk_weights"], kwargs["pricer"].values()))
+        total = 0.0
+        for rw, pr, pk in zip(kwargs["risk_weights"], kwargs["pricer"].values(), kwargs["package"]):
+            price = _package_price(pr, pk)
+            pv01 = _package_pv01(pr, pk)
+            total += float(rw) * price * pv01
+        return float(total)
 
     def _pv01(self, **kwargs: Any) -> float:
-        return sum(pr.pv01(stirf=pk) for pr, pk in zip(kwargs["pricer"].values(), kwargs["package"]))
+        return sum(_package_pv01(pr, pk) for pr, pk in zip(kwargs["pricer"].values(), kwargs["package"]))
 
     def _dv01(self, **kwargs: Any) -> float:
         return self._pv01(**kwargs)
 
     def _price(self, **kwargs: Any) -> float:
-        # Unlike bonds where sum(clean_price) implies portfolio cost, 
-        # STIR structures (spreads) are quoted as Price A - Price B.
-        # We use risk_weights to handle the direction (Buy A / Sell B).
-        # return sum(rw * pr.price(pk) for rw, pr, pk in zip(kwargs["risk_weights"], kwargs["pricer"].values(), kwargs["package"]))
-        return sum(rw * pr.price() for rw, pr in zip(kwargs["risk_weights"], kwargs["pricer"].values()))
+        return sum(
+            float(rw) * _package_price(pr, pk)
+            for rw, pr, pk in zip(kwargs["risk_weights"], kwargs["pricer"].values(), kwargs["package"])
+        )

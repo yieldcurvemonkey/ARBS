@@ -21,10 +21,17 @@ class _FakeCurve:
         raise ValueError(token)
 
 
+class _FakeCurveHandle:
+    @staticmethod
+    def discount(_date):
+        return 0.95
+
+
 class _FakeContext:
     def __init__(self):
         self.as_of_date = dt.date(2026, 3, 5)
         self.curve = _FakeCurve()
+        self.curve_handle = _FakeCurveHandle()
 
 
 @pytest.fixture
@@ -125,6 +132,39 @@ def test_vega_01_target_scales_package_notional(monkeypatch, structure_map):
     assert rws == [1.0]
     assert len(package) == 1
     assert abs(package[0].notional * 0.00032) == pytest.approx(50_000.0)
+
+
+@pytest.mark.parametrize(
+    ("premium_kwargs", "expected_override"),
+    [
+        ({"premium": 125_000.0}, 125_000.0),
+        ({"premium": 12.5, "premium_type": "spot_bps"}, 125_000.0),
+        ({"premium": 12.5, "premium_type": "fwd_bps"}, 118_750.0),
+    ],
+)
+def test_premium_override_accepts_cash_spot_bps_and_forward_bps(structure_map, premium_kwargs, expected_override):
+    package, _ = structure_map.apply(
+        IRSwaptionStructure.PAYER,
+        expiry="1Y",
+        tail="5Y",
+        strike=0.04,
+        notional=100_000_000.0,
+        **premium_kwargs,
+    )
+    assert package[0].premium_override == pytest.approx(expected_override)
+
+
+def test_multi_leg_premium_types_can_mix_conventions(structure_map):
+    package, _ = structure_map.apply(
+        IRSwaptionStructure.STRADDLE,
+        expiry="1Y",
+        tail="5Y",
+        strike=0.04,
+        notional=100_000_000.0,
+        premiums=[12.0, 80_000.0],
+        premium_types=["fwd_bps", "spot_cash"],
+    )
+    assert [leg.premium_override for leg in package] == pytest.approx([114_000.0, 80_000.0])
 
 
 def test_delta_strike_suffix_overrides_resolution_option_type(structure_map):

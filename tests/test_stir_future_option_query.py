@@ -3,6 +3,7 @@ import datetime
 import pytest
 import pytz
 
+from Query.Base.bachelier import bachelier_greeks_fd, implied_normal_vol
 from Query.Base.product_adapter import get_adapter
 from Query.STIRFutureOptions.STIRFutureOptionQuery import STIRFutureOptionQuery
 from Query.STIRFutureOptions.STIRFutureOptionStructure import STIRFutureOptionStructure
@@ -358,3 +359,58 @@ def test_build_mdp_request_endpoint_and_symbols_wiring():
     assert req_ts["endpoint"] == "option_timeseries"
     assert req_ts["symbols"] == ["SR3Z30|9700C", "SR3Z30|9750C"]
     assert req_ts["timestamp"] == now.date()
+
+
+def test_premium_override_reprices_outright_iv_and_greeks():
+    pricer = _mk_pricer(symbol="SR3Z30|9700C", right="C", price=0.21, delta=0.60, gamma=1.2, vega=0.11, theta=-0.03, iv_normal=0.90)
+    pricer_map = {"SR3Z30|9700C": [pricer]}
+    q = STIRFutureOptionQuery(
+        structure=STIRFutureOptionStructure.OUTRIGHT,
+        value=STIRFutureOptionValue.IV_NORMAL_BPS,
+        symbol="SR3Z30|9700C",
+        structure_kwargs={"premium": 0.30},
+    )
+
+    package, weights = q.resolve_package(pricer_or_curve=pricer_map)
+    value_map = q.build_value_map(pricer_or_curve=pricer_map, package=package, risk_weights=weights)
+    tte = max((pricer.expiry_date() - pricer.quote_timestamp().date()).days / 365.0, 1e-12)
+    expected_iv = implied_normal_vol("C", package[0].strike(), pricer.forward(), tte, 0.30, pricer.discount())
+    exp_delta, exp_gamma, exp_vega, exp_theta = bachelier_greeks_fd(
+        right="C",
+        strike=package[0].strike(),
+        forward=pricer.forward(),
+        vol_normal=expected_iv,
+        tte=tte,
+        discount=pricer.discount(),
+    )
+
+    assert package[0].premium_override() == pytest.approx(0.30)
+    assert value_map.apply(STIRFutureOptionValue.PRICE) == pytest.approx(0.30)
+    assert value_map.apply(STIRFutureOptionValue.NPV) == pytest.approx(0.30)
+    assert value_map.apply(STIRFutureOptionValue.IV_NORMAL_BPS) == pytest.approx(expected_iv * 100.0)
+    assert value_map.apply(STIRFutureOptionValue.DELTA) == pytest.approx(exp_delta)
+    assert value_map.apply(STIRFutureOptionValue.GAMMA) == pytest.approx(exp_gamma)
+    assert value_map.apply(STIRFutureOptionValue.VEGA) == pytest.approx(exp_vega)
+    assert value_map.apply(STIRFutureOptionValue.THETA) == pytest.approx(exp_theta)
+
+
+def test_multi_leg_premiums_override_follow_package_order():
+    p_call_97 = _mk_pricer(symbol="SR3Z30|9700C", right="C", price=0.21, delta=0.60, gamma=1.2, vega=0.11, theta=-0.03, iv_normal=0.90)
+    p_call_975 = _mk_pricer(symbol="SR3Z30|9750C", right="C", price=0.08, delta=0.30, gamma=0.8, vega=0.06, theta=-0.02, iv_normal=0.70)
+    pricer_map = {"SR3Z30|9700C": [p_call_97], "SR3Z30|9750C": [p_call_975]}
+    q = STIRFutureOptionQuery(
+        structure=STIRFutureOptionStructure.VERTICAL,
+        value=STIRFutureOptionValue.PRICE,
+        structure_kwargs={
+            "long_symbol": "SR3Z30|9700C",
+            "short_symbol": "SR3Z30|9750C",
+            "premiums": [0.33, 0.07],
+        },
+    )
+
+    package, weights = q.resolve_package(pricer_or_curve=pricer_map)
+    value_map = q.build_value_map(pricer_or_curve=pricer_map, package=package, risk_weights=weights)
+
+    assert package[0].premium_override() == pytest.approx(0.33)
+    assert package[1].premium_override() == pytest.approx(0.07)
+    assert value_map.apply(STIRFutureOptionValue.PRICE) == pytest.approx(0.26)

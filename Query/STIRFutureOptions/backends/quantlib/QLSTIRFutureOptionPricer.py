@@ -14,6 +14,7 @@ class QLSTIRFutureOptionPricable(_STIRFutureOptionGenericPricable):
     _expiry_date: datetime.date
     _quote_timestamp: datetime.datetime
     _quantity: float = 1.0
+    _premium_override: Optional[float] = None
 
     def symbol(self) -> str:
         return self._symbol
@@ -32,6 +33,9 @@ class QLSTIRFutureOptionPricable(_STIRFutureOptionGenericPricable):
 
     def quantity(self) -> float:
         return self._quantity
+
+    def premium_override(self) -> Optional[float]:
+        return self._premium_override
 
 
 @dataclass
@@ -159,6 +163,7 @@ class QLSTIRFutureOptionPricer(_STIRFutureOptionGenericPricer):
             _expiry_date=kwargs.get("expiry_date", self._expiry_date),
             _quote_timestamp=kwargs.get("quote_timestamp", self._quote_timestamp),
             _quantity=float(kwargs.get("quantity", 1.0)),
+            _premium_override=kwargs.get("premium_override"),
         )
 
     def resolve_pricable(

@@ -57,6 +57,66 @@ class USTFutureOptionStructureFunctionMap(
             raise ValueError(f"Expected exactly {n} pricers in dict, got {len(keys)}: {keys}")
         return keys
 
+    def _resolve_pricer_for_leg(
+        self,
+        leg: _USTFutureOptionGenericPricable,
+        *,
+        index: int,
+    ) -> _USTFutureOptionGenericPricer:
+        pricers: Dict[str, _USTFutureOptionGenericPricer] = self.common_kwargs["pricer"]
+        if leg.symbol() in pricers:
+            return pricers[leg.symbol()]
+        matches = [pr for pr in pricers.values() if pr.symbol() == leg.symbol()]
+        if len(matches) == 1:
+            return matches[0]
+        flat = list(pricers.values())
+        if 0 <= index < len(flat):
+            return flat[index]
+        raise KeyError(f"Could not resolve UST option pricer for symbol={leg.symbol()!r}")
+
+    @staticmethod
+    def _premium_overrides(kwargs: Dict[str, object], n_legs: int) -> List[Optional[float]]:
+        premiums = kwargs.get("premiums")
+        if premiums is not None:
+            if not isinstance(premiums, (list, tuple)) or len(premiums) != n_legs:
+                raise ValueError(f"premiums must be a list/tuple with {n_legs} entries")
+            return [None if value is None else float(value) for value in premiums]
+
+        premium = kwargs.get("premium")
+        if premium is None:
+            return [None] * n_legs
+        if n_legs != 1:
+            raise ValueError("Scalar premium/upfront override is only valid for outright option queries.")
+        return [float(premium)]
+
+    def _apply_premium_overrides(
+        self,
+        package: List[_USTFutureOptionGenericPricable],
+        kwargs: Dict[str, object],
+    ) -> List[_USTFutureOptionGenericPricable]:
+        overrides = self._premium_overrides(kwargs, len(package))
+        if not any(value is not None for value in overrides):
+            return package
+
+        rebuilt: List[_USTFutureOptionGenericPricable] = []
+        for idx, (leg, premium) in enumerate(zip(package, overrides)):
+            if premium is None:
+                rebuilt.append(leg)
+                continue
+            pricer = self._resolve_pricer_for_leg(leg, index=idx)
+            rebuilt.append(
+                pricer.build_pricable(
+                    symbol=leg.symbol(),
+                    right=leg.right(),
+                    strike=leg.strike(),
+                    expiry_date=leg.expiry_date(),
+                    quote_timestamp=leg.quote_timestamp(),
+                    quantity=float(leg.quantity()),
+                    premium_override=float(premium),
+                )
+            )
+        return rebuilt
+
     def _build_outright(
         self,
         *,
@@ -67,7 +127,8 @@ class USTFutureOptionStructureFunctionMap(
         key = self._resolve_key(desired=symbol, role="outright.symbol")
         pr = self.common_kwargs["pricer"][key]
         rw = float(risk_weights[0]) if risk_weights else 1.0
-        return [pr.build_pricable(quantity=1.0)], [rw]
+        package = [pr.build_pricable(quantity=1.0)]
+        return self._apply_premium_overrides(package, _), [rw]
 
     def _build_vertical(
         self,
@@ -88,7 +149,8 @@ class USTFutureOptionStructureFunctionMap(
         pr0 = self.common_kwargs["pricer"][keys[0]]
         pr1 = self.common_kwargs["pricer"][keys[1]]
         weights = [1.0, -1.0] if risk_weights is None else [float(x) for x in risk_weights]
-        return [pr0.build_pricable(quantity=1.0), pr1.build_pricable(quantity=1.0)], weights
+        package = [pr0.build_pricable(quantity=1.0), pr1.build_pricable(quantity=1.0)]
+        return self._apply_premium_overrides(package, _), weights
 
     def _build_straddle(
         self,
@@ -104,7 +166,8 @@ class USTFutureOptionStructureFunctionMap(
         if symbol is not None and symbol in pricers:
             pr = pricers[symbol]
             weights = [1.0] if risk_weights is None else [float(risk_weights[0])]
-            return [pr.build_pricable(quantity=1.0)], weights
+            package = [pr.build_pricable(quantity=1.0)]
+            return self._apply_premium_overrides(package, _), weights
 
         if symbol and symbol.upper().endswith("S"):
             call_key = f"{symbol[:-1]}C"
@@ -118,4 +181,5 @@ class USTFutureOptionStructureFunctionMap(
         pr0 = pricers[keys[0]]
         pr1 = pricers[keys[1]]
         weights = [1.0, 1.0] if risk_weights is None else [float(x) for x in risk_weights]
-        return [pr0.build_pricable(quantity=1.0), pr1.build_pricable(quantity=1.0)], weights
+        package = [pr0.build_pricable(quantity=1.0), pr1.build_pricable(quantity=1.0)]
+        return self._apply_premium_overrides(package, _), weights

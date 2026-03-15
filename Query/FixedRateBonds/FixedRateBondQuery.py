@@ -27,6 +27,14 @@ class FixedRateBondQuery(BaseQuery):
         skw = dict(self.structure_kwargs or {})
         if self.cusip is not None and "cusip" not in skw:
             skw["cusip"] = self.cusip
+        if skw.get("cpn") is None and skw.get("coupon") is not None:
+            skw["cpn"] = skw["coupon"]
+        if skw.get("front_cpn") is None and skw.get("front_coupon") is not None:
+            skw["front_cpn"] = skw["front_coupon"]
+        if skw.get("belly_cpn") is None and skw.get("belly_coupon") is not None:
+            skw["belly_cpn"] = skw["belly_coupon"]
+        if skw.get("back_cpn") is None and skw.get("back_coupon") is not None:
+            skw["back_cpn"] = skw["back_coupon"]
 
         object.__setattr__(self, "product", "FRB")
         object.__setattr__(self, "structure_id", self.structure)
@@ -46,16 +54,31 @@ class FixedRateBondQuery(BaseQuery):
 
         cusip_str = self.structure_kwargs.get("cusip") or self.cusip or ""
         slash_count = cusip_str.count("/")
+        explicit_multi_leg = self.structure in {FixedRateBondStructure.CURVE, FixedRateBondStructure.FLY} or any(
+            skw.get(key) is not None
+            for key in (
+                "front_cusip",
+                "belly_cusip",
+                "back_cusip",
+                "front_issue_date",
+                "belly_issue_date",
+                "back_issue_date",
+                "front_maturity_date",
+                "belly_maturity_date",
+                "back_maturity_date",
+            )
+        )
 
-        if slash_count == 1:
-            object.__setattr__(self, "structure", FixedRateBondStructure.CURVE)
-            object.__setattr__(self, "structure_id", FixedRateBondStructure.CURVE)
-        elif slash_count == 2:
-            object.__setattr__(self, "structure", FixedRateBondStructure.FLY)
-            object.__setattr__(self, "structure_id", FixedRateBondStructure.FLY)
-        else:
-            object.__setattr__(self, "structure", FixedRateBondStructure.OUTRIGHT)
-            object.__setattr__(self, "structure_id", FixedRateBondStructure.OUTRIGHT)
+        if not explicit_multi_leg:
+            if slash_count == 1:
+                object.__setattr__(self, "structure", FixedRateBondStructure.CURVE)
+                object.__setattr__(self, "structure_id", FixedRateBondStructure.CURVE)
+            elif slash_count == 2:
+                object.__setattr__(self, "structure", FixedRateBondStructure.FLY)
+                object.__setattr__(self, "structure_id", FixedRateBondStructure.FLY)
+            else:
+                object.__setattr__(self, "structure", FixedRateBondStructure.OUTRIGHT)
+                object.__setattr__(self, "structure_id", FixedRateBondStructure.OUTRIGHT)
 
     def return_query(self) -> List["FixedRateBondQuery"]:
         if isinstance(self.value, list):

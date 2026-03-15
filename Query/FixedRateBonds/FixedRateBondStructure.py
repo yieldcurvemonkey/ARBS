@@ -1,5 +1,6 @@
 from enum import Enum, auto
 from functools import partial
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -35,12 +36,22 @@ class FixedRateBondStructure(Enum):
     FLY = auto()
 
 
-class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondStructure, _FixedRateBondGenericPricable]):
+@dataclass(frozen=True)
+class FixedRateBondPricableSpec:
+    instrument: Any
+    cusip: str
+    issue_date: datetime.date
+    maturity_date: datetime.date
+    cpn: float
+    notional: float
+
+
+class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondStructure, FixedRateBondPricableSpec]):
     def __init__(self, pricer: Dict[str, _FixedRateBondGenericPricer]):
         super().__init__(FixedRateBondStructure, pricer=pricer)
         self._map = self._create_map()
 
-    def _create_map(self) -> Dict[FixedRateBondStructure, Callable[..., List[_FixedRateBondGenericPricable]]]:
+    def _create_map(self) -> Dict[FixedRateBondStructure, Callable[..., List[FixedRateBondPricableSpec]]]:
         return {
             FixedRateBondStructure.OUTRIGHT: partial(self._build_outright),
             FixedRateBondStructure.CURVE: partial(self._build_curve),
@@ -55,9 +66,26 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
         cpn: float,
         notional: Optional[float] = None,
         bpv: Optional[float] = None,
-    ) -> _FixedRateBondGenericPricable:
+    ) -> FixedRateBondPricableSpec:
         current_pricer: _FixedRateBondGenericPricer = self.common_kwargs["pricer"][cusip]
-        return current_pricer.build_pricable(cusip=cusip, issue_date=issue_date, maturity_date=maturity_date, cpn=cpn, notional=notional, bpv=bpv)
+        instrument = current_pricer.build_pricable(cusip=cusip, issue_date=issue_date, maturity_date=maturity_date, cpn=cpn, notional=notional, bpv=bpv)
+        return FixedRateBondPricableSpec(
+            instrument=instrument,
+            cusip=str(cusip),
+            issue_date=issue_date,
+            maturity_date=maturity_date,
+            cpn=float(cpn),
+            notional=float(current_pricer.notional(instrument)),
+        )
+
+    def _leg_spec(self, *, cusip: str, prefix: str, **kwargs: Any) -> Dict[str, Any]:
+        pricer: _FixedRateBondGenericPricer = self.common_kwargs["pricer"][cusip]
+        return {
+            "cusip": cusip,
+            "issue_date": kwargs.get(f"{prefix}_issue_date") or kwargs.get("issue_date") or pricer.issue_date(),
+            "maturity_date": kwargs.get(f"{prefix}_maturity_date") or kwargs.get("maturity_date") or pricer.maturity_date(),
+            "cpn": kwargs.get(f"{prefix}_cpn") or kwargs.get(f"{prefix}_coupon") or kwargs.get("cpn") or kwargs.get("coupon") or pricer.coupon(),
+        }
 
     def _build_spreadable(
         self,
@@ -66,7 +94,7 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
         constrained_leg_index: int,
         constrained_notional: Optional[float] = None,
         constrained_bpv: Optional[float] = None,
-    ) -> List[_FixedRateBondGenericPricable]:
+    ) -> List[FixedRateBondPricableSpec]:
         n = len(leg_specs)
         rw = np.array(risk_weights or ([1.0, -1.0] + [0.0] * (n - 2))[:n], dtype=float)
 
@@ -90,8 +118,8 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
 
         cusip = next(iter(self.common_kwargs["pricer"]))
         pricer: _FixedRateBondGenericPricer = self.common_kwargs["pricer"][cusip]
-        bond = self._leg(cusip=cusip, issue_date=pricer.issue_date(), maturity_date=pricer.maturity_date(), cpn=pricer.coupon(), notional=notional, bpv=bpv)
-        weight = 1.0 if pricer.notional(bond) > 0 else -1.0
+        bond = self._leg(cusip=cusip, issue_date=_.get("issue_date") or pricer.issue_date(), maturity_date=_.get("maturity_date") or pricer.maturity_date(), cpn=_.get("cpn") or _.get("coupon") or pricer.coupon(), notional=notional, bpv=bpv)
+        weight = 1.0 if bond.notional > 0 else -1.0
         return [bond], [weight]
 
     def _build_curve(
@@ -101,18 +129,8 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
         cusips = list(pricers.keys())
         assert len(cusips) == 2, "its a CURVE!"
 
-        leg0 = {
-            "cusip": cusips[0],
-            "issue_date": pricers[cusips[0]].issue_date(),
-            "maturity_date": pricers[cusips[0]].maturity_date(),
-            "cpn": pricers[cusips[0]].coupon(),
-        }
-        leg1 = {
-            "cusip": cusips[1],
-            "issue_date": pricers[cusips[1]].issue_date(),
-            "maturity_date": pricers[cusips[1]].maturity_date(),
-            "cpn": pricers[cusips[1]].coupon(),
-        }
+        leg0 = self._leg_spec(cusip=cusips[0], prefix="front", **_)
+        leg1 = self._leg_spec(cusip=cusips[1], prefix="back", **_)
 
         if front_notional is not None:
             idx, cn, cp = 0, front_notional, None
@@ -165,24 +183,9 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
             if i != idx:
                 risk_weights[i] = np.copysign(risk_weights[i], -risk_weights[idx])
 
-        leg0 = {
-            "cusip": cusips[0],
-            "issue_date": pricers[cusips[0]].issue_date(),
-            "maturity_date": pricers[cusips[0]].maturity_date(),
-            "cpn": pricers[cusips[0]].coupon(),
-        }
-        leg1 = {
-            "cusip": cusips[1],
-            "issue_date": pricers[cusips[1]].issue_date(),
-            "maturity_date": pricers[cusips[1]].maturity_date(),
-            "cpn": pricers[cusips[1]].coupon(),
-        }
-        leg2 = {
-            "cusip": cusips[2],
-            "issue_date": pricers[cusips[2]].issue_date(),
-            "maturity_date": pricers[cusips[2]].maturity_date(),
-            "cpn": pricers[cusips[2]].coupon(),
-        }
+        leg0 = self._leg_spec(cusip=cusips[0], prefix="front", **_)
+        leg1 = self._leg_spec(cusip=cusips[1], prefix="belly", **_)
+        leg2 = self._leg_spec(cusip=cusips[2], prefix="back", **_)
 
         return (
             self._build_spreadable(

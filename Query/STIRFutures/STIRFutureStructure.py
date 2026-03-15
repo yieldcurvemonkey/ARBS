@@ -90,7 +90,7 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
         contracts: Optional[int] = None,
         notional: Optional[float] = None,
         is_ser: Optional[bool] = False,
-        **_,
+        **kwargs,
     ) -> _STIRFutureGenericPricable:
         pr = self.common_kwargs["pricer"][key]
 
@@ -167,6 +167,31 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
         out = [int(round(alpha * rw_i / pv01_i)) for rw_i, pv01_i in zip(rw, pv01s)]
         return out
 
+    def _leg_kwargs(
+        self,
+        *,
+        key: str,
+        prefix: str,
+        is_ser: bool,
+        contracts: Optional[int],
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        leg_kwargs: Dict[str, Any] = {"key": key, "is_ser": is_ser}
+        for field in ("effective_date", "maturity_date", "price", "rate", "notional"):
+            prefixed = kwargs.get(f"{prefix}_{field}") if prefix else None
+            shared = kwargs.get(field)
+            value = prefixed if prefixed is not None else shared
+            if value is not None:
+                leg_kwargs[field] = value
+
+        prefixed_contracts = kwargs.get(f"{prefix}_contracts") if prefix else None
+        if prefixed_contracts is not None:
+            leg_kwargs["contracts"] = prefixed_contracts
+        elif contracts is not None:
+            leg_kwargs["contracts"] = contracts
+
+        return leg_kwargs
+
     # ----------------------------- builders -----------------------------
 
     def _build_outright(
@@ -182,7 +207,7 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
         bpv: Optional[float] = None,
         is_ser: Optional[bool] = False,
         risk_weights: Optional[List[float]] = None,
-        **_,
+        **kwargs,
     ) -> Tuple[List[_STIRFutureGenericPricable], List[float]]:
         pricers: Dict[str, _STIRFutureGenericPricer] = self.common_kwargs["pricer"]
 
@@ -225,7 +250,6 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
 
         if bpv is not None:
             pv01_1 = self._pv01_per_contract(key=key, is_ser=bool(is_ser))
-            print(pv01_1, "jehrehe") 
             contracts = int(round(float(bpv) / pv01_1))
 
         if contracts is None and notional is None and bpv is None:
@@ -259,7 +283,7 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
         constrained_leg_index: int = 0,
         constrained_contracts: Optional[int] = None,
         constrained_bpv: Optional[float] = None,
-        **_,
+        **kwargs,
     ) -> Tuple[List[_STIRFutureGenericPricable], List[float]]:
         if risk_weights is None:
             risk_weights = [1.0, -1.0]
@@ -284,8 +308,8 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
             )
 
         legs = [
-            self._build_leg(key=keys[0], contracts=(contracts[0] if contracts else None), is_ser=is_ser),
-            self._build_leg(key=keys[1], contracts=(contracts[1] if contracts else None), is_ser=is_ser),
+            self._build_leg(**self._leg_kwargs(key=keys[0], prefix="front", is_ser=bool(is_ser), contracts=(contracts[0] if contracts else None), kwargs=kwargs)),
+            self._build_leg(**self._leg_kwargs(key=keys[1], prefix="back", is_ser=bool(is_ser), contracts=(contracts[1] if contracts else None), kwargs=kwargs)),
         ]
         return legs, [float(x) for x in risk_weights]
 
@@ -329,9 +353,9 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
             )
 
         legs = [
-            self._build_leg(key=keys[0], contracts=(contracts[0] if contracts else None), is_ser=is_ser),
-            self._build_leg(key=keys[1], contracts=(contracts[1] if contracts else None), is_ser=is_ser),
-            self._build_leg(key=keys[2], contracts=(contracts[2] if contracts else None), is_ser=is_ser),
+            self._build_leg(**self._leg_kwargs(key=keys[0], prefix="front", is_ser=bool(is_ser), contracts=(contracts[0] if contracts else None), kwargs=kwargs)),
+            self._build_leg(**self._leg_kwargs(key=keys[1], prefix="belly", is_ser=bool(is_ser), contracts=(contracts[1] if contracts else None), kwargs=kwargs)),
+            self._build_leg(**self._leg_kwargs(key=keys[2], prefix="back", is_ser=bool(is_ser), contracts=(contracts[2] if contracts else None), kwargs=kwargs)),
         ]
         return legs, [float(x) for x in risk_weights]
 
@@ -375,7 +399,7 @@ class STIRFutureStructureFunctionMap(BaseStructureFunctionMap[STIRFutureStructur
 
         # build both legs with the *same* symbol dates/fields if needed; rate/price usually comes from pricer
         legs = [
-            self._build_leg(key=keys[0], contracts=(contracts[0] if contracts else None), is_ser=is_ser),
-            self._build_leg(key=keys[1], contracts=(contracts[1] if contracts else None), is_ser=is_ser),
+            self._build_leg(**self._leg_kwargs(key=keys[0], prefix="front", is_ser=bool(is_ser), contracts=(contracts[0] if contracts else None), kwargs=kwargs)),
+            self._build_leg(**self._leg_kwargs(key=keys[1], prefix="back", is_ser=bool(is_ser), contracts=(contracts[1] if contracts else None), kwargs=kwargs)),
         ]
         return legs, [float(x) for x in risk_weights]

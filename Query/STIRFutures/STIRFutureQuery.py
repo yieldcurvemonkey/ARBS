@@ -69,6 +69,7 @@ class STIRFutureQuery(BaseQuery):
     structure: STIRFutureStructure = STIRFutureStructure.OUTRIGHT
     value: Union[STIRFutureValue, List[STIRFutureValue]] = STIRFutureValue.PRICE
 
+    tenor: Optional[str] = None
     symbol: Optional[str] = None
     effective_date: Optional[datetime.date] = None
     maturity_date: Optional[datetime.date] = None
@@ -91,19 +92,22 @@ class STIRFutureQuery(BaseQuery):
         skw: Dict[str, Any] = dict(self.structure_kwargs or {})
 
         # ---- normalize common identifiers into structure_kwargs ----
+        if self.tenor is not None and "symbol" not in skw and self.symbol is None:
+            skw["symbol"] = self.tenor
         if self.symbol is not None and "symbol" not in skw:
             skw["symbol"] = self.symbol
         if self.effective_date is not None and "effective_date" not in skw:
             skw["effective_date"] = self.effective_date
         if self.maturity_date is not None and "maturity_date" not in skw:
             skw["maturity_date"] = self.maturity_date
-        if self.is_ser or "SER" in self.symbol:
+        symbol_token = self.symbol or skw.get("symbol") or ""
+        if self.is_ser or "SER" in str(symbol_token):
             skw.setdefault("is_ser", True)
             # if "SERFF" in self.symbol or "SR1ZQ" in self.symbol:
             #     self.structure = STIRFutureStructure.BASIS
 
         # ---- structure-specific normalization + validation ----
-        if self.structure == STIRFutureStructure.OUTRIGHT and not "/" in self.symbol:
+        if self.structure == STIRFutureStructure.OUTRIGHT and "/" not in str(symbol_token):
             assert skw.get("symbol") is not None or (
                 skw.get("effective_date") is not None and skw.get("maturity_date") is not None
             ), "OUTRIGHT requires symbol OR (effective_date & maturity_date)"
@@ -113,7 +117,7 @@ class STIRFutureQuery(BaseQuery):
             if skw.get("contracts") is None and "notional" not in skw and "bpv" not in skw:
                 skw.setdefault("notional", 1_000_000)
 
-        elif "/" in self.symbol or self.structure in {getattr(STIRFutureStructure.CURVE, STIRFutureStructure.SPREAD), STIRFutureStructure.SPREAD}:
+        elif "/" in str(symbol_token) or self.structure in {STIRFutureStructure.CURVE, getattr(STIRFutureStructure, "SPREAD", STIRFutureStructure.CURVE)}:
             # accept symbols=[...] as a convenience
             symbols = skw.get("symbols")
             if isinstance(symbols, (list, tuple)) and len(symbols) >= 2:
@@ -173,17 +177,39 @@ class STIRFutureQuery(BaseQuery):
             object.__setattr__(self, "value_id", self.value)
             object.__setattr__(self, "value_ids", tuple())
 
-        symbol_str = self.structure_kwargs.get("symbol") or self.symbol or ""
+        symbol_str = self.structure_kwargs.get("symbol") or self.symbol or self.tenor or ""
         slash_count = symbol_str.count("/")
-        if slash_count == 1:
-            object.__setattr__(self, "structure", STIRFutureStructure.CURVE)
-            object.__setattr__(self, "structure_id", STIRFutureStructure.CURVE)
-        elif slash_count == 2:
-            object.__setattr__(self, "structure", STIRFutureStructure.FLY)
-            object.__setattr__(self, "structure_id", STIRFutureStructure.FLY)
-        else:
-            object.__setattr__(self, "structure", STIRFutureStructure.OUTRIGHT)
-            object.__setattr__(self, "structure_id", STIRFutureStructure.OUTRIGHT)
+        explicit_multi_leg = self.structure in {
+            STIRFutureStructure.CURVE,
+            STIRFutureStructure.FLY,
+            getattr(STIRFutureStructure, "SPREAD", STIRFutureStructure.CURVE),
+            getattr(STIRFutureStructure, "BASIS", STIRFutureStructure.CURVE),
+        } or any(
+            skw.get(key) is not None
+            for key in (
+                "front_symbol",
+                "back_symbol",
+                "belly_symbol",
+                "symbols",
+                "tickers",
+                "front_effective_date",
+                "back_effective_date",
+                "front_maturity_date",
+                "back_maturity_date",
+                "front_curve",
+                "back_curve",
+            )
+        )
+        if not explicit_multi_leg:
+            if slash_count == 1:
+                object.__setattr__(self, "structure", STIRFutureStructure.CURVE)
+                object.__setattr__(self, "structure_id", STIRFutureStructure.CURVE)
+            elif slash_count == 2:
+                object.__setattr__(self, "structure", STIRFutureStructure.FLY)
+                object.__setattr__(self, "structure_id", STIRFutureStructure.FLY)
+            else:
+                object.__setattr__(self, "structure", STIRFutureStructure.OUTRIGHT)
+                object.__setattr__(self, "structure_id", STIRFutureStructure.OUTRIGHT)
 
     def return_query(self) -> List["STIRFutureQuery"]:
         if isinstance(self.value, list):

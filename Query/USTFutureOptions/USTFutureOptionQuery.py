@@ -41,6 +41,10 @@ class USTFutureOptionQuery(BaseQuery):
         object.__setattr__(self, "structure_id", self.structure)
 
         skw: Dict[str, Any] = dict(self.structure_kwargs or {})
+        if skw.get("premium") is None and skw.get("upfront") is not None:
+            skw["premium"] = skw["upfront"]
+        if skw.get("premiums") is None and skw.get("upfronts") is not None:
+            skw["premiums"] = skw["upfronts"]
         if self.symbol is not None and "symbol" not in skw:
             skw["symbol"] = self.symbol
 

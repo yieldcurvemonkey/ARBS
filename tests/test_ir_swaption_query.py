@@ -66,6 +66,38 @@ def test_shorthand_parses_midcurve_three_token_form():
     assert q.structure_kwargs["tail"] == "1Yx10Y"
 
 
+def test_premium_bps_alias_defaults_to_forward_bps_market_convention():
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        shorthand="1Yx5Y",
+        structure_kwargs={"premium_bps": 12.5},
+    )
+    assert q.structure_kwargs["premium"] == pytest.approx(12.5)
+    assert q.structure_kwargs["premium_type"] == "fwd_bps"
+    assert "premium_bps" not in q.structure_kwargs
+
+
+def test_premiums_bps_alias_normalizes_multi_leg_types():
+    q = IRSwaptionQuery(
+        curve="USD-SOFR-1D",
+        shorthand="1Yx5Y",
+        structure=IRSwaptionStructure.STRADDLE,
+        structure_kwargs={"premiums_bps": [12.5, 8.0]},
+    )
+    assert q.structure_kwargs["premiums"] == [12.5, 8.0]
+    assert q.structure_kwargs["premium_types"] == ["fwd_bps", "fwd_bps"]
+    assert "premiums_bps" not in q.structure_kwargs
+
+
+def test_conflicting_scalar_premium_inputs_raise():
+    with pytest.raises(ValueError, match="scalar premium input"):
+        IRSwaptionQuery(
+            curve="USD-SOFR-1D",
+            shorthand="1Yx5Y",
+            structure_kwargs={"premium": 125_000.0, "premium_bps": 12.5},
+        )
+
+
 def test_atmf_plus_offset_infers_payer_for_outright():
     q = IRSwaptionQuery(
         curve="USD-SOFR-1D",

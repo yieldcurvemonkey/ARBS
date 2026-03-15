@@ -18,6 +18,25 @@ _DELTA_RE = re.compile(
     re.IGNORECASE,
 )
 _SHORTHANDLE_TOKEN_RE = re.compile(r"\d+[DWMYdwm y]")
+_PREMIUM_TYPE_ALIASES = {
+    "cash": "spot_cash",
+    "premium_cash": "spot_cash",
+    "spot_cash": "spot_cash",
+    "spot_premium_cash": "spot_cash",
+    "spot_upfront_cash": "spot_cash",
+    "upfront_cash": "spot_cash",
+    "bps": "fwd_bps",
+    "forward_bps": "fwd_bps",
+    "forward_premium_bps": "fwd_bps",
+    "fwd_bps": "fwd_bps",
+    "fwd_premium_bps": "fwd_bps",
+    "market_bps": "fwd_bps",
+    "premium_bps": "fwd_bps",
+    "upfront_bps": "fwd_bps",
+    "spot_bps": "spot_bps",
+    "spot_premium_bps": "spot_bps",
+    "spot_upfront_bps": "spot_bps",
+}
 
 
 def to_date(value: dt.date | dt.datetime | str) -> dt.date:
@@ -111,6 +130,23 @@ def normalize_option_type(option_type: str) -> str:
     if token in {"receiver", "rec", "r", "put"}:
         return "receiver"
     raise ValueError(f"Invalid option type '{option_type}'. Expected payer/receiver.")
+
+
+def normalize_premium_type(
+    premium_type: str | None,
+    *,
+    default: str = "spot_cash",
+) -> str:
+    if premium_type is None:
+        return default
+    token = str(premium_type).strip().lower().replace("-", "_").replace(" ", "_")
+    normalized = _PREMIUM_TYPE_ALIASES.get(token)
+    if normalized is None:
+        raise ValueError(
+            f"Unsupported premium_type '{premium_type}'. Expected one of "
+            "'spot_cash', 'spot_bps', or 'fwd_bps'."
+        )
+    return normalized
 
 
 def infer_option_type_from_strike_spec(strike_spec: float | int | str | None) -> Optional[str]:

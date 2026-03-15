@@ -140,6 +140,17 @@ class IRSwapQuery(BaseQuery):
         object.__setattr__(self, "structure_id", self.structure)
 
         skw: Dict[str, Any] = dict(self.structure_kwargs or {})
+        if skw.get("fixed_rate") is None and skw.get("coupon") is not None:
+            skw["fixed_rate"] = skw["coupon"]
+        if skw.get("front_fixed_rate") is None and skw.get("front_coupon") is not None:
+            skw["front_fixed_rate"] = skw["front_coupon"]
+        if skw.get("back_fixed_rate") is None and skw.get("back_coupon") is not None:
+            skw["back_fixed_rate"] = skw["back_coupon"]
+        if skw.get("mid_fixed_rate") is None:
+            if skw.get("belly_coupon") is not None:
+                skw["mid_fixed_rate"] = skw["belly_coupon"]
+            elif skw.get("mid_coupon") is not None:
+                skw["mid_fixed_rate"] = skw["mid_coupon"]
         if self.structure == IRSwapStructure.CURVE and "tenors" in skw:
             tenors = skw.get("tenors") or []
             if len(tenors) >= 2:
@@ -148,27 +159,34 @@ class IRSwapQuery(BaseQuery):
 
         # Basic validation by structure
         if self.structure == IRSwapStructure.OUTRIGHT:
-            assert (
-                self.tenor or (self.effective_date and self.maturity_date) or self.is_mms
-            ), "OUTRIGHT requires tenor OR (effective_date & maturity_date) OR is_mms=True"
+            if not (self.tenor or (self.effective_date and self.maturity_date) or self.is_mms):
+                raise ValueError("OUTRIGHT requires tenor OR (effective_date & maturity_date) OR is_mms=True")
             if "notional" not in skw and "bpv" not in skw:
                 skw.setdefault("notional", 1_000_000)
         elif self.structure == IRSwapStructure.CURVE:
-            assert ("front_tenor" in skw and "back_tenor" in skw) or (
-                "front_effective_date" in self.structure_kwargs
-                and "front_maturity_date" in self.structure_kwargs
-                and "back_effective_date" in self.structure_kwargs
-                and "back_maturity_date" in self.structure_kwargs
-            ), "CURVE requires both leg tenors OR both leg (effective_date & maturity_date)"
+            if not (
+                ("front_tenor" in skw and "back_tenor" in skw)
+                or (
+                    "front_effective_date" in self.structure_kwargs
+                    and "front_maturity_date" in self.structure_kwargs
+                    and "back_effective_date" in self.structure_kwargs
+                    and "back_maturity_date" in self.structure_kwargs
+                )
+            ):
+                raise ValueError("CURVE requires both leg tenors OR both leg (effective_date & maturity_date)")
         elif self.structure == IRSwapStructure.FLY:
-            assert ("front_tenor" in self.structure_kwargs and "belly_tenor" in self.structure_kwargs and "back_tenor" in self.structure_kwargs) or (
-                "front_effective_date" in self.structure_kwargs
-                and "front_maturity_date" in self.structure_kwargs
-                and "belly_effective_date" in self.structure_kwargs
-                and "belly_maturity_date" in self.structure_kwargs
-                and "back_effective_date" in self.structure_kwargs
-                and "back_maturity_date" in self.structure_kwargs
-            ), "FLY requires all three leg tenors OR (effective_date & maturity_date) for each leg"
+            if not (
+                ("front_tenor" in self.structure_kwargs and "belly_tenor" in self.structure_kwargs and "back_tenor" in self.structure_kwargs)
+                or (
+                    "front_effective_date" in self.structure_kwargs
+                    and "front_maturity_date" in self.structure_kwargs
+                    and "belly_effective_date" in self.structure_kwargs
+                    and "belly_maturity_date" in self.structure_kwargs
+                    and "back_effective_date" in self.structure_kwargs
+                    and "back_maturity_date" in self.structure_kwargs
+                )
+            ):
+                raise ValueError("FLY requires all three leg tenors OR (effective_date & maturity_date) for each leg")
 
         # Build normalized structure kwargs (merge tenor/dates/is_mms flags)
         if self.tenor is not None and "tenor" not in skw:
@@ -205,15 +223,30 @@ class IRSwapQuery(BaseQuery):
 
         tenor_str = self.structure_kwargs.get("tenor") or self.tenor or ""
         slash_count = tenor_str.count("/")
-        if slash_count == 1:
-            object.__setattr__(self, "structure", IRSwapStructure.CURVE)
-            object.__setattr__(self, "structure_id", IRSwapStructure.CURVE)
-        elif slash_count == 2:
-            object.__setattr__(self, "structure", IRSwapStructure.FLY)
-            object.__setattr__(self, "structure_id", IRSwapStructure.FLY)
-        else:
-            object.__setattr__(self, "structure", IRSwapStructure.OUTRIGHT)
-            object.__setattr__(self, "structure_id", IRSwapStructure.OUTRIGHT)
+        explicit_multi_leg = self.structure in {IRSwapStructure.CURVE, IRSwapStructure.FLY} or any(
+            skw.get(key) is not None
+            for key in (
+                "front_tenor",
+                "back_tenor",
+                "belly_tenor",
+                "front_effective_date",
+                "back_effective_date",
+                "belly_effective_date",
+                "front_maturity_date",
+                "back_maturity_date",
+                "belly_maturity_date",
+            )
+        )
+        if not explicit_multi_leg:
+            if slash_count == 1:
+                object.__setattr__(self, "structure", IRSwapStructure.CURVE)
+                object.__setattr__(self, "structure_id", IRSwapStructure.CURVE)
+            elif slash_count == 2:
+                object.__setattr__(self, "structure", IRSwapStructure.FLY)
+                object.__setattr__(self, "structure_id", IRSwapStructure.FLY)
+            else:
+                object.__setattr__(self, "structure", IRSwapStructure.OUTRIGHT)
+                object.__setattr__(self, "structure_id", IRSwapStructure.OUTRIGHT)
 
     # ---- BaseQuery abstract hooks adapted to IRS ----
 

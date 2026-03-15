@@ -3,6 +3,7 @@ import datetime
 import pytest
 import pytz
 
+from Query.Base.bachelier import bachelier_greeks_fd, implied_normal_vol
 from Query.Base.product_adapter import get_adapter
 from Query.USTFutureOptions.USTFutureOptionQuery import USTFutureOptionQuery
 from Query.USTFutureOptions.USTFutureOptionStructure import USTFutureOptionStructure
@@ -141,3 +142,36 @@ def test_build_mdp_request_endpoint_and_symbols_wiring():
     assert req_ts["endpoint"] == "option_timeseries"
     assert req_ts["symbols"] == ["ZNM26|1125C", "ZNM26|1130C"]
     assert req_ts["timestamp"] == now.date()
+
+
+def test_premium_override_reprices_outright_iv_and_greeks():
+    pricer = _mk_pricer(symbol="ZNM26|1125C", right="C", price=1.20, delta=0.55, gamma=0.9, vega=0.1, theta=-0.02, iv_normal=0.80)
+    pricer_map = {"ZNM26|1125C": [pricer]}
+    q = USTFutureOptionQuery(
+        structure=USTFutureOptionStructure.OUTRIGHT,
+        value=USTFutureOptionValue.IV_NORMAL_BPS,
+        symbol="ZNM26|1125C",
+        structure_kwargs={"premium": 1.45},
+    )
+
+    package, weights = q.resolve_package(pricer_or_curve=pricer_map)
+    value_map = q.build_value_map(pricer_or_curve=pricer_map, package=package, risk_weights=weights)
+    tte = max((pricer.expiry_date() - pricer.quote_timestamp().date()).days / 365.0, 1e-12)
+    expected_iv = implied_normal_vol("C", package[0].strike(), pricer.forward(), tte, 1.45, pricer.discount())
+    exp_delta, exp_gamma, exp_vega, exp_theta = bachelier_greeks_fd(
+        right="C",
+        strike=package[0].strike(),
+        forward=pricer.forward(),
+        vol_normal=expected_iv,
+        tte=tte,
+        discount=pricer.discount(),
+    )
+
+    assert package[0].premium_override() == pytest.approx(1.45)
+    assert value_map.apply(USTFutureOptionValue.PRICE) == pytest.approx(1.45)
+    assert value_map.apply(USTFutureOptionValue.NPV) == pytest.approx(1.45)
+    assert value_map.apply(USTFutureOptionValue.IV_NORMAL_BPS) == pytest.approx(expected_iv / pricer.fv01())
+    assert value_map.apply(USTFutureOptionValue.DELTA) == pytest.approx(exp_delta)
+    assert value_map.apply(USTFutureOptionValue.GAMMA) == pytest.approx(exp_gamma)
+    assert value_map.apply(USTFutureOptionValue.VEGA) == pytest.approx(exp_vega)
+    assert value_map.apply(USTFutureOptionValue.THETA) == pytest.approx(exp_theta)

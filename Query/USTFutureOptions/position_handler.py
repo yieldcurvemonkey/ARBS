@@ -42,11 +42,23 @@ class USTFutureOptionHandler(PositionHandler):
     def _leg_prices(pr: Any, package: list[Any]) -> list[float]:
         if isinstance(pr, Mapping):
             out: list[float] = []
-            for p in pr.values():
-                pricer_obj = p[0] if isinstance(p, list) and p else p
-                if pricer_obj is None:
+            flat: list[Any] = []
+            for entry in pr.values():
+                pricer_obj = entry[0] if isinstance(entry, list) and entry else entry
+                if pricer_obj is not None:
+                    flat.append(pricer_obj)
+            for idx, leg in enumerate(package):
+                if hasattr(leg, "premium_override"):
+                    premium_override = leg.premium_override()
+                    if premium_override is not None:
+                        out.append(float(abs(premium_override)))
+                        continue
+                match = next((p for p in flat if getattr(p, "symbol", lambda: None)() == leg.symbol()), None)
+                if match is None and 0 <= idx < len(flat):
+                    match = flat[idx]
+                if match is None:
                     continue
-                out.append(float(pricer_obj.price()))
+                out.append(float(match.price()))
             return out
         return [float(pr.price(pk)) for pk in package]
 

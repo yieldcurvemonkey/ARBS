@@ -1,6 +1,7 @@
 import importlib
 import datetime as dt
 import math
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,7 @@ from Query.IRSwaptions.pricer import IRSwaptionPricable
 
 
 value_module = importlib.import_module("Query.IRSwaptions.IRSwaptionValue")
+pricer_module = importlib.import_module("Query.IRSwaptions.pricer")
 
 
 class _DummyContext:
@@ -247,3 +249,55 @@ def test_forward_nvol_midcurve_single_leg_and_two_leg_modes(monkeypatch):
     fwd_two_leg = fmap_two.apply(IRSwaptionValue.FWD_NVOL)
     expected_two_leg = math.sqrt((3.0 * 0.010 * 0.010 - 1.0 * 0.008 * 0.008) / 2.0) * 10_000.0
     assert fwd_two_leg == pytest.approx(expected_two_leg)
+
+
+def test_premium_override_changes_swaption_nvol_and_delta(monkeypatch):
+    class _FakeSwaption:
+        def __init__(self, premium):
+            self._premium = float(premium or 0.0)
+
+        def impliedVolatility(self, npv, *args, **kwargs):
+            _ = args, kwargs
+            return float(npv) / 1_000_000.0
+
+        def NPV(self):
+            return self._premium
+
+        def delta(self):
+            return self._premium / 1_000.0
+
+        def annuity(self):
+            return 1.0
+
+        def vega(self):
+            return self._premium / 100.0
+
+        def underlying(self):
+            return SimpleNamespace(fixedLegBPS=lambda: 1.0)
+
+    monkeypatch.setattr(pricer_module, "build_ql_swaption", lambda context, leg, **kwargs: _FakeSwaption(leg.premium_override))
+    monkeypatch.setattr(pricer_module, "_override_implied_normal_vol", lambda context, leg: (leg.premium_override or 0.0) / 1_000_000.0)
+    monkeypatch.setattr(pricer_module, "leg_fwd_npv", lambda context, leg: float(leg.premium_override or 0.0) * 2.0)
+    monkeypatch.setattr(pricer_module, "leg_delta", lambda context, leg: float(leg.premium_override or 0.0) / 1_000.0)
+    monkeypatch.setattr(pricer_module, "leg_dv01", lambda context, leg: float(leg.premium_override or 0.0) / 10_000.0)
+    monkeypatch.setattr(pricer_module, "leg_gamma", lambda context, leg, bump_bps=1.0: float(leg.premium_override or 0.0) / 10_000.0)
+    monkeypatch.setattr(pricer_module, "leg_gamma_01", lambda context, leg, bump_bps=1.0: float(leg.premium_override or 0.0) / 100_000.0)
+    monkeypatch.setattr(pricer_module, "leg_vega_01", lambda context, leg: float(leg.premium_override or 0.0) / 1_000.0)
+    monkeypatch.setattr(pricer_module, "leg_theta_1d", lambda context, leg: -1.0)
+    monkeypatch.setattr(pricer_module, "leg_charm", lambda context, leg: -0.1)
+    monkeypatch.setattr(pricer_module, "leg_veta", lambda context, leg: -0.2)
+
+    leg = IRSwaptionPricable(
+        option_type="payer",
+        exercise_date=dt.date(2027, 3, 4),
+        underlying_effective_date=dt.date(2027, 3, 4),
+        underlying_maturity_date=dt.date(2032, 3, 4),
+        strike=0.02,
+        notional=1.0,
+        premium_override=125_000.0,
+    )
+    fmap = IRSwaptionValueFunctionMap(context=SimpleNamespace(), package=[leg], risk_weights=[1.0])
+
+    assert fmap.apply(IRSwaptionValue.SPOT_NPV) == pytest.approx(125_000.0)
+    assert fmap.apply(IRSwaptionValue.NVOL) == pytest.approx(1_250.0)
+    assert fmap.apply(IRSwaptionValue.DELTA) == pytest.approx(125.0)

@@ -231,3 +231,5 @@ _temp_raw_raw_trades.csv
 /notebooks/data
 /.claude
 /tmp
+/logs
+notebooks/logs/

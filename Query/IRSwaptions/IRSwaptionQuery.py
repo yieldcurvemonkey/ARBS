@@ -11,12 +11,33 @@ from Query.IRSwaptions.IRSwaptionValue import IRSwaptionValue
 from Query.IRSwaptions.pricer import IRSwaptionPricable, leg_forward_rate, leg_model_vol, leg_tte_years
 from Query.IRSwaptions.utils import (
     infer_option_type_from_strike_spec,
+    normalize_premium_type,
     normalize_tenor,
     parse_expiry_tail_shorthandle,
     parse_midcurve_tail,
     resolve_strike_spec,
     to_date,
 )
+
+
+_SCALAR_PREMIUM_ALIASES: dict[str, str | None] = {
+    "premium": None,
+    "upfront": None,
+    "premium_bps": "fwd_bps",
+    "fwd_premium_bps": "fwd_bps",
+    "forward_premium_bps": "fwd_bps",
+    "upfront_bps": "fwd_bps",
+    "spot_premium_bps": "spot_bps",
+}
+_VECTOR_PREMIUM_ALIASES: dict[str, str | None] = {
+    "premiums": None,
+    "upfronts": None,
+    "premiums_bps": "fwd_bps",
+    "fwd_premiums_bps": "fwd_bps",
+    "forward_premiums_bps": "fwd_bps",
+    "upfronts_bps": "fwd_bps",
+    "spot_premiums_bps": "spot_bps",
+}
 
 
 def _is_explicit_date_mode(skw: Dict[str, Any]) -> bool:
@@ -45,6 +66,73 @@ def _infer_outright_structure(
     if inferred_option_type == "receiver":
         return IRSwaptionStructure.RECEIVER
     return structure
+
+
+def _normalize_scalar_premium_inputs(skw: Dict[str, Any]) -> None:
+    present = [(key, skw[key], premium_type) for key, premium_type in _SCALAR_PREMIUM_ALIASES.items() if skw.get(key) is not None]
+    if len(present) > 1:
+        labels = ", ".join(key for key, _, _ in present)
+        raise ValueError(f"Specify only one scalar premium input for IRSwaptionQuery, got: {labels}")
+    if not present:
+        return
+
+    key, value, implied_type = present[0]
+    if key != "premium":
+        skw["premium"] = value
+        skw.pop(key, None)
+
+    if implied_type is None:
+        return
+
+    existing_type = skw.get("premium_type")
+    if existing_type is None:
+        skw["premium_type"] = implied_type
+        return
+
+    normalized_existing = normalize_premium_type(existing_type)
+    if normalized_existing != implied_type:
+        raise ValueError(
+            f"Scalar premium alias '{key}' implies premium_type='{implied_type}', "
+            f"but explicit premium_type='{existing_type}' was provided."
+        )
+    skw["premium_type"] = normalized_existing
+
+
+def _normalize_vector_premium_inputs(skw: Dict[str, Any]) -> None:
+    present = [(key, skw[key], premium_type) for key, premium_type in _VECTOR_PREMIUM_ALIASES.items() if skw.get(key) is not None]
+    if len(present) > 1:
+        labels = ", ".join(key for key, _, _ in present)
+        raise ValueError(f"Specify only one multi-leg premium input for IRSwaptionQuery, got: {labels}")
+    if not present:
+        return
+
+    key, values, implied_type = present[0]
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(f"{key} must be a list or tuple of per-leg premium values.")
+    values_list = list(values)
+    if key != "premiums":
+        skw["premiums"] = values_list
+        skw.pop(key, None)
+    else:
+        skw["premiums"] = values_list
+
+    if implied_type is None:
+        return
+
+    existing_types = skw.get("premium_types")
+    if existing_types is None:
+        skw["premium_types"] = [implied_type] * len(values_list)
+        return
+    if not isinstance(existing_types, (list, tuple)) or len(existing_types) != len(values_list):
+        raise ValueError("premium_types must align one-for-one with premiums.")
+
+    normalized_existing = [normalize_premium_type(v) for v in existing_types]
+    if any(token != implied_type for token in normalized_existing):
+        raise ValueError(
+            f"Premium alias '{key}' implies premium_types='{implied_type}', "
+            "but explicit premium_types were also provided."
+        )
+    skw["premium_types"] = normalized_existing
 
 
 @dataclass(frozen=True)
@@ -97,6 +185,17 @@ class IRSwaptionQuery(BaseQuery):
             object.__setattr__(self, "tail", tail)
 
         skw = dict(self.structure_kwargs or {})
+        _normalize_scalar_premium_inputs(skw)
+        _normalize_vector_premium_inputs(skw)
+        if skw.get("premium") is not None and skw.get("premiums") is not None:
+            raise ValueError("Specify only one of premium or premiums in IRSwaptionQuery.structure_kwargs.")
+        if skw.get("premium_type") is not None:
+            skw["premium_type"] = normalize_premium_type(skw["premium_type"])
+        if skw.get("premium_types") is not None:
+            premium_types = skw["premium_types"]
+            if not isinstance(premium_types, (list, tuple)):
+                raise ValueError("premium_types must be a list or tuple of per-leg premium type labels.")
+            skw["premium_types"] = [normalize_premium_type(v) for v in premium_types]
         if expiry is not None and "expiry" not in skw:
             skw["expiry"] = expiry
         if tail is not None and "tail" not in skw:

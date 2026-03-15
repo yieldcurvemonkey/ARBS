@@ -57,6 +57,11 @@ class STIRFutureOptionHandler(PositionHandler):
         if isinstance(pr, Mapping):
             out: list[float] = []
             for idx, leg in enumerate(package):
+                if hasattr(leg, "premium_override"):
+                    premium_override = leg.premium_override()
+                    if premium_override is not None:
+                        out.append(float(abs(premium_override)))
+                        continue
                 out.append(float(resolve_pricer_for_leg(pr, leg, index=idx).price()))
             return out
         return [float(pr.price(pk)) for pk in package]

@@ -73,6 +73,10 @@ def rebuild_leg_with_quantity(
     *,
     quantity: float,
 ) -> Any:
+    premium_override = None
+    if hasattr(leg, "premium_override"):
+        override_attr = leg.premium_override
+        premium_override = override_attr() if callable(override_attr) else override_attr
     return pricer.build_pricable(
         symbol=leg.symbol(),
         right=leg.right(),
@@ -80,6 +84,7 @@ def rebuild_leg_with_quantity(
         expiry_date=leg.expiry_date(),
         quote_timestamp=leg.quote_timestamp(),
         quantity=float(quantity),
+        premium_override=premium_override,
     )
 
 

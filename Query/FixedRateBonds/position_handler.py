@@ -68,9 +68,10 @@ class FinancedFixedRateBondHandler(PositionHandler):
 
         cf_total = 0.0
         for frb in pos.package or []:
+            instrument = getattr(frb, "instrument", frb)
             cf_total += float(
                 pr_any.cashflows_between(
-                    frb,
+                    instrument,
                     start=window_start,
                     end=window_end,
                     include_coupons=True,
