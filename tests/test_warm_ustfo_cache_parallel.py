@@ -169,3 +169,218 @@ def test_warm_range_retries_retryable_bulk_dual_source_errors(monkeypatch):
     assert seen["bulk_calls"] == 2
     assert seen["sleep_calls"] == [1.0]
     assert out.failure_count == 0
+
+
+def test_warm_range_dual_source_skips_bad_symbol_during_per_date_smile_warm(monkeypatch):
+    d1 = dt.date(2025, 9, 8)
+    d2 = dt.date(2025, 9, 9)
+    seen = {"bulk_requests": [], "snapshot_requests": []}
+
+    class _DummyUSTFutureOptionMDP:
+        def __init__(self, source):
+            assert source == "USTFO_DUAL-QL"
+
+        def fetch_bulk_sabr_smile(self, request):
+            payload = {
+                "globex_symbols": list(request["globex_symbols"]),
+                "timestamps": list(request["timestamps"]),
+                "show_tqdm": request["show_tqdm"],
+                "use_ql_calculator": request.get("use_ql_calculator"),
+            }
+            seen["bulk_requests"].append(payload)
+
+            symbols = payload["globex_symbols"]
+            timestamps = payload["timestamps"]
+            if symbols == ["TU_30", "FV_30"] and timestamps == [d1, d2]:
+                raise ValueError("range batch failed")
+            if symbols == ["TU_30", "FV_30"]:
+                raise ValueError("day batch failed")
+            if symbols == ["TU_30"]:
+                raise ValueError("Not enough valid SABR smile legs")
+            return {symbol: {timestamp: object() for timestamp in timestamps} for symbol in symbols}
+
+        def get_pricer(self, request):
+            seen["snapshot_requests"].append(
+                {
+                    "symbols": list(request["symbols"]),
+                    "timestamp": request["timestamp"],
+                    "use_ql_calculator": request["use_ql_calculator"],
+                }
+            )
+            return {}
+
+    monkeypatch.setattr(warm_mod, "ql_cal_date_range", lambda **kwargs: [d1, d2])
+    monkeypatch.setattr(ustfo_module, "USTFutureOptionMDP", _DummyUSTFutureOptionMDP)
+
+    out = _warm_range(
+        DateRange(d1, d2),
+        source="USTFO_DUAL-QL",
+        roots=("TU", "FV"),
+        cmts=("30",),
+        warm_snapshot=True,
+        warm_smile=True,
+        use_ql_calculator=True,
+        startup_delay_seconds=0.0,
+        heartbeat_seconds=0.0,
+    )
+
+    assert seen["snapshot_requests"] == [
+        {
+            "symbols": ["TU_30|ATMS", "FV_30|ATMS"],
+            "timestamp": d1,
+            "use_ql_calculator": True,
+        },
+        {
+            "symbols": ["TU_30|ATMS", "FV_30|ATMS"],
+            "timestamp": d2,
+            "use_ql_calculator": True,
+        },
+    ]
+    assert seen["bulk_requests"] == [
+        {
+            "globex_symbols": ["TU_30", "FV_30"],
+            "timestamps": [d1, d2],
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        },
+        {
+            "globex_symbols": ["TU_30", "FV_30"],
+            "timestamps": [d1],
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        },
+        {
+            "globex_symbols": ["TU_30"],
+            "timestamps": [d1],
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        },
+        {
+            "globex_symbols": ["FV_30"],
+            "timestamps": [d1],
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        },
+        {
+            "globex_symbols": ["TU_30", "FV_30"],
+            "timestamps": [d2],
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        },
+        {
+            "globex_symbols": ["TU_30"],
+            "timestamps": [d2],
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        },
+        {
+            "globex_symbols": ["FV_30"],
+            "timestamps": [d2],
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        },
+    ]
+    assert out.snapshot_requests == 2
+    assert out.smile_requests == 2
+    assert out.failure_count == 2
+    assert out.failures == [
+        {
+            **out.failures[0],
+            "date": "2025-09-08",
+            "cmt": "30",
+            "symbol": "TU_30",
+            "error": "Not enough valid SABR smile legs",
+        },
+        {
+            **out.failures[1],
+            "date": "2025-09-09",
+            "cmt": "30",
+            "symbol": "TU_30",
+            "error": "Not enough valid SABR smile legs",
+        },
+    ]
+
+
+def test_warm_range_dual_source_skips_bad_symbol_during_per_date_snapshot_warm(monkeypatch):
+    d1 = dt.date(2025, 9, 8)
+    seen = {"bulk_requests": [], "snapshot_requests": []}
+
+    class _DummyUSTFutureOptionMDP:
+        def __init__(self, source):
+            assert source == "USTFO_DUAL-QL"
+
+        def fetch_bulk_sabr_smile(self, request):
+            payload = {
+                "globex_symbols": list(request["globex_symbols"]),
+                "timestamps": list(request["timestamps"]),
+                "show_tqdm": request["show_tqdm"],
+                "use_ql_calculator": request.get("use_ql_calculator"),
+            }
+            seen["bulk_requests"].append(payload)
+            raise ValueError("range batch failed")
+
+        def get_pricer(self, request):
+            payload = {
+                "symbols": list(request["symbols"]),
+                "timestamp": request["timestamp"],
+                "use_ql_calculator": request["use_ql_calculator"],
+            }
+            seen["snapshot_requests"].append(payload)
+            if payload["symbols"] == ["TU_30|ATMS", "FV_30|ATMS"]:
+                raise ValueError("snapshot day batch failed")
+            if payload["symbols"] == ["TU_30|ATMS"]:
+                raise ValueError("Could not resolve dual-source constant-maturity option aliases: TU_30|ATMS")
+            return {}
+
+    monkeypatch.setattr(warm_mod, "ql_cal_date_range", lambda **kwargs: [d1])
+    monkeypatch.setattr(ustfo_module, "USTFutureOptionMDP", _DummyUSTFutureOptionMDP)
+
+    out = _warm_range(
+        DateRange(d1, d1),
+        source="USTFO_DUAL-QL",
+        roots=("TU", "FV"),
+        cmts=("30",),
+        warm_snapshot=True,
+        warm_smile=False,
+        use_ql_calculator=True,
+        startup_delay_seconds=0.0,
+        heartbeat_seconds=0.0,
+    )
+
+    assert seen["bulk_requests"] == [
+        {
+            "globex_symbols": ["TU_30", "FV_30"],
+            "timestamps": [d1],
+            "show_tqdm": False,
+            "use_ql_calculator": True,
+        }
+    ]
+    assert seen["snapshot_requests"] == [
+        {
+            "symbols": ["TU_30|ATMS", "FV_30|ATMS"],
+            "timestamp": d1,
+            "use_ql_calculator": True,
+        },
+        {
+            "symbols": ["TU_30|ATMS"],
+            "timestamp": d1,
+            "use_ql_calculator": True,
+        },
+        {
+            "symbols": ["FV_30|ATMS"],
+            "timestamp": d1,
+            "use_ql_calculator": True,
+        },
+    ]
+    assert out.snapshot_requests == 1
+    assert out.smile_requests == 0
+    assert out.failure_count == 1
+    assert out.failures == [
+        {
+            **out.failures[0],
+            "date": "2025-09-08",
+            "cmt": "30",
+            "symbol": "TU_30|ATMS",
+            "error": "Could not resolve dual-source constant-maturity option aliases: TU_30|ATMS",
+        }
+    ]

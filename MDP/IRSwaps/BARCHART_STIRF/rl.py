@@ -3,6 +3,7 @@ import hashlib
 import math
 import os
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
@@ -360,6 +361,12 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
     _CURVE_CACHE_SCHEMA = 1
     _CURVE_CACHE_ATTR = "_barchart_stirf_curve_cache"
     _CURVE_CACHE_STEM = "BARCHART_STIRF-RL_CURVE_CACHE"
+
+    # In-memory LRU for deserialized curves – avoids diskcache I/O + rl.from_json()
+    # on repeated bulk fetches. Class-level so all instances share the same pool.
+    _CURVE_MEM_CACHE: Dict[str, Any] = {}
+    _CURVE_MEM_CACHE_LOCK = threading.Lock()
+    _CURVE_MEM_CACHE_MAXSIZE = 100_000
 
     def __init__(self, curve_cache_dir: Optional[Union[str, Path]] = None):
         DiskCacheMixin.__init__(self)
@@ -963,6 +970,10 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
 
     def _curve_cache_get(self, curve_name: str, timestamp: datetime.datetime, cfg: Dict[str, Any]) -> Optional[rl.Curve]:
         key = self._curve_cache_key(curve_name, timestamp, cfg)
+        # Check in-memory cache first (avoids diskcache I/O + rl.from_json).
+        mem_hit = self._CURVE_MEM_CACHE.get(key)
+        if mem_hit is not None:
+            return self._attach_curve_context(mem_hit, curve_name=curve_name, timestamp=timestamp, cfg=cfg)
         mapping = self._curve_cache_mapping()
         payload = mapping.get(key)
         if payload is None:
@@ -977,6 +988,7 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
             if not curve_json:
                 return None
             curve = rl.from_json(curve_json)
+            self._mem_cache_put(key, curve)
             return self._attach_curve_context(curve, curve_name=curve_name, timestamp=timestamp, cfg=cfg)
         except Exception:
             return None
@@ -991,6 +1003,93 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
             "timestamp_utc": ts_utc.isoformat(),
             "curve_json": curve.to_json(),
         }
+        self._mem_cache_put(key, curve)
+
+    def _mem_cache_put(self, key: str, curve) -> None:
+        mem = self._CURVE_MEM_CACHE
+        with self._CURVE_MEM_CACHE_LOCK:
+            if len(mem) >= self._CURVE_MEM_CACHE_MAXSIZE:
+                for k in list(islice(mem, self._CURVE_MEM_CACHE_MAXSIZE // 10)):
+                    del mem[k]
+            mem[key] = curve
+
+    def _curve_cache_bulk_get(
+        self,
+        curve_name: str,
+        timestamps: List[datetime.datetime],
+        cfg: Dict[str, Any],
+    ) -> Tuple[Dict[datetime.datetime, Any], List[datetime.datetime]]:
+        """Bulk cache lookup with in-memory LRU + parallel disk reads.
+
+        Returns (hits_dict, misses_list).
+        """
+        cfg_hash = self._curve_cfg_hash(cfg)
+        schema = self._CURVE_CACHE_SCHEMA
+        sanitize = re.compile(r"[^A-Za-z0-9_.-]")
+
+        # Pre-generate all cache keys (cfg_hash computed once, not per-ts).
+        keys: List[str] = []
+        for ts in timestamps:
+            ts_utc = ts.astimezone(pytz.utc).replace(microsecond=0)
+            ts_str = ts_utc.strftime("%Y%m%dT%H%M%SZ")
+            keys.append(sanitize.sub("_", f"v{schema}_{curve_name}_{ts_str}_{cfg_hash}"))
+
+        hits: Dict[datetime.datetime, Any] = {}
+        disk_needed: List[Tuple[str, datetime.datetime]] = []
+
+        # Phase 1: in-memory cache lookups (instant).
+        mem = self._CURVE_MEM_CACHE
+        for key, ts in zip(keys, timestamps):
+            cached = mem.get(key)
+            if cached is not None:
+                hits[ts] = self._attach_curve_context(cached, curve_name=curve_name, timestamp=ts, cfg=cfg)
+            else:
+                disk_needed.append((key, ts))
+
+        if not disk_needed:
+            return hits, []
+
+        # Phase 2: parallel disk reads for cache misses.
+        mapping = self._curve_cache_mapping()
+        misses: List[datetime.datetime] = []
+
+        def _read_one(item: Tuple[str, datetime.datetime]) -> Tuple[str, datetime.datetime, Any]:
+            key, ts = item
+            payload = mapping.get(key)
+            if payload is None:
+                return key, ts, None
+            try:
+                if isinstance(payload, str):
+                    curve_json = payload
+                elif isinstance(payload, dict):
+                    curve_json = payload.get("curve_json")
+                else:
+                    return key, ts, None
+                if not curve_json:
+                    return key, ts, None
+                return key, ts, rl.from_json(curve_json)
+            except Exception:
+                return key, ts, None
+
+        n_workers = min(len(disk_needed), 8)
+        if n_workers <= 1:
+            results = [_read_one(item) for item in disk_needed]
+        else:
+            with ThreadPoolExecutor(max_workers=n_workers, thread_name_prefix="curve-cache-read") as pool:
+                results = list(pool.map(_read_one, disk_needed))
+
+        with self._CURVE_MEM_CACHE_LOCK:
+            for key, ts, curve in results:
+                if curve is not None:
+                    if len(mem) >= self._CURVE_MEM_CACHE_MAXSIZE:
+                        for k in list(islice(mem, self._CURVE_MEM_CACHE_MAXSIZE // 10)):
+                            del mem[k]
+                    mem[key] = curve
+                    hits[ts] = self._attach_curve_context(curve, curve_name=curve_name, timestamp=ts, cfg=cfg)
+                else:
+                    misses.append(ts)
+
+        return hits, misses
 
     @staticmethod
     def _pricer_symbol(pricer: "RLSTIRFuturePricer") -> str:
@@ -1692,19 +1791,20 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
             force_refresh = bool(local_kwargs.get("force_refresh", False))
             use_curve_cache = bool(curve_only) and not force_refresh
 
-            # Seed output from curve-cache and only process missing timestamps.
-            out: Dict[datetime.datetime, Any] = {}
-            pending_timestamps: List[datetime.datetime] = []
-            seen_pending: Set[datetime.datetime] = set()
+            # Deduplicate normalized timestamps.
+            seen_ts: Set[datetime.datetime] = set()
+            unique_timestamps: List[datetime.datetime] = []
             for ts in normalized_timestamps:
-                if use_curve_cache:
-                    cached_curve = self._curve_cache_get(curve_name, ts, cfg)
-                    if cached_curve is not None:
-                        out[ts] = cached_curve
-                        continue
-                if ts not in seen_pending:
-                    seen_pending.add(ts)
-                    pending_timestamps.append(ts)
+                if ts not in seen_ts:
+                    seen_ts.add(ts)
+                    unique_timestamps.append(ts)
+
+            # Seed output from curve-cache (bulk: in-memory LRU + parallel disk reads).
+            out: Dict[datetime.datetime, Any] = {}
+            if use_curve_cache:
+                out, pending_timestamps = self._curve_cache_bulk_get(curve_name, unique_timestamps, cfg)
+            else:
+                pending_timestamps = list(unique_timestamps)
 
             if not pending_timestamps:
                 return out

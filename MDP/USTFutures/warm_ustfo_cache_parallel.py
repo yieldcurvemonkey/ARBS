@@ -156,6 +156,223 @@ def _is_retryable_warm_error(exc: Exception) -> bool:
     return any(token in message for token in retry_tokens)
 
 
+def _fetch_bulk_sabr_smile_with_retries(
+    *,
+    mdp: object,
+    request: dict[str, object],
+) -> None:
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            mdp.fetch_bulk_sabr_smile(request)
+            return
+        except Exception as exc:  # pragma: no cover - exercised via callers
+            last_exc = exc
+            if attempt >= 1 or not _is_retryable_warm_error(exc):
+                break
+            time.sleep(float(attempt + 1))
+    assert last_exc is not None
+    raise last_exc
+
+
+def _fetch_option_snapshot_with_retries(
+    *,
+    mdp: object,
+    request: dict[str, object],
+) -> None:
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            mdp.get_pricer(request)
+            return
+        except Exception as exc:  # pragma: no cover - exercised via callers
+            last_exc = exc
+            if attempt >= 1 or not _is_retryable_warm_error(exc):
+                break
+            time.sleep(float(attempt + 1))
+    assert last_exc is not None
+    raise last_exc
+
+
+def _warm_bulk_sabr_smile_resilient(
+    *,
+    mdp: object,
+    globex_symbols: Sequence[str],
+    timestamps: Sequence[dt.date],
+    cmt: str,
+    date_label: str,
+    use_ql_calculator: bool,
+) -> tuple[bool, list[dict[str, str]]]:
+    symbol_list = [str(symbol).strip().upper() for symbol in globex_symbols if str(symbol).strip()]
+    timestamp_list = list(timestamps)
+    if not symbol_list or not timestamp_list:
+        return False, []
+
+    def _build_request(symbols: Sequence[str]) -> dict[str, object]:
+        return {
+            "globex_symbols": list(symbols),
+            "timestamps": timestamp_list,
+            "show_tqdm": False,
+            "use_ql_calculator": use_ql_calculator,
+        }
+
+    try:
+        _fetch_bulk_sabr_smile_with_retries(mdp=mdp, request=_build_request(symbol_list))
+        return True, []
+    except Exception as exc:
+        if len(symbol_list) == 1:
+            symbol = symbol_list[0]
+            print(
+                "[warn]"
+                f" warm_sabr_symbol_skipped"
+                f" date={date_label}"
+                f" cmt={cmt}"
+                f" symbol={symbol}"
+                f" error={exc}",
+                flush=True,
+            )
+            return (
+                False,
+                [
+                    {
+                        "date": str(date_label),
+                        "cmt": str(cmt),
+                        "symbol": str(symbol),
+                        "error": str(exc),
+                        "traceback": traceback.format_exc(limit=8),
+                    }
+                ],
+            )
+
+        print(
+            "[warn]"
+            f" warm_sabr_batch_failed"
+            f" date={date_label}"
+            f" cmt={cmt}"
+            f" symbols={','.join(symbol_list)}"
+            f" retry=individual"
+            f" error={exc}",
+            flush=True,
+        )
+
+    any_success = False
+    failures: list[dict[str, str]] = []
+    for symbol in symbol_list:
+        try:
+            _fetch_bulk_sabr_smile_with_retries(mdp=mdp, request=_build_request([symbol]))
+            any_success = True
+        except Exception as symbol_exc:
+            print(
+                "[warn]"
+                f" warm_sabr_symbol_skipped"
+                f" date={date_label}"
+                f" cmt={cmt}"
+                f" symbol={symbol}"
+                f" error={symbol_exc}",
+                flush=True,
+            )
+            failures.append(
+                {
+                    "date": str(date_label),
+                    "cmt": str(cmt),
+                    "symbol": str(symbol),
+                    "error": str(symbol_exc),
+                    "traceback": traceback.format_exc(limit=8),
+                }
+            )
+    return any_success, failures
+
+
+def _warm_option_snapshot_resilient(
+    *,
+    mdp: object,
+    symbols: Sequence[str],
+    trade_date: dt.date,
+    cmt: str,
+    use_ql_calculator: bool,
+) -> tuple[bool, list[dict[str, str]]]:
+    symbol_list = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
+    if not symbol_list:
+        return False, []
+
+    date_label = trade_date.isoformat()
+
+    def _build_request(request_symbols: Sequence[str]) -> dict[str, object]:
+        return {
+            "endpoint": "option_snapshot",
+            "symbols": list(request_symbols),
+            "timestamp": trade_date,
+            "show_tqdm": False,
+            "use_ql_calculator": use_ql_calculator,
+        }
+
+    try:
+        _fetch_option_snapshot_with_retries(mdp=mdp, request=_build_request(symbol_list))
+        return True, []
+    except Exception as exc:
+        if len(symbol_list) == 1:
+            symbol = symbol_list[0]
+            print(
+                "[warn]"
+                f" warm_snapshot_symbol_skipped"
+                f" date={date_label}"
+                f" cmt={cmt}"
+                f" symbol={symbol}"
+                f" error={exc}",
+                flush=True,
+            )
+            return (
+                False,
+                [
+                    {
+                        "date": date_label,
+                        "cmt": str(cmt),
+                        "symbol": str(symbol),
+                        "error": str(exc),
+                        "traceback": traceback.format_exc(limit=8),
+                    }
+                ],
+            )
+
+        print(
+            "[warn]"
+            f" warm_snapshot_batch_failed"
+            f" date={date_label}"
+            f" cmt={cmt}"
+            f" symbols={','.join(symbol_list)}"
+            f" retry=individual"
+            f" error={exc}",
+            flush=True,
+        )
+
+    any_success = False
+    failures: list[dict[str, str]] = []
+    for symbol in symbol_list:
+        try:
+            _fetch_option_snapshot_with_retries(mdp=mdp, request=_build_request([symbol]))
+            any_success = True
+        except Exception as symbol_exc:
+            print(
+                "[warn]"
+                f" warm_snapshot_symbol_skipped"
+                f" date={date_label}"
+                f" cmt={cmt}"
+                f" symbol={symbol}"
+                f" error={symbol_exc}",
+                flush=True,
+            )
+            failures.append(
+                {
+                    "date": date_label,
+                    "cmt": str(cmt),
+                    "symbol": str(symbol),
+                    "error": str(symbol_exc),
+                    "traceback": traceback.format_exc(limit=8),
+                }
+            )
+    return any_success, failures
+
+
 def _snapshot_worker_progress(progress: WorkerProgress, *, now_monotonic: float | None = None) -> dict[str, object]:
     now = time.perf_counter() if now_monotonic is None else float(now_monotonic)
     with progress.lock:
@@ -269,26 +486,29 @@ def _warm_range(
     def _run_single_date(trade_date: dt.date, cmt: str) -> None:
         nonlocal snapshot_requests, smile_requests
         if warm_snapshot:
-            mdp.get_pricer(
-                {
-                    "endpoint": "option_snapshot",
-                    "symbols": _snapshot_symbols(roots, cmt),
-                    "timestamp": trade_date,
-                    "show_tqdm": False,
-                    "use_ql_calculator": use_ql_calculator,
-                }
+            any_snapshot_success, snapshot_failures = _warm_option_snapshot_resilient(
+                mdp=mdp,
+                symbols=_snapshot_symbols(roots, cmt),
+                trade_date=trade_date,
+                cmt=str(cmt),
+                use_ql_calculator=use_ql_calculator,
             )
-            snapshot_requests += 1
+            failures.extend(snapshot_failures)
+            if any_snapshot_success:
+                snapshot_requests += 1
 
         if warm_smile:
-            mdp.fetch_bulk_sabr_smile(
-                {
-                    "globex_symbols": _smile_symbols(roots, cmt),
-                    "timestamps": [trade_date],
-                    "show_tqdm": False,
-                }
+            any_smile_success, smile_failures = _warm_bulk_sabr_smile_resilient(
+                mdp=mdp,
+                globex_symbols=_smile_symbols(roots, cmt),
+                timestamps=[trade_date],
+                cmt=str(cmt),
+                date_label=trade_date.isoformat(),
+                use_ql_calculator=use_ql_calculator,
             )
-            smile_requests += 1
+            failures.extend(smile_failures)
+            if any_smile_success:
+                smile_requests += 1
 
     try:
         source_upper = str(source).upper()
@@ -306,20 +526,16 @@ def _warm_range(
                     "use_ql_calculator": use_ql_calculator,
                 }
                 bulk_seeded = False
-                for attempt in range(2):
-                    try:
-                        # Bulk SABR warming also seeds the dual-source ATM snapshot aliases.
-                        mdp.fetch_bulk_sabr_smile(bulk_request)
-                        if warm_snapshot:
-                            snapshot_requests += len(dates)
-                        if warm_smile:
-                            smile_requests += len(dates)
-                        bulk_seeded = True
-                        break
-                    except Exception as exc:
-                        if attempt >= 1 or not _is_retryable_warm_error(exc):
-                            break
-                        time.sleep(float(attempt + 1))
+                try:
+                    # Bulk SABR warming also seeds the dual-source ATM snapshot aliases.
+                    _fetch_bulk_sabr_smile_with_retries(mdp=mdp, request=bulk_request)
+                    if warm_snapshot:
+                        snapshot_requests += len(dates)
+                    if warm_smile:
+                        smile_requests += len(dates)
+                    bulk_seeded = True
+                except Exception:
+                    bulk_seeded = False
 
                 if bulk_seeded:
                     with progress.lock:

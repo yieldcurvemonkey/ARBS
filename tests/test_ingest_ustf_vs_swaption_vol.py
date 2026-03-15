@@ -212,6 +212,141 @@ def test_fetch_swaption_snapshot_rows_warns_when_context_cube_missing(monkeypatc
     ) in logged_messages
 
 
+def test_fetch_bulk_sabr_smiles_batched_retries_individual_symbols(monkeypatch):
+    as_of_date = dt.date(2026, 3, 12)
+    logged_messages: list[tuple[str, str]] = []
+    requests: list[dict[str, object]] = []
+
+    class FakeMDP:
+        def fetch_bulk_sabr_smile(self, request):
+            requests.append(dict(request))
+            symbols = list(request["globex_symbols"])
+            if symbols == ["TU_30", "FV_30"]:
+                raise ValueError("batch calibration failed")
+            if symbols == ["FV_30"]:
+                raise ValueError("Not enough valid SABR smile legs")
+            return {symbol: {as_of_date: f"smile:{symbol}"} for symbol in symbols}
+
+    def _stub_log_status(message, *, level="INFO"):
+        logged_messages.append((level, message))
+
+    monkeypatch.setattr(ingest_mod, "_log_status", _stub_log_status)
+
+    result = ingest_mod._fetch_bulk_sabr_smiles_batched(
+        mdp=FakeMDP(),
+        globex_symbols=["TU_30", "FV_30", "TY_30"],
+        as_of_date=as_of_date,
+        force_refresh=True,
+        batch_size=2,
+    )
+
+    assert result == {
+        "TU_30": {as_of_date: "smile:TU_30"},
+        "TY_30": {as_of_date: "smile:TY_30"},
+    }
+    assert requests == [
+        {
+            "globex_symbols": ["TU_30", "FV_30"],
+            "timestamps": [as_of_date],
+            "force_refresh": True,
+            "show_tqdm": False,
+        },
+        {
+            "globex_symbols": ["TU_30"],
+            "timestamps": [as_of_date],
+            "force_refresh": True,
+            "show_tqdm": False,
+        },
+        {
+            "globex_symbols": ["FV_30"],
+            "timestamps": [as_of_date],
+            "force_refresh": True,
+            "show_tqdm": False,
+        },
+        {
+            "globex_symbols": ["TY_30"],
+            "timestamps": [as_of_date],
+            "force_refresh": True,
+            "show_tqdm": False,
+        },
+    ]
+    assert (
+        "WARN",
+        "2026-03-12: USTF SABR batch failed for TU_30, FV_30; retrying individually: "
+        "batch calibration failed",
+    ) in logged_messages
+    assert (
+        "WARN",
+        "2026-03-12: skipping USTF symbol FV_30: Not enough valid SABR smile legs",
+    ) in logged_messages
+
+
+def test_fetch_ustf_snapshot_rows_skips_bad_symbol_row_build(monkeypatch):
+    as_of_date = dt.date(2026, 3, 12)
+    logged_messages: list[tuple[str, str]] = []
+
+    class FakeMDP:
+        def __init__(self, *, source, force_refresh):
+            assert source == "USTFO_DUAL-QL"
+            assert force_refresh is False
+
+    def _stub_request_map():
+        return {
+            "TU_30": ("TU", "1M"),
+            "FV_30": ("FV", "1M"),
+        }
+
+    def _stub_fetch_bulk_sabr_smiles_batched(*, mdp, globex_symbols, as_of_date, force_refresh):
+        assert isinstance(mdp, FakeMDP)
+        assert globex_symbols == ["TU_30", "FV_30"]
+        assert as_of_date == dt.date(2026, 3, 12)
+        assert force_refresh is True
+        return {
+            "TU_30": {as_of_date: "smile-tu"},
+            "FV_30": {as_of_date: "smile-fv"},
+        }
+
+    def _stub_build_ustf_snapshot_row(*, as_of_date, product, expiry_label, expiry_days_requested, smile):
+        assert as_of_date == dt.date(2026, 3, 12)
+        assert expiry_label == "1M"
+        assert expiry_days_requested == ingest_mod.ROLLING_EXPIRIES["1M"]
+        if product == "FV":
+            raise ValueError("bad smile payload")
+        return {
+            "as_of_date": as_of_date,
+            "product": product,
+            "expiry_label": expiry_label,
+            "smile": smile,
+        }
+
+    def _stub_log_status(message, *, level="INFO"):
+        logged_messages.append((level, message))
+
+    monkeypatch.setattr(ingest_mod, "USTFutureOptionMDP", FakeMDP)
+    monkeypatch.setattr(ingest_mod, "_build_ustf_request_map", _stub_request_map)
+    monkeypatch.setattr(ingest_mod, "_fetch_bulk_sabr_smiles_batched", _stub_fetch_bulk_sabr_smiles_batched)
+    monkeypatch.setattr(ingest_mod, "_build_ustf_snapshot_row", _stub_build_ustf_snapshot_row)
+    monkeypatch.setattr(ingest_mod, "_log_status", _stub_log_status)
+
+    rows = ingest_mod._fetch_ustf_snapshot_rows(
+        as_of_date=as_of_date,
+        force_refresh=True,
+    )
+
+    assert rows == [
+        {
+            "as_of_date": as_of_date,
+            "product": "TU",
+            "expiry_label": "1M",
+            "smile": "smile-tu",
+        }
+    ]
+    assert (
+        "WARN",
+        "2026-03-12: skipping USTF symbol FV_30 (FV 1M) during row build: bad smile payload",
+    ) in logged_messages
+
+
 def test_build_ustf_otm_payloads_include_price_and_ytm_metadata():
     class FakePoint:
         def __init__(

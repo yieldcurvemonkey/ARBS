@@ -90,7 +90,7 @@ USTF_TO_SWAPTION_EXPIRY: dict[str, str] = {
 }
 
 SWAPTION_EXPIRY_LABELS = ["1M", "2M", "3M", "6M", "1Y"]
-SWAPTION_TAIL_LABELS = ["2Y", "5Y", "7Y", "10Y", "20Y", "30Y"]
+SWAPTION_TAIL_LABELS = ["2Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y"]
 USTF_OTM_SIDE_SPECS = (("call", "C", 1.0), ("put", "P", -1.0))
 SWAPTION_OTM_SIDE_SPECS = (("payer", "payer", 1.0), ("receiver", "receiver", -1.0))
 
@@ -299,18 +299,50 @@ def _fetch_bulk_sabr_smiles_batched(
     if not globex_symbols:
         return {}
     merged: dict[str, dict[dt.date, Any]] = {}
-    for start in range(0, len(globex_symbols), batch_size):
-        symbol_batch = globex_symbols[start : start + batch_size]
-        batch_smiles = mdp.fetch_bulk_sabr_smile(
-            {
-                "globex_symbols": symbol_batch,
-                "timestamps": [as_of_date],
-                "force_refresh": False,
-                "show_tqdm": False,
-            }
-        )
+
+    def _merge_smiles(batch_smiles: dict[str, dict[dt.date, Any]] | None) -> None:
         for request_symbol, by_date in (batch_smiles or {}).items():
             merged.setdefault(str(request_symbol), {}).update(by_date or {})
+
+    for start in range(0, len(globex_symbols), batch_size):
+        symbol_batch = globex_symbols[start : start + batch_size]
+        request = {
+            "globex_symbols": symbol_batch,
+            "timestamps": [as_of_date],
+            "force_refresh": force_refresh,
+            "show_tqdm": False,
+        }
+        try:
+            _merge_smiles(mdp.fetch_bulk_sabr_smile(request))
+        except Exception as exc:
+            if len(symbol_batch) == 1:
+                _log_status(
+                    f"{as_of_date.isoformat()}: skipping USTF symbol {symbol_batch[0]}: {exc}",
+                    level="WARN",
+                )
+                continue
+            _log_status(
+                f"{as_of_date.isoformat()}: USTF SABR batch failed for "
+                f"{', '.join(symbol_batch)}; retrying individually: {exc}",
+                level="WARN",
+            )
+            for symbol in symbol_batch:
+                try:
+                    _merge_smiles(
+                        mdp.fetch_bulk_sabr_smile(
+                            {
+                                "globex_symbols": [symbol],
+                                "timestamps": [as_of_date],
+                                "force_refresh": force_refresh,
+                                "show_tqdm": False,
+                            }
+                        )
+                    )
+                except Exception as symbol_exc:
+                    _log_status(
+                        f"{as_of_date.isoformat()}: skipping USTF symbol {symbol}: {symbol_exc}",
+                        level="WARN",
+                    )
     return merged
 
 
@@ -599,7 +631,7 @@ def _fetch_ustf_snapshot_rows(
         mdp=mdp,
         globex_symbols=all_symbols,
         as_of_date=as_of_date,
-        force_refresh=False,
+        force_refresh=force_refresh,
     )
 
     rows: list[dict[str, Any]] = []
@@ -611,15 +643,22 @@ def _fetch_ustf_snapshot_rows(
         smile = by_date.get(as_of_date)
         if smile is None:
             continue
-        rows.append(
-            _build_ustf_snapshot_row(
-                as_of_date=as_of_date,
-                product=product,
-                expiry_label=expiry_label,
-                expiry_days_requested=ROLLING_EXPIRIES[expiry_label],
-                smile=smile,
+        try:
+            rows.append(
+                _build_ustf_snapshot_row(
+                    as_of_date=as_of_date,
+                    product=product,
+                    expiry_label=expiry_label,
+                    expiry_days_requested=ROLLING_EXPIRIES[expiry_label],
+                    smile=smile,
+                )
             )
-        )
+        except Exception as exc:
+            _log_status(
+                f"{as_of_date.isoformat()}: skipping USTF symbol {request_symbol} "
+                f"({product} {expiry_label}) during row build: {exc}",
+                level="WARN",
+            )
     return sorted(rows, key=lambda r: (r["product"], r["expiry_label"]))
 
 
