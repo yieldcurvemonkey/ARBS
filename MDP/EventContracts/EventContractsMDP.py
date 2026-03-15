@@ -54,19 +54,32 @@ class EventContractPricer:
         )
 
     def market_impact(self, quantity: int, side: str = "yes") -> Dict[str, Any]:
-        """Walk the orderbook to fill *quantity* contracts on *side*.
+        """Walk the orderbook to estimate execution cost for *buying* contracts.
+
+        In Kalshi's orderbook, ``yes`` and ``no`` contain resting **bids** for
+        each side.  To **buy YES** you must match against **NO bids** (a NO bid
+        at price P is equivalent to a YES offer at 1 − P), and vice-versa.
 
         Returns a dict with:
             avg_price       – volume-weighted average execution price
-            best_price      – top-of-book price
-            slippage        – avg_price - best_price (positive = worse)
-            total_cost      – avg_price * filled_quantity
+            best_price      – top-of-book (best available) price
+            slippage        – avg_price − best_price (positive = worse)
+            total_cost      – avg_price × filled_quantity
             filled_quantity – contracts actually filled (<= quantity)
         """
         book = self.get_orderbook()
-        levels = book.get(side, pd.DataFrame())
-        if levels.empty:
+
+        # To buy YES we lift NO bids (and flip prices); to buy NO we lift YES bids.
+        opposite = "no" if side == "yes" else "yes"
+        contra = book.get(opposite, pd.DataFrame())
+        if contra.empty:
             return {"avg_price": None, "best_price": None, "slippage": None, "total_cost": None, "filled_quantity": 0}
+
+        # Convert contra-side bids into offers on *side*: price → (1 − price).
+        # Sort ascending so cheapest offer is first.
+        levels = contra.copy()
+        levels["price"] = 1.0 - levels["price"]
+        levels = levels.sort_values("price", ascending=True).reset_index(drop=True)
 
         best_price = float(levels["price"].iloc[0])
         remaining = quantity

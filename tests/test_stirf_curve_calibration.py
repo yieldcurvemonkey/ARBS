@@ -3,6 +3,7 @@ import importlib.util
 import json
 import logging
 import sys
+import threading
 from collections import OrderedDict
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -123,7 +124,7 @@ def test_run_bucketed_calibration_writes_perf_log(tmp_path):
     assert fake_mdp.calls[0]["calibration_max_workers"] == 4
     assert fake_mdp.calls[0]["stirf_fetch_max_workers"] == 2
 
-    assert len(all_curves) == 2
+    assert all_curves == {}
     assert len(daily_results) == 2
     assert daily_results[0].requested_timestamps == 2
     assert daily_results[0].returned_curves == 1
@@ -147,3 +148,100 @@ def test_run_bucketed_calibration_writes_perf_log(tmp_path):
     assert events[1]["trade_date"] == "2026-03-10"
     assert events[1]["missing_curves"] == 1
     assert events[-1]["returned_curves"] == 2
+
+
+def test_run_bucketed_calibration_can_retain_all_curves(tmp_path):
+    class FakeCurve:
+        def __init__(self, curve_name):
+            self._curve_name = curve_name
+
+        def meta(self):
+            return {"curve_name": self._curve_name}
+
+    class FakeMDP:
+        def bulk_get_data(self, request):
+            return {
+                ts: FakeCurve(request["curve_name"])
+                for ts in request["timestamps"]
+            }
+
+    daily_buckets = OrderedDict(
+        [
+            (
+                dt.date(2026, 3, 10),
+                [
+                    dt.datetime(2026, 3, 10, 7, 0, tzinfo=ZoneInfo("America/New_York")),
+                    dt.datetime(2026, 3, 10, 7, 1, tzinfo=ZoneInfo("America/New_York")),
+                ],
+            ),
+        ]
+    )
+    request_options = {
+        "n_jobs": 4,
+        "show_tqdm": False,
+        "ignore_cache": False,
+        "calibration_executor": "process",
+        "auto_prime_bulk": True,
+        "stirf_fetch_max_workers": None,
+        "calibration_max_workers": None,
+    }
+
+    all_curves, daily_results, summary = stirf_curve_calibration.run_bucketed_calibration(
+        curve_mdp=FakeMDP(),
+        curve_name="USD-SOFR-1D-Q12STIRT",
+        source="BARCHART_STIRF-RL",
+        daily_buckets=daily_buckets,
+        request_options=request_options,
+        perf_log_path=tmp_path / "perf.jsonl",
+        logger=logging.getLogger("test_stirf_curve_calibration"),
+        fail_fast=False,
+        retain_all_curves=True,
+    )
+
+    assert len(all_curves) == 2
+    assert len(daily_results) == 1
+    assert summary["returned_curves"] == 2
+
+
+def test_release_barchart_runtime_state_clears_builder_cache(monkeypatch):
+    class FakeChildMDP:
+        def __init__(self):
+            self.closed = False
+            self._cache_ready = True
+
+        def close_cache(self):
+            self.closed = True
+
+    class FakeBuilder:
+        _CURVE_MEM_CACHE = {"curve-a": object(), "curve-b": object()}
+        _CURVE_MEM_CACHE_LOCK = threading.Lock()
+
+        def __init__(self):
+            self.closed = False
+            self.stirf_mdp = FakeChildMDP()
+            self.stirf_mdp_schwab_app = FakeChildMDP()
+            self.stirf_mdp_barchart = FakeChildMDP()
+
+        def close_cache(self):
+            self.closed = True
+
+    fake_builder = FakeBuilder()
+    fake_state = {
+        "builder": fake_builder,
+        "lock": threading.RLock(),
+        "io_lock": threading.RLock(),
+    }
+    monkeypatch.setattr(stirf_curve_calibration.IRSwapsMDP, "_BARCHART_STIRF_STATE", fake_state)
+
+    stirf_curve_calibration._release_barchart_runtime_state(
+        source="BARCHART_STIRF-RL",
+        logger=logging.getLogger("test_stirf_curve_calibration"),
+    )
+
+    assert fake_state["builder"] is None
+    assert FakeBuilder._CURVE_MEM_CACHE == {}
+    assert fake_builder.closed is True
+    assert fake_builder.stirf_mdp.closed is True
+    assert fake_builder.stirf_mdp._cache_ready is False
+    assert fake_builder.stirf_mdp_schwab_app.closed is True
+    assert fake_builder.stirf_mdp_barchart.closed is True

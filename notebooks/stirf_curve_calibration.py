@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import gc
 import json
 import logging
 import sys
@@ -337,6 +338,68 @@ def _summarize_run(
     }
 
 
+def _release_barchart_runtime_state(*, source: str, logger: logging.Logger | None = None) -> None:
+    source_token = str(source).upper().strip()
+    if source_token not in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}:
+        return
+
+    state = getattr(IRSwapsMDP, "_BARCHART_STIRF_STATE", None)
+    if not isinstance(state, dict):
+        return
+
+    builder = None
+    state_lock = state.get("lock")
+    if state_lock is None:
+        builder = state.get("builder")
+        state["builder"] = None
+    else:
+        with state_lock:
+            builder = state.get("builder")
+            state["builder"] = None
+
+    if builder is None:
+        gc.collect()
+        return
+
+    builder_cls = builder.__class__
+    mem_cache = getattr(builder_cls, "_CURVE_MEM_CACHE", None)
+    mem_cache_lock = getattr(builder_cls, "_CURVE_MEM_CACHE_LOCK", None)
+    if isinstance(mem_cache, dict):
+        if mem_cache_lock is None:
+            mem_cache.clear()
+        else:
+            with mem_cache_lock:
+                mem_cache.clear()
+
+    for child_attr in ("stirf_mdp", "stirf_mdp_schwab_app", "stirf_mdp_barchart"):
+        child = getattr(builder, child_attr, None)
+        if child is None:
+            continue
+        close_child_cache = getattr(child, "close_cache", None)
+        if callable(close_child_cache):
+            try:
+                close_child_cache()
+            except Exception:
+                if logger is not None:
+                    logger.debug("Failed to close %s cache while releasing BARCHART runtime state.", child_attr, exc_info=True)
+        if hasattr(child, "_cache_ready"):
+            try:
+                child._cache_ready = False
+            except Exception:
+                pass
+
+    close_builder_cache = getattr(builder, "close_cache", None)
+    if callable(close_builder_cache):
+        try:
+            close_builder_cache()
+        except Exception:
+            if logger is not None:
+                logger.debug("Failed to close BARCHART builder cache while releasing runtime state.", exc_info=True)
+
+    del builder
+    gc.collect()
+
+
 def run_bucketed_calibration(
     *,
     curve_mdp: Any,
@@ -347,6 +410,8 @@ def run_bucketed_calibration(
     perf_log_path: Path,
     logger: logging.Logger,
     fail_fast: bool,
+    retain_all_curves: bool = False,
+    release_runtime_state: bool = True,
 ) -> tuple[dict[Any, Any], list[DayCalibrationStats], dict[str, Any]]:
     all_curves: dict[Any, Any] = {}
     daily_results: list[DayCalibrationStats] = []
@@ -394,7 +459,8 @@ def run_bucketed_calibration(
         error: str | None = None
         try:
             curves = curve_mdp.bulk_get_data(request)
-            all_curves.update(curves)
+            if retain_all_curves:
+                all_curves.update(curves)
         except Exception as exc:
             status = "error"
             error = str(exc)
@@ -415,6 +481,9 @@ def run_bucketed_calibration(
                     perf_log_path,
                     {"event": "day_result", **asdict(day_result)},
                 )
+                curves.clear()
+                if release_runtime_state:
+                    _release_barchart_runtime_state(source=source, logger=logger)
                 raise
 
         elapsed = time.perf_counter() - started
@@ -441,6 +510,10 @@ def run_bucketed_calibration(
             perf_log_path,
             {"event": "day_result", **asdict(day_result)},
         )
+        if not retain_all_curves:
+            curves.clear()
+        if release_runtime_state:
+            _release_barchart_runtime_state(source=source, logger=logger)
 
     total_elapsed_seconds = time.perf_counter() - run_started
     summary = _summarize_run(
