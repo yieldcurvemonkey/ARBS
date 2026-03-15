@@ -10,9 +10,10 @@ _VALID_SOURCES = ("KALSHI", "POLYMARKET")
 
 
 class EventContractPricer:
-    def __init__(self, data: pd.DataFrame, meta_data: Dict[str, Any]):
+    def __init__(self, data: pd.DataFrame, meta_data: Dict[str, Any], auth: Optional[Dict[str, str]] = None):
         self._data = data
         self._meta_data = meta_data
+        self._auth = auth or {}
 
     @property
     def data(self) -> pd.DataFrame:
@@ -37,6 +38,61 @@ class EventContractPricer:
         if self._data.empty or "open_interest" not in self._data.columns:
             return None
         return float(self._data["open_interest"].iloc[-1])
+
+    def get_orderbook(self, request: Optional[Dict[str, Any]] = None) -> Dict[str, pd.DataFrame]:
+        if self._meta_data.get("source") != "KALSHI":
+            raise NotImplementedError("Orderbook is only supported for KALSHI")
+        from MDP.EventContracts.kalshi_fetcher import fetch_orderbook
+
+        request = request or {}
+        depth = request.get("depth", 0)
+        return fetch_orderbook(
+            ticker=self._meta_data["ticker"],
+            depth=depth,
+            api_key_id=self._auth.get("api_key_id", ""),
+            private_key_pem=self._auth.get("private_key_pem", ""),
+        )
+
+    def market_impact(self, quantity: int, side: str = "yes") -> Dict[str, Any]:
+        """Walk the orderbook to fill *quantity* contracts on *side*.
+
+        Returns a dict with:
+            avg_price       – volume-weighted average execution price
+            best_price      – top-of-book price
+            slippage        – avg_price - best_price (positive = worse)
+            total_cost      – avg_price * filled_quantity
+            filled_quantity – contracts actually filled (<= quantity)
+        """
+        book = self.get_orderbook()
+        levels = book.get(side, pd.DataFrame())
+        if levels.empty:
+            return {"avg_price": None, "best_price": None, "slippage": None, "total_cost": None, "filled_quantity": 0}
+
+        best_price = float(levels["price"].iloc[0])
+        remaining = quantity
+        total_cost = 0.0
+        filled = 0
+
+        for _, row in levels.iterrows():
+            px = float(row["price"])
+            qty_available = int(row["quantity"])
+            fill = min(remaining, qty_available)
+            total_cost += px * fill
+            filled += fill
+            remaining -= fill
+            if remaining <= 0:
+                break
+
+        avg_price = total_cost / filled if filled > 0 else None
+        slippage = (avg_price - best_price) if avg_price is not None else None
+
+        return {
+            "avg_price": avg_price,
+            "best_price": best_price,
+            "slippage": slippage,
+            "total_cost": total_cost,
+            "filled_quantity": filled,
+        }
 
 
 class EventContractsMDP(MarketDataProvider):
@@ -87,6 +143,10 @@ class EventContractsMDP(MarketDataProvider):
         ticker = request["ticker"]
         start = self._resolve_datetime(request, "start", "start_ts")
         end = self._resolve_datetime(request, "end", "end_ts")
+        if end is None:
+            end = datetime.datetime.now(datetime.timezone.utc)
+        if start is None:
+            start = end - datetime.timedelta(days=90)
         period = request.get("period_interval", 1440)
         api_key = request.get("api_key_id", "dcd3316c-192d-4d1e-9049-832d46fd9564")
         private_key = request.get("private_key_pem", Path(r"C:\Users\chris\clee\ARBS\MDP\EventContracts\arbs_mdp.txt").read_text(encoding="utf-8"))
@@ -126,7 +186,8 @@ class EventContractsMDP(MarketDataProvider):
                 end=end,
                 period_interval=period,
             )
-        return EventContractPricer(data=data, meta_data={"source": "KALSHI", "ticker": ticker})
+        auth = {"api_key_id": api_key, "private_key_pem": private_key}
+        return EventContractPricer(data=data, meta_data={"source": "KALSHI", "ticker": ticker}, auth=auth)
 
     def _fetch_polymarket(self, request: Dict[str, Any]) -> EventContractPricer:
         from MDP.EventContracts.polymarket_fetcher import fetch_price_history
