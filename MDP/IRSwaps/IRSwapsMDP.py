@@ -21,6 +21,10 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         "lock": threading.RLock(),
         "io_lock": threading.RLock(),
     }
+    _CURVE_STORE_STATE: Dict[str, Any] = {
+        "store": None,
+        "lock": threading.Lock(),
+    }
 
     def __init__(self, source: str = "CME_NY_EOD_LIVE-ql_basic", force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
         super().__init__(source, **kwargs)
@@ -45,6 +49,16 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
 
             self._rl_curve_cache = _RLCurveCache(cache_name="GSQUANT-RL_CURVE_CACHE")
+
+    @staticmethod
+    def _get_curve_store() -> Any:
+        S = IRSwapsMDP._CURVE_STORE_STATE
+        with S["lock"]:
+            if S["store"] is None:
+                from Caching.curve_store import CurveStore
+
+                S["store"] = CurveStore()
+            return S["store"]
 
     def _get_barchart_stirf_curve_builder(self) -> Any:
         from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
@@ -1275,6 +1289,101 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                     rl_timestamps.append(rl_timestamp)
                     timestamps_by_rl_timestamp.setdefault(rl_timestamp, []).append(t)
 
+                # ── Tier 0: CurveStore Parquet fast path ──
+                # Attempt bulk read from Parquet store. If all timestamps are
+                # found, reconstruct rl.Curve objects and skip diskcache entirely.
+                if not ignore_cache:
+                    try:
+                        store = self._get_curve_store()
+                        # Collect unique trading dates for targeted reads
+                        unique_dates = sorted({
+                            t.date() if isinstance(t, datetime.datetime) else t
+                            for t in rl_timestamps
+                        })
+                        # Read all needed days (fast path: direct PyArrow per day)
+                        import pandas as _pd
+
+                        day_dfs = []
+                        for d in unique_dates:
+                            day_df = store.read_raw_day(resolved_curve_name, d)
+                            if not day_df.empty:
+                                day_dfs.append(day_df)
+
+                        if day_dfs:
+                            parquet_df = _pd.concat(day_dfs, ignore_index=True)
+                            # Index by timestamp_utc for fast lookup (normalize to second precision)
+                            parquet_ts_set = set()
+                            if "timestamp_utc" in parquet_df.columns:
+                                for ts_val in parquet_df["timestamp_utc"]:
+                                    if hasattr(ts_val, "to_pydatetime"):
+                                        parquet_ts_set.add(ts_val.to_pydatetime().replace(tzinfo=pytz.UTC, microsecond=0))
+                                    elif isinstance(ts_val, datetime.datetime):
+                                        parquet_ts_set.add(ts_val.replace(microsecond=0) if ts_val.tzinfo else pytz.UTC.localize(ts_val.replace(microsecond=0)))
+                                    else:
+                                        parquet_ts_set.add(ts_val)
+
+                            # Check coverage: do we have ALL requested timestamps?
+                            rl_ts_utc = set()
+                            for ts in set(rl_timestamps):
+                                ts_utc = ts.astimezone(pytz.UTC).replace(microsecond=0)
+                                rl_ts_utc.add(ts_utc)
+
+                            # Match with tolerance (second-level)
+                            matched_count = sum(
+                                1 for ts in rl_ts_utc
+                                if ts in parquet_ts_set
+                            )
+
+                            if matched_count >= len(rl_ts_utc):
+                                # All found — reconstruct and return
+                                cfg = builder._STIRF_CURVE_CONFIGS[resolved_curve_name]
+                                curves_by_ts = store.reconstruct_curves_batch(
+                                    parquet_df, cfg=cfg, max_workers=4,
+                                )
+
+                                fixings_cache_t0: Dict[tuple, _pd.Series] = {}
+                                for rl_timestamp, original_timestamps in timestamps_by_rl_timestamp.items():
+                                    ts_utc = rl_timestamp.astimezone(pytz.UTC).replace(microsecond=0)
+                                    rl_curve_handle = curves_by_ts.get(ts_utc)
+                                    if rl_curve_handle is None:
+                                        # Try pandas Timestamp key
+                                        for k, v in curves_by_ts.items():
+                                            if hasattr(k, "to_pydatetime"):
+                                                kk = k.to_pydatetime()
+                                                if kk.tzinfo is None:
+                                                    kk = pytz.UTC.localize(kk)
+                                                if abs((kk - ts_utc).total_seconds()) < 1:
+                                                    rl_curve_handle = v
+                                                    break
+                                            elif isinstance(k, datetime.datetime):
+                                                kk = k if k.tzinfo else pytz.UTC.localize(k)
+                                                if abs((kk - ts_utc).total_seconds()) < 1:
+                                                    rl_curve_handle = v
+                                                    break
+
+                                    if rl_curve_handle is None:
+                                        continue
+                                    curve_wrapper = self._build_barchart_stirf_rl_curve(
+                                        requested_curve_name=curve_name,
+                                        resolved_curve_name=resolved_curve_name,
+                                        request_timestamp=original_timestamps[0],
+                                        rl_curve_handle=rl_curve_handle,
+                                        builder=builder,
+                                        fixings_cache=fixings_cache_t0,
+                                    )
+                                    for original_timestamp in original_timestamps:
+                                        out[original_timestamp] = curve_wrapper
+
+                                if len(out) >= len(timestamps_by_rl_timestamp):
+                                    return out
+                                # Partial hit — fall through to existing path for misses
+                    except Exception as _tier0_exc:
+                        import logging as _logging
+                        _logging.getLogger(__name__).debug(
+                            "CurveStore Tier 0 fast path failed: %s", _tier0_exc,
+                        )
+
+                # ── Tier 1+2: diskcache + solver fallback ──
                 try:
                     with self._suppress_ratelibs_solver_output():
                         built_curves = builder.build_curve(

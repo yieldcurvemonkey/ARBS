@@ -948,6 +948,11 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
         cfg_hash = cls._curve_cfg_hash(cfg)
         return re.sub(r"[^A-Za-z0-9_.-]", "_", f"v{cls._CURVE_CACHE_SCHEMA}_{curve_name}_{ts_str}_{cfg_hash}")
 
+    @classmethod
+    def _curve_cache_daily_bundle_key(cls, curve_name: str, date: datetime.date, cfg: Dict[str, Any]) -> str:
+        cfg_hash = cls._curve_cfg_hash(cfg)
+        return re.sub(r"[^A-Za-z0-9_.-]", "_", f"v{cls._CURVE_CACHE_SCHEMA}_BUNDLE_{curve_name}_{date.strftime('%Y%m%d')}_{cfg_hash}")
+
     def _curve_cache_mapping(self):
         self.open_cache(cache_attr=self._CURVE_CACHE_ATTR, path=self._curve_cache_path)
         return getattr(self, self._CURVE_CACHE_ATTR)
@@ -1090,6 +1095,65 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
                     misses.append(ts)
 
         return hits, misses
+
+    def _curve_cache_daily_bundle_get(
+        self, curve_name: str, date: datetime.date, cfg: Dict[str, Any]
+    ) -> Optional[Dict[datetime.datetime, Dict[pd.Timestamp, float]]]:
+        """Fetch node values for an entire day from a single bundle entry."""
+        key = self._curve_cache_daily_bundle_key(curve_name, date, cfg)
+        mapping = self._curve_cache_mapping()
+        payload = mapping.get(key)
+        if not isinstance(payload, dict):
+            return None
+        return payload.get("nodes_by_ts")
+
+    def _curve_cache_daily_bundle_put(
+        self, curve_name: str, date: datetime.date, cfg: Dict[str, Any], curves_by_ts: Dict[datetime.datetime, rl.Curve]
+    ) -> None:
+        """Store node values for an entire day into a single bundle entry."""
+        key = self._curve_cache_daily_bundle_key(curve_name, date, cfg)
+        mapping = self._curve_cache_daily_bundle_mapping()
+
+        # Extract nodes from all curves. Nodes keys are pd.Timestamp (dt) or rl.dt.
+        # We store them as a nested dict: {ts_iso: {node_ts_iso: value}}
+        nodes_by_ts: Dict[str, Dict[str, float]] = {}
+        for ts, curve in curves_by_ts.items():
+            ts_iso = ts.isoformat()
+            ts_nodes = {}
+            for node_ts, val in curve.nodes.nodes.items():
+                node_ts_iso = pd.Timestamp(node_ts).isoformat()
+                ts_nodes[node_ts_iso] = float(val)
+            nodes_by_ts[ts_iso] = ts_nodes
+
+        mapping[key] = {
+            "schema": self._CURVE_CACHE_SCHEMA,
+            "curve_name": curve_name,
+            "date": date.strftime("%Y-%m-%d"),
+            "nodes_by_ts": nodes_by_ts,
+        }
+
+        # Also write to Parquet CurveStore for fast bulk retrieval.
+        try:
+            from Caching.curve_store import CurveSnapshot, CurveStore
+
+            cfg_hash = self._curve_cfg_hash(cfg)
+            snapshots = []
+            for ts, curve in curves_by_ts.items():
+                snapshots.append(
+                    CurveSnapshot.from_rl_curve(
+                        curve, curve_name=curve_name, cfg=cfg, cfg_hash=cfg_hash,
+                    )
+                )
+            if snapshots:
+                store = CurveStore.default()
+                store.write_day(curve_name, date, snapshots, overwrite=True)
+        except Exception:
+            pass  # Best-effort — diskcache is the authoritative store
+
+    def _curve_cache_daily_bundle_mapping(self):
+        # Bundles go in the same diskcache path but we could separate them if needed.
+        # For now, reuse the same mapping.
+        return self._curve_cache_mapping()
 
     @staticmethod
     def _pricer_symbol(pricer: "RLSTIRFuturePricer") -> str:
@@ -1802,7 +1866,49 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
             # Seed output from curve-cache (bulk: in-memory LRU + parallel disk reads).
             out: Dict[datetime.datetime, Any] = {}
             if use_curve_cache:
-                out, pending_timestamps = self._curve_cache_bulk_get(curve_name, unique_timestamps, cfg)
+                # --- [OPTIMIZATION] Check Daily Bundles first ---
+                by_date: Dict[datetime.date, List[datetime.datetime]] = {}
+                for ts in unique_timestamps:
+                    by_date.setdefault(ts.date(), []).append(ts)
+
+                remaining_unique_timestamps: List[datetime.datetime] = []
+                for dt, d_timestamps in by_date.items():
+                    bundle_nodes = self._curve_cache_daily_bundle_get(curve_name, dt, cfg)
+                    if bundle_nodes is not None:
+                        for ts in d_timestamps:
+                            ts_iso = ts.isoformat()
+                            node_values = bundle_nodes.get(ts_iso)
+                            if node_values is not None:
+                                # Solver bypass: build rl.Curve directly from nodes.
+                                # Convert ISO keys back to pd.Timestamp.
+                                raw_nodes = {pd.Timestamp(nt): float(v) for nt, v in node_values.items()}
+                                # We need nodes dict sorted by date for rateslib.
+                                sorted_nodes = _sort_nodes({rl.dt(d.year, d.month, d.day): v for d, v in raw_nodes.items()})
+                                
+                                curve_obj = rl.Curve(
+                                    nodes=sorted_nodes,
+                                    id=cfg["reference_key"],
+                                    convention=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["DayCounter"],
+                                    calendar=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["Calendar"],
+                                    modifier=RATESLIB_CURVE_DEFINITIONS[cfg["reference_key"]]["BusinessConvention"],
+                                    **self._curve_interp_kwargs(nodes=sorted_nodes, cfg=cfg, base_date=dt, interpolation=cfg.get("interpolation", "log_linear"))
+                                )
+                                curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
+                                out[ts] = curve_obj if curve_only else (curve_obj, None)
+                                # Pre-populate memory cache to avoid even bundle checks next time.
+                                self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
+                                continue
+                            remaining_unique_timestamps.append(ts)
+                    else:
+                        remaining_unique_timestamps.extend(d_timestamps)
+                
+                # Check individual cache for anything not in bundles.
+                if remaining_unique_timestamps:
+                    hits, misses = self._curve_cache_bulk_get(curve_name, remaining_unique_timestamps, cfg)
+                    out.update(hits)
+                    pending_timestamps = misses
+                else:
+                    pending_timestamps = []
             else:
                 pending_timestamps = list(unique_timestamps)
 
@@ -1910,6 +2016,23 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
                         curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
                         self._curve_cache_put(curve_name, ts, cfg, curve_obj)
                         out[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
+
+            # --- [OPTIMIZATION] Save Daily Bundles after successful bulk build ---
+            # If we built a large set of curves for the same day, bundle them.
+            if out:
+                curves_to_bundle: Dict[datetime.date, Dict[datetime.datetime, rl.Curve]] = {}
+                for ts, val in out.items():
+                    curve_to_save = val if curve_only else val[0]
+                    if isinstance(curve_to_save, rl.Curve):
+                        curves_to_bundle.setdefault(ts.date(), {})[ts] = curve_to_save
+                
+                for dt, day_curves in curves_to_bundle.items():
+                    # Only bundle if we have a significant number of points (e.g. > 10) to avoid overhead for shallow calls.
+                    if len(day_curves) > 10:
+                        try:
+                            self._curve_cache_daily_bundle_put(curve_name, dt, cfg, day_curves)
+                        except Exception:
+                            pass
 
             return out
 
