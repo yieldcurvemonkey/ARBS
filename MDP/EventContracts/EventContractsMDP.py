@@ -2,6 +2,8 @@ from __future__ import annotations
 import datetime
 from typing import Any, Dict, Optional
 import pandas as pd
+from pathlib import Path
+
 from MDP.MarketDataProvider import MarketDataProvider
 
 _VALID_SOURCES = ("KALSHI", "POLYMARKET")
@@ -81,12 +83,13 @@ class EventContractsMDP(MarketDataProvider):
             fetch_historical_candlesticks,
             fetch_live_candlesticks,
         )
+
         ticker = request["ticker"]
         start = self._resolve_datetime(request, "start", "start_ts")
         end = self._resolve_datetime(request, "end", "end_ts")
         period = request.get("period_interval", 1440)
-        api_key = request.get("api_key_id")
-        private_key = request.get("private_key_pem")
+        api_key = request.get("api_key_id", "dcd3316c-192d-4d1e-9049-832d46fd9564")
+        private_key = request.get("private_key_pem", Path(r"C:\Users\chris\clee\ARBS\MDP\EventContracts\arbs_mdp.txt").read_text(encoding="utf-8"))
         series_ticker = request.get("series_ticker", ticker.rsplit("-", 1)[0])
         ticker_type = request.get("ticker_type", self._kalshi_ticker_type(ticker))
 
@@ -98,24 +101,36 @@ class EventContractsMDP(MarketDataProvider):
                     "for unauthenticated historical access."
                 )
             data = fetch_event_candlesticks(
-                series_ticker=series_ticker, event_ticker=ticker,
-                start=start, end=end, period_interval=period,
-                api_key_id=api_key, private_key_pem=private_key,
+                series_ticker=series_ticker,
+                event_ticker=ticker,
+                start=start,
+                end=end,
+                period_interval=period,
+                api_key_id=api_key,
+                private_key_pem=private_key,
             )
         elif api_key and private_key:
             data = fetch_live_candlesticks(
-                series_ticker=series_ticker, ticker=ticker,
-                start=start, end=end, period_interval=period,
-                api_key_id=api_key, private_key_pem=private_key,
+                series_ticker=series_ticker,
+                ticker=ticker,
+                start=start,
+                end=end,
+                period_interval=period,
+                api_key_id=api_key,
+                private_key_pem=private_key,
             )
         else:
             data = fetch_historical_candlesticks(
-                ticker=ticker, start=start, end=end, period_interval=period,
+                ticker=ticker,
+                start=start,
+                end=end,
+                period_interval=period,
             )
         return EventContractPricer(data=data, meta_data={"source": "KALSHI", "ticker": ticker})
 
     def _fetch_polymarket(self, request: Dict[str, Any]) -> EventContractPricer:
         from MDP.EventContracts.polymarket_fetcher import fetch_price_history
+
         market_id = request.get("market_id") or request.get("token_id")
         if market_id is None:
             raise KeyError("Polymarket request must include 'market_id' or 'token_id'")
