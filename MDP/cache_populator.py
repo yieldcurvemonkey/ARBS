@@ -1424,25 +1424,14 @@ def _ust_future_pricer_ephemeral(spec: WarmTargetSpec, units: list[WarmUnit], op
 
 
 def _resolve_delivery_basket_root_and_period(symbol: str, as_of: dt.date) -> tuple[str, int]:
-    import rateslib as rl
-
-    if len(symbol) > 3:
-        root = symbol[:-3]
-        contract_imm_date = rl.get_imm(code=symbol[-3:])
-    else:
-        root = symbol
-        contract_imm_date = rl.next_imm(start=dt.datetime(as_of.year, as_of.month, as_of.day))
-    return root, int(contract_imm_date.strftime("%Y%m"))
+    resolve_contract = _load_attr("MDP.USTFutures.treasury_conversion_factors", "resolve_delivery_contract")
+    root, _contract_imm_date, period = resolve_contract(symbol, as_of)
+    return root, int(period)
 
 
 def _delivery_basket_cusips(symbol: str, as_of: dt.date) -> list[str]:
-    read_cme_tcf = _load_attr("MDP.FixedRateBonds.reference_data_cache.cme_tcf", "read_cme_tcf_with_headers")
-    root, period = _resolve_delivery_basket_root_and_period(symbol, as_of)
-    df = read_cme_tcf(as_of=as_of)
-    df = df[(df["ticker"] == root) & (df["period"] == period)].copy()
-    if df.empty:
-        return []
-    return [str(value) for value in df["cusip"].tolist()]
+    delivery_basket_cusips = _load_attr("MDP.USTFutures.treasury_conversion_factors", "delivery_basket_cusips")
+    return delivery_basket_cusips(as_of=as_of, symbol=symbol)
 
 
 def _ust_delivery_basket_units_from_request(spec: WarmTargetSpec, source: str, request: Mapping[str, Any], job: WarmJobInput) -> list[WarmUnit]:

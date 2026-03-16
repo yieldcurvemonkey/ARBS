@@ -22,6 +22,12 @@ from Query.USTFutures.backends.rateslib.RLUSTFuturePricer import RLUSTFuturePric
 from definitions.USTFutures import normalize_barchart_ust_future_price, to_barchart_root
 
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
+from MDP.USTFutures.treasury_conversion_factors import (
+    build_delivery_basket_frame,
+    delivery_business_window,
+    get_contract_spec,
+    resolve_delivery_contract,
+)
 
 DateLike = Union[datetime.date, datetime.datetime, Literal["live"]]
 InstrumentLike = _USTFutureGenericPricer
@@ -651,12 +657,8 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         source: str = "RL_CME_TCF",
         ignore_cache: Optional[bool] = False,
     ) -> Dict[str, Any]:
-        if source != "RL_CME_TCF":
+        if source not in {"RL_CME_TCF", "INTERNAL_CF"}:
             raise ValueError(f"Unsupported delivery basket source: {source}")
-
-        import rateslib as rl
-        from pandas.tseries.offsets import BMonthBegin, BMonthEnd
-        from MDP.FixedRateBonds.reference_data_cache.cme_tcf import read_cme_tcf_with_headers
 
         usts_mdp = FixedRateBondsMDP(source=usts_mdp_source)
 
@@ -667,33 +669,14 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             cached = self._threadsafe_basket_cache_get(cache_key)
 
         if cached is None or ignore_cache:
-            # explict ticker passed in e.g. USH26
-            if len(symbol) > 3:
-                root = symbol[:-3]
-                contract_imm_date = rl.get_imm(code=symbol[-3:])
-            else:
-                # constant maturity passed in e.g. US
-                root = symbol
-                contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
-
-            tcf_period = int(contract_imm_date.strftime("%Y%m"))
-
-            cme_tcf_df = read_cme_tcf_with_headers(as_of=as_of)
-            cme_tcf_df = cme_tcf_df[(cme_tcf_df["ticker"] == root) & (cme_tcf_df["period"] == tcf_period)].copy()
-
-            if cme_tcf_df.empty:
+            root, contract_imm_date, tcf_period = resolve_delivery_contract(symbol, as_of)
+            basket_df = build_delivery_basket_frame(as_of=as_of, symbol=symbol, force_refresh=bool(ignore_cache))
+            if basket_df.empty:
                 raise ValueError(f"No CME TCF deliverables found for {symbol} at period {tcf_period}.")
 
-            mb_offset = BMonthBegin()
-            me_offset = BMonthEnd()
-            delivery_start = mb_offset.rollback(contract_imm_date)
-            delivery_end = me_offset.rollforward(contract_imm_date)
-
-            contract_coupon = 6.0
-            if "futures_coupon" in cme_tcf_df.columns:
-                contract_coupon = float(cme_tcf_df["futures_coupon"].iloc[0])
-
-            calc_mode = "ust_long" if root in {"WN", "US", "UXY", "TY"} else "ust_short"
+            delivery_start, delivery_end = delivery_business_window(contract_imm_date)
+            spec = get_contract_spec(root)
+            contract_coupon = float(basket_df["futures_coupon"].iloc[0]) if "futures_coupon" in basket_df.columns else 6.0
 
             # preserve row-order to keep conversion factors aligned with basket_pricers
             cached = {
@@ -703,11 +686,11 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 "symbol": symbol,
                 "root": root,
                 "period": int(tcf_period),
-                "delivery": (delivery_start.date().isoformat(), delivery_end.date().isoformat()),
-                "cusips": cme_tcf_df["cusip"].tolist(),
-                "conversion_factors": [float(x) for x in cme_tcf_df["invoice_conversion_factor"].tolist()],
+                "delivery": (delivery_start.isoformat(), delivery_end.isoformat()),
+                "cusips": basket_df["cusip"].tolist(),
+                "conversion_factors": [float(x) for x in basket_df["invoice_conversion_factor"].tolist()],
                 "contract_coupon": float(contract_coupon),
-                "calc_mode": calc_mode,
+                "calc_mode": spec.calc_mode,
                 "contract_imm_date": contract_imm_date,
             }
 
@@ -755,9 +738,8 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         #     "WN": "us_gb_30y",
         # }
 
-        if source == "RL_CME_TCF":
+        if source in {"RL_CME_TCF", "INTERNAL_CF"}:
             import rateslib as rl
-            from MDP.FixedRateBonds.reference_data_cache.cme_tcf import read_cme_tcf_with_headers
             from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
 
             from pandas.tseries.offsets import BMonthEnd, BMonthBegin
@@ -765,16 +747,17 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             if usts_mdp is None:
                 usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
 
-            contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
+            root, contract_imm_date, tcf_period = resolve_delivery_contract(symbol, as_of)
 
             for m_code, month_nums in _CME_QUARTERLY_MONTH_CODES.items():
                 if as_of.month in month_nums:
-                    full_symbol = f"{symbol}{m_code}{int(as_of.strftime("%y"))}"
-                    tcf_period = int(contract_imm_date.strftime("%Y%m"))
+                    full_symbol = f"{root}{m_code}{int(as_of.strftime("%y"))}"
                     break
 
-            cme_tcf_df = read_cme_tcf_with_headers(as_of=as_of)
-            cme_tcf_df = cme_tcf_df[(cme_tcf_df["ticker"] == symbol) & (cme_tcf_df["period"] == tcf_period)]
+            cme_tcf_df = build_delivery_basket_frame(as_of=as_of, symbol=symbol)
+            cme_tcf_df = cme_tcf_df[(cme_tcf_df["ticker"] == root) & (cme_tcf_df["period"] == tcf_period)].copy()
+            if cme_tcf_df.empty:
+                raise ValueError(f"No CME TCF deliverables found for {symbol} at period {tcf_period}.")
 
             close_2pm = pytz.timezone("America/Chicago").localize(datetime.datetime(as_of.year, as_of.month, as_of.day, 14, 00))
             ustf_pricer = self.get_pricer(request=dict(symbols=[full_symbol], timestamp=close_2pm))
@@ -797,7 +780,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 # spec=symbol_to_rl_spec[symbol],
                 coupon=6.0,
                 currency="usd",
-                calc_mode="ust_long" if symbol in ["WN", "TWE", "US", "UXY", "TY"] else "ust_short",
+                calc_mode=get_contract_spec(root).calc_mode,
             )
 
             cme_tcf_df["gross_basis_rl"] = rl_ust_future.gross_basis(future_price=ustf_pricer[full_symbol]._price, prices=cme_tcf_df["clean_price"].to_list())

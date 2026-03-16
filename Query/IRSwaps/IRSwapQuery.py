@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from Query.Base.BaseQuery import BaseQuery
+from Query.Base.product_adapter import get_adapter
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 from Query.IRSwaps.IRSwapValue import IRSwapValue
 from Query.IRSwaps._CME_INVOICE_SWAP_TICKERS import _CME_INVOICE_SWAP_TICKERS
@@ -250,6 +251,45 @@ class IRSwapQuery(BaseQuery):
 
     # ---- BaseQuery abstract hooks adapted to IRS ----
 
+    def _uses_empirical_convexity_adjustment(self) -> bool:
+        return self.value == IRSwapValue.CVX_ADJ_EMPIRICAL
+
+    def _structure_pricer_or_curve(self, pricer_or_curve: Any) -> Any:
+        if self._uses_empirical_convexity_adjustment() and hasattr(pricer_or_curve, "pricer_a"):
+            return pricer_or_curve.pricer_a
+        return pricer_or_curve
+
+    def build_mdp_request(self, now: datetime.datetime) -> Dict[str, Any]:
+        if not self._uses_empirical_convexity_adjustment():
+            return super().build_mdp_request(now)
+
+        req = dict(self.market_request or {})
+        if self.mdp_time_key not in req:
+            req[self.mdp_time_key] = now
+        else:
+            v = req[self.mdp_time_key]
+            if v == "now":
+                req[self.mdp_time_key] = now
+        return req
+
+    def resolve_package(
+        self,
+        *,
+        pricer_or_curve: Any,
+        **hints: Any,
+    ):
+        adapter_cls = get_adapter(self.product)
+        adapter = adapter_cls()
+        struct_map = adapter.build_structure_map(
+            pricer_or_curve=self._structure_pricer_or_curve(pricer_or_curve),
+        )
+
+        kwargs = {k: v for k, v in (self.structure_kwargs or {}).items() if v is not None}
+        for k, v in (hints or {}).items():
+            kwargs[k] = v
+
+        return struct_map.apply(self.structure_id, **kwargs)
+
     def return_query(self) -> List["IRSwapQuery"]:
         """Expand a list-valued `value` into separate queries; otherwise, return [self]."""
         if isinstance(self.value, list):
@@ -449,7 +489,7 @@ class IRSwapQuery(BaseQuery):
                 mr = dict(q_eff.market_request or {})
                 mr[q_eff.mdp_time_key] = getattr(self.curve, "meta_data", {}).get("timestamp", ref_dt)
                 q_eff = replace(q_eff, market_request=mr)
-                q_eff = q_eff._edited(pricer_or_curve)
+                q_eff = q_eff._edited(q_eff._structure_pricer_or_curve(pricer_or_curve))
                 return q_eff
 
             x_ct = txt.count("x")
@@ -484,7 +524,7 @@ class IRSwapQuery(BaseQuery):
             mr = dict(q_eff.market_request or {})
             mr[q_eff.mdp_time_key] = getattr(self.curve, "meta_data", {}).get("timestamp", ref_dt)
             q_eff = replace(q_eff, market_request=mr)
-            q_eff = q_eff._edited(pricer_or_curve)
+            q_eff = q_eff._edited(q_eff._structure_pricer_or_curve(pricer_or_curve))
         else:
             q_eff = q
 

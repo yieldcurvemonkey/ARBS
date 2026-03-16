@@ -28,6 +28,7 @@ class IRSwapValue(Enum):
 
     # TODO
     CVX_ADJ = auto()
+    CVX_ADJ_EMPIRICAL = auto()
 
 
 # _swap_structure_sign_mapper = {
@@ -78,6 +79,7 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
             IRSwapValue.ROLL_BPS_RUNNING: self._rolldown_bps_running,
             IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING: self._carry_and_roll_bps_running,
             IRSwapValue.CVX_ADJ: self._convexity_adjustment,
+            IRSwapValue.CVX_ADJ_EMPIRICAL: self._convexity_adjustment_empirical,
         }
 
     def _rate(self, **kwargs: Any) -> float:
@@ -173,3 +175,20 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
         swap_yield_pct = _as_percent(float(curve.fair_rate(swap_obj)))
 
         return (implied_fut_yield_pct - swap_yield_pct) * 100.0
+
+    def _convexity_adjustment_empirical(self, **kwargs: Any) -> float:
+        curve = kwargs["curve"]
+        if not hasattr(curve, "pricer_a") or not hasattr(curve, "pricer_b"):
+            raise TypeError("CVX_ADJ_EMPIRICAL requires a spread-style pricer with 'pricer_a' and 'pricer_b'.")
+
+        package = kwargs["package"]
+        risk_weights = kwargs["risk_weights"]
+        structure = _swap_structure_legs_mapper[len(package)][0]
+        risk_weights = _swap_structure_sign_mapper[structure](risk_weights)
+
+        pricer_a = curve.pricer_a
+        pricer_b = curve.pricer_b
+        return sum(
+            risk_weights[i] * (pricer_a.fair_rate(sw) - pricer_b.fair_rate(sw))
+            for i, sw in enumerate(package)
+        ) * 10_000.0
