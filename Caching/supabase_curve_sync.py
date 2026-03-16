@@ -63,7 +63,11 @@ class SupabaseCurveSync:
         return pq_files[0].read_bytes()
 
     def push_day(
-        self, curve_name: str, trading_date: datetime.date
+        self,
+        curve_name: str,
+        trading_date: datetime.date,
+        *,
+        event_calendar: dict | None = None,
     ) -> bool:
         """Push a day's Parquet blob from local to Supabase.
 
@@ -106,11 +110,66 @@ class SupabaseCurveSync:
                     "sha256": sha,
                 },
             )
+
+            # Extract and push priority snapshots
+            if event_calendar is None:
+                event_calendar = {}
+            self._push_tagged_snapshots(conn, table, curve_name, trading_date, event_calendar)
+
         logger.info(
             "Pushed %s/%s to Supabase (%d rows, %d bytes)",
             curve_name, trading_date, row_count, len(payload),
         )
         return True
+
+    def _push_tagged_snapshots(self, conn, table, curve_name, trading_date, event_calendar):
+        """Extract tagged snapshots from Arrow table and UPSERT into curve_snapshots."""
+        from Caching.curve_tag_config import get_tags
+
+        df = table.to_pandas()
+        max_minute = df["session_minute"].max()
+
+        for _, row in df.iterrows():
+            is_last = row["session_minute"] == max_minute
+            tags = get_tags(
+                session_minute=int(row["session_minute"]),
+                trading_date=trading_date,
+                is_last_of_day=is_last,
+                event_calendar=event_calendar,
+            )
+            if not tags:
+                continue
+
+            node_dates = [d.isoformat() for d in row["node_dates"]]
+            conn.execute(
+                text("""
+                    INSERT INTO curve_snapshots
+                        (curve_name, timestamp_utc, trading_date, session_minute,
+                         tags, cfg_hash, reference_key, interpolation, source_variant,
+                         node_dates, discount_factors)
+                    VALUES
+                        (:curve_name, :timestamp_utc, :trading_date, :session_minute,
+                         :tags, :cfg_hash, :reference_key, :interpolation, :source_variant,
+                         :node_dates, :discount_factors)
+                    ON CONFLICT (curve_name, timestamp_utc) DO UPDATE SET
+                        tags = EXCLUDED.tags,
+                        node_dates = EXCLUDED.node_dates,
+                        discount_factors = EXCLUDED.discount_factors
+                """),
+                {
+                    "curve_name": curve_name,
+                    "timestamp_utc": row["timestamp_utc"],
+                    "trading_date": trading_date,
+                    "session_minute": int(row["session_minute"]),
+                    "tags": tags,
+                    "cfg_hash": str(row.get("cfg_hash", "")),
+                    "reference_key": str(row.get("reference_key", "")),
+                    "interpolation": str(row.get("interpolation", "")),
+                    "source_variant": str(row.get("source_variant", "")),
+                    "node_dates": node_dates,
+                    "discount_factors": list(row["discount_factors"]),
+                },
+            )
 
     def pull_day(
         self, curve_name: str, trading_date: datetime.date

@@ -159,3 +159,31 @@ class TestPrefetchRange:
 
         assert datetime.date(2025, 1, 16) in fetched
         assert datetime.date(2025, 1, 15) not in fetched
+
+
+class TestPushDaySnapshots:
+    """push_day() also inserts tagged snapshots into curve_snapshots."""
+
+    def test_push_day_inserts_eod_snapshot(self, tmp_path):
+        from Caching.supabase_curve_sync import SupabaseCurveSync
+
+        parquet_bytes = _make_test_parquet_bytes()
+        part_dir = tmp_path / "raw" / "asset=USD-SOFR-1D" / "date=2025-01-15"
+        part_dir.mkdir(parents=True)
+        (part_dir / "abc.parquet").write_bytes(parquet_bytes)
+
+        mock_engine = MagicMock()
+        mock_conn = MagicMock()
+        mock_engine.begin.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)
+
+        sync = SupabaseCurveSync(base_dir=tmp_path, engine=mock_engine)
+        sync.push_day(
+            "USD-SOFR-1D",
+            datetime.date(2025, 1, 15),
+            event_calendar={},
+        )
+
+        # Should have at least 2 execute calls: one for blob, one for EOD snapshot
+        # (the test parquet has session_minute=540 which is the max, so it gets EOD tag)
+        assert mock_conn.execute.call_count >= 2
