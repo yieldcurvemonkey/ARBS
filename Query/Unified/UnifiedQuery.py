@@ -14,6 +14,8 @@ class UnifiedQuery(BaseQuery):
     structure: Optional[UnifiedStructure | str | Any] = None
     value: Optional[UnifiedValue | Sequence[UnifiedValue] | str | Any] = None
     selector: Mapping[str, Any] = field(default_factory=dict)
+    curve: Any = None
+    tenor: Any = None
 
     structure_kwargs: Mapping[str, Any] = field(default_factory=dict)
     value_kwargs: Mapping[str, Any] = field(default_factory=dict)
@@ -22,19 +24,30 @@ class UnifiedQuery(BaseQuery):
     structure_id: Any = field(init=False, default=None)
 
     def __post_init__(self):
+        selector = dict(self.selector or {})
+        for key, direct_value in (("curve", self.curve), ("tenor", self.tenor)):
+            if direct_value is None:
+                continue
+            existing_value = selector.get(key)
+            if existing_value is not None and existing_value != direct_value:
+                raise ValueError(f"UnifiedQuery received conflicting {key!r}: selector={existing_value!r}, direct={direct_value!r}")
+            selector.setdefault(key, direct_value)
+
         normalized_structure = DESCRIPTOR_REGISTRY.coerce_structure(self.structure, product=self.product)
         normalized_value = DESCRIPTOR_REGISTRY.coerce_values(self.value, product=self.product)
         inferred_product = DESCRIPTOR_REGISTRY.infer_query_product(
             product=self.product,
             structure=normalized_structure,
             value=normalized_value,
-            selector=self.selector,
+            selector=selector,
         )
 
         object.__setattr__(self, "product", inferred_product or str(self.product or ""))
         object.__setattr__(self, "structure", normalized_structure)
         object.__setattr__(self, "value", normalized_value)
-        object.__setattr__(self, "selector", dict(self.selector or {}))
+        object.__setattr__(self, "selector", selector)
+        object.__setattr__(self, "curve", selector.get("curve"))
+        object.__setattr__(self, "tenor", selector.get("tenor"))
         object.__setattr__(self, "structure_kwargs", dict(self.structure_kwargs or {}))
         object.__setattr__(self, "value_kwargs", dict(self.value_kwargs or {}))
         object.__setattr__(self, "market_request", dict(self.market_request or {}))

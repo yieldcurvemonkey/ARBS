@@ -492,28 +492,26 @@ class IRSwapQuery(BaseQuery):
                 q_eff = q_eff._edited(q_eff._structure_pricer_or_curve(pricer_or_curve))
                 return q_eff
 
-            x_ct = txt.count("x")
+            normalized_txt = _norm(txt)
             slash_ct = txt.count("/")
 
-            if x_ct >= 2 or slash_ct >= 2:
+            if slash_ct >= 2:
                 structure = IRSwapStructure.FLY
                 tokens = [_norm(t) for t in re.split(r"\s*/\s*", txt) if t.strip()]
                 if len(tokens) != 3:
                     raise ValueError(f"Expected 3 legs for FLY, got {len(tokens)} in '{txt}'")
                 skw["front_tenor"], skw["belly_tenor"], skw["back_tenor"] = tokens
 
-            elif x_ct == 1 or slash_ct == 1:
+            elif slash_ct == 1:
                 structure = IRSwapStructure.CURVE
                 tokens = [_norm(t) for t in re.split(r"\s*/\s*", txt) if t.strip()]
-                if len(tokens) == 2:
-                    skw["front_tenor"], skw["back_tenor"] = tokens
-                else:
-                    structure = IRSwapStructure.OUTRIGHT if structure is None else structure
-                    skw["tenor"] = _norm(txt)
+                if len(tokens) != 2:
+                    raise ValueError(f"Expected 2 legs for CURVE, got {len(tokens)} in '{txt}'")
+                skw["front_tenor"], skw["back_tenor"] = tokens
 
             else:
-                structure = IRSwapStructure.OUTRIGHT if structure is None else structure
-                skw["tenor"] = _norm(q.tenor)
+                structure = IRSwapStructure.OUTRIGHT
+                skw["tenor"] = normalized_txt
 
             skw.setdefault("bpv", 1)
             try:

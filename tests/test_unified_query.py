@@ -249,6 +249,69 @@ def test_unified_query_parity_for_irs_package_and_value_map():
     assert unified_value == pytest.approx(legacy_value)
 
 
+def test_unified_query_accepts_direct_curve_and_tenor_fields():
+    unified = UnifiedQuery(
+        product="IRS",
+        structure=UnifiedStructure.IRS_OUTRIGHT,
+        value=UnifiedValue.IRS_RATE,
+        curve="USD-SOFR-1D-Q12STIRT",
+        tenor="IMM_Z26xIMM_H27",
+    )
+
+    assert unified.selector["curve"] == "USD-SOFR-1D-Q12STIRT"
+    assert unified.selector["tenor"] == "IMM_Z26xIMM_H27"
+    assert unified.curve == "USD-SOFR-1D-Q12STIRT"
+    assert unified.tenor == "IMM_Z26xIMM_H27"
+
+    legacy = unified.to_legacy()
+    assert isinstance(legacy, IRSwapQuery)
+    assert legacy.curve == "USD-SOFR-1D-Q12STIRT"
+    assert legacy.tenor == "IMM_Z26xIMM_H27"
+
+
+def test_unified_query_irs_imm_forward_tenor_resolves_as_outright():
+    curve = _IRCurveStub()
+    unified = UnifiedQuery(
+        product="IRS",
+        structure=UnifiedStructure.IRS_OUTRIGHT,
+        value=UnifiedValue.IRS_RATE,
+        curve="USD-SOFR-1D-Q12STIRT",
+        tenor="IMM_Z26xIMM_H27",
+    )
+
+    legacy = unified.to_legacy()
+    resolved = legacy.resolve_query(_now(), pricer_or_curve=curve)
+
+    assert isinstance(resolved, IRSwapQuery)
+    assert resolved.structure == IRSwapStructure.OUTRIGHT
+    assert resolved.structure_id == IRSwapStructure.OUTRIGHT
+    assert resolved.structure_kwargs["tenor"] == "IMM_Z26xIMM_H27"
+    assert "front_tenor" not in resolved.structure_kwargs
+    assert "back_tenor" not in resolved.structure_kwargs
+
+    package, risk_weights = resolved.resolve_package(pricer_or_curve=curve, is_for_timeseries=True)
+    assert len(package) == 1
+    assert len(risk_weights) == 1
+
+
+def test_irs_forward_start_tenor_with_x_resolves_as_outright():
+    curve = _IRCurveStub()
+    query = IRSwapQuery(
+        structure=IRSwapStructure.OUTRIGHT,
+        value=IRSwapValue.RATE,
+        tenor="2Yx5Y",
+        curve="USD-SOFR-1D",
+    )
+
+    resolved = query.resolve_query(_now(), pricer_or_curve=curve)
+
+    assert resolved.structure == IRSwapStructure.OUTRIGHT
+    assert resolved.structure_id == IRSwapStructure.OUTRIGHT
+    assert resolved.structure_kwargs["tenor"] == "2Yx5Y"
+    assert "front_tenor" not in resolved.structure_kwargs
+    assert "back_tenor" not in resolved.structure_kwargs
+
+
 def test_unified_query_parity_for_spread_package_and_value_map():
     context = _SpreadContext()
     legacy = SpreadQuery(
