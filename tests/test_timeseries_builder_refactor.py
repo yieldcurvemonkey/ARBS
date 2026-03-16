@@ -1,5 +1,8 @@
 import datetime
+import uuid
+from concurrent.futures import Future
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
 
@@ -20,6 +23,7 @@ from Query.IRSwaptions.IRSwaptionValue import IRSwaptionValue
 from Query.USTFutureOptions.USTFutureOptionQuery import USTFutureOptionQuery
 from Query.USTFutureOptions.USTFutureOptionValue import USTFutureOptionValue
 from Query.USTFutureOptions.backends.quantlib.QLUSTFutureOptionPricer import QLUSTFutureOptionPricer
+from Query.Unified import UnifiedQuery, UnifiedStructure, UnifiedValue
 from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
 from Query.STIRFutures.STIRFutureValue import STIRFutureValue
 from Query.STIRFutures._STIRFutureGenericPricable import _STIRFutureGenericPricable
@@ -81,6 +85,120 @@ class _FakeRouter:
             return pd.DataFrame()
 
         return pd.DataFrame(data, index=pd.Index(dates, name=self.date_col))
+
+
+class _NoCallRouter(_FakeRouter):
+    def __init__(self, mdp: Any):
+        super().__init__(auto_cols=True, auto_value=0.0)
+        self.mdp = mdp
+        self.call_count = 0
+
+    def get_timeseries(self, *args, **kwargs) -> pd.DataFrame:
+        self.call_count += 1
+        raise AssertionError("router fallback should not be used")
+
+
+class _PartialFallbackRouter(_FakeRouter):
+    def __init__(self, mdp: Any, fallback_value: float = 0.052):
+        super().__init__(auto_cols=False)
+        self.mdp = mdp
+        self.call_count = 0
+        self.fallback_value = float(fallback_value)
+
+    def get_timeseries(self, start, end, queries, *, n_jobs=1, ignore_cache=False, freq=None, timestamps=None) -> pd.DataFrame:
+        _ = start, end, n_jobs, ignore_cache, freq
+        self.call_count += 1
+        idx = pd.Index(list(timestamps or []), name=self.date_col)
+        return pd.DataFrame(
+            {
+                q.col_name(): [self.fallback_value] * len(idx)
+                for q in queries
+            },
+            index=idx,
+        )
+
+
+class _FakeIRSCurveStore:
+    def __init__(self, timestamps: List[datetime.datetime]):
+        self.timestamps = list(timestamps)
+        self.raw_reads: List[Tuple[str, datetime.date, datetime.date]] = []
+        self.analytics_reads: List[Tuple[str, datetime.date, datetime.date]] = []
+        self.reconstruct_workers: List[int] = []
+
+    def read_analytics(self, curve_name: str, *, start=None, end=None, tenors=None, metrics=None) -> pd.DataFrame:
+        _ = tenors, metrics
+        self.analytics_reads.append((curve_name, start, end))
+        return pd.DataFrame()
+
+    def read_raw_nodes(self, curve_name: str, *, start=None, end=None, session_minute_min=None, session_minute_max=None) -> pd.DataFrame:
+        _ = session_minute_min, session_minute_max
+        self.raw_reads.append((curve_name, start, end))
+        return pd.DataFrame(
+            {
+                "timestamp_utc": [pd.Timestamp(ts.astimezone(datetime.timezone.utc)) for ts in self.timestamps],
+            }
+        )
+
+    def reconstruct_curves_batch(self, df: pd.DataFrame, *, cfg=None, max_workers: int = 4) -> Dict[datetime.datetime, Any]:
+        _ = cfg
+        self.reconstruct_workers.append(max_workers)
+        return {
+            row.timestamp_utc.to_pydatetime().replace(tzinfo=datetime.timezone.utc): f"curve::{row.timestamp_utc.isoformat()}"
+            for row in df.itertuples(index=False)
+        }
+
+
+class _FakeIRSCurveStoreMDP:
+    def __init__(self, store: _FakeIRSCurveStore, source: str = "BARCHART_STIRF-RL"):
+        self.source = source
+        self._store = store
+        self.resolve_calls: List[Tuple[str, Dict[str, Any]]] = []
+        self.wrap_calls: List[Tuple[str, str, Any]] = []
+        self.bulk_calls = 0
+
+    def _get_curve_store(self):
+        return self._store
+
+    def _get_barchart_stirf_curve_builder(self):
+        return SimpleNamespace(
+            _STIRF_CURVE_CONFIGS={
+                "USD-SOFR-Q12": {"reference_key": "USD-SOFR-1D"}
+            }
+        )
+
+    def _resolve_barchart_stirf_curve_name(self, requested_curve_name: str, kwargs: Dict[str, Any], builder: Any) -> str:
+        _ = builder
+        self.resolve_calls.append((requested_curve_name, dict(kwargs)))
+        return "USD-SOFR-Q12"
+
+    def _to_barchart_stirf_timestamp(self, timestamp: datetime.datetime) -> datetime.datetime:
+        if isinstance(timestamp, datetime.datetime):
+            if timestamp.tzinfo is None:
+                return timestamp.replace(tzinfo=datetime.timezone.utc)
+            return timestamp.astimezone(datetime.timezone.utc)
+        return datetime.datetime.combine(timestamp, datetime.time(17, 0), tzinfo=datetime.timezone.utc)
+
+    def _build_barchart_stirf_rl_curve(
+        self,
+        *,
+        requested_curve_name: str,
+        resolved_curve_name: str,
+        request_timestamp: Any,
+        rl_curve_handle: Any,
+        builder: Any,
+        fixings_cache: Any = None,
+    ):
+        _ = request_timestamp, builder, fixings_cache
+        self.wrap_calls.append((requested_curve_name, resolved_curve_name, rl_curve_handle))
+        return {
+            "requested_curve_name": requested_curve_name,
+            "resolved_curve_name": resolved_curve_name,
+            "curve": rl_curve_handle,
+        }
+
+    def bulk_get_data(self, request: Dict[str, Any]) -> Dict[Any, Any]:
+        self.bulk_calls += 1
+        return {}
 
 
 class _MockSTIRFuturePricable(_STIRFutureGenericPricable):
@@ -401,6 +519,36 @@ class _MockSTIRFutureMDP(MarketDataProvider):
         return {sym: [_MockSTIRFuturePricer(sym, price=self.price)] for sym in symbols}
 
 
+class _BulkAwareSTIRFutureMDP(_MockSTIRFutureMDP):
+    def __init__(self, price: float = 95.125):
+        super().__init__(price=price)
+        self.get_pricer_calls = 0
+        self.get_bulk_data_calls = 0
+        self.bulk_requests: List[Dict[str, Any]] = []
+
+    def get_pricer(self, request: Dict[str, Any]) -> Dict[str, List[_MockSTIRFuturePricer]]:
+        self.get_pricer_calls += 1
+        return super().get_pricer(request)
+
+    def get_bulk_data(self, request: Dict[str, Any]) -> Dict[datetime.date, Dict[str, List[_MockSTIRFuturePricer]]]:
+        self.get_bulk_data_calls += 1
+        self.bulk_requests.append(dict(request))
+        timestamps = list(request.get("timestamps", []) or [])
+        symbols = list(request.get("symbols", []) or [])
+        return {
+            ts: {sym: [_MockSTIRFuturePricer(sym, price=self.price)] for sym in symbols}
+            for ts in timestamps
+        }
+
+
+class _MockFixedRateBondMDP(MarketDataProvider):
+    def __init__(self):
+        super().__init__(source="MOCK_FRB")
+
+    def get_pricer(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        return {}
+
+
 class _MockUSTFutureMDP(MarketDataProvider):
     def __init__(self, price: float = 110.5):
         super().__init__(source="MOCK_UST")
@@ -521,6 +669,200 @@ def test_mixed_product_routing_joins_output_columns():
     assert not out.empty
     assert irs_q.col_name() in out.columns
     assert stir_q.col_name() in out.columns
+
+
+def test_timeseries_builder_normalizes_unified_irs_queries_before_special_routing():
+    irs_router = _FakeRouter(auto_cols=True, auto_value=0.045)
+    tb = TimeseriesBuilder(irswaps_tb=irs_router)
+    unified = UnifiedQuery(
+        structure=UnifiedStructure.IRS_OUTRIGHT,
+        value=UnifiedValue.IRS_RATE,
+        selector={"curve": "USD-SOFR-1D", "tenor": "5Y"},
+    )
+
+    out = tb.get_timeseries(start=START, end=END, queries=[unified])
+
+    assert not out.empty
+    assert irs_router.received_queries
+    assert all(isinstance(q, IRSwapQuery) for q in irs_router.received_queries)
+
+
+def test_base_timeseries_tb_prefers_bulk_mdp_fetch_when_available():
+    mdp = _BulkAwareSTIRFutureMDP(price=95.25)
+    tb = STIRFuturesTB(mdp, show_tqdm=False)
+    q = STIRFutureQuery(symbol="SR3H26", curve="USD-SOFR-1D", value=STIRFutureValue.PRICE)
+
+    out = tb.get_timeseries(start=START, end=END, queries=[q])
+
+    assert not out.empty
+    assert mdp.get_bulk_data_calls == 1
+    assert mdp.get_pricer_calls == 0
+    assert len(mdp.bulk_requests) == 1
+    assert mdp.bulk_requests[0]["timestamps"] == pd.bdate_range(START, END).date.tolist()
+
+
+def test_timeseries_builder_uses_curve_store_fast_path_for_irs_intraday(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    ts1 = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2025, 1, 6, 15, 0, tzinfo=datetime.timezone.utc)
+    store = _FakeIRSCurveStore([ts1, ts2])
+    mdp = _FakeIRSCurveStoreMDP(store)
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05 if ref_dt == ts1 else 0.051),
+    )
+
+    out = tb.get_timeseries(start=ts1, end=ts2, queries=[q], timestamps=[ts1, ts2], n_jobs=4)
+
+    assert list(out.index) == [ts1, ts2]
+    assert list(out[q.col_name()]) == [0.05, 0.051]
+    assert router.call_count == 0
+    assert store.raw_reads == [("USD-SOFR-Q12", ts1.date(), ts2.date())]
+    assert store.reconstruct_workers == [4]
+    assert mdp.wrap_calls
+
+
+def test_timeseries_builder_curve_store_fast_path_falls_back_for_missing_points(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    ts1 = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2025, 1, 6, 15, 0, tzinfo=datetime.timezone.utc)
+    store = _FakeIRSCurveStore([ts1])
+    mdp = _FakeIRSCurveStoreMDP(store)
+    router = _PartialFallbackRouter(mdp, fallback_value=0.052)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(start=ts1, end=ts2, queries=[q], timestamps=[ts1, ts2], n_jobs=2)
+
+    assert list(out.index) == [ts1, ts2]
+    assert list(out[q.col_name()]) == [0.05, 0.052]
+    assert router.call_count == 1
+
+
+def test_timeseries_builder_parallelizes_product_plans(monkeypatch):
+    import TB.TimeseriesBuilder as ts_builder_module
+
+    executors = []
+
+    class _RecordingExecutor:
+        def __init__(self, max_workers=None, thread_name_prefix=None):
+            self.max_workers = max_workers
+            self.thread_name_prefix = thread_name_prefix
+            self.submitted = []
+            executors.append(self)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            _ = exc_type, exc, tb
+            return False
+
+        def submit(self, fn, *args, **kwargs):
+            fut = Future()
+            try:
+                result = fn(*args, **kwargs)
+            except Exception as exc:
+                fut.set_exception(exc)
+            else:
+                fut.set_result(result)
+            self.submitted.append((fn, args, kwargs))
+            return fut
+
+    monkeypatch.setattr(ts_builder_module, "ThreadPoolExecutor", _RecordingExecutor)
+
+    stir_router = _FakeRouter(auto_cols=True, auto_value=95.0)
+    ust_router = _FakeRouter(auto_cols=True, auto_value=111.0)
+    tb = TimeseriesBuilder(stirfutures_tb=stir_router, ustfutures_tb=ust_router)
+    q_stir = STIRFutureQuery(symbol="SR3H26", curve="USD-SOFR-1D", value=STIRFutureValue.PRICE)
+    q_ust = USTFutureQuery(symbol="TYM26", value=USTFutureValue.PRICE)
+
+    out = tb.get_timeseries(start=START, end=END, queries=[q_stir, q_ust], n_jobs=4)
+
+    assert not out.empty
+    assert executors
+    assert executors[0].max_workers == 2
+    assert len(executors[0].submitted) == 2
+
+
+def test_timeseries_builder_auto_wraps_frb_mdp_with_specialized_tb(monkeypatch):
+    import TB.FixedRateBondsTB as frb_tb_module
+
+    created = []
+
+    class _RecordingFixedRateBondsTB:
+        def __init__(self, mdp, *, date_col="Date", show_tqdm=True):
+            self.mdp = mdp
+            self.date_col = date_col
+            self.show_tqdm = show_tqdm
+            self.calls = []
+            created.append(self)
+
+        def get_timeseries(
+            self,
+            start,
+            end,
+            queries,
+            *,
+            n_jobs=1,
+            ignore_cache=False,
+            freq=None,
+            timestamps=None,
+        ) -> pd.DataFrame:
+            self.calls.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "queries": list(queries),
+                    "n_jobs": n_jobs,
+                    "ignore_cache": ignore_cache,
+                    "freq": freq,
+                    "timestamps": list(timestamps or []),
+                }
+            )
+            idx = pd.Index(list(timestamps or []), name=self.date_col)
+            return pd.DataFrame(
+                {queries[0].col_name(): [4.25] * len(idx)},
+                index=idx,
+            )
+
+    monkeypatch.setattr(frb_tb_module, "FixedRateBondsTB", _RecordingFixedRateBondsTB)
+
+    mdp = _MockFixedRateBondMDP()
+    tb = TimeseriesBuilder()
+    ts1 = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2025, 1, 6, 15, 0, tzinfo=datetime.timezone.utc)
+    q = FixedRateBondQuery(cusip="CT10", value=FixedRateBondValue.YTM)
+
+    out = tb.get_timeseries(
+        start=ts1,
+        end=ts2,
+        queries=[q],
+        mdps={"FRB": mdp},
+        timestamps=[ts1, ts2],
+        n_jobs=3,
+    )
+
+    assert not out.empty
+    assert len(created) == 1
+    assert created[0].mdp is mdp
+    assert created[0].calls[0]["timestamps"] == [ts1, ts2]
+    assert created[0].calls[0]["n_jobs"] == 3
+    assert list(out.index) == [ts1, ts2]
+    assert list(out[q.col_name()]) == [4.25, 4.25]
 
 
 def test_irswaption_router_coverage():

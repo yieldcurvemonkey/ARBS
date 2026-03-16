@@ -16,7 +16,7 @@ from tqdm import tqdm
 # fmt: off
 import Query.FixedRateBonds.adapter  # noqa: F401  # ensure pricer adapters are registered
 # fmt: on
-from Caching.timeseries_cache import WriteOptions, append_timeseries, read_timeseries
+from Caching.computed_timeseries_store import ComputedTimeseriesStore
 from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from Query.Base.query_resolution import resolve_query
@@ -33,12 +33,15 @@ _LOGGER_NAME = "FixedRateBondsTB"
 def _query_fingerprint(q: "FixedRateBondQuery") -> str:
     payload = {
         "cusip": getattr(q, "cusip", None),
-        "value": ([_canonicalize_value(v) for v in q.value] if isinstance(getattr(q, "value", None), list) else _canonicalize_value(getattr(q, "value", None))),
+        "value": (
+            [_canonicalize_value(v) for v in q.value]
+            if isinstance(getattr(q, "value", None), list)
+            else _canonicalize_value(getattr(q, "value", None))
+        ),
         "structure": getattr(q, "structure", None).name if getattr(q, "structure", None) else None,
         "structure_kwargs": _canonicalize_value(getattr(q, "structure_kwargs", {}) or {}),
         "name": getattr(q, "name", None),
         "risk_weight": getattr(q, "risk_weight", None),
-        # NB: we purposely exclude execution terms and MDP source here (market/time axes)
     }
     s = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(s.encode("utf-8")).hexdigest()
@@ -83,8 +86,11 @@ def _build_row_for_query(
     user_passed_col_name = q_eff.col_name()
 
     pkg, rw = q_eff.resolve_package(pricer_or_curve=pricer_for_cusip, is_for_timeseries=True)
-
-    vmap = q_eff.build_value_map(pricer_or_curve=pricer_for_cusip, package=pkg, risk_weights=user_passed_rws if user_passed_rws is not None else rw)
+    vmap = q_eff.build_value_map(
+        pricer_or_curve=pricer_for_cusip,
+        package=pkg,
+        risk_weights=user_passed_rws if user_passed_rws is not None else rw,
+    )
     value = vmap.apply(value=q_eff.value)
     return ref_dt, user_passed_col_name, float(value)
 
@@ -106,7 +112,6 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         logger: Optional[logging.Logger] = None,
         skip_non_business: bool = True,
         calendar: Optional[ql.Calendar] = None,
-        # >>> added (timeseries cache controls)
         use_ts_cache: bool = True,
         ts_base_dir: Optional[str] = "./data/ts",
         ts_row_group_size: int = 256_000,
@@ -122,20 +127,16 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         )
 
         self._logger = logger or logging.getLogger(_LOGGER_NAME)
-
         self._skip_non_business = skip_non_business
         self._cal = calendar or ql.UnitedStates(ql.UnitedStates.GovernmentBond)
 
         stem = cache_stem or f"FixedRateBondsTB_{self._CACHE_VERSION}_{mdp.source}"
         self._cache_path = self.default_cache_path(stem=stem)
         self._cache_attr = f"{self._CACHE_ATTR_BASE}_{self._CACHE_VERSION}"
-
-        # mapping cache: key=(iso_date, query_fingerprint) -> (date, col, val)
         self.open_cache(cache_attr=self._cache_attr, path=self._cache_path)
 
-        # >>> added
         self._use_ts_cache = bool(use_ts_cache)
-        self._ts_write_opts = WriteOptions(
+        self._computed_ts_store = ComputedTimeseriesStore(
             base_dir=ts_base_dir or "./data/ts",
             compression=ts_compression,
             row_group_size=int(ts_row_group_size),
@@ -163,22 +164,8 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
     ) -> List[FixedRateBondQuery]:
         return _flatten_queries(queries)
 
-    # >>> added
     def _ts_symbol_for_query(self, q: FixedRateBondQuery) -> str:
-        """
-        Stable, unique symbol for the timeseries cache (content-addressed by query fingerprint).
-        Namespaced by source to avoid cross-source collisions.
-        """
         return f"FRB::{self.mdp.source}::{_query_fingerprint(q)}"
-
-    # >>> added
-    @staticmethod
-    def _to_timestamp(d: DateLike) -> pd.Timestamp:
-        if isinstance(d, datetime.datetime):
-            return pd.Timestamp(d)
-        if isinstance(d, datetime.date):
-            return pd.Timestamp(d)
-        return pd.Timestamp(d)
 
     def get_timeseries(
         self,
@@ -202,88 +189,52 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
             ref_points = self._build_reference_points(start=start, end=end, freq=eff_freq, timestamps=None)
         else:
             if self._skip_non_business:
-                bd = []
+                ref_points = []
                 for d in pd.date_range(start=start, end=end, freq="D"):
                     qld = datetime_to_ql_date(d.date())
                     if self._cal.isBusinessDay(qld):
-                        bd.append(d.date())
-                ref_points = bd
+                        ref_points.append(d.date())
             else:
                 ref_points = pd.date_range(start, end, freq="D").date.tolist()
 
-        flat: List[FixedRateBondQuery] = self._flatten_queries(queries)
-
+        flat = self._flatten_queries(queries)
         cached_rows: List[Tuple[DateLike, str, float]] = []
-        ref_points_set = set(ref_points)
+        cached_row_keys: set[Tuple[DateLike, str]] = set()
         today = datetime.date.today()
 
         if self._use_ts_cache and not ignore_cache and flat:
-            ts_root = getattr(self, self._cache_attr)
-
             for q in flat:
                 symbol = self._ts_symbol_for_query(q)
-
                 try:
-                    df_ts = read_timeseries(
-                        ts_root,
-                        symbol,
-                        start=min(ref_points) if ref_points else None,
-                        end=max(ref_points) if ref_points else None,
-                        columns=None,
-                        base_dir=self._ts_write_opts.base_dir,
+                    rows = self._computed_ts_store.read_rows(
+                        symbol=symbol,
+                        reference_points=ref_points,
+                        intraday=is_intraday,
+                        skip_current_eod=True,
+                        fallback_column_name=q.col_name(),
                     )
                 except Exception as ex:
                     self._logger.debug(f"[TS cache] read failed for symbol={symbol}: {ex}")
-                    df_ts = pd.DataFrame()
-
-                if df_ts.empty:
-                    continue
-
-                # Normalize index to naive timestamps/dates comparable to ref_points
-                # If '_index_ts' handling happened, read_timeseries already restored index.
-                if not isinstance(df_ts.index, (pd.DatetimeIndex, pd.Index)):
-                    df_ts.index = pd.to_datetime(df_ts.index)
-
-                # Allow either single 'value' column or multi-column; take the first numeric
-                col_candidates = [c for c in df_ts.columns if pd.api.types.is_numeric_dtype(df_ts[c])]
-                if not col_candidates:
-                    continue
-                c0 = col_candidates[0]
-
-                # For date-only schedules, cast to .date() for matching
-                if not is_intraday:
-                    present = {ts_ts.date(): float(v) for ts_ts, v in df_ts[c0].items()}
-                else:
-                    present = {pd.Timestamp(ts_ts): float(v) for ts_ts, v in df_ts[c0].items()}
-
-                # Add rows for dates/timestamps we have, but skip "today" to avoid staleness
-                for rp in ref_points:
-                    if (not is_intraday) and (isinstance(rp, datetime.date)) and (rp == today):
-                        continue
-                    if rp in present:
-                        cached_rows.append((rp, q.col_name(), present[rp]))
+                    rows = []
+                cached_rows.extend(rows)
+                cached_row_keys.update((row_d, row_c) for row_d, row_c, _ in rows)
 
         qs_per_date: Dict[Union[datetime.date, datetime.datetime], List[FixedRateBondQuery]] = {d: list(flat) for d in ref_points}
         to_price_dates: List[Union[datetime.date, datetime.datetime]] = []
-
         cache_map = getattr(self, self._cache_attr)
 
         for d in ref_points:
             all_cached = True
-
             for q in flat:
-                # prefer TS cache hit first
-                hit_ts = any((row_d == d and row_c == q.col_name()) for (row_d, row_c, _v) in cached_rows)
-
-                # fall back to row cache
+                hit_ts = (d, q.col_name()) in cached_row_keys
                 k = self._cache_key(d, q)
                 hit_row = (k in cache_map) and not (d == today or d == "live") and not bool(ignore_cache)
                 if hit_row and not hit_ts:
-                    cached_rows.append(cache_map[k])
-
+                    row = cache_map[k]
+                    cached_rows.append(row)
+                    cached_row_keys.add((row[0], row[1]))
                 if not hit_ts and not hit_row:
                     all_cached = False
-
             if not all_cached:
                 to_price_dates.append(d)
 
@@ -302,8 +253,8 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         for q in flat:
             needed_symbols.extend(_split_components(str(q.cusip)))
 
-        seen = set()
         uniq_symbols: List[str] = []
+        seen = set()
         for s in needed_symbols:
             if s not in seen:
                 seen.add(s)
@@ -323,14 +274,15 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
             bulk_map = {}
 
         new_rows_with_q: List[Tuple[Tuple[DateLike, str, float], FixedRateBondQuery, datetime.date | datetime.datetime]] = []
-
         total_tasks = sum(len(qs_per_date[d]) for d in to_price_dates)
         pbar_disable = not self._show_tqdm
-        desc = f"{self._DEFAULT_PRICING_MESSAGE}"
 
-        with tqdm(total=total_tasks, disable=pbar_disable, desc=desc, leave=True) as pbar:
+        with tqdm(total=total_tasks, disable=pbar_disable, desc=self._DEFAULT_PRICING_MESSAGE, leave=True) as pbar:
 
-            def _build_task_inputs(d, q) -> Optional[Tuple[DateLike, FixedRateBondQuery, Dict[str, _FixedRateBondGenericPricer]]]:
+            def _build_task_inputs(
+                d: DateLike,
+                q: FixedRateBondQuery,
+            ) -> Optional[Tuple[DateLike, FixedRateBondQuery, Dict[str, _FixedRateBondGenericPricer]]]:
                 pr_map_all = bulk_map.get(d, {})
                 if not isinstance(pr_map_all, dict):
                     return None
@@ -352,23 +304,28 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
             tasks: List[Tuple[DateLike, FixedRateBondQuery, Dict[str, _FixedRateBondGenericPricer]]] = []
             for d in to_price_dates:
                 for q in qs_per_date[d]:
-                    t = _build_task_inputs(d, q)
-                    if t is not None:
-                        tasks.append(t)
+                    task = _build_task_inputs(d, q)
+                    if task is not None:
+                        tasks.append(task)
                     else:
                         pbar.update(1)
 
             if (n_jobs or 1) > 1:
                 max_workers = int(n_jobs) if n_jobs and n_jobs > 1 else None
                 with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                    fut_map = {ex.submit(_build_row_for_query, pr_map, q, d, self._date_col): (q, d) for (d, q, pr_map) in tasks}
+                    fut_map = {
+                        ex.submit(_build_row_for_query, pr_map, q, d, self._date_col): (q, d)
+                        for d, q, pr_map in tasks
+                    }
                     for fut in as_completed(fut_map):
                         q, d0 = fut_map[fut]
                         try:
                             row = fut.result()
                             new_rows_with_q.append((row, q, d0))
                         except Exception as e:
-                            self._logger.exception(f"Pricing failed for cusip='{q.cusip}', date='{d0}', query='{q}'. Error: {e}")
+                            self._logger.exception(
+                                f"Pricing failed for cusip='{q.cusip}', date='{d0}', query='{q}'. Error: {e}"
+                            )
                         finally:
                             pbar.update(1)
             else:
@@ -377,7 +334,9 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         row = _build_row_for_query(pr_map, q, d0, self._date_col)
                         new_rows_with_q.append((row, q, d0))
                     except Exception as e:
-                        self._logger.exception(f"Pricing failed for cusip='{q.cusip}', date='{d0}', query='{q}'. Error: {e}")
+                        self._logger.exception(
+                            f"Pricing failed for cusip='{q.cusip}', date='{d0}', query='{q}'. Error: {e}"
+                        )
                     finally:
                         pbar.update(1)
 
@@ -387,28 +346,12 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 mapping[self._cache_key(d, q)] = row
 
         if self._use_ts_cache and new_rows_with_q:
-            ts_root = getattr(self, self._cache_attr)  # persistent mapping works as “root” for catalog
-            # Group rows by query (symbol)
-            grouped: Dict[str, List[Tuple[pd.Timestamp, float, str]]] = defaultdict(list)
+            grouped: Dict[str, List[Tuple[DateLike, str, float]]] = defaultdict(list)
             for (dt_like, col, val), q, _d in new_rows_with_q:
-                sym = self._ts_symbol_for_query(q)
-                ts = self._to_timestamp(dt_like)
-                grouped[sym].append((ts, float(val), col))
-            # Write one symbol at a time
+                grouped[self._ts_symbol_for_query(q)].append((dt_like, col, float(val)))
             for sym, rows in grouped.items():
-                if not rows:
-                    continue
-                rows_sorted = sorted(rows, key=lambda x: x[0])
-                ts_index = pd.DatetimeIndex([t for (t, _v, _c) in rows_sorted])
-                df_sym = pd.DataFrame({"value": [v for (_t, v, _c) in rows_sorted]}, index=ts_index)
-                # append_timeseries partitions by calendar date
                 try:
-                    append_timeseries(
-                        ts_root,
-                        sym,
-                        df_sym,
-                        opts=self._ts_write_opts,
-                    )
+                    self._computed_ts_store.append_rows(symbol=sym, rows=rows)
                 except Exception as ex:
                     self._logger.warning(f"[TS cache] append failed for symbol={sym}: {ex}")
 

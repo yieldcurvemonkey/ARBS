@@ -16,6 +16,7 @@ import QuantLib as ql
 import Query.IRSwaps.adapter  # noqa: F401
 # fmt: on
 
+from Caching.computed_timeseries_store import ComputedTimeseriesStore
 from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
@@ -136,6 +137,10 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         use_btree: bool = True,
         show_tqdm: bool = True,
         logger: Optional[logging.Logger] = None,
+        use_ts_cache: bool = True,
+        ts_base_dir: Optional[str] = "./data/ts",
+        ts_row_group_size: int = 256_000,
+        ts_compression: str = "zstd",
     ):
         LayeredCacheMixin.__init__(
             self,
@@ -156,6 +161,12 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
         # mapping cache: key=(iso_date, curve_name, query_key) -> (date, col, val)
         self.open_cache(cache_attr=self._cache_attr, path=self._cache_path)
+        self._use_ts_cache = bool(use_ts_cache)
+        self._computed_ts_store = ComputedTimeseriesStore(
+            base_dir=ts_base_dir or "./data/ts",
+            compression=ts_compression,
+            row_group_size=int(ts_row_group_size),
+        )
 
     def __enter__(self):
         return self
@@ -179,6 +190,9 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
     ) -> List[IRSwapQuery]:
         return _flatten_queries(queries)
 
+    def _ts_symbol_for_query(self, curve_name: str, q: IRSwapQuery) -> str:
+        return f"IRS::{self.mdp.source}::{curve_name}::{_query_fingerprint(q)}"
+
     def get_timeseries(
         self,
         start: DateLike,
@@ -196,14 +210,38 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
         eff_freq = (freq or "1T") if is_intraday else freq
         ref_points = self._build_reference_points(start=start, end=end, freq=eff_freq, timestamps=timestamps)
+        use_intraday_cache = has_timestamps or is_intraday
 
         flat = self._flatten_queries(queries)
         by_curve = _group_queries_by_curve(flat)
 
         to_fetch: DefaultDict[str, set] = defaultdict(set)
         cached_rows: List[Tuple[DateLike, str, float]] = []
+        cached_row_keys: set[Tuple[DateLike, str]] = set()
 
         cache_map = getattr(self, self._cache_attr)
+
+        if self._use_ts_cache and not ignore_cache:
+            for curve_name, qs in by_curve.items():
+                for q in qs:
+                    try:
+                        rows = self._computed_ts_store.read_rows(
+                            symbol=self._ts_symbol_for_query(curve_name, q),
+                            reference_points=ref_points,
+                            intraday=use_intraday_cache,
+                            skip_current_eod=True,
+                            fallback_column_name=q.col_name(curve_name),
+                        )
+                    except Exception as ex:
+                        self._logger.debug(
+                            "Computed TS cache read failed for curve='%s', query='%s': %s",
+                            curve_name,
+                            q,
+                            ex,
+                        )
+                        rows = []
+                    cached_rows.extend(rows)
+                    cached_row_keys.update((row_d, row_c) for row_d, row_c, _ in rows)
 
         for d in ref_points:
             for curve_name, qs in by_curve.items():
@@ -212,13 +250,19 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         break
 
                 for q in qs:
+                    col_name = q.col_name(curve_name)
+                    if (d, col_name) in cached_row_keys:
+                        continue
+
                     if _is_today(d):
                         to_fetch[curve_name].add(d)
                         continue
 
                     k = self._cache_key(d, curve_name, q)
                     if (k in cache_map) and not ignore_cache:
-                        cached_rows.append(cache_map[k])
+                        row = cache_map[k]
+                        cached_rows.append(row)
+                        cached_row_keys.add((row[0], row[1]))
                     else:
                         to_fetch[curve_name].add(d)
 
@@ -300,6 +344,16 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 if _is_today(d):
                     continue
                 mapping[self._cache_key(d, curve_name, q)] = row
+
+        if self._use_ts_cache and new_rows_with_q:
+            grouped: Dict[str, List[Tuple[DateLike, str, float]]] = defaultdict(list)
+            for (dt_like, col, val), q, curve_name, _d in new_rows_with_q:
+                grouped[self._ts_symbol_for_query(curve_name, q)].append((dt_like, col, float(val)))
+            for sym, rows in grouped.items():
+                try:
+                    self._computed_ts_store.append_rows(symbol=sym, rows=rows)
+                except Exception as ex:
+                    self._logger.warning(f"[TS cache] append failed for symbol={sym}: {ex}")
 
         all_rows = cached_rows + [r for (r, _q, _cn, _d) in new_rows_with_q]
         if not all_rows:

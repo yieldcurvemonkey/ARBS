@@ -1,6 +1,8 @@
 import datetime
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, DefaultDict, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 
 import pandas as pd
@@ -13,8 +15,10 @@ from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 from Query.IRSwaps.IRSwapValue import IRSwapValue
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
+from Query.Unified.UnifiedQuery import UnifiedQuery
 from TB.BaseTimeseriesTB import BaseTimeseriesTB
 from TB.utils import DateLike
 
@@ -29,17 +33,86 @@ if TYPE_CHECKING:
     from TB.USTFuturesTB import USTFuturesTB
 
 
+def _normalize_query_like(query: BaseQuery) -> List[BaseQuery]:
+    if isinstance(query, UnifiedQuery):
+        return [legacy for item in query.return_query() for legacy in _normalize_query_like(item.to_legacy())]
+
+    if hasattr(query, "return_query"):
+        out = query.return_query()
+        items = out if isinstance(out, list) else [out]
+        flat: List[BaseQuery] = []
+        for item in items:
+            if isinstance(item, UnifiedQuery):
+                flat.extend(_normalize_query_like(item))
+            else:
+                flat.append(item)
+        return flat
+
+    return [query]
+
+
 def _flatten_base_queries(queries: Iterable[Union[BaseQuery, List[BaseQuery]]]) -> List[BaseQuery]:
     flat: List[BaseQuery] = []
     for q in queries:
         if isinstance(q, list):
             for qq in q:
-                out = qq.return_query() if hasattr(qq, "return_query") else [qq]
-                flat.extend(out if isinstance(out, list) else [out])
+                flat.extend(_normalize_query_like(qq))
         else:
-            out = q.return_query() if hasattr(q, "return_query") else [q]
-            flat.extend(out if isinstance(out, list) else [out])
+            flat.extend(_normalize_query_like(q))
     return flat
+
+
+def _build_reference_points(
+    start: DateLike,
+    end: DateLike,
+    *,
+    freq: Optional[str],
+    timestamps: Optional[List[datetime.datetime]],
+) -> List[DateLike]:
+    if timestamps is not None and len(timestamps) > 0:
+        return sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
+
+    is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
+    if is_intraday:
+        if start.tzinfo is not None:
+            rng = pd.date_range(start=start, end=end, freq=freq, tz=start.tzinfo)
+        else:
+            rng = pd.date_range(start=start, end=end, freq=freq)
+        return rng.to_pydatetime().tolist()
+
+    return pd.bdate_range(start, end).date.tolist()
+
+
+def _timestamp_utc_key(value: Any) -> Optional[datetime.datetime]:
+    if value is None:
+        return None
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
+        value = datetime.datetime.combine(value, datetime.time())
+    if not isinstance(value, datetime.datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=datetime.timezone.utc)
+    else:
+        value = value.astimezone(datetime.timezone.utc)
+    return value.replace(microsecond=0)
+
+
+@dataclass(frozen=True)
+class _ProductTimeseriesPlan:
+    product: str
+    queries: Tuple[BaseQuery, ...]
+    strategy: str
+    router: Optional[object] = None
+    mdp: Optional[MarketDataProvider] = None
+
+
+@dataclass(frozen=True)
+class _TimeseriesRequestPlan:
+    product_plans: Tuple[_ProductTimeseriesPlan, ...]
+    irswap_spread_queries: Tuple[IRSwapQuery, ...] = ()
+    irswap_asw_queries: Tuple[IRSwapQuery, ...] = ()
 
 
 def _ct_alias_to_y(tenor: str) -> str:
@@ -113,6 +186,7 @@ class TimeseriesBuilder:
             self._routers["FXFORWARD"] = fxforwards_tb
 
         self._generic_router_cache: Dict[str, _GenericTimeseriesTB] = {}
+        self._specialized_router_cache: Dict[str, object] = {}
 
     def register_router(self, product: str, tb_obj: object) -> None:
         self._routers[product] = tb_obj
@@ -124,6 +198,33 @@ class TimeseriesBuilder:
         generic_tb = _GenericTimeseriesTB(product=product, mdp=mdp, date_col=self._date_col)
         self._generic_router_cache[product] = generic_tb
         return generic_tb
+
+    def _get_specialized_router(self, product: str, mdp: MarketDataProvider) -> Optional[object]:
+        canonical_product = {"IRSWAPTIONS": "IRSWAPTION", "STIRCAPFLOORS": "STIRCAPFLOOR"}.get(product, product)
+        existing = self._specialized_router_cache.get(canonical_product)
+        if existing is not None and getattr(existing, "mdp", None) is mdp:
+            return existing
+
+        router_cls = None
+        if canonical_product == "FRB":
+            from TB.FixedRateBondsTB import FixedRateBondsTB
+
+            router_cls = FixedRateBondsTB
+        elif canonical_product == "IRSWAPTION":
+            from TB.IRSwaptionsTB import IRSwaptionsTB
+
+            router_cls = IRSwaptionsTB
+        elif canonical_product == "IRS":
+            from TB.IRSwapsTB import IRSwapsTB
+
+            router_cls = IRSwapsTB
+
+        if router_cls is None:
+            return None
+
+        router = router_cls(mdp=mdp, date_col=self._date_col, show_tqdm=True)
+        self._specialized_router_cache[canonical_product] = router
+        return router
 
     def _route_product_timeseries(
         self,
@@ -139,10 +240,12 @@ class TimeseriesBuilder:
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
     ) -> pd.DataFrame:
-        alias_map = {"IRSWAPTIONS": "IRSWAPTION", "STIRCAPFLOORS": "STIRCAPFLOOR"}
-        canonical_product = alias_map.get(product, product)
+        canonical_product, tb, mdp = self._resolve_product_handles(
+            product=product,
+            merged_routers=merged_routers,
+            merged_mdps=merged_mdps,
+        )
 
-        tb = merged_routers.get(product) or merged_routers.get(canonical_product)
         if tb is not None:
             return tb.get_timeseries(  # type: ignore[attr-defined]
                 start,
@@ -154,9 +257,8 @@ class TimeseriesBuilder:
                 timestamps=timestamps,
             )
 
-        mdp_key = product if product in merged_mdps else canonical_product
-        if mdp_key in merged_mdps:
-            generic_tb = self._get_generic_router(canonical_product, merged_mdps[mdp_key])
+        if mdp is not None:
+            generic_tb = self._get_generic_router(canonical_product, mdp)
             return generic_tb.get_timeseries(
                 start,
                 end,
@@ -246,6 +348,687 @@ class TimeseriesBuilder:
             df = df.set_index(self._date_col)
         per_product_frames.append((product, pd.concat({product: df}, axis=1)))
 
+    def _resolve_product_handles(
+        self,
+        *,
+        product: str,
+        merged_routers: Mapping[str, Any],
+        merged_mdps: Mapping[str, MarketDataProvider],
+    ) -> Tuple[str, Optional[object], Optional[MarketDataProvider]]:
+        alias_map = {"IRSWAPTIONS": "IRSWAPTION", "STIRCAPFLOORS": "STIRCAPFLOOR"}
+        canonical_product = alias_map.get(product, product)
+        router = merged_routers.get(product) or merged_routers.get(canonical_product)
+        mdp = merged_mdps.get(product) or merged_mdps.get(canonical_product)
+        if mdp is None and router is not None and hasattr(router, "mdp"):
+            mdp = getattr(router, "mdp")
+        if router is None and mdp is not None:
+            router = self._get_specialized_router(canonical_product, mdp)
+        return canonical_product, router, mdp
+
+    @staticmethod
+    def _parallel_product_workers(plan_count: int, n_jobs: Optional[int]) -> int:
+        if plan_count <= 1 or not n_jobs or n_jobs <= 1:
+            return 1
+        return max(1, min(plan_count, int(n_jobs)))
+
+    @staticmethod
+    def _route_job_budget(n_jobs: Optional[int], worker_count: int) -> int:
+        if not n_jobs or n_jobs <= 1:
+            return 1
+        return max(1, int(n_jobs) // max(1, worker_count))
+
+    def _can_use_irs_curve_store_fast_path(
+        self,
+        *,
+        queries: List[IRSwapQuery],
+        mdp: Optional[MarketDataProvider],
+        start: DateLike,
+        end: DateLike,
+        ignore_cache: Optional[bool],
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+    ) -> bool:
+        if not queries or mdp is None or ignore_cache:
+            return False
+
+        source = str(getattr(mdp, "source", "")).upper()
+        if source not in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}:
+            return False
+
+        required_attrs = (
+            "_get_curve_store",
+            "_get_barchart_stirf_curve_builder",
+            "_resolve_barchart_stirf_curve_name",
+            "_to_barchart_stirf_timestamp",
+            "_build_barchart_stirf_rl_curve",
+        )
+        if not all(hasattr(mdp, attr) for attr in required_attrs):
+            return False
+
+        ref_points = _build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps)
+        if not ref_points:
+            return False
+
+        for q in queries:
+            if not isinstance(q, IRSwapQuery):
+                return False
+            req = dict(q.market_request or {})
+            time_key = str(getattr(q, "mdp_time_key", "timestamp") or "timestamp")
+            if str(req.get(time_key, "")).lower() == "live":
+                return False
+
+        return True
+
+    def _build_request_plan(
+        self,
+        *,
+        flat_queries: List[BaseQuery],
+        merged_routers: Mapping[str, Any],
+        merged_mdps: Mapping[str, MarketDataProvider],
+        start: DateLike,
+        end: DateLike,
+        ignore_cache: Optional[bool],
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+    ) -> _TimeseriesRequestPlan:
+        by_product: DefaultDict[str, List[BaseQuery]] = defaultdict(list)
+        for q in flat_queries:
+            if not getattr(q, "product", None):
+                raise ValueError(f"Query missing 'product': {q!r}")
+            by_product[q.product].append(q)
+
+        product_plans: List[_ProductTimeseriesPlan] = []
+        irswap_spread_queries: List[IRSwapQuery] = []
+        irswap_asw_queries: List[IRSwapQuery] = []
+
+        for product, qs in by_product.items():
+            canonical_product, router, mdp = self._resolve_product_handles(
+                product=product,
+                merged_routers=merged_routers,
+                merged_mdps=merged_mdps,
+            )
+
+            if canonical_product == "IRS":
+                irs_qs_unfiltered: List[IRSwapQuery] = [q for q in qs if isinstance(q, IRSwapQuery)]
+                irs_qs: List[IRSwapQuery] = []
+                for q in irs_qs_unfiltered:
+                    if q.value in [IRSwapValue.MMSS, IRSwapValue.SPREADOVER]:
+                        irswap_spread_queries.append(q)
+                    elif q.value in [
+                        IRSwapValue.PAR_PAR_ASW,
+                        IRSwapValue.PAR_PAR_ASW,
+                        IRSwapValue.TRUE_ASW,
+                        IRSwapValue.PROCEEDS_ASW,
+                        IRSwapValue.MARKET_ASW,
+                    ]:
+                        irswap_asw_queries.append(q)
+                    else:
+                        irs_qs.append(q)
+
+                if not irs_qs:
+                    continue
+
+                strategy = "irs_curve_store" if self._can_use_irs_curve_store_fast_path(
+                    queries=irs_qs,
+                    mdp=mdp,
+                    start=start,
+                    end=end,
+                    ignore_cache=ignore_cache,
+                    freq=freq,
+                    timestamps=timestamps,
+                ) else "route"
+                product_plans.append(
+                    _ProductTimeseriesPlan(
+                        product="IRS",
+                        queries=tuple(irs_qs),
+                        strategy=strategy,
+                        router=router,
+                        mdp=mdp,
+                    )
+                )
+                continue
+
+            if canonical_product == "FRB":
+                frb_qs: List[FixedRateBondQuery] = [q for q in qs if isinstance(q, FixedRateBondQuery)]
+                if len(frb_qs) != len(qs):
+                    raise TypeError("Mixed/non-FRB queries encountered in FixedRateBond bucket")
+                product_plans.append(
+                    _ProductTimeseriesPlan(
+                        product="FRB",
+                        queries=tuple(frb_qs),
+                        strategy="route",
+                        router=router,
+                        mdp=mdp,
+                    )
+                )
+                continue
+
+            if router is None and mdp is None:
+                if canonical_product in {"FXFORWARD", "FXFORWARDS"}:
+                    raise NotImplementedError(
+                        "FX forward timeseries queries are not supported yet: no FX-forward BaseQuery implementation is available."
+                    )
+                available = sorted(set(merged_routers.keys()) | set(merged_mdps.keys()))
+                raise KeyError(
+                    f"No timeseries router or MDP registered for product '{product}'. "
+                    f"Available: {available}"
+                )
+
+            product_plans.append(
+                _ProductTimeseriesPlan(
+                    product=product,
+                    queries=tuple(qs),
+                    strategy="route",
+                    router=router,
+                    mdp=mdp,
+                )
+            )
+
+        return _TimeseriesRequestPlan(
+            product_plans=tuple(product_plans),
+            irswap_spread_queries=tuple(irswap_spread_queries),
+            irswap_asw_queries=tuple(irswap_asw_queries),
+        )
+
+    def _execute_product_plan(
+        self,
+        *,
+        plan: _ProductTimeseriesPlan,
+        merged_routers: Dict[str, Any],
+        merged_mdps: Dict[str, MarketDataProvider],
+        start: DateLike,
+        end: DateLike,
+        n_jobs: Optional[int],
+        ignore_cache: Optional[bool],
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+    ) -> pd.DataFrame:
+        if plan.strategy == "irs_curve_store":
+            return self._execute_irs_curve_store_plan(
+                plan=plan,
+                start=start,
+                end=end,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                freq=freq,
+                timestamps=timestamps,
+            )
+
+        return self._route_product_timeseries(
+            product=plan.product,
+            qs=list(plan.queries),
+            merged_routers=merged_routers,
+            merged_mdps=merged_mdps,
+            start=start,
+            end=end,
+            n_jobs=n_jobs,
+            ignore_cache=ignore_cache,
+            freq=freq,
+            timestamps=timestamps,
+        )
+
+    def _execute_product_plans(
+        self,
+        *,
+        plan: _TimeseriesRequestPlan,
+        merged_routers: Dict[str, Any],
+        merged_mdps: Dict[str, MarketDataProvider],
+        start: DateLike,
+        end: DateLike,
+        n_jobs: Optional[int],
+        ignore_cache: Optional[bool],
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+    ) -> List[Tuple[str, pd.DataFrame]]:
+        if not plan.product_plans:
+            return []
+
+        worker_count = self._parallel_product_workers(len(plan.product_plans), n_jobs)
+        route_jobs = self._route_job_budget(n_jobs, worker_count)
+
+        results: List[Optional[pd.DataFrame]] = [None] * len(plan.product_plans)
+        if worker_count <= 1:
+            for idx, product_plan in enumerate(plan.product_plans):
+                results[idx] = self._execute_product_plan(
+                    plan=product_plan,
+                    merged_routers=merged_routers,
+                    merged_mdps=merged_mdps,
+                    start=start,
+                    end=end,
+                    n_jobs=route_jobs,
+                    ignore_cache=ignore_cache,
+                    freq=freq,
+                    timestamps=timestamps,
+                )
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ts-builder") as pool:
+                future_map = {
+                    pool.submit(
+                        self._execute_product_plan,
+                        plan=product_plan,
+                        merged_routers=merged_routers,
+                        merged_mdps=merged_mdps,
+                        start=start,
+                        end=end,
+                        n_jobs=route_jobs,
+                        ignore_cache=ignore_cache,
+                        freq=freq,
+                        timestamps=timestamps,
+                    ): idx
+                    for idx, product_plan in enumerate(plan.product_plans)
+                }
+                for future in as_completed(future_map):
+                    idx = future_map[future]
+                    results[idx] = future.result()
+
+        return [
+            (product_plan.product, results[idx] if results[idx] is not None else pd.DataFrame())
+            for idx, product_plan in enumerate(plan.product_plans)
+        ]
+
+    def _read_irs_curve_store_analytics_rows(
+        self,
+        *,
+        store: Any,
+        resolved_curve_name: str,
+        requested_curve_name: str,
+        queries: List[IRSwapQuery],
+        requested_key_by_ref: Mapping[DateLike, datetime.datetime],
+    ) -> Tuple[List[Tuple[DateLike, str, float]], set[Tuple[DateLike, int]]]:
+        eligible: List[Tuple[int, IRSwapQuery, str]] = []
+        for idx, q in enumerate(queries):
+            tenor = str(getattr(q, "tenor", "") or "").strip().upper().replace(" ", "")
+            if not tenor or "/" in tenor or "X" in tenor:
+                continue
+            if q.structure != IRSwapStructure.OUTRIGHT or q.value != IRSwapValue.RATE:
+                continue
+            eligible.append((idx, q, tenor))
+
+        if not eligible:
+            return [], set()
+
+        ref_keys = list(requested_key_by_ref.values())
+        start_bound = min(ref_keys).date()
+        end_bound = max(ref_keys).date()
+        analytics_df = store.read_analytics(
+            resolved_curve_name,
+            start=start_bound,
+            end=end_bound,
+            tenors=sorted({tenor for _, _, tenor in eligible}),
+            metrics=["par_rate", "rate"],
+        )
+        if analytics_df.empty or "timestamp_utc" not in analytics_df.columns:
+            return [], set()
+
+        rows_by_key: Dict[datetime.datetime, Any] = {}
+        for _, row in analytics_df.iterrows():
+            ts_key = _timestamp_utc_key(row.get("timestamp_utc"))
+            if ts_key is not None:
+                rows_by_key[ts_key] = row
+
+        rows: List[Tuple[DateLike, str, float]] = []
+        covered: set[Tuple[DateLike, int]] = set()
+        for ref_point, ts_key in requested_key_by_ref.items():
+            row = rows_by_key.get(ts_key)
+            if row is None:
+                continue
+            for idx, q, tenor in eligible:
+                value = None
+                for metric_name in ("par_rate", "rate"):
+                    col_name = f"{metric_name}_{tenor}"
+                    if col_name in row.index and pd.notna(row[col_name]):
+                        value = float(row[col_name])
+                        break
+                if value is None:
+                    continue
+                default = f"{requested_curve_name}.{tenor}.{IRSwapValue.RATE.name}"
+                rows.append((ref_point, _safe_col_name(q, default), value))
+                covered.add((ref_point, idx))
+        return rows, covered
+
+    def _read_irs_computed_cache_rows(
+        self,
+        *,
+        router: Optional[object],
+        requested_curve_name: str,
+        queries: List[IRSwapQuery],
+        reference_points: List[DateLike],
+        intraday: bool,
+    ) -> Tuple[List[Tuple[DateLike, str, float]], set[Tuple[DateLike, int]]]:
+        if router is None:
+            return [], set()
+        computed_store = getattr(router, "_computed_ts_store", None)
+        symbol_builder = getattr(router, "_ts_symbol_for_query", None)
+        if computed_store is None or not callable(symbol_builder):
+            return [], set()
+
+        rows: List[Tuple[DateLike, str, float]] = []
+        covered: set[Tuple[DateLike, int]] = set()
+        for idx, q in enumerate(queries):
+            try:
+                q_rows = computed_store.read_rows(
+                    symbol=symbol_builder(requested_curve_name, q),
+                    reference_points=reference_points,
+                    intraday=intraday,
+                    skip_current_eod=True,
+                    fallback_column_name=q.col_name(requested_curve_name),
+                )
+            except Exception:
+                q_rows = []
+            rows.extend(q_rows)
+            covered.update((ref_point, idx) for ref_point, _col, _value in q_rows)
+        return rows, covered
+
+    def _write_irs_computed_cache_rows(
+        self,
+        *,
+        router: Optional[object],
+        requested_curve_name: str,
+        rows_by_query_idx: Mapping[int, List[Tuple[DateLike, str, float]]],
+        queries: List[IRSwapQuery],
+    ) -> None:
+        if router is None:
+            return
+        computed_store = getattr(router, "_computed_ts_store", None)
+        symbol_builder = getattr(router, "_ts_symbol_for_query", None)
+        if computed_store is None or not callable(symbol_builder):
+            return
+
+        for idx, rows in rows_by_query_idx.items():
+            if not rows:
+                continue
+            q = queries[idx]
+            try:
+                computed_store.append_rows(
+                    symbol=symbol_builder(requested_curve_name, q),
+                    rows=rows,
+                )
+            except Exception:
+                continue
+
+    def _build_irs_curve_store_curve_map(
+        self,
+        *,
+        mdp: Any,
+        store: Any,
+        builder: Any,
+        requested_curve_name: str,
+        resolved_curve_name: str,
+        reference_points: List[DateLike],
+        requested_key_by_ref: Mapping[DateLike, datetime.datetime],
+        n_jobs: Optional[int],
+    ) -> Dict[DateLike, Any]:
+        if not reference_points:
+            return {}
+
+        start_bound = min(requested_key_by_ref.values()).date()
+        end_bound = max(requested_key_by_ref.values()).date()
+        raw_df = store.read_raw_nodes(resolved_curve_name, start=start_bound, end=end_bound)
+        if raw_df.empty or "timestamp_utc" not in raw_df.columns:
+            return {}
+
+        requested_keys = set(requested_key_by_ref.values())
+        ts_keys = raw_df["timestamp_utc"].map(_timestamp_utc_key)
+        filtered_df = raw_df.loc[ts_keys.isin(requested_keys)].copy()
+        if filtered_df.empty:
+            return {}
+
+        cfg = getattr(builder, "_STIRF_CURVE_CONFIGS", {}).get(resolved_curve_name)
+        curves_by_ts = store.reconstruct_curves_batch(
+            filtered_df,
+            cfg=cfg,
+            max_workers=max(1, int(n_jobs or 1)),
+        )
+        curves_by_key = {
+            key: curve
+            for key, curve in (
+                (_timestamp_utc_key(ts_val), curve_val)
+                for ts_val, curve_val in curves_by_ts.items()
+            )
+            if key is not None
+        }
+
+        wrapped_by_key: Dict[datetime.datetime, Any] = {}
+        fixings_cache: Dict[tuple, pd.Series] = {}
+        for ref_point in reference_points:
+            ts_key = requested_key_by_ref.get(ref_point)
+            if ts_key is None:
+                continue
+            if ts_key not in wrapped_by_key:
+                rl_curve_handle = curves_by_key.get(ts_key)
+                if rl_curve_handle is None:
+                    continue
+                wrapped_by_key[ts_key] = mdp._build_barchart_stirf_rl_curve(
+                    requested_curve_name=requested_curve_name,
+                    resolved_curve_name=resolved_curve_name,
+                    request_timestamp=ref_point,
+                    rl_curve_handle=rl_curve_handle,
+                    builder=builder,
+                    fixings_cache=fixings_cache,
+                )
+        return {
+            ref_point: wrapped_by_key[ts_key]
+            for ref_point, ts_key in requested_key_by_ref.items()
+            if ts_key in wrapped_by_key
+        }
+
+    def _fallback_timeseries_for_missing_points(
+        self,
+        *,
+        product: str,
+        queries: List[BaseQuery],
+        router: Optional[object],
+        mdp: Optional[MarketDataProvider],
+        start: DateLike,
+        end: DateLike,
+        missing_points: List[DateLike],
+        n_jobs: Optional[int],
+        ignore_cache: Optional[bool],
+        freq: Optional[str],
+    ) -> pd.DataFrame:
+        if not missing_points:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+        fallback_tb = router if router is not None else (self._get_generic_router(product, mdp) if mdp is not None else None)
+        if fallback_tb is None:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+        if all(isinstance(point, datetime.datetime) for point in missing_points):
+            return fallback_tb.get_timeseries(  # type: ignore[attr-defined]
+                start,
+                end,
+                queries,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                freq=freq,
+                timestamps=sorted(missing_points),
+            )
+
+        date_points = [
+            point if isinstance(point, datetime.date) and not isinstance(point, datetime.datetime) else point.date()
+            for point in missing_points
+        ]
+        fallback_df = fallback_tb.get_timeseries(  # type: ignore[attr-defined]
+            min(date_points),
+            max(date_points),
+            queries,
+            n_jobs=n_jobs,
+            ignore_cache=ignore_cache,
+            freq=None,
+            timestamps=None,
+        )
+        return fallback_df.reindex(pd.Index(sorted(date_points), name=fallback_df.index.name or self._date_col))
+
+    def _execute_irs_curve_store_plan(
+        self,
+        *,
+        plan: _ProductTimeseriesPlan,
+        start: DateLike,
+        end: DateLike,
+        n_jobs: Optional[int],
+        ignore_cache: Optional[bool],
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+    ) -> pd.DataFrame:
+        if plan.mdp is None:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+        from TB.IRSwapsTB import _build_row_for_query as _build_irs_row_for_query
+        from TB.IRSwapsTB import _group_queries_by_curve as _group_irs_queries_by_curve
+
+        mdp = plan.mdp
+        queries = [q for q in plan.queries if isinstance(q, IRSwapQuery)]
+        reference_points = _build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps)
+        if not queries or not reference_points:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+        use_intraday_cache = any(isinstance(point, datetime.datetime) for point in reference_points)
+
+        store = mdp._get_curve_store()
+        builder = mdp._get_barchart_stirf_curve_builder()
+        generic_tb = self._get_generic_router("IRS", mdp)
+        curve_frames: List[pd.DataFrame] = []
+
+        for requested_curve_name, curve_queries in _group_irs_queries_by_curve(queries).items():
+            anchor_req = dict(curve_queries[0].build_mdp_request(
+                reference_points[0] if isinstance(reference_points[0], datetime.datetime) else datetime.datetime.combine(reference_points[0], datetime.time())
+            ))
+            anchor_req.pop(str(getattr(curve_queries[0], "mdp_time_key", "timestamp") or "timestamp"), None)
+            anchor_req.pop("curve_name", None)
+            resolved_curve_name = mdp._resolve_barchart_stirf_curve_name(
+                requested_curve_name=requested_curve_name,
+                kwargs=anchor_req,
+                builder=builder,
+            )
+
+            requested_key_by_ref: Dict[DateLike, datetime.datetime] = {}
+            for ref_point in reference_points:
+                rl_timestamp = mdp._to_barchart_stirf_timestamp(ref_point)
+                if rl_timestamp == "live":
+                    continue
+                ts_key = _timestamp_utc_key(rl_timestamp)
+                if ts_key is None:
+                    continue
+                requested_key_by_ref[ref_point] = ts_key
+
+            if not requested_key_by_ref:
+                fallback_df = self._fallback_timeseries_for_missing_points(
+                    product="IRS",
+                    queries=curve_queries,
+                    router=plan.router,
+                    mdp=mdp,
+                    start=start,
+                    end=end,
+                    missing_points=reference_points,
+                    n_jobs=n_jobs,
+                    ignore_cache=ignore_cache,
+                    freq=freq,
+                )
+                if not fallback_df.empty:
+                    curve_frames.append(fallback_df)
+                continue
+
+            cached_rows, covered = self._read_irs_computed_cache_rows(
+                router=plan.router,
+                requested_curve_name=requested_curve_name,
+                queries=curve_queries,
+                reference_points=reference_points,
+                intraday=use_intraday_cache,
+            )
+            analytics_rows, analytics_covered = self._read_irs_curve_store_analytics_rows(
+                store=store,
+                resolved_curve_name=resolved_curve_name,
+                requested_curve_name=requested_curve_name,
+                queries=curve_queries,
+                requested_key_by_ref=requested_key_by_ref,
+            )
+            rows = list(cached_rows) + list(analytics_rows)
+            covered.update(analytics_covered)
+
+            if all((ref_point, idx) in covered for idx in range(len(curve_queries)) for ref_point in reference_points):
+                curve_df = generic_tb._rows_to_frame(rows)
+                if not curve_df.empty:
+                    curve_frames.append(curve_df)
+                continue
+
+            curve_map = self._build_irs_curve_store_curve_map(
+                mdp=mdp,
+                store=store,
+                builder=builder,
+                requested_curve_name=requested_curve_name,
+                resolved_curve_name=resolved_curve_name,
+                reference_points=reference_points,
+                requested_key_by_ref=requested_key_by_ref,
+                n_jobs=n_jobs,
+            )
+
+            newly_computed_rows: Dict[int, List[Tuple[DateLike, str, float]]] = defaultdict(list)
+            tasks = [
+                (idx, ref_point, q, curve_map[ref_point])
+                for idx, q in enumerate(curve_queries)
+                for ref_point in reference_points
+                if (ref_point, idx) not in covered and ref_point in curve_map
+            ]
+            worker_count = max(1, int(n_jobs or 1))
+            if worker_count > 1 and len(tasks) > 1:
+                with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ts-irs-curve-store") as pool:
+                    future_map = {
+                        pool.submit(_build_irs_row_for_query, curve, q, ref_point, self._date_col): (ref_point, idx)
+                        for idx, ref_point, q, curve in tasks
+                    }
+                    for future in as_completed(future_map):
+                        ref_point, idx = future_map[future]
+                        try:
+                            row = future.result()
+                            rows.append(row)
+                            covered.add((ref_point, idx))
+                            newly_computed_rows[idx].append(row)
+                        except Exception:
+                            continue
+            else:
+                for idx, ref_point, q, curve in tasks:
+                    try:
+                        row = _build_irs_row_for_query(curve, q, ref_point, self._date_col)
+                        rows.append(row)
+                        covered.add((ref_point, idx))
+                        newly_computed_rows[idx].append(row)
+                    except Exception:
+                        continue
+
+            self._write_irs_computed_cache_rows(
+                router=plan.router,
+                requested_curve_name=requested_curve_name,
+                rows_by_query_idx=newly_computed_rows,
+                queries=curve_queries,
+            )
+
+            direct_df = generic_tb._rows_to_frame(rows)
+            missing_points = [
+                ref_point
+                for ref_point in reference_points
+                if sum((ref_point, idx) in covered for idx in range(len(curve_queries))) < len(curve_queries)
+            ]
+            fallback_df = self._fallback_timeseries_for_missing_points(
+                product="IRS",
+                queries=curve_queries,
+                router=plan.router,
+                mdp=mdp,
+                start=start,
+                end=end,
+                missing_points=missing_points,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                freq=freq,
+            )
+            curve_df = direct_df.combine_first(fallback_df) if not fallback_df.empty else direct_df
+            if not curve_df.empty:
+                curve_frames.append(curve_df)
+
+        if not curve_frames:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+        out = pd.concat(curve_frames, axis=1).sort_index()
+        out.index.name = self._date_col
+        return out
+
     def get_timeseries(
         self,
         start: DateLike,
@@ -263,91 +1046,45 @@ class TimeseriesBuilder:
         assert start <= end, "must have end > start"
         flat = _flatten_base_queries(queries)
 
-        by_product: DefaultDict[str, List[BaseQuery]] = defaultdict(list)
-        for q in flat:
-            if not getattr(q, "product", None):
-                raise ValueError(f"Query missing 'product': {q!r}")
-            by_product[q.product].append(q)
-
         merged_routers: Dict[str, Any] = dict(self._routers)
         if routers:
             merged_routers.update(routers)
         merged_mdps: Dict[str, MarketDataProvider] = dict(mdps or {})
 
         per_product_frames: List[Tuple[str, pd.DataFrame]] = []
-        irswap_spread_queries: List[IRSwapQuery] = []
-        irswap_asw_queries: List[IRSwapQuery] = []
+        request_plan = self._build_request_plan(
+            flat_queries=flat,
+            merged_routers=merged_routers,
+            merged_mdps=merged_mdps,
+            start=start,
+            end=end,
+            ignore_cache=ignore_cache,
+            freq=freq,
+            timestamps=timestamps,
+        )
 
-        for product, qs in by_product.items():
-            if product == "IRS":
-                irs_qs_unfiltered: List[IRSwapQuery] = [q for q in qs if isinstance(q, IRSwapQuery)]
-                irs_qs: List[IRSwapQuery] = []
-                for q in irs_qs_unfiltered:
-                    if q.value in [IRSwapValue.MMSS, IRSwapValue.SPREADOVER]:
-                        irswap_spread_queries.append(q)
-                    elif q.value in [IRSwapValue.PAR_PAR_ASW, IRSwapValue.PAR_PAR_ASW, IRSwapValue.TRUE_ASW, IRSwapValue.PROCEEDS_ASW, IRSwapValue.MARKET_ASW]:
-                        irswap_asw_queries.append(q)
-                    else:
-                        irs_qs.append(q)
-
-                if irs_qs:
-                    df = self._route_product_timeseries(
-                        product="IRS",
-                        qs=irs_qs,
-                        merged_routers=merged_routers,
-                        merged_mdps=merged_mdps,
-                        start=start,
-                        end=end,
-                        n_jobs=n_jobs,
-                        ignore_cache=ignore_cache,
-                        freq=freq,
-                        timestamps=timestamps,
-                    )
-                    self._append_product_frame(per_product_frames, product="IRS", df=df)
-                continue
-
-            if product == "FRB":
-                frb_qs: List[FixedRateBondQuery] = [q for q in qs if isinstance(q, FixedRateBondQuery)]
-                if len(frb_qs) != len(qs):
-                    raise TypeError("Mixed/non-FRB queries encountered in FixedRateBond bucket")
-                df = self._route_product_timeseries(
-                    product="FRB",
-                    qs=frb_qs,
-                    merged_routers=merged_routers,
-                    merged_mdps=merged_mdps,
-                    start=start,
-                    end=end,
-                    n_jobs=n_jobs,
-                    ignore_cache=ignore_cache,
-                    freq=freq,
-                    timestamps=timestamps,
-                )
-                self._append_product_frame(per_product_frames, product="FRB", df=df)
-                continue
-
-            df = self._route_product_timeseries(
-                product=product,
-                qs=qs,
-                merged_routers=merged_routers,
-                merged_mdps=merged_mdps,
-                start=start,
-                end=end,
-                n_jobs=n_jobs,
-                ignore_cache=ignore_cache,
-                freq=freq,
-                timestamps=timestamps,
-            )
+        for product, df in self._execute_product_plans(
+            plan=request_plan,
+            merged_routers=merged_routers,
+            merged_mdps=merged_mdps,
+            start=start,
+            end=end,
+            n_jobs=n_jobs,
+            ignore_cache=ignore_cache,
+            freq=freq,
+            timestamps=timestamps,
+        ):
             self._append_product_frame(per_product_frames, product=product, df=df)
 
         irs_router = merged_routers.get("IRS")
         frb_router = merged_routers.get("FRB")
         spread_mdp = self._get_irswap_spreads_mdp(merged_mdps)
 
-        if irswap_spread_queries:
+        if request_plan.irswap_spread_queries:
             if spread_mdp is not None:
                 spread_df = self._price_irswap_spread_queries_with_mdp(
                     mdp=spread_mdp,
-                    queries=irswap_spread_queries,
+                    queries=list(request_plan.irswap_spread_queries),
                     start=start,
                     end=end,
                     freq=freq,
@@ -367,7 +1104,7 @@ class TimeseriesBuilder:
                 _CT_RE = re.compile(r"(?i)\bct\s*(\d+)\b")
                 _Y_RE = re.compile(r"(?i)\b(\d+)\s*y\b")
 
-                for q in irswap_spread_queries:
+                for q in request_plan.irswap_spread_queries:
                     if q.value == IRSwapValue.MMSS:
                         q_frb = FixedRateBondQuery(cusip=q.tenor, value=FixedRateBondValue.YTM)
                         q_irs = IRSwapQuery(curve=q.curve, tenor=q.tenor, value=IRSwapValue.RATE)
@@ -448,11 +1185,11 @@ class TimeseriesBuilder:
                     spread_df.index.name = self._date_col
                     per_product_frames.append(("SWAPSPREADS", pd.concat({"SWAPSPREADS": spread_df}, axis=1)))
 
-        if irswap_asw_queries:
+        if request_plan.irswap_asw_queries:
             if spread_mdp is not None:
                 df = self._price_irswap_spread_queries_with_mdp(
                     mdp=spread_mdp,
-                    queries=irswap_asw_queries,
+                    queries=list(request_plan.irswap_asw_queries),
                     start=start,
                     end=end,
                     freq=freq,
@@ -471,7 +1208,7 @@ class TimeseriesBuilder:
                 ref_points = pd.bdate_range(start, end).date.tolist()
                 rows = []
                 for d in _tqdm(ref_points, desc="PRICING ASSET SWAPS..."):
-                    for q in irswap_asw_queries:
+                    for q in request_plan.irswap_asw_queries:
                         try:
                             curve = irs_mdp.get_pricer({"curve_name": q.curve, "timestamp": d})
                             ql_curve = curve

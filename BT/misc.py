@@ -31,7 +31,11 @@ def ql_cal_date_range(
 
     pd_range = pd.date_range(start=start, end=end, freq=freq)
     date_filtered_range = [d for d in pd_range if ql_cal.isBusinessDay(_to_ql_date(d))]
-    if "min" in freq or "hr" in freq:
+    freq_str = str(freq).lower()
+    if "min" in freq_str or "hr" in freq_str:
+        if open_time is None and close_time is None and not cme_session:
+            return date_filtered_range
+
         time_filtered_range = []
         for ts in date_filtered_range:
             if open_time is not None and close_time is not None:

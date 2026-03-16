@@ -1006,6 +1006,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 seen.add(key)
                 timestamps.append(t)
 
+        if not timestamps:
+            raise ValueError("Request 'timestamps' resolved to an empty collection.")
+
         out: Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve] = {}
 
         if self.source.upper() in ["CME_NY_EOD_LIVE-QL_BASIC", "CME_NY_EOD_LIVE_QL_BASIC"]:

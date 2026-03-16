@@ -3,6 +3,7 @@ import datetime as dt
 import pandas as pd
 import pytest
 import QuantLib as ql
+import pytz
 
 import MDP.IRSwaps.IRSwapsMDP as irswaps_mdp_module
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
@@ -43,6 +44,28 @@ class _FakeBarchartBuilder:
                 for ts in timestamp
             }
         return _FakeBarchartCurveHandle(curve_id="USD-SOFR-1D", timestamp=dt.datetime(2026, 3, 3, 17, 0))
+
+
+class _FakeCurveStore:
+    def __init__(self, day_df: pd.DataFrame, curves_by_ts):
+        self.day_df = day_df
+        self.curves_by_ts = curves_by_ts
+        self.read_calls = []
+        self.reconstruct_calls = []
+
+    def read_raw_day(self, curve_name, trading_date):
+        self.read_calls.append((curve_name, trading_date))
+        return self.day_df.copy()
+
+    def reconstruct_curves_batch(self, df, *, cfg=None, max_workers=4):
+        self.reconstruct_calls.append(
+            {
+                "cfg": cfg,
+                "max_workers": max_workers,
+                "timestamps": list(df["timestamp_utc"]),
+            }
+        )
+        return dict(self.curves_by_ts)
 
 
 def test_bulk_get_data_falls_back_one_by_one_for_eris_ql(monkeypatch):
@@ -233,6 +256,46 @@ def test_barchart_stirf_bulk_get_data_process_failure_raises(monkeypatch):
         assert "Process-pool calibration failed" in str(exc)
     else:
         raise AssertionError("Expected process-mode bulk_get_data to raise on builder failure")
+
+
+def test_bulk_get_data_rejects_empty_timestamp_collection():
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+
+    with pytest.raises(ValueError, match="empty collection"):
+        mdp.bulk_get_data({"curve_name": "USD-SOFR-1D", "timestamps": []})
+
+
+def test_barchart_stirf_bulk_get_data_uses_curve_store_fast_path(monkeypatch):
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    builder = _FakeBarchartBuilder()
+    chi_tz = pytz.timezone("America/Chicago")
+    ts_local = chi_tz.localize(dt.datetime(2026, 3, 10, 10, 0))
+    ts_utc = ts_local.astimezone(pytz.UTC).replace(microsecond=0)
+    store = _FakeCurveStore(
+        day_df=pd.DataFrame({"timestamp_utc": [pd.Timestamp(ts_utc)]}),
+        curves_by_ts={ts_utc: _FakeBarchartCurveHandle(curve_id="USD-SOFR-1D", timestamp=ts_local)},
+    )
+
+    def _unexpected_builder_call(*args, **kwargs):
+        raise AssertionError("builder.build_curve should not be called when CurveStore covers all timestamps")
+
+    builder.build_curve = _unexpected_builder_call
+
+    monkeypatch.setattr(mdp, "_get_barchart_stirf_curve_builder", lambda: builder)
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: store)
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+
+    out = mdp.bulk_get_data({"curve_name": "USD-SOFR-1D", "timestamps": [ts_local]})
+
+    assert set(out) == {ts_local}
+    assert store.read_calls == [("USD-SOFR-Q12", dt.date(2026, 3, 10))]
+    assert len(store.reconstruct_calls) == 1
+    assert out[ts_local].meta()["curve_name"] == "USD-SOFR-Q12"
+    assert builder.calls == []
 
 
 @pytest.mark.parametrize(
