@@ -17,7 +17,7 @@ from pandas.errors import DtypeWarning
 from pandas.tseries.holiday import USFederalHolidayCalendar
 from pandas.tseries.offsets import CustomBusinessDay
 
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.BaseFetcher import BaseFetcher
 from Query.IRSwaps.backends.quantlib.ql_curve_building_utils import build_ql_discount_curve
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date, ql_date_to_pydate
@@ -45,7 +45,7 @@ def get_bdates_between(start_date: datetime.date, end_date: datetime.date, calen
     return sorted([ql_date_to_pydate(bd) for bd in bdates])
 
 
-class ErisFuturesFetcher(DiskCacheMixin, BaseFetcher):
+class ErisFuturesFetcher(LayeredCacheMixin, BaseFetcher):
     """
     Adds DiskCache-backed read-through caching for raw ERIS files (CSV/XLSX).
     """
@@ -71,7 +71,7 @@ class ErisFuturesFetcher(DiskCacheMixin, BaseFetcher):
             info_verbose=info_verbose or False,
             warning_verbose=warning_verbose or False,
             error_verbose=error_verbose or False,
-            # DiskCacheMixin args
+            # LayeredCacheMixin args
             use_btree=True,
             force_refresh=force_refresh,
         )
@@ -99,7 +99,7 @@ class ErisFuturesFetcher(DiskCacheMixin, BaseFetcher):
 
         self._cache_attr = cache_attr
         if cache_path is None:
-            cache_path = DiskCacheMixin.default_cache_path("ErisFuturesFetcher-raw.fs")
+            cache_path = LayeredCacheMixin.default_cache_path("ErisFuturesFetcher-raw.fs")
 
         # mapping: key (str) -> dict(file_name, content: bytes, fetched_at, workbook_type)
         self.open_cache(cache_attr=self._cache_attr, path=cache_path)

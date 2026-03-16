@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
+import logging as _logging
+
 import duckdb
 import numpy as np
 import pandas as pd
@@ -35,6 +37,8 @@ import pytz
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
+logger = _logging.getLogger(__name__)
 
 DEFAULT_COMPRESSION = "zstd"
 _CHI = pytz.timezone("America/Chicago")
@@ -224,6 +228,20 @@ class CurveSnapshot:
 
 
 # ---------------------------------------------------------------------------
+# L2 Supabase sync (lazy-loaded)
+# ---------------------------------------------------------------------------
+
+
+def _get_curve_sync():
+    """Lazy-load SupabaseCurveSync. Returns None if Supabase disabled."""
+    from Caching.supabase_engine import SUPABASE_ENABLED
+    if not SUPABASE_ENABLED:
+        return None
+    from Caching.supabase_curve_sync import SupabaseCurveSync
+    return SupabaseCurveSync.from_defaults()
+
+
+# ---------------------------------------------------------------------------
 # CurveStore
 # ---------------------------------------------------------------------------
 
@@ -307,7 +325,19 @@ class CurveStore:
             / f"asset={_sanitize(curve_name)}"
             / f"date={trading_date.isoformat()}"
         )
-        return _atomic_content_write(part_dir, pbytes, overwrite=overwrite)
+        meta = _atomic_content_write(part_dir, pbytes, overwrite=overwrite)
+
+        # L2: background push to Supabase
+        sync = _get_curve_sync()
+        if sync is not None:
+            def _bg_push():
+                try:
+                    sync.push_day(curve_name, trading_date)
+                except Exception:
+                    logger.warning("L2 push failed for %s/%s", curve_name, trading_date, exc_info=True)
+            threading.Thread(target=_bg_push, daemon=True).start()
+
+        return meta
 
     def write_analytics_day(
         self,
@@ -345,7 +375,11 @@ class CurveStore:
             / f"asset={_sanitize(curve_name)}"
             / f"date={trading_date.isoformat()}"
         )
-        if not part_dir.exists():
+        if not part_dir.exists() or not any(part_dir.glob("*.parquet")):
+            # L2 fallback: try pulling from Supabase before returning empty
+            sync = _get_curve_sync()
+            if sync is not None and sync.pull_day(curve_name, trading_date):
+                return self.read_raw_day(curve_name, trading_date)
             return pd.DataFrame()
 
         pq_files = list(part_dir.glob("*.parquet"))

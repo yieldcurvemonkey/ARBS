@@ -30,29 +30,29 @@ Two distinct subsystems, each optimized for its access pattern:
 ```
                         PRODUCER (existing workflow)
                                   |
-                    ┌─────────────┼─────────────┐
-                    |             |              |
+                    +--------------+--------------+
+                    |              |              |
               CurveStore    DiskCacheMixin    Fixings
               .write_day()  obj.cache[k]=v   cache.set()
-                    |             |              |
-                    v             v              v
-              ┌───────────────────────────────────────┐
-              |        LOCAL L1 (unchanged)            |
-              |  Parquet/Hive    diskcache.FanoutCache  |
-              └──────────────┬────────────────────────┘
-                             |  write-through (background)
-                             v
-              ┌───────────────────────────────────────┐
-              |        SUPABASE L2 (new)               |
-              |  curve_snapshots    arbs_kv_cache_v1   |
-              |  curve_intraday_blocks                 |
-              └───────────────────────────────────────┘
-                             |
-                             v
-              ┌───────────────────────────────────────┐
-              |        CONSUMER (researcher node)      |
-              |  L1 check → L2 fallback → L1 hydrate  |
-              └───────────────────────────────────────┘
+                    |              |              |
+                    v              v              v
+              +-------------------------------------------+
+              |        LOCAL L1 (unchanged)                |
+              |  Parquet/Hive    diskcache.FanoutCache     |
+              +--------------------+----------------------+
+                                   |  write-through (background)
+                                   v
+              +-------------------------------------------+
+              |        SUPABASE L2 (new)                   |
+              |  curve_snapshots    arbs_kv_cache_v1       |
+              |  curve_intraday_blocks                     |
+              +-------------------------------------------+
+                                   |
+                                   v
+              +-------------------------------------------+
+              |        CONSUMER (researcher node)          |
+              |  L1 check -> L2 fallback -> L1 hydrate    |
+              +-------------------------------------------+
 ```
 
 ## 2. Postgres Schema
@@ -177,12 +177,12 @@ When `CurveStore.write_day()` completes its local atomic Parquet write:
 
 ```
 CurveStore.write_day(curve_name, trading_date, snapshots)
-  ├── Local Parquet write (existing, unchanged)
-  └── SupabaseCurveSync.push_day(curve_name, trading_date)  [background thread]
-       ├── Read local Parquet file bytes
-       ├── UPSERT into curve_intraday_blocks (payload=bytes, sha256=hash)
-       └── Extract priority snapshots (EOD/FOMC/CPI based on event calendar)
-            └── UPSERT into curve_snapshots with appropriate tags
+  +-- Local Parquet write (existing, unchanged)
+  +-- SupabaseCurveSync.push_day(curve_name, trading_date)  [background thread]
+       +-- Read local Parquet file bytes
+       +-- UPSERT into curve_intraday_blocks (payload=bytes, sha256=hash)
+       +-- Extract priority snapshots (EOD/FOMC/CPI based on event calendar)
+            +-- UPSERT into curve_snapshots with appropriate tags
 ```
 
 Background write is fire-and-forget with retry. Local write always succeeds immediately. Supabase failure is logged, not raised.
@@ -193,13 +193,13 @@ Modified `CurveStore.read_raw_day()`:
 
 ```
 CurveStore.read_raw_day(curve_name, date)
-  ├── Local Parquet exists? → return immediately (fast path, ~5ms)
-  └── SUPABASE_ENABLED and L2_READ?
-       ├── SupabaseCurveSync.pull_day(curve_name, date)
-       │    ├── SELECT payload FROM curve_intraday_blocks WHERE ...
-       │    ├── Write blob to local Parquet directory (L1 hydration)
-       │    └── Return via normal local read path
-       └── If Supabase miss → raise FileNotFoundError (as today)
+  +-- Local Parquet exists? -> return immediately (fast path, ~5ms)
+  +-- SUPABASE_ENABLED and L2_READ?
+       +-- SupabaseCurveSync.pull_day(curve_name, date)
+       |    +-- SELECT payload FROM curve_intraday_blocks WHERE ...
+       |    +-- Write blob to local Parquet directory (L1 hydration)
+       |    +-- Return via normal local read path
+       +-- If Supabase miss -> raise FileNotFoundError (as today)
 ```
 
 ### 3.4 Bulk Pre-fetch for Backtesting
@@ -277,7 +277,7 @@ class LayeredDictProxy(MutableMapping):
             value, stored_at = self._l1_get_with_timestamp(cache_key)
             if not self._is_stale(stored_at):
                 return value
-            # Stale — fall through to L2
+            # Stale -- fall through to L2
         except KeyError:
             pass
 
@@ -331,13 +331,13 @@ Each MDP subclass can override toggles:
 
 ```python
 class USTFuturesMDP(LayeredCacheMixin, MarketDataProvider):
-    L2_TTL_SECONDS = 600  # Bond data — 10 min TTL
+    L2_TTL_SECONDS = 600  # Bond data -- 10 min TTL
 
 class IRSwapsMDP(LayeredCacheMixin, MarketDataProvider):
-    L2_TTL_SECONDS = 120  # Rate curves — 2 min TTL
+    L2_TTL_SECONDS = 120  # Rate curves -- 2 min TTL
 
 class STIRFutureMDP(LayeredCacheMixin, MarketDataProvider):
-    L2_TTL_SECONDS = 60   # Futures — 1 min TTL
+    L2_TTL_SECONDS = 60   # Futures -- 1 min TTL
 ```
 
 ### 4.5 Failure Modes
@@ -345,7 +345,7 @@ class STIRFutureMDP(LayeredCacheMixin, MarketDataProvider):
 | Scenario | Behavior |
 |----------|----------|
 | Supabase unreachable | L1 serves normally, L2 writes silently dropped, warning logged |
-| L1 miss + L2 miss | `KeyError` raised → MDP computes fresh → writes to both L1 and L2 |
+| L1 miss + L2 miss | `KeyError` raised -> MDP computes fresh -> writes to both L1 and L2 |
 | L1 stale + L2 has newer data | L1 refreshed from L2 payload |
 | Cloudpickle deserialization fails | Warning logged, treat as miss, recompute |
 | `SUPABASE_DATABASE_URL` not set | Entire L2 layer disabled, operates as pure DiskCacheMixin |
@@ -406,7 +406,7 @@ def backfill_curve_store(store: CurveStore, sync: SupabaseCurveSync):
 ### Phase 3: LayeredCacheMixin (Week 3-4)
 - Implement `Caching/layered_cache_mixin.py`
 - Implement `LayeredDictProxy` with TTL-based L1/L2 fall-through
-- Re-parent MDPs: `DiskCacheMixin` → `LayeredCacheMixin`
+- Re-parent MDPs: `DiskCacheMixin` -> `LayeredCacheMixin`
 - Run diskcache migration script
 
 ### Phase 4: Shadow Mode & Validation (Week 4-5)
@@ -428,8 +428,8 @@ At every phase, if `SUPABASE_DATABASE_URL` is unset or Supabase is unreachable, 
 | `Caching/supabase_curve_sync.py` | `SupabaseCurveSync` — push/pull/prefetch for CurveStore |
 | `Caching/layered_cache_mixin.py` | `LayeredCacheMixin` + `LayeredDictProxy` |
 | `Caching/curve_tag_config.py` | Priority tag logic + event calendar |
-| `scripts/migrate_diskcache_to_supabase.py` | One-time diskcache → Postgres migration |
-| `scripts/backfill_curve_store.py` | One-time Parquet → Postgres backfill |
+| `scripts/migrate_diskcache_to_supabase.py` | One-time diskcache -> Postgres migration |
+| `scripts/backfill_curve_store.py` | One-time Parquet -> Postgres backfill |
 | `config/event_calendar.yaml` | FOMC/CPI/NFP dates and times |
 | `sql/create_tables.sql` | DDL for all 3 tables + indexes |
 
