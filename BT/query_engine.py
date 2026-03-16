@@ -60,6 +60,13 @@ class QueryDrivenBacktest:
         self._cache[key] = pr
         return pr
 
+    @staticmethod
+    def _enrich_request_product(req: Dict[str, Any], q: BaseQuery) -> Dict[str, Any]:
+        enriched = dict(req)
+        if "product" not in enriched and getattr(q, "product", None):
+            enriched["product"] = q.product
+        return enriched
+
     def _mdp_for_query(self, q: BaseQuery) -> MarketDataProvider:
         mdp = None
         if hasattr(self.strategy, "mdp_for_query"):
@@ -72,11 +79,11 @@ class QueryDrivenBacktest:
 
     def _pricer_for_query(self, q: BaseQuery, now: datetime.datetime) -> Any:
         mdp = self._mdp_for_query(q)
-        seed_req = q.build_mdp_request(now)
+        seed_req = self._enrich_request_product(q.build_mdp_request(now), q)
         pr = self._pricer_for_request(seed_req, mdp)
 
         q_req = resolve_for_request(q, timestamp=now, pricer_or_curve=pr)
-        req = q_req.build_mdp_request(now)
+        req = self._enrich_request_product(q_req.build_mdp_request(now), q_req)
         if req == seed_req:
             return pr
         return self._pricer_for_request(req, mdp)
