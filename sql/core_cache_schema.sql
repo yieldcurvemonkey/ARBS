@@ -1,7 +1,7 @@
 -- CORE Distributed Cache Schema
 -- Run via Caching.supabase_schema.ensure_schema()
 
-CREATE TABLE IF NOT EXISTS curve_snapshots (
+CREATE TABLE IF NOT EXISTS arbs_curve_snapshots_v1 (
     curve_name VARCHAR NOT NULL,
     timestamp_utc TIMESTAMPTZ NOT NULL,
     trading_date DATE NOT NULL,
@@ -18,11 +18,11 @@ CREATE TABLE IF NOT EXISTS curve_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_tags
-    ON curve_snapshots USING GIN (tags);
+    ON arbs_curve_snapshots_v1 USING GIN (tags);
 CREATE INDEX IF NOT EXISTS idx_snapshots_date
-    ON curve_snapshots (curve_name, trading_date);
+    ON arbs_curve_snapshots_v1 (curve_name, trading_date);
 
-CREATE TABLE IF NOT EXISTS curve_intraday_blocks (
+CREATE TABLE IF NOT EXISTS arbs_curve_intraday_blocks_v1 (
     trading_date DATE NOT NULL,
     curve_name VARCHAR NOT NULL,
     data_format VARCHAR NOT NULL DEFAULT 'parquet_zstd',

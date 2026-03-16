@@ -44,7 +44,7 @@ def migrate_namespace(
 
     engine = get_engine()
     if engine is None:
-        logger.error("ARBS_DATABASE_URL not set — cannot migrate.")
+        logger.error("Supabase cache engine disabled or unavailable — cannot migrate.")
         return 0
 
     try:

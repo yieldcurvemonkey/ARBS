@@ -9,6 +9,30 @@ import pytest
 class TestWriteDayL2:
     """write_day() triggers background L2 push when Supabase is enabled."""
 
+    def test_write_day_uses_store_base_dir_for_sync(self, tmp_path):
+        from Caching.curve_store import CurveStore, CurveSnapshot
+
+        store_base_dir = tmp_path / "custom_store"
+        store = CurveStore(base_dir=store_base_dir)
+        snap = CurveSnapshot(
+            timestamp_utc=datetime.datetime(2025, 1, 15, 21, 0, tzinfo=datetime.timezone.utc),
+            timestamp_local=datetime.datetime(2025, 1, 15, 15, 0),
+            trading_date=datetime.date(2025, 1, 15),
+            session_minute=540,
+            curve_name="USD-SOFR-1D",
+            cfg_hash="test",
+            reference_key="ref",
+            interpolation="log_linear",
+            node_dates=[datetime.date(2025, 1, 16)],
+            discount_factors=[0.999],
+        )
+
+        mock_sync = MagicMock()
+        with patch("Caching.curve_store._get_curve_sync", return_value=mock_sync) as get_sync:
+            store.write_day("USD-SOFR-1D", datetime.date(2025, 1, 15), [snap])
+
+        assert get_sync.call_args.args[0] == store_base_dir
+
     def test_write_day_calls_push_in_background(self, tmp_path):
         from Caching.curve_store import CurveStore, CurveSnapshot
 
@@ -65,6 +89,19 @@ class TestWriteDayL2:
 class TestReadRawDayL2:
     """read_raw_day() falls back to L2 when local data is missing."""
 
+    def test_read_uses_store_base_dir_for_sync(self, tmp_path):
+        from Caching.curve_store import CurveStore
+
+        store_base_dir = tmp_path / "custom_store"
+        store = CurveStore(base_dir=store_base_dir)
+        mock_sync = MagicMock()
+        mock_sync.pull_day.return_value = False
+
+        with patch("Caching.curve_store._get_curve_sync", return_value=mock_sync) as get_sync:
+            store.read_raw_day("USD-SOFR-1D", datetime.date(2025, 1, 15))
+
+        assert get_sync.call_args.args[0] == store_base_dir
+
     def test_read_falls_back_to_supabase(self, tmp_path):
         from Caching.curve_store import CurveStore
 
@@ -115,7 +152,8 @@ class TestReadRawDayL2:
             node_dates=[datetime.date(2025, 1, 16)],
             discount_factors=[0.999],
         )
-        store.write_day("USD-SOFR-1D", datetime.date(2025, 1, 15), [snap])
+        with patch("Caching.curve_store._get_curve_sync", return_value=None):
+            store.write_day("USD-SOFR-1D", datetime.date(2025, 1, 15), [snap])
 
         mock_sync = MagicMock()
         with patch("Caching.curve_store._get_curve_sync", return_value=mock_sync):

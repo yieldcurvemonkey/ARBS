@@ -39,11 +39,11 @@ class TestCOREEndToEnd:
 
             def execute(self, stmt, params=None):
                 sql = str(stmt.text) if hasattr(stmt, "text") else str(stmt)
-                if "INSERT INTO curve_intraday_blocks" in sql:
+                if "curve_intraday_blocks" in sql and "INSERT INTO" in sql:
                     key = (params["curve_name"], params["trading_date"])
                     blob_store[key] = params
                     return MagicMock()
-                elif "SELECT" in sql and "curve_intraday_blocks" in sql:
+                elif "curve_intraday_blocks" in sql and "SELECT" in sql:
                     key = (params["curve_name"], params["trading_date"])
                     if key in blob_store:
                         row = MagicMock()
@@ -56,7 +56,7 @@ class TestCOREEndToEnd:
                     result = MagicMock()
                     result.fetchone.return_value = None
                     return result
-                elif "INSERT INTO curve_snapshots" in sql:
+                elif "curve_snapshots" in sql and "INSERT INTO" in sql:
                     return MagicMock()
                 return MagicMock()
 
@@ -75,7 +75,8 @@ class TestCOREEndToEnd:
             node_dates=[datetime.date(2025, 6, 16), datetime.date(2025, 12, 15)],
             discount_factors=[0.99987, 0.97523],
         )
-        producer_store.write_day("USD-SOFR-1D", datetime.date(2025, 6, 15), [snap])
+        with patch("Caching.curve_store._get_curve_sync", return_value=None):
+            producer_store.write_day("USD-SOFR-1D", datetime.date(2025, 6, 15), [snap])
 
         # Producer pushes to "Supabase"
         producer_sync = SupabaseCurveSync(base_dir=producer_dir, engine=fake_engine)
@@ -97,10 +98,10 @@ class TestCOREEndToEnd:
 
 
 class TestGracefulDegradation:
-    """System operates normally when ARBS_DATABASE_URL is not set."""
+    """System operates normally when the Supabase layer is explicitly disabled."""
 
     def test_curvestore_works_without_supabase(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        monkeypatch.setenv("ARBS_SUPABASE_ENABLED", "0")
         import importlib
         import Caching.supabase_engine as eng
         importlib.reload(eng)
@@ -129,7 +130,7 @@ class TestGracefulDegradation:
             assert len(df) == 1
 
     def test_layered_cache_works_without_supabase(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        monkeypatch.setenv("ARBS_SUPABASE_ENABLED", "0")
         import importlib
         import Caching.supabase_engine as eng
         importlib.reload(eng)

@@ -46,7 +46,8 @@ class TestOpenCacheWrapping:
     """open_cache() wraps L1 with LayeredDictProxy when L2 is enabled."""
 
     def test_wraps_cache_attr_when_l2_enabled(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("ARBS_DATABASE_URL", "postgresql://user:pass@host:6543/db")
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
         import importlib
         import Caching.supabase_engine as eng
         importlib.reload(eng)
@@ -55,8 +56,18 @@ class TestOpenCacheWrapping:
         c = _make_consumer(tmp_path, l2_enabled=True)
         assert isinstance(c.my_cache, LayeredDictProxy)
 
-    def test_no_wrap_when_l2_disabled(self, tmp_path, monkeypatch):
+    def test_namespace_uses_last_path_component(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
         monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        import importlib
+        import Caching.supabase_engine as eng
+        importlib.reload(eng)
+
+        c = _make_consumer(tmp_path, l2_enabled=True)
+        assert c.my_cache._ns == "test_cache"
+
+    def test_no_wrap_when_l2_disabled(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ARBS_SUPABASE_ENABLED", "0")
         import importlib
         import Caching.supabase_engine as eng
         importlib.reload(eng)
@@ -70,7 +81,7 @@ class TestLayeredDictProxyL1Only:
     """LayeredDictProxy works as pure L1 when L2 is disabled for reads/writes."""
 
     def test_set_and_get_l1_only(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        monkeypatch.setenv("ARBS_SUPABASE_ENABLED", "0")
         import importlib
         import Caching.supabase_engine as eng
         importlib.reload(eng)
@@ -80,7 +91,7 @@ class TestLayeredDictProxyL1Only:
         assert c.my_cache["hello"] == "world"
 
     def test_keyerror_on_miss(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        monkeypatch.setenv("ARBS_SUPABASE_ENABLED", "0")
         import importlib
         import Caching.supabase_engine as eng
         importlib.reload(eng)
@@ -94,7 +105,8 @@ class TestLayeredDictProxyL2Fallback:
     """LayeredDictProxy falls back to L2 on L1 miss."""
 
     def test_l2_fallback_on_miss(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("ARBS_DATABASE_URL", "postgresql://user:pass@host:6543/db")
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
         import importlib
         import Caching.supabase_engine as eng
         importlib.reload(eng)
@@ -113,7 +125,8 @@ class TestLayeredDictProxyL2Fallback:
         assert val == "from_l2"
 
     def test_l2_write_on_set(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("ARBS_DATABASE_URL", "postgresql://user:pass@host:6543/db")
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
         import importlib
         import Caching.supabase_engine as eng
         importlib.reload(eng)

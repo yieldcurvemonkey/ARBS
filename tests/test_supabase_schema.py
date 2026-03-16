@@ -22,10 +22,10 @@ class TestSchemaSQL:
 
 
 class TestEnsureSchema:
-    """ensure_schema() is a no-op when Supabase is disabled."""
+    """ensure_schema() is a no-op when Supabase is explicitly disabled."""
 
     def test_noop_when_disabled(self, monkeypatch):
-        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        monkeypatch.setenv("ARBS_SUPABASE_ENABLED", "0")
         import importlib
         import Caching.supabase_engine as eng
         importlib.reload(eng)

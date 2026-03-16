@@ -8,16 +8,24 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import pickle
 import threading
 import time
 from collections.abc import Iterator, MutableMapping
+from pathlib import Path
 from typing import Any, ClassVar, Optional
-
-import cloudpickle
 
 from Caching.DiskCacheMixin import DiskCacheMixin
 
 logger = logging.getLogger(__name__)
+
+try:
+    import cloudpickle as _pickle_impl
+
+    _DEFAULT_SERIALIZER = "cloudpickle"
+except ImportError:  # pragma: no cover - exercised implicitly in environments without cloudpickle
+    _pickle_impl = pickle
+    _DEFAULT_SERIALIZER = "pickle"
 
 
 class LayeredDictProxy(MutableMapping):
@@ -41,7 +49,7 @@ class LayeredDictProxy(MutableMapping):
         self._timestamps: dict[str, float] = {}
 
     def _hash_key(self, key: Any) -> str:
-        return hashlib.sha256(cloudpickle.dumps(key)).hexdigest()
+        return hashlib.sha256(_pickle_impl.dumps(key)).hexdigest()
 
     def _is_stale(self, cache_key: str) -> bool:
         ts = self._timestamps.get(cache_key)
@@ -118,9 +126,12 @@ class LayeredDictProxy(MutableMapping):
     def _l2_get(self, cache_key: str) -> Optional[Any]:
         """Fetch from Supabase KV table. Returns row or None."""
         try:
+            from Caching.supabase_schema import ensure_schema
             from Caching.supabase_engine import get_engine
             from sqlalchemy import text
 
+            if not ensure_schema():
+                return None
             engine = get_engine()
             if engine is None:
                 return None
@@ -141,13 +152,16 @@ class LayeredDictProxy(MutableMapping):
         """Background UPSERT to Supabase KV table."""
         def _bg():
             try:
+                from Caching.supabase_schema import ensure_schema
                 from Caching.supabase_engine import get_engine
                 from sqlalchemy import text
 
+                if not ensure_schema():
+                    return
                 engine = get_engine()
                 if engine is None:
                     return
-                payload = cloudpickle.dumps(value)
+                payload = _pickle_impl.dumps(value)
                 with engine.begin() as conn:
                     conn.execute(
                         text("""
@@ -165,7 +179,7 @@ class LayeredDictProxy(MutableMapping):
                             "key": cache_key,
                             "repr": repr(key)[:500],
                             "payload": payload,
-                            "serializer": "cloudpickle",
+                            "serializer": _DEFAULT_SERIALIZER,
                         },
                     )
             except Exception:
@@ -176,7 +190,14 @@ class LayeredDictProxy(MutableMapping):
     def _deserialize(self, payload: bytes, serializer: str) -> Any:
         """Deserialize L2 payload."""
         if serializer == "cloudpickle":
-            return cloudpickle.loads(payload)
+            try:
+                import cloudpickle
+
+                return cloudpickle.loads(payload)
+            except ImportError:
+                return pickle.loads(payload)
+        if serializer == "pickle":
+            return pickle.loads(payload)
         raise ValueError(f"Unknown serializer: {serializer}")
 
 
@@ -203,8 +224,7 @@ class LayeredCacheMixin(DiskCacheMixin):
 
         if SUPABASE_ENABLED and self.L2_ENABLED:
             l1 = getattr(self, cache_attr)
-            # Extract namespace from path (last component)
-            cache_ns = path.rstrip("/").split("/")[-1] if "/" in path else path
+            cache_ns = Path(path).name
             proxy = LayeredDictProxy(
                 l1,
                 cache_ns,

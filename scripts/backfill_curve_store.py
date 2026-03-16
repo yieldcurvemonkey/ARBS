@@ -27,7 +27,7 @@ def main():
 
     engine = get_engine()
     if engine is None:
-        logger.error("ARBS_DATABASE_URL not set — cannot backfill.")
+        logger.error("Supabase cache engine disabled or unavailable — cannot backfill.")
         return
 
     store = CurveStore.default()

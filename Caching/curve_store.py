@@ -232,13 +232,20 @@ class CurveSnapshot:
 # ---------------------------------------------------------------------------
 
 
-def _get_curve_sync():
-    """Lazy-load SupabaseCurveSync. Returns None if Supabase disabled."""
+def _get_curve_sync(base_dir: Optional[Union[str, Path]] = None):
+    """Lazy-load SupabaseCurveSync for the active CurveStore base directory."""
     from Caching.supabase_engine import SUPABASE_ENABLED
+
     if not SUPABASE_ENABLED:
         return None
+
     from Caching.supabase_curve_sync import SupabaseCurveSync
-    return SupabaseCurveSync.from_defaults()
+
+    if base_dir is None:
+        return SupabaseCurveSync.from_defaults()
+    from Caching.supabase_engine import get_engine
+
+    return SupabaseCurveSync(base_dir=Path(base_dir), engine=get_engine())
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +335,7 @@ class CurveStore:
         meta = _atomic_content_write(part_dir, pbytes, overwrite=overwrite)
 
         # L2: background push to Supabase
-        sync = _get_curve_sync()
+        sync = _get_curve_sync(self._base_dir)
         if sync is not None:
             def _bg_push():
                 try:
@@ -377,7 +384,7 @@ class CurveStore:
         )
         if not part_dir.exists() or not any(part_dir.glob("*.parquet")):
             # L2 fallback: try pulling from Supabase before returning empty
-            sync = _get_curve_sync()
+            sync = _get_curve_sync(self._base_dir)
             if sync is not None and sync.pull_day(curve_name, trading_date):
                 return self.read_raw_day(curve_name, trading_date)
             return pd.DataFrame()

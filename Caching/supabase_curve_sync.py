@@ -21,10 +21,20 @@ from sqlalchemy import Engine, text
 logger = logging.getLogger(__name__)
 
 _SLUG_RX = re.compile(r"[^\w.\-]")
+CURVE_SNAPSHOTS_TABLE = "arbs_curve_snapshots_v1"
+CURVE_INTRADAY_BLOCKS_TABLE = "arbs_curve_intraday_blocks_v1"
 
 
 def _sanitize(name: str) -> str:
     return _SLUG_RX.sub("_", name)
+
+
+def _to_python_date(value: object) -> datetime.date:
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    return datetime.date.fromisoformat(str(value))
 
 
 class SupabaseCurveSync:
@@ -75,6 +85,10 @@ class SupabaseCurveSync:
         """
         if self._engine is None:
             return False
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return False
         payload = self._local_parquet_bytes(curve_name, trading_date)
         if payload is None:
             return False
@@ -89,8 +103,8 @@ class SupabaseCurveSync:
 
         with self._engine.begin() as conn:
             conn.execute(
-                text("""
-                    INSERT INTO curve_intraday_blocks
+                text(f"""
+                    INSERT INTO {CURVE_INTRADAY_BLOCKS_TABLE}
                         (trading_date, curve_name, data_format, row_count, payload, sha256)
                     VALUES
                         (:trading_date, :curve_name, :data_format, :row_count, :payload, :sha256)
@@ -140,10 +154,11 @@ class SupabaseCurveSync:
             if not tags:
                 continue
 
-            node_dates = [d.isoformat() for d in row["node_dates"]]
+            node_dates = [_to_python_date(d) for d in row["node_dates"]]
+            discount_factors = [float(v) for v in row["discount_factors"]]
             conn.execute(
-                text("""
-                    INSERT INTO curve_snapshots
+                text(f"""
+                    INSERT INTO {CURVE_SNAPSHOTS_TABLE}
                         (curve_name, timestamp_utc, trading_date, session_minute,
                          tags, cfg_hash, reference_key, interpolation, source_variant,
                          node_dates, discount_factors)
@@ -167,7 +182,7 @@ class SupabaseCurveSync:
                     "interpolation": str(row.get("interpolation", "")),
                     "source_variant": str(row.get("source_variant", "")),
                     "node_dates": node_dates,
-                    "discount_factors": list(row["discount_factors"]),
+                    "discount_factors": discount_factors,
                 },
             )
 
@@ -180,12 +195,16 @@ class SupabaseCurveSync:
         """
         if self._engine is None:
             return False
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return False
 
         with self._engine.begin() as conn:
             row = conn.execute(
-                text("""
+                text(f"""
                     SELECT payload, sha256, data_format
-                    FROM curve_intraday_blocks
+                    FROM {CURVE_INTRADAY_BLOCKS_TABLE}
                     WHERE trading_date = :trading_date AND curve_name = :curve_name
                 """),
                 {"trading_date": trading_date, "curve_name": curve_name},
@@ -213,6 +232,10 @@ class SupabaseCurveSync:
         """
         if self._engine is None:
             return []
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return []
 
         # Find locally available dates
         local_dates = set()
@@ -230,9 +253,9 @@ class SupabaseCurveSync:
         # Fetch missing days from Supabase
         with self._engine.begin() as conn:
             rows = conn.execute(
-                text("""
+                text(f"""
                     SELECT trading_date, payload, sha256
-                    FROM curve_intraday_blocks
+                    FROM {CURVE_INTRADAY_BLOCKS_TABLE}
                     WHERE curve_name = :curve_name
                       AND trading_date BETWEEN :start AND :end
                     ORDER BY trading_date
