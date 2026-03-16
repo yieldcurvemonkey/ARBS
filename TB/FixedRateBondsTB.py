@@ -17,7 +17,7 @@ from tqdm import tqdm
 import Query.FixedRateBonds.adapter  # noqa: F401  # ensure pricer adapters are registered
 # fmt: on
 from Caching.timeseries_cache import WriteOptions, append_timeseries, read_timeseries
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from Query.Base.query_resolution import resolve_query
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
@@ -89,7 +89,7 @@ def _build_row_for_query(
     return ref_dt, user_passed_col_name, float(value)
 
 
-class FixedRateBondsTB(DiskCacheMixin, BaseTimeseriesTB):
+class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_fixedratebonds_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING FIXED-RATE BONDS."
     _CACHE_VERSION = "v1"
@@ -112,7 +112,7 @@ class FixedRateBondsTB(DiskCacheMixin, BaseTimeseriesTB):
         ts_row_group_size: int = 256_000,
         ts_compression: str = "zstd",
     ):
-        DiskCacheMixin.__init__(
+        LayeredCacheMixin.__init__(
             self,
             use_btree=use_btree,
             force_refresh=force_refresh,

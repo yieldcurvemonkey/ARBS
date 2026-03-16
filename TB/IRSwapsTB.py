@@ -16,7 +16,7 @@ import QuantLib as ql
 import Query.IRSwaps.adapter  # noqa: F401
 # fmt: on
 
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery, IRSwapQueryWrapper
@@ -121,7 +121,7 @@ def _is_today(d: DateLike) -> bool:
     return False
 
 
-class IRSwapsTB(DiskCacheMixin, BaseTimeseriesTB):
+class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_irswaps_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS."
     _CACHE_VERSION = "v2"
@@ -137,7 +137,7 @@ class IRSwapsTB(DiskCacheMixin, BaseTimeseriesTB):
         show_tqdm: bool = True,
         logger: Optional[logging.Logger] = None,
     ):
-        DiskCacheMixin.__init__(
+        LayeredCacheMixin.__init__(
             self,
             use_btree=use_btree,
             force_refresh=force_refresh,

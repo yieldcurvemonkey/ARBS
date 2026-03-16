@@ -20,7 +20,7 @@ import rateslib as rl
 from pandas.tseries.offsets import DateOffset
 from itertools import islice
 
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
 from Query.IRSwaps._CENTRAL_BANK_DATES import _CENTRAL_BANK_DATES
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
@@ -710,7 +710,7 @@ def build_rl_stirf_turn_flies(
     return flies
 
 
-class BARCHART_STIRF_CURVE(DiskCacheMixin):
+class BARCHART_STIRF_CURVE(LayeredCacheMixin):
     _CURVE_CACHE_SCHEMA = 1
     _CURVE_CACHE_ATTR = "_barchart_stirf_curve_cache"
     _CURVE_CACHE_STEM = "BARCHART_STIRF-RL_CURVE_CACHE"
@@ -722,7 +722,7 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
     _CURVE_MEM_CACHE_MAXSIZE = 100_000
 
     def __init__(self, curve_cache_dir: Optional[Union[str, Path]] = None):
-        DiskCacheMixin.__init__(self)
+        LayeredCacheMixin.__init__(self)
         self.stirf_mdp = STIRFutureMDP(source="BARCHART_TOS_LIVE_STIRF-RL")
         self.stirf_mdp_schwab_app = STIRFutureMDP(source="SCHWAB_APP_STIRF-RL")
         self.stirf_mdp_barchart = STIRFutureMDP(source="BARCHART_STIRF-RL")
@@ -1261,7 +1261,7 @@ class BARCHART_STIRF_CURVE(DiskCacheMixin):
         if arbs_cache_dir:
             return str((Path(arbs_cache_dir) / "IRSwaps" / "BARCHART_STIRF" / "curve_cache").resolve())
 
-        return DiskCacheMixin.default_cache_path(BARCHART_STIRF_CURVE._CURVE_CACHE_STEM)
+        return LayeredCacheMixin.default_cache_path(BARCHART_STIRF_CURVE._CURVE_CACHE_STEM)
 
     @staticmethod
     def _curve_cfg_hash(cfg: Dict[str, Any]) -> str:

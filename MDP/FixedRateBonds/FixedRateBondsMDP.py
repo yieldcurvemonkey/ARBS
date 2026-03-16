@@ -11,7 +11,7 @@ import pytz
 import QuantLib as ql
 import tqdm
 
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base._GenericPricable import _GenericPricable
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
@@ -113,13 +113,13 @@ def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> Optional[str]:
     return unique_cusips[0]
 
 
-class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], DiskCacheMixin):
+class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin):
 
     _FRB_PRICER_CACHE = "_frb_pricer_cache"
 
     def __init__(self, source: str = "USTS_FEDINVEST_WSJ_LIVE-QL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
-        DiskCacheMixin.__init__(self)
+        LayeredCacheMixin.__init__(self)
 
         self._open_count = 0
         self._open_lock = threading.RLock()
@@ -133,7 +133,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], DiskCacheMixin):
     def _ensure_pricer_cache(self) -> None:
         if self._cache_ready and hasattr(self, self._FRB_PRICER_CACHE):
             return
-        cache_path = DiskCacheMixin.default_cache_path("FixedRateBondPricer_Cache")
+        cache_path = LayeredCacheMixin.default_cache_path("FixedRateBondPricer_Cache")
         self.open_cache(
             cache_attr=self._FRB_PRICER_CACHE,
             path=cache_path,

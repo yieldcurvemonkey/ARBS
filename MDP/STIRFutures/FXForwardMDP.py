@@ -18,7 +18,7 @@ import pytz
 import rateslib as rl
 import requests
 
-from Caching.DiskCacheMixin import DiskCacheMixin
+from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.STIRFutures.BARCHART.BarchartFetcher import BarchartFetcher
@@ -464,14 +464,14 @@ class _ProxyGuard:
         requests.get = self._orig_get
 
 
-class FXForwardMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
+class FXForwardMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
     _FXFWD_PRICER_CACHE = "_fxfwd_pricer_cache"
     _BARCHART_STATE: Dict[str, Any] = {}
     _CURVE_STATE: Dict[str, Any] = {}
 
     def __init__(self, source: str = "BARCHART_FXFWD-RL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
-        DiskCacheMixin.__init__(self)
+        LayeredCacheMixin.__init__(self)
 
         self.cache_full_intraday_fetch = bool(kwargs.get("cache_full_intraday_fetch", False))
         self._open_count = 0
@@ -517,7 +517,7 @@ class FXForwardMDP(MarketDataProvider[InstrumentLike], DiskCacheMixin):
     def _ensure_pricer_cache(self) -> None:
         if self._cache_ready and hasattr(self, self._FXFWD_PRICER_CACHE):
             return
-        cache_path = DiskCacheMixin.default_cache_path("FXForwardPricer_Cache")
+        cache_path = LayeredCacheMixin.default_cache_path("FXForwardPricer_Cache")
         self.open_cache(cache_attr=self._FXFWD_PRICER_CACHE, path=cache_path, encode=None, decode=None)
         self._cache_ready = True
 
