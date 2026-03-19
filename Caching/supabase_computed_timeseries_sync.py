@@ -6,7 +6,7 @@ import datetime
 import hashlib
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import pandas as pd
 from sqlalchemy import Engine, text
@@ -216,3 +216,87 @@ class SupabaseComputedTimeseriesSync:
             len(local_dates),
         )
         return fetched
+
+    # ---- Row-level sync (v2) ----
+
+    ROWS_TABLE = "arbs_computed_timeseries_rows_v1"
+
+    def push_rows(
+        self,
+        symbol: str,
+        rows: Sequence[tuple[datetime.date, str, float]],
+    ) -> bool:
+        """Push individual (date, column_name, value) rows to Postgres."""
+        if self._engine is None or not rows:
+            return False
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return False
+
+        with self._engine.begin() as conn:
+            for trading_date, column_name, value in rows:
+                conn.execute(
+                    text(f"""
+                        INSERT INTO {self.ROWS_TABLE}
+                            (symbol, trading_date, column_name, value, updated_at)
+                        VALUES
+                            (:symbol, :trading_date, :column_name, :value, NOW())
+                        ON CONFLICT (symbol, trading_date) DO UPDATE SET
+                            column_name = EXCLUDED.column_name,
+                            value = EXCLUDED.value,
+                            updated_at = NOW()
+                    """),
+                    {
+                        "symbol": symbol,
+                        "trading_date": trading_date,
+                        "column_name": column_name,
+                        "value": value,
+                    },
+                )
+        logger.info("Pushed %d rows for %s to %s", len(rows), symbol, self.ROWS_TABLE)
+        return True
+
+    def pull_rows(
+        self,
+        symbol: str,
+        *,
+        start: datetime.date,
+        end: datetime.date,
+        since: datetime.datetime | None = None,
+    ) -> list[tuple[datetime.date, str, float, datetime.datetime]]:
+        """Pull rows from Postgres. Returns list of (date, column_name, value, updated_at)."""
+        if self._engine is None:
+            return []
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return []
+
+        params: dict = {
+            "symbol": symbol,
+            "start": start,
+            "end": end,
+        }
+        since_clause = ""
+        if since is not None:
+            since_clause = "AND updated_at > :since"
+            params["since"] = since
+
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                text(f"""
+                    SELECT trading_date, column_name, value, updated_at
+                    FROM {self.ROWS_TABLE}
+                    WHERE symbol = :symbol
+                      AND trading_date BETWEEN :start AND :end
+                      {since_clause}
+                    ORDER BY trading_date
+                """),
+                params,
+            ).fetchall()
+
+        return [
+            (row.trading_date, row.column_name, row.value, row.updated_at)
+            for row in result
+        ]
