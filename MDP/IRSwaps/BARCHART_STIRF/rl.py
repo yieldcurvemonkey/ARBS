@@ -714,6 +714,8 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
     _CURVE_CACHE_SCHEMA = 1
     _CURVE_CACHE_ATTR = "_barchart_stirf_curve_cache"
     _CURVE_CACHE_STEM = "BARCHART_STIRF-RL_CURVE_CACHE"
+    L2_READ = False
+    L2_WRITE = False
 
     # In-memory LRU for deserialized curves – avoids diskcache I/O + rl.from_json()
     # on repeated bulk fetches. Class-level so all instances share the same pool.
@@ -1474,6 +1476,20 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         }
         self._mem_cache_put(key, curve)
 
+    def _curve_cache_put_local(self, curve_name: str, timestamp: datetime.datetime, cfg: Dict[str, Any], curve: rl.Curve) -> None:
+        """Persist a single curve to the local diskcache only, bypassing L2 writes."""
+        key = self._curve_cache_key(curve_name, timestamp, cfg)
+        mapping = self._curve_cache_mapping()
+        l1_mapping = mapping.raw if hasattr(mapping, "raw") else mapping
+        ts_utc = timestamp.astimezone(pytz.utc).replace(microsecond=0)
+        l1_mapping[key] = {
+            "schema": self._CURVE_CACHE_SCHEMA,
+            "curve_name": curve_name,
+            "timestamp_utc": ts_utc.isoformat(),
+            "curve_json": curve.to_json(),
+        }
+        self._mem_cache_put(key, curve)
+
     def _mem_cache_put(self, key: str, curve) -> None:
         mem = self._CURVE_MEM_CACHE
         with self._CURVE_MEM_CACHE_LOCK:
@@ -1574,9 +1590,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
     def _curve_cache_daily_bundle_put(
         self, curve_name: str, date: datetime.date, cfg: Dict[str, Any], curves_by_ts: Dict[datetime.datetime, rl.Curve]
     ) -> None:
-        """Store node values for an entire day into a single bundle entry."""
+        """Store node values for an entire day into a single local bundle entry."""
         key = self._curve_cache_daily_bundle_key(curve_name, date, cfg)
         mapping = self._curve_cache_daily_bundle_mapping()
+        l1_mapping = mapping.raw if hasattr(mapping, "raw") else mapping
 
         # Extract nodes from all curves. Nodes keys are pd.Timestamp (dt) or rl.dt.
         # We store them as a nested dict: {ts_iso: {node_ts_iso: value}}
@@ -1589,35 +1606,79 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 ts_nodes[node_ts_iso] = float(val)
             nodes_by_ts[ts_iso] = ts_nodes
 
-        mapping[key] = {
+        l1_mapping[key] = {
             "schema": self._CURVE_CACHE_SCHEMA,
             "curve_name": curve_name,
             "date": date.strftime("%Y-%m-%d"),
             "nodes_by_ts": nodes_by_ts,
         }
 
-        # Also write to Parquet CurveStore for fast bulk retrieval.
-        try:
-            from Caching.curve_store import CurveSnapshot, CurveStore
-
-            cfg_hash = self._curve_cfg_hash(cfg)
-            snapshots = []
-            for ts, curve in curves_by_ts.items():
-                snapshots.append(
-                    CurveSnapshot.from_rl_curve(
-                        curve, curve_name=curve_name, cfg=cfg, cfg_hash=cfg_hash,
-                    )
-                )
-            if snapshots:
-                store = CurveStore.default()
-                store.write_day(curve_name, date, snapshots, overwrite=True)
-        except Exception:
-            pass  # Best-effort — diskcache is the authoritative store
-
     def _curve_cache_daily_bundle_mapping(self):
         # Bundles go in the same diskcache path but we could separate them if needed.
         # For now, reuse the same mapping.
         return self._curve_cache_mapping()
+
+    def _curve_store_write_day(
+        self,
+        curve_name: str,
+        date: datetime.date,
+        cfg: Dict[str, Any],
+        curves_by_ts: Dict[datetime.datetime, rl.Curve],
+    ) -> None:
+        """Persist a bulk trading day once via CurveStore for day-block Supabase sync."""
+        if not curves_by_ts:
+            return
+
+        from Caching.curve_store import CurveSnapshot, CurveStore
+
+        cfg_hash = self._curve_cfg_hash(cfg)
+        snapshots = [
+            CurveSnapshot.from_rl_curve(curve, curve_name=curve_name, cfg=cfg, cfg_hash=cfg_hash)
+            for _, curve in sorted(curves_by_ts.items())
+        ]
+        if not snapshots:
+            return
+
+        store = CurveStore.default()
+        store.write_day(curve_name, date, snapshots, overwrite=True)
+
+    def _persist_bulk_curves(
+        self,
+        *,
+        curve_name: str,
+        cfg: Dict[str, Any],
+        out: Dict[datetime.datetime, Any],
+        fresh_curves: Dict[datetime.datetime, rl.Curve],
+        curve_only: bool,
+    ) -> None:
+        if not out:
+            return
+
+        curves_to_store_by_day: Dict[datetime.date, Dict[datetime.datetime, rl.Curve]] = {}
+        for ts, val in out.items():
+            curve_to_save = val if curve_only else val[0]
+            if isinstance(curve_to_save, rl.Curve):
+                curves_to_store_by_day.setdefault(self._trading_date_for_timestamp(ts), {})[ts] = curve_to_save
+
+        fresh_curves_by_day: Dict[datetime.date, Dict[datetime.datetime, rl.Curve]] = {}
+        for ts, curve_obj in fresh_curves.items():
+            fresh_curves_by_day.setdefault(self._trading_date_for_timestamp(ts), {})[ts] = curve_obj
+
+        for dt, day_curves in curves_to_store_by_day.items():
+            try:
+                self._curve_store_write_day(curve_name, dt, cfg, day_curves)
+            except Exception:
+                pass
+
+            if len(day_curves) > 10:
+                try:
+                    self._curve_cache_daily_bundle_put(curve_name, dt, cfg, day_curves)
+                except Exception:
+                    pass
+                continue
+
+            for ts, curve_obj in fresh_curves_by_day.get(dt, {}).items():
+                self._curve_cache_put_local(curve_name, ts, cfg, curve_obj)
 
     @staticmethod
     def _pricer_symbol(pricer: "RLSTIRFuturePricer") -> str:
@@ -2327,30 +2388,13 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                         fresh_curves[ts] = curve_obj
                         out[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
 
-            # --- [OPTIMIZATION] Save Daily Bundles after successful bulk build ---
-            # If we built a large set of curves for the same day, bundle them.
-            if out:
-                curves_to_bundle: Dict[datetime.date, Dict[datetime.datetime, rl.Curve]] = {}
-                for ts, val in out.items():
-                    curve_to_save = val if curve_only else val[0]
-                    if isinstance(curve_to_save, rl.Curve):
-                        curves_to_bundle.setdefault(self._trading_date_for_timestamp(ts), {})[ts] = curve_to_save
-
-                fresh_curves_by_day: Dict[datetime.date, Dict[datetime.datetime, rl.Curve]] = {}
-                for ts, curve_obj in fresh_curves.items():
-                    fresh_curves_by_day.setdefault(self._trading_date_for_timestamp(ts), {})[ts] = curve_obj
-
-                for dt, day_curves in curves_to_bundle.items():
-                    # Only bundle if we have a significant number of points (e.g. > 10) to avoid overhead for shallow calls.
-                    if len(day_curves) > 10:
-                        try:
-                            self._curve_cache_daily_bundle_put(curve_name, dt, cfg, day_curves)
-                        except Exception:
-                            pass
-                        continue
-
-                    for ts, curve_obj in fresh_curves_by_day.get(dt, {}).items():
-                        self._curve_cache_put(curve_name, ts, cfg, curve_obj)
+            self._persist_bulk_curves(
+                curve_name=curve_name,
+                cfg=cfg,
+                out=out,
+                fresh_curves=fresh_curves,
+                curve_only=curve_only,
+            )
 
             return out
 

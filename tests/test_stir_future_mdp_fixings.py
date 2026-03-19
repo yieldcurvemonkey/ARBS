@@ -1,4 +1,5 @@
 import datetime
+import importlib
 
 import pandas as pd
 import pytest
@@ -138,3 +139,30 @@ def test_request_local_memoization_reuses_fixings(monkeypatch):
 
     assert len(calls) == 1
     assert list(fixings_memo.keys()) == [("USD-SOFR-1D", datetime.date(2025, 1, 7))]
+
+
+def test_pricer_cache_stays_local_when_supabase_enabled(tmp_path, monkeypatch):
+    from Caching.DiskCacheMixin import DiskCacheMixin
+    from Caching.layered_cache_mixin import LayeredDictProxy
+    import Caching.supabase_engine as eng
+
+    saved_root = DiskCacheMixin.CACHE_ROOT
+    try:
+        with monkeypatch.context() as env_patch:
+            env_patch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+            env_patch.setenv("ARBS_DATABASE_URL", "postgresql://user:pass@localhost:6543/testdb")
+            importlib.reload(eng)
+
+            DiskCacheMixin.CACHE_ROOT = tmp_path
+            DiskCacheMixin._CACHE_REGISTRY.clear()
+
+            mdp = STIRFutureMDP(source="WEBULL_STIRF-RL")
+            mdp._ensure_pricer_cache()
+            cache = getattr(mdp, mdp._STIR_PRICER_CACHE)
+
+            assert not isinstance(cache, LayeredDictProxy)
+            mdp.close_cache()
+    finally:
+        DiskCacheMixin.CACHE_ROOT = saved_root
+        DiskCacheMixin._CACHE_REGISTRY.clear()
+        importlib.reload(eng)

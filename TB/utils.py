@@ -15,6 +15,80 @@ from scipy.stats import tstd, zscore
 
 DateLike = Union[datetime.date, datetime.datetime]
 
+_EOD_FREQ_ALIASES: Dict[str, Tuple[str, datetime.time]] = {
+    "eod": ("America/New_York", datetime.time(17, 0)),
+    "nyc_eod": ("America/New_York", datetime.time(17, 0)),
+    "chi_eod": ("America/Chicago", datetime.time(16, 0)),
+    "ldn_eod": ("Europe/London", datetime.time(17, 0)),
+}
+
+
+def _reference_point_output_tz(start: DateLike, end: DateLike):
+    for value in (start, end):
+        if isinstance(value, datetime.datetime) and value.tzinfo is not None and value.tzinfo.utcoffset(value) is not None:
+            return value.tzinfo
+    return None
+
+
+def _coerce_reference_point_bound(
+    value: DateLike,
+    *,
+    zone: ZoneInfo,
+    is_end: bool,
+) -> datetime.datetime:
+    if isinstance(value, datetime.datetime):
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+            return value.replace(tzinfo=zone)
+        return value.astimezone(zone)
+
+    clock = datetime.time.max if is_end else datetime.time.min
+    return datetime.datetime.combine(value, clock, tzinfo=zone)
+
+
+def _build_eod_reference_points(
+    start: DateLike,
+    end: DateLike,
+    *,
+    freq: str,
+) -> List[datetime.datetime]:
+    zone_name, close_time = _EOD_FREQ_ALIASES[freq]
+    zone = ZoneInfo(zone_name)
+    start_local = _coerce_reference_point_bound(start, zone=zone, is_end=False)
+    end_local = _coerce_reference_point_bound(end, zone=zone, is_end=True)
+
+    out_tz = _reference_point_output_tz(start, end)
+    refs: List[datetime.datetime] = []
+    for bday in pd.bdate_range(start_local.date(), end_local.date()).date.tolist():
+        close_local = datetime.datetime.combine(bday, close_time, tzinfo=zone)
+        if start_local <= close_local <= end_local:
+            refs.append(close_local.astimezone(out_tz) if out_tz is not None else close_local)
+    return refs
+
+
+def build_reference_points(
+    start: DateLike,
+    end: DateLike,
+    *,
+    freq: Optional[str],
+    timestamps: Optional[List[datetime.datetime]],
+) -> List[DateLike]:
+    if timestamps is not None and len(timestamps) > 0:
+        return sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
+
+    freq_key = str(freq or "").strip().lower()
+    if freq_key in _EOD_FREQ_ALIASES:
+        return _build_eod_reference_points(start=start, end=end, freq=freq_key)
+
+    is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
+    if is_intraday:
+        if start.tzinfo is not None:
+            rng = pd.date_range(start=start, end=end, freq=freq, tz=start.tzinfo)
+        else:
+            rng = pd.date_range(start=start, end=end, freq=freq)
+        return rng.to_pydatetime().tolist()
+
+    return pd.bdate_range(start, end).date.tolist()
+
 
 def _to_utc_naive(dt: DateLike) -> datetime.datetime:
     if isinstance(dt, datetime.date) and not isinstance(dt, datetime.datetime):

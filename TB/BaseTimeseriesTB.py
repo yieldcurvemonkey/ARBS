@@ -11,7 +11,7 @@ from tqdm.auto import tqdm as _tqdm
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base.BaseQuery import BaseQuery
 from Query.Base.query_resolution import resolve_for_request, resolve_query
-from TB.utils import DateLike, _canonicalize_value
+from TB.utils import DateLike, _canonicalize_value, build_reference_points
 
 
 class BaseTimeseriesTB(ABC):
@@ -59,18 +59,12 @@ class BaseTimeseriesTB(ABC):
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
     ) -> List[DateLike]:
-        if timestamps is not None and len(timestamps) > 0:
-            return sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
-
-        is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
-        if is_intraday:
-            if start.tzinfo is not None:
-                rng = pd.date_range(start=start, end=end, freq=freq, tz=start.tzinfo)
-            else:
-                rng = pd.date_range(start=start, end=end, freq=freq)
-            return rng.to_pydatetime().tolist()
-
-        return pd.bdate_range(start, end).date.tolist()
+        return build_reference_points(
+            start=start,
+            end=end,
+            freq=freq,
+            timestamps=timestamps,
+        )
 
     def _to_now(self, ref_point: DateLike) -> datetime.datetime:
         if isinstance(ref_point, datetime.datetime):

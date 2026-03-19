@@ -18,6 +18,7 @@ import QuantLib as ql
 import rateslib as rl
 import requests
 
+from Caching.DiskCacheMixin import DiskCacheMixin
 from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
 from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
@@ -501,7 +502,10 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         if self._cache_ready and hasattr(self, self._STIR_PRICER_CACHE):
             return
         cache_path = LayeredCacheMixin.default_cache_path("STIRFuturePricer_Cache")
-        self.open_cache(cache_attr=self._STIR_PRICER_CACHE, path=cache_path, encode=None, decode=None)
+        # Keep minute-level STIR pricer snapshots on local diskcache only; pushing
+        # these high-churn entries through the shared Supabase L2 creates more
+        # network traffic than value for bulk calibration workflows.
+        DiskCacheMixin.open_cache(self, cache_attr=self._STIR_PRICER_CACHE, path=cache_path, encode=None, decode=None)
         self._cache_ready = True
 
     def _threadsafe_cache_put(self, key: str, value: dict) -> None:

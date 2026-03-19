@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import pickle
+import queue
 import threading
 import time
 from collections.abc import Iterator, MutableMapping
@@ -28,8 +30,29 @@ except ImportError:  # pragma: no cover - exercised implicitly in environments w
     _DEFAULT_SERIALIZER = "pickle"
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default=%s", name, raw, default)
+        return default
+
+
+_DEFAULT_L2_WRITE_WORKERS = _env_positive_int("ARBS_SUPABASE_WRITE_WORKERS", 1)
+_DEFAULT_L2_WRITE_QUEUE_SIZE = _env_positive_int("ARBS_SUPABASE_WRITE_QUEUE_SIZE", 512)
+
+
 class LayeredDictProxy(MutableMapping):
     """Wraps L1 diskcache with L2 Supabase KV fallback."""
+
+    _L2_WRITE_WORKER_COUNT: ClassVar[int] = _DEFAULT_L2_WRITE_WORKERS
+    _L2_WRITE_QUEUE_MAXSIZE: ClassVar[int] = _DEFAULT_L2_WRITE_QUEUE_SIZE
+    _L2_WRITE_QUEUE: ClassVar[queue.Queue[tuple[str, str, str, Any]] | None] = None
+    _L2_WRITE_WORKERS_STARTED: ClassVar[bool] = False
+    _L2_WRITE_LOCK: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(
         self,
@@ -148,19 +171,47 @@ class LayeredDictProxy(MutableMapping):
             logger.warning("L2 get failed for %s/%s", self._ns, cache_key[:12], exc_info=True)
             return None
 
-    def _l2_set_async(self, cache_key: str, key: Any, value: Any) -> None:
-        """Background UPSERT to Supabase KV table."""
-        def _bg():
+    @classmethod
+    def _ensure_l2_write_workers(cls) -> queue.Queue[tuple[str, str, str, Any]]:
+        work_queue = cls._L2_WRITE_QUEUE
+        if work_queue is not None and cls._L2_WRITE_WORKERS_STARTED:
+            return work_queue
+
+        with cls._L2_WRITE_LOCK:
+            work_queue = cls._L2_WRITE_QUEUE
+            if work_queue is None:
+                work_queue = queue.Queue(maxsize=cls._L2_WRITE_QUEUE_MAXSIZE)
+                cls._L2_WRITE_QUEUE = work_queue
+
+            if not cls._L2_WRITE_WORKERS_STARTED:
+                # Keep background writes below the SQLAlchemy pool size so cache bursts
+                # cannot starve foreground reads or calibrations.
+                for idx in range(cls._L2_WRITE_WORKER_COUNT):
+                    worker = threading.Thread(
+                        target=cls._l2_write_worker,
+                        args=(work_queue,),
+                        name=f"layered-cache-l2-{idx}",
+                        daemon=True,
+                    )
+                    worker.start()
+                cls._L2_WRITE_WORKERS_STARTED = True
+
+            return work_queue
+
+    @classmethod
+    def _l2_write_worker(cls, work_queue: queue.Queue[tuple[str, str, str, Any]]) -> None:
+        while True:
+            ns, cache_key, key_repr, value = work_queue.get()
             try:
                 from Caching.supabase_schema import ensure_schema
                 from Caching.supabase_engine import get_engine
                 from sqlalchemy import text
 
                 if not ensure_schema():
-                    return
+                    continue
                 engine = get_engine()
                 if engine is None:
-                    return
+                    continue
                 payload = _pickle_impl.dumps(value)
                 with engine.begin() as conn:
                     conn.execute(
@@ -175,17 +226,25 @@ class LayeredDictProxy(MutableMapping):
                                 updated_at = NOW()
                         """),
                         {
-                            "ns": self._ns,
+                            "ns": ns,
                             "key": cache_key,
-                            "repr": repr(key)[:500],
+                            "repr": key_repr,
                             "payload": payload,
                             "serializer": _DEFAULT_SERIALIZER,
                         },
                     )
             except Exception:
-                logger.warning("L2 set failed for %s/%s", self._ns, cache_key[:12], exc_info=True)
+                logger.warning("L2 set failed for %s/%s", ns, cache_key[:12], exc_info=True)
+            finally:
+                work_queue.task_done()
 
-        threading.Thread(target=_bg, daemon=True).start()
+    def _l2_set_async(self, cache_key: str, key: Any, value: Any) -> None:
+        """Queue best-effort L2 UPSERTs onto a bounded shared worker pool."""
+        work_queue = type(self)._ensure_l2_write_workers()
+        try:
+            work_queue.put_nowait((self._ns, cache_key, repr(key)[:500], value))
+        except queue.Full:
+            logger.warning("L2 write queue full; dropping write for %s/%s", self._ns, cache_key[:12])
 
     def _deserialize(self, payload: bytes, serializer: str) -> Any:
         """Deserialize L2 payload."""

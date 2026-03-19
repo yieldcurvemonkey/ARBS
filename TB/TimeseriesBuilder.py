@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, DefaultDict, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 
 import pandas as pd
+import pytz
 from tqdm.auto import tqdm as _tqdm
 
 from MDP.IRSwapSpreads.IRSwapSpreadsMDP import IRSwapSpreadsMDP
@@ -20,7 +21,7 @@ from Query.IRSwaps.IRSwapValue import IRSwapValue
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.Unified.UnifiedQuery import UnifiedQuery
 from TB.BaseTimeseriesTB import BaseTimeseriesTB
-from TB.utils import DateLike
+from TB.utils import DateLike, build_reference_points
 
 if TYPE_CHECKING:
     from TB.FixedRateBondsTB import FixedRateBondsTB
@@ -69,18 +70,12 @@ def _build_reference_points(
     freq: Optional[str],
     timestamps: Optional[List[datetime.datetime]],
 ) -> List[DateLike]:
-    if timestamps is not None and len(timestamps) > 0:
-        return sorted(pd.to_datetime(pd.Index(timestamps)).to_pydatetime().tolist())
-
-    is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
-    if is_intraday:
-        if start.tzinfo is not None:
-            rng = pd.date_range(start=start, end=end, freq=freq, tz=start.tzinfo)
-        else:
-            rng = pd.date_range(start=start, end=end, freq=freq)
-        return rng.to_pydatetime().tolist()
-
-    return pd.bdate_range(start, end).date.tolist()
+    return build_reference_points(
+        start=start,
+        end=end,
+        freq=freq,
+        timestamps=timestamps,
+    )
 
 
 def _timestamp_utc_key(value: Any) -> Optional[datetime.datetime]:
@@ -97,6 +92,57 @@ def _timestamp_utc_key(value: Any) -> Optional[datetime.datetime]:
     else:
         value = value.astimezone(datetime.timezone.utc)
     return value.replace(microsecond=0)
+
+
+def _is_barchart_stirf_rl_source(mdp: Optional[MarketDataProvider]) -> bool:
+    source = str(getattr(mdp, "source", "")).upper()
+    return source in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}
+
+
+def _is_cme_rates_session_timestamp(ref_point: DateLike) -> bool:
+    if not isinstance(ref_point, datetime.datetime):
+        return True
+    if ref_point.tzinfo is None or ref_point.tzinfo.utcoffset(ref_point) is None:
+        return True
+
+    # CME rates futures trade Sunday 17:00 CT through Friday 16:00 CT,
+    # with the regular 16:00-17:00 CT maintenance break Monday-Thursday.
+    ts_chi = ref_point.astimezone(pytz.timezone("America/Chicago"))
+    tod = ts_chi.time()
+    weekday = ts_chi.weekday()
+
+    if weekday == 5:
+        return False
+    if weekday == 6:
+        return tod >= datetime.time(17, 0)
+    if weekday == 4:
+        return tod <= datetime.time(16, 0)
+    return tod <= datetime.time(16, 0) or tod >= datetime.time(17, 0)
+
+
+def _filter_irs_reference_points_for_mdp(
+    reference_points: List[DateLike],
+    *,
+    mdp: Optional[MarketDataProvider],
+) -> List[DateLike]:
+    if not _is_barchart_stirf_rl_source(mdp):
+        return reference_points
+    if not any(isinstance(point, datetime.datetime) for point in reference_points):
+        return reference_points
+    return [point for point in reference_points if _is_cme_rates_session_timestamp(point)]
+
+
+def _curve_store_trading_date(timestamp: datetime.datetime) -> datetime.date:
+    ts_chi = timestamp.astimezone(pytz.timezone("America/Chicago"))
+    if ts_chi.hour >= 17:
+        return (ts_chi + datetime.timedelta(days=1)).date()
+    return ts_chi.date()
+
+
+def _curve_store_session_minute(timestamp: datetime.datetime) -> int:
+    ts_chi = timestamp.astimezone(pytz.timezone("America/Chicago"))
+    session_open = ts_chi.replace(hour=6, minute=0, second=0, microsecond=0)
+    return int((ts_chi - session_open).total_seconds() // 60)
 
 
 @dataclass(frozen=True)
@@ -245,6 +291,22 @@ class TimeseriesBuilder:
             merged_routers=merged_routers,
             merged_mdps=merged_mdps,
         )
+        route_freq = freq
+        route_timestamps = timestamps
+        if canonical_product == "IRS":
+            intraday_timestamps = self._prepare_product_intraday_timestamps(
+                product=canonical_product,
+                mdp=mdp,
+                start=start,
+                end=end,
+                freq=freq,
+                timestamps=timestamps,
+            )
+            if intraday_timestamps is not None:
+                if not intraday_timestamps:
+                    return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+                route_freq = None
+                route_timestamps = intraday_timestamps
 
         if tb is not None:
             return tb.get_timeseries(  # type: ignore[attr-defined]
@@ -253,8 +315,8 @@ class TimeseriesBuilder:
                 qs,
                 n_jobs=n_jobs,
                 ignore_cache=ignore_cache,
-                freq=freq,
-                timestamps=timestamps,
+                freq=route_freq,
+                timestamps=route_timestamps,
             )
 
         if mdp is not None:
@@ -265,8 +327,8 @@ class TimeseriesBuilder:
                 qs,
                 n_jobs=n_jobs,
                 ignore_cache=ignore_cache,
-                freq=freq,
-                timestamps=timestamps,
+                freq=route_freq,
+                timestamps=route_timestamps,
             )
 
         if canonical_product in {"FXFORWARD", "FXFORWARDS"}:
@@ -377,6 +439,34 @@ class TimeseriesBuilder:
             return 1
         return max(1, int(n_jobs) // max(1, worker_count))
 
+    def _prepare_product_intraday_timestamps(
+        self,
+        *,
+        product: str,
+        mdp: Optional[MarketDataProvider],
+        start: DateLike,
+        end: DateLike,
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+    ) -> Optional[List[datetime.datetime]]:
+        if product != "IRS" or not _is_barchart_stirf_rl_source(mdp):
+            return None
+
+        reference_points = _build_reference_points(
+            start=start,
+            end=end,
+            freq=freq,
+            timestamps=timestamps,
+        )
+        if not any(isinstance(point, datetime.datetime) for point in reference_points):
+            return None
+
+        return [
+            point
+            for point in _filter_irs_reference_points_for_mdp(reference_points, mdp=mdp)
+            if isinstance(point, datetime.datetime)
+        ]
+
     def _can_use_irs_curve_store_fast_path(
         self,
         *,
@@ -405,7 +495,10 @@ class TimeseriesBuilder:
         if not all(hasattr(mdp, attr) for attr in required_attrs):
             return False
 
-        ref_points = _build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps)
+        ref_points = _filter_irs_reference_points_for_mdp(
+            _build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps),
+            mdp=mdp,
+        )
         if not ref_points:
             return False
 
@@ -650,13 +743,23 @@ class TimeseriesBuilder:
         ref_keys = list(requested_key_by_ref.values())
         start_bound = min(ref_keys).date()
         end_bound = max(ref_keys).date()
-        analytics_df = store.read_analytics(
-            resolved_curve_name,
-            start=start_bound,
-            end=end_bound,
-            tenors=sorted({tenor for _, _, tenor in eligible}),
-            metrics=["par_rate", "rate"],
-        )
+        try:
+            analytics_df = store.read_analytics(
+                resolved_curve_name,
+                start=start_bound,
+                end=end_bound,
+                tenors=sorted({tenor for _, _, tenor in eligible}),
+                metrics=["par_rate", "rate"],
+                timestamps_utc=ref_keys,
+            )
+        except TypeError:
+            analytics_df = store.read_analytics(
+                resolved_curve_name,
+                start=start_bound,
+                end=end_bound,
+                tenors=sorted({tenor for _, _, tenor in eligible}),
+                metrics=["par_rate", "rate"],
+            )
         if analytics_df.empty or "timestamp_utc" not in analytics_df.columns:
             return [], set()
 
@@ -746,6 +849,58 @@ class TimeseriesBuilder:
             except Exception:
                 continue
 
+    def _read_irs_curve_store_raw_df(
+        self,
+        *,
+        store: Any,
+        resolved_curve_name: str,
+        requested_keys: List[datetime.datetime],
+    ) -> pd.DataFrame:
+        if not requested_keys:
+            return pd.DataFrame()
+
+        trading_dates = sorted({_curve_store_trading_date(ts_key) for ts_key in requested_keys})
+        session_minutes = sorted({_curve_store_session_minute(ts_key) for ts_key in requested_keys})
+
+        raw_df = pd.DataFrame()
+        if hasattr(store, "read_raw_nodes") and trading_dates:
+            try:
+                raw_kwargs = {
+                    "start": trading_dates[0],
+                    "end": trading_dates[-1],
+                    "timestamps_utc": requested_keys,
+                }
+                if len(session_minutes) <= 3:
+                    raw_kwargs["session_minute_min"] = session_minutes[0]
+                    raw_kwargs["session_minute_max"] = session_minutes[-1]
+                raw_df = store.read_raw_nodes(
+                    resolved_curve_name,
+                    **raw_kwargs,
+                )
+            except TypeError:
+                raw_df = store.read_raw_nodes(
+                    resolved_curve_name,
+                    start=trading_dates[0],
+                    end=trading_dates[-1],
+                )
+
+        if raw_df is not None and not raw_df.empty:
+            return raw_df
+
+        if hasattr(store, "read_raw_day"):
+            day_frames: List[pd.DataFrame] = []
+            for trading_date in trading_dates:
+                try:
+                    day_df = store.read_raw_day(resolved_curve_name, trading_date)
+                except Exception:
+                    continue
+                if day_df is not None and not day_df.empty:
+                    day_frames.append(day_df)
+            if day_frames:
+                return pd.concat(day_frames, ignore_index=True, sort=False)
+
+        return pd.DataFrame()
+
     def _build_irs_curve_store_curve_map(
         self,
         *,
@@ -761,9 +916,11 @@ class TimeseriesBuilder:
         if not reference_points:
             return {}
 
-        start_bound = min(requested_key_by_ref.values()).date()
-        end_bound = max(requested_key_by_ref.values()).date()
-        raw_df = store.read_raw_nodes(resolved_curve_name, start=start_bound, end=end_bound)
+        raw_df = self._read_irs_curve_store_raw_df(
+            store=store,
+            resolved_curve_name=resolved_curve_name,
+            requested_keys=list(requested_key_by_ref.values()),
+        )
         if raw_df.empty or "timestamp_utc" not in raw_df.columns:
             return {}
 
@@ -878,7 +1035,10 @@ class TimeseriesBuilder:
 
         mdp = plan.mdp
         queries = [q for q in plan.queries if isinstance(q, IRSwapQuery)]
-        reference_points = _build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps)
+        reference_points = _filter_irs_reference_points_for_mdp(
+            _build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps),
+            mdp=mdp,
+        )
         if not queries or not reference_points:
             return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
         use_intraday_cache = any(isinstance(point, datetime.datetime) for point in reference_points)
@@ -969,30 +1129,41 @@ class TimeseriesBuilder:
                 if (ref_point, idx) not in covered and ref_point in curve_map
             ]
             worker_count = max(1, int(n_jobs or 1))
-            if worker_count > 1 and len(tasks) > 1:
-                with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ts-irs-curve-store") as pool:
-                    future_map = {
-                        pool.submit(_build_irs_row_for_query, curve, q, ref_point, self._date_col): (ref_point, idx)
-                        for idx, ref_point, q, curve in tasks
-                    }
-                    for future in as_completed(future_map):
-                        ref_point, idx = future_map[future]
+            pbar_disable = not getattr(plan.router, "_show_tqdm", True)
+            with _tqdm(
+                total=len(tasks),
+                disable=pbar_disable,
+                desc=f"PRICING {requested_curve_name} IRSWAPS [curve-store, workers={worker_count}]...",
+                leave=True,
+            ) as pbar:
+                if worker_count > 1 and len(tasks) > 1:
+                    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ts-irs-curve-store") as pool:
+                        future_map = {
+                            pool.submit(_build_irs_row_for_query, curve, q, ref_point, self._date_col): (ref_point, idx)
+                            for idx, ref_point, q, curve in tasks
+                        }
+                        for future in as_completed(future_map):
+                            ref_point, idx = future_map[future]
+                            try:
+                                row = future.result()
+                                rows.append(row)
+                                covered.add((ref_point, idx))
+                                newly_computed_rows[idx].append(row)
+                            except Exception:
+                                continue
+                            finally:
+                                pbar.update(1)
+                else:
+                    for idx, ref_point, q, curve in tasks:
                         try:
-                            row = future.result()
+                            row = _build_irs_row_for_query(curve, q, ref_point, self._date_col)
                             rows.append(row)
                             covered.add((ref_point, idx))
                             newly_computed_rows[idx].append(row)
                         except Exception:
                             continue
-            else:
-                for idx, ref_point, q, curve in tasks:
-                    try:
-                        row = _build_irs_row_for_query(curve, q, ref_point, self._date_col)
-                        rows.append(row)
-                        covered.add((ref_point, idx))
-                        newly_computed_rows[idx].append(row)
-                    except Exception:
-                        continue
+                        finally:
+                            pbar.update(1)
 
             self._write_irs_computed_cache_rows(
                 router=plan.router,
@@ -1147,24 +1318,56 @@ class TimeseriesBuilder:
                         }
                     )
 
-                irs_df = irs_router.get_timeseries(  # type: ignore[attr-defined]
-                    start,
-                    end,
-                    irrs_irs_qs,
-                    n_jobs=n_jobs,
-                    ignore_cache=ignore_cache,
+                irs_intraday_timestamps = self._prepare_product_intraday_timestamps(
+                    product="IRS",
+                    mdp=getattr(irs_router, "mdp", None),
+                    start=start,
+                    end=end,
                     freq=freq,
                     timestamps=timestamps,
                 )
-                cash_df = frb_router.get_timeseries(  # type: ignore[attr-defined]
-                    start,
-                    end,
-                    irss_frb_qs,
-                    n_jobs=n_jobs,
-                    ignore_cache=ignore_cache,
-                    freq=freq,
-                    timestamps=timestamps,
-                )
+                if irs_intraday_timestamps is not None:
+                    if not irs_intraday_timestamps:
+                        irs_df = pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+                        cash_df = pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+                    else:
+                        irs_df = irs_router.get_timeseries(  # type: ignore[attr-defined]
+                            start,
+                            end,
+                            irrs_irs_qs,
+                            n_jobs=n_jobs,
+                            ignore_cache=ignore_cache,
+                            freq=None,
+                            timestamps=irs_intraday_timestamps,
+                        )
+                        cash_df = frb_router.get_timeseries(  # type: ignore[attr-defined]
+                            start,
+                            end,
+                            irss_frb_qs,
+                            n_jobs=n_jobs,
+                            ignore_cache=ignore_cache,
+                            freq=None,
+                            timestamps=irs_intraday_timestamps,
+                        )
+                else:
+                    irs_df = irs_router.get_timeseries(  # type: ignore[attr-defined]
+                        start,
+                        end,
+                        irrs_irs_qs,
+                        n_jobs=n_jobs,
+                        ignore_cache=ignore_cache,
+                        freq=freq,
+                        timestamps=timestamps,
+                    )
+                    cash_df = frb_router.get_timeseries(  # type: ignore[attr-defined]
+                        start,
+                        end,
+                        irss_frb_qs,
+                        n_jobs=n_jobs,
+                        ignore_cache=ignore_cache,
+                        freq=freq,
+                        timestamps=timestamps,
+                    )
 
                 spread_cols: Dict[str, pd.Series] = {}
                 idx = irs_df.index.union(cash_df.index)

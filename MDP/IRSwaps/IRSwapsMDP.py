@@ -57,7 +57,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             if S["store"] is None:
                 from Caching.curve_store import CurveStore
 
-                S["store"] = CurveStore()
+                S["store"] = CurveStore.default()
             return S["store"]
 
     def _get_barchart_stirf_curve_builder(self) -> Any:
@@ -1401,22 +1401,27 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 if not ignore_cache:
                     try:
                         store = self._get_curve_store()
-                        # Collect unique trading dates for targeted reads
-                        unique_dates = sorted({
-                            t.date() if isinstance(t, datetime.datetime) else t
-                            for t in rl_timestamps
-                        })
-                        # Read all needed days (fast path: direct PyArrow per day)
                         import pandas as _pd
+                        parquet_df = _pd.DataFrame()
+                        try:
+                            parquet_df = store.read_raw_nodes(
+                                resolved_curve_name,
+                                timestamps_utc=list(set(rl_timestamps)),
+                            )
+                        except TypeError:
+                            unique_dates = sorted({
+                                builder._trading_date_for_timestamp(t)
+                                for t in rl_timestamps
+                            })
+                            day_dfs = []
+                            for d in unique_dates:
+                                day_df = store.read_raw_day(resolved_curve_name, d)
+                                if not day_df.empty:
+                                    day_dfs.append(day_df)
+                            if day_dfs:
+                                parquet_df = _pd.concat(day_dfs, ignore_index=True)
 
-                        day_dfs = []
-                        for d in unique_dates:
-                            day_df = store.read_raw_day(resolved_curve_name, d)
-                            if not day_df.empty:
-                                day_dfs.append(day_df)
-
-                        if day_dfs:
-                            parquet_df = _pd.concat(day_dfs, ignore_index=True)
+                        if not parquet_df.empty:
                             # Index by timestamp_utc for fast lookup (normalize to second precision)
                             parquet_ts_set = set()
                             if "timestamp_utc" in parquet_df.columns:
@@ -1443,6 +1448,22 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                             if matched_count >= len(rl_ts_utc):
                                 # All found — reconstruct and return
                                 cfg = builder._STIRF_CURVE_CONFIGS[resolved_curve_name]
+                                parquet_ts_keys = parquet_df["timestamp_utc"].map(
+                                    lambda ts_val: (
+                                        ts_val.to_pydatetime().replace(tzinfo=pytz.UTC, microsecond=0)
+                                        if hasattr(ts_val, "to_pydatetime")
+                                        else (
+                                            ts_val.astimezone(pytz.UTC).replace(microsecond=0)
+                                            if isinstance(ts_val, datetime.datetime) and ts_val.tzinfo is not None
+                                            else (
+                                                pytz.UTC.localize(ts_val.replace(microsecond=0))
+                                                if isinstance(ts_val, datetime.datetime)
+                                                else ts_val
+                                            )
+                                        )
+                                    )
+                                )
+                                parquet_df = parquet_df.loc[parquet_ts_keys.isin(rl_ts_utc)].copy()
                                 curves_by_ts = store.reconstruct_curves_batch(
                                     parquet_df, cfg=cfg, max_workers=4,
                                 )

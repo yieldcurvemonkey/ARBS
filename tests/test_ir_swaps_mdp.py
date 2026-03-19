@@ -51,11 +51,33 @@ class _FakeCurveStore:
         self.day_df = day_df
         self.curves_by_ts = curves_by_ts
         self.read_calls = []
+        self.raw_node_calls = []
         self.reconstruct_calls = []
 
     def read_raw_day(self, curve_name, trading_date):
         self.read_calls.append((curve_name, trading_date))
         return self.day_df.copy()
+
+    def read_raw_nodes(self, curve_name, *, start=None, end=None, session_minute_min=None, session_minute_max=None, timestamps_utc=None):
+        self.raw_node_calls.append(
+            {
+                "curve_name": curve_name,
+                "start": start,
+                "end": end,
+                "session_minute_min": session_minute_min,
+                "session_minute_max": session_minute_max,
+                "timestamps_utc": list(timestamps_utc or []),
+            }
+        )
+        df = self.day_df.copy()
+        if timestamps_utc and "timestamp_utc" in df.columns:
+            requested = {
+                pd.Timestamp(ts.astimezone(pytz.UTC).replace(microsecond=0))
+                for ts in timestamps_utc
+            }
+            ts_keys = pd.to_datetime(df["timestamp_utc"], utc=True)
+            df = df.loc[ts_keys.isin(requested)].copy()
+        return df
 
     def reconstruct_curves_batch(self, df, *, cfg=None, max_workers=4):
         self.reconstruct_calls.append(
@@ -292,10 +314,72 @@ def test_barchart_stirf_bulk_get_data_uses_curve_store_fast_path(monkeypatch):
     out = mdp.bulk_get_data({"curve_name": "USD-SOFR-1D", "timestamps": [ts_local]})
 
     assert set(out) == {ts_local}
-    assert store.read_calls == [("USD-SOFR-Q12", dt.date(2026, 3, 10))]
+    assert len(store.raw_node_calls) == 1
+    assert store.raw_node_calls[0]["curve_name"] == "USD-SOFR-Q12"
+    assert store.raw_node_calls[0]["timestamps_utc"] == [ts_local]
+    assert store.read_calls == []
     assert len(store.reconstruct_calls) == 1
     assert out[ts_local].meta()["curve_name"] == "USD-SOFR-Q12"
     assert builder.calls == []
+
+
+def test_barchart_stirf_bulk_get_data_curve_store_fast_path_reconstructs_only_requested_rows(monkeypatch):
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    builder = _FakeBarchartBuilder()
+    chi_tz = pytz.timezone("America/Chicago")
+    ts_local = chi_tz.localize(dt.datetime(2026, 3, 10, 10, 0))
+    extra_local = chi_tz.localize(dt.datetime(2026, 3, 10, 11, 0))
+    ts_utc = ts_local.astimezone(pytz.UTC).replace(microsecond=0)
+    extra_utc = extra_local.astimezone(pytz.UTC).replace(microsecond=0)
+    store = _FakeCurveStore(
+        day_df=pd.DataFrame({"timestamp_utc": [pd.Timestamp(ts_utc), pd.Timestamp(extra_utc)]}),
+        curves_by_ts={
+            ts_utc: _FakeBarchartCurveHandle(curve_id="USD-SOFR-1D", timestamp=ts_local),
+            extra_utc: _FakeBarchartCurveHandle(curve_id="USD-SOFR-1D", timestamp=extra_local),
+        },
+    )
+
+    monkeypatch.setattr(mdp, "_get_barchart_stirf_curve_builder", lambda: builder)
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: store)
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+
+    out = mdp.bulk_get_data({"curve_name": "USD-SOFR-1D", "timestamps": [ts_local]})
+
+    assert set(out) == {ts_local}
+    assert len(store.raw_node_calls) == 1
+    assert store.raw_node_calls[0]["timestamps_utc"] == [ts_local]
+    assert store.read_calls == []
+    assert len(store.reconstruct_calls) == 1
+    assert list(store.reconstruct_calls[0]["timestamps"]) == [pd.Timestamp(ts_utc)]
+
+
+def test_get_curve_store_uses_curve_store_default_singleton(monkeypatch):
+    from Caching.curve_store import CurveStore
+
+    sentinel = object()
+    calls = []
+    state = IRSwapsMDP._CURVE_STORE_STATE
+    original_store = state["store"]
+    state["store"] = None
+    monkeypatch.setattr(
+        CurveStore,
+        "default",
+        classmethod(lambda cls: calls.append("default") or sentinel),
+    )
+
+    try:
+        first = IRSwapsMDP._get_curve_store()
+        second = IRSwapsMDP._get_curve_store()
+    finally:
+        state["store"] = original_store
+
+    assert first is sentinel
+    assert second is sentinel
+    assert calls == ["default"]
 
 
 @pytest.mark.parametrize(

@@ -33,7 +33,7 @@ import time
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Iterator
 from zoneinfo import ZoneInfo
 
 import QuantLib as ql
@@ -44,6 +44,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from BT.misc import ql_cal_date_range
+from Caching.curve_store import CurveStore
+from Caching.supabase_curve_sync import CURVE_INTRADAY_BLOCKS_TABLE, SupabaseCurveSync
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 
 
@@ -59,6 +61,7 @@ DEFAULT_CALIBRATION_EXECUTOR = "process"
 DEFAULT_LOG_DIR = REPO_ROOT / "notebooks" / "logs"
 DEFAULT_CME_SESSION_OPEN = dt.time(17, 0)
 DEFAULT_CME_SESSION_CLOSE = dt.time(16, 0)
+DEFAULT_BACKFILL_BATCH_SIZE = 25
 
 
 @dataclass
@@ -200,13 +203,37 @@ def build_daily_minute_buckets(
     calendar: ql.Calendar | None = None,
     cme_session: bool = False,
 ) -> OrderedDict[dt.date, list[dt.datetime]]:
+    return OrderedDict(
+        iter_daily_minute_buckets(
+            start_date=start_date,
+            end_date=end_date,
+            session_start=session_start,
+            session_end=session_end,
+            freq=freq,
+            timezone=timezone,
+            calendar=calendar,
+            cme_session=cme_session,
+        )
+    )
+
+
+def iter_daily_minute_buckets(
+    *,
+    start_date: dt.date,
+    end_date: dt.date,
+    session_start: dt.time,
+    session_end: dt.time,
+    freq: str,
+    timezone: ZoneInfo,
+    calendar: ql.Calendar | None = None,
+    cme_session: bool = False,
+) -> Iterator[tuple[dt.date, list[dt.datetime]]]:
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date.")
     if not cme_session and session_end < session_start:
         raise ValueError("session_end must be on or after session_start.")
 
     cal = calendar or ql.UnitedStates(ql.UnitedStates.GovernmentBond)
-    out: OrderedDict[dt.date, list[dt.datetime]] = OrderedDict()
 
     current = start_date
     while current <= end_date:
@@ -233,10 +260,27 @@ def build_daily_minute_buckets(
                         )
                     )
                 )
-            out[current] = list(bucket)
+            yield current, list(bucket)
         current += dt.timedelta(days=1)
 
-    return out
+
+def count_business_day_buckets(
+    *,
+    start_date: dt.date,
+    end_date: dt.date,
+    calendar: ql.Calendar | None = None,
+) -> int:
+    if end_date < start_date:
+        raise ValueError("end_date must be on or after start_date.")
+
+    cal = calendar or ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    count = 0
+    current = start_date
+    while current <= end_date:
+        if _is_business_day(current, cal):
+            count += 1
+        current += dt.timedelta(days=1)
+    return count
 
 
 def build_bulk_request(
@@ -278,6 +322,333 @@ def _curve_meta(curve: Any) -> dict[str, Any]:
         return {}
     meta = curve.meta()
     return meta if isinstance(meta, dict) else {}
+
+
+def _supabase_engine_diagnostics() -> dict[str, Any]:
+    from Caching import supabase_engine
+
+    db_url = supabase_engine.get_database_url()
+    safe_target = None
+    if db_url:
+        safe_target = db_url.split("@", 1)[-1]
+    return {
+        "supabase_enabled": bool(supabase_engine.SUPABASE_ENABLED),
+        "database_target": safe_target,
+    }
+
+
+def _chunked(values: list[dt.date], batch_size: int) -> list[list[dt.date]]:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive.")
+    return [
+        values[idx : idx + batch_size]
+        for idx in range(0, len(values), batch_size)
+    ]
+
+
+def _local_curve_dates_in_range(
+    *,
+    curve_name: str,
+    start_date: dt.date,
+    end_date: dt.date,
+    store: CurveStore | None = None,
+) -> list[dt.date]:
+    active_store = store or CurveStore.default()
+    return [
+        trading_date
+        for trading_date in active_store.available_dates(curve_name)
+        if start_date <= trading_date <= end_date
+    ]
+
+
+def _remote_curve_dates_in_range(
+    *,
+    curve_name: str,
+    start_date: dt.date,
+    end_date: dt.date,
+    sync: SupabaseCurveSync | None = None,
+) -> list[dt.date]:
+    active_sync = sync or SupabaseCurveSync.from_defaults()
+    engine = getattr(active_sync, "_engine", None)
+    if engine is None:
+        return []
+
+    from Caching.supabase_schema import ensure_schema
+    from sqlalchemy import text
+
+    if not ensure_schema(engine):
+        return []
+
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                f"""
+                SELECT trading_date
+                FROM {CURVE_INTRADAY_BLOCKS_TABLE}
+                WHERE curve_name = :curve_name
+                  AND trading_date BETWEEN :start_date AND :end_date
+                ORDER BY trading_date
+                """
+            ),
+            {
+                "curve_name": curve_name,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        ).fetchall()
+
+    out: list[dt.date] = []
+    for row in rows:
+        value = getattr(row, "trading_date", row[0])
+        if isinstance(value, dt.datetime):
+            out.append(value.date())
+        elif isinstance(value, dt.date):
+            out.append(value)
+        else:
+            out.append(dt.date.fromisoformat(str(value)))
+    return out
+
+
+def inspect_curve_store_sync_status(
+    *,
+    curve_name: str,
+    start_date: dt.date,
+    end_date: dt.date,
+    store: CurveStore | None = None,
+    sync: SupabaseCurveSync | None = None,
+) -> dict[str, Any]:
+    local_dates = sorted(
+        _local_curve_dates_in_range(
+            curve_name=curve_name,
+            start_date=start_date,
+            end_date=end_date,
+            store=store,
+        )
+    )
+    remote_dates = sorted(
+        _remote_curve_dates_in_range(
+            curve_name=curve_name,
+            start_date=start_date,
+            end_date=end_date,
+            sync=sync,
+        )
+    )
+    remote_date_set = set(remote_dates)
+    local_only_dates = [trading_date for trading_date in local_dates if trading_date not in remote_date_set]
+    return {
+        "curve_name": curve_name,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "local_dates": local_dates,
+        "remote_dates": remote_dates,
+        "local_days": len(local_dates),
+        "remote_days": len(remote_dates),
+        "local_only_days": len(local_only_dates),
+        "local_only_dates": local_only_dates,
+    }
+
+
+def backfill_local_curve_store_to_supabase(
+    *,
+    curve_name: str,
+    start_date: dt.date,
+    end_date: dt.date,
+    batch_size: int,
+    rewrite_existing: bool,
+    logger: logging.Logger,
+    perf_log_path: Path,
+    store: CurveStore | None = None,
+    sync: SupabaseCurveSync | None = None,
+    event_calendar: dict[dt.date, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    active_sync = sync or SupabaseCurveSync.from_defaults()
+    engine = getattr(active_sync, "_engine", None)
+    started_at = time.perf_counter()
+    status = inspect_curve_store_sync_status(
+        curve_name=curve_name,
+        start_date=start_date,
+        end_date=end_date,
+        store=store,
+        sync=active_sync,
+    )
+
+    local_dates = list(status["local_dates"])
+    remote_date_set = set(status["remote_dates"])
+    dates_to_push = local_dates if rewrite_existing else [
+        trading_date for trading_date in local_dates if trading_date not in remote_date_set
+    ]
+
+    summary = {
+        "event": "supabase_backfill_summary",
+        "curve_name": curve_name,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "rewrite_existing": bool(rewrite_existing),
+        "batch_size": int(batch_size),
+        "local_days": len(local_dates),
+        "remote_days_before": int(status["remote_days"]),
+        "queued_days": len(dates_to_push),
+        "pushed_days": 0,
+        "failed_days": 0,
+        "status": "ok",
+    }
+
+    if engine is None:
+        summary["status"] = "disabled"
+        diagnostics = _supabase_engine_diagnostics()
+        summary["diagnostics"] = diagnostics
+        _write_perf_event(perf_log_path, summary)
+        logger.info(
+            "Supabase backfill skipped for %s: engine unavailable; local_days=%s remote_days=%s supabase_enabled=%s target=%s",
+            curve_name,
+            summary["local_days"],
+            summary["remote_days_before"],
+            diagnostics["supabase_enabled"],
+            diagnostics["database_target"],
+        )
+        return summary
+
+    if not dates_to_push:
+        _write_perf_event(perf_log_path, summary)
+        logger.info(
+            "Supabase backfill not needed for %s: local_days=%s remote_days=%s rewrite_existing=%s",
+            curve_name,
+            summary["local_days"],
+            summary["remote_days_before"],
+            rewrite_existing,
+        )
+        return summary
+
+    batches = _chunked(dates_to_push, batch_size)
+    logger.info(
+        "Supabase backfill starting for %s: local_days=%s remote_days=%s queued_days=%s batches=%s rewrite_existing=%s",
+        curve_name,
+        summary["local_days"],
+        summary["remote_days_before"],
+        summary["queued_days"],
+        len(batches),
+        rewrite_existing,
+    )
+
+    calendar = event_calendar or {}
+    failed_dates: list[str] = []
+    total_days = len(dates_to_push)
+    processed_days = 0
+    for batch_idx, batch in enumerate(batches, start=1):
+        batch_success = 0
+        batch_failure = 0
+        for day_idx, trading_date in enumerate(batch, start=1):
+            global_day_idx = processed_days + day_idx
+            elapsed_before = time.perf_counter() - started_at
+            logger.info(
+                "Supabase backfill heartbeat for %s: starting day %s/%s trading_date=%s batch=%s/%s batch_day=%s/%s pushed=%s failed=%s elapsed=%.1fs",
+                curve_name,
+                global_day_idx,
+                total_days,
+                trading_date.isoformat(),
+                batch_idx,
+                len(batches),
+                day_idx,
+                len(batch),
+                summary["pushed_days"],
+                summary["failed_days"],
+                elapsed_before,
+            )
+            day_started_at = time.perf_counter()
+            day_status = "ok"
+            try:
+                pushed = bool(active_sync.push_day(curve_name, trading_date, event_calendar=calendar))
+            except Exception as exc:
+                pushed = False
+                day_status = "error"
+                batch_failure += 1
+                failed_dates.append(trading_date.isoformat())
+                logger.warning(
+                    "Supabase backfill failed for %s/%s: %s",
+                    curve_name,
+                    trading_date.isoformat(),
+                    exc,
+                )
+
+            if pushed:
+                batch_success += 1
+            elif day_status != "error":
+                day_status = "skipped"
+                batch_failure += 1
+                failed_dates.append(trading_date.isoformat())
+
+            summary["pushed_days"] += int(pushed)
+            summary["failed_days"] += int(not pushed)
+            elapsed_after = time.perf_counter() - started_at
+            day_elapsed = time.perf_counter() - day_started_at
+            remaining_days = total_days - global_day_idx
+            _write_perf_event(
+                perf_log_path,
+                {
+                    "event": "supabase_backfill_day",
+                    "curve_name": curve_name,
+                    "day_index": global_day_idx,
+                    "day_count": total_days,
+                    "batch_index": batch_idx,
+                    "batch_count": len(batches),
+                    "batch_day_index": day_idx,
+                    "batch_day_count": len(batch),
+                    "trading_date": trading_date.isoformat(),
+                    "status": day_status,
+                    "pushed": bool(pushed),
+                    "pushed_days": summary["pushed_days"],
+                    "failed_days": summary["failed_days"],
+                    "remaining_days": remaining_days,
+                    "day_elapsed_seconds": day_elapsed,
+                    "elapsed_seconds": elapsed_after,
+                },
+            )
+            logger.info(
+                "Supabase backfill heartbeat for %s: completed day %s/%s trading_date=%s status=%s pushed=%s failed=%s remaining=%s day_elapsed=%.1fs total_elapsed=%.1fs",
+                curve_name,
+                global_day_idx,
+                total_days,
+                trading_date.isoformat(),
+                day_status,
+                summary["pushed_days"],
+                summary["failed_days"],
+                remaining_days,
+                day_elapsed,
+                elapsed_after,
+            )
+
+        processed_days += len(batch)
+        _write_perf_event(
+            perf_log_path,
+            {
+                "event": "supabase_backfill_batch",
+                "curve_name": curve_name,
+                "batch_index": batch_idx,
+                "batch_count": len(batches),
+                "batch_size": len(batch),
+                "first_date": batch[0].isoformat(),
+                "last_date": batch[-1].isoformat(),
+                "success_days": batch_success,
+                "failed_days": batch_failure,
+            },
+        )
+        logger.info(
+            "Supabase backfill batch %s/%s complete for %s: success=%s failure=%s first=%s last=%s",
+            batch_idx,
+            len(batches),
+            curve_name,
+            batch_success,
+            batch_failure,
+            batch[0].isoformat(),
+            batch[-1].isoformat(),
+        )
+
+    if failed_dates:
+        summary["status"] = "partial" if summary["pushed_days"] > 0 else "error"
+        summary["failed_date_list"] = failed_dates
+
+    _write_perf_event(perf_log_path, summary)
+    return summary
 
 
 def _summarize_day(
@@ -400,21 +771,37 @@ def _release_barchart_runtime_state(*, source: str, logger: logging.Logger | Non
     gc.collect()
 
 
+def _flush_curve_store_pushes(*, logger: logging.Logger, timeout_seconds: float = 300.0) -> None:
+    try:
+        waited = CurveStore.default().wait_for_background_pushes(timeout=timeout_seconds)
+        if waited > 0:
+            logger.info("CurveStore Supabase sync flush complete after waiting on %s background push thread(s).", waited)
+    except Exception:
+        logger.warning("CurveStore Supabase sync flush failed.", exc_info=True)
+
+
 def run_bucketed_calibration(
     *,
     curve_mdp: Any,
     curve_name: str,
     source: str,
-    daily_buckets: OrderedDict[dt.date, list[dt.datetime]],
+    daily_buckets: OrderedDict[dt.date, list[dt.datetime]] | Iterable[tuple[dt.date, list[dt.datetime]]],
     request_options: dict[str, Any],
     perf_log_path: Path,
     logger: logging.Logger,
     fail_fast: bool,
     retain_all_curves: bool = False,
     release_runtime_state: bool = True,
+    business_days: int | None = None,
 ) -> tuple[dict[Any, Any], list[DayCalibrationStats], dict[str, Any]]:
     all_curves: dict[Any, Any] = {}
     daily_results: list[DayCalibrationStats] = []
+    if hasattr(daily_buckets, "items"):
+        daily_bucket_iter = daily_buckets.items()
+        expected_business_days = len(daily_buckets) if business_days is None else int(business_days)
+    else:
+        daily_bucket_iter = iter(daily_buckets)
+        expected_business_days = None if business_days is None else int(business_days)
 
     _write_perf_event(
         perf_log_path,
@@ -422,7 +809,7 @@ def run_bucketed_calibration(
             "event": "run_start",
             "curve_name": curve_name,
             "source": source,
-            "business_days": len(daily_buckets),
+            "business_days": expected_business_days,
             "request_options": {
                 key: value
                 for key, value in request_options.items()
@@ -432,7 +819,9 @@ def run_bucketed_calibration(
     )
 
     run_started = time.perf_counter()
-    for trade_date, timestamps in daily_buckets.items():
+    processed_business_days = 0
+    for trade_date, timestamps in daily_bucket_iter:
+        processed_business_days += 1
         request = build_bulk_request(
             curve_name=curve_name,
             timestamps=timestamps,
@@ -521,7 +910,7 @@ def run_bucketed_calibration(
         source=source,
         daily_results=daily_results,
         total_elapsed_seconds=total_elapsed_seconds,
-        business_days=len(daily_buckets),
+        business_days=processed_business_days,
     )
     _write_perf_event(perf_log_path, summary)
     return all_curves, daily_results, summary
@@ -554,12 +943,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--calibration-max-workers", type=int)
     parser.add_argument("--ignore-cache", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
+    parser.add_argument("--backfill-only", action="store_true", help="Only push existing local CurveStore days in range to Supabase; skip calibration.")
+    parser.add_argument("--backfill-batch-size", type=int, default=DEFAULT_BACKFILL_BATCH_SIZE)
     parser.add_argument("--verbose", action="store_true")
-    parser.set_defaults(show_tqdm=True, auto_prime_bulk=True)
+    parser.set_defaults(show_tqdm=True, auto_prime_bulk=True, backfill_local_cache=True, rewrite_existing_supabase=True)
     parser.add_argument("--show-tqdm", dest="show_tqdm", action="store_true")
     parser.add_argument("--hide-tqdm", dest="show_tqdm", action="store_false")
     parser.add_argument("--auto-prime-bulk", dest="auto_prime_bulk", action="store_true")
     parser.add_argument("--no-auto-prime-bulk", dest="auto_prime_bulk", action="store_false")
+    parser.add_argument("--backfill-local-cache", dest="backfill_local_cache", action="store_true")
+    parser.add_argument("--no-backfill-local-cache", dest="backfill_local_cache", action="store_false")
+    parser.add_argument("--rewrite-existing-supabase", dest="rewrite_existing_supabase", action="store_true")
+    parser.add_argument("--only-missing-supabase", dest="rewrite_existing_supabase", action="store_false")
     parser.add_argument(
         "--perf-log-path",
         default=None,
@@ -580,7 +975,71 @@ def main() -> int:
     session_end = _parse_time(args.session_end)
     perf_log_path = Path(args.perf_log_path) if args.perf_log_path else _default_perf_log_path()
 
-    daily_buckets = build_daily_minute_buckets(
+    sync_status = inspect_curve_store_sync_status(
+        curve_name=str(args.curve_name),
+        start_date=start_date,
+        end_date=end_date,
+    )
+    logger.info(
+        "CurveStore sync status for %s [%s -> %s]: local_days=%s remote_days=%s local_only_days=%s",
+        args.curve_name,
+        start_date.isoformat(),
+        end_date.isoformat(),
+        sync_status["local_days"],
+        sync_status["remote_days"],
+        sync_status["local_only_days"],
+    )
+    _write_perf_event(
+        perf_log_path,
+        {
+            "event": "supabase_backfill_status",
+            "curve_name": str(args.curve_name),
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "local_days": sync_status["local_days"],
+            "remote_days": sync_status["remote_days"],
+            "local_only_days": sync_status["local_only_days"],
+        },
+    )
+
+    if bool(args.backfill_local_cache):
+        backfill_summary = backfill_local_curve_store_to_supabase(
+            curve_name=str(args.curve_name),
+            start_date=start_date,
+            end_date=end_date,
+            batch_size=int(args.backfill_batch_size),
+            rewrite_existing=bool(args.rewrite_existing_supabase),
+            logger=logger,
+            perf_log_path=perf_log_path,
+        )
+        logger.info(
+            "Supabase backfill summary for %s: status=%s pushed_days=%s failed_days=%s queued_days=%s",
+            args.curve_name,
+            backfill_summary["status"],
+            backfill_summary["pushed_days"],
+            backfill_summary["failed_days"],
+            backfill_summary["queued_days"],
+        )
+
+    if bool(args.backfill_only):
+        logger.info("Backfill-only mode enabled; skipping calibration run.")
+        logger.info("Performance log written to %s", perf_log_path)
+        return 0
+
+    business_days = count_business_day_buckets(
+        start_date=start_date,
+        end_date=end_date,
+    )
+    logger.info(
+        "Prepared streaming run for %s business-day buckets across [%s -> %s]; intraday timestamps will be built and calibrated one trade date at a time; session_mode=%s timezone=%s perf_log=%s",
+        business_days,
+        start_date.isoformat(),
+        end_date.isoformat(),
+        "cme" if args.cme_session else "clock",
+        timezone_name,
+        perf_log_path,
+    )
+    daily_bucket_iter = iter_daily_minute_buckets(
         start_date=start_date,
         end_date=end_date,
         session_start=session_start,
@@ -588,15 +1047,6 @@ def main() -> int:
         freq=str(args.freq),
         timezone=timezone,
         cme_session=bool(args.cme_session),
-    )
-    total_requested = sum(len(bucket) for bucket in daily_buckets.values())
-    logger.info(
-        "Prepared %s business-day buckets covering %s timestamps; session_mode=%s timezone=%s perf_log=%s",
-        len(daily_buckets),
-        total_requested,
-        "cme" if args.cme_session else "clock",
-        timezone_name,
-        perf_log_path,
     )
 
     mdp = IRSwapsMDP(source=str(args.source))
@@ -617,15 +1067,19 @@ def main() -> int:
             curve_mdp=mdp,
             curve_name=str(args.curve_name),
             source=str(args.source),
-            daily_buckets=daily_buckets,
+            daily_buckets=daily_bucket_iter,
             request_options=request_options,
             perf_log_path=perf_log_path,
             logger=logger,
             fail_fast=bool(args.fail_fast),
+            business_days=business_days,
         )
     except Exception:
+        _flush_curve_store_pushes(logger=logger)
         logger.info("Performance log written to %s", perf_log_path)
         raise
+
+    _flush_curve_store_pushes(logger=logger)
 
     logger.info(
         "Run complete: business_days=%s successful_days=%s failed_days=%s returned=%s/%s elapsed=%.2fs",

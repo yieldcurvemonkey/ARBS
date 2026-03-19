@@ -1,6 +1,7 @@
 """Tests for CurveStore L2 Supabase integration."""
 
 import datetime
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -84,6 +85,44 @@ class TestWriteDayL2:
 
         # Local write still succeeded
         assert result is not None
+
+    def test_wait_for_background_pushes_joins_pending_threads(self, tmp_path):
+        from Caching.curve_store import CurveStore, CurveSnapshot
+
+        store = CurveStore(base_dir=tmp_path)
+        snap = CurveSnapshot(
+            timestamp_utc=datetime.datetime(2025, 1, 15, 21, 0, tzinfo=datetime.timezone.utc),
+            timestamp_local=datetime.datetime(2025, 1, 15, 15, 0),
+            trading_date=datetime.date(2025, 1, 15),
+            session_minute=540,
+            curve_name="USD-SOFR-1D",
+            cfg_hash="test",
+            reference_key="ref",
+            interpolation="log_linear",
+            node_dates=[datetime.date(2025, 1, 16)],
+            discount_factors=[0.999],
+        )
+
+        started = threading.Event()
+        release = threading.Event()
+        mock_sync = MagicMock()
+
+        def _slow_push(curve_name, trading_date):
+            started.set()
+            assert release.wait(timeout=2.0)
+
+        mock_sync.push_day.side_effect = _slow_push
+
+        with patch("Caching.curve_store._get_curve_sync", return_value=mock_sync):
+            result = store.write_day("USD-SOFR-1D", datetime.date(2025, 1, 15), [snap])
+            assert result is not None
+            assert started.wait(timeout=1.0)
+            release.set()
+            waited = store.wait_for_background_pushes(timeout=2.0)
+
+        assert waited == 1
+        assert store.wait_for_background_pushes(timeout=0.0) == 0
+        mock_sync.push_day.assert_called_once_with("USD-SOFR-1D", datetime.date(2025, 1, 15))
 
 
 class TestReadRawDayL2:

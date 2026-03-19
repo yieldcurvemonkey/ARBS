@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytz
 import pytest
 
 from MDP.MarketDataProvider import MarketDataProvider
@@ -121,7 +122,8 @@ class _PartialFallbackRouter(_FakeRouter):
 class _FakeIRSCurveStore:
     def __init__(self, timestamps: List[datetime.datetime]):
         self.timestamps = list(timestamps)
-        self.raw_reads: List[Tuple[str, datetime.date, datetime.date]] = []
+        self.raw_reads: List[Dict[str, Any]] = []
+        self.raw_day_reads: List[Tuple[str, datetime.date]] = []
         self.analytics_reads: List[Tuple[str, datetime.date, datetime.date]] = []
         self.reconstruct_workers: List[int] = []
 
@@ -130,12 +132,53 @@ class _FakeIRSCurveStore:
         self.analytics_reads.append((curve_name, start, end))
         return pd.DataFrame()
 
-    def read_raw_nodes(self, curve_name: str, *, start=None, end=None, session_minute_min=None, session_minute_max=None) -> pd.DataFrame:
-        _ = session_minute_min, session_minute_max
-        self.raw_reads.append((curve_name, start, end))
+    def read_raw_nodes(
+        self,
+        curve_name: str,
+        *,
+        start=None,
+        end=None,
+        session_minute_min=None,
+        session_minute_max=None,
+        timestamps_utc=None,
+    ) -> pd.DataFrame:
+        self.raw_reads.append(
+            {
+                "curve_name": curve_name,
+                "start": start,
+                "end": end,
+                "session_minute_min": session_minute_min,
+                "session_minute_max": session_minute_max,
+                "timestamps_utc": list(timestamps_utc or []),
+            }
+        )
+        rows = [pd.Timestamp(ts.astimezone(datetime.timezone.utc)) for ts in self.timestamps]
+        if timestamps_utc:
+            requested = {
+                pd.Timestamp(ts.astimezone(datetime.timezone.utc).replace(microsecond=0))
+                for ts in timestamps_utc
+            }
+            rows = [ts for ts in rows if ts.replace(microsecond=0) in requested]
         return pd.DataFrame(
             {
-                "timestamp_utc": [pd.Timestamp(ts.astimezone(datetime.timezone.utc)) for ts in self.timestamps],
+                "timestamp_utc": rows,
+            }
+        )
+
+    def read_raw_day(self, curve_name: str, trading_date: datetime.date) -> pd.DataFrame:
+        self.raw_day_reads.append((curve_name, trading_date))
+        chi = pytz.timezone("America/Chicago")
+        return pd.DataFrame(
+            {
+                "timestamp_utc": [
+                    pd.Timestamp(ts.astimezone(datetime.timezone.utc))
+                    for ts in self.timestamps
+                    if (
+                        (ts.astimezone(chi) + datetime.timedelta(days=1)).date()
+                        if ts.astimezone(chi).hour >= 17
+                        else ts.astimezone(chi).date()
+                    ) == trading_date
+                ],
             }
         )
 
@@ -723,9 +766,165 @@ def test_timeseries_builder_uses_curve_store_fast_path_for_irs_intraday(monkeypa
     assert list(out.index) == [ts1, ts2]
     assert list(out[q.col_name()]) == [0.05, 0.051]
     assert router.call_count == 0
-    assert store.raw_reads == [("USD-SOFR-Q12", ts1.date(), ts2.date())]
+    assert len(store.raw_reads) == 1
+    assert store.raw_reads[0]["curve_name"] == "USD-SOFR-Q12"
+    assert store.raw_reads[0]["start"] == ts1.date()
+    assert store.raw_reads[0]["end"] == ts2.date()
+    assert store.raw_reads[0]["session_minute_min"] == 120
+    assert store.raw_reads[0]["session_minute_max"] == 180
+    assert store.raw_reads[0]["timestamps_utc"] == [ts1, ts2]
     assert store.reconstruct_workers == [4]
     assert mdp.wrap_calls
+
+
+def test_timeseries_builder_curve_store_fast_path_shows_pricing_tqdm_by_default(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+    import TB.TimeseriesBuilder as ts_builder_module
+
+    ts1 = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2025, 1, 6, 15, 0, tzinfo=datetime.timezone.utc)
+    store = _FakeIRSCurveStore([ts1, ts2])
+    mdp = _FakeIRSCurveStoreMDP(store)
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    calls = []
+
+    class _RecordingTqdm:
+        def __init__(self, iterable=None, **kwargs):
+            self.iterable = iterable
+            self.kwargs = kwargs
+            self.updates: List[int] = []
+            calls.append(self)
+
+        def __iter__(self):
+            if self.iterable is None:
+                return iter(())
+            return iter(self.iterable)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            _ = exc_type, exc, tb
+            return False
+
+        def update(self, n=1):
+            self.updates.append(int(n))
+
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05 if ref_dt == ts1 else 0.051),
+    )
+    monkeypatch.setattr(ts_builder_module, "_tqdm", _RecordingTqdm)
+
+    out = tb.get_timeseries(start=ts1, end=ts2, queries=[q], timestamps=[ts1, ts2], n_jobs=2)
+
+    assert list(out.index) == [ts1, ts2]
+    assert list(out[q.col_name()]) == [0.05, 0.051]
+    assert calls
+    assert calls[0].kwargs["disable"] is False
+    assert calls[0].kwargs["total"] == 2
+    assert "curve-store" in calls[0].kwargs["desc"]
+    assert sum(calls[0].updates) == 2
+
+
+def test_timeseries_builder_curve_store_fast_path_filters_out_of_session_intraday_minutes(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    chi = pytz.timezone("America/Chicago")
+    start = chi.localize(datetime.datetime(2025, 1, 6, 15, 58))
+    end = chi.localize(datetime.datetime(2025, 1, 6, 17, 2))
+    expected_points = [
+        chi.localize(datetime.datetime(2025, 1, 6, 15, 58)),
+        chi.localize(datetime.datetime(2025, 1, 6, 15, 59)),
+        chi.localize(datetime.datetime(2025, 1, 6, 16, 0)),
+        chi.localize(datetime.datetime(2025, 1, 6, 17, 0)),
+        chi.localize(datetime.datetime(2025, 1, 6, 17, 1)),
+        chi.localize(datetime.datetime(2025, 1, 6, 17, 2)),
+    ]
+    store = _FakeIRSCurveStore(expected_points)
+    mdp = _FakeIRSCurveStoreMDP(store)
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(start=start, end=end, queries=[q], freq="1min", n_jobs=2)
+
+    assert list(out.index) == expected_points
+    assert list(out[q.col_name()]) == [0.05] * len(expected_points)
+    assert router.call_count == 0
+
+
+def test_timeseries_builder_route_skips_all_out_of_session_barchart_irs_requests():
+    chi = pytz.timezone("America/Chicago")
+    start = chi.localize(datetime.datetime(2025, 1, 6, 16, 1))
+    end = chi.localize(datetime.datetime(2025, 1, 6, 16, 59))
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    class _FailIfCalledRouter:
+        def __init__(self):
+            self.mdp = SimpleNamespace(source="BARCHART_STIRF-RL")
+            self.call_count = 0
+
+        def get_timeseries(self, *args, **kwargs) -> pd.DataFrame:
+            self.call_count += 1
+            raise AssertionError("out-of-session BARCHART IRS requests should be discarded before routing")
+
+    router = _FailIfCalledRouter()
+    tb = TimeseriesBuilder(irswaps_tb=router)
+
+    out = tb.get_timeseries(start=start, end=end, queries=[q], freq="1min", ignore_cache=True)
+
+    assert out.empty
+    assert router.call_count == 0
+
+
+def test_timeseries_builder_curve_store_fast_path_supports_eod_freq_alias(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    nyc = pytz.timezone("America/New_York")
+    start = nyc.localize(datetime.datetime(2025, 7, 28, 0, 1))
+    end = nyc.localize(datetime.datetime(2025, 8, 1, 17, 0))
+    expected_points = [
+        nyc.localize(datetime.datetime(2025, 7, 28, 17, 0)),
+        nyc.localize(datetime.datetime(2025, 7, 29, 17, 0)),
+        nyc.localize(datetime.datetime(2025, 7, 30, 17, 0)),
+        nyc.localize(datetime.datetime(2025, 7, 31, 17, 0)),
+        nyc.localize(datetime.datetime(2025, 8, 1, 17, 0)),
+    ]
+    store = _FakeIRSCurveStore(expected_points)
+    mdp = _FakeIRSCurveStoreMDP(store)
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D-Q12STIRT", tenor="IMM_Z25xIMM_H26", value=IRSwapValue.RATE)
+
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(start=start, end=end, queries=[q], freq="eod", n_jobs=2)
+
+    assert list(out.index) == expected_points
+    assert list(out[q.col_name()]) == [0.05] * len(expected_points)
+    assert router.call_count == 0
+    assert len(store.raw_reads) == 1
+    assert store.raw_reads[0]["curve_name"] == "USD-SOFR-Q12"
+    assert store.raw_reads[0]["start"] == datetime.date(2025, 7, 28)
+    assert store.raw_reads[0]["end"] == datetime.date(2025, 8, 1)
+    assert store.raw_reads[0]["session_minute_min"] == 600
+    assert store.raw_reads[0]["session_minute_max"] == 600
+    assert store.raw_reads[0]["timestamps_utc"] == expected_points
 
 
 def test_timeseries_builder_curve_store_fast_path_falls_back_for_missing_points(monkeypatch):

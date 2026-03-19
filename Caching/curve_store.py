@@ -20,6 +20,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +48,66 @@ _UTC = pytz.UTC
 # Session reference: CME STIR futures regular hours 06:00-17:00 CT
 _SESSION_OPEN_HOUR = 6
 _SESSION_OPEN_MINUTE = 0
+
+
+def _normalize_timestamp_utc_values(
+    timestamps_utc: Optional[Sequence[Union[datetime.datetime, pd.Timestamp]]],
+) -> list[datetime.datetime]:
+    if not timestamps_utc:
+        return []
+
+    normalized: list[datetime.datetime] = []
+    seen: set[datetime.datetime] = set()
+    for value in timestamps_utc:
+        if isinstance(value, pd.Timestamp):
+            value = value.to_pydatetime()
+        if not isinstance(value, datetime.datetime):
+            continue
+        if value.tzinfo is None:
+            value = _UTC.localize(value)
+        else:
+            value = value.astimezone(_UTC)
+        value = value.replace(microsecond=0)
+        if value not in seen:
+            seen.add(value)
+            normalized.append(value)
+    return sorted(normalized)
+
+
+def _trading_dates_for_timestamps_utc(timestamps_utc: Sequence[datetime.datetime]) -> list[datetime.date]:
+    return sorted({_compute_trading_date(ts.astimezone(_CHI)) for ts in timestamps_utc})
+
+
+def _filter_df_to_timestamps_utc(df: pd.DataFrame, timestamps_utc: Sequence[datetime.datetime]) -> pd.DataFrame:
+    if df.empty or "timestamp_utc" not in df.columns or not timestamps_utc:
+        return df
+    requested = set(timestamps_utc)
+    ts_keys = df["timestamp_utc"].map(_normalize_timestamp_utc_scalar)
+    return df.loc[ts_keys.isin(requested)].reset_index(drop=True)
+
+
+def _normalize_timestamp_utc_scalar(value: Any) -> Optional[datetime.datetime]:
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        value = value.to_pydatetime()
+    if not isinstance(value, datetime.datetime):
+        return None
+    if value.tzinfo is None:
+        value = _UTC.localize(value)
+    else:
+        value = value.astimezone(_UTC)
+    return value.replace(microsecond=0)
+
+
+def _timestamps_cte_sql(
+    timestamps_utc: Sequence[datetime.datetime],
+) -> str:
+    values = ", ".join(
+        f"(TIMESTAMPTZ '{ts.isoformat(sep=' ')}')"
+        for ts in timestamps_utc
+    )
+    return f"WITH requested(ts) AS (VALUES {values})"
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +347,41 @@ class CurveStore:
         self._compression = compression
         self._raw_dir = self._base_dir / "raw"
         self._analytics_dir = self._base_dir / "analytics"
+        self._bg_push_threads: list[threading.Thread] = []
+        self._bg_push_lock = threading.Lock()
+
+    def _track_bg_push_thread(self, thread: threading.Thread) -> None:
+        with self._bg_push_lock:
+            self._bg_push_threads = [t for t in self._bg_push_threads if t.is_alive()]
+            self._bg_push_threads.append(thread)
+
+    def _release_bg_push_thread(self, thread: threading.Thread) -> None:
+        with self._bg_push_lock:
+            self._bg_push_threads = [t for t in self._bg_push_threads if t.is_alive() and t is not thread]
+
+    def wait_for_background_pushes(self, timeout: Optional[float] = None) -> int:
+        """Join outstanding background Supabase push threads.
+
+        Returns the number of tracked push threads that were awaited.
+        """
+        deadline = None if timeout is None else (time.monotonic() + float(timeout))
+        waited = 0
+
+        while True:
+            with self._bg_push_lock:
+                threads = [t for t in self._bg_push_threads if t.is_alive()]
+                self._bg_push_threads = threads
+
+            if not threads:
+                return waited
+
+            waited = max(waited, len(threads))
+            for thread in threads:
+                remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+                thread.join(remaining)
+
+            if deadline is not None and time.monotonic() >= deadline:
+                return waited
 
     @staticmethod
     def _default_base_dir() -> Path:
@@ -342,7 +438,12 @@ class CurveStore:
                     sync.push_day(curve_name, trading_date)
                 except Exception:
                     logger.warning("L2 push failed for %s/%s", curve_name, trading_date, exc_info=True)
-            threading.Thread(target=_bg_push, daemon=True).start()
+                finally:
+                    self._release_bg_push_thread(threading.current_thread())
+
+            thread = threading.Thread(target=_bg_push, daemon=True)
+            self._track_bg_push_thread(thread)
+            thread.start()
 
         return meta
 
@@ -411,6 +512,7 @@ class CurveStore:
         end: Optional[Union[datetime.date, datetime.datetime]] = None,
         session_minute_min: Optional[int] = None,
         session_minute_max: Optional[int] = None,
+        timestamps_utc: Optional[Sequence[Union[datetime.datetime, pd.Timestamp]]] = None,
     ) -> pd.DataFrame:
         """Bulk read raw node data via DuckDB Hive-partitioned scan.
 
@@ -423,6 +525,13 @@ class CurveStore:
         asset_dir = self._raw_dir / f"asset={_sanitize(curve_name)}"
         if not asset_dir.exists():
             return pd.DataFrame()
+
+        requested_timestamps_utc = _normalize_timestamp_utc_values(timestamps_utc)
+        if requested_timestamps_utc:
+            trading_dates = _trading_dates_for_timestamps_utc(requested_timestamps_utc)
+            if len(trading_dates) == 1 and session_minute_min is None and session_minute_max is None:
+                day_df = self.read_raw_day(curve_name, trading_dates[0])
+                return _ensure_raw_df_columns(_filter_df_to_timestamps_utc(day_df, requested_timestamps_utc))
 
         # Fast path: if start == end (single day), use direct PyArrow
         if (
@@ -439,6 +548,14 @@ class CurveStore:
         glob_pattern = str(asset_dir / "date=*" / "*.parquet").replace("\\", "/")
 
         where_parts: list[str] = []
+        cte_prefix = ""
+        join_clause = ""
+        if requested_timestamps_utc:
+            trading_dates = _trading_dates_for_timestamps_utc(requested_timestamps_utc)
+            where_parts.append(f"date >= '{trading_dates[0].isoformat()}'")
+            where_parts.append(f"date <= '{trading_dates[-1].isoformat()}'")
+            cte_prefix = _timestamps_cte_sql(requested_timestamps_utc)
+            join_clause = "INNER JOIN requested ON raw.timestamp_utc = requested.ts"
         if start is not None:
             s = start.date() if isinstance(start, datetime.datetime) else start
             where_parts.append(f"date >= '{s.isoformat()}'")
@@ -453,8 +570,10 @@ class CurveStore:
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
         query = f"""
-            SELECT *
-            FROM read_parquet('{glob_pattern}', hive_partitioning=true, union_by_name=true)
+            {cte_prefix}
+            SELECT raw.*
+            FROM read_parquet('{glob_pattern}', hive_partitioning=true, union_by_name=true) raw
+            {join_clause}
             {where_clause}
             ORDER BY timestamp_utc
         """
@@ -476,6 +595,7 @@ class CurveStore:
         end: Optional[Union[datetime.date, datetime.datetime]] = None,
         tenors: Optional[list[str]] = None,
         metrics: Optional[list[str]] = None,
+        timestamps_utc: Optional[Sequence[Union[datetime.datetime, pd.Timestamp]]] = None,
     ) -> pd.DataFrame:
         """Read analytics panel (wide-format)."""
         asset_dir = self._analytics_dir / f"asset={_sanitize(curve_name)}"
@@ -483,6 +603,7 @@ class CurveStore:
             return pd.DataFrame()
 
         glob_pattern = str(asset_dir / "date=*" / "*.parquet").replace("\\", "/")
+        requested_timestamps_utc = _normalize_timestamp_utc_values(timestamps_utc)
 
         # Build column selection
         cols: list[str] = ["timestamp_utc", "trading_date", "session_minute"]
@@ -493,6 +614,14 @@ class CurveStore:
         col_expr = ", ".join(f'"{c}"' for c in cols) if (tenors and metrics) else "*"
 
         where_parts: list[str] = []
+        cte_prefix = ""
+        join_clause = ""
+        if requested_timestamps_utc:
+            trading_dates = _trading_dates_for_timestamps_utc(requested_timestamps_utc)
+            where_parts.append(f"date >= '{trading_dates[0].isoformat()}'")
+            where_parts.append(f"date <= '{trading_dates[-1].isoformat()}'")
+            cte_prefix = _timestamps_cte_sql(requested_timestamps_utc)
+            join_clause = "INNER JOIN requested ON analytics.timestamp_utc = requested.ts"
         if start is not None:
             s = start.date() if isinstance(start, datetime.datetime) else start
             where_parts.append(f"date >= '{s.isoformat()}'")
@@ -503,8 +632,10 @@ class CurveStore:
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
         query = f"""
+            {cte_prefix}
             SELECT {col_expr}
-            FROM read_parquet('{glob_pattern}', hive_partitioning=true)
+            FROM read_parquet('{glob_pattern}', hive_partitioning=true) analytics
+            {join_clause}
             {where_clause}
             ORDER BY timestamp_utc
         """

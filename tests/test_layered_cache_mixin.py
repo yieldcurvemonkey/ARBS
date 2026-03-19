@@ -1,6 +1,6 @@
 """Tests for Caching.layered_cache_mixin — L1 diskcache + L2 Supabase KV."""
 
-import time
+import queue
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -137,3 +137,53 @@ class TestLayeredDictProxyL2Fallback:
             c.my_cache["key"] = "value"
 
         mock_l2_set.assert_called_once()
+
+    def test_async_writer_starts_shared_workers_once(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        import importlib
+        import Caching.supabase_engine as eng
+        importlib.reload(eng)
+
+        from Caching.layered_cache_mixin import LayeredDictProxy
+
+        c = _make_consumer(tmp_path, l2_enabled=True, l2_write=True)
+        monkeypatch.setattr(LayeredDictProxy, "_L2_WRITE_QUEUE", None)
+        monkeypatch.setattr(LayeredDictProxy, "_L2_WRITE_WORKERS_STARTED", False)
+        monkeypatch.setattr(LayeredDictProxy, "_L2_WRITE_WORKER_COUNT", 2)
+
+        started_names = []
+
+        class DummyThread:
+            def __init__(self, *args, **kwargs):
+                started_names.append(kwargs["name"])
+
+            def start(self):
+                return None
+
+        with patch("Caching.layered_cache_mixin.threading.Thread", side_effect=DummyThread):
+            c.my_cache._l2_set_async("cache-key-1", "key1", "value1")
+            c.my_cache._l2_set_async("cache-key-2", "key2", "value2")
+
+        assert started_names == ["layered-cache-l2-0", "layered-cache-l2-1"]
+        assert LayeredDictProxy._L2_WRITE_QUEUE is not None
+        assert LayeredDictProxy._L2_WRITE_QUEUE.qsize() == 2
+
+    def test_async_writer_drops_when_queue_is_full(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        import importlib
+        import Caching.supabase_engine as eng
+        importlib.reload(eng)
+
+        c = _make_consumer(tmp_path, l2_enabled=True, l2_write=True)
+
+        class FullQueue:
+            def put_nowait(self, item):
+                raise queue.Full
+
+        with patch.object(type(c.my_cache), "_ensure_l2_write_workers", return_value=FullQueue()):
+            with patch("Caching.layered_cache_mixin.logger.warning") as mock_warning:
+                c.my_cache._l2_set_async("cache-key-1", "key1", "value1")
+
+        mock_warning.assert_called_once()

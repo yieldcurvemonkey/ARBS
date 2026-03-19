@@ -1,6 +1,7 @@
 import datetime
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base.BaseQuery import BaseQuery
@@ -128,6 +129,28 @@ def test_reference_points_business_date_range():
         datetime.date(2025, 1, 6),
         datetime.date(2025, 1, 7),
     ]
+
+
+def test_reference_points_eod_aliases_resolve_to_business_close_instants():
+    tb = _TestTB(mdp=_RecordingMDP(), date_col="Date", show_tqdm=False)
+    nyc = ZoneInfo("America/New_York")
+    start = datetime.datetime(2025, 7, 28, 0, 1, tzinfo=nyc)
+    end = datetime.datetime(2025, 7, 30, 17, 0, tzinfo=nyc)
+    expected_nyc = [
+        datetime.datetime(2025, 7, 28, 17, 0, tzinfo=nyc),
+        datetime.datetime(2025, 7, 29, 17, 0, tzinfo=nyc),
+        datetime.datetime(2025, 7, 30, 17, 0, tzinfo=nyc),
+    ]
+    expected_ldn = [
+        datetime.datetime(2025, 7, 28, 12, 0, tzinfo=nyc),
+        datetime.datetime(2025, 7, 29, 12, 0, tzinfo=nyc),
+        datetime.datetime(2025, 7, 30, 12, 0, tzinfo=nyc),
+    ]
+
+    assert tb._build_reference_points(start=start, end=end, freq="eod", timestamps=None) == expected_nyc
+    assert tb._build_reference_points(start=start, end=end, freq="nyc_eod", timestamps=None) == expected_nyc
+    assert tb._build_reference_points(start=start, end=end, freq="chi_eod", timestamps=None) == expected_nyc
+    assert tb._build_reference_points(start=start, end=end, freq="ldn_eod", timestamps=None) == expected_ldn
 
 
 def test_generic_row_evaluation_pipeline_refetches_when_request_changes():
