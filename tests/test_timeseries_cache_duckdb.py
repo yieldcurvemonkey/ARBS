@@ -296,16 +296,17 @@ class TestAppendSemantics:
         assert date(2025, 1, 6) in result_dates
         assert date(2025, 1, 7) in result_dates
 
-    def test_append_same_day_creates_multiple_files(self, opts, ts_dir):
+    def test_append_same_day_compacts_to_latest_single_file(self, opts, ts_dir):
         idx = pd.date_range("2025-01-06", periods=3, freq="h")
         df1 = pd.DataFrame({"v": [1.0, 2.0, 3.0]}, index=idx)
         df2 = pd.DataFrame({"v": [4.0, 5.0, 6.0]}, index=idx)
         append_timeseries(None, "SAMEDAY", df1, opts=opts)
         append_timeseries(None, "SAMEDAY", df2, opts=opts)
-        # Both files should exist (different content → different SHA)
         part_dir = ts_dir / "asset=SAMEDAY" / "date=2025-01-06"
         parquet_files = list(part_dir.glob("*.parquet"))
-        assert len(parquet_files) == 2
+        assert len(parquet_files) == 1
+        result = read_timeseries(None, "SAMEDAY", base_dir=str(ts_dir))
+        assert list(result["v"]) == [4.0, 5.0, 6.0]
 
 
 # ---------------------------------------------------------------------------

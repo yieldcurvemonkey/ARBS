@@ -78,6 +78,39 @@ def _df_to_table(df: pd.DataFrame) -> pa.Table:
     return pa.Table.from_pandas(df, preserve_index=False)
 
 
+def _restore_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    restored_index = None
+    if "_index_ts" in df.columns:
+        restored_index = pd.to_datetime(df["_index_ts"], utc=False, errors="coerce")
+        if "date" in df.columns:
+            partition_dates = pd.to_datetime(df["date"], utc=False, errors="coerce")
+            restored_index = restored_index.where(restored_index.notna(), partition_dates)
+        df = df.drop(columns=["_index_ts"])
+
+    if restored_index is None or restored_index.isna().all():
+        for candidate in ("timestamp", "Timestamp", "Date", "date"):
+            if candidate not in df.columns:
+                continue
+            candidate_index = pd.to_datetime(df[candidate], utc=False, errors="coerce")
+            if candidate_index.notna().any():
+                restored_index = candidate_index
+                break
+
+    if restored_index is not None and restored_index.notna().any():
+        df = df.copy()
+        df.index = pd.DatetimeIndex(restored_index)
+        df = df.loc[~df.index.isna()].copy()
+
+    for partition_col in ("date", "asset"):
+        if partition_col in df.columns:
+            df = df.drop(columns=[partition_col])
+
+    return df
+
+
 def _write_parquet_bytes(table: pa.Table, compression: str = DEFAULT_COMPRESSION, row_group_size: int = DEFAULT_ROW_GROUP_SIZE) -> bytes:
     sink = pa.BufferOutputStream()
     pq.write_table(
@@ -273,14 +306,7 @@ def read_timeseries(
     if df.empty:
         return pd.DataFrame()
 
-    # Restore DatetimeIndex from _index_ts if present
-    if "_index_ts" in df.columns:
-        df.set_index(pd.to_datetime(df["_index_ts"], utc=False), inplace=True)
-        df.drop(columns=["_index_ts"], inplace=True)
-
-    # Drop the hive partition column if it leaked through
-    if "date" in df.columns:
-        df.drop(columns=["date"], inplace=True)
+    df = _restore_datetime_index(df)
 
     # If user provided start/end as datetimes, trim exactly
     if isinstance(start, datetime) and isinstance(df.index, pd.DatetimeIndex):

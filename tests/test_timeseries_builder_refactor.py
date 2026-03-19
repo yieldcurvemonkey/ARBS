@@ -109,7 +109,11 @@ class _PartialFallbackRouter(_FakeRouter):
     def get_timeseries(self, start, end, queries, *, n_jobs=1, ignore_cache=False, freq=None, timestamps=None) -> pd.DataFrame:
         _ = start, end, n_jobs, ignore_cache, freq
         self.call_count += 1
-        idx = pd.Index(list(timestamps or []), name=self.date_col)
+        if timestamps:
+            points = list(timestamps)
+        else:
+            points = pd.bdate_range(start, end).date.tolist()
+        idx = pd.Index(points, name=self.date_col)
         return pd.DataFrame(
             {
                 q.col_name(): [self.fallback_value] * len(idx)
@@ -1009,6 +1013,34 @@ def test_timeseries_builder_curve_store_fast_path_falls_back_for_missing_points(
     assert list(out.index) == [ts1, ts2]
     assert list(out[q.col_name()]) == [0.05, 0.052]
     assert router.call_count == 1
+
+
+def test_timeseries_builder_curve_store_eod_fallback_does_not_emit_redundant_date_column(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    ts1 = datetime.datetime(2026, 1, 2, 20, 0, tzinfo=datetime.timezone.utc)
+    store = _FakeIRSCurveStore([ts1])
+    mdp = _FakeIRSCurveStoreMDP(store, source="ERIS_EOD_LIVE-RL_BASIC")
+    router = _PartialFallbackRouter(mdp, fallback_value=0.052)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(
+        start=datetime.date(2026, 1, 2),
+        end=datetime.date(2026, 1, 5),
+        queries=[q],
+        n_jobs=2,
+    )
+
+    assert "Date" not in out.columns
+    assert list(out.index) == [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)]
+    assert list(out[q.col_name()]) == [0.05, 0.052]
 
 
 def test_timeseries_builder_uses_eris_curve_analytics_fast_path():

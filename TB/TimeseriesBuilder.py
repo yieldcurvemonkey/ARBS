@@ -500,9 +500,27 @@ class TimeseriesBuilder:
     ) -> None:
         if df is None or df.empty:
             return
+        df = self._strip_redundant_date_column(df)
         if self._date_col in df.columns:
             df = df.set_index(self._date_col)
         per_product_frames.append((product, pd.concat({product: df}, axis=1)))
+
+    def _strip_redundant_date_column(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty or self._date_col not in df.columns:
+            return df
+        if df.index.name != self._date_col:
+            return df
+
+        date_series = pd.to_datetime(df[self._date_col], errors="coerce")
+        index_series = pd.to_datetime(pd.Index(df.index), errors="coerce")
+        if len(date_series) != len(index_series):
+            return df
+        if date_series.isna().all():
+            return df.drop(columns=[self._date_col])
+        aligned = date_series.where(date_series.notna(), index_series)
+        if aligned.equals(pd.Series(index_series, index=df.index)):
+            return df.drop(columns=[self._date_col])
+        return df
 
     def _resolve_product_handles(
         self,
@@ -1359,6 +1377,7 @@ class TimeseriesBuilder:
             return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
         out = pd.concat(curve_frames, axis=1).sort_index()
         out.index.name = self._date_col
+        out = self._strip_redundant_date_column(out)
         return out
 
     def get_timeseries(

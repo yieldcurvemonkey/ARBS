@@ -4,6 +4,8 @@ from typing import Any, Dict
 
 import pandas as pd
 import pytest
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from Caching.computed_timeseries_store import ComputedTimeseriesStore
 from MDP.MarketDataProvider import MarketDataProvider
@@ -156,6 +158,35 @@ def test_computed_timeseries_store_skips_redundant_per_day_remote_probe_for_abse
     ]
     assert len(fake_sync.prefetch_calls) == 1
     assert fake_sync.pull_calls == []
+
+
+def test_computed_timeseries_store_recovers_eod_rows_from_partition_date_when_index_ts_is_null(tmp_path):
+    store = ComputedTimeseriesStore(base_dir=tmp_path)
+    symbol = "IRS::TEST_LEGACY_NULL_INDEX"
+    trading_date = datetime.date(2025, 1, 6)
+    part_dir = tmp_path / "asset=IRS__TEST_LEGACY_NULL_INDEX" / "date=2025-01-06"
+    part_dir.mkdir(parents=True, exist_ok=True)
+
+    table = pa.table(
+        {
+            "_index_ts": pa.array([None], type=pa.timestamp("us")),
+            "value": pa.array([0.051], type=pa.float64()),
+            "_column_name": pa.array(["USD-SOFR-1D 1Y1Y OUTRIGHT RATE"], type=pa.string()),
+        }
+    )
+    pq.write_table(table, part_dir / "legacy-null-index.parquet")
+
+    rows = store.read_rows(
+        symbol=symbol,
+        reference_points=[trading_date],
+        intraday=False,
+        skip_current_eod=False,
+        fallback_column_name="fallback",
+    )
+
+    assert rows == [
+        (trading_date, "USD-SOFR-1D 1Y1Y OUTRIGHT RATE", 0.051),
+    ]
 
 
 def test_irswaps_tb_uses_shared_computed_store_across_instances(monkeypatch, tmp_path):

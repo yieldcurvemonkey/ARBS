@@ -95,7 +95,22 @@ class ComputedTimeseriesStore:
             return []
 
         if not isinstance(df.index, pd.DatetimeIndex):
-            df.index = pd.to_datetime(df.index)
+            for candidate in ("Date", "date", "timestamp", "_index_ts"):
+                if candidate not in df.columns:
+                    continue
+                candidate_index = pd.to_datetime(df[candidate], errors="coerce")
+                if candidate_index.notna().any():
+                    df = df.copy()
+                    df.index = candidate_index
+                    break
+
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return []
+
+        if df.index.hasnans:
+            df = df.loc[~df.index.isna()].copy()
+        if df.empty:
+            return []
 
         numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
         if not numeric_cols:
