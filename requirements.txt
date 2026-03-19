@@ -1,25 +1,55 @@
+# ARBS working dependency set
+# Pinned to versions installed in conda env `stir` on 2026-03-19.
+#
+# This is intentionally not a full machine-wide `pip freeze`.
+# It captures the packages imported by the repo's modules, scripts,
+# tests, and notebooks so a fresh clone can reproduce the working setup.
+
+# Core analytics and pricing
 numpy==2.3.2
 pandas==2.3.1
 pyarrow==21.0.0
-QuantLib==1.39
+QuantLib==1.41
 rateslib==2.1.1
-duckdb>=1.3.0
-diskcache>=5.6.0
+scipy==1.15.3
+scikit-learn==1.7.2
+statsmodels==0.14.5
+networkx==3.4.2
+
+# Local cache / storage / sync
+cloudpickle==3.1.2
+diskcache==5.6.3
+duckdb==1.4.4
+platformdirs==4.3.8
+psycopg2-binary==2.9.10
+SQLAlchemy==2.0.37
+
+# Fetching / parsing / transport
 aiohttp==3.12.15
+beautifulsoup4==4.13.4
+Brotli==1.1.0
+cryptography==46.0.3
+gs-quant==1.4.26
 httpx==0.28.1
-h2==4.2.0
-httpx-socks==0.10.1
+python-dateutil==2.9.0.post0
+PyYAML==6.0.2
+pytz==2024.2
+pyzipper==0.3.6
 requests==2.32.4
+selenium==4.36.0
+tvdatafeed==2.1.0
 ujson==5.10.0
-tqdm==4.67.1
+zstandard==0.25.0
+
+# Visualization / research
 matplotlib==3.10.5
 plotly==6.3.1
-nest-asyncio==1.6.0
+polars==1.32.3
+seaborn==0.13.2
+tqdm==4.67.1
+
+# Notebook / test tooling used in this repo
 ipykernel==6.30.1
-scikit-learn==1.7.2
-networkx==3.4.2
-scipy==1.16.1
-gs-quant==1.20.2
-sqlalchemy>=2.0.0
-psycopg2-binary>=2.9.0
-cloudpickle>=3.0.0
+jupyterlab==4.4.7
+nest-asyncio==1.6.0
+pytest==9.0.2
