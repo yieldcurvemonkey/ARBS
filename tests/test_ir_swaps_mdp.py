@@ -459,6 +459,96 @@ def test_eris_bulk_get_data_reuses_fixings_once_per_batch(monkeypatch):
     assert out[d2]["cache_dates"] == [d1, d2]
 
 
+def test_eris_bulk_get_data_uses_curve_store_fast_path(monkeypatch):
+    mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC")
+    d1 = dt.date(2026, 1, 2)
+    d2 = dt.date(2026, 1, 5)
+    ts1 = pytz.UTC.localize(dt.datetime(2026, 1, 2, 20, 0))
+    ts2 = pytz.UTC.localize(dt.datetime(2026, 1, 5, 20, 0))
+    store = _FakeCurveStore(
+        day_df=pd.DataFrame({"timestamp_utc": [pd.Timestamp(ts1), pd.Timestamp(ts2)]}),
+        curves_by_ts={
+            pd.Timestamp(ts1): object(),
+            pd.Timestamp(ts2): object(),
+        },
+    )
+
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: store)
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "bulk_get_eris_eod_live_rl_basic",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy ERIS curve cache should not be used when CurveStore covers all dates")
+        ),
+    )
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+
+    wrap_calls = []
+
+    def _stub_wrap(**kwargs):
+        wrap_calls.append(kwargs["request_timestamp"])
+        return {"timestamp": kwargs["request_timestamp"]}
+
+    monkeypatch.setattr(mdp, "_build_eris_eod_rl_curve", _stub_wrap)
+
+    out = mdp.bulk_get_data(
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [d1, d2],
+        }
+    )
+
+    assert set(out) == {d1, d2}
+    assert len(store.raw_node_calls) == 1
+    assert store.read_calls == []
+    assert len(store.reconstruct_calls) == 1
+    assert wrap_calls == [d1, d2]
+
+
+def test_eris_bulk_get_data_uses_curve_store_fast_path_for_today(monkeypatch):
+    mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC")
+    today = dt.date.today()
+    ts_today = mdp._to_curve_store_timestamp(today).astimezone(pytz.UTC)
+    store = _FakeCurveStore(
+        day_df=pd.DataFrame({"timestamp_utc": [pd.Timestamp(ts_today)]}),
+        curves_by_ts={pd.Timestamp(ts_today): object()},
+    )
+
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: store)
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "get_eris_eod_live_rl_basic",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy ERIS live path should not be used when CurveStore already has today's day")
+        ),
+    )
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+    monkeypatch.setattr(
+        mdp,
+        "_build_eris_eod_rl_curve",
+        lambda **kwargs: {"timestamp": kwargs["request_timestamp"]},
+    )
+
+    out = mdp.bulk_get_data(
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [today],
+        }
+    )
+
+    assert out == {today: {"timestamp": today}}
+    assert len(store.raw_node_calls) == 1
+    assert store.read_calls == []
+
+
 def test_promote_eris_curve_store_day_writes_missing_raw_and_analytics(monkeypatch):
     mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC")
     nyc = pytz.timezone("America/New_York")
@@ -523,6 +613,7 @@ def test_eris_bulk_get_data_promotes_curve_store_for_cached_historical_days(monk
         "_build_eris_eod_rl_curve",
         lambda **kwargs: _FakePromotableErisCurve(kwargs["request_timestamp"]),
     )
+    monkeypatch.setattr(mdp, "_load_eris_curve_store_history", lambda **kwargs: {})
 
     promote_calls = []
     monkeypatch.setattr(

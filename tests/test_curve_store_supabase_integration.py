@@ -202,6 +202,38 @@ class TestReadRawDayL2:
         mock_sync.pull_day.assert_not_called()
 
 
+class TestReadRawNodesL2:
+    def test_read_raw_nodes_prefetches_from_supabase_when_local_missing(self, tmp_path):
+        from Caching.curve_store import CurveStore
+        from tests.test_supabase_curve_sync import _make_test_parquet_bytes
+
+        store = CurveStore(base_dir=tmp_path)
+        target_date = datetime.date(2025, 1, 15)
+        target_ts = datetime.datetime(2025, 1, 15, 21, 0, tzinfo=datetime.timezone.utc)
+
+        def _prefetch(curve_name, start, end):
+            assert curve_name == "USD-SOFR-1D"
+            assert start == target_date
+            assert end == target_date
+            part_dir = tmp_path / "raw" / "asset=USD-SOFR-1D" / f"date={target_date.isoformat()}"
+            part_dir.mkdir(parents=True, exist_ok=True)
+            (part_dir / "prefetched.parquet").write_bytes(_make_test_parquet_bytes())
+            return [target_date]
+
+        mock_sync = MagicMock()
+        mock_sync.prefetch_range.side_effect = _prefetch
+        with patch("Caching.curve_store._get_curve_sync", return_value=mock_sync):
+            df = store.read_raw_nodes(
+                "USD-SOFR-1D",
+                start=target_date,
+                end=target_date,
+                timestamps_utc=[target_ts],
+            )
+
+        assert len(df) == 1
+        mock_sync.prefetch_range.assert_called_once_with("USD-SOFR-1D", target_date, target_date)
+
+
 class TestAnalyticsL2:
     def test_write_analytics_day_calls_push_in_background(self, tmp_path):
         from Caching.curve_store import CurveStore

@@ -39,6 +39,7 @@ requests==2.32.4
 selenium==4.36.0
 ujson==5.10.0
 zstandard==0.25.0
+lxml==6.0.2
 
 # Visualization / research
 matplotlib==3.10.5

@@ -543,11 +543,34 @@ class CurveStore:
         For single-day reads, prefer read_raw_day() which bypasses DuckDB
         overhead (~5ms vs ~200ms).
         """
+        requested_timestamps_utc = _normalize_timestamp_utc_values(timestamps_utc)
+        start_date = start.date() if isinstance(start, datetime.datetime) else start
+        end_date = end.date() if isinstance(end, datetime.datetime) else end
+        if requested_timestamps_utc:
+            requested_dates = _trading_dates_for_timestamps_utc(requested_timestamps_utc)
+            if requested_dates:
+                if start_date is None:
+                    start_date = requested_dates[0]
+                if end_date is None:
+                    end_date = requested_dates[-1]
+
         asset_dir = self._raw_dir / f"asset={_sanitize(curve_name)}"
         if not asset_dir.exists():
-            return pd.DataFrame()
+            sync = _get_curve_sync(self._base_dir)
+            if sync is not None and start_date is not None and end_date is not None:
+                try:
+                    sync.prefetch_range(curve_name, start_date, end_date)
+                except Exception:
+                    logger.debug(
+                        "Raw CurveStore prefetch failed for %s %s->%s",
+                        curve_name,
+                        start_date,
+                        end_date,
+                        exc_info=True,
+                    )
+            if not asset_dir.exists():
+                return pd.DataFrame()
 
-        requested_timestamps_utc = _normalize_timestamp_utc_values(timestamps_utc)
         if requested_timestamps_utc:
             trading_dates = _trading_dates_for_timestamps_utc(requested_timestamps_utc)
             if len(trading_dates) == 1 and session_minute_min is None and session_minute_max is None:
@@ -601,7 +624,15 @@ class CurveStore:
         try:
             df = duckdb.sql(query).df()
         except (duckdb.IOException, duckdb.CatalogException):
-            return pd.DataFrame()
+            sync = _get_curve_sync(self._base_dir)
+            if sync is not None and start_date is not None and end_date is not None:
+                try:
+                    sync.prefetch_range(curve_name, start_date, end_date)
+                    df = duckdb.sql(query).df()
+                except (duckdb.IOException, duckdb.CatalogException):
+                    return pd.DataFrame()
+            else:
+                return pd.DataFrame()
 
         if "date" in df.columns:
             df.drop(columns=["date"], inplace=True)

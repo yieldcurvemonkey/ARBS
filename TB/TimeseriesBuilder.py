@@ -135,6 +135,30 @@ def _supports_irs_curve_store_analytics_fast_path(mdp: Optional[MarketDataProvid
     return _is_barchart_stirf_rl_source(mdp)
 
 
+def _supports_irs_curve_store_session_minute_filter(mdp: Optional[MarketDataProvider]) -> bool:
+    if mdp is None:
+        return False
+    fn = getattr(mdp, "_supports_curve_store_session_minute_filter", None)
+    if callable(fn):
+        try:
+            return bool(fn())
+        except Exception:
+            return False
+    return _is_barchart_stirf_rl_source(mdp)
+
+
+def _matches_irs_curve_store_on_trading_date(mdp: Optional[MarketDataProvider]) -> bool:
+    if mdp is None:
+        return False
+    fn = getattr(mdp, "_curve_store_match_on_trading_date", None)
+    if callable(fn):
+        try:
+            return bool(fn())
+        except Exception:
+            return False
+    return False
+
+
 def _is_cme_rates_session_timestamp(ref_point: DateLike) -> bool:
     if not isinstance(ref_point, datetime.datetime):
         return True
@@ -179,6 +203,18 @@ def _curve_store_session_minute(timestamp: datetime.datetime) -> int:
     ts_chi = timestamp.astimezone(pytz.timezone("America/Chicago"))
     session_open = ts_chi.replace(hour=6, minute=0, second=0, microsecond=0)
     return int((ts_chi - session_open).total_seconds() // 60)
+
+
+def _normalize_trading_date(value: Any) -> Optional[datetime.date]:
+    if value is None:
+        return None
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    return None
 
 
 @dataclass(frozen=True)
@@ -776,6 +812,7 @@ class TimeseriesBuilder:
     def _read_irs_curve_store_analytics_rows(
         self,
         *,
+        mdp: Optional[Any],
         store: Any,
         resolved_curve_name: str,
         requested_curve_name: str,
@@ -795,15 +832,17 @@ class TimeseriesBuilder:
         start_bound = min(ref_keys).date()
         end_bound = max(ref_keys).date()
         analytics_tenors = sorted({tenor for _idx, _q, components in eligible for _weight, tenor in components})
+        use_trading_date_match = _matches_irs_curve_store_on_trading_date(mdp)
         try:
-            analytics_df = store.read_analytics(
-                resolved_curve_name,
-                start=start_bound,
-                end=end_bound,
-                tenors=analytics_tenors,
-                metrics=["par_rate", "rate"],
-                timestamps_utc=ref_keys,
-            )
+            analytics_kwargs = {
+                "start": start_bound,
+                "end": end_bound,
+                "tenors": analytics_tenors,
+                "metrics": ["par_rate", "rate"],
+            }
+            if not use_trading_date_match:
+                analytics_kwargs["timestamps_utc"] = ref_keys
+            analytics_df = store.read_analytics(resolved_curve_name, **analytics_kwargs)
         except TypeError:
             analytics_df = store.read_analytics(
                 resolved_curve_name,
@@ -815,16 +854,23 @@ class TimeseriesBuilder:
         if analytics_df.empty or "timestamp_utc" not in analytics_df.columns:
             return [], set()
 
-        rows_by_key: Dict[datetime.datetime, Any] = {}
-        for _, row in analytics_df.iterrows():
-            ts_key = _timestamp_utc_key(row.get("timestamp_utc"))
-            if ts_key is not None:
-                rows_by_key[ts_key] = row
+        rows_by_key: Dict[Any, Any] = {}
+        if use_trading_date_match and "trading_date" in analytics_df.columns:
+            for _, row in analytics_df.iterrows():
+                trading_date = _normalize_trading_date(row.get("trading_date"))
+                if trading_date is not None:
+                    rows_by_key[trading_date] = row
+        else:
+            for _, row in analytics_df.iterrows():
+                ts_key = _timestamp_utc_key(row.get("timestamp_utc"))
+                if ts_key is not None:
+                    rows_by_key[ts_key] = row
 
         rows: List[Tuple[DateLike, str, float]] = []
         covered: set[Tuple[DateLike, int]] = set()
         for ref_point, ts_key in requested_key_by_ref.items():
-            row = rows_by_key.get(ts_key)
+            lookup_key: Any = _curve_store_trading_date(ts_key) if use_trading_date_match else ts_key
+            row = rows_by_key.get(lookup_key)
             if row is None:
                 continue
             for idx, q, components in eligible:
@@ -910,6 +956,7 @@ class TimeseriesBuilder:
     def _read_irs_curve_store_raw_df(
         self,
         *,
+        mdp: Optional[Any],
         store: Any,
         resolved_curve_name: str,
         requested_keys: List[datetime.datetime],
@@ -919,6 +966,7 @@ class TimeseriesBuilder:
 
         trading_dates = sorted({_curve_store_trading_date(ts_key) for ts_key in requested_keys})
         session_minutes = sorted({_curve_store_session_minute(ts_key) for ts_key in requested_keys})
+        use_session_filter = _supports_irs_curve_store_session_minute_filter(mdp)
 
         raw_df = pd.DataFrame()
         if hasattr(store, "read_raw_nodes") and trading_dates:
@@ -926,9 +974,10 @@ class TimeseriesBuilder:
                 raw_kwargs = {
                     "start": trading_dates[0],
                     "end": trading_dates[-1],
-                    "timestamps_utc": requested_keys,
                 }
-                if len(session_minutes) <= 3:
+                if not _matches_irs_curve_store_on_trading_date(mdp):
+                    raw_kwargs["timestamps_utc"] = requested_keys
+                if use_session_filter and len(session_minutes) <= 3:
                     raw_kwargs["session_minute_min"] = session_minutes[0]
                     raw_kwargs["session_minute_max"] = session_minutes[-1]
                 raw_df = store.read_raw_nodes(
@@ -975,6 +1024,7 @@ class TimeseriesBuilder:
             return {}
 
         raw_df = self._read_irs_curve_store_raw_df(
+            mdp=mdp,
             store=store,
             resolved_curve_name=resolved_curve_name,
             requested_keys=list(requested_key_by_ref.values()),
@@ -982,9 +1032,17 @@ class TimeseriesBuilder:
         if raw_df.empty or "timestamp_utc" not in raw_df.columns:
             return {}
 
-        requested_keys = set(requested_key_by_ref.values())
-        ts_keys = raw_df["timestamp_utc"].map(_timestamp_utc_key)
-        filtered_df = raw_df.loc[ts_keys.isin(requested_keys)].copy()
+        if _matches_irs_curve_store_on_trading_date(mdp) and "trading_date" in raw_df.columns:
+            requested_trading_dates = {
+                _curve_store_trading_date(ts_key)
+                for ts_key in requested_key_by_ref.values()
+            }
+            trading_dates = raw_df["trading_date"].map(_normalize_trading_date)
+            filtered_df = raw_df.loc[trading_dates.isin(requested_trading_dates)].copy()
+        else:
+            requested_keys = set(requested_key_by_ref.values())
+            ts_keys = raw_df["timestamp_utc"].map(_timestamp_utc_key)
+            filtered_df = raw_df.loc[ts_keys.isin(requested_keys)].copy()
         if filtered_df.empty:
             return {}
 
@@ -1003,17 +1061,34 @@ class TimeseriesBuilder:
             if key is not None
         }
 
-        wrapped_by_key: Dict[datetime.datetime, Any] = {}
+        wrapped_by_key: Dict[Any, Any] = {}
         fixings_cache: Dict[tuple, pd.Series] = {}
+        use_trading_date_match = _matches_irs_curve_store_on_trading_date(mdp)
+        trading_date_by_ts_key = {}
+        if use_trading_date_match and "trading_date" in filtered_df.columns:
+            for row in filtered_df.itertuples(index=False):
+                ts_key = _timestamp_utc_key(getattr(row, "timestamp_utc", None))
+                trading_date = _normalize_trading_date(getattr(row, "trading_date", None))
+                if ts_key is not None and trading_date is not None:
+                    trading_date_by_ts_key[ts_key] = trading_date
         for ref_point in reference_points:
             ts_key = requested_key_by_ref.get(ref_point)
             if ts_key is None:
                 continue
-            if ts_key not in wrapped_by_key:
-                rl_curve_handle = curves_by_key.get(ts_key)
+            cache_key: Any = _curve_store_trading_date(ts_key) if use_trading_date_match else ts_key
+            if cache_key not in wrapped_by_key:
+                rl_curve_handle = None
+                if use_trading_date_match:
+                    requested_trading_date = _curve_store_trading_date(ts_key)
+                    for candidate_ts_key, candidate_curve in curves_by_key.items():
+                        if trading_date_by_ts_key.get(candidate_ts_key) == requested_trading_date:
+                            rl_curve_handle = candidate_curve
+                            break
+                else:
+                    rl_curve_handle = curves_by_key.get(ts_key)
                 if rl_curve_handle is None:
                     continue
-                wrapped_by_key[ts_key] = mdp._wrap_curve_store_curve(
+                wrapped_by_key[cache_key] = mdp._wrap_curve_store_curve(
                     requested_curve_name=requested_curve_name,
                     resolved_curve_name=resolved_curve_name,
                     request_timestamp=ref_point,
@@ -1022,9 +1097,9 @@ class TimeseriesBuilder:
                     fixings_cache=fixings_cache,
                 )
         return {
-            ref_point: wrapped_by_key[ts_key]
+            ref_point: wrapped_by_key[(_curve_store_trading_date(ts_key) if use_trading_date_match else ts_key)]
             for ref_point, ts_key in requested_key_by_ref.items()
-            if ts_key in wrapped_by_key
+            if (_curve_store_trading_date(ts_key) if use_trading_date_match else ts_key) in wrapped_by_key
         }
 
     def _fallback_timeseries_for_missing_points(
@@ -1170,6 +1245,7 @@ class TimeseriesBuilder:
                     desc=f"READING {requested_curve_name} curve analytics...",
                     total=len(reference_points),
                     fn=lambda: self._read_irs_curve_store_analytics_rows(
+                        mdp=mdp,
                         store=store,
                         resolved_curve_name=resolved_curve_name,
                         requested_curve_name=requested_curve_name,

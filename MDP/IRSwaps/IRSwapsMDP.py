@@ -87,11 +87,23 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         }
 
     def _supports_curve_store_raw_curve_fast_path(self) -> bool:
-        return self._curve_store_source_family() == "barchart_stirf"
+        return self._curve_store_source_family() in {
+            "barchart_stirf",
+            "eris_eod_rl_basic",
+        }
 
     def _supports_curve_store_analytics_fast_path(self) -> bool:
         return self._curve_store_source_family() in {
             "barchart_stirf",
+            "eris_eod_rl_basic",
+            "eris_eod_rl_basic_nojumps",
+        }
+
+    def _supports_curve_store_session_minute_filter(self) -> bool:
+        return self._curve_store_source_family() == "barchart_stirf"
+
+    def _curve_store_match_on_trading_date(self) -> bool:
+        return self._curve_store_source_family() in {
             "eris_eod_rl_basic",
             "eris_eod_rl_basic_nojumps",
         }
@@ -372,6 +384,122 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 fixings_cache=fixings_cache,
             )
         raise NotImplementedError(f"CurveStore wrapper not supported for source '{self.source}'")
+
+    @staticmethod
+    def _curve_store_timestamp_key(
+        value: Union[datetime.datetime, pd.Timestamp, Any],
+    ) -> Optional[datetime.datetime]:
+        if value is None:
+            return None
+        if hasattr(value, "to_pydatetime"):
+            value = value.to_pydatetime()
+        if not isinstance(value, datetime.datetime):
+            return None
+        if value.tzinfo is None:
+            value = pytz.UTC.localize(value)
+        else:
+            value = value.astimezone(pytz.UTC)
+        return value.replace(microsecond=0)
+
+    def _load_eris_curve_store_history(
+        self,
+        *,
+        requested_curve_name: str,
+        request_dates: Iterable[datetime.date],
+        fixings_cache: Optional[Dict[datetime.date, pd.Series]] = None,
+        max_workers: int = 4,
+    ) -> Dict[datetime.date, "_IRSwapGenericCurve"]:
+        unique_dates = sorted({d for d in request_dates if isinstance(d, datetime.date)})
+        if not unique_dates:
+            return {}
+
+        requested_timestamps = [
+            ts
+            for ts in (self._to_eris_eod_timestamp(ref_date) for ref_date in unique_dates)
+            if ts != "live"
+        ]
+        if not requested_timestamps:
+            return {}
+
+        store = self._get_curve_store()
+        raw_df = pd.DataFrame()
+        if hasattr(store, "read_raw_nodes"):
+            try:
+                raw_df = store.read_raw_nodes(
+                    requested_curve_name,
+                    start=unique_dates[0],
+                    end=unique_dates[-1],
+                )
+            except TypeError:
+                raw_df = store.read_raw_nodes(
+                    requested_curve_name,
+                    start=unique_dates[0],
+                    end=unique_dates[-1],
+                )
+
+        if raw_df is None or raw_df.empty or "timestamp_utc" not in raw_df.columns:
+            return {}
+
+        requested_dates_set = set(unique_dates)
+        if "trading_date" in raw_df.columns:
+            trading_dates = raw_df["trading_date"].map(
+                lambda value: value.date() if isinstance(value, datetime.datetime) else value
+            )
+            filtered_df = raw_df.loc[trading_dates.isin(requested_dates_set)].copy()
+        else:
+            requested_keys = {
+                key
+                for key in (self._curve_store_timestamp_key(ts) for ts in requested_timestamps)
+                if key is not None
+            }
+            ts_keys = raw_df["timestamp_utc"].map(self._curve_store_timestamp_key)
+            filtered_df = raw_df.loc[ts_keys.isin(requested_keys)].copy()
+        if filtered_df.empty:
+            return {}
+
+        curves_by_ts = store.reconstruct_curves_batch(
+            filtered_df,
+            cfg=None,
+            max_workers=max(1, int(max_workers or 1)),
+        )
+        curves_by_key = {
+            key: curve
+            for key, curve in (
+                (self._curve_store_timestamp_key(ts_val), curve_val)
+                for ts_val, curve_val in curves_by_ts.items()
+            )
+            if key is not None
+        }
+        trading_date_by_ts_key = {}
+        if "trading_date" in filtered_df.columns:
+            for row in filtered_df.itertuples(index=False):
+                ts_key = self._curve_store_timestamp_key(getattr(row, "timestamp_utc", None))
+                trading_date = getattr(row, "trading_date", None)
+                if isinstance(trading_date, datetime.datetime):
+                    trading_date = trading_date.date()
+                if ts_key is not None and isinstance(trading_date, datetime.date):
+                    trading_date_by_ts_key[ts_key] = trading_date
+
+        out: Dict[datetime.date, _IRSwapGenericCurve] = {}
+        for ref_date in unique_dates:
+            rl_curve_handle = None
+            if trading_date_by_ts_key:
+                for ts_key, curve in curves_by_key.items():
+                    if trading_date_by_ts_key.get(ts_key) == ref_date:
+                        rl_curve_handle = curve
+                        break
+            else:
+                requested_ts_key = self._curve_store_timestamp_key(self._to_eris_eod_timestamp(ref_date))
+                rl_curve_handle = curves_by_key.get(requested_ts_key)
+            if rl_curve_handle is None:
+                continue
+            out[ref_date] = self._build_eris_eod_rl_curve(
+                requested_curve_name=requested_curve_name,
+                request_timestamp=ref_date,
+                rl_curve_handle=rl_curve_handle,
+                fixings_cache=fixings_cache,
+            )
+        return out
 
     @staticmethod
     def _should_suppress_ratelibs_solver_output(line: str) -> bool:
@@ -679,13 +807,23 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             assert curve_name in RATESLIB_CURVE_DEFINITIONS, f"Error: Curve definition for '{curve_name}' not found."
 
             curve_id = f"{self.source.upper()}-{curve_name}-{timestamp}"
+            force_refresh = bool(kwargs.get("force_refresh", kwargs.get("ignore_cache", False)))
 
             if timestamp == "live":
                 eff = ErisFuturesFetcher(**self.config)
                 rl_curve_handle, ts = eff.fetch_intraday_discount_curve(curve_id=curve_id, date=None, show_tqdm=True, return_intraday_timestamp=True, **kwargs)
             else:
+                if not force_refresh and self._supports_curve_store_raw_curve_fast_path():
+                    curve_store_hit = self._load_eris_curve_store_history(
+                        requested_curve_name=curve_name,
+                        request_dates=[timestamp],
+                        max_workers=1,
+                    ).get(timestamp)
+                    if curve_store_hit is not None:
+                        curve_store_hit._meta_data["id"] = curve_id
+                        return curve_store_hit
                 _, rl_json, ts = self._rl_curve_cache.get_eris_eod_live_rl_basic(
-                    curve_id=curve_id, as_of=timestamp, force_refresh=kwargs.get("force_refresh", False), fetcher_kwargs={"show_tqdm": False}
+                    curve_id=curve_id, as_of=timestamp, force_refresh=force_refresh, fetcher_kwargs={"show_tqdm": False}
                 )
                 rl_curve_handle = from_json(rl_json)
 
@@ -1358,56 +1496,34 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 as_of_dates=bdates,
             )
 
-            if not ignore_cache and past_dates and self._supports_curve_store_raw_curve_fast_path():
+            if not ignore_cache and (past_dates or today_dates) and self._supports_curve_store_raw_curve_fast_path():
                 try:
-                    import pandas as _pd
+                    raw_candidate_dates = list(past_dates) + list(today_dates)
+                    out.update(
+                        self._load_eris_curve_store_history(
+                            requested_curve_name=curve_name,
+                            request_dates=raw_candidate_dates,
+                            fixings_cache=fixings_cache,
+                            max_workers=max(1, int(n_jobs or 1)),
+                        )
+                    )
 
-                    store = self._get_curve_store()
-                    day_dfs = []
-                    for d in past_dates:
-                        day_df = store.read_raw_day(curve_name, d)
-                        if not day_df.empty:
-                            day_dfs.append(day_df)
-
-                    if len(day_dfs) >= len(past_dates):
-                        parquet_df = _pd.concat(day_dfs, ignore_index=True)
-                        curves_by_ts = store.reconstruct_curves_batch(parquet_df, cfg=None)
-
-                        parquet_by_date = {}
-                        for ts_key, rl_curve in curves_by_ts.items():
-                            if hasattr(ts_key, "date"):
-                                td = ts_key.date() if callable(ts_key.date) else ts_key.date
-                            else:
-                                td = _to_date(ts_key)
-                            parquet_by_date[td] = rl_curve
-
-                        for ref_date in past_dates:
-                            rl_curve = parquet_by_date.get(ref_date)
-                            if rl_curve is None:
-                                continue
+                    if len([d for d in raw_candidate_dates if d in out]) >= len(raw_candidate_dates):
+                        for ref_date in [d for d in today_dates if d not in out]:
+                            _, rl_json_live, ts_live = self._rl_curve_cache.get_eris_eod_live_rl_basic(
+                                curve_id=f"{self.source}-{curve_name}-live",
+                                as_of="live",
+                                force_refresh=True if ignore_cache else False,
+                                fetcher_kwargs={"show_tqdm": True},
+                            )
                             out[ref_date] = self._build_eris_eod_rl_curve(
                                 requested_curve_name=curve_name,
                                 request_timestamp=ref_date,
-                                rl_curve_handle=rl_curve,
+                                rl_curve_handle=from_json(rl_json_live),
                                 fixings_cache=fixings_cache,
                             )
-
-                        if len([d for d in past_dates if d in out]) >= len(past_dates):
-                            for ref_date in today_dates:
-                                _, rl_json_live, ts_live = self._rl_curve_cache.get_eris_eod_live_rl_basic(
-                                    curve_id=f"{self.source}-{curve_name}-live",
-                                    as_of="live",
-                                    force_refresh=True if ignore_cache else False,
-                                    fetcher_kwargs={"show_tqdm": True},
-                                )
-                                out[ref_date] = self._build_eris_eod_rl_curve(
-                                    requested_curve_name=curve_name,
-                                    request_timestamp=ref_date,
-                                    rl_curve_handle=from_json(rl_json_live),
-                                    fixings_cache=fixings_cache,
-                                )
-                                out[ref_date]._meta_data["timestamp"] = ts_live
-                            return out
+                            out[ref_date]._meta_data["timestamp"] = ts_live
+                        return out
                 except Exception as _tier0_exc:
                     import logging as _logging
 
@@ -1416,15 +1532,17 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                     )
 
             built_json: Dict[datetime.date, str] = {}
-            if past_dates:
+            remaining_past_dates = [d for d in past_dates if d not in out]
+            if remaining_past_dates:
                 built_json = self._rl_curve_cache.bulk_get_eris_eod_live_rl_basic(
                     base_curve_id=f"{self.source}-{curve_name}-bulk",
-                    bdates=past_dates,
+                    bdates=remaining_past_dates,
                     force_refresh=ignore_cache,
                     fetcher_kwargs={"show_tqdm": True},
                 )
 
-            for ref_date in today_dates:
+            remaining_today_dates = [d for d in today_dates if d not in out]
+            for ref_date in remaining_today_dates:
                 _, rl_json_live, ts_live = self._rl_curve_cache.get_eris_eod_live_rl_basic(
                     curve_id=f"{self.source}-{curve_name}-live",
                     as_of="live",

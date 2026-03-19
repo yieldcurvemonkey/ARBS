@@ -163,6 +163,7 @@ class _FakeIRSCurveStore:
         return pd.DataFrame(
             {
                 "timestamp_utc": rows,
+                "trading_date": [ts.date() for ts in rows],
             }
         )
 
@@ -180,6 +181,15 @@ class _FakeIRSCurveStore:
                         else ts.astimezone(chi).date()
                     ) == trading_date
                 ],
+                "trading_date": [trading_date for _ in range(sum(
+                    1
+                    for ts in self.timestamps
+                    if (
+                        (ts.astimezone(chi) + datetime.timedelta(days=1)).date()
+                        if ts.astimezone(chi).hour >= 17
+                        else ts.astimezone(chi).date()
+                    ) == trading_date
+                ))],
             }
         )
 
@@ -200,6 +210,9 @@ class _FakeIRSCurveStoreMDP:
         self.wrap_calls: List[Tuple[str, str, Any]] = []
         self.bulk_calls = 0
 
+    def _is_barchart_source(self) -> bool:
+        return self.source.upper().startswith("BARCHART_STIRF")
+
     def _get_curve_store(self):
         return self._store
 
@@ -207,13 +220,13 @@ class _FakeIRSCurveStoreMDP:
         return True
 
     def _supports_curve_store_raw_curve_fast_path(self):
-        return not self.source.upper().startswith("ERIS_EOD_LIVE-RL_BASIC")
+        return not self.source.upper().startswith("ERIS_EOD_LIVE-RL_BASIC-NOJUMPS")
 
     def _supports_curve_store_analytics_fast_path(self):
         return True
 
     def _get_curve_store_builder(self):
-        return self._get_barchart_stirf_curve_builder() if self._supports_curve_store_raw_curve_fast_path() else None
+        return self._get_barchart_stirf_curve_builder() if self._is_barchart_source() else None
 
     def _get_barchart_stirf_curve_builder(self):
         return SimpleNamespace(
@@ -228,7 +241,7 @@ class _FakeIRSCurveStoreMDP:
         return "USD-SOFR-Q12"
 
     def _resolve_curve_store_curve_name(self, requested_curve_name: str, kwargs: Dict[str, Any], builder: Any = None) -> str:
-        if self._supports_curve_store_raw_curve_fast_path():
+        if self._is_barchart_source():
             return self._resolve_barchart_stirf_curve_name(requested_curve_name, kwargs, builder)
         self.resolve_calls.append((requested_curve_name, dict(kwargs)))
         return requested_curve_name
@@ -241,7 +254,7 @@ class _FakeIRSCurveStoreMDP:
         return datetime.datetime.combine(timestamp, datetime.time(17, 0), tzinfo=datetime.timezone.utc)
 
     def _to_curve_store_timestamp(self, timestamp: Any) -> datetime.datetime:
-        if self._supports_curve_store_raw_curve_fast_path():
+        if self._is_barchart_source():
             return self._to_barchart_stirf_timestamp(timestamp)
         if isinstance(timestamp, datetime.datetime):
             dt = timestamp.astimezone(datetime.timezone.utc) if timestamp.tzinfo else timestamp.replace(tzinfo=datetime.timezone.utc)
@@ -1064,6 +1077,40 @@ def test_timeseries_builder_uses_eris_curve_analytics_fast_path_for_curve_spread
     assert list(out[q.col_name()]) == pytest.approx([0.45, 0.45])
     assert router.call_count == 0
     assert store.raw_reads == []
+    assert mdp.bulk_calls == 0
+
+
+def test_timeseries_builder_uses_eris_curve_store_raw_fast_path_for_forward_fly_queries(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    ts1 = datetime.datetime(2026, 1, 2, 20, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2026, 1, 5, 20, 0, tzinfo=datetime.timezone.utc)
+    store = _FakeIRSCurveStore([ts1, ts2])
+    mdp = _FakeIRSCurveStoreMDP(store, source="ERIS_EOD_LIVE-RL_BASIC")
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="1Y5Y/1Y10Y/1Y30Y", value=IRSwapValue.RATE)
+
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(
+        start=datetime.date(2026, 1, 2),
+        end=datetime.date(2026, 1, 5),
+        queries=[q],
+        n_jobs=2,
+    )
+
+    assert list(out.index) == [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)]
+    assert list(out[q.col_name()]) == [0.05, 0.05]
+    assert router.call_count == 0
+    assert len(store.raw_reads) == 1
+    assert store.raw_reads[0]["session_minute_min"] is None
+    assert store.raw_reads[0]["session_minute_max"] is None
+    assert store.raw_day_reads == []
     assert mdp.bulk_calls == 0
 
 
