@@ -204,6 +204,65 @@ class ErisFuturesFetcher(LayeredCacheMixin, BaseFetcher):
             for key, payload in staged:
                 mapping[key] = payload
 
+    def _write_curve_store_products(
+        self,
+        *,
+        curve_id: str,
+        discount_curve_df: pd.DataFrame,
+        curve: rl.Curve,
+        trading_date: datetime.date,
+        intraday_ts: datetime.datetime,
+        no_jumps_just_interp: bool,
+    ) -> None:
+        try:
+            from Caching.curve_analytics import build_analytics_frame, compute_analytics_row
+            from Caching.curve_store import CurveSnapshot, CurveStore
+            from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            store = CurveStore.default()
+            curve_name = "USD-SOFR-1D"
+            source_variant = "ERIS_RL_BASIC_NOJUMPS" if no_jumps_just_interp else "ERIS_RL_BASIC"
+            snap = CurveSnapshot.from_eris_df(
+                discount_curve_df,
+                trading_date=trading_date,
+                curve_name=curve_name,
+                source_variant=source_variant,
+                timestamp_utc=intraday_ts.astimezone(pytz.UTC),
+            )
+            store.write_day(curve_name, trading_date, [snap], overwrite=True)
+
+            fixings = _fetch_fixings(
+                as_of_date=trading_date,
+                curve_name=curve_name,
+                force_refresh=self._force_refresh,
+            ).sort_index()
+            fixings = fixings[fixings.index.date < trading_date] * 100.0
+            wrapped_curve = RLIRSwapCurve(
+                rl_curve_id=curve_name,
+                rl_curve_handle=curve,
+                fixings=fixings,
+                meta_data={
+                    "timestamp": intraday_ts,
+                    "id": f"{curve_id}-{trading_date.isoformat()}",
+                    "curve_name": curve_name,
+                    "requested_curve_name": curve_name,
+                    "reference_curve_name": curve_name,
+                },
+            )
+            analytics_df = build_analytics_frame(
+                [
+                    compute_analytics_row(
+                        wrapped_curve,
+                        timestamp_utc=intraday_ts.astimezone(pytz.UTC),
+                        trading_date=trading_date,
+                    )
+                ]
+            )
+            store.write_analytics_day(curve_name, trading_date, analytics_df, overwrite=True)
+        except Exception:
+            pass
+
     async def _fetch_eris_ftp_files_helper(
         self,
         client: httpx.AsyncClient,
@@ -215,6 +274,7 @@ class ErisFuturesFetcher(LayeredCacheMixin, BaseFetcher):
         def diff_month(d1, d2):
             return (d1.year - d2.year) * 12 + d1.month - d2.month
 
+        other_eris_ftp_formatted_url = None
         if "Intraday" in workbook_type or date == datetime.date.today():
             eris_ftp_formatted_url = "https://files.erisfutures.com/ftp/Eris_Intraday_DiscountFactors_SOFR.csv"
             file_name = "Eris_Intraday_DiscountFactors_SOFR.csv"
@@ -223,8 +283,10 @@ class ErisFuturesFetcher(LayeredCacheMixin, BaseFetcher):
             file_name = f"Eris_{date.strftime('%Y%m%d')}_{workbook_type}.csv"
             if diff_month(datetime.date.today(), date) <= 3:
                 eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{file_name}"
+                other_eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{archives_path}/{file_name}"
             else:
                 eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{archives_path}/{file_name}"
+                other_eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{file_name}"
 
         retries = 0
         try:
@@ -247,8 +309,11 @@ class ErisFuturesFetcher(LayeredCacheMixin, BaseFetcher):
 
                 except httpx.HTTPStatusError:
                     self._logger.error(f"ERIS FTP - Bad Status for {workbook_type}-{date}: {response.status_code}")
-                    if response.status_code == 404:
+                    if response.status_code == 404 and retries >= 1:
                         return None, None
+                    if response.status_code == 404:
+                        eris_ftp_formatted_url = other_eris_ftp_formatted_url
+
                     retries += 1
                     wait_time = backoff_factor * (2 ** (retries - 1))
                     self._logger.debug(f"ERIS FTP - Throttled. Waiting for {wait_time} seconds before retrying...")
@@ -554,22 +619,14 @@ class ErisFuturesFetcher(LayeredCacheMixin, BaseFetcher):
                     curve = _df_to_curve(df, tday, intraday_ts, curve_id_prefix=curve_id)
                     curves[tday] = curve
 
-                    try:
-                        from Caching.curve_store import CurveSnapshot, CurveStore
-
-                        snap = CurveSnapshot.from_eris_df(
-                            df,
-                            trading_date=tday,
-                            curve_name="USD-SOFR-1D",
-                            source_variant=(
-                                "ERIS_RL_BASIC_NOJUMPS"
-                                if no_jumps_just_interp
-                                else "ERIS_RL_BASIC"
-                            ),
-                        )
-                        CurveStore.default().write_day("USD-SOFR-1D", tday, [snap])
-                    except Exception:
-                        pass
+                    self._write_curve_store_products(
+                        curve_id=curve_id,
+                        discount_curve_df=df,
+                        curve=curve,
+                        trading_date=tday,
+                        intraday_ts=intraday_ts,
+                        no_jumps_just_interp=bool(no_jumps_just_interp),
+                    )
 
                     if staged_payload:
                         d, wbt, fname, raw = staged_payload
@@ -627,6 +684,16 @@ class ErisFuturesFetcher(LayeredCacheMixin, BaseFetcher):
             else:
                 intraday_ts = pytz.timezone("America/New_York").localize(datetime.datetime(date.year, date.month, date.day, 15, 0))
                 curve = _df_to_curve(discount_curve_df, the_date, intraday_ts, curve_id_prefix=curve_id)
+
+            if date is not None:
+                self._write_curve_store_products(
+                    curve_id=curve_id,
+                    discount_curve_df=discount_curve_df,
+                    curve=curve,
+                    trading_date=the_date,
+                    intraday_ts=intraday_ts,
+                    no_jumps_just_interp=bool(no_jumps_just_interp),
+                )
 
             if return_intraday_timestamp:
                 return curve, intraday_ts

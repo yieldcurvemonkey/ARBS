@@ -180,6 +180,10 @@ class ComputedTimeseriesStore:
             skip_current_eod=skip_current_eod,
             fallback_column_name=fallback_column_name,
         )
+        local_present_dates = {
+            _normalize_eod_key(ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts)
+            for ts in (df.index if isinstance(df.index, pd.DatetimeIndex) else [])
+        }
 
         if sync is None:
             return rows
@@ -205,8 +209,12 @@ class ComputedTimeseriesStore:
         if not missing_dates:
             return rows
 
+        candidate_pull_dates = [trading_date for trading_date in missing_dates if trading_date in local_present_dates]
+        if not candidate_pull_dates:
+            return rows
+
         pulled_any = False
-        for trading_date in missing_dates:
+        for trading_date in candidate_pull_dates:
             try:
                 pulled_any = sync.pull_day(symbol, trading_date) or pulled_any
             except Exception:

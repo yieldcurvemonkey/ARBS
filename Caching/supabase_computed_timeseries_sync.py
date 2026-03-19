@@ -143,6 +143,13 @@ class SupabaseComputedTimeseriesSync:
         part_dir.mkdir(parents=True, exist_ok=True)
         dest = part_dir / f"{row.sha256}.parquet"
         _atomic_write_bytes(dest, row.payload)
+        for old_path in part_dir.glob("*.parquet"):
+            if old_path == dest:
+                continue
+            try:
+                old_path.unlink()
+            except OSError:
+                pass
         logger.info("Pulled computed TS %s/%s from Supabase -> %s", symbol, trading_date, dest)
         return True
 
@@ -192,6 +199,13 @@ class SupabaseComputedTimeseriesSync:
             part_dir.mkdir(parents=True, exist_ok=True)
             dest = part_dir / f"{row.sha256}.parquet"
             _atomic_write_bytes(dest, row.payload)
+            for old_path in part_dir.glob("*.parquet"):
+                if old_path == dest:
+                    continue
+                try:
+                    old_path.unlink()
+                except OSError:
+                    pass
             fetched.append(row.trading_date)
 
         logger.info(

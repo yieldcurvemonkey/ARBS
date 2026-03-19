@@ -83,6 +83,38 @@ class TestPushDay:
 
         assert result is False
 
+    def test_push_analytics_day_reads_file_and_upserts(self, tmp_path):
+        from Caching.supabase_curve_sync import SupabaseCurveSync
+
+        table = pa.table(
+            {
+                "timestamp_utc": pa.array(
+                    [datetime.datetime(2025, 1, 15, 21, 0, tzinfo=datetime.timezone.utc)],
+                    type=pa.timestamp("us", tz="UTC"),
+                ),
+                "trading_date": pa.array([datetime.date(2025, 1, 15)], type=pa.date32()),
+                "session_minute": pa.array([540], type=pa.int16()),
+                "par_rate_10Y": pa.array([4.25], type=pa.float64()),
+                "rate_10Y": pa.array([4.25], type=pa.float64()),
+            }
+        )
+        buf = io.BytesIO()
+        pq.write_table(table, buf, compression="zstd")
+        part_dir = tmp_path / "analytics" / "asset=USD-SOFR-1D" / "date=2025-01-15"
+        part_dir.mkdir(parents=True)
+        (part_dir / "analytics.parquet").write_bytes(buf.getvalue())
+
+        mock_engine = MagicMock()
+        mock_conn = MagicMock()
+        mock_engine.begin.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)
+
+        sync = SupabaseCurveSync(base_dir=tmp_path, engine=mock_engine)
+        result = sync.push_analytics_day("USD-SOFR-1D", datetime.date(2025, 1, 15))
+
+        assert result is True
+        mock_conn.execute.assert_called()
+
 
 class TestPullDay:
     """pull_day() fetches blob from Supabase and writes local Parquet."""
@@ -126,6 +158,42 @@ class TestPullDay:
         result = sync.pull_day("USD-SOFR-1D", datetime.date(2025, 1, 15))
 
         assert result is False
+
+    def test_pull_analytics_day_writes_local_file(self, tmp_path):
+        from Caching.supabase_curve_sync import SupabaseCurveSync
+
+        analytics_table = pa.table(
+            {
+                "timestamp_utc": pa.array(
+                    [datetime.datetime(2025, 1, 15, 21, 0, tzinfo=datetime.timezone.utc)],
+                    type=pa.timestamp("us", tz="UTC"),
+                ),
+                "trading_date": pa.array([datetime.date(2025, 1, 15)], type=pa.date32()),
+                "session_minute": pa.array([540], type=pa.int16()),
+                "par_rate_10Y": pa.array([4.25], type=pa.float64()),
+                "rate_10Y": pa.array([4.25], type=pa.float64()),
+            }
+        )
+        buf = io.BytesIO()
+        pq.write_table(analytics_table, buf, compression="zstd")
+
+        mock_engine = MagicMock()
+        mock_conn = MagicMock()
+        mock_engine.begin.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)
+        mock_row = MagicMock()
+        mock_row.payload = buf.getvalue()
+        mock_row.sha256 = "analyticshash"
+        mock_row.data_format = "parquet_zstd"
+        mock_conn.execute.return_value.fetchone.return_value = mock_row
+
+        sync = SupabaseCurveSync(base_dir=tmp_path, engine=mock_engine)
+        result = sync.pull_analytics_day("USD-SOFR-1D", datetime.date(2025, 1, 15))
+
+        assert result is True
+        part_dir = tmp_path / "analytics" / "asset=USD-SOFR-1D" / "date=2025-01-15"
+        assert part_dir.exists()
+        assert len(list(part_dir.glob("*.parquet"))) == 1
 
 
 class TestPrefetchRange:

@@ -171,6 +171,7 @@ class ErisFuturesFetcher(LayeredCacheMixin, BaseFetcher):
         def diff_month(d1, d2):
             return (d1.year - d2.year) * 12 + d1.month - d2.month
 
+        other_eris_ftp_formatted_url = None 
         if "Intraday" in workbook_type or date == datetime.date.today():
             eris_ftp_formatted_url = "https://files.erisfutures.com/ftp/Eris_Intraday_DiscountFactors_SOFR.csv"
             file_name = "Eris_Intraday_DiscountFactors_SOFR.csv"
@@ -179,8 +180,10 @@ class ErisFuturesFetcher(LayeredCacheMixin, BaseFetcher):
             file_name = f"Eris_{date.strftime('%Y%m%d')}_{workbook_type}.csv"
             if diff_month(datetime.date.today(), date) <= 3:
                 eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{file_name}"
+                other_eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{archives_path}/{file_name}"
             else:
                 eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{archives_path}/{file_name}"
+                other_eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{file_name}" 
 
         retries = 0
         try:
@@ -203,8 +206,11 @@ class ErisFuturesFetcher(LayeredCacheMixin, BaseFetcher):
 
                 except httpx.HTTPStatusError:
                     self._logger.error(f"ERIS FTP - Bad Status for {workbook_type}-{date}: {response.status_code}")
-                    if response.status_code == 404:
+                    if response.status_code == 404 and retries >= 1:
                         return None, None
+                    if response.status_code == 404:
+                        eris_ftp_formatted_url = other_eris_ftp_formatted_url
+                    
                     retries += 1
                     wait_time = backoff_factor * (2 ** (retries - 1))
                     self._logger.debug(f"ERIS FTP - Throttled. Waiting for {wait_time} seconds before retrying...")
@@ -217,7 +223,7 @@ class ErisFuturesFetcher(LayeredCacheMixin, BaseFetcher):
                     self._logger.debug(f"ERIS FTP - Throttled. Waiting for {wait_time} seconds before retrying...")
                     await asyncio.sleep(wait_time)
 
-            raise ValueError(f"ERIS FTP - Max retries exceeded for {workbook_type}-{date}")
+            raise ValueError(f"ERIS FTP - Max retries exceeded for {workbook_type}-{date}") 
 
         except Exception as e:
             print(e)

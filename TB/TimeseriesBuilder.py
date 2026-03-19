@@ -99,6 +99,42 @@ def _is_barchart_stirf_rl_source(mdp: Optional[MarketDataProvider]) -> bool:
     return source in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}
 
 
+def _supports_irs_curve_store_fast_path(mdp: Optional[MarketDataProvider]) -> bool:
+    if mdp is None:
+        return False
+    fn = getattr(mdp, "_supports_curve_store_fast_path", None)
+    if callable(fn):
+        try:
+            return bool(fn())
+        except Exception:
+            return False
+    return _is_barchart_stirf_rl_source(mdp)
+
+
+def _supports_irs_curve_store_raw_curve_fast_path(mdp: Optional[MarketDataProvider]) -> bool:
+    if mdp is None:
+        return False
+    fn = getattr(mdp, "_supports_curve_store_raw_curve_fast_path", None)
+    if callable(fn):
+        try:
+            return bool(fn())
+        except Exception:
+            return False
+    return _is_barchart_stirf_rl_source(mdp)
+
+
+def _supports_irs_curve_store_analytics_fast_path(mdp: Optional[MarketDataProvider]) -> bool:
+    if mdp is None:
+        return False
+    fn = getattr(mdp, "_supports_curve_store_analytics_fast_path", None)
+    if callable(fn):
+        try:
+            return bool(fn())
+        except Exception:
+            return False
+    return _is_barchart_stirf_rl_source(mdp)
+
+
 def _is_cme_rates_session_timestamp(ref_point: DateLike) -> bool:
     if not isinstance(ref_point, datetime.datetime):
         return True
@@ -176,6 +212,28 @@ def _safe_col_name(q: Any, default: str) -> str:
         return q.col_name()
     except Exception:
         return default
+
+
+def _analytics_rate_components(q: IRSwapQuery) -> Optional[list[tuple[float, str]]]:
+    if q.value != IRSwapValue.RATE:
+        return None
+
+    tenor_text = str(getattr(q, "tenor", "") or "").strip().upper().replace(" ", "")
+    if not tenor_text:
+        return None
+
+    tokens = [tok for tok in tenor_text.split("/") if tok]
+    tenor_re = re.compile(r"^\d+[DWMY]$")
+    if not tokens or any((not tenor_re.match(tok)) or ("X" in tok) for tok in tokens):
+        return None
+
+    if len(tokens) == 1 and q.structure == IRSwapStructure.OUTRIGHT:
+        return [(1.0, tokens[0])]
+    if len(tokens) == 2 and q.structure == IRSwapStructure.CURVE:
+        return [(-1.0, tokens[0]), (1.0, tokens[1])]
+    if len(tokens) == 3 and q.structure == IRSwapStructure.FLY:
+        return [(-1.0, tokens[0]), (2.0, tokens[1]), (-1.0, tokens[2])]
+    return None
 
 
 class _GenericTimeseriesTB(BaseTimeseriesTB):
@@ -481,24 +539,20 @@ class TimeseriesBuilder:
         if not queries or mdp is None or ignore_cache:
             return False
 
-        source = str(getattr(mdp, "source", "")).upper()
-        if source not in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}:
+        if not _supports_irs_curve_store_fast_path(mdp):
             return False
 
         required_attrs = (
             "_get_curve_store",
-            "_get_barchart_stirf_curve_builder",
-            "_resolve_barchart_stirf_curve_name",
-            "_to_barchart_stirf_timestamp",
-            "_build_barchart_stirf_rl_curve",
+            "_resolve_curve_store_curve_name",
+            "_to_curve_store_timestamp",
         )
         if not all(hasattr(mdp, attr) for attr in required_attrs):
             return False
 
-        ref_points = _filter_irs_reference_points_for_mdp(
-            _build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps),
-            mdp=mdp,
-        )
+        ref_points = _build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps)
+        if _is_barchart_stirf_rl_source(mdp):
+            ref_points = _filter_irs_reference_points_for_mdp(ref_points, mdp=mdp)
         if not ref_points:
             return False
 
@@ -728,14 +782,11 @@ class TimeseriesBuilder:
         queries: List[IRSwapQuery],
         requested_key_by_ref: Mapping[DateLike, datetime.datetime],
     ) -> Tuple[List[Tuple[DateLike, str, float]], set[Tuple[DateLike, int]]]:
-        eligible: List[Tuple[int, IRSwapQuery, str]] = []
+        eligible: List[Tuple[int, IRSwapQuery, list[tuple[float, str]]]] = []
         for idx, q in enumerate(queries):
-            tenor = str(getattr(q, "tenor", "") or "").strip().upper().replace(" ", "")
-            if not tenor or "/" in tenor or "X" in tenor:
-                continue
-            if q.structure != IRSwapStructure.OUTRIGHT or q.value != IRSwapValue.RATE:
-                continue
-            eligible.append((idx, q, tenor))
+            components = _analytics_rate_components(q)
+            if components:
+                eligible.append((idx, q, components))
 
         if not eligible:
             return [], set()
@@ -743,12 +794,13 @@ class TimeseriesBuilder:
         ref_keys = list(requested_key_by_ref.values())
         start_bound = min(ref_keys).date()
         end_bound = max(ref_keys).date()
+        analytics_tenors = sorted({tenor for _idx, _q, components in eligible for _weight, tenor in components})
         try:
             analytics_df = store.read_analytics(
                 resolved_curve_name,
                 start=start_bound,
                 end=end_bound,
-                tenors=sorted({tenor for _, _, tenor in eligible}),
+                tenors=analytics_tenors,
                 metrics=["par_rate", "rate"],
                 timestamps_utc=ref_keys,
             )
@@ -757,7 +809,7 @@ class TimeseriesBuilder:
                 resolved_curve_name,
                 start=start_bound,
                 end=end_bound,
-                tenors=sorted({tenor for _, _, tenor in eligible}),
+                tenors=analytics_tenors,
                 metrics=["par_rate", "rate"],
             )
         if analytics_df.empty or "timestamp_utc" not in analytics_df.columns:
@@ -775,17 +827,23 @@ class TimeseriesBuilder:
             row = rows_by_key.get(ts_key)
             if row is None:
                 continue
-            for idx, q, tenor in eligible:
-                value = None
-                for metric_name in ("par_rate", "rate"):
-                    col_name = f"{metric_name}_{tenor}"
-                    if col_name in row.index and pd.notna(row[col_name]):
-                        value = float(row[col_name])
+            for idx, q, components in eligible:
+                component_values: list[float] = []
+                for weight, tenor in components:
+                    component_value = None
+                    for metric_name in ("par_rate", "rate"):
+                        col_name = f"{metric_name}_{tenor}"
+                        if col_name in row.index and pd.notna(row[col_name]):
+                            component_value = float(row[col_name]) * float(weight)
+                            break
+                    if component_value is None:
+                        component_values = []
                         break
-                if value is None:
+                    component_values.append(component_value)
+                if not component_values:
                     continue
-                default = f"{requested_curve_name}.{tenor}.{IRSwapValue.RATE.name}"
-                rows.append((ref_point, _safe_col_name(q, default), value))
+                default = f"{requested_curve_name}.{getattr(q, 'tenor', '')}.{IRSwapValue.RATE.name}"
+                rows.append((ref_point, _safe_col_name(q, default), float(sum(component_values))))
                 covered.add((ref_point, idx))
         return rows, covered
 
@@ -955,7 +1013,7 @@ class TimeseriesBuilder:
                 rl_curve_handle = curves_by_key.get(ts_key)
                 if rl_curve_handle is None:
                     continue
-                wrapped_by_key[ts_key] = mdp._build_barchart_stirf_rl_curve(
+                wrapped_by_key[ts_key] = mdp._wrap_curve_store_curve(
                     requested_curve_name=requested_curve_name,
                     resolved_curve_name=resolved_curve_name,
                     request_timestamp=ref_point,
@@ -1044,9 +1102,16 @@ class TimeseriesBuilder:
         use_intraday_cache = any(isinstance(point, datetime.datetime) for point in reference_points)
 
         store = mdp._get_curve_store()
-        builder = mdp._get_barchart_stirf_curve_builder()
+        builder = mdp._get_curve_store_builder() if hasattr(mdp, "_get_curve_store_builder") else None
         generic_tb = self._get_generic_router("IRS", mdp)
         curve_frames: List[pd.DataFrame] = []
+        pbar_disable = not getattr(plan.router, "_show_tqdm", True)
+
+        def _run_stage(desc: str, total: int, fn):
+            with _tqdm(total=max(1, int(total)), disable=pbar_disable, desc=desc, leave=True) as pbar:
+                result = fn()
+                pbar.update(max(1, int(total)))
+                return result
 
         for requested_curve_name, curve_queries in _group_irs_queries_by_curve(queries).items():
             anchor_req = dict(curve_queries[0].build_mdp_request(
@@ -1054,7 +1119,7 @@ class TimeseriesBuilder:
             ))
             anchor_req.pop(str(getattr(curve_queries[0], "mdp_time_key", "timestamp") or "timestamp"), None)
             anchor_req.pop("curve_name", None)
-            resolved_curve_name = mdp._resolve_barchart_stirf_curve_name(
+            resolved_curve_name = mdp._resolve_curve_store_curve_name(
                 requested_curve_name=requested_curve_name,
                 kwargs=anchor_req,
                 builder=builder,
@@ -1062,7 +1127,7 @@ class TimeseriesBuilder:
 
             requested_key_by_ref: Dict[DateLike, datetime.datetime] = {}
             for ref_point in reference_points:
-                rl_timestamp = mdp._to_barchart_stirf_timestamp(ref_point)
+                rl_timestamp = mdp._to_curve_store_timestamp(ref_point)
                 if rl_timestamp == "live":
                     continue
                 ts_key = _timestamp_utc_key(rl_timestamp)
@@ -1087,20 +1152,31 @@ class TimeseriesBuilder:
                     curve_frames.append(fallback_df)
                 continue
 
-            cached_rows, covered = self._read_irs_computed_cache_rows(
-                router=plan.router,
-                requested_curve_name=requested_curve_name,
-                queries=curve_queries,
-                reference_points=reference_points,
-                intraday=use_intraday_cache,
+            cached_rows, covered = _run_stage(
+                desc=f"READING {requested_curve_name} computed cache...",
+                total=len(curve_queries),
+                fn=lambda: self._read_irs_computed_cache_rows(
+                    router=plan.router,
+                    requested_curve_name=requested_curve_name,
+                    queries=curve_queries,
+                    reference_points=reference_points,
+                    intraday=use_intraday_cache,
+                ),
             )
-            analytics_rows, analytics_covered = self._read_irs_curve_store_analytics_rows(
-                store=store,
-                resolved_curve_name=resolved_curve_name,
-                requested_curve_name=requested_curve_name,
-                queries=curve_queries,
-                requested_key_by_ref=requested_key_by_ref,
-            )
+            analytics_rows: List[Tuple[DateLike, str, float]] = []
+            analytics_covered: set[Tuple[DateLike, int]] = set()
+            if _supports_irs_curve_store_analytics_fast_path(mdp):
+                analytics_rows, analytics_covered = _run_stage(
+                    desc=f"READING {requested_curve_name} curve analytics...",
+                    total=len(reference_points),
+                    fn=lambda: self._read_irs_curve_store_analytics_rows(
+                        store=store,
+                        resolved_curve_name=resolved_curve_name,
+                        requested_curve_name=requested_curve_name,
+                        queries=curve_queries,
+                        requested_key_by_ref=requested_key_by_ref,
+                    ),
+                )
             rows = list(cached_rows) + list(analytics_rows)
             covered.update(analytics_covered)
 
@@ -1110,16 +1186,22 @@ class TimeseriesBuilder:
                     curve_frames.append(curve_df)
                 continue
 
-            curve_map = self._build_irs_curve_store_curve_map(
-                mdp=mdp,
-                store=store,
-                builder=builder,
-                requested_curve_name=requested_curve_name,
-                resolved_curve_name=resolved_curve_name,
-                reference_points=reference_points,
-                requested_key_by_ref=requested_key_by_ref,
-                n_jobs=n_jobs,
-            )
+            curve_map: Dict[DateLike, Any] = {}
+            if _supports_irs_curve_store_raw_curve_fast_path(mdp):
+                curve_map = _run_stage(
+                    desc=f"LOADING {requested_curve_name} raw curves...",
+                    total=len(reference_points),
+                    fn=lambda: self._build_irs_curve_store_curve_map(
+                        mdp=mdp,
+                        store=store,
+                        builder=builder,
+                        requested_curve_name=requested_curve_name,
+                        resolved_curve_name=resolved_curve_name,
+                        reference_points=reference_points,
+                        requested_key_by_ref=requested_key_by_ref,
+                        n_jobs=n_jobs,
+                    ),
+                )
 
             newly_computed_rows: Dict[int, List[Tuple[DateLike, str, float]]] = defaultdict(list)
             tasks = [
@@ -1129,7 +1211,6 @@ class TimeseriesBuilder:
                 if (ref_point, idx) not in covered and ref_point in curve_map
             ]
             worker_count = max(1, int(n_jobs or 1))
-            pbar_disable = not getattr(plan.router, "_show_tqdm", True)
             with _tqdm(
                 total=len(tasks),
                 disable=pbar_disable,
@@ -1165,11 +1246,15 @@ class TimeseriesBuilder:
                         finally:
                             pbar.update(1)
 
-            self._write_irs_computed_cache_rows(
-                router=plan.router,
-                requested_curve_name=requested_curve_name,
-                rows_by_query_idx=newly_computed_rows,
-                queries=curve_queries,
+            _run_stage(
+                desc=f"WRITING {requested_curve_name} computed cache...",
+                total=max(1, sum(len(v) for v in newly_computed_rows.values())),
+                fn=lambda: self._write_irs_computed_cache_rows(
+                    router=plan.router,
+                    requested_curve_name=requested_curve_name,
+                    rows_by_query_idx=newly_computed_rows,
+                    queries=curve_queries,
+                ),
             )
 
             direct_df = generic_tb._rows_to_frame(rows)

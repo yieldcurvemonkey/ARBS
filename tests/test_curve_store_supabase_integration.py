@@ -200,3 +200,64 @@ class TestReadRawDayL2:
 
         assert len(df) == 1
         mock_sync.pull_day.assert_not_called()
+
+
+class TestAnalyticsL2:
+    def test_write_analytics_day_calls_push_in_background(self, tmp_path):
+        from Caching.curve_store import CurveStore
+
+        store = CurveStore(base_dir=tmp_path)
+        analytics_df = pytest.importorskip("pandas").DataFrame(
+            {
+                "timestamp_utc": [datetime.datetime(2025, 1, 15, 21, 0, tzinfo=datetime.timezone.utc)],
+                "trading_date": [datetime.date(2025, 1, 15)],
+                "session_minute": [540],
+                "par_rate_10Y": [4.25],
+                "rate_10Y": [4.25],
+            }
+        )
+
+        mock_sync = MagicMock()
+        with patch("Caching.curve_store._get_curve_sync", return_value=mock_sync):
+            result = store.write_analytics_day("USD-SOFR-1D", datetime.date(2025, 1, 15), analytics_df, overwrite=True)
+
+        assert result is not None
+        import time
+        time.sleep(0.2)
+        mock_sync.push_analytics_day.assert_called_once_with("USD-SOFR-1D", datetime.date(2025, 1, 15))
+
+    def test_read_analytics_prefetches_from_supabase_when_local_missing(self, tmp_path):
+        from Caching.curve_store import CurveStore
+
+        store = CurveStore(base_dir=tmp_path)
+        analytics_df = pytest.importorskip("pandas").DataFrame(
+            {
+                "timestamp_utc": [datetime.datetime(2025, 1, 15, 21, 0, tzinfo=datetime.timezone.utc)],
+                "trading_date": [datetime.date(2025, 1, 15)],
+                "session_minute": [540],
+                "par_rate_10Y": [4.25],
+                "rate_10Y": [4.25],
+            }
+        )
+
+        def _prefetch(curve_name, start, end):
+            assert curve_name == "USD-SOFR-1D"
+            assert start == datetime.date(2025, 1, 15)
+            assert end == datetime.date(2025, 1, 15)
+            store.write_analytics_day("USD-SOFR-1D", datetime.date(2025, 1, 15), analytics_df, overwrite=True)
+            return [datetime.date(2025, 1, 15)]
+
+        mock_sync = MagicMock()
+        mock_sync.prefetch_analytics_range.side_effect = _prefetch
+        with patch("Caching.curve_store._get_curve_sync", return_value=mock_sync):
+            df = store.read_analytics(
+                "USD-SOFR-1D",
+                start=datetime.date(2025, 1, 15),
+                end=datetime.date(2025, 1, 15),
+                tenors=["10Y"],
+                metrics=["par_rate", "rate"],
+            )
+
+        assert not df.empty
+        assert float(df.iloc[0]["par_rate_10Y"]) == 4.25
+        mock_sync.prefetch_analytics_range.assert_called_once()

@@ -138,6 +138,21 @@ class TestLayeredDictProxyL2Fallback:
 
         mock_l2_set.assert_called_once()
 
+    def test_local_hit_without_session_timestamp_does_not_probe_l2(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        import importlib
+        import Caching.supabase_engine as eng
+        importlib.reload(eng)
+
+        c = _make_consumer(tmp_path, l2_enabled=True, l2_read=True)
+        c.my_cache.raw["key"] = "value"
+
+        with patch.object(c.my_cache, "_l2_get") as mock_l2_get:
+            assert c.my_cache["key"] == "value"
+
+        mock_l2_get.assert_not_called()
+
     def test_async_writer_starts_shared_workers_once(self, tmp_path, monkeypatch):
         monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
         monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)

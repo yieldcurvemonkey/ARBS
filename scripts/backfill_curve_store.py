@@ -62,6 +62,7 @@ def main():
                 continue
             try:
                 sync.push_day(curve_name, dt, event_calendar=event_calendar)
+                sync.push_analytics_day(curve_name, dt)
                 total += 1
             except Exception:
                 logger.warning("Failed to push %s/%s", curve_name, dt, exc_info=True)

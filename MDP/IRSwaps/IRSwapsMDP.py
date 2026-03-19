@@ -69,6 +69,310 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 S["builder"] = BARCHART_STIRF_CURVE()
             return S["builder"]
 
+    def _curve_store_source_family(self) -> Optional[str]:
+        source = str(self.source).upper()
+        if source in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}:
+            return "barchart_stirf"
+        if source in {"ERIS_EOD_LIVE-RL_BASIC", "ERIS_EOD_LIVE_RL_BASIC"}:
+            return "eris_eod_rl_basic"
+        if source in {"ERIS_EOD_LIVE-RL_BASIC-NOJUMPS", "ERIS_EOD_LIVE_RL_BASIC-NOJUMPS"}:
+            return "eris_eod_rl_basic_nojumps"
+        return None
+
+    def _supports_curve_store_fast_path(self) -> bool:
+        return self._curve_store_source_family() in {
+            "barchart_stirf",
+            "eris_eod_rl_basic",
+            "eris_eod_rl_basic_nojumps",
+        }
+
+    def _supports_curve_store_raw_curve_fast_path(self) -> bool:
+        return self._curve_store_source_family() == "barchart_stirf"
+
+    def _supports_curve_store_analytics_fast_path(self) -> bool:
+        return self._curve_store_source_family() in {
+            "barchart_stirf",
+            "eris_eod_rl_basic",
+            "eris_eod_rl_basic_nojumps",
+        }
+
+    def _get_curve_store_builder(self) -> Any:
+        family = self._curve_store_source_family()
+        if family == "barchart_stirf":
+            return self._get_barchart_stirf_curve_builder()
+        return None
+
+    def _resolve_curve_store_curve_name(
+        self,
+        requested_curve_name: str,
+        kwargs: Dict[str, Any],
+        builder: Any = None,
+    ) -> str:
+        family = self._curve_store_source_family()
+        if family == "barchart_stirf":
+            return self._resolve_barchart_stirf_curve_name(
+                requested_curve_name=requested_curve_name,
+                kwargs=kwargs,
+                builder=builder or self._get_barchart_stirf_curve_builder(),
+            )
+        return requested_curve_name
+
+    @staticmethod
+    def _to_eris_eod_timestamp(
+        timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> Union[datetime.datetime, Literal["live"]]:
+        if timestamp == "live":
+            return "live"
+
+        if isinstance(timestamp, pd.Timestamp):
+            timestamp = timestamp.to_pydatetime()
+
+        ny_tz = pytz.timezone("America/New_York")
+        if isinstance(timestamp, datetime.datetime):
+            if timestamp.tzinfo is None or timestamp.tzinfo.utcoffset(timestamp) is None:
+                timestamp = ny_tz.localize(timestamp)
+            else:
+                timestamp = timestamp.astimezone(ny_tz)
+            return ny_tz.localize(
+                datetime.datetime(timestamp.year, timestamp.month, timestamp.day, 15, 0)
+            )
+
+        if isinstance(timestamp, datetime.date):
+            return ny_tz.localize(
+                datetime.datetime(timestamp.year, timestamp.month, timestamp.day, 15, 0)
+            )
+
+        raise TypeError("timestamp must be datetime.date, datetime.datetime, pd.Timestamp, or 'live'")
+
+    def _to_curve_store_timestamp(
+        self,
+        timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> Union[datetime.datetime, Literal["live"]]:
+        family = self._curve_store_source_family()
+        if family == "barchart_stirf":
+            return self._to_barchart_stirf_timestamp(timestamp)
+        if family in {"eris_eod_rl_basic", "eris_eod_rl_basic_nojumps"}:
+            return self._to_eris_eod_timestamp(timestamp)
+        raise NotImplementedError(f"CurveStore timestamps not supported for source '{self.source}'")
+
+    def _curve_store_cfg(self, resolved_curve_name: str, builder: Any = None) -> Optional[Dict[str, Any]]:
+        family = self._curve_store_source_family()
+        if family == "barchart_stirf":
+            active_builder = builder or self._get_barchart_stirf_curve_builder()
+            return getattr(active_builder, "_STIRF_CURVE_CONFIGS", {}).get(resolved_curve_name)
+        return None
+
+    def _build_fixings_cache_for_dates(
+        self,
+        *,
+        curve_name: str,
+        as_of_dates: Iterable[datetime.date],
+    ) -> Dict[datetime.date, pd.Series]:
+        unique_dates = sorted({d for d in as_of_dates if isinstance(d, datetime.date)})
+        if not unique_dates:
+            return {}
+
+        max_ref = max(unique_dates)
+        full_fixings = _fetch_fixings(
+            as_of_date=max_ref,
+            curve_name=curve_name,
+            force_refresh=self.force_refresh_fixings,
+        ).sort_index()
+        full_fixings = full_fixings * 100.0
+
+        out: Dict[datetime.date, pd.Series] = {}
+        for ref_date in unique_dates:
+            out[ref_date] = full_fixings[full_fixings.index.date < ref_date]
+        return out
+
+    def _build_eris_eod_rl_curve(
+        self,
+        *,
+        requested_curve_name: str,
+        request_timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+        rl_curve_handle: Any,
+        fixings_cache: Optional[Dict[datetime.date, pd.Series]] = None,
+    ) -> "_IRSwapGenericCurve":
+        import rateslib as rl
+
+        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+        from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
+
+        if request_timestamp == "live":
+            ref_date = datetime.date.today()
+        elif isinstance(request_timestamp, pd.Timestamp):
+            ref_date = request_timestamp.date()
+        elif isinstance(request_timestamp, datetime.datetime):
+            ref_date = request_timestamp.date()
+        else:
+            ref_date = request_timestamp
+
+        fixings_series = None if fixings_cache is None else fixings_cache.get(ref_date)
+        if fixings_series is None:
+            fixings_series = _fetch_fixings(
+                as_of_date=ref_date,
+                curve_name=requested_curve_name,
+                force_refresh=self.force_refresh_fixings,
+            ).sort_index()
+            fixings_series = fixings_series[fixings_series.index.date < ref_date] * 100.0
+            if fixings_cache is not None:
+                fixings_cache[ref_date] = fixings_series
+
+        curve_def = RATESLIB_CURVE_DEFINITIONS[requested_curve_name]
+        cal = curve_def.get("Calendar", None)
+        if cal is not None:
+            try:
+                rl_curve_handle.calendar = cal
+            except Exception:
+                rl_curve_handle = rl.Curve(
+                    nodes=dict(rl_curve_handle.nodes.nodes),
+                    calendar=cal,
+                    id=getattr(rl_curve_handle, "id", None),
+                )
+
+        ts_meta = getattr(rl_curve_handle, "timestamp", None) or getattr(rl_curve_handle, "timestamp_utc", None)
+        if ts_meta is None:
+            ts_meta = self._to_eris_eod_timestamp(request_timestamp)
+        curve_id = f"{self.source.upper()}-{requested_curve_name}-{ts_meta}"
+        return RLIRSwapCurve(
+            rl_curve_id=requested_curve_name,
+            rl_curve_handle=rl_curve_handle,
+            fixings=fixings_series,
+            meta_data={
+                "timestamp": ts_meta,
+                "id": curve_id,
+                "requested_curve_name": requested_curve_name,
+                "curve_name": requested_curve_name,
+                "reference_curve_name": requested_curve_name,
+            },
+        )
+
+    def _eris_curve_store_source_variant(self) -> str:
+        family = self._curve_store_source_family()
+        if family == "eris_eod_rl_basic_nojumps":
+            return "ERIS_RL_BASIC_NOJUMPS"
+        return "ERIS_RL_BASIC"
+
+    def _promote_eris_curve_store_day(
+        self,
+        *,
+        requested_curve_name: str,
+        curve: Any,
+        request_timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> None:
+        family = self._curve_store_source_family()
+        if family not in {"eris_eod_rl_basic", "eris_eod_rl_basic_nojumps"}:
+            return
+        if request_timestamp == "live":
+            return
+
+        store = self._get_curve_store()
+        trading_date = (
+            request_timestamp.date()
+            if isinstance(request_timestamp, (datetime.datetime, pd.Timestamp))
+            else request_timestamp
+        )
+        if trading_date is None:
+            return
+
+        need_raw = not bool(getattr(store, "has_day")(requested_curve_name, trading_date))
+        has_analytics = getattr(store, "has_analytics_day", None)
+        need_analytics = not bool(has_analytics(requested_curve_name, trading_date)) if callable(has_analytics) else True
+        if not need_raw and not need_analytics:
+            return
+
+        ts_meta = None
+        if hasattr(curve, "meta") and callable(curve.meta):
+            ts_meta = (curve.meta() or {}).get("timestamp")
+        ts_local = self._to_eris_eod_timestamp(ts_meta or request_timestamp)
+        if ts_local == "live":
+            return
+        ts_utc = ts_local.astimezone(pytz.UTC)
+        ts_chi = ts_utc.astimezone(pytz.timezone("America/Chicago"))
+
+        rl_curve_handle = curve.handle() if hasattr(curve, "handle") else None
+        if rl_curve_handle is None:
+            return
+
+        try:
+            rl_curve_handle.timestamp = ts_local
+            rl_curve_handle.timestamp_utc = ts_utc
+        except Exception:
+            pass
+
+        if need_raw:
+            from Caching.curve_store import CurveSnapshot
+
+            raw_nodes: dict = (
+                rl_curve_handle.nodes._nodes
+                if hasattr(rl_curve_handle, "nodes") and hasattr(rl_curve_handle.nodes, "_nodes")
+                else dict(getattr(rl_curve_handle, "nodes", {}) or {})
+            )
+            node_dates_sorted = sorted(raw_nodes.keys())
+            node_dates = [
+                d.date() if hasattr(d, "date") else d
+                for d in node_dates_sorted
+            ]
+            discount_factors = [float(raw_nodes[d]) for d in node_dates_sorted]
+            snapshot = CurveSnapshot(
+                timestamp_utc=ts_utc,
+                timestamp_local=ts_chi,
+                trading_date=trading_date,
+                session_minute=int((ts_chi - ts_chi.replace(hour=6, minute=0, second=0, microsecond=0)).total_seconds() // 60),
+                curve_name=requested_curve_name,
+                cfg_hash="",
+                reference_key=str(getattr(rl_curve_handle, "id", "") or requested_curve_name),
+                interpolation=str(getattr(rl_curve_handle, "interpolation", "log_linear") or "log_linear"),
+                source_variant=self._eris_curve_store_source_variant(),
+                node_dates=node_dates,
+                discount_factors=discount_factors,
+            )
+            store.write_day(requested_curve_name, trading_date, [snapshot])
+
+        if need_analytics:
+            from Caching.curve_analytics import build_analytics_frame, compute_analytics_row
+
+            analytics_df = build_analytics_frame(
+                [
+                    compute_analytics_row(
+                        curve,
+                        timestamp_utc=ts_utc,
+                        trading_date=trading_date,
+                    )
+                ]
+            )
+            if not analytics_df.empty:
+                store.write_analytics_day(requested_curve_name, trading_date, analytics_df)
+
+    def _wrap_curve_store_curve(
+        self,
+        *,
+        requested_curve_name: str,
+        resolved_curve_name: str,
+        request_timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+        rl_curve_handle: Any,
+        builder: Any = None,
+        fixings_cache: Optional[Dict[Any, pd.Series]] = None,
+    ) -> "_IRSwapGenericCurve":
+        family = self._curve_store_source_family()
+        if family == "barchart_stirf":
+            return self._build_barchart_stirf_rl_curve(
+                requested_curve_name=requested_curve_name,
+                resolved_curve_name=resolved_curve_name,
+                request_timestamp=request_timestamp,
+                rl_curve_handle=rl_curve_handle,
+                builder=builder or self._get_barchart_stirf_curve_builder(),
+                fixings_cache=fixings_cache,
+            )
+        if family in {"eris_eod_rl_basic", "eris_eod_rl_basic_nojumps"}:
+            return self._build_eris_eod_rl_curve(
+                requested_curve_name=requested_curve_name,
+                request_timestamp=request_timestamp,
+                rl_curve_handle=rl_curve_handle,
+                fixings_cache=fixings_cache,
+            )
+        raise NotImplementedError(f"CurveStore wrapper not supported for source '{self.source}'")
+
     @staticmethod
     def _should_suppress_ratelibs_solver_output(line: str) -> bool:
         return "SUCCESS: `conv_tol` reached" in line and "(levenberg_marquardt)" in line
@@ -363,12 +667,10 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=fixings_series, meta_data={"timestamp": ts, "id": curve_id})
 
         elif self.source.upper() in ["ERIS_EOD_LIVE-RL_BASIC", "ERIS_EOD_LIVE_RL_BASIC"]:
-            import rateslib as rl
             from rateslib import from_json
 
             from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
             from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
-            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             if type(timestamp) == datetime.datetime or hasattr(timestamp, "date"):
                 timestamp = timestamp.date()
@@ -387,51 +689,26 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 )
                 rl_curve_handle = from_json(rl_json)
 
-            curve_def = RATESLIB_CURVE_DEFINITIONS[curve_name]
-            cal = curve_def.get("Calendar", None)
-            if cal is not None:
-                try:
-                    rl_curve_handle.calendar = cal
-                except Exception:
-                    rl_curve_handle = rl.Curve(
-                        nodes=dict(rl_curve_handle.nodes.nodes),
-                        calendar=cal,
-                        id=getattr(rl_curve_handle, "id", None),
-                    )
-
-            ref = datetime.date.today() if timestamp == "live" else timestamp
-            fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            fixings_series = fixings_series[fixings_series.index.date < ref]
-            # print(fixings_series)
-            # print(timestamp)
-
-            # FIXINGS_TOL = 1
-            # if not fixings_series.empty:
-            #     from pandas.tseries.holiday import USFederalHolidayCalendar
-            #     from pandas.tseries.offsets import CustomBusinessDay
-
-            #     cbd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-            #     target_dt = (pd.Timestamp(ref) - (cbd * FIXINGS_TOL)).normalize()
-            #     idx_norm = fixings_series.index.normalize()
-            #     if target_dt not in idx_norm:
-            #         last_val = fixings_series.iloc[-1]
-            #         fixings_series.loc[target_dt] = float(last_val)
-            #         fixings_series = fixings_series.sort_index()
-
-            return RLIRSwapCurve(
-                rl_curve_id=curve_name,
+            curve = self._build_eris_eod_rl_curve(
+                requested_curve_name=curve_name,
+                request_timestamp=timestamp,
                 rl_curve_handle=rl_curve_handle,
-                fixings=fixings_series * 100,
-                meta_data={"timestamp": ts, "id": curve_id},
             )
+            curve._meta_data["timestamp"] = ts
+            curve._meta_data["id"] = curve_id
+            if timestamp != "live":
+                self._promote_eris_curve_store_day(
+                    requested_curve_name=curve_name,
+                    curve=curve,
+                    request_timestamp=timestamp,
+                )
+            return curve
 
         elif self.source.upper() in ["ERIS_EOD_LIVE-RL_BASIC-NOJUMPS"]:
-            import rateslib as rl
             from rateslib import from_json
 
             from MDP.IRSwaps.CME_NY_EOD_LIVE.rl_basic.ErisFuturesFetcher import ErisFuturesFetcher
             from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
-            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             if type(timestamp) == datetime.datetime or hasattr(timestamp, "date"):
                 timestamp = timestamp.date()
@@ -456,28 +733,20 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 )
                 rl_curve_handle = from_json(rl_json)
 
-            curve_def = RATESLIB_CURVE_DEFINITIONS[curve_name]
-            cal = curve_def.get("Calendar", None)
-            if cal is not None:
-                try:
-                    rl_curve_handle.calendar = cal
-                except Exception:
-                    rl_curve_handle = rl.Curve(
-                        nodes=dict(rl_curve_handle.nodes.nodes),
-                        calendar=cal,
-                        id=getattr(rl_curve_handle, "id", None),
-                    )
-
-            ref = datetime.date.today() if timestamp == "live" else timestamp
-            fixings_series = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            fixings_series = fixings_series[fixings_series.index.date < ref]
-
-            return RLIRSwapCurve(
-                rl_curve_id=curve_name,
+            curve = self._build_eris_eod_rl_curve(
+                requested_curve_name=curve_name,
+                request_timestamp=timestamp,
                 rl_curve_handle=rl_curve_handle,
-                fixings=fixings_series * 100,
-                meta_data={"timestamp": ts, "id": curve_id},
             )
+            curve._meta_data["timestamp"] = ts
+            curve._meta_data["id"] = curve_id
+            if timestamp != "live":
+                self._promote_eris_curve_store_day(
+                    requested_curve_name=curve_name,
+                    curve=curve,
+                    request_timestamp=timestamp,
+                )
+            return curve
 
         elif self.source.upper() in ["ERIS_EOD_LIVE-QL_BASIC", "ERIS_EOD_LIVE_QL_BASIC"]:
             import QuantLib as ql
@@ -1072,8 +1341,6 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         elif self.source.upper() in ["ERIS_EOD_LIVE-RL_BASIC", "ERIS_EOD_LIVE_RL_BASIC"]:
             from rateslib import from_json
 
-            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
-
             def _to_date(x):
                 if x == "live":
                     return datetime.date.today()
@@ -1086,8 +1353,12 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             today = datetime.date.today()
             past_dates = [d for d in bdates if d < today]
             today_dates = [d for d in bdates if d == today]
+            fixings_cache = self._build_fixings_cache_for_dates(
+                curve_name=curve_name,
+                as_of_dates=bdates,
+            )
 
-            if not ignore_cache and past_dates:
+            if not ignore_cache and past_dates and self._supports_curve_store_raw_curve_fast_path():
                 try:
                     import pandas as _pd
 
@@ -1114,21 +1385,11 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                             rl_curve = parquet_by_date.get(ref_date)
                             if rl_curve is None:
                                 continue
-
-                            fixings_series = _fetch_fixings(
-                                as_of_date=ref_date,
-                                curve_name=curve_name,
-                                force_refresh=self.force_refresh_fixings,
-                            ).sort_index()
-                            fixings_series = (
-                                fixings_series[fixings_series.index.date < ref_date] * 100.0
-                            )
-
-                            out[ref_date] = RLIRSwapCurve(
-                                rl_curve_id=curve_name,
+                            out[ref_date] = self._build_eris_eod_rl_curve(
+                                requested_curve_name=curve_name,
+                                request_timestamp=ref_date,
                                 rl_curve_handle=rl_curve,
-                                fixings=fixings_series,
-                                meta_data={"timestamp": ref_date},
+                                fixings_cache=fixings_cache,
                             )
 
                         if len([d for d in past_dates if d in out]) >= len(past_dates):
@@ -1139,20 +1400,13 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                                     force_refresh=True if ignore_cache else False,
                                     fetcher_kwargs={"show_tqdm": True},
                                 )
-                                fixings_series = _fetch_fixings(
-                                    as_of_date=ref_date,
-                                    curve_name=curve_name,
-                                    force_refresh=self.force_refresh_fixings,
-                                ).sort_index()
-                                fixings_series = (
-                                    fixings_series[fixings_series.index.date < ref_date] * 100.0
-                                )
-                                out[ref_date] = RLIRSwapCurve(
-                                    rl_curve_id=curve_name,
+                                out[ref_date] = self._build_eris_eod_rl_curve(
+                                    requested_curve_name=curve_name,
+                                    request_timestamp=ref_date,
                                     rl_curve_handle=from_json(rl_json_live),
-                                    fixings=fixings_series,
-                                    meta_data={"timestamp": ts_live},
+                                    fixings_cache=fixings_cache,
                                 )
+                                out[ref_date]._meta_data["timestamp"] = ts_live
                             return out
                 except Exception as _tier0_exc:
                     import logging as _logging
@@ -1177,26 +1431,25 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                     force_refresh=True if ignore_cache else False,
                     fetcher_kwargs={"show_tqdm": True},
                 )
-                fixings_series = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-                fixings_series = fixings_series[fixings_series.index.date < ref_date] * 100.0
-
-                out[ref_date] = RLIRSwapCurve(
-                    rl_curve_id=curve_name,
+                out[ref_date] = self._build_eris_eod_rl_curve(
+                    requested_curve_name=curve_name,
+                    request_timestamp=ref_date,
                     rl_curve_handle=from_json(rl_json_live),
-                    fixings=fixings_series,
-                    meta_data={"timestamp": ts_live},  # live intraday timestamp
+                    fixings_cache=fixings_cache,
                 )
+                out[ref_date]._meta_data["timestamp"] = ts_live
 
             for ref_date, json_str in built_json.items():
-                ts = ref_date  # EOD (date) timestamp semantics for cached paths
-                fixings_series = _fetch_fixings(as_of_date=ref_date, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-                fixings_series = fixings_series[fixings_series.index.date < ref_date] * 100.0
-
-                out[ref_date] = RLIRSwapCurve(
-                    rl_curve_id=curve_name,
+                out[ref_date] = self._build_eris_eod_rl_curve(
+                    requested_curve_name=curve_name,
+                    request_timestamp=ref_date,
                     rl_curve_handle=from_json(json_str),
-                    fixings=fixings_series,
-                    meta_data={"timestamp": ts},
+                    fixings_cache=fixings_cache,
+                )
+                self._promote_eris_curve_store_day(
+                    requested_curve_name=curve_name,
+                    curve=out[ref_date],
+                    request_timestamp=ref_date,
                 )
 
             return out

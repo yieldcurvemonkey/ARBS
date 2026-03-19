@@ -1,4 +1,5 @@
 import datetime as dt
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -88,6 +89,35 @@ class _FakeCurveStore:
             }
         )
         return dict(self.curves_by_ts)
+
+
+class _FakePromotableErisCurve:
+    def __init__(self, timestamp):
+        self._meta = {"timestamp": timestamp}
+        self._handle = SimpleNamespace(
+            id="USD-SOFR-1D",
+            interpolation="log_linear",
+            nodes=SimpleNamespace(
+                _nodes={
+                    dt.date(2026, 1, 2): 1.0,
+                    dt.date(2027, 1, 2): 0.95,
+                }
+            ),
+        )
+
+    def meta(self):
+        return self._meta
+
+    def handle(self):
+        return self._handle
+
+    def build_irswap(self, tenor=None, **kwargs):
+        _ = kwargs
+        return tenor
+
+    def fair_rate(self, irswap):
+        _ = irswap
+        return 0.04
 
 
 def test_bulk_get_data_falls_back_one_by_one_for_eris_ql(monkeypatch):
@@ -380,6 +410,136 @@ def test_get_curve_store_uses_curve_store_default_singleton(monkeypatch):
     assert first is sentinel
     assert second is sentinel
     assert calls == ["default"]
+
+
+def test_eris_bulk_get_data_reuses_fixings_once_per_batch(monkeypatch):
+    rateslib = pytest.importorskip("rateslib")
+
+    mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC")
+    d1 = dt.date(2026, 1, 2)
+    d2 = dt.date(2026, 1, 5)
+
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "bulk_get_eris_eod_live_rl_basic",
+        lambda **kwargs: {d1: "curve-json-1", d2: "curve-json-2"},
+    )
+    monkeypatch.setattr(rateslib, "from_json", lambda _: SimpleNamespace(calendar=None))
+
+    fixings_calls = []
+
+    def _stub_fetch_fixings(**kwargs):
+        fixings_calls.append(kwargs["as_of_date"])
+        idx = pd.to_datetime(["2025-12-31", "2026-01-02", "2026-01-03"])
+        return pd.Series([4.1, 4.2, 4.3], index=idx)
+
+    wrap_calls = []
+
+    def _stub_wrap(**kwargs):
+        wrap_calls.append(kwargs)
+        return {
+            "timestamp": kwargs["request_timestamp"],
+            "cache_dates": sorted(kwargs["fixings_cache"].keys()),
+        }
+
+    monkeypatch.setattr(irswaps_mdp_module, "_fetch_fixings", _stub_fetch_fixings)
+    monkeypatch.setattr(mdp, "_build_eris_eod_rl_curve", _stub_wrap)
+
+    out = mdp.bulk_get_data(
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [d1, d2],
+        }
+    )
+
+    assert set(out) == {d1, d2}
+    assert fixings_calls == [d2]
+    assert len(wrap_calls) == 2
+    assert out[d1]["cache_dates"] == [d1, d2]
+    assert out[d2]["cache_dates"] == [d1, d2]
+
+
+def test_promote_eris_curve_store_day_writes_missing_raw_and_analytics(monkeypatch):
+    mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC")
+    nyc = pytz.timezone("America/New_York")
+    curve = _FakePromotableErisCurve(nyc.localize(dt.datetime(2026, 1, 2, 15, 0)))
+
+    raw_calls = []
+    analytics_calls = []
+
+    class _Store:
+        def has_day(self, curve_name, trading_date):
+            _ = curve_name, trading_date
+            return False
+
+        def has_analytics_day(self, curve_name, trading_date):
+            _ = curve_name, trading_date
+            return False
+
+        def write_day(self, curve_name, trading_date, snapshots):
+            raw_calls.append((curve_name, trading_date, snapshots))
+
+        def write_analytics_day(self, curve_name, trading_date, df):
+            analytics_calls.append((curve_name, trading_date, df))
+
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: _Store())
+
+    mdp._promote_eris_curve_store_day(
+        requested_curve_name="USD-SOFR-1D",
+        curve=curve,
+        request_timestamp=dt.date(2026, 1, 2),
+    )
+
+    assert len(raw_calls) == 1
+    assert raw_calls[0][0] == "USD-SOFR-1D"
+    assert raw_calls[0][1] == dt.date(2026, 1, 2)
+    assert raw_calls[0][2][0].source_variant == "ERIS_RL_BASIC"
+    assert len(analytics_calls) == 1
+    assert analytics_calls[0][0] == "USD-SOFR-1D"
+    assert analytics_calls[0][1] == dt.date(2026, 1, 2)
+    assert "par_rate_10Y" in analytics_calls[0][2].columns
+
+
+def test_eris_bulk_get_data_promotes_curve_store_for_cached_historical_days(monkeypatch):
+    rateslib = pytest.importorskip("rateslib")
+
+    mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC")
+    d1 = dt.date(2026, 1, 2)
+    d2 = dt.date(2026, 1, 5)
+
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "bulk_get_eris_eod_live_rl_basic",
+        lambda **kwargs: {d1: "curve-json-1", d2: "curve-json-2"},
+    )
+    monkeypatch.setattr(rateslib, "from_json", lambda _: object())
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series([4.1], index=pd.to_datetime(["2025-12-31"])),
+    )
+    monkeypatch.setattr(
+        mdp,
+        "_build_eris_eod_rl_curve",
+        lambda **kwargs: _FakePromotableErisCurve(kwargs["request_timestamp"]),
+    )
+
+    promote_calls = []
+    monkeypatch.setattr(
+        mdp,
+        "_promote_eris_curve_store_day",
+        lambda **kwargs: promote_calls.append(kwargs["request_timestamp"]),
+    )
+
+    out = mdp.bulk_get_data(
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [d1, d2],
+        }
+    )
+
+    assert set(out) == {d1, d2}
+    assert promote_calls == [d1, d2]
 
 
 @pytest.mark.parametrize(

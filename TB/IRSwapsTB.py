@@ -219,7 +219,8 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         cached_rows: List[Tuple[DateLike, str, float]] = []
         cached_row_keys: set[Tuple[DateLike, str]] = set()
 
-        cache_map = getattr(self, self._cache_attr)
+        use_mapping_cache = not self._use_ts_cache
+        cache_map = getattr(self, self._cache_attr) if use_mapping_cache else None
 
         if self._use_ts_cache and not ignore_cache:
             for curve_name, qs in by_curve.items():
@@ -258,11 +259,14 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         to_fetch[curve_name].add(d)
                         continue
 
-                    k = self._cache_key(d, curve_name, q)
-                    if (k in cache_map) and not ignore_cache:
-                        row = cache_map[k]
-                        cached_rows.append(row)
-                        cached_row_keys.add((row[0], row[1]))
+                    if use_mapping_cache:
+                        k = self._cache_key(d, curve_name, q)
+                        if (k in cache_map) and not ignore_cache:
+                            row = cache_map[k]
+                            cached_rows.append(row)
+                            cached_row_keys.add((row[0], row[1]))
+                        else:
+                            to_fetch[curve_name].add(d)
                     else:
                         to_fetch[curve_name].add(d)
 
@@ -338,12 +342,13 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                             finally:
                                 pbar.update(1)
 
-        with self.batched():
-            mapping = getattr(self, self._cache_attr)
-            for row, q, curve_name, d in new_rows_with_q:
-                if _is_today(d):
-                    continue
-                mapping[self._cache_key(d, curve_name, q)] = row
+        if use_mapping_cache:
+            with self.batched():
+                mapping = getattr(self, self._cache_attr)
+                for row, q, curve_name, d in new_rows_with_q:
+                    if _is_today(d):
+                        continue
+                    mapping[self._cache_key(d, curve_name, q)] = row
 
         if self._use_ts_cache and new_rows_with_q:
             grouped: Dict[str, List[Tuple[DateLike, str, float]]] = defaultdict(list)

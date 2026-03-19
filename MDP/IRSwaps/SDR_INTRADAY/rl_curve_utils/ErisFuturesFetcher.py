@@ -140,16 +140,19 @@ class ErisFuturesFetcher(BaseFetcher):
         def diff_month(d1, d2):
             return (d1.year - d2.year) * 12 + d1.month - d2.month
 
-        if "Intraday" in workbook_type:
+        other_eris_ftp_formatted_url = None
+        if "Intraday" in workbook_type or date == datetime.date.today():
             eris_ftp_formatted_url = "https://files.erisfutures.com/ftp/Eris_Intraday_DiscountFactors_SOFR.csv"
             file_name = "Eris_Intraday_DiscountFactors_SOFR.csv"
         else:
             archives_path = f"archives/{date.year}/{date.month:02}-{calendar.month_name[date.month]}"
-            file_name = f"Eris_{date.strftime("%Y%m%d")}_{workbook_type}.csv"
-            if diff_month(datetime.date.today(), date) < 3:
+            file_name = f"Eris_{date.strftime('%Y%m%d')}_{workbook_type}.csv"
+            if diff_month(datetime.date.today(), date) <= 3:
                 eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{file_name}"
+                other_eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{archives_path}/{file_name}"
             else:
                 eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{archives_path}/{file_name}"
+                other_eris_ftp_formatted_url = f"{self.eris_ftp_urls}/{file_name}"
 
         retries = 0
         try:
@@ -168,13 +171,14 @@ class ErisFuturesFetcher(BaseFetcher):
                         async for chunk in response.aiter_bytes():
                             buffer.write(chunk)
                         buffer.seek(0)
-
                     return buffer, file_name
 
-                except httpx.HTTPStatusError as e:
+                except httpx.HTTPStatusError:
                     self._logger.error(f"ERIS FTP - Bad Status for {workbook_type}-{date}: {response.status_code}")
-                    if response.status_code == 404:
+                    if response.status_code == 404 and retries >= 1:
                         return None, None
+                    if response.status_code == 404:
+                        eris_ftp_formatted_url = other_eris_ftp_formatted_url
 
                     retries += 1
                     wait_time = backoff_factor * (2 ** (retries - 1))

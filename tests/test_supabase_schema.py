@@ -14,6 +14,7 @@ class TestSchemaSQL:
         from Caching.supabase_schema import SCHEMA_SQL
         assert "curve_snapshots" in SCHEMA_SQL
         assert "curve_intraday_blocks" in SCHEMA_SQL
+        assert "curve_analytics_blocks" in SCHEMA_SQL
         assert "arbs_kv_cache_v1" in SCHEMA_SQL
         assert "arbs_computed_timeseries_blocks_v1" in SCHEMA_SQL
 

@@ -465,7 +465,28 @@ class CurveStore:
             / f"asset={_sanitize(curve_name)}"
             / f"date={trading_date.isoformat()}"
         )
-        return _atomic_content_write(part_dir, pbytes, overwrite=overwrite)
+        meta = _atomic_content_write(part_dir, pbytes, overwrite=overwrite)
+
+        sync = _get_curve_sync(self._base_dir)
+        if sync is not None:
+            def _bg_push():
+                try:
+                    sync.push_analytics_day(curve_name, trading_date)
+                except Exception:
+                    logger.warning(
+                        "L2 analytics push failed for %s/%s",
+                        curve_name,
+                        trading_date,
+                        exc_info=True,
+                    )
+                finally:
+                    self._release_bg_push_thread(threading.current_thread())
+
+            thread = threading.Thread(target=_bg_push, daemon=True)
+            self._track_bg_push_thread(thread)
+            thread.start()
+
+        return meta
 
     # ── Read Path (Bulk) ──
 
@@ -599,11 +620,24 @@ class CurveStore:
     ) -> pd.DataFrame:
         """Read analytics panel (wide-format)."""
         asset_dir = self._analytics_dir / f"asset={_sanitize(curve_name)}"
-        if not asset_dir.exists():
-            return pd.DataFrame()
-
         glob_pattern = str(asset_dir / "date=*" / "*.parquet").replace("\\", "/")
         requested_timestamps_utc = _normalize_timestamp_utc_values(timestamps_utc)
+        start_date = start.date() if isinstance(start, datetime.datetime) else start
+        end_date = end.date() if isinstance(end, datetime.datetime) else end
+        if requested_timestamps_utc:
+            trading_dates = _trading_dates_for_timestamps_utc(requested_timestamps_utc)
+            if trading_dates:
+                if start_date is None:
+                    start_date = trading_dates[0]
+                if end_date is None:
+                    end_date = trading_dates[-1]
+
+        if not asset_dir.exists():
+            sync = _get_curve_sync(self._base_dir)
+            if sync is not None and start_date is not None and end_date is not None:
+                sync.prefetch_analytics_range(curve_name, start_date, end_date)
+            if not asset_dir.exists():
+                return pd.DataFrame()
 
         # Build column selection
         cols: list[str] = ["timestamp_utc", "trading_date", "session_minute"]
@@ -622,12 +656,10 @@ class CurveStore:
             where_parts.append(f"date <= '{trading_dates[-1].isoformat()}'")
             cte_prefix = _timestamps_cte_sql(requested_timestamps_utc)
             join_clause = "INNER JOIN requested ON analytics.timestamp_utc = requested.ts"
-        if start is not None:
-            s = start.date() if isinstance(start, datetime.datetime) else start
-            where_parts.append(f"date >= '{s.isoformat()}'")
-        if end is not None:
-            e = end.date() if isinstance(end, datetime.datetime) else end
-            where_parts.append(f"date <= '{e.isoformat()}'")
+        if start_date is not None:
+            where_parts.append(f"date >= '{start_date.isoformat()}'")
+        if end_date is not None:
+            where_parts.append(f"date <= '{end_date.isoformat()}'")
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -642,7 +674,15 @@ class CurveStore:
         try:
             df = duckdb.sql(query).df()
         except (duckdb.IOException, duckdb.CatalogException):
-            return pd.DataFrame()
+            sync = _get_curve_sync(self._base_dir)
+            if sync is not None and start_date is not None and end_date is not None:
+                try:
+                    sync.prefetch_analytics_range(curve_name, start_date, end_date)
+                    df = duckdb.sql(query).df()
+                except (duckdb.IOException, duckdb.CatalogException):
+                    return pd.DataFrame()
+            else:
+                return pd.DataFrame()
 
         if "date" in df.columns:
             df.drop(columns=["date"], inplace=True)
@@ -878,6 +918,17 @@ class CurveStore:
         """Check if raw data exists for a (curve_name, trading_date)."""
         part_dir = (
             self._raw_dir
+            / f"asset={_sanitize(curve_name)}"
+            / f"date={trading_date.isoformat()}"
+        )
+        if not part_dir.exists():
+            return False
+        return any(part_dir.glob("*.parquet"))
+
+    def has_analytics_day(self, curve_name: str, trading_date: datetime.date) -> bool:
+        """Check if analytics data exists for a (curve_name, trading_date)."""
+        part_dir = (
+            self._analytics_dir
             / f"asset={_sanitize(curve_name)}"
             / f"date={trading_date.isoformat()}"
         )

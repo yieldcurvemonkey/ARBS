@@ -33,6 +33,17 @@ CREATE TABLE IF NOT EXISTS arbs_curve_intraday_blocks_v1 (
     PRIMARY KEY (trading_date, curve_name)
 );
 
+CREATE TABLE IF NOT EXISTS arbs_curve_analytics_blocks_v1 (
+    trading_date DATE NOT NULL,
+    curve_name VARCHAR NOT NULL,
+    data_format VARCHAR NOT NULL DEFAULT 'parquet_zstd',
+    row_count INTEGER NOT NULL,
+    payload BYTEA NOT NULL,
+    sha256 VARCHAR NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (trading_date, curve_name)
+);
+
 CREATE TABLE IF NOT EXISTS arbs_kv_cache_v1 (
     cache_ns VARCHAR NOT NULL,
     cache_key VARCHAR NOT NULL,

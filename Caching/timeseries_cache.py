@@ -25,6 +25,14 @@ DEFAULT_PARTITION_FMT = "date=%Y-%m-%d"  # directory partition format
 
 
 def _sanitize_symbol(symbol: str) -> str:
+    safe = _legacy_sanitize_symbol(symbol)
+    if len(safe) <= 48:
+        return safe
+    digest = hashlib.sha1(symbol.encode("utf-8")).hexdigest()[:16]
+    return f"{safe[:24]}__{digest}"
+
+
+def _legacy_sanitize_symbol(symbol: str) -> str:
     # filesystem-safe-ish
     return "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in symbol)
 
@@ -36,21 +44,19 @@ def _to_datestr(d: Union[date, datetime]) -> str:
 
 
 def _atomic_write_bytes(dst_path: Path, data: bytes) -> None:
+    def _path_str(path: Path) -> str:
+        resolved = str(path.resolve())
+        if os.name == "nt" and not resolved.startswith("\\\\?\\"):
+            return "\\\\?\\" + resolved
+        return resolved
+
     dst_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=str(dst_path.parent), delete=False) as tmp:
         tmp.write(data)
         tmp.flush()
         os.fsync(tmp.fileno())
         tmp_path = Path(tmp.name)
-    os.replace(tmp_path, dst_path)
-
-
-def _hash_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    os.replace(_path_str(tmp_path), _path_str(dst_path))
 
 
 def _df_min_max_ts(df: pd.DataFrame) -> Tuple[str, str]:
@@ -142,25 +148,39 @@ def append_timeseries(
         part_dir = base_dir / f"asset={symbol}" / datetime.strftime(datetime(d.year, d.month, d.day), opts.partition_fmt)
         part_dir.mkdir(parents=True, exist_ok=True)
 
+        existing = read_timeseries(
+            None,
+            symbol,
+            start=d,
+            end=d,
+            base_dir=base_dir,
+        )
+        if not existing.empty:
+            if isinstance(existing.index, pd.DatetimeIndex) and isinstance(g.index, pd.DatetimeIndex):
+                combined = pd.concat([existing, g], axis=0).sort_index()
+                combined = combined[~combined.index.duplicated(keep="last")]
+            else:
+                combined = pd.concat([existing, g], axis=0).drop_duplicates(keep="last")
+            g = combined
+
         # Arrow table + Parquet
         table = _df_to_table(g)
         pbytes = _write_parquet_bytes(table, opts.compression, opts.row_group_size)
 
-        # Content addressing at file level: write to temp, hash, rename to sha.parquet
-        tmp_path = part_dir / "part.tmp"
-        _atomic_write_bytes(tmp_path, pbytes)
-        file_sha = _hash_file(tmp_path)
+        file_sha = hashlib.sha256(pbytes).hexdigest()
         final_name = f"{file_sha}.parquet"
         final_path = part_dir / final_name
 
-        # If a file with identical content exists already, drop temp; else atomically publish
-        if final_path.exists():
+        if not final_path.exists():
+            _atomic_write_bytes(final_path, pbytes)
+
+        for old_path in part_dir.glob("*.parquet"):
+            if old_path == final_path:
+                continue
             try:
-                os.remove(tmp_path)
+                os.remove(old_path)
             except FileNotFoundError:
                 pass
-        else:
-            os.replace(tmp_path, final_path)
 
         rows = g.shape[0]
         size = final_path.stat().st_size
@@ -192,9 +212,14 @@ def read_timeseries(
     Read timeseries for *symbol* over [start, end] using DuckDB to scan
     Hive-partitioned Parquet files directly (no catalog needed).
     """
-    symbol = _sanitize_symbol(symbol)
+    primary_symbol = _sanitize_symbol(symbol)
+    legacy_symbol = _legacy_sanitize_symbol(symbol)
     base = Path(base_dir)
-    symbol_dir = base / f"asset={symbol}"
+    symbol_dir = base / f"asset={primary_symbol}"
+    if not symbol_dir.exists() and legacy_symbol != primary_symbol:
+        legacy_dir = base / f"asset={legacy_symbol}"
+        if legacy_dir.exists():
+            symbol_dir = legacy_dir
 
     if not symbol_dir.exists():
         return pd.DataFrame()

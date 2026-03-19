@@ -3,6 +3,7 @@ import uuid
 from typing import Any, Dict
 
 import pandas as pd
+import pytest
 
 from Caching.computed_timeseries_store import ComputedTimeseriesStore
 from MDP.MarketDataProvider import MarketDataProvider
@@ -74,6 +75,87 @@ def test_computed_timeseries_store_roundtrip_preserves_intraday_column_names(tmp
         (ts1, "USD-SOFR-1D 5Y OUTRIGHT RATE", 0.051),
         (ts2, "USD-SOFR-1D 5Y OUTRIGHT RATE", 0.052),
     ]
+
+
+def test_computed_timeseries_store_compacts_day_partition_on_rewrite(tmp_path):
+    store = ComputedTimeseriesStore(base_dir=tmp_path)
+    ts1 = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2025, 1, 6, 15, 0, tzinfo=datetime.timezone.utc)
+
+    store.append_rows(
+        symbol="IRS::TEST_COMPACT",
+        rows=[
+            (ts1, "USD-SOFR-1D 5Y OUTRIGHT RATE", 0.051),
+        ],
+    )
+    store.append_rows(
+        symbol="IRS::TEST_COMPACT",
+        rows=[
+            (ts1, "USD-SOFR-1D 5Y OUTRIGHT RATE", 0.052),
+            (ts2, "USD-SOFR-1D 5Y OUTRIGHT RATE", 0.053),
+        ],
+    )
+
+    part_dir = tmp_path / "asset=IRS__TEST_COMPACT" / "date=2025-01-06"
+    assert len(list(part_dir.glob("*.parquet"))) == 1
+
+    rows = store.read_rows(
+        symbol="IRS::TEST_COMPACT",
+        reference_points=[ts1, ts2],
+        intraday=True,
+        skip_current_eod=False,
+        fallback_column_name="fallback",
+    )
+
+    assert rows == [
+        (ts1, "USD-SOFR-1D 5Y OUTRIGHT RATE", 0.052),
+        (ts2, "USD-SOFR-1D 5Y OUTRIGHT RATE", 0.053),
+    ]
+
+
+def test_computed_timeseries_store_skips_redundant_per_day_remote_probe_for_absent_local_days(monkeypatch, tmp_path):
+    import Caching.computed_timeseries_store as cts_module
+
+    store = ComputedTimeseriesStore(base_dir=tmp_path)
+    ts1 = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2025, 1, 7, 14, 0, tzinfo=datetime.timezone.utc)
+
+    store.append_rows(
+        symbol="IRS::TEST_REMOTE_PROBE",
+        rows=[
+            (ts1, "USD-SOFR-1D 5Y OUTRIGHT RATE", 0.051),
+        ],
+    )
+
+    class _FakeSync:
+        def __init__(self):
+            self.prefetch_calls = []
+            self.pull_calls = []
+
+        def prefetch_range(self, symbol, start, end):
+            self.prefetch_calls.append((symbol, start, end))
+            return []
+
+        def pull_day(self, symbol, trading_date):
+            self.pull_calls.append((symbol, trading_date))
+            return False
+
+    fake_sync = _FakeSync()
+    monkeypatch.setattr(cts_module, "_get_computed_ts_sync", lambda base_dir: fake_sync)
+
+    rows = store.read_rows(
+        symbol="IRS::TEST_REMOTE_PROBE",
+        reference_points=[ts1, ts2],
+        intraday=True,
+        skip_current_eod=False,
+        fallback_column_name="fallback",
+    )
+
+    assert rows == [
+        (ts1, "USD-SOFR-1D 5Y OUTRIGHT RATE", 0.051),
+    ]
+    assert len(fake_sync.prefetch_calls) == 1
+    assert fake_sync.pull_calls == []
 
 
 def test_irswaps_tb_uses_shared_computed_store_across_instances(monkeypatch, tmp_path):

@@ -120,17 +120,18 @@ class _PartialFallbackRouter(_FakeRouter):
 
 
 class _FakeIRSCurveStore:
-    def __init__(self, timestamps: List[datetime.datetime]):
+    def __init__(self, timestamps: List[datetime.datetime], analytics_df: Optional[pd.DataFrame] = None):
         self.timestamps = list(timestamps)
+        self.analytics_df = analytics_df if analytics_df is not None else pd.DataFrame()
         self.raw_reads: List[Dict[str, Any]] = []
         self.raw_day_reads: List[Tuple[str, datetime.date]] = []
         self.analytics_reads: List[Tuple[str, datetime.date, datetime.date]] = []
         self.reconstruct_workers: List[int] = []
 
-    def read_analytics(self, curve_name: str, *, start=None, end=None, tenors=None, metrics=None) -> pd.DataFrame:
-        _ = tenors, metrics
+    def read_analytics(self, curve_name: str, *, start=None, end=None, tenors=None, metrics=None, timestamps_utc=None) -> pd.DataFrame:
+        _ = tenors, metrics, timestamps_utc
         self.analytics_reads.append((curve_name, start, end))
-        return pd.DataFrame()
+        return self.analytics_df.copy()
 
     def read_raw_nodes(
         self,
@@ -202,6 +203,18 @@ class _FakeIRSCurveStoreMDP:
     def _get_curve_store(self):
         return self._store
 
+    def _supports_curve_store_fast_path(self):
+        return True
+
+    def _supports_curve_store_raw_curve_fast_path(self):
+        return not self.source.upper().startswith("ERIS_EOD_LIVE-RL_BASIC")
+
+    def _supports_curve_store_analytics_fast_path(self):
+        return True
+
+    def _get_curve_store_builder(self):
+        return self._get_barchart_stirf_curve_builder() if self._supports_curve_store_raw_curve_fast_path() else None
+
     def _get_barchart_stirf_curve_builder(self):
         return SimpleNamespace(
             _STIRF_CURVE_CONFIGS={
@@ -214,12 +227,26 @@ class _FakeIRSCurveStoreMDP:
         self.resolve_calls.append((requested_curve_name, dict(kwargs)))
         return "USD-SOFR-Q12"
 
+    def _resolve_curve_store_curve_name(self, requested_curve_name: str, kwargs: Dict[str, Any], builder: Any = None) -> str:
+        if self._supports_curve_store_raw_curve_fast_path():
+            return self._resolve_barchart_stirf_curve_name(requested_curve_name, kwargs, builder)
+        self.resolve_calls.append((requested_curve_name, dict(kwargs)))
+        return requested_curve_name
+
     def _to_barchart_stirf_timestamp(self, timestamp: datetime.datetime) -> datetime.datetime:
         if isinstance(timestamp, datetime.datetime):
             if timestamp.tzinfo is None:
                 return timestamp.replace(tzinfo=datetime.timezone.utc)
             return timestamp.astimezone(datetime.timezone.utc)
         return datetime.datetime.combine(timestamp, datetime.time(17, 0), tzinfo=datetime.timezone.utc)
+
+    def _to_curve_store_timestamp(self, timestamp: Any) -> datetime.datetime:
+        if self._supports_curve_store_raw_curve_fast_path():
+            return self._to_barchart_stirf_timestamp(timestamp)
+        if isinstance(timestamp, datetime.datetime):
+            dt = timestamp.astimezone(datetime.timezone.utc) if timestamp.tzinfo else timestamp.replace(tzinfo=datetime.timezone.utc)
+            return datetime.datetime(dt.year, dt.month, dt.day, 20, 0, tzinfo=datetime.timezone.utc)
+        return datetime.datetime.combine(timestamp, datetime.time(20, 0), tzinfo=datetime.timezone.utc)
 
     def _build_barchart_stirf_rl_curve(
         self,
@@ -238,6 +265,25 @@ class _FakeIRSCurveStoreMDP:
             "resolved_curve_name": resolved_curve_name,
             "curve": rl_curve_handle,
         }
+
+    def _wrap_curve_store_curve(
+        self,
+        *,
+        requested_curve_name: str,
+        resolved_curve_name: str,
+        request_timestamp: Any,
+        rl_curve_handle: Any,
+        builder: Any = None,
+        fixings_cache: Any = None,
+    ):
+        return self._build_barchart_stirf_rl_curve(
+            requested_curve_name=requested_curve_name,
+            resolved_curve_name=resolved_curve_name,
+            request_timestamp=request_timestamp,
+            rl_curve_handle=rl_curve_handle,
+            builder=builder,
+            fixings_cache=fixings_cache,
+        )
 
     def bulk_get_data(self, request: Dict[str, Any]) -> Dict[Any, Any]:
         self.bulk_calls += 1
@@ -825,10 +871,11 @@ def test_timeseries_builder_curve_store_fast_path_shows_pricing_tqdm_by_default(
     assert list(out.index) == [ts1, ts2]
     assert list(out[q.col_name()]) == [0.05, 0.051]
     assert calls
-    assert calls[0].kwargs["disable"] is False
-    assert calls[0].kwargs["total"] == 2
-    assert "curve-store" in calls[0].kwargs["desc"]
-    assert sum(calls[0].updates) == 2
+    pricing_calls = [call for call in calls if "curve-store" in call.kwargs.get("desc", "")]
+    assert pricing_calls
+    assert pricing_calls[0].kwargs["disable"] is False
+    assert pricing_calls[0].kwargs["total"] == 2
+    assert sum(pricing_calls[0].updates) == 2
 
 
 def test_timeseries_builder_curve_store_fast_path_filters_out_of_session_intraday_minutes(monkeypatch):
@@ -949,6 +996,75 @@ def test_timeseries_builder_curve_store_fast_path_falls_back_for_missing_points(
     assert list(out.index) == [ts1, ts2]
     assert list(out[q.col_name()]) == [0.05, 0.052]
     assert router.call_count == 1
+
+
+def test_timeseries_builder_uses_eris_curve_analytics_fast_path():
+    ts1 = datetime.datetime(2026, 1, 2, 20, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2026, 1, 5, 20, 0, tzinfo=datetime.timezone.utc)
+    analytics_df = pd.DataFrame(
+        {
+            "timestamp_utc": [pd.Timestamp(ts1), pd.Timestamp(ts2)],
+            "trading_date": [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)],
+            "session_minute": [480, 480],
+            "par_rate_10Y": [4.25, 4.30],
+            "rate_10Y": [4.25, 4.30],
+        }
+    )
+    store = _FakeIRSCurveStore([], analytics_df=analytics_df)
+    mdp = _FakeIRSCurveStoreMDP(store, source="ERIS_EOD_LIVE-RL_BASIC")
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="10Y", value=IRSwapValue.RATE)
+
+    out = tb.get_timeseries(
+        start=datetime.date(2026, 1, 2),
+        end=datetime.date(2026, 1, 5),
+        queries=[q],
+        n_jobs=2,
+    )
+
+    assert list(out.index) == [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)]
+    assert list(out[q.col_name()]) == [4.25, 4.30]
+    assert router.call_count == 0
+    assert store.analytics_reads == [
+        ("USD-SOFR-1D", datetime.date(2026, 1, 2), datetime.date(2026, 1, 5))
+    ]
+    assert store.raw_reads == []
+    assert mdp.bulk_calls == 0
+
+
+def test_timeseries_builder_uses_eris_curve_analytics_fast_path_for_curve_spreads():
+    ts1 = datetime.datetime(2026, 1, 2, 20, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2026, 1, 5, 20, 0, tzinfo=datetime.timezone.utc)
+    analytics_df = pd.DataFrame(
+        {
+            "timestamp_utc": [pd.Timestamp(ts1), pd.Timestamp(ts2)],
+            "trading_date": [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)],
+            "session_minute": [480, 480],
+            "par_rate_2Y": [3.80, 3.85],
+            "rate_2Y": [3.80, 3.85],
+            "par_rate_10Y": [4.25, 4.30],
+            "rate_10Y": [4.25, 4.30],
+        }
+    )
+    store = _FakeIRSCurveStore([], analytics_df=analytics_df)
+    mdp = _FakeIRSCurveStoreMDP(store, source="ERIS_EOD_LIVE-RL_BASIC")
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="2Y/10Y", value=IRSwapValue.RATE)
+
+    out = tb.get_timeseries(
+        start=datetime.date(2026, 1, 2),
+        end=datetime.date(2026, 1, 5),
+        queries=[q],
+        n_jobs=2,
+    )
+
+    assert list(out.index) == [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)]
+    assert list(out[q.col_name()]) == pytest.approx([0.45, 0.45])
+    assert router.call_count == 0
+    assert store.raw_reads == []
+    assert mdp.bulk_calls == 0
 
 
 def test_timeseries_builder_parallelizes_product_plans(monkeypatch):

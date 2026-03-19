@@ -77,7 +77,7 @@ class LayeredDictProxy(MutableMapping):
     def _is_stale(self, cache_key: str) -> bool:
         ts = self._timestamps.get(cache_key)
         if ts is None:
-            return True  # No timestamp = treat as potentially stale
+            return False  # Existing L1 value loaded from disk is treated as fresh
         return (time.time() - ts) > self._ttl
 
     def __getitem__(self, key: Any) -> Any:

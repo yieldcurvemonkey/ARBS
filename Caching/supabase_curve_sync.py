@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _SLUG_RX = re.compile(r"[^\w.\-]")
 CURVE_SNAPSHOTS_TABLE = "arbs_curve_snapshots_v1"
 CURVE_INTRADAY_BLOCKS_TABLE = "arbs_curve_intraday_blocks_v1"
+CURVE_ANALYTICS_BLOCKS_TABLE = "arbs_curve_analytics_blocks_v1"
 
 
 def _sanitize(name: str) -> str:
@@ -52,18 +53,28 @@ class SupabaseCurveSync:
         store = CurveStore.default()
         return cls(base_dir=store.base_dir, engine=get_engine())
 
-    def _partition_dir(self, curve_name: str, trading_date: datetime.date) -> Path:
+    def _partition_dir(
+        self,
+        curve_name: str,
+        trading_date: datetime.date,
+        *,
+        kind: str = "raw",
+    ) -> Path:
         return (
             self._base_dir
-            / "raw"
+            / kind
             / f"asset={_sanitize(curve_name)}"
             / f"date={trading_date.isoformat()}"
         )
 
     def _local_parquet_bytes(
-        self, curve_name: str, trading_date: datetime.date
+        self,
+        curve_name: str,
+        trading_date: datetime.date,
+        *,
+        kind: str = "raw",
     ) -> Optional[bytes]:
-        part_dir = self._partition_dir(curve_name, trading_date)
+        part_dir = self._partition_dir(curve_name, trading_date, kind=kind)
         if not part_dir.exists():
             return None
         pq_files = list(part_dir.glob("*.parquet"))
@@ -89,7 +100,7 @@ class SupabaseCurveSync:
 
         if not ensure_schema(self._engine):
             return False
-        payload = self._local_parquet_bytes(curve_name, trading_date)
+        payload = self._local_parquet_bytes(curve_name, trading_date, kind="raw")
         if payload is None:
             return False
 
@@ -132,6 +143,59 @@ class SupabaseCurveSync:
 
         logger.info(
             "Pushed %s/%s to Supabase (%d rows, %d bytes)",
+            curve_name, trading_date, row_count, len(payload),
+        )
+        return True
+
+    def push_analytics_day(
+        self,
+        curve_name: str,
+        trading_date: datetime.date,
+    ) -> bool:
+        """Push a day's analytics Parquet blob from local storage to Supabase."""
+        if self._engine is None:
+            return False
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return False
+        payload = self._local_parquet_bytes(curve_name, trading_date, kind="analytics")
+        if payload is None:
+            return False
+
+        sha = hashlib.sha256(payload).hexdigest()
+        import io
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(io.BytesIO(payload))
+        row_count = table.num_rows
+
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(f"""
+                    INSERT INTO {CURVE_ANALYTICS_BLOCKS_TABLE}
+                        (trading_date, curve_name, data_format, row_count, payload, sha256)
+                    VALUES
+                        (:trading_date, :curve_name, :data_format, :row_count, :payload, :sha256)
+                    ON CONFLICT (trading_date, curve_name) DO UPDATE SET
+                        data_format = EXCLUDED.data_format,
+                        row_count = EXCLUDED.row_count,
+                        payload = EXCLUDED.payload,
+                        sha256 = EXCLUDED.sha256,
+                        created_at = NOW()
+                """),
+                {
+                    "trading_date": trading_date,
+                    "curve_name": curve_name,
+                    "data_format": "parquet_zstd",
+                    "row_count": row_count,
+                    "payload": payload,
+                    "sha256": sha,
+                },
+            )
+
+        logger.info(
+            "Pushed analytics %s/%s to Supabase (%d rows, %d bytes)",
             curve_name, trading_date, row_count, len(payload),
         )
         return True
@@ -213,11 +277,58 @@ class SupabaseCurveSync:
         if row is None:
             return False
 
-        part_dir = self._partition_dir(curve_name, trading_date)
+        part_dir = self._partition_dir(curve_name, trading_date, kind="raw")
         part_dir.mkdir(parents=True, exist_ok=True)
         dest = part_dir / f"{row.sha256}.parquet"
         dest.write_bytes(row.payload)
+        for old_path in part_dir.glob("*.parquet"):
+            if old_path == dest:
+                continue
+            try:
+                old_path.unlink()
+            except OSError:
+                pass
         logger.info("Pulled %s/%s from Supabase -> %s", curve_name, trading_date, dest)
+        return True
+
+    def pull_analytics_day(
+        self,
+        curve_name: str,
+        trading_date: datetime.date,
+    ) -> bool:
+        """Pull a day's analytics Parquet blob from Supabase to local storage."""
+        if self._engine is None:
+            return False
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return False
+
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                text(f"""
+                    SELECT payload, sha256, data_format
+                    FROM {CURVE_ANALYTICS_BLOCKS_TABLE}
+                    WHERE trading_date = :trading_date AND curve_name = :curve_name
+                """),
+                {"trading_date": trading_date, "curve_name": curve_name},
+            ).fetchone()
+
+        if row is None:
+            return False
+
+        part_dir = self._partition_dir(curve_name, trading_date, kind="analytics")
+        part_dir.mkdir(parents=True, exist_ok=True)
+        dest = part_dir / f"{row.sha256}.parquet"
+        dest.write_bytes(row.payload)
+        for old_path in part_dir.glob("*.parquet"):
+            if old_path == dest:
+                continue
+            try:
+                old_path.unlink()
+            except OSError:
+                pass
+        logger.info("Pulled analytics %s/%s from Supabase -> %s", curve_name, trading_date, dest)
         return True
 
     def prefetch_range(
@@ -267,14 +378,82 @@ class SupabaseCurveSync:
         for row in rows:
             if row.trading_date in local_dates:
                 continue
-            part_dir = self._partition_dir(curve_name, row.trading_date)
+            part_dir = self._partition_dir(curve_name, row.trading_date, kind="raw")
             part_dir.mkdir(parents=True, exist_ok=True)
             dest = part_dir / f"{row.sha256}.parquet"
             dest.write_bytes(row.payload)
+            for old_path in part_dir.glob("*.parquet"):
+                if old_path == dest:
+                    continue
+                try:
+                    old_path.unlink()
+                except OSError:
+                    pass
             fetched.append(row.trading_date)
 
         logger.info(
             "Prefetched %s: %d/%d days downloaded (%d already local)",
+            curve_name, len(fetched), len(rows), len(local_dates),
+        )
+        return fetched
+
+    def prefetch_analytics_range(
+        self,
+        curve_name: str,
+        start: datetime.date,
+        end: datetime.date,
+    ) -> list[datetime.date]:
+        """Download all missing analytics days from Supabase to local storage."""
+        if self._engine is None:
+            return []
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return []
+
+        local_dates = set()
+        asset_dir = self._base_dir / "analytics" / f"asset={_sanitize(curve_name)}"
+        if asset_dir.exists():
+            for d in asset_dir.iterdir():
+                if d.name.startswith("date=") and any(d.glob("*.parquet")):
+                    try:
+                        dt = datetime.date.fromisoformat(d.name[5:])
+                        if start <= dt <= end:
+                            local_dates.add(dt)
+                    except ValueError:
+                        pass
+
+        with self._engine.begin() as conn:
+            rows = conn.execute(
+                text(f"""
+                    SELECT trading_date, payload, sha256
+                    FROM {CURVE_ANALYTICS_BLOCKS_TABLE}
+                    WHERE curve_name = :curve_name
+                      AND trading_date BETWEEN :start AND :end
+                    ORDER BY trading_date
+                """),
+                {"curve_name": curve_name, "start": start, "end": end},
+            ).fetchall()
+
+        fetched = []
+        for row in rows:
+            if row.trading_date in local_dates:
+                continue
+            part_dir = self._partition_dir(curve_name, row.trading_date, kind="analytics")
+            part_dir.mkdir(parents=True, exist_ok=True)
+            dest = part_dir / f"{row.sha256}.parquet"
+            dest.write_bytes(row.payload)
+            for old_path in part_dir.glob("*.parquet"):
+                if old_path == dest:
+                    continue
+                try:
+                    old_path.unlink()
+                except OSError:
+                    pass
+            fetched.append(row.trading_date)
+
+        logger.info(
+            "Prefetched analytics %s: %d/%d days downloaded (%d already local)",
             curve_name, len(fetched), len(rows), len(local_dates),
         )
         return fetched
