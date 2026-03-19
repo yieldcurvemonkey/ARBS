@@ -1,6 +1,7 @@
 """Tests for ComputedTimeseriesStore with DuckDB fast path."""
 
 import datetime
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -86,3 +87,24 @@ class TestDuckDBFastPath:
         # Should skip today
         assert len(result) == 1
         assert result[0][0] == yesterday
+
+
+class TestRowLevelL2Push:
+    @patch("Caching.computed_timeseries_store._get_computed_ts_sync")
+    def test_append_rows_pushes_to_row_table(self, mock_get_sync, store):
+        mock_sync = MagicMock()
+        mock_sync.push_rows = MagicMock(return_value=True)
+        mock_sync.push_day = MagicMock(return_value=True)
+        mock_get_sync.return_value = mock_sync
+
+        d = datetime.date(2026, 3, 10)
+        store.append_rows(symbol="IRS::TEST", rows=[(d, "rate", 4.5)])
+
+        # Give the background thread time to execute
+        time.sleep(0.5)
+
+        # Verify push_rows was called
+        mock_sync.push_rows.assert_called_once()
+        call_args = mock_sync.push_rows.call_args
+        assert call_args[0][0] == "IRS::TEST"  # symbol
+        assert len(call_args[0][1]) == 1  # one row

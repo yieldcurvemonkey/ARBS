@@ -398,6 +398,28 @@ class ComputedTimeseriesStore:
 
         threading.Thread(target=_bg_push, daemon=True).start()
 
+    def _push_rows_to_l2(
+        self,
+        *,
+        symbol: str,
+        rows: list[Tuple[DateLike, str, float]],
+    ) -> None:
+        sync = _get_computed_ts_sync(self._opts.base_dir)
+        if sync is None or not rows or not hasattr(sync, "push_rows"):
+            return
+        row_data = [
+            (_normalize_eod_key(ref_point), str(column_name), float(value))
+            for ref_point, column_name, value in rows
+        ]
+
+        def _bg_push_rows() -> None:
+            try:
+                sync.push_rows(symbol, row_data)
+            except Exception:
+                logger.warning("Row-level L2 push failed for %s", symbol, exc_info=True)
+
+        threading.Thread(target=_bg_push_rows, daemon=True).start()
+
     def append_rows(
         self,
         *,
@@ -443,3 +465,6 @@ class ComputedTimeseriesStore:
             symbol=symbol,
             trading_dates=[ts.date() for ts in ordered.keys()],
         )
+
+        # Push row-level data to L2 (new row table)
+        self._push_rows_to_l2(symbol=symbol, rows=normalized_rows)
