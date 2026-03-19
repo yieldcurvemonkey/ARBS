@@ -37,7 +37,6 @@ pytz==2024.2
 pyzipper==0.3.6
 requests==2.32.4
 selenium==4.36.0
-tvdatafeed==2.1.0
 ujson==5.10.0
 zstandard==0.25.0
 
