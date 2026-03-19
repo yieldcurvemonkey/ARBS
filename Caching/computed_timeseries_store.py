@@ -266,24 +266,32 @@ class ComputedTimeseriesStore:
             skip_current_eod=skip_current_eod,
             fallback_column_name=fallback_column_name,
         )
+        today = datetime.date.today()
+        requested = {
+            _normalize_eod_key(rp) if not intraday else _normalize_intraday_key(rp).date()
+            for rp in reference_points
+            if not ((not intraday) and skip_current_eod and _normalize_eod_key(rp) == today)
+        }
+
         if duckdb_result is not None:
-            today = datetime.date.today()
-            requested = {
-                _normalize_eod_key(rp) if not intraday else _normalize_intraday_key(rp).date()
-                for rp in reference_points
-                if not ((not intraday) and skip_current_eod and _normalize_eod_key(rp) == today)
-            }
             covered = {
                 (_normalize_eod_key(rp) if not intraday else _normalize_intraday_key(rp).date())
                 for rp, _, _ in duckdb_result
             }
             if covered >= requested:
                 return duckdb_result
-            # Partial coverage — try syncing missing dates from Postgres
             missing_dates = sorted({
                 (d.date() if isinstance(d, pd.Timestamp) else d)
                 for d in (requested - covered)
             })
+        else:
+            missing_dates = sorted({
+                (d.date() if isinstance(d, pd.Timestamp) else d)
+                for d in requested
+            })
+
+        # Try syncing missing dates from Postgres into DuckDB
+        if self._duckdb_cache is not None and missing_dates:
             synced = self._sync_missing_from_postgres(
                 symbol=symbol,
                 missing_dates=missing_dates,
@@ -297,7 +305,12 @@ class ComputedTimeseriesStore:
                     fallback_column_name=fallback_column_name,
                 )
                 if duckdb_result_2 is not None:
-                    return duckdb_result_2
+                    covered_2 = {
+                        (_normalize_eod_key(rp) if not intraday else _normalize_intraday_key(rp).date())
+                        for rp, _, _ in duckdb_result_2
+                    }
+                    if covered_2 >= requested:
+                        return duckdb_result_2
 
         # Fallback to existing Parquet path
         start = min(reference_points)
