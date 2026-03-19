@@ -185,6 +185,9 @@ class ComputedTimeseriesStore:
         """Try DuckDB fast path. Returns rows or None if DuckDB unavailable."""
         if self._duckdb_cache is None:
             return None
+        # DuckDB table stores one row per (symbol, date) — not suitable for intraday
+        if intraday:
+            return None
 
         start = min(reference_points)
         end = max(reference_points)
