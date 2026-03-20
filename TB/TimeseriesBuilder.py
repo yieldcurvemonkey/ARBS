@@ -3,7 +3,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, DefaultDict, Dict, Iterable, List, Mapping, Optional, Tuple, Union
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, DefaultDict, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 import pytz
@@ -215,6 +216,49 @@ def _normalize_trading_date(value: Any) -> Optional[datetime.date]:
     if isinstance(value, datetime.date):
         return value
     return None
+
+
+def _ordered_unique_reference_points(reference_points: Iterable[DateLike]) -> List[DateLike]:
+    return list(dict.fromkeys(reference_points))
+
+
+@lru_cache(maxsize=1)
+def _get_us_govt_bond_calendar():
+    import QuantLib as ql
+
+    return ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+
+
+def _is_us_govt_bond_business_day(ref_point: DateLike) -> bool:
+    date_value = ref_point.date() if isinstance(ref_point, datetime.datetime) else ref_point
+    try:
+        from utils.ql_utils import datetime_to_ql_date
+    except Exception:
+        return True
+    return bool(_get_us_govt_bond_calendar().isBusinessDay(datetime_to_ql_date(date_value)))
+
+
+def _filter_irs_curve_store_reference_points(
+    reference_points: Iterable[DateLike],
+    *,
+    requested_curve_name: str,
+) -> List[DateLike]:
+    filtered = _ordered_unique_reference_points(reference_points)
+    if requested_curve_name == "USD-SOFR-1D":
+        return [ref_point for ref_point in filtered if _is_us_govt_bond_business_day(ref_point)]
+    return filtered
+
+
+def _is_curve_coverage_complete(
+    *,
+    reference_points: Sequence[DateLike],
+    query_count: int,
+    covered: set[Tuple[DateLike, int]],
+) -> bool:
+    if query_count <= 0:
+        return True
+    expected_coverage = len(reference_points) * int(query_count)
+    return expected_coverage == 0 or len(covered) >= expected_coverage
 
 
 @dataclass(frozen=True)
@@ -1261,8 +1305,38 @@ class TimeseriesBuilder:
                 return result
 
         for requested_curve_name, curve_queries in _group_irs_queries_by_curve(queries).items():
+            curve_reference_points = _filter_irs_curve_store_reference_points(
+                reference_points,
+                requested_curve_name=requested_curve_name,
+            )
+            if not curve_reference_points:
+                continue
+
+            cached_rows, covered = _run_stage(
+                desc=f"READING {requested_curve_name} computed cache...",
+                total=len(curve_queries),
+                fn=lambda: self._read_irs_computed_cache_rows(
+                    router=plan.router,
+                    requested_curve_name=requested_curve_name,
+                    queries=curve_queries,
+                    reference_points=curve_reference_points,
+                    intraday=use_intraday_cache,
+                ),
+            )
+            if _is_curve_coverage_complete(
+                reference_points=curve_reference_points,
+                query_count=len(curve_queries),
+                covered=covered,
+            ):
+                curve_df = generic_tb._rows_to_frame(cached_rows)
+                if not curve_df.empty:
+                    curve_frames.append(curve_df)
+                continue
+
             anchor_req = dict(curve_queries[0].build_mdp_request(
-                reference_points[0] if isinstance(reference_points[0], datetime.datetime) else datetime.datetime.combine(reference_points[0], datetime.time())
+                curve_reference_points[0]
+                if isinstance(curve_reference_points[0], datetime.datetime)
+                else datetime.datetime.combine(curve_reference_points[0], datetime.time())
             ))
             anchor_req.pop(str(getattr(curve_queries[0], "mdp_time_key", "timestamp") or "timestamp"), None)
             anchor_req.pop("curve_name", None)
@@ -1273,7 +1347,7 @@ class TimeseriesBuilder:
             )
 
             requested_key_by_ref: Dict[DateLike, datetime.datetime] = {}
-            for ref_point in reference_points:
+            for ref_point in curve_reference_points:
                 rl_timestamp = mdp._to_curve_store_timestamp(ref_point)
                 if rl_timestamp == "live":
                     continue
@@ -1290,7 +1364,7 @@ class TimeseriesBuilder:
                     mdp=mdp,
                     start=start,
                     end=end,
-                    missing_points=reference_points,
+                    missing_points=curve_reference_points,
                     n_jobs=n_jobs,
                     ignore_cache=ignore_cache,
                     freq=freq,
@@ -1299,23 +1373,12 @@ class TimeseriesBuilder:
                     curve_frames.append(fallback_df)
                 continue
 
-            cached_rows, covered = _run_stage(
-                desc=f"READING {requested_curve_name} computed cache...",
-                total=len(curve_queries),
-                fn=lambda: self._read_irs_computed_cache_rows(
-                    router=plan.router,
-                    requested_curve_name=requested_curve_name,
-                    queries=curve_queries,
-                    reference_points=reference_points,
-                    intraday=use_intraday_cache,
-                ),
-            )
             analytics_rows: List[Tuple[DateLike, str, float]] = []
             analytics_covered: set[Tuple[DateLike, int]] = set()
             if _supports_irs_curve_store_analytics_fast_path(mdp):
                 analytics_rows, analytics_covered = _run_stage(
                     desc=f"READING {requested_curve_name} curve analytics...",
-                    total=len(reference_points),
+                    total=len(curve_reference_points),
                     fn=lambda: self._read_irs_curve_store_analytics_rows(
                         mdp=mdp,
                         store=store,
@@ -1328,7 +1391,11 @@ class TimeseriesBuilder:
             rows = list(cached_rows) + list(analytics_rows)
             covered.update(analytics_covered)
 
-            if all((ref_point, idx) in covered for idx in range(len(curve_queries)) for ref_point in reference_points):
+            if _is_curve_coverage_complete(
+                reference_points=curve_reference_points,
+                query_count=len(curve_queries),
+                covered=covered,
+            ):
                 curve_df = generic_tb._rows_to_frame(rows)
                 if not curve_df.empty:
                     curve_frames.append(curve_df)
@@ -1336,7 +1403,7 @@ class TimeseriesBuilder:
 
             # Only load raw curves for reference points that still need pricing
             uncovered_ref_points = [
-                rp for rp in reference_points
+                rp for rp in curve_reference_points
                 if any((rp, idx) not in covered for idx in range(len(curve_queries)))
             ]
             uncovered_key_by_ref = {
@@ -1365,7 +1432,7 @@ class TimeseriesBuilder:
             tasks = [
                 (idx, ref_point, q, curve_map[ref_point])
                 for idx, q in enumerate(curve_queries)
-                for ref_point in reference_points
+                for ref_point in curve_reference_points
                 if (ref_point, idx) not in covered and ref_point in curve_map
             ]
             worker_count = max(1, int(n_jobs or 1))
@@ -1404,21 +1471,23 @@ class TimeseriesBuilder:
                         finally:
                             pbar.update(1)
 
-            _run_stage(
-                desc=f"WRITING {requested_curve_name} computed cache...",
-                total=max(1, sum(len(v) for v in newly_computed_rows.values())),
-                fn=lambda: self._write_irs_computed_cache_rows(
-                    router=plan.router,
-                    requested_curve_name=requested_curve_name,
-                    rows_by_query_idx=newly_computed_rows,
-                    queries=curve_queries,
-                ),
-            )
+            new_row_count = sum(len(v) for v in newly_computed_rows.values())
+            if new_row_count > 0:
+                _run_stage(
+                    desc=f"WRITING {requested_curve_name} computed cache...",
+                    total=new_row_count,
+                    fn=lambda: self._write_irs_computed_cache_rows(
+                        router=plan.router,
+                        requested_curve_name=requested_curve_name,
+                        rows_by_query_idx=newly_computed_rows,
+                        queries=curve_queries,
+                    ),
+                )
 
             direct_df = generic_tb._rows_to_frame(rows)
             missing_points = [
                 ref_point
-                for ref_point in reference_points
+                for ref_point in curve_reference_points
                 if any((ref_point, idx) not in covered for idx in range(len(curve_queries)))
             ]
             fallback_df = self._fallback_timeseries_for_missing_points(

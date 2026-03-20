@@ -10,6 +10,7 @@ import pandas as pd
 import pytz
 import pytest
 
+from Caching.computed_timeseries_store import ComputedTimeseriesStore
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base.BaseQuery import BaseQuery
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
@@ -991,6 +992,46 @@ def test_timeseries_builder_curve_store_fast_path_supports_eod_freq_alias(monkey
     assert store.raw_reads[0]["timestamps_utc"] == expected_points
 
 
+def test_timeseries_builder_curve_store_full_computed_cache_hit_skips_follow_on_work(monkeypatch, tmp_path):
+    ts1 = datetime.date(2026, 1, 2)
+    ts2 = datetime.date(2026, 1, 5)
+    store = _FakeIRSCurveStore([])
+    mdp = _FakeIRSCurveStoreMDP(store, source="ERIS_EOD_LIVE-RL_BASIC")
+    router = _NoCallRouter(mdp)
+    router._computed_ts_store = ComputedTimeseriesStore(base_dir=tmp_path, use_duckdb=False)
+    router._ts_symbol_for_query = lambda curve_name, q: f"IRS::{curve_name}::{q.tenor}::{q.value.name}"
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="10Y", value=IRSwapValue.RATE)
+
+    router._computed_ts_store.append_rows(
+        symbol=router._ts_symbol_for_query(q.curve, q),
+        rows=[
+            (ts1, q.col_name(), 4.25),
+            (ts2, q.col_name(), 4.30),
+        ],
+    )
+
+    monkeypatch.setattr(
+        tb,
+        "_write_irs_computed_cache_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("computed cache write should not run on cache hit")),
+    )
+
+    out = tb.get_timeseries(
+        start=ts1,
+        end=ts2,
+        queries=[q],
+        n_jobs=2,
+    )
+
+    assert list(out.index) == [ts1, ts2]
+    assert list(out[q.col_name()]) == [4.25, 4.30]
+    assert router.call_count == 0
+    assert store.analytics_reads == []
+    assert store.raw_reads == []
+    assert mdp.bulk_calls == 0
+
+
 def test_timeseries_builder_curve_store_fast_path_falls_back_for_missing_points(monkeypatch):
     import TB.IRSwapsTB as irs_tb_module
 
@@ -1041,6 +1082,41 @@ def test_timeseries_builder_curve_store_eod_fallback_does_not_emit_redundant_dat
     assert "Date" not in out.columns
     assert list(out.index) == [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)]
     assert list(out[q.col_name()]) == [0.05, 0.052]
+
+
+def test_timeseries_builder_uses_eris_curve_analytics_fast_path_skips_usd_sofr_holidays():
+    ts1 = datetime.datetime(2026, 1, 2, 20, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2026, 1, 5, 20, 0, tzinfo=datetime.timezone.utc)
+    analytics_df = pd.DataFrame(
+        {
+            "timestamp_utc": [pd.Timestamp(ts1), pd.Timestamp(ts2)],
+            "trading_date": [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)],
+            "session_minute": [480, 480],
+            "par_rate_10Y": [4.25, 4.30],
+            "rate_10Y": [4.25, 4.30],
+        }
+    )
+    store = _FakeIRSCurveStore([], analytics_df=analytics_df)
+    mdp = _FakeIRSCurveStoreMDP(store, source="ERIS_EOD_LIVE-RL_BASIC")
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="10Y", value=IRSwapValue.RATE)
+
+    out = tb.get_timeseries(
+        start=datetime.date(2026, 1, 1),
+        end=datetime.date(2026, 1, 5),
+        queries=[q],
+        n_jobs=2,
+    )
+
+    assert list(out.index) == [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)]
+    assert list(out[q.col_name()]) == [4.25, 4.30]
+    assert router.call_count == 0
+    assert store.analytics_reads == [
+        ("USD-SOFR-1D", datetime.date(2026, 1, 2), datetime.date(2026, 1, 5))
+    ]
+    assert store.raw_reads == []
+    assert mdp.bulk_calls == 0
 
 
 def test_timeseries_builder_uses_eris_curve_analytics_fast_path():
