@@ -2193,6 +2193,16 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             solver_tolerances=solver_tolerances,
         )
 
+    def _get_primed_session_df(
+        self,
+        timestamp: datetime.datetime,
+        cfg: Dict[str, Any],
+    ) -> Optional[pd.DataFrame]:
+        """Retrieve the full-session DataFrame cached during priming, if available."""
+        session_key = self._cme_session_open_chi(timestamp).isoformat()
+        mdp = self.stirf_mdp
+        return mdp._session_dfs.get(session_key)
+
     def _calibrate_chunk(
         self,
         *,
@@ -2325,6 +2335,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                     tqdm_mod = None
 
             # Phase 1: optional auto-prime to minimize Barchart calls on bulk runs.
+            primed_dfs: Dict[str, pd.DataFrame] = {}
             if auto_prime_bulk:
                 prime_kwargs = dict(local_kwargs)
                 prime_kwargs["cache_full_intraday_fetch"] = bool(prime_kwargs.get("cache_full_intraday_fetch", True))
@@ -2342,6 +2353,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 if tqdm_mod is not None and len(session_rep_timestamps) > 1:
                     prime_iter = tqdm_mod.tqdm(session_rep_timestamps, desc=f"PRIMING {curve_name} STIR CACHE")
 
+                primed_dfs: Dict[str, pd.DataFrame] = {}
                 for ts_prime in prime_iter:
                     prime_req = dict(symbols=cfg["instruments"], timestamp=ts_prime, **prime_kwargs)
                     fetch_pricers_func, _ = self._resolve_fetchers_for_request(
@@ -2349,6 +2361,11 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                         is_live_request=bool(live_by_timestamp.get(ts_prime, False)),
                     )
                     fetch_pricers_func(request=prime_req)
+                    # Capture the full session DataFrame for fast bulk lookup
+                    session_key = self._cme_session_open_chi(ts_prime).isoformat()
+                    cached_df = self._get_primed_session_df(ts_prime, cfg)
+                    if cached_df is not None:
+                        primed_dfs[session_key] = cached_df
 
             # Phase 2: fetch STIR pricers for all requested timestamps (prefer cache).
             pricers_by_ts: Dict[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]] = {}
@@ -2369,7 +2386,8 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 elif stirf_fetch_max_workers is not None and "max_workers" not in bulk_kwargs:
                     bulk_kwargs["max_workers"] = int(stirf_fetch_max_workers)
 
-                bulk_req = dict(symbols=cfg["instruments"], timestamps=pending_timestamps, **bulk_kwargs)
+                bulk_req = dict(symbols=cfg["instruments"], timestamps=pending_timestamps,
+                                primed_session_data=primed_dfs or None, **bulk_kwargs)
                 pricers_by_ts = fetch_pricers_bulk_func(request=bulk_req)
 
             calibration_jobs: List[Tuple[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]]] = []
