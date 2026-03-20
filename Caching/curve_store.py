@@ -33,6 +33,18 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+# --------------- Thread-safe DuckDB connection for read-only queries ----------
+_duckdb_local = threading.local()
+
+
+def _thread_local_conn() -> duckdb.DuckDBPyConnection:
+    """Return a per-thread DuckDB connection (read-only, no shared state)."""
+    conn = getattr(_duckdb_local, "conn", None)
+    if conn is None:
+        conn = duckdb.connect()
+        _duckdb_local.conn = conn
+    return conn
 import pytz
 
 # ---------------------------------------------------------------------------
@@ -622,13 +634,13 @@ class CurveStore:
             ORDER BY timestamp_utc
         """
         try:
-            df = duckdb.sql(query).df()
+            df = _thread_local_conn().sql(query).df()
         except (duckdb.IOException, duckdb.CatalogException):
             sync = _get_curve_sync(self._base_dir)
             if sync is not None and start_date is not None and end_date is not None:
                 try:
                     sync.prefetch_range(curve_name, start_date, end_date)
-                    df = duckdb.sql(query).df()
+                    df = _thread_local_conn().sql(query).df()
                 except (duckdb.IOException, duckdb.CatalogException):
                     return pd.DataFrame()
             else:
@@ -703,13 +715,13 @@ class CurveStore:
             ORDER BY timestamp_utc
         """
         try:
-            df = duckdb.sql(query).df()
+            df = _thread_local_conn().sql(query).df()
         except (duckdb.IOException, duckdb.CatalogException):
             sync = _get_curve_sync(self._base_dir)
             if sync is not None and start_date is not None and end_date is not None:
                 try:
                     sync.prefetch_analytics_range(curve_name, start_date, end_date)
-                    df = duckdb.sql(query).df()
+                    df = _thread_local_conn().sql(query).df()
                 except (duckdb.IOException, duckdb.CatalogException):
                     return pd.DataFrame()
             else:
