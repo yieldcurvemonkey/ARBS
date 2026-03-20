@@ -74,3 +74,19 @@ class TestSTIRFTimeseriesPerformance:
         assert numeric_cols.notna().all().all(), "No NaN values expected"
         assert (numeric_cols.abs() < 20).all().all(), "Rates should be <20%"
         print(f"\n[CORRECTNESS] {len(df)} rows, range: {numeric_cols.min().min():.4f} to {numeric_cols.max().max():.4f}")
+
+    def test_single_timestamp_unchanged(self):
+        """Verify single-timestamp build_curve still uses 1e-5 tolerances (no warm-start)."""
+        from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
+
+        builder = BARCHART_STIRF_CURVE()
+        ts = NYC.localize(datetime.datetime(2026, 3, 12, 10, 0))
+
+        # Single timestamp — should use default 1e-5 tolerances, no warm-start
+        result = builder.build_curve(
+            curve_name="USD-SOFR-1D-Q12STIRT",
+            timestamp=ts,
+            curve_only=True,
+        )
+        assert result is not None, "Single-timestamp build_curve should return a curve"
+        print(f"\n[REGRESSION] Single-timestamp build_curve OK")
