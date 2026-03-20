@@ -466,6 +466,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         self._open_count = 0
         self._open_lock = threading.RLock()
         self._cache_ready = False
+        self._session_dfs: Dict[str, pd.DataFrame] = {}  # session_open_iso -> full session DataFrame
 
         # ---- proxy rotation config ----
         default_hosts = [
@@ -1038,6 +1039,12 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             if price_df.empty:
                 raise RuntimeError(f"{src} returned no data for requested STIR futures.")
 
+            # Retain full-day DataFrame for downstream fast-path bulk lookups.
+            if floor_req_to_minute and not price_df.empty:
+                from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
+                session_key = BARCHART_STIRF_CURVE._cme_session_open_chi(ts_dt).isoformat()
+                self._session_dfs[session_key] = price_df
+
             # Persist all slices for future reuse
             if not use_live:
                 for t in price_df.columns:
@@ -1169,6 +1176,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         force_refresh = bool(request.get("force_refresh", False))
         max_workers = int(request.get("max_workers", 8))
         cache_full_intraday_fetch = bool(request.get("cache_full_intraday_fetch", self.cache_full_intraday_fetch))
+        primed_session_data = request.get("primed_session_data", None)
 
         if not symbols:
             raise ValueError("Request must include 'symbols' or 'tickers'.")
@@ -1191,6 +1199,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 force_refresh=force_refresh,
                 max_workers=max_workers,
                 cache_full_intraday_fetch=cache_full_intraday_fetch,
+                primed_session_data=primed_session_data,
             )
 
     def bulk_get_data(
@@ -1202,6 +1211,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         force_refresh: bool = False,
         max_workers: int = 8,
         cache_full_intraday_fetch: bool = False,
+        primed_session_data: Optional[Dict[str, pd.DataFrame]] = None,
     ) -> Dict[DateLike, Dict[str, List[InstrumentLike]]]:
         jobs: List[Tuple[DateLike, List[str]]] = []
         base_symbols = _clean_symbols(symbols)
@@ -1211,6 +1221,28 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         results: List[Tuple[DateLike, Dict[str, List[InstrumentLike]]]] = []
 
         with self:
+
+            # Fast-path: build pricers directly from primed session DataFrames.
+            if primed_session_data:
+                remaining_jobs: List[Tuple[DateLike, List[str]]] = []
+                for ts, syms in jobs:
+                    pricer_result = self._build_pricers_from_primed_df(
+                        symbols=syms,
+                        timestamp=ts,
+                        primed_session_data=primed_session_data,
+                    )
+                    if pricer_result is not None:
+                        results.append((ts, pricer_result))
+                    else:
+                        remaining_jobs.append((ts, syms))
+                jobs = remaining_jobs
+
+            if not jobs:
+                out: Dict[DateLike, Dict[str, List[InstrumentLike]]] = defaultdict(dict)
+                for ts, res in results:
+                    if res:
+                        out[ts].update(res)
+                return dict(out)
 
             def _process_one(ts: DateLike, syms: List[str]):
                 return ts, self._get_data_for_timestamp(
@@ -1245,6 +1277,80 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 if res:
                     out[ts].update(res)
             return dict(out)
+
+    def _build_pricers_from_primed_df(
+        self,
+        *,
+        symbols: List[str],
+        timestamp: DateLike,
+        primed_session_data: Dict[str, pd.DataFrame],
+    ) -> Optional[Dict[str, List[InstrumentLike]]]:
+        """Build pricers directly from a primed session DataFrame, bypassing cache lookups."""
+        from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
+
+        ts_dt = _as_datetime(timestamp)
+        session_key = BARCHART_STIRF_CURVE._cme_session_open_chi(ts_dt).isoformat()
+        price_df = primed_session_data.get(session_key)
+        if price_df is None or price_df.empty:
+            return None
+
+        alias_map = _resolve_aliases_bulk(symbols, timestamp)
+        if not alias_map:
+            return None
+
+        # Align lookup timestamp to DataFrame index
+        ts_obj = pd.Timestamp(ts_dt)
+        if price_df.index.tz is not None:
+            if ts_obj.tzinfo is None:
+                ts_obj = ts_obj.tz_localize(price_df.index.tz)
+            else:
+                ts_obj = ts_obj.tz_convert(price_df.index.tz)
+        elif ts_obj.tzinfo is not None:
+            ts_obj = ts_obj.tz_localize(None)
+
+        pos = price_df.index.get_indexer([ts_obj], method="nearest")
+        if pos.size == 0 or pos[0] == -1:
+            return None
+        row_ts = price_df.index[pos[0]]
+        row_ts_iso = pd.Timestamp(row_ts).isoformat()
+
+        result: Dict[str, List[InstrumentLike]] = {}
+        fixings_memo: Dict[Tuple[str, datetime.date], pd.Series] = {}
+
+        src = self.source.upper()
+        spread_legs: Dict[str, Dict[str, InstrumentLike]] = defaultdict(dict)
+
+        for alias, tickers in alias_map.items():
+            is_spread = _is_serff_spread_alias(alias)
+            if not is_spread:
+                insts: List[InstrumentLike] = []
+                for t in tickers:
+                    if t not in price_df.columns:
+                        continue
+                    px = price_df.at[row_ts, t]
+                    if pd.isna(px):
+                        continue
+                    args = {"symbol": t, "price": float(px), "timestamp": row_ts_iso, "schema": 1}
+                    insts.append(self._build_pricer_from_args(args, fixings_memo=fixings_memo))
+                if insts:
+                    result[alias] = insts
+            else:
+                legs = _serff_spread_legs(alias)
+                if legs is None:
+                    continue
+                sr1_leg, zq_leg = legs
+                for t in [sr1_leg, zq_leg]:
+                    if t not in price_df.columns:
+                        continue
+                    px = price_df.at[row_ts, t]
+                    if pd.isna(px):
+                        continue
+                    args = {"symbol": t, "price": float(px), "timestamp": row_ts_iso, "schema": 1}
+                    spread_legs[alias][t] = self._build_pricer_from_args(args, fixings_memo=fixings_memo)
+                if len(spread_legs[alias]) == 2:
+                    result[alias] = [spread_legs[alias][sr1_leg], spread_legs[alias][zq_leg]]
+
+        return result if result else None
 
     # --------------------------- context managers ----------------------------
     def __open__(self):

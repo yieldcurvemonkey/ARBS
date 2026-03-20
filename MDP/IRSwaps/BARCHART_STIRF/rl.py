@@ -116,6 +116,7 @@ def _build_stirf_nodes(
     central_bank_dates: Dict[str, Dict[str, Tuple[datetime.date, datetime.date]]],
     reference_key: str,
     max_tenor_from_timestamp_months: int,
+    initial_nodes: Optional[Dict[pd.Timestamp, float]] = None,
 ) -> Dict[pd.Timestamp, float]:
     assert isinstance(timestamp, datetime.datetime)
     assert timestamp.tzinfo is not None and timestamp.tzinfo.utcoffset(timestamp) is not None
@@ -157,7 +158,8 @@ def _build_stirf_nodes(
     # build nodes dict (values are placeholders / initial guesses)
     nodes: Dict[pd.Timestamp, float] = {_as_node_ts(base_date, base_ts=base_ts): 1.0}
     for d in node_dates:
-        nodes[_as_node_ts(d, base_ts=base_ts)] = 1.0
+        key = _as_node_ts(d, base_ts=base_ts)
+        nodes[key] = initial_nodes.get(key, 1.0) if initial_nodes else 1.0
 
     return nodes
 
@@ -255,7 +257,11 @@ def _build_curve_from_pricers_core(
     timestamp: datetime.datetime,
     cfg: Dict[str, Any],
     pricers: Dict[str, List["RLSTIRFuturePricer"]],
+    initial_nodes: Optional[Dict[pd.Timestamp, float]] = None,
+    solver_tolerances: Optional[Dict[str, float]] = None,
 ) -> Tuple[rl.Curve, rl.Solver]:
+    _func_tol = (solver_tolerances or {}).get("func_tol", 1e-5)
+    _conv_tol = (solver_tolerances or {}).get("conv_tol", 1e-5)
     curve_cls = BARCHART_STIRF_CURVE
     sorted_pricers = _sort_pricers_for_solver(pricers)
     node_reference_key = cfg.get("node_reference_key", cfg["reference_key"])
@@ -327,6 +333,7 @@ def _build_curve_from_pricers_core(
             central_bank_dates=_CENTRAL_BANK_DATES,
             reference_key=node_reference_key,
             max_tenor_from_timestamp_months=cfg["max_tenor_from_timestamp_months"],
+            initial_nodes=initial_nodes,
         )
         nodes = _sort_nodes(nodes)
         nodes = curve_cls._ensure_mixed_support_nodes(nodes=nodes, cfg=cfg, base_date=timestamp.date())
@@ -358,8 +365,8 @@ def _build_curve_from_pricers_core(
             s=[p._rate for p in base_pricers] + [0.0] * len(sofr_bflies),
             id=f"{curve_name}-SOFR-ANCHOR",
             weights=[1.0] * len(base_pricers) + [1e-8] * len(sofr_bflies),
-            func_tol=1e-5,
-            conv_tol=1e-5,
+            func_tol=_func_tol,
+            conv_tol=_conv_tol,
         )
 
         skew_s: List[float] = []
@@ -411,8 +418,8 @@ def _build_curve_from_pricers_core(
             s=skew_s + [0.0] * len(bflies),
             id=curve_name,
             weights=skew_w + [1e-8] * len(bflies),
-            func_tol=1e-5,
-            conv_tol=1e-5,
+            func_tol=_func_tol,
+            conv_tol=_conv_tol,
         )
 
         return rl_curve, rl_solver
@@ -423,6 +430,7 @@ def _build_curve_from_pricers_core(
         central_bank_dates=_CENTRAL_BANK_DATES,
         reference_key=node_reference_key,
         max_tenor_from_timestamp_months=cfg["max_tenor_from_timestamp_months"],
+        initial_nodes=initial_nodes,
     )
     nodes = _sort_nodes(nodes)
     nodes = curve_cls._ensure_mixed_support_nodes(nodes=nodes, cfg=cfg, base_date=timestamp.date())
@@ -459,8 +467,8 @@ def _build_curve_from_pricers_core(
         s=s,
         id=curve_name,
         weights=weights,
-        func_tol=1e-5,
-        conv_tol=1e-5,
+        func_tol=_func_tol,
+        conv_tol=_conv_tol,
     )
 
     return rl_curve, rl_solver
@@ -471,6 +479,8 @@ def _process_curve_calibration_job(
     timestamp: datetime.datetime,
     cfg: Dict[str, Any],
     pricers: Dict[str, List["RLSTIRFuturePricer"]],
+    initial_nodes: Optional[Dict] = None,
+    solver_tolerances: Optional[Dict[str, float]] = None,
 ) -> Tuple[datetime.datetime, rl.Curve]:
     with _suppress_solver_output():
         curve_obj, _ = _build_curve_from_pricers_core(
@@ -478,8 +488,35 @@ def _process_curve_calibration_job(
             timestamp=timestamp,
             cfg=cfg,
             pricers=pricers,
+            initial_nodes=initial_nodes,
+            solver_tolerances=solver_tolerances,
         )
     return timestamp, curve_obj
+
+
+def _extract_nodes(curve: rl.Curve) -> Dict[pd.Timestamp, float]:
+    """Extract calibrated node values from a solved rateslib Curve."""
+    raw = curve.nodes._nodes if hasattr(curve.nodes, "_nodes") else dict(curve.nodes)
+    return {k: float(v) for k, v in raw.items()}
+
+
+def _split_chronological(
+    jobs: List[Tuple[datetime.datetime, Any]],
+    n_chunks: int,
+) -> List[List[Tuple[datetime.datetime, Any]]]:
+    """Split jobs into n_chunks contiguous chronological chunks for warm-start chains."""
+    sorted_jobs = sorted(jobs, key=lambda x: x[0])
+    if n_chunks <= 1 or len(sorted_jobs) <= 1:
+        return [sorted_jobs]
+    chunk_size = max(1, len(sorted_jobs) // n_chunks)
+    chunks: List[List[Tuple[datetime.datetime, Any]]] = []
+    for i in range(0, len(sorted_jobs), chunk_size):
+        chunks.append(sorted_jobs[i : i + chunk_size])
+    # Merge any tiny trailing chunk into the last real chunk
+    if len(chunks) > n_chunks and chunks[-1]:
+        chunks[-2].extend(chunks[-1])
+        chunks.pop()
+    return chunks
 
 
 def _to_plot_bound(value: Optional[Union[str, datetime.date, datetime.datetime, pd.Timestamp]]) -> Optional[Union[str, Any]]:
@@ -2144,13 +2181,55 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         timestamp: datetime.datetime,
         cfg: Dict[str, Any],
         pricers: Dict[str, List[RLSTIRFuturePricer]],
+        initial_nodes: Optional[Dict] = None,
+        solver_tolerances: Optional[Dict[str, float]] = None,
     ) -> Tuple[rl.Curve, rl.Solver]:
         return _build_curve_from_pricers_core(
             curve_name=curve_name,
             timestamp=timestamp,
             cfg=cfg,
             pricers=pricers,
+            initial_nodes=initial_nodes,
+            solver_tolerances=solver_tolerances,
         )
+
+    def _get_primed_session_df(
+        self,
+        timestamp: datetime.datetime,
+        cfg: Dict[str, Any],
+    ) -> Optional[pd.DataFrame]:
+        """Retrieve the full-session DataFrame cached during priming, if available."""
+        session_key = self._cme_session_open_chi(timestamp).isoformat()
+        mdp = self.stirf_mdp
+        return mdp._session_dfs.get(session_key)
+
+    def _calibrate_chunk(
+        self,
+        *,
+        chunk: List[Tuple[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]]],
+        curve_name: str,
+        cfg: Dict[str, Any],
+        solver_tolerances: Optional[Dict[str, float]] = None,
+        curve_only: bool = True,
+    ) -> Dict[datetime.datetime, Any]:
+        """Calibrate a chronological chunk with warm-starting from previous curve's nodes."""
+        results: Dict[datetime.datetime, Any] = {}
+        prior_nodes: Optional[Dict] = None
+        for ts, ts_pricers in chunk:
+            with _suppress_solver_output():
+                curve_obj, solver_obj = self._build_curve_from_pricers(
+                    curve_name=curve_name,
+                    timestamp=ts,
+                    cfg=cfg,
+                    pricers=ts_pricers,
+                    initial_nodes=prior_nodes,
+                    solver_tolerances=solver_tolerances,
+                )
+            prior_nodes = _extract_nodes(curve_obj)
+            curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
+            self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
+            results[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
+        return results
 
     def build_curve(
         self,
@@ -2256,6 +2335,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                     tqdm_mod = None
 
             # Phase 1: optional auto-prime to minimize Barchart calls on bulk runs.
+            primed_dfs: Dict[str, pd.DataFrame] = {}
             if auto_prime_bulk:
                 prime_kwargs = dict(local_kwargs)
                 prime_kwargs["cache_full_intraday_fetch"] = bool(prime_kwargs.get("cache_full_intraday_fetch", True))
@@ -2273,6 +2353,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 if tqdm_mod is not None and len(session_rep_timestamps) > 1:
                     prime_iter = tqdm_mod.tqdm(session_rep_timestamps, desc=f"PRIMING {curve_name} STIR CACHE")
 
+                primed_dfs: Dict[str, pd.DataFrame] = {}
                 for ts_prime in prime_iter:
                     prime_req = dict(symbols=cfg["instruments"], timestamp=ts_prime, **prime_kwargs)
                     fetch_pricers_func, _ = self._resolve_fetchers_for_request(
@@ -2280,6 +2361,11 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                         is_live_request=bool(live_by_timestamp.get(ts_prime, False)),
                     )
                     fetch_pricers_func(request=prime_req)
+                    # Capture the full session DataFrame for fast bulk lookup
+                    session_key = self._cme_session_open_chi(ts_prime).isoformat()
+                    cached_df = self._get_primed_session_df(ts_prime, cfg)
+                    if cached_df is not None:
+                        primed_dfs[session_key] = cached_df
 
             # Phase 2: fetch STIR pricers for all requested timestamps (prefer cache).
             pricers_by_ts: Dict[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]] = {}
@@ -2300,7 +2386,8 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 elif stirf_fetch_max_workers is not None and "max_workers" not in bulk_kwargs:
                     bulk_kwargs["max_workers"] = int(stirf_fetch_max_workers)
 
-                bulk_req = dict(symbols=cfg["instruments"], timestamps=pending_timestamps, **bulk_kwargs)
+                bulk_req = dict(symbols=cfg["instruments"], timestamps=pending_timestamps,
+                                primed_session_data=primed_dfs or None, **bulk_kwargs)
                 pricers_by_ts = fetch_pricers_bulk_func(request=bulk_req)
 
             calibration_jobs: List[Tuple[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]]] = []
@@ -2319,13 +2406,17 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                     ts_pricers = fetch_pricers_func(request=pricer_req)
                 calibration_jobs.append((ts, ts_pricers))
 
-            # Phase 3: parallel curve calibrations + tqdm progress.
+            # Phase 3: parallel curve calibrations with warm-start chains + tqdm progress.
             cal_workers = int(calibration_max_workers or len(calibration_jobs))
             cal_workers = max(1, min(cal_workers, len(calibration_jobs)))
             fresh_curves: Dict[datetime.datetime, rl.Curve] = {}
+
+            # Relaxed tolerances for bulk timeseries calibration.
+            bulk_solver_tolerances = {"func_tol": 1e-3, "conv_tol": 1e-3}
+
             _emit_calibration_status(
                 curve_name=curve_name,
-                executor_mode=calibration_executor,
+                executor_mode="thread-warmstart",
                 workers=cal_workers,
                 jobs=len(calibration_jobs),
                 show_tqdm=show_tqdm,
@@ -2333,6 +2424,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             )
 
             if calibration_executor == "process":
+                # Process pool: no warm-start possible (kept as escape hatch).
                 reduced_cfg = _reduced_calibration_cfg(cfg)
                 _validate_spawn_process_pool_environment()
                 with ProcessPoolExecutor(
@@ -2346,6 +2438,8 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                             ts,
                             reduced_cfg,
                             ts_pricers,
+                            None,  # no warm-start
+                            bulk_solver_tolerances,
                         ): ts
                         for ts, ts_pricers in calibration_jobs
                     }
@@ -2360,33 +2454,42 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                         fresh_curves[ts] = curve_obj
                         out[ts] = curve_obj if curve_only else (curve_obj, None)
             elif cal_workers == 1:
-                cal_iter: Iterable[Tuple[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]]] = calibration_jobs
-                if tqdm_mod is not None:
-                    cal_iter = tqdm_mod.tqdm(calibration_jobs, desc=f"CALIBRATING {curve_name}")
-                for ts, ts_pricers in cal_iter:
-                    built = self._build_curve_from_pricers(curve_name=curve_name, timestamp=ts, cfg=cfg, pricers=ts_pricers)
-                    curve_obj, solver_obj = built
-                    curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
-                    self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
+                # Single worker: sequential warm-start chain.
+                chunk_results = self._calibrate_chunk(
+                    chunk=sorted(calibration_jobs, key=lambda x: x[0]),
+                    curve_name=curve_name,
+                    cfg=cfg,
+                    solver_tolerances=bulk_solver_tolerances,
+                    curve_only=curve_only,
+                )
+                for ts, val in chunk_results.items():
+                    curve_obj = val if curve_only else val[0]
                     fresh_curves[ts] = curve_obj
-                    out[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
+                    out[ts] = val
             else:
+                # Multi-worker: partition into chronological chunks, warm-start within each.
+                chunks = _split_chronological(calibration_jobs, cal_workers)
                 with ThreadPoolExecutor(max_workers=cal_workers, thread_name_prefix="stir-curve-calib") as pool:
                     futures = {
-                        pool.submit(self._build_curve_from_pricers, curve_name=curve_name, timestamp=ts, cfg=cfg, pricers=ts_pricers): ts
-                        for ts, ts_pricers in calibration_jobs
+                        pool.submit(
+                            self._calibrate_chunk,
+                            chunk=chunk,
+                            curve_name=curve_name,
+                            cfg=cfg,
+                            solver_tolerances=bulk_solver_tolerances,
+                            curve_only=curve_only,
+                        ): idx
+                        for idx, chunk in enumerate(chunks)
                     }
                     completed = as_completed(futures)
                     if tqdm_mod is not None:
                         completed = tqdm_mod.tqdm(completed, total=len(futures), desc=f"CALIBRATING {curve_name}")
                     for fut in completed:
-                        ts = futures[fut]
-                        built = fut.result()
-                        curve_obj, solver_obj = built
-                        curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
-                        self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
-                        fresh_curves[ts] = curve_obj
-                        out[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
+                        chunk_results = fut.result()
+                        for ts, val in chunk_results.items():
+                            curve_obj = val if curve_only else val[0]
+                            fresh_curves[ts] = curve_obj
+                            out[ts] = val
 
             self._persist_bulk_curves(
                 curve_name=curve_name,
