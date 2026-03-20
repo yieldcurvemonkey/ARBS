@@ -106,6 +106,7 @@ class _PartialFallbackRouter(_FakeRouter):
         self.mdp = mdp
         self.call_count = 0
         self.fallback_value = float(fallback_value)
+        self.fallback_requests: List[List[Any]] = []
 
     def get_timeseries(self, start, end, queries, *, n_jobs=1, ignore_cache=False, freq=None, timestamps=None) -> pd.DataFrame:
         _ = start, end, n_jobs, ignore_cache, freq
@@ -114,6 +115,7 @@ class _PartialFallbackRouter(_FakeRouter):
             points = list(timestamps)
         else:
             points = pd.bdate_range(start, end).date.tolist()
+        self.fallback_requests.append(list(points))
         idx = pd.Index(points, name=self.date_col)
         return pd.DataFrame(
             {
@@ -219,12 +221,20 @@ class _FakeIRSCurveStore:
 
 
 class _FakeIRSCurveStoreMDP:
-    def __init__(self, store: _FakeIRSCurveStore, source: str = "BARCHART_STIRF-RL"):
+    def __init__(
+        self,
+        store: _FakeIRSCurveStore,
+        source: str = "BARCHART_STIRF-RL",
+        *,
+        bulk_results: Optional[Dict[Any, Any]] = None,
+    ):
         self.source = source
         self._store = store
         self.resolve_calls: List[Tuple[str, Dict[str, Any]]] = []
         self.wrap_calls: List[Tuple[str, str, Any]] = []
         self.bulk_calls = 0
+        self.bulk_results = dict(bulk_results or {})
+        self.bulk_requests: List[Dict[str, Any]] = []
 
     def _is_barchart_source(self) -> bool:
         return self.source.upper().startswith("BARCHART_STIRF")
@@ -316,7 +326,13 @@ class _FakeIRSCurveStoreMDP:
 
     def bulk_get_data(self, request: Dict[str, Any]) -> Dict[Any, Any]:
         self.bulk_calls += 1
-        return {}
+        self.bulk_requests.append(dict(request))
+        timestamps = list(request.get("timestamps", []) or [])
+        return {
+            ts: self.bulk_results[ts]
+            for ts in timestamps
+            if ts in self.bulk_results
+        }
 
 
 class _MockSTIRFuturePricable(_STIRFutureGenericPricable):
@@ -1083,28 +1099,72 @@ def test_timeseries_builder_route_full_computed_cache_hit_skips_irs_router(monke
     assert mdp.bulk_calls == 0
 
 
-def test_timeseries_builder_curve_store_fast_path_falls_back_for_missing_points(monkeypatch):
+def test_timeseries_builder_curve_store_fast_path_recovers_missing_points_via_bulk_mdp(monkeypatch):
     import TB.IRSwapsTB as irs_tb_module
 
     ts1 = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
     ts2 = datetime.datetime(2025, 1, 6, 15, 0, tzinfo=datetime.timezone.utc)
     store = _FakeIRSCurveStore([ts1])
-    mdp = _FakeIRSCurveStoreMDP(store)
-    router = _PartialFallbackRouter(mdp, fallback_value=0.052)
+    mdp = _FakeIRSCurveStoreMDP(store, bulk_results={ts2: "mdp::curve::2025-01-06T15:00:00+00:00"})
+    router = _NoCallRouter(mdp)
     tb = TimeseriesBuilder(irswaps_tb=router)
     q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
 
     monkeypatch.setattr(
         irs_tb_module,
         "_build_row_for_query",
-        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.053 if str(curve).startswith("mdp::") else 0.05),
     )
 
     out = tb.get_timeseries(start=ts1, end=ts2, queries=[q], timestamps=[ts1, ts2], n_jobs=2)
 
     assert list(out.index) == [ts1, ts2]
-    assert list(out[q.col_name()]) == [0.05, 0.052]
+    assert list(out[q.col_name()]) == [0.05, 0.053]
+    assert router.call_count == 0
+    assert mdp.bulk_calls == 1
+    assert mdp.bulk_requests == [
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [ts2],
+            "ignore_cache": False,
+            "n_jobs": 2,
+        }
+    ]
+
+
+def test_timeseries_builder_curve_store_fast_path_falls_back_only_for_points_missing_after_bulk_recovery(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    ts1 = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2025, 1, 6, 15, 0, tzinfo=datetime.timezone.utc)
+    ts3 = datetime.datetime(2025, 1, 6, 16, 0, tzinfo=datetime.timezone.utc)
+    store = _FakeIRSCurveStore([ts1])
+    mdp = _FakeIRSCurveStoreMDP(store, bulk_results={ts2: "mdp::curve::2025-01-06T15:00:00+00:00"})
+    router = _PartialFallbackRouter(mdp, fallback_value=0.054)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.053 if str(curve).startswith("mdp::") else 0.05),
+    )
+
+    out = tb.get_timeseries(start=ts1, end=ts3, queries=[q], timestamps=[ts1, ts2, ts3], n_jobs=2)
+
+    assert list(out.index) == [ts1, ts2, ts3]
+    assert list(out[q.col_name()]) == [0.05, 0.053, 0.054]
+    assert mdp.bulk_calls == 1
+    assert mdp.bulk_requests == [
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [ts2, ts3],
+            "ignore_cache": False,
+            "n_jobs": 2,
+        }
+    ]
     assert router.call_count == 1
+    assert router.fallback_requests == [[ts3]]
 
 
 def test_timeseries_builder_curve_store_eod_fallback_does_not_emit_redundant_date_column(monkeypatch):

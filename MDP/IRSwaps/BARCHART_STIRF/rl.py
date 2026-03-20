@@ -500,6 +500,53 @@ def _extract_nodes(curve: rl.Curve) -> Dict[pd.Timestamp, float]:
     return {k: float(v) for k, v in raw.items()}
 
 
+def _float_signature(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except Exception:
+        return str(value)
+    if math.isnan(numeric):
+        return "nan"
+    if math.isinf(numeric):
+        return "inf" if numeric > 0 else "-inf"
+    return repr(numeric)
+
+
+def _date_signature(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        return pd.Timestamp(value).isoformat()
+    except Exception:
+        return str(value)
+
+
+def _pricer_signature(pricer: "RLSTIRFuturePricer") -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str], int]:
+    return (
+        getattr(pricer, "_rl_stirf_id", None) or getattr(pricer, "_meta_data", {}).get("symbol", ""),
+        _date_signature(getattr(pricer, "_effective_date", None)),
+        _date_signature(getattr(pricer, "_maturity_date", None)),
+        _float_signature(getattr(pricer, "_price", None)),
+        _float_signature(getattr(pricer, "_rate", None)),
+        int(getattr(pricer, "_contracts", 1) or 1),
+    )
+
+
+def _calibration_job_signature(
+    pricers: Dict[str, List["RLSTIRFuturePricer"]],
+) -> Tuple[Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str], int], ...]:
+    return tuple(_pricer_signature(pricer) for pricer in _sort_pricers_for_solver(pricers))
+
+
+def _curve_nodes_payload(curve: rl.Curve) -> Dict[str, float]:
+    return {
+        pd.Timestamp(node_ts).isoformat(): float(value)
+        for node_ts, value in curve.nodes.nodes.items()
+    }
+
+
 def _split_chronological(
     jobs: List[Tuple[datetime.datetime, Any]],
     n_chunks: int,
@@ -2391,6 +2438,11 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 pricers_by_ts = fetch_pricers_bulk_func(request=bulk_req)
 
             calibration_jobs: List[Tuple[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]]] = []
+            duplicate_timestamps_by_canonical: Dict[datetime.datetime, List[datetime.datetime]] = {}
+            canonical_timestamp_by_signature: Dict[
+                Tuple[Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str], int], ...],
+                datetime.datetime,
+            ] = {}
             for ts in pending_timestamps:
                 ts_pricers = pricers_by_ts.get(ts, None)
                 if ts_pricers is None:
@@ -2404,7 +2456,14 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                         is_live_request=bool(live_by_timestamp.get(ts, False)),
                     )
                     ts_pricers = fetch_pricers_func(request=pricer_req)
-                calibration_jobs.append((ts, ts_pricers))
+                signature = _calibration_job_signature(ts_pricers)
+                canonical_ts = canonical_timestamp_by_signature.get(signature)
+                if canonical_ts is None:
+                    canonical_timestamp_by_signature[signature] = ts
+                    duplicate_timestamps_by_canonical[ts] = []
+                    calibration_jobs.append((ts, ts_pricers))
+                    continue
+                duplicate_timestamps_by_canonical.setdefault(canonical_ts, []).append(ts)
 
             # Phase 3: parallel curve calibrations with warm-start chains + tqdm progress.
             cal_workers = int(calibration_max_workers or len(calibration_jobs))
@@ -2490,6 +2549,38 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                             curve_obj = val if curve_only else val[0]
                             fresh_curves[ts] = curve_obj
                             out[ts] = val
+
+            coalesced_duplicates = 0
+            for canonical_ts, duplicate_timestamps in duplicate_timestamps_by_canonical.items():
+                if not duplicate_timestamps:
+                    continue
+                canonical_val = out.get(canonical_ts)
+                if canonical_val is None:
+                    continue
+                canonical_curve = canonical_val if curve_only else canonical_val[0]
+                if not isinstance(canonical_curve, rl.Curve):
+                    continue
+                node_values = _curve_nodes_payload(canonical_curve)
+                for duplicate_ts in duplicate_timestamps:
+                    duplicate_curve = self._curve_from_bundle_nodes(
+                        curve_name=curve_name,
+                        timestamp=duplicate_ts,
+                        cfg=cfg,
+                        bundle_date=self._trading_date_for_timestamp(duplicate_ts),
+                        node_values=node_values,
+                    )
+                    fresh_curves[duplicate_ts] = duplicate_curve
+                    out[duplicate_ts] = duplicate_curve if curve_only else (duplicate_curve, None)
+                    coalesced_duplicates += 1
+
+            if coalesced_duplicates:
+                logging.getLogger(__name__).debug(
+                    "Coalesced %s duplicate calibration jobs for %s (%s unique calibrations across %s requested timestamps).",
+                    coalesced_duplicates,
+                    curve_name,
+                    len(calibration_jobs),
+                    len(pending_timestamps),
+                )
 
             self._persist_bulk_curves(
                 curve_name=curve_name,

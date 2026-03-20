@@ -1,5 +1,7 @@
 import datetime
+import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from dataclasses import dataclass
@@ -33,6 +35,9 @@ if TYPE_CHECKING:
     from TB.STIRFuturesTB import STIRFuturesTB
     from TB.USTFutureOptionsTB import USTFutureOptionsTB
     from TB.USTFuturesTB import USTFuturesTB
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _normalize_query_like(query: BaseQuery) -> List[BaseQuery]:
@@ -1514,6 +1519,87 @@ class TimeseriesBuilder:
             if not curve_reference_points:
                 continue
 
+            def _log_curve_stage(stage_name: str, started_at: float, **metrics: Any) -> None:
+                if not _LOGGER.isEnabledFor(logging.DEBUG):
+                    return
+                metric_items = [f"{key}={value}" for key, value in metrics.items()]
+                metric_suffix = f" ({', '.join(metric_items)})" if metric_items else ""
+                _LOGGER.debug(
+                    "IRS curve-store %s for %s took %.3fs%s",
+                    stage_name,
+                    requested_curve_name,
+                    time.perf_counter() - started_at,
+                    metric_suffix,
+                )
+
+            def _curve_for_ref_point(curves_by_ref: Mapping[Any, Any], ref_point: DateLike) -> Any:
+                curve = curves_by_ref.get(ref_point)
+                if curve is None and isinstance(ref_point, datetime.date) and not isinstance(ref_point, datetime.datetime):
+                    if ref_point == datetime.date.today():
+                        curve = curves_by_ref.get("live")
+                return curve
+
+            rows: List[Tuple[DateLike, str, float]] = []
+            newly_computed_rows: Dict[int, List[Tuple[DateLike, str, float]]] = defaultdict(list)
+
+            def _price_curve_map(
+                *,
+                candidate_ref_points: Sequence[DateLike],
+                curves_by_ref: Mapping[Any, Any],
+                source_desc: str,
+            ) -> int:
+                tasks: List[Tuple[int, DateLike, IRSwapQuery, Any]] = []
+                for ref_point in candidate_ref_points:
+                    curve = _curve_for_ref_point(curves_by_ref, ref_point)
+                    if curve is None:
+                        continue
+                    for idx, q in enumerate(curve_queries):
+                        if (ref_point, idx) in covered:
+                            continue
+                        tasks.append((idx, ref_point, q, curve))
+
+                if not tasks:
+                    return 0
+
+                worker_count = max(1, int(n_jobs or 1))
+                with _tqdm(
+                    total=len(tasks),
+                    disable=pbar_disable,
+                    desc=f"PRICING {requested_curve_name} IRSWAPS [{source_desc}, workers={worker_count}]...",
+                    leave=True,
+                ) as pbar:
+                    if worker_count > 1 and len(tasks) > 1:
+                        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ts-irs-curve-store") as pool:
+                            future_map = {
+                                pool.submit(_build_irs_row_for_query, curve, q, ref_point, self._date_col): (ref_point, idx)
+                                for idx, ref_point, q, curve in tasks
+                            }
+                            for future in as_completed(future_map):
+                                ref_point, idx = future_map[future]
+                                try:
+                                    row = future.result()
+                                    rows.append(row)
+                                    covered.add((ref_point, idx))
+                                    newly_computed_rows[idx].append(row)
+                                except Exception:
+                                    continue
+                                finally:
+                                    pbar.update(1)
+                    else:
+                        for idx, ref_point, q, curve in tasks:
+                            try:
+                                row = _build_irs_row_for_query(curve, q, ref_point, self._date_col)
+                                rows.append(row)
+                                covered.add((ref_point, idx))
+                                newly_computed_rows[idx].append(row)
+                            except Exception:
+                                continue
+                            finally:
+                                pbar.update(1)
+
+                return len(tasks)
+
+            cached_started = time.perf_counter()
             cached_rows, covered = _run_stage(
                 desc=f"READING {requested_curve_name} computed cache...",
                 total=len(curve_queries),
@@ -1525,12 +1611,23 @@ class TimeseriesBuilder:
                     intraday=use_intraday_cache,
                 ),
             )
+            rows.extend(cached_rows)
+            _log_curve_stage(
+                "computed cache read",
+                cached_started,
+                rows=len(cached_rows),
+                covered=len(covered),
+                ref_points=len(curve_reference_points),
+                queries=len(curve_queries),
+            )
             if _is_curve_coverage_complete(
                 reference_points=curve_reference_points,
                 query_count=len(curve_queries),
                 covered=covered,
             ):
-                curve_df = generic_tb._rows_to_frame(cached_rows)
+                frame_started = time.perf_counter()
+                curve_df = generic_tb._rows_to_frame(rows)
+                _log_curve_stage("frame assembly", frame_started, rows=len(rows), shape=getattr(curve_df, "shape", None))
                 if not curve_df.empty:
                     curve_frames.append(curve_df)
                 continue
@@ -1578,6 +1675,7 @@ class TimeseriesBuilder:
             analytics_rows: List[Tuple[DateLike, str, float]] = []
             analytics_covered: set[Tuple[DateLike, int]] = set()
             if _supports_irs_curve_store_analytics_fast_path(mdp):
+                analytics_started = time.perf_counter()
                 analytics_rows, analytics_covered = _run_stage(
                     desc=f"READING {requested_curve_name} curve analytics...",
                     total=len(curve_reference_points),
@@ -1590,7 +1688,13 @@ class TimeseriesBuilder:
                         requested_key_by_ref=requested_key_by_ref,
                     ),
                 )
-            rows = list(cached_rows) + list(analytics_rows)
+                _log_curve_stage(
+                    "analytics read",
+                    analytics_started,
+                    rows=len(analytics_rows),
+                    covered=len(analytics_covered),
+                )
+            rows.extend(analytics_rows)
             covered.update(analytics_covered)
 
             if _is_curve_coverage_complete(
@@ -1598,7 +1702,9 @@ class TimeseriesBuilder:
                 query_count=len(curve_queries),
                 covered=covered,
             ):
+                frame_started = time.perf_counter()
                 curve_df = generic_tb._rows_to_frame(rows)
+                _log_curve_stage("frame assembly", frame_started, rows=len(rows), shape=getattr(curve_df, "shape", None))
                 if not curve_df.empty:
                     curve_frames.append(curve_df)
                 continue
@@ -1615,6 +1721,7 @@ class TimeseriesBuilder:
 
             curve_map: Dict[DateLike, Any] = {}
             if _supports_irs_curve_store_raw_curve_fast_path(mdp) and uncovered_ref_points:
+                raw_curve_started = time.perf_counter()
                 raw_curve_total = len(uncovered_ref_points)
                 with _tqdm(
                     total=max(1, raw_curve_total),
@@ -1647,52 +1754,82 @@ class TimeseriesBuilder:
                     )
                     if raw_curve_progress < raw_curve_total:
                         pbar.update(raw_curve_total - raw_curve_progress)
+                _log_curve_stage(
+                    "raw curve reconstruction",
+                    raw_curve_started,
+                    requested=len(uncovered_ref_points),
+                    recovered=len(curve_map),
+                )
 
-            newly_computed_rows: Dict[int, List[Tuple[DateLike, str, float]]] = defaultdict(list)
-            tasks = [
-                (idx, ref_point, q, curve_map[ref_point])
-                for idx, q in enumerate(curve_queries)
+            curve_store_pricing_started = time.perf_counter()
+            curve_store_priced = _price_curve_map(
+                candidate_ref_points=uncovered_ref_points,
+                curves_by_ref=curve_map,
+                source_desc="curve-store",
+            )
+            _log_curve_stage(
+                "curve-store pricing",
+                curve_store_pricing_started,
+                tasks=curve_store_priced,
+                covered=len(covered),
+            )
+
+            missing_points = [
+                ref_point
                 for ref_point in curve_reference_points
-                if (ref_point, idx) not in covered and ref_point in curve_map
+                if any((ref_point, idx) not in covered for idx in range(len(curve_queries)))
             ]
-            worker_count = max(1, int(n_jobs or 1))
-            with _tqdm(
-                total=len(tasks),
-                disable=pbar_disable,
-                desc=f"PRICING {requested_curve_name} IRSWAPS [curve-store, workers={worker_count}]...",
-                leave=True,
-            ) as pbar:
-                if worker_count > 1 and len(tasks) > 1:
-                    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ts-irs-curve-store") as pool:
-                        future_map = {
-                            pool.submit(_build_irs_row_for_query, curve, q, ref_point, self._date_col): (ref_point, idx)
-                            for idx, ref_point, q, curve in tasks
+
+            direct_recovery_curves: Dict[DateLike, Any] = {}
+            if missing_points:
+                direct_recovery_started = time.perf_counter()
+                recovered_curve_map: Mapping[Any, Any]
+                try:
+                    recovered_curve_map = mdp.bulk_get_data(
+                        {
+                            "curve_name": requested_curve_name,
+                            "timestamps": sorted(missing_points),
+                            "ignore_cache": ignore_cache,
+                            "n_jobs": n_jobs,
                         }
-                        for future in as_completed(future_map):
-                            ref_point, idx = future_map[future]
-                            try:
-                                row = future.result()
-                                rows.append(row)
-                                covered.add((ref_point, idx))
-                                newly_computed_rows[idx].append(row)
-                            except Exception:
-                                continue
-                            finally:
-                                pbar.update(1)
-                else:
-                    for idx, ref_point, q, curve in tasks:
-                        try:
-                            row = _build_irs_row_for_query(curve, q, ref_point, self._date_col)
-                            rows.append(row)
-                            covered.add((ref_point, idx))
-                            newly_computed_rows[idx].append(row)
-                        except Exception:
-                            continue
-                        finally:
-                            pbar.update(1)
+                    )
+                except Exception:
+                    recovered_curve_map = {}
+                    _LOGGER.debug(
+                        "IRS curve-store direct miss recovery fetch failed for %s",
+                        requested_curve_name,
+                        exc_info=True,
+                    )
+
+                for ref_point in missing_points:
+                    curve = _curve_for_ref_point(recovered_curve_map, ref_point)
+                    if curve is not None:
+                        direct_recovery_curves[ref_point] = curve
+
+                _log_curve_stage(
+                    "direct miss recovery fetch",
+                    direct_recovery_started,
+                    requested=len(missing_points),
+                    recovered=len(direct_recovery_curves),
+                )
+
+            if direct_recovery_curves:
+                direct_pricing_started = time.perf_counter()
+                direct_priced = _price_curve_map(
+                    candidate_ref_points=missing_points,
+                    curves_by_ref=direct_recovery_curves,
+                    source_desc="mdp-direct",
+                )
+                _log_curve_stage(
+                    "direct miss recovery",
+                    direct_pricing_started,
+                    tasks=direct_priced,
+                    covered=len(covered),
+                )
 
             new_row_count = sum(len(v) for v in newly_computed_rows.values())
             if new_row_count > 0:
+                write_started = time.perf_counter()
                 _run_stage(
                     desc=f"WRITING {requested_curve_name} computed cache...",
                     total=new_row_count,
@@ -1703,13 +1840,14 @@ class TimeseriesBuilder:
                         queries=curve_queries,
                     ),
                 )
+                _log_curve_stage("computed cache write", write_started, rows=new_row_count)
 
-            direct_df = generic_tb._rows_to_frame(rows)
             missing_points = [
                 ref_point
                 for ref_point in curve_reference_points
                 if any((ref_point, idx) not in covered for idx in range(len(curve_queries)))
             ]
+            fallback_started = time.perf_counter()
             fallback_df = self._fallback_timeseries_for_missing_points(
                 product="IRS",
                 queries=curve_queries,
@@ -1722,15 +1860,39 @@ class TimeseriesBuilder:
                 ignore_cache=ignore_cache,
                 freq=freq,
             )
+            _log_curve_stage(
+                "final router fallback",
+                fallback_started,
+                missing=len(missing_points),
+                fallback_shape=getattr(fallback_df, "shape", None),
+            )
+            frame_started = time.perf_counter()
+            direct_df = generic_tb._rows_to_frame(rows)
             curve_df = direct_df.combine_first(fallback_df) if not fallback_df.empty else direct_df
+            _log_curve_stage(
+                "frame assembly",
+                frame_started,
+                rows=len(rows),
+                direct_shape=getattr(direct_df, "shape", None),
+                fallback_shape=getattr(fallback_df, "shape", None),
+                final_shape=getattr(curve_df, "shape", None),
+            )
             if not curve_df.empty:
                 curve_frames.append(curve_df)
 
         if not curve_frames:
             return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+        final_frame_started = time.perf_counter()
         out = pd.concat(curve_frames, axis=1).sort_index()
         out.index.name = self._date_col
         out = self._strip_redundant_date_column(out)
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "IRS curve-store final frame assembly took %.3fs (curve_frames=%d, shape=%s)",
+                time.perf_counter() - final_frame_started,
+                len(curve_frames),
+                getattr(out, "shape", None),
+            )
         return out
 
     def get_timeseries(

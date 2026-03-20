@@ -3,7 +3,7 @@ import datetime
 import io
 import sys
 import threading
-from typing import Any, Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
 
 import pandas as pd
 import pytz
@@ -1882,17 +1882,11 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                         )
 
                 # ── Tier 1+2: diskcache + solver fallback ──
-                try:
-                    with self._suppress_ratelibs_solver_output():
-                        built_curves = builder.build_curve(
-                            curve_name=resolved_curve_name,
-                            timestamp=rl_timestamps,
-                            kwargs=bulk_request,
-                            curve_only=True,
-                        )
-                    fixings_cache: Dict[tuple[datetime.date, str], pd.Series] = {}
+                fixings_cache: Dict[tuple[datetime.date, str], pd.Series] = {}
+
+                def _wrap_barchart_curves(curve_handles_by_timestamp: Dict[datetime.datetime, Any]) -> None:
                     for rl_timestamp, original_timestamps in timestamps_by_rl_timestamp.items():
-                        rl_curve_handle = built_curves.get(rl_timestamp)
+                        rl_curve_handle = curve_handles_by_timestamp.get(rl_timestamp)
                         if rl_curve_handle is None:
                             continue
                         curve = self._build_barchart_stirf_rl_curve(
@@ -1905,15 +1899,115 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                         )
                         for original_timestamp in original_timestamps:
                             out[original_timestamp] = curve
-                    return out
+
+                def _attempt_bulk_build(
+                    batch_timestamps: Sequence[datetime.datetime],
+                    *,
+                    request_kwargs: Dict[str, Any],
+                ) -> Dict[datetime.datetime, Any]:
+                    if not batch_timestamps:
+                        return {}
+                    with self._suppress_ratelibs_solver_output():
+                        built = builder.build_curve(
+                            curve_name=resolved_curve_name,
+                            timestamp=list(batch_timestamps),
+                            kwargs=request_kwargs,
+                            curve_only=True,
+                        )
+                    if not isinstance(built, dict):
+                        return {}
+                    return {
+                        ts: built.get(ts)
+                        for ts in batch_timestamps
+                        if built.get(ts) is not None
+                    }
+
+                built_curves: Dict[datetime.datetime, Any] = {}
+                bulk_build_exc: Optional[Exception] = None
+                try:
+                    built_curves = _attempt_bulk_build(rl_timestamps, request_kwargs=bulk_request)
                 except Exception as exc:
-                    if calibration_executor == "process":
-                        raise RuntimeError("Process-pool calibration failed for BARCHART STIRF bulk_get_data.") from exc
-                    pass
+                    bulk_build_exc = exc
+
+                if bulk_build_exc is not None and calibration_executor == "process":
+                    raise RuntimeError("Process-pool calibration failed for BARCHART STIRF bulk_get_data.") from bulk_build_exc
+
+                if built_curves:
+                    _wrap_barchart_curves(built_curves)
+                if calibration_executor == "process":
+                    return out
+
+                retry_request = dict(bulk_request)
+                retry_request["show_tqdm"] = False
+
+                remaining_rl_timestamps = [
+                    rl_timestamp
+                    for rl_timestamp in timestamps_by_rl_timestamp
+                    if rl_timestamp not in built_curves
+                ]
+                if remaining_rl_timestamps:
+                    by_trading_date: Dict[datetime.date, List[datetime.datetime]] = {}
+                    for rl_timestamp in remaining_rl_timestamps:
+                        by_trading_date.setdefault(builder._trading_date_for_timestamp(rl_timestamp), []).append(rl_timestamp)
+
+                    for trading_date in sorted(by_trading_date):
+                        day_timestamps = by_trading_date[trading_date]
+                        recovered_day: Dict[datetime.datetime, Any] = {}
+                        try:
+                            recovered_day = _attempt_bulk_build(day_timestamps, request_kwargs=retry_request)
+                        except Exception:
+                            logging.getLogger(__name__).debug(
+                                "BARCHART STIRF day-chunk retry failed for %s (%s timestamps)",
+                                trading_date,
+                                len(day_timestamps),
+                                exc_info=True,
+                            )
+                        if recovered_day:
+                            built_curves.update(recovered_day)
+
+                        remaining_day_timestamps = [
+                            rl_timestamp
+                            for rl_timestamp in day_timestamps
+                            if rl_timestamp not in recovered_day
+                        ]
+                        if not remaining_day_timestamps:
+                            continue
+
+                        for offset in range(0, len(remaining_day_timestamps), 120):
+                            subchunk = remaining_day_timestamps[offset : offset + 120]
+                            recovered_chunk: Dict[datetime.datetime, Any] = {}
+                            try:
+                                recovered_chunk = _attempt_bulk_build(subchunk, request_kwargs=retry_request)
+                            except Exception:
+                                logging.getLogger(__name__).debug(
+                                    "BARCHART STIRF subchunk retry failed for %s (%s timestamps)",
+                                    trading_date,
+                                    len(subchunk),
+                                    exc_info=True,
+                                )
+                            if recovered_chunk:
+                                built_curves.update(recovered_chunk)
+
+                if built_curves:
+                    _wrap_barchart_curves(built_curves)
+                if len(out) >= len(timestamps_by_rl_timestamp):
+                    return out
+
+                timestamps = [
+                    original_timestamp
+                    for original_timestamp in timestamps
+                    if original_timestamp not in out
+                ]
+                if not timestamps:
+                    return out
 
             for t in tqdm.tqdm(timestamps, desc=f"Building curves for {self.source}"):
                 try:
-                    out[t] = self._get_curve(curve_name=curve_name, timestamp=t, kwargs=dict(local_request) | {"cache_full_intraday_fetch": True})
+                    out[t] = self._get_curve(
+                        curve_name=curve_name,
+                        timestamp=t,
+                        kwargs=dict(local_request) | {"cache_full_intraday_fetch": True, "show_tqdm": False},
+                    )
                 except Exception:
                     continue
             return out

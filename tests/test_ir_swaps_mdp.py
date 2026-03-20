@@ -313,6 +313,118 @@ def test_barchart_stirf_bulk_get_data_process_failure_raises(monkeypatch):
         raise AssertionError("Expected process-mode bulk_get_data to raise on builder failure")
 
 
+def test_barchart_stirf_bulk_get_data_retries_by_trading_day_before_per_timestamp_fallback(monkeypatch):
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    chi = pytz.timezone("America/Chicago")
+    ts1 = chi.localize(dt.datetime(2026, 3, 3, 10, 0))
+    ts2 = chi.localize(dt.datetime(2026, 3, 3, 11, 0))
+    ts3 = chi.localize(dt.datetime(2026, 3, 4, 10, 0))
+    fallback_calls = []
+
+    class _RetryByDayBuilder(_FakeBarchartBuilder):
+        @staticmethod
+        def _trading_date_for_timestamp(timestamp):
+            ts_chi = timestamp.astimezone(chi)
+            return (ts_chi + dt.timedelta(days=1)).date() if ts_chi.hour >= 17 else ts_chi.date()
+
+        def build_curve(self, curve_name, timestamp, kwargs, curve_only):
+            self.calls.append(
+                {
+                    "curve_name": curve_name,
+                    "timestamp": timestamp,
+                    "kwargs": dict(kwargs),
+                    "curve_only": curve_only,
+                }
+            )
+            ts_batch = list(timestamp) if isinstance(timestamp, list) else [timestamp]
+            if len(ts_batch) == 3:
+                raise ValueError("synthetic full batch failure")
+            return {
+                ts: _FakeBarchartCurveHandle(curve_id="USD-SOFR-1D", timestamp=ts)
+                for ts in ts_batch
+            }
+
+    builder = _RetryByDayBuilder()
+
+    monkeypatch.setattr(mdp, "_get_barchart_stirf_curve_builder", lambda: builder)
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+    monkeypatch.setattr(irswaps_mdp_module.tqdm, "tqdm", lambda iterable, **kwargs: iterable)
+
+    def _unexpected_get_curve(*args, **kwargs):
+        fallback_calls.append(kwargs.get("timestamp"))
+        raise AssertionError("per-timestamp fallback should not run when day retries recover all timestamps")
+
+    monkeypatch.setattr(mdp, "_get_curve", _unexpected_get_curve)
+
+    out = mdp.bulk_get_data({"curve_name": "USD-SOFR-1D", "timestamps": [ts1, ts2, ts3], "n_jobs": 4})
+
+    assert set(out) == {ts1, ts2, ts3}
+    assert fallback_calls == []
+    assert [len(call["timestamp"]) if isinstance(call["timestamp"], list) else 1 for call in builder.calls] == [3, 2, 1]
+
+
+def test_barchart_stirf_bulk_get_data_uses_per_timestamp_fallback_only_for_residual_misses(monkeypatch):
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    chi = pytz.timezone("America/Chicago")
+    ts1 = chi.localize(dt.datetime(2026, 3, 3, 10, 0))
+    ts2 = chi.localize(dt.datetime(2026, 3, 3, 11, 0))
+    ts3 = chi.localize(dt.datetime(2026, 3, 4, 10, 0))
+    fallback_calls = []
+
+    class _ResidualFallbackBuilder(_FakeBarchartBuilder):
+        @staticmethod
+        def _trading_date_for_timestamp(timestamp):
+            ts_chi = timestamp.astimezone(chi)
+            return (ts_chi + dt.timedelta(days=1)).date() if ts_chi.hour >= 17 else ts_chi.date()
+
+        def build_curve(self, curve_name, timestamp, kwargs, curve_only):
+            self.calls.append(
+                {
+                    "curve_name": curve_name,
+                    "timestamp": timestamp,
+                    "kwargs": dict(kwargs),
+                    "curve_only": curve_only,
+                }
+            )
+            ts_batch = list(timestamp) if isinstance(timestamp, list) else [timestamp]
+            if len(ts_batch) == 3:
+                raise ValueError("synthetic full batch failure")
+            if len(ts_batch) == 2 and set(ts_batch) == {ts1, ts2}:
+                return {ts1: _FakeBarchartCurveHandle(curve_id="USD-SOFR-1D", timestamp=ts1)}
+            if len(ts_batch) == 1 and ts_batch[0] == ts2:
+                return {}
+            return {
+                ts: _FakeBarchartCurveHandle(curve_id="USD-SOFR-1D", timestamp=ts)
+                for ts in ts_batch
+            }
+
+    builder = _ResidualFallbackBuilder()
+
+    monkeypatch.setattr(mdp, "_get_barchart_stirf_curve_builder", lambda: builder)
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+    monkeypatch.setattr(irswaps_mdp_module.tqdm, "tqdm", lambda iterable, **kwargs: iterable)
+
+    def _record_get_curve(curve_name, timestamp, kwargs):
+        fallback_calls.append(timestamp)
+        return {"curve_name": curve_name, "timestamp": timestamp, "kwargs": dict(kwargs)}
+
+    monkeypatch.setattr(mdp, "_get_curve", _record_get_curve)
+
+    out = mdp.bulk_get_data({"curve_name": "USD-SOFR-1D", "timestamps": [ts1, ts2, ts3], "n_jobs": 4})
+
+    assert set(out) == {ts1, ts2, ts3}
+    assert fallback_calls == [ts2]
+    assert [len(call["timestamp"]) if isinstance(call["timestamp"], list) else 1 for call in builder.calls] == [3, 2, 1, 1]
+
+
 def test_bulk_get_data_rejects_empty_timestamp_collection():
     mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
 
