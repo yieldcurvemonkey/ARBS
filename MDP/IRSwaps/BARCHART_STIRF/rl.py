@@ -257,7 +257,11 @@ def _build_curve_from_pricers_core(
     timestamp: datetime.datetime,
     cfg: Dict[str, Any],
     pricers: Dict[str, List["RLSTIRFuturePricer"]],
+    initial_nodes: Optional[Dict[pd.Timestamp, float]] = None,
+    solver_tolerances: Optional[Dict[str, float]] = None,
 ) -> Tuple[rl.Curve, rl.Solver]:
+    _func_tol = (solver_tolerances or {}).get("func_tol", 1e-5)
+    _conv_tol = (solver_tolerances or {}).get("conv_tol", 1e-5)
     curve_cls = BARCHART_STIRF_CURVE
     sorted_pricers = _sort_pricers_for_solver(pricers)
     node_reference_key = cfg.get("node_reference_key", cfg["reference_key"])
@@ -329,6 +333,7 @@ def _build_curve_from_pricers_core(
             central_bank_dates=_CENTRAL_BANK_DATES,
             reference_key=node_reference_key,
             max_tenor_from_timestamp_months=cfg["max_tenor_from_timestamp_months"],
+            initial_nodes=initial_nodes,
         )
         nodes = _sort_nodes(nodes)
         nodes = curve_cls._ensure_mixed_support_nodes(nodes=nodes, cfg=cfg, base_date=timestamp.date())
@@ -360,8 +365,8 @@ def _build_curve_from_pricers_core(
             s=[p._rate for p in base_pricers] + [0.0] * len(sofr_bflies),
             id=f"{curve_name}-SOFR-ANCHOR",
             weights=[1.0] * len(base_pricers) + [1e-8] * len(sofr_bflies),
-            func_tol=1e-5,
-            conv_tol=1e-5,
+            func_tol=_func_tol,
+            conv_tol=_conv_tol,
         )
 
         skew_s: List[float] = []
@@ -413,8 +418,8 @@ def _build_curve_from_pricers_core(
             s=skew_s + [0.0] * len(bflies),
             id=curve_name,
             weights=skew_w + [1e-8] * len(bflies),
-            func_tol=1e-5,
-            conv_tol=1e-5,
+            func_tol=_func_tol,
+            conv_tol=_conv_tol,
         )
 
         return rl_curve, rl_solver
@@ -425,6 +430,7 @@ def _build_curve_from_pricers_core(
         central_bank_dates=_CENTRAL_BANK_DATES,
         reference_key=node_reference_key,
         max_tenor_from_timestamp_months=cfg["max_tenor_from_timestamp_months"],
+        initial_nodes=initial_nodes,
     )
     nodes = _sort_nodes(nodes)
     nodes = curve_cls._ensure_mixed_support_nodes(nodes=nodes, cfg=cfg, base_date=timestamp.date())
@@ -461,8 +467,8 @@ def _build_curve_from_pricers_core(
         s=s,
         id=curve_name,
         weights=weights,
-        func_tol=1e-5,
-        conv_tol=1e-5,
+        func_tol=_func_tol,
+        conv_tol=_conv_tol,
     )
 
     return rl_curve, rl_solver
