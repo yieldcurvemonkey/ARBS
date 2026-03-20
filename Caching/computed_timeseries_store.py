@@ -5,7 +5,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, List, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
@@ -55,12 +55,18 @@ class ComputedTimeseriesStore:
         base_dir: Union[str, Path] = "./data/ts",
         compression: str = "zstd",
         row_group_size: int = 256_000,
+        use_duckdb: bool = True,
+        duckdb_path: Optional[str] = None,
     ) -> None:
         self._opts = WriteOptions(
             base_dir=str(base_dir),
             compression=compression,
             row_group_size=int(row_group_size),
         )
+        self._duckdb_cache: Optional["DuckDBTimeseriesCache"] = None
+        if use_duckdb:
+            from Caching.duckdb_timeseries_cache import DuckDBTimeseriesCache
+            self._duckdb_cache = DuckDBTimeseriesCache(db_path=duckdb_path)
 
     @property
     def write_options(self) -> WriteOptions:
@@ -167,6 +173,82 @@ class ComputedTimeseriesStore:
             logger.warning("Computed TS L2 prefetch failed for %s", symbol, exc_info=True)
         return sync
 
+    def _read_from_duckdb(
+        self,
+        *,
+        symbol: str,
+        reference_points: Sequence[DateLike],
+        intraday: bool,
+        skip_current_eod: bool,
+        fallback_column_name: str | None,
+    ) -> List[Tuple[DateLike, str, float]] | None:
+        """Try DuckDB fast path. Returns rows or None if DuckDB unavailable."""
+        if self._duckdb_cache is None:
+            return None
+        # DuckDB table stores one row per (symbol, date) — not suitable for intraday
+        if intraday:
+            return None
+
+        start = min(reference_points)
+        end = max(reference_points)
+        start_date = _normalize_intraday_key(start).date() if intraday else _normalize_eod_key(start)
+        end_date = _normalize_intraday_key(end).date() if intraday else _normalize_eod_key(end)
+
+        duckdb_rows = self._duckdb_cache.read_rows(symbol, start=start_date, end=end_date)
+        if not duckdb_rows:
+            return None
+
+        today = datetime.date.today()
+        result: List[Tuple[DateLike, str, float]] = []
+        by_date = {row[0]: (row[1], row[2]) for row in duckdb_rows}
+
+        for ref_point in reference_points:
+            key = _normalize_eod_key(ref_point) if not intraday else _normalize_intraday_key(ref_point).date()
+            if (not intraday) and skip_current_eod and key == today:
+                continue
+            hit = by_date.get(key)
+            if hit is not None:
+                col_name, value = hit
+                result.append((ref_point, col_name, value))
+
+        return result if result else None
+
+    def _sync_missing_from_postgres(
+        self,
+        *,
+        symbol: str,
+        missing_dates: list[datetime.date],
+    ) -> bool:
+        """Pull missing rows from Postgres into local DuckDB."""
+        if self._duckdb_cache is None or not missing_dates:
+            return False
+        sync = _get_computed_ts_sync(self._opts.base_dir)
+        if sync is None:
+            return False
+        if not hasattr(sync, "pull_rows"):
+            return False
+
+        try:
+            start = min(missing_dates)
+            end = max(missing_dates)
+            watermark = self._duckdb_cache.get_watermark(symbol)
+            pulled = sync.pull_rows(
+                symbol,
+                start=start,
+                end=end,
+                since=watermark,
+            )
+            if not pulled:
+                return False
+            rows = [(r[0], r[1], r[2]) for r in pulled]
+            self._duckdb_cache.upsert_rows(symbol, rows)
+            max_updated = max(r[3] for r in pulled)
+            self._duckdb_cache.set_watermark(symbol, max_updated)
+            return True
+        except Exception:
+            logger.warning("DuckDB sync from Postgres failed for %s", symbol, exc_info=True)
+            return False
+
     def read_rows(
         self,
         *,
@@ -179,6 +261,61 @@ class ComputedTimeseriesStore:
         if not reference_points:
             return []
 
+        # DuckDB fast path
+        duckdb_result = self._read_from_duckdb(
+            symbol=symbol,
+            reference_points=reference_points,
+            intraday=intraday,
+            skip_current_eod=skip_current_eod,
+            fallback_column_name=fallback_column_name,
+        )
+        today = datetime.date.today()
+        requested = {
+            _normalize_eod_key(rp) if not intraday else _normalize_intraday_key(rp).date()
+            for rp in reference_points
+            if not ((not intraday) and skip_current_eod and _normalize_eod_key(rp) == today)
+        }
+
+        if duckdb_result is not None:
+            covered = {
+                (_normalize_eod_key(rp) if not intraday else _normalize_intraday_key(rp).date())
+                for rp, _, _ in duckdb_result
+            }
+            if covered >= requested:
+                return duckdb_result
+            missing_dates = sorted({
+                (d.date() if isinstance(d, pd.Timestamp) else d)
+                for d in (requested - covered)
+            })
+        else:
+            missing_dates = sorted({
+                (d.date() if isinstance(d, pd.Timestamp) else d)
+                for d in requested
+            })
+
+        # Try syncing missing dates from Postgres into DuckDB
+        if self._duckdb_cache is not None and missing_dates:
+            synced = self._sync_missing_from_postgres(
+                symbol=symbol,
+                missing_dates=missing_dates,
+            )
+            if synced:
+                duckdb_result_2 = self._read_from_duckdb(
+                    symbol=symbol,
+                    reference_points=reference_points,
+                    intraday=intraday,
+                    skip_current_eod=skip_current_eod,
+                    fallback_column_name=fallback_column_name,
+                )
+                if duckdb_result_2 is not None:
+                    covered_2 = {
+                        (_normalize_eod_key(rp) if not intraday else _normalize_intraday_key(rp).date())
+                        for rp, _, _ in duckdb_result_2
+                    }
+                    if covered_2 >= requested:
+                        return duckdb_result_2
+
+        # Fallback to existing Parquet path
         start = min(reference_points)
         end = max(reference_points)
         read_start: DateLike = _normalize_intraday_key(start).to_pydatetime() if intraday else start
@@ -277,6 +414,28 @@ class ComputedTimeseriesStore:
 
         threading.Thread(target=_bg_push, daemon=True).start()
 
+    def _push_rows_to_l2(
+        self,
+        *,
+        symbol: str,
+        rows: list[Tuple[DateLike, str, float]],
+    ) -> None:
+        sync = _get_computed_ts_sync(self._opts.base_dir)
+        if sync is None or not rows or not hasattr(sync, "push_rows"):
+            return
+        row_data = [
+            (_normalize_eod_key(ref_point), str(column_name), float(value))
+            for ref_point, column_name, value in rows
+        ]
+
+        def _bg_push_rows() -> None:
+            try:
+                sync.push_rows(symbol, row_data)
+            except Exception:
+                logger.warning("Row-level L2 push failed for %s", symbol, exc_info=True)
+
+        threading.Thread(target=_bg_push_rows, daemon=True).start()
+
     def append_rows(
         self,
         *,
@@ -306,7 +465,22 @@ class ComputedTimeseriesStore:
             df,
             opts=self._opts,
         )
+
+        # Write to local DuckDB
+        if self._duckdb_cache is not None:
+            duckdb_rows = [
+                (_normalize_eod_key(ref_point), str(column_name), float(value))
+                for ref_point, column_name, value in normalized_rows
+            ]
+            try:
+                self._duckdb_cache.upsert_rows(symbol, duckdb_rows)
+            except Exception:
+                logger.warning("DuckDB upsert failed for %s", symbol, exc_info=True)
+
         self._push_days_to_l2(
             symbol=symbol,
             trading_dates=[ts.date() for ts in ordered.keys()],
         )
+
+        # Push row-level data to L2 (new row table)
+        self._push_rows_to_l2(symbol=symbol, rows=normalized_rows)

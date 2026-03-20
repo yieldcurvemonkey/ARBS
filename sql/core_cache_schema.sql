@@ -72,3 +72,15 @@ CREATE TABLE IF NOT EXISTS arbs_computed_timeseries_blocks_v1 (
 
 CREATE INDEX IF NOT EXISTS idx_computed_ts_symbol_date
     ON arbs_computed_timeseries_blocks_v1 (symbol, trading_date);
+
+CREATE TABLE IF NOT EXISTS arbs_computed_timeseries_rows_v1 (
+    symbol        VARCHAR   NOT NULL,
+    trading_date  DATE      NOT NULL,
+    column_name   VARCHAR   NOT NULL,
+    value         FLOAT8    NOT NULL,
+    updated_at    TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (symbol, trading_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ts_rows_symbol_date
+    ON arbs_computed_timeseries_rows_v1 (symbol, trading_date);

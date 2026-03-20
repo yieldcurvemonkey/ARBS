@@ -141,6 +141,8 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         ts_base_dir: Optional[str] = "./data/ts",
         ts_row_group_size: int = 256_000,
         ts_compression: str = "zstd",
+        use_duckdb: bool = True,
+        duckdb_path: Optional[str] = None,
     ):
         LayeredCacheMixin.__init__(
             self,
@@ -166,6 +168,8 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             base_dir=ts_base_dir or "./data/ts",
             compression=ts_compression,
             row_group_size=int(ts_row_group_size),
+            use_duckdb=use_duckdb,
+            duckdb_path=duckdb_path,
         )
 
     def __enter__(self):
