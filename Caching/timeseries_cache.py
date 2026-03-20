@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -13,6 +14,19 @@ import duckdb
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+# --------------- Thread-safe DuckDB connection for read-only queries ----------
+_duckdb_local = threading.local()
+
+
+def _thread_local_conn() -> duckdb.DuckDBPyConnection:
+    """Return a per-thread DuckDB connection (read-only, no shared state)."""
+    conn = getattr(_duckdb_local, "conn", None)
+    if conn is None:
+        conn = duckdb.connect()
+        _duckdb_local.conn = conn
+    return conn
+
 
 # ------------------------------ Configuration --------------------------------
 
@@ -288,7 +302,7 @@ def read_timeseries(
             {where_clause}
             ORDER BY _index_ts
         """
-        df = duckdb.sql(query).df()
+        df = _thread_local_conn().sql(query).df()
     except duckdb.IOException:
         return pd.DataFrame()
     except duckdb.CatalogException:
@@ -299,7 +313,7 @@ def read_timeseries(
             {where_clause}
         """
         try:
-            df = duckdb.sql(query).df()
+            df = _thread_local_conn().sql(query).df()
         except Exception:
             return pd.DataFrame()
 
