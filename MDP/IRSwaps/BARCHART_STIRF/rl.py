@@ -2388,13 +2388,17 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                     ts_pricers = fetch_pricers_func(request=pricer_req)
                 calibration_jobs.append((ts, ts_pricers))
 
-            # Phase 3: parallel curve calibrations + tqdm progress.
+            # Phase 3: parallel curve calibrations with warm-start chains + tqdm progress.
             cal_workers = int(calibration_max_workers or len(calibration_jobs))
             cal_workers = max(1, min(cal_workers, len(calibration_jobs)))
             fresh_curves: Dict[datetime.datetime, rl.Curve] = {}
+
+            # Relaxed tolerances for bulk timeseries calibration.
+            bulk_solver_tolerances = {"func_tol": 1e-3, "conv_tol": 1e-3}
+
             _emit_calibration_status(
                 curve_name=curve_name,
-                executor_mode=calibration_executor,
+                executor_mode="thread-warmstart",
                 workers=cal_workers,
                 jobs=len(calibration_jobs),
                 show_tqdm=show_tqdm,
@@ -2402,6 +2406,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             )
 
             if calibration_executor == "process":
+                # Process pool: no warm-start possible (kept as escape hatch).
                 reduced_cfg = _reduced_calibration_cfg(cfg)
                 _validate_spawn_process_pool_environment()
                 with ProcessPoolExecutor(
@@ -2415,6 +2420,8 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                             ts,
                             reduced_cfg,
                             ts_pricers,
+                            None,  # no warm-start
+                            bulk_solver_tolerances,
                         ): ts
                         for ts, ts_pricers in calibration_jobs
                     }
@@ -2429,33 +2436,42 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                         fresh_curves[ts] = curve_obj
                         out[ts] = curve_obj if curve_only else (curve_obj, None)
             elif cal_workers == 1:
-                cal_iter: Iterable[Tuple[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]]] = calibration_jobs
-                if tqdm_mod is not None:
-                    cal_iter = tqdm_mod.tqdm(calibration_jobs, desc=f"CALIBRATING {curve_name}")
-                for ts, ts_pricers in cal_iter:
-                    built = self._build_curve_from_pricers(curve_name=curve_name, timestamp=ts, cfg=cfg, pricers=ts_pricers)
-                    curve_obj, solver_obj = built
-                    curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
-                    self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
+                # Single worker: sequential warm-start chain.
+                chunk_results = self._calibrate_chunk(
+                    chunk=sorted(calibration_jobs, key=lambda x: x[0]),
+                    curve_name=curve_name,
+                    cfg=cfg,
+                    solver_tolerances=bulk_solver_tolerances,
+                    curve_only=curve_only,
+                )
+                for ts, val in chunk_results.items():
+                    curve_obj = val if curve_only else val[0]
                     fresh_curves[ts] = curve_obj
-                    out[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
+                    out[ts] = val
             else:
+                # Multi-worker: partition into chronological chunks, warm-start within each.
+                chunks = _split_chronological(calibration_jobs, cal_workers)
                 with ThreadPoolExecutor(max_workers=cal_workers, thread_name_prefix="stir-curve-calib") as pool:
                     futures = {
-                        pool.submit(self._build_curve_from_pricers, curve_name=curve_name, timestamp=ts, cfg=cfg, pricers=ts_pricers): ts
-                        for ts, ts_pricers in calibration_jobs
+                        pool.submit(
+                            self._calibrate_chunk,
+                            chunk=chunk,
+                            curve_name=curve_name,
+                            cfg=cfg,
+                            solver_tolerances=bulk_solver_tolerances,
+                            curve_only=curve_only,
+                        ): idx
+                        for idx, chunk in enumerate(chunks)
                     }
                     completed = as_completed(futures)
                     if tqdm_mod is not None:
                         completed = tqdm_mod.tqdm(completed, total=len(futures), desc=f"CALIBRATING {curve_name}")
                     for fut in completed:
-                        ts = futures[fut]
-                        built = fut.result()
-                        curve_obj, solver_obj = built
-                        curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
-                        self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
-                        fresh_curves[ts] = curve_obj
-                        out[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
+                        chunk_results = fut.result()
+                        for ts, val in chunk_results.items():
+                            curve_obj = val if curve_only else val[0]
+                            fresh_curves[ts] = curve_obj
+                            out[ts] = val
 
             self._persist_bulk_curves(
                 curve_name=curve_name,
