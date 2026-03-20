@@ -1,5 +1,7 @@
 import datetime as dt
 
+import pandas as pd
+
 from scripts import warm_intraday_irs_cache as warm_script
 
 
@@ -113,9 +115,9 @@ def test_stirt_tenor_maturity_date_respects_three_year_horizon_examples():
     ) > dt.date(2029, 3, 20)
 
 
-def test_incremental_range_uses_latest_curve_store_timestamp_and_session_filter(monkeypatch):
-    latest_ts = dt.datetime(2026, 3, 20, 9, 30, tzinfo=dt.timezone.utc)
-    now_utc = dt.datetime(2026, 3, 20, 10, 0, tzinfo=dt.timezone.utc)
+def test_incremental_range_uses_latest_curve_store_timestamp(monkeypatch):
+    latest_ts = dt.datetime(2026, 3, 20, 13, 30, tzinfo=dt.timezone.utc)
+    now_utc = dt.datetime(2026, 3, 20, 14, 0, tzinfo=dt.timezone.utc)
 
     class _FakeStore:
         pass
@@ -147,7 +149,42 @@ def test_incremental_range_uses_latest_curve_store_timestamp_and_session_filter(
     )
 
     assert timestamps[0] == latest_ts
-    assert timestamps[-1] == dt.datetime(2026, 3, 20, 9, 44, tzinfo=dt.timezone.utc)
+    assert timestamps[-1] == dt.datetime(2026, 3, 20, 13, 44, tzinfo=dt.timezone.utc)
+
+
+def test_select_missing_curve_store_timestamps_backfills_internal_gap():
+    timestamps = [
+        dt.datetime(2026, 3, 20, 9, 30, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 3, 20, 9, 31, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 3, 20, 9, 32, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 3, 20, 9, 33, tzinfo=dt.timezone.utc),
+    ]
+
+    class _FakeStore:
+        def read_raw_nodes(self, curve_name, timestamps_utc):
+            _ = curve_name
+            return pd.DataFrame(
+                {
+                    "timestamp_utc": [
+                        timestamps_utc[0],
+                        timestamps_utc[-1],
+                    ]
+                }
+            )
+
+    missing = warm_script._select_missing_curve_store_timestamps(
+        _FakeStore(),
+        curve_name="USD-SOFR-1D-Q12STIRT",
+        timestamps=timestamps,
+    )
+
+    assert missing == timestamps[1:3]
+
+
+def test_parser_defaults_to_cme_trading_day():
+    args = warm_script._build_parser().parse_args([])
+
+    assert args.window_template == "cme_trading_day"
 
 
 def test_safe_warm_raw_curves_isolates_bad_timestamp():

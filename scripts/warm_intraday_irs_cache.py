@@ -142,6 +142,25 @@ def _floor_to_minute(value: dt.datetime) -> dt.datetime:
     return value.replace(second=0, microsecond=0)
 
 
+def _normalize_timestamp_utc_minute(value: Any) -> dt.datetime | None:
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if not isinstance(value, dt.datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.timezone.utc)
+    else:
+        value = value.astimezone(dt.timezone.utc)
+    return _floor_to_minute(value)
+
+
+def _curve_store_trading_date(value: dt.datetime) -> dt.date:
+    value_chi = value.astimezone(ZoneInfo("America/Chicago"))
+    if value_chi.hour >= 17:
+        return value_chi.date() + dt.timedelta(days=1)
+    return value_chi.date()
+
+
 def _cap_end_at_now(
     start: dt.datetime,
     end: dt.datetime,
@@ -393,6 +412,87 @@ def _latest_curve_store_timestamp(store: Any, curve_name: str) -> dt.datetime | 
     return None
 
 
+def _read_existing_curve_store_timestamps(
+    store: Any,
+    *,
+    curve_name: str,
+    timestamps: Sequence[dt.datetime],
+) -> set[dt.datetime]:
+    import pandas as pd
+
+    requested_keys = [
+        ts_key
+        for ts_key in (_normalize_timestamp_utc_minute(timestamp) for timestamp in timestamps)
+        if ts_key is not None
+    ]
+    if not requested_keys:
+        return set()
+
+    requested_key_set = set(requested_keys)
+    ordered_trading_dates = sorted({_curve_store_trading_date(ts_key) for ts_key in requested_keys})
+    df = pd.DataFrame()
+
+    if hasattr(store, "read_raw_nodes"):
+        try:
+            df = store.read_raw_nodes(curve_name, timestamps_utc=sorted(requested_key_set))
+        except TypeError:
+            df = store.read_raw_nodes(
+                curve_name,
+                start=ordered_trading_dates[0],
+                end=ordered_trading_dates[-1],
+            )
+        except Exception:
+            df = pd.DataFrame()
+
+    if (df is None or df.empty or "timestamp_utc" not in df.columns) and hasattr(store, "read_raw_day"):
+        day_frames = []
+        for trading_date in ordered_trading_dates:
+            try:
+                day_df = store.read_raw_day(curve_name, trading_date)
+            except Exception:
+                continue
+            if day_df is not None and not day_df.empty:
+                day_frames.append(day_df)
+        if day_frames:
+            df = pd.concat(day_frames, ignore_index=True, sort=False)
+
+    if df is None or df.empty or "timestamp_utc" not in df.columns:
+        return set()
+
+    present_keys = {
+        ts_key
+        for ts_key in (_normalize_timestamp_utc_minute(value) for value in df["timestamp_utc"])
+        if ts_key is not None
+    }
+    return present_keys & requested_key_set
+
+
+def _select_missing_curve_store_timestamps(
+    store: Any,
+    *,
+    curve_name: str,
+    timestamps: Sequence[dt.datetime],
+) -> list[dt.datetime]:
+    ordered_keys: list[dt.datetime] = []
+    original_by_key: dict[dt.datetime, dt.datetime] = {}
+    for timestamp in timestamps:
+        ts_key = _normalize_timestamp_utc_minute(timestamp)
+        if ts_key is None or ts_key in original_by_key:
+            continue
+        ordered_keys.append(ts_key)
+        original_by_key[ts_key] = timestamp
+
+    if not ordered_keys:
+        return []
+
+    present_keys = _read_existing_curve_store_timestamps(
+        store,
+        curve_name=curve_name,
+        timestamps=[original_by_key[key] for key in ordered_keys],
+    )
+    return [original_by_key[key] for key in ordered_keys if key not in present_keys]
+
+
 def _resolve_incremental_timestamp_range(
     *,
     curve_name: str,
@@ -565,7 +665,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--window-template",
         choices=("nyc_rth", "cme_trading_day", "custom"),
-        default="nyc_rth",
+        default="cme_trading_day",
         help="Timestamp expansion template for each trading date.",
     )
     parser.add_argument("--timezone", default="America/New_York", help="Custom window timezone.")
@@ -603,6 +703,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
     from Query.Unified.UnifiedQuery import UnifiedQuery
     from Query.Unified.registry import UnifiedValue
+    from TB.IRSwapsTB import IRSwapsTB
     from TB.TimeseriesBuilder import TimeseriesBuilder
 
     ny_now = dt.datetime.now(ZoneInfo("America/New_York"))
@@ -614,7 +715,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     mdp = IRSwapsMDP(source=args.source)
-    ts_builder = TimeseriesBuilder()
+    ts_builder = TimeseriesBuilder(
+        irswaps_tb=IRSwapsTB(
+            mdp=mdp,
+            show_tqdm=True,
+            use_duckdb=False,
+        )
+    )
 
     warmed_curve_windows = 0
     warmed_ts_windows = 0
@@ -623,46 +730,59 @@ def main(argv: Sequence[str] | None = None) -> int:
     failed_windows = 0
     successful_windows = 0
 
-    def _warm_curve(curve: str, timestamps: list[dt.datetime], *, label: str) -> None:
+    def _warm_curve(
+        curve: str,
+        curve_timestamps: list[dt.datetime],
+        *,
+        timeseries_timestamps: list[dt.datetime],
+        label: str,
+    ) -> None:
         nonlocal warmed_curve_windows, warmed_ts_windows
         nonlocal failed_curve_timestamps, failed_ts_tenors, failed_windows, successful_windows
-        if not timestamps:
+        if not curve_timestamps and not timeseries_timestamps:
             print(f"SKIP {curve} because no timestamps were generated for {label}.")
             return
 
-        anchor_date = timestamps[0].date()
+        active_timestamps = timeseries_timestamps or curve_timestamps
+        anchor_date = active_timestamps[0].date()
         curve_tenors = [] if args.skip_timeseries_warm else (
             explicit_tenors or _default_tenors_for_curve(curve, anchor_date=anchor_date)
         )
-        start = timestamps[0]
-        end = timestamps[-1]
+        start = active_timestamps[0]
+        end = active_timestamps[-1]
         print(
             f"WARM {curve} "
             f"label={label} "
             f"window={start.isoformat()}..{end.isoformat()} "
-            f"minutes={len(timestamps)} tenors={len(curve_tenors)}"
+            f"curve_minutes={len(curve_timestamps)} "
+            f"ts_minutes={len(timeseries_timestamps)} "
+            f"tenors={len(curve_tenors)}"
         )
 
         succeeded = False
         try:
             if not args.skip_curve_warm:
-                curve_count, failed_timestamps = _safe_warm_raw_curves(
-                    mdp,
-                    curve_name=curve,
-                    timestamps=timestamps,
-                    ignore_cache=args.ignore_cache,
-                    n_jobs=args.n_jobs,
-                    calibration_executor=args.calibration_executor,
-                )
                 warmed_curve_windows += 1
-                failed_curve_timestamps += len(failed_timestamps)
-                succeeded = succeeded or curve_count > 0
-                print(
-                    f"  RAW {curve}: {curve_count}/{len(timestamps)} curve snapshots ready"
-                    + (f" ({len(failed_timestamps)} failed timestamps)" if failed_timestamps else "")
-                )
+                if curve_timestamps:
+                    curve_count, failed_timestamps = _safe_warm_raw_curves(
+                        mdp,
+                        curve_name=curve,
+                        timestamps=curve_timestamps,
+                        ignore_cache=args.ignore_cache,
+                        n_jobs=args.n_jobs,
+                        calibration_executor=args.calibration_executor,
+                    )
+                    failed_curve_timestamps += len(failed_timestamps)
+                    succeeded = succeeded or curve_count > 0
+                    print(
+                        f"  RAW {curve}: {curve_count}/{len(curve_timestamps)} curve snapshots ready"
+                        + (f" ({len(failed_timestamps)} failed timestamps)" if failed_timestamps else "")
+                    )
+                else:
+                    succeeded = True
+                    print(f"  RAW {curve}: already warm for requested window")
 
-            if not args.skip_timeseries_warm:
+            if not args.skip_timeseries_warm and timeseries_timestamps:
                 queries = [
                     UnifiedQuery(
                         curve=curve,
@@ -673,12 +793,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ]
                 df, failed_tenors = _safe_warm_timeseries(
                     ts_builder,
-                    start=start,
-                    end=end,
+                    start=timeseries_timestamps[0],
+                    end=timeseries_timestamps[-1],
                     queries=queries,
                     n_jobs=args.n_jobs,
                     ignore_cache=args.ignore_cache,
-                    timestamps=timestamps,
+                    timestamps=timeseries_timestamps,
                     mdps={"IRS": mdp},
                     curve_name=curve,
                 )
@@ -703,7 +823,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         now_utc = dt.datetime.now(dt.timezone.utc)
         for curve in curves:
             try:
-                timestamps = _resolve_incremental_timestamp_range(
+                timeseries_timestamps = _resolve_incremental_timestamp_range(
                     curve_name=curve,
                     mdp=mdp,
                     ts_builder=ts_builder,
@@ -717,7 +837,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 failed_windows += 1
                 print(f"WARN {curve}: failed to resolve incremental window ({exc})")
                 continue
-            _warm_curve(curve, timestamps, label="incremental-from-db")
+            curve_timestamps = _select_missing_curve_store_timestamps(
+                mdp._get_curve_store(),
+                curve_name=_resolve_curve_store_name(mdp, curve),
+                timestamps=timeseries_timestamps,
+            )
+            _warm_curve(
+                curve,
+                curve_timestamps,
+                timeseries_timestamps=timeseries_timestamps,
+                label="incremental-from-db",
+            )
     else:
         for trading_date in trading_dates:
             if args.window_template != "cme_trading_day" and trading_date.weekday() >= 5:
@@ -749,7 +879,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 continue
 
             for curve in curves:
-                _warm_curve(curve, timestamps, label=trading_date.isoformat())
+                _warm_curve(
+                    curve,
+                    list(timestamps),
+                    timeseries_timestamps=list(timestamps),
+                    label=trading_date.isoformat(),
+                )
 
     print(
         "DONE "
