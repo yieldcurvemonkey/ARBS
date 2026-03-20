@@ -522,6 +522,41 @@ class TimeseriesBuilder:
             return df.drop(columns=[self._date_col])
         return df
 
+    def _coerce_date_index(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return df
+
+        if isinstance(df.index, pd.DatetimeIndex):
+            out = df.copy()
+            out.index = pd.Index(out.index.date, name=out.index.name or self._date_col)
+            return out
+
+        raw_index = list(df.index)
+        if raw_index and all(isinstance(point, datetime.datetime) for point in raw_index):
+            out = df.copy()
+            out.index = pd.Index([point.date() for point in raw_index], name=df.index.name or self._date_col)
+            return out
+
+        return df
+
+    def _group_business_date_ranges(self, date_points: List[datetime.date]) -> List[Tuple[datetime.date, datetime.date]]:
+        ordered_points = sorted({point for point in date_points})
+        if not ordered_points:
+            return []
+
+        ranges: List[Tuple[datetime.date, datetime.date]] = []
+        range_start = ordered_points[0]
+        range_end = ordered_points[0]
+        for current in ordered_points[1:]:
+            if len(pd.bdate_range(range_end, current).date.tolist()) == 2:
+                range_end = current
+                continue
+            ranges.append((range_start, range_end))
+            range_start = current
+            range_end = current
+        ranges.append((range_start, range_end))
+        return ranges
+
     def _resolve_product_handles(
         self,
         *,
@@ -1156,16 +1191,31 @@ class TimeseriesBuilder:
             point if isinstance(point, datetime.date) and not isinstance(point, datetime.datetime) else point.date()
             for point in missing_points
         ]
-        fallback_df = fallback_tb.get_timeseries(  # type: ignore[attr-defined]
-            min(date_points),
-            max(date_points),
-            queries,
-            n_jobs=n_jobs,
-            ignore_cache=ignore_cache,
-            freq=None,
-            timestamps=None,
-        )
-        return fallback_df.reindex(pd.Index(sorted(date_points), name=fallback_df.index.name or self._date_col))
+        fallback_frames: List[pd.DataFrame] = []
+        for range_start, range_end in self._group_business_date_ranges(date_points):
+            fallback_df = fallback_tb.get_timeseries(  # type: ignore[attr-defined]
+                range_start,
+                range_end,
+                queries,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                freq=None,
+                timestamps=None,
+            )
+            if fallback_df is None or fallback_df.empty:
+                continue
+            fallback_df = self._strip_redundant_date_column(fallback_df)
+            fallback_df = self._coerce_date_index(fallback_df)
+            fallback_frames.append(fallback_df)
+
+        if not fallback_frames:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+        fallback_df = pd.concat(fallback_frames, axis=0, sort=False)
+        if fallback_df.index.has_duplicates:
+            fallback_df = fallback_df[~fallback_df.index.duplicated(keep="last")]
+        fallback_df = fallback_df.sort_index()
+        return fallback_df.reindex(pd.Index(sorted(set(date_points)), name=fallback_df.index.name or self._date_col))
 
     def _execute_irs_curve_store_plan(
         self,
