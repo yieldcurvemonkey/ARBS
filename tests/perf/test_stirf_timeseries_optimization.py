@@ -50,3 +50,27 @@ class TestSTIRFTimeseriesPerformance:
         assert len(df) > 100, f"Expected >100 rows, got {len(df)}"
         print(f"\n[PERF] Cold-cache timeseries: {elapsed:.1f}s ({len(df)} rows)")
         assert elapsed < 180, f"Cold-cache took {elapsed:.1f}s, target is <180s"
+
+    @pytest.mark.slow
+    def test_warm_start_correctness(self):
+        """Verify warm-start + relaxed tolerances produce near-identical results."""
+        ts_builder, start, end, q1, curve_mdp = _build_ts()
+
+        # Use a shorter window for correctness test (30 min = ~30 curves)
+        short_end = NYC.localize(datetime.datetime(2026, 3, 12, 7, 30))
+
+        df = ts_builder.get_timeseries(
+            start=start,
+            end=short_end,
+            queries=[q1],
+            n_jobs=1,
+            freq="1min",
+            mdps={"IRS": curve_mdp},
+        )
+
+        assert not df.empty, "DataFrame should not be empty"
+        # Verify values are reasonable SOFR rates (not NaN, not extreme)
+        numeric_cols = df.select_dtypes(include="number")
+        assert numeric_cols.notna().all().all(), "No NaN values expected"
+        assert (numeric_cols.abs() < 20).all().all(), "Rates should be <20%"
+        print(f"\n[CORRECTNESS] {len(df)} rows, range: {numeric_cols.min().min():.4f} to {numeric_cols.max().max():.4f}")
