@@ -494,6 +494,31 @@ def _process_curve_calibration_job(
     return timestamp, curve_obj
 
 
+def _extract_nodes(curve: rl.Curve) -> Dict[pd.Timestamp, float]:
+    """Extract calibrated node values from a solved rateslib Curve."""
+    raw = curve.nodes._nodes if hasattr(curve.nodes, "_nodes") else dict(curve.nodes)
+    return {k: float(v) for k, v in raw.items()}
+
+
+def _split_chronological(
+    jobs: List[Tuple[datetime.datetime, Any]],
+    n_chunks: int,
+) -> List[List[Tuple[datetime.datetime, Any]]]:
+    """Split jobs into n_chunks contiguous chronological chunks for warm-start chains."""
+    sorted_jobs = sorted(jobs, key=lambda x: x[0])
+    if n_chunks <= 1 or len(sorted_jobs) <= 1:
+        return [sorted_jobs]
+    chunk_size = max(1, len(sorted_jobs) // n_chunks)
+    chunks: List[List[Tuple[datetime.datetime, Any]]] = []
+    for i in range(0, len(sorted_jobs), chunk_size):
+        chunks.append(sorted_jobs[i : i + chunk_size])
+    # Merge any tiny trailing chunk into the last real chunk
+    if len(chunks) > n_chunks and chunks[-1]:
+        chunks[-2].extend(chunks[-1])
+        chunks.pop()
+    return chunks
+
+
 def _to_plot_bound(value: Optional[Union[str, datetime.date, datetime.datetime, pd.Timestamp]]) -> Optional[Union[str, Any]]:
     if value is None:
         return None
@@ -2167,6 +2192,34 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             initial_nodes=initial_nodes,
             solver_tolerances=solver_tolerances,
         )
+
+    def _calibrate_chunk(
+        self,
+        *,
+        chunk: List[Tuple[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]]],
+        curve_name: str,
+        cfg: Dict[str, Any],
+        solver_tolerances: Optional[Dict[str, float]] = None,
+        curve_only: bool = True,
+    ) -> Dict[datetime.datetime, Any]:
+        """Calibrate a chronological chunk with warm-starting from previous curve's nodes."""
+        results: Dict[datetime.datetime, Any] = {}
+        prior_nodes: Optional[Dict] = None
+        for ts, ts_pricers in chunk:
+            with _suppress_solver_output():
+                curve_obj, solver_obj = self._build_curve_from_pricers(
+                    curve_name=curve_name,
+                    timestamp=ts,
+                    cfg=cfg,
+                    pricers=ts_pricers,
+                    initial_nodes=prior_nodes,
+                    solver_tolerances=solver_tolerances,
+                )
+            prior_nodes = _extract_nodes(curve_obj)
+            curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
+            self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
+            results[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
+        return results
 
     def build_curve(
         self,
