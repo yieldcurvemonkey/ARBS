@@ -88,14 +88,13 @@ class DuckDBTimeseriesCache:
         with self._lock:
             self._conn.execute("BEGIN TRANSACTION")
             try:
-                for trading_date, column_name, value in rows:
-                    self._conn.execute(
-                        """
-                        INSERT OR REPLACE INTO computed_timeseries (symbol, trading_date, column_name, value, synced_at)
-                        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                        """,
-                        [symbol, trading_date, column_name, value],
-                    )
+                self._conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO computed_timeseries (symbol, trading_date, column_name, value, synced_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    [[symbol, trading_date, column_name, value] for trading_date, column_name, value in rows],
+                )
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")

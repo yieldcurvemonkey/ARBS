@@ -1187,35 +1187,39 @@ class TimeseriesBuilder:
                 timestamps=sorted(missing_points),
             )
 
-        date_points = [
+        date_points = sorted(set(
             point if isinstance(point, datetime.date) and not isinstance(point, datetime.datetime) else point.date()
             for point in missing_points
-        ]
-        fallback_frames: List[pd.DataFrame] = []
-        for range_start, range_end in self._group_business_date_ranges(date_points):
-            fallback_df = fallback_tb.get_timeseries(  # type: ignore[attr-defined]
-                range_start,
-                range_end,
-                queries,
-                n_jobs=n_jobs,
-                ignore_cache=ignore_cache,
-                freq=None,
-                timestamps=None,
-            )
-            if fallback_df is None or fallback_df.empty:
+        ))
+
+        # Group consecutive dates into tight ranges so the fallback router
+        # doesn't re-process the entire original date span for a few gaps.
+        ranges: List[Tuple[datetime.date, datetime.date]] = []
+        range_start = date_points[0]
+        prev = range_start
+        for d in date_points[1:]:
+            if (d - prev).days > 5:
+                ranges.append((range_start, prev))
+                range_start = d
+            prev = d
+        ranges.append((range_start, prev))
+
+        frames: List[pd.DataFrame] = []
+        for rs, re in ranges:
+            try:
+                chunk = fallback_tb.get_timeseries(  # type: ignore[attr-defined]
+                    rs, re, queries,
+                    n_jobs=n_jobs, ignore_cache=ignore_cache, freq=None, timestamps=None,
+                )
+                if not chunk.empty:
+                    frames.append(chunk)
+            except Exception:
                 continue
-            fallback_df = self._strip_redundant_date_column(fallback_df)
-            fallback_df = self._coerce_date_index(fallback_df)
-            fallback_frames.append(fallback_df)
-
-        if not fallback_frames:
+        if not frames:
             return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
-
-        fallback_df = pd.concat(fallback_frames, axis=0, sort=False)
-        if fallback_df.index.has_duplicates:
-            fallback_df = fallback_df[~fallback_df.index.duplicated(keep="last")]
-        fallback_df = fallback_df.sort_index()
-        return fallback_df.reindex(pd.Index(sorted(set(date_points)), name=fallback_df.index.name or self._date_col))
+        fallback_df = pd.concat(frames, axis=0).sort_index()
+        fallback_df = fallback_df[~fallback_df.index.duplicated(keep="last")]
+        return fallback_df.reindex(pd.Index(date_points, name=fallback_df.index.name or self._date_col))
 
     def _execute_irs_curve_store_plan(
         self,
@@ -1415,7 +1419,7 @@ class TimeseriesBuilder:
             missing_points = [
                 ref_point
                 for ref_point in reference_points
-                if sum((ref_point, idx) in covered for idx in range(len(curve_queries))) < len(curve_queries)
+                if any((ref_point, idx) not in covered for idx in range(len(curve_queries)))
             ]
             fallback_df = self._fallback_timeseries_for_missing_points(
                 product="IRS",

@@ -312,7 +312,8 @@ class BaseTimeseriesTB(ABC):
             return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
 
         df = pd.DataFrame(rows, columns=[self._date_col, "_col", "_val"])
-        out = df.pivot_table(index=self._date_col, columns="_col", values="_val", aggfunc="last").sort_index()
+        # groupby + last + unstack is faster than pivot_table for mostly-unique keys
+        out = df.groupby([self._date_col, "_col"])["_val"].last().unstack("_col")
         out.index.name = self._date_col
         out.columns.name = None
         return out

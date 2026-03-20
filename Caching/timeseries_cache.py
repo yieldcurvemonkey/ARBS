@@ -5,6 +5,7 @@ import hashlib
 import os
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -188,10 +189,7 @@ def append_timeseries(
             raise ValueError("DataFrame has no DatetimeIndex; provide as_of_date.")
         groups = {as_of_date: df}
 
-    metas: List[FileMetaDict] = []
-
-    for d, g in sorted(groups.items()):
-        # path: base_dir/asset=<SYMBOL>/date=YYYY-MM-DD/part-<N>.parquet
+    def _process_partition(d: date, g: pd.DataFrame) -> FileMetaDict:
         part_dir = base_dir / f"asset={symbol}" / datetime.strftime(datetime(d.year, d.month, d.day), opts.partition_fmt)
         part_dir.mkdir(parents=True, exist_ok=True)
 
@@ -210,7 +208,6 @@ def append_timeseries(
                 combined = pd.concat([existing, g], axis=0).drop_duplicates(keep="last")
             g = combined
 
-        # Arrow table + Parquet
         table = _df_to_table(g)
         pbytes = _write_parquet_bytes(table, opts.compression, opts.row_group_size)
 
@@ -229,20 +226,28 @@ def append_timeseries(
             except FileNotFoundError:
                 pass
 
-        rows = g.shape[0]
+        rows_count = g.shape[0]
         size = final_path.stat().st_size
         ts_min, ts_max = _df_min_max_ts(g)
-        meta: FileMetaDict = {
+        return {
             "path": str(final_path),
-            "rows": int(rows),
+            "rows": int(rows_count),
             "size": int(size),
             "min_ts": ts_min,
             "max_ts": ts_max,
             "sha256": file_sha,
         }
 
-        metas.append(meta)
+    sorted_groups = sorted(groups.items())
+    if len(sorted_groups) <= 4:
+        return [_process_partition(d, g) for d, g in sorted_groups]
 
+    metas: List[FileMetaDict] = []
+    workers = min(len(sorted_groups), os.cpu_count() or 4, 8)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_process_partition, d, g): d for d, g in sorted_groups}
+        for future in as_completed(futures):
+            metas.append(future.result())
     return metas
 
 
