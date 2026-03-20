@@ -1280,19 +1280,29 @@ class TimeseriesBuilder:
                     curve_frames.append(curve_df)
                 continue
 
+            # Only load raw curves for reference points that still need pricing
+            uncovered_ref_points = [
+                rp for rp in reference_points
+                if any((rp, idx) not in covered for idx in range(len(curve_queries)))
+            ]
+            uncovered_key_by_ref = {
+                rp: ts_key for rp, ts_key in requested_key_by_ref.items()
+                if rp in set(uncovered_ref_points)
+            }
+
             curve_map: Dict[DateLike, Any] = {}
-            if _supports_irs_curve_store_raw_curve_fast_path(mdp):
+            if _supports_irs_curve_store_raw_curve_fast_path(mdp) and uncovered_ref_points:
                 curve_map = _run_stage(
                     desc=f"LOADING {requested_curve_name} raw curves...",
-                    total=len(reference_points),
+                    total=len(uncovered_ref_points),
                     fn=lambda: self._build_irs_curve_store_curve_map(
                         mdp=mdp,
                         store=store,
                         builder=builder,
                         requested_curve_name=requested_curve_name,
                         resolved_curve_name=resolved_curve_name,
-                        reference_points=reference_points,
-                        requested_key_by_ref=requested_key_by_ref,
+                        reference_points=uncovered_ref_points,
+                        requested_key_by_ref=uncovered_key_by_ref,
                         n_jobs=n_jobs,
                     ),
                 )
