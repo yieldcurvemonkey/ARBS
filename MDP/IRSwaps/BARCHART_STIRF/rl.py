@@ -116,6 +116,7 @@ def _build_stirf_nodes(
     central_bank_dates: Dict[str, Dict[str, Tuple[datetime.date, datetime.date]]],
     reference_key: str,
     max_tenor_from_timestamp_months: int,
+    initial_nodes: Optional[Dict[pd.Timestamp, float]] = None,
 ) -> Dict[pd.Timestamp, float]:
     assert isinstance(timestamp, datetime.datetime)
     assert timestamp.tzinfo is not None and timestamp.tzinfo.utcoffset(timestamp) is not None
@@ -157,7 +158,8 @@ def _build_stirf_nodes(
     # build nodes dict (values are placeholders / initial guesses)
     nodes: Dict[pd.Timestamp, float] = {_as_node_ts(base_date, base_ts=base_ts): 1.0}
     for d in node_dates:
-        nodes[_as_node_ts(d, base_ts=base_ts)] = 1.0
+        key = _as_node_ts(d, base_ts=base_ts)
+        nodes[key] = initial_nodes.get(key, 1.0) if initial_nodes else 1.0
 
     return nodes
 
