@@ -479,6 +479,8 @@ def _process_curve_calibration_job(
     timestamp: datetime.datetime,
     cfg: Dict[str, Any],
     pricers: Dict[str, List["RLSTIRFuturePricer"]],
+    initial_nodes: Optional[Dict] = None,
+    solver_tolerances: Optional[Dict[str, float]] = None,
 ) -> Tuple[datetime.datetime, rl.Curve]:
     with _suppress_solver_output():
         curve_obj, _ = _build_curve_from_pricers_core(
@@ -486,6 +488,8 @@ def _process_curve_calibration_job(
             timestamp=timestamp,
             cfg=cfg,
             pricers=pricers,
+            initial_nodes=initial_nodes,
+            solver_tolerances=solver_tolerances,
         )
     return timestamp, curve_obj
 
@@ -2152,12 +2156,16 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         timestamp: datetime.datetime,
         cfg: Dict[str, Any],
         pricers: Dict[str, List[RLSTIRFuturePricer]],
+        initial_nodes: Optional[Dict] = None,
+        solver_tolerances: Optional[Dict[str, float]] = None,
     ) -> Tuple[rl.Curve, rl.Solver]:
         return _build_curve_from_pricers_core(
             curve_name=curve_name,
             timestamp=timestamp,
             cfg=cfg,
             pricers=pricers,
+            initial_nodes=initial_nodes,
+            solver_tolerances=solver_tolerances,
         )
 
     def build_curve(
