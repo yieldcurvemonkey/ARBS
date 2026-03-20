@@ -522,6 +522,41 @@ class TimeseriesBuilder:
             return df.drop(columns=[self._date_col])
         return df
 
+    def _coerce_date_index(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return df
+
+        if isinstance(df.index, pd.DatetimeIndex):
+            out = df.copy()
+            out.index = pd.Index(out.index.date, name=out.index.name or self._date_col)
+            return out
+
+        raw_index = list(df.index)
+        if raw_index and all(isinstance(point, datetime.datetime) for point in raw_index):
+            out = df.copy()
+            out.index = pd.Index([point.date() for point in raw_index], name=df.index.name or self._date_col)
+            return out
+
+        return df
+
+    def _group_business_date_ranges(self, date_points: List[datetime.date]) -> List[Tuple[datetime.date, datetime.date]]:
+        ordered_points = sorted({point for point in date_points})
+        if not ordered_points:
+            return []
+
+        ranges: List[Tuple[datetime.date, datetime.date]] = []
+        range_start = ordered_points[0]
+        range_end = ordered_points[0]
+        for current in ordered_points[1:]:
+            if len(pd.bdate_range(range_end, current).date.tolist()) == 2:
+                range_end = current
+                continue
+            ranges.append((range_start, range_end))
+            range_start = current
+            range_end = current
+        ranges.append((range_start, range_end))
+        return ranges
+
     def _resolve_product_handles(
         self,
         *,
