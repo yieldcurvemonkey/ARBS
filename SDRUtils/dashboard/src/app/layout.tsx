@@ -83,9 +83,9 @@ export default function RootLayout({
                 <Link href="/usts-rv" className="hover:text-white">
                   UST RV
                 </Link>
-                <span className="text-slate-500">
-                  More coming soon
-                </span>
+                <Link href="/curve-explorer" className="hover:text-white">
+                  Curve Explorer
+                </Link>
               </nav>
             </div>
           </header>
