@@ -28,6 +28,7 @@ import pytest
 from Caching.timeseries_cache import (
     WriteOptions,
     append_timeseries,
+    append_timeseries_many,
     read_timeseries,
     _sanitize_symbol,
     _to_datestr,
@@ -165,6 +166,25 @@ class TestAppendTimeseries:
         dirs = list(ts_dir.glob("asset=*"))
         assert len(dirs) == 1
         assert "US_T_2.5_" in dirs[0].name
+
+    def test_bulk_multi_symbol_write(self, opts, ts_dir):
+        df1 = _make_df([date(2025, 1, 6)], columns={"v": 1.0}, periods_per_day=2)
+        df2 = _make_df([date(2025, 1, 7)], columns={"v": 2.0}, periods_per_day=2)
+
+        metas = append_timeseries_many(
+            None,
+            [
+                ("SYM1", df1, None),
+                ("SYM2", df2, None),
+            ],
+            opts=opts,
+        )
+
+        assert set(metas.keys()) == {"SYM1", "SYM2"}
+        assert len(metas["SYM1"]) == 1
+        assert len(metas["SYM2"]) == 1
+        assert read_timeseries(None, "SYM1", base_dir=str(ts_dir)).shape[0] == 2
+        assert read_timeseries(None, "SYM2", base_dir=str(ts_dir)).shape[0] == 2
 
 
 # ---------------------------------------------------------------------------

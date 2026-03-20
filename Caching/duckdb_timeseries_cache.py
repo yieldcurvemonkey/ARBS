@@ -12,7 +12,7 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Mapping, Optional, Sequence, Tuple
 
 import duckdb
 
@@ -83,8 +83,21 @@ class DuckDBTimeseriesCache:
         rows: Sequence[Tuple[datetime.date, str, float]],
     ) -> int:
         """Insert or update rows. Returns count of rows upserted."""
-        if not rows:
+        return self.upsert_many_rows({symbol: rows})
+
+    def upsert_many_rows(
+        self,
+        rows_by_symbol: Mapping[str, Sequence[Tuple[datetime.date, str, float]]],
+    ) -> int:
+        """Insert or update rows for multiple symbols in one transaction."""
+        payload = [
+            [symbol, trading_date, column_name, value]
+            for symbol, rows in rows_by_symbol.items()
+            for trading_date, column_name, value in rows
+        ]
+        if not payload:
             return 0
+
         with self._lock:
             self._conn.execute("BEGIN TRANSACTION")
             try:
@@ -93,13 +106,13 @@ class DuckDBTimeseriesCache:
                     INSERT OR REPLACE INTO computed_timeseries (symbol, trading_date, column_name, value, synced_at)
                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
                     """,
-                    [[symbol, trading_date, column_name, value] for trading_date, column_name, value in rows],
+                    payload,
                 )
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
-        return len(rows)
+        return len(payload)
 
     def read_rows(
         self,

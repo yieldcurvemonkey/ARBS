@@ -5,11 +5,11 @@ import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
-from Caching.timeseries_cache import WriteOptions, append_timeseries, read_timeseries
+from Caching.timeseries_cache import WriteOptions, append_timeseries, append_timeseries_many, read_timeseries
 
 DateLike = Union[datetime.date, datetime.datetime]
 
@@ -66,7 +66,9 @@ class ComputedTimeseriesStore:
         self._duckdb_cache: Optional["DuckDBTimeseriesCache"] = None
         if use_duckdb:
             from Caching.duckdb_timeseries_cache import DuckDBTimeseriesCache
-            self._duckdb_cache = DuckDBTimeseriesCache(db_path=duckdb_path)
+
+            resolved_duckdb_path = duckdb_path or str(Path(self._opts.base_dir) / "computed_ts.duckdb")
+            self._duckdb_cache = DuckDBTimeseriesCache(db_path=resolved_duckdb_path)
 
     @property
     def write_options(self) -> WriteOptions:
@@ -436,51 +438,139 @@ class ComputedTimeseriesStore:
 
         threading.Thread(target=_bg_push_rows, daemon=True).start()
 
+    def _push_many_days_to_l2(
+        self,
+        *,
+        trading_dates_by_symbol: Mapping[str, Sequence[datetime.date]],
+    ) -> None:
+        sync = _get_computed_ts_sync(self._opts.base_dir)
+        if sync is None or not trading_dates_by_symbol:
+            return
+
+        normalized = {
+            symbol: sorted(set(trading_dates))
+            for symbol, trading_dates in trading_dates_by_symbol.items()
+            if trading_dates
+        }
+        if not normalized:
+            return
+
+        def _bg_push() -> None:
+            for symbol, trading_dates in normalized.items():
+                for trading_date in trading_dates:
+                    try:
+                        sync.push_day(symbol, trading_date)
+                    except Exception:
+                        logger.warning(
+                            "Computed TS L2 push failed for %s/%s",
+                            symbol,
+                            trading_date,
+                            exc_info=True,
+                        )
+
+        threading.Thread(target=_bg_push, daemon=True).start()
+
+    def _push_many_rows_to_l2(
+        self,
+        *,
+        rows_by_symbol: Mapping[str, Sequence[Tuple[DateLike, str, float]]],
+    ) -> None:
+        sync = _get_computed_ts_sync(self._opts.base_dir)
+        if sync is None or not rows_by_symbol or not hasattr(sync, "push_rows"):
+            return
+
+        normalized = {
+            symbol: [
+                (_normalize_eod_key(ref_point), str(column_name), float(value))
+                for ref_point, column_name, value in rows
+            ]
+            for symbol, rows in rows_by_symbol.items()
+            if rows
+        }
+        if not normalized:
+            return
+
+        def _bg_push_rows() -> None:
+            for symbol, row_data in normalized.items():
+                try:
+                    sync.push_rows(symbol, row_data)
+                except Exception:
+                    logger.warning("Row-level L2 push failed for %s", symbol, exc_info=True)
+
+        threading.Thread(target=_bg_push_rows, daemon=True).start()
+
+    @staticmethod
+    def _normalize_symbol_rows(
+        rows: Iterable[Tuple[DateLike, str, float]],
+    ) -> list[Tuple[pd.Timestamp, str, float]]:
+        ordered: dict[pd.Timestamp, Tuple[str, float]] = {}
+        for ref_point, column_name, value in rows:
+            ordered[_normalize_intraday_key(ref_point)] = (str(column_name), float(value))
+        return [(ts, col, val) for ts, (col, val) in ordered.items()]
+
     def append_rows(
         self,
         *,
         symbol: str,
         rows: Iterable[Tuple[DateLike, str, float]],
     ) -> None:
-        normalized_rows = list(rows)
-        if not normalized_rows:
+        self.append_many_rows(rows_by_symbol={symbol: rows})
+
+    def append_many_rows(
+        self,
+        *,
+        rows_by_symbol: Mapping[str, Iterable[Tuple[DateLike, str, float]]],
+    ) -> None:
+        normalized_by_symbol = {
+            symbol: self._normalize_symbol_rows(rows)
+            for symbol, rows in rows_by_symbol.items()
+        }
+        normalized_by_symbol = {
+            symbol: rows
+            for symbol, rows in normalized_by_symbol.items()
+            if rows
+        }
+        if not normalized_by_symbol:
             return
 
-        ordered: dict[pd.Timestamp, Tuple[str, float]] = {}
-        for ref_point, column_name, value in normalized_rows:
-            ordered[_normalize_intraday_key(ref_point)] = (str(column_name), float(value))
+        frame_items = []
+        duckdb_rows_by_symbol: dict[str, list[Tuple[datetime.date, str, float]]] = {}
+        trading_dates_by_symbol: dict[str, list[datetime.date]] = {}
+        l2_rows_by_symbol: dict[str, list[Tuple[DateLike, str, float]]] = {}
 
-        index = pd.DatetimeIndex(list(ordered.keys()))
-        df = pd.DataFrame(
-            {
-                "value": [item[1] for item in ordered.values()],
-                "_column_name": [item[0] for item in ordered.values()],
-            },
-            index=index,
-        ).sort_index()
+        for symbol, normalized_rows in normalized_by_symbol.items():
+            index = pd.DatetimeIndex([ts for ts, _col, _val in normalized_rows])
+            df = pd.DataFrame(
+                {
+                    "value": [val for _ts, _col, val in normalized_rows],
+                    "_column_name": [col for _ts, col, _val in normalized_rows],
+                },
+                index=index,
+            ).sort_index()
+            frame_items.append((symbol, df, None))
 
-        append_timeseries(
+            duckdb_rows = [
+                (_normalize_eod_key(ts.to_pydatetime()), str(col), float(val))
+                for ts, col, val in normalized_rows
+            ]
+            duckdb_rows_by_symbol[symbol] = duckdb_rows
+            trading_dates_by_symbol[symbol] = [ts.date() for ts, _col, _val in normalized_rows]
+            l2_rows_by_symbol[symbol] = [
+                (ts.to_pydatetime(), col, val)
+                for ts, col, val in normalized_rows
+            ]
+
+        append_timeseries_many(
             None,
-            symbol,
-            df,
+            frame_items,
             opts=self._opts,
         )
 
-        # Write to local DuckDB
         if self._duckdb_cache is not None:
-            duckdb_rows = [
-                (_normalize_eod_key(ref_point), str(column_name), float(value))
-                for ref_point, column_name, value in normalized_rows
-            ]
             try:
-                self._duckdb_cache.upsert_rows(symbol, duckdb_rows)
+                self._duckdb_cache.upsert_many_rows(duckdb_rows_by_symbol)
             except Exception:
-                logger.warning("DuckDB upsert failed for %s", symbol, exc_info=True)
+                logger.warning("DuckDB bulk upsert failed", exc_info=True)
 
-        self._push_days_to_l2(
-            symbol=symbol,
-            trading_dates=[ts.date() for ts in ordered.keys()],
-        )
-
-        # Push row-level data to L2 (new row table)
-        self._push_rows_to_l2(symbol=symbol, rows=normalized_rows)
+        self._push_many_days_to_l2(trading_dates_by_symbol=trading_dates_by_symbol)
+        self._push_many_rows_to_l2(rows_by_symbol=l2_rows_by_symbol)

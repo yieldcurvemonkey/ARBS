@@ -198,13 +198,24 @@ class _FakeIRSCurveStore:
             }
         )
 
-    def reconstruct_curves_batch(self, df: pd.DataFrame, *, cfg=None, max_workers: int = 4) -> Dict[datetime.datetime, Any]:
+    def reconstruct_curves_batch(
+        self,
+        df: pd.DataFrame,
+        *,
+        cfg=None,
+        max_workers: int = 4,
+        progress_callback=None,
+    ) -> Dict[datetime.datetime, Any]:
         _ = cfg
         self.reconstruct_workers.append(max_workers)
-        return {
-            row.timestamp_utc.to_pydatetime().replace(tzinfo=datetime.timezone.utc): f"curve::{row.timestamp_utc.isoformat()}"
-            for row in df.itertuples(index=False)
-        }
+        result = {}
+        for row in df.itertuples(index=False):
+            result[row.timestamp_utc.to_pydatetime().replace(tzinfo=datetime.timezone.utc)] = (
+                f"curve::{row.timestamp_utc.isoformat()}"
+            )
+            if progress_callback is not None:
+                progress_callback(1)
+        return result
 
 
 class _FakeIRSCurveStoreMDP:
@@ -860,6 +871,7 @@ def test_timeseries_builder_curve_store_fast_path_shows_pricing_tqdm_by_default(
             self.iterable = iterable
             self.kwargs = kwargs
             self.updates: List[int] = []
+            self.n = 0
             calls.append(self)
 
         def __iter__(self):
@@ -875,7 +887,9 @@ def test_timeseries_builder_curve_store_fast_path_shows_pricing_tqdm_by_default(
             return False
 
         def update(self, n=1):
-            self.updates.append(int(n))
+            inc = int(n)
+            self.updates.append(inc)
+            self.n += inc
 
     monkeypatch.setattr(
         irs_tb_module,
@@ -889,6 +903,11 @@ def test_timeseries_builder_curve_store_fast_path_shows_pricing_tqdm_by_default(
     assert list(out.index) == [ts1, ts2]
     assert list(out[q.col_name()]) == [0.05, 0.051]
     assert calls
+    raw_curve_calls = [call for call in calls if "LOADING" in call.kwargs.get("desc", "")]
+    assert raw_curve_calls
+    assert raw_curve_calls[0].kwargs["disable"] is False
+    assert raw_curve_calls[0].kwargs["total"] == 2
+    assert raw_curve_calls[0].updates == [1, 1]
     pricing_calls = [call for call in calls if "curve-store" in call.kwargs.get("desc", "")]
     assert pricing_calls
     assert pricing_calls[0].kwargs["disable"] is False
@@ -1032,6 +1051,38 @@ def test_timeseries_builder_curve_store_full_computed_cache_hit_skips_follow_on_
     assert mdp.bulk_calls == 0
 
 
+def test_timeseries_builder_route_full_computed_cache_hit_skips_irs_router(monkeypatch, tmp_path):
+    ts1 = datetime.date(2026, 1, 2)
+    ts2 = datetime.date(2026, 1, 5)
+    mdp = _FakeIRSCurveStoreMDP(_FakeIRSCurveStore([]), source="MOCK_IRS_ROUTE")
+    monkeypatch.setattr(mdp, "_supports_curve_store_fast_path", lambda: False)
+    router = _NoCallRouter(mdp)
+    router._computed_ts_store = ComputedTimeseriesStore(base_dir=tmp_path / "irs-route", use_duckdb=False)
+    router._ts_symbol_for_query = lambda curve_name, q: f"IRS::{curve_name}::{q.tenor}::{q.value.name}"
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="10Y", value=IRSwapValue.RATE)
+
+    router._computed_ts_store.append_rows(
+        symbol=router._ts_symbol_for_query(q.curve, q),
+        rows=[
+            (ts1, q.col_name(), 4.25),
+            (ts2, q.col_name(), 4.30),
+        ],
+    )
+
+    out = tb.get_timeseries(
+        start=ts1,
+        end=ts2,
+        queries=[q],
+        n_jobs=2,
+    )
+
+    assert list(out.index) == [ts1, ts2]
+    assert list(out[q.col_name()]) == [4.25, 4.30]
+    assert router.call_count == 0
+    assert mdp.bulk_calls == 0
+
+
 def test_timeseries_builder_curve_store_fast_path_falls_back_for_missing_points(monkeypatch):
     import TB.IRSwapsTB as irs_tb_module
 
@@ -1117,6 +1168,39 @@ def test_timeseries_builder_uses_eris_curve_analytics_fast_path_skips_usd_sofr_h
     ]
     assert store.raw_reads == []
     assert mdp.bulk_calls == 0
+
+
+def test_timeseries_builder_route_full_computed_cache_hit_skips_frb_router_with_business_day_filter(tmp_path):
+    import QuantLib as ql
+
+    ts1 = datetime.date(2026, 1, 2)
+    ts2 = datetime.date(2026, 1, 5)
+    router = _NoCallRouter(_MockFixedRateBondMDP())
+    router._computed_ts_store = ComputedTimeseriesStore(base_dir=tmp_path / "frb-route", use_duckdb=False)
+    router._ts_symbol_for_query = lambda q: f"FRB::{q.cusip}::{q.value.name}"
+    router._skip_non_business = True
+    router._cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    tb = TimeseriesBuilder(fixedratebonds_tb=router)
+    q = FixedRateBondQuery(cusip="CT10", value=FixedRateBondValue.YTM)
+
+    router._computed_ts_store.append_rows(
+        symbol=router._ts_symbol_for_query(q),
+        rows=[
+            (ts1, q.col_name(), 4.25),
+            (ts2, q.col_name(), 4.30),
+        ],
+    )
+
+    out = tb.get_timeseries(
+        start=datetime.date(2026, 1, 1),
+        end=datetime.date(2026, 1, 5),
+        queries=[q],
+        n_jobs=2,
+    )
+
+    assert list(out.index) == [ts1, ts2]
+    assert list(out[q.col_name()]) == [4.25, 4.30]
+    assert router.call_count == 0
 
 
 def test_timeseries_builder_uses_eris_curve_analytics_fast_path():

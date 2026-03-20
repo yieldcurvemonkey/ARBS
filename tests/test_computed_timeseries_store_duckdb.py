@@ -88,6 +88,27 @@ class TestDuckDBFastPath:
         assert len(result) == 1
         assert result[0][0] == yesterday
 
+    def test_append_many_rows_writes_multiple_symbols(self, store, tmp_path):
+        d1 = datetime.date(2026, 3, 10)
+        d2 = datetime.date(2026, 3, 11)
+
+        store.append_many_rows(
+            rows_by_symbol={
+                "IRS::TEST1": [(d1, "rate", 4.5)],
+                "IRS::TEST2": [(d2, "rate", 4.6)],
+            }
+        )
+
+        assert store._duckdb_cache.read_rows("IRS::TEST1", start=d1, end=d1) == [(d1, "rate", 4.5)]
+        assert store._duckdb_cache.read_rows("IRS::TEST2", start=d2, end=d2) == [(d2, "rate", 4.6)]
+
+        from Caching.timeseries_cache import read_timeseries
+
+        df1 = read_timeseries(None, "IRS::TEST1", start=d1, end=d1, base_dir=str(tmp_path / "ts"))
+        df2 = read_timeseries(None, "IRS::TEST2", start=d2, end=d2, base_dir=str(tmp_path / "ts"))
+        assert not df1.empty
+        assert not df2.empty
+
 
 class TestRowLevelL2Push:
     @patch("Caching.computed_timeseries_store._get_computed_ts_sync")

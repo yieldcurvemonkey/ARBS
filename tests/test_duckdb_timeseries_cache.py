@@ -102,6 +102,21 @@ class TestDuckDBTimeseriesCache:
         result = cache.read_rows(sym, start=base, end=base + datetime.timedelta(days=499))
         assert len(result) == 500
 
+    def test_upsert_many_rows_supports_multiple_symbols(self, cache):
+        d1 = datetime.date(2026, 1, 6)
+        d2 = datetime.date(2026, 1, 7)
+
+        count = cache.upsert_many_rows(
+            {
+                "IRS::SYM1": [(d1, "rate", 4.25)],
+                "IRS::SYM2": [(d2, "rate", 4.30)],
+            }
+        )
+
+        assert count == 2
+        assert cache.read_rows("IRS::SYM1", start=d1, end=d1) == [(d1, "rate", 4.25)]
+        assert cache.read_rows("IRS::SYM2", start=d2, end=d2) == [(d2, "rate", 4.30)]
+
     def test_persistence_across_reopen(self, tmp_path):
         db_path = str(tmp_path / "persist.duckdb")
         c1 = DuckDBTimeseriesCache(db_path=db_path)

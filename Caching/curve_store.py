@@ -17,6 +17,7 @@ import datetime
 import hashlib
 import json
 import os
+import queue
 import re
 import tempfile
 import threading
@@ -24,7 +25,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import logging as _logging
 
@@ -352,6 +353,7 @@ class CurveStore:
         self,
         base_dir: Optional[Union[str, Path]] = None,
         compression: str = DEFAULT_COMPRESSION,
+        bg_push_workers: Optional[int] = None,
     ) -> None:
         if base_dir is None:
             base_dir = self._default_base_dir()
@@ -361,39 +363,102 @@ class CurveStore:
         self._analytics_dir = self._base_dir / "analytics"
         self._bg_push_threads: list[threading.Thread] = []
         self._bg_push_lock = threading.Lock()
+        self._bg_push_condition = threading.Condition(self._bg_push_lock)
+        self._bg_push_queue: queue.Queue[tuple[Any, str, str, datetime.date]] = queue.Queue()
+        self._bg_push_pending = 0
+        self._bg_push_worker_count = self._resolve_bg_push_workers(bg_push_workers)
 
-    def _track_bg_push_thread(self, thread: threading.Thread) -> None:
+    @staticmethod
+    def _resolve_bg_push_workers(bg_push_workers: Optional[int]) -> int:
+        if bg_push_workers is None:
+            raw_value = os.getenv("ARBS_CURVE_STORE_BG_PUSH_WORKERS")
+            if raw_value is None or raw_value == "":
+                return 2
+            try:
+                bg_push_workers = int(raw_value)
+            except ValueError:
+                logger.warning(
+                    "Invalid ARBS_CURVE_STORE_BG_PUSH_WORKERS=%r; defaulting to 2",
+                    raw_value,
+                )
+                return 2
+        return max(1, int(bg_push_workers))
+
+    def _ensure_bg_push_workers(self) -> None:
+        threads_to_start: list[threading.Thread] = []
         with self._bg_push_lock:
             self._bg_push_threads = [t for t in self._bg_push_threads if t.is_alive()]
-            self._bg_push_threads.append(thread)
+            while len(self._bg_push_threads) < self._bg_push_worker_count:
+                worker_idx = len(self._bg_push_threads) + 1
+                thread = threading.Thread(
+                    target=self._bg_push_worker,
+                    name=f"curve-store-bg-push-{worker_idx}",
+                    daemon=True,
+                )
+                self._bg_push_threads.append(thread)
+                threads_to_start.append(thread)
+        for thread in threads_to_start:
+            thread.start()
 
-    def _release_bg_push_thread(self, thread: threading.Thread) -> None:
-        with self._bg_push_lock:
-            self._bg_push_threads = [t for t in self._bg_push_threads if t.is_alive() and t is not thread]
+    def _bg_push_worker(self) -> None:
+        while True:
+            sync, kind, curve_name, trading_date = self._bg_push_queue.get()
+            try:
+                if kind == "raw":
+                    sync.push_day(curve_name, trading_date)
+                else:
+                    sync.push_analytics_day(curve_name, trading_date)
+            except Exception:
+                if kind == "raw":
+                    logger.warning(
+                        "L2 push failed for %s/%s",
+                        curve_name,
+                        trading_date,
+                        exc_info=True,
+                    )
+                else:
+                    logger.warning(
+                        "L2 analytics push failed for %s/%s",
+                        curve_name,
+                        trading_date,
+                        exc_info=True,
+                    )
+            finally:
+                with self._bg_push_condition:
+                    self._bg_push_pending = max(0, self._bg_push_pending - 1)
+                    if self._bg_push_pending == 0:
+                        self._bg_push_condition.notify_all()
+                self._bg_push_queue.task_done()
+
+    def _enqueue_bg_push(
+        self,
+        sync: Any,
+        *,
+        kind: str,
+        curve_name: str,
+        trading_date: datetime.date,
+    ) -> None:
+        self._ensure_bg_push_workers()
+        with self._bg_push_condition:
+            self._bg_push_pending += 1
+        self._bg_push_queue.put((sync, kind, curve_name, trading_date))
 
     def wait_for_background_pushes(self, timeout: Optional[float] = None) -> int:
-        """Join outstanding background Supabase push threads.
+        """Wait for outstanding background Supabase pushes to finish.
 
-        Returns the number of tracked push threads that were awaited.
+        Returns the number of queued or in-flight pushes that were awaited.
         """
         deadline = None if timeout is None else (time.monotonic() + float(timeout))
-        waited = 0
-
-        while True:
-            with self._bg_push_lock:
-                threads = [t for t in self._bg_push_threads if t.is_alive()]
-                self._bg_push_threads = threads
-
-            if not threads:
-                return waited
-
-            waited = max(waited, len(threads))
-            for thread in threads:
+        with self._bg_push_condition:
+            waited = self._bg_push_pending
+            while self._bg_push_pending > 0:
                 remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
-                thread.join(remaining)
-
-            if deadline is not None and time.monotonic() >= deadline:
-                return waited
+                if remaining is not None and remaining <= 0.0:
+                    return waited
+                self._bg_push_condition.wait(timeout=remaining)
+                if deadline is not None and time.monotonic() >= deadline and self._bg_push_pending > 0:
+                    return waited
+            return waited
 
     @staticmethod
     def _default_base_dir() -> Path:
@@ -445,17 +510,12 @@ class CurveStore:
         # L2: background push to Supabase
         sync = _get_curve_sync(self._base_dir)
         if sync is not None:
-            def _bg_push():
-                try:
-                    sync.push_day(curve_name, trading_date)
-                except Exception:
-                    logger.warning("L2 push failed for %s/%s", curve_name, trading_date, exc_info=True)
-                finally:
-                    self._release_bg_push_thread(threading.current_thread())
-
-            thread = threading.Thread(target=_bg_push, daemon=True)
-            self._track_bg_push_thread(thread)
-            thread.start()
+            self._enqueue_bg_push(
+                sync,
+                kind="raw",
+                curve_name=curve_name,
+                trading_date=trading_date,
+            )
 
         return meta
 
@@ -481,22 +541,12 @@ class CurveStore:
 
         sync = _get_curve_sync(self._base_dir)
         if sync is not None:
-            def _bg_push():
-                try:
-                    sync.push_analytics_day(curve_name, trading_date)
-                except Exception:
-                    logger.warning(
-                        "L2 analytics push failed for %s/%s",
-                        curve_name,
-                        trading_date,
-                        exc_info=True,
-                    )
-                finally:
-                    self._release_bg_push_thread(threading.current_thread())
-
-            thread = threading.Thread(target=_bg_push, daemon=True)
-            self._track_bg_push_thread(thread)
-            thread.start()
+            self._enqueue_bg_push(
+                sync,
+                kind="analytics",
+                curve_name=curve_name,
+                trading_date=trading_date,
+            )
 
         return meta
 
@@ -854,6 +904,7 @@ class CurveStore:
         *,
         cfg: Optional[dict] = None,
         max_workers: int = 4,
+        progress_callback: Optional[Callable[[int], None]] = None,
     ) -> Dict[datetime.datetime, Any]:
         """Parallel rl.Curve reconstruction from a raw-store DataFrame.
 
@@ -869,6 +920,14 @@ class CurveStore:
             curve = cls.reconstruct_curve(row, cfg=cfg)
             return ts, curve
 
+        def _emit_progress() -> None:
+            if progress_callback is None:
+                return
+            try:
+                progress_callback(1)
+            except Exception:
+                logger.debug("Curve reconstruction progress callback failed.", exc_info=True)
+
         n_workers = min(max_workers, max(1, len(rows)))
         result: Dict[datetime.datetime, Any] = {}
 
@@ -876,6 +935,7 @@ class CurveStore:
             for r in rows:
                 ts, curve = _build_one(r)
                 result[ts] = curve
+                _emit_progress()
         else:
             with ThreadPoolExecutor(
                 max_workers=n_workers, thread_name_prefix="curve-reconstruct"
@@ -884,6 +944,7 @@ class CurveStore:
                 for fut in as_completed(futures):
                     ts, curve = fut.result()
                     result[ts] = curve
+                    _emit_progress()
 
         return result
 

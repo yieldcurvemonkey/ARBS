@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, DefaultDict, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, DefaultDict, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 import pytz
@@ -249,6 +249,34 @@ def _filter_irs_curve_store_reference_points(
     return filtered
 
 
+def _filter_fixed_rate_bond_reference_points(
+    reference_points: Iterable[DateLike],
+    *,
+    router: Optional[object],
+) -> List[DateLike]:
+    filtered = _ordered_unique_reference_points(reference_points)
+    if not filtered or any(isinstance(ref_point, datetime.datetime) for ref_point in filtered):
+        return filtered
+
+    if not bool(getattr(router, "_skip_non_business", False)):
+        return filtered
+
+    calendar = getattr(router, "_cal", None)
+    if calendar is None or not hasattr(calendar, "isBusinessDay"):
+        return filtered
+
+    try:
+        from utils.ql_utils import datetime_to_ql_date
+    except Exception:
+        return filtered
+
+    return [
+        ref_point
+        for ref_point in filtered
+        if bool(calendar.isBusinessDay(datetime_to_ql_date(ref_point)))
+    ]
+
+
 def _is_curve_coverage_complete(
     *,
     reference_points: Sequence[DateLike],
@@ -447,6 +475,19 @@ class TimeseriesBuilder:
                 route_timestamps = intraday_timestamps
 
         if tb is not None:
+            cached_df = self._try_routed_product_computed_cache_hit(
+                product=canonical_product,
+                queries=qs,
+                router=tb,
+                mdp=mdp,
+                start=start,
+                end=end,
+                freq=route_freq,
+                timestamps=route_timestamps,
+                ignore_cache=ignore_cache,
+            )
+            if cached_df is not None:
+                return cached_df
             return tb.get_timeseries(  # type: ignore[attr-defined]
                 start,
                 end,
@@ -1023,6 +1064,144 @@ class TimeseriesBuilder:
             covered.update((ref_point, idx) for ref_point, _col, _value in q_rows)
         return rows, covered
 
+    def _read_frb_computed_cache_rows(
+        self,
+        *,
+        router: Optional[object],
+        queries: List[FixedRateBondQuery],
+        reference_points: List[DateLike],
+        intraday: bool,
+    ) -> Tuple[List[Tuple[DateLike, str, float]], set[Tuple[DateLike, int]]]:
+        if router is None:
+            return [], set()
+        computed_store = getattr(router, "_computed_ts_store", None)
+        symbol_builder = getattr(router, "_ts_symbol_for_query", None)
+        if computed_store is None or not callable(symbol_builder):
+            return [], set()
+
+        rows: List[Tuple[DateLike, str, float]] = []
+        covered: set[Tuple[DateLike, int]] = set()
+        for idx, q in enumerate(queries):
+            try:
+                q_rows = computed_store.read_rows(
+                    symbol=symbol_builder(q),
+                    reference_points=reference_points,
+                    intraday=intraday,
+                    skip_current_eod=True,
+                    fallback_column_name=q.col_name(),
+                )
+            except Exception:
+                q_rows = []
+            rows.extend(q_rows)
+            covered.update((ref_point, idx) for ref_point, _col, _value in q_rows)
+        return rows, covered
+
+    def _frame_from_cached_rows(
+        self,
+        *,
+        product: str,
+        router: Optional[object],
+        mdp: Optional[MarketDataProvider],
+        rows: List[Tuple[DateLike, str, float]],
+    ) -> pd.DataFrame:
+        if router is not None and hasattr(router, "_rows_to_frame"):
+            return router._rows_to_frame(rows)  # type: ignore[attr-defined]
+        if mdp is not None:
+            return self._get_generic_router(product, mdp)._rows_to_frame(rows)
+        return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+    def _try_routed_product_computed_cache_hit(
+        self,
+        *,
+        product: str,
+        queries: List[BaseQuery],
+        router: Optional[object],
+        mdp: Optional[MarketDataProvider],
+        start: DateLike,
+        end: DateLike,
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+        ignore_cache: Optional[bool],
+    ) -> Optional[pd.DataFrame]:
+        if ignore_cache or router is None:
+            return None
+
+        computed_store = getattr(router, "_computed_ts_store", None)
+        if computed_store is None:
+            return None
+
+        reference_points = _ordered_unique_reference_points(
+            _build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps)
+        )
+        if not reference_points:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+        intraday = any(isinstance(ref_point, datetime.datetime) for ref_point in reference_points)
+
+        if product == "IRS":
+            from TB.IRSwapsTB import _group_queries_by_curve as _group_irs_queries_by_curve
+
+            irs_queries = [q for q in queries if isinstance(q, IRSwapQuery)]
+            if len(irs_queries) != len(queries):
+                return None
+
+            rows: List[Tuple[DateLike, str, float]] = []
+            any_reference_points = False
+            for requested_curve_name, curve_queries in _group_irs_queries_by_curve(irs_queries).items():
+                curve_reference_points = _filter_irs_curve_store_reference_points(
+                    reference_points,
+                    requested_curve_name=requested_curve_name,
+                )
+                if not curve_reference_points:
+                    continue
+                any_reference_points = True
+                curve_rows, covered = self._read_irs_computed_cache_rows(
+                    router=router,
+                    requested_curve_name=requested_curve_name,
+                    queries=curve_queries,
+                    reference_points=curve_reference_points,
+                    intraday=intraday,
+                )
+                if not _is_curve_coverage_complete(
+                    reference_points=curve_reference_points,
+                    query_count=len(curve_queries),
+                    covered=covered,
+                ):
+                    return None
+                rows.extend(curve_rows)
+
+            if not any_reference_points:
+                return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+            return self._frame_from_cached_rows(product=product, router=router, mdp=mdp, rows=rows)
+
+        if product == "FRB":
+            frb_queries = [q for q in queries if isinstance(q, FixedRateBondQuery)]
+            if len(frb_queries) != len(queries):
+                return None
+
+            filtered_reference_points = _filter_fixed_rate_bond_reference_points(
+                reference_points,
+                router=router,
+            )
+            if not filtered_reference_points:
+                return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+            rows, covered = self._read_frb_computed_cache_rows(
+                router=router,
+                queries=frb_queries,
+                reference_points=filtered_reference_points,
+                intraday=intraday,
+            )
+            if not _is_curve_coverage_complete(
+                reference_points=filtered_reference_points,
+                query_count=len(frb_queries),
+                covered=covered,
+            ):
+                return None
+            return self._frame_from_cached_rows(product=product, router=router, mdp=mdp, rows=rows)
+
+        return None
+
     def _write_irs_computed_cache_rows(
         self,
         *,
@@ -1038,15 +1217,25 @@ class TimeseriesBuilder:
         if computed_store is None or not callable(symbol_builder):
             return
 
+        grouped: Dict[str, List[Tuple[DateLike, str, float]]] = {}
         for idx, rows in rows_by_query_idx.items():
             if not rows:
                 continue
             q = queries[idx]
+            grouped[symbol_builder(requested_curve_name, q)] = list(rows)
+        if not grouped:
+            return
+        try:
+            append_many = getattr(computed_store, "append_many_rows", None)
+            if callable(append_many):
+                append_many(rows_by_symbol=grouped)
+                return
+        except Exception:
+            pass
+
+        for symbol, rows in grouped.items():
             try:
-                computed_store.append_rows(
-                    symbol=symbol_builder(requested_curve_name, q),
-                    rows=rows,
-                )
+                computed_store.append_rows(symbol=symbol, rows=rows)
             except Exception:
                 continue
 
@@ -1116,6 +1305,7 @@ class TimeseriesBuilder:
         reference_points: List[DateLike],
         requested_key_by_ref: Mapping[DateLike, datetime.datetime],
         n_jobs: Optional[int],
+        progress_callback: Optional[Callable[[int], None]] = None,
     ) -> Dict[DateLike, Any]:
         if not reference_points:
             return {}
@@ -1144,11 +1334,23 @@ class TimeseriesBuilder:
             return {}
 
         cfg = getattr(builder, "_STIRF_CURVE_CONFIGS", {}).get(resolved_curve_name)
-        curves_by_ts = store.reconstruct_curves_batch(
-            filtered_df,
-            cfg=cfg,
-            max_workers=max(1, int(n_jobs or 1)),
-        )
+        reconstruct_kwargs = {
+            "cfg": cfg,
+            "max_workers": max(1, int(n_jobs or 1)),
+        }
+        if progress_callback is not None:
+            reconstruct_kwargs["progress_callback"] = progress_callback
+        try:
+            curves_by_ts = store.reconstruct_curves_batch(
+                filtered_df,
+                **reconstruct_kwargs,
+            )
+        except TypeError:
+            reconstruct_kwargs.pop("progress_callback", None)
+            curves_by_ts = store.reconstruct_curves_batch(
+                filtered_df,
+                **reconstruct_kwargs,
+            )
         curves_by_key = {
             key: curve
             for key, curve in (
@@ -1413,10 +1615,26 @@ class TimeseriesBuilder:
 
             curve_map: Dict[DateLike, Any] = {}
             if _supports_irs_curve_store_raw_curve_fast_path(mdp) and uncovered_ref_points:
-                curve_map = _run_stage(
+                raw_curve_total = len(uncovered_ref_points)
+                with _tqdm(
+                    total=max(1, raw_curve_total),
+                    disable=pbar_disable,
                     desc=f"LOADING {requested_curve_name} raw curves...",
-                    total=len(uncovered_ref_points),
-                    fn=lambda: self._build_irs_curve_store_curve_map(
+                    leave=True,
+                ) as pbar:
+                    raw_curve_progress = 0
+
+                    def _update_raw_curve_progress(step: int = 1) -> None:
+                        nonlocal raw_curve_progress
+                        step = max(0, int(step or 0))
+                        remaining = max(0, raw_curve_total - raw_curve_progress)
+                        applied = min(step, remaining)
+                        if applied <= 0:
+                            return
+                        raw_curve_progress += applied
+                        pbar.update(applied)
+
+                    curve_map = self._build_irs_curve_store_curve_map(
                         mdp=mdp,
                         store=store,
                         builder=builder,
@@ -1425,8 +1643,10 @@ class TimeseriesBuilder:
                         reference_points=uncovered_ref_points,
                         requested_key_by_ref=uncovered_key_by_ref,
                         n_jobs=n_jobs,
-                    ),
-                )
+                        progress_callback=_update_raw_curve_progress,
+                    )
+                    if raw_curve_progress < raw_curve_total:
+                        pbar.update(raw_curve_total - raw_curve_progress)
 
             newly_computed_rows: Dict[int, List[Tuple[DateLike, str, float]]] = defaultdict(list)
             tasks = [

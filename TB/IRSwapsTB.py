@@ -358,11 +358,10 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             grouped: Dict[str, List[Tuple[DateLike, str, float]]] = defaultdict(list)
             for (dt_like, col, val), q, curve_name, _d in new_rows_with_q:
                 grouped[self._ts_symbol_for_query(curve_name, q)].append((dt_like, col, float(val)))
-            for sym, rows in grouped.items():
-                try:
-                    self._computed_ts_store.append_rows(symbol=sym, rows=rows)
-                except Exception as ex:
-                    self._logger.warning(f"[TS cache] append failed for symbol={sym}: {ex}")
+            try:
+                self._computed_ts_store.append_many_rows(rows_by_symbol=grouped)
+            except Exception as ex:
+                self._logger.warning(f"[TS cache] bulk append failed: {ex}")
 
         all_rows = cached_rows + [r for (r, _q, _cn, _d) in new_rows_with_q]
         if not all_rows:

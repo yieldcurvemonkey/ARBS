@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import duckdb
 import pandas as pd
@@ -145,6 +145,52 @@ def _write_parquet_bytes(table: pa.Table, compression: str = DEFAULT_COMPRESSION
 FileMetaDict = Dict[str, Union[str, int]]
 
 
+def _resolve_symbol_dir(base_dir: Path, symbol: str) -> Path:
+    primary_symbol = _sanitize_symbol(symbol)
+    legacy_symbol = _legacy_sanitize_symbol(symbol)
+    symbol_dir = base_dir / f"asset={primary_symbol}"
+    if not symbol_dir.exists() and legacy_symbol != primary_symbol:
+        legacy_dir = base_dir / f"asset={legacy_symbol}"
+        if legacy_dir.exists():
+            return legacy_dir
+    return symbol_dir
+
+
+def _partition_frames_by_date(
+    df: pd.DataFrame,
+    *,
+    as_of_date: Optional[date],
+) -> Dict[date, pd.DataFrame]:
+    if isinstance(df.index, pd.DatetimeIndex):
+        sdf = df.copy()
+        sdf.index = sdf.index.tz_convert(None) if sdf.index.tz else sdf.index
+        return {pd.Timestamp(d).date(): g for d, g in sdf.groupby(sdf.index.date)}
+
+    if as_of_date is None:
+        raise ValueError("DataFrame has no DatetimeIndex; provide as_of_date.")
+    return {as_of_date: df}
+
+
+def _read_partition_df(part_dir: Path) -> pd.DataFrame:
+    parquet_files = sorted(part_dir.glob("*.parquet"))
+    if not parquet_files:
+        return pd.DataFrame()
+
+    tables = [pq.read_table(path) for path in parquet_files]
+    table = tables[0] if len(tables) == 1 else pa.concat_tables(tables)
+    df = table.to_pandas()
+    if df.empty:
+        return pd.DataFrame()
+    if "_index_ts" in df.columns:
+        restored_index = pd.to_datetime(df["_index_ts"], utc=False, errors="coerce")
+        if restored_index.isna().all() and "date" not in df.columns:
+            partition_label = str(part_dir.name)
+            if partition_label.startswith("date="):
+                df = df.copy()
+                df["date"] = partition_label.split("=", 1)[1]
+    return _restore_datetime_index(df).sort_index()
+
+
 # ------------------------------ Public API ------------------------------------
 
 
@@ -171,35 +217,45 @@ def append_timeseries(
     The ``root`` parameter is ignored (kept for backward compatibility with
     callers that previously passed a ZODB connection root).
     """
-    if df is None or len(df) == 0:
-        return []
+    metas_by_symbol = append_timeseries_many(
+        root,
+        [(symbol, df, as_of_date)],
+        opts=opts,
+    )
+    return metas_by_symbol.get(symbol, [])
+
+
+def append_timeseries_many(
+    root,  # ignored (kept for API compat, was ZODB root)
+    items: Iterable[Tuple[str, pd.DataFrame, Optional[date]]],
+    *,
+    opts: Optional[WriteOptions] = None,
+) -> Dict[str, List[FileMetaDict]]:
+    """
+    Append multiple symbol DataFrames to partitioned Parquet storage.
+    Returns a mapping from input symbol to FileMetaDict entries created.
+    """
+    _ = root
+
+    item_list = [(symbol, df, as_of_date) for symbol, df, as_of_date in items if df is not None and len(df) > 0]
+    if not item_list:
+        return {}
 
     opts = opts or WriteOptions(base_dir="./data/ts")
     base_dir = Path(opts.base_dir)
-    symbol = _sanitize_symbol(symbol)
 
-    # Partition df by date
-    if isinstance(df.index, pd.DatetimeIndex):
-        sdf = df.copy()
-        sdf.index = sdf.index.tz_convert(None) if sdf.index.tz else sdf.index
-        groups: Dict[date, pd.DataFrame] = {pd.Timestamp(d).date(): g for d, g in sdf.groupby(sdf.index.date)}
-    else:
-        # No datetime index; use provided as_of_date
-        if as_of_date is None:
-            raise ValueError("DataFrame has no DatetimeIndex; provide as_of_date.")
-        groups = {as_of_date: df}
+    tasks: List[Tuple[str, Path, date, pd.DataFrame]] = []
+    for symbol, df, as_of_date in item_list:
+        symbol_dir = _resolve_symbol_dir(base_dir, symbol)
+        groups = _partition_frames_by_date(df, as_of_date=as_of_date)
+        for d, g in groups.items():
+            tasks.append((symbol, symbol_dir, d, g))
 
-    def _process_partition(d: date, g: pd.DataFrame) -> FileMetaDict:
-        part_dir = base_dir / f"asset={symbol}" / datetime.strftime(datetime(d.year, d.month, d.day), opts.partition_fmt)
+    def _process_partition(symbol: str, symbol_dir: Path, d: date, g: pd.DataFrame) -> Tuple[str, FileMetaDict]:
+        part_dir = symbol_dir / datetime.strftime(datetime(d.year, d.month, d.day), opts.partition_fmt)
         part_dir.mkdir(parents=True, exist_ok=True)
 
-        existing = read_timeseries(
-            None,
-            symbol,
-            start=d,
-            end=d,
-            base_dir=base_dir,
-        )
+        existing = _read_partition_df(part_dir)
         if not existing.empty:
             if isinstance(existing.index, pd.DatetimeIndex) and isinstance(g.index, pd.DatetimeIndex):
                 combined = pd.concat([existing, g], axis=0).sort_index()
@@ -229,7 +285,7 @@ def append_timeseries(
         rows_count = g.shape[0]
         size = final_path.stat().st_size
         ts_min, ts_max = _df_min_max_ts(g)
-        return {
+        return symbol, {
             "path": str(final_path),
             "rows": int(rows_count),
             "size": int(size),
@@ -238,17 +294,21 @@ def append_timeseries(
             "sha256": file_sha,
         }
 
-    sorted_groups = sorted(groups.items())
-    if len(sorted_groups) <= 4:
-        return [_process_partition(d, g) for d, g in sorted_groups]
+    if len(tasks) <= 4:
+        results = [_process_partition(symbol, symbol_dir, d, g) for symbol, symbol_dir, d, g in tasks]
+    else:
+        workers = min(len(tasks), os.cpu_count() or 4, 8)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_process_partition, symbol, symbol_dir, d, g): symbol
+                for symbol, symbol_dir, d, g in tasks
+            }
+            results = [future.result() for future in as_completed(futures)]
 
-    metas: List[FileMetaDict] = []
-    workers = min(len(sorted_groups), os.cpu_count() or 4, 8)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_process_partition, d, g): d for d, g in sorted_groups}
-        for future in as_completed(futures):
-            metas.append(future.result())
-    return metas
+    metas_by_symbol: Dict[str, List[FileMetaDict]] = {}
+    for symbol, meta in results:
+        metas_by_symbol.setdefault(symbol, []).append(meta)
+    return metas_by_symbol
 
 
 def read_timeseries(
@@ -264,14 +324,8 @@ def read_timeseries(
     Read timeseries for *symbol* over [start, end] using DuckDB to scan
     Hive-partitioned Parquet files directly (no catalog needed).
     """
-    primary_symbol = _sanitize_symbol(symbol)
-    legacy_symbol = _legacy_sanitize_symbol(symbol)
     base = Path(base_dir)
-    symbol_dir = base / f"asset={primary_symbol}"
-    if not symbol_dir.exists() and legacy_symbol != primary_symbol:
-        legacy_dir = base / f"asset={legacy_symbol}"
-        if legacy_dir.exists():
-            symbol_dir = legacy_dir
+    symbol_dir = _resolve_symbol_dir(base, symbol)
 
     if not symbol_dir.exists():
         return pd.DataFrame()

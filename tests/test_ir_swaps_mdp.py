@@ -80,7 +80,7 @@ class _FakeCurveStore:
             df = df.loc[ts_keys.isin(requested)].copy()
         return df
 
-    def reconstruct_curves_batch(self, df, *, cfg=None, max_workers=4):
+    def reconstruct_curves_batch(self, df, *, cfg=None, max_workers=4, progress_callback=None):
         self.reconstruct_calls.append(
             {
                 "cfg": cfg,
@@ -88,6 +88,9 @@ class _FakeCurveStore:
                 "timestamps": list(df["timestamp_utc"]),
             }
         )
+        if progress_callback is not None:
+            for _ in range(len(df)):
+                progress_callback(1)
         return dict(self.curves_by_ts)
 
 

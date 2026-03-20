@@ -57,8 +57,7 @@ class TestWriteDayL2:
 
         assert result is not None  # local write succeeded
         # Background push was scheduled — wait briefly for thread to run
-        import time
-        time.sleep(0.2)
+        assert store.wait_for_background_pushes(timeout=2.0) == 1
         mock_sync.push_day.assert_called_once_with("USD-SOFR-1D", datetime.date(2025, 1, 15))
 
     def test_write_day_succeeds_even_if_push_fails(self, tmp_path):
@@ -123,6 +122,64 @@ class TestWriteDayL2:
         assert waited == 1
         assert store.wait_for_background_pushes(timeout=0.0) == 0
         mock_sync.push_day.assert_called_once_with("USD-SOFR-1D", datetime.date(2025, 1, 15))
+
+    def test_write_day_limits_background_push_concurrency(self, tmp_path):
+        from Caching.curve_store import CurveStore, CurveSnapshot
+
+        store = CurveStore(base_dir=tmp_path, bg_push_workers=2)
+        active_lock = threading.Lock()
+        release = threading.Event()
+        two_started = threading.Event()
+        third_started = threading.Event()
+        active_pushes = 0
+        max_active_pushes = 0
+
+        def _make_snapshot(trading_date):
+            return CurveSnapshot(
+                timestamp_utc=datetime.datetime.combine(
+                    trading_date,
+                    datetime.time(21, 0, tzinfo=datetime.timezone.utc),
+                ),
+                timestamp_local=datetime.datetime(2025, 1, 15, 15, 0),
+                trading_date=trading_date,
+                session_minute=540,
+                curve_name="USD-SOFR-1D",
+                cfg_hash="test",
+                reference_key="ref",
+                interpolation="log_linear",
+                node_dates=[trading_date + datetime.timedelta(days=1)],
+                discount_factors=[0.999],
+            )
+
+        def _slow_push(curve_name, trading_date):
+            nonlocal active_pushes, max_active_pushes
+            with active_lock:
+                active_pushes += 1
+                max_active_pushes = max(max_active_pushes, active_pushes)
+                if active_pushes >= 2:
+                    two_started.set()
+                if active_pushes >= 3:
+                    third_started.set()
+            assert release.wait(timeout=2.0)
+            with active_lock:
+                active_pushes -= 1
+
+        mock_sync = MagicMock()
+        mock_sync.push_day.side_effect = _slow_push
+
+        with patch("Caching.curve_store._get_curve_sync", return_value=mock_sync):
+            for offset in range(4):
+                trading_date = datetime.date(2025, 1, 15) + datetime.timedelta(days=offset)
+                result = store.write_day("USD-SOFR-1D", trading_date, [_make_snapshot(trading_date)])
+                assert result is not None
+
+            assert two_started.wait(timeout=1.0)
+            assert not third_started.wait(timeout=0.2)
+            release.set()
+            assert store.wait_for_background_pushes(timeout=2.0) == 4
+
+        assert max_active_pushes == 2
+        assert mock_sync.push_day.call_count == 4
 
 
 class TestReadRawDayL2:
@@ -254,8 +311,7 @@ class TestAnalyticsL2:
             result = store.write_analytics_day("USD-SOFR-1D", datetime.date(2025, 1, 15), analytics_df, overwrite=True)
 
         assert result is not None
-        import time
-        time.sleep(0.2)
+        assert store.wait_for_background_pushes(timeout=2.0) == 1
         mock_sync.push_analytics_day.assert_called_once_with("USD-SOFR-1D", datetime.date(2025, 1, 15))
 
     def test_read_analytics_prefetches_from_supabase_when_local_missing(self, tmp_path):
