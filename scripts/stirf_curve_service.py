@@ -27,7 +27,7 @@ import os
 import sys
 import time
 from collections import OrderedDict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence
 from zoneinfo import ZoneInfo
@@ -121,6 +121,126 @@ class DayCalibrationStats:
     error: str | None = None
     requested_curve_name: str | None = None
     resolved_curve_name: str | None = None
+
+
+def _get_rss_mb() -> float:
+    """Return current process RSS in MB. Returns 0.0 if unavailable."""
+    try:
+        import psutil
+        return psutil.Process().memory_info().rss / (1024 * 1024)
+    except Exception:
+        try:
+            import resource
+            # maxrss is in KB on Linux, bytes on macOS
+            rusage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            return rusage / 1024 if sys.platform != "darwin" else rusage / (1024 * 1024)
+        except Exception:
+            return 0.0
+
+
+def _format_duration(seconds: float) -> str:
+    """Format seconds into human-readable duration like '2h03m' or '45s'."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes = seconds / 60
+    if minutes < 60:
+        return f"{minutes:.0f}m{seconds % 60:02.0f}s"
+    hours = minutes / 60
+    return f"{hours:.0f}h{minutes % 60:02.0f}m"
+
+
+@dataclass
+class BackfillProgress:
+    """Tracks cumulative progress across a multi-day backfill run."""
+
+    curve_name: str
+    total_days: int
+    skipped_days: int
+    processed_days: int = 0
+    calibration_ok: int = 0
+    calibration_error: int = 0
+    timeseries_ok: int = 0
+    timeseries_partial: int = 0
+    failed_tenors: list[str] = field(default_factory=list)
+    started_at: float = field(default_factory=time.perf_counter)
+
+    def record_calibration(self, *, status: str) -> None:
+        self.processed_days += 1
+        if status == "ok":
+            self.calibration_ok += 1
+        else:
+            self.calibration_error += 1
+
+    def record_timeseries(self, *, status: str, failed_tenors: list[str]) -> None:
+        if status == "ok":
+            self.timeseries_ok += 1
+        elif status in ("partial", "error"):
+            self.timeseries_partial += 1
+        self.failed_tenors.extend(failed_tenors)
+
+    @property
+    def pct_complete(self) -> float:
+        if self.total_days == 0:
+            return 100.0
+        return round((self.skipped_days + self.processed_days) / self.total_days * 100, 1)
+
+    @property
+    def elapsed_seconds(self) -> float:
+        return time.perf_counter() - self.started_at
+
+    @property
+    def rate_days_per_min(self) -> float:
+        elapsed = self.elapsed_seconds
+        if elapsed < 1 or self.processed_days == 0:
+            return 0.0
+        return self.processed_days / (elapsed / 60)
+
+    @property
+    def eta_seconds(self) -> float:
+        rate = self.rate_days_per_min
+        if rate <= 0:
+            return 0.0
+        remaining = self.total_days - self.skipped_days - self.processed_days
+        return max(0.0, remaining / rate * 60)
+
+    def format_heartbeat(self) -> str:
+        done = self.skipped_days + self.processed_days
+        mem = _get_rss_mb()
+        parts = [
+            f"day {done}/{self.total_days} ({self.pct_complete}%)",
+            f"elapsed={_format_duration(self.elapsed_seconds)}",
+            f"eta={_format_duration(self.eta_seconds)}",
+            f"rate={self.rate_days_per_min:.1f} days/min",
+        ]
+        if mem > 0:
+            parts.append(f"mem={mem:.0f}MB")
+        parts.append(
+            f"calibration=ok({self.calibration_ok}) error({self.calibration_error})"
+        )
+        parts.append(
+            f"timeseries=ok({self.timeseries_ok}) partial({self.timeseries_partial})"
+            f" failed_tenors={len(self.failed_tenors)}"
+        )
+        return f"Backfill progress for {self.curve_name}: {' '.join(parts)}"
+
+    def to_perf_event(self) -> dict[str, Any]:
+        return {
+            "event": "backfill_heartbeat",
+            "curve_name": self.curve_name,
+            "total_days": self.total_days,
+            "skipped_days": self.skipped_days,
+            "processed_days": self.processed_days,
+            "pct_complete": self.pct_complete,
+            "elapsed_seconds": round(self.elapsed_seconds, 2),
+            "eta_seconds": round(self.eta_seconds, 2),
+            "rate_days_per_min": round(self.rate_days_per_min, 2),
+            "rss_mb": round(_get_rss_mb(), 1),
+            "calibration_ok": self.calibration_ok,
+            "calibration_error": self.calibration_error,
+            "timeseries_ok": self.timeseries_ok,
+            "timeseries_partial": self.timeseries_partial,
+            "failed_tenor_count": len(self.failed_tenors),
+        }
 
 
 def _parse_date(value: str) -> dt.date:
