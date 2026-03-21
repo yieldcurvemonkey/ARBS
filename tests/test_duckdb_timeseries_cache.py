@@ -117,6 +117,40 @@ class TestDuckDBTimeseriesCache:
         assert cache.read_rows("IRS::SYM1", start=d1, end=d1) == [(d1, "rate", 4.25)]
         assert cache.read_rows("IRS::SYM2", start=d2, end=d2) == [(d2, "rate", 4.30)]
 
+    def test_available_dates_returns_dates_with_data(self, cache):
+        dates = [datetime.date(2026, 1, d) for d in (6, 7, 8, 9, 10)]
+        cache.upsert_rows(
+            "IRS::TEST::1M",
+            [(d, "1M RATE", 4.0 + i * 0.01) for i, d in enumerate(dates)],
+        )
+        result = cache.available_dates(
+            "IRS::TEST::1M",
+            start=datetime.date(2026, 1, 1),
+            end=datetime.date(2026, 1, 31),
+        )
+        assert result == set(dates)
+
+    def test_available_dates_empty_when_no_data(self, cache):
+        result = cache.available_dates(
+            "IRS::TEST::MISSING",
+            start=datetime.date(2026, 1, 1),
+            end=datetime.date(2026, 1, 31),
+        )
+        assert result == set()
+
+    def test_available_dates_filters_by_range(self, cache):
+        all_dates = [datetime.date(2026, 1, d) for d in (6, 7, 8, 9, 10)]
+        cache.upsert_rows(
+            "IRS::TEST::1M",
+            [(d, "1M RATE", 4.0) for d in all_dates],
+        )
+        result = cache.available_dates(
+            "IRS::TEST::1M",
+            start=datetime.date(2026, 1, 8),
+            end=datetime.date(2026, 1, 9),
+        )
+        assert result == {datetime.date(2026, 1, 8), datetime.date(2026, 1, 9)}
+
     def test_persistence_across_reopen(self, tmp_path):
         db_path = str(tmp_path / "persist.duckdb")
         c1 = DuckDBTimeseriesCache(db_path=db_path)

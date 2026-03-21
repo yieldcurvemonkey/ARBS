@@ -2,11 +2,85 @@ import datetime as dt
 import json
 import logging
 import threading
+import time
 from collections import OrderedDict
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from scripts import stirf_curve_service as stirf_curve_calibration
+from scripts.stirf_curve_service import BackfillProgress, _probe_completed_days
+
+
+class TestBackfillProgress:
+    def test_record_day_increments_counters(self):
+        p = BackfillProgress(curve_name="TEST", total_days=10, skipped_days=2)
+        p.record_calibration(status="ok")
+        p.record_timeseries(status="ok", failed_tenors=[])
+        assert p.processed_days == 1
+        assert p.calibration_ok == 1
+        assert p.timeseries_ok == 1
+
+    def test_record_day_tracks_errors(self):
+        p = BackfillProgress(curve_name="TEST", total_days=10, skipped_days=0)
+        p.record_calibration(status="error")
+        p.record_timeseries(status="partial", failed_tenors=["1M1Y"])
+        assert p.calibration_error == 1
+        assert p.timeseries_partial == 1
+        assert p.failed_tenors == ["1M1Y"]
+
+    def test_pct_complete_includes_skipped(self):
+        p = BackfillProgress(curve_name="TEST", total_days=10, skipped_days=5)
+        p.record_calibration(status="ok")
+        p.record_timeseries(status="ok", failed_tenors=[])
+        # 5 skipped + 1 processed = 6/10 = 60%
+        assert p.pct_complete == 60.0
+
+    def test_format_heartbeat_returns_string(self):
+        p = BackfillProgress(curve_name="TEST", total_days=10, skipped_days=0)
+        p.record_calibration(status="ok")
+        p.record_timeseries(status="ok", failed_tenors=[])
+        msg = p.format_heartbeat()
+        assert "TEST" in msg
+        assert "1/10" in msg
+
+    def test_to_perf_event_returns_dict(self):
+        p = BackfillProgress(curve_name="TEST", total_days=5, skipped_days=1)
+        event = p.to_perf_event()
+        assert event["event"] == "backfill_heartbeat"
+        assert event["curve_name"] == "TEST"
+        assert event["total_days"] == 5
+        assert event["skipped_days"] == 1
+
+
+class TestCheckpointProbe:
+    def test_returns_intersection_of_raw_and_ts(self):
+        raw_dates = {dt.date(2026, 1, 6), dt.date(2026, 1, 7), dt.date(2026, 1, 8)}
+        ts_dates = {dt.date(2026, 1, 7), dt.date(2026, 1, 8), dt.date(2026, 1, 9)}
+        result = _probe_completed_days(
+            raw_complete_dates=raw_dates,
+            ts_complete_dates=ts_dates,
+            skip_timeseries_warm=False,
+        )
+        assert result == {dt.date(2026, 1, 7), dt.date(2026, 1, 8)}
+
+    def test_returns_raw_only_when_ts_skipped(self):
+        raw_dates = {dt.date(2026, 1, 6), dt.date(2026, 1, 7)}
+        result = _probe_completed_days(
+            raw_complete_dates=raw_dates,
+            ts_complete_dates=set(),
+            skip_timeseries_warm=True,
+        )
+        assert result == raw_dates
+
+    def test_returns_empty_when_no_overlap(self):
+        raw_dates = {dt.date(2026, 1, 6)}
+        ts_dates = {dt.date(2026, 1, 7)}
+        result = _probe_completed_days(
+            raw_complete_dates=raw_dates,
+            ts_complete_dates=ts_dates,
+            skip_timeseries_warm=False,
+        )
+        assert result == set()
 
 
 def test_build_daily_minute_buckets_skips_non_business_days():
