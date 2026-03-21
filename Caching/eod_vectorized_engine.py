@@ -158,3 +158,25 @@ def interpolate_discount_factors(
     result[t_targets > max_t + 0.5] = np.nan  # 0.5 day tolerance
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Par swap rate
+# ---------------------------------------------------------------------------
+def compute_par_swap_rate(
+    *,
+    df_effective: float,
+    df_maturity: float,
+    df_at_payments: np.ndarray,
+    accrual_fractions: np.ndarray,
+) -> float:
+    """Compute par swap rate from discount factors.
+
+    rate = (DF_eff - DF_mat) / SUM(DF_i * tau_i)
+    """
+    if np.isnan(df_effective) or np.isnan(df_maturity) or np.any(np.isnan(df_at_payments)):
+        return np.nan
+    annuity = np.dot(df_at_payments, accrual_fractions)
+    if annuity == 0.0:
+        return np.nan
+    return (df_effective - df_maturity) / annuity
