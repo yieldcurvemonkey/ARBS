@@ -1,5 +1,7 @@
 import datetime
+import threading
 import uuid
+from pathlib import Path
 from typing import Any, Dict
 
 import pandas as pd
@@ -50,6 +52,61 @@ class _FakeFixedRateBondsMDP(MarketDataProvider):
         _ = show_tqdm, force_refresh, max_workers
         self.bulk_calls += 1
         return {ts: {cusip: {"cusip": cusip, "timestamp": ts} for cusip in cusips} for ts in timestamps}
+
+
+def test_computed_timeseries_store_default_base_dir_is_repo_root_relative(monkeypatch, tmp_path):
+    import Caching.computed_timeseries_store as cts_module
+
+    cwd = tmp_path / "nested" / "cwd"
+    cwd.mkdir(parents=True)
+    monkeypatch.chdir(cwd)
+
+    expected = Path(cts_module.__file__).resolve().parents[1] / "data" / "ts"
+
+    store = ComputedTimeseriesStore(use_duckdb=False)
+    assert Path(store.write_options.base_dir).resolve() == expected.resolve()
+
+    router = IRSwapsTB(_FakeIRSwapsMDP(source="TEST_IRS_DEFAULT_BASE"), show_tqdm=False, use_duckdb=False)
+    assert Path(router._computed_ts_store.write_options.base_dir).resolve() == expected.resolve()
+
+
+def test_computed_timeseries_store_wait_for_background_pushes_joins_pending_tasks(monkeypatch, tmp_path):
+    import Caching.computed_timeseries_store as cts_module
+
+    started = threading.Event()
+    release = threading.Event()
+    push_calls: list[tuple[str, Any]] = []
+
+    class _FakeSync:
+        def push_day(self, symbol, trading_date):
+            push_calls.append(("day", trading_date))
+            started.set()
+            assert release.wait(timeout=2.0)
+
+        def push_rows(self, symbol, rows):
+            push_calls.append(("rows", tuple(rows)))
+            started.set()
+            assert release.wait(timeout=2.0)
+
+    monkeypatch.setattr(cts_module, "_get_computed_ts_sync", lambda base_dir: _FakeSync())
+
+    store = ComputedTimeseriesStore(base_dir=tmp_path, use_duckdb=False)
+    ts = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
+
+    store.append_rows(
+        symbol="IRS::WAIT_TEST",
+        rows=[
+            (ts, "USD-SOFR-1D 5Y OUTRIGHT RATE", 0.051),
+        ],
+    )
+
+    assert started.wait(timeout=1.0)
+    release.set()
+    waited = store.wait_for_background_pushes(timeout=2.0)
+
+    assert waited == 2
+    assert store.wait_for_background_pushes(timeout=0.0) == 0
+    assert sorted(kind for kind, _ in push_calls) == ["day", "rows"]
 
 
 def test_computed_timeseries_store_roundtrip_preserves_intraday_column_names(tmp_path):

@@ -2,7 +2,7 @@ import datetime as dt
 
 import pandas as pd
 
-from scripts import warm_intraday_irs_cache as warm_script
+from scripts import stirf_curve_service as warm_script
 
 
 def test_window_for_date_cme_trading_day_spans_prior_evening():
@@ -94,9 +94,9 @@ def test_default_tenors_for_stirt_curve_stays_inside_3y_and_includes_imm_pairs()
 def test_default_tenors_for_non_cb_curve_stays_generic():
     tenors = warm_script._default_tenors_for_curve("MXN-TIIE", anchor_date=dt.date(2026, 3, 13))
 
-    assert len(tenors) == 100
+    assert len(tenors) == 72
     assert "1Y" in tenors
-    assert "1Y10Y" in tenors
+    assert "1Y1Y" in tenors
     assert "fomc_1" not in tenors
 
 
@@ -193,9 +193,56 @@ def test_select_missing_curve_store_timestamps_backfills_internal_gap():
 
 
 def test_parser_defaults_to_cme_trading_day():
-    args = warm_script._build_parser().parse_args([])
+    args = warm_script.parse_args(["live-service"])
 
     assert args.window_template == "cme_trading_day"
+
+
+def test_live_service_window_reports_partial_when_some_timestamps_fail(monkeypatch):
+    timestamps = [
+        dt.datetime(2026, 3, 20, 9, 30, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 3, 20, 9, 31, tzinfo=dt.timezone.utc),
+    ]
+
+    logger = warm_script.logging.getLogger("test_live_service_window")
+    monkeypatch.setattr(
+        warm_script,
+        "_safe_warm_raw_curves",
+        lambda *args, **kwargs: (1, [timestamps[-1]]),
+    )
+    monkeypatch.setattr(
+        warm_script,
+        "_warm_timeseries_window",
+        lambda **kwargs: {
+            "status": "partial",
+            "rows": 2,
+            "cols": 1,
+            "failed_tenors": ["BAD"],
+        },
+    )
+
+    warm_script_summary = warm_script._run_live_service_window(
+        curve_name="USD-SOFR-1D-Q12STIRT",
+        curve_timestamps=timestamps,
+        timeseries_timestamps=timestamps,
+        explicit_tenors=["1Y"],
+        mdp=object(),
+        ts_builder=object(),
+        n_jobs=4,
+        calibration_executor="thread",
+        ignore_cache=False,
+        show_tqdm=False,
+        auto_prime_bulk=True,
+        stirf_fetch_max_workers=None,
+        calibration_max_workers=None,
+        skip_curve_warm=False,
+        skip_timeseries_warm=False,
+        perf_log_path=None,
+        logger=logger,
+        label="incremental-from-db",
+    )
+
+    assert warm_script_summary["status"] == "partial"
 
 
 def test_safe_warm_raw_curves_isolates_bad_timestamp():

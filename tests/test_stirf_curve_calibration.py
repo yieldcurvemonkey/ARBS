@@ -1,20 +1,12 @@
 import datetime as dt
-import importlib.util
 import json
 import logging
-import sys
 import threading
 from collections import OrderedDict
-from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-
-MODULE_PATH = Path(__file__).resolve().parents[1] / "notebooks" / "stirf_curve_calibration.py"
-SPEC = importlib.util.spec_from_file_location("stirf_curve_calibration_module", MODULE_PATH)
-stirf_curve_calibration = importlib.util.module_from_spec(SPEC)
-assert SPEC is not None and SPEC.loader is not None
-sys.modules[SPEC.name] = stirf_curve_calibration
-SPEC.loader.exec_module(stirf_curve_calibration)
+from scripts import stirf_curve_service as stirf_curve_calibration
 
 
 def test_build_daily_minute_buckets_skips_non_business_days():
@@ -230,6 +222,36 @@ def test_run_bucketed_calibration_accepts_streaming_bucket_iterable(tmp_path):
     assert summary["requested_timestamps"] == 3
 
 
+def test_flush_computed_ts_pushes_waits_on_unique_stores():
+    waits: list[tuple[str, float]] = []
+
+    class _FakeStore:
+        def __init__(self, label, waited):
+            self.label = label
+            self.waited = waited
+
+        def wait_for_background_pushes(self, timeout=None):
+            waits.append((self.label, timeout))
+            return self.waited
+
+    shared = _FakeStore("shared", 2)
+    isolated = _FakeStore("isolated", 1)
+    ts_builder = SimpleNamespace(
+        _routers={"IRS": SimpleNamespace(_computed_ts_store=shared)},
+        _specialized_router_cache={"IRS": SimpleNamespace(_computed_ts_store=shared)},
+        _generic_router_cache={"FRB": SimpleNamespace()},
+    )
+    ts_builder._routers["ALT"] = SimpleNamespace(_computed_ts_store=isolated)
+
+    stirf_curve_calibration._flush_computed_ts_pushes(
+        ts_builder=ts_builder,
+        logger=logging.getLogger("test_stirf_curve_calibration"),
+        timeout_seconds=12.5,
+    )
+
+    assert waits == [("shared", 12.5), ("isolated", 12.5)]
+
+
 def test_run_bucketed_calibration_can_retain_all_curves(tmp_path):
     class FakeCurve:
         def __init__(self, curve_name):
@@ -284,20 +306,17 @@ def test_run_bucketed_calibration_can_retain_all_curves(tmp_path):
 
 
 def test_parse_args_backfill_defaults(monkeypatch):
-    monkeypatch.setattr(
-        sys,
-        "argv",
+    args = stirf_curve_calibration.parse_args(
         [
-            "stirf_curve_calibration.py",
+            "backfill",
             "--start-date",
             "2026-03-10",
             "--end-date",
             "2026-03-12",
-        ],
+        ]
     )
 
-    args = stirf_curve_calibration.parse_args()
-
+    assert args.mode == "backfill"
     assert args.backfill_local_cache is True
     assert args.rewrite_existing_supabase is True
     assert args.backfill_batch_size == stirf_curve_calibration.DEFAULT_BACKFILL_BATCH_SIZE
@@ -426,39 +445,6 @@ def test_backfill_local_curve_store_to_supabase_can_skip_existing_remote_days(tm
 def test_main_backfill_only_skips_bucket_build(monkeypatch, tmp_path):
     monkeypatch.setattr(
         stirf_curve_calibration,
-        "parse_args",
-        lambda: type(
-            "Args",
-            (),
-            {
-                "source": "BARCHART_STIRF-RL",
-                "curve_name": "USD-SOFR-1D-Q12STIRT",
-                "start_date": "2026-03-10",
-                "end_date": "2026-03-12",
-                "session_start": "07:00",
-                "session_end": "17:00",
-                "cme_session": False,
-                "freq": "1min",
-                "timezone": "America/New_York",
-                "n_jobs": 8,
-                "calibration_executor": "process",
-                "stirf_fetch_max_workers": None,
-                "calibration_max_workers": None,
-                "ignore_cache": False,
-                "fail_fast": False,
-                "backfill_only": True,
-                "backfill_batch_size": 25,
-                "verbose": False,
-                "show_tqdm": True,
-                "auto_prime_bulk": True,
-                "backfill_local_cache": True,
-                "rewrite_existing_supabase": True,
-                "perf_log_path": str(tmp_path / "perf.jsonl"),
-            },
-        )()
-    )
-    monkeypatch.setattr(
-        stirf_curve_calibration,
         "inspect_curve_store_sync_status",
         lambda **kwargs: {
             "curve_name": kwargs["curve_name"],
@@ -486,9 +472,20 @@ def test_main_backfill_only_skips_bucket_build(monkeypatch, tmp_path):
     def _boom(*args, **kwargs):
         raise AssertionError("build_daily_minute_buckets should not be called in backfill-only mode")
 
-    monkeypatch.setattr(stirf_curve_calibration, "build_daily_minute_buckets", _boom)
+    monkeypatch.setattr(stirf_curve_calibration, "iter_daily_minute_buckets", _boom)
 
-    exit_code = stirf_curve_calibration.main()
+    exit_code = stirf_curve_calibration.main(
+        [
+            "backfill",
+            "--start-date",
+            "2026-03-10",
+            "--end-date",
+            "2026-03-12",
+            "--backfill-only",
+            "--perf-log-path",
+            str(tmp_path / "perf.jsonl"),
+        ]
+    )
 
     assert exit_code == 0
 

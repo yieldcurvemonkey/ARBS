@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
@@ -12,6 +13,8 @@ import pandas as pd
 from Caching.timeseries_cache import WriteOptions, append_timeseries, append_timeseries_many, read_timeseries
 
 DateLike = Union[datetime.date, datetime.datetime]
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_COMPUTED_TS_BASE_DIR = REPO_ROOT / "data" / "ts"
 
 logger = logging.getLogger(__name__)
 
@@ -48,22 +51,39 @@ def _get_computed_ts_sync(base_dir: Union[str, Path]):
     return SupabaseComputedTimeseriesSync(base_dir=Path(base_dir), engine=get_engine())
 
 
+def default_computed_timeseries_base_dir() -> str:
+    return str(DEFAULT_COMPUTED_TS_BASE_DIR)
+
+
+def _resolve_computed_timeseries_base_dir(base_dir: Union[str, Path, None]) -> Path:
+    if base_dir is None:
+        return DEFAULT_COMPUTED_TS_BASE_DIR
+
+    path = Path(base_dir)
+    if path.is_absolute():
+        return path
+    return (REPO_ROOT / path).resolve()
+
+
 class ComputedTimeseriesStore:
     def __init__(
         self,
         *,
-        base_dir: Union[str, Path] = "./data/ts",
+        base_dir: Union[str, Path, None] = None,
         compression: str = "zstd",
         row_group_size: int = 256_000,
         use_duckdb: bool = True,
         duckdb_path: Optional[str] = None,
     ) -> None:
+        resolved_base_dir = _resolve_computed_timeseries_base_dir(base_dir)
         self._opts = WriteOptions(
-            base_dir=str(base_dir),
+            base_dir=str(resolved_base_dir),
             compression=compression,
             row_group_size=int(row_group_size),
         )
         self._duckdb_cache: Optional["DuckDBTimeseriesCache"] = None
+        self._bg_push_pending = 0
+        self._bg_push_condition = threading.Condition(threading.Lock())
         if use_duckdb:
             from Caching.duckdb_timeseries_cache import DuckDBTimeseriesCache
 
@@ -414,7 +434,7 @@ class ComputedTimeseriesStore:
                         exc_info=True,
                     )
 
-        threading.Thread(target=_bg_push, daemon=True).start()
+        self._launch_background_push(name=f"computed-ts-day-push-{symbol}", target=_bg_push)
 
     def _push_rows_to_l2(
         self,
@@ -436,7 +456,7 @@ class ComputedTimeseriesStore:
             except Exception:
                 logger.warning("Row-level L2 push failed for %s", symbol, exc_info=True)
 
-        threading.Thread(target=_bg_push_rows, daemon=True).start()
+        self._launch_background_push(name=f"computed-ts-row-push-{symbol}", target=_bg_push_rows)
 
     def _push_many_days_to_l2(
         self,
@@ -468,7 +488,7 @@ class ComputedTimeseriesStore:
                             exc_info=True,
                         )
 
-        threading.Thread(target=_bg_push, daemon=True).start()
+        self._launch_background_push(name="computed-ts-day-push-many", target=_bg_push)
 
     def _push_many_rows_to_l2(
         self,
@@ -497,7 +517,47 @@ class ComputedTimeseriesStore:
                 except Exception:
                     logger.warning("Row-level L2 push failed for %s", symbol, exc_info=True)
 
-        threading.Thread(target=_bg_push_rows, daemon=True).start()
+        self._launch_background_push(name="computed-ts-row-push-many", target=_bg_push_rows)
+
+    def _launch_background_push(
+        self,
+        *,
+        name: str,
+        target: Any,
+    ) -> None:
+        with self._bg_push_condition:
+            self._bg_push_pending += 1
+
+        def _run() -> None:
+            try:
+                target()
+            finally:
+                with self._bg_push_condition:
+                    self._bg_push_pending = max(0, self._bg_push_pending - 1)
+                    if self._bg_push_pending == 0:
+                        self._bg_push_condition.notify_all()
+
+        threading.Thread(target=_run, name=name, daemon=True).start()
+
+    def wait_for_background_pushes(self, timeout: Optional[float] = None) -> int:
+        """Wait for outstanding background Supabase pushes to finish.
+
+        Returns the number of queued or in-flight background push tasks that
+        were pending when the wait started.
+        """
+        deadline = None if timeout is None else (time.monotonic() + float(timeout))
+        with self._bg_push_condition:
+            waited = self._bg_push_pending
+            while self._bg_push_pending > 0:
+                remaining = None
+                if deadline is not None:
+                    remaining = max(0.0, deadline - time.monotonic())
+                    if remaining <= 0.0:
+                        return waited
+                self._bg_push_condition.wait(timeout=remaining)
+                if deadline is not None and time.monotonic() >= deadline and self._bg_push_pending > 0:
+                    return waited
+            return waited
 
     @staticmethod
     def _normalize_symbol_rows(
