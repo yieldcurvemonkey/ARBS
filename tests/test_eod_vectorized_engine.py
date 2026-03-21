@@ -8,6 +8,7 @@ from Caching.eod_vectorized_engine import (
     parse_tenor,
     build_payment_schedule,
     PaymentSchedule,
+    interpolate_discount_factors,
 )
 
 
@@ -82,3 +83,44 @@ class TestBuildPaymentSchedule:
             settlement_days=2,
         )
         assert sched.maturity_date == sched.payment_dates[-1]
+
+
+class TestInterpolateDiscountFactors:
+    """Test log-linear discount factor interpolation."""
+
+    def test_on_node_returns_exact(self):
+        base_date = datetime.date(2024, 1, 2)
+        node_dates = [datetime.date(2024, 1, 2), datetime.date(2025, 1, 2), datetime.date(2026, 1, 2)]
+        node_dfs = np.array([1.0, 0.96, 0.92])
+        target_dates = [datetime.date(2025, 1, 2)]
+        result = interpolate_discount_factors(base_date, node_dates, node_dfs, target_dates)
+        np.testing.assert_allclose(result, [0.96], atol=1e-12)
+
+    def test_midpoint_log_linear(self):
+        base_date = datetime.date(2024, 1, 2)
+        node_dates = [datetime.date(2024, 1, 2), datetime.date(2026, 1, 2)]
+        node_dfs = np.array([1.0, 0.92])
+        # Midpoint: log-linear interpolation at 1Y
+        target_dates = [datetime.date(2025, 1, 2)]
+        result = interpolate_discount_factors(base_date, node_dates, node_dfs, target_dates)
+        # 2024 is leap year: 366 days to midpoint, 731 days to end
+        frac = 366.0 / 731.0
+        expected = np.exp(frac * np.log(0.92))
+        np.testing.assert_allclose(result, [expected], atol=1e-10)
+
+    def test_multiple_targets(self):
+        base_date = datetime.date(2024, 1, 2)
+        node_dates = [datetime.date(2024, 1, 2), datetime.date(2025, 1, 2), datetime.date(2029, 1, 2)]
+        node_dfs = np.array([1.0, 0.95, 0.80])
+        targets = [datetime.date(2025, 1, 2), datetime.date(2027, 1, 2)]
+        result = interpolate_discount_factors(base_date, node_dates, node_dfs, targets)
+        assert len(result) == 2
+        np.testing.assert_allclose(result[0], 0.95, atol=1e-12)
+
+    def test_beyond_last_node_returns_nan(self):
+        base_date = datetime.date(2024, 1, 2)
+        node_dates = [datetime.date(2024, 1, 2), datetime.date(2026, 1, 2)]
+        node_dfs = np.array([1.0, 0.92])
+        target_dates = [datetime.date(2030, 1, 2)]
+        result = interpolate_discount_factors(base_date, node_dates, node_dfs, target_dates)
+        assert np.isnan(result[0])

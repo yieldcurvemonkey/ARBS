@@ -130,3 +130,31 @@ def build_payment_schedule(
         payment_dates=payment_dates,
         accrual_fractions=accrual_fractions,
     )
+
+
+# ---------------------------------------------------------------------------
+# Discount factor interpolation
+# ---------------------------------------------------------------------------
+def interpolate_discount_factors(
+    base_date: datetime.date,
+    node_dates: Sequence[datetime.date],
+    node_dfs: np.ndarray,
+    target_dates: Sequence[datetime.date],
+) -> np.ndarray:
+    """Log-linear interpolation of discount factors.
+
+    Returns NaN for target dates beyond the last node.
+    """
+    t_nodes = np.array([(d - base_date).days for d in node_dates], dtype=np.float64)
+    t_targets = np.array([(d - base_date).days for d in target_dates], dtype=np.float64)
+
+    log_dfs = np.log(np.maximum(node_dfs, 1e-20))  # guard against log(0)
+    log_interp = np.interp(t_targets, t_nodes, log_dfs)
+
+    result = np.exp(log_interp)
+
+    # Mark extrapolated points as NaN
+    max_t = t_nodes[-1]
+    result[t_targets > max_t + 0.5] = np.nan  # 0.5 day tolerance
+
+    return result
