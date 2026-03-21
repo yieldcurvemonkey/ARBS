@@ -142,6 +142,24 @@ class DuckDBTimeseriesCache:
             ).fetchone()
         return result is not None
 
+    def available_dates(
+        self,
+        symbol: str,
+        start: datetime.date,
+        end: datetime.date,
+    ) -> set[datetime.date]:
+        """Return the set of trading dates that have cached rows for symbol in [start, end]."""
+        with self._lock:
+            result = self._conn.execute(
+                """
+                SELECT DISTINCT trading_date
+                FROM computed_timeseries
+                WHERE symbol = ? AND trading_date BETWEEN ? AND ?
+                """,
+                [symbol, start, end],
+            ).fetchall()
+        return {row[0] for row in result}
+
     def get_watermark(self, symbol: str) -> Optional[datetime.datetime]:
         with self._lock:
             row = self._conn.execute(
