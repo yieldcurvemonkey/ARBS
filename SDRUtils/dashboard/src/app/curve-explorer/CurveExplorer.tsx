@@ -229,7 +229,7 @@ function OverviewTable({ rows, onDrill }: { rows: OverviewRow[]; onDrill: (name:
             <td className="px-4 py-2.5 text-right">
               <DrillButton value={r.snapshot_days} onClick={() => onDrill(r.curve_name, 'snapshots')} />
             </td>
-            <td className="px-4 py-2.5 text-right text-slate-300">{r.total_snapshots.toLocaleString()}</td>
+            <td className="px-4 py-2.5 text-right text-slate-300">{(r.total_snapshots ?? 0).toLocaleString()}</td>
             <td className="px-4 py-2.5 text-right">
               <DrillButton value={r.intraday_days} onClick={() => onDrill(r.curve_name, 'intraday')} />
             </td>
@@ -331,7 +331,7 @@ function BlocksTable({ rows, kind }: { rows: BlockRow[]; kind: 'intraday' | 'ana
           <tr key={`${r.curve_name}-${r.trading_date}-${i}`} className="border-b border-slate-800/50 transition hover:bg-slate-800/40">
             <td className="px-4 py-2.5 font-mono text-emerald-400">{r.curve_name}</td>
             <td className="px-4 py-2.5 font-mono text-slate-300">{r.trading_date}</td>
-            <td className="px-4 py-2.5 text-right text-slate-300">{r.row_count.toLocaleString()}</td>
+            <td className="px-4 py-2.5 text-right text-slate-300">{(r.row_count ?? 0).toLocaleString()}</td>
             <td className="px-4 py-2.5 text-xs text-slate-400">{r.data_format}</td>
             <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{r.sha256?.slice(0, 12)}...</td>
             <td className="px-4 py-2.5 text-xs text-slate-400">{formatTs(r.created_at)}</td>
