@@ -180,3 +180,105 @@ def compute_par_swap_rate(
     if annuity == 0.0:
         return np.nan
     return (df_effective - df_maturity) / annuity
+
+
+# ---------------------------------------------------------------------------
+# Full panel computation
+# ---------------------------------------------------------------------------
+def compute_eod_rate_panel(
+    raw_nodes_df: pd.DataFrame,
+    tenors: Sequence[str],
+    *,
+    settlement_days: int = 2,
+    calendar: ql.Calendar = _US_CALENDAR,
+    frequency: int = ql.Annual,
+    day_counter: ql.DayCounter = ql.Actual360(),
+) -> pd.DataFrame:
+    """Compute a (dates x tenors) panel of par swap rates from raw curve nodes.
+
+    Parameters
+    ----------
+    raw_nodes_df : DataFrame
+        Must have columns: trading_date, node_dates (list), discount_factors (list).
+        One row per trading date.
+    tenors : sequence of str
+        Tenor strings like "2Y", "5Y", "1Y2Y", etc.
+    settlement_days : int
+        T+N settlement convention (default 2).
+
+    Returns
+    -------
+    DataFrame with DatetimeIndex (trading_date) and one column per tenor,
+    values are par swap rates as decimals (e.g. 0.04 = 4%).
+    """
+    if raw_nodes_df.empty or not tenors:
+        return pd.DataFrame()
+
+    trading_dates = [
+        d.date() if isinstance(d, pd.Timestamp) else d
+        for d in raw_nodes_df["trading_date"]
+    ]
+
+    # Pre-build schedules: {tenor: {trading_date: PaymentSchedule}}
+    schedules: Dict[str, Dict[datetime.date, PaymentSchedule]] = {}
+    for tenor in tenors:
+        tenor_schedules: Dict[datetime.date, PaymentSchedule] = {}
+        for td in trading_dates:
+            try:
+                tenor_schedules[td] = build_payment_schedule(
+                    td,
+                    tenor,
+                    settlement_days=settlement_days,
+                    calendar=calendar,
+                    frequency=frequency,
+                    day_counter=day_counter,
+                )
+            except Exception:
+                logger.debug("Schedule build failed for %s on %s", tenor, td, exc_info=True)
+        schedules[tenor] = tenor_schedules
+
+    # Compute rates
+    results: Dict[str, List[float]] = {tenor: [] for tenor in tenors}
+    for _, row in raw_nodes_df.iterrows():
+        td = row["trading_date"]
+        if isinstance(td, pd.Timestamp):
+            td = td.date()
+        node_dates_raw = row["node_dates"]
+        dfs_raw = row["discount_factors"]
+
+        # Convert node dates
+        node_dates = [
+            d.date() if isinstance(d, pd.Timestamp) else d
+            for d in node_dates_raw
+        ]
+        node_dfs = np.array(dfs_raw, dtype=np.float64)
+
+        for tenor in tenors:
+            sched = schedules[tenor].get(td)
+            if sched is None:
+                results[tenor].append(np.nan)
+                continue
+
+            # Interpolate DFs at effective, maturity, and all payment dates
+            all_target_dates = [sched.effective_date] + sched.payment_dates
+            interp_dfs = interpolate_discount_factors(
+                base_date=node_dates[0],
+                node_dates=node_dates,
+                node_dfs=node_dfs,
+                target_dates=all_target_dates,
+            )
+
+            df_effective = interp_dfs[0]
+            df_at_payments = interp_dfs[1:]
+            df_maturity = df_at_payments[-1]  # last payment = maturity
+
+            rate = compute_par_swap_rate(
+                df_effective=df_effective,
+                df_maturity=df_maturity,
+                df_at_payments=df_at_payments,
+                accrual_fractions=np.array(sched.accrual_fractions, dtype=np.float64),
+            )
+            results[tenor].append(rate)
+
+    out = pd.DataFrame(results, index=pd.DatetimeIndex(trading_dates, name="trading_date"))
+    return out

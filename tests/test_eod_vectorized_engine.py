@@ -4,12 +4,15 @@ import datetime
 import numpy as np
 import pytest
 
+import pandas as pd
+
 from Caching.eod_vectorized_engine import (
     parse_tenor,
     build_payment_schedule,
     PaymentSchedule,
     interpolate_discount_factors,
     compute_par_swap_rate,
+    compute_eod_rate_panel,
 )
 
 
@@ -172,3 +175,47 @@ class TestComputeParSwapRate:
             accrual_fractions=np.array([1.0]),
         )
         assert np.isnan(result)
+
+
+class TestComputeEodRatePanel:
+    """Test full vectorized panel computation from raw node data."""
+
+    def test_panel_from_raw_nodes(self):
+        # Simulate raw node data for 3 trading dates
+        # Each date has a simple flat curve at ~4% (DF ~ exp(-0.04 * t))
+        trading_dates = [
+            datetime.date(2024, 1, 2),
+            datetime.date(2024, 1, 3),
+            datetime.date(2024, 1, 4),
+        ]
+        # Node dates: 0, 1Y, 2Y, 5Y, 10Y, 30Y from each trading date
+        def _make_nodes(td):
+            offsets_years = [0, 1, 2, 5, 10, 30]
+            dates = [td + datetime.timedelta(days=int(y * 365.25)) for y in offsets_years]
+            dfs = [np.exp(-0.04 * y) for y in offsets_years]
+            return dates, dfs
+
+        rows = []
+        for td in trading_dates:
+            nd, df = _make_nodes(td)
+            rows.append({
+                "trading_date": td,
+                "node_dates": nd,
+                "discount_factors": df,
+            })
+        raw_df = pd.DataFrame(rows)
+
+        tenors = ["2Y", "5Y", "10Y"]
+        panel = compute_eod_rate_panel(
+            raw_nodes_df=raw_df,
+            tenors=tenors,
+            settlement_days=2,
+        )
+        assert isinstance(panel, pd.DataFrame)
+        assert len(panel) == 3  # 3 trading dates
+        assert set(panel.columns) >= {"2Y", "5Y", "10Y"}
+        # Rates should be close to 4% for a flat curve
+        for col in tenors:
+            assert panel[col].notna().all(), f"NaN found in {col}"
+            for rate in panel[col]:
+                assert 0.035 < rate < 0.045, f"Rate {rate} not near 4% for {col}"
