@@ -135,7 +135,21 @@ class LayeredDictProxy(MutableMapping):
         return len(self._l1)
 
     def __contains__(self, key: Any) -> bool:
-        return key in self._l1
+        if key in self._l1:
+            return True
+
+        if not self._l2_read:
+            return False
+
+        cache_key = self._hash_key(key)
+        row = self._l2_get(cache_key)
+        if row is None:
+            return False
+
+        value = self._deserialize(row.payload, row.serializer)
+        self._l1[key] = value
+        self._timestamps[cache_key] = time.time()
+        return True
 
     def clear(self) -> None:
         self._l1.clear()

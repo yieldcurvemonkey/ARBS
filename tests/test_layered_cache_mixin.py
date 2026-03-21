@@ -124,6 +124,51 @@ class TestLayeredDictProxyL2Fallback:
 
         assert val == "from_l2"
 
+    def test_contains_returns_true_and_hydrates_from_l2_on_local_miss(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        import importlib
+        import Caching.supabase_engine as eng
+        importlib.reload(eng)
+
+        c = _make_consumer(tmp_path, l2_enabled=True, l2_read=True)
+        payload = {"result": "curve-json", "pricing_location": "NYC"}
+        mock_row = MagicMock()
+        mock_row.payload = b"unused"
+        mock_row.serializer = "cloudpickle"
+
+        with patch.object(c.my_cache, "_l2_get", return_value=mock_row) as mock_l2_get:
+            with patch.object(c.my_cache, "_deserialize", return_value=payload) as mock_deserialize:
+                assert "curve-key" in c.my_cache
+
+        assert c.my_cache.raw["curve-key"] == payload
+        mock_l2_get.assert_called_once()
+        mock_deserialize.assert_called_once_with(mock_row.payload, mock_row.serializer)
+
+    def test_contains_hydration_supports_fetch_then_get_access_pattern(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        import importlib
+        import Caching.supabase_engine as eng
+        importlib.reload(eng)
+
+        c = _make_consumer(tmp_path, l2_enabled=True, l2_read=True)
+        payload = {"result": "curve-json", "pricing_location": "LDN"}
+        mock_row = MagicMock()
+        mock_row.payload = b"unused"
+        mock_row.serializer = "cloudpickle"
+
+        with patch.object(c.my_cache, "_l2_get", return_value=mock_row) as mock_l2_get:
+            with patch.object(c.my_cache, "_deserialize", return_value=payload) as mock_deserialize:
+                cached = None
+                if "curve-key" in c.my_cache:
+                    cached = c.my_cache["curve-key"]
+
+        assert cached == payload
+        assert c.my_cache.raw["curve-key"] == payload
+        mock_l2_get.assert_called_once()
+        mock_deserialize.assert_called_once_with(mock_row.payload, mock_row.serializer)
+
     def test_l2_write_on_set(self, tmp_path, monkeypatch):
         monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
         monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
