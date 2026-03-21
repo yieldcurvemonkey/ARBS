@@ -327,6 +327,135 @@ def _safe_col_name(q: Any, default: str) -> str:
         return default
 
 
+def _ref_point_date(ref_point: DateLike) -> datetime.date:
+    return ref_point.date() if isinstance(ref_point, datetime.datetime) else ref_point
+
+
+def _next_imm_dates(ref_date: datetime.date, *, count: int) -> list[datetime.date]:
+    from rateslib.scheduling import next_imm
+
+    imm = datetime.datetime.combine(ref_date + datetime.timedelta(days=1), datetime.time())
+    out: list[datetime.date] = []
+    for _ in range(max(0, int(count))):
+        imm = next_imm(imm)
+        imm_date = imm.date() if isinstance(imm, datetime.datetime) else imm
+        out.append(imm_date)
+        imm = datetime.datetime.combine(imm_date, datetime.time())
+    return out
+
+
+def _resolve_imm_tenor_date(token: str, *, ref_date: datetime.date) -> Optional[datetime.date]:
+    from rateslib.scheduling import get_imm
+
+    imm_token = str(token or "").strip().upper()
+    if not imm_token.startswith("IMM_"):
+        return None
+    suffix = imm_token.split("IMM_", 1)[1]
+    if suffix.isnumeric():
+        rank = int(suffix)
+        if rank <= 0:
+            return None
+        upcoming = _next_imm_dates(ref_date, count=rank)
+        return upcoming[rank - 1] if len(upcoming) >= rank else None
+    try:
+        imm_value = get_imm(code=suffix)
+    except Exception:
+        return None
+    if isinstance(imm_value, datetime.datetime):
+        return imm_value.date()
+    return imm_value
+
+
+def _map_explicit_imm_pair_to_relative(
+    token: str,
+    *,
+    ref_date: datetime.date,
+    max_rank: int,
+) -> Optional[str]:
+    imm_pair = str(token or "").strip().upper()
+    if not imm_pair.startswith("IMM_") or "XIMM_" not in imm_pair:
+        return None
+    left_token, right_token = imm_pair.split("X", 1)
+    effective_date = _resolve_imm_tenor_date(left_token, ref_date=ref_date)
+    maturity_date = _resolve_imm_tenor_date(right_token, ref_date=effective_date or ref_date)
+    if effective_date is None or maturity_date is None:
+        return None
+
+    upcoming = _next_imm_dates(ref_date, count=max_rank + 1)
+    try:
+        left_rank = upcoming.index(effective_date) + 1
+        right_rank = upcoming.index(maturity_date) + 1
+    except ValueError:
+        return None
+
+    if right_rank != left_rank + 1 or left_rank > max_rank:
+        return None
+    return f"IMM_{left_rank}xIMM_{right_rank}"
+
+
+def _map_explicit_cb_tenor_to_rank(
+    curve_name: str,
+    token: str,
+    *,
+    ref_date: datetime.date,
+    max_rank: int,
+) -> Optional[str]:
+    from Query.IRSwaps._CENTRAL_BANK_DATES import resolve_central_bank_tenor
+
+    tenor_token = str(token or "").strip()
+    if not tenor_token:
+        return None
+    if re.fullmatch(r"(?i)FOMC_\d+", tenor_token):
+        rank = int(tenor_token.split("_", 1)[1])
+        return f"FOMC_{rank}" if 1 <= rank <= max_rank else None
+
+    try:
+        target_dates = resolve_central_bank_tenor(curve_name, tenor_token, as_of=ref_date)
+    except Exception:
+        return None
+    if target_dates is None:
+        return None
+
+    for rank in range(1, max_rank + 1):
+        try:
+            rank_dates = resolve_central_bank_tenor(curve_name, f"fomc_{rank}", as_of=ref_date)
+        except Exception:
+            continue
+        if rank_dates == target_dates:
+            return f"FOMC_{rank}"
+    return None
+
+
+def _analytics_token_for_query_tenor(
+    *,
+    requested_curve_name: str,
+    token: str,
+    ref_point: DateLike,
+) -> Optional[str]:
+    from Caching.curve_analytics import analytics_tenors_for_curve
+
+    normalized = str(token or "").strip().upper().replace(" ", "")
+    if not normalized:
+        return None
+
+    supported = {item.upper(): item for item in analytics_tenors_for_curve(requested_curve_name)}
+    if normalized in supported:
+        return supported[normalized]
+
+    ref_date = _ref_point_date(ref_point)
+    if normalized.startswith("IMM_") and "XIMM_" in normalized:
+        mapped = _map_explicit_imm_pair_to_relative(normalized, ref_date=ref_date, max_rank=12)
+        if mapped is not None and mapped.upper() in supported:
+            return supported[mapped.upper()]
+
+    if normalized.startswith("FOMC_") or normalized.startswith("FOMC"):
+        mapped = _map_explicit_cb_tenor_to_rank(requested_curve_name, normalized, ref_date=ref_date, max_rank=7)
+        if mapped is not None and mapped.upper() in supported:
+            return supported[mapped.upper()]
+
+    return None
+
+
 def _analytics_rate_components(q: IRSwapQuery) -> Optional[list[tuple[float, str]]]:
     if q.value != IRSwapValue.RATE:
         return None
@@ -336,8 +465,7 @@ def _analytics_rate_components(q: IRSwapQuery) -> Optional[list[tuple[float, str
         return None
 
     tokens = [tok for tok in tenor_text.split("/") if tok]
-    tenor_re = re.compile(r"^\d+[DWMY]$")
-    if not tokens or any((not tenor_re.match(tok)) or ("X" in tok) for tok in tokens):
+    if not tokens:
         return None
 
     if len(tokens) == 1 and q.structure == IRSwapStructure.OUTRIGHT:
@@ -974,7 +1102,9 @@ class TimeseriesBuilder:
         ref_keys = list(requested_key_by_ref.values())
         start_bound = min(ref_keys).date()
         end_bound = max(ref_keys).date()
-        analytics_tenors = sorted({tenor for _idx, _q, components in eligible for _weight, tenor in components})
+        from Caching.curve_analytics import analytics_tenors_for_curve
+
+        analytics_tenors = list(analytics_tenors_for_curve(requested_curve_name))
         use_trading_date_match = _matches_irs_curve_store_on_trading_date(mdp)
         try:
             analytics_kwargs = {
@@ -1019,9 +1149,17 @@ class TimeseriesBuilder:
             for idx, q, components in eligible:
                 component_values: list[float] = []
                 for weight, tenor in components:
+                    analytics_token = _analytics_token_for_query_tenor(
+                        requested_curve_name=requested_curve_name,
+                        token=tenor,
+                        ref_point=ref_point,
+                    )
+                    if analytics_token is None:
+                        component_values = []
+                        break
                     component_value = None
                     for metric_name in ("par_rate", "rate"):
-                        col_name = f"{metric_name}_{tenor}"
+                        col_name = f"{metric_name}_{analytics_token}"
                         if col_name in row.index and pd.notna(row[col_name]):
                             component_value = float(row[col_name]) * float(weight)
                             break

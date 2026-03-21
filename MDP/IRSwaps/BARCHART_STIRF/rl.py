@@ -1726,6 +1726,30 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         store = CurveStore.default()
         store.write_day(curve_name, date, snapshots, overwrite=True)
 
+        try:
+            from Caching.curve_analytics import (
+                analytics_tenors_for_curve,
+                build_analytics_frame,
+                compute_analytics_row,
+            )
+
+            analytics_tenors = analytics_tenors_for_curve(curve_name)
+            analytics_rows = [
+                compute_analytics_row(
+                    curve,
+                    timestamp_utc=ts,
+                    trading_date=date,
+                    tenors=analytics_tenors,
+                    curve_name=curve_name,
+                )
+                for ts, curve in sorted(curves_by_ts.items())
+            ]
+            analytics_df = build_analytics_frame(analytics_rows)
+            if not analytics_df.empty:
+                store.write_analytics_day(curve_name, date, analytics_df, overwrite=True)
+        except Exception:
+            pass
+
     def _persist_bulk_curves(
         self,
         *,

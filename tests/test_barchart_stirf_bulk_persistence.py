@@ -89,6 +89,7 @@ def test_curve_store_write_day_persists_one_bulk_day(monkeypatch):
     builder._curve_cfg_hash = lambda cfg: "cfg123"
 
     import Caching.curve_store as curve_store_module
+    import Caching.curve_analytics as curve_analytics_module
 
     captured = {}
 
@@ -99,6 +100,12 @@ def test_curve_store_write_day_persists_one_bulk_day(monkeypatch):
             captured["snapshots"] = list(snapshots)
             captured["overwrite"] = overwrite
 
+        def write_analytics_day(self, curve_name, trading_date, df, overwrite=False):
+            captured["analytics_curve_name"] = curve_name
+            captured["analytics_trading_date"] = trading_date
+            captured["analytics_df"] = df.copy()
+            captured["analytics_overwrite"] = overwrite
+
     monkeypatch.setattr(
         curve_store_module.CurveSnapshot,
         "from_rl_curve",
@@ -108,6 +115,16 @@ def test_curve_store_write_day_persists_one_bulk_day(monkeypatch):
         curve_store_module.CurveStore,
         "default",
         staticmethod(lambda: _DummyStore()),
+    )
+    monkeypatch.setattr(
+        curve_analytics_module,
+        "compute_analytics_row",
+        lambda curve, *, timestamp_utc, trading_date, session_minute=None, tenors=None, curve_name=None: {
+            "timestamp_utc": pd.Timestamp(timestamp_utc),
+            "trading_date": trading_date,
+            "session_minute": 480 if session_minute is None else session_minute,
+            "par_rate_1Y1Y": float(tenors is not None and "1Y1Y" in tenors),
+        },
     )
 
     curves_by_ts = {
@@ -129,6 +146,10 @@ def test_curve_store_write_day_persists_one_bulk_day(monkeypatch):
         ("USD-SOFR-1D-Q12STIRT", "cfg123", "curve-a"),
         ("USD-SOFR-1D-Q12STIRT", "cfg123", "curve-b"),
     ]
+    assert captured["analytics_curve_name"] == "USD-SOFR-1D-Q12STIRT"
+    assert captured["analytics_trading_date"] == datetime.date(2026, 3, 10)
+    assert captured["analytics_overwrite"] is True
+    assert "par_rate_1Y1Y" in captured["analytics_df"].columns
 
 
 def test_persist_bulk_curves_uses_curve_store_for_shallow_days_only_once(monkeypatch):

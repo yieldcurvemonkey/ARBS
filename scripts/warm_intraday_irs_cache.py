@@ -24,9 +24,18 @@ _BASE_OUTRIGHT_TENORS = tuple(
     [f"{months}M" for months in range(1, 24)]
     + [f"{years}Y" for years in range(1, 41)]
 )
-_STIRT_OUTRIGHT_TENORS = tuple([f"{months}M" for months in range(1, 24)] + ["1Y", "2Y", "27M", "30M", "33M", "3Y"])
+_STIRT_OUTRIGHT_TENORS = tuple([f"{months}M" for months in range(1, 12)] + ["1Y", "18M", "22M", "2Y", "30M", "3Y"])
 _STIRT_MAX_MATURITY_YEARS = 3
-_STIRT_IMM_SPANS = (1, 4)
+_STIRT_FORWARD_START_TENORS = (
+    "3M1Y",
+    "3M2Y",
+    "6M1Y",
+    "6M2Y",
+    "1Y1Y",
+    "2Y1Y",
+    "1Y2Y",
+)
+_STIRT_IMM_SPANS = (1,)
 _STIRT_IMM_HORIZON_COUNT = 13
 _FORWARD_START_TENORS = (
     "1M1Y",
@@ -320,15 +329,6 @@ def _default_tenors_for_curve(curve_name: str, *, anchor_date: dt.date | None = 
     if _is_stirt_curve(curve_name):
         stirt_base = list(_STIRT_OUTRIGHT_TENORS)
         max_maturity_date = _add_years(anchor_date, _STIRT_MAX_MATURITY_YEARS)
-        stirt_imm_relative = [
-            tenor
-            for tenor in _relative_imm_pair_tenors(max_imm_index=_STIRT_IMM_HORIZON_COUNT, spans=_STIRT_IMM_SPANS)
-            if (
-                (maturity_date := _stirt_tenor_maturity_date(curve_name, tenor, anchor_date=anchor_date))
-                is not None
-                and maturity_date <= max_maturity_date
-            )
-        ]
         stirt_imm_explicit = [
             tenor
             for tenor in _explicit_imm_pair_tenors(
@@ -346,7 +346,7 @@ def _default_tenors_for_curve(curve_name: str, *, anchor_date: dt.date | None = 
         meeting_tenors = (
             [
                 f"{_CB_TOKEN_PREFIX[cb_name]}_{rank}"
-                for rank in range(1, 25)
+                for rank in range(1, 8)
                 if (
                     (maturity_date := _stirt_tenor_maturity_date(
                         curve_name,
@@ -360,7 +360,7 @@ def _default_tenors_for_curve(curve_name: str, *, anchor_date: dt.date | None = 
             if cb_name in _CB_TOKEN_PREFIX
             else []
         )
-        return _dedupe_preserve_order(stirt_base + meeting_tenors + stirt_imm_relative + stirt_imm_explicit)
+        return _dedupe_preserve_order(stirt_base + list(_STIRT_FORWARD_START_TENORS) + meeting_tenors + stirt_imm_explicit)
 
     forward_starts = list(_FORWARD_START_TENORS)
     cb_name = central_bank_for_curve(_curve_reference_id(curve_name))

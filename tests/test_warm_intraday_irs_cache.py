@@ -59,11 +59,22 @@ def test_default_tenors_for_stirt_curve_stays_inside_3y_and_includes_imm_pairs()
 
     assert "1Y" in tenors
     assert "3Y" in tenors
+    assert "11M" in tenors
+    assert "12M" not in tenors
+    assert "18M" in tenors
+    assert "22M" in tenors
+    assert "30M" in tenors
     assert "5Y" not in tenors
+    assert "1Y1Y" in tenors
+    assert "2Y1Y" in tenors
+    assert "1Y2Y" in tenors
+    assert "3M1Y" in tenors
+    assert "6M2Y" in tenors
     assert "fomc_1" in tenors
-    assert "IMM_1xIMM_2" in tenors
-    assert "IMM_1xIMM_5" in tenors
+    assert "fomc_7" in tenors
+    assert "fomc_8" not in tenors
     assert "IMM_Z26xIMM_H27" in tenors
+    assert "IMM_M26xIMM_U26" in tenors
     assert "IMM_Z28xIMM_H29" not in tenors
 
     max_maturity = dt.date(2029, 3, 20)

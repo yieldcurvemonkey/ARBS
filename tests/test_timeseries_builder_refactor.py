@@ -1366,6 +1366,112 @@ def test_timeseries_builder_uses_eris_curve_store_raw_fast_path_for_forward_fly_
     assert mdp.bulk_calls == 0
 
 
+def test_timeseries_builder_uses_barchart_stirt_analytics_fast_path_for_forward_start():
+    ts1 = datetime.datetime(2026, 1, 2, 15, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2026, 1, 5, 15, 0, tzinfo=datetime.timezone.utc)
+    analytics_df = pd.DataFrame(
+        {
+            "timestamp_utc": [pd.Timestamp(ts1), pd.Timestamp(ts2)],
+            "trading_date": [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)],
+            "session_minute": [480, 480],
+            "par_rate_1Y1Y": [4.05, 4.10],
+            "rate_1Y1Y": [4.05, 4.10],
+        }
+    )
+    store = _FakeIRSCurveStore([], analytics_df=analytics_df)
+    mdp = _FakeIRSCurveStoreMDP(store, source="BARCHART_STIRF-RL")
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D-Q12STIRT", tenor="1Y1Y", value=IRSwapValue.RATE)
+
+    out = tb.get_timeseries(
+        start=datetime.datetime(2026, 1, 2, 15, 0, tzinfo=datetime.timezone.utc),
+        end=datetime.datetime(2026, 1, 5, 15, 0, tzinfo=datetime.timezone.utc),
+        queries=[q],
+        n_jobs=2,
+        timestamps=[
+            datetime.datetime(2026, 1, 2, 15, 0, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2026, 1, 5, 15, 0, tzinfo=datetime.timezone.utc),
+        ],
+    )
+
+    assert list(out.index) == [
+        datetime.datetime(2026, 1, 2, 15, 0, tzinfo=datetime.timezone.utc),
+        datetime.datetime(2026, 1, 5, 15, 0, tzinfo=datetime.timezone.utc),
+    ]
+    assert list(out[q.col_name()]) == [4.05, 4.10]
+    assert store.raw_reads == []
+    assert mdp.bulk_calls == 0
+
+
+def test_timeseries_builder_uses_barchart_stirt_analytics_fast_path_for_ranked_fomc():
+    ts1 = datetime.datetime(2026, 1, 2, 15, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2026, 1, 5, 15, 0, tzinfo=datetime.timezone.utc)
+    analytics_df = pd.DataFrame(
+        {
+            "timestamp_utc": [pd.Timestamp(ts1), pd.Timestamp(ts2)],
+            "trading_date": [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)],
+            "session_minute": [480, 480],
+            "par_rate_FOMC_1": [4.15, 4.20],
+            "rate_FOMC_1": [4.15, 4.20],
+        }
+    )
+    store = _FakeIRSCurveStore([], analytics_df=analytics_df)
+    mdp = _FakeIRSCurveStoreMDP(store, source="BARCHART_STIRF-RL")
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D-Q12STIRT", tenor="fomc_1", value=IRSwapValue.RATE)
+
+    out = tb.get_timeseries(
+        start=datetime.datetime(2026, 1, 2, 15, 0, tzinfo=datetime.timezone.utc),
+        end=datetime.datetime(2026, 1, 5, 15, 0, tzinfo=datetime.timezone.utc),
+        queries=[q],
+        n_jobs=2,
+        timestamps=[
+            datetime.datetime(2026, 1, 2, 15, 0, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2026, 1, 5, 15, 0, tzinfo=datetime.timezone.utc),
+        ],
+    )
+
+    assert list(out[q.col_name()]) == [4.15, 4.20]
+    assert store.raw_reads == []
+    assert mdp.bulk_calls == 0
+
+
+def test_timeseries_builder_uses_barchart_stirt_analytics_fast_path_for_explicit_imm_pair():
+    ts1 = datetime.datetime(2026, 1, 2, 15, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2026, 1, 5, 15, 0, tzinfo=datetime.timezone.utc)
+    analytics_df = pd.DataFrame(
+        {
+            "timestamp_utc": [pd.Timestamp(ts1), pd.Timestamp(ts2)],
+            "trading_date": [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)],
+            "session_minute": [480, 480],
+            "par_rate_IMM_1xIMM_2": [4.25, 4.30],
+            "rate_IMM_1xIMM_2": [4.25, 4.30],
+        }
+    )
+    store = _FakeIRSCurveStore([], analytics_df=analytics_df)
+    mdp = _FakeIRSCurveStoreMDP(store, source="BARCHART_STIRF-RL")
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D-Q12STIRT", tenor="IMM_H26xIMM_M26", value=IRSwapValue.RATE)
+
+    out = tb.get_timeseries(
+        start=datetime.datetime(2026, 1, 2, 15, 0, tzinfo=datetime.timezone.utc),
+        end=datetime.datetime(2026, 1, 5, 15, 0, tzinfo=datetime.timezone.utc),
+        queries=[q],
+        n_jobs=2,
+        timestamps=[
+            datetime.datetime(2026, 1, 2, 15, 0, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2026, 1, 5, 15, 0, tzinfo=datetime.timezone.utc),
+        ],
+    )
+
+    assert list(out[q.col_name()]) == [4.25, 4.30]
+    assert store.raw_reads == []
+    assert mdp.bulk_calls == 0
+
+
 def test_timeseries_builder_parallelizes_product_plans(monkeypatch):
     import TB.TimeseriesBuilder as ts_builder_module
 
