@@ -345,3 +345,64 @@ class TestComputeAndPersist:
                 end=td,
             )
             assert len(rows) > 0, f"No DuckDB rows for {td}"
+
+
+import time
+
+
+class TestPerformance:
+    """Benchmark vectorized engine throughput."""
+
+    def test_252_dates_200_tenors_under_5s(self):
+        """Full year x full desk tenors must complete in under 5 seconds."""
+        # Generate 252 synthetic trading dates
+        base = datetime.date(2024, 1, 2)
+        trading_dates = []
+        d = base
+        while len(trading_dates) < 252:
+            if d.weekday() < 5:  # skip weekends
+                trading_dates.append(d)
+            d += datetime.timedelta(days=1)
+
+        offsets_years = [0, 0.25, 0.5, 1, 2, 3, 5, 7, 10, 15, 20, 30, 40, 50]
+
+        def _nodes(td):
+            dates = [td + datetime.timedelta(days=int(y * 365.25)) for y in offsets_years]
+            dfs = [np.exp(-0.04 * y) for y in offsets_years]
+            return dates, dfs
+
+        raw_rows = []
+        for td in trading_dates:
+            nd, df = _nodes(td)
+            raw_rows.append({"trading_date": td, "node_dates": nd, "discount_factors": df})
+        raw_df = pd.DataFrame(raw_rows)
+
+        # 200 tenors: spot 1M-50Y + forward-starting
+        tenors = (
+            [f"{m}M" for m in range(1, 24)]
+            + [f"{y}Y" for y in range(2, 51)]
+            + ["1Y1Y", "1Y2Y", "1Y3Y", "1Y5Y", "1Y10Y",
+               "2Y1Y", "2Y2Y", "2Y3Y", "2Y5Y", "2Y10Y",
+               "3Y1Y", "3Y2Y", "3Y3Y", "3Y5Y", "3Y10Y",
+               "5Y1Y", "5Y2Y", "5Y3Y", "5Y5Y", "5Y10Y",
+               "7Y1Y", "7Y2Y", "7Y3Y", "7Y5Y",
+               "10Y1Y", "10Y2Y", "10Y5Y", "10Y10Y",
+               "15Y5Y", "15Y10Y", "15Y15Y",
+               "20Y5Y", "20Y10Y", "20Y30Y",
+               "30Y5Y", "30Y10Y", "30Y20Y"]
+        )
+
+        start = time.perf_counter()
+        panel = compute_eod_rate_panel(raw_df, tenors)
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 5.0, f"Took {elapsed:.2f}s (budget: 5s)"
+        assert len(panel) == 252
+        assert len(panel.columns) >= 100  # at least 100 tenors produced
+        # Most rates should be non-NaN
+        fill_rate = panel.notna().sum().sum() / (len(panel) * len(panel.columns))
+        assert fill_rate > 0.8, f"Fill rate {fill_rate:.2%} too low"
+
+        print(f"\nBenchmark: {len(panel)} dates x {len(panel.columns)} tenors = "
+              f"{panel.notna().sum().sum():.0f} rates in {elapsed:.2f}s "
+              f"({panel.notna().sum().sum() / elapsed:.0f} rates/sec)")
