@@ -70,30 +70,29 @@ _BASE_OUTRIGHT_TENORS = tuple(
     [f"{months}M" for months in range(1, 24)]
     + [f"{years}Y" for years in range(1, 41)]
 )
-_STIRT_OUTRIGHT_TENORS = tuple([f"{months}M" for months in range(1, 12)] + ["1Y", "18M", "22M", "2Y", "30M", "3Y"])
+_STIRT_OUTRIGHT_TENORS = tuple([f"{months}M" for months in range(1, 12)] + ["1Y", "18M", "22M", "2Y", "30M", "33M", "3Y"])
 _STIRT_MAX_MATURITY_YEARS = 3
 _STIRT_FORWARD_START_TENORS = (
-    "3M1Y",
-    "3M2Y",
-    "6M1Y",
-    "6M2Y",
-    "1Y1Y",
-    "2Y1Y",
-    "1Y2Y",
+    # 1M fwd
+    "1M3M", "1M6M", "1M1Y", "1M18M", "1M2Y",
+    # 2M fwd
+    "2M3M", "2M6M", "2M1Y", "2M18M", "2M2Y",
+    # 3M fwd
+    "3M3M", "3M6M", "3M1Y", "3M18M", "3M2Y",
+    # 6M fwd
+    "6M3M", "6M6M", "6M1Y", "6M18M", "6M2Y",
+    # 9M fwd
+    "9M3M", "9M6M", "9M1Y", "9M18M",
+    # 1Y fwd
+    "1Y3M", "1Y6M", "1Y1Y", "1Y18M", "1Y2Y",
+    # 18M fwd
+    "18M3M", "18M6M", "18M1Y", "18M18M",
+    # 2Y fwd
+    "2Y3M", "2Y6M", "2Y1Y",
 )
-_STIRT_IMM_SPANS = (1,)
+_STIRT_IMM_SPANS = (1, 2, 4)  # 1=3M gap, 2=6M gap, 4=1Y gap
 _STIRT_IMM_HORIZON_COUNT = 13
-_FORWARD_START_TENORS = (
-    "1M1Y",
-    "1M2Y",
-    "3M1Y",
-    "3M2Y",
-    "6M1Y",
-    "6M2Y",
-    "1Y1Y",
-    "1Y2Y",
-    "2Y1Y",
-)
+_FORWARD_START_TENORS = _STIRT_FORWARD_START_TENORS
 _GENERIC_CB_FORWARD_START_TENORS = (
     "1Y1Y",
     "1Y2Y",
@@ -1141,7 +1140,7 @@ def _explicit_imm_pair_tenors(*, as_of: dt.date, horizon_count: int, spans: Sequ
 
 
 def _default_tenors_for_curve(curve_name: str, *, anchor_date: dt.date | None = None) -> list[str]:
-    from Query.IRSwaps._CENTRAL_BANK_DATES import central_bank_for_curve
+    from Query.IRSwaps._CENTRAL_BANK_DATES import central_bank_date_map, central_bank_for_curve
 
     if anchor_date is None:
         anchor_date = dt.date.today()
@@ -1150,38 +1149,39 @@ def _default_tenors_for_curve(curve_name: str, *, anchor_date: dt.date | None = 
     if _is_stirt_curve(curve_name):
         stirt_base = list(_STIRT_OUTRIGHT_TENORS)
         max_maturity_date = _add_years(anchor_date, _STIRT_MAX_MATURITY_YEARS)
-        stirt_imm_explicit = [
-            tenor
-            for tenor in _explicit_imm_pair_tenors(
-                as_of=anchor_date,
-                horizon_count=_STIRT_IMM_HORIZON_COUNT,
-                spans=_STIRT_IMM_SPANS,
-            )
-            if (
-                (maturity_date := _stirt_tenor_maturity_date(curve_name, tenor, anchor_date=anchor_date))
-                is not None
-                and maturity_date <= max_maturity_date
-            )
-        ]
+        stirt_imm_explicit = _explicit_imm_pair_tenors(
+            as_of=anchor_date,
+            horizon_count=_STIRT_IMM_HORIZON_COUNT,
+            spans=_STIRT_IMM_SPANS,
+        )
+        stirt_imm_relative = _relative_imm_pair_tenors(
+            max_imm_index=_STIRT_IMM_HORIZON_COUNT,
+            spans=_STIRT_IMM_SPANS,
+        )
         cb_name = central_bank_for_curve(_curve_reference_id(curve_name))
-        meeting_tenors = (
-            [
-                f"{_CB_TOKEN_PREFIX[cb_name]}_{rank}"
-                for rank in range(1, 8)
-                if (
-                    (maturity_date := _stirt_tenor_maturity_date(
-                        curve_name,
-                        f"{_CB_TOKEN_PREFIX[cb_name]}_{rank}",
-                        anchor_date=anchor_date,
-                    ))
-                    is not None
-                    and maturity_date <= max_maturity_date
-                )
-            ]
+        meeting_ranked = (
+            [f"{_CB_TOKEN_PREFIX[cb_name]}_{rank}" for rank in range(1, 8)]
             if cb_name in _CB_TOKEN_PREFIX
             else []
         )
-        return _dedupe_preserve_order(stirt_base + list(_STIRT_FORWARD_START_TENORS) + meeting_tenors + stirt_imm_explicit)
+        meeting_explicit: list[str] = []
+        if cb_name in _CB_TOKEN_PREFIX:
+            cb_prefix = _CB_TOKEN_PREFIX[cb_name]
+            meeting_map = central_bank_date_map(_curve_reference_id(curve_name))
+            meeting_explicit = [
+                f"{cb_prefix}_{label}"
+                for label, (eff, _mat) in sorted(meeting_map.items(), key=lambda kv: kv[1][0])
+                if pd.Timestamp(eff) >= pd.Timestamp(anchor_date)
+                and pd.Timestamp(eff) <= pd.Timestamp(max_maturity_date)
+            ]
+        return _dedupe_preserve_order(
+            stirt_base
+            + list(_STIRT_FORWARD_START_TENORS)
+            + meeting_ranked
+            + meeting_explicit
+            + stirt_imm_explicit
+            + stirt_imm_relative
+        )
 
     forward_starts = list(_FORWARD_START_TENORS)
     cb_name = central_bank_for_curve(_curve_reference_id(curve_name))
