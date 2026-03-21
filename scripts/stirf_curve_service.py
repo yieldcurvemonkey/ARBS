@@ -2117,6 +2117,20 @@ def _build_parser() -> argparse.ArgumentParser:
     backfill.add_argument("--no-backfill-local-cache", dest="backfill_local_cache", action="store_false")
     backfill.add_argument("--rewrite-existing-supabase", dest="rewrite_existing_supabase", action="store_true")
     backfill.add_argument("--only-missing-supabase", dest="rewrite_existing_supabase", action="store_false")
+    backfill.add_argument(
+        "--no-resume",
+        "--force",
+        dest="resume",
+        action="store_false",
+        default=True,
+        help="Disable checkpoint skip; reprocess all days even if already cached.",
+    )
+    backfill.add_argument(
+        "--max-tasks-per-child",
+        type=int,
+        default=50,
+        help="Recycle process pool workers after N calibrations to limit memory leaks.",
+    )
 
     live_service = subparsers.add_parser(
         "live-service",
@@ -2228,15 +2242,67 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
         if bool(args.backfill_only):
             continue
 
+        # --- Checkpoint probe ---
+        skip_ts = bool(args.skip_timeseries_warm) or ts_builder is None
+        skipped_days_set: set[dt.date] = set()
+        if bool(args.resume) and not bool(args.ignore_cache):
+            raw_complete = set(_local_curve_dates_in_range(
+                curve_name=curve_name,
+                start_date=start_date,
+                end_date=end_date,
+            ))
+            ts_complete = (
+                set()
+                if skip_ts
+                else _probe_ts_completed_dates(
+                    ts_builder=ts_builder,
+                    curve_name=curve_name,
+                    source=str(args.source),
+                    sentinel_tenor=_default_tenors_for_curve(curve_name, anchor_date=start_date)[0],
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            )
+            skipped_days_set = _probe_completed_days(
+                raw_complete_dates=raw_complete,
+                ts_complete_dates=ts_complete,
+                skip_timeseries_warm=skip_ts,
+            )
+            if skipped_days_set:
+                logger.info(
+                    "Checkpoint: skipping %s/%s already-completed days for %s",
+                    len(skipped_days_set),
+                    business_days,
+                    curve_name,
+                )
+                _write_perf_event(perf_log_path, {
+                    "event": "checkpoint_probe",
+                    "curve_name": curve_name,
+                    "skipped_days": len(skipped_days_set),
+                    "total_days": business_days,
+                    "raw_complete": len(raw_complete),
+                    "ts_complete": len(ts_complete) if not skip_ts else None,
+                })
+
+        remaining_days = business_days - len(skipped_days_set)
+
         logger.info(
-            "Prepared backfill service run for %s [%s -> %s]: business_days=%s session_mode=%s timezone=%s perf_log=%s",
+            "Prepared backfill service run for %s [%s -> %s]: business_days=%s remaining=%s session_mode=%s timezone=%s perf_log=%s",
             curve_name,
             start_date.isoformat(),
             end_date.isoformat(),
             business_days,
+            remaining_days,
             "cme" if args.cme_session else "clock",
             timezone_name,
             perf_log_path,
+        )
+
+        # --- Progress tracker ---
+        progress = BackfillProgress(
+            curve_name=curve_name,
+            total_days=business_days,
+            skipped_days=len(skipped_days_set),
         )
 
         timeseries_results: list[dict[str, Any]] = []
@@ -2247,10 +2313,10 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
             _curves: dict[Any, Any],
             day_result: DayCalibrationStats,
         ) -> None:
-            if ts_builder is None or day_result.status == "error":
-                return
-            timeseries_results.append(
-                _warm_timeseries_window(
+            progress.record_calibration(status=day_result.status)
+            ts_summary: dict[str, Any] = {}
+            if ts_builder is not None and day_result.status != "error":
+                ts_summary = _warm_timeseries_window(
                     curve_name=curve_name,
                     timestamps=timestamps,
                     explicit_tenors=explicit_tenors,
@@ -2262,17 +2328,30 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
                     logger=logger,
                     label=trade_date.isoformat(),
                 )
+                timeseries_results.append(ts_summary)
+            progress.record_timeseries(
+                status=ts_summary.get("status", "skipped"),
+                failed_tenors=ts_summary.get("failed_tenors", []),
             )
+            logger.info(progress.format_heartbeat())
+            _write_perf_event(perf_log_path, progress.to_perf_event())
+            gc.collect()
 
-        daily_bucket_iter = iter_daily_minute_buckets(
-            start_date=start_date,
-            end_date=end_date,
-            session_start=session_start,
-            session_end=session_end,
-            freq=str(args.freq),
-            timezone=timezone,
-            cme_session=bool(args.cme_session),
-        )
+        # --- Filtered daily iterator ---
+        def _filtered_daily_buckets():
+            for trade_date, timestamps in iter_daily_minute_buckets(
+                start_date=start_date,
+                end_date=end_date,
+                session_start=session_start,
+                session_end=session_end,
+                freq=str(args.freq),
+                timezone=timezone,
+                cme_session=bool(args.cme_session),
+            ):
+                if trade_date in skipped_days_set:
+                    continue
+                yield trade_date, timestamps
+
         request_options = {
             "n_jobs": int(args.n_jobs),
             "show_tqdm": bool(args.show_tqdm),
@@ -2283,6 +2362,7 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
             "calibration_max_workers": args.calibration_max_workers,
             "cme_session": bool(args.cme_session),
             "timezone": timezone_name,
+            "max_tasks_per_child": int(args.max_tasks_per_child),
         }
 
         try:
@@ -2290,12 +2370,12 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
                 curve_mdp=mdp,
                 curve_name=curve_name,
                 source=str(args.source),
-                daily_buckets=daily_bucket_iter,
+                daily_buckets=_filtered_daily_buckets(),
                 request_options=request_options,
                 perf_log_path=perf_log_path,
                 logger=logger,
                 fail_fast=bool(args.fail_fast),
-                business_days=business_days,
+                business_days=remaining_days,
                 day_callback=_day_callback,
             )
         except Exception:
