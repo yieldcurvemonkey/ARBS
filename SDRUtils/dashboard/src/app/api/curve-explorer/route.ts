@@ -31,6 +31,24 @@ interface AnalyticsBlockSummary {
   created_at: string
 }
 
+interface SnapshotDetail {
+  curve_name: string
+  timestamp_utc: string
+  trading_date: string
+  session_minute: number
+  tags: string[]
+  cfg_hash: string
+  reference_key: string
+  interpolation: string
+  source_variant: string
+  node_count: number
+  node_date_min: string | null
+  node_date_max: string | null
+  node_dates: string[]
+  discount_factors: number[]
+  created_at: string
+}
+
 interface CurveOverview {
   curve_name: string
   snapshot_days: number
@@ -150,6 +168,45 @@ export async function GET(request: Request) {
         LIMIT $${params.length + 1}
       `, [...params, limit])
       return NextResponse.json({ view: 'analytics', rows: res.rows })
+    }
+
+    if (view === 'snapshot-detail') {
+      // Individual snapshot rows for a curve+date drill-down
+      const tradingDate = searchParams.get('trading_date') || null
+      const conditions: string[] = []
+      const params: any[] = []
+      if (curveName) {
+        params.push(curveName)
+        conditions.push(`curve_name = $${params.length}`)
+      }
+      if (tradingDate) {
+        params.push(tradingDate)
+        conditions.push(`trading_date = $${params.length}`)
+      }
+      const whereClause = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
+      const res = await query<SnapshotDetail>(`
+        SELECT
+          curve_name,
+          timestamp_utc::text AS timestamp_utc,
+          trading_date::text AS trading_date,
+          session_minute,
+          tags,
+          cfg_hash,
+          reference_key,
+          interpolation,
+          source_variant,
+          array_length(node_dates, 1) AS node_count,
+          node_dates[1]::text AS node_date_min,
+          node_dates[array_length(node_dates, 1)]::text AS node_date_max,
+          node_dates::text[] AS node_dates,
+          discount_factors,
+          created_at::text AS created_at
+        FROM arbs_curve_snapshots_v1
+        ${whereClause}
+        ORDER BY timestamp_utc ASC
+        LIMIT $${params.length + 1}
+      `, [...params, limit])
+      return NextResponse.json({ view: 'snapshot-detail', rows: res.rows })
     }
 
     return NextResponse.json({ error: `Unknown view: ${view}` }, { status: 400 })
