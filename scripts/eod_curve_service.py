@@ -61,7 +61,7 @@ DEFAULT_CURVES = (DEFAULT_CURVE_NAME,)
 DEFAULT_TS_BASE_DIR = "./data/ts"
 DEFAULT_TS_ROW_GROUP_SIZE = 256_000
 DEFAULT_TS_COMPRESSION = "zstd"
-DEFAULT_USE_DUCKDB = False
+DEFAULT_USE_DUCKDB = True
 
 # ---------------------------------------------------------------------------
 # EOD sources understood by this script
