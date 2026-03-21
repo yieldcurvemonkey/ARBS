@@ -219,3 +219,77 @@ class TestComputeEodRatePanel:
             assert panel[col].notna().all(), f"NaN found in {col}"
             for rate in panel[col]:
                 assert 0.035 < rate < 0.045, f"Rate {rate} not near 4% for {col}"
+
+
+import QuantLib as ql
+from Caching.eod_vectorized_engine import _period_to_ql, _ql_date
+
+
+class TestNumericalValidation:
+    """Validate vectorized rates against QuantLib discount curve lookups.
+
+    We validate that our log-linear interpolation and par rate formula
+    match QuantLib's DiscountCurve (which also uses log-linear interp)
+    when both use the same schedule. This isolates the math from
+    schedule convention differences (e.g. SOFR OIS stub handling).
+    """
+
+    @pytest.mark.parametrize("tenor", ["2Y", "5Y", "10Y", "30Y", "1Y1Y", "2Y5Y", "5Y10Y"])
+    def test_matches_quantlib(self, tenor):
+        """Vectorized rate must match QuantLib DiscountCurve to within 0.01bp."""
+        trading_date = datetime.date(2024, 6, 3)
+        base = trading_date
+        offsets_days = [0, 30, 91, 182]
+        offsets_years = list(range(1, 31)) + [40, 50]
+        node_dates = (
+            [base + datetime.timedelta(days=d) for d in offsets_days]
+            + [base + datetime.timedelta(days=int(y * 365.25)) for y in offsets_years]
+        )
+        rate_at_node = lambda y: 0.04 + 0.005 * (1 - np.exp(-0.3 * y))
+        node_dfs = [
+            np.exp(-rate_at_node((d - base).days / 365.25) * (d - base).days / 365.25)
+            for d in node_dates
+        ]
+
+        # Build QuantLib discount curve
+        ql_trade = _ql_date(trading_date)
+        ql.Settings.instance().evaluationDate = ql_trade
+        ql_dates = [_ql_date(d) for d in node_dates]
+        ql_curve = ql.DiscountCurve(ql_dates, node_dfs, ql.Actual360())
+        ql_curve.enableExtrapolation()
+
+        # Build our schedule
+        sched = build_payment_schedule(trading_date, tenor, settlement_days=2)
+
+        # Compute QuantLib reference rate using same schedule + curve DFs
+        ql_dc = ql.Actual360()
+        ql_eff = _ql_date(sched.effective_date)
+        ql_sched_dates = [ql_eff] + [_ql_date(d) for d in sched.payment_dates]
+        df_eff_ql = ql_curve.discount(ql_eff)
+        df_payments_ql = np.array([ql_curve.discount(d) for d in ql_sched_dates[1:]])
+        accruals_ql = np.array([
+            ql_dc.yearFraction(ql_sched_dates[i], ql_sched_dates[i + 1])
+            for i in range(len(ql_sched_dates) - 1)
+        ])
+        ql_rate = (df_eff_ql - df_payments_ql[-1]) / np.dot(df_payments_ql, accruals_ql)
+
+        # Vectorized rate
+        all_targets = [sched.effective_date] + sched.payment_dates
+        interp_dfs = interpolate_discount_factors(
+            base_date=node_dates[0],
+            node_dates=node_dates,
+            node_dfs=np.array(node_dfs),
+            target_dates=all_targets,
+        )
+        vec_rate = compute_par_swap_rate(
+            df_effective=interp_dfs[0],
+            df_maturity=interp_dfs[-1],
+            df_at_payments=interp_dfs[1:],
+            accrual_fractions=np.array(sched.accrual_fractions),
+        )
+
+        # 0.01bp tolerance = 1e-6
+        assert abs(vec_rate - ql_rate) < 1e-6, (
+            f"tenor={tenor}: vectorized={vec_rate:.8f} vs ql={ql_rate:.8f}, "
+            f"diff={abs(vec_rate - ql_rate):.2e}"
+        )
