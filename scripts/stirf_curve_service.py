@@ -457,6 +457,7 @@ def build_bulk_request(
     auto_prime_bulk: bool,
     stirf_fetch_max_workers: int | None = None,
     calibration_max_workers: int | None = None,
+    max_tasks_per_child: int | None = None,
 ) -> dict[str, Any]:
     request: dict[str, Any] = {
         "curve_name": curve_name,
@@ -471,6 +472,8 @@ def build_bulk_request(
         request["stirf_fetch_max_workers"] = int(stirf_fetch_max_workers)
     if calibration_max_workers is not None:
         request["calibration_max_workers"] = int(calibration_max_workers)
+    if max_tasks_per_child is not None:
+        request["max_tasks_per_child"] = int(max_tasks_per_child)
     return request
 
 
@@ -1947,6 +1950,7 @@ def run_bucketed_calibration(
             auto_prime_bulk=request_options["auto_prime_bulk"],
             stirf_fetch_max_workers=request_options.get("stirf_fetch_max_workers"),
             calibration_max_workers=request_options.get("calibration_max_workers"),
+            max_tasks_per_child=request_options.get("max_tasks_per_child"),
         )
         logger.info(
             "Starting %s bucket: requested=%s first=%s last=%s executor=%s",

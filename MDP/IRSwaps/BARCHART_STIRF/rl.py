@@ -2345,6 +2345,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             auto_prime_bulk = bool(local_kwargs.pop("auto_prime_bulk", True))
             stirf_fetch_max_workers = local_kwargs.pop("stirf_fetch_max_workers", None)
             calibration_max_workers = local_kwargs.pop("calibration_max_workers", None)
+            max_tasks_per_child = local_kwargs.pop("max_tasks_per_child", None)
             force_refresh = bool(local_kwargs.get("force_refresh", False))
             use_curve_cache = bool(curve_only) and not force_refresh
 
@@ -2510,10 +2511,13 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 # Process pool: no warm-start possible (kept as escape hatch).
                 reduced_cfg = _reduced_calibration_cfg(cfg)
                 _validate_spawn_process_pool_environment()
-                with ProcessPoolExecutor(
-                    max_workers=cal_workers,
-                    mp_context=mp.get_context("spawn"),
-                ) as pool:
+                pool_kwargs: Dict[str, Any] = {
+                    "max_workers": cal_workers,
+                    "mp_context": mp.get_context("spawn"),
+                }
+                if max_tasks_per_child is not None:
+                    pool_kwargs["max_tasks_per_child"] = int(max_tasks_per_child)
+                with ProcessPoolExecutor(**pool_kwargs) as pool:
                     futures = {
                         pool.submit(
                             _process_curve_calibration_job,
