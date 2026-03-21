@@ -282,3 +282,109 @@ def compute_eod_rate_panel(
 
     out = pd.DataFrame(results, index=pd.DatetimeIndex(trading_dates, name="trading_date"))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Persistence — write results to all stores
+# ---------------------------------------------------------------------------
+def _build_ts_symbol(source: str, curve_name: str, fingerprint: str) -> str:
+    """Build the computed timeseries symbol key."""
+    return f"IRS::{source}::{curve_name}::{fingerprint}"
+
+
+def _tenor_fingerprint(tenor: str) -> str:
+    """Build a stable fingerprint for a tenor query.
+
+    Matches the format used by TB.IRSwapsTB._query_fingerprint for
+    UnifiedQuery(curve=..., tenor=tenor, value=IRS_RATE).
+    """
+    return f"rate_{tenor.upper()}"
+
+
+def compute_and_persist_eod_panel(
+    raw_nodes_df: pd.DataFrame,
+    tenors: Sequence[str],
+    *,
+    curve_name: str,
+    source: str,
+    computed_ts_store: Optional[object] = None,
+    curve_store: Optional[object] = None,
+    settlement_days: int = 2,
+) -> Dict[str, object]:
+    """Compute vectorized EOD rate panel and persist to all stores.
+
+    Returns a summary dict with status, counts, and symbol keys.
+    """
+    import time as _time
+
+    started = _time.perf_counter()
+    panel = compute_eod_rate_panel(
+        raw_nodes_df=raw_nodes_df,
+        tenors=tenors,
+        settlement_days=settlement_days,
+    )
+
+    if panel.empty:
+        return {"status": "empty", "rates_computed": 0, "symbols": [], "elapsed_seconds": 0.0}
+
+    trading_dates = [
+        d.date() if isinstance(d, pd.Timestamp) else d
+        for d in panel.index
+    ]
+    symbols: List[str] = []
+
+    # --- Write to ComputedTimeseriesStore (DuckDB L1 + Parquet TS) ---
+    if computed_ts_store is not None:
+        rows_by_symbol: Dict[str, List[Tuple]] = {}
+        for tenor in tenors:
+            if tenor not in panel.columns:
+                continue
+            fingerprint = _tenor_fingerprint(tenor)
+            symbol = _build_ts_symbol(source, curve_name, fingerprint)
+            if symbol not in symbols:
+                symbols.append(symbol)
+            tenor_rows = []
+            for td, rate in zip(trading_dates, panel[tenor]):
+                if np.isnan(rate):
+                    continue
+                tenor_rows.append((td, tenor, float(rate)))
+            if tenor_rows:
+                rows_by_symbol[symbol] = tenor_rows
+
+        if rows_by_symbol:
+            try:
+                computed_ts_store.append_many_rows(rows_by_symbol=rows_by_symbol)
+            except Exception:
+                logger.warning("Failed to write vectorized rates to computed TS store", exc_info=True)
+
+    # --- Write to CurveStore analytics panel ---
+    if curve_store is not None:
+        for td in trading_dates:
+            row_mask = panel.index == pd.Timestamp(td)
+            if not row_mask.any():
+                continue
+            analytics_row = panel.loc[row_mask].copy()
+            # Rename columns to rate_{tenor} format for analytics panel
+            analytics_row.columns = [f"rate_{t}" for t in analytics_row.columns]
+            analytics_row.insert(0, "timestamp_utc", pd.Timestamp(td, tz="UTC"))
+            analytics_row.insert(1, "trading_date", td)
+            try:
+                curve_store.write_analytics_day(
+                    curve_name, td, analytics_row, overwrite=True,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to write analytics panel for %s/%s",
+                    curve_name, td, exc_info=True,
+                )
+
+    elapsed = _time.perf_counter() - started
+    rates_computed = int(panel.notna().sum().sum())
+    return {
+        "status": "ok",
+        "rates_computed": rates_computed,
+        "tenor_count": len(tenors),
+        "date_count": len(trading_dates),
+        "symbols": symbols,
+        "elapsed_seconds": round(elapsed, 3),
+    }

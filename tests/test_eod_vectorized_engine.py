@@ -13,6 +13,7 @@ from Caching.eod_vectorized_engine import (
     interpolate_discount_factors,
     compute_par_swap_rate,
     compute_eod_rate_panel,
+    compute_and_persist_eod_panel,
 )
 
 
@@ -293,3 +294,54 @@ class TestNumericalValidation:
             f"tenor={tenor}: vectorized={vec_rate:.8f} vs ql={ql_rate:.8f}, "
             f"diff={abs(vec_rate - ql_rate):.2e}"
         )
+
+
+class TestComputeAndPersist:
+    """Test that computed rates are persisted to all stores."""
+
+    def test_writes_to_duckdb_and_parquet(self, tmp_path):
+        from Caching.computed_timeseries_store import ComputedTimeseriesStore
+
+        # Build synthetic raw node data
+        trading_dates = [datetime.date(2024, 6, 3), datetime.date(2024, 6, 4)]
+        offsets_years = [0, 1, 2, 5, 10, 30, 50]
+
+        def _nodes(td):
+            dates = [td + datetime.timedelta(days=int(y * 365.25)) for y in offsets_years]
+            dfs = [np.exp(-0.04 * y) for y in offsets_years]
+            return dates, dfs
+
+        raw_rows = []
+        for td in trading_dates:
+            nd, df = _nodes(td)
+            raw_rows.append({"trading_date": td, "node_dates": nd, "discount_factors": df})
+        raw_df = pd.DataFrame(raw_rows)
+
+        ts_store = ComputedTimeseriesStore(
+            base_dir=str(tmp_path / "ts"),
+            use_duckdb=True,
+            duckdb_path=str(tmp_path / "test.duckdb"),
+        )
+
+        result = compute_and_persist_eod_panel(
+            raw_nodes_df=raw_df,
+            tenors=["2Y", "5Y", "10Y"],
+            curve_name="USD-SOFR-1D",
+            source="ERIS_EOD_LIVE-RL_BASIC",
+            computed_ts_store=ts_store,
+            curve_store=None,  # skip analytics panel write in test
+        )
+
+        assert result["status"] == "ok"
+        assert result["rates_computed"] > 0
+
+        # Verify DuckDB has data
+        duckdb_cache = ts_store._duckdb_cache
+        assert duckdb_cache is not None
+        for td in trading_dates:
+            rows = duckdb_cache.read_rows(
+                result["symbols"][0],  # first symbol
+                start=td,
+                end=td,
+            )
+            assert len(rows) > 0, f"No DuckDB rows for {td}"
