@@ -1857,6 +1857,66 @@ class TimeseriesBuilder:
                 if rp in set(uncovered_ref_points)
             }
 
+            # --- Vectorized EOD fast path for uncovered tenors ---
+            if (
+                uncovered_ref_points
+                and _matches_irs_curve_store_on_trading_date(mdp)
+            ):
+                try:
+                    import numpy as np
+                    from Caching.eod_vectorized_engine import compute_eod_rate_panel
+
+                    uncovered_dates = sorted(set(
+                        _ref_point_date(rp) for rp in uncovered_ref_points
+                    ))
+                    raw_df = store.read_raw_nodes(
+                        resolved_curve_name,
+                        start=uncovered_dates[0],
+                        end=uncovered_dates[-1],
+                    )
+                    if not raw_df.empty:
+                        uncovered_tenors = list({
+                            str(getattr(q, "tenor", ""))
+                            for idx, q in enumerate(curve_queries)
+                            if getattr(q, "tenor", None)
+                            and any((rp, idx) not in covered for rp in curve_reference_points)
+                        })
+                        if uncovered_tenors:
+                            vec_start = time.perf_counter()
+                            panel = compute_eod_rate_panel(
+                                raw_nodes_df=raw_df,
+                                tenors=uncovered_tenors,
+                            )
+                            if not panel.empty:
+                                for rp in uncovered_ref_points:
+                                    rp_date = _ref_point_date(rp)
+                                    ts_key = pd.Timestamp(rp_date)
+                                    if ts_key not in panel.index:
+                                        continue
+                                    for idx, q in enumerate(curve_queries):
+                                        if (rp, idx) in covered:
+                                            continue
+                                        tenor = str(getattr(q, "tenor", "") or "")
+                                        if tenor in panel.columns:
+                                            rate_val = panel.loc[ts_key, tenor]
+                                            if not np.isnan(rate_val):
+                                                col_name = _safe_col_name(q, tenor)
+                                                row = (rp, col_name, float(rate_val) * 100)
+                                                rows.append(row)
+                                                covered.add((rp, idx))
+                                                newly_computed_rows[idx].append(row)
+                                _log_curve_stage("vectorized EOD", vec_start, covered=len(covered))
+                except ImportError:
+                    pass  # vectorized engine not available, fall through to reconstruction
+                except Exception:
+                    _LOGGER.debug("Vectorized EOD fallback failed", exc_info=True)
+
+            # Recompute uncovered after vectorized path
+            uncovered_ref_points = [
+                rp for rp in curve_reference_points
+                if any((rp, idx) not in covered for idx in range(len(curve_queries)))
+            ]
+
             curve_map: Dict[DateLike, Any] = {}
             if _supports_irs_curve_store_raw_curve_fast_path(mdp) and uncovered_ref_points:
                 raw_curve_started = time.perf_counter()
