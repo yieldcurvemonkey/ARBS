@@ -86,6 +86,9 @@ export default function RootLayout({
                 <Link href="/curve-explorer" className="hover:text-white">
                   Curve Explorer
                 </Link>
+                <Link href="/timeseries-explorer" className="hover:text-white">
+                  Timeseries Explorer
+                </Link>
               </nav>
             </div>
           </header>
