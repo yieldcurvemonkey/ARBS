@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from scripts import stirf_curve_service as stirf_curve_calibration
-from scripts.stirf_curve_service import BackfillProgress
+from scripts.stirf_curve_service import BackfillProgress, _probe_completed_days
 
 
 class TestBackfillProgress:
@@ -50,6 +50,37 @@ class TestBackfillProgress:
         assert event["curve_name"] == "TEST"
         assert event["total_days"] == 5
         assert event["skipped_days"] == 1
+
+
+class TestCheckpointProbe:
+    def test_returns_intersection_of_raw_and_ts(self):
+        raw_dates = {dt.date(2026, 1, 6), dt.date(2026, 1, 7), dt.date(2026, 1, 8)}
+        ts_dates = {dt.date(2026, 1, 7), dt.date(2026, 1, 8), dt.date(2026, 1, 9)}
+        result = _probe_completed_days(
+            raw_complete_dates=raw_dates,
+            ts_complete_dates=ts_dates,
+            skip_timeseries_warm=False,
+        )
+        assert result == {dt.date(2026, 1, 7), dt.date(2026, 1, 8)}
+
+    def test_returns_raw_only_when_ts_skipped(self):
+        raw_dates = {dt.date(2026, 1, 6), dt.date(2026, 1, 7)}
+        result = _probe_completed_days(
+            raw_complete_dates=raw_dates,
+            ts_complete_dates=set(),
+            skip_timeseries_warm=True,
+        )
+        assert result == raw_dates
+
+    def test_returns_empty_when_no_overlap(self):
+        raw_dates = {dt.date(2026, 1, 6)}
+        ts_dates = {dt.date(2026, 1, 7)}
+        result = _probe_completed_days(
+            raw_complete_dates=raw_dates,
+            ts_complete_dates=ts_dates,
+            skip_timeseries_warm=False,
+        )
+        assert result == set()
 
 
 def test_build_daily_minute_buckets_skips_non_business_days():

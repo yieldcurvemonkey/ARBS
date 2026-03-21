@@ -969,6 +969,68 @@ def _computed_ts_stores_for_builder(ts_builder: Any | None) -> list[Any]:
     return stores
 
 
+def _probe_completed_days(
+    *,
+    raw_complete_dates: set[dt.date],
+    ts_complete_dates: set[dt.date],
+    skip_timeseries_warm: bool,
+) -> set[dt.date]:
+    """Return dates fully completed (raw curves + optional timeseries)."""
+    if skip_timeseries_warm:
+        return set(raw_complete_dates)
+    return raw_complete_dates & ts_complete_dates
+
+
+def _probe_ts_completed_dates(
+    *,
+    ts_builder: Any | None,
+    curve_name: str,
+    source: str,
+    sentinel_tenor: str,
+    start_date: dt.date,
+    end_date: dt.date,
+) -> set[dt.date]:
+    """Probe DuckDB computed TS cache for dates with cached sentinel tenor."""
+    if ts_builder is None:
+        return set()
+
+    stores = _computed_ts_stores_for_builder(ts_builder)
+    if not stores:
+        return set()
+
+    # Build sentinel symbol: IRS::{source}::{curve_name}::{fingerprint}
+    from Query.Unified.UnifiedQuery import UnifiedQuery
+    from Query.Unified.registry import UnifiedValue
+    sentinel_query = UnifiedQuery(
+        curve=curve_name,
+        tenor=sentinel_tenor,
+        value=UnifiedValue.IRS_RATE,
+    )
+    # Convert to legacy query and get fingerprint
+    legacy_queries = sentinel_query.return_query()
+    if not legacy_queries:
+        return set()
+    legacy_item = legacy_queries[0].to_legacy()
+    from TB.IRSwapsTB import _query_fingerprint
+    fingerprint = _query_fingerprint(legacy_item)
+    sentinel_symbol = f"IRS::{source}::{curve_name}::{fingerprint}"
+
+    # Probe each store for the sentinel symbol
+    all_dates: set[dt.date] = set()
+    for store in stores:
+        duckdb_cache = getattr(store, "_duckdb_cache", None)
+        if duckdb_cache is None:
+            continue
+        available_fn = getattr(duckdb_cache, "available_dates", None)
+        if not callable(available_fn):
+            continue
+        try:
+            all_dates |= available_fn(sentinel_symbol, start_date, end_date)
+        except Exception:
+            pass
+    return all_dates
+
+
 def _flush_computed_ts_pushes(
     *,
     ts_builder: Any | None,
