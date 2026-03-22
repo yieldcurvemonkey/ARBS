@@ -474,20 +474,6 @@ def _default_tenors_for_curve(curve_name: str, *, anchor_date: dt.date | None = 
     base = list(_EOD_SPOT_OUTRIGHT_TENORS)
     forwards = list(_EOD_FORWARD_START_TENORS)
 
-    # FOMC meeting tenors
-    cb_name = central_bank_for_curve(_curve_reference_id(curve_name))
-    meeting_ranked: list[str] = []
-    meeting_explicit: list[str] = []
-    if cb_name in _CB_TOKEN_PREFIX:
-        cb_prefix = _CB_TOKEN_PREFIX[cb_name]
-        meeting_ranked = [f"{cb_prefix}_{rank}" for rank in range(1, 25)]
-        meeting_map = central_bank_date_map(_curve_reference_id(curve_name))
-        meeting_explicit = [
-            f"{cb_prefix}_{label}"
-            for label, (eff, _mat) in sorted(meeting_map.items(), key=lambda kv: kv[1][0])
-            if pd.Timestamp(eff) >= pd.Timestamp(anchor_date)
-        ]
-
     # IMM pair tenors
     imm_explicit = _explicit_imm_pair_tenors(
         as_of=anchor_date,
@@ -502,8 +488,6 @@ def _default_tenors_for_curve(curve_name: str, *, anchor_date: dt.date | None = 
     return _dedupe_preserve_order(
         base
         + forwards
-        + meeting_ranked
-        + meeting_explicit
         + imm_explicit
         + imm_relative
     )
