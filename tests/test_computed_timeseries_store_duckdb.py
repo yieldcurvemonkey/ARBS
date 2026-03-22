@@ -4,6 +4,7 @@ import datetime
 import time
 from unittest.mock import MagicMock, patch
 
+import duckdb
 import pytest
 
 from Caching.computed_timeseries_store import ComputedTimeseriesStore
@@ -108,6 +109,77 @@ class TestDuckDBFastPath:
         df2 = read_timeseries(None, "IRS::TEST2", start=d2, end=d2, base_dir=str(tmp_path / "ts"))
         assert not df1.empty
         assert not df2.empty
+
+
+class TestGracefulLockFallback:
+    def test_rw_lock_falls_back_to_read_only(self, tmp_path):
+        """When read-write fails but read-only succeeds, cache is read-only."""
+        db_path = str(tmp_path / "fallback_ro.duckdb")
+        # Create the DB so read-only can open it
+        init_conn = duckdb.connect(db_path)
+        init_conn.close()
+
+        _real_connect = duckdb.connect
+
+        def _connect_rw_fails(path, *, read_only=False):
+            if not read_only:
+                raise IOError("Cannot open file: locked by another process")
+            return _real_connect(path, read_only=True)
+
+        with patch("Caching.duckdb_timeseries_cache.duckdb.connect", side_effect=_connect_rw_fails):
+            store = ComputedTimeseriesStore(
+                base_dir=str(tmp_path / "ts"),
+                use_duckdb=True,
+                duckdb_path=db_path,
+            )
+        assert store._duckdb_cache is not None
+        assert store._duckdb_cache.read_only is True
+
+    def test_total_lock_falls_back_to_none(self, tmp_path):
+        """When both read-write and read-only fail, cache is None."""
+        db_path = str(tmp_path / "fallback_none.duckdb")
+
+        def _connect_always_fails(path, *, read_only=False):
+            raise IOError("Cannot open file: locked by another process")
+
+        with patch("Caching.duckdb_timeseries_cache.duckdb.connect", side_effect=_connect_always_fails):
+            store = ComputedTimeseriesStore(
+                base_dir=str(tmp_path / "ts"),
+                use_duckdb=True,
+                duckdb_path=db_path,
+            )
+        assert store._duckdb_cache is None
+
+    def test_total_lock_still_allows_parquet_writes(self, tmp_path):
+        """Even with DuckDB completely locked, parquet writes still work."""
+        db_path = str(tmp_path / "fallback_pq.duckdb")
+
+        def _connect_always_fails(path, *, read_only=False):
+            raise IOError("Cannot open file: locked by another process")
+
+        with patch("Caching.duckdb_timeseries_cache.duckdb.connect", side_effect=_connect_always_fails):
+            store = ComputedTimeseriesStore(
+                base_dir=str(tmp_path / "ts"),
+                use_duckdb=True,
+                duckdb_path=db_path,
+            )
+
+        d = datetime.date(2026, 3, 10)
+        store.append_rows(symbol="IRS::TEST", rows=[(d, "rate", 4.5)])
+
+        from Caching.timeseries_cache import read_timeseries
+        df = read_timeseries(None, "IRS::TEST", start=d, end=d, base_dir=str(tmp_path / "ts"))
+        assert not df.empty
+
+    def test_normal_open_gets_read_write(self, tmp_path):
+        """When no lock contention, DuckDB should open in read-write mode."""
+        store = ComputedTimeseriesStore(
+            base_dir=str(tmp_path / "ts"),
+            use_duckdb=True,
+            duckdb_path=str(tmp_path / "normal.duckdb"),
+        )
+        assert store._duckdb_cache is not None
+        assert store._duckdb_cache.read_only is False
 
 
 class TestRowLevelL2Push:

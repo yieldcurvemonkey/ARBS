@@ -162,3 +162,59 @@ class TestDuckDBTimeseriesCache:
         c2.close()
         assert len(rows) == 1
         assert rows[0][2] == 42.0
+
+    def test_read_only_property(self, tmp_path):
+        db_path = str(tmp_path / "ro_prop.duckdb")
+        rw = DuckDBTimeseriesCache(db_path=db_path)
+        assert rw.read_only is False
+        rw.close()
+
+        ro = DuckDBTimeseriesCache(db_path=db_path, read_only=True)
+        assert ro.read_only is True
+        ro.close()
+
+    def test_read_only_reads_existing_data(self, tmp_path):
+        db_path = str(tmp_path / "ro_read.duckdb")
+        rw = DuckDBTimeseriesCache(db_path=db_path)
+        rw.upsert_rows("SYM", [(datetime.date(2026, 1, 6), "col", 1.0)])
+        rw.close()
+
+        ro = DuckDBTimeseriesCache(db_path=db_path, read_only=True)
+        rows = ro.read_rows("SYM", start=datetime.date(2026, 1, 6), end=datetime.date(2026, 1, 6))
+        assert len(rows) == 1
+        assert rows[0][2] == 1.0
+        ro.close()
+
+    def test_read_only_skips_upsert(self, tmp_path):
+        db_path = str(tmp_path / "ro_skip.duckdb")
+        rw = DuckDBTimeseriesCache(db_path=db_path)
+        rw.upsert_rows("SYM", [(datetime.date(2026, 1, 6), "col", 1.0)])
+        rw.close()
+
+        ro = DuckDBTimeseriesCache(db_path=db_path, read_only=True)
+        count = ro.upsert_rows("SYM", [(datetime.date(2026, 1, 7), "col", 2.0)])
+        assert count == 0
+        rows = ro.read_rows("SYM", start=datetime.date(2026, 1, 6), end=datetime.date(2026, 1, 7))
+        assert len(rows) == 1  # only the original row
+        ro.close()
+
+    def test_read_only_skips_upsert_many(self, tmp_path):
+        db_path = str(tmp_path / "ro_many.duckdb")
+        rw = DuckDBTimeseriesCache(db_path=db_path)
+        rw.close()
+
+        ro = DuckDBTimeseriesCache(db_path=db_path, read_only=True)
+        count = ro.upsert_many_rows({"SYM": [(datetime.date(2026, 1, 6), "col", 1.0)]})
+        assert count == 0
+        ro.close()
+
+    def test_read_only_skips_set_watermark(self, tmp_path):
+        db_path = str(tmp_path / "ro_wm.duckdb")
+        rw = DuckDBTimeseriesCache(db_path=db_path)
+        rw.close()
+
+        ro = DuckDBTimeseriesCache(db_path=db_path, read_only=True)
+        # Should not raise
+        ro.set_watermark("SYM", datetime.datetime(2026, 1, 6, 12, 0, 0))
+        assert ro.get_watermark("SYM") is None
+        ro.close()
