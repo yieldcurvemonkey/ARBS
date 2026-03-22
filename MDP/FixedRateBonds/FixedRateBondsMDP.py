@@ -72,24 +72,51 @@ def _preflight_proxy(proxies: dict | None, timeout: int = 6) -> bool:
         return False
 
 
-def _choose_frb_proxy() -> dict | None:
-    """Pick the next working Nord proxy (round-robin with preflight)."""
+def _init_frb_proxy_state() -> None:
+    """Lazily initialize the process-wide proxy rotation state."""
+    if not _FRB_PROXY_STATE:
+        hosts = list(_NORD_HOSTS)
+        random.shuffle(hosts)
+        _FRB_PROXY_STATE["cycler"] = itertools.cycle(hosts)
+        _FRB_PROXY_STATE["proxies"] = None
+        _FRB_PROXY_STATE["host"] = None
+        _FRB_PROXY_STATE["chosen_at"] = 0.0
+        _FRB_PROXY_STATE["ttl"] = 120
+        _FRB_PROXY_STATE["failures"] = 0
+
+
+def _choose_frb_proxy(*, force_rotate: bool = False) -> dict | None:
+    """Pick the next working Nord proxy (round-robin with preflight).
+
+    Args:
+        force_rotate: If True, invalidate the current proxy and cycle to
+            the next one regardless of TTL. Use after a fetch-time failure.
+    """
     if not _socksio_available():
         return None
 
-    with _FRB_PROXY_LOCK:
-        if not _FRB_PROXY_STATE:
-            hosts = list(_NORD_HOSTS)
-            random.shuffle(hosts)
-            _FRB_PROXY_STATE["cycler"] = itertools.cycle(hosts)
-            _FRB_PROXY_STATE["proxies"] = None
-            _FRB_PROXY_STATE["chosen_at"] = 0.0
-            _FRB_PROXY_STATE["ttl"] = 120
+    import time
 
-        import time
+    with _FRB_PROXY_LOCK:
+        _init_frb_proxy_state()
         now = time.time()
-        if _FRB_PROXY_STATE["proxies"] is not None and (now - _FRB_PROXY_STATE["chosen_at"]) < _FRB_PROXY_STATE["ttl"]:
+
+        # Return cached proxy if still valid and not force-rotating
+        if (
+            not force_rotate
+            and _FRB_PROXY_STATE["proxies"] is not None
+            and (now - _FRB_PROXY_STATE["chosen_at"]) < _FRB_PROXY_STATE["ttl"]
+        ):
             return _FRB_PROXY_STATE["proxies"]
+
+        if force_rotate:
+            old_host = _FRB_PROXY_STATE.get("host")
+            _FRB_PROXY_STATE["failures"] = _FRB_PROXY_STATE.get("failures", 0) + 1
+            _logger.warning(
+                "FRB proxy rotation forced (prev=%s, consecutive_failures=%d)",
+                old_host or "direct",
+                _FRB_PROXY_STATE["failures"],
+            )
 
         # Try each host until one works
         for _ in range(len(_NORD_HOSTS)):
@@ -101,14 +128,91 @@ def _choose_frb_proxy() -> dict | None:
 
             if _preflight_proxy(proxies):
                 _FRB_PROXY_STATE["proxies"] = proxies
+                _FRB_PROXY_STATE["host"] = host
                 _FRB_PROXY_STATE["chosen_at"] = now
+                _FRB_PROXY_STATE["failures"] = 0
                 _logger.info("FRB proxy selected: %s", host or "direct")
                 return proxies
 
         _logger.warning("All Nord proxies failed preflight, falling back to direct")
         _FRB_PROXY_STATE["proxies"] = None
+        _FRB_PROXY_STATE["host"] = None
         _FRB_PROXY_STATE["chosen_at"] = now
         return None
+
+
+def _invalidate_frb_proxy() -> None:
+    """Mark the current proxy as failed so the next call rotates."""
+    with _FRB_PROXY_LOCK:
+        _FRB_PROXY_STATE["chosen_at"] = 0.0
+
+
+def _webull_fetch_with_proxy_fallback(
+    *,
+    cusips: list,
+    start,
+    end,
+    show_tqdm: bool,
+    max_retries: int = 2,
+    error_verbose: bool = True,
+) -> pd.DataFrame:
+    """Fetch Webull intraday data with automatic proxy rotation on failure.
+
+    Tries the current proxy first. On SOCKS5 auth errors, connection
+    failures, or rate-limit responses, rotates to the next proxy and
+    retries up to ``max_retries`` times.
+    """
+    from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
+
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        force_rotate = attempt > 0
+        proxies = _choose_frb_proxy(force_rotate=force_rotate)
+        max_concurrent = 64 if proxies else 32
+
+        try:
+            wb = WebullFintechFetcher(
+                debug_verbose=False,
+                error_verbose=error_verbose,
+                proxies=proxies,
+            )
+            result = wb.intraday_by_cusips(
+                cusips=cusips,
+                start=start,
+                end=end,
+                show_tqdm=show_tqdm,
+                max_concurrent_tasks=max_concurrent,
+                max_keepalive_connections=max_concurrent,
+            )
+            return result
+        except Exception as exc:
+            last_exc = exc
+            exc_str = str(exc).lower()
+            is_proxy_error = any(
+                kw in exc_str
+                for kw in (
+                    "socks",
+                    "proxy",
+                    "authentication",
+                    "connection",
+                    "timeout",
+                    "429",
+                    "too many",
+                    "reset by peer",
+                    "closed",
+                )
+            )
+            if is_proxy_error and attempt < max_retries:
+                _logger.warning(
+                    "Webull fetch attempt %d/%d failed (proxy error): %s — rotating proxy",
+                    attempt + 1, max_retries + 1, exc,
+                )
+                _invalidate_frb_proxy()
+                continue
+            # Non-proxy error or out of retries
+            raise
+
+    raise last_exc  # type: ignore[misc]
 
 DateLike = Union[datetime.date, datetime.datetime, Literal["live"]]
 _BulkOut = Dict[DateLike, Dict[str, "_FixedRateBondGenericPricer"]]
@@ -669,18 +773,16 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
 
                 alias_to_cusip_to_fetch[original] = cusip
 
-            _wb_proxies = _choose_frb_proxy()
-            wb = WebullFintechFetcher(
-                debug_verbose=False,
-                error_verbose=True,
-                proxies=_wb_proxies,
-            )
             t = timestamp
             ny = pytz.timezone("America/New_York")
             start_ny = ny.localize(datetime.datetime(t.year, t.month, t.day, 7, 0, 0)) - BDay(1)
             end_ny = ny.localize(datetime.datetime(t.year, t.month, t.day, 17, 0, 0)) + BDay(1)
-            _wb_max_conc = 64 if _wb_proxies else 32
-            wide = wb.intraday_by_cusips(cusips=list(alias_to_cusip_to_fetch.values()), start=start_ny, end=end_ny, show_tqdm=bool(kwargs.get("show_tqdm", True)), max_concurrent_tasks=_wb_max_conc, max_keepalive_connections=_wb_max_conc)
+            wide = _webull_fetch_with_proxy_fallback(
+                cusips=list(alias_to_cusip_to_fetch.values()),
+                start=start_ny,
+                end=end_ny,
+                show_tqdm=bool(kwargs.get("show_tqdm", True)),
+            )
             print(wide)
             for original, cusip in alias_to_cusip_to_fetch.items():
                 for curr_ts, ytm in wide[cusip].items():
@@ -1123,10 +1225,11 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                     return cached
                 return self._build_pricer_from_args(cached, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
 
-            ts_quote_df = WebullFintechFetcher(proxies=_choose_frb_proxy()).intraday_by_cusips(
+            ts_quote_df = _webull_fetch_with_proxy_fallback(
                 cusips=[cusip],
                 start=timestamp,
                 end=timestamp,
+                show_tqdm=False,
             )
             meta_data["timestamp"] = timestamp.isoformat()
             args = {
@@ -1227,21 +1330,11 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
             len(unique_cusips), start_ny.isoformat(), end_ny.isoformat(), len(intraday_timestamps),
         )
         try:
-            proxies = _choose_frb_proxy()
-            wb = WebullFintechFetcher(
-                debug_verbose=False,
-                error_verbose=True,
-                proxies=proxies,
-            )
-            # Higher concurrency through Nord proxy to avoid per-IP rate limits
-            max_concurrent = 64 if proxies else 32
-            wide: pd.DataFrame = wb.intraday_by_cusips(
+            wide: pd.DataFrame = _webull_fetch_with_proxy_fallback(
                 cusips=unique_cusips,
                 start=start_ny,
                 end=end_ny,
                 show_tqdm=show_tqdm,
-                max_concurrent_tasks=max_concurrent,
-                max_keepalive_connections=max_concurrent,
             )
         except Exception as ex:
             _logger.warning("RL prefetch: Webull fetch failed, falling back to per-timestamp: %s", ex)
@@ -1634,21 +1727,12 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                         start_ny = ny.localize(datetime.datetime(ts.year, ts.month, ts.day, 7, 0, 0)) - BDay(1)
                         end_ny = ny.localize(datetime.datetime(ts.year, ts.month, ts.day, 17, 0, 0)) + BDay(1)
 
-                        _wb_proxies = _choose_frb_proxy()
-                        wb = WebullFintechFetcher(
-                            debug_verbose=False,
-                            error_verbose=True,
-                            proxies=_wb_proxies,
-                        )
-                        _wb_max_conc = 64 if _wb_proxies else 32
-                        wide: pd.DataFrame = wb.intraday_by_cusips(
+                        wide: pd.DataFrame = _webull_fetch_with_proxy_fallback(
                             cusips=list(to_fetch.values()),
                             start=start_ny,
                             end=end_ny,
                             show_tqdm=show_tqdm,
-                            max_concurrent_tasks=_wb_max_conc,
-                            max_keepalive_connections=_wb_max_conc,
-                        )  # batched async underneath
+                        )
 
                         # Persist all timeslices to cache (same scheme as your RL branch)
                         for original, cusip in to_fetch.items():
