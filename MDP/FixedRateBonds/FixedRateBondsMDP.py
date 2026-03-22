@@ -1908,39 +1908,81 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 cache = getattr(self, self._FRB_PRICER_CACHE)
                 hit_count = 0
                 miss_count = 0
+                skipped_count = 0
 
-                iterable = timestamps
-                if show_tqdm:
-                    iterable = tqdm.tqdm(iterable, desc="BUILDING PRICERS FROM CACHE")
+                # Filter timestamps to valid Webull session hours (7:00-17:00 ET)
+                # to avoid pointless cache lookups for overnight timestamps.
+                _session_open = datetime.time(7, 0)
+                _session_close = datetime.time(17, 0)
+                ny = pytz.timezone("America/New_York")
 
-                for ts in iterable:
+                def _in_session(ts):
+                    if not isinstance(ts, datetime.datetime):
+                        return True  # dates always valid
+                    t = ts.astimezone(ny).time() if ts.tzinfo else ts.time()
+                    return _session_open <= t <= _session_close
+
+                valid_timestamps = []
+                for ts in timestamps:
                     if not isinstance(ts, datetime.datetime) or _is_live(ts):
                         # Non-intraday or live — fall through to _process_one
-                        jobs_fallback = [(ts, base_cusips)]
-                        for ts_fb, syms_fb in jobs_fallback:
-                            out[ts_fb].update(_process_one(ts_fb, syms_fb)[1])
-                        continue
+                        out[ts].update(_process_one(ts, base_cusips)[1])
+                    elif _in_session(ts):
+                        valid_timestamps.append(ts)
+                    else:
+                        skipped_count += 1
 
-                    result: Dict[str, "_FixedRateBondGenericPricer"] = {}
-                    for original, cusip in alias_to_cusip.items():
-                        cache_key = f"{ts.isoformat()}-{cusip}-{self.source.upper()}"
-                        hit = cache.get(cache_key)
+                if skipped_count:
+                    _logger.info(
+                        "RL fast path: skipped %d timestamps outside session (%s-%s ET), %d valid",
+                        skipped_count, _session_open, _session_close, len(valid_timestamps),
+                    )
+
+                # Batch cache reads: read all keys at once, then build pricers
+                source_upper = self.source.upper()
+                alias_items = list(alias_to_cusip.items())
+
+                # Pre-read all cache keys in one pass per alias
+                ts_args: list[tuple[DateLike, str, dict]] = []  # (ts, original, args_dict)
+                for original, cusip in alias_items:
+                    keys = [f"{ts.isoformat()}-{cusip}-{source_upper}" for ts in valid_timestamps]
+                    for ts, key in zip(valid_timestamps, keys):
+                        hit = cache.get(key)
                         if hit is not None:
                             if hasattr(hit, "__class__") and hit.__class__.__name__ == "RLFixedRateBondPricer":
-                                result[original] = hit
+                                out[ts][original] = hit
                             else:
-                                result[original] = self._build_pricer_from_args(
-                                    hit, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn"
-                                )
+                                ts_args.append((ts, original, hit))
                             hit_count += 1
                         else:
                             miss_count += 1
-                    if result:
-                        out[ts].update(result)
+
+                # Parallelize pricer construction from args dicts
+                if ts_args:
+                    def _build(item):
+                        ts, original, args = item
+                        return ts, original, self._build_pricer_from_args(
+                            args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn"
+                        )
+
+                    build_workers = min(max_workers, len(ts_args))
+                    if build_workers > 1:
+                        with ThreadPoolExecutor(max_workers=build_workers, thread_name_prefix="frb-build") as pool:
+                            build_iter = pool.map(_build, ts_args, chunksize=max(1, len(ts_args) // (build_workers * 4)))
+                            if show_tqdm:
+                                build_iter = tqdm.tqdm(build_iter, total=len(ts_args), desc="BUILDING PRICERS FROM CACHE")
+                            for ts, original, pricer in build_iter:
+                                out[ts][original] = pricer
+                    else:
+                        build_iter = ((_build(item) for item in ts_args))
+                        if show_tqdm:
+                            build_iter = tqdm.tqdm(build_iter, total=len(ts_args), desc="BUILDING PRICERS FROM CACHE")
+                        for ts, original, pricer in build_iter:
+                            out[ts][original] = pricer
 
                 _logger.info(
-                    "RL fast path: %d cache hits, %d misses across %d timestamps",
-                    hit_count, miss_count, len(timestamps),
+                    "RL fast path: %d cache hits, %d misses, %d skipped (out-of-session) across %d timestamps",
+                    hit_count, miss_count, skipped_count, len(timestamps),
                 )
                 return dict(out)
 
