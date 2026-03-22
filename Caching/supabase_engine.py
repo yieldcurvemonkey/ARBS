@@ -7,6 +7,10 @@ Configuration precedence:
        pooler values used by the SwapPulse ingest scripts
 
 Set ``ARBS_SUPABASE_ENABLED=0`` to disable the CORE cache L2 explicitly.
+
+Pool sizing env vars (optional overrides):
+    ``ARBS_SUPABASE_POOL_SIZE``      — base pool connections (default: scales with worker count)
+    ``ARBS_SUPABASE_POOL_OVERFLOW``  — extra overflow connections (default: scales with worker count)
 """
 
 from __future__ import annotations
@@ -19,6 +23,18 @@ from typing import Optional
 from sqlalchemy import Engine, create_engine
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    """Read a positive integer from an env var, with a floor."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        return default
+
 
 DEFAULT_DB_HOST = "aws-0-us-east-1.pooler.supabase.com"
 DEFAULT_DB_PORT = "6543"
@@ -52,6 +68,11 @@ SUPABASE_ENABLED: bool = _env_enabled("ARBS_SUPABASE_ENABLED", True)
 _DATABASE_URL: Optional[str] = get_database_url() if SUPABASE_ENABLED else None
 SUPABASE_ENABLED = SUPABASE_ENABLED and bool(_DATABASE_URL)
 
+# Pool sizing scales with L2 write workers so background writes don't starve reads.
+_L2_WRITE_WORKERS = _env_int("ARBS_SUPABASE_WRITE_WORKERS", 4)
+_POOL_SIZE = _env_int("ARBS_SUPABASE_POOL_SIZE", max(3, _L2_WRITE_WORKERS + 1))
+_POOL_OVERFLOW = _env_int("ARBS_SUPABASE_POOL_OVERFLOW", max(2, _L2_WRITE_WORKERS))
+
 _engine: Optional[Engine] = None
 _lock = threading.Lock()
 
@@ -68,13 +89,19 @@ def get_engine() -> Optional[Engine]:
             return _engine
         _engine = create_engine(
             _DATABASE_URL,
-            pool_size=3,
-            max_overflow=2,
+            pool_size=_POOL_SIZE,
+            max_overflow=_POOL_OVERFLOW,
             pool_timeout=30,
             pool_recycle=1800,
             pool_pre_ping=True,
+            executemany_mode="values_list",
         )
-        logger.info("ARBS Supabase engine created: %s", _DATABASE_URL.split("@")[-1])
+        logger.info(
+            "ARBS Supabase engine created: %s (pool=%d+%d)",
+            _DATABASE_URL.split("@")[-1],
+            _POOL_SIZE,
+            _POOL_OVERFLOW,
+        )
         return _engine
 
 

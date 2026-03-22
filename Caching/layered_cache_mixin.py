@@ -41,8 +41,10 @@ def _env_positive_int(name: str, default: int) -> int:
         return default
 
 
-_DEFAULT_L2_WRITE_WORKERS = _env_positive_int("ARBS_SUPABASE_WRITE_WORKERS", 1)
-_DEFAULT_L2_WRITE_QUEUE_SIZE = _env_positive_int("ARBS_SUPABASE_WRITE_QUEUE_SIZE", 512)
+_DEFAULT_L2_WRITE_WORKERS = _env_positive_int("ARBS_SUPABASE_WRITE_WORKERS", 4)
+_DEFAULT_L2_WRITE_QUEUE_SIZE = _env_positive_int("ARBS_SUPABASE_WRITE_QUEUE_SIZE", 4096)
+_DEFAULT_L2_WRITE_BATCH_SIZE = _env_positive_int("ARBS_SUPABASE_WRITE_BATCH_SIZE", 50)
+_DEFAULT_L2_WRITE_TIMEOUT: float = max(0.0, float(os.environ.get("ARBS_SUPABASE_WRITE_TIMEOUT", "0.1")))
 
 
 class LayeredDictProxy(MutableMapping):
@@ -50,9 +52,17 @@ class LayeredDictProxy(MutableMapping):
 
     _L2_WRITE_WORKER_COUNT: ClassVar[int] = _DEFAULT_L2_WRITE_WORKERS
     _L2_WRITE_QUEUE_MAXSIZE: ClassVar[int] = _DEFAULT_L2_WRITE_QUEUE_SIZE
-    _L2_WRITE_QUEUE: ClassVar[queue.Queue[tuple[str, str, str, Any]] | None] = None
+    _L2_WRITE_BATCH_SIZE: ClassVar[int] = _DEFAULT_L2_WRITE_BATCH_SIZE
+    _L2_WRITE_TIMEOUT: ClassVar[float] = _DEFAULT_L2_WRITE_TIMEOUT
+    _L2_WRITE_QUEUE: ClassVar[queue.Queue[tuple[str, str, str, bytes, str]] | None] = None
     _L2_WRITE_WORKERS_STARTED: ClassVar[bool] = False
     _L2_WRITE_LOCK: ClassVar[threading.Lock] = threading.Lock()
+
+    # Throughput stats (approximate — no lock on increment, only on periodic log)
+    _L2_WRITES_OK: ClassVar[int] = 0
+    _L2_WRITES_DROPPED: ClassVar[int] = 0
+    _L2_LAST_STATS_LOG: ClassVar[float] = 0.0
+    _L2_STATS_INTERVAL: ClassVar[float] = 60.0
 
     def __init__(
         self,
@@ -186,7 +196,7 @@ class LayeredDictProxy(MutableMapping):
             return None
 
     @classmethod
-    def _ensure_l2_write_workers(cls) -> queue.Queue[tuple[str, str, str, Any]]:
+    def _ensure_l2_write_workers(cls) -> queue.Queue[tuple[str, str, str, bytes, str]]:
         work_queue = cls._L2_WRITE_QUEUE
         if work_queue is not None and cls._L2_WRITE_WORKERS_STARTED:
             return work_queue
@@ -198,8 +208,6 @@ class LayeredDictProxy(MutableMapping):
                 cls._L2_WRITE_QUEUE = work_queue
 
             if not cls._L2_WRITE_WORKERS_STARTED:
-                # Keep background writes below the SQLAlchemy pool size so cache bursts
-                # cannot starve foreground reads or calibrations.
                 for idx in range(cls._L2_WRITE_WORKER_COUNT):
                     worker = threading.Thread(
                         target=cls._l2_write_worker,
@@ -213,9 +221,18 @@ class LayeredDictProxy(MutableMapping):
             return work_queue
 
     @classmethod
-    def _l2_write_worker(cls, work_queue: queue.Queue[tuple[str, str, str, Any]]) -> None:
+    def _l2_write_worker(cls, work_queue: queue.Queue[tuple[str, str, str, bytes, str]]) -> None:
+        """Drain batches from the queue and execute multi-row UPSERTs."""
+        batch_size = cls._L2_WRITE_BATCH_SIZE
         while True:
-            ns, cache_key, key_repr, value = work_queue.get()
+            # Block on first item
+            batch = [work_queue.get()]
+            # Drain up to batch_size - 1 more without blocking
+            for _ in range(batch_size - 1):
+                try:
+                    batch.append(work_queue.get_nowait())
+                except queue.Empty:
+                    break
             try:
                 from Caching.supabase_schema import ensure_schema
                 from Caching.supabase_engine import get_engine
@@ -226,7 +243,18 @@ class LayeredDictProxy(MutableMapping):
                 engine = get_engine()
                 if engine is None:
                     continue
-                payload = _pickle_impl.dumps(value)
+
+                params = [
+                    {
+                        "ns": ns,
+                        "key": cache_key,
+                        "repr": key_repr,
+                        "payload": payload_bytes,
+                        "serializer": serializer,
+                    }
+                    for ns, cache_key, key_repr, payload_bytes, serializer in batch
+                ]
+
                 with engine.begin() as conn:
                     conn.execute(
                         text("""
@@ -239,26 +267,63 @@ class LayeredDictProxy(MutableMapping):
                                 key_repr = EXCLUDED.key_repr,
                                 updated_at = NOW()
                         """),
-                        {
-                            "ns": ns,
-                            "key": cache_key,
-                            "repr": key_repr,
-                            "payload": payload,
-                            "serializer": _DEFAULT_SERIALIZER,
-                        },
+                        params,
                     )
             except Exception:
-                logger.warning("L2 set failed for %s/%s", ns, cache_key[:12], exc_info=True)
+                logger.warning(
+                    "L2 batch set failed (%d items, first key %s)",
+                    len(batch),
+                    batch[0][1][:12] if batch else "?",
+                    exc_info=True,
+                )
             finally:
-                work_queue.task_done()
+                for _ in batch:
+                    work_queue.task_done()
+            cls._maybe_log_stats(len(batch))
 
     def _l2_set_async(self, cache_key: str, key: Any, value: Any) -> None:
-        """Queue best-effort L2 UPSERTs onto a bounded shared worker pool."""
-        work_queue = type(self)._ensure_l2_write_workers()
+        """Queue best-effort L2 UPSERTs onto a bounded shared worker pool.
+
+        Serialization happens here (caller thread) so workers only do I/O.
+        A brief timeout provides backpressure before dropping writes.
+        """
         try:
-            work_queue.put_nowait((self._ns, cache_key, repr(key)[:500], value))
+            payload_bytes = _pickle_impl.dumps(value)
+        except Exception:
+            logger.warning("L2 serialization failed for %s/%s", self._ns, cache_key[:12], exc_info=True)
+            return
+
+        cls = type(self)
+        work_queue = cls._ensure_l2_write_workers()
+        item = (self._ns, cache_key, repr(key)[:500], payload_bytes, _DEFAULT_SERIALIZER)
+        try:
+            timeout = cls._L2_WRITE_TIMEOUT
+            if timeout > 0:
+                work_queue.put(item, timeout=timeout)
+            else:
+                work_queue.put_nowait(item)
+            cls._L2_WRITES_OK += 1
         except queue.Full:
+            cls._L2_WRITES_DROPPED += 1
             logger.warning("L2 write queue full; dropping write for %s/%s", self._ns, cache_key[:12])
+
+    @classmethod
+    def _maybe_log_stats(cls, batch_len: int) -> None:
+        """Periodically log L2 write throughput stats."""
+        now = time.time()
+        if now - cls._L2_LAST_STATS_LOG < cls._L2_STATS_INTERVAL:
+            return
+        # Double-check under lock to avoid duplicate log lines
+        if now - cls._L2_LAST_STATS_LOG < cls._L2_STATS_INTERVAL:
+            return
+        cls._L2_LAST_STATS_LOG = now
+        logger.info(
+            "L2 write stats: queued=%d dropped=%d queue_depth=%d last_batch=%d",
+            cls._L2_WRITES_OK,
+            cls._L2_WRITES_DROPPED,
+            cls._L2_WRITE_QUEUE.qsize() if cls._L2_WRITE_QUEUE else 0,
+            batch_len,
+        )
 
     def _deserialize(self, payload: bytes, serializer: str) -> Any:
         """Deserialize L2 payload."""
