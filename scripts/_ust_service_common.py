@@ -56,6 +56,10 @@ DEFAULT_UNIVERSE = "otr-plus-old"
 # Original-issue buckets supported by fiscaldata reference data
 _OI_TENORS = (2, 3, 5, 7, 10, 20, 30)
 
+# 20-year Treasury was reintroduced in May 2020; aliases for tenor 20
+# should be excluded for dates before this.
+_20Y_REINTRO_DATE = dt.date(2020, 5, 20)
+
 _BENCHMARK_ALIASES = tuple(f"CT{t}" for t in _OI_TENORS)
 
 _OTR_PLUS_OLD_ALIASES = tuple(
@@ -84,10 +88,11 @@ def resolve_bond_universe(
     )
 
     tier_lower = tier.lower().replace("_", "-")
+    exclude_20y = as_of_date < _20Y_REINTRO_DATE
     if tier_lower == "benchmarks":
-        aliases = list(_BENCHMARK_ALIASES)
+        aliases = [a for a in _BENCHMARK_ALIASES if not (exclude_20y and a.endswith("20"))]
     elif tier_lower in ("otr-plus-old", "otr_plus_old"):
-        aliases = list(_OTR_PLUS_OLD_ALIASES)
+        aliases = [a for a in _OTR_PLUS_OLD_ALIASES if not (exclude_20y and a.endswith("20"))]
     elif tier_lower in ("full-active", "full_active"):
         ref_df = update_reference_data(source=source, force_refresh=False)
         ref_df = ref_df[
