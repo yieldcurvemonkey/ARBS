@@ -1,15 +1,21 @@
 import contextlib
 import datetime
+import importlib.util
+import itertools
 import logging
+import os
+import random
 import re
 import threading
 from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, Union
+from urllib.parse import quote as urlquote
 
 import pandas as pd
 import pytz
 import QuantLib as ql
+import requests
 import tqdm
 
 from Caching.layered_cache_mixin import LayeredCacheMixin
@@ -18,6 +24,91 @@ from Query.Base._GenericPricable import _GenericPricable
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 
 _logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Nord proxy helpers (mirrors STIRFutureMDP pattern)
+# ---------------------------------------------------------------------------
+_NORD_HOSTS = [
+    "atlanta.us.socks.nordhold.net",
+    "chicago.us.socks.nordhold.net",
+    "dallas.us.socks.nordhold.net",
+    "los-angeles.us.socks.nordhold.net",
+    "new-york.us.socks.nordhold.net",
+    "phoenix.us.socks.nordhold.net",
+    "san-francisco.us.socks.nordhold.net",
+    "us.socks.nordhold.net",
+    None,  # allow direct
+]
+
+_FRB_PROXY_STATE: Dict[str, Any] = {}
+_FRB_PROXY_LOCK = threading.RLock()
+
+
+def _socksio_available() -> bool:
+    return importlib.util.find_spec("socksio") is not None
+
+
+def _build_socks5h(host: str) -> dict:
+    user = os.getenv("NORDVPN_USER", "3G5mmfKXWfCGFGT4yDL34Tzn")
+    pwd = os.getenv("NORDVPN_PASS", "VN33uViQZp6pXVzdgsGskhNg")
+    if not user or not pwd:
+        raise ValueError("Missing NORDVPN_USER/NORDVPN_PASS in environment.")
+    url = f"socks5h://{urlquote(user, safe='')}:{urlquote(pwd, safe='')}@{host}:1080"
+    return {"http": url, "https": url}
+
+
+def _preflight_proxy(proxies: dict | None, timeout: int = 6) -> bool:
+    try:
+        r = requests.get(
+            "https://api.ipify.org?format=json",
+            proxies=proxies,
+            timeout=timeout,
+            headers={"Connection": "close"},
+        )
+        r.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
+def _choose_frb_proxy() -> dict | None:
+    """Pick the next working Nord proxy (round-robin with preflight)."""
+    if not _socksio_available():
+        return None
+
+    with _FRB_PROXY_LOCK:
+        if not _FRB_PROXY_STATE:
+            hosts = list(_NORD_HOSTS)
+            random.shuffle(hosts)
+            _FRB_PROXY_STATE["cycler"] = itertools.cycle(hosts)
+            _FRB_PROXY_STATE["proxies"] = None
+            _FRB_PROXY_STATE["chosen_at"] = 0.0
+            _FRB_PROXY_STATE["ttl"] = 120
+
+        import time
+        now = time.time()
+        if _FRB_PROXY_STATE["proxies"] is not None and (now - _FRB_PROXY_STATE["chosen_at"]) < _FRB_PROXY_STATE["ttl"]:
+            return _FRB_PROXY_STATE["proxies"]
+
+        # Try each host until one works
+        for _ in range(len(_NORD_HOSTS)):
+            host = next(_FRB_PROXY_STATE["cycler"])
+            if host is None:
+                proxies = None
+            else:
+                proxies = _build_socks5h(host)
+
+            if _preflight_proxy(proxies):
+                _FRB_PROXY_STATE["proxies"] = proxies
+                _FRB_PROXY_STATE["chosen_at"] = now
+                _logger.info("FRB proxy selected: %s", host or "direct")
+                return proxies
+
+        _logger.warning("All Nord proxies failed preflight, falling back to direct")
+        _FRB_PROXY_STATE["proxies"] = None
+        _FRB_PROXY_STATE["chosen_at"] = now
+        return None
 
 DateLike = Union[datetime.date, datetime.datetime, Literal["live"]]
 _BulkOut = Dict[DateLike, Dict[str, "_FixedRateBondGenericPricer"]]
@@ -578,12 +669,18 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
 
                 alias_to_cusip_to_fetch[original] = cusip
 
-            wb = WebullFintechFetcher(debug_verbose=False, error_verbose=True)
+            _wb_proxies = _choose_frb_proxy()
+            wb = WebullFintechFetcher(
+                debug_verbose=False,
+                error_verbose=True,
+                proxies=_wb_proxies,
+            )
             t = timestamp
             ny = pytz.timezone("America/New_York")
             start_ny = ny.localize(datetime.datetime(t.year, t.month, t.day, 7, 0, 0)) - BDay(1)
             end_ny = ny.localize(datetime.datetime(t.year, t.month, t.day, 17, 0, 0)) + BDay(1)
-            wide = wb.intraday_by_cusips(cusips=list(alias_to_cusip_to_fetch.values()), start=start_ny, end=end_ny, show_tqdm=bool(kwargs.get("show_tqdm", True)))
+            _wb_max_conc = 64 if _wb_proxies else 32
+            wide = wb.intraday_by_cusips(cusips=list(alias_to_cusip_to_fetch.values()), start=start_ny, end=end_ny, show_tqdm=bool(kwargs.get("show_tqdm", True)), max_concurrent_tasks=_wb_max_conc, max_keepalive_connections=_wb_max_conc)
             print(wide)
             for original, cusip in alias_to_cusip_to_fetch.items():
                 for curr_ts, ytm in wide[cusip].items():
@@ -1026,7 +1123,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                     return cached
                 return self._build_pricer_from_args(cached, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
 
-            ts_quote_df = WebullFintechFetcher().intraday_by_cusips(
+            ts_quote_df = WebullFintechFetcher(proxies=_choose_frb_proxy()).intraday_by_cusips(
                 cusips=[cusip],
                 start=timestamp,
                 end=timestamp,
@@ -1130,12 +1227,21 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
             len(unique_cusips), start_ny.isoformat(), end_ny.isoformat(), len(intraday_timestamps),
         )
         try:
-            wb = WebullFintechFetcher(debug_verbose=False, error_verbose=True)
+            proxies = _choose_frb_proxy()
+            wb = WebullFintechFetcher(
+                debug_verbose=False,
+                error_verbose=True,
+                proxies=proxies,
+            )
+            # Higher concurrency through Nord proxy to avoid per-IP rate limits
+            max_concurrent = 64 if proxies else 32
             wide: pd.DataFrame = wb.intraday_by_cusips(
                 cusips=unique_cusips,
                 start=start_ny,
                 end=end_ny,
                 show_tqdm=show_tqdm,
+                max_concurrent_tasks=max_concurrent,
+                max_keepalive_connections=max_concurrent,
             )
         except Exception as ex:
             _logger.warning("RL prefetch: Webull fetch failed, falling back to per-timestamp: %s", ex)
@@ -1528,12 +1634,20 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                         start_ny = ny.localize(datetime.datetime(ts.year, ts.month, ts.day, 7, 0, 0)) - BDay(1)
                         end_ny = ny.localize(datetime.datetime(ts.year, ts.month, ts.day, 17, 0, 0)) + BDay(1)
 
-                        wb = WebullFintechFetcher(debug_verbose=False, error_verbose=True)
+                        _wb_proxies = _choose_frb_proxy()
+                        wb = WebullFintechFetcher(
+                            debug_verbose=False,
+                            error_verbose=True,
+                            proxies=_wb_proxies,
+                        )
+                        _wb_max_conc = 64 if _wb_proxies else 32
                         wide: pd.DataFrame = wb.intraday_by_cusips(
                             cusips=list(to_fetch.values()),
                             start=start_ny,
                             end=end_ny,
                             show_tqdm=show_tqdm,
+                            max_concurrent_tasks=_wb_max_conc,
+                            max_keepalive_connections=_wb_max_conc,
                         )  # batched async underneath
 
                         # Persist all timeslices to cache (same scheme as your RL branch)
