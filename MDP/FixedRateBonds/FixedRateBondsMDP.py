@@ -1357,6 +1357,109 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                         result[original] = self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
                     return ts, result
 
+                # -------------------- RL path (FedInvest/WSJ) --------------------
+                elif self.source.upper() == "USTS_FEDINVEST_WSJ_LIVE-RL":
+                    from MDP.FixedRateBonds.WSJ.WSJFetcher import WSJFetcher, get_isin_from_cusip
+                    from Query.FixedRateBonds.backends.rateslib.RLFixedRateBondPricer import RLFixedRateBondPricer
+
+                    is_live = _is_live(ts)
+                    wsj_buffer = self._wsj_buffer_date()
+                    ts_qldate = _ts_to_ql_date(ts)
+                    in_wsj_buffer = ts_qldate > wsj_buffer
+
+                    if is_live:
+                        wsj = WSJFetcher()
+                        live_data = wsj.fetch_live_ust_quotes(cusips=list(alias_to_cusip.values()))
+                        for original, cusip in alias_to_cusip.items():
+                            try:
+                                meta = dict(meta_by_cusip[cusip])
+                                meta["timestamp"] = live_data[cusip]["timestamp"]
+                                result[original] = RLFixedRateBondPricer(
+                                    rl_frb_id="USTS",
+                                    reference_date=live_data[cusip]["timestamp"].date(),
+                                    issue_date=meta["issue_date"],
+                                    maturity_date=meta["maturity_date"],
+                                    cpn=meta["cpn"],
+                                    ytm=float(live_data[cusip]["ytm"]),
+                                    meta_data=meta,
+                                )
+                            except Exception:
+                                pass
+                        return ts, result
+
+                    if in_wsj_buffer:
+                        wsj = WSJFetcher()
+                        mapping = {get_isin_from_cusip(c, "US")[2:]: c for c in alias_to_cusip.values()}
+                        wide = wsj.ust_intraday_timeseries(mapping, show_tqdm=show_tqdm)
+
+                        est = pytz.timezone("America/New_York")
+                        assert isinstance(ts, datetime.date) and not isinstance(ts, datetime.datetime)
+                        t_3pm = est.localize(datetime.datetime(ts.year, ts.month, ts.day, 15, 0, 0)).astimezone(pytz.UTC)
+                        idx = wide.index
+                        pos = idx.get_indexer([t_3pm], method="nearest")[0]
+                        nearest_ts = idx[pos]
+                        if abs(nearest_ts - t_3pm) > pd.Timedelta("120min"):
+                            raise ValueError("No intraday snapshot within 120min of 3pm ET")
+
+                        for original, cusip in alias_to_cusip.items():
+                            try:
+                                y = wide[cusip].iloc[pos]
+                                if pd.isna(y):
+                                    col = wide[cusip].dropna()
+                                    if col.empty:
+                                        raise ValueError(f"No intraday data for {cusip} near 3pm")
+                                    nearest_ts = col.index[col.index.get_indexer([t_3pm], method="nearest")[0]]
+                                    y = col.loc[nearest_ts]
+                                meta = dict(meta_by_cusip[cusip])
+                                meta["timestamp"] = nearest_ts
+                                result[original] = RLFixedRateBondPricer(
+                                    rl_frb_id="USTS",
+                                    reference_date=nearest_ts.date(),
+                                    issue_date=meta["issue_date"],
+                                    maturity_date=meta["maturity_date"],
+                                    cpn=meta["cpn"],
+                                    ytm=float(y),
+                                    meta_data=meta,
+                                )
+                            except Exception:
+                                pass
+                        return ts, result
+
+                    # Historical daily close via FedInvest
+                    from pandas.tseries.offsets import BDay
+
+                    timestamp_dt = datetime.datetime(as_of_ref.year, as_of_ref.month, as_of_ref.day)
+
+                    self._ensure_pricer_cache()
+                    cache = getattr(self, self._FRB_PRICER_CACHE)
+
+                    fi_map = self.fi.runner(dates=[timestamp_dt], refresh_cache=force_refresh)
+                    fi_df = fi_map.get(timestamp_dt)
+                    if fi_df is None or fi_df.empty:
+                        raise KeyError(f"No FedInvest snapshot for {as_of_ref} (key: {timestamp_dt})")
+
+                    fi_df = fi_df.set_index("cusip")
+
+                    for original, cusip in alias_to_cusip.items():
+                        try:
+                            clean_price = float(fi_df.loc[cusip]["eod_price"])
+                        except Exception:
+                            continue
+
+                        meta = self._pyify_meta(meta_by_cusip[cusip])
+                        args = {
+                            "rl_frb_id": "USTS",
+                            "reference_date": as_of_ref.isoformat(),
+                            "clean_price": clean_price,
+                            "meta_data": meta,
+                            "schema": 2,
+                            "source": "fedinvest",
+                        }
+                        cache_key = f"{as_of_ref.isoformat()}-{cusip}-{self.source.upper()}"
+                        self._threadsafe_cache_put(cache_key, args)
+                        result[original] = self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
+                    return ts, result
+
                 # -------------------- RL path (Webull/WSJ live) --------------------
                 elif self.source.upper() == "USTS_WEBULL_WSJ_LIVE-RL":
                     from pandas.tseries.offsets import BDay
