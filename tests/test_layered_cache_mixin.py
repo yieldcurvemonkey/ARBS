@@ -229,6 +229,13 @@ class TestLayeredDictProxyL2Fallback:
         assert LayeredDictProxy._L2_WRITE_QUEUE is not None
         assert LayeredDictProxy._L2_WRITE_QUEUE.qsize() == 2
 
+        # Items are now pre-serialized 5-tuples
+        item = LayeredDictProxy._L2_WRITE_QUEUE.get_nowait()
+        assert len(item) == 5
+        ns, cache_key, key_repr, payload_bytes, serializer = item
+        assert isinstance(payload_bytes, bytes)
+        assert serializer in ("cloudpickle", "pickle")
+
     def test_async_writer_drops_when_queue_is_full(self, tmp_path, monkeypatch):
         monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
         monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
@@ -242,8 +249,129 @@ class TestLayeredDictProxyL2Fallback:
             def put_nowait(self, item):
                 raise queue.Full
 
+            def put(self, item, timeout=None):
+                raise queue.Full
+
         with patch.object(type(c.my_cache), "_ensure_l2_write_workers", return_value=FullQueue()):
             with patch("Caching.layered_cache_mixin.logger.warning") as mock_warning:
                 c.my_cache._l2_set_async("cache-key-1", "key1", "value1")
 
         mock_warning.assert_called_once()
+
+    def test_serialization_happens_before_enqueue(self, tmp_path, monkeypatch):
+        """Payload is pre-serialized to bytes before hitting the queue."""
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        import importlib
+        import Caching.supabase_engine as eng
+        importlib.reload(eng)
+
+        from Caching.layered_cache_mixin import LayeredDictProxy
+
+        c = _make_consumer(tmp_path, l2_enabled=True, l2_write=True)
+        monkeypatch.setattr(LayeredDictProxy, "_L2_WRITE_QUEUE", None)
+        monkeypatch.setattr(LayeredDictProxy, "_L2_WRITE_WORKERS_STARTED", False)
+
+        class DummyThread:
+            def __init__(self, *args, **kwargs):
+                pass
+            def start(self):
+                pass
+
+        with patch("Caching.layered_cache_mixin.threading.Thread", side_effect=DummyThread):
+            c.my_cache._l2_set_async("cache-key", "key", {"complex": [1, 2, 3]})
+
+        item = LayeredDictProxy._L2_WRITE_QUEUE.get_nowait()
+        ns, cache_key, key_repr, payload_bytes, serializer = item
+        assert isinstance(payload_bytes, bytes)
+        assert len(payload_bytes) > 0
+
+    def test_backpressure_timeout_before_drop(self, tmp_path, monkeypatch):
+        """With timeout > 0, put() is called with timeout instead of put_nowait()."""
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        import importlib
+        import Caching.supabase_engine as eng
+        importlib.reload(eng)
+
+        from Caching.layered_cache_mixin import LayeredDictProxy
+
+        c = _make_consumer(tmp_path, l2_enabled=True, l2_write=True)
+
+        put_calls = []
+
+        class TrackingQueue:
+            def put(self, item, timeout=None):
+                put_calls.append(("put", timeout))
+            def put_nowait(self, item):
+                put_calls.append(("put_nowait", None))
+
+        monkeypatch.setattr(LayeredDictProxy, "_L2_WRITE_TIMEOUT", 0.1)
+        with patch.object(type(c.my_cache), "_ensure_l2_write_workers", return_value=TrackingQueue()):
+            c.my_cache._l2_set_async("cache-key", "key", "value")
+
+        assert len(put_calls) == 1
+        assert put_calls[0][0] == "put"
+        assert put_calls[0][1] == 0.1
+
+    def test_zero_timeout_uses_put_nowait(self, tmp_path, monkeypatch):
+        """With timeout == 0, put_nowait() is used for non-blocking behavior."""
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        import importlib
+        import Caching.supabase_engine as eng
+        importlib.reload(eng)
+
+        from Caching.layered_cache_mixin import LayeredDictProxy
+
+        c = _make_consumer(tmp_path, l2_enabled=True, l2_write=True)
+
+        put_calls = []
+
+        class TrackingQueue:
+            def put(self, item, timeout=None):
+                put_calls.append(("put", timeout))
+            def put_nowait(self, item):
+                put_calls.append(("put_nowait", None))
+
+        monkeypatch.setattr(LayeredDictProxy, "_L2_WRITE_TIMEOUT", 0.0)
+        with patch.object(type(c.my_cache), "_ensure_l2_write_workers", return_value=TrackingQueue()):
+            c.my_cache._l2_set_async("cache-key", "key", "value")
+
+        assert len(put_calls) == 1
+        assert put_calls[0][0] == "put_nowait"
+
+    def test_stats_counters_increment(self, tmp_path, monkeypatch):
+        """Write counters track successful enqueues and drops."""
+        monkeypatch.delenv("ARBS_SUPABASE_ENABLED", raising=False)
+        monkeypatch.delenv("ARBS_DATABASE_URL", raising=False)
+        import importlib
+        import Caching.supabase_engine as eng
+        importlib.reload(eng)
+
+        from Caching.layered_cache_mixin import LayeredDictProxy
+
+        c = _make_consumer(tmp_path, l2_enabled=True, l2_write=True)
+
+        # Reset counters
+        monkeypatch.setattr(LayeredDictProxy, "_L2_WRITES_OK", 0)
+        monkeypatch.setattr(LayeredDictProxy, "_L2_WRITES_DROPPED", 0)
+
+        # Successful enqueue
+        ok_queue = queue.Queue(maxsize=10)
+        with patch.object(type(c.my_cache), "_ensure_l2_write_workers", return_value=ok_queue):
+            c.my_cache._l2_set_async("cache-key", "key", "value")
+        assert LayeredDictProxy._L2_WRITES_OK == 1
+        assert LayeredDictProxy._L2_WRITES_DROPPED == 0
+
+        # Full queue -> dropped
+        class FullQueue:
+            def put(self, item, timeout=None):
+                raise queue.Full
+            def put_nowait(self, item):
+                raise queue.Full
+
+        with patch.object(type(c.my_cache), "_ensure_l2_write_workers", return_value=FullQueue()):
+            c.my_cache._l2_set_async("cache-key", "key", "value")
+        assert LayeredDictProxy._L2_WRITES_OK == 1
+        assert LayeredDictProxy._L2_WRITES_DROPPED == 1
