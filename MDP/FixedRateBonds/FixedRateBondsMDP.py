@@ -147,6 +147,120 @@ def _invalidate_frb_proxy() -> None:
         _FRB_PROXY_STATE["chosen_at"] = 0.0
 
 
+def _validate_proxy_pool(*, max_proxies: int = 4, timeout: int = 6) -> list[tuple[str | None, dict | None]]:
+    """Preflight multiple Nord proxies in parallel and return validated ones."""
+    if not _socksio_available():
+        return [(None, None)]
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    candidates = [h for h in _NORD_HOSTS if h is not None]
+    random.shuffle(candidates)
+    # Always include direct as fallback
+    candidates_with_direct: list[str | None] = candidates + [None]
+
+    def _check(host: str | None) -> tuple[str | None, dict | None, bool]:
+        proxies = _build_socks5h(host) if host else None
+        ok = _preflight_proxy(proxies, timeout=timeout)
+        return host, proxies, ok
+
+    valid: list[tuple[str | None, dict | None]] = []
+    with ThreadPoolExecutor(max_workers=min(len(candidates_with_direct), 8)) as pool:
+        for host, proxies, ok in pool.map(_check, candidates_with_direct):
+            if ok:
+                valid.append((host, proxies))
+                if len(valid) >= max_proxies:
+                    break
+
+    if not valid:
+        _logger.warning("No proxies passed preflight, using direct")
+        return [(None, None)]
+
+    _logger.info(
+        "Validated %d proxies: %s",
+        len(valid),
+        [h or "direct" for h, _ in valid],
+    )
+    return valid
+
+
+def _webull_fetch_multi_proxy(
+    *,
+    cusips: list,
+    start,
+    end,
+    show_tqdm: bool,
+    max_proxies: int = 4,
+    max_concurrent_per_proxy: int = 64,
+) -> pd.DataFrame:
+    """Fetch Webull intraday data striped across multiple Nord proxies.
+
+    Partitions CUSIPs across validated proxies and fetches each partition
+    in a separate thread with its own httpx.AsyncClient. This multiplies
+    effective throughput by the number of proxies.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
+
+    pool_proxies = _validate_proxy_pool(max_proxies=max_proxies)
+    n = len(pool_proxies)
+
+    # Round-robin partition CUSIPs across proxies
+    chunks: list[list] = [[] for _ in range(n)]
+    for i, cusip in enumerate(cusips):
+        chunks[i % n].append(cusip)
+
+    _logger.info(
+        "Multi-proxy fetch: %d cusips across %d proxies (%s cusips/proxy)",
+        len(cusips),
+        n,
+        "/".join(str(len(c)) for c in chunks),
+    )
+
+    # Scale down concurrency per proxy to avoid aggregate rate-limiting
+    effective_concurrent = min(max_concurrent_per_proxy, max(8, 128 // n))
+
+    def _fetch_chunk(chunk_cusips: list, proxy_info: tuple, chunk_idx: int) -> pd.DataFrame:
+        host, proxies = proxy_info
+        concurrent = effective_concurrent if proxies else 32
+        wb = WebullFintechFetcher(
+            debug_verbose=False,
+            error_verbose=True,
+            proxies=proxies,
+            global_timeout=15,
+        )
+        return wb.intraday_by_cusips(
+            cusips=chunk_cusips,
+            start=start,
+            end=end,
+            show_tqdm=(show_tqdm and chunk_idx == 0),  # tqdm on first chunk only
+            max_concurrent_tasks=concurrent,
+            max_keepalive_connections=concurrent,
+        )
+
+    results: list[pd.DataFrame] = []
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        futures = {
+            pool.submit(_fetch_chunk, chunk, proxy, idx): (idx, proxy[0], len(chunk))
+            for idx, (chunk, proxy) in enumerate(zip(chunks, pool_proxies))
+            if chunk
+        }
+        for future in as_completed(futures):
+            idx, host, chunk_size = futures[future]
+            try:
+                df = future.result()
+                if df is not None and not df.empty:
+                    results.append(df)
+                    _logger.info("Proxy %s: fetched %d columns", host or "direct", len(df.columns))
+            except Exception as exc:
+                _logger.warning("Multi-proxy fetch failed for proxy %s (%d cusips): %s", host or "direct", chunk_size, exc)
+
+    if not results:
+        return pd.DataFrame()
+    return pd.concat(results, axis=1).sort_index()
+
+
 def _webull_fetch_with_proxy_fallback(
     *,
     cusips: list,
@@ -1330,11 +1444,13 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
             len(unique_cusips), start_ny.isoformat(), end_ny.isoformat(), len(intraday_timestamps),
         )
         try:
-            wide: pd.DataFrame = _webull_fetch_with_proxy_fallback(
+            wide: pd.DataFrame = _webull_fetch_multi_proxy(
                 cusips=unique_cusips,
                 start=start_ny,
                 end=end_ny,
                 show_tqdm=show_tqdm,
+                max_proxies=4,
+                max_concurrent_per_proxy=64,
             )
         except Exception as ex:
             _logger.warning("RL prefetch: Webull fetch failed, falling back to per-timestamp: %s", ex)
