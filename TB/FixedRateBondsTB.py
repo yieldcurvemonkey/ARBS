@@ -202,7 +202,11 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         cached_row_keys: set[Tuple[DateLike, str]] = set()
         today = datetime.date.today()
 
-        if self._use_ts_cache and not ignore_cache and flat:
+        # Skip computed TS cache for large intraday runs — the Postgres/DuckDB
+        # sync is too slow for hundreds of timestamps and the MDP pricer cache
+        # is the authoritative source for intraday data.
+        _skip_ts_cache = is_intraday and len(ref_points) > 50
+        if self._use_ts_cache and not ignore_cache and flat and not _skip_ts_cache:
             for q in flat:
                 symbol = self._ts_symbol_for_query(q)
                 try:
@@ -223,20 +227,33 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         to_price_dates: List[Union[datetime.date, datetime.datetime]] = []
         cache_map = getattr(self, self._cache_attr)
 
-        for d in ref_points:
-            all_cached = True
-            for q in flat:
-                hit_ts = (d, q.col_name()) in cached_row_keys
-                k = self._cache_key(d, q)
-                hit_row = (k in cache_map) and not (d == today or d == "live") and not bool(ignore_cache)
-                if hit_row and not hit_ts:
-                    row = cache_map[k]
-                    cached_rows.append(row)
-                    cached_row_keys.add((row[0], row[1]))
-                if not hit_ts and not hit_row:
-                    all_cached = False
-            if not all_cached:
-                to_price_dates.append(d)
+        # For intraday with many ref points, temporarily suppress L2 reads
+        # during the scan loop to avoid N sequential Supabase round-trips.
+        # The MDP's bulk_get_data will handle fetching missing data.
+        _suppress_l2 = is_intraday and len(ref_points) > 50
+        _prev_l2_read = None
+        if _suppress_l2 and hasattr(cache_map, '_l2_read'):
+            _prev_l2_read = cache_map._l2_read
+            cache_map._l2_read = False
+
+        try:
+            for d in ref_points:
+                all_cached = True
+                for q in flat:
+                    hit_ts = (d, q.col_name()) in cached_row_keys
+                    k = self._cache_key(d, q)
+                    hit_row = (k in cache_map) and not (d == today or d == "live") and not bool(ignore_cache)
+                    if hit_row and not hit_ts:
+                        row = cache_map[k]
+                        cached_rows.append(row)
+                        cached_row_keys.add((row[0], row[1]))
+                    if not hit_ts and not hit_row:
+                        all_cached = False
+                if not all_cached:
+                    to_price_dates.append(d)
+        finally:
+            if _prev_l2_read is not None:
+                cache_map._l2_read = _prev_l2_read
 
         if not to_price_dates and cached_rows:
             return self._rows_to_frame(cached_rows)
@@ -290,11 +307,17 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 parts = _split_components(str(q.cusip))
                 missing = [k for k in parts if k not in pr_map_all]
                 if missing:
-                    try:
-                        fetched = self.mdp.get_pricer({"cusips": missing, "timestamp": d, "ignore_cache": ignore_cache})
-                        pr_map_all = pr_map_all | (fetched or {})
-                    except Exception as ex:
-                        self._logger.warning(f"On-demand pricer fetch failed for date={d}, parts={missing}: {ex}")
+                    # For large intraday runs, skip expensive per-timestamp
+                    # on-demand fetches — missing timestamps likely have no
+                    # market data (e.g. before market open, gaps).
+                    if _skip_ts_cache:
+                        pass  # skip on-demand fetch for intraday fast path
+                    else:
+                        try:
+                            fetched = self.mdp.get_pricer({"cusips": missing, "timestamp": d, "ignore_cache": ignore_cache})
+                            pr_map_all = pr_map_all | (fetched or {})
+                        except Exception as ex:
+                            self._logger.warning(f"On-demand pricer fetch failed for date={d}, parts={missing}: {ex}")
 
                 pr_map = {k: pr_map_all[k] for k in parts if k in pr_map_all}
                 if not pr_map:
@@ -342,10 +365,19 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
         with self.batched():
             mapping = getattr(self, self._cache_attr)
-            for row, q, d in new_rows_with_q:
-                mapping[self._cache_key(d, q)] = row
+            # Suppress L2 writes for large intraday to avoid write storm
+            _prev_l2_write = None
+            if _suppress_l2 and hasattr(mapping, '_l2_write'):
+                _prev_l2_write = mapping._l2_write
+                mapping._l2_write = False
+            try:
+                for row, q, d in new_rows_with_q:
+                    mapping[self._cache_key(d, q)] = row
+            finally:
+                if _prev_l2_write is not None:
+                    mapping._l2_write = _prev_l2_write
 
-        if self._use_ts_cache and new_rows_with_q:
+        if self._use_ts_cache and new_rows_with_q and not _skip_ts_cache:
             grouped: Dict[str, List[Tuple[DateLike, str, float]]] = defaultdict(list)
             for (dt_like, col, val), q, _d in new_rows_with_q:
                 grouped[self._ts_symbol_for_query(q)].append((dt_like, col, float(val)))
