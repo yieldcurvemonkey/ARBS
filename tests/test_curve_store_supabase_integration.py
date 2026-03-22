@@ -349,3 +349,77 @@ class TestAnalyticsL2:
         assert not df.empty
         assert float(df.iloc[0]["par_rate_10Y"]) == 4.25
         mock_sync.prefetch_analytics_range.assert_called_once()
+
+    def test_read_analytics_supports_mixed_legacy_schema(self, tmp_path):
+        from Caching.curve_store import CurveStore
+
+        pd = pytest.importorskip("pandas")
+
+        store = CurveStore(base_dir=tmp_path)
+        legacy_df = pd.DataFrame(
+            {
+                "timestamp_utc": [datetime.datetime(2025, 1, 15, 21, 0, tzinfo=datetime.timezone.utc)],
+                "trading_date": [datetime.date(2025, 1, 15)],
+                "par_rate_10Y": [4.25],
+                "rate_10Y": [4.25],
+            }
+        )
+        current_df = pd.DataFrame(
+            {
+                "timestamp_utc": [datetime.datetime(2025, 1, 16, 21, 0, tzinfo=datetime.timezone.utc)],
+                "trading_date": [datetime.date(2025, 1, 16)],
+                "session_minute": [540],
+                "par_rate_10Y": [4.30],
+                "rate_10Y": [4.30],
+            }
+        )
+
+        with patch("Caching.curve_store._get_curve_sync", return_value=None):
+            store.write_analytics_day("USD-SOFR-1D", datetime.date(2025, 1, 15), legacy_df, overwrite=True)
+            store.write_analytics_day("USD-SOFR-1D", datetime.date(2025, 1, 16), current_df, overwrite=True)
+
+        df = store.read_analytics(
+            "USD-SOFR-1D",
+            start=datetime.date(2025, 1, 15),
+            end=datetime.date(2025, 1, 16),
+            tenors=["10Y"],
+            metrics=["par_rate", "rate"],
+        )
+
+        assert list(pd.to_datetime(df["trading_date"]).dt.date) == [
+            datetime.date(2025, 1, 15),
+            datetime.date(2025, 1, 16),
+        ]
+        assert list(df["par_rate_10Y"]) == [4.25, 4.30]
+        assert list(df["rate_10Y"]) == [4.25, 4.30]
+        assert list(df["session_minute"].astype("Int64")) == [540, 540]
+
+    def test_read_analytics_tolerates_requested_columns_missing_from_all_files(self, tmp_path):
+        from Caching.curve_store import CurveStore
+
+        pd = pytest.importorskip("pandas")
+
+        store = CurveStore(base_dir=tmp_path)
+        analytics_df = pd.DataFrame(
+            {
+                "timestamp_utc": [datetime.datetime(2025, 1, 15, 21, 0, tzinfo=datetime.timezone.utc)],
+                "trading_date": [datetime.date(2025, 1, 15)],
+                "session_minute": [540],
+                "rate_1Y2Y": [4.25],
+            }
+        )
+
+        with patch("Caching.curve_store._get_curve_sync", return_value=None):
+            store.write_analytics_day("USD-SOFR-1D", datetime.date(2025, 1, 15), analytics_df, overwrite=True)
+
+        df = store.read_analytics(
+            "USD-SOFR-1D",
+            start=datetime.date(2025, 1, 15),
+            end=datetime.date(2025, 1, 15),
+            tenors=["1Y2Y"],
+            metrics=["par_rate", "rate"],
+        )
+
+        assert "rate_1Y2Y" in df.columns
+        assert "par_rate_1Y2Y" not in df.columns
+        assert float(df.iloc[0]["rate_1Y2Y"]) == 4.25

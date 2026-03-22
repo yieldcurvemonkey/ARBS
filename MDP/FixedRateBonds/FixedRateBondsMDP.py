@@ -1,5 +1,6 @@
 import contextlib
 import datetime
+import logging
 import re
 import threading
 from collections import OrderedDict, defaultdict
@@ -15,6 +16,8 @@ from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base._GenericPricable import _GenericPricable
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
+
+_logger = logging.getLogger(__name__)
 
 DateLike = Union[datetime.date, datetime.datetime, Literal["live"]]
 _BulkOut = Dict[DateLike, Dict[str, "_FixedRateBondGenericPricer"]]
@@ -1055,6 +1058,117 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
     def _wsj_buffer_date(self) -> ql.Date:
         return ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(ql.Date.todaysDate(), ql.Period("-3D"))
 
+    def _rl_prefetch_intraday(
+        self,
+        intraday_timestamps: List[datetime.datetime],
+        symbols: List[str],
+        *,
+        force_refresh: bool = False,
+        show_tqdm: bool = False,
+    ) -> bool:
+        """Pre-fetch Webull intraday data ONCE for all timestamps and populate the pricer cache.
+
+        This avoids N redundant Webull HTTP fetches when bulk_get_data fans out
+        timestamps to threads. Each thread then only does cheap cache lookups.
+
+        Returns True if prefetch succeeded and cache was populated.
+        """
+        from pandas.tseries.offsets import BDay
+
+        from MDP.FixedRateBonds.WEBULL.WebullFintechFetcher import WebullFintechFetcher
+        from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
+
+        if not intraday_timestamps or not symbols:
+            return False
+
+        # Determine the date range we need to cover
+        ny = pytz.timezone("America/New_York")
+        all_dates = sorted(set(ts.date() for ts in intraday_timestamps))
+        earliest_date = all_dates[0]
+        latest_date = all_dates[-1]
+
+        # Resolve aliases once (use the earliest timestamp as reference)
+        ref_ts = intraday_timestamps[0]
+        as_of_ref = ref_ts.date()
+        ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
+        ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)].copy()
+        ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+
+        alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(symbols, ref_ts, ref_df=ref_df)
+        unique_cusips = list(dict.fromkeys(alias_to_cusip.values()))
+
+        if not unique_cusips:
+            return False
+
+        # Check if cache already has data for all timestamps (skip prefetch if so)
+        if not force_refresh:
+            self._ensure_pricer_cache()
+            all_cached = True
+            # Spot-check first, middle, last timestamps
+            check_points = [intraday_timestamps[0]]
+            if len(intraday_timestamps) > 2:
+                check_points.append(intraday_timestamps[len(intraday_timestamps) // 2])
+            check_points.append(intraday_timestamps[-1])
+            for ts in check_points:
+                for cusip in unique_cusips:
+                    cache_key = f"{ts.isoformat()}-{cusip}-{self.source.upper()}"
+                    if self._threadsafe_cache_get(cache_key) is None:
+                        all_cached = False
+                        break
+                if not all_cached:
+                    break
+            if all_cached:
+                _logger.info("RL prefetch: all spot-check timestamps already cached, skipping Webull fetch")
+                return True
+
+        # Single Webull fetch covering the full date range (with BDay padding)
+        start_ny = ny.localize(datetime.datetime(earliest_date.year, earliest_date.month, earliest_date.day, 7, 0, 0)) - BDay(1)
+        end_ny = ny.localize(datetime.datetime(latest_date.year, latest_date.month, latest_date.day, 17, 0, 0)) + BDay(1)
+
+        _logger.info(
+            "RL prefetch: fetching Webull intraday for %d cusips, %s → %s (covering %d timestamps)",
+            len(unique_cusips), start_ny.isoformat(), end_ny.isoformat(), len(intraday_timestamps),
+        )
+        try:
+            wb = WebullFintechFetcher(debug_verbose=False, error_verbose=True)
+            wide: pd.DataFrame = wb.intraday_by_cusips(
+                cusips=unique_cusips,
+                start=start_ny,
+                end=end_ny,
+                show_tqdm=show_tqdm,
+            )
+        except Exception as ex:
+            _logger.warning("RL prefetch: Webull fetch failed, falling back to per-timestamp: %s", ex)
+            return False
+
+        if wide is None or (hasattr(wide, "empty") and wide.empty):
+            _logger.warning("RL prefetch: Webull returned empty DataFrame")
+            return False
+
+        # Populate the pricer cache for ALL data points in a single pass
+        self._ensure_pricer_cache()
+        write_count = 0
+        for cusip in unique_cusips:
+            if cusip not in wide.columns:
+                continue
+            series = wide[cusip].dropna()
+            meta = meta_by_cusip.get(cusip, {})
+            for curr_ts, ytm in series.items():
+                args = {
+                    "rl_frb_id": "USTS",
+                    "reference_date": curr_ts.date().isoformat(),
+                    "ytm": float(ytm),
+                    "meta_data": self._pyify_meta({**meta, "timestamp": curr_ts.isoformat()}),
+                    "schema": 1,
+                    "source": f"{curr_ts.isoformat()}-{cusip}-{self.source.upper()}",
+                }
+                cache_key = f"{curr_ts.isoformat()}-{cusip}-{self.source.upper()}"
+                self._threadsafe_cache_put(cache_key, args)
+                write_count += 1
+
+        _logger.info("RL prefetch: cached %d pricer entries for %d cusips", write_count, len(unique_cusips))
+        return True
+
     def bulk_get_data(
         self,
         timestamps: Sequence[DateLike],
@@ -1106,6 +1220,24 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
             for ts in timestamps:
                 jobs.append((ts, base_cusips))
 
+            # ----------------------------------------------------------------
+            # RL INTRADAY FAST PATH: pre-fetch Webull data ONCE for all
+            # intraday datetime timestamps, populate the pricer cache in a
+            # single pass, then let _process_one only do cheap cache lookups.
+            # This avoids N redundant Webull HTTP fetches and the resulting
+            # L2 cache write storm that caused queue overflow / hangs.
+            # ----------------------------------------------------------------
+            _rl_prefetched: bool = False
+            if self.source.upper() == "USTS_WEBULL_WSJ_LIVE-RL":
+                intraday_ts = [ts for ts in timestamps if isinstance(ts, datetime.datetime)]
+                if intraday_ts and not all(_is_live(ts) for ts in intraday_ts):
+                    _rl_prefetched = self._rl_prefetch_intraday(
+                        intraday_timestamps=intraday_ts,
+                        symbols=base_cusips,
+                        force_refresh=force_refresh,
+                        show_tqdm=show_tqdm,
+                    )
+
             def _process_one(ts: DateLike, symbols: List[str]) -> Tuple[DateLike, Dict[str, "_FixedRateBondGenericPricer"]]:
                 # --- alias resolution per timestamp ---
                 from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
@@ -1115,7 +1247,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)].copy()
                 ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
 
-                alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(symbols, ts, ref_df=ref_df)  # :contentReference[oaicite:0]{index=0}
+                alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(symbols, ts, ref_df=ref_df)
 
                 result: Dict[str, "_FixedRateBondGenericPricer"] = {}
 
@@ -1261,6 +1393,11 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
 
                     # exact ts is required (your RL branch keys on exact timestamp)
                     if isinstance(ts, datetime.datetime):
+                        # When _rl_prefetched is True, the prefetch already did a
+                        # fresh Webull fetch and populated the cache — trust it even
+                        # when force_refresh is set to avoid redundant HTTP calls.
+                        _trust_cache = (not force_refresh) or _rl_prefetched
+
                         # Check for cached pricers/args under both (cusip, original)
                         for original, cusip in alias_to_cusip.items():
                             hit = None
@@ -1269,7 +1406,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                                 hit = self._threadsafe_cache_get(cache_key)
                                 if hit is not None:
                                     break
-                            if hit is not None and not force_refresh:
+                            if hit is not None and _trust_cache:
                                 # build pricer whether cached object or args
                                 if hasattr(hit, "__class__") and hit.__class__.__name__ == "RLFixedRateBondPricer":
                                     result[original] = hit  # already a pricer
@@ -1294,7 +1431,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                             start=start_ny,
                             end=end_ny,
                             show_tqdm=show_tqdm,
-                        )  # batched async underneath  :contentReference[oaicite:1]{index=1}  :contentReference[oaicite:2]{index=2}
+                        )  # batched async underneath
 
                         # Persist all timeslices to cache (same scheme as your RL branch)
                         for original, cusip in to_fetch.items():
@@ -1332,11 +1469,63 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
 
                     # If we got here, user passed a date (not datetime) for RL non-live; no canonical source
                     # for an RL daily close in your repo; we’ll just raise to match your existing semantics.
-                    raise NotImplementedError("For RL, pass an intraday datetime for timestamp or 'live'.")
+                    raise NotImplementedError("For RL, pass an intraday datetime for timestamp or ‘live’.")
 
                 # -------------------- Unsupported source --------------------
                 else:
                     raise NotImplementedError(f"Unsupported source {self.source}")
+
+            # -------- RL FAST PATH: build pricers directly from prefetched cache --------
+            if _rl_prefetched:
+                from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
+
+                # Resolve aliases ONCE (not per-timestamp)
+                ref_ts0 = timestamps[0]
+                as_of_ref = _as_of_ref(ref_ts0)
+                ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
+                ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)].copy()
+                ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+                alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(base_cusips, ref_ts0, ref_df=ref_df)
+
+                self._ensure_pricer_cache()
+                cache = getattr(self, self._FRB_PRICER_CACHE)
+                hit_count = 0
+                miss_count = 0
+
+                iterable = timestamps
+                if show_tqdm:
+                    iterable = tqdm.tqdm(iterable, desc="BUILDING PRICERS FROM CACHE")
+
+                for ts in iterable:
+                    if not isinstance(ts, datetime.datetime) or _is_live(ts):
+                        # Non-intraday or live — fall through to _process_one
+                        jobs_fallback = [(ts, base_cusips)]
+                        for ts_fb, syms_fb in jobs_fallback:
+                            out[ts_fb].update(_process_one(ts_fb, syms_fb)[1])
+                        continue
+
+                    result: Dict[str, "_FixedRateBondGenericPricer"] = {}
+                    for original, cusip in alias_to_cusip.items():
+                        cache_key = f"{ts.isoformat()}-{cusip}-{self.source.upper()}"
+                        hit = cache.get(cache_key)
+                        if hit is not None:
+                            if hasattr(hit, "__class__") and hit.__class__.__name__ == "RLFixedRateBondPricer":
+                                result[original] = hit
+                            else:
+                                result[original] = self._build_pricer_from_args(
+                                    hit, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn"
+                                )
+                            hit_count += 1
+                        else:
+                            miss_count += 1
+                    if result:
+                        out[ts].update(result)
+
+                _logger.info(
+                    "RL fast path: %d cache hits, %d misses across %d timestamps",
+                    hit_count, miss_count, len(timestamps),
+                )
+                return dict(out)
 
             # -------- fan out (timestamp-level) with threads --------
             results: List[Tuple[DateLike, Dict[str, "_FixedRateBondGenericPricer"]]] = []

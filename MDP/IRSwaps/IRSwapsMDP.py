@@ -1,6 +1,7 @@
 import contextlib
 import datetime
 import io
+import os
 import sys
 import threading
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
@@ -401,6 +402,17 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             value = value.astimezone(pytz.UTC)
         return value.replace(microsecond=0)
 
+    @staticmethod
+    def _resolve_curve_store_history_workers(
+        max_workers: int,
+        *,
+        task_count: int,
+    ) -> int:
+        requested_workers = max(1, int(max_workers or 1))
+        if requested_workers > 1 or task_count < 64:
+            return requested_workers
+        return max(2, min(int(task_count), int(os.cpu_count() or 4), 8))
+
     def _load_eris_curve_store_history(
         self,
         *,
@@ -457,10 +469,14 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         if filtered_df.empty:
             return {}
 
+        reconstruct_workers = self._resolve_curve_store_history_workers(
+            max_workers,
+            task_count=len(filtered_df),
+        )
         curves_by_ts = store.reconstruct_curves_batch(
             filtered_df,
             cfg=None,
-            max_workers=max(1, int(max_workers or 1)),
+            max_workers=reconstruct_workers,
         )
         curves_by_key = {
             key: curve

@@ -738,7 +738,7 @@ class CurveStore:
             for m in metrics:
                 for t in tenors:
                     cols.append(f"{m}_{t}")
-        col_expr = ", ".join(f'"{c}"' for c in cols) if (tenors and metrics) else "*"
+        col_expr = "*"
 
         where_parts: list[str] = []
         cte_prefix = ""
@@ -759,7 +759,7 @@ class CurveStore:
         query = f"""
             {cte_prefix}
             SELECT {col_expr}
-            FROM read_parquet('{glob_pattern}', hive_partitioning=true) analytics
+            FROM read_parquet('{glob_pattern}', hive_partitioning=true, union_by_name=true) analytics
             {join_clause}
             {where_clause}
             ORDER BY timestamp_utc
@@ -780,6 +780,10 @@ class CurveStore:
         if "date" in df.columns:
             df.drop(columns=["date"], inplace=True)
 
+        df = _ensure_analytics_df_columns(df)
+        if tenors and metrics:
+            available_cols = [col for col in cols if col in df.columns]
+            return df.loc[:, available_cols]
         return df
 
     # ── Lazy Reconstruction ──
@@ -1083,6 +1087,50 @@ def _ensure_raw_df_columns(df: pd.DataFrame) -> pd.DataFrame:
         if name not in df.columns:
             df[name] = None
     return df.loc[:, _RAW_SCHEMA.names]
+
+
+def _analytics_trading_date_from_timestamp(value: Any) -> Optional[datetime.date]:
+    ts_utc = _normalize_timestamp_utc_scalar(value)
+    if ts_utc is None:
+        return None
+    return _compute_trading_date(ts_utc.astimezone(_CHI))
+
+
+def _analytics_session_minute_from_timestamp(value: Any) -> Optional[int]:
+    ts_utc = _normalize_timestamp_utc_scalar(value)
+    if ts_utc is None:
+        return None
+    return _compute_session_minute(ts_utc.astimezone(_CHI))
+
+
+def _ensure_analytics_df_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if "timestamp_utc" not in df.columns:
+        df["timestamp_utc"] = pd.NaT
+
+    derived_trading_dates = df["timestamp_utc"].map(_analytics_trading_date_from_timestamp)
+    if "trading_date" not in df.columns:
+        df["trading_date"] = derived_trading_dates
+    else:
+        missing_trading_dates = df["trading_date"].isna()
+        if missing_trading_dates.any():
+            df.loc[missing_trading_dates, "trading_date"] = derived_trading_dates.loc[missing_trading_dates]
+
+    derived_session_minutes = df["timestamp_utc"].map(_analytics_session_minute_from_timestamp)
+    if "session_minute" not in df.columns:
+        df["session_minute"] = pd.array(derived_session_minutes.tolist(), dtype="Int16")
+    else:
+        session_minute = pd.to_numeric(df["session_minute"], errors="coerce")
+        missing_session_minutes = session_minute.isna()
+        if missing_session_minutes.any():
+            fill_values = pd.Series(derived_session_minutes, index=df.index, dtype="float64")
+            session_minute = session_minute.where(~missing_session_minutes, fill_values)
+        try:
+            df["session_minute"] = session_minute.astype("Int16")
+        except (TypeError, ValueError):
+            df["session_minute"] = session_minute
+
+    return df
 
 
 def _snapshots_to_arrow_table(snapshots: Sequence[CurveSnapshot]) -> pa.Table:

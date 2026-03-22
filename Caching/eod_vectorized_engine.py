@@ -344,20 +344,21 @@ def compute_and_persist_eod_panel(
         return {"status": "empty", "rates_computed": 0, "symbols": [], "elapsed_seconds": 0.0}
 
     trading_dates = [_to_py_date(d) for d in panel.index]
+    scaled_panel = panel * 100.0
     symbols: List[str] = []
 
     # --- Write to ComputedTimeseriesStore (DuckDB L1 + Parquet TS) ---
     if computed_ts_store is not None:
         rows_by_symbol: Dict[str, List[Tuple]] = {}
         for tenor in tenors:
-            if tenor not in panel.columns:
+            if tenor not in scaled_panel.columns:
                 continue
             fingerprint = _tenor_fingerprint(tenor)
             symbol = _build_ts_symbol(source, curve_name, fingerprint)
             if symbol not in symbols:
                 symbols.append(symbol)
             tenor_rows = []
-            for td, rate in zip(trading_dates, panel[tenor]):
+            for td, rate in zip(trading_dates, scaled_panel[tenor]):
                 if np.isnan(rate):
                     continue
                 tenor_rows.append((td, tenor, float(rate)))
@@ -373,12 +374,13 @@ def compute_and_persist_eod_panel(
     # --- Write to CurveStore analytics panel ---
     if curve_store is not None:
         for td in trading_dates:
-            row_mask = panel.index == pd.Timestamp(td)
+            row_mask = scaled_panel.index == pd.Timestamp(td)
             if not row_mask.any():
                 continue
-            analytics_row = panel.loc[row_mask].copy()
-            # Rename columns to rate_{tenor} format for analytics panel
-            analytics_row.columns = [f"rate_{t}" for t in analytics_row.columns]
+            analytics_source_row = scaled_panel.loc[row_mask].copy()
+            analytics_row = analytics_source_row.rename(columns=lambda tenor: f"rate_{tenor}")
+            for tenor in analytics_source_row.columns:
+                analytics_row[f"par_rate_{tenor}"] = analytics_source_row[tenor]
             analytics_row.insert(0, "timestamp_utc", pd.Timestamp(td, tz="UTC"))
             analytics_row.insert(1, "trading_date", td)
             try:
