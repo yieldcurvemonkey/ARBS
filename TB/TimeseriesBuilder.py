@@ -1,5 +1,6 @@
 import datetime
 import logging
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,6 +10,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, DefaultDict, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
+import numpy as np
 import pytz
 from tqdm.auto import tqdm as _tqdm
 
@@ -103,6 +105,35 @@ def _timestamp_utc_key(value: Any) -> Optional[datetime.datetime]:
 def _is_barchart_stirf_rl_source(mdp: Optional[MarketDataProvider]) -> bool:
     source = str(getattr(mdp, "source", "")).upper()
     return source in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}
+
+
+def _irs_curve_store_source_family(mdp: Optional[MarketDataProvider]) -> Optional[str]:
+    if mdp is None:
+        return None
+    fn = getattr(mdp, "_curve_store_source_family", None)
+    if callable(fn):
+        try:
+            family = fn()
+        except Exception:
+            family = None
+        if family:
+            return str(family)
+
+    source = str(getattr(mdp, "source", "")).upper()
+    if source in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}:
+        return "barchart_stirf"
+    if source in {"ERIS_EOD_LIVE-RL_BASIC", "ERIS_EOD_LIVE_RL_BASIC"}:
+        return "eris_eod_rl_basic"
+    if source in {"ERIS_EOD_LIVE-RL_BASIC-NOJUMPS", "ERIS_EOD_LIVE_RL_BASIC-NOJUMPS"}:
+        return "eris_eod_rl_basic_nojumps"
+    return None
+
+
+def _uses_legacy_eris_eod_decimal_store_rates(mdp: Optional[MarketDataProvider]) -> bool:
+    return _irs_curve_store_source_family(mdp) in {
+        "eris_eod_rl_basic",
+        "eris_eod_rl_basic_nojumps",
+    }
 
 
 def _supports_irs_curve_store_fast_path(mdp: Optional[MarketDataProvider]) -> bool:
@@ -325,6 +356,49 @@ def _safe_col_name(q: Any, default: str) -> str:
         return q.col_name()
     except Exception:
         return default
+
+
+def _resolve_irs_curve_store_reconstruction_workers(
+    n_jobs: Optional[int],
+    *,
+    task_count: int,
+) -> int:
+    requested_workers = max(1, int(n_jobs or 1))
+    if requested_workers > 1 or task_count < 64:
+        return requested_workers
+    return max(2, min(int(task_count), int(os.cpu_count() or 4), 8))
+
+
+def _normalize_legacy_eris_eod_cached_rows(
+    *,
+    mdp: Optional[MarketDataProvider],
+    requested_curve_name: str,
+    query: IRSwapQuery,
+    rows: Sequence[Tuple[DateLike, str, float]],
+) -> List[Tuple[DateLike, str, float]]:
+    if not rows or not _uses_legacy_eris_eod_decimal_store_rates(mdp):
+        return list(rows)
+    if query.value != IRSwapValue.RATE:
+        return list(rows)
+    if getattr(query, "structure", None) != IRSwapStructure.OUTRIGHT:
+        return list(rows)
+
+    expected_col_name = query.col_name(requested_curve_name)
+    tenor_token = str(getattr(query, "tenor", "") or "").strip()
+    if not tenor_token:
+        return list(rows)
+
+    tenor_aliases = {tenor_token, tenor_token.upper(), tenor_token.lower()}
+    normalized_rows: List[Tuple[DateLike, str, float]] = []
+    used_legacy_alias = False
+    for ref_point, column_name, value in rows:
+        column_text = str(column_name)
+        if column_text in tenor_aliases:
+            normalized_rows.append((ref_point, expected_col_name, float(value) * 100.0))
+            used_legacy_alias = True
+        else:
+            normalized_rows.append((ref_point, column_text, float(value)))
+    return normalized_rows if used_legacy_alias else list(rows)
 
 
 def _ref_point_date(ref_point: DateLike) -> datetime.date:
@@ -996,6 +1070,7 @@ class TimeseriesBuilder:
         ignore_cache: Optional[bool],
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
+        use_irs_vectorized_pricing: bool,
     ) -> pd.DataFrame:
         if plan.strategy == "irs_curve_store":
             return self._execute_irs_curve_store_plan(
@@ -1006,6 +1081,7 @@ class TimeseriesBuilder:
                 ignore_cache=ignore_cache,
                 freq=freq,
                 timestamps=timestamps,
+                use_irs_vectorized_pricing=use_irs_vectorized_pricing,
             )
 
         return self._route_product_timeseries(
@@ -1033,6 +1109,7 @@ class TimeseriesBuilder:
         ignore_cache: Optional[bool],
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
+        use_irs_vectorized_pricing: bool,
     ) -> List[Tuple[str, pd.DataFrame]]:
         if not plan.product_plans:
             return []
@@ -1053,6 +1130,7 @@ class TimeseriesBuilder:
                     ignore_cache=ignore_cache,
                     freq=freq,
                     timestamps=timestamps,
+                    use_irs_vectorized_pricing=use_irs_vectorized_pricing,
                 )
         else:
             with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ts-builder") as pool:
@@ -1068,6 +1146,7 @@ class TimeseriesBuilder:
                         ignore_cache=ignore_cache,
                         freq=freq,
                         timestamps=timestamps,
+                        use_irs_vectorized_pricing=use_irs_vectorized_pricing,
                     ): idx
                     for idx, product_plan in enumerate(plan.product_plans)
                 }
@@ -1162,6 +1241,12 @@ class TimeseriesBuilder:
                         col_name = f"{metric_name}_{analytics_token}"
                         if col_name in row.index and pd.notna(row[col_name]):
                             component_value = float(row[col_name]) * float(weight)
+                            if (
+                                metric_name == "rate"
+                                and _uses_legacy_eris_eod_decimal_store_rates(mdp)
+                                and pd.isna(row.get(f"par_rate_{analytics_token}"))
+                            ):
+                                component_value *= 100.0
                             break
                     if component_value is None:
                         component_values = []
@@ -1170,7 +1255,10 @@ class TimeseriesBuilder:
                 if not component_values:
                     continue
                 default = f"{requested_curve_name}.{getattr(q, 'tenor', '')}.{IRSwapValue.RATE.name}"
-                rows.append((ref_point, _safe_col_name(q, default), float(sum(component_values))))
+                query_value = float(sum(component_values))
+                if len(components) > 1:
+                    query_value *= 100.0
+                rows.append((ref_point, _safe_col_name(q, default), query_value))
                 covered.add((ref_point, idx))
         return rows, covered
 
@@ -1203,6 +1291,12 @@ class TimeseriesBuilder:
                 )
             except Exception:
                 q_rows = []
+            q_rows = _normalize_legacy_eris_eod_cached_rows(
+                mdp=getattr(router, "mdp", None),
+                requested_curve_name=requested_curve_name,
+                query=q,
+                rows=q_rows,
+            )
             rows.extend(q_rows)
             covered.update((ref_point, idx) for ref_point, _col, _value in q_rows)
         return rows, covered
@@ -1437,6 +1531,115 @@ class TimeseriesBuilder:
 
         return pd.DataFrame()
 
+    def _read_irs_curve_store_vectorized_rows(
+        self,
+        *,
+        mdp: Optional[Any],
+        store: Any,
+        resolved_curve_name: str,
+        requested_curve_name: str,
+        queries: List[IRSwapQuery],
+        candidate_ref_points: Sequence[DateLike],
+        requested_key_by_ref: Mapping[DateLike, datetime.datetime],
+        covered: set[Tuple[DateLike, int]],
+        allow_multi_leg: bool,
+    ) -> Tuple[
+        List[Tuple[DateLike, str, float]],
+        set[Tuple[DateLike, int]],
+        Dict[int, List[Tuple[DateLike, str, float]]],
+    ]:
+        if not candidate_ref_points or not _matches_irs_curve_store_on_trading_date(mdp):
+            return [], set(), {}
+
+        try:
+            from Caching.eod_vectorized_engine import compute_eod_rate_panel, parse_tenor
+        except ImportError:
+            return [], set(), {}
+
+        eligible: List[Tuple[int, IRSwapQuery, list[tuple[float, str]]]] = []
+        required_tenors: set[str] = set()
+        for idx, q in enumerate(queries):
+            if all((ref_point, idx) in covered for ref_point in candidate_ref_points):
+                continue
+            components = _analytics_rate_components(q)
+            if not components:
+                continue
+            if not allow_multi_leg and len(components) > 1:
+                continue
+
+            normalized_components: list[tuple[float, str]] = []
+            skip_query = False
+            for weight, token in components:
+                tenor_token = str(token or "").strip().upper()
+                if not tenor_token:
+                    skip_query = True
+                    break
+                try:
+                    parse_tenor(tenor_token)
+                except Exception:
+                    skip_query = True
+                    break
+                normalized_components.append((float(weight), tenor_token))
+                required_tenors.add(tenor_token)
+            if skip_query or not normalized_components:
+                continue
+            eligible.append((idx, q, normalized_components))
+
+        if not eligible or not required_tenors:
+            return [], set(), {}
+
+        requested_keys = [
+            requested_key_by_ref[ref_point]
+            for ref_point in candidate_ref_points
+            if ref_point in requested_key_by_ref
+        ]
+        raw_df = self._read_irs_curve_store_raw_df(
+            mdp=mdp,
+            store=store,
+            resolved_curve_name=resolved_curve_name,
+            requested_keys=requested_keys,
+        )
+        if raw_df.empty:
+            return [], set(), {}
+
+        panel = compute_eod_rate_panel(
+            raw_nodes_df=raw_df,
+            tenors=sorted(required_tenors),
+        )
+        if panel.empty:
+            return [], set(), {}
+
+        rows: List[Tuple[DateLike, str, float]] = []
+        vectorized_covered: set[Tuple[DateLike, int]] = set()
+        rows_by_query_idx: Dict[int, List[Tuple[DateLike, str, float]]] = defaultdict(list)
+        for ref_point in candidate_ref_points:
+            panel_key = pd.Timestamp(_ref_point_date(ref_point))
+            if panel_key not in panel.index:
+                continue
+            for idx, q, components in eligible:
+                if (ref_point, idx) in covered or (ref_point, idx) in vectorized_covered:
+                    continue
+                total = 0.0
+                for weight, tenor_token in components:
+                    if tenor_token not in panel.columns:
+                        total = float("nan")
+                        break
+                    rate_value = panel.at[panel_key, tenor_token]
+                    if pd.isna(rate_value):
+                        total = float("nan")
+                        break
+                    total += float(weight) * float(rate_value)
+                if np.isnan(total):
+                    continue
+                scale = 100.0 if len(components) == 1 else 10_000.0
+                default = f"{requested_curve_name}.{getattr(q, 'tenor', '')}.{IRSwapValue.RATE.name}"
+                row = (ref_point, _safe_col_name(q, default), total * scale)
+                rows.append(row)
+                rows_by_query_idx[idx].append(row)
+                vectorized_covered.add((ref_point, idx))
+
+        return rows, vectorized_covered, rows_by_query_idx
+
     def _build_irs_curve_store_curve_map(
         self,
         *,
@@ -1477,9 +1680,13 @@ class TimeseriesBuilder:
             return {}
 
         cfg = getattr(builder, "_STIRF_CURVE_CONFIGS", {}).get(resolved_curve_name)
+        reconstruct_workers = _resolve_irs_curve_store_reconstruction_workers(
+            n_jobs,
+            task_count=len(filtered_df),
+        )
         reconstruct_kwargs = {
             "cfg": cfg,
-            "max_workers": max(1, int(n_jobs or 1)),
+            "max_workers": reconstruct_workers,
         }
         if progress_callback is not None:
             reconstruct_kwargs["progress_callback"] = progress_callback
@@ -1620,6 +1827,7 @@ class TimeseriesBuilder:
         ignore_cache: Optional[bool],
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
+        use_irs_vectorized_pricing: bool,
     ) -> pd.DataFrame:
         if plan.mdp is None:
             return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
@@ -1699,7 +1907,10 @@ class TimeseriesBuilder:
                 if not tasks:
                     return 0
 
-                worker_count = max(1, int(n_jobs or 1))
+                worker_count = _resolve_irs_curve_store_reconstruction_workers(
+                    n_jobs,
+                    task_count=len(tasks),
+                )
                 with _tqdm(
                     total=len(tasks),
                     disable=pbar_disable,
@@ -1863,51 +2074,32 @@ class TimeseriesBuilder:
                 and _matches_irs_curve_store_on_trading_date(mdp)
             ):
                 try:
-                    import numpy as np
-                    from Caching.eod_vectorized_engine import compute_eod_rate_panel
-
-                    uncovered_dates = sorted(set(
-                        _ref_point_date(rp) for rp in uncovered_ref_points
-                    ))
-                    raw_df = store.read_raw_nodes(
-                        resolved_curve_name,
-                        start=uncovered_dates[0],
-                        end=uncovered_dates[-1],
+                    vec_start = time.perf_counter()
+                    vectorized_rows, vectorized_covered, vectorized_rows_by_query_idx = _run_stage(
+                        desc=f"VECTOR PRICING {requested_curve_name} IRS...",
+                        total=len(uncovered_ref_points),
+                        fn=lambda: self._read_irs_curve_store_vectorized_rows(
+                            mdp=mdp,
+                            store=store,
+                            resolved_curve_name=resolved_curve_name,
+                            requested_curve_name=requested_curve_name,
+                            queries=curve_queries,
+                            candidate_ref_points=uncovered_ref_points,
+                            requested_key_by_ref=uncovered_key_by_ref,
+                            covered=covered,
+                            allow_multi_leg=use_irs_vectorized_pricing,
+                        ),
                     )
-                    if not raw_df.empty:
-                        uncovered_tenors = list({
-                            str(getattr(q, "tenor", ""))
-                            for idx, q in enumerate(curve_queries)
-                            if getattr(q, "tenor", None)
-                            and any((rp, idx) not in covered for rp in curve_reference_points)
-                        })
-                        if uncovered_tenors:
-                            vec_start = time.perf_counter()
-                            panel = compute_eod_rate_panel(
-                                raw_nodes_df=raw_df,
-                                tenors=uncovered_tenors,
-                            )
-                            if not panel.empty:
-                                for rp in uncovered_ref_points:
-                                    rp_date = _ref_point_date(rp)
-                                    ts_key = pd.Timestamp(rp_date)
-                                    if ts_key not in panel.index:
-                                        continue
-                                    for idx, q in enumerate(curve_queries):
-                                        if (rp, idx) in covered:
-                                            continue
-                                        tenor = str(getattr(q, "tenor", "") or "")
-                                        if tenor in panel.columns:
-                                            rate_val = panel.loc[ts_key, tenor]
-                                            if not np.isnan(rate_val):
-                                                col_name = _safe_col_name(q, tenor)
-                                                row = (rp, col_name, float(rate_val) * 100)
-                                                rows.append(row)
-                                                covered.add((rp, idx))
-                                                newly_computed_rows[idx].append(row)
-                                _log_curve_stage("vectorized EOD", vec_start, covered=len(covered))
-                except ImportError:
-                    pass  # vectorized engine not available, fall through to reconstruction
+                    rows.extend(vectorized_rows)
+                    covered.update(vectorized_covered)
+                    for idx, idx_rows in vectorized_rows_by_query_idx.items():
+                        newly_computed_rows[idx].extend(idx_rows)
+                    _log_curve_stage(
+                        "vectorized EOD",
+                        vec_start,
+                        rows=len(vectorized_rows),
+                        covered=len(vectorized_covered),
+                    )
                 except Exception:
                     _LOGGER.debug("Vectorized EOD fallback failed", exc_info=True)
 
@@ -2106,6 +2298,9 @@ class TimeseriesBuilder:
         drop_multilevel_cols: Optional[bool] = True,
         routers: Optional[Mapping[str, Any]] = None,
         mdps: Optional[Mapping[str, MarketDataProvider]] = None,
+        use_irs_vectorized_pricing: bool = False,
+        use_duckdb: Optional[bool] = None,
+        duckdb_path: Optional[str] = None,
     ) -> pd.DataFrame:
         assert start <= end, "must have end > start"
         flat = _flatten_base_queries(queries)
@@ -2114,6 +2309,22 @@ class TimeseriesBuilder:
         if routers:
             merged_routers.update(routers)
         merged_mdps: Dict[str, MarketDataProvider] = dict(mdps or {})
+
+        if (
+            (use_duckdb is not None or duckdb_path is not None)
+            and merged_routers.get("IRS") is None
+            and merged_mdps.get("IRS") is not None
+            and any(isinstance(q, IRSwapQuery) for q in flat)
+        ):
+            from TB.IRSwapsTB import IRSwapsTB
+
+            merged_routers["IRS"] = IRSwapsTB(
+                mdp=merged_mdps["IRS"],  # type: ignore[arg-type]
+                date_col=self._date_col,
+                show_tqdm=True,
+                use_duckdb=True if use_duckdb is None else bool(use_duckdb),
+                duckdb_path=duckdb_path,
+            )
 
         per_product_frames: List[Tuple[str, pd.DataFrame]] = []
         request_plan = self._build_request_plan(
@@ -2137,6 +2348,7 @@ class TimeseriesBuilder:
             ignore_cache=ignore_cache,
             freq=freq,
             timestamps=timestamps,
+            use_irs_vectorized_pricing=use_irs_vectorized_pricing,
         ):
             self._append_product_frame(per_product_frames, product=product, df=df)
 

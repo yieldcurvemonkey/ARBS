@@ -122,6 +122,67 @@ def _is_today(d: DateLike) -> bool:
     return False
 
 
+def _curve_store_source_family(mdp: Optional[IRSwapsMDP]) -> Optional[str]:
+    if mdp is None:
+        return None
+    fn = getattr(mdp, "_curve_store_source_family", None)
+    if callable(fn):
+        try:
+            family = fn()
+        except Exception:
+            family = None
+        if family:
+            return str(family)
+
+    source = str(getattr(mdp, "source", "")).upper()
+    if source in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}:
+        return "barchart_stirf"
+    if source in {"ERIS_EOD_LIVE-RL_BASIC", "ERIS_EOD_LIVE_RL_BASIC"}:
+        return "eris_eod_rl_basic"
+    if source in {"ERIS_EOD_LIVE-RL_BASIC-NOJUMPS", "ERIS_EOD_LIVE_RL_BASIC-NOJUMPS"}:
+        return "eris_eod_rl_basic_nojumps"
+    return None
+
+
+def _uses_legacy_eris_eod_decimal_store_rates(mdp: Optional[IRSwapsMDP]) -> bool:
+    return _curve_store_source_family(mdp) in {
+        "eris_eod_rl_basic",
+        "eris_eod_rl_basic_nojumps",
+    }
+
+
+def _normalize_legacy_eod_cached_rows(
+    *,
+    mdp: Optional[IRSwapsMDP],
+    curve_name: str,
+    query: IRSwapQuery,
+    rows: List[Tuple[DateLike, str, float]],
+) -> List[Tuple[DateLike, str, float]]:
+    if not rows or not _uses_legacy_eris_eod_decimal_store_rates(mdp):
+        return rows
+    if query.value != IRSwapValue.RATE:
+        return rows
+    if getattr(query, "structure", None) != IRSwapStructure.OUTRIGHT:
+        return rows
+
+    expected_col_name = query.col_name(curve_name)
+    tenor_token = str(getattr(query, "tenor", "") or "").strip()
+    if not tenor_token:
+        return rows
+
+    tenor_aliases = {tenor_token, tenor_token.upper(), tenor_token.lower()}
+    normalized_rows: List[Tuple[DateLike, str, float]] = []
+    used_legacy_alias = False
+    for ref_point, column_name, value in rows:
+        column_text = str(column_name)
+        if column_text in tenor_aliases:
+            normalized_rows.append((ref_point, expected_col_name, float(value) * 100.0))
+            used_legacy_alias = True
+        else:
+            normalized_rows.append((ref_point, column_text, float(value)))
+    return normalized_rows if used_legacy_alias else rows
+
+
 class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_irswaps_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS."
@@ -245,6 +306,12 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                             ex,
                         )
                         rows = []
+                    rows = _normalize_legacy_eod_cached_rows(
+                        mdp=self.mdp,
+                        curve_name=curve_name,
+                        query=q,
+                        rows=rows,
+                    )
                     cached_rows.extend(rows)
                     cached_row_keys.update((row_d, row_c) for row_d, row_c, _ in rows)
 
