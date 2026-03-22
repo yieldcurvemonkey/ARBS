@@ -567,6 +567,9 @@ def configure_logging(*, verbose: bool, name: str = "ust_service") -> logging.Lo
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    # Suppress noisy per-request HTTP logs from httpx/httpcore
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     return logging.getLogger(name)
 
 
