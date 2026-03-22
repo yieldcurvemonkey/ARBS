@@ -922,11 +922,10 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
         pricers = {}
         clean_cusips_iter = tqdm.tqdm(clean_cusips, desc="FETCHING CUSIPS...") if show_tqdm else clean_cusips
         for c in clean_cusips_iter:
-            # try:
-            pricers[c] = self._get_single_pricer(cusip=c, timestamp=timestamp, kwargs=kwargs)
-            # except Exception as e:
-            #     # TODO handle errros
-            #     print(f"Failed to fetch cash pricer {c}", e)
+            try:
+                pricers[c] = self._get_single_pricer(cusip=c, timestamp=timestamp, kwargs=kwargs)
+            except Exception as e:
+                _logger.warning("Failed to fetch pricer for %s @ %s: %s", c, timestamp, e)
 
         return pricers
 

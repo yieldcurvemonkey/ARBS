@@ -116,6 +116,9 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
                 if pricers_count == 0:
                     status = "error"
                     error = "No pricers returned"
+                elif pricers_count < len(cusips):
+                    status = "partial"
+                    error = f"{len(cusips) - pricers_count}/{len(cusips)} cusips failed"
             except Exception as exc:
                 status = "error"
                 error = str(exc)
