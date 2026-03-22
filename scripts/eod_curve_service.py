@@ -61,7 +61,8 @@ DEFAULT_CURVES = (DEFAULT_CURVE_NAME,)
 DEFAULT_TS_BASE_DIR = "./data/ts"
 DEFAULT_TS_ROW_GROUP_SIZE = 256_000
 DEFAULT_TS_COMPRESSION = "zstd"
-DEFAULT_USE_DUCKDB = False
+DEFAULT_USE_DUCKDB = True
+DEFAULT_USE_VECTORIZED_ENGINE = True
 
 # ---------------------------------------------------------------------------
 # EOD sources understood by this script
@@ -1248,6 +1249,62 @@ def _warm_timeseries_window(
     return summary
 
 
+def _vectorized_timeseries_warm(
+    *,
+    curve_name: str,
+    start_date: dt.date,
+    end_date: dt.date,
+    explicit_tenors: Sequence[str],
+    source: str,
+    computed_ts_store: object,
+    curve_store: object | None,
+    perf_log_path: Path | None,
+    logger: logging.Logger,
+) -> dict[str, Any]:
+    """Compute all EOD timeseries via vectorized engine in one pass."""
+    from Caching.eod_vectorized_engine import compute_and_persist_eod_panel
+
+    started = time.perf_counter()
+    tenors = _dedupe_preserve_order(explicit_tenors) or _default_tenors_for_curve(curve_name, anchor_date=start_date)
+
+    # Read all raw nodes in one scan
+    active_store = curve_store or CurveStore.default()
+    raw_df = active_store.read_raw_nodes(
+        curve_name,
+        start=start_date,
+        end=end_date,
+    )
+
+    if raw_df.empty:
+        logger.warning("No raw nodes found for %s [%s -> %s]", curve_name, start_date, end_date)
+        summary = {"status": "empty", "rates_computed": 0, "elapsed_seconds": 0.0}
+        _write_perf_event(perf_log_path, {"event": "vectorized_timeseries_result", **summary})
+        return summary
+
+    result = compute_and_persist_eod_panel(
+        raw_nodes_df=raw_df,
+        tenors=tenors,
+        curve_name=curve_name,
+        source=source,
+        computed_ts_store=computed_ts_store,
+        curve_store=active_store,
+    )
+
+    elapsed = time.perf_counter() - started
+    result["elapsed_seconds"] = round(elapsed, 3)
+    _write_perf_event(perf_log_path, {"event": "vectorized_timeseries_result", "curve_name": curve_name, **result})
+    logger.info(
+        "Vectorized TS warm complete for %s: status=%s rates=%s tenors=%s dates=%s elapsed=%.2fs",
+        curve_name,
+        result["status"],
+        result.get("rates_computed", 0),
+        result.get("tenor_count", 0),
+        result.get("date_count", 0),
+        elapsed,
+    )
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Bucketed calibration runner
 # ---------------------------------------------------------------------------
@@ -1415,6 +1472,7 @@ def _add_common_service_args(parser: argparse.ArgumentParser, *, default_n_jobs:
         show_tqdm=True,
         auto_prime_bulk=True,
         use_duckdb=DEFAULT_USE_DUCKDB,
+        use_vectorized_engine=DEFAULT_USE_VECTORIZED_ENGINE,
         ts_base_dir=DEFAULT_TS_BASE_DIR,
         ts_row_group_size=DEFAULT_TS_ROW_GROUP_SIZE,
         ts_compression=DEFAULT_TS_COMPRESSION,
@@ -1423,6 +1481,8 @@ def _add_common_service_args(parser: argparse.ArgumentParser, *, default_n_jobs:
     parser.add_argument("--hide-tqdm", dest="show_tqdm", action="store_false")
     parser.add_argument("--use-duckdb", dest="use_duckdb", action="store_true", help="Enable DuckDB backing for computed TS cache.")
     parser.add_argument("--no-use-duckdb", dest="use_duckdb", action="store_false", help="Disable DuckDB backing for computed TS cache.")
+    parser.add_argument("--use-vectorized-engine", dest="use_vectorized_engine", action="store_true", help="Use vectorized EOD engine for timeseries computation.")
+    parser.add_argument("--no-vectorized-engine", dest="use_vectorized_engine", action="store_false", help="Disable vectorized EOD engine.")
     parser.add_argument("--perf-log-path", default=None, help="Optional JSONL output path.")
 
 
@@ -1655,8 +1715,9 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
         ) -> None:
             progress.record_calibration(status=day_result.status)
             ts_summary: dict[str, Any] = {}
-            if ts_builder is not None and day_result.status != "error":
+            if ts_builder is not None and day_result.status != "error" and not bool(args.use_vectorized_engine):
                 # For EOD, we warm TS for the range [trade_date, trade_date]
+                # (skipped when vectorized engine handles TS in one pass after calibration)
                 ts_summary = _warm_timeseries_window(
                     curve_name=curve_name,
                     timestamps=[trade_date],
@@ -1710,6 +1771,23 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
             if bool(args.fail_fast):
                 break
             continue
+
+        # --- Vectorized timeseries warm (replaces per-date _warm_timeseries_window) ---
+        if bool(args.use_vectorized_engine) and ts_builder is not None:
+            ts_stores = _computed_ts_stores_for_builder(ts_builder)
+            ts_store = ts_stores[0] if ts_stores else None
+            if ts_store is not None:
+                _vectorized_timeseries_warm(
+                    curve_name=curve_name,
+                    start_date=start_date,
+                    end_date=end_date,
+                    explicit_tenors=explicit_tenors,
+                    source=str(args.source),
+                    computed_ts_store=ts_store,
+                    curve_store=None,
+                    perf_log_path=perf_log_path,
+                    logger=logger,
+                )
 
         logger.info(
             "EOD backfill curve summary for %s: successful_days=%s failed_days=%s returned=%s/%s elapsed=%.2fs",
