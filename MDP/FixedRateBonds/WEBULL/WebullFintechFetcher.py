@@ -462,7 +462,6 @@ class WebullFintechFetcher(BaseFetcher):
         sem = asyncio.Semaphore(max_concurrent_tasks)
 
         async def _task(cusip: str):
-            await asyncio.sleep(0.05)
             async with sem:
                 tid = await self._get_ticker_id_from_cusip(client, cusip, headers)
                 return cusip, tid
