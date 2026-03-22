@@ -129,8 +129,12 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
         cusips = list(pricers.keys())
         assert len(cusips) == 2, "its a CURVE!"
 
-        leg0 = self._leg_spec(cusip=cusips[0], prefix="front", **_)
-        leg1 = self._leg_spec(cusip=cusips[1], prefix="back", **_)
+        # Top-level `cusip` can be a slash-delimited package label (e.g. 5s/10s).
+        # Strip it before building each leg, since leg CUSIPs are supplied explicitly.
+        leg_kwargs = {k: v for k, v in _.items() if k != "cusip"}
+
+        leg0 = self._leg_spec(cusip=cusips[0], prefix="front", **leg_kwargs)
+        leg1 = self._leg_spec(cusip=cusips[1], prefix="back", **leg_kwargs)
 
         if front_notional is not None:
             idx, cn, cp = 0, front_notional, None
@@ -183,9 +187,13 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
             if i != idx:
                 risk_weights[i] = np.copysign(risk_weights[i], -risk_weights[idx])
 
-        leg0 = self._leg_spec(cusip=cusips[0], prefix="front", **_)
-        leg1 = self._leg_spec(cusip=cusips[1], prefix="belly", **_)
-        leg2 = self._leg_spec(cusip=cusips[2], prefix="back", **_)
+        # Top-level `cusip` can be a slash-delimited package label (e.g. 5s/10s/30s).
+        # Strip it before building each leg, since leg CUSIPs are supplied explicitly.
+        leg_kwargs = {k: v for k, v in _.items() if k != "cusip"}
+
+        leg0 = self._leg_spec(cusip=cusips[0], prefix="front", **leg_kwargs)
+        leg1 = self._leg_spec(cusip=cusips[1], prefix="belly", **leg_kwargs)
+        leg2 = self._leg_spec(cusip=cusips[2], prefix="back", **leg_kwargs)
 
         return (
             self._build_spreadable(
