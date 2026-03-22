@@ -65,6 +65,40 @@ def _resolve_computed_timeseries_base_dir(base_dir: Union[str, Path, None]) -> P
     return (REPO_ROOT / path).resolve()
 
 
+def _open_duckdb_graceful(db_path: str) -> Optional["DuckDBTimeseriesCache"]:
+    """Try read-write, then read-only, then give up.
+
+    Returns a DuckDBTimeseriesCache or None if the file is completely
+    inaccessible (e.g. locked by another process that also blocks
+    read-only access).
+    """
+    from Caching.duckdb_timeseries_cache import DuckDBTimeseriesCache
+
+    # 1. Try read-write (full cache participation)
+    try:
+        return DuckDBTimeseriesCache(db_path=db_path)
+    except Exception:
+        pass
+
+    # 2. Try read-only (concurrent reads still fast)
+    try:
+        cache = DuckDBTimeseriesCache(db_path=db_path, read_only=True)
+        logger.info(
+            "DuckDB opened read-only (write lock held by another process): %s",
+            db_path,
+        )
+        return cache
+    except Exception:
+        pass
+
+    # 3. Give up — parquet fallback
+    logger.warning(
+        "DuckDB unavailable (file locked), falling back to parquet-only: %s",
+        db_path,
+    )
+    return None
+
+
 class ComputedTimeseriesStore:
     def __init__(
         self,
@@ -85,10 +119,8 @@ class ComputedTimeseriesStore:
         self._bg_push_pending = 0
         self._bg_push_condition = threading.Condition(threading.Lock())
         if use_duckdb:
-            from Caching.duckdb_timeseries_cache import DuckDBTimeseriesCache
-
             resolved_duckdb_path = duckdb_path or str(Path(self._opts.base_dir) / "computed_ts.duckdb")
-            self._duckdb_cache = DuckDBTimeseriesCache(db_path=resolved_duckdb_path)
+            self._duckdb_cache = _open_duckdb_graceful(resolved_duckdb_path)
 
     @property
     def write_options(self) -> WriteOptions:

@@ -60,12 +60,14 @@ CREATE TABLE IF NOT EXISTS sync_watermarks (
 class DuckDBTimeseriesCache:
     """Persistent local DuckDB store for computed timeseries rows."""
 
-    def __init__(self, db_path: Optional[str] = None) -> None:
+    def __init__(self, db_path: Optional[str] = None, *, read_only: bool = False) -> None:
         self._db_path = db_path or os.environ.get("ARBS_DUCKDB_PATH") or _default_db_path()
+        self._read_only = read_only
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = duckdb.connect(self._db_path)
+        self._conn = duckdb.connect(self._db_path, read_only=read_only)
         self._lock = threading.Lock()
-        self._init_schema()
+        if not read_only:
+            self._init_schema()
 
     def _init_schema(self) -> None:
         with self._lock:
@@ -77,19 +79,27 @@ class DuckDBTimeseriesCache:
                 self._conn.close()
                 self._conn = None
 
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
     def upsert_rows(
         self,
         symbol: str,
         rows: Sequence[Tuple[datetime.date, str, float]],
     ) -> int:
-        """Insert or update rows. Returns count of rows upserted."""
+        """Insert or update rows. Returns count of rows upserted. No-op when read_only."""
+        if self._read_only:
+            return 0
         return self.upsert_many_rows({symbol: rows})
 
     def upsert_many_rows(
         self,
         rows_by_symbol: Mapping[str, Sequence[Tuple[datetime.date, str, float]]],
     ) -> int:
-        """Insert or update rows for multiple symbols in one transaction."""
+        """Insert or update rows for multiple symbols in one transaction. No-op when read_only."""
+        if self._read_only:
+            return 0
         payload = [
             [symbol, trading_date, column_name, value]
             for symbol, rows in rows_by_symbol.items()
@@ -169,6 +179,8 @@ class DuckDBTimeseriesCache:
         return row[0] if row else None
 
     def set_watermark(self, symbol: str, ts: datetime.datetime) -> None:
+        if self._read_only:
+            return
         with self._lock:
             count_row = self._conn.execute(
                 "SELECT COUNT(*) FROM computed_timeseries WHERE symbol = ?",
