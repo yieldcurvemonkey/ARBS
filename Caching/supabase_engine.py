@@ -94,7 +94,6 @@ def get_engine() -> Optional[Engine]:
             pool_timeout=30,
             pool_recycle=1800,
             pool_pre_ping=True,
-            executemany_mode="values_list",
         )
         logger.info(
             "ARBS Supabase engine created: %s (pool=%d+%d)",
