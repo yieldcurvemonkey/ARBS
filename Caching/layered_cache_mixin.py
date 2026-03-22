@@ -287,14 +287,21 @@ class LayeredDictProxy(MutableMapping):
         Serialization happens here (caller thread) so workers only do I/O.
         A brief timeout provides backpressure before dropping writes.
         """
+        cls = type(self)
+        work_queue = cls._ensure_l2_write_workers()
+
+        # Fast-path: skip expensive serialization when queue is already saturated
+        if work_queue.full():
+            cls._L2_WRITES_DROPPED += 1
+            logger.debug("L2 write queue full; skipping serialize for %s/%s", self._ns, cache_key[:12])
+            return
+
         try:
             payload_bytes = _pickle_impl.dumps(value)
         except Exception:
             logger.warning("L2 serialization failed for %s/%s", self._ns, cache_key[:12], exc_info=True)
             return
 
-        cls = type(self)
-        work_queue = cls._ensure_l2_write_workers()
         item = (self._ns, cache_key, repr(key)[:500], payload_bytes, _DEFAULT_SERIALIZER)
         try:
             timeout = cls._L2_WRITE_TIMEOUT
@@ -305,7 +312,7 @@ class LayeredDictProxy(MutableMapping):
             cls._L2_WRITES_OK += 1
         except queue.Full:
             cls._L2_WRITES_DROPPED += 1
-            logger.warning("L2 write queue full; dropping write for %s/%s", self._ns, cache_key[:12])
+            logger.debug("L2 write queue full; dropping write for %s/%s", self._ns, cache_key[:12])
 
     @classmethod
     def _maybe_log_stats(cls, batch_len: int) -> None:
