@@ -58,6 +58,18 @@ def _period_to_ql(period_str: str) -> ql.Period:
     raise ValueError(f"Unknown period unit: {unit_char!r}")
 
 
+def _to_py_date(d) -> datetime.date:
+    """Convert any date-like (Timestamp, numpy.datetime64, date, datetime) to datetime.date."""
+    if isinstance(d, datetime.date) and not isinstance(d, datetime.datetime):
+        return d
+    if isinstance(d, datetime.datetime):
+        return d.date()
+    if isinstance(d, pd.Timestamp):
+        return d.date()
+    # numpy.datetime64 or other
+    return pd.Timestamp(d).date()
+
+
 def _ql_date(d: datetime.date) -> ql.Date:
     return ql.Date(d.day, d.month, d.year)
 
@@ -214,10 +226,19 @@ def compute_eod_rate_panel(
     if raw_nodes_df.empty or not tenors:
         return pd.DataFrame()
 
-    trading_dates = [
-        d.date() if isinstance(d, pd.Timestamp) else d
-        for d in raw_nodes_df["trading_date"]
-    ]
+    trading_dates = [_to_py_date(d) for d in raw_nodes_df["trading_date"]]
+
+    # Filter tenors to only those parseable by our engine (skip FOMC, IMM, etc.)
+    valid_tenors: List[str] = []
+    for tenor in tenors:
+        try:
+            parse_tenor(tenor)
+            valid_tenors.append(tenor)
+        except ValueError:
+            logger.debug("Skipping unsupported tenor for vectorized engine: %s", tenor)
+    tenors = valid_tenors
+    if not tenors:
+        return pd.DataFrame()
 
     # Pre-build schedules: {tenor: {trading_date: PaymentSchedule}}
     schedules: Dict[str, Dict[datetime.date, PaymentSchedule]] = {}
@@ -240,17 +261,12 @@ def compute_eod_rate_panel(
     # Compute rates
     results: Dict[str, List[float]] = {tenor: [] for tenor in tenors}
     for _, row in raw_nodes_df.iterrows():
-        td = row["trading_date"]
-        if isinstance(td, pd.Timestamp):
-            td = td.date()
+        td = _to_py_date(row["trading_date"])
         node_dates_raw = row["node_dates"]
         dfs_raw = row["discount_factors"]
 
-        # Convert node dates
-        node_dates = [
-            d.date() if isinstance(d, pd.Timestamp) else d
-            for d in node_dates_raw
-        ]
+        # Convert node dates (handles numpy.datetime64, Timestamp, date, etc.)
+        node_dates = [_to_py_date(d) for d in node_dates_raw]
         node_dfs = np.array(dfs_raw, dtype=np.float64)
 
         for tenor in tenors:
@@ -327,10 +343,7 @@ def compute_and_persist_eod_panel(
     if panel.empty:
         return {"status": "empty", "rates_computed": 0, "symbols": [], "elapsed_seconds": 0.0}
 
-    trading_dates = [
-        d.date() if isinstance(d, pd.Timestamp) else d
-        for d in panel.index
-    ]
+    trading_dates = [_to_py_date(d) for d in panel.index]
     symbols: List[str] = []
 
     # --- Write to ComputedTimeseriesStore (DuckDB L1 + Parquet TS) ---
