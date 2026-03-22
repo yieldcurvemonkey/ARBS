@@ -61,7 +61,7 @@ _BENCHMARK_ALIASES = tuple(f"CT{t}" for t in _OI_TENORS)
 _OTR_PLUS_OLD_ALIASES = tuple(
     alias
     for t in _OI_TENORS
-    for alias in (f"CT{t}", f"O{t}", f"OO{t}")
+    for alias in (f"CT{t}", f"O{t}", f"OO{t}", f"OOO{t}")
 )
 
 
@@ -75,7 +75,7 @@ def resolve_bond_universe(
 
     Tiers:
         benchmarks     — CT2..CT30 (7 on-the-run aliases)
-        otr-plus-old   — CT/O/OO for each OI bucket (21 aliases)
+        otr-plus-old   — CT/O/OO/OOO for each OI bucket (28 aliases)
         full-active    — every CUSIP from reference data where
                          issue_date <= as_of_date <= maturity_date
     """
