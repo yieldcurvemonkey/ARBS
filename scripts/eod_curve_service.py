@@ -125,25 +125,25 @@ _EOD_FORWARD_START_TENORS = (
     "2Y15Y", "2Y20Y", "2Y30Y",
     # --- 3Y forward (key sector) ---
     "3Y1Y", "3Y2Y", "3Y3Y", "3Y5Y", "3Y7Y", "3Y10Y",
-    "3Y15Y", "3Y20Y", "3Y27Y",
+    "3Y15Y", "3Y20Y", "3Y30Y",
     # --- 4Y forward ---
     "4Y1Y", "4Y2Y", "4Y3Y", "4Y5Y", "4Y6Y", "4Y7Y", "4Y10Y",
-    "4Y15Y", "4Y20Y", "4Y26Y",
+    "4Y15Y", "4Y20Y", "4Y30Y",
     # --- 5Y forward (key sector) ---
     "5Y1Y", "5Y2Y", "5Y3Y", "5Y5Y", "5Y7Y", "5Y10Y",
-    "5Y15Y", "5Y20Y", "5Y25Y",
+    "5Y15Y", "5Y20Y", "5Y30Y",
     # --- 7Y forward ---
     "7Y1Y", "7Y2Y", "7Y3Y", "7Y5Y", "7Y10Y",
-    "7Y15Y", "7Y23Y",
+    "7Y15Y", "7Y20Y", "7Y30Y",
     # --- 10Y forward ---
     "10Y1Y", "10Y2Y", "10Y3Y", "10Y5Y", "10Y10Y",
-    "10Y15Y", "10Y20Y",
+    "10Y15Y", "10Y20Y", "10Y30Y",
     # --- 15Y forward ---
-    "15Y1Y", "15Y5Y", "15Y10Y", "15Y15Y",
+    "15Y1Y", "15Y5Y", "15Y10Y", "15Y15Y", "15Y30Y",
     # --- 20Y forward ---
     "20Y1Y", "20Y5Y", "20Y10Y", "20Y30Y",
     # --- 30Y forward ---
-    "30Y1Y", "30Y5Y", "30Y10Y", "30Y20Y",
+    "30Y1Y", "30Y5Y", "30Y10Y", "30Y20Y", "30Y30Y",
 )
 
 # Common spread / butterfly building-block tenors used by the medium-term desk
