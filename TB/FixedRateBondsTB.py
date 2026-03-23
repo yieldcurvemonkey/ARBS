@@ -22,6 +22,8 @@ from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from Query.Base.query_resolution import resolve_query
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
+from Query.FixedRateBonds.FixedRateBondStructure import FixedRateBondStructure
+from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 from TB.BaseTimeseriesTB import BaseTimeseriesTB
 from TB.utils import DateLike, _canonicalize_value, _dt_to_epoch_ns
 from utils.ql_utils import datetime_to_ql_date
@@ -80,6 +82,27 @@ def _build_row_for_query(
     ref_dt: DateLike,
     date_col: str,
 ) -> Tuple[DateLike, str, float]:
+    simple_cusip = str(getattr(q, "cusip", "") or "").strip()
+    simple_structure_kwargs = dict(getattr(q, "structure_kwargs", {}) or {})
+    if (
+        getattr(q, "structure", None) == FixedRateBondStructure.OUTRIGHT
+        and getattr(q, "value", None) == FixedRateBondValue.YTM
+        and simple_cusip
+        and simple_cusip in pricer_for_cusip
+        and not any(
+            simple_structure_kwargs.get(key) is not None
+            for key in (
+                "issue_date",
+                "maturity_date",
+                "cpn",
+                "coupon",
+                "notional",
+                "bpv",
+            )
+        )
+    ):
+        return ref_dt, q.col_name(), float(pricer_for_cusip[simple_cusip].ytm())
+
     q_eff = resolve_query(q, timestamp=ref_dt, pricer_or_curve=pricer_for_cusip)
     skw = dict(getattr(q_eff, "structure_kwargs", {}) or {})
     user_passed_rws = _clone_risk_weights(skw.get("risk_weights", None))
@@ -99,6 +122,7 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_fixedratebonds_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING FIXED-RATE BONDS."
     _CACHE_VERSION = "v1"
+    _ROW_CACHE_L2_SCAN_SUPPRESS_THRESHOLD = 64
 
     def __init__(
         self,
@@ -167,6 +191,16 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
     def _ts_symbol_for_query(self, q: FixedRateBondQuery) -> str:
         return f"FRB::{self.mdp.source}::{_query_fingerprint(q)}"
 
+    @classmethod
+    def _should_suppress_row_cache_l2(
+        cls,
+        *,
+        reference_point_count: int,
+        query_count: int,
+    ) -> bool:
+        probe_count = max(0, int(reference_point_count)) * max(1, int(query_count))
+        return probe_count > cls._ROW_CACHE_L2_SCAN_SUPPRESS_THRESHOLD
+
     def get_timeseries(
         self,
         start: DateLike,
@@ -227,10 +261,13 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         to_price_dates: List[Union[datetime.date, datetime.datetime]] = []
         cache_map = getattr(self, self._cache_attr)
 
-        # For intraday with many ref points, temporarily suppress L2 reads
-        # during the scan loop to avoid N sequential Supabase round-trips.
-        # The MDP's bulk_get_data will handle fetching missing data.
-        _suppress_l2 = is_intraday and len(ref_points) > 50
+        # For large runs, temporarily suppress row-cache L2 probes during the
+        # scan loop to avoid one remote round-trip per (date, query) miss.
+        # bulk_get_data handles misses much more efficiently.
+        _suppress_l2 = self._should_suppress_row_cache_l2(
+            reference_point_count=len(ref_points),
+            query_count=len(flat),
+        )
         _prev_l2_read = None
         if _suppress_l2 and hasattr(cache_map, '_l2_read'):
             _prev_l2_read = cache_map._l2_read

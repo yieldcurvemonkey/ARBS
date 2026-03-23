@@ -21,6 +21,12 @@ class IRSwapValue(Enum):
 
     SPREADOVER = auto()
     MMSS = auto()
+    SPREADOVER_CARRY_ADJUSTED = auto()
+    MMSS_CARRY_ADJUSTED = auto()
+    SPREADOVER_ROLL_ADJUSTED = auto()
+    MMSS_ROLL_ADJUSTED = auto()
+    SPREADOVER_CR_ADJUSTED = auto()
+    MMSS_CR_ADJUSTED = auto()
     PAR_PAR_ASW = auto()
     TRUE_ASW = auto()
     PROCEEDS_ASW = auto()

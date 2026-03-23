@@ -101,8 +101,8 @@ class FixingsFetcher(BaseFetcher):
             "USD-OIS": self._effr_nyfrb,
             "USD-OIS_FRED": functools.partial(self._fetch_fred_series, series_id="EFFR"),
             "CAD-CORRA": self._corra_boc,
-            "GBP-SONIA": functools.partial(self._fetch_fred_series, series_id="IUDSOIA"),
-            "EUR-ESTR": functools.partial(self._fetch_fred_series, series_id="ECBESTRVOLWGTTRMDMNRT"),
+            "GBP-SONIA_FRED": functools.partial(self._fetch_fred_series, series_id="IUDSOIA"),
+            "EUR-ESTR_FRED": functools.partial(self._fetch_fred_series, series_id="ECBESTRVOLWGTTRMDMNRT"),
             "EUR-EURIBOR-1M": self._euribor_1m,
             "EUR-EURIBOR-3M": self._euribor_3m,
             "EUR-EURIBOR-6M": self._euribor_6m,
@@ -115,6 +115,8 @@ class FixingsFetcher(BaseFetcher):
             curve = "USD-OIS"
         if "SOFR" in curve:
             curve = "USD-SOFR-1D"
+        if "SONIA" in curve:
+            curve = "GBP-SONIA"
 
         if use_fred:
             curve = f"{curve}_FRED"

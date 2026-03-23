@@ -1,5 +1,6 @@
 import datetime
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -130,6 +131,26 @@ class FixedRateBondQuery(BaseQuery):
                 return ref_dt
             return None
 
+        def _can_resolve_from_pricer_keys(txt: str) -> bool:
+            if not isinstance(pricer_or_curve, Mapping):
+                return False
+
+            token = str(txt or "").strip()
+            if not token:
+                return False
+
+            if ("x" in token) and ("Ox" not in token):
+                parts = [part.strip() for part in token.split("x") if part.strip()]
+            elif ("/" in token) and (not re.match(r"^\d{2}\d{2}/\d{1,2}$", token)):
+                parts = [part.strip() for part in token.split("/") if part.strip()]
+            else:
+                parts = [token]
+
+            try:
+                return all(part in pricer_or_curve for part in parts)
+            except Exception:
+                return False
+
         def _resolve_on_the_run_token(token: str, as_of: datetime.date) -> str:
             from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
 
@@ -186,6 +207,8 @@ class FixedRateBondQuery(BaseQuery):
         def _resolve_cusip_aliases(txt: str) -> str:
             as_of = _as_of_date()
             if not as_of:
+                return txt
+            if _can_resolve_from_pricer_keys(txt):
                 return txt
             tokens = re.split(r"([/x])", txt)
             resolved = []

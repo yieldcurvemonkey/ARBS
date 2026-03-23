@@ -253,6 +253,15 @@ class _StaticSpreadMDP:
         value = request.get("value")
         if value == IRSwapValue.MARKET_ASW:
             return _StaticSpreadPricer(27.25)
+        if value in {
+            IRSwapValue.MMSS_CARRY_ADJUSTED,
+            IRSwapValue.SPREADOVER_CARRY_ADJUSTED,
+            IRSwapValue.MMSS_ROLL_ADJUSTED,
+            IRSwapValue.SPREADOVER_ROLL_ADJUSTED,
+            IRSwapValue.MMSS_CR_ADJUSTED,
+            IRSwapValue.SPREADOVER_CR_ADJUSTED,
+        }:
+            return _StaticSpreadPricer(21.75)
         return _StaticSpreadPricer(self.mmss_bps)
 
 
@@ -347,6 +356,42 @@ def test_asset_swap_values_dispatch_to_quantlib_helper(monkeypatch: pytest.Monke
     assert seen["par_par_asw"] is True
 
 
+@pytest.mark.parametrize(
+    ("value", "expected_bps"),
+    [
+        (IRSwapValue.MMSS_CARRY_ADJUSTED, 26.5),
+        (IRSwapValue.MMSS_ROLL_ADJUSTED, 24.5),
+        (IRSwapValue.MMSS_CR_ADJUSTED, 26.0),
+        (IRSwapValue.SPREADOVER_CARRY_ADJUSTED, 31.5),
+        (IRSwapValue.SPREADOVER_ROLL_ADJUSTED, 29.5),
+        (IRSwapValue.SPREADOVER_CR_ADJUSTED, 31.0),
+    ],
+)
+def test_adjusted_swap_spread_values_add_cached_adjustments(monkeypatch: pytest.MonkeyPatch, value: IRSwapValue, expected_bps: float):
+    ref_date = datetime.date(2026, 1, 2)
+    curve = _FakeCurve(reference_date=ref_date, rate_decimal=0.0425 if value.name.startswith("MMSS") else 0.0430)
+    irs_mdp = _CaptureIRSMDP(curve)
+    frb_mdp = _CaptureFRBMDP(_FakeBondPricer(ytm_percent=4.00))
+    mdp = IRSwapSpreadsMDP(_irs_mdp=irs_mdp, _frb_mdp=frb_mdp)
+
+    monkeypatch.setattr(
+        IRSwapSpreadsMDP,
+        "_compute_adjustment_bps",
+        lambda self, **kwargs: {"carry": 1.5, "roll": -0.5, "carry_and_roll": 1.0},
+    )
+
+    pricer = mdp.get_pricer(
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamp": ref_date,
+            "tenor": "CT10",
+            "value": value,
+        }
+    )
+
+    assert pricer.value_bps() == pytest.approx(expected_bps)
+
+
 def test_timeseries_builder_can_use_explicit_irswap_spreads_mdp():
     spread_mdp = _StaticSpreadMDP(mmss_bps=18.5)
     tb = TimeseriesBuilder()
@@ -364,6 +409,25 @@ def test_timeseries_builder_can_use_explicit_irswap_spreads_mdp():
     assert len(spread_mdp.requests) == 2
     assert all(req["value"] == IRSwapValue.MMSS for req in spread_mdp.requests)
     assert out.iloc[0, 0] == pytest.approx(18.5)
+
+
+def test_timeseries_builder_routes_adjusted_swap_spreads_to_explicit_spread_mdp():
+    spread_mdp = _StaticSpreadMDP(mmss_bps=18.5)
+    tb = TimeseriesBuilder()
+
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="CT10", value=IRSwapValue.MMSS_CR_ADJUSTED)
+    out = tb.get_timeseries(
+        start=datetime.date(2026, 1, 5),
+        end=datetime.date(2026, 1, 6),
+        queries=[q],
+        mdps={"IRSWAPSPREADS": spread_mdp},
+        drop_multilevel_cols=False,
+    )
+
+    assert not out.empty
+    assert len(spread_mdp.requests) == 2
+    assert all(req["value"] == IRSwapValue.MMSS_CR_ADJUSTED for req in spread_mdp.requests)
+    assert out.iloc[0, 0] == pytest.approx(21.75)
 
 
 def test_timeseries_builder_explicit_spread_mdp_handles_asw_only_queries():

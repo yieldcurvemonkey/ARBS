@@ -269,6 +269,48 @@ def test_unified_query_accepts_direct_curve_and_tenor_fields():
     assert legacy.tenor == "IMM_Z26xIMM_H27"
 
 
+def test_unified_query_accepts_direct_cusip_field():
+    unified = UnifiedQuery(
+        cusip="CT10",
+        value=UnifiedValue.FRB_YTM,
+    )
+
+    assert unified.product == "FRB"
+    assert unified.selector["cusip"] == "CT10"
+    assert unified.cusip == "CT10"
+
+    legacy = unified.to_legacy()
+    assert isinstance(legacy, FixedRateBondQuery)
+    assert legacy.cusip == "CT10"
+    assert legacy.value == FixedRateBondValue.YTM
+
+
+def test_unified_query_rejects_conflicting_direct_cusip_and_selector():
+    with pytest.raises(ValueError, match="conflicting 'cusip'"):
+        UnifiedQuery(
+            cusip="CT10",
+            value=UnifiedValue.FRB_YTM,
+            selector={"cusip": "CT5"},
+        )
+
+
+def test_fixed_rate_bond_alias_resolution_reuses_existing_pricer_keys(monkeypatch):
+    import MDP.FixedRateBonds.reference_data_cache.ust_reference_data as refdata_module
+
+    query = FixedRateBondQuery(cusip="CT10", value=FixedRateBondValue.YTM)
+
+    monkeypatch.setattr(
+        refdata_module,
+        "update_reference_data",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("reference data lookup should be skipped")),
+    )
+
+    resolved = query.resolve_query(_now(), pricer_or_curve={"CT10": object()})
+
+    assert resolved.cusip == "CT10"
+    assert resolved.structure_kwargs["cusip"] == "CT10"
+
+
 def test_unified_query_irs_imm_forward_tenor_resolves_as_outright():
     curve = _IRCurveStub()
     unified = UnifiedQuery(

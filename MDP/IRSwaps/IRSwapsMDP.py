@@ -674,14 +674,17 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         fixings_key = (ref, reference_curve_name)
         fixings = None if fixings_cache is None else fixings_cache.get(fixings_key)
         if fixings is None:
-            fixings = _fetch_fixings(
-                as_of_date=ref,
-                curve_name=reference_curve_name,
-                force_refresh=self.force_refresh_fixings,
-            ).sort_index()
-            fixings = fixings[fixings.index.date < ref] * 100
-            if fixings_cache is not None:
-                fixings_cache[fixings_key] = fixings
+            try:
+                fixings = _fetch_fixings(
+                    as_of_date=ref,
+                    curve_name=reference_curve_name,
+                    force_refresh=self.force_refresh_fixings,
+                ).sort_index()
+                fixings = fixings[fixings.index.date < ref] * 100
+                if fixings_cache is not None:
+                    fixings_cache[fixings_key] = fixings
+            except:
+                pass
 
         ts_meta = getattr(rl_curve_handle, "timestamp", request_timestamp)
         curve_id = f"{self.source.upper()}-{resolved_curve_name}-{ts_meta}"

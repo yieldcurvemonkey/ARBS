@@ -16,6 +16,7 @@ class UnifiedQuery(BaseQuery):
     selector: Mapping[str, Any] = field(default_factory=dict)
     curve: Any = None
     tenor: Any = None
+    cusip: Any = None
 
     structure_kwargs: Mapping[str, Any] = field(default_factory=dict)
     value_kwargs: Mapping[str, Any] = field(default_factory=dict)
@@ -25,7 +26,7 @@ class UnifiedQuery(BaseQuery):
 
     def __post_init__(self):
         selector = dict(self.selector or {})
-        for key, direct_value in (("curve", self.curve), ("tenor", self.tenor)):
+        for key, direct_value in (("curve", self.curve), ("tenor", self.tenor), ("cusip", self.cusip)):
             if direct_value is None:
                 continue
             existing_value = selector.get(key)
@@ -48,6 +49,7 @@ class UnifiedQuery(BaseQuery):
         object.__setattr__(self, "selector", selector)
         object.__setattr__(self, "curve", selector.get("curve"))
         object.__setattr__(self, "tenor", selector.get("tenor"))
+        object.__setattr__(self, "cusip", selector.get("cusip"))
         object.__setattr__(self, "structure_kwargs", dict(self.structure_kwargs or {}))
         object.__setattr__(self, "value_kwargs", dict(self.value_kwargs or {}))
         object.__setattr__(self, "market_request", dict(self.market_request or {}))

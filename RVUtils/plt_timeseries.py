@@ -732,23 +732,40 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
 
                 # helper: horizontal line
                 def _add_hline(val, lbl, axis_for_line, line_style):
+                    line_style = dict(line_style or {})
+
                     if state["engine"] == "matplotlib":
                         line_style.setdefault("linestyle", ":")
                         line_style.setdefault("linewidth", 1.0)
-                        h = (ax_ind if axis_for_line is None else axis_for_line).axhline(y=val, color=style_color or color, **line_style, label=lbl)
+
+                        line_color = line_style.pop("color", style_color or color)
+
+                        h = (ax_ind if axis_for_line is None else axis_for_line).axhline(
+                            y=val,
+                            color=line_color,
+                            **line_style,
+                            label=lbl,
+                        )
                         state["indicator_lines"].append(h)
                         _remember_line_mpl(h, lbl, pd.Series([val], index=[s_proc.index[-1]]))
                     else:
                         x0, x1 = (s_proc.index.min(), s_proc.index.max()) if len(s_proc) else (0, 1)
                         dash_map = {":": "dot", "--": "dash", "-.": "dashdot", "-": "solid"}
+
+                        line_color = line_style.pop("color", style_color or color)
                         dash = dash_map.get(line_style.get("linestyle", ":"), "dot")
+
                         fig.add_trace(
                             go.Scatter(
                                 x=[x0, x1],
                                 y=[val, val],
                                 mode="lines",
                                 name=lbl,
-                                line=dict(dash=dash, width=line_style.get("linewidth", 1.0), color=style_color or color),
+                                line=dict(
+                                    dash=dash,
+                                    width=line_style.get("linewidth", 1.0),
+                                    color=line_color,
+                                ),
                                 yaxis=ax_ind,
                                 showlegend=True,
                             )
@@ -960,6 +977,53 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
                     if "linestyle" not in line_style:
                         line_style["linestyle"] = ":"
                     _add_hline(avg_val, lbl, ax_ind if state["engine"] == "matplotlib" else None, line_style)
+
+                elif kind == "full_sigma":
+                    s_valid2 = s_proc.dropna()
+                    if len(s_valid2) == 0:
+                        continue
+
+                    n = float(ind.get("n", 2))
+                    mu = float(s_valid2.mean())
+                    sd = float(s_valid2.std(ddof=1))
+                    upper = mu + n * sd
+                    lower = mu - n * sd
+
+                    show_center = bool(ind.get("center", True))
+                    hide_center = bool(ind.get("hide_center", False))
+                    hide_upper = bool(ind.get("hide_upper", False))
+                    hide_lower = bool(ind.get("hide_lower", False))
+
+                    lblm = ind.get("label_center", ind.get("label", f"Mean({label})"))
+                    lblu = ind.get("label_upper", f"+{n:g}σ({label})")
+                    lbll = ind.get("label_lower", f"-{n:g}σ({label})")
+
+                    if hide:
+                        if show_center and not hide_center:
+                            _handle_scalar_hide(mu, lblm)
+                        if not hide_upper:
+                            _handle_scalar_hide(upper, lblu)
+                        if not hide_lower:
+                            _handle_scalar_hide(lower, lbll)
+                        continue
+
+                    center_style = dict(ind.get("style_center", style))
+                    upper_style = dict(ind.get("style_upper", style))
+                    lower_style = dict(ind.get("style_lower", style))
+
+                    if "linestyle" not in center_style:
+                        center_style["linestyle"] = ":"
+                    if "linestyle" not in upper_style:
+                        upper_style["linestyle"] = "--"
+                    if "linestyle" not in lower_style:
+                        lower_style["linestyle"] = "--"
+
+                    if show_center and not hide_center:
+                        _add_hline(mu, lblm, ax_ind if state["engine"] == "matplotlib" else None, center_style)
+                    if not hide_upper:
+                        _add_hline(upper, lblu, ax_ind if state["engine"] == "matplotlib" else None, upper_style)
+                    if not hide_lower:
+                        _add_hline(lower, lbll, ax_ind if state["engine"] == "matplotlib" else None, lower_style)
 
                 elif kind == "hurst":
                     H = _hurst_exponent(s_proc, ind.get("max_lag", 100))

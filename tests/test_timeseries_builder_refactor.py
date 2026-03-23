@@ -1,5 +1,7 @@
 import datetime
 import uuid
+import threading
+import time
 from concurrent.futures import Future
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -98,6 +100,51 @@ class _NoCallRouter(_FakeRouter):
     def get_timeseries(self, *args, **kwargs) -> pd.DataFrame:
         self.call_count += 1
         raise AssertionError("router fallback should not be used")
+
+
+class _ConcurrentFakeRouter(_FakeRouter):
+    def __init__(
+        self,
+        shared_state: Dict[str, int],
+        shared_lock: threading.Lock,
+        *args,
+        delay_s: float = 0.05,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self._shared_state = shared_state
+        self._shared_lock = shared_lock
+        self._delay_s = float(delay_s)
+
+    def get_timeseries(
+        self,
+        start,
+        end,
+        queries,
+        *,
+        n_jobs=1,
+        ignore_cache=False,
+        freq=None,
+        timestamps=None,
+    ) -> pd.DataFrame:
+        with self._shared_lock:
+            current = self._shared_state.get("current", 0) + 1
+            self._shared_state["current"] = current
+            self._shared_state["max"] = max(self._shared_state.get("max", 0), current)
+        try:
+            time.sleep(self._delay_s)
+            return super().get_timeseries(
+                start,
+                end,
+                queries,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                freq=freq,
+                timestamps=timestamps,
+            )
+        finally:
+            with self._shared_lock:
+                self._shared_state["current"] -= 1
 
 
 class _PartialFallbackRouter(_FakeRouter):
@@ -866,6 +913,42 @@ def test_timeseries_builder_uses_curve_store_fast_path_for_irs_intraday(monkeypa
     assert store.raw_reads[0]["timestamps_utc"] == [ts1, ts2]
     assert store.reconstruct_workers == [4]
     assert mdp.wrap_calls
+
+
+def test_timeseries_builder_routes_alias_backed_irs_queries_away_from_curve_store():
+    mdp = _FakeIRSCurveStoreMDP(_FakeIRSCurveStore([]), source="ERIS_EOD_LIVE-RL_BASIC")
+    router = _FakeRouter(auto_cols=True, auto_value=0.045)
+    router.mdp = mdp
+    tb = TimeseriesBuilder(irswaps_tb=router)
+
+    benchmark_q = IRSwapQuery(curve="USD-SOFR-1D", tenor="7Y/20Y", value=IRSwapValue.RATE)
+    alias_q = IRSwapQuery(curve="USD-SOFR-1D", tenor="CT7/CT20", value=IRSwapValue.RATE)
+
+    benchmark_plan = tb._build_request_plan(
+        flat_queries=[benchmark_q],
+        merged_routers={"IRS": router},
+        merged_mdps={},
+        start=START,
+        end=END,
+        ignore_cache=False,
+        freq=None,
+        timestamps=None,
+    )
+    alias_plan = tb._build_request_plan(
+        flat_queries=[alias_q],
+        merged_routers={"IRS": router},
+        merged_mdps={},
+        start=START,
+        end=END,
+        ignore_cache=False,
+        freq=None,
+        timestamps=None,
+    )
+
+    assert len(benchmark_plan.product_plans) == 1
+    assert benchmark_plan.product_plans[0].strategy == "irs_curve_store"
+    assert len(alias_plan.product_plans) == 1
+    assert alias_plan.product_plans[0].strategy == "route"
 
 
 def test_timeseries_builder_curve_store_fast_path_shows_pricing_tqdm_by_default(monkeypatch):
@@ -2054,5 +2137,37 @@ def test_spreadover_alias_mapping_regression_ct_vs_y():
     )
     assert any(
         isinstance(x, IRSwapQuery) and x.tenor == "10Y" and x.value == IRSwapValue.RATE
+        for x in irs_router.received_queries
+    )
+
+
+def test_spreadover_component_fetches_run_in_parallel():
+    shared_state = {"current": 0, "max": 0}
+    shared_lock = threading.Lock()
+    irs_router = _ConcurrentFakeRouter(
+        shared_state,
+        shared_lock,
+        auto_cols=True,
+        auto_value=0.045,
+    )
+    frb_router = _ConcurrentFakeRouter(
+        shared_state,
+        shared_lock,
+        auto_cols=True,
+        auto_value=0.040,
+    )
+    tb = TimeseriesBuilder(irswaps_tb=irs_router, fixedratebonds_tb=frb_router)
+
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="7Y/20Y", value=IRSwapValue.SPREADOVER)
+    out = tb.get_timeseries(start=START, end=END, queries=[q])
+
+    assert not out.empty
+    assert shared_state["max"] >= 2
+    assert any(
+        isinstance(x, FixedRateBondQuery) and x.cusip == "CT7/CT20"
+        for x in frb_router.received_queries
+    )
+    assert any(
+        isinstance(x, IRSwapQuery) and x.tenor == "7Y/20Y" and x.value == IRSwapValue.RATE
         for x in irs_router.received_queries
     )

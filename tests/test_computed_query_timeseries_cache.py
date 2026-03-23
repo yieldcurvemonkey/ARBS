@@ -54,6 +54,26 @@ class _FakeFixedRateBondsMDP(MarketDataProvider):
         return {ts: {cusip: {"cusip": cusip, "timestamp": ts} for cusip in cusips} for ts in timestamps}
 
 
+class _ProbeRecordingCache(dict):
+    def __init__(self):
+        super().__init__()
+        self._l2_read = True
+        self._l2_write = True
+        self.contains_flags: list[bool] = []
+
+    def __contains__(self, key):
+        self.contains_flags.append(bool(self._l2_read))
+        return super().__contains__(key)
+
+
+class _YTMPricer:
+    def __init__(self, value: float):
+        self._value = float(value)
+
+    def ytm(self) -> float:
+        return self._value
+
+
 def test_computed_timeseries_store_default_base_dir_is_repo_root_relative(monkeypatch, tmp_path):
     import Caching.computed_timeseries_store as cts_module
 
@@ -302,3 +322,52 @@ def test_fixedratebonds_tb_uses_shared_computed_store_across_instances(monkeypat
 
     assert mdp2.bulk_calls == 0
     pd.testing.assert_frame_equal(out1, out2)
+
+
+def test_fixedratebonds_tb_suppresses_row_cache_l2_reads_for_large_daily_scans(monkeypatch, tmp_path):
+    import TB.FixedRateBondsTB as frb_tb_module
+
+    q = FixedRateBondQuery(cusip="CT10", value=FixedRateBondValue.YTM)
+    source = f"TEST_FRB_L2_{uuid.uuid4().hex}"
+    mdp = _FakeFixedRateBondsMDP(source=source)
+    tb = FixedRateBondsTB(mdp, show_tqdm=False, use_ts_cache=False, ts_base_dir=str(tmp_path))
+
+    probe_cache = _ProbeRecordingCache()
+    setattr(tb, tb._cache_attr, probe_cache)
+
+    monkeypatch.setattr(
+        frb_tb_module,
+        "_build_row_for_query",
+        lambda pr_map, q, ref_dt, date_col: (ref_dt, q.col_name(), 4.25),
+    )
+
+    start = datetime.date(2025, 1, 1)
+    end = datetime.date(2025, 4, 30)
+    out = tb.get_timeseries(start=start, end=end, queries=[q], n_jobs=1)
+
+    assert not out.empty
+    assert mdp.bulk_calls == 1
+    assert probe_cache.contains_flags
+    assert all(flag is False for flag in probe_cache.contains_flags)
+    assert probe_cache._l2_read is True
+
+
+def test_fixedratebonds_build_row_fast_paths_simple_ytm_queries(monkeypatch):
+    import TB.FixedRateBondsTB as frb_tb_module
+
+    q = FixedRateBondQuery(cusip="CT10", value=FixedRateBondValue.YTM)
+
+    monkeypatch.setattr(
+        frb_tb_module,
+        "resolve_query",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("resolve_query should not run for simple YTM")),
+    )
+
+    row = frb_tb_module._build_row_for_query(
+        {"CT10": _YTMPricer(4.125)},
+        q,
+        datetime.date(2025, 1, 6),
+        "Date",
+    )
+
+    assert row == (datetime.date(2025, 1, 6), q.col_name(), 4.125)

@@ -20,6 +20,7 @@ from Query.Base.BaseQuery import BaseQuery
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
+from Query.IRSwaps.adapter import _looks_like_alias_or_cusip
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 from Query.IRSwaps.IRSwapValue import IRSwapValue
@@ -40,6 +41,18 @@ if TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
+_IRSWAP_ADJUSTED_SPREAD_VALUES = {
+    value
+    for value in (
+        getattr(IRSwapValue, "MMSS_CARRY_ADJUSTED", None),
+        getattr(IRSwapValue, "SPREADOVER_CARRY_ADJUSTED", None),
+        getattr(IRSwapValue, "MMSS_ROLL_ADJUSTED", None),
+        getattr(IRSwapValue, "SPREADOVER_ROLL_ADJUSTED", None),
+        getattr(IRSwapValue, "MMSS_CR_ADJUSTED", None),
+        getattr(IRSwapValue, "SPREADOVER_CR_ADJUSTED", None),
+    )
+    if value is not None
+}
 
 
 def _normalize_query_like(query: BaseQuery) -> List[BaseQuery]:
@@ -551,6 +564,14 @@ def _analytics_rate_components(q: IRSwapQuery) -> Optional[list[tuple[float, str
     return None
 
 
+def _uses_alias_backed_irs_tenor(q: IRSwapQuery) -> bool:
+    tenor_text = str(getattr(q, "tenor", "") or "").strip()
+    if not tenor_text:
+        return False
+    tokens = [token.strip().upper() for token in tenor_text.split("/") if token.strip()]
+    return any(_looks_like_alias_or_cusip(token) for token in tokens)
+
+
 class _GenericTimeseriesTB(BaseTimeseriesTB):
     def __init__(
         self,
@@ -944,6 +965,8 @@ class TimeseriesBuilder:
             time_key = str(getattr(q, "mdp_time_key", "timestamp") or "timestamp")
             if str(req.get(time_key, "")).lower() == "live":
                 return False
+            if _uses_alias_backed_irs_tenor(q):
+                return False
 
         return True
 
@@ -980,7 +1003,7 @@ class TimeseriesBuilder:
                 irs_qs_unfiltered: List[IRSwapQuery] = [q for q in qs if isinstance(q, IRSwapQuery)]
                 irs_qs: List[IRSwapQuery] = []
                 for q in irs_qs_unfiltered:
-                    if q.value in [IRSwapValue.MMSS, IRSwapValue.SPREADOVER]:
+                    if q.value in ({IRSwapValue.MMSS, IRSwapValue.SPREADOVER} | _IRSWAP_ADJUSTED_SPREAD_VALUES):
                         irswap_spread_queries.append(q)
                     elif q.value in [
                         IRSwapValue.PAR_PAR_ASW,
@@ -2357,10 +2380,31 @@ class TimeseriesBuilder:
         spread_mdp = self._get_irswap_spreads_mdp(merged_mdps)
 
         if request_plan.irswap_spread_queries:
-            if spread_mdp is not None:
+            mdp_spread_queries = [
+                q
+                for q in request_plan.irswap_spread_queries
+                if spread_mdp is not None or q.value in _IRSWAP_ADJUSTED_SPREAD_VALUES
+            ]
+            fallback_spread_queries = [
+                q for q in request_plan.irswap_spread_queries
+                if q not in mdp_spread_queries
+            ]
+
+            effective_spread_mdp = spread_mdp
+            if mdp_spread_queries and effective_spread_mdp is None:
+                if irs_router is None or frb_router is None:
+                    raise KeyError("IRS/FRB routers must be registered for adjusted swap spread evaluation.")
+                from MDP.IRSwapSpreads.IRSwapSpreadsMDP import IRSwapSpreadsMDP
+
+                effective_spread_mdp = IRSwapSpreadsMDP(
+                    _irs_mdp=getattr(irs_router, "mdp", None),
+                    _frb_mdp=getattr(frb_router, "mdp", None),
+                )
+
+            if mdp_spread_queries and effective_spread_mdp is not None:
                 spread_df = self._price_irswap_spread_queries_with_mdp(
-                    mdp=spread_mdp,
-                    queries=list(request_plan.irswap_spread_queries),
+                    mdp=effective_spread_mdp,
+                    queries=list(mdp_spread_queries),
                     start=start,
                     end=end,
                     freq=freq,
@@ -2369,7 +2413,7 @@ class TimeseriesBuilder:
                 )
                 if not spread_df.empty:
                     per_product_frames.append(("SWAPSPREADS", pd.concat({"SWAPSPREADS": spread_df}, axis=1)))
-            else:
+            if fallback_spread_queries:
                 if irs_router is None or frb_router is None:
                     raise KeyError("IRS/FRB routers must be registered for MMSS/SPREADOVER evaluation.")
 
@@ -2380,7 +2424,7 @@ class TimeseriesBuilder:
                 _CT_RE = re.compile(r"(?i)\bct\s*(\d+)\b")
                 _Y_RE = re.compile(r"(?i)\b(\d+)\s*y\b")
 
-                for q in request_plan.irswap_spread_queries:
+                for q in fallback_spread_queries:
                     if q.value == IRSwapValue.MMSS:
                         q_frb = FixedRateBondQuery(cusip=q.tenor, value=FixedRateBondValue.YTM)
                         q_irs = IRSwapQuery(curve=q.curve, tenor=q.tenor, value=IRSwapValue.RATE)
@@ -2431,48 +2475,35 @@ class TimeseriesBuilder:
                     freq=freq,
                     timestamps=timestamps,
                 )
-                if irs_intraday_timestamps is not None:
-                    if not irs_intraday_timestamps:
-                        irs_df = pd.DataFrame().set_index(pd.Index([], name=self._date_col))
-                        cash_df = pd.DataFrame().set_index(pd.Index([], name=self._date_col))
-                    else:
-                        irs_df = irs_router.get_timeseries(  # type: ignore[attr-defined]
-                            start,
-                            end,
-                            irrs_irs_qs,
-                            n_jobs=n_jobs,
-                            ignore_cache=ignore_cache,
-                            freq=None,
-                            timestamps=irs_intraday_timestamps,
-                        )
-                        cash_df = frb_router.get_timeseries(  # type: ignore[attr-defined]
-                            start,
-                            end,
-                            irss_frb_qs,
-                            n_jobs=n_jobs,
-                            ignore_cache=ignore_cache,
-                            freq=None,
-                            timestamps=irs_intraday_timestamps,
-                        )
+                if irs_intraday_timestamps is not None and not irs_intraday_timestamps:
+                    irs_df = pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+                    cash_df = pd.DataFrame().set_index(pd.Index([], name=self._date_col))
                 else:
-                    irs_df = irs_router.get_timeseries(  # type: ignore[attr-defined]
-                        start,
-                        end,
-                        irrs_irs_qs,
-                        n_jobs=n_jobs,
-                        ignore_cache=ignore_cache,
-                        freq=freq,
-                        timestamps=timestamps,
-                    )
-                    cash_df = frb_router.get_timeseries(  # type: ignore[attr-defined]
-                        start,
-                        end,
-                        irss_frb_qs,
-                        n_jobs=n_jobs,
-                        ignore_cache=ignore_cache,
-                        freq=freq,
-                        timestamps=timestamps,
-                    )
+                    component_freq = None if irs_intraday_timestamps is not None else freq
+                    component_timestamps = irs_intraday_timestamps if irs_intraday_timestamps is not None else timestamps
+
+                    def _fetch_component_frame(router: Any, component_queries: List[BaseQuery]) -> pd.DataFrame:
+                        return router.get_timeseries(  # type: ignore[attr-defined]
+                            start,
+                            end,
+                            component_queries,
+                            n_jobs=n_jobs,
+                            ignore_cache=ignore_cache,
+                            freq=component_freq,
+                            timestamps=component_timestamps,
+                        )
+
+                    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="ts-swap-spread") as pool:
+                        future_to_component = {
+                            pool.submit(_fetch_component_frame, irs_router, irrs_irs_qs): "IRS",
+                            pool.submit(_fetch_component_frame, frb_router, irss_frb_qs): "FRB",
+                        }
+                        component_frames: Dict[str, pd.DataFrame] = {}
+                        for future in as_completed(future_to_component):
+                            component_frames[future_to_component[future]] = future.result()
+
+                    irs_df = component_frames["IRS"]
+                    cash_df = component_frames["FRB"]
 
                 spread_cols: Dict[str, pd.Series] = {}
                 idx = irs_df.index.union(cash_df.index)
