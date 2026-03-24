@@ -233,3 +233,5 @@ _temp_raw_raw_trades.csv
 /tmp
 /logs
 notebooks/logs/
+
+temp.ipynb
