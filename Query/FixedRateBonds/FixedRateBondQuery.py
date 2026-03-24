@@ -4,10 +4,30 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import pandas as pd
+
 from Query.Base.BaseQuery import BaseQuery
 from Query.FixedRateBonds import adapter as _frb_adapter  # noqa: F401
 from Query.FixedRateBonds.FixedRateBondStructure import FixedRateBondStructure
 from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
+
+
+def _request_date(now: Any) -> datetime.date | str:
+    if isinstance(now, str) and now.lower() == "live":
+        return "live"
+    if isinstance(now, datetime.datetime):
+        return now.date()
+    if isinstance(now, datetime.date):
+        return now
+    raise TypeError(f"Unsupported request timestamp type for FixedRateBondQuery: {type(now)!r}")
+
+
+def _request_datetime(now: Any) -> datetime.datetime:
+    if isinstance(now, datetime.datetime):
+        return now
+    if isinstance(now, datetime.date):
+        return datetime.datetime.combine(now, datetime.time())
+    raise TypeError(f"Unsupported request timestamp type for FixedRateBondQuery: {type(now)!r}")
 
 
 @dataclass(frozen=True)
@@ -19,6 +39,7 @@ class FixedRateBondQuery(BaseQuery):
     curve: Optional[str] = None  # Maps to the MDP source
 
     structure_kwargs: Dict[str, Any] = field(default_factory=dict)
+    value_kwargs: Dict[str, Any] = field(default_factory=dict)
     risk_weight: Optional[float] = None
 
     product: str = field(init=False, default="FRB")
@@ -45,6 +66,7 @@ class FixedRateBondQuery(BaseQuery):
         if self.curve is not None and "curve_name" not in mr:
             mr["curve_name"] = self.curve
         object.__setattr__(self, "market_request", mr)
+        object.__setattr__(self, "value_kwargs", dict(self.value_kwargs or {}))
 
         if isinstance(self.value, list):
             object.__setattr__(self, "value_id", None)
@@ -86,6 +108,20 @@ class FixedRateBondQuery(BaseQuery):
             return [replace(self, value=v) for v in self.value]
         return [self]
 
+    def _all_value_ids(self) -> Tuple[FixedRateBondValue, ...]:
+        if isinstance(self.value, list):
+            return tuple(self.value)
+        return (self.value,)
+
+    def _uses_carry_roll_universe(self) -> bool:
+        carry_roll_values = {
+            getattr(FixedRateBondValue, "CARRY_BPS_RUNNING", None),
+            getattr(FixedRateBondValue, "ROLL_BPS_RUNNING", None),
+            getattr(FixedRateBondValue, "CARRY_AND_ROLL_BPS_RUNNING", None),
+        }
+        carry_roll_values.discard(None)
+        return any(value in carry_roll_values for value in self._all_value_ids())
+
     def col_name(self, cube_name: Optional[str] = None) -> str:
         curve_label = cube_name or self.curve or ""
         struct_name = self.structure.name
@@ -125,6 +161,8 @@ class FixedRateBondQuery(BaseQuery):
         cusip_txt = str(getattr(q, "cusip", "") or "").strip()
 
         def _as_of_date() -> Optional[datetime.date]:
+            if isinstance(ref_dt, str) and ref_dt.lower() == "live":
+                return datetime.date.today()
             if isinstance(ref_dt, datetime.datetime):
                 return ref_dt.date()
             if isinstance(ref_dt, datetime.date):
@@ -232,7 +270,10 @@ class FixedRateBondQuery(BaseQuery):
         resolved_cusip_txt = _resolve_cusip_aliases(cusip_txt)
 
         skw = dict(getattr(q, "structure_kwargs", None) or {})
-        skw.setdefault("cusip", resolved_cusip_txt)
+        skw["cusip"] = resolved_cusip_txt
+        for leg_key in ("front_cusip", "belly_cusip", "back_cusip"):
+            if skw.get(leg_key) is not None:
+                skw[leg_key] = _resolve_cusip_aliases(str(skw[leg_key]))
 
         if structure == FixedRateBondStructure.OUTRIGHT:
             if all(skw.get(k) is None for k in ("notional", "bpv")):
@@ -278,14 +319,52 @@ class FixedRateBondQuery(BaseQuery):
         """
         req = dict(self.market_request or {})
         if self.mdp_time_key not in req:
-            req[self.mdp_time_key] = now.date()
+            req[self.mdp_time_key] = _request_date(now)
         else:
             v = req[self.mdp_time_key]
             if v == "now":
-                req[self.mdp_time_key] = now
+                req[self.mdp_time_key] = _request_datetime(now)
             # "live" or concrete value: leave as-is
 
-        req["cusips"] = [self.cusip]
+        if self._uses_carry_roll_universe():
+            from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
+
+            ts_value = req[self.mdp_time_key]
+            if isinstance(ts_value, str) and ts_value.lower() == "live":
+                as_of_date = datetime.date.today()
+            elif isinstance(ts_value, datetime.datetime):
+                as_of_date = ts_value.date()
+            elif isinstance(ts_value, datetime.date):
+                as_of_date = ts_value
+            else:
+                raise TypeError(f"Unsupported timestamp for FRB carry/roll universe expansion: {type(ts_value)!r}")
+
+            min_ttm = float((self.value_kwargs or {}).get("min_ttm", 1.0))
+            ref_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-QL")
+            ref_df = ref_mdp.get_bond_reference_data(as_of_date=as_of_date).copy()
+            ref_df = ref_df.drop(columns=["record_date"], errors="ignore")
+            if "ttm" in ref_df.columns:
+                ref_df["ttm"] = pd.to_numeric(ref_df["ttm"], errors="coerce")
+                ref_df = ref_df[ref_df["ttm"] >= min_ttm].copy()
+            ref_df["cusip"] = ref_df["cusip"].astype(str)
+            try:
+                resolved_query = self.resolve_query(as_of_date, {})
+                requested_cusip_text = str(resolved_query.cusip or self.cusip or "")
+            except Exception:
+                requested_cusip_text = str(self.cusip or "")
+
+            requested_cusips = {
+                token.strip()
+                for token in requested_cusip_text.split("/")
+                if token.strip()
+            }
+            if "rank" in ref_df.columns:
+                rank = pd.to_numeric(ref_df["rank"], errors="coerce")
+                ref_df = ref_df.loc[~rank.isin([0, 1, 2]) | ref_df["cusip"].isin(requested_cusips)].copy()
+            ref_df = ref_df.drop_duplicates(subset=["cusip"], keep="last")
+            req["cusips"] = ref_df["cusip"].tolist() or [self.cusip]
+        else:
+            req["cusips"] = [self.cusip]
         return req
 
     def default_mtm_value_id(self) -> Any:

@@ -70,10 +70,15 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
                 if str(d.split("IMM_")[-1]).isnumeric():
                     offset = int(d.split("IMM_")[-1]) - 1
                     if isinstance(ref_date, ql.Date):
-                        ref_date = ql_date_to_pydate(d)
+                        ref_date = ql_date_to_pydate(ref_date)
+                    ref_is_date = isinstance(ref_date, datetime.date) and not isinstance(ref_date, datetime.datetime)
                     imm = ref_date + datetime.timedelta(days=1)
+                    if ref_is_date:
+                        imm = datetime.datetime(imm.year, imm.month, imm.day)
                     for _ in range(offset + 1):
                         imm = next_imm(imm)
+                    if ref_is_date:
+                        return imm.date()
                     return imm
                 return get_imm(code=d.split("IMM_")[-1])
 
@@ -102,8 +107,9 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
 
         if isinstance(tenor, str) and tenor.startswith("IMM_"):
             imm_date, mat_date = tenor.split("x")
-            effective_date = self._to_dt(imm_date, current_curve.reference_date())
-            maturity_date = self._to_dt(mat_date, effective_date)
+            ref_date = current_curve.reference_date()
+            effective_date = self._to_dt(imm_date, ref_date)
+            maturity_date = self._to_dt(mat_date, ref_date)
             fwd, tenor = None, None
         else:
             if isinstance(tenor, str):

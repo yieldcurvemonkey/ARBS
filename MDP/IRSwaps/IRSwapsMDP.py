@@ -4,6 +4,7 @@ import io
 import os
 import sys
 import threading
+import logging
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
 
 import pandas as pd

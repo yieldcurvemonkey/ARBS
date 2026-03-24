@@ -1249,6 +1249,38 @@ def test_timeseries_builder_curve_store_fast_path_recovers_missing_points_via_bu
     ]
 
 
+def test_timeseries_builder_curve_store_fast_path_reprices_without_forcing_raw_refetch(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    ts1 = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2025, 1, 6, 15, 0, tzinfo=datetime.timezone.utc)
+    store = _FakeIRSCurveStore([])
+    mdp = _FakeIRSCurveStoreMDP(store, bulk_results={ts1: "mdp::curve::2025-01-06T14:00:00+00:00", ts2: "mdp::curve::2025-01-06T15:00:00+00:00"})
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05 if ref_dt == ts1 else 0.051),
+    )
+
+    out = tb.get_timeseries(start=ts1, end=ts2, queries=[q], timestamps=[ts1, ts2], n_jobs=2, ignore_cache=True)
+
+    assert list(out.index) == [ts1, ts2]
+    assert list(out[q.col_name()]) == [0.05, 0.051]
+    assert mdp.bulk_calls == 1
+    assert mdp.bulk_requests == [
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [ts1, ts2],
+            "ignore_cache": False,
+            "n_jobs": 2,
+        }
+    ]
+
+
 def test_timeseries_builder_curve_store_fast_path_falls_back_only_for_points_missing_after_bulk_recovery(monkeypatch):
     import TB.IRSwapsTB as irs_tb_module
 

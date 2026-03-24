@@ -1,6 +1,8 @@
 import datetime as dt
 from dataclasses import dataclass
 
+import pandas as pd
+
 from Query.Base.query_resolution import resolve_query
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from Query.FixedRateBonds.FixedRateBondStructure import FixedRateBondStructure
@@ -100,3 +102,35 @@ def test_fly_query_with_slash_cusip_resolves_package() -> None:
     assert resolved.structure == FixedRateBondStructure.FLY
     assert [bond.cusip for bond in package] == ["AAA", "BBB", "CCC"]
     assert risk_weights == [-1.0, 2.0, -1.0]
+
+
+def test_build_mdp_request_accepts_live_literal() -> None:
+    query = FixedRateBondQuery(cusip="CT10")
+
+    request = query.build_mdp_request("live")
+
+    assert request["timestamp"] == "live"
+    assert request["cusips"] == ["CT10"]
+
+
+def test_resolve_query_with_live_timestamp_resolves_constant_maturity_alias(monkeypatch) -> None:
+    from MDP.FixedRateBonds.reference_data_cache import ust_reference_data
+
+    today = dt.date.today()
+    ref_df = pd.DataFrame(
+        [
+            {
+                "cusip": "91282CPZ8",
+                "oi": "10-Year",
+                "issue_date": today - dt.timedelta(days=365),
+                "maturity_date": today + dt.timedelta(days=3650),
+            }
+        ]
+    )
+
+    monkeypatch.setattr(ust_reference_data, "update_reference_data", lambda *args, **kwargs: ref_df)
+
+    query = FixedRateBondQuery(cusip="CT10")
+    resolved = resolve_query(query, timestamp="live", pricer_or_curve={})
+
+    assert resolved.cusip == "91282CPZ8"

@@ -58,6 +58,43 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
             FixedRateBondStructure.FLY: partial(self._build_fly),
         }
 
+    def _keys(self) -> List[str]:
+        return list(self.common_kwargs["pricer"].keys())
+
+    def _resolve_key(self, *, desired: Optional[str], role: str) -> str:
+        pricers: Dict[str, _FixedRateBondGenericPricer] = self.common_kwargs["pricer"]
+        if desired is not None and desired in pricers:
+            return desired
+        if len(pricers) == 1:
+            return next(iter(pricers.keys()))
+        raise KeyError(f"Could not resolve FRB pricer key for {role}. desired={desired!r}, available={list(pricers.keys())}")
+
+    def _resolve_keys_for_n_legs(self, desired: Optional[List[str]], n: int) -> List[str]:
+        keys = self._keys()
+        if desired is not None:
+            if len(desired) != n:
+                raise ValueError(f"Expected {n} pricer keys, got {len(desired)}")
+            for k in desired:
+                if k not in self.common_kwargs["pricer"]:
+                    raise KeyError(f"Missing pricer for key={k!r}. available={keys}")
+            return desired
+        if len(keys) != n:
+            raise ValueError(f"Expected exactly {n} pricers in dict, got {len(keys)}: {keys}")
+        return keys
+
+    @staticmethod
+    def _split_package_cusips(raw: Any) -> Optional[List[str]]:
+        token = str(raw or "").strip()
+        if not token:
+            return None
+        if ("x" in token) and ("Ox" not in token):
+            parts = [part.strip() for part in token.split("x") if part.strip()]
+            return parts or None
+        if ("/" in token) and (not token[:4].isdigit() or token.count("/") > 1):
+            parts = [part.strip() for part in token.split("/") if part.strip()]
+            return parts or None
+        return None
+
     def _leg(
         self,
         cusip: str,
@@ -116,7 +153,7 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
         if (notional is None and bpv is None) or (notional is not None and bpv is not None):
             raise ValueError("Must specify exactly one of `notional` or `bpv` for an outright bond.")
 
-        cusip = next(iter(self.common_kwargs["pricer"]))
+        cusip = self._resolve_key(desired=_.get("cusip"), role="outright")
         pricer: _FixedRateBondGenericPricer = self.common_kwargs["pricer"][cusip]
         bond = self._leg(cusip=cusip, issue_date=_.get("issue_date") or pricer.issue_date(), maturity_date=_.get("maturity_date") or pricer.maturity_date(), cpn=_.get("cpn") or _.get("coupon") or pricer.coupon(), notional=notional, bpv=bpv)
         weight = 1.0 if bond.notional > 0 else -1.0
@@ -125,9 +162,12 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
     def _build_curve(
         self, front_notional: Optional[float] = None, back_notional: Optional[float] = None, bpv: Optional[float] = None, risk_weights: List[float] = [1.0, 1.0], **_
     ) -> Tuple[List[_FixedRateBondGenericPricable], List[float]]:
-        pricers: Dict[str, _FixedRateBondGenericPricable] = self.common_kwargs["pricer"]
-        cusips = list(pricers.keys())
-        assert len(cusips) == 2, "its a CURVE!"
+        desired = None
+        if _.get("front_cusip") is not None or _.get("back_cusip") is not None:
+            desired = [_.get("front_cusip"), _.get("back_cusip")]
+        else:
+            desired = self._split_package_cusips(_.get("cusip"))
+        cusips = self._resolve_keys_for_n_legs(desired, 2)
 
         # Top-level `cusip` can be a slash-delimited package label (e.g. 5s/10s).
         # Strip it before building each leg, since leg CUSIPs are supplied explicitly.
@@ -169,9 +209,12 @@ class FixedRateBondStructureFunctionMap(BaseStructureFunctionMap[FixedRateBondSt
         risk_weights: List[float] = [1.0, 2.0, 1.0],
         **_,
     ) -> Tuple[List[_FixedRateBondGenericPricable], List[float]]:
-        pricers: Dict[str, _FixedRateBondGenericPricable] = self.common_kwargs["pricer"]
-        cusips = list(pricers.keys())
-        assert len(cusips) == 3, "its a FLY!"
+        desired = None
+        if _.get("front_cusip") is not None or _.get("belly_cusip") is not None or _.get("back_cusip") is not None:
+            desired = [_.get("front_cusip"), _.get("belly_cusip"), _.get("back_cusip")]
+        else:
+            desired = self._split_package_cusips(_.get("cusip"))
+        cusips = self._resolve_keys_for_n_legs(desired, 3)
 
         if front_notional is not None:
             idx, cn, cp = 0, front_notional, None

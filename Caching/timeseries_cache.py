@@ -258,8 +258,11 @@ def append_timeseries_many(
         existing = _read_partition_df(part_dir)
         if not existing.empty:
             if isinstance(existing.index, pd.DatetimeIndex) and isinstance(g.index, pd.DatetimeIndex):
-                combined = pd.concat([existing, g], axis=0).sort_index()
+                # Preserve append order for duplicate timestamps so the incoming
+                # frame deterministically overwrites older values.
+                combined = pd.concat([existing, g], axis=0)
                 combined = combined[~combined.index.duplicated(keep="last")]
+                combined = combined.sort_index()
             else:
                 combined = pd.concat([existing, g], axis=0).drop_duplicates(keep="last")
             g = combined

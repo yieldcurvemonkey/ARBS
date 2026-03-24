@@ -10,6 +10,8 @@ import re
 import pandas as pd
 from tqdm import tqdm
 
+import logging
+
 import QuantLib as ql
 
 # fmt: off

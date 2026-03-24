@@ -328,6 +328,17 @@ class TestAppendSemantics:
         result = read_timeseries(None, "SAMEDAY", base_dir=str(ts_dir))
         assert list(result["v"]) == [4.0, 5.0, 6.0]
 
+    def test_append_same_day_partial_overlap_prefers_latest_values(self, opts, ts_dir):
+        idx = pd.date_range("2025-01-06 00:00", periods=20, freq="min")
+        df1 = pd.DataFrame({"v": [1.0] * len(idx)}, index=idx)
+        df2 = pd.DataFrame({"v": [2.0] * len(idx[::2])}, index=idx[::2])
+        append_timeseries(None, "PARTIAL", df1, opts=opts)
+        append_timeseries(None, "PARTIAL", df2, opts=opts)
+
+        result = read_timeseries(None, "PARTIAL", base_dir=str(ts_dir))
+        assert (result.loc[idx[::2], "v"] == 2.0).all()
+        assert (result.loc[idx[1::2], "v"] == 1.0).all()
+
 
 # ---------------------------------------------------------------------------
 # WriteOptions

@@ -92,6 +92,9 @@ _STIRT_FORWARD_START_TENORS = (
 )
 _STIRT_IMM_SPANS = (1, 2, 4)  # 1=3M gap, 2=6M gap, 4=1Y gap
 _STIRT_IMM_HORIZON_COUNT = 13
+_STIRT_DEFAULT_RELATIVE_IMM_TENORS = tuple(
+    f"IMM_{idx}xIMM_{idx + 1}" for idx in range(1, 13)
+)
 _FORWARD_START_TENORS = _STIRT_FORWARD_START_TENORS
 _GENERIC_CB_FORWARD_START_TENORS = (
     "1Y1Y",
@@ -1287,8 +1290,8 @@ def _stirt_tenor_maturity_date(curve_name: str, tenor: str, *, anchor_date: dt.d
     if tenor_token.upper().startswith("IMM_") and "X" in tenor_token.upper():
         try:
             imm_date_token, mat_date_token = tenor_token.upper().split("X", 1)
-            effective_date = _resolve_imm_token(imm_date_token, anchor_date)
-            return _resolve_imm_token(mat_date_token, effective_date)
+            _ = _resolve_imm_token(imm_date_token, anchor_date)
+            return _resolve_imm_token(mat_date_token, anchor_date)
         except Exception:
             return None
 
@@ -1325,48 +1328,14 @@ def _explicit_imm_pair_tenors(*, as_of: dt.date, horizon_count: int, spans: Sequ
 
 
 def _default_tenors_for_curve(curve_name: str, *, anchor_date: dt.date | None = None) -> list[str]:
-    from Query.IRSwaps._CENTRAL_BANK_DATES import central_bank_date_map, central_bank_for_curve
+    from Query.IRSwaps._CENTRAL_BANK_DATES import central_bank_for_curve
 
     if anchor_date is None:
         anchor_date = dt.date.today()
 
     base = list(_BASE_OUTRIGHT_TENORS)
     if _is_stirt_curve(curve_name):
-        stirt_base = list(_STIRT_OUTRIGHT_TENORS)
-        max_maturity_date = _add_years(anchor_date, _STIRT_MAX_MATURITY_YEARS)
-        stirt_imm_explicit = _explicit_imm_pair_tenors(
-            as_of=anchor_date,
-            horizon_count=_STIRT_IMM_HORIZON_COUNT,
-            spans=_STIRT_IMM_SPANS,
-        )
-        stirt_imm_relative = _relative_imm_pair_tenors(
-            max_imm_index=_STIRT_IMM_HORIZON_COUNT,
-            spans=_STIRT_IMM_SPANS,
-        )
-        cb_name = central_bank_for_curve(_curve_reference_id(curve_name))
-        meeting_ranked = (
-            [f"{_CB_TOKEN_PREFIX[cb_name]}_{rank}" for rank in range(1, 8)]
-            if cb_name in _CB_TOKEN_PREFIX
-            else []
-        )
-        meeting_explicit: list[str] = []
-        if cb_name in _CB_TOKEN_PREFIX:
-            cb_prefix = _CB_TOKEN_PREFIX[cb_name]
-            meeting_map = central_bank_date_map(_curve_reference_id(curve_name))
-            meeting_explicit = [
-                f"{cb_prefix}_{label}"
-                for label, (eff, _mat) in sorted(meeting_map.items(), key=lambda kv: kv[1][0])
-                if pd.Timestamp(eff) >= pd.Timestamp(anchor_date)
-                and pd.Timestamp(eff) <= pd.Timestamp(max_maturity_date)
-            ]
-        return _dedupe_preserve_order(
-            stirt_base
-            + list(_STIRT_FORWARD_START_TENORS)
-            + meeting_ranked
-            + meeting_explicit
-            + stirt_imm_explicit
-            + stirt_imm_relative
-        )
+        return list(_STIRT_DEFAULT_RELATIVE_IMM_TENORS)
 
     forward_starts = list(_FORWARD_START_TENORS)
     cb_name = central_bank_for_curve(_curve_reference_id(curve_name))
@@ -1796,7 +1765,8 @@ def _run_live_service_window(
     ts_builder: Any,
     n_jobs: int,
     calibration_executor: str,
-    ignore_cache: bool,
+    curve_ignore_cache: bool,
+    timeseries_ignore_cache: bool,
     show_tqdm: bool,
     auto_prime_bulk: bool,
     stirf_fetch_max_workers: int | None,
@@ -1826,12 +1796,13 @@ def _run_live_service_window(
 
     curve_failed_timestamps: list[dt.datetime] = []
     curve_ready = 0
+    curve_status = "skipped"
     if not skip_curve_warm and curve_timestamps:
         curve_ready, curve_failed_timestamps = _safe_warm_raw_curves(
             mdp,
             curve_name=curve_name,
             timestamps=curve_timestamps,
-            ignore_cache=ignore_cache,
+            ignore_cache=curve_ignore_cache,
             n_jobs=n_jobs,
             calibration_executor=calibration_executor,
             show_tqdm=show_tqdm,
@@ -1840,6 +1811,10 @@ def _run_live_service_window(
             calibration_max_workers=calibration_max_workers,
             logger=logger,
         )
+        if curve_failed_timestamps:
+            curve_status = "partial" if curve_ready > 0 else "error"
+        else:
+            curve_status = "ok"
     elif not skip_curve_warm:
         logger.info("Raw curve warm skipped for %s [%s]: requested window already present in CurveStore.", curve_name, label)
 
@@ -1857,7 +1832,7 @@ def _run_live_service_window(
             ts_builder=ts_builder,
             mdp=mdp,
             n_jobs=n_jobs,
-            ignore_cache=ignore_cache,
+            ignore_cache=timeseries_ignore_cache,
             perf_log_path=perf_log_path,
             logger=logger,
             label=label,
@@ -1875,9 +1850,11 @@ def _run_live_service_window(
         "curve_name": curve_name,
         "label": label,
         "status": status,
+        "curve_status": curve_status,
         "curve_requested": len(curve_timestamps),
         "curve_ready": curve_ready,
         "curve_failed_timestamps": [timestamp.isoformat() for timestamp in curve_failed_timestamps],
+        "timeseries_status": ts_summary["status"],
         "timeseries_rows": int(ts_summary["rows"]),
         "timeseries_cols": int(ts_summary["cols"]),
         "timeseries_failed_tenors": list(ts_summary["failed_tenors"]),
@@ -2246,103 +2223,26 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
         if bool(args.backfill_only):
             continue
 
-        # --- Checkpoint probe ---
-        skip_ts = bool(args.skip_timeseries_warm) or ts_builder is None
-        skipped_days_set: set[dt.date] = set()
-        if bool(args.resume) and not bool(args.ignore_cache):
-            raw_complete = set(_local_curve_dates_in_range(
-                curve_name=curve_name,
-                start_date=start_date,
-                end_date=end_date,
-            ))
-            ts_complete = (
-                set()
-                if skip_ts
-                else _probe_ts_completed_dates(
-                    ts_builder=ts_builder,
-                    curve_name=curve_name,
-                    source=str(args.source),
-                    sentinel_tenor=_default_tenors_for_curve(curve_name, anchor_date=start_date)[0],
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-            )
-            skipped_days_set = _probe_completed_days(
-                raw_complete_dates=raw_complete,
-                ts_complete_dates=ts_complete,
-                skip_timeseries_warm=skip_ts,
-            )
-            if skipped_days_set:
-                logger.info(
-                    "Checkpoint: skipping %s/%s already-completed days for %s",
-                    len(skipped_days_set),
-                    business_days,
-                    curve_name,
-                )
-                _write_perf_event(perf_log_path, {
-                    "event": "checkpoint_probe",
-                    "curve_name": curve_name,
-                    "skipped_days": len(skipped_days_set),
-                    "total_days": business_days,
-                    "raw_complete": len(raw_complete),
-                    "ts_complete": len(ts_complete) if not skip_ts else None,
-                })
-
-        remaining_days = business_days - len(skipped_days_set)
-
         logger.info(
             "Prepared backfill service run for %s [%s -> %s]: business_days=%s remaining=%s session_mode=%s timezone=%s perf_log=%s",
             curve_name,
             start_date.isoformat(),
             end_date.isoformat(),
             business_days,
-            remaining_days,
+            business_days,
             "cme" if args.cme_session else "clock",
             timezone_name,
             perf_log_path,
         )
 
-        # --- Progress tracker ---
         progress = BackfillProgress(
             curve_name=curve_name,
             total_days=business_days,
-            skipped_days=len(skipped_days_set),
+            skipped_days=0,
         )
 
-        timeseries_results: list[dict[str, Any]] = []
-
-        def _day_callback(
-            trade_date: dt.date,
-            timestamps: list[dt.datetime],
-            _curves: dict[Any, Any],
-            day_result: DayCalibrationStats,
-        ) -> None:
-            progress.record_calibration(status=day_result.status)
-            ts_summary: dict[str, Any] = {}
-            if ts_builder is not None and day_result.status != "error":
-                ts_summary = _warm_timeseries_window(
-                    curve_name=curve_name,
-                    timestamps=timestamps,
-                    explicit_tenors=explicit_tenors,
-                    ts_builder=ts_builder,
-                    mdp=mdp,
-                    n_jobs=int(args.n_jobs),
-                    ignore_cache=bool(args.ignore_cache),
-                    perf_log_path=perf_log_path,
-                    logger=logger,
-                    label=trade_date.isoformat(),
-                )
-                timeseries_results.append(ts_summary)
-            progress.record_timeseries(
-                status=ts_summary.get("status", "skipped"),
-                failed_tenors=ts_summary.get("failed_tenors", []),
-            )
-            logger.info(progress.format_heartbeat())
-            _write_perf_event(perf_log_path, progress.to_perf_event())
-            gc.collect()
-
-        # --- Filtered daily iterator ---
-        def _filtered_daily_buckets():
+        window_summaries: list[dict[str, Any]] = []
+        try:
             for trade_date, timestamps in iter_daily_minute_buckets(
                 start_date=start_date,
                 end_date=end_date,
@@ -2352,36 +2252,43 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
                 timezone=timezone,
                 cme_session=bool(args.cme_session),
             ):
-                if trade_date in skipped_days_set:
-                    continue
-                yield trade_date, timestamps
-
-        request_options = {
-            "n_jobs": int(args.n_jobs),
-            "show_tqdm": bool(args.show_tqdm),
-            "ignore_cache": bool(args.ignore_cache),
-            "calibration_executor": str(args.calibration_executor),
-            "auto_prime_bulk": bool(args.auto_prime_bulk),
-            "stirf_fetch_max_workers": args.stirf_fetch_max_workers,
-            "calibration_max_workers": args.calibration_max_workers,
-            "cme_session": bool(args.cme_session),
-            "timezone": timezone_name,
-            "max_tasks_per_child": int(args.max_tasks_per_child),
-        }
-
-        try:
-            _, daily_results, summary = run_bucketed_calibration(
-                curve_mdp=mdp,
-                curve_name=curve_name,
-                source=str(args.source),
-                daily_buckets=_filtered_daily_buckets(),
-                request_options=request_options,
-                perf_log_path=perf_log_path,
-                logger=logger,
-                fail_fast=bool(args.fail_fast),
-                business_days=remaining_days,
-                day_callback=_day_callback,
-            )
+                curve_timestamps = [] if args.skip_curve_warm else _select_missing_curve_store_timestamps(
+                    mdp._get_curve_store(),
+                    curve_name=_resolve_curve_store_name(mdp, curve_name),
+                    timestamps=timestamps,
+                )
+                summary = _run_live_service_window(
+                    curve_name=curve_name,
+                    curve_timestamps=curve_timestamps,
+                    timeseries_timestamps=list(timestamps),
+                    explicit_tenors=explicit_tenors,
+                    mdp=mdp,
+                    ts_builder=ts_builder,
+                    n_jobs=int(args.n_jobs),
+                    calibration_executor=str(args.calibration_executor),
+                    curve_ignore_cache=False,
+                    timeseries_ignore_cache=True,
+                    show_tqdm=bool(args.show_tqdm),
+                    auto_prime_bulk=bool(args.auto_prime_bulk),
+                    stirf_fetch_max_workers=args.stirf_fetch_max_workers,
+                    calibration_max_workers=args.calibration_max_workers,
+                    skip_curve_warm=bool(args.skip_curve_warm),
+                    skip_timeseries_warm=bool(args.skip_timeseries_warm),
+                    perf_log_path=perf_log_path,
+                    logger=logger,
+                    label=trade_date.isoformat(),
+                )
+                window_summaries.append(summary)
+                progress.record_calibration(
+                    status="ok" if summary.get("curve_status") in {"ok", "skipped"} else "error",
+                )
+                progress.record_timeseries(
+                    status=str(summary.get("timeseries_status", "skipped")),
+                    failed_tenors=list(summary.get("timeseries_failed_tenors", [])),
+                )
+                logger.info(progress.format_heartbeat())
+                _write_perf_event(perf_log_path, progress.to_perf_event())
+                gc.collect()
         except Exception:
             overall_failure = True
             logger.exception("Backfill service failed for %s", curve_name)
@@ -2389,36 +2296,19 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
                 break
             continue
 
-        logger.info(
-            "Backfill curve summary for %s: successful_days=%s failed_days=%s returned=%s/%s elapsed=%.2fs",
-            curve_name,
-            summary["successful_days"],
-            summary["failed_days"],
-            summary["returned_curves"],
-            summary["requested_timestamps"],
-            summary["total_elapsed_seconds"],
-        )
-        if daily_results:
-            slowest = max(daily_results, key=lambda row: row.elapsed_seconds)
+        if window_summaries:
             logger.info(
-                "Slowest bucket for %s: trade_date=%s elapsed=%.2fs missing=%s",
+                "Backfill summary for %s: windows=%s curve_partial_or_error=%s ts_partial_or_error=%s",
                 curve_name,
-                slowest.trade_date,
-                slowest.elapsed_seconds,
-                slowest.missing_curves,
-            )
-        if timeseries_results:
-            logger.info(
-                "Backfill timeseries summary for %s: windows=%s partial_or_error=%s failed_tenors=%s",
-                curve_name,
-                len(timeseries_results),
-                sum(1 for result in timeseries_results if result["status"] in {"partial", "error"}),
-                sum(len(result["failed_tenors"]) for result in timeseries_results),
+                len(window_summaries),
+                sum(1 for summary in window_summaries if summary.get("curve_status") in {"partial", "error"}),
+                sum(1 for summary in window_summaries if summary.get("timeseries_status") in {"partial", "error"}),
             )
 
-        overall_failure = overall_failure or summary["failed_days"] > 0
         overall_failure = overall_failure or any(
-            result["status"] in {"partial", "error"} for result in timeseries_results
+            summary.get("curve_status") in {"partial", "error"}
+            or summary.get("timeseries_status") in {"partial", "error"}
+            for summary in window_summaries
         )
 
     _flush_curve_store_pushes(logger=logger)
@@ -2494,7 +2384,8 @@ def _run_live_service_mode(args: argparse.Namespace, logger: logging.Logger) -> 
                     ts_builder=ts_builder,
                     n_jobs=int(args.n_jobs),
                     calibration_executor=str(args.calibration_executor),
-                    ignore_cache=bool(args.ignore_cache),
+                    curve_ignore_cache=False,
+                    timeseries_ignore_cache=True,
                     show_tqdm=bool(args.show_tqdm),
                     auto_prime_bulk=bool(args.auto_prime_bulk),
                     stirf_fetch_max_workers=args.stirf_fetch_max_workers,
@@ -2547,17 +2438,23 @@ def _run_live_service_mode(args: argparse.Namespace, logger: logging.Logger) -> 
                 continue
 
             for curve_name in curves:
+                curve_timestamps = [] if args.skip_curve_warm else _select_missing_curve_store_timestamps(
+                    mdp._get_curve_store(),
+                    curve_name=_resolve_curve_store_name(mdp, curve_name),
+                    timestamps=timestamps,
+                )
                 window_summaries.append(
                     _run_live_service_window(
                         curve_name=curve_name,
-                        curve_timestamps=[] if args.skip_curve_warm else list(timestamps),
+                        curve_timestamps=curve_timestamps,
                         timeseries_timestamps=list(timestamps),
                         explicit_tenors=explicit_tenors,
                         mdp=mdp,
                         ts_builder=ts_builder,
                         n_jobs=int(args.n_jobs),
                         calibration_executor=str(args.calibration_executor),
-                        ignore_cache=bool(args.ignore_cache),
+                        curve_ignore_cache=False,
+                        timeseries_ignore_cache=True,
                         show_tqdm=bool(args.show_tqdm),
                         auto_prime_bulk=bool(args.auto_prime_bulk),
                         stirf_fetch_max_workers=args.stirf_fetch_max_workers,

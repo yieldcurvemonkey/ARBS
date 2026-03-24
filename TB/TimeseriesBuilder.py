@@ -938,7 +938,7 @@ class TimeseriesBuilder:
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
     ) -> bool:
-        if not queries or mdp is None or ignore_cache:
+        if not queries or mdp is None:
             return False
 
         if not _supports_irs_curve_store_fast_path(mdp):
@@ -1972,17 +1972,20 @@ class TimeseriesBuilder:
                 return len(tasks)
 
             cached_started = time.perf_counter()
-            cached_rows, covered = _run_stage(
-                desc=f"READING {requested_curve_name} computed cache...",
-                total=len(curve_queries),
-                fn=lambda: self._read_irs_computed_cache_rows(
-                    router=plan.router,
-                    requested_curve_name=requested_curve_name,
-                    queries=curve_queries,
-                    reference_points=curve_reference_points,
-                    intraday=use_intraday_cache,
-                ),
-            )
+            if ignore_cache:
+                cached_rows, covered = [], set()
+            else:
+                cached_rows, covered = _run_stage(
+                    desc=f"READING {requested_curve_name} computed cache...",
+                    total=len(curve_queries),
+                    fn=lambda: self._read_irs_computed_cache_rows(
+                        router=plan.router,
+                        requested_curve_name=requested_curve_name,
+                        queries=curve_queries,
+                        reference_points=curve_reference_points,
+                        intraday=use_intraday_cache,
+                    ),
+                )
             rows.extend(cached_rows)
             _log_curve_stage(
                 "computed cache read",
@@ -2202,7 +2205,9 @@ class TimeseriesBuilder:
                         {
                             "curve_name": requested_curve_name,
                             "timestamps": sorted(missing_points),
-                            "ignore_cache": ignore_cache,
+                            # Reprice requests should bypass computed TS caches,
+                            # but raw-curve recovery should still use CurveStore.
+                            "ignore_cache": False,
                             "n_jobs": n_jobs,
                         }
                     )

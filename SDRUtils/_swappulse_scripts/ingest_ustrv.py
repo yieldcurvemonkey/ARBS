@@ -27,6 +27,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from tqdm import tqdm
 
+from Query.FixedRateBonds.carry_roll import compute_carry_roll_columns as shared_compute_carry_roll_columns
 from RVUtils.Interpolation.GeneralCurveInterpolator import GeneralCurveInterpolator
 
 
@@ -1179,7 +1180,7 @@ def build_points_dataframe(
     merged_df["swap_carry_and_roll_bps"] = merged_df.get("swap_carry_and_roll_3m_bps")
 
     merged_df["coupon"] = merged_df["cpn"] if "cpn" in merged_df.columns else np.nan
-    merged_df = _compute_carry_roll_columns(
+    merged_df = shared_compute_carry_roll_columns(
         merged_df,
         as_of_date=as_of_date,
         pricers={str(k): v for k, v in pricers.items()},

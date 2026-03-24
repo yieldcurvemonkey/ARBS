@@ -4,7 +4,7 @@ import datetime
 import logging
 import re
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -12,16 +12,23 @@ import pandas as pd
 import QuantLib as ql
 from tqdm.auto import tqdm as _tqdm
 
+from BT.misc import ql_cal_date_range
+from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from MDP.FixedRateBonds.WSJ.WSJFetcher import WSJFetcher
+from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
+from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 from Query.IRSwaps.IRSwapStructure import IRSwapStructure, IRSwapStructureFunctionMap
 from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
 from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
 from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
 from SDRUtils.data.builder import SDRDataBuilder
+from TB.FixedRateBondsTB import FixedRateBondsTB
 from TB.utils import DateLike
 
 _LOGGER_NAME = "IRSwapSpreadsTB"
+_SOURCE_SDR_WSJ_INTRADAY_SPREADOVER = "SDR-WSJ-INTRADAY-SPREADOVER"
+_SOURCE_SDR_USTS_WEBULL_WSJ_LIVE_INTRADAY_SPREADOVER = "SDR-USTS_WEBULL_WSJ_LIVE-INTRADAY-SPREADOVER"
 _LIQUID_TENORS: tuple[str, ...] = ("2Y", "5Y", "10Y", "30Y")
 _SOFR_SDR_UPIS: tuple[str, ...] = (
     "QZXQ4R16245X",
@@ -34,13 +41,8 @@ _WSJ_CT_TICKERS: dict[str, str] = {
     "10Y": "TMUBMUSD10Y",
     "30Y": "TMUBMUSD30Y",
 }
-_CT_ALIAS: dict[str, str] = {
-    "2Y": "CT2",
-    "5Y": "CT5",
-    "10Y": "CT10",
-    "30Y": "CT30",
-}
 _WSJ_INTRADAY_MAX_DAYS = 10
+_USTS_WEBULL_INTRADAY_N_JOBS = 12
 
 
 def _empty_frame(index_name: str) -> pd.DataFrame:
@@ -99,22 +101,33 @@ def deadband_step_filter(x: pd.Series, threshold: float, snap: float | None = No
 
 class IRSwapSpreadsTB:
     """
-    Intraday swap spread builder using raw SDR trades and WSJ CT yields.
+    Intraday swap spread builder keyed by explicit source implementation.
 
-    This module intentionally mirrors the workflow from the Oasis notebook:
-    - USD SOFR swap rates are built from minute VWAPs of filtered SDR trades
-    - UST constant-maturity yields are pulled directly from WSJ intraday
-    - spreads are returned in basis points with several smoothing variants
+    Supported sources:
+    - `SDR-WSJ-INTRADAY-SPREADOVER`
+      Uses raw SDR trades for swap-rate minute VWAPs and WSJ intraday CT
+      yields for UST benchmarks. This mirrors the Oasis notebook workflow.
+    - `SDR-USTS_WEBULL_WSJ_LIVE-INTRADAY-SPREADOVER`
+      Uses the same SDR swap-rate minute VWAPs, but sources UST intraday
+      yields through `FixedRateBondsTB(FixedRateBondsMDP("USTS_WEBULL_WSJ_LIVE-RL"))`.
 
     The implementation is intentionally narrow and only supports the liquid
     spot tenors `2Y`, `5Y`, `10Y`, and `30Y`.
     """
 
     LIQUID_TENORS = _LIQUID_TENORS
+    DEFAULT_SOURCE = _SOURCE_SDR_WSJ_INTRADAY_SPREADOVER
+    SUPPORTED_SOURCES = frozenset(
+        {
+            _SOURCE_SDR_WSJ_INTRADAY_SPREADOVER,
+            _SOURCE_SDR_USTS_WEBULL_WSJ_LIVE_INTRADAY_SPREADOVER,
+        }
+    )
 
     def __init__(
         self,
         *,
+        source: str = DEFAULT_SOURCE,
         curve_name: str = "USD-SOFR-1D",
         cache_path: Optional[str] = None,
         date_col: str = "Date",
@@ -122,8 +135,19 @@ class IRSwapSpreadsTB:
         show_tqdm: bool = True,
         logger: Optional[logging.Logger] = None,
     ):
-        if curve_name != "USD-SOFR-1D":
-            raise ValueError("IRSwapSpreadsTB currently supports only curve_name='USD-SOFR-1D'.")
+        if source not in self.SUPPORTED_SOURCES:
+            raise ValueError(
+                f"Unsupported source '{source}'. Supported sources: {sorted(self.SUPPORTED_SOURCES)}"
+            )
+        if source in {
+            _SOURCE_SDR_WSJ_INTRADAY_SPREADOVER,
+            _SOURCE_SDR_USTS_WEBULL_WSJ_LIVE_INTRADAY_SPREADOVER,
+        } and curve_name != "USD-SOFR-1D":
+            raise ValueError(
+                "IRSwapSpreadsTB currently supports only curve_name='USD-SOFR-1D' "
+                f"for source='{source}'."
+            )
+        self.source = source
         self.curve_name = curve_name
         self._cache_path = Path(cache_path or "./.cache/sdr")
         self._cache_path.mkdir(parents=True, exist_ok=True)
@@ -133,6 +157,8 @@ class IRSwapSpreadsTB:
         self._show_tqdm = show_tqdm
         self._logger = logger or logging.getLogger(_LOGGER_NAME)
         self._swap_date_cache: dict[tuple[datetime.date, str], tuple[datetime.date, datetime.date]] = {}
+        self._usts_webull_wsj_live_mdp: Optional[FixedRateBondsMDP] = None
+        self._usts_webull_wsj_live_tb: Optional[FixedRateBondsTB] = None
 
     def _coerce_timestamp_bound(self, value: DateLike, *, is_end: bool) -> datetime.datetime:
         if isinstance(value, datetime.datetime):
@@ -148,7 +174,10 @@ class IRSwapSpreadsTB:
         if start_dt > end_dt:
             raise ValueError("start must be <= end")
         span_days = end_dt - start_dt
-        if span_days > datetime.timedelta(days=_WSJ_INTRADAY_MAX_DAYS):
+        if (
+            self.source == _SOURCE_SDR_WSJ_INTRADAY_SPREADOVER
+            and span_days > datetime.timedelta(days=_WSJ_INTRADAY_MAX_DAYS)
+        ):
             raise ValueError(
                 "WSJ intraday only retains roughly 10 days. "
                 "Use a shorter intraday window for IRSwapSpreadsTB."
@@ -238,6 +267,11 @@ class IRSwapSpreadsTB:
         end: datetime.datetime,
         ignore_cache: bool,
     ) -> pd.DataFrame:
+        if self.source not in {
+            _SOURCE_SDR_WSJ_INTRADAY_SPREADOVER,
+            _SOURCE_SDR_USTS_WEBULL_WSJ_LIVE_INTRADAY_SPREADOVER,
+        }:
+            raise NotImplementedError(f"Raw SDR fetch not implemented for source '{self.source}'.")
         builder = SDRDataBuilder(
             cache_path=str(self._cache_path),
             show_tqdm=self._show_tqdm,
@@ -399,6 +433,74 @@ class IRSwapSpreadsTB:
         wide.index.name = self._date_col
         return wide.loc[(wide.index >= start) & (wide.index <= end)].ffill()
 
+    @staticmethod
+    def _ct_alias_for_tenor(tenor: str) -> str:
+        return f"CT{str(tenor).upper().replace('Y', '')}"
+
+    def _get_usts_webull_wsj_live_tb(self) -> FixedRateBondsTB:
+        if self._usts_webull_wsj_live_tb is None:
+            self._usts_webull_wsj_live_mdp = FixedRateBondsMDP(source="USTS_WEBULL_WSJ_LIVE-RL")
+            self._usts_webull_wsj_live_tb = FixedRateBondsTB(
+                self._usts_webull_wsj_live_mdp,
+                show_tqdm=self._show_tqdm,
+            )
+        return self._usts_webull_wsj_live_tb
+
+    def _fetch_usts_webull_wsj_live_ct_timeseries(
+        self,
+        *,
+        start: datetime.datetime,
+        end: datetime.datetime,
+        tenors: Sequence[str],
+    ) -> pd.DataFrame:
+        timestamps = ql_cal_date_range(
+            self._calendar,
+            start=start,
+            end=end,
+            freq="1min",
+        )
+        if not timestamps:
+            return _empty_frame(self._date_col)
+
+        queries = [
+            FixedRateBondQuery(
+                cusip=self._ct_alias_for_tenor(tenor),
+                value=FixedRateBondValue.YTM,
+            )
+            for tenor in tenors
+        ]
+        rename_map = {
+            query.col_name(): self._ust_yield_col(tenor)
+            for tenor, query in zip(tenors, queries)
+        }
+
+        tb = self._get_usts_webull_wsj_live_tb()
+        wide = tb.get_timeseries(
+            start=None,
+            end=None,
+            timestamps=timestamps,
+            queries=queries,
+            n_jobs=_USTS_WEBULL_INTRADAY_N_JOBS,
+        )
+        if wide.empty:
+            return _empty_frame(self._date_col)
+        wide = wide.rename(columns=rename_map).sort_index().ffill()
+        wide.index.name = self._date_col
+        return wide.loc[(wide.index >= start) & (wide.index <= end)]
+
+    def _fetch_ust_timeseries(
+        self,
+        *,
+        start: datetime.datetime,
+        end: datetime.datetime,
+        tenors: Sequence[str],
+    ) -> pd.DataFrame:
+        if self.source == _SOURCE_SDR_WSJ_INTRADAY_SPREADOVER:
+            return self._fetch_wsj_ct_timeseries(start=start, end=end, tenors=tenors)
+        if self.source == _SOURCE_SDR_USTS_WEBULL_WSJ_LIVE_INTRADAY_SPREADOVER:
+            return self._fetch_usts_webull_wsj_live_ct_timeseries(start=start, end=end, tenors=tenors)
+        raise NotImplementedError(f"UST fetch not implemented for source '{self.source}'.")
+
     def _append_smoothing_columns(
         self,
         df: pd.DataFrame,
@@ -443,7 +545,7 @@ class IRSwapSpreadsTB:
             tenors=resolved_tenors,
             ignore_cache=ignore_cache,
         )
-        ust_df = self._fetch_wsj_ct_timeseries(
+        ust_df = self._fetch_ust_timeseries(
             start=start_dt,
             end=end_dt,
             tenors=resolved_tenors,

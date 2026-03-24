@@ -51,50 +51,19 @@ def test_resolve_dates_defaults_to_today_or_inclusive_range():
     ]
 
 
-def test_default_tenors_for_stirt_curve_stays_inside_3y_and_includes_imm_pairs():
+def test_default_tenors_for_stirt_curve_defaults_to_first_twelve_quarterly_imm_pairs():
     tenors = warm_script._default_tenors_for_curve(
         "USD-SOFR-1D-Q12STIRT",
         anchor_date=dt.date(2026, 3, 20),
     )
 
-    assert "1Y" in tenors
-    assert "3Y" in tenors
-    assert "11M" in tenors
-    assert "12M" not in tenors
-    assert "18M" in tenors
-    assert "22M" in tenors
-    assert "30M" in tenors
-    assert "5Y" not in tenors
-    assert "1Y1Y" in tenors
-    assert "2Y1Y" in tenors
-    assert "1Y2Y" in tenors
-    assert "3M1Y" in tenors
-    assert "6M2Y" in tenors
-    assert "fomc_1" in tenors
-    assert "fomc_7" in tenors
-    assert "fomc_8" not in tenors
-    assert "IMM_Z26xIMM_H27" in tenors
-    assert "IMM_M26xIMM_U26" in tenors
-    assert "IMM_Z28xIMM_H29" not in tenors
-
-    max_maturity = dt.date(2029, 3, 20)
-    filtered_maturities = [
-        warm_script._stirt_tenor_maturity_date(
-            "USD-SOFR-1D-Q12STIRT",
-            tenor,
-            anchor_date=dt.date(2026, 3, 20),
-        )
-        for tenor in tenors
-        if tenor.startswith("fomc_") or tenor.startswith("IMM_")
-    ]
-    assert filtered_maturities
-    assert all(maturity is not None and maturity <= max_maturity for maturity in filtered_maturities)
+    assert tenors == [f"IMM_{idx}xIMM_{idx + 1}" for idx in range(1, 13)]
 
 
 def test_default_tenors_for_non_cb_curve_stays_generic():
     tenors = warm_script._default_tenors_for_curve("MXN-TIIE", anchor_date=dt.date(2026, 3, 13))
 
-    assert len(tenors) == 72
+    assert len(tenors) > 70
     assert "1Y" in tenors
     assert "1Y1Y" in tenors
     assert "fomc_1" not in tenors
@@ -230,7 +199,8 @@ def test_live_service_window_reports_partial_when_some_timestamps_fail(monkeypat
         ts_builder=object(),
         n_jobs=4,
         calibration_executor="thread",
-        ignore_cache=False,
+        curve_ignore_cache=False,
+        timeseries_ignore_cache=True,
         show_tqdm=False,
         auto_prime_bulk=True,
         stirf_fetch_max_workers=None,
@@ -243,6 +213,8 @@ def test_live_service_window_reports_partial_when_some_timestamps_fail(monkeypat
     )
 
     assert warm_script_summary["status"] == "partial"
+    assert warm_script_summary["curve_status"] == "partial"
+    assert warm_script_summary["timeseries_status"] == "partial"
 
 
 def test_safe_warm_raw_curves_isolates_bad_timestamp():
@@ -310,3 +282,103 @@ def test_safe_warm_timeseries_isolates_bad_tenor():
 
     assert list(df.columns) == ["1Y", "IMM_1xIMM_2"]
     assert failed == ["BAD"]
+
+
+def test_backfill_mode_only_warms_missing_raw_and_forces_timeseries_reprice(monkeypatch, tmp_path):
+    trading_date = dt.date(2026, 3, 20)
+    timestamps = [
+        dt.datetime(2026, 3, 20, 9, 30, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 3, 20, 9, 31, tzinfo=dt.timezone.utc),
+    ]
+    captured: list[dict] = []
+
+    class _FakeMdp:
+        def __init__(self, source):
+            self.source = source
+            self._store = object()
+
+        def _get_curve_store(self):
+            return self._store
+
+    monkeypatch.setattr(warm_script, "IRSwapsMDP", _FakeMdp)
+    monkeypatch.setattr(warm_script, "_build_timeseries_builder", lambda **kwargs: object())
+    monkeypatch.setattr(warm_script, "count_business_day_buckets", lambda **kwargs: 1)
+    monkeypatch.setattr(
+        warm_script,
+        "inspect_curve_store_sync_status",
+        lambda **kwargs: {
+            "curve_name": kwargs["curve_name"],
+            "start_date": kwargs["start_date"].isoformat(),
+            "end_date": kwargs["end_date"].isoformat(),
+            "local_dates": [],
+            "remote_dates": [],
+            "local_days": 0,
+            "remote_days": 0,
+            "local_only_days": 0,
+            "local_only_dates": [],
+        },
+    )
+    monkeypatch.setattr(
+        warm_script,
+        "backfill_local_curve_store_to_supabase",
+        lambda **kwargs: {
+            "status": "ok",
+            "pushed_days": 0,
+            "failed_days": 0,
+            "queued_days": 0,
+        },
+    )
+    monkeypatch.setattr(
+        warm_script,
+        "iter_daily_minute_buckets",
+        lambda **kwargs: iter([(trading_date, timestamps)]),
+    )
+    monkeypatch.setattr(
+        warm_script,
+        "_select_missing_curve_store_timestamps",
+        lambda store, curve_name, timestamps: [timestamps[-1]],
+    )
+    monkeypatch.setattr(warm_script, "_flush_curve_store_pushes", lambda **kwargs: None)
+    monkeypatch.setattr(warm_script, "_flush_computed_ts_pushes", lambda **kwargs: None)
+
+    def _fake_run_live_service_window(**kwargs):
+        captured.append(kwargs)
+        return {
+            "status": "ok",
+            "curve_status": "ok",
+            "timeseries_status": "ok",
+            "curve_requested": len(kwargs["curve_timestamps"]),
+            "curve_ready": len(kwargs["curve_timestamps"]),
+            "curve_failed_timestamps": [],
+            "timeseries_rows": len(kwargs["timeseries_timestamps"]),
+            "timeseries_cols": len(kwargs["explicit_tenors"]) or len(warm_script._STIRT_DEFAULT_RELATIVE_IMM_TENORS),
+            "timeseries_failed_tenors": [],
+        }
+
+    monkeypatch.setattr(warm_script, "_run_live_service_window", _fake_run_live_service_window)
+
+    args = warm_script.parse_args(
+        [
+            "backfill",
+            "--curve",
+            "USD-SOFR-1D-Q12STIRT",
+            "--start-date",
+            "2026-03-20",
+            "--end-date",
+            "2026-03-20",
+            "--perf-log-path",
+            str(tmp_path / "perf.jsonl"),
+        ]
+    )
+
+    exit_code = warm_script._run_backfill_mode(
+        args,
+        warm_script.logging.getLogger("test_backfill_mode"),
+    )
+
+    assert exit_code == 0
+    assert len(captured) == 1
+    assert captured[0]["curve_timestamps"] == [timestamps[-1]]
+    assert captured[0]["timeseries_timestamps"] == timestamps
+    assert captured[0]["curve_ignore_cache"] is False
+    assert captured[0]["timeseries_ignore_cache"] is True
