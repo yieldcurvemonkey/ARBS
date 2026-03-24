@@ -5,6 +5,7 @@ import os
 import sys
 import threading
 import logging
+import re
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
 
 import pandas as pd
@@ -18,6 +19,8 @@ from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 
 
 class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
+    _DEFAULT_GRID_FWDS: tuple[str, ...] = ("Spot", "1M", "3M", "6M", "1Y", "2Y", "5Y", "7Y", "10Y")
+    _DEFAULT_GRID_SWAP_TENORS: tuple[str, ...] = ("1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "8Y", "9Y", "10Y", "15Y", "20Y", "25Y", "30Y")
     _BARCHART_STIRF_STATE: Dict[str, Any] = {
         "builder": None,
         "lock": threading.RLock(),
@@ -706,6 +709,60 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         if curve is None:
             raise RuntimeError(f"IRSwapsMDP could not build a curve for request: {request}")
         return curve
+
+    @staticmethod
+    def _normalize_grid_tenor(tenor: str, *, allow_spot: bool = False) -> str:
+        token = str(tenor or "").strip().upper().replace(" ", "")
+        if not token:
+            raise ValueError("Grid tenor cannot be empty.")
+        if allow_spot and token in {"SPOT", "0", "0D"}:
+            return "0D"
+        if not re.fullmatch(r"\d+[DWMY]", token):
+            raise ValueError(f"Invalid grid tenor '{tenor}'. Expected values like 'Spot', '1M', or '10Y'.")
+        return token
+
+    @staticmethod
+    def _grid_axis_labels(values: Sequence[str], axis_name: str) -> list[str]:
+        labels = ["Spot" if value == "0D" else value for value in values]
+        if len(labels) != len(set(labels)):
+            raise ValueError(f"Duplicate {axis_name} labels after normalization: {labels}")
+        return labels
+
+    def get_grid(
+        self,
+        request: dict,
+        *,
+        fwds: Optional[Sequence[str]] = None,
+        swap_tenors: Optional[Sequence[str]] = None,
+        flip_axes: bool = False,
+    ) -> pd.DataFrame:
+        curve = self.get_pricer(dict(request))
+
+        normalized_fwds = [
+            self._normalize_grid_tenor(fwd, allow_spot=True)
+            for fwd in (fwds or self._DEFAULT_GRID_FWDS)
+        ]
+        normalized_swap_tenors = [
+            self._normalize_grid_tenor(swap_tenor)
+            for swap_tenor in (swap_tenors or self._DEFAULT_GRID_SWAP_TENORS)
+        ]
+
+        forward_labels = self._grid_axis_labels(normalized_fwds, "fwds")
+        swap_tenor_labels = self._grid_axis_labels(normalized_swap_tenors, "swap_tenors")
+
+        grid = pd.DataFrame(index=swap_tenor_labels, columns=forward_labels, dtype=float)
+        for swap_tenor, swap_label in zip(normalized_swap_tenors, swap_tenor_labels):
+            for fwd, fwd_label in zip(normalized_fwds, forward_labels):
+                swap = curve.build_irswap(fwd=fwd, tenor=swap_tenor)
+                grid.at[swap_label, fwd_label] = float(curve.fair_rate(swap)) * 100.0
+
+        grid.index.name = "swap_tenor"
+        grid.columns.name = "forward_tenor"
+        if flip_axes:
+            grid = grid.T
+            grid.index.name = "forward_tenor"
+            grid.columns.name = "swap_tenor"
+        return grid
 
     def get_data(self, request: dict) -> Optional[_IRSwapGenericCurve]:
         curve_name = request.pop("curve_name")

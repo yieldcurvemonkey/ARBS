@@ -123,6 +123,28 @@ class _FakePromotableErisCurve:
         return 0.04
 
 
+def _grid_token_to_months(token: str) -> int:
+    normalized = str(token).strip().upper()
+    if normalized == "0D":
+        return 0
+    if normalized.endswith("M"):
+        return int(normalized[:-1])
+    if normalized.endswith("Y"):
+        return int(normalized[:-1]) * 12
+    raise ValueError(f"Unsupported grid token: {token}")
+
+
+class _FakeGridCurve:
+    def build_irswap(self, fwd=None, tenor=None, **kwargs):
+        _ = kwargs
+        return {"fwd": fwd, "tenor": tenor}
+
+    def fair_rate(self, irswap):
+        fwd_months = _grid_token_to_months(irswap["fwd"])
+        tenor_months = _grid_token_to_months(irswap["tenor"])
+        return tenor_months / 1_000.0 + fwd_months / 10_000.0
+
+
 def test_bulk_get_data_falls_back_one_by_one_for_eris_ql(monkeypatch):
     mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-QL_BASIC")
     d1 = dt.date(2026, 2, 13)
@@ -150,6 +172,68 @@ def test_bulk_get_data_falls_back_one_by_one_for_eris_ql(monkeypatch):
         ("USD-SOFR-1D", d2, True),
     ]
     assert out == {d1: {"curve": d1}}
+
+
+def test_get_grid_supports_custom_axes_without_mutating_request(monkeypatch):
+    mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC")
+    request = {
+        "curve_name": "USD-SOFR-1D",
+        "timestamp": dt.date(2026, 3, 3),
+        "ignore_cache": True,
+    }
+
+    def _stub_get_pricer(req):
+        assert req is not request
+        req.pop("curve_name")
+        req.pop("timestamp")
+        return _FakeGridCurve()
+
+    monkeypatch.setattr(mdp, "get_pricer", _stub_get_pricer)
+
+    grid = mdp.get_grid(
+        request,
+        fwds=["Spot", "1m", "1Y"],
+        swap_tenors=["2Y", "10y"],
+    )
+
+    expected = pd.DataFrame(
+        [[2.40, 2.41, 2.52], [12.00, 12.01, 12.12]],
+        index=["2Y", "10Y"],
+        columns=["Spot", "1M", "1Y"],
+        dtype=float,
+    )
+    expected.index.name = "swap_tenor"
+    expected.columns.name = "forward_tenor"
+
+    pd.testing.assert_frame_equal(grid, expected)
+    assert request == {
+        "curve_name": "USD-SOFR-1D",
+        "timestamp": dt.date(2026, 3, 3),
+        "ignore_cache": True,
+    }
+
+
+def test_get_grid_can_flip_axes(monkeypatch):
+    mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC")
+    monkeypatch.setattr(mdp, "get_pricer", lambda req: _FakeGridCurve())
+
+    grid = mdp.get_grid(
+        {"curve_name": "USD-SOFR-1D", "timestamp": dt.date(2026, 3, 3)},
+        fwds=["Spot", "6M"],
+        swap_tenors=["2Y", "5Y"],
+        flip_axes=True,
+    )
+
+    expected = pd.DataFrame(
+        [[2.40, 6.00], [2.46, 6.06]],
+        index=["Spot", "6M"],
+        columns=["2Y", "5Y"],
+        dtype=float,
+    )
+    expected.index.name = "forward_tenor"
+    expected.columns.name = "swap_tenor"
+
+    pd.testing.assert_frame_equal(grid, expected)
 
 
 def test_build_ql_irswap_explicit_date_ois_uses_forward_schedule():
