@@ -123,6 +123,10 @@ def _timestamps_cte_sql(
     return f"WITH requested(ts) AS (VALUES {values})"
 
 
+def _quote_identifier(identifier: str) -> str:
+    return f"\"{str(identifier).replace('\"', '\"\"')}\""
+
+
 # ---------------------------------------------------------------------------
 # CurveSnapshot dataclass
 # ---------------------------------------------------------------------------
@@ -710,6 +714,7 @@ class CurveStore:
         tenors: Optional[list[str]] = None,
         metrics: Optional[list[str]] = None,
         timestamps_utc: Optional[Sequence[Union[datetime.datetime, pd.Timestamp]]] = None,
+        columns: Optional[Sequence[str]] = None,
     ) -> pd.DataFrame:
         """Read analytics panel (wide-format)."""
         asset_dir = self._analytics_dir / f"asset={_sanitize(curve_name)}"
@@ -738,7 +743,25 @@ class CurveStore:
             for m in metrics:
                 for t in tenors:
                     cols.append(f"{m}_{t}")
+        if columns:
+            for column in columns:
+                column_name = str(column)
+                if column_name not in cols:
+                    cols.append(column_name)
+
+        projected_cols: Optional[list[str]] = None
+        if columns or (tenors and metrics):
+            schema_query = f"SELECT * FROM read_parquet('{glob_pattern}', hive_partitioning=true, union_by_name=true) LIMIT 0"
+            try:
+                available_cols = set(_thread_local_conn().sql(schema_query).df().columns)
+            except (duckdb.IOException, duckdb.CatalogException):
+                available_cols = set()
+            if available_cols:
+                projected_cols = [col for col in cols if col in available_cols]
+
         col_expr = "*"
+        if projected_cols:
+            col_expr = ", ".join(f"analytics.{_quote_identifier(col)}" for col in projected_cols)
 
         where_parts: list[str] = []
         cte_prefix = ""

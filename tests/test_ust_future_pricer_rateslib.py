@@ -1,5 +1,6 @@
 import datetime
 
+import pandas as pd
 import pytest
 
 import MDP.USTFutures.USTFuturesMDP as ustf_mdp_module
@@ -19,6 +20,9 @@ class _DummyBondFuture:
     def __init__(self):
         self.ctd_inputs = []
         self.ytm_inputs = []
+        self.gross_basis_inputs = []
+        self.net_basis_inputs = []
+        self.implied_repo_inputs = []
 
     def ctd_index(self, *, future_price, prices, settlement, ordered=False):
         self.ctd_inputs.append((future_price, tuple(prices), settlement, ordered))
@@ -27,6 +31,18 @@ class _DummyBondFuture:
     def ytm(self, *, future_price):
         self.ytm_inputs.append(future_price)
         return [0.10 - 0.0005 * float(future_price)]
+
+    def gross_basis(self, *, future_price, prices, settlement=None, dirty=False):
+        self.gross_basis_inputs.append((future_price, tuple(prices), settlement, dirty))
+        return [float(price) - float(future_price) for price in prices]
+
+    def net_basis(self, *, future_price, prices, repo_rate, settlement, delivery, convention, dirty=False):
+        self.net_basis_inputs.append((future_price, tuple(prices), repo_rate, settlement, delivery, convention, dirty))
+        return [float(repo_rate) + idx for idx, _ in enumerate(prices)]
+
+    def implied_repo(self, *, future_price, prices, settlement, delivery=None, convention=None, dirty=False):
+        self.implied_repo_inputs.append((future_price, tuple(prices), settlement, delivery, convention, dirty))
+        return [0.01 + (0.001 * idx) for idx, _ in enumerate(prices)]
 
 
 def test_yield_to_maturity_from_price_uses_supplied_future_price(monkeypatch):
@@ -65,6 +81,52 @@ def test_yield_to_maturity_uses_passed_pricable_price(monkeypatch):
     assert dummy_bf.ctd_inputs[0][0] == pytest.approx(109.5)
     assert dummy_bf.ytm_inputs[0] == pytest.approx(109.5)
 
+
+def test_gross_basis_uses_default_future_price_and_basket_prices(monkeypatch):
+    pricer = RLUSTFuturePricer(
+        symbol="TYM26",
+        reference_date=datetime.date(2026, 3, 4),
+        price=112.0,
+    )
+    pricer._basket_pricers = [_DummyBasketPricer(), _DummyBasketPricer()]
+    dummy_bf = _DummyBondFuture()
+    monkeypatch.setattr(pricer, "build_rateslib_object", lambda curves=None, early_or_late_delivery=None: dummy_bf)
+
+    gross_basis = pricer.gross_basis()
+
+    assert gross_basis == pytest.approx((-12.0, -12.0))
+    assert dummy_bf.gross_basis_inputs[0] == (112.0, (100.0, 100.0), None, False)
+
+
+def test_bnoc_defaults_repo_fixing_contract_imm_and_settlement(monkeypatch):
+    pricer = RLUSTFuturePricer(
+        symbol="TYM26",
+        reference_date=datetime.date(2026, 3, 4),
+        price=112.0,
+        curve_id="USD-SOFR-1D",
+    )
+    pricer._basket_pricers = [_DummyBasketPricer(), _DummyBasketPricer()]
+    dummy_bf = _DummyBondFuture()
+    monkeypatch.setattr(pricer, "build_rateslib_object", lambda curves=None, early_or_late_delivery=None: dummy_bf)
+    monkeypatch.setattr(
+        "Query.USTFutures.backends.rateslib.RLUSTFuturePricer._fetch_fixings",
+        lambda as_of_date, curve_name: pd.Series([0.0432], index=[pd.Timestamp("2026-03-03")]),
+    )
+    monkeypatch.setattr(
+        "Query.USTFutures.backends.rateslib.RLUSTFuturePricer.resolve_delivery_contract",
+        lambda symbol, as_of: ("TY", datetime.date(2026, 6, 17), 202606),
+    )
+
+    bnoc = pricer.bnoc()
+
+    assert bnoc == pytest.approx((4.32, 5.32))
+    assert dummy_bf.net_basis_inputs[0][0] == pytest.approx(112.0)
+    assert dummy_bf.net_basis_inputs[0][1] == (100.0, 100.0)
+    assert dummy_bf.net_basis_inputs[0][2] == pytest.approx(4.32)
+    assert dummy_bf.net_basis_inputs[0][3] == datetime.datetime(2026, 3, 4)
+    assert dummy_bf.net_basis_inputs[0][4] == datetime.datetime(2026, 6, 17)
+    assert dummy_bf.net_basis_inputs[0][5] == "ActAct"
+    assert dummy_bf.net_basis_inputs[0][6] is False
 
 def test_ust_proxy_fallback_when_socksio_missing(monkeypatch):
     monkeypatch.setattr(ustf_mdp_module, "_socksio_available", lambda: False)

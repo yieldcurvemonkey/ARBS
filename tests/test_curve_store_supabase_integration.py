@@ -423,3 +423,53 @@ class TestAnalyticsL2:
         assert "rate_1Y2Y" in df.columns
         assert "par_rate_1Y2Y" not in df.columns
         assert float(df.iloc[0]["rate_1Y2Y"]) == 4.25
+
+    def test_read_analytics_projected_reads_match_wide_reads_for_requested_columns(self, tmp_path):
+        from Caching.curve_store import CurveStore
+
+        pd = pytest.importorskip("pandas")
+
+        store = CurveStore(base_dir=tmp_path)
+        analytics_df = pd.DataFrame(
+            {
+                "timestamp_utc": [datetime.datetime(2025, 1, 15, 21, 0, tzinfo=datetime.timezone.utc)],
+                "trading_date": [datetime.date(2025, 1, 15)],
+                "session_minute": [540],
+                "par_rate_10Y": [4.25],
+                "rate_10Y": [4.25],
+                "par_rate_1Y2Y": [4.05],
+                "rate_1Y2Y": [4.05],
+                "par_rate_30Y": [4.75],
+                "rate_30Y": [4.75],
+            }
+        )
+
+        with patch("Caching.curve_store._get_curve_sync", return_value=None):
+            store.write_analytics_day("USD-SOFR-1D", datetime.date(2025, 1, 15), analytics_df, overwrite=True)
+
+        projected = store.read_analytics(
+            "USD-SOFR-1D",
+            start=datetime.date(2025, 1, 15),
+            end=datetime.date(2025, 1, 15),
+            tenors=["10Y", "1Y2Y"],
+            metrics=["par_rate", "rate"],
+        ).reset_index(drop=True)
+        wide = store.read_analytics(
+            "USD-SOFR-1D",
+            start=datetime.date(2025, 1, 15),
+            end=datetime.date(2025, 1, 15),
+        ).reset_index(drop=True)
+
+        expected = wide.loc[
+            :,
+            [
+                "timestamp_utc",
+                "trading_date",
+                "session_minute",
+                "par_rate_10Y",
+                "par_rate_1Y2Y",
+                "rate_10Y",
+                "rate_1Y2Y",
+            ],
+        ]
+        pd.testing.assert_frame_equal(projected, expected)

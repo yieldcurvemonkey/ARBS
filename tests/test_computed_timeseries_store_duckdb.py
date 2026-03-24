@@ -110,6 +110,42 @@ class TestDuckDBFastPath:
         assert not df1.empty
         assert not df2.empty
 
+    @patch("Caching.computed_timeseries_store._get_computed_ts_sync")
+    def test_allow_partial_returns_local_duckdb_rows_without_range_prefetch(self, mock_get_sync, store):
+        d1 = datetime.date(2026, 3, 10)
+        d2 = datetime.date(2026, 3, 11)
+        store.append_rows(symbol="IRS::PARTIAL", rows=[(d1, "rate", 4.5)])
+
+        mock_sync = MagicMock()
+        mock_sync.pull_rows.return_value = []
+        mock_sync.prefetch_range = MagicMock()
+        mock_get_sync.return_value = mock_sync
+
+        result = store.read_rows(
+            symbol="IRS::PARTIAL",
+            reference_points=[d1, d2],
+            intraday=False,
+            allow_partial=True,
+        )
+
+        assert result == [(d1, "rate", 4.5)]
+        mock_sync.pull_rows.assert_called_once()
+        mock_sync.prefetch_range.assert_not_called()
+
+    def test_allow_partial_reads_local_parquet_when_duckdb_disabled(self, store_no_duckdb):
+        d1 = datetime.date(2026, 3, 10)
+        d2 = datetime.date(2026, 3, 11)
+        store_no_duckdb.append_rows(symbol="IRS::PARTIAL_NO_DUCKDB", rows=[(d1, "rate", 4.5)])
+
+        result = store_no_duckdb.read_rows(
+            symbol="IRS::PARTIAL_NO_DUCKDB",
+            reference_points=[d1, d2],
+            intraday=False,
+            allow_partial=True,
+        )
+
+        assert result == [(d1, "rate", 4.5)]
+
 
 class TestGracefulLockFallback:
     def test_rw_lock_falls_back_to_read_only(self, tmp_path):

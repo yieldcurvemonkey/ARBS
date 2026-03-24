@@ -9,6 +9,30 @@ from Query.Base._GenericPricable import _GenericPricable
 from Query.Base.product_adapter import get_adapter
 
 
+def _request_date(now: Any) -> datetime.date | str:
+    if isinstance(now, str):
+        if now.lower() == "live":
+            return "live"
+        raise TypeError(f"Unsupported request timestamp literal for BaseQuery: {now!r}")
+    if isinstance(now, datetime.datetime):
+        return now.date()
+    if isinstance(now, datetime.date):
+        return now
+    raise TypeError(f"Unsupported request timestamp type for BaseQuery: {type(now)!r}")
+
+
+def _request_datetime(now: Any) -> datetime.datetime | str:
+    if isinstance(now, str):
+        if now.lower() == "live":
+            return "live"
+        raise TypeError(f"Unsupported request timestamp literal for BaseQuery: {now!r}")
+    if isinstance(now, datetime.datetime):
+        return now
+    if isinstance(now, datetime.date):
+        return datetime.datetime.combine(now, datetime.time())
+    raise TypeError(f"Unsupported request timestamp type for BaseQuery: {type(now)!r}")
+
+
 @dataclass(frozen=True)
 class BaseQuery(ABC):
     """
@@ -42,21 +66,21 @@ class BaseQuery(ABC):
     tags: Tuple[str, ...] = tuple()
     meta: Dict[str, Any] = field(default_factory=dict)
 
-    def build_mdp_request(self, now: datetime.datetime) -> Dict[str, Any]:
+    def build_mdp_request(self, now: Any) -> Dict[str, Any]:
         """
         Build the request dict for MDP.get_pricer(request) at time 'now'.
         Policy:
-          - If mdp_time_key missing -> inject 'now.date()'
+          - If mdp_time_key missing -> inject request date or preserve "live"
           - If mdp_time_key == "live" or already set -> pass through unchanged
-          - If mdp_time_key == "now" -> inject full datetime
+          - If mdp_time_key == "now" -> inject full datetime or preserve "live"
         """
         req = dict(self.market_request or {})
         if self.mdp_time_key not in req:
-            req[self.mdp_time_key] = now.date()
+            req[self.mdp_time_key] = _request_date(now)
         else:
             v = req[self.mdp_time_key]
             if v == "now":
-                req[self.mdp_time_key] = now
+                req[self.mdp_time_key] = _request_datetime(now)
             # "live" or concrete value: leave as-is
         return req
 

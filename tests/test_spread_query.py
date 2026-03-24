@@ -66,6 +66,40 @@ class TestSpreadQuery:
         assert "curve_b" in req
         assert req["curve_a"] == "USD-SOFR-1D"
         assert req["curve_b"] == "USD-FEDFUNDS"
+        assert req["timestamp"] == now.date()
+
+    def test_build_mdp_request_accepts_live_literal(self):
+        from Query.Spreads.SpreadQuery import SpreadQuery
+        from Query.Spreads.SpreadValue import SpreadValue
+
+        q = SpreadQuery(
+            tenor="5Y",
+            value=SpreadValue.SPREAD_BPS,
+            curve_a="USD-SOFR-1D",
+            curve_b="USD-FEDFUNDS",
+        )
+
+        req = q.build_mdp_request("live")
+
+        assert req["timestamp"] == "live"
+        assert req["curve_a"] == "USD-SOFR-1D"
+        assert req["curve_b"] == "USD-FEDFUNDS"
+
+    def test_build_mdp_request_accepts_date_literal(self):
+        from Query.Spreads.SpreadQuery import SpreadQuery
+        from Query.Spreads.SpreadValue import SpreadValue
+
+        q = SpreadQuery(
+            tenor="5Y",
+            value=SpreadValue.SPREAD_BPS,
+            curve_a="USD-SOFR-1D",
+            curve_b="USD-FEDFUNDS",
+        )
+
+        as_of = datetime.date(2026, 3, 15)
+        req = q.build_mdp_request(as_of)
+
+        assert req["timestamp"] == as_of
 
     def test_col_name(self):
         from Query.Spreads.SpreadQuery import SpreadQuery

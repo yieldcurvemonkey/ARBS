@@ -1,13 +1,28 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
+import re
 from typing import Any, Callable, Dict, List, Tuple
 
 from Query.Base.product_adapter import ProductAdapter, register_product
 from Query.Base.BaseStructure import BaseStructureFunctionMap
 from Query.Base.BaseValue import BaseValueFunctionMap
+from Query.IRSwaps.IRSwapStructure import IRSwapStructureFunctionMap
 from Query.Spreads.SpreadStructure import SpreadStructure
 from Query.Spreads.SpreadValue import SpreadValue
+
+_ADJACENT_FORWARD_TENOR_RE = re.compile(r"^(\d+[DWMY])(\d+[DWMY])$", re.IGNORECASE)
+
+
+def _normalize_irs_tenor(token: Any) -> Any:
+    if not isinstance(token, str):
+        return token
+    normalized = token.strip().upper().replace(" ", "")
+    normalized = normalized.replace("X", "x")
+    match = _ADJACENT_FORWARD_TENOR_RE.match(normalized)
+    if match:
+        return f"{match.group(1)}x{match.group(2)}"
+    return normalized
 
 
 @dataclass
@@ -22,6 +37,8 @@ class SpreadStructureFunctionMap(BaseStructureFunctionMap[SpreadStructure, Sprea
     def __init__(self, pricer_a: Any, pricer_b: Any, **common_kwargs: Any):
         self._pricer_a = pricer_a
         self._pricer_b = pricer_b
+        self._irs_leg_builder_a = IRSwapStructureFunctionMap(curve=pricer_a)
+        self._irs_leg_builder_b = IRSwapStructureFunctionMap(curve=pricer_b)
         super().__init__(SpreadStructure, pricer_a=pricer_a, pricer_b=pricer_b, **common_kwargs)
 
     def _create_map(self) -> Dict[SpreadStructure, Callable[..., Tuple[List[SpreadLegPair], List[float]]]]:
@@ -32,7 +49,7 @@ class SpreadStructureFunctionMap(BaseStructureFunctionMap[SpreadStructure, Sprea
         }
 
     def _leg_build_kwargs(self, *, prefix: str, tenor: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        build_kw: Dict[str, Any] = {"tenor": tenor}
+        build_kw: Dict[str, Any] = {"tenor": _normalize_irs_tenor(tenor)}
         for field in ("effective_date", "maturity_date", "fixed_rate", "notional", "bpv"):
             prefixed = kwargs.get(f"{prefix}_{field}")
             shared = kwargs.get(field)
@@ -43,8 +60,8 @@ class SpreadStructureFunctionMap(BaseStructureFunctionMap[SpreadStructure, Sprea
 
     def _build_leg_pair(self, prefix: str, tenor: str, kwargs: Dict[str, Any]) -> SpreadLegPair:
         build_kw = self._leg_build_kwargs(prefix=prefix, tenor=tenor, kwargs=kwargs)
-        inst_a = self._pricer_a.build_irswap(**build_kw)
-        inst_b = self._pricer_b.build_irswap(**build_kw)
+        inst_a = self._irs_leg_builder_a._leg(**build_kw, is_for_timeseries=True)
+        inst_b = self._irs_leg_builder_b._leg(**build_kw, is_for_timeseries=True)
         return SpreadLegPair(inst_a=inst_a, inst_b=inst_b, tenor=tenor)
 
     def _build_outright(self, **kwargs) -> Tuple[List[SpreadLegPair], List[float]]:

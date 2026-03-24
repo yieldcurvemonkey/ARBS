@@ -39,6 +39,7 @@ from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
 from definitions.USTFutureOptions import decode_strike_token
 from TB.STIRFutureOptionsTB import STIRFutureOptionsTB
 from TB.STIRFuturesTB import STIRFuturesTB
+from TB.IRSwapsTB import IRSwapsTB
 from TB.TimeseriesBuilder import TimeseriesBuilder, _safe_col_name
 from TB.USTFutureOptionsTB import USTFutureOptionsTB
 from TB.USTFuturesTB import USTFuturesTB
@@ -70,8 +71,9 @@ class _FakeRouter:
         ignore_cache=False,
         freq=None,
         timestamps=None,
+        _prefetched_ts_rows_by_symbol=None,
     ) -> pd.DataFrame:
-        _ = n_jobs, ignore_cache, freq, timestamps
+        _ = n_jobs, ignore_cache, freq, timestamps, _prefetched_ts_rows_by_symbol
         self.received_queries.extend(queries)
         dates = pd.bdate_range(start, end).date.tolist()
         if not dates:
@@ -180,11 +182,13 @@ class _FakeIRSCurveStore:
         self.raw_reads: List[Dict[str, Any]] = []
         self.raw_day_reads: List[Tuple[str, datetime.date]] = []
         self.analytics_reads: List[Tuple[str, datetime.date, datetime.date]] = []
+        self.analytics_column_requests: List[Optional[List[str]]] = []
         self.reconstruct_workers: List[int] = []
 
-    def read_analytics(self, curve_name: str, *, start=None, end=None, tenors=None, metrics=None, timestamps_utc=None) -> pd.DataFrame:
+    def read_analytics(self, curve_name: str, *, start=None, end=None, tenors=None, metrics=None, timestamps_utc=None, columns=None) -> pd.DataFrame:
         _ = tenors, metrics, timestamps_utc
         self.analytics_reads.append((curve_name, start, end))
+        self.analytics_column_requests.append(list(columns) if columns is not None else None)
         return self.analytics_df.copy()
 
     def read_raw_nodes(
@@ -1216,6 +1220,69 @@ def test_timeseries_builder_route_full_computed_cache_hit_skips_irs_router(monke
     assert mdp.bulk_calls == 0
 
 
+def test_timeseries_builder_route_partial_computed_cache_hit_reuses_prefetched_irs_rows(monkeypatch, tmp_path):
+    import TB.IRSwapsTB as irs_tb_module
+
+    class _PartialCacheIRSMdp(MarketDataProvider):
+        def __init__(self):
+            super().__init__(source=f"TEST_IRS_PARTIAL_{uuid.uuid4().hex}")
+            self.bulk_calls = 0
+            self.bulk_requests: List[Dict[str, Any]] = []
+
+        def get_pricer(self, request: Dict[str, Any]) -> Dict[str, Any]:
+            return dict(request)
+
+        def bulk_get_data(self, request: Dict[str, Any]) -> Dict[datetime.date, str]:
+            self.bulk_calls += 1
+            self.bulk_requests.append(dict(request))
+            return {
+                ts: f"curve::{ts.isoformat()}"
+                for ts in request["timestamps"]
+            }
+
+    ts1 = datetime.date(2025, 1, 6)
+    ts2 = datetime.date(2025, 1, 7)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="10Y", value=IRSwapValue.RATE)
+    mdp = _PartialCacheIRSMdp()
+    router = IRSwapsTB(mdp, show_tqdm=False, ts_base_dir=str(tmp_path), use_duckdb=False)
+    symbol = router._ts_symbol_for_query(q.curve, q)
+    router._computed_ts_store.append_rows(
+        symbol=symbol,
+        rows=[(ts1, q.col_name(q.curve), 4.25)],
+    )
+
+    read_rows_calls = 0
+    original_read_rows = router._computed_ts_store.read_rows
+
+    def _record_read_rows(*args, **kwargs):
+        nonlocal read_rows_calls
+        read_rows_calls += 1
+        return original_read_rows(*args, **kwargs)
+
+    monkeypatch.setattr(router._computed_ts_store, "read_rows", _record_read_rows)
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(q.curve), 4.25 if ref_dt == ts1 else 4.30),
+    )
+
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    out = tb.get_timeseries(start=ts1, end=ts2, queries=[q], n_jobs=2)
+
+    assert list(out.index) == [ts1, ts2]
+    assert list(out[q.col_name()]) == [4.25, 4.30]
+    assert read_rows_calls == 1
+    assert mdp.bulk_calls == 1
+    assert mdp.bulk_requests == [
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [ts2],
+            "ignore_cache": False,
+            "n_jobs": 2,
+        }
+    ]
+
+
 def test_timeseries_builder_curve_store_fast_path_recovers_missing_points_via_bulk_mdp(monkeypatch):
     import TB.IRSwapsTB as irs_tb_module
 
@@ -1477,6 +1544,53 @@ def test_timeseries_builder_uses_eris_curve_analytics_fast_path():
     ]
     assert store.raw_reads == []
     assert mdp.bulk_calls == 0
+
+
+def test_timeseries_builder_projects_only_needed_analytics_columns():
+    ts1 = datetime.datetime(2026, 1, 2, 20, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2026, 1, 5, 20, 0, tzinfo=datetime.timezone.utc)
+    analytics_df = pd.DataFrame(
+        {
+            "timestamp_utc": [pd.Timestamp(ts1), pd.Timestamp(ts2)],
+            "trading_date": [datetime.date(2026, 1, 2), datetime.date(2026, 1, 5)],
+            "session_minute": [480, 480],
+            "par_rate_7Y": [4.05, 4.10],
+            "rate_7Y": [4.05, 4.10],
+            "par_rate_20Y": [4.55, 4.60],
+            "rate_20Y": [4.55, 4.60],
+            "par_rate_30Y": [4.75, 4.80],
+            "rate_30Y": [4.75, 4.80],
+        }
+    )
+    store = _FakeIRSCurveStore([], analytics_df=analytics_df)
+    mdp = _FakeIRSCurveStoreMDP(store, source="ERIS_EOD_LIVE-RL_BASIC")
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q7 = IRSwapQuery(curve="USD-SOFR-1D", tenor="7Y", value=IRSwapValue.RATE)
+    q20 = IRSwapQuery(curve="USD-SOFR-1D", tenor="20Y", value=IRSwapValue.RATE)
+
+    out = tb.get_timeseries(
+        start=datetime.date(2026, 1, 2),
+        end=datetime.date(2026, 1, 5),
+        queries=[q7, q20],
+        n_jobs=2,
+    )
+
+    assert list(out[q7.col_name()]) == [4.05, 4.10]
+    assert list(out[q20.col_name()]) == [4.55, 4.60]
+    assert len(store.analytics_column_requests) == 1
+    requested_columns = set(store.analytics_column_requests[0] or [])
+    assert requested_columns == {
+        "timestamp_utc",
+        "trading_date",
+        "session_minute",
+        "par_rate_7Y",
+        "rate_7Y",
+        "par_rate_20Y",
+        "rate_20Y",
+    }
+    assert "par_rate_30Y" not in requested_columns
+    assert "rate_30Y" not in requested_columns
 
 
 def test_timeseries_builder_uses_eris_curve_analytics_fast_path_for_curve_spreads():
@@ -2203,3 +2317,46 @@ def test_spreadover_component_fetches_run_in_parallel():
         isinstance(x, IRSwapQuery) and x.tenor == "7Y/20Y" and x.value == IRSwapValue.RATE
         for x in irs_router.received_queries
     )
+
+
+def test_spreadover_reuses_existing_component_frames_and_only_fetches_missing_curve_components():
+    irs_router = _FakeRouter(auto_cols=True, auto_value=0.045)
+    frb_router = _FakeRouter(auto_cols=True, auto_value=0.040)
+    tb = TimeseriesBuilder(irswaps_tb=irs_router, fixedratebonds_tb=frb_router)
+
+    q_curve = IRSwapQuery(curve="USD-SOFR-1D", tenor="7Y/20Y", value=IRSwapValue.SPREADOVER)
+    q_7y = IRSwapQuery(curve="USD-SOFR-1D", tenor="7Y", value=IRSwapValue.SPREADOVER)
+    q_20y = IRSwapQuery(curve="USD-SOFR-1D", tenor="20Y", value=IRSwapValue.SPREADOVER)
+    q_rate_7y = IRSwapQuery(curve="USD-SOFR-1D", tenor="7Y", value=IRSwapValue.RATE)
+    q_rate_20y = IRSwapQuery(curve="USD-SOFR-1D", tenor="20Y", value=IRSwapValue.RATE)
+    q_cash_7y = FixedRateBondQuery(cusip="CT7", value=FixedRateBondValue.YTM)
+    q_cash_20y = FixedRateBondQuery(cusip="CT20", value=FixedRateBondValue.YTM)
+
+    out = tb.get_timeseries(
+        start=START,
+        end=END,
+        queries=[q_curve, q_7y, q_20y, q_rate_7y, q_rate_20y, q_cash_7y, q_cash_20y],
+    )
+
+    irs_rate_queries = [
+        q
+        for q in irs_router.received_queries
+        if isinstance(q, IRSwapQuery) and q.value == IRSwapValue.RATE
+    ]
+    frb_ytm_queries = [
+        q
+        for q in frb_router.received_queries
+        if isinstance(q, FixedRateBondQuery) and q.value == FixedRateBondValue.YTM
+    ]
+
+    assert sum(str(q.tenor) == "7Y" for q in irs_rate_queries) == 1
+    assert sum(str(q.tenor) == "20Y" for q in irs_rate_queries) == 1
+    assert sum(str(q.tenor) == "7Y/20Y" for q in irs_rate_queries) == 1
+    assert sum(str(q.cusip) == "CT7" for q in frb_ytm_queries) == 1
+    assert sum(str(q.cusip) == "CT20" for q in frb_ytm_queries) == 1
+    assert sum(str(q.cusip) == "CT7/CT20" for q in frb_ytm_queries) == 1
+
+    assert not out.empty
+    assert float(out.iloc[0][q_7y.col_name()]) == pytest.approx(0.5)
+    assert float(out.iloc[0][q_20y.col_name()]) == pytest.approx(0.5)
+    assert float(out.iloc[0][q_curve.col_name()]) == pytest.approx(0.005)

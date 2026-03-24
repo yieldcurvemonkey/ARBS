@@ -37,14 +37,38 @@ def parse_candlestick_response(raw: Dict[str, Any]) -> pd.DataFrame:
     for candle in raw.get("candlesticks", []):
         ts = candle.get("end_period_ts", 0)
         price = candle.get("price") or {}
+        previous = _parse_fp(price.get("previous_dollars"))
+        volume = _parse_fp(candle.get("volume_fp"))
+        open_px = _parse_fp(price.get("open_dollars"))
+        high_px = _parse_fp(price.get("high_dollars"))
+        low_px = _parse_fp(price.get("low_dollars"))
+        close_px = _parse_fp(price.get("close_dollars"))
+        mean_px = _parse_fp(price.get("mean_dollars"))
+
+        # Market candles often return only previous_dollars during no-trade
+        # intervals. Expose a flat carry-forward price so the resulting
+        # timeseries is usable without requiring downstream custom parsing.
+        if previous is not None and close_px is None:
+            close_px = previous
+        if previous is not None and volume == 0:
+            if open_px is None:
+                open_px = previous
+            if high_px is None:
+                high_px = previous
+            if low_px is None:
+                low_px = previous
+            if mean_px is None:
+                mean_px = previous
+
         rows.append({
             "timestamp": datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc),
-            "open": _parse_fp(price.get("open_dollars")),
-            "high": _parse_fp(price.get("high_dollars")),
-            "low": _parse_fp(price.get("low_dollars")),
-            "close": _parse_fp(price.get("close_dollars")),
-            "mean": _parse_fp(price.get("mean_dollars")),
-            "volume": _parse_fp(candle.get("volume_fp")),
+            "open": open_px,
+            "high": high_px,
+            "low": low_px,
+            "close": close_px,
+            "mean": mean_px,
+            "previous": previous,
+            "volume": volume,
             "open_interest": _parse_fp(candle.get("open_interest_fp")),
         })
     df = pd.DataFrame(rows)
@@ -81,6 +105,24 @@ def fetch_event_markets(event_ticker: str, **_: Any) -> list:
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
     return resp.json().get("markets", [])
+
+
+def fetch_market_metadata(ticker: str) -> Optional[Dict[str, Any]]:
+    url = f"{KALSHI_BASE_URL}/markets/{ticker}"
+    resp = requests.get(url, timeout=30)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json().get("market")
+
+
+def fetch_event_metadata(event_ticker: str) -> Optional[Dict[str, Any]]:
+    url = f"{KALSHI_BASE_URL}/events/{event_ticker}"
+    resp = requests.get(url, timeout=30)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json().get("event")
 
 
 def fetch_orderbook(ticker: str, depth: int = 0, api_key_id: str = "", private_key_pem: str = "") -> Dict[str, pd.DataFrame]:

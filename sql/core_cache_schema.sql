@@ -81,3 +81,31 @@ CREATE TABLE IF NOT EXISTS arbs_computed_timeseries_rows_v1 (
     updated_at    TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (symbol, trading_date)
 );
+
+CREATE TABLE IF NOT EXISTS arbs_ustf_snapshot_blocks_v1 (
+    trading_date DATE NOT NULL,
+    symbol VARCHAR NOT NULL,
+    data_format VARCHAR NOT NULL DEFAULT 'parquet_zstd',
+    row_count INTEGER NOT NULL,
+    payload BYTEA NOT NULL,
+    sha256 VARCHAR NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (trading_date, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ustf_snapshot_symbol_date
+    ON arbs_ustf_snapshot_blocks_v1 (symbol, trading_date);
+
+CREATE TABLE IF NOT EXISTS arbs_ustf_basis_report_blocks_v1 (
+    trading_date DATE NOT NULL,
+    symbol VARCHAR NOT NULL,
+    data_format VARCHAR NOT NULL DEFAULT 'parquet_zstd',
+    row_count INTEGER NOT NULL,
+    payload BYTEA NOT NULL,
+    sha256 VARCHAR NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (trading_date, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ustf_basis_symbol_date
+    ON arbs_ustf_basis_report_blocks_v1 (symbol, trading_date);

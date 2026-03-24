@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import json
 from collections import OrderedDict
 
@@ -21,6 +22,7 @@ EXPECTED_TARGETS = {
     "stirfutureoptions.sabr_smile",
     "ustfutures.pricer",
     "ustfutures.delivery_basket",
+    "ustfutures.basis_report",
     "ustfutureoptions.option_snapshot",
     "ustfutureoptions.option_timeseries",
     "ustfutureoptions.sabr_smile",
@@ -98,6 +100,68 @@ def test_dependency_expansion_for_swaption_adds_curve():
     targets = {unit.target for unit in units}
     assert "irswaptions.swaption_snapshot" in targets
     assert "irswaps.curve" in targets
+
+
+def test_dependency_expansion_for_ust_basis_report_adds_pricer_and_basket():
+    registry = cp.build_registry()
+    job = cp.WarmJobInput(
+        job_id="ust-basis",
+        target="ustfutures.basis_report",
+        source=None,
+        preset=None,
+        params={},
+        request={"symbol": "TY", "as_of": "2026-03-05"},
+        cache_scope=cp.PERSISTENT_SCOPE,
+        include_dependencies=True,
+        force_refresh=False,
+        priority=100,
+    )
+    units = cp._normalize_requested_units([job], registry)
+    targets = {unit.target for unit in units}
+    assert "ustfutures.basis_report" in targets
+    assert "ustfutures.pricer" in targets
+    assert "ustfutures.delivery_basket" in targets
+
+
+def test_basis_report_execute_invokes_mdp():
+    class _FakeUSTMDP:
+        def __init__(self):
+            self.calls = []
+
+        def get_basis_report(self, **kwargs):
+            self.calls.append(kwargs)
+            return None
+
+    mdp = _FakeUSTMDP()
+
+    class _Ctx:
+        def cached(self, key, factory):
+            return mdp
+
+    unit = cp._cache_unit(
+        spec=cp.build_registry()["ustfutures.basis_report"],
+        source="BARCHART_USTF-RL",
+        request={"symbol": "TY", "as_of": datetime.date(2026, 3, 5), "basket_source": "RL_CME_TCF", "usts_mdp_source": "USTS_FEDINVEST_WSJ_LIVE-RL"},
+        job=cp.WarmJobInput(
+            job_id="basis-exec",
+            target="ustfutures.basis_report",
+            source="BARCHART_USTF-RL",
+            preset=None,
+            params={},
+            request=None,
+            cache_scope=cp.PERSISTENT_SCOPE,
+            include_dependencies=False,
+            force_refresh=False,
+            priority=10,
+        ),
+        description="basis-report",
+        batch_identity={"as_of": datetime.date(2026, 3, 5)},
+    )
+
+    results = cp._ust_basis_report_execute(cp.build_registry()["ustfutures.basis_report"], [unit], cp.RunOptions(), _Ctx())
+
+    assert len(results) == 1
+    assert mdp.calls[0]["symbol"] == "TY"
 
 
 def test_shard_is_deterministic_after_dedupe():

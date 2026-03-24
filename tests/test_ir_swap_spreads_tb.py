@@ -68,6 +68,23 @@ def test_oasis_filter_removes_non_notebook_trades():
     assert filtered["Dissemination Identifier"].tolist() == ["good"]
 
 
+def test_oasis_filter_keeps_intraday_rows_with_missing_optional_fields():
+    tb = IRSwapSpreadsTB(source="SDR-WSJ-INTRADAY-SPREADOVER", show_tqdm=False)
+    raw = pd.DataFrame(
+        [
+            {
+                **_oasis_valid_trade_row(trade_id="good_missing"),
+                "Other payment type": pd.NA,
+                "Package transaction price notation": pd.NA,
+            }
+        ]
+    )
+
+    filtered = tb._apply_oasis_sdr_filters(raw)
+
+    assert filtered["Dissemination Identifier"].tolist() == ["good_missing"]
+
+
 def test_get_timeseries_builds_spreads_and_smoothing(monkeypatch: pytest.MonkeyPatch):
     tb = IRSwapSpreadsTB(source="SDR-WSJ-INTRADAY-SPREADOVER", show_tqdm=False)
     ny = ZoneInfo("America/New_York")

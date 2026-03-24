@@ -4,7 +4,10 @@ from typing import Any, Iterable, List, Optional, Sequence, Tuple, Union, Litera
 
 import string
 import rateslib as rl
+import pandas as pd
 
+from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
+from MDP.USTFutures.treasury_conversion_factors import resolve_delivery_contract
 from Query.FixedRateBonds.backends.rateslib.RLFixedRateBondPricer import RLFixedRateBondPricer
 from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
 from Query.USTFutures.backends.rateslib.RLUSTFuturePricable import RLUSTFuturePricable
@@ -252,29 +255,145 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
             idx = self.ctd_index(ordered=False)
             return self._basket_pricers[int(idx)]
 
-    def implied_repo(self) -> Tuple[float, ...]:
-        if not self._basket_pricers:
-            raise ValueError("Cannot compute implied repo without a deliverable basket")
-        bf = self.build_rateslib_object(curves=self._curve_id)
-        prices = self._basket_prices()
-        settlement = self._basket_settlement()
-        return tuple(
-            float(x)
-            for x in bf.implied_repo(
-                future_price=self._price,
-                prices=prices,
-                settlement=settlement,
-            )
-        )
-
     def _basket_prices(self) -> List[float]:
         return [float(pricer.clean_price()) for pricer in self._basket_pricers]
 
     def _basket_settlement(self) -> datetime.date:
         return self._basket_pricers[0].settlement_date()
 
+    def _resolve_future_price(self, future_price: Optional[float] = None) -> float:
+        return float(self._price if future_price is None else future_price)
+
+    def _resolve_prices(self, prices: Optional[Sequence[float]] = None) -> List[float]:
+        if prices is None:
+            return self._basket_prices()
+        return [float(x) for x in prices]
+
+    def _coerce_datetime(self, value: Optional[DateLike]) -> Optional[datetime.datetime]:
+        if value is None:
+            return None
+        if pd.isna(value):
+            return None
+        if isinstance(value, datetime.datetime):
+            return value
+        return datetime.datetime(value.year, value.month, value.day)
+
+    def _resolve_settlement(self, settlement: Optional[DateLike] = None) -> datetime.datetime:
+        if not self._basket_pricers:
+            raise ValueError("Cannot compute settlement-dependent basis metrics without a deliverable basket")
+        return self._coerce_datetime(settlement) or self._coerce_datetime(self._basket_settlement())
+
+    def _resolve_delivery(self, delivery: Optional[DateLike] = None) -> datetime.datetime:
+        delivery_date = self._coerce_datetime(delivery)
+        if delivery_date is not None:
+            return delivery_date
+        _, contract_imm_date, _ = resolve_delivery_contract(self._symbol, self._reference_date)
+        return datetime.datetime(contract_imm_date.year, contract_imm_date.month, contract_imm_date.day)
+
+    def _resolve_repo_rate(
+        self,
+        repo_rate: Optional[float | Sequence[float]] = None,
+        curve_name: Optional[str] = None,
+    ) -> float | Sequence[float]:
+        if repo_rate is not None:
+            return repo_rate
+        fixing_curve = curve_name or (self._curve_id if isinstance(self._curve_id, str) else "USD-SOFR-1D")
+        fixings = _fetch_fixings(as_of_date=self._reference_date, curve_name=fixing_curve)
+        return float(fixings.sort_index().tail(1).iloc[0]) * 100.0
+
     def conversion_factors(self) -> List[float]:
         return list(self._conversion_factors)
+
+    def gross_basis(
+        self,
+        future_price: Optional[float] = None,
+        prices: Optional[Sequence[float]] = None,
+        settlement: Optional[DateLike] = None,
+        dirty: bool = False,
+    ) -> Tuple[float, ...]:
+        if not self._basket_pricers:
+            raise ValueError("Cannot compute gross basis without a deliverable basket")
+        bf = self.build_rateslib_object(curves=self._curve_id)
+        kwargs = {
+            "future_price": self._resolve_future_price(future_price),
+            "prices": self._resolve_prices(prices),
+            "dirty": dirty,
+        }
+        if settlement is not None:
+            kwargs["settlement"] = self._coerce_datetime(settlement)
+        return tuple(float(x) for x in bf.gross_basis(**kwargs))
+
+    def net_basis(
+        self,
+        repo_rate: Optional[float | Sequence[float]] = None,
+        future_price: Optional[float] = None,
+        prices: Optional[Sequence[float]] = None,
+        settlement: Optional[DateLike] = None,
+        delivery: Optional[DateLike] = None,
+        convention: Optional[str] = "ActAct",
+        dirty: bool = False,
+        curve_name: Optional[str] = None,
+    ) -> Tuple[float, ...]:
+        if not self._basket_pricers:
+            raise ValueError("Cannot compute net basis without a deliverable basket")
+        bf = self.build_rateslib_object(curves=self._curve_id)
+        kwargs = {
+            "future_price": self._resolve_future_price(future_price),
+            "prices": self._resolve_prices(prices),
+            "repo_rate": self._resolve_repo_rate(repo_rate=repo_rate, curve_name=curve_name),
+            "settlement": self._resolve_settlement(settlement),
+            "delivery": self._resolve_delivery(delivery),
+            "dirty": dirty,
+        }
+        if convention is not None:
+            kwargs["convention"] = convention
+        return tuple(float(x) for x in bf.net_basis(**kwargs))
+
+    def bnoc(
+        self,
+        repo_rate: Optional[float | Sequence[float]] = None,
+        future_price: Optional[float] = None,
+        prices: Optional[Sequence[float]] = None,
+        settlement: Optional[DateLike] = None,
+        delivery: Optional[DateLike] = None,
+        convention: Optional[str] = "ActAct",
+        dirty: bool = False,
+        curve_name: Optional[str] = None,
+    ) -> Tuple[float, ...]:
+        return self.net_basis(
+            repo_rate=repo_rate,
+            future_price=future_price,
+            prices=prices,
+            settlement=settlement,
+            delivery=delivery,
+            convention=convention,
+            dirty=dirty,
+            curve_name=curve_name,
+        )
+
+    def implied_repo(
+        self,
+        future_price: Optional[float] = None,
+        prices: Optional[Sequence[float]] = None,
+        settlement: Optional[DateLike] = None,
+        delivery: Optional[DateLike] = None,
+        convention: Optional[str] = None,
+        dirty: bool = False,
+    ) -> Tuple[float, ...]:
+        if not self._basket_pricers:
+            raise ValueError("Cannot compute implied repo without a deliverable basket")
+        bf = self.build_rateslib_object(curves=self._curve_id)
+        kwargs = {
+            "future_price": self._resolve_future_price(future_price),
+            "prices": self._resolve_prices(prices),
+            "settlement": self._resolve_settlement(settlement),
+            "dirty": dirty,
+        }
+        if delivery is not None:
+            kwargs["delivery"] = self._coerce_datetime(delivery)
+        if convention is not None:
+            kwargs["convention"] = convention
+        return tuple(float(x) for x in bf.implied_repo(**kwargs))
 
     def resolve_pricable(self, priceable: RLUSTFuturePricable, risk_weight: Optional[float] = None) -> RLUSTFuturePricable:
         if risk_weight is None or risk_weight >= 0:

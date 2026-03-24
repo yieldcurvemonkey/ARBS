@@ -303,6 +303,28 @@ class ComputedTimeseriesStore:
             logger.warning("DuckDB sync from Postgres failed for %s", symbol, exc_info=True)
             return False
 
+    def _read_local_rows_without_prefetch(
+        self,
+        *,
+        symbol: str,
+        reference_points: Sequence[DateLike],
+        intraday: bool,
+        skip_current_eod: bool,
+        fallback_column_name: str | None,
+    ) -> List[Tuple[DateLike, str, float]]:
+        start = min(reference_points)
+        end = max(reference_points)
+        read_start: DateLike = _normalize_intraday_key(start).to_pydatetime() if intraday else start
+        read_end: DateLike = _normalize_intraday_key(end).to_pydatetime() if intraday else end
+        df = self._read_df(symbol=symbol, start=read_start, end=read_end)
+        return self._rows_from_df(
+            df=df,
+            reference_points=reference_points,
+            intraday=intraday,
+            skip_current_eod=skip_current_eod,
+            fallback_column_name=fallback_column_name,
+        )
+
     def read_rows(
         self,
         *,
@@ -311,6 +333,7 @@ class ComputedTimeseriesStore:
         intraday: bool,
         skip_current_eod: bool = True,
         fallback_column_name: str | None = None,
+        allow_partial: bool = False,
     ) -> List[Tuple[DateLike, str, float]]:
         if not reference_points:
             return []
@@ -368,6 +391,20 @@ class ComputedTimeseriesStore:
                     }
                     if covered_2 >= requested:
                         return duckdb_result_2
+                    duckdb_result = duckdb_result_2
+
+        if allow_partial:
+            if duckdb_result is not None:
+                return duckdb_result
+            if intraday or self._duckdb_cache is None:
+                return self._read_local_rows_without_prefetch(
+                    symbol=symbol,
+                    reference_points=reference_points,
+                    intraday=intraday,
+                    skip_current_eod=skip_current_eod,
+                    fallback_column_name=fallback_column_name,
+                )
+            return []
 
         # Fallback to existing Parquet path
         start = min(reference_points)

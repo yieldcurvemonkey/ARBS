@@ -138,13 +138,42 @@ class EventContractsMDP(MarketDataProvider):
 
     @staticmethod
     def _kalshi_ticker_type(ticker: str) -> str:
-        """Infer Kalshi ticker type from its structure.
+        """Heuristic Kalshi ticker classification.
 
-        Market tickers have 3+ dash-separated segments (e.g. KXFEDDECISION-26MAR-T4.625).
-        Event tickers have 2 segments (e.g. KXFEDDECISION-26MAR).
+        This is only a fallback. Some live Kalshi market tickers have two
+        segments (for example ``FEDHIKE-26DEC31``), so callers should prefer
+        explicit metadata resolution when available.
         """
         parts = ticker.split("-")
         return "market" if len(parts) >= 3 else "event"
+
+    def _resolve_kalshi_contract(self, request: Dict[str, Any], ticker: str) -> tuple[str, str]:
+        from MDP.EventContracts.kalshi_fetcher import fetch_event_metadata, fetch_market_metadata
+
+        explicit_type = request.get("ticker_type")
+        explicit_series = request.get("series_ticker")
+        if explicit_type in {"market", "event"} and explicit_series:
+            return explicit_type, explicit_series
+
+        # First try the public market metadata endpoint. Some Kalshi market
+        # tickers have only two segments, so structural heuristics are not
+        # reliable.
+        if explicit_type != "event":
+            market_meta = fetch_market_metadata(ticker)
+            if market_meta is not None:
+                series_ticker = explicit_series
+                if not series_ticker:
+                    event_ticker = market_meta.get("event_ticker")
+                    event_meta = fetch_event_metadata(event_ticker) if event_ticker else None
+                    series_ticker = (event_meta or {}).get("series_ticker")
+                return "market", series_ticker or ticker.rsplit("-", 1)[0]
+
+        if explicit_type != "market":
+            event_meta = fetch_event_metadata(ticker)
+            if event_meta is not None:
+                return "event", explicit_series or event_meta["series_ticker"]
+
+        return explicit_type or self._kalshi_ticker_type(ticker), explicit_series or ticker.rsplit("-", 1)[0]
 
     def _fetch_kalshi(self, request: Dict[str, Any]) -> EventContractPricer:
         from MDP.EventContracts.kalshi_fetcher import (
@@ -163,8 +192,7 @@ class EventContractsMDP(MarketDataProvider):
         period = request.get("period_interval", 1440)
         api_key = request.get("api_key_id", "dcd3316c-192d-4d1e-9049-832d46fd9564")
         private_key = request.get("private_key_pem", Path(r"C:\Users\chris\clee\ARBS\MDP\EventContracts\arbs_mdp.txt").read_text(encoding="utf-8"))
-        series_ticker = request.get("series_ticker", ticker.rsplit("-", 1)[0])
-        ticker_type = request.get("ticker_type", self._kalshi_ticker_type(ticker))
+        ticker_type, series_ticker = self._resolve_kalshi_contract(request, ticker)
 
         if ticker_type == "event":
             if not (api_key and private_key):

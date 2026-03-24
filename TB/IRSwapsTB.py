@@ -4,7 +4,7 @@ import json
 import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
+from typing import DefaultDict, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import re
 import pandas as pd
@@ -270,6 +270,7 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         ignore_cache: Optional[bool] = False,
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
+        _prefetched_ts_rows_by_symbol: Optional[Mapping[str, Sequence[Tuple[DateLike, str, float]]]] = None,
     ) -> pd.DataFrame:
         has_timestamps = timestamps is not None and len(timestamps) > 0
         is_intraday = (not has_timestamps) and isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
@@ -285,6 +286,10 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         to_fetch: DefaultDict[str, set] = defaultdict(set)
         cached_rows: List[Tuple[DateLike, str, float]] = []
         cached_row_keys: set[Tuple[DateLike, str]] = set()
+        prefetched_ts_rows_by_symbol = {
+            str(symbol): list(rows)
+            for symbol, rows in (_prefetched_ts_rows_by_symbol or {}).items()
+        }
 
         use_mapping_cache = not self._use_ts_cache
         cache_map = getattr(self, self._cache_attr) if use_mapping_cache else None
@@ -292,28 +297,38 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         if self._use_ts_cache and not ignore_cache:
             for curve_name, qs in by_curve.items():
                 for q in qs:
+                    symbol = self._ts_symbol_for_query(curve_name, q)
+                    prefetched_rows = prefetched_ts_rows_by_symbol.get(symbol)
+                    if prefetched_rows is not None:
+                        rows = list(prefetched_rows)
+                    else:
+                        try:
+                            rows = self._computed_ts_store.read_rows(
+                                symbol=symbol,
+                                reference_points=ref_points,
+                                intraday=use_intraday_cache,
+                                skip_current_eod=True,
+                                fallback_column_name=q.col_name(curve_name),
+                                allow_partial=True,
+                            )
+                        except Exception as ex:
+                            self._logger.debug(
+                                "Computed TS cache read failed for curve='%s', query='%s': %s",
+                                curve_name,
+                                q,
+                                ex,
+                            )
+                            rows = []
                     try:
-                        rows = self._computed_ts_store.read_rows(
-                            symbol=self._ts_symbol_for_query(curve_name, q),
-                            reference_points=ref_points,
-                            intraday=use_intraday_cache,
-                            skip_current_eod=True,
-                            fallback_column_name=q.col_name(curve_name),
-                        )
-                    except Exception as ex:
-                        self._logger.debug(
-                            "Computed TS cache read failed for curve='%s', query='%s': %s",
-                            curve_name,
-                            q,
-                            ex,
-                        )
+                        if prefetched_rows is None:
+                            rows = _normalize_legacy_eod_cached_rows(
+                                mdp=self.mdp,
+                                curve_name=curve_name,
+                                query=q,
+                                rows=rows,
+                            )
+                    except Exception:
                         rows = []
-                    rows = _normalize_legacy_eod_cached_rows(
-                        mdp=self.mdp,
-                        curve_name=curve_name,
-                        query=q,
-                        rows=rows,
-                    )
                     cached_rows.extend(rows)
                     cached_row_keys.update((row_d, row_c) for row_d, row_c, _ in rows)
 

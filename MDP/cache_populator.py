@@ -1436,10 +1436,13 @@ def _delivery_basket_cusips(symbol: str, as_of: dt.date) -> list[str]:
 
 def _ust_delivery_basket_units_from_request(spec: WarmTargetSpec, source: str, request: Mapping[str, Any], job: WarmJobInput) -> list[WarmUnit]:
     req = dict(request)
-    symbols = _dedupe_strs(req.pop("symbols", None) or req.pop("tickers", None) or req.pop("symbol", None) or [])
+    symbols = _dedupe_strs(_listify(req.pop("symbols", None) or req.pop("tickers", None) or req.pop("symbol", None) or []))
     if not symbols:
         raise ValueError("Request must include 'symbols' or 'symbol'.")
-    as_ofs = _extract_date_list(req, singular="as_of", plural="as_ofs")
+    raw_as_ofs = req.pop("as_ofs", None)
+    raw_as_of = req.pop("as_of", None)
+    as_of_request = {"as_ofs": raw_as_ofs} if raw_as_ofs is not None else {"as_of": raw_as_of}
+    as_ofs = _extract_date_list(as_of_request, singular="as_of", plural="as_ofs")
     basket_source = str(req.pop("basket_source", "RL_CME_TCF"))
     usts_source = str(req.pop("usts_mdp_source", "USTS_FEDINVEST_WSJ_LIVE-RL"))
     if req:
@@ -1527,6 +1530,139 @@ def _ust_delivery_basket_execute(spec: WarmTargetSpec, units: list[WarmUnit], op
             usts_mdp_source=str(unit.request["usts_mdp_source"]),
             source=str(unit.request["source"]),
             ignore_cache=bool(unit.force_refresh),
+        )
+    return [_result_for_unit(unit, scope=PERSISTENT_SCOPE, status=STATUS_EXECUTED) for unit in units]
+
+
+def _ust_basis_report_units_from_request(spec: WarmTargetSpec, source: str, request: Mapping[str, Any], job: WarmJobInput) -> list[WarmUnit]:
+    req = dict(request)
+    symbols = _dedupe_strs(_listify(req.pop("symbols", None) or req.pop("tickers", None) or req.pop("symbol", None) or []))
+    if not symbols:
+        raise ValueError("Request must include 'symbols' or 'symbol'.")
+    raw_as_ofs = req.pop("as_ofs", None)
+    raw_as_of = req.pop("as_of", None)
+    as_of_request = {"as_ofs": raw_as_ofs} if raw_as_ofs is not None else {"as_of": raw_as_of}
+    as_ofs = _extract_date_list(as_of_request, singular="as_of", plural="as_ofs")
+    basket_source = str(req.pop("basket_source", "RL_CME_TCF"))
+    usts_source = str(req.pop("usts_mdp_source", "USTS_FEDINVEST_WSJ_LIVE-RL"))
+    if req:
+        raise ValueError(f"Unsupported {spec.target} request keys: {', '.join(sorted(req.keys()))}")
+    units: list[WarmUnit] = []
+    for as_of in as_ofs:
+        for symbol in symbols:
+            scalar_request = {"symbol": symbol, "as_of": as_of, "basket_source": basket_source, "usts_mdp_source": usts_source}
+            identity_request = {"symbol": symbol, "as_of": as_of, "basket_source": basket_source, "usts_mdp_source": usts_source}
+            units.append(
+                _cache_unit(
+                    spec=spec,
+                    source=source,
+                    request=scalar_request,
+                    identity_request=identity_request,
+                    job=job,
+                    description=f"{spec.target} {symbol} @ {as_of.isoformat()}",
+                    batch_identity={"as_of": as_of, "basket_source": basket_source, "usts_mdp_source": usts_source},
+                    metadata={"basket_source": basket_source, "usts_mdp_source": usts_source},
+                )
+            )
+    return units
+
+
+def _ust_basis_report_units_from_preset(spec: WarmTargetSpec, source: str, preset: str, params: Mapping[str, Any], job: WarmJobInput) -> list[WarmUnit]:
+    preset_key = str(preset).strip().lower()
+    as_of = _last_weekday()
+    if preset_key == "smoke":
+        return _ust_basis_report_units_from_request(spec, source, {"symbols": params.get("symbols") or ["TY"], "as_of": params.get("as_of", as_of)}, job)
+    if preset_key == "front":
+        return _ust_basis_report_units_from_request(
+            spec,
+            source,
+            {"symbols": params.get("symbols") or ["TU", "FV", "TY", "US"], "as_ofs": params.get("as_ofs") or [as_of - dt.timedelta(days=offset) for offset in range(3)]},
+            job,
+        )
+    raise ValueError(f"Unsupported preset '{preset}' for target '{spec.target}'.")
+
+
+def _ust_basis_report_dependencies(spec: WarmTargetSpec, unit: WarmUnit) -> list[WarmUnit]:
+    _ = spec
+    if PERSISTENT_SCOPE not in unit.requested_scopes:
+        return []
+    registry = build_registry()
+    pricer_spec = registry["ustfutures.pricer"]
+    basket_spec = registry["ustfutures.delivery_basket"]
+    as_of = _coerce_date(unit.request["as_of"])
+
+    pricer_job = WarmJobInput(
+        job_id=unit.job_ids[0],
+        target=pricer_spec.target,
+        source=unit.source,
+        preset=None,
+        params={},
+        request=None,
+        cache_scope=PERSISTENT_SCOPE,
+        include_dependencies=False,
+        force_refresh=unit.force_refresh,
+        priority=unit.user_priority,
+    )
+    basket_job = WarmJobInput(
+        job_id=unit.job_ids[0],
+        target=basket_spec.target,
+        source=unit.source,
+        preset=None,
+        params={},
+        request=None,
+        cache_scope=PERSISTENT_SCOPE,
+        include_dependencies=False,
+        force_refresh=unit.force_refresh,
+        priority=unit.user_priority,
+    )
+
+    deps = []
+    deps.extend(
+        pricer_spec.build_units_from_request(
+            pricer_spec,
+            _resolve_source(pricer_spec, pricer_job.source),
+            {"symbols": [str(unit.request["symbol"])], "timestamp": as_of},
+            pricer_job,
+        )
+    )
+    deps.extend(
+        basket_spec.build_units_from_request(
+            basket_spec,
+            _resolve_source(basket_spec, basket_job.source),
+            {
+                "symbols": [str(unit.request["symbol"])],
+                "as_of": as_of,
+                "basket_source": str(unit.request["basket_source"]),
+                "usts_mdp_source": str(unit.request["usts_mdp_source"]),
+            },
+            basket_job,
+        )
+    )
+    for dep in deps:
+        dep.description = f"dependency of {unit.target}: {dep.description}"
+    return deps
+
+
+def _ust_basis_report_probe(spec: WarmTargetSpec, unit: WarmUnit, context: RunContext) -> ProbeResult:
+    _ = spec
+    mdp = context.cached(("mdp", "USTFuturesMDP", unit.source), lambda: _load_attr("MDP.USTFutures.USTFuturesMDP", "USTFuturesMDP")(source=unit.source))
+    as_of = _coerce_date(unit.request["as_of"])
+    symbol = mdp._resolve_contract_symbol(str(unit.request["symbol"]), dt.datetime(as_of.year, as_of.month, as_of.day, 14, 0, tzinfo=_CHICAGO_TZ))
+    store = mdp._get_ust_future_store()
+    return ProbeResult("hit", "Basis report CORE snapshot already present.") if store.has_basis_report_day(symbol, as_of) else ProbeResult("miss")
+
+
+def _ust_basis_report_execute(spec: WarmTargetSpec, units: list[WarmUnit], options: RunOptions, context: RunContext) -> list[WarmResult]:
+    _ = spec
+    _ = options
+    mdp = context.cached(("mdp", "USTFuturesMDP", units[0].source), lambda: _load_attr("MDP.USTFutures.USTFuturesMDP", "USTFuturesMDP")(source=units[0].source))
+    for unit in units:
+        mdp.get_basis_report(
+            symbol=str(unit.request["symbol"]),
+            timestamp=_coerce_date(unit.request["as_of"]),
+            basket_source=str(unit.request["basket_source"]),
+            usts_mdp_source=str(unit.request["usts_mdp_source"]),
+            force_refresh=bool(unit.force_refresh),
         )
     return [_result_for_unit(unit, scope=PERSISTENT_SCOPE, status=STATUS_EXECUTED) for unit in units]
 
@@ -2025,6 +2161,25 @@ def _build_registry_impl() -> OrderedDict[str, WarmTargetSpec]:
             expand_dependencies=_ust_delivery_basket_dependencies,
             probe_persistent=_ust_delivery_basket_probe,
             execute_persistent=_ust_delivery_basket_execute,
+        )
+    )
+    add(
+        WarmTargetSpec(
+            target="ustfutures.basis_report",
+            default_source="BARCHART_USTF-RL",
+            allowed_sources=("BARCHART_USTF-RL",),
+            supported_scopes=frozenset({PERSISTENT_SCOPE}),
+            request_schema={"required": ["symbols|symbol", "as_of|as_ofs"], "optional": ["basket_source", "usts_mdp_source"], "notes": ["Builds and persists canonical UST futures basis report CORE snapshots."]},
+            preset_docs={"smoke": "Warm one UST futures basis report.", "front": "Warm recent basis reports across standard front roots."},
+            param_docs={"symbols": "JSON array override for preset futures roots.", "as_ofs": "Optional JSON array of ISO dates."},
+            dependency_doc="Depends on ustfutures.pricer and ustfutures.delivery_basket.",
+            examples=({"symbols": ["TY"], "as_ofs": ["2026-03-05", "2026-03-06"]},),
+            base_priority=10,
+            build_units_from_preset=_ust_basis_report_units_from_preset,
+            build_units_from_request=_ust_basis_report_units_from_request,
+            expand_dependencies=_ust_basis_report_dependencies,
+            probe_persistent=_ust_basis_report_probe,
+            execute_persistent=_ust_basis_report_execute,
         )
     )
     add(

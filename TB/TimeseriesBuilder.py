@@ -703,7 +703,7 @@ class TimeseriesBuilder:
                 route_timestamps = intraday_timestamps
 
         if tb is not None:
-            cached_df = self._try_routed_product_computed_cache_hit(
+            cached_df, prefetched_rows_by_symbol = self._probe_routed_product_computed_cache(
                 product=canonical_product,
                 queries=qs,
                 router=tb,
@@ -716,14 +716,19 @@ class TimeseriesBuilder:
             )
             if cached_df is not None:
                 return cached_df
+            route_kwargs: Dict[str, Any] = {
+                "n_jobs": n_jobs,
+                "ignore_cache": ignore_cache,
+                "freq": route_freq,
+                "timestamps": route_timestamps,
+            }
+            if prefetched_rows_by_symbol and canonical_product in {"IRS", "FRB"}:
+                route_kwargs["_prefetched_ts_rows_by_symbol"] = prefetched_rows_by_symbol
             return tb.get_timeseries(  # type: ignore[attr-defined]
                 start,
                 end,
                 qs,
-                n_jobs=n_jobs,
-                ignore_cache=ignore_cache,
-                freq=route_freq,
-                timestamps=route_timestamps,
+                **route_kwargs,
             )
 
         if mdp is not None:
@@ -1204,16 +1209,39 @@ class TimeseriesBuilder:
         ref_keys = list(requested_key_by_ref.values())
         start_bound = min(ref_keys).date()
         end_bound = max(ref_keys).date()
-        from Caching.curve_analytics import analytics_tenors_for_curve
-
-        analytics_tenors = list(analytics_tenors_for_curve(requested_curve_name))
         use_trading_date_match = _matches_irs_curve_store_on_trading_date(mdp)
+        analytics_token_cache: Dict[Tuple[datetime.date, str], Optional[str]] = {}
+        requested_analytics_tokens: set[str] = set()
+        for ref_point in requested_key_by_ref:
+            ref_date = _ref_point_date(ref_point)
+            for _idx, _q, components in eligible:
+                for _weight, tenor in components:
+                    cache_key = (ref_date, str(tenor or "").strip().upper())
+                    analytics_token = analytics_token_cache.get(cache_key)
+                    if cache_key not in analytics_token_cache:
+                        analytics_token = _analytics_token_for_query_tenor(
+                            requested_curve_name=requested_curve_name,
+                            token=tenor,
+                            ref_point=ref_point,
+                        )
+                        analytics_token_cache[cache_key] = analytics_token
+                    if analytics_token is not None:
+                        requested_analytics_tokens.add(analytics_token)
+
+        if not requested_analytics_tokens:
+            return [], set()
+
+        projected_columns = ["timestamp_utc", "trading_date", "session_minute"]
+        for metric_name in ("par_rate", "rate"):
+            for tenor_token in sorted(requested_analytics_tokens):
+                projected_columns.append(f"{metric_name}_{tenor_token}")
         try:
             analytics_kwargs = {
                 "start": start_bound,
                 "end": end_bound,
-                "tenors": analytics_tenors,
+                "tenors": sorted(requested_analytics_tokens),
                 "metrics": ["par_rate", "rate"],
+                "columns": projected_columns,
             }
             if not use_trading_date_match:
                 analytics_kwargs["timestamps_utc"] = ref_keys
@@ -1223,7 +1251,7 @@ class TimeseriesBuilder:
                 resolved_curve_name,
                 start=start_bound,
                 end=end_bound,
-                tenors=analytics_tenors,
+                tenors=sorted(requested_analytics_tokens),
                 metrics=["par_rate", "rate"],
             )
         if analytics_df.empty or "timestamp_utc" not in analytics_df.columns:
@@ -1251,11 +1279,15 @@ class TimeseriesBuilder:
             for idx, q, components in eligible:
                 component_values: list[float] = []
                 for weight, tenor in components:
-                    analytics_token = _analytics_token_for_query_tenor(
-                        requested_curve_name=requested_curve_name,
-                        token=tenor,
-                        ref_point=ref_point,
-                    )
+                    cache_key = (_ref_point_date(ref_point), str(tenor or "").strip().upper())
+                    analytics_token = analytics_token_cache.get(cache_key)
+                    if cache_key not in analytics_token_cache:
+                        analytics_token = _analytics_token_for_query_tenor(
+                            requested_curve_name=requested_curve_name,
+                            token=tenor,
+                            ref_point=ref_point,
+                        )
+                        analytics_token_cache[cache_key] = analytics_token
                     if analytics_token is None:
                         component_values = []
                         break
@@ -1293,24 +1325,32 @@ class TimeseriesBuilder:
         queries: List[IRSwapQuery],
         reference_points: List[DateLike],
         intraday: bool,
-    ) -> Tuple[List[Tuple[DateLike, str, float]], set[Tuple[DateLike, int]]]:
+        allow_partial: bool = False,
+    ) -> Tuple[
+        List[Tuple[DateLike, str, float]],
+        set[Tuple[DateLike, int]],
+        Dict[str, List[Tuple[DateLike, str, float]]],
+    ]:
         if router is None:
-            return [], set()
+            return [], set(), {}
         computed_store = getattr(router, "_computed_ts_store", None)
         symbol_builder = getattr(router, "_ts_symbol_for_query", None)
         if computed_store is None or not callable(symbol_builder):
-            return [], set()
+            return [], set(), {}
 
         rows: List[Tuple[DateLike, str, float]] = []
         covered: set[Tuple[DateLike, int]] = set()
+        rows_by_symbol: Dict[str, List[Tuple[DateLike, str, float]]] = {}
         for idx, q in enumerate(queries):
+            symbol = symbol_builder(requested_curve_name, q)
             try:
                 q_rows = computed_store.read_rows(
-                    symbol=symbol_builder(requested_curve_name, q),
+                    symbol=symbol,
                     reference_points=reference_points,
                     intraday=intraday,
                     skip_current_eod=True,
                     fallback_column_name=q.col_name(requested_curve_name),
+                    allow_partial=allow_partial,
                 )
             except Exception:
                 q_rows = []
@@ -1320,9 +1360,11 @@ class TimeseriesBuilder:
                 query=q,
                 rows=q_rows,
             )
+            if q_rows:
+                rows_by_symbol[symbol] = list(q_rows)
             rows.extend(q_rows)
             covered.update((ref_point, idx) for ref_point, _col, _value in q_rows)
-        return rows, covered
+        return rows, covered, rows_by_symbol
 
     def _read_frb_computed_cache_rows(
         self,
@@ -1331,30 +1373,40 @@ class TimeseriesBuilder:
         queries: List[FixedRateBondQuery],
         reference_points: List[DateLike],
         intraday: bool,
-    ) -> Tuple[List[Tuple[DateLike, str, float]], set[Tuple[DateLike, int]]]:
+        allow_partial: bool = False,
+    ) -> Tuple[
+        List[Tuple[DateLike, str, float]],
+        set[Tuple[DateLike, int]],
+        Dict[str, List[Tuple[DateLike, str, float]]],
+    ]:
         if router is None:
-            return [], set()
+            return [], set(), {}
         computed_store = getattr(router, "_computed_ts_store", None)
         symbol_builder = getattr(router, "_ts_symbol_for_query", None)
         if computed_store is None or not callable(symbol_builder):
-            return [], set()
+            return [], set(), {}
 
         rows: List[Tuple[DateLike, str, float]] = []
         covered: set[Tuple[DateLike, int]] = set()
+        rows_by_symbol: Dict[str, List[Tuple[DateLike, str, float]]] = {}
         for idx, q in enumerate(queries):
+            symbol = symbol_builder(q)
             try:
                 q_rows = computed_store.read_rows(
-                    symbol=symbol_builder(q),
+                    symbol=symbol,
                     reference_points=reference_points,
                     intraday=intraday,
                     skip_current_eod=True,
                     fallback_column_name=q.col_name(),
+                    allow_partial=allow_partial,
                 )
             except Exception:
                 q_rows = []
+            if q_rows:
+                rows_by_symbol[symbol] = list(q_rows)
             rows.extend(q_rows)
             covered.update((ref_point, idx) for ref_point, _col, _value in q_rows)
-        return rows, covered
+        return rows, covered, rows_by_symbol
 
     def _frame_from_cached_rows(
         self,
@@ -1370,6 +1422,114 @@ class TimeseriesBuilder:
             return self._get_generic_router(product, mdp)._rows_to_frame(rows)
         return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
 
+    def _probe_routed_product_computed_cache(
+        self,
+        *,
+        product: str,
+        queries: List[BaseQuery],
+        router: Optional[object],
+        mdp: Optional[MarketDataProvider],
+        start: DateLike,
+        end: DateLike,
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+        ignore_cache: Optional[bool],
+    ) -> Tuple[Optional[pd.DataFrame], Dict[str, Tuple[Tuple[DateLike, str, float], ...]]]:
+        if ignore_cache or router is None:
+            return None, {}
+
+        computed_store = getattr(router, "_computed_ts_store", None)
+        if computed_store is None:
+            return None, {}
+
+        reference_points = _ordered_unique_reference_points(
+            _build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps)
+        )
+        if not reference_points:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col)), {}
+
+        intraday = any(isinstance(ref_point, datetime.datetime) for ref_point in reference_points)
+
+        if product == "IRS":
+            from TB.IRSwapsTB import _group_queries_by_curve as _group_irs_queries_by_curve
+
+            irs_queries = [q for q in queries if isinstance(q, IRSwapQuery)]
+            if len(irs_queries) != len(queries):
+                return None, {}
+
+            rows: List[Tuple[DateLike, str, float]] = []
+            prefetched_rows_by_symbol: Dict[str, Tuple[Tuple[DateLike, str, float], ...]] = {}
+            any_reference_points = False
+            cache_complete = True
+            for requested_curve_name, curve_queries in _group_irs_queries_by_curve(irs_queries).items():
+                curve_reference_points = _filter_irs_curve_store_reference_points(
+                    reference_points,
+                    requested_curve_name=requested_curve_name,
+                )
+                if not curve_reference_points:
+                    continue
+                any_reference_points = True
+                curve_rows, covered, rows_by_symbol = self._read_irs_computed_cache_rows(
+                    router=router,
+                    requested_curve_name=requested_curve_name,
+                    queries=curve_queries,
+                    reference_points=curve_reference_points,
+                    intraday=intraday,
+                    allow_partial=True,
+                )
+                rows.extend(curve_rows)
+                prefetched_rows_by_symbol.update({
+                    symbol: tuple(symbol_rows)
+                    for symbol, symbol_rows in rows_by_symbol.items()
+                    if symbol_rows
+                })
+                if not _is_curve_coverage_complete(
+                    reference_points=curve_reference_points,
+                    query_count=len(curve_queries),
+                    covered=covered,
+                ):
+                    cache_complete = False
+
+            if not any_reference_points:
+                return pd.DataFrame().set_index(pd.Index([], name=self._date_col)), prefetched_rows_by_symbol
+            if cache_complete:
+                return self._frame_from_cached_rows(product=product, router=router, mdp=mdp, rows=rows), prefetched_rows_by_symbol
+            return None, prefetched_rows_by_symbol
+
+        if product == "FRB":
+            frb_queries = [q for q in queries if isinstance(q, FixedRateBondQuery)]
+            if len(frb_queries) != len(queries):
+                return None, {}
+
+            filtered_reference_points = _filter_fixed_rate_bond_reference_points(
+                reference_points,
+                router=router,
+            )
+            if not filtered_reference_points:
+                return pd.DataFrame().set_index(pd.Index([], name=self._date_col)), {}
+
+            rows, covered, rows_by_symbol = self._read_frb_computed_cache_rows(
+                router=router,
+                queries=frb_queries,
+                reference_points=filtered_reference_points,
+                intraday=intraday,
+                allow_partial=True,
+            )
+            prefetched_rows_by_symbol = {
+                symbol: tuple(symbol_rows)
+                for symbol, symbol_rows in rows_by_symbol.items()
+                if symbol_rows
+            }
+            if _is_curve_coverage_complete(
+                reference_points=filtered_reference_points,
+                query_count=len(frb_queries),
+                covered=covered,
+            ):
+                return self._frame_from_cached_rows(product=product, router=router, mdp=mdp, rows=rows), prefetched_rows_by_symbol
+            return None, prefetched_rows_by_symbol
+
+        return None, {}
+
     def _try_routed_product_computed_cache_hit(
         self,
         *,
@@ -1383,84 +1543,18 @@ class TimeseriesBuilder:
         timestamps: Optional[List[datetime.datetime]],
         ignore_cache: Optional[bool],
     ) -> Optional[pd.DataFrame]:
-        if ignore_cache or router is None:
-            return None
-
-        computed_store = getattr(router, "_computed_ts_store", None)
-        if computed_store is None:
-            return None
-
-        reference_points = _ordered_unique_reference_points(
-            _build_reference_points(start=start, end=end, freq=freq, timestamps=timestamps)
+        cached_df, _prefetched_rows_by_symbol = self._probe_routed_product_computed_cache(
+            product=product,
+            queries=queries,
+            router=router,
+            mdp=mdp,
+            start=start,
+            end=end,
+            freq=freq,
+            timestamps=timestamps,
+            ignore_cache=ignore_cache,
         )
-        if not reference_points:
-            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
-
-        intraday = any(isinstance(ref_point, datetime.datetime) for ref_point in reference_points)
-
-        if product == "IRS":
-            from TB.IRSwapsTB import _group_queries_by_curve as _group_irs_queries_by_curve
-
-            irs_queries = [q for q in queries if isinstance(q, IRSwapQuery)]
-            if len(irs_queries) != len(queries):
-                return None
-
-            rows: List[Tuple[DateLike, str, float]] = []
-            any_reference_points = False
-            for requested_curve_name, curve_queries in _group_irs_queries_by_curve(irs_queries).items():
-                curve_reference_points = _filter_irs_curve_store_reference_points(
-                    reference_points,
-                    requested_curve_name=requested_curve_name,
-                )
-                if not curve_reference_points:
-                    continue
-                any_reference_points = True
-                curve_rows, covered = self._read_irs_computed_cache_rows(
-                    router=router,
-                    requested_curve_name=requested_curve_name,
-                    queries=curve_queries,
-                    reference_points=curve_reference_points,
-                    intraday=intraday,
-                )
-                if not _is_curve_coverage_complete(
-                    reference_points=curve_reference_points,
-                    query_count=len(curve_queries),
-                    covered=covered,
-                ):
-                    return None
-                rows.extend(curve_rows)
-
-            if not any_reference_points:
-                return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
-            return self._frame_from_cached_rows(product=product, router=router, mdp=mdp, rows=rows)
-
-        if product == "FRB":
-            frb_queries = [q for q in queries if isinstance(q, FixedRateBondQuery)]
-            if len(frb_queries) != len(queries):
-                return None
-
-            filtered_reference_points = _filter_fixed_rate_bond_reference_points(
-                reference_points,
-                router=router,
-            )
-            if not filtered_reference_points:
-                return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
-
-            rows, covered = self._read_frb_computed_cache_rows(
-                router=router,
-                queries=frb_queries,
-                reference_points=filtered_reference_points,
-                intraday=intraday,
-            )
-            if not _is_curve_coverage_complete(
-                reference_points=filtered_reference_points,
-                query_count=len(frb_queries),
-                covered=covered,
-            ):
-                return None
-            return self._frame_from_cached_rows(product=product, router=router, mdp=mdp, rows=rows)
-
-        return None
+        return cached_df
 
     def _write_irs_computed_cache_rows(
         self,
@@ -1973,9 +2067,9 @@ class TimeseriesBuilder:
 
             cached_started = time.perf_counter()
             if ignore_cache:
-                cached_rows, covered = [], set()
+                cached_rows, covered, _cached_rows_by_symbol = [], set(), {}
             else:
-                cached_rows, covered = _run_stage(
+                cached_rows, covered, _cached_rows_by_symbol = _run_stage(
                     desc=f"READING {requested_curve_name} computed cache...",
                     total=len(curve_queries),
                     fn=lambda: self._read_irs_computed_cache_rows(
@@ -1984,6 +2078,7 @@ class TimeseriesBuilder:
                         queries=curve_queries,
                         reference_points=curve_reference_points,
                         intraday=use_intraday_cache,
+                        allow_partial=True,
                     ),
                 )
             rows.extend(cached_rows)
@@ -2355,6 +2450,7 @@ class TimeseriesBuilder:
             )
 
         per_product_frames: List[Tuple[str, pd.DataFrame]] = []
+        product_frames_by_product: Dict[str, pd.DataFrame] = {}
         request_plan = self._build_request_plan(
             flat_queries=flat,
             merged_routers=merged_routers,
@@ -2378,6 +2474,8 @@ class TimeseriesBuilder:
             timestamps=timestamps,
             use_irs_vectorized_pricing=use_irs_vectorized_pricing,
         ):
+            if df is not None and not df.empty:
+                product_frames_by_product[product] = df
             self._append_product_frame(per_product_frames, product=product, df=df)
 
         irs_router = merged_routers.get("IRS")
@@ -2422,9 +2520,9 @@ class TimeseriesBuilder:
                 if irs_router is None or frb_router is None:
                     raise KeyError("IRS/FRB routers must be registered for MMSS/SPREADOVER evaluation.")
 
-                irss_frb_qs = []
-                irrs_irs_qs = []
                 pair_specs = []
+                irs_component_queries_by_col: Dict[str, BaseQuery] = {}
+                frb_component_queries_by_col: Dict[str, BaseQuery] = {}
 
                 _CT_RE = re.compile(r"(?i)\bct\s*(\d+)\b")
                 _Y_RE = re.compile(r"(?i)\b(\d+)\s*y\b")
@@ -2448,9 +2546,6 @@ class TimeseriesBuilder:
                     else:
                         raise NotImplementedError(f"Unhandled spread type: {q.value}")
 
-                    irss_frb_qs.append(q_frb)
-                    irrs_irs_qs.append(q_irs)
-
                     irs_col = _safe_col_name(
                         q_irs,
                         f"{getattr(q_irs,'curve','IRS')}.{getattr(q_irs,'tenor','')}.{IRSwapValue.RATE.name}",
@@ -2469,8 +2564,12 @@ class TimeseriesBuilder:
                             "irs_col": irs_col,
                             "frb_col": frb_col,
                             "op": op,
+                            "irs_query": q_irs,
+                            "frb_query": q_frb,
                         }
                     )
+                    irs_component_queries_by_col.setdefault(irs_col, q_irs)
+                    frb_component_queries_by_col.setdefault(frb_col, q_frb)
 
                 irs_intraday_timestamps = self._prepare_product_intraday_timestamps(
                     product="IRS",
@@ -2498,10 +2597,45 @@ class TimeseriesBuilder:
                             timestamps=component_timestamps,
                         )
 
+                    def _complete_component_frame(
+                        *,
+                        router: Any,
+                        existing_frame: Optional[pd.DataFrame],
+                        queries_by_col: Mapping[str, BaseQuery],
+                    ) -> pd.DataFrame:
+                        base_frame = existing_frame.copy() if existing_frame is not None and not existing_frame.empty else pd.DataFrame()
+                        existing_cols = {str(col) for col in base_frame.columns}
+                        missing_queries = [
+                            query
+                            for col_name, query in queries_by_col.items()
+                            if str(col_name) not in existing_cols
+                        ]
+                        if not missing_queries:
+                            return base_frame
+                        fetched_frame = _fetch_component_frame(router, missing_queries)
+                        if base_frame.empty:
+                            return fetched_frame
+                        if fetched_frame.empty:
+                            return base_frame
+                        return base_frame.combine_first(fetched_frame)
+
+                    existing_irs_df = product_frames_by_product.get("IRS")
+                    existing_cash_df = product_frames_by_product.get("FRB")
+
                     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="ts-swap-spread") as pool:
                         future_to_component = {
-                            pool.submit(_fetch_component_frame, irs_router, irrs_irs_qs): "IRS",
-                            pool.submit(_fetch_component_frame, frb_router, irss_frb_qs): "FRB",
+                            pool.submit(
+                                _complete_component_frame,
+                                router=irs_router,
+                                existing_frame=existing_irs_df,
+                                queries_by_col=irs_component_queries_by_col,
+                            ): "IRS",
+                            pool.submit(
+                                _complete_component_frame,
+                                router=frb_router,
+                                existing_frame=existing_cash_df,
+                                queries_by_col=frb_component_queries_by_col,
+                            ): "FRB",
                         }
                         component_frames: Dict[str, pd.DataFrame] = {}
                         for future in as_completed(future_to_component):

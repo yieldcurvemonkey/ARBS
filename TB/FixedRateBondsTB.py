@@ -6,7 +6,7 @@ import logging
 import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -211,6 +211,7 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         ignore_cache: Optional[bool] = False,
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
+        _prefetched_ts_rows_by_symbol: Optional[Mapping[str, Sequence[Tuple[DateLike, str, float]]]] = None,
     ) -> pd.DataFrame:
         has_timestamps = timestamps is not None and len(timestamps) > 0
         is_intraday = isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
@@ -235,6 +236,10 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         cached_rows: List[Tuple[DateLike, str, float]] = []
         cached_row_keys: set[Tuple[DateLike, str]] = set()
         today = datetime.date.today()
+        prefetched_ts_rows_by_symbol = {
+            str(symbol): list(rows)
+            for symbol, rows in (_prefetched_ts_rows_by_symbol or {}).items()
+        }
 
         # Skip computed TS cache for large intraday runs — the Postgres/DuckDB
         # sync is too slow for hundreds of timestamps and the MDP pricer cache
@@ -243,17 +248,22 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         if self._use_ts_cache and not ignore_cache and flat and not _skip_ts_cache:
             for q in flat:
                 symbol = self._ts_symbol_for_query(q)
-                try:
-                    rows = self._computed_ts_store.read_rows(
-                        symbol=symbol,
-                        reference_points=ref_points,
-                        intraday=is_intraday,
-                        skip_current_eod=True,
-                        fallback_column_name=q.col_name(),
-                    )
-                except Exception as ex:
-                    self._logger.debug(f"[TS cache] read failed for symbol={symbol}: {ex}")
-                    rows = []
+                prefetched_rows = prefetched_ts_rows_by_symbol.get(symbol)
+                if prefetched_rows is not None:
+                    rows = list(prefetched_rows)
+                else:
+                    try:
+                        rows = self._computed_ts_store.read_rows(
+                            symbol=symbol,
+                            reference_points=ref_points,
+                            intraday=is_intraday,
+                            skip_current_eod=True,
+                            fallback_column_name=q.col_name(),
+                            allow_partial=True,
+                        )
+                    except Exception as ex:
+                        self._logger.debug(f"[TS cache] read failed for symbol={symbol}: {ex}")
+                        rows = []
                 cached_rows.extend(rows)
                 cached_row_keys.update((row_d, row_c) for row_d, row_c, _ in rows)
 
