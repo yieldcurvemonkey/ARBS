@@ -1,5 +1,6 @@
 import datetime
 
+import pandas as pd
 import pytest
 
 from MDP.STIRFutures.STIRFutureOptionMDP import (
@@ -72,19 +73,19 @@ def test_option_alias_parsing_atm_and_delta():
     offset_call = _parse_option_request_symbol("SFRZ27|25BPC")
     assert offset_call["selector"] == "atmf_offset"
     assert offset_call["right"] == "C"
-    assert offset_call["atm_offset_bps"] == pytest.approx(25.0)
+    assert offset_call["atm_offset_bps"] == pytest.approx(-25.0)
     assert offset_call["canonical"] == "SFRZ27|25BPC"
 
-    offset_call_alt = _parse_option_request_symbol("SFRZ27|ATMF-25")
+    offset_call_alt = _parse_option_request_symbol("SFRZ27|ATMF+25")
     assert offset_call_alt["selector"] == "atmf_offset"
     assert offset_call_alt["right"] == "C"
-    assert offset_call_alt["atm_offset_bps"] == pytest.approx(25.0)
+    assert offset_call_alt["atm_offset_bps"] == pytest.approx(-25.0)
     assert offset_call_alt["canonical"] == "SFRZ27|25BPC"
 
-    offset_put_alt = _parse_option_request_symbol("SFRZ27|ATMF+25")
+    offset_put_alt = _parse_option_request_symbol("SFRZ27|ATMF-25")
     assert offset_put_alt["selector"] == "atmf_offset"
     assert offset_put_alt["right"] == "P"
-    assert offset_put_alt["atm_offset_bps"] == pytest.approx(-25.0)
+    assert offset_put_alt["atm_offset_bps"] == pytest.approx(25.0)
     assert offset_put_alt["canonical"] == "SFRZ27|25BPP"
 
     natural = _parse_option_request_symbol("SFRZ27 ATM straddle")
@@ -155,7 +156,7 @@ def test_cme_listed_strike_rules_cover_front_and_back_contract_buckets():
     assert _cme_listed_strike_rule_for_contract(contract="3QU26", as_of=as_of)["fine_step"] == pytest.approx(0.125)
 
 
-def test_listed_offset_grid_and_snap_use_rate_space_signs():
+def test_listed_offset_grid_and_snap_match_price_space_call_put_convention():
     as_of = datetime.date(2026, 3, 4)
     atm_strike, abs_offsets, signed_offsets = _cme_listed_abs_offset_grid_bps_for_contract_forward(
         contract="SFRU26",
@@ -185,10 +186,36 @@ def test_listed_offset_grid_and_snap_use_rate_space_signs():
         offset_bps=12.5,
     )
 
-    assert call_strike == pytest.approx(96.5)
-    assert put_strike == pytest.approx(96.75)
-    assert call_offset == pytest.approx(12.5)
-    assert put_offset == pytest.approx(-12.5)
+    assert call_strike == pytest.approx(96.75)
+    assert put_strike == pytest.approx(96.5)
+    assert call_offset == pytest.approx(-12.5)
+    assert put_offset == pytest.approx(12.5)
+
+
+def test_live_atmf_offset_resolution_matches_price_space_call_put_convention():
+    mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
+    chain = {
+        "call": pd.DataFrame({"strikePrice": [96.5, 96.625, 96.75]}),
+        "put": pd.DataFrame({"strikePrice": [96.5, 96.625, 96.75]}),
+    }
+
+    call_strike = mdp._resolve_live_atmf_offset_strike(
+        chain=chain,
+        contract="SFRU26",
+        forward=96.61,
+        right="C",
+        atm_offset_bps=12.5,
+    )
+    put_strike = mdp._resolve_live_atmf_offset_strike(
+        chain=chain,
+        contract="SFRU26",
+        forward=96.61,
+        right="P",
+        atm_offset_bps=12.5,
+    )
+
+    assert call_strike == pytest.approx(96.75)
+    assert put_strike == pytest.approx(96.5)
 
 
 def test_sabr_smile_offset_request_normalization_uses_absolute_unique_bps():
@@ -209,7 +236,7 @@ def test_sabr_smile_offset_request_normalization_uses_absolute_unique_bps():
     }
 
 
-def test_sabr_smile_listed_auto_full_ladder_caps_to_225bps():
+def test_sabr_smile_listed_auto_full_ladder_caps_to_250bps():
     mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
 
     legs = mdp._build_sabr_smile_offset_leg_specs(
@@ -220,11 +247,11 @@ def test_sabr_smile_listed_auto_full_ladder_caps_to_225bps():
         auto_full_ladder=True,
     )
 
-    assert len(legs) == 56
+    assert len(legs) == 58
     abs_offsets = sorted({round(abs(float(leg["requested_atm_offset_bps"])), 8) for leg in legs})
-    assert abs_offsets[-1] == pytest.approx(225.0)
+    assert abs_offsets[-1] == pytest.approx(250.0)
     assert 225.0 in abs_offsets
-    assert 250.0 not in abs_offsets
+    assert 250.0 in abs_offsets
 
 
 def test_sabr_smile_explicit_offsets_are_not_capped():
@@ -240,6 +267,25 @@ def test_sabr_smile_explicit_offsets_are_not_capped():
 
     abs_offsets = sorted({round(abs(float(leg["requested_atm_offset_bps"])), 8) for leg in legs})
     assert abs_offsets == pytest.approx([0.0, 25.0, 300.0])
+
+
+def test_sabr_smile_offset_leg_specs_match_price_space_call_put_convention():
+    mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
+
+    legs = mdp._build_sabr_smile_offset_leg_specs(
+        contract="SFRU26",
+        forward=96.61,
+        as_of=datetime.date(2026, 3, 4),
+        offset_magnitudes_bps=[12.5],
+        auto_full_ladder=False,
+    )
+
+    call_leg = next(leg for leg in legs if leg["right"] == "C" and abs(float(leg["requested_atm_offset_bps"])) > 0.0)
+    put_leg = next(leg for leg in legs if leg["right"] == "P" and abs(float(leg["requested_atm_offset_bps"])) > 0.0)
+
+    assert call_leg["requested_atm_offset_bps"] == pytest.approx(-12.5)
+    assert put_leg["requested_atm_offset_bps"] == pytest.approx(12.5)
+    assert float(call_leg["strike_price"]) > float(put_leg["strike_price"])
 
 
 def test_sabr_smile_point_roundtrip_preserves_atm_offset_bps():

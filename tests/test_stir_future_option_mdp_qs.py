@@ -7,6 +7,8 @@ import pytz
 
 from MDP.STIRFutures.STIRFutureOptionMDP import (
     STIRFutureOptionSABRSmile,
+    STIRFutureOptionSABRParams,
+    STIRFutureOptionSmilePoint,
     STIRFutureOptionMDP,
     QuikVolProductID,
     QuikVolValueType,
@@ -158,6 +160,77 @@ def _make_strike_pricer(
                 "option_type": "Call" if right == "C" else "Put",
             },
         },
+    )
+
+
+def _make_rate_space_flipped_stir_smile(
+    *,
+    source: str = "BARCHART_STIRFO-QL",
+    symbol: str = "SFRZ26",
+) -> STIRFutureOptionSABRSmile:
+    ny = pytz.timezone("America/New_York")
+    quote_ts = ny.localize(datetime.datetime(2026, 3, 23, 17, 0))
+    params = STIRFutureOptionSABRParams(
+        alpha=0.10,
+        beta=0.5,
+        rho=0.0,
+        nu=0.90,
+        forward_price=96.31,
+        forward_rate=3.69,
+        time_to_expiry=0.73,
+        expiry_date=datetime.date(2026, 12, 16),
+        as_of=datetime.date(2026, 3, 23),
+        calibration_rmse=0.02,
+    )
+    points = (
+        STIRFutureOptionSmilePoint(
+            label="SFRZ26|25DC",
+            right="C",
+            delta_abs=25.0,
+            atm_offset_bps=37.5,
+            strike_price=95.9375,
+            strike_rate=4.0625,
+            iv_normal_price=1.0472062662122796,
+            iv_normal_bps=104.72062662122796,
+        ),
+        STIRFutureOptionSmilePoint(
+            label="SFRZ26|50DC",
+            right="C",
+            delta_abs=50.0,
+            atm_offset_bps=6.25,
+            strike_price=96.25,
+            strike_rate=3.75,
+            iv_normal_price=1.0526079035339837,
+            iv_normal_bps=105.26079035339836,
+        ),
+        STIRFutureOptionSmilePoint(
+            label="SFRZ26|50DP",
+            right="P",
+            delta_abs=50.0,
+            atm_offset_bps=0.0,
+            strike_price=96.3125,
+            strike_rate=3.6875,
+            iv_normal_price=1.033785795938053,
+            iv_normal_bps=103.3785795938053,
+        ),
+        STIRFutureOptionSmilePoint(
+            label="SFRZ26|25DP",
+            right="P",
+            delta_abs=25.0,
+            atm_offset_bps=-50.0,
+            strike_price=96.8125,
+            strike_rate=3.1875,
+            iv_normal_price=1.1219873289554427,
+            iv_normal_bps=112.19873289554427,
+        ),
+    )
+    return STIRFutureOptionSABRSmile(
+        source=source,
+        symbol=symbol,
+        underlying_contract="SFRZ26",
+        quote_timestamp=quote_ts,
+        params=params,
+        points=points,
     )
 
 
@@ -414,6 +487,53 @@ def test_sabr_smile_cache_roundtrip_preserves_object_and_evaluator(monkeypatch):
     probe = smile.points[3].strike_price
     assert restored_smile.normal_vol(probe) == pytest.approx(smile.normal_vol(probe), rel=1e-12)
     assert restored_smile.price_to_rate(probe) == pytest.approx(smile.price_to_rate(probe), rel=1e-12)
+
+
+def test_normalize_stir_sabr_smile_convention_flips_rate_space_wings():
+    mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
+
+    corrected = mdp._normalize_stir_sabr_smile_convention(_make_rate_space_flipped_stir_smile())
+
+    call_prices = [pt.strike_price for pt in corrected.points if pt.right == "C"]
+    put_prices = [pt.strike_price for pt in corrected.points if pt.right == "P"]
+
+    assert min(call_prices) > max(put_prices)
+
+    call_25 = next(pt for pt in corrected.points if pt.label == "SFRZ26|25DC")
+    put_25 = next(pt for pt in corrected.points if pt.label == "SFRZ26|25DP")
+    assert call_25.right == "C"
+    assert call_25.strike_price == pytest.approx(96.8125)
+    assert put_25.right == "P"
+    assert put_25.strike_price == pytest.approx(95.9375)
+
+
+def test_fetch_sabr_smile_corrects_cached_stale_stir_convention_without_refresh(monkeypatch):
+    mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
+    as_of = datetime.date(2026, 3, 23)
+    payload = mdp._serialize_get_data_result(
+        "sabr_smile",
+        {"sabr_smile": [_make_rate_space_flipped_stir_smile()]},
+    )
+    monkeypatch.setattr(
+        mdp,
+        "_threadsafe_cache_get",
+        lambda key: payload if str(key).startswith("STIRFO_GET_DATA::sabr_smile::") else None,
+    )
+    monkeypatch.setattr(mdp, "_threadsafe_cache_put", lambda key, value: None)
+    monkeypatch.setattr(
+        mdp,
+        "_build_sabr_smile_result",
+        lambda request: (_ for _ in ()).throw(AssertionError("expected cached sabr_smile hit")),
+    )
+
+    smile = mdp.fetch_sabr_smile({"symbol": "SFRZ26", "as_of": as_of})
+
+    call_25 = next(pt for pt in smile.points if pt.label == "SFRZ26|25DC")
+    put_25 = next(pt for pt in smile.points if pt.label == "SFRZ26|25DP")
+    assert call_25.right == "C"
+    assert call_25.strike_price == pytest.approx(96.8125)
+    assert put_25.right == "P"
+    assert put_25.strike_price == pytest.approx(95.9375)
 
 
 def test_qs_sabr_smile_common_cache_aliases_delta_and_offset_requests(monkeypatch):

@@ -13,7 +13,7 @@ import threading
 import time
 from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, Union
 from urllib.parse import quote
@@ -1033,15 +1033,15 @@ def _snap_to_listed_strike_for_offset(
         raise ValueError(f"Unsupported option right for offset strike snapping: {right}")
 
     target_signed_offset = float(offset_bps)
-    if right_token == "C" and target_signed_offset < 0.0:
-        target_signed_offset = abs(target_signed_offset)
-    if right_token == "P" and target_signed_offset > 0.0:
+    if right_token == "C" and target_signed_offset > 0.0:
         target_signed_offset = -abs(target_signed_offset)
+    if right_token == "P" and target_signed_offset < 0.0:
+        target_signed_offset = abs(target_signed_offset)
 
     side_candidates = (
-        [strike for strike in listed_strikes if strike <= atm_strike + 1e-12]
+        [strike for strike in listed_strikes if strike >= atm_strike - 1e-12]
         if right_token == "C"
-        else [strike for strike in listed_strikes if strike >= atm_strike - 1e-12]
+        else [strike for strike in listed_strikes if strike <= atm_strike + 1e-12]
     )
     if not side_candidates:
         side_candidates = list(listed_strikes)
@@ -1367,7 +1367,7 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
             offset_bps = abs(float(m.group("offset")))
             if offset_bps <= 0.0:
                 raise ValueError(f"ATMF offset alias must be > 0: {symbol}")
-            signed_offset = offset_bps if right == "C" else -offset_bps
+            signed_offset = -offset_bps if right == "C" else offset_bps
             return _build(
                 contract_spec=contract_spec,
                 selector="atmf_offset",
@@ -1383,8 +1383,8 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
             offset_bps = abs(float(m.group("offset")))
             if offset_bps <= 0.0:
                 raise ValueError(f"ATMF offset alias must be > 0: {symbol}")
-            right = "C" if price_sign == "-" else "P"
-            signed_offset = offset_bps if right == "C" else -offset_bps
+            right = "C" if price_sign == "+" else "P"
+            signed_offset = -offset_bps if right == "C" else offset_bps
             return _build(
                 contract_spec=contract_spec,
                 selector="atmf_offset",
@@ -2348,6 +2348,72 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             points=tuple(smile.points),
         )
 
+    @staticmethod
+    def _flip_stir_sabr_smile_point_label(label: str) -> str:
+        text = str(label)
+
+        def _swap_word(match: re.Match[str]) -> str:
+            word = match.group(0)
+            replacement = "Put" if word.lower() == "call" else "Call"
+            if word.isupper():
+                return replacement.upper()
+            if word.islower():
+                return replacement.lower()
+            return replacement
+
+        swapped, count = re.subn(r"\b(Call|Put)\b", _swap_word, text, count=1, flags=re.IGNORECASE)
+        if count:
+            return swapped
+        if text.endswith("C"):
+            return f"{text[:-1]}P"
+        if text.endswith("P"):
+            return f"{text[:-1]}C"
+        return text
+
+    @classmethod
+    def _normalize_stir_sabr_smile_convention(
+        cls,
+        smile: STIRFutureOptionSABRSmile,
+    ) -> STIRFutureOptionSABRSmile:
+        if not isinstance(smile, STIRFutureOptionSABRSmile):
+            return smile
+
+        call_strikes = [
+            float(pt.strike_price)
+            for pt in smile.points
+            if str(pt.right).upper() == "C" and math.isfinite(float(pt.strike_price))
+        ]
+        put_strikes = [
+            float(pt.strike_price)
+            for pt in smile.points
+            if str(pt.right).upper() == "P" and math.isfinite(float(pt.strike_price))
+        ]
+        if not call_strikes or not put_strikes:
+            return smile
+
+        call_mid = float(np.median(np.asarray(call_strikes, dtype=float)))
+        put_mid = float(np.median(np.asarray(put_strikes, dtype=float)))
+        if not math.isfinite(call_mid) or not math.isfinite(put_mid) or call_mid >= put_mid - 1e-10:
+            return smile
+
+        # STIR smiles should preserve futures-price call/put semantics:
+        # calls on the higher-price / lower-rate wing, puts on the lower-price / higher-rate wing.
+        flipped_points = []
+        for pt in smile.points:
+            right = str(pt.right).upper()
+            if right not in {"C", "P"}:
+                flipped_points.append(pt)
+                continue
+            flipped_points.append(
+                replace(
+                    pt,
+                    right="P" if right == "C" else "C",
+                    label=cls._flip_stir_sabr_smile_point_label(pt.label),
+                )
+            )
+
+        return replace(smile, points=tuple(sorted(flipped_points, key=lambda pt: pt.strike_price)))
+
     def _load_sabr_smile_common_cache(
         self,
         *,
@@ -2775,14 +2841,14 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             )
 
         points = sorted(points, key=lambda pt: pt.strike_price)
-        return STIRFutureOptionSABRSmile(
+        return self._normalize_stir_sabr_smile_convention(STIRFutureOptionSABRSmile(
             source=str(self.source),
             symbol=raw_symbol,
             underlying_contract=underlying_contract,
             quote_timestamp=latest_quote,
             params=params,
             points=tuple(points),
-        )
+        ))
 
     def _seed_option_snapshot_alias_cache(
         self,
@@ -3951,7 +4017,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         return smile.to_dict()
 
     def _deserialize_sabr_smile(self, row: Dict[str, Any]) -> STIRFutureOptionSABRSmile:
-        return STIRFutureOptionSABRSmile.from_dict(row)
+        return self._normalize_stir_sabr_smile_convention(STIRFutureOptionSABRSmile.from_dict(row))
 
     def _build_get_data_cache_key(self, endpoint: str, request: Dict[str, Any]) -> Optional[str]:
         ep = str(endpoint or "").strip().lower()
@@ -5100,11 +5166,11 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             except Exception:
                 return None
 
-        signed_offset = abs(float(atm_offset_bps)) if r == "C" else -abs(float(atm_offset_bps))
+        signed_offset = -abs(float(atm_offset_bps)) if r == "C" else abs(float(atm_offset_bps))
         side_candidates = (
-            [strike for strike in strikes if strike <= atm_strike + 1e-12]
+            [strike for strike in strikes if strike >= atm_strike - 1e-12]
             if r == "C"
-            else [strike for strike in strikes if strike >= atm_strike - 1e-12]
+            else [strike for strike in strikes if strike <= atm_strike + 1e-12]
         )
         if not side_candidates:
             side_candidates = list(strikes)
@@ -6759,7 +6825,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         smiles = out.get("sabr_smile") or []
         if not smiles:
             raise ValueError("sabr_smile returned no calibrated smile.")
-        return smiles[0]
+        return self._normalize_stir_sabr_smile_convention(smiles[0])
 
     def get_pricer(self, request: Dict[str, Any]):
         return self.get_data(request)

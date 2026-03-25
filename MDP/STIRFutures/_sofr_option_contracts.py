@@ -379,15 +379,15 @@ def _snap_to_listed_strike_for_offset(
         raise ValueError(f"Unsupported option right for offset strike snapping: {right}")
 
     target_signed_offset = float(offset_bps)
-    if right_token == "C" and target_signed_offset < 0.0:
-        target_signed_offset = abs(target_signed_offset)
-    if right_token == "P" and target_signed_offset > 0.0:
+    if right_token == "C" and target_signed_offset > 0.0:
         target_signed_offset = -abs(target_signed_offset)
+    if right_token == "P" and target_signed_offset < 0.0:
+        target_signed_offset = abs(target_signed_offset)
 
     side_candidates = (
-        [strike for strike in listed_strikes if strike <= atm_strike + 1e-12]
+        [strike for strike in listed_strikes if strike >= atm_strike - 1e-12]
         if right_token == "C"
-        else [strike for strike in listed_strikes if strike >= atm_strike - 1e-12]
+        else [strike for strike in listed_strikes if strike <= atm_strike + 1e-12]
     )
     if not side_candidates:
         side_candidates = list(listed_strikes)
@@ -574,7 +574,7 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
             offset_bps = abs(float(m.group("offset")))
             if offset_bps <= 0.0:
                 raise ValueError(f"ATMF offset alias must be > 0: {symbol}")
-            signed_offset = offset_bps if right == "C" else -offset_bps
+            signed_offset = -offset_bps if right == "C" else offset_bps
             return _build(
                 contract_spec=contract_spec,
                 selector="atmf_offset",
@@ -590,8 +590,8 @@ def _parse_option_request_symbol(symbol: str) -> Dict[str, Any]:
             offset_bps = abs(float(m.group("offset")))
             if offset_bps <= 0.0:
                 raise ValueError(f"ATMF offset alias must be > 0: {symbol}")
-            right = "C" if price_sign == "-" else "P"
-            signed_offset = offset_bps if right == "C" else -offset_bps
+            right = "C" if price_sign == "+" else "P"
+            signed_offset = -offset_bps if right == "C" else offset_bps
             return _build(
                 contract_spec=contract_spec,
                 selector="atmf_offset",
