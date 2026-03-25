@@ -56,6 +56,11 @@ from BT.signals.pca_rv_triggers import (
     PCARVEntryTrigger,
     PCARVExitTrigger,
 )
+from BT.signals.jpm_rv_backtest import (
+    JPMRVBacktestConfig,
+    JPMRVBacktestResult,
+    run_jpm_rv_backtest,
+)
 
 __all__ = [
     "PCAMomentumConfig",
@@ -102,4 +107,7 @@ __all__ = [
     "reshape_rates_panel",
     "PCARVEntryTrigger",
     "PCARVExitTrigger",
+    "JPMRVBacktestConfig",
+    "JPMRVBacktestResult",
+    "run_jpm_rv_backtest",
 ]
