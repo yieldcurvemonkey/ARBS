@@ -29,22 +29,29 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PCARVConfig:
     """Configuration for rolling PCA engine."""
+
     pca_window_days: int = 130
-    pca_input: str = "levels"           # "levels" or "changes"
+    pca_input: str = "levels"  # "levels" or "changes"
     n_components: int = 3
-    pca_scope: str = "full_curve"       # "full_curve" or "trade_tenors_only"
-    use_correlation: bool = False       # False=covariance, True=correlation
+    pca_scope: str = "full_curve"  # "full_curve" or "trade_tenors_only"
+    use_correlation: bool = False  # False=covariance, True=correlation
     zscore_lookback_days: int = 130
 
 
 @dataclass
 class PCARVResult:
     """Output of rolling PCA analysis."""
-    residuals: pd.DataFrame             # [dates x tenors] out-of-sample residuals
-    zscores: pd.DataFrame               # [dates x tenors] Z-scored residuals
+
+    residuals: pd.DataFrame  # [dates x tenors] out-of-sample residuals
+    zscores: pd.DataFrame  # [dates x tenors] Z-scored residuals
     loadings: Dict[pd.Timestamp, np.ndarray]  # date -> (n_tenors x n_components)
-    variance_explained: pd.DataFrame    # [dates x n_components]
-    reconstructed: pd.DataFrame         # [dates x tenors] 3-PC reconstructed values
+    variance_explained: pd.DataFrame  # [dates x n_components]
+    eigenvalues: pd.DataFrame  # [dates x n_components]
+    scores: pd.DataFrame  # [dates x n_components] OOS score at each date
+    fit_quality: pd.Series  # [dates] sum of explained variance ratio
+    reconstructed: pd.DataFrame  # [dates x tenors] 3-PC reconstructed values
+    means: Dict[pd.Timestamp, np.ndarray]  # date -> training window mean vector
+    scales: Dict[pd.Timestamp, np.ndarray]  # date -> std vector used in corr mode
 
 
 def rolling_pca(rates: pd.DataFrame, config: PCARVConfig) -> PCARVResult:
@@ -78,7 +85,12 @@ def rolling_pca(rates: pd.DataFrame, config: PCARVConfig) -> PCARVResult:
     zscores = pd.DataFrame(np.nan, index=data.index, columns=data.columns)
     ve_cols = [f"PC{i+1}" for i in range(n_comp)]
     variance_explained = pd.DataFrame(np.nan, index=data.index, columns=ve_cols)
+    eigenvalues = pd.DataFrame(np.nan, index=data.index, columns=ve_cols)
+    scores = pd.DataFrame(np.nan, index=data.index, columns=ve_cols)
+    fit_quality = pd.Series(np.nan, index=data.index, name="fit_quality")
     loadings_dict: Dict[pd.Timestamp, np.ndarray] = {}
+    means_dict: Dict[pd.Timestamp, np.ndarray] = {}
+    scales_dict: Dict[pd.Timestamp, np.ndarray] = {}
 
     for i in range(window, n_dates):
         # Estimation window: [i-window, i-1] — strictly out-of-sample
@@ -123,14 +135,20 @@ def rolling_pca(rates: pd.DataFrame, config: PCARVConfig) -> PCARVResult:
             reconstructed.loc[dt] = recon
 
         variance_explained.loc[dt] = pca.explained_variance_ratio_[:n_comp]
+        eigenvalues.loc[dt] = pca.explained_variance_[:n_comp]
+        scores.loc[dt] = scores_today.flatten()[:n_comp]
+        fit_quality.loc[dt] = float(np.sum(pca.explained_variance_ratio_[:n_comp]))
         loadings_dict[dt] = pca.components_.T  # (n_tenors x n_comp)
+        means_dict[dt] = mean.copy()
+        scales_dict[dt] = std.copy() if config.use_correlation else np.ones_like(mean)
 
     # Z-score the residuals using rolling lookback
     zs_window = config.zscore_lookback_days
+    min_periods = min(zs_window, max(zs_window // 2, 20))
     for col in residuals.columns:
         r = residuals[col]
-        roll_mean = r.rolling(window=zs_window, min_periods=max(zs_window // 2, 20)).mean()
-        roll_std = r.rolling(window=zs_window, min_periods=max(zs_window // 2, 20)).std()
+        roll_mean = r.rolling(window=zs_window, min_periods=min_periods).mean()
+        roll_std = r.rolling(window=zs_window, min_periods=min_periods).std()
         roll_std = roll_std.replace(0.0, np.nan)
         zscores[col] = (r - roll_mean) / roll_std
 
@@ -139,7 +157,12 @@ def rolling_pca(rates: pd.DataFrame, config: PCARVConfig) -> PCARVResult:
         zscores=zscores,
         loadings=loadings_dict,
         variance_explained=variance_explained,
+        eigenvalues=eigenvalues,
+        scores=scores,
+        fit_quality=fit_quality,
         reconstructed=reconstructed,
+        means=means_dict,
+        scales=scales_dict,
     )
 
 
@@ -209,6 +232,47 @@ def ou_half_life(series: pd.Series) -> float:
     if b >= 0:
         return np.inf  # not mean-reverting
     return -np.log(2) / np.log(1 + b)
+
+
+def ou_params(series: pd.Series) -> Dict[str, float]:
+    """Fit full Ornstein-Uhlenbeck process parameters.
+
+    dX = mu * (theta - X) * dt + sigma * dW
+
+    Returns dict with keys: mu (mean-reversion speed), theta (long-run mean),
+    sigma (volatility), half_life, investment_horizon_875 (87.5% life = 3 half-lives).
+    """
+    x = series.dropna().values
+    if len(x) < 20:
+        return {k: np.nan for k in ["mu", "theta", "sigma", "half_life", "investment_horizon_875"]}
+
+    dx = np.diff(x)
+    x_lag = x[:-1]
+    X = np.column_stack([np.ones(len(x_lag)), x_lag])
+    try:
+        beta = np.linalg.lstsq(X, dx, rcond=None)[0]
+    except np.linalg.LinAlgError:
+        return {k: np.nan for k in ["mu", "theta", "sigma", "half_life", "investment_horizon_875"]}
+
+    a, b = beta[0], beta[1]
+    if b >= 0:
+        return {"mu": 0.0, "theta": np.nan, "sigma": np.nan, "half_life": np.inf, "investment_horizon_875": np.inf}
+
+    mu = -b  # mean-reversion speed (per period)
+    theta = -a / b  # long-run mean
+    residuals = dx - X @ beta
+    sigma = residuals.std()
+    half_life = np.log(2) / mu
+    # 87.5% life = ln(8) / mu (Standard Chartered convention: 3 half-lives)
+    investment_horizon = np.log(8) / mu
+
+    return {
+        "mu": float(mu),
+        "theta": float(theta),
+        "sigma": float(sigma),
+        "half_life": float(half_life),
+        "investment_horizon_875": float(investment_horizon),
+    }
 
 
 def adf_test(series: pd.Series) -> Dict[str, float]:

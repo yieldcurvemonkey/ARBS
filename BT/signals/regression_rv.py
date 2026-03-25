@@ -32,6 +32,8 @@ class RegressionRVResult:
     """Output of rolling regression analysis."""
     residuals: pd.Series
     zscores: pd.Series
+    intercepts: pd.Series
+    fitted: pd.Series
     betas_body: pd.Series
     betas_curve: pd.Series
     rsq: pd.Series
@@ -66,6 +68,8 @@ def rolling_regression(
     w = config.window_days
 
     residuals = pd.Series(np.nan, index=idx)
+    intercepts = pd.Series(np.nan, index=idx)
+    fitted = pd.Series(np.nan, index=idx)
     betas_body = pd.Series(np.nan, index=idx)
     betas_curve = pd.Series(np.nan, index=idx)
     rsq = pd.Series(np.nan, index=idx)
@@ -93,6 +97,8 @@ def rolling_regression(
 
         # Out-of-sample residual
         y_hat = beta[0] + beta[1] * body_vals[i] + beta[2] * curve_vals[i]
+        intercepts.iloc[i] = beta[0]
+        fitted.iloc[i] = y_hat
         residuals.iloc[i] = fly_vals[i] - y_hat
         betas_body.iloc[i] = beta[1]
         betas_curve.iloc[i] = beta[2]
@@ -105,8 +111,9 @@ def rolling_regression(
 
     # Z-score the residuals
     zs_window = config.zscore_lookback_days
-    roll_mean = residuals.rolling(window=zs_window, min_periods=max(zs_window // 2, 20)).mean()
-    roll_std = residuals.rolling(window=zs_window, min_periods=max(zs_window // 2, 20)).std()
+    min_periods = min(zs_window, max(zs_window // 2, 20))
+    roll_mean = residuals.rolling(window=zs_window, min_periods=min_periods).mean()
+    roll_std = residuals.rolling(window=zs_window, min_periods=min_periods).std()
     roll_std = roll_std.replace(0.0, np.nan)
     zscores = (residuals - roll_mean) / roll_std
 
@@ -125,6 +132,8 @@ def rolling_regression(
     return RegressionRVResult(
         residuals=residuals,
         zscores=zscores,
+        intercepts=intercepts,
+        fitted=fitted,
         betas_body=betas_body,
         betas_curve=betas_curve,
         rsq=rsq,

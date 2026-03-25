@@ -42,6 +42,8 @@ class TestRollingRegression:
         assert len(result.residuals) == len(fly)
         assert len(result.betas_body) == len(fly)
         assert len(result.betas_curve) == len(fly)
+        assert len(result.intercepts) == len(fly)
+        assert len(result.fitted) == len(fly)
         assert len(result.rsq) == len(fly)
         assert len(result.zscores) == len(fly)
 
@@ -72,6 +74,8 @@ class TestRollingRegression:
         valid_curve = result.betas_curve.dropna()
         assert abs(valid_body.median() - 0.5) < 0.15
         assert abs(valid_curve.median() - 0.3) < 0.15
+        assert result.intercepts.dropna().shape[0] > 0
+        assert result.fitted.dropna().shape[0] > 0
 
     def test_hedge_ratios_shape(self):
         fly, body, curve = _make_synthetic_fly(300)

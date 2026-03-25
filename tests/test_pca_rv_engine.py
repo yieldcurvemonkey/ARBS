@@ -52,6 +52,9 @@ class TestRollingPCA:
         assert result.residuals.shape[1] == 5
         assert result.zscores.shape == result.residuals.shape
         assert result.variance_explained.shape[1] == 3
+        assert result.eigenvalues.shape[1] == 3
+        assert result.scores.shape[1] == 3
+        assert len(result.fit_quality) == len(rates)
 
     def test_out_of_sample_residuals(self):
         """Residual on date T must NOT use T's data in the estimation window."""
@@ -73,6 +76,9 @@ class TestRollingPCA:
         row_sums = valid_ve.sum(axis=1)
         assert (row_sums <= 1.01).all()  # allow small float tolerance
         assert (row_sums > 0.90).all()   # 3 PCs should capture >90%
+        valid_fit = result.fit_quality.dropna()
+        assert (valid_fit <= 1.01).all()
+        assert (valid_fit > 0.90).all()
 
     def test_levels_vs_changes_mode(self):
         rates = _make_synthetic_rates(200, 5)

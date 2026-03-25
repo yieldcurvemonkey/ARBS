@@ -53,8 +53,8 @@ def traffic_light(
     """
     vol_w = config.beta_vol_window_days
     zs_w = config.beta_vol_zscore_window_days
-    min_periods_vol = max(vol_w // 2, 10)
-    min_periods_zs = max(zs_w // 2, 20)
+    min_periods_vol = min(vol_w, max(vol_w // 2, 10))
+    min_periods_zs = min(zs_w, max(zs_w // 2, 20))
 
     # Step 1: 3M rolling std of each beta
     vol_body = betas_body.rolling(window=vol_w, min_periods=min_periods_vol).std()
