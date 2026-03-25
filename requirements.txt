@@ -48,6 +48,9 @@ polars==1.32.3
 seaborn==0.13.2
 tqdm==4.67.1
 
+# Mean-reversion analytics (optional — fallback to AR(1) if unavailable)
+# arbitragelab==1.0.0
+
 # Notebook / test tooling used in this repo
 ipykernel==6.30.1
 jupyterlab==4.4.7
