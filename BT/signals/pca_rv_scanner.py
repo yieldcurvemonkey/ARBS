@@ -719,13 +719,13 @@ def build_signal_table(
 
     # Normalize timezone awareness for comparison
     if start_date is not None:
-        if dates.tz is None and start_date.tzinfo is not None:
-            start_date = start_date.tz_localize(None)
-        dates = dates[dates >= start_date]
+        # if dates.tz is None and start_date.tzinfo is not None:
+        start_date = start_date.tz_localize(None)
+        dates = dates[dates >= pd.Timestamp(start_date).date()]
     if end_date is not None:
-        if dates.tz is None and end_date.tzinfo is not None:
-            end_date = end_date.tz_localize(None)
-        dates = dates[dates <= end_date]
+        # if dates.tz is None and end_date.tzinfo is not None:
+        end_date = end_date.tz_localize(None)
+        dates = dates[dates <= pd.Timestamp(end_date).date()]
 
     # Run full surface scan once (it's already rolling internally)
     scan_result = scan_forward_surface(panels, config)
