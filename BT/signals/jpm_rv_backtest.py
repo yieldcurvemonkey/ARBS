@@ -319,6 +319,11 @@ def _run_vectorized_backtest(
             "entry_residual", "entry_zscore", "direction", "realized_pnl", "holding_days",
         ])
 
+    # Ensure DatetimeIndex for downstream resampling
+    if not isinstance(daily_pnl.index, pd.DatetimeIndex):
+        daily_pnl.index = pd.to_datetime(daily_pnl.index)
+        daily_pnl_cat.index = pd.to_datetime(daily_pnl_cat.index)
+
     cumulative_pnl = daily_pnl.cumsum()
     drawdown = cumulative_pnl - cumulative_pnl.cummax()
     daily_pnl_ccy = daily_pnl * config.trade_belly_bpv / 10_000
