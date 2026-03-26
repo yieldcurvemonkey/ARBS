@@ -1,11 +1,24 @@
 from BT.signals.pca_momentum import (
     PCAMomentumConfig,
+    PCAMomentumWalkForwardResult,
+    build_rank_tenor_map,
+    build_intraday_rate_queries,
+    load_intraday_rate_panel,
     generate_ma_features,
+    compute_forward_return_zscore,
     generate_labels,
     build_pipeline,
+    walk_forward_pca_momentum,
     fit_pca_momentum,
     predict_signals,
     extract_pca_components,
+)
+from BT.signals.pca_momentum_backtest import (
+    PCAMomentumVectorizedBacktestResult,
+    PCAMomentumQueryBacktestResult,
+    build_signal_table,
+    run_pca_momentum_vectorized_backtest,
+    run_pca_momentum_query_backtest,
 )
 from BT.signals.vectorized_backtest import (
     VectorizedResult,
@@ -64,12 +77,23 @@ from BT.signals.jpm_rv_backtest import (
 
 __all__ = [
     "PCAMomentumConfig",
+    "PCAMomentumWalkForwardResult",
+    "build_rank_tenor_map",
+    "build_intraday_rate_queries",
+    "load_intraday_rate_panel",
     "generate_ma_features",
+    "compute_forward_return_zscore",
     "generate_labels",
     "build_pipeline",
+    "walk_forward_pca_momentum",
     "fit_pca_momentum",
     "predict_signals",
     "extract_pca_components",
+    "PCAMomentumVectorizedBacktestResult",
+    "PCAMomentumQueryBacktestResult",
+    "build_signal_table",
+    "run_pca_momentum_vectorized_backtest",
+    "run_pca_momentum_query_backtest",
     "VectorizedResult",
     "vectorized_backtest",
     "grid_search",
