@@ -16,6 +16,14 @@ from BT.signals.regression_rv import (
     RegressionRVConfig,
     RegressionRVResult,
     rolling_regression,
+    EntrySnapshot,
+    frozen_residual,
+    build_entry_snapshots,
+    compute_residual_stats,
+    RegressionSignalTable,
+    build_jpm_signal_table,
+    JPMFlyUniverse,
+    default_fly_universe,
 )
 from BT.signals.regime_filter import (
     RegimeFilterConfig,
@@ -48,6 +56,11 @@ from BT.signals.pca_rv_triggers import (
     PCARVEntryTrigger,
     PCARVExitTrigger,
 )
+from BT.signals.jpm_rv_backtest import (
+    JPMRVBacktestConfig,
+    JPMRVBacktestResult,
+    run_jpm_rv_backtest,
+)
 
 __all__ = [
     "PCAMomentumConfig",
@@ -63,6 +76,14 @@ __all__ = [
     "RegressionRVConfig",
     "RegressionRVResult",
     "rolling_regression",
+    "EntrySnapshot",
+    "frozen_residual",
+    "build_entry_snapshots",
+    "compute_residual_stats",
+    "RegressionSignalTable",
+    "build_jpm_signal_table",
+    "JPMFlyUniverse",
+    "default_fly_universe",
     "RegimeFilterConfig",
     "traffic_light",
     "RVBacktestConfig",
@@ -86,4 +107,7 @@ __all__ = [
     "reshape_rates_panel",
     "PCARVEntryTrigger",
     "PCARVExitTrigger",
+    "JPMRVBacktestConfig",
+    "JPMRVBacktestResult",
+    "run_jpm_rv_backtest",
 ]
