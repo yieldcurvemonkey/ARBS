@@ -383,6 +383,8 @@ class _JPMRVQuerySignalAction:
         from Query.IRSwaps.IRSwapValue import IRSwapValue
 
         dt = pd.Timestamp(now).normalize()
+        # Signal tables are keyed by datetime.date; convert for lookups
+        dk = dt.date() if hasattr(dt, "date") else dt
         self._roll_date(dt)
         table = self.signal_table
         config = self.config
@@ -396,13 +398,16 @@ class _JPMRVQuerySignalAction:
         positions_to_exit: set = set()
         for pos in current_positions:
             meta = pos.meta
+            if meta.get("is_hedge"):
+                continue
             fid = meta.get("fly_id")
             if fid is None:
                 continue
 
             entry_dt = pd.Timestamp(meta.get("entry_signal_date", pos.opened)).normalize()
+            entry_dk = entry_dt.date() if hasattr(entry_dt, "date") else entry_dt
             snapshot_dict = table.entry_snapshots.get(fid, {})
-            snapshot = snapshot_dict.get(entry_dt)
+            snapshot = snapshot_dict.get(entry_dk) or snapshot_dict.get(entry_dt)
             if snapshot is None:
                 continue
 
@@ -410,10 +415,10 @@ class _JPMRVQuerySignalAction:
             oos_residual = np.nan
 
             # Compute OOS residual
-            if fid in table.fly_series and dt in table.fly_series[fid].index:
-                fly_t = float(table.fly_series[fid].loc[dt])
-                body_t = float(table.body_series[fid].loc[dt])
-                curve_t = float(table.curve_series[fid].loc[dt])
+            if fid in table.fly_series and dk in table.fly_series[fid].index:
+                fly_t = float(table.fly_series[fid].loc[dk])
+                body_t = float(table.body_series[fid].loc[dk])
+                curve_t = float(table.curve_series[fid].loc[dk])
                 oos_residual = frozen_residual(snapshot, fly_t, body_t, curve_t)
 
             entry_residual = float(meta.get("entry_residual", 0.0))
@@ -458,13 +463,14 @@ class _JPMRVQuerySignalAction:
                 self._stopped_today.add(fid)
 
         # --- Entry ---
-        regime_state = self.regime.get(dt, np.nan)
+        regime_state = self.regime.get(dk, np.nan)
         if regime_state != "green":
             return orders
 
         open_after_exit = [
             p for p in current_positions
             if p.meta.get("rv_position_id") not in positions_to_exit
+            and not p.meta.get("is_hedge")
         ]
         open_fly_ids = {p.meta.get("fly_id") for p in open_after_exit}
 
@@ -475,9 +481,9 @@ class _JPMRVQuerySignalAction:
             if not config.reentry_after_stop and fid in (self._stopped_yesterday | self._stopped_today):
                 continue
 
-            res_val = table.residuals[fid].get(dt, np.nan)
-            zs_val = table.zscores[fid].get(dt, np.nan)
-            rsq_val = table.rsq[fid].get(dt, np.nan)
+            res_val = table.residuals[fid].get(dk, np.nan)
+            zs_val = table.zscores[fid].get(dk, np.nan)
+            rsq_val = table.rsq[fid].get(dk, np.nan)
             if pd.isna(res_val) or pd.isna(zs_val) or pd.isna(rsq_val):
                 continue
             if rsq_val < config.entry_min_rsq:
@@ -487,7 +493,7 @@ class _JPMRVQuerySignalAction:
             if abs(float(zs_val)) < config.entry_min_zscore:
                 continue
 
-            snapshot = table.entry_snapshots.get(fid, {}).get(dt)
+            snapshot = table.entry_snapshots.get(fid, {}).get(dk)
             if snapshot is None:
                 continue
 
@@ -509,44 +515,107 @@ class _JPMRVQuerySignalAction:
             belly_tenor = parts[-2]
             right_tenor = parts[-1]
 
-            belly_bpv = config.trade_belly_bpv
-            query = IRSwapQuery.butterfly(
-                left_tenor=left_tenor,
-                belly_tenor=belly_tenor,
-                right_tenor=right_tenor,
-                belly_bpv=belly_bpv * abs(direction),
-                direction=direction,
+            # direction encodes through bpv sign:
+            #   direction=+1 (residual < 0, fly cheap) -> positive bpv -> profit when fly increases
+            #   direction=-1 (residual > 0, fly rich)  -> negative bpv -> profit when fly decreases
+            # FLY NPV change = bpv * Δ(fly_spread), so bpv must be proportional to direction.
+            signed_bpv = config.trade_belly_bpv * direction
+            query = IRSwapQuery(
+                structure=IRSwapStructure.FLY,
+                value=IRSwapValue.NPV,
                 curve="USD-SOFR-1D",
+                structure_kwargs={
+                    "front_tenor": left_tenor,
+                    "belly_tenor": belly_tenor,
+                    "back_tenor": right_tenor,
+                    "bpv": signed_bpv,
+                },
             )
 
             stats_row = table.residual_stats.get(fid)
             entry_mean = 0.0
             entry_std = np.nan
-            if stats_row is not None and dt in stats_row.index:
-                entry_mean = float(stats_row.loc[dt, "mean"])
-                entry_std = float(stats_row.loc[dt, "std"])
+            if stats_row is not None and dk in stats_row.index:
+                entry_mean = float(stats_row.loc[dk, "mean"])
+                entry_std = float(stats_row.loc[dk, "std"])
 
             self._trade_seq += 1
             trade_id = f"{fid}|{dt.date().isoformat()}|{self._trade_seq}"
 
+            fly_meta = {
+                "strategy": "jpm_rv_query",
+                "rv_position_id": trade_id,
+                "fly_id": fid,
+                "category": table.fly_categories.get(fid, "unknown"),
+                "entry_signal_date": dt,
+                "entry_residual": res_val,
+                "entry_zscore": zs_val,
+                "entry_residual_mean": entry_mean,
+                "entry_residual_std": entry_std,
+                "direction": direction,
+            }
             orders.append(
-                QueryOrder(
-                    timestamp=now,
-                    query=query,
-                    meta={
-                        "strategy": "jpm_rv_query",
-                        "rv_position_id": trade_id,
-                        "fly_id": fid,
-                        "category": table.fly_categories.get(fid, "unknown"),
-                        "entry_signal_date": dt,
-                        "entry_residual": res_val,
-                        "entry_zscore": zs_val,
-                        "entry_residual_mean": entry_mean,
-                        "entry_residual_std": entry_std,
-                        "direction": direction,
-                    },
-                )
+                QueryOrder(timestamp=now, query=query, meta=fly_meta)
             )
+
+            # --- Regression beta hedges ---
+            # The fly has exposure: fly ~ beta_body * body + beta_curve * curve
+            # where body = belly rate, curve = back_rate - front_rate.
+            # To isolate the residual, hedge out body and curve exposure
+            # with outright swaps sized by the entry betas.
+            belly_bpv_abs = abs(config.trade_belly_bpv)
+
+            hedge_base_meta = {
+                "strategy": "jpm_rv_query",
+                "rv_position_id": trade_id,
+                "fly_id": fid,
+                "category": table.fly_categories.get(fid, "unknown"),
+                "is_hedge": True,
+            }
+
+            # Body hedge: strip out the beta_body exposure from the total position
+            # Outright NPV change = -bpv * Δrate, so to get -direction*belly_bpv*β_body*Δbody,
+            # we need body_bpv = direction * β_body * belly_bpv.
+            body_hedge_bpv = direction * snapshot.beta_body * belly_bpv_abs
+            if abs(body_hedge_bpv) > 1.0:
+                body_query = IRSwapQuery(
+                    structure=IRSwapStructure.OUTRIGHT,
+                    value=IRSwapValue.NPV,
+                    curve="USD-SOFR-1D",
+                    tenor=belly_tenor,
+                    structure_kwargs={"bpv": body_hedge_bpv},
+                )
+                orders.append(
+                    QueryOrder(timestamp=now, query=body_query, meta={**hedge_base_meta, "hedge_type": "body"})
+                )
+
+            # Curve hedge (back leg): strip out beta_curve at back tenor
+            curve_back_bpv = direction * snapshot.beta_curve * belly_bpv_abs
+            if abs(curve_back_bpv) > 1.0:
+                curve_back_query = IRSwapQuery(
+                    structure=IRSwapStructure.OUTRIGHT,
+                    value=IRSwapValue.NPV,
+                    curve="USD-SOFR-1D",
+                    tenor=right_tenor,
+                    structure_kwargs={"bpv": curve_back_bpv},
+                )
+                orders.append(
+                    QueryOrder(timestamp=now, query=curve_back_query, meta={**hedge_base_meta, "hedge_type": "curve_back"})
+                )
+
+            # Curve hedge (front leg): strip out -beta_curve at front tenor
+            curve_front_bpv = -direction * snapshot.beta_curve * belly_bpv_abs
+            if abs(curve_front_bpv) > 1.0:
+                curve_front_query = IRSwapQuery(
+                    structure=IRSwapStructure.OUTRIGHT,
+                    value=IRSwapValue.NPV,
+                    curve="USD-SOFR-1D",
+                    tenor=left_tenor,
+                    structure_kwargs={"bpv": curve_front_bpv},
+                )
+                orders.append(
+                    QueryOrder(timestamp=now, query=curve_front_query, meta={**hedge_base_meta, "hedge_type": "curve_front"})
+                )
 
         return orders
 
