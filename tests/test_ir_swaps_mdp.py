@@ -281,6 +281,18 @@ def test_barchart_stirf_get_data_suppresses_rateslib_solver_logs(monkeypatch, ca
     assert curve.meta()["requested_curve_name"] == "USD-SOFR-1D"
 
 
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("SUCCESS: `conv_tol` reached after 4 iterations (levenberg_marquardt)", True),
+        ("SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt)", True),
+        ("builder diagnostic", False),
+    ],
+)
+def test_should_suppress_ratelibs_solver_output(line, expected):
+    assert IRSwapsMDP._should_suppress_ratelibs_solver_output(line) is expected
+
+
 def test_barchart_stirf_bulk_get_data_suppresses_rateslib_solver_logs(monkeypatch, capsys):
     mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
     builder = _FakeBarchartBuilder()
@@ -549,6 +561,82 @@ def test_barchart_stirf_bulk_get_data_uses_curve_store_fast_path(monkeypatch):
     assert store.read_calls == []
     assert len(store.reconstruct_calls) == 1
     assert out[ts_local].meta()["curve_name"] == "USD-SOFR-Q12"
+    assert builder.calls == []
+
+
+def test_barchart_stirf_get_pricer_uses_curve_store_fast_path(monkeypatch):
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    builder = _FakeBarchartBuilder()
+    chi_tz = pytz.timezone("America/Chicago")
+    ts_local = chi_tz.localize(dt.datetime(2026, 3, 10, 10, 0))
+    ts_utc = ts_local.astimezone(pytz.UTC).replace(microsecond=0)
+    store = _FakeCurveStore(
+        day_df=pd.DataFrame({"timestamp_utc": [pd.Timestamp(ts_utc)]}),
+        curves_by_ts={ts_utc: _FakeBarchartCurveHandle(curve_id="USD-SOFR-1D", timestamp=ts_local)},
+    )
+
+    def _unexpected_builder_call(*args, **kwargs):
+        raise AssertionError("builder.build_curve should not be called when CurveStore covers the single intraday timestamp")
+
+    builder.build_curve = _unexpected_builder_call
+
+    monkeypatch.setattr(mdp, "_get_barchart_stirf_curve_builder", lambda: builder)
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: store)
+    monkeypatch.setattr(
+        mdp,
+        "bulk_get_data",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("single-date get_pricer fast path should not route through bulk_get_data")
+        ),
+    )
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+
+    out = mdp.get_pricer({"curve_name": "USD-SOFR-1D", "timestamp": ts_local})
+
+    assert out.meta()["curve_name"] == "USD-SOFR-Q12"
+    assert len(store.raw_node_calls) == 1
+    assert store.raw_node_calls[0]["curve_name"] == "USD-SOFR-Q12"
+    assert store.raw_node_calls[0]["timestamps_utc"] == [ts_local]
+    assert len(store.reconstruct_calls) == 1
+    assert builder.calls == []
+
+
+def test_barchart_stirf_get_pricer_ignore_cache_miss_skips_solver_on_point_miss(monkeypatch):
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    builder = _FakeBarchartBuilder()
+    chi_tz = pytz.timezone("America/Chicago")
+    ts_local = chi_tz.localize(dt.datetime(2026, 3, 10, 10, 0))
+    store = _FakeCurveStore(day_df=pd.DataFrame({"timestamp_utc": []}), curves_by_ts={})
+
+    def _unexpected_builder_call(*args, **kwargs):
+        raise AssertionError("builder.build_curve should not be called when ignore_cache_miss is enabled")
+
+    builder.build_curve = _unexpected_builder_call
+
+    monkeypatch.setattr(mdp, "_get_barchart_stirf_curve_builder", lambda: builder)
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: store)
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+
+    with pytest.raises(RuntimeError, match="could not build a curve"):
+        mdp.get_pricer(
+            {
+                "curve_name": "USD-SOFR-1D",
+                "timestamp": ts_local,
+                "ignore_cache_miss": True,
+            }
+        )
+
+    assert len(store.raw_node_calls) == 1
+    assert store.raw_node_calls[0]["curve_name"] == "USD-SOFR-Q12"
+    assert store.raw_node_calls[0]["timestamps_utc"] == [ts_local]
     assert builder.calls == []
 
 
@@ -1007,10 +1095,62 @@ def test_promote_gsquant_curve_store_day_writes_missing_raw_and_analytics(monkey
     assert raw_calls[0][0] == "USD-OIS"
     assert raw_calls[0][1] == dt.date(2026, 1, 2)
     assert raw_calls[0][2][0].source_variant == "GSQUANT_RL"
+    assert raw_calls[0][2][0].reference_key == "USD-OIS"
     assert len(analytics_calls) == 1
     assert analytics_calls[0][0] == "USD-OIS"
     assert analytics_calls[0][1] == dt.date(2026, 1, 2)
     assert "par_rate_10Y" in analytics_calls[0][2].columns
+
+
+def test_gsquant_get_data_uses_curve_store_fast_path(monkeypatch):
+    mdp = IRSwapsMDP(source="GSQUANT-RL")
+    d1 = dt.date(2026, 1, 2)
+    ts1 = mdp._to_curve_store_timestamp(d1).astimezone(pytz.UTC)
+    store = _FakeCurveStore(
+        day_df=pd.DataFrame(
+            {
+                "timestamp_utc": [pd.Timestamp(ts1)],
+                "trading_date": [d1],
+            }
+        ),
+        curves_by_ts={
+            pd.Timestamp(ts1): object(),
+        },
+    )
+
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: store)
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "get_gsquant_rl_basic",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy GSQUANT curve cache should not be used when CurveStore covers the requested day")
+        ),
+    )
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+
+    wrap_calls = []
+
+    def _stub_wrap(**kwargs):
+        wrap_calls.append(kwargs["request_timestamp"])
+        return {"timestamp": kwargs["request_timestamp"]}
+
+    monkeypatch.setattr(mdp, "_build_gsquant_rl_curve", _stub_wrap)
+
+    out = mdp.get_data(
+        {
+            "curve_name": "USD-OIS",
+            "timestamp": d1,
+        }
+    )
+
+    assert out == {"timestamp": d1}
+    assert len(store.raw_node_calls) == 1
+    assert len(store.reconstruct_calls) == 1
+    assert wrap_calls == [d1]
 
 
 def test_eris_bulk_get_data_promotes_curve_store_for_cached_historical_days(monkeypatch):

@@ -20,6 +20,19 @@ from BT.signals.pca_momentum_backtest import (
     run_pca_momentum_vectorized_backtest,
     run_pca_momentum_query_backtest,
 )
+from BT.signals.technical_indicators import (
+    TechnicalIndicatorSignalResult,
+    moving_average_crossover_signal,
+    rsi_signal,
+    bollinger_signal,
+    macd_signal,
+)
+from BT.signals.technical_indicator_backtest import (
+    TechnicalIndicatorQueryBacktestResult,
+    TechnicalIndicatorTriggerRequirements,
+    TargetPositionSignalAction,
+    run_technical_indicator_query_backtest,
+)
 from BT.signals.vectorized_backtest import (
     VectorizedResult,
     vectorized_backtest,
@@ -94,6 +107,15 @@ __all__ = [
     "build_signal_table",
     "run_pca_momentum_vectorized_backtest",
     "run_pca_momentum_query_backtest",
+    "TechnicalIndicatorSignalResult",
+    "moving_average_crossover_signal",
+    "rsi_signal",
+    "bollinger_signal",
+    "macd_signal",
+    "TechnicalIndicatorQueryBacktestResult",
+    "TechnicalIndicatorTriggerRequirements",
+    "TargetPositionSignalAction",
+    "run_technical_indicator_query_backtest",
     "VectorizedResult",
     "vectorized_backtest",
     "grid_search",

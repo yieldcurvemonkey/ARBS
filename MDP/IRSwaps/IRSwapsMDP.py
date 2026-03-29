@@ -536,7 +536,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 session_minute=int((ts_chi - ts_chi.replace(hour=6, minute=0, second=0, microsecond=0)).total_seconds() // 60),
                 curve_name=requested_curve_name,
                 cfg_hash="",
-                reference_key=str(getattr(rl_curve_handle, "id", "") or requested_curve_name),
+                reference_key=self._resolve_gsquant_reference_curve_name(requested_curve_name),
                 interpolation=str(getattr(rl_curve_handle, "interpolation", "log_linear") or "log_linear"),
                 source_variant=self._gsquant_curve_store_source_variant(),
                 node_dates=node_dates,
@@ -663,6 +663,74 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         if raw_df is None or raw_df.empty:
             return False
         return any(self._curve_store_row_has_nodes(row) for row in raw_df.to_dict("records"))
+
+    def _load_barchart_stirf_curve_store_point(
+        self,
+        *,
+        requested_curve_name: str,
+        request_timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+        builder: Any = None,
+        fixings_cache: Optional[Dict[Any, pd.Series]] = None,
+    ) -> Optional["_IRSwapGenericCurve"]:
+        rl_timestamp = self._to_barchart_stirf_timestamp(request_timestamp)
+        if rl_timestamp == "live":
+            return None
+
+        active_builder = builder or self._get_barchart_stirf_curve_builder()
+        resolved_curve_name = self._resolve_barchart_stirf_curve_name(
+            requested_curve_name=requested_curve_name,
+            kwargs={},
+            builder=active_builder,
+        )
+        store = self._get_curve_store()
+        raw_df = pd.DataFrame()
+        if hasattr(store, "read_raw_nodes"):
+            raw_df = store.read_raw_nodes(
+                resolved_curve_name,
+                timestamps_utc=[rl_timestamp],
+            )
+
+        if raw_df is None or raw_df.empty or "timestamp_utc" not in raw_df.columns:
+            return None
+
+        requested_key = self._curve_store_timestamp_key(rl_timestamp)
+        if requested_key is None:
+            return None
+
+        filtered_df = raw_df.loc[
+            raw_df["timestamp_utc"].map(self._curve_store_timestamp_key) == requested_key
+        ].copy()
+        if filtered_df.empty:
+            return None
+
+        if "node_dates" in filtered_df.columns and "discount_factors" in filtered_df.columns:
+            filtered_df = filtered_df.loc[
+                filtered_df.apply(self._curve_store_row_has_nodes, axis=1)
+            ].copy()
+            if filtered_df.empty:
+                return None
+
+        curves_by_ts = store.reconstruct_curves_batch(
+            filtered_df,
+            cfg=self._curve_store_cfg(resolved_curve_name, active_builder),
+            max_workers=1,
+        )
+        rl_curve_handle = None
+        for ts_val, curve_val in curves_by_ts.items():
+            if self._curve_store_timestamp_key(ts_val) == requested_key:
+                rl_curve_handle = curve_val
+                break
+        if rl_curve_handle is None:
+            return None
+
+        return self._wrap_curve_store_curve(
+            requested_curve_name=requested_curve_name,
+            resolved_curve_name=resolved_curve_name,
+            request_timestamp=request_timestamp,
+            rl_curve_handle=rl_curve_handle,
+            builder=active_builder,
+            fixings_cache=fixings_cache,
+        )
 
     def _load_eris_curve_store_history(
         self,
@@ -877,7 +945,13 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
     @staticmethod
     def _should_suppress_ratelibs_solver_output(line: str) -> bool:
-        return "SUCCESS: `conv_tol` reached" in line and "(levenberg_marquardt)" in line
+        return (
+            "(levenberg_marquardt)" in line
+            and (
+                "SUCCESS: `conv_tol` reached" in line
+                or "SUCCESS: `func_tol` reached" in line
+            )
+        )
 
     @staticmethod
     @contextlib.contextmanager
@@ -1797,6 +1871,26 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         elif "GSQUANT-RL" in self.source.upper() or "GSQUANT_RL" in self.source.upper():
             assert type(timestamp) == datetime.date, "GSQUANT ONLY HAS EOD - 'timestamp' must be type 'datetime.date'"
 
+            fixings_cache = self._build_fixings_cache_for_dates(
+                curve_name=self._resolve_gsquant_reference_curve_name(curve_name),
+                as_of_dates=[timestamp],
+            )
+            if not kwargs.get("force_refresh", False) and self._supports_curve_store_raw_curve_fast_path():
+                try:
+                    curve_store_hits = self._load_gsquant_curve_store_history(
+                        requested_curve_name=curve_name,
+                        request_dates=[timestamp],
+                        fixings_cache=fixings_cache,
+                        max_workers=1,
+                    )
+                    if timestamp in curve_store_hits:
+                        return curve_store_hits[timestamp]
+                except Exception as _tier0_exc:
+                    logging.getLogger(__name__).debug(
+                        "GSQUANT CurveStore Tier 0 single-date fast path failed: %s",
+                        _tier0_exc,
+                    )
+
             from rateslib import from_json
 
             curve_id, rl_curve_serialized, pricing_location = self._rl_curve_cache.get_gsquant_rl_basic(
@@ -1808,6 +1902,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 rl_curve_handle=from_json(rl_curve_serialized),
                 pricing_location=pricing_location,
                 curve_id=curve_id,
+                fixings_cache=fixings_cache,
             )
 
         elif self.source.upper() in ["BARCHART_STIRF-RL", "BARCHART_STIRF_RL"]:
@@ -1820,6 +1915,23 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
 
             rl_timestamp = self._to_barchart_stirf_timestamp(timestamp)
+            local_force_refresh = bool(local_kwargs.get("force_refresh", local_kwargs.get("ignore_cache", False)))
+            if rl_timestamp != "live" and not local_force_refresh and self._supports_curve_store_raw_curve_fast_path():
+                try:
+                    curve_store_hit = self._load_barchart_stirf_curve_store_point(
+                        requested_curve_name=curve_name,
+                        request_timestamp=timestamp,
+                        builder=builder,
+                    )
+                    if curve_store_hit is not None:
+                        return curve_store_hit
+                except Exception as _tier0_exc:
+                    logging.getLogger(__name__).debug(
+                        "BARCHART_STIRF CurveStore Tier 0 single-date fast path failed: %s",
+                        _tier0_exc,
+                    )
+            if local_kwargs.get("ignore_cache_miss", False):
+                return None
             with self._suppress_ratelibs_solver_output():
                 rl_curve_handle = builder.build_curve(
                     curve_name=resolved_curve_name,

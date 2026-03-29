@@ -1168,7 +1168,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                         meta_data=meta_data,
                     )
 
-            wsj_buffer = ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(ql.Date.todaysDate(), ql.Period("-3D"))
+            wsj_buffer = ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(ql.Date.todaysDate(), ql.Period("-5D"))
             if ql.Date(timestamp.day, timestamp.month, timestamp.year) > wsj_buffer:
                 wsj_key = get_isin_from_cusip(cusip, "US")[2:]
 
