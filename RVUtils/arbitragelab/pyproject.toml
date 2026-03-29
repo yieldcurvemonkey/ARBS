@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arbitragelab"
+version = "1.0.0"
+description = "Statistical arbitrage research tools vendored into the ARBS repository."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "arch",
+    "cvxpy",
+    "dash",
+    "jupyter-dash",
+    "keras",
+    "matplotlib",
+    "mpmath",
+    "networkx",
+    "numpy",
+    "pandas",
+    "plotly",
+    "POT",
+    "pmdarima",
+    "pyvinecopulib",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "statsmodels",
+    "tensorflow",
+    "tqdm",
+    "yfinance",
+]
+
+[tool.setuptools.packages.find]
+include = ["arbitragelab*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

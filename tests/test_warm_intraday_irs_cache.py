@@ -3,6 +3,7 @@ import datetime as dt
 import pandas as pd
 
 from scripts import stirf_curve_service as warm_script
+from TB.barchart_irs_bulk import bucket_timestamps_by_trading_date
 
 
 def test_window_for_date_cme_trading_day_spans_prior_evening():
@@ -159,6 +160,20 @@ def test_select_missing_curve_store_timestamps_backfills_internal_gap():
     )
 
     assert missing == timestamps[1:3]
+
+
+def test_bucket_timestamps_by_trading_date_preserves_barchart_trade_date_boundaries():
+    timestamps = [
+        dt.datetime(2026, 3, 15, 23, 0, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 3, 16, 14, 30, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 3, 16, 23, 0, tzinfo=dt.timezone.utc),
+    ]
+
+    buckets = bucket_timestamps_by_trading_date(timestamps)
+
+    assert list(buckets) == [dt.date(2026, 3, 16), dt.date(2026, 3, 17)]
+    assert buckets[dt.date(2026, 3, 16)] == timestamps[:2]
+    assert buckets[dt.date(2026, 3, 17)] == timestamps[2:]
 
 
 def test_parser_defaults_to_cme_trading_day():

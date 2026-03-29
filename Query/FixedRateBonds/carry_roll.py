@@ -142,11 +142,11 @@ def ensure_numeric_columns(df: pd.DataFrame, cols: Iterable[str]) -> pd.DataFram
     return out
 
 
-def load_sofr_fixing_pct(as_of_date: datetime.date) -> Optional[float]:
+def load_curve_fixing_pct(as_of_date: datetime.date, curve_name: str) -> Optional[float]:
     from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
 
     try:
-        fixings = _fetch_fixings(as_of_date=as_of_date, curve_name="USD-SOFR-1D")
+        fixings = _fetch_fixings(as_of_date=as_of_date, curve_name=curve_name)
     except Exception:
         return None
     if fixings is None:
@@ -168,13 +168,31 @@ def load_sofr_fixing_pct(as_of_date: datetime.date) -> Optional[float]:
     if tmp.empty:
         return None
 
-    sofr_pct = float(tmp["fixing"].iloc[-1])
-    if not np.isfinite(sofr_pct):
+    fixing_pct = float(tmp["fixing"].iloc[-1])
+    if not np.isfinite(fixing_pct):
         return None
 
-    if abs(sofr_pct) <= 1.0:
-        sofr_pct *= 100.0
-    return sofr_pct
+    if abs(fixing_pct) <= 1.0:
+        fixing_pct *= 100.0
+    return fixing_pct
+
+
+def load_sofr_fixing_pct(as_of_date: datetime.date) -> Optional[float]:
+    return load_curve_fixing_pct(as_of_date=as_of_date, curve_name="USD-SOFR-1D")
+
+
+def load_us_treasury_gc_fixing_pct(as_of_date: datetime.date) -> Optional[float]:
+    """
+    Resolve the unsecured overnight proxy used for UST financing.
+
+    Use SOFR when that fixing history is available for the requested date and
+    fall back to Fed Funds for earlier dates before SOFR's publication history.
+    """
+    for curve_name in ("USD-SOFR-1D", "USD-FEDFUNDS"):
+        fixing_pct = load_curve_fixing_pct(as_of_date=as_of_date, curve_name=curve_name)
+        if fixing_pct is not None:
+            return fixing_pct
+    return None
 
 
 def _resolve_roll_spline_cache_dir() -> Path:

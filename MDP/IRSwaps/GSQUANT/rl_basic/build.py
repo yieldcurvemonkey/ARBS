@@ -1,12 +1,16 @@
-import pandas as pd
 import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, Optional, Sequence, Tuple
+
+import pandas as pd
 import rateslib as rl
 
 from gs_quant.data import Dataset
 from gs_quant.session import GsSession
 
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
-from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils._RLCurveCache import _RLCurveCache
 
 
 # fmt: off
@@ -282,37 +286,151 @@ GSQUANT_CURVE_MAP = {
 }
 # fmt: on
 
+_GS_DATASET_NAME = "IR_SWAP_RATES_V1_STANDARD"
+_GS_CLIENT_ID = "2eb2f48872304c1d94fa1642fa691afe"
+_GS_SECRET_KEY = "91cb9c89110495d1f62d0ab0c4014555c992c2509de8f5ae2b8bf1a2d3c86bd4"
+_GS_MAX_FETCH_SPAN_DAYS = 90
 
-def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
-    assert GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"] in RATESLIB_CURVE_DEFINITIONS, f"{curve} not defined in 'RATESLIB_CURVE_DEFINITIONS'"
 
-    if curve == "USD-FEDFUNDS":
-        curve = "USD-OIS"
-    assert curve in GSQUANT_CURVE_MAP, f"{curve} not defined in 'GSQUANT_CURVE_MAP'"
+def _normalize_gsquant_curve_name(curve: str) -> str:
+    return "USD-OIS" if curve == "USD-FEDFUNDS" else curve
 
-    curve_id = f"{as_of}-GSQUANT-rl_basic_{curve}"
-    gs_client_id = "2eb2f48872304c1d94fa1642fa691afe"
-    gs_secret_key = "91cb9c89110495d1f62d0ab0c4014555c992c2509de8f5ae2b8bf1a2d3c86bd4"
-    GsSession.use(client_id=gs_client_id, client_secret=gs_secret_key, scopes=GsSession.Scopes.get_default())
 
-    gs_ds = "IR_SWAP_RATES_V1_STANDARD"
-    gs_ds_coverage = pd.read_excel(rf"C:\Users\chris\clee\ARBS\MDP\IRSwaps\GSQUANT\COVERAGE\{gs_ds}_COVERAGE.xlsx")
-    df = Dataset(gs_ds).get_data(
-        start=as_of, end=as_of, assetId=gs_ds_coverage[gs_ds_coverage["name"].isin(GSQUANT_CURVE_MAP[curve]["rl_basic"]["base_tenors"])]["assetId"]
+def _resolve_gsquant_curve_config(curve: str) -> Tuple[str, Dict[str, Any]]:
+    normalized_curve = _normalize_gsquant_curve_name(curve)
+    assert normalized_curve in GSQUANT_CURVE_MAP, f"{curve} not defined in 'GSQUANT_CURVE_MAP'"
+    curve_cfg = GSQUANT_CURVE_MAP[normalized_curve]["rl_basic"]
+    reference_curve_name = curve_cfg["reference_key"]
+    assert reference_curve_name in RATESLIB_CURVE_DEFINITIONS, f"{curve} not defined in 'RATESLIB_CURVE_DEFINITIONS'"
+    return normalized_curve, curve_cfg
+
+
+@lru_cache(maxsize=1)
+def _ensure_gsquant_session() -> bool:
+    GsSession.use(
+        client_id=_GS_CLIENT_ID,
+        client_secret=_GS_SECRET_KEY,
+        scopes=GsSession.Scopes.get_default(),
     )
-    df["tenor"] = df["assetId"].map(dict(zip(gs_ds_coverage["assetId"], gs_ds_coverage["name"])))
-    df = df.reset_index(drop=True).set_index("tenor").reindex(GSQUANT_CURVE_MAP[curve]["rl_basic"]["base_tenors"])
+    return True
+
+
+@lru_cache(maxsize=1)
+def _load_gsquant_coverage() -> pd.DataFrame:
+    coverage_path = Path(__file__).resolve().parents[1] / "COVERAGE" / f"{_GS_DATASET_NAME}_COVERAGE.xlsx"
+    return pd.read_excel(coverage_path)
+
+
+def _extract_gsquant_as_of_dates(df: pd.DataFrame) -> pd.Series:
+    for col in ("date", "pricingDate", "pricing_date", "as_of", "time", "index"):
+        if col in df.columns:
+            return pd.to_datetime(df[col], errors="coerce").dt.date
+    raise KeyError("Could not infer GSQUANT pricing date column from dataset response.")
+
+
+def _request_rl_basic_gsquant_dataset(
+    *,
+    start: datetime.date,
+    end: datetime.date,
+    asset_ids: Sequence[Any],
+) -> pd.DataFrame:
+    raw = Dataset(_GS_DATASET_NAME).get_data(
+        start=start,
+        end=end,
+        assetId=list(asset_ids),
+    )
+    if raw is None:
+        return pd.DataFrame()
+    return raw.reset_index()
+
+
+def _fetch_rl_basic_gsquant_dataset_chunked(
+    *,
+    requested_dates: Sequence[datetime.date],
+    asset_ids: Sequence[Any],
+) -> pd.DataFrame:
+    if not requested_dates:
+        return pd.DataFrame()
+
+    chunks = []
+    start_idx = 0
+    while start_idx < len(requested_dates):
+        start_date = requested_dates[start_idx]
+        end_idx = start_idx
+        while (
+            end_idx + 1 < len(requested_dates)
+            and (requested_dates[end_idx + 1] - start_date).days <= _GS_MAX_FETCH_SPAN_DAYS
+        ):
+            end_idx += 1
+
+        chunk_start = start_date
+        chunk_end = requested_dates[end_idx]
+        chunk_df = _request_rl_basic_gsquant_dataset(
+            start=chunk_start,
+            end=chunk_end,
+            asset_ids=asset_ids,
+        )
+        if not chunk_df.empty:
+            chunks.append(chunk_df)
+        start_idx = end_idx + 1
+
+    if not chunks:
+        return pd.DataFrame()
+    return pd.concat(chunks, ignore_index=True)
+
+
+def _fetch_rl_basic_gsquant_dataset(curve: str, as_of_dates: Sequence[datetime.date]) -> pd.DataFrame:
+    requested_dates = sorted({d for d in as_of_dates if isinstance(d, datetime.date)})
+    if not requested_dates:
+        return pd.DataFrame()
+
+    _, curve_cfg = _resolve_gsquant_curve_config(curve)
+    coverage = _load_gsquant_coverage()
+    requested_names = set(curve_cfg["base_tenors"])
+    coverage_slice = coverage.loc[coverage["name"].isin(requested_names), ["assetId", "name"]].dropna()
+    asset_id_to_name = dict(zip(coverage_slice["assetId"], coverage_slice["name"]))
+
+    _ensure_gsquant_session()
+    df = _fetch_rl_basic_gsquant_dataset_chunked(
+        requested_dates=requested_dates,
+        asset_ids=coverage_slice["assetId"].tolist(),
+    )
+    if df.empty:
+        return df
+
+    df["assetId"] = df["assetId"]
+    df["tenor"] = df["assetId"].map(asset_id_to_name)
+    df["as_of"] = _extract_gsquant_as_of_dates(df)
+    df = df[df["as_of"].isin(requested_dates) & df["tenor"].notna()].copy()
+    if df.empty:
+        return df
+
     df["effectiveDate"] = pd.to_datetime(df["effectiveDate"], errors="coerce")
     df["terminationDate"] = pd.to_datetime(df["terminationDate"], errors="coerce")
-    df["rate"] = df["rate"] * 100
+    df["rate"] = pd.to_numeric(df["rate"], errors="coerce") * 100.0
+    return df
 
-    def make_swap(row):
+
+def _build_rl_basic_gsquant_curve_from_frame(curve: str, as_of: datetime.date, frame: pd.DataFrame):
+    normalized_curve, curve_cfg = _resolve_gsquant_curve_config(curve)
+    reference_curve_name = curve_cfg["reference_key"]
+    curve_id = f"{as_of}-GSQUANT-rl_basic_{curve}"
+
+    df = frame.copy()
+    df = df.set_index("tenor").reindex(curve_cfg["base_tenors"])
+    required_cols = ["effectiveDate", "terminationDate", "rate"]
+    missing_mask = df[required_cols].isna().any(axis=1)
+    if missing_mask.any():
+        missing_tenors = list(df.index[missing_mask])
+        raise ValueError(f"Missing GSQUANT inputs for curve '{curve}' on {as_of}: {missing_tenors}")
+
+    def make_swap(row: pd.Series):
         return rl.IRS(
             effective=row["effectiveDate"],
             termination=row["terminationDate"],
             fixed_rate=row["rate"],
             curves=curve_id,
-            spec=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["ReferenceRate"],
+            spec=RATESLIB_CURVE_DEFINITIONS[reference_curve_name]["ReferenceRate"],
         )
 
     df["instruments"] = df.apply(make_swap, axis=1)
@@ -321,42 +439,33 @@ def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
     nodes.update(dict(zip(df["terminationDate"], [1.0] * len(df))))
     nodes = dict(sorted(nodes.items()))
 
-    if "extrapolation" in GSQUANT_CURVE_MAP[curve]["rl_basic"] and GSQUANT_CURVE_MAP[curve]["rl_basic"]["extrapolation"]:
-        knots = [df.loc[i]["terminationDate"] for i in GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"].copy()[1:-1]]
-        extrapolated = df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][-2]]["terminationDate"] + GSQUANT_CURVE_MAP[curve]["rl_basic"]["extrapolation"]
-        rl_curve = rl.Curve(
-            nodes=nodes,
-            id=curve_id,
-            convention=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["DayCounter"],
-            calendar=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["Calendar"],
-            modifier=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["BusinessConvention"],
+    curve_kwargs: Dict[str, Any] = {
+        "nodes": nodes,
+        "id": curve_id,
+        "convention": RATESLIB_CURVE_DEFINITIONS[reference_curve_name]["DayCounter"],
+        "calendar": RATESLIB_CURVE_DEFINITIONS[reference_curve_name]["Calendar"],
+        "modifier": RATESLIB_CURVE_DEFINITIONS[reference_curve_name]["BusinessConvention"],
+    }
+
+    if curve_cfg.get("extrapolation"):
+        knot_names = list(curve_cfg["knots"])
+        knots = [df.loc[name]["terminationDate"] for name in knot_names[1:-1]]
+        extrapolated = df.loc[knot_names[-2]]["terminationDate"] + curve_cfg["extrapolation"]
+        curve_kwargs.update(
             interpolation="log_linear",
-            # fmt: off
             t=[
-                df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
-                df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
-                df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
-                df.loc[GSQUANT_CURVE_MAP[curve]["rl_basic"]["knots"][0]]["terminationDate"],
+                df.loc[knot_names[0]]["terminationDate"],
+                df.loc[knot_names[0]]["terminationDate"],
+                df.loc[knot_names[0]]["terminationDate"],
+                df.loc[knot_names[0]]["terminationDate"],
             ]
             + knots
-            + [
-                extrapolated, extrapolated, extrapolated, extrapolated
-            ],
-            # fmt: on
+            + [extrapolated, extrapolated, extrapolated, extrapolated],
             endpoints=("natural", "natural"),
         )
-    else:
-        rl_curve = rl.Curve(
-            nodes=nodes,
-            id=curve_id,
-            convention=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["DayCounter"],
-            calendar=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["Calendar"],
-            modifier=RATESLIB_CURVE_DEFINITIONS[GSQUANT_CURVE_MAP[curve]["rl_basic"]["reference_key"]]["BusinessConvention"],
-        )
 
-    print(df["rate"])
-
-    rl_solver = rl.Solver(
+    rl_curve = rl.Curve(**curve_kwargs)
+    rl.Solver(
         curves=[rl_curve],
         instruments=df["instruments"],
         s=df["rate"],
@@ -367,4 +476,67 @@ def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
         weights=[1] * len(df["instruments"]),
     )
 
-    return curve_id, rl_curve, df["pricingLocation"].iloc[-1]
+    pricing_location: Optional[str] = None
+    if "pricingLocation" in df.columns:
+        pricing_values = df["pricingLocation"].dropna().tolist()
+        if pricing_values:
+            pricing_location = pricing_values[-1]
+
+    return curve_id, rl_curve, pricing_location
+
+
+def build_rl_basic_gsquant_curves(
+    curve: str,
+    as_of_dates: Sequence[datetime.date],
+    *,
+    max_workers: Optional[int] = None,
+) -> Dict[datetime.date, Tuple[str, Any, Optional[str]]]:
+    requested_dates = sorted({d for d in as_of_dates if isinstance(d, datetime.date)})
+    if not requested_dates:
+        return {}
+
+    dataset_df = _fetch_rl_basic_gsquant_dataset(curve, requested_dates)
+    if dataset_df.empty:
+        return {}
+
+    frames_by_date: Dict[datetime.date, pd.DataFrame] = {
+        as_of: dataset_df.loc[dataset_df["as_of"] == as_of].copy()
+        for as_of in requested_dates
+        if as_of in set(dataset_df["as_of"].tolist())
+    }
+    if not frames_by_date:
+        return {}
+
+    def _build_one(as_of: datetime.date):
+        return as_of, _build_rl_basic_gsquant_curve_from_frame(curve, as_of, frames_by_date[as_of])
+
+    out: Dict[datetime.date, Tuple[str, Any, Optional[str]]] = {}
+    worker_count = int(max_workers or 1)
+    if worker_count > 1 and len(frames_by_date) > 1:
+        with ThreadPoolExecutor(max_workers=min(worker_count, len(frames_by_date))) as executor:
+            futures = {executor.submit(_build_one, as_of): as_of for as_of in frames_by_date}
+            for future in as_completed(futures):
+                try:
+                    as_of, built = future.result()
+                except Exception:
+                    continue
+                out[as_of] = built
+        return {as_of: out[as_of] for as_of in requested_dates if as_of in out}
+
+    for as_of in requested_dates:
+        frame = frames_by_date.get(as_of)
+        if frame is None or frame.empty:
+            continue
+        try:
+            _, built = _build_one(as_of)
+        except Exception:
+            continue
+        out[as_of] = built
+    return out
+
+
+def build_rl_basic_gsquant_curve(curve: str, as_of: datetime.date):
+    built = build_rl_basic_gsquant_curves(curve=curve, as_of_dates=[as_of], max_workers=1)
+    if as_of not in built:
+        raise ValueError(f"Could not build GSQUANT curve '{curve}' for {as_of}.")
+    return built[as_of]

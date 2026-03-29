@@ -51,6 +51,24 @@ class TestDuckDBFastPath:
         )
         assert result == []
 
+    def test_skip_if_symbol_absent_short_circuits_before_remote_or_parquet(self, store, monkeypatch):
+        d1 = datetime.date(2026, 1, 6)
+        monkeypatch.setattr(store._duckdb_cache, "has_symbol", lambda symbol: False)
+        monkeypatch.setattr(
+            store,
+            "_read_df",
+            lambda **kwargs: (_ for _ in ()).throw(AssertionError("parquet read should not run for absent symbol")),
+        )
+
+        result = store.read_rows(
+            symbol="UNKNOWN_FAST_SKIP",
+            reference_points=[d1],
+            intraday=False,
+            skip_if_symbol_absent=True,
+        )
+
+        assert result == []
+
     def test_duckdb_disabled_falls_back_to_parquet(self, store_no_duckdb):
         """When use_duckdb=False, should use existing Parquet path."""
         assert not hasattr(store_no_duckdb, "_duckdb_cache") or store_no_duckdb._duckdb_cache is None

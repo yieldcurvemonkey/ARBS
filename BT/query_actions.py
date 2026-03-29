@@ -1,7 +1,7 @@
 # BT/query_actions.py
 from __future__ import annotations
 from dataclasses import dataclass, replace, field
-from typing import Any, Dict, List, Optional, Protocol, Type, Callable
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Type, Callable
 
 from BT.query_order import QueryOrder, UnwindOrder
 from Query.Base.BaseQuery import BaseQuery
@@ -11,6 +11,29 @@ class QAction(Protocol):
     risk: Optional[str]
 
     def __call__(self, *, now, backtest, info: Dict[Type, Any]) -> List[QueryOrder]: ...
+
+
+@dataclass(frozen=True)
+class BuiltQuery:
+    """Normalized query payload returned by factory-style actions."""
+
+    query: BaseQuery
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+
+def _normalize_built_queries(value: Any) -> List[BuiltQuery]:
+    if value is None:
+        return []
+    if isinstance(value, BuiltQuery):
+        return [value]
+    if isinstance(value, BaseQuery):
+        return [BuiltQuery(query=value)]
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict)):
+        out: List[BuiltQuery] = []
+        for item in value:
+            out.extend(_normalize_built_queries(item))
+        return out
+    raise TypeError(f"Unsupported query factory output type: {type(value)!r}")
 
 
 @dataclass
@@ -23,6 +46,28 @@ class AddQueryAction:
 
     def __call__(self, *, now, backtest, info) -> List[QueryOrder]:
         return [QueryOrder(timestamp=now, query=self.query, meta={"action": "add_query"} | self.meta)]
+
+
+@dataclass
+class AddQueryFactoryAction:
+    """Build query orders dynamically from trigger/backtest context."""
+
+    query_factory: Callable[..., Any]
+    risk: Optional[str] = None
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+    def __call__(self, *, now, backtest, info) -> List[QueryOrder]:
+        built_queries = _normalize_built_queries(self.query_factory(now=now, backtest=backtest, info=info))
+        orders: List[QueryOrder] = []
+        for payload in built_queries:
+            orders.append(
+                QueryOrder(
+                    timestamp=now,
+                    query=payload.query,
+                    meta={"action": "add_query_factory"} | self.meta | dict(payload.meta or {}),
+                )
+            )
+        return orders
 
 
 @dataclass

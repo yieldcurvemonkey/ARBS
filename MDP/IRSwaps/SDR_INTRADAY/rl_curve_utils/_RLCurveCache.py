@@ -196,6 +196,68 @@ class _RLCurveCache(LayeredCacheMixin):
         # auto-committed (DiskCache)
         return key, result_json, pricing_location
 
+    def bulk_get_gsquant_rl_basic(
+        self,
+        *,
+        curve_id: str,
+        bdates: List[datetime.date],
+        force_refresh: bool = False,
+        max_workers: Optional[int] = None,
+    ) -> Dict[datetime.date, Tuple[str, str, Optional[str]]]:
+        from MDP.IRSwaps.GSQUANT.rl_basic.build import build_rl_basic_gsquant_curves
+
+        self.open_cache(cache_attr=self._cache_attr, path=self._path, force=force_refresh)
+        mapping = getattr(self, self._cache_attr)
+
+        requested_dates = list(dict.fromkeys(bdates))
+        out: Dict[datetime.date, Tuple[str, str, Optional[str]]] = {}
+        to_fetch: List[datetime.date] = []
+
+        if not force_refresh:
+            for as_of in requested_dates:
+                key = f"{as_of}-GSQUANT-rl_basic_{curve_id}"
+                if key in mapping:
+                    stored = mapping[key]
+                    out[as_of] = (key, stored["result"], stored.get("pricing_location"))
+                else:
+                    to_fetch.append(as_of)
+        else:
+            to_fetch = requested_dates
+
+        if not to_fetch:
+            return out
+
+        built = build_rl_basic_gsquant_curves(
+            curve=curve_id,
+            as_of_dates=to_fetch,
+            max_workers=max_workers,
+        )
+        if not built:
+            return out
+
+        pending: List[Tuple[str, Dict[str, Optional[str]]]] = []
+        for as_of, (_curve_key, curve, pricing_location) in built.items():
+            key = f"{as_of}-GSQUANT-rl_basic_{curve_id}"
+            result_json = curve.to_json()
+            out[as_of] = (key, result_json, pricing_location)
+            pending.append(
+                (
+                    key,
+                    {
+                        "result": result_json,
+                        "pricing_location": pricing_location,
+                    },
+                )
+            )
+
+        if pending:
+            with self.batched():
+                mapping = getattr(self, self._cache_attr)
+                for key, payload in pending:
+                    mapping[key] = payload
+
+        return out
+
     def _eris_key(self, curve_id: str, as_of: Union[datetime.date, str]) -> str:
         return f"{as_of}-ERIS_EOD_LIVE-rl_basic_{curve_id}"
 

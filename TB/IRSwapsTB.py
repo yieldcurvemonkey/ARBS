@@ -260,6 +260,31 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
     def _ts_symbol_for_query(self, curve_name: str, q: IRSwapQuery) -> str:
         return f"IRS::{self.mdp.source}::{curve_name}::{_query_fingerprint(q)}"
 
+    def _filter_reference_points_for_curve(
+        self,
+        reference_points: Iterable[DateLike],
+        curve_name: str,
+    ) -> List[DateLike]:
+        filtered = list(dict.fromkeys(reference_points))
+
+        filter_fn = getattr(self.mdp, "filter_reference_points_for_curve", None)
+        if callable(filter_fn):
+            try:
+                filtered = list(filter_fn(curve_name=curve_name, reference_points=filtered))
+            except TypeError:
+                filtered = list(filter_fn(curve_name, filtered))
+            except Exception:
+                pass
+
+        if curve_name == "USD-SOFR-1D":
+            filtered = [
+                ref_point
+                for ref_point in filtered
+                if ql.UnitedStates(ql.UnitedStates.GovernmentBond).isBusinessDay(datetime_to_ql_date(ref_point))
+            ]
+
+        return filtered
+
     def get_timeseries(
         self,
         start: DateLike,
@@ -268,6 +293,7 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         *,
         n_jobs: Optional[int] = 1,
         ignore_cache: Optional[bool] = False,
+        ignore_cache_miss: Optional[bool] = False,
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
         _prefetched_ts_rows_by_symbol: Optional[Mapping[str, Sequence[Tuple[DateLike, str, float]]]] = None,
@@ -282,6 +308,10 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
         flat = self._flatten_queries(queries)
         by_curve = _group_queries_by_curve(flat)
+        ref_points_by_curve = {
+            curve_name: self._filter_reference_points_for_curve(ref_points, curve_name)
+            for curve_name in by_curve
+        }
 
         to_fetch: DefaultDict[str, set] = defaultdict(set)
         cached_rows: List[Tuple[DateLike, str, float]] = []
@@ -296,6 +326,9 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
         if self._use_ts_cache and not ignore_cache:
             for curve_name, qs in by_curve.items():
+                curve_ref_points = ref_points_by_curve.get(curve_name, [])
+                if not curve_ref_points:
+                    continue
                 for q in qs:
                     symbol = self._ts_symbol_for_query(curve_name, q)
                     prefetched_rows = prefetched_ts_rows_by_symbol.get(symbol)
@@ -305,11 +338,12 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         try:
                             rows = self._computed_ts_store.read_rows(
                                 symbol=symbol,
-                                reference_points=ref_points,
+                                reference_points=curve_ref_points,
                                 intraday=use_intraday_cache,
                                 skip_current_eod=True,
                                 fallback_column_name=q.col_name(curve_name),
                                 allow_partial=True,
+                                skip_if_symbol_absent=not use_intraday_cache,
                             )
                         except Exception as ex:
                             self._logger.debug(
@@ -332,12 +366,11 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                     cached_rows.extend(rows)
                     cached_row_keys.update((row_d, row_c) for row_d, row_c, _ in rows)
 
-        for d in ref_points:
-            for curve_name, qs in by_curve.items():
-                if curve_name == "USD-SOFR-1D":
-                    if not ql.UnitedStates(ql.UnitedStates.GovernmentBond).isBusinessDay(datetime_to_ql_date(d)):
-                        break
-
+        for curve_name, qs in by_curve.items():
+            curve_ref_points = ref_points_by_curve.get(curve_name, [])
+            if not curve_ref_points:
+                continue
+            for d in curve_ref_points:
                 for q in qs:
                     col_name = q.col_name(curve_name)
                     if (d, col_name) in cached_row_keys:
@@ -363,14 +396,15 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             if not missing_points:
                 continue
 
-            built_map: Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve] = self.mdp.bulk_get_data(
-                {
-                    "curve_name": curve_name,
-                    "timestamps": sorted(missing_points),
-                    "ignore_cache": ignore_cache,
-                    "n_jobs": n_jobs,
-                }
-            )
+            bulk_request = {
+                "curve_name": curve_name,
+                "timestamps": sorted(missing_points),
+                "ignore_cache": ignore_cache,
+                "n_jobs": n_jobs,
+            }
+            if ignore_cache_miss:
+                bulk_request["ignore_cache_miss"] = True
+            built_map: Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve] = self.mdp.bulk_get_data(bulk_request)
 
             qs = by_curve[curve_name]
             total_tasks = len(missing_points) * len(qs)
@@ -380,7 +414,7 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 total=total_tasks,
                 disable=pbar_disable,
                 desc=f"PRICING {curve_name} IRSWAPS [workers={worker_count}]...",
-                leave=True,
+                leave=False,
             ) as pbar:
                 tasks: List[Tuple[datetime.datetime | datetime.date, IRSwapQuery, _IRSwapGenericCurve]] = []
                 for d in sorted(missing_points):
@@ -719,7 +753,7 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 curve_by_day[day] = ch
             return ch
 
-        for label in tqdm(need_fetch_labels, desc="SFR CVX...", disable=not self._show_tqdm, leave=True):
+        for label in tqdm(need_fetch_labels, desc="SFR CVX...", disable=not self._show_tqdm, leave=False):
             colname = _col_name(label)
             rows = list(pre_cached_rows.get(label, []))
             miss_all = partial_missing_dates.get(label, set()) | missing_today_dates.get(label, set())

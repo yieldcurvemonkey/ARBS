@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlfinlab"
+version = "0.4.1"
+description = "Legacy mlfinlab snapshot vendored into the ARBS repository."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib",
+    "networkx",
+    "numpy",
+    "pandas",
+    "POT",
+    "scikit-learn",
+    "scipy",
+    "statsmodels",
+]
+
+[project.optional-dependencies]
+dash = [
+    "dash",
+    "dash-bootstrap-components",
+    "dash-core-components",
+    "dash-cytoscape",
+    "dash-html-components",
+    "jupyter-dash",
+]
+numba = ["numba"]
+
+[tool.setuptools.packages.find]
+include = ["mlfinlab*"]
+
+[tool.setuptools.package-data]
+"mlfinlab.datasets" = ["data/*.csv"]

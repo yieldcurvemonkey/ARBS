@@ -7,7 +7,7 @@ import QuantLib as ql
 if __name__ == "__main__":
     curve_mdp = IRSwapsMDP(source="GSQUANT_RL")
 
-    dates = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), start=datetime.date(2019, 6, 2), end=datetime.date(2026, 3, 20), to_date=True)
+    dates = ql_cal_date_range(ql.UnitedStates(ql.UnitedStates.GovernmentBond), start=datetime.date(2026, 3, 20), end=datetime.date(2026, 3, 27), to_date=True)
     errors = []
     for d in dates:
         try:
