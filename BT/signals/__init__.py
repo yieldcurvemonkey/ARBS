@@ -26,6 +26,7 @@ from BT.signals.technical_indicators import (
     rsi_signal,
     bollinger_signal,
     macd_signal,
+    pca_svm_momentum_signal,
 )
 from BT.signals.technical_indicator_backtest import (
     TechnicalIndicatorQueryBacktestResult,
@@ -112,6 +113,7 @@ __all__ = [
     "rsi_signal",
     "bollinger_signal",
     "macd_signal",
+    "pca_svm_momentum_signal",
     "TechnicalIndicatorQueryBacktestResult",
     "TechnicalIndicatorTriggerRequirements",
     "TargetPositionSignalAction",

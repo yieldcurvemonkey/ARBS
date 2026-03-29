@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
@@ -214,6 +214,201 @@ def macd_signal(
         desired_frame=desired,
         was_series=was_series,
     )
+
+
+def pca_svm_momentum_signal(
+    raw_series: pd.Series | pd.DataFrame,
+    *,
+    ewma_short_spans: Sequence[int] = (7, 14, 20),
+    ewma_long_spans: Sequence[int] = (50, 75, 100),
+    n_components: int = 2,
+    svm_c: float = 0.02,
+    svm_gamma: float = 0.1,
+    label_window: int = 10,
+    z_threshold: float = 1.75,
+    train_fraction: float = 0.7,
+    retrain_every: int | None = None,
+) -> TechnicalIndicatorSignalResult:
+    """Return discrete positions from PCA-reduced SVM momentum classification.
+
+    Ported from the Matlab ``pfBBGDailySVM`` pipeline:
+
+    1. EMA minus SMA spreads for short and long windows, plus long-vs-short
+       EMA cross-spreads (``len(short) + len(long) + len(short)*len(long)``
+       features).
+    2. Feature normalization (zero mean, unit variance).
+    3. PCA projection to *n_components* dimensions.
+    4. SVM with RBF kernel on backward-looking momentum z-score labels
+       binned into {-1, 0, +1} via *z_threshold*.
+
+    Uses expanding-window walk-forward training.  The first model is fitted
+    on the initial *train_fraction* of valid observations; subsequent
+    retrains expand the training set every *retrain_every* bars.  When
+    *retrain_every* is ``None`` a single train/test split is used (matching
+    the original Matlab 70/30 split).
+    """
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.svm import SVC
+
+    if n_components <= 0:
+        raise ValueError("n_components must be positive.")
+    if train_fraction <= 0.0 or train_fraction >= 1.0:
+        raise ValueError("train_fraction must be between 0 and 1 exclusive.")
+
+    raw, was_series = _coerce_numeric_input(raw_series)
+
+    desired = _empty_positions_like(raw)
+    pc_frames: dict[str, pd.DataFrame] = {
+        f"pc_{i + 1}": _empty_indicator_like(raw) for i in range(n_components)
+    }
+    zscore_frame = _empty_indicator_like(raw)
+    label_frame = _empty_indicator_like(raw)
+    decision_frame = _empty_indicator_like(raw)
+
+    for column in raw.columns:
+        series = raw[column].dropna()
+        if len(series) < 2:
+            continue
+
+        # 1. Feature generation (Matlab: EMA-SMA spreads + cross spreads)
+        features = _build_momentum_features(series, ewma_short_spans, ewma_long_spans)
+
+        # 2. Backward-looking momentum z-score (Matlab: yZscore)
+        zscore = _backward_momentum_zscore(series, label_window)
+        zscore_frame[column] = zscore
+
+        # 3. Bin z-score into {-1, 0, +1} (Matlab: histc with labelBreaks)
+        labels = pd.Series(np.nan, index=series.index, dtype=float)
+        valid_z = zscore.notna()
+        labels = labels.mask(valid_z & (zscore > z_threshold), 1.0)
+        labels = labels.mask(valid_z & (zscore < -z_threshold), -1.0)
+        labels = labels.mask(valid_z & (zscore.abs() <= z_threshold), 0.0)
+        label_frame[column] = labels
+
+        # 4. Walk-forward PCA-SVM
+        feature_valid = features.notna().all(axis=1) & labels.notna()
+        valid_idx = features.index[feature_valid]
+        if len(valid_idx) < n_components + 1:
+            continue
+
+        n_train = int(len(valid_idx) * train_fraction)
+        if n_train < n_components + 1:
+            continue
+
+        if retrain_every is None:
+            blocks = [(0, n_train, n_train, len(valid_idx))]
+        else:
+            step = max(1, retrain_every)
+            blocks = [
+                (0, pred_start, pred_start, min(pred_start + step, len(valid_idx)))
+                for pred_start in range(n_train, len(valid_idx), step)
+            ]
+
+        for train_start, train_end, pred_start, pred_end in blocks:
+            train_idx = valid_idx[train_start:train_end]
+            pred_idx = valid_idx[pred_start:pred_end]
+            if len(train_idx) < n_components + 1 or len(pred_idx) == 0:
+                continue
+
+            X_train = features.loc[train_idx].values
+            y_train = labels.loc[train_idx].values.astype(int)
+            X_pred = features.loc[pred_idx].values
+
+            unique_labels = set(int(v) for v in y_train)
+            if len(unique_labels) < 2:
+                pred_label = float(y_train[0])
+                desired.loc[pred_idx, column] = pred_label
+                decision_frame.loc[pred_idx, column] = pred_label
+                continue
+
+            # Normalize (Matlab: featureNormalize)
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_pred_scaled = scaler.transform(X_pred)
+
+            # PCA (Matlab: pcaCustom + projectData)
+            k = min(n_components, X_train_scaled.shape[1], len(X_train_scaled))
+            pca = PCA(n_components=k)
+            Z_train = pca.fit_transform(X_train_scaled)
+            Z_pred = pca.transform(X_pred_scaled)
+
+            # SVM with RBF kernel (Matlab: svmTrain + gaussianKernel)
+            clf = SVC(kernel="rbf", C=svm_c, gamma=svm_gamma)
+            clf.fit(Z_train, y_train)
+            predictions = clf.predict(Z_pred)
+            decision = clf.decision_function(Z_pred)
+
+            desired.loc[pred_idx, column] = predictions.astype(float)
+            if decision.ndim == 1:
+                decision_frame.loc[pred_idx, column] = decision.astype(float)
+            else:
+                decision_frame.loc[pred_idx, column] = decision.max(axis=1).astype(float)
+
+            for i in range(k):
+                pc_frames[f"pc_{i + 1}"].loc[pred_idx, column] = Z_pred[:, i]
+
+    components: dict[str, pd.DataFrame] = {
+        "momentum_zscore": zscore_frame,
+        "label": label_frame,
+        "decision_score": decision_frame,
+    }
+    components.update(pc_frames)
+
+    indicator_frame = _build_indicator_frame(
+        was_series=was_series,
+        components=components,
+    )
+    return _finalize_signal_result(
+        raw_input=raw_series,
+        raw_frame=raw,
+        indicator_frame=indicator_frame,
+        desired_frame=desired,
+        was_series=was_series,
+    )
+
+
+def _build_momentum_features(
+    series: pd.Series,
+    ewma_short_spans: Sequence[int],
+    ewma_long_spans: Sequence[int],
+) -> pd.DataFrame:
+    """Build the MACD-style feature grid from the Matlab pfBBGDailySVM pipeline.
+
+    Features:
+    - ``EMA(span) - SMA(span)`` for each short span
+    - ``EMA(span) - SMA(span)`` for each long span
+    - ``EMA(long) - EMA(short)`` for every long/short combination
+    """
+    features: dict[str, pd.Series] = {}
+    ewma_short: dict[int, pd.Series] = {}
+    ewma_long: dict[int, pd.Series] = {}
+
+    for span in ewma_short_spans:
+        ew = series.ewm(span=span, adjust=False).mean()
+        sm = series.rolling(window=span).mean()
+        ewma_short[span] = ew
+        features[f"ema_sma_short_{span}"] = ew - sm
+
+    for span in ewma_long_spans:
+        ew = series.ewm(span=span, adjust=False).mean()
+        sm = series.rolling(window=span).mean()
+        ewma_long[span] = ew
+        features[f"ema_sma_long_{span}"] = ew - sm
+
+    for l_span in ewma_long_spans:
+        for s_span in ewma_short_spans:
+            features[f"cross_{l_span}_{s_span}"] = ewma_long[l_span] - ewma_short[s_span]
+
+    return pd.DataFrame(features, index=series.index)
+
+
+def _backward_momentum_zscore(series: pd.Series, window: int) -> pd.Series:
+    """Backward-looking z-scored momentum (Matlab: ``yMovAvg ./ yMovAvgStd * nOffset``)."""
+    delta = series.diff()
+    mov_avg = delta.rolling(window=window).mean()
+    mov_std = delta.rolling(window=window).std()
+    return mov_avg / mov_std.replace(0.0, np.nan) * window
 
 
 def _coerce_numeric_input(raw_series: pd.Series | pd.DataFrame) -> tuple[pd.DataFrame, bool]:
