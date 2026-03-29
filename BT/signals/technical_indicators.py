@@ -229,6 +229,8 @@ def pca_svm_momentum_signal(
     z_threshold: float = 1.75,
     train_fraction: float = 0.7,
     retrain_every: int | None = None,
+    tod_volatility_adjust: bool = False,
+    tod_volatility_lookback: int | None = None,
 ) -> TechnicalIndicatorSignalResult:
     """Return discrete positions from PCA-reduced SVM momentum classification.
 
@@ -247,6 +249,14 @@ def pca_svm_momentum_signal(
     retrains expand the training set every *retrain_every* bars.  When
     *retrain_every* is ``None`` a single train/test split is used (matching
     the original Matlab 70/30 split).
+
+    When *tod_volatility_adjust* is ``True``, the z-score denominator uses
+    time-of-day adjusted volatility instead of a flat rolling std.  This
+    prevents the z-scores from spiking during low-volatility sessions
+    (e.g. Asian hours) and compressing during high-volatility sessions
+    (e.g. US open).  *tod_volatility_lookback* controls the expanding
+    lookback in calendar days for the time-of-day profile (default: all
+    available history).
     """
     from sklearn.decomposition import PCA
     from sklearn.preprocessing import StandardScaler
@@ -276,7 +286,12 @@ def pca_svm_momentum_signal(
         features = _build_momentum_features(series, ewma_short_spans, ewma_long_spans)
 
         # 2. Backward-looking momentum z-score (Matlab: yZscore)
-        zscore = _backward_momentum_zscore(series, label_window)
+        if tod_volatility_adjust:
+            zscore = _tod_adjusted_momentum_zscore(
+                series, label_window, lookback_days=tod_volatility_lookback
+            )
+        else:
+            zscore = _backward_momentum_zscore(series, label_window)
         zscore_frame[column] = zscore
 
         # 3. Bin z-score into {-1, 0, +1} (Matlab: histc with labelBreaks)
@@ -810,6 +825,44 @@ def _backward_momentum_zscore(series: pd.Series, window: int) -> pd.Series:
     mov_avg = delta.rolling(window=window).mean()
     mov_std = delta.rolling(window=window).std()
     return mov_avg / mov_std.replace(0.0, np.nan) * window
+
+
+def _tod_adjusted_momentum_zscore(
+    series: pd.Series,
+    window: int,
+    lookback_days: int | None = None,
+) -> pd.Series:
+    """Momentum z-score with time-of-day volatility adjustment.
+
+    Instead of a flat rolling std as the z-score denominator, this groups
+    returns by time-of-day (hour:minute) and computes an expanding (or
+    rolling by *lookback_days*) volatility for each bucket.  This prevents
+    spuriously large z-scores during quiet sessions (e.g. Asian hours)
+    and compressed z-scores during volatile sessions (e.g. US open).
+    """
+    delta = series.diff()
+    mov_avg = delta.rolling(window=window).mean()
+
+    # Build time-of-day key (HH:MM string to handle any bar frequency)
+    tod_key = series.index.strftime("%H:%M")
+
+    # Compute per-bar time-of-day volatility using expanding or rolling window
+    tod_std = pd.Series(np.nan, index=series.index, dtype=float)
+
+    for tod in np.unique(tod_key):
+        mask = tod_key == tod
+        tod_deltas = delta[mask]
+
+        if lookback_days is None:
+            # Expanding std over all history for this time-of-day bucket
+            tod_std[mask] = tod_deltas.expanding(min_periods=5).std()
+        else:
+            # Rolling std using lookback_days worth of same-TOD observations
+            tod_std[mask] = tod_deltas.rolling(
+                window=lookback_days, min_periods=min(5, lookback_days)
+            ).std()
+
+    return mov_avg / tod_std.replace(0.0, np.nan) * window
 
 
 def _coerce_numeric_input(raw_series: pd.Series | pd.DataFrame) -> tuple[pd.DataFrame, bool]:
