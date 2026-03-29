@@ -491,6 +491,256 @@ def svr_momentum_signal(
     )
 
 
+def svr_momentum_signal_optimized(
+    raw_series: pd.Series | pd.DataFrame,
+    *,
+    ewma_short_spans: Sequence[int] = (24, 48, 120, 240),
+    ewma_long_spans: Sequence[int] = (360, 1080, 1440),
+    svr_c: float = 400.0,
+    svr_gamma: float = 0.5,
+    svr_epsilon: float = 0.000000025,
+    signal_threshold: float = 0.0,
+    train_fraction: float = 0.7,
+    retrain_every: int | None = None,
+) -> TechnicalIndicatorSignalResult:
+    """Drop-in replacement for :func:`svr_momentum_signal` with performance optimizations.
+
+    Speed-ups over the base version:
+
+    * **RBFSampler + SGDRegressor** — approximates the RBF kernel via
+      random Fourier features (O(n·d) instead of O(n²–n³) libsvm), then
+      fits a linear model with SGD which scales linearly.
+    * **Numba-JIT EWM** — feature computation runs in compiled native code
+      instead of pandas ``.ewm()``.
+    * **Numpy-only walk-forward** — all array indexing, scaling, and
+      intercept insertion use pre-allocated numpy buffers (no ``pd.loc``
+      writes in the inner loop).
+    * **Parallel columns** — multi-column DataFrames are processed
+      concurrently via ``joblib.Parallel``.
+    """
+    import joblib
+    from sklearn.kernel_approximation import RBFSampler
+    from sklearn.linear_model import SGDRegressor
+    from sklearn.preprocessing import MinMaxScaler
+
+    if train_fraction <= 0.0 or train_fraction >= 1.0:
+        raise ValueError("train_fraction must be between 0 and 1 exclusive.")
+
+    raw, was_series = _coerce_numeric_input(raw_series)
+
+    short_spans = np.array(list(ewma_short_spans), dtype=np.int64)
+    long_spans = np.array(list(ewma_long_spans), dtype=np.int64)
+    n_features = len(short_spans) * len(long_spans)
+
+    def _process_column(col_values: np.ndarray, col_notna: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Process a single column entirely in numpy. Returns (desired, predicted_return, target)."""
+        n = len(col_values)
+        desired_out = np.full(n, np.nan, dtype=np.float64)
+        pred_return_out = np.full(n, np.nan, dtype=np.float64)
+
+        # Identify valid (non-NaN) slice
+        valid_mask = col_notna.astype(bool)
+        valid_positions = np.where(valid_mask)[0]
+        if len(valid_positions) < 2:
+            target_out = np.full(n, np.nan, dtype=np.float64)
+            return desired_out, pred_return_out, target_out
+
+        first_valid = valid_positions[0]
+        last_valid = valid_positions[-1]
+        vals = col_values[first_valid : last_valid + 1].copy()
+        m = len(vals)
+
+        # 1. Numba-JIT feature computation
+        feat_matrix = _numba_cross_spread_features(vals, short_spans, long_spans)
+
+        # 2. Continuous target: 1-step-ahead return
+        delta = np.empty(m, dtype=np.float64)
+        delta[0] = np.nan
+        delta[1:] = vals[1:] - vals[:-1]
+        target_local = np.empty(m, dtype=np.float64)
+        target_local[:-1] = delta[1:]
+        target_local[-1] = np.nan
+
+        # Write target back to full-size array
+        target_out = np.full(n, np.nan, dtype=np.float64)
+        target_out[first_valid : last_valid + 1] = target_local
+
+        # 3. Valid mask for training
+        feat_valid = np.all(np.isfinite(feat_matrix), axis=1)
+        target_valid = np.isfinite(target_local)
+        row_valid = feat_valid & target_valid
+        valid_local_idx = np.where(row_valid)[0]
+        if len(valid_local_idx) < 3:
+            return desired_out, pred_return_out, target_out
+
+        n_train = int(len(valid_local_idx) * train_fraction)
+        if n_train < 3:
+            return desired_out, pred_return_out, target_out
+
+        # 4. Build walk-forward blocks
+        if retrain_every is None:
+            blocks = [(0, n_train, n_train, len(valid_local_idx))]
+        else:
+            step = max(1, retrain_every)
+            blocks = [
+                (0, ps, ps, min(ps + step, len(valid_local_idx)))
+                for ps in range(n_train, len(valid_local_idx), step)
+            ]
+
+        # 5. Walk-forward SVR
+        for train_start, train_end, pred_start, pred_end in blocks:
+            t_idx = valid_local_idx[train_start:train_end]
+            p_idx = valid_local_idx[pred_start:pred_end]
+            if len(t_idx) < 3 or len(p_idx) == 0:
+                continue
+
+            X_train_raw = feat_matrix[t_idx]
+            y_train_raw = target_local[t_idx]
+            X_pred_raw = feat_matrix[p_idx]
+
+            # Min/max scale features to [-1, 1]
+            x_scaler = MinMaxScaler(feature_range=(-1, 1))
+            X_train_s = x_scaler.fit_transform(X_train_raw)
+            X_pred_s = x_scaler.transform(X_pred_raw)
+
+            # Min/max scale target
+            y_scaler = MinMaxScaler(feature_range=(-1, 1))
+            y_train_s = y_scaler.fit_transform(y_train_raw.reshape(-1, 1)).ravel()
+
+            # Add intercept column
+            X_train_s = np.column_stack([np.ones(len(X_train_s)), X_train_s])
+            X_pred_s = np.column_stack([np.ones(len(X_pred_s)), X_pred_s])
+
+            # RBFSampler (random Fourier features) + SGDRegressor (O(n·d))
+            n_rff = min(100, X_train_s.shape[1] * 8)
+            rbf_sampler = RBFSampler(gamma=svr_gamma, n_components=n_rff, random_state=0)
+            X_train_rff = rbf_sampler.fit_transform(X_train_s)
+            X_pred_rff = rbf_sampler.transform(X_pred_s)
+
+            sgd = SGDRegressor(
+                loss="epsilon_insensitive",
+                epsilon=svr_epsilon,
+                alpha=1.0 / (svr_c * len(X_train_rff)),
+                max_iter=2000,
+                tol=1e-4,
+                random_state=0,
+            )
+            sgd.fit(X_train_rff, y_train_s)
+            y_pred_s = sgd.predict(X_pred_rff)
+
+            y_pred = y_scaler.inverse_transform(y_pred_s.reshape(-1, 1)).ravel()
+
+            # Map local indices back to full array positions
+            global_p_idx = p_idx + first_valid
+            pred_return_out[global_p_idx] = y_pred
+            desired_out[global_p_idx] = np.where(
+                y_pred > signal_threshold, 1.0,
+                np.where(y_pred < -signal_threshold, -1.0, 0.0),
+            )
+
+        return desired_out, pred_return_out, target_out
+
+    # Parallel column processing
+    col_data = [
+        (raw.iloc[:, i].values, raw.iloc[:, i].notna().values)
+        for i in range(raw.shape[1])
+    ]
+    n_jobs = min(len(col_data), max(1, joblib.cpu_count() or 1))
+    if len(col_data) == 1:
+        results = [_process_column(*col_data[0])]
+    else:
+        results = joblib.Parallel(n_jobs=n_jobs, prefer="threads")(
+            joblib.delayed(_process_column)(vals, mask) for vals, mask in col_data
+        )
+
+    # Assemble output arrays into DataFrames
+    desired_arr = np.column_stack([r[0] for r in results])
+    pred_return_arr = np.column_stack([r[1] for r in results])
+    target_arr = np.column_stack([r[2] for r in results])
+
+    desired = pd.DataFrame(desired_arr, index=raw.index, columns=raw.columns, dtype=float)
+    predicted_return_frame = pd.DataFrame(pred_return_arr, index=raw.index, columns=raw.columns, dtype=float)
+    scaled_target_frame = pd.DataFrame(target_arr, index=raw.index, columns=raw.columns, dtype=float)
+
+    indicator_frame = _build_indicator_frame(
+        was_series=was_series,
+        components={
+            "predicted_return": predicted_return_frame,
+            "scaled_target": scaled_target_frame,
+        },
+    )
+    return _finalize_signal_result(
+        raw_input=raw_series,
+        raw_frame=raw,
+        indicator_frame=indicator_frame,
+        desired_frame=desired,
+        was_series=was_series,
+    )
+
+
+def _numba_cross_spread_features(
+    values: np.ndarray,
+    short_spans: np.ndarray,
+    long_spans: np.ndarray,
+) -> np.ndarray:
+    """Compute cross-spread features using numba-accelerated EWM.
+
+    Returns an ``(n, len(long_spans) * len(short_spans))`` array.
+    """
+    n = len(values)
+    n_short = len(short_spans)
+    n_long = len(long_spans)
+
+    # Compute all EWMs in one pass via numba
+    all_spans = np.concatenate([short_spans, long_spans])
+    ewm_matrix = _numba_ewm_batch(values, all_spans)
+
+    short_ewms = ewm_matrix[:, :n_short]
+    long_ewms = ewm_matrix[:, n_short:]
+
+    # Cross-spreads: long[i] - short[j] for all (i, j)
+    out = np.empty((n, n_long * n_short), dtype=np.float64)
+    col = 0
+    for i in range(n_long):
+        for j in range(n_short):
+            out[:, col] = long_ewms[:, i] - short_ewms[:, j]
+            col += 1
+    return out
+
+
+try:
+    from numba import njit as _njit
+
+    @_njit(cache=True)
+    def _numba_ewm_batch(values: np.ndarray, spans: np.ndarray) -> np.ndarray:  # type: ignore[misc]
+        """Compute EWM (adjust=False) for multiple spans in a single pass.
+
+        Returns ``(len(values), len(spans))`` array.
+        """
+        n = len(values)
+        k = len(spans)
+        out = np.empty((n, k), dtype=np.float64)
+        for j in range(k):
+            alpha = 2.0 / (spans[j] + 1.0)
+            out[0, j] = values[0]
+            for i in range(1, n):
+                out[i, j] = alpha * values[i] + (1.0 - alpha) * out[i - 1, j]
+        return out
+
+except ImportError:
+    def _numba_ewm_batch(values: np.ndarray, spans: np.ndarray) -> np.ndarray:
+        """Pure-numpy fallback when numba is unavailable."""
+        n = len(values)
+        k = len(spans)
+        out = np.empty((n, k), dtype=np.float64)
+        for j in range(k):
+            alpha = 2.0 / (spans[j] + 1.0)
+            out[0, j] = values[0]
+            for i in range(1, n):
+                out[i, j] = alpha * values[i] + (1.0 - alpha) * out[i - 1, j]
+        return out
+
+
 def _build_cross_spread_features(
     series: pd.Series,
     ewma_short_spans: Sequence[int],
