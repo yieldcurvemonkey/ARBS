@@ -162,6 +162,39 @@ def test_build_mdp_request_expands_universe_for_carry_roll(monkeypatch) -> None:
     assert request["cusips"] == ["C2", "C3", "C4", "C5"]
 
 
+def test_load_us_treasury_gc_fixing_pct_prefers_sofr_then_falls_back_to_fedfunds(monkeypatch) -> None:
+    calls: list[tuple[dt.date, str]] = []
+
+    def _fake_fetch_fixings(*, as_of_date, curve_name):
+        calls.append((as_of_date, curve_name))
+        if curve_name == "USD-SOFR-1D":
+            if as_of_date <= dt.date(2017, 12, 31):
+                return {}
+            return {
+                dt.date(2026, 3, 18): 0.049,
+                dt.date(2026, 3, 19): 0.051,
+            }
+        if curve_name == "USD-FEDFUNDS":
+            return {
+                dt.date(2017, 12, 28): 0.0125,
+                dt.date(2017, 12, 29): 0.0130,
+            }
+        raise AssertionError(f"unexpected curve {curve_name}")
+
+    monkeypatch.setattr("MDP.IRSwaps.fixings_cache.fixings_cache._fetch_fixings", _fake_fetch_fixings)
+
+    sofr_first = carry_roll_module.load_us_treasury_gc_fixing_pct(dt.date(2026, 3, 20))
+    fedfunds_fallback = carry_roll_module.load_us_treasury_gc_fixing_pct(dt.date(2018, 1, 2))
+
+    assert sofr_first == pytest.approx(5.1)
+    assert fedfunds_fallback == pytest.approx(1.3)
+    assert calls == [
+        (dt.date(2026, 3, 20), "USD-SOFR-1D"),
+        (dt.date(2018, 1, 2), "USD-SOFR-1D"),
+        (dt.date(2018, 1, 2), "USD-FEDFUNDS"),
+    ]
+
+
 def test_build_mdp_request_filters_to_off_runs_and_requested_legs(monkeypatch) -> None:
     from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 

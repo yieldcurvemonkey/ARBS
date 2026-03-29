@@ -1,4 +1,5 @@
 import datetime
+import logging
 import uuid
 import threading
 import time
@@ -13,6 +14,7 @@ import pytz
 import pytest
 
 from Caching.computed_timeseries_store import ComputedTimeseriesStore
+from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base.BaseQuery import BaseQuery
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
@@ -38,6 +40,7 @@ from Query.USTFutures._USTFutureGenericPricable import _USTFutureGenericPricable
 from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
 from definitions.USTFutureOptions import decode_strike_token
 from TB.STIRFutureOptionsTB import STIRFutureOptionsTB
+from TB.barchart_irs_bulk import bucket_timestamps_by_trading_date
 from TB.STIRFuturesTB import STIRFuturesTB
 from TB.IRSwapsTB import IRSwapsTB
 from TB.TimeseriesBuilder import TimeseriesBuilder, _safe_col_name
@@ -69,11 +72,12 @@ class _FakeRouter:
         *,
         n_jobs=1,
         ignore_cache=False,
+        ignore_cache_miss=False,
         freq=None,
         timestamps=None,
         _prefetched_ts_rows_by_symbol=None,
     ) -> pd.DataFrame:
-        _ = n_jobs, ignore_cache, freq, timestamps, _prefetched_ts_rows_by_symbol
+        _ = n_jobs, ignore_cache, ignore_cache_miss, freq, timestamps, _prefetched_ts_rows_by_symbol
         self.received_queries.extend(queries)
         dates = pd.bdate_range(start, end).date.tolist()
         if not dates:
@@ -126,6 +130,7 @@ class _ConcurrentFakeRouter(_FakeRouter):
         *,
         n_jobs=1,
         ignore_cache=False,
+        ignore_cache_miss=False,
         freq=None,
         timestamps=None,
     ) -> pd.DataFrame:
@@ -141,6 +146,7 @@ class _ConcurrentFakeRouter(_FakeRouter):
                 queries,
                 n_jobs=n_jobs,
                 ignore_cache=ignore_cache,
+                ignore_cache_miss=ignore_cache_miss,
                 freq=freq,
                 timestamps=timestamps,
             )
@@ -157,8 +163,8 @@ class _PartialFallbackRouter(_FakeRouter):
         self.fallback_value = float(fallback_value)
         self.fallback_requests: List[List[Any]] = []
 
-    def get_timeseries(self, start, end, queries, *, n_jobs=1, ignore_cache=False, freq=None, timestamps=None) -> pd.DataFrame:
-        _ = start, end, n_jobs, ignore_cache, freq
+    def get_timeseries(self, start, end, queries, *, n_jobs=1, ignore_cache=False, ignore_cache_miss=False, freq=None, timestamps=None) -> pd.DataFrame:
+        _ = start, end, n_jobs, ignore_cache, ignore_cache_miss, freq
         self.call_count += 1
         if timestamps:
             points = list(timestamps)
@@ -278,6 +284,7 @@ class _FakeIRSCurveStoreMDP:
         source: str = "BARCHART_STIRF-RL",
         *,
         bulk_results: Optional[Dict[Any, Any]] = None,
+        warm_store_on_bulk: bool = False,
     ):
         self.source = source
         self._store = store
@@ -286,6 +293,7 @@ class _FakeIRSCurveStoreMDP:
         self.bulk_calls = 0
         self.bulk_results = dict(bulk_results or {})
         self.bulk_requests: List[Dict[str, Any]] = []
+        self.warm_store_on_bulk = bool(warm_store_on_bulk)
 
     def _is_barchart_source(self) -> bool:
         return self.source.upper().startswith("BARCHART_STIRF")
@@ -379,11 +387,30 @@ class _FakeIRSCurveStoreMDP:
         self.bulk_calls += 1
         self.bulk_requests.append(dict(request))
         timestamps = list(request.get("timestamps", []) or [])
+        if self.warm_store_on_bulk:
+            existing = list(getattr(self._store, "timestamps", []))
+            for ts in timestamps:
+                if ts not in existing:
+                    existing.append(ts)
+            self._store.timestamps = existing
         return {
             ts: self.bulk_results[ts]
             for ts in timestamps
             if ts in self.bulk_results
         }
+
+
+def _make_barchart_trade_date_timestamps(
+    trade_date: datetime.date,
+    *,
+    count: int,
+) -> List[datetime.datetime]:
+    chi = pytz.timezone("America/Chicago")
+    session_open = chi.localize(datetime.datetime.combine(trade_date - datetime.timedelta(days=1), datetime.time(17, 0)))
+    return [
+        session_open.astimezone(datetime.timezone.utc) + datetime.timedelta(minutes=offset)
+        for offset in range(count)
+    ]
 
 
 class _MockSTIRFuturePricable(_STIRFutureGenericPricable):
@@ -872,6 +899,145 @@ def test_timeseries_builder_normalizes_unified_irs_queries_before_special_routin
     assert all(isinstance(q, IRSwapQuery) for q in irs_router.received_queries)
 
 
+def test_timeseries_builder_prices_multiple_gsquant_tenors_from_bulk_curve_fetch(monkeypatch, tmp_path):
+    import MDP.IRSwaps.IRSwapsMDP as irswaps_mdp_module
+    import TB.IRSwapsTB as irs_tb_module
+
+    rateslib = pytest.importorskip("rateslib")
+
+    d1 = datetime.date(2026, 3, 3)
+    d2 = datetime.date(2026, 3, 4)
+    mdp = IRSwapsMDP(source="GSQUANT-RL")
+    monkeypatch.setattr(mdp, "_supports_curve_store_fast_path", lambda: False)
+    monkeypatch.setattr(mdp, "_supports_curve_store_raw_curve_fast_path", lambda: False)
+    router = IRSwapsTB(mdp, show_tqdm=False, ts_base_dir=str(tmp_path), use_duckdb=False)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+
+    bulk_requests: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "get_gsquant_rl_basic",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("single-date GSQUANT fetch should not be used")),
+    )
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "bulk_get_gsquant_rl_basic",
+        lambda **kwargs: bulk_requests.append(kwargs)
+        or {
+            d1: (f"{d1}-GSQUANT-rl_basic_USD-OIS", '{"curve":"d1"}', "NYC"),
+            d2: (f"{d2}-GSQUANT-rl_basic_USD-OIS", '{"curve":"d2"}', "NYC"),
+        },
+    )
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series([4.10, 4.15], index=pd.to_datetime(["2026-03-01", "2026-03-02"])),
+    )
+    monkeypatch.setattr(rateslib, "from_json", lambda serialized: SimpleNamespace(serialized=serialized))
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (
+            ref_dt,
+            q.col_name(q.curve),
+            {
+                ("5Y", d1): 4.05,
+                ("5Y", d2): 4.06,
+                ("30Y", d1): 4.55,
+                ("30Y", d2): 4.56,
+            }[(str(q.tenor), ref_dt)],
+        ),
+    )
+
+    q5 = UnifiedQuery(
+        structure=UnifiedStructure.IRS_OUTRIGHT,
+        value=UnifiedValue.IRS_RATE,
+        selector={"curve": "USD-OIS", "tenor": "5Y"},
+    )
+    q30 = UnifiedQuery(
+        structure=UnifiedStructure.IRS_OUTRIGHT,
+        value=UnifiedValue.IRS_RATE,
+        selector={"curve": "USD-OIS", "tenor": "30Y"},
+    )
+    expected_5y = IRSwapQuery(curve="USD-OIS", tenor="5Y", value=IRSwapValue.RATE)
+    expected_30y = IRSwapQuery(curve="USD-OIS", tenor="30Y", value=IRSwapValue.RATE)
+
+    out = tb.get_timeseries(
+        start=d1,
+        end=d2,
+        queries=[q5, q30],
+        n_jobs=2,
+        ignore_cache=True,
+    )
+
+    assert bulk_requests == [
+        {
+            "curve_id": "USD-OIS",
+            "bdates": [d1, d2],
+            "force_refresh": True,
+            "max_workers": 2,
+        }
+    ]
+    assert list(out.index) == [d1, d2]
+    assert list(out[expected_5y.col_name()]) == [4.05, 4.06]
+    assert list(out[expected_30y.col_name()]) == [4.55, 4.56]
+
+
+def test_irswaps_tb_skips_known_gsquant_usd_ois_ignore_dates_without_warning(monkeypatch, tmp_path, caplog):
+    import MDP.IRSwaps.IRSwapsMDP as irswaps_mdp_module
+    import TB.IRSwapsTB as irs_tb_module
+
+    rateslib = pytest.importorskip("rateslib")
+
+    ignored_date = datetime.date(2012, 1, 2)
+    valid_date = datetime.date(2012, 1, 3)
+    mdp = IRSwapsMDP(source="GSQUANT-RL")
+    router = IRSwapsTB(mdp, show_tqdm=False, ts_base_dir=str(tmp_path), use_duckdb=False)
+    q = IRSwapQuery(curve="USD-OIS", tenor="5Y", value=IRSwapValue.RATE)
+
+    bulk_requests: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "bulk_get_gsquant_rl_basic",
+        lambda **kwargs: bulk_requests.append(kwargs)
+        or {
+            valid_date: (f"{valid_date}-GSQUANT-rl_basic_USD-OIS", '{"curve":"valid"}', "NYC"),
+        },
+    )
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series([4.10], index=pd.to_datetime(["2011-12-30"])),
+    )
+    monkeypatch.setattr(rateslib, "from_json", lambda serialized: SimpleNamespace(serialized=serialized))
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(q.curve), 4.06),
+    )
+
+    caplog.set_level(logging.WARNING, logger="IRSwapsTB")
+    out = router.get_timeseries(
+        start=ignored_date,
+        end=valid_date,
+        queries=[q],
+        n_jobs=2,
+        ignore_cache=True,
+    )
+
+    assert bulk_requests == [
+        {
+            "curve_id": "USD-OIS",
+            "bdates": [valid_date],
+            "force_refresh": True,
+            "max_workers": 2,
+        }
+    ]
+    assert list(out.index) == [valid_date]
+    assert list(out[q.col_name()]) == [4.06]
+    assert "No curve returned for curve='USD-OIS' on date='2012-01-02'." not in caplog.text
+
+
 def test_base_timeseries_tb_prefers_bulk_mdp_fetch_when_available():
     mdp = _BulkAwareSTIRFutureMDP(price=95.25)
     tb = STIRFuturesTB(mdp, show_tqdm=False)
@@ -1348,6 +1514,347 @@ def test_timeseries_builder_curve_store_fast_path_reprices_without_forcing_raw_r
     ]
 
 
+def test_timeseries_builder_curve_store_fast_path_ignore_cache_miss_returns_only_stored_curves(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    ts1 = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2025, 1, 6, 15, 0, tzinfo=datetime.timezone.utc)
+    store = _FakeIRSCurveStore([ts1])
+    mdp = _FakeIRSCurveStoreMDP(store)
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(
+        start=ts1,
+        end=ts2,
+        queries=[q],
+        timestamps=[ts1, ts2],
+        n_jobs=2,
+        ignore_cache_miss=True,
+    )
+
+    assert list(out.index) == [ts1]
+    assert list(out[q.col_name()]) == [0.05]
+    assert mdp.bulk_calls == 0
+    assert router.call_count == 0
+
+
+def test_timeseries_builder_barchart_bulk_planner_activates_for_large_multi_day_intraday_request(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    day1 = _make_barchart_trade_date_timestamps(datetime.date(2025, 1, 7), count=1000)
+    day2 = _make_barchart_trade_date_timestamps(datetime.date(2025, 1, 8), count=1005)
+    timestamps = day1 + day2
+    store = _FakeIRSCurveStore([])
+    mdp = _FakeIRSCurveStoreMDP(store, warm_store_on_bulk=True)
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D-Q12STIRT", tenor="IMM_12xIMM_13", value=IRSwapValue.RATE)
+
+    plan_calls: List[Dict[str, Any]] = []
+    orig_execute = tb._execute_irs_curve_store_plan
+
+    monkeypatch.setattr(
+        tb,
+        "_execute_irs_curve_store_plan",
+        lambda **kwargs: plan_calls.append(
+            {
+                "ignore_cache": kwargs["ignore_cache"],
+                "ignore_cache_miss": kwargs["ignore_cache_miss"],
+                "timestamps": list(kwargs["timestamps"] or []),
+            }
+        ) or orig_execute(**kwargs),
+    )
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(
+        start=timestamps[0],
+        end=timestamps[-1],
+        queries=[q],
+        timestamps=timestamps,
+        n_jobs=2,
+    )
+
+    assert len(out) == len(timestamps)
+    assert len(plan_calls) == 2
+    assert [len(call["timestamps"]) for call in plan_calls] == [len(day1), len(day2)]
+    assert all(call["ignore_cache"] is False for call in plan_calls)
+    assert all(call["ignore_cache_miss"] is True for call in plan_calls)
+    assert len(mdp.bulk_requests) == 2
+    assert all(request.get("auto_prime_bulk") is True for request in mdp.bulk_requests)
+    assert all(request.get("show_tqdm") is False for request in mdp.bulk_requests)
+
+
+def test_timeseries_builder_barchart_bulk_planner_skips_small_multi_day_requests(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    day1 = _make_barchart_trade_date_timestamps(datetime.date(2025, 1, 7), count=999)
+    day2 = _make_barchart_trade_date_timestamps(datetime.date(2025, 1, 8), count=1000)
+    timestamps = day1 + day2
+    bulk_results = {ts: f"mdp::{ts.isoformat()}" for ts in timestamps}
+    mdp = _FakeIRSCurveStoreMDP(_FakeIRSCurveStore([]), bulk_results=bulk_results)
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D-Q12STIRT", tenor="IMM_12xIMM_13", value=IRSwapValue.RATE)
+
+    monkeypatch.setattr(
+        tb,
+        "_execute_barchart_irs_bulk_plan",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("bulk planner should not run for sub-threshold jobs")),
+    )
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(
+        start=timestamps[0],
+        end=timestamps[-1],
+        queries=[q],
+        timestamps=timestamps,
+        n_jobs=2,
+    )
+
+    assert len(out) == len(timestamps)
+    assert mdp.bulk_calls == 1
+
+
+def test_timeseries_builder_barchart_bulk_planner_skips_single_day_requests(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    timestamps = _make_barchart_trade_date_timestamps(datetime.date(2025, 1, 7), count=1000)
+    bulk_results = {ts: f"mdp::{ts.isoformat()}" for ts in timestamps}
+    mdp = _FakeIRSCurveStoreMDP(_FakeIRSCurveStore([]), bulk_results=bulk_results)
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D-Q12STIRT", tenor="IMM_12xIMM_13", value=IRSwapValue.RATE)
+
+    monkeypatch.setattr(
+        tb,
+        "_execute_barchart_irs_bulk_plan",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("bulk planner should not run for single trade-date jobs")),
+    )
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(
+        start=timestamps[0],
+        end=timestamps[-1],
+        queries=[q],
+        timestamps=timestamps,
+        n_jobs=2,
+    )
+
+    assert len(out) == len(timestamps)
+    assert mdp.bulk_calls == 1
+
+
+def test_timeseries_builder_barchart_bulk_planner_fully_cached_bucket_skips_raw_warm(monkeypatch, tmp_path):
+    day1 = _make_barchart_trade_date_timestamps(datetime.date(2025, 1, 7), count=1000)
+    day2 = _make_barchart_trade_date_timestamps(datetime.date(2025, 1, 8), count=1005)
+    timestamps = day1 + day2
+    store = _FakeIRSCurveStore([])
+    mdp = _FakeIRSCurveStoreMDP(store)
+    router = _NoCallRouter(mdp)
+    router._computed_ts_store = ComputedTimeseriesStore(base_dir=tmp_path / "bulk-cached", use_duckdb=False)
+    router._ts_symbol_for_query = lambda curve_name, q: f"IRS::{curve_name}::{q.tenor}::{q.value.name}"
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D-Q12STIRT", tenor="IMM_12xIMM_13", value=IRSwapValue.RATE)
+
+    router._computed_ts_store.append_rows(
+        symbol=router._ts_symbol_for_query(q.curve, q),
+        rows=[(ts, q.col_name(), 4.25) for ts in timestamps],
+    )
+
+    plan_calls: List[Dict[str, Any]] = []
+    orig_execute = tb._execute_irs_curve_store_plan
+    monkeypatch.setattr(
+        tb,
+        "_execute_irs_curve_store_plan",
+        lambda **kwargs: plan_calls.append(dict(kwargs)) or orig_execute(**kwargs),
+    )
+
+    out = tb.get_timeseries(
+        start=timestamps[0],
+        end=timestamps[-1],
+        queries=[q],
+        timestamps=timestamps,
+        n_jobs=2,
+    )
+
+    assert len(out) == len(timestamps)
+    assert mdp.bulk_calls == 0
+    assert plan_calls == []
+    assert store.raw_reads == []
+    assert store.analytics_reads == []
+
+
+def test_timeseries_builder_barchart_bulk_planner_warms_only_missing_raw_after_partial_cache(monkeypatch, tmp_path):
+    import TB.IRSwapsTB as irs_tb_module
+
+    day1 = _make_barchart_trade_date_timestamps(datetime.date(2025, 1, 7), count=1000)
+    day2 = _make_barchart_trade_date_timestamps(datetime.date(2025, 1, 8), count=1000)
+    timestamps = day1 + day2
+    store = _FakeIRSCurveStore(day1[400:700])
+    mdp = _FakeIRSCurveStoreMDP(store, warm_store_on_bulk=True)
+    router = _NoCallRouter(mdp)
+    router._computed_ts_store = ComputedTimeseriesStore(base_dir=tmp_path / "bulk-partial", use_duckdb=False)
+    router._ts_symbol_for_query = lambda curve_name, q: f"IRS::{curve_name}::{q.tenor}::{q.value.name}"
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D-Q12STIRT", tenor="IMM_12xIMM_13", value=IRSwapValue.RATE)
+
+    router._computed_ts_store.append_rows(
+        symbol=router._ts_symbol_for_query(q.curve, q),
+        rows=[(ts, q.col_name(), 4.25) for ts in day1[:400]],
+    )
+
+    plan_calls: List[Dict[str, Any]] = []
+    orig_execute = tb._execute_irs_curve_store_plan
+    monkeypatch.setattr(
+        tb,
+        "_execute_irs_curve_store_plan",
+        lambda **kwargs: plan_calls.append(
+            {"ignore_cache_miss": kwargs["ignore_cache_miss"], "timestamps": list(kwargs["timestamps"] or [])}
+        ) or orig_execute(**kwargs),
+    )
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(
+        start=timestamps[0],
+        end=timestamps[-1],
+        queries=[q],
+        timestamps=timestamps,
+        n_jobs=2,
+    )
+
+    assert len(out) == len(timestamps)
+    assert len(mdp.bulk_requests) == 2
+    assert mdp.bulk_requests[0]["timestamps"] == day1[700:]
+    assert mdp.bulk_requests[1]["timestamps"] == day2
+    assert all(request.get("auto_prime_bulk") is True for request in mdp.bulk_requests)
+    assert len(plan_calls) == 2
+    assert all(call["ignore_cache_miss"] is True for call in plan_calls)
+
+
+def test_timeseries_builder_barchart_bulk_planner_generated_freq_multi_day_request(monkeypatch):
+    import TB.IRSwapsTB as irs_tb_module
+
+    start = datetime.datetime(2025, 1, 6, 23, 0, tzinfo=datetime.timezone.utc)
+    end = datetime.datetime(2025, 1, 8, 15, 39, tzinfo=datetime.timezone.utc)
+    store = _FakeIRSCurveStore([])
+    mdp = _FakeIRSCurveStoreMDP(store, warm_store_on_bulk=True)
+    router = _NoCallRouter(mdp)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D-Q12STIRT", tenor="IMM_12xIMM_13", value=IRSwapValue.RATE)
+    expected_points = tb._prepare_product_intraday_timestamps(
+        product="IRS",
+        mdp=mdp,
+        start=start,
+        end=end,
+        freq="1min",
+        timestamps=None,
+    )
+
+    plan_calls: List[Dict[str, Any]] = []
+    orig_execute = tb._execute_irs_curve_store_plan
+    monkeypatch.setattr(
+        tb,
+        "_execute_irs_curve_store_plan",
+        lambda **kwargs: plan_calls.append({"timestamps": list(kwargs["timestamps"] or [])}) or orig_execute(**kwargs),
+    )
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(
+        start=start,
+        end=end,
+        queries=[q],
+        freq="1min",
+        n_jobs=2,
+    )
+
+    expected_bucket_sizes = [len(bucket) for bucket in bucket_timestamps_by_trading_date(expected_points).values()]
+    assert list(out.index) == expected_points
+    assert len(plan_calls) == 2
+    assert [len(call["timestamps"]) for call in plan_calls] == expected_bucket_sizes
+
+
+def test_timeseries_builder_barchart_bulk_planner_ignore_cache_still_reprices(monkeypatch, tmp_path):
+    import TB.IRSwapsTB as irs_tb_module
+
+    day1 = _make_barchart_trade_date_timestamps(datetime.date(2025, 1, 7), count=1000)
+    day2 = _make_barchart_trade_date_timestamps(datetime.date(2025, 1, 8), count=1000)
+    timestamps = day1 + day2
+    store = _FakeIRSCurveStore(timestamps)
+    mdp = _FakeIRSCurveStoreMDP(store)
+    router = _NoCallRouter(mdp)
+    router._computed_ts_store = ComputedTimeseriesStore(base_dir=tmp_path / "bulk-ignore-cache", use_duckdb=False)
+    router._ts_symbol_for_query = lambda curve_name, q: f"IRS::{curve_name}::{q.tenor}::{q.value.name}"
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D-Q12STIRT", tenor="IMM_12xIMM_13", value=IRSwapValue.RATE)
+
+    router._computed_ts_store.append_rows(
+        symbol=router._ts_symbol_for_query(q.curve, q),
+        rows=[(ts, q.col_name(), 4.25) for ts in timestamps],
+    )
+
+    plan_calls: List[Dict[str, Any]] = []
+    orig_execute = tb._execute_irs_curve_store_plan
+    monkeypatch.setattr(
+        tb,
+        "_execute_irs_curve_store_plan",
+        lambda **kwargs: plan_calls.append(
+            {
+                "ignore_cache": kwargs["ignore_cache"],
+                "ignore_cache_miss": kwargs["ignore_cache_miss"],
+            }
+        ) or orig_execute(**kwargs),
+    )
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.05),
+    )
+
+    out = tb.get_timeseries(
+        start=timestamps[0],
+        end=timestamps[-1],
+        queries=[q],
+        timestamps=timestamps,
+        n_jobs=2,
+        ignore_cache=True,
+    )
+
+    assert len(out) == len(timestamps)
+    assert float(out.iloc[0][q.col_name()]) == 0.05
+    assert len(plan_calls) == 2
+    assert all(call["ignore_cache"] is True for call in plan_calls)
+    assert all(call["ignore_cache_miss"] is True for call in plan_calls)
+    assert mdp.bulk_calls == 0
+
+
 def test_timeseries_builder_curve_store_fast_path_falls_back_only_for_points_missing_after_bulk_recovery(monkeypatch):
     import TB.IRSwapsTB as irs_tb_module
 
@@ -1750,8 +2257,8 @@ def test_timeseries_builder_get_timeseries_can_prebuild_irs_router_without_duckd
             captured.update(kwargs)
             self.mdp = mdp
 
-        def get_timeseries(self, start, end, queries, *, n_jobs=1, ignore_cache=False, freq=None, timestamps=None):
-            _ = n_jobs, ignore_cache, freq, timestamps
+        def get_timeseries(self, start, end, queries, *, n_jobs=1, ignore_cache=False, ignore_cache_miss=False, freq=None, timestamps=None):
+            _ = n_jobs, ignore_cache, ignore_cache_miss, freq, timestamps
             idx = pd.Index(pd.bdate_range(start, end).date.tolist(), name="Date")
             return pd.DataFrame(
                 {queries[0].col_name(): [4.25] * len(idx)},

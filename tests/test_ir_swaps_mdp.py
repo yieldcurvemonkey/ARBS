@@ -586,6 +586,50 @@ def test_barchart_stirf_bulk_get_data_curve_store_fast_path_reconstructs_only_re
     assert list(store.reconstruct_calls[0]["timestamps"]) == [pd.Timestamp(ts_utc)]
 
 
+def test_barchart_stirf_bulk_get_data_ignore_cache_miss_returns_partial_curve_store_hits(monkeypatch):
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    builder = _FakeBarchartBuilder()
+    chi_tz = pytz.timezone("America/Chicago")
+    ts1_local = chi_tz.localize(dt.datetime(2026, 3, 10, 10, 0))
+    ts2_local = chi_tz.localize(dt.datetime(2026, 3, 10, 11, 0))
+    ts1_utc = ts1_local.astimezone(pytz.UTC).replace(microsecond=0)
+    store = _FakeCurveStore(
+        day_df=pd.DataFrame({"timestamp_utc": [pd.Timestamp(ts1_utc)]}),
+        curves_by_ts={ts1_utc: _FakeBarchartCurveHandle(curve_id="USD-SOFR-1D", timestamp=ts1_local)},
+    )
+
+    def _unexpected_builder_call(*args, **kwargs):
+        raise AssertionError("builder.build_curve should not be called when ignore_cache_miss is enabled")
+
+    def _unexpected_get_curve(*args, **kwargs):
+        raise AssertionError("per-timestamp fallback should not be called when ignore_cache_miss is enabled")
+
+    builder.build_curve = _unexpected_builder_call
+
+    monkeypatch.setattr(mdp, "_get_barchart_stirf_curve_builder", lambda: builder)
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: store)
+    monkeypatch.setattr(mdp, "_get_curve", _unexpected_get_curve)
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+
+    out = mdp.bulk_get_data(
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": [ts1_local, ts2_local],
+            "ignore_cache_miss": True,
+        }
+    )
+
+    assert set(out) == {ts1_local}
+    assert len(store.raw_node_calls) == 1
+    assert store.raw_node_calls[0]["timestamps_utc"] == [ts1_local, ts2_local]
+    assert len(store.reconstruct_calls) == 1
+    assert list(store.reconstruct_calls[0]["timestamps"]) == [pd.Timestamp(ts1_utc)]
+
+
 def test_get_curve_store_uses_curve_store_default_singleton(monkeypatch):
     from Caching.curve_store import CurveStore
 
@@ -789,6 +833,186 @@ def test_promote_eris_curve_store_day_writes_missing_raw_and_analytics(monkeypat
     assert "par_rate_10Y" in analytics_calls[0][2].columns
 
 
+def test_gsquant_bulk_get_data_uses_curve_store_fast_path(monkeypatch):
+    mdp = IRSwapsMDP(source="GSQUANT-RL")
+    d1 = dt.date(2026, 1, 2)
+    d2 = dt.date(2026, 1, 5)
+    ts1 = mdp._to_curve_store_timestamp(d1).astimezone(pytz.UTC)
+    ts2 = mdp._to_curve_store_timestamp(d2).astimezone(pytz.UTC)
+    store = _FakeCurveStore(
+        day_df=pd.DataFrame(
+            {
+                "timestamp_utc": [pd.Timestamp(ts1), pd.Timestamp(ts2)],
+                "trading_date": [d1, d2],
+            }
+        ),
+        curves_by_ts={
+            pd.Timestamp(ts1): object(),
+            pd.Timestamp(ts2): object(),
+        },
+    )
+
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: store)
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "bulk_get_gsquant_rl_basic",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy GSQUANT curve cache should not be used when CurveStore covers all dates")
+        ),
+    )
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+
+    wrap_calls = []
+
+    def _stub_wrap(**kwargs):
+        wrap_calls.append(kwargs["request_timestamp"])
+        return {"timestamp": kwargs["request_timestamp"]}
+
+    monkeypatch.setattr(mdp, "_build_gsquant_rl_curve", _stub_wrap)
+
+    out = mdp.bulk_get_data(
+        {
+            "curve_name": "USD-OIS",
+            "timestamps": [d1, d2],
+        }
+    )
+
+    assert set(out) == {d1, d2}
+    assert len(store.raw_node_calls) == 1
+    assert store.read_calls == []
+    assert len(store.reconstruct_calls) == 1
+    assert wrap_calls == [d1, d2]
+
+
+def test_gsquant_bulk_get_data_ignores_invalid_curve_store_rows_and_falls_back(monkeypatch):
+    rateslib = pytest.importorskip("rateslib")
+
+    mdp = IRSwapsMDP(source="GSQUANT-RL")
+    d1 = dt.date(2026, 3, 3)
+    ts1 = mdp._to_curve_store_timestamp(d1).astimezone(pytz.UTC)
+    store = _FakeCurveStore(
+        day_df=pd.DataFrame(
+            {
+                "timestamp_utc": [pd.Timestamp(ts1)],
+                "trading_date": [d1],
+                "node_dates": [[]],
+                "discount_factors": [[]],
+            }
+        ),
+        curves_by_ts={pd.Timestamp(ts1): object()},
+    )
+
+    bulk_calls = []
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: store)
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "bulk_get_gsquant_rl_basic",
+        lambda **kwargs: bulk_calls.append(kwargs)
+        or {
+            d1: ("curve-cache-id-1", '{"curve":"d1"}', "NYC"),
+        },
+    )
+    monkeypatch.setattr(rateslib, "from_json", lambda _: object())
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series(dtype=float, index=pd.DatetimeIndex([])),
+    )
+    monkeypatch.setattr(
+        mdp,
+        "_build_gsquant_rl_curve",
+        lambda **kwargs: {"timestamp": kwargs["request_timestamp"]},
+    )
+    monkeypatch.setattr(mdp, "_promote_gsquant_curve_store_day", lambda **kwargs: None)
+
+    out = mdp.bulk_get_data(
+        {
+            "curve_name": "USD-OIS",
+            "timestamps": [d1],
+        }
+    )
+
+    assert bulk_calls == [
+        {
+            "curve_id": "USD-OIS",
+            "bdates": [d1],
+            "force_refresh": False,
+            "max_workers": 1,
+        }
+    ]
+    assert out == {d1: {"timestamp": d1}}
+    assert store.reconstruct_calls == []
+
+
+def test_promote_gsquant_curve_store_day_writes_missing_raw_and_analytics(monkeypatch):
+    mdp = IRSwapsMDP(source="GSQUANT-RL")
+    nyc = pytz.timezone("America/New_York")
+
+    class _Curve:
+        def __init__(self, timestamp):
+            self._meta = {"timestamp": timestamp}
+            self._handle = SimpleNamespace(
+                id="USD-OIS",
+                interpolation="log_linear",
+                nodes=SimpleNamespace(
+                    _nodes={
+                        dt.date(2026, 1, 2): 1.0,
+                        dt.date(2027, 1, 2): 0.96,
+                    }
+                ),
+            )
+
+        def meta(self):
+            return self._meta
+
+        def handle(self):
+            return self._handle
+
+        def build_irswap(self, tenor=None, **kwargs):
+            _ = kwargs
+            return tenor
+
+    curve = _Curve(nyc.localize(dt.datetime(2026, 1, 2, 15, 0)))
+    raw_calls = []
+    analytics_calls = []
+
+    class _Store:
+        def has_day(self, curve_name, trading_date):
+            _ = curve_name, trading_date
+            return False
+
+        def has_analytics_day(self, curve_name, trading_date):
+            _ = curve_name, trading_date
+            return False
+
+        def write_day(self, curve_name, trading_date, snapshots):
+            raw_calls.append((curve_name, trading_date, snapshots))
+
+        def write_analytics_day(self, curve_name, trading_date, df):
+            analytics_calls.append((curve_name, trading_date, df))
+
+    monkeypatch.setattr(mdp, "_get_curve_store", lambda: _Store())
+
+    mdp._promote_gsquant_curve_store_day(
+        requested_curve_name="USD-OIS",
+        curve=curve,
+        request_timestamp=dt.date(2026, 1, 2),
+    )
+
+    assert len(raw_calls) == 1
+    assert raw_calls[0][0] == "USD-OIS"
+    assert raw_calls[0][1] == dt.date(2026, 1, 2)
+    assert raw_calls[0][2][0].source_variant == "GSQUANT_RL"
+    assert len(analytics_calls) == 1
+    assert analytics_calls[0][0] == "USD-OIS"
+    assert analytics_calls[0][1] == dt.date(2026, 1, 2)
+    assert "par_rate_10Y" in analytics_calls[0][2].columns
+
+
 def test_eris_bulk_get_data_promotes_curve_store_for_cached_historical_days(monkeypatch):
     rateslib = pytest.importorskip("rateslib")
 
@@ -824,6 +1048,77 @@ def test_eris_bulk_get_data_promotes_curve_store_for_cached_historical_days(monk
     out = mdp.bulk_get_data(
         {
             "curve_name": "USD-SOFR-1D",
+            "timestamps": [d1, d2],
+        }
+    )
+
+    assert set(out) == {d1, d2}
+    assert promote_calls == [d1, d2]
+
+
+def test_gsquant_bulk_get_data_promotes_curve_store_for_cached_historical_days(monkeypatch):
+    rateslib = pytest.importorskip("rateslib")
+
+    mdp = IRSwapsMDP(source="GSQUANT-RL")
+    d1 = dt.date(2026, 1, 2)
+    d2 = dt.date(2026, 1, 5)
+
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "bulk_get_gsquant_rl_basic",
+        lambda **kwargs: {
+            d1: ("curve-cache-id-1", "curve-json-1", "NYC"),
+            d2: ("curve-cache-id-2", "curve-json-2", "NYC"),
+        },
+    )
+    monkeypatch.setattr(rateslib, "from_json", lambda _: object())
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: pd.Series([4.1], index=pd.to_datetime(["2025-12-31"])),
+    )
+
+    class _Curve:
+        def __init__(self, timestamp):
+            self._meta = {"timestamp": timestamp}
+            self._handle = SimpleNamespace(
+                id="USD-OIS",
+                interpolation="log_linear",
+                nodes=SimpleNamespace(
+                    _nodes={
+                        dt.date(2026, 1, 2): 1.0,
+                        dt.date(2027, 1, 2): 0.96,
+                    }
+                ),
+            )
+
+        def meta(self):
+            return self._meta
+
+        def handle(self):
+            return self._handle
+
+        def build_irswap(self, tenor=None, **kwargs):
+            _ = kwargs
+            return tenor
+
+    monkeypatch.setattr(
+        mdp,
+        "_build_gsquant_rl_curve",
+        lambda **kwargs: _Curve(kwargs["request_timestamp"]),
+    )
+    monkeypatch.setattr(mdp, "_load_gsquant_curve_store_history", lambda **kwargs: {})
+
+    promote_calls = []
+    monkeypatch.setattr(
+        mdp,
+        "_promote_gsquant_curve_store_day",
+        lambda **kwargs: promote_calls.append(kwargs["request_timestamp"]),
+    )
+
+    out = mdp.bulk_get_data(
+        {
+            "curve_name": "USD-OIS",
             "timestamps": [d1, d2],
         }
     )
@@ -883,3 +1178,63 @@ def test_gsquant_rl_alias_curves_use_reference_curve_for_fixings_and_conventions
         "modifier": curve_def["BusinessConvention"],
         "calendar": curve_def["Calendar"],
     }
+
+
+def test_gsquant_rl_bulk_get_data_uses_batch_cache_and_shared_fixings(monkeypatch):
+    rateslib = pytest.importorskip("rateslib")
+
+    d0 = dt.date(2026, 1, 19)
+    d1 = dt.date(2026, 3, 3)
+    d2 = dt.date(2026, 3, 4)
+    mdp = IRSwapsMDP(source="GSQUANT-RL")
+
+    bulk_calls = []
+    fixings_calls = []
+    monkeypatch.setattr(mdp, "_supports_curve_store_raw_curve_fast_path", lambda: False)
+
+    monkeypatch.setattr(
+        mdp._rl_curve_cache,
+        "bulk_get_gsquant_rl_basic",
+        lambda **kwargs: bulk_calls.append(kwargs)
+        or {
+            d1: ("curve-cache-id-1", '{"curve":"d1"}', "NYC"),
+            d2: ("curve-cache-id-2", '{"curve":"d2"}', "NYC"),
+        },
+    )
+    monkeypatch.setattr(
+        irswaps_mdp_module,
+        "_fetch_fixings",
+        lambda **kwargs: fixings_calls.append(kwargs)
+        or pd.Series([4.10, 4.15], index=pd.to_datetime(["2026-03-01", "2026-03-02"])),
+    )
+    monkeypatch.setattr(rateslib, "from_json", lambda serialized: SimpleNamespace(serialized=serialized))
+
+    out = mdp.bulk_get_data(
+        {
+            "curve_name": "USD-OIS",
+            "timestamps": [d0, d1, d2],
+            "n_jobs": 3,
+        }
+    )
+
+    assert bulk_calls == [
+        {
+            "curve_id": "USD-OIS",
+            "bdates": [d1, d2],
+            "force_refresh": False,
+            "max_workers": 3,
+        }
+    ]
+    assert fixings_calls == [
+        {
+            "as_of_date": d2,
+            "curve_name": "USD-OIS",
+            "force_refresh": False,
+        }
+    ]
+    assert d0 not in out
+    assert set(out) == {d1, d2}
+    assert out[d1].meta()["id"] == "curve-cache-id-1"
+    assert out[d1].meta()["pricing_location"] == "NYC"
+    assert out[d1].meta()["reference_curve_name"] == "USD-OIS"
+    assert out[d2].meta()["id"] == "curve-cache-id-2"
