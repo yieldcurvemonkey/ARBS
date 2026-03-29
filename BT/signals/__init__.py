@@ -28,6 +28,7 @@ from BT.signals.technical_indicators import (
     macd_signal,
     pca_svm_momentum_signal,
     svr_momentum_signal,
+    svr_momentum_signal_optimized,
 )
 from BT.signals.technical_indicator_backtest import (
     TechnicalIndicatorQueryBacktestResult,
@@ -116,6 +117,7 @@ __all__ = [
     "macd_signal",
     "pca_svm_momentum_signal",
     "svr_momentum_signal",
+    "svr_momentum_signal_optimized",
     "TechnicalIndicatorQueryBacktestResult",
     "TechnicalIndicatorTriggerRequirements",
     "TargetPositionSignalAction",
