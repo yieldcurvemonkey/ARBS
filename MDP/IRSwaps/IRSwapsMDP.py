@@ -30,6 +30,42 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         "store": None,
         "lock": threading.Lock(),
     }
+    _GSQUANT_IGNORED_DATES_BY_CURVE: Dict[str, frozenset[datetime.date]] = {
+        "USD-OIS": frozenset(
+            datetime.date.fromisoformat(date_str)
+            for date_str in (
+                "2012-01-02", "2012-01-16", "2012-02-20", "2012-04-06", "2012-05-28", "2012-07-04", "2012-09-03",
+                "2012-11-22", "2012-12-25",
+                "2013-01-01", "2013-01-21", "2013-02-18", "2013-03-29", "2013-05-27", "2013-07-04", "2013-09-02",
+                "2013-11-28", "2013-12-25",
+                "2014-01-01", "2014-01-20", "2014-02-17", "2014-02-26", "2014-04-18", "2014-05-26", "2014-07-04",
+                "2014-09-01", "2014-11-27", "2014-12-25",
+                "2015-01-01", "2015-01-19", "2015-02-16", "2015-04-03", "2015-05-25", "2015-07-03", "2015-09-07",
+                "2015-11-26", "2015-12-25",
+                "2016-01-01", "2016-01-18", "2016-02-15", "2016-03-25", "2016-05-30", "2016-07-04", "2016-09-05",
+                "2016-11-24", "2016-12-26",
+                "2017-01-02", "2017-01-16", "2017-02-20", "2017-04-14", "2017-05-29", "2017-07-04", "2017-09-04",
+                "2017-11-23", "2017-12-25",
+                "2018-01-01", "2018-01-15", "2018-02-19", "2018-03-30", "2018-05-28", "2018-07-04", "2018-09-03",
+                "2018-11-22", "2018-12-25",
+                "2019-01-01", "2019-01-21", "2019-02-18", "2019-04-19", "2019-05-27", "2019-07-04", "2019-09-02",
+                "2019-11-28", "2019-12-25",
+                "2020-01-01", "2020-01-20", "2020-02-17", "2020-04-10", "2020-05-25", "2020-07-03", "2020-09-07",
+                "2020-11-26", "2020-12-25",
+                "2021-01-01", "2021-01-18", "2021-02-15", "2021-04-02", "2021-05-31", "2021-07-05", "2021-09-06",
+                "2021-11-25", "2021-12-24", "2021-12-31",
+                "2022-01-17", "2022-02-21", "2022-04-15", "2022-05-04", "2022-05-30", "2022-06-20", "2022-07-04",
+                "2022-09-05", "2022-10-10", "2022-11-11", "2022-11-24", "2022-12-26",
+                "2023-01-02", "2023-01-16", "2023-02-20", "2023-04-07", "2023-05-29", "2023-06-19",
+                "2023-07-04", "2023-09-04", "2023-10-09", "2023-11-23", "2023-12-25",
+                "2024-01-01", "2024-01-15", "2024-02-19", "2024-03-29", "2024-05-27", "2024-06-19",
+                "2024-07-04", "2024-09-02", "2024-10-14", "2024-11-11", "2024-11-28", "2024-12-25",
+                "2025-01-01", "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26", "2025-06-19",
+                "2025-07-04", "2025-09-01", "2025-10-13", "2025-11-11", "2025-11-27", "2025-12-25",
+                "2026-01-01", "2026-01-19", "2026-02-16",
+            )
+        )
+    }
 
     def __init__(self, source: str = "CME_NY_EOD_LIVE-ql_basic", force_refresh_fixings: Optional[bool] = False, **kwargs: Any):
         super().__init__(source, **kwargs)
@@ -78,6 +114,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         source = str(self.source).upper()
         if source in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}:
             return "barchart_stirf"
+        if source in {"GSQUANT-RL", "GSQUANT_RL"}:
+            return "gsquant_rl"
         if source in {"ERIS_EOD_LIVE-RL_BASIC", "ERIS_EOD_LIVE_RL_BASIC"}:
             return "eris_eod_rl_basic"
         if source in {"ERIS_EOD_LIVE-RL_BASIC-NOJUMPS", "ERIS_EOD_LIVE_RL_BASIC-NOJUMPS"}:
@@ -87,6 +125,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
     def _supports_curve_store_fast_path(self) -> bool:
         return self._curve_store_source_family() in {
             "barchart_stirf",
+            "gsquant_rl",
             "eris_eod_rl_basic",
             "eris_eod_rl_basic_nojumps",
         }
@@ -94,12 +133,14 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
     def _supports_curve_store_raw_curve_fast_path(self) -> bool:
         return self._curve_store_source_family() in {
             "barchart_stirf",
+            "gsquant_rl",
             "eris_eod_rl_basic",
         }
 
     def _supports_curve_store_analytics_fast_path(self) -> bool:
         return self._curve_store_source_family() in {
             "barchart_stirf",
+            "gsquant_rl",
             "eris_eod_rl_basic",
             "eris_eod_rl_basic_nojumps",
         }
@@ -109,6 +150,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
     def _curve_store_match_on_trading_date(self) -> bool:
         return self._curve_store_source_family() in {
+            "gsquant_rl",
             "eris_eod_rl_basic",
             "eris_eod_rl_basic_nojumps",
         }
@@ -168,6 +210,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         family = self._curve_store_source_family()
         if family == "barchart_stirf":
             return self._to_barchart_stirf_timestamp(timestamp)
+        if family == "gsquant_rl":
+            return self._to_eris_eod_timestamp(timestamp)
         if family in {"eris_eod_rl_basic", "eris_eod_rl_basic_nojumps"}:
             return self._to_eris_eod_timestamp(timestamp)
         raise NotImplementedError(f"CurveStore timestamps not supported for source '{self.source}'")
@@ -201,6 +245,60 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         for ref_date in unique_dates:
             out[ref_date] = full_fixings[full_fixings.index.date < ref_date]
         return out
+
+    @staticmethod
+    def _to_gsquant_eod_date(
+        timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> datetime.date:
+        if timestamp == "live":
+            return datetime.date.today()
+        if isinstance(timestamp, pd.Timestamp):
+            return timestamp.date()
+        if isinstance(timestamp, datetime.datetime):
+            return timestamp.date()
+        if isinstance(timestamp, datetime.date):
+            return timestamp
+        raise TypeError("timestamp must be datetime.date, datetime.datetime, pd.Timestamp, or 'live'")
+
+    def _build_gsquant_rl_curve(
+        self,
+        *,
+        requested_curve_name: str,
+        request_timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+        rl_curve_handle: Any,
+        pricing_location: Optional[str],
+        curve_id: str,
+        fixings_cache: Optional[Dict[datetime.date, pd.Series]] = None,
+    ) -> "_IRSwapGenericCurve":
+        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+        ref_date = self._to_gsquant_eod_date(request_timestamp)
+        reference_curve_name = self._resolve_gsquant_reference_curve_name(requested_curve_name)
+
+        fixings_series = None if fixings_cache is None else fixings_cache.get(ref_date)
+        if fixings_series is None:
+            fixings_series = _fetch_fixings(
+                as_of_date=ref_date,
+                curve_name=reference_curve_name,
+                force_refresh=self.force_refresh_fixings,
+            ).sort_index()
+            fixings_series = fixings_series[fixings_series.index.date < ref_date] * 100.0
+            if fixings_cache is not None:
+                fixings_cache[ref_date] = fixings_series
+
+        return RLIRSwapCurve(
+            rl_curve_id=requested_curve_name,
+            rl_curve_handle=rl_curve_handle,
+            fixings=fixings_series,
+            meta_data={
+                "timestamp": ref_date,
+                "id": curve_id,
+                "pricing_location": pricing_location,
+                "curve_name": requested_curve_name,
+                "requested_curve_name": requested_curve_name,
+                "reference_curve_name": reference_curve_name,
+            },
+        )
 
     def _build_eris_eod_rl_curve(
         self,
@@ -269,6 +367,10 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         if family == "eris_eod_rl_basic_nojumps":
             return "ERIS_RL_BASIC_NOJUMPS"
         return "ERIS_RL_BASIC"
+
+    @staticmethod
+    def _gsquant_curve_store_source_variant() -> str:
+        return "GSQUANT_RL"
 
     def _promote_eris_curve_store_day(
         self,
@@ -361,6 +463,102 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             if not analytics_df.empty:
                 store.write_analytics_day(requested_curve_name, trading_date, analytics_df)
 
+    def _promote_gsquant_curve_store_day(
+        self,
+        *,
+        requested_curve_name: str,
+        curve: Any,
+        request_timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> None:
+        if self._curve_store_source_family() != "gsquant_rl":
+            return
+        if request_timestamp == "live":
+            return
+
+        store = self._get_curve_store()
+        trading_date = (
+            request_timestamp.date()
+            if isinstance(request_timestamp, (datetime.datetime, pd.Timestamp))
+            else request_timestamp
+        )
+        if trading_date is None:
+            return
+
+        has_day = getattr(store, "has_day", None)
+        raw_present = bool(has_day(requested_curve_name, trading_date)) if callable(has_day) else False
+        need_raw = not raw_present or not self._curve_store_day_has_valid_raw_nodes(
+            store=store,
+            curve_name=requested_curve_name,
+            trading_date=trading_date,
+        )
+        has_analytics = getattr(store, "has_analytics_day", None)
+        need_analytics = not bool(has_analytics(requested_curve_name, trading_date)) if callable(has_analytics) else True
+        if not need_raw and not need_analytics:
+            return
+
+        ts_meta = None
+        if hasattr(curve, "meta") and callable(curve.meta):
+            ts_meta = (curve.meta() or {}).get("timestamp")
+        ts_local = self._to_eris_eod_timestamp(ts_meta or request_timestamp)
+        if ts_local == "live":
+            return
+        ts_utc = ts_local.astimezone(pytz.UTC)
+        ts_chi = ts_utc.astimezone(pytz.timezone("America/Chicago"))
+
+        rl_curve_handle = curve.handle() if hasattr(curve, "handle") else None
+        if rl_curve_handle is None:
+            return
+
+        try:
+            rl_curve_handle.timestamp = ts_local
+            rl_curve_handle.timestamp_utc = ts_utc
+        except Exception:
+            pass
+
+        if need_raw:
+            from Caching.curve_store import CurveSnapshot
+
+            raw_nodes: dict = (
+                rl_curve_handle.nodes._nodes
+                if hasattr(rl_curve_handle, "nodes") and hasattr(rl_curve_handle.nodes, "_nodes")
+                else dict(getattr(rl_curve_handle, "nodes", {}) or {})
+            )
+            node_dates_sorted = sorted(raw_nodes.keys())
+            node_dates = [
+                d.date() if hasattr(d, "date") else d
+                for d in node_dates_sorted
+            ]
+            discount_factors = [float(raw_nodes[d]) for d in node_dates_sorted]
+            snapshot = CurveSnapshot(
+                timestamp_utc=ts_utc,
+                timestamp_local=ts_chi,
+                trading_date=trading_date,
+                session_minute=int((ts_chi - ts_chi.replace(hour=6, minute=0, second=0, microsecond=0)).total_seconds() // 60),
+                curve_name=requested_curve_name,
+                cfg_hash="",
+                reference_key=str(getattr(rl_curve_handle, "id", "") or requested_curve_name),
+                interpolation=str(getattr(rl_curve_handle, "interpolation", "log_linear") or "log_linear"),
+                source_variant=self._gsquant_curve_store_source_variant(),
+                node_dates=node_dates,
+                discount_factors=discount_factors,
+            )
+            store.write_day(requested_curve_name, trading_date, [snapshot])
+
+        if need_analytics:
+            from Caching.curve_analytics import build_analytics_frame, compute_analytics_row
+
+            analytics_df = build_analytics_frame(
+                [
+                    compute_analytics_row(
+                        curve,
+                        timestamp_utc=ts_utc,
+                        trading_date=trading_date,
+                    )
+                ]
+            )
+            if not analytics_df.empty:
+                store.write_analytics_day(requested_curve_name, trading_date, analytics_df)
+
     def _wrap_curve_store_curve(
         self,
         *,
@@ -386,6 +584,19 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 requested_curve_name=requested_curve_name,
                 request_timestamp=request_timestamp,
                 rl_curve_handle=rl_curve_handle,
+                fixings_cache=fixings_cache,
+            )
+        if family == "gsquant_rl":
+            ts_meta = getattr(rl_curve_handle, "timestamp", None) or getattr(rl_curve_handle, "timestamp_utc", None)
+            if ts_meta is None:
+                ts_meta = self._to_eris_eod_timestamp(request_timestamp)
+            curve_id = f"{self.source.upper()}-{requested_curve_name}-{ts_meta}"
+            return self._build_gsquant_rl_curve(
+                requested_curve_name=requested_curve_name,
+                request_timestamp=request_timestamp,
+                rl_curve_handle=rl_curve_handle,
+                pricing_location=None,
+                curve_id=curve_id,
                 fixings_cache=fixings_cache,
             )
         raise NotImplementedError(f"CurveStore wrapper not supported for source '{self.source}'")
@@ -416,6 +627,42 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         if requested_workers > 1 or task_count < 64:
             return requested_workers
         return max(2, min(int(task_count), int(os.cpu_count() or 4), 8))
+
+    @staticmethod
+    def _curve_store_row_has_nodes(row: Any) -> bool:
+        node_dates = None
+        discount_factors = None
+        if isinstance(row, dict):
+            node_dates = row.get("node_dates")
+            discount_factors = row.get("discount_factors")
+        else:
+            node_dates = getattr(row, "node_dates", None)
+            discount_factors = getattr(row, "discount_factors", None)
+        try:
+            if node_dates is None or discount_factors is None:
+                return False
+            return len(node_dates) > 0 and len(discount_factors) > 0
+        except Exception:
+            return False
+
+    def _curve_store_day_has_valid_raw_nodes(
+        self,
+        *,
+        store: Any,
+        curve_name: str,
+        trading_date: datetime.date,
+    ) -> bool:
+        raw_df = pd.DataFrame()
+        try:
+            if hasattr(store, "read_raw_day"):
+                raw_df = store.read_raw_day(curve_name, trading_date)
+            elif hasattr(store, "read_raw_nodes"):
+                raw_df = store.read_raw_nodes(curve_name, start=trading_date, end=trading_date)
+        except Exception:
+            return False
+        if raw_df is None or raw_df.empty:
+            return False
+        return any(self._curve_store_row_has_nodes(row) for row in raw_df.to_dict("records"))
 
     def _load_eris_curve_store_history(
         self,
@@ -521,6 +768,113 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
         return out
 
+    def _load_gsquant_curve_store_history(
+        self,
+        *,
+        requested_curve_name: str,
+        request_dates: Iterable[datetime.date],
+        fixings_cache: Optional[Dict[datetime.date, pd.Series]] = None,
+        max_workers: int = 4,
+    ) -> Dict[datetime.date, "_IRSwapGenericCurve"]:
+        unique_dates = sorted({d for d in request_dates if isinstance(d, datetime.date)})
+        if not unique_dates:
+            return {}
+
+        requested_timestamps = [
+            ts
+            for ts in (self._to_eris_eod_timestamp(ref_date) for ref_date in unique_dates)
+            if ts != "live"
+        ]
+        if not requested_timestamps:
+            return {}
+
+        store = self._get_curve_store()
+        raw_df = pd.DataFrame()
+        if hasattr(store, "read_raw_nodes"):
+            raw_df = store.read_raw_nodes(
+                requested_curve_name,
+                start=unique_dates[0],
+                end=unique_dates[-1],
+            )
+
+        if raw_df is None or raw_df.empty or "timestamp_utc" not in raw_df.columns:
+            return {}
+
+        if "node_dates" in raw_df.columns and "discount_factors" in raw_df.columns:
+            raw_df = raw_df.loc[
+                raw_df.apply(self._curve_store_row_has_nodes, axis=1)
+            ].copy()
+            if raw_df.empty:
+                return {}
+
+        requested_dates_set = set(unique_dates)
+        if "trading_date" in raw_df.columns:
+            trading_dates = raw_df["trading_date"].map(
+                lambda value: value.date() if isinstance(value, datetime.datetime) else value
+            )
+            filtered_df = raw_df.loc[trading_dates.isin(requested_dates_set)].copy()
+        else:
+            requested_keys = {
+                key
+                for key in (self._curve_store_timestamp_key(ts) for ts in requested_timestamps)
+                if key is not None
+            }
+            ts_keys = raw_df["timestamp_utc"].map(self._curve_store_timestamp_key)
+            filtered_df = raw_df.loc[ts_keys.isin(requested_keys)].copy()
+        if filtered_df.empty:
+            return {}
+
+        reconstruct_workers = self._resolve_curve_store_history_workers(
+            max_workers,
+            task_count=len(filtered_df),
+        )
+        curves_by_ts = store.reconstruct_curves_batch(
+            filtered_df,
+            cfg=None,
+            max_workers=reconstruct_workers,
+        )
+        curves_by_key = {
+            key: curve
+            for key, curve in (
+                (self._curve_store_timestamp_key(ts_val), curve_val)
+                for ts_val, curve_val in curves_by_ts.items()
+            )
+            if key is not None
+        }
+        trading_date_by_ts_key = {}
+        if "trading_date" in filtered_df.columns:
+            for row in filtered_df.itertuples(index=False):
+                ts_key = self._curve_store_timestamp_key(getattr(row, "timestamp_utc", None))
+                trading_date = getattr(row, "trading_date", None)
+                if isinstance(trading_date, datetime.datetime):
+                    trading_date = trading_date.date()
+                if ts_key is not None and isinstance(trading_date, datetime.date):
+                    trading_date_by_ts_key[ts_key] = trading_date
+
+        out: Dict[datetime.date, _IRSwapGenericCurve] = {}
+        for ref_date in unique_dates:
+            rl_curve_handle = None
+            if trading_date_by_ts_key:
+                for ts_key, curve in curves_by_key.items():
+                    if trading_date_by_ts_key.get(ts_key) == ref_date:
+                        rl_curve_handle = curve
+                        break
+            else:
+                requested_ts_key = self._curve_store_timestamp_key(self._to_eris_eod_timestamp(ref_date))
+                rl_curve_handle = curves_by_key.get(requested_ts_key)
+            if rl_curve_handle is None:
+                continue
+            curve_id = f"{self.source.upper()}-{requested_curve_name}-{ref_date}"
+            out[ref_date] = self._build_gsquant_rl_curve(
+                requested_curve_name=requested_curve_name,
+                request_timestamp=ref_date,
+                rl_curve_handle=rl_curve_handle,
+                pricing_location=None,
+                curve_id=curve_id,
+                fixings_cache=fixings_cache,
+            )
+        return out
+
     @staticmethod
     def _should_suppress_ratelibs_solver_output(line: str) -> bool:
         return "SUCCESS: `conv_tol` reached" in line and "(levenberg_marquardt)" in line
@@ -604,6 +958,46 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
         curve_cfg = GSQUANT_CURVE_MAP.get(curve_name, {}).get("rl_basic", {})
         return str(curve_cfg.get("reference_key") or curve_name)
+
+    @staticmethod
+    def _normalize_gsquant_curve_name(curve_name: str) -> str:
+        return "USD-OIS" if str(curve_name).upper().strip() == "USD-FEDFUNDS" else str(curve_name)
+
+    @staticmethod
+    def _reference_point_date(
+        ref_point: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> Optional[datetime.date]:
+        if ref_point == "live":
+            return None
+        if isinstance(ref_point, pd.Timestamp):
+            return ref_point.date()
+        if isinstance(ref_point, datetime.datetime):
+            return ref_point.date()
+        if isinstance(ref_point, datetime.date):
+            return ref_point
+        return None
+
+    def ignored_reference_dates_for_curve(self, curve_name: str) -> frozenset[datetime.date]:
+        source = str(self.source).upper()
+        if "GSQUANT-RL" not in source and "GSQUANT_RL" not in source:
+            return frozenset()
+        normalized_curve = self._normalize_gsquant_curve_name(curve_name)
+        return self._GSQUANT_IGNORED_DATES_BY_CURVE.get(normalized_curve, frozenset())
+
+    def filter_reference_points_for_curve(
+        self,
+        *,
+        curve_name: str,
+        reference_points: Iterable[Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]]],
+    ) -> List[Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]]]:
+        ignored_dates = self.ignored_reference_dates_for_curve(curve_name)
+        if not ignored_dates:
+            return list(reference_points)
+        return [
+            ref_point
+            for ref_point in reference_points
+            if self._reference_point_date(ref_point) not in ignored_dates
+        ]
 
     def _resolve_barchart_stirf_curve_name(self, requested_curve_name: str, kwargs: Dict[str, Any], builder: Any) -> str:
         cfgs: Dict[str, Dict[str, Any]] = dict(getattr(builder, "_STIRF_CURVE_CONFIGS", {}))
@@ -1405,30 +1799,15 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             from rateslib import from_json
 
-            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
-
-            reference_curve_name = self._resolve_gsquant_reference_curve_name(curve_name)
-
             curve_id, rl_curve_serialized, pricing_location = self._rl_curve_cache.get_gsquant_rl_basic(
                 curve_id=curve_name, as_of=timestamp, force_refresh=kwargs.get("force_refresh", False)
             )
-            rl_curve_handle = from_json(rl_curve_serialized)
-
-            fixings = _fetch_fixings(as_of_date=timestamp, curve_name=reference_curve_name, force_refresh=self.force_refresh_fixings).sort_index()
-            fixings: pd.Series = fixings[fixings.index.date < timestamp] * 100
-
-            return RLIRSwapCurve(
-                rl_curve_id=curve_name,
-                rl_curve_handle=rl_curve_handle,
-                fixings=fixings,
-                meta_data={
-                    "timestamp": timestamp,
-                    "id": curve_id,
-                    "pricing_location": pricing_location,
-                    "curve_name": curve_name,
-                    "requested_curve_name": curve_name,
-                    "reference_curve_name": reference_curve_name,
-                },
+            return self._build_gsquant_rl_curve(
+                requested_curve_name=curve_name,
+                request_timestamp=timestamp,
+                rl_curve_handle=from_json(rl_curve_serialized),
+                pricing_location=pricing_location,
+                curve_id=curve_id,
             )
 
         elif self.source.upper() in ["BARCHART_STIRF-RL", "BARCHART_STIRF_RL"]:
@@ -1467,6 +1846,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         curve_name: str = request.pop("curve_name", None)
         timestamps_in: Iterable[Union[datetime.date, datetime.datetime, Literal["live"]]] = request.pop("timestamps", None)
         ignore_cache = bool(request.pop("ignore_cache", False))
+        ignore_cache_miss = bool(request.pop("ignore_cache_miss", False))
         n_jobs_raw = request.pop("n_jobs", None)
         n_jobs = int(n_jobs_raw) if n_jobs_raw is not None else 1
         n_jobs_requested = n_jobs_raw is not None
@@ -1489,6 +1869,11 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             if key not in seen:
                 seen.add(key)
                 timestamps.append(t)
+
+        timestamps = self.filter_reference_points_for_curve(
+            curve_name=curve_name,
+            reference_points=timestamps,
+        )
 
         if not timestamps:
             raise ValueError("Request 'timestamps' resolved to an empty collection.")
@@ -1607,6 +1992,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                     _logging.getLogger(__name__).debug(
                         "Eris CurveStore Tier 0 fast path failed: %s", _tier0_exc,
                     )
+            if ignore_cache_miss:
+                return out
 
             built_json: Dict[datetime.date, str] = {}
             remaining_past_dates = [d for d in past_dates if d not in out]
@@ -1816,6 +2203,63 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             return out
 
+        elif "GSQUANT-RL" in self.source.upper() or "GSQUANT_RL" in self.source.upper():
+            from rateslib import from_json
+
+            bdates: List[datetime.date] = [self._to_gsquant_eod_date(t) for t in timestamps]
+            fixings_cache = self._build_fixings_cache_for_dates(
+                curve_name=self._resolve_gsquant_reference_curve_name(curve_name),
+                as_of_dates=bdates,
+            )
+
+            if not ignore_cache and self._supports_curve_store_raw_curve_fast_path():
+                try:
+                    out.update(
+                        self._load_gsquant_curve_store_history(
+                            requested_curve_name=curve_name,
+                            request_dates=bdates,
+                            fixings_cache=fixings_cache,
+                            max_workers=max(1, int(n_jobs or 1)),
+                        )
+                    )
+                    if len([d for d in bdates if d in out]) >= len(bdates):
+                        return out
+                except Exception as _tier0_exc:
+                    logging.getLogger(__name__).debug(
+                        "GSQUANT CurveStore Tier 0 fast path failed: %s", _tier0_exc,
+                    )
+            if ignore_cache_miss:
+                return out
+
+            remaining_dates = [d for d in bdates if d not in out]
+            built = self._rl_curve_cache.bulk_get_gsquant_rl_basic(
+                curve_id=curve_name,
+                bdates=remaining_dates,
+                force_refresh=ignore_cache,
+                max_workers=max(1, int(n_jobs or 1)),
+            )
+
+            for ref_date in remaining_dates:
+                payload = built.get(ref_date)
+                if payload is None:
+                    continue
+                curve_id, rl_curve_serialized, pricing_location = payload
+                out[ref_date] = self._build_gsquant_rl_curve(
+                    requested_curve_name=curve_name,
+                    request_timestamp=ref_date,
+                    rl_curve_handle=from_json(rl_curve_serialized),
+                    pricing_location=pricing_location,
+                    curve_id=curve_id,
+                    fixings_cache=fixings_cache,
+                )
+                self._promote_gsquant_curve_store_day(
+                    requested_curve_name=curve_name,
+                    curve=out[ref_date],
+                    request_timestamp=ref_date,
+                )
+
+            return out
+
         elif self.source.upper() in ["BARCHART_STIRF-RL", "BARCHART_STIRF_RL"]:
             local_request = dict(request)
             local_request.setdefault("force_refresh", bool(ignore_cache))
@@ -1893,7 +2337,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                                 if ts in parquet_ts_set
                             )
 
-                            if matched_count >= len(rl_ts_utc):
+                            if matched_count >= len(rl_ts_utc) or ignore_cache_miss:
                                 # All found — reconstruct and return
                                 cfg = builder._STIRF_CURVE_CONFIGS[resolved_curve_name]
                                 parquet_ts_keys = parquet_df["timestamp_utc"].map(
@@ -1951,6 +2395,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
                                 if len(out) >= len(timestamps_by_rl_timestamp):
                                     return out
+                                if ignore_cache_miss:
+                                    return out
                                 # Partial hit — fall through to existing path for misses
                     except Exception as _tier0_exc:
                         import logging as _logging
@@ -1959,6 +2405,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                         )
 
                 # ── Tier 1+2: diskcache + solver fallback ──
+                if ignore_cache_miss:
+                    return out
                 fixings_cache: Dict[tuple[datetime.date, str], pd.Series] = {}
 
                 def _wrap_barchart_curves(curve_handles_by_timestamp: Dict[datetime.datetime, Any]) -> None:
@@ -2077,6 +2525,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 ]
                 if not timestamps:
                     return out
+            elif ignore_cache_miss:
+                return out
 
             for t in tqdm.tqdm(timestamps, desc=f"Building curves for {self.source}"):
                 try:

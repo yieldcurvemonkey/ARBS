@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, DefaultDict, Dict, Iterable, Li
 import pandas as pd
 import numpy as np
 import pytz
-from tqdm.auto import tqdm as _tqdm
+from tqdm import tqdm as _tqdm
 
 from MDP.IRSwapSpreads.IRSwapSpreadsMDP import IRSwapSpreadsMDP
 from MDP.MarketDataProvider import MarketDataProvider
@@ -27,6 +27,11 @@ from Query.IRSwaps.IRSwapValue import IRSwapValue
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.Unified.UnifiedQuery import UnifiedQuery
 from TB.BaseTimeseriesTB import BaseTimeseriesTB
+from TB.barchart_irs_bulk import (
+    bucket_timestamps_by_trading_date,
+    safe_warm_raw_curves,
+    select_missing_curve_store_timestamps,
+)
 from TB.utils import DateLike, build_reference_points
 
 if TYPE_CHECKING:
@@ -41,6 +46,8 @@ if TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
+_BARCHART_IRS_BULK_MIN_TIMESTAMPS = 2000
+_BARCHART_IRS_BULK_CALIBRATION_EXECUTOR = "thread"
 _IRSWAP_ADJUSTED_SPREAD_VALUES = {
     value
     for value in (
@@ -336,6 +343,21 @@ def _is_curve_coverage_complete(
         return True
     expected_coverage = len(reference_points) * int(query_count)
     return expected_coverage == 0 or len(covered) >= expected_coverage
+
+
+def _count_fully_covered_reference_points(
+    *,
+    reference_points: Sequence[DateLike],
+    query_count: int,
+    covered: set[Tuple[DateLike, int]],
+) -> int:
+    if query_count <= 0:
+        return len(reference_points)
+    return sum(
+        1
+        for ref_point in reference_points
+        if all((ref_point, idx) in covered for idx in range(int(query_count)))
+    )
 
 
 @dataclass(frozen=True)
@@ -677,6 +699,7 @@ class TimeseriesBuilder:
         end: DateLike,
         n_jobs: Optional[int],
         ignore_cache: Optional[bool],
+        ignore_cache_miss: Optional[bool],
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
     ) -> pd.DataFrame:
@@ -722,6 +745,8 @@ class TimeseriesBuilder:
                 "freq": route_freq,
                 "timestamps": route_timestamps,
             }
+            if canonical_product == "IRS" and ignore_cache_miss:
+                route_kwargs["ignore_cache_miss"] = True
             if prefetched_rows_by_symbol and canonical_product in {"IRS", "FRB"}:
                 route_kwargs["_prefetched_ts_rows_by_symbol"] = prefetched_rows_by_symbol
             return tb.get_timeseries(  # type: ignore[attr-defined]
@@ -785,7 +810,7 @@ class TimeseriesBuilder:
         )
 
         rows = []
-        for ref_point in _tqdm(reference_points, desc=desc):
+        for ref_point in _tqdm(reference_points, desc=desc, leave=False):
             for q in queries:
                 try:
                     pricer = mdp.get_pricer(IRSwapSpreadsMDP.build_request_from_query(q, ref_point))
@@ -931,6 +956,183 @@ class TimeseriesBuilder:
             for point in _filter_irs_reference_points_for_mdp(reference_points, mdp=mdp)
             if isinstance(point, datetime.datetime)
         ]
+
+    def _prepare_barchart_irs_bulk_buckets(
+        self,
+        *,
+        plan: _ProductTimeseriesPlan,
+        start: DateLike,
+        end: DateLike,
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+    ) -> Optional[Mapping[datetime.date, List[datetime.datetime]]]:
+        if plan.product != "IRS" or plan.strategy != "irs_curve_store" or plan.mdp is None:
+            return None
+        if not _is_barchart_stirf_rl_source(plan.mdp):
+            return None
+        intraday_timestamps = self._prepare_product_intraday_timestamps(
+            product="IRS",
+            mdp=plan.mdp,
+            start=start,
+            end=end,
+            freq=freq,
+            timestamps=timestamps,
+        )
+        if not intraday_timestamps or len(intraday_timestamps) < _BARCHART_IRS_BULK_MIN_TIMESTAMPS:
+            return None
+        day_buckets = bucket_timestamps_by_trading_date(intraday_timestamps)
+        if len(day_buckets) < 2:
+            return None
+        return day_buckets
+
+    def _execute_barchart_irs_bulk_plan(
+        self,
+        *,
+        plan: _ProductTimeseriesPlan,
+        start: DateLike,
+        end: DateLike,
+        n_jobs: Optional[int],
+        ignore_cache: Optional[bool],
+        ignore_cache_miss: Optional[bool],
+        use_irs_vectorized_pricing: bool,
+        day_buckets: Mapping[datetime.date, List[datetime.datetime]],
+    ) -> pd.DataFrame:
+        if plan.mdp is None:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+        from TB.IRSwapsTB import _group_queries_by_curve as _group_irs_queries_by_curve
+
+        mdp = plan.mdp
+        queries = [q for q in plan.queries if isinstance(q, IRSwapQuery)]
+        if not queries:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+
+        grouped_queries = _group_irs_queries_by_curve(queries)
+        generic_tb = self._get_generic_router("IRS", mdp)
+        store = mdp._get_curve_store()
+        builder = mdp._get_curve_store_builder() if hasattr(mdp, "_get_curve_store_builder") else None
+        worker_jobs = max(1, int(n_jobs or 1))
+        bucket_frames: List[pd.DataFrame] = []
+
+        for trading_date, bucket_timestamps in day_buckets.items():
+            if not bucket_timestamps:
+                continue
+            bucket_rows: List[Tuple[DateLike, str, float]] = []
+            bucket_is_fully_cached = not bool(ignore_cache)
+            for requested_curve_name, curve_queries in grouped_queries.items():
+                curve_bucket_points = _filter_irs_curve_store_reference_points(
+                    bucket_timestamps,
+                    requested_curve_name=requested_curve_name,
+                )
+                if not curve_bucket_points:
+                    continue
+
+                covered: set[Tuple[DateLike, int]] = set()
+                if not ignore_cache:
+                    cached_rows, covered, _prefetched_rows = self._read_irs_computed_cache_rows(
+                        router=plan.router,
+                        requested_curve_name=requested_curve_name,
+                        queries=curve_queries,
+                        reference_points=curve_bucket_points,
+                        intraday=True,
+                        allow_partial=True,
+                    )
+                    if _is_curve_coverage_complete(
+                        reference_points=curve_bucket_points,
+                        query_count=len(curve_queries),
+                        covered=covered,
+                    ):
+                        bucket_rows.extend(cached_rows)
+                    else:
+                        bucket_is_fully_cached = False
+                else:
+                    bucket_is_fully_cached = False
+
+                missing_raw_timestamps: List[datetime.datetime] = []
+                warmed_raw_count = 0
+                if not bucket_is_fully_cached:
+                    uncovered_points = [
+                        ref_point
+                        for ref_point in curve_bucket_points
+                        if any((ref_point, idx) not in covered for idx in range(len(curve_queries)))
+                    ]
+                    if uncovered_points and not ignore_cache_miss:
+                        anchor_req = dict(curve_queries[0].build_mdp_request(curve_bucket_points[0]))
+                        anchor_req.pop(str(getattr(curve_queries[0], "mdp_time_key", "timestamp") or "timestamp"), None)
+                        anchor_req.pop("curve_name", None)
+                        resolved_curve_name = mdp._resolve_curve_store_curve_name(
+                            requested_curve_name=requested_curve_name,
+                            kwargs=anchor_req,
+                            builder=builder,
+                        )
+                        missing_raw_timestamps = select_missing_curve_store_timestamps(
+                            store,
+                            curve_name=resolved_curve_name,
+                            timestamps=uncovered_points,
+                        )
+                        warmed_raw_count, _failed_raw = safe_warm_raw_curves(
+                            mdp,
+                            curve_name=requested_curve_name,
+                            timestamps=missing_raw_timestamps,
+                            ignore_cache=False,
+                            n_jobs=worker_jobs,
+                            calibration_executor=_BARCHART_IRS_BULK_CALIBRATION_EXECUTOR,
+                            show_tqdm=False,
+                            auto_prime_bulk=True,
+                            logger=_LOGGER,
+                        )
+                    if _LOGGER.isEnabledFor(logging.DEBUG):
+                        _LOGGER.debug(
+                            "IRS bulk bucket curve=%s trading_date=%s requested_timestamps=%s computed_cache_covered=%s missing_raw_selected=%s warmed_raw=%s",
+                            requested_curve_name,
+                            trading_date,
+                            len(curve_bucket_points),
+                            _count_fully_covered_reference_points(
+                                reference_points=curve_bucket_points,
+                                query_count=len(curve_queries),
+                                covered=covered,
+                            ),
+                            len(missing_raw_timestamps),
+                            warmed_raw_count,
+                        )
+
+            if bucket_is_fully_cached:
+                bucket_df = generic_tb._rows_to_frame(bucket_rows) if bucket_rows else pd.DataFrame()
+            else:
+                bucket_df = self.get_timeseries(
+                    start=bucket_timestamps[0],
+                    end=bucket_timestamps[-1],
+                    queries=list(plan.queries),
+                    n_jobs=n_jobs,
+                    ignore_cache=ignore_cache,
+                    ignore_cache_miss=True,
+                    freq=None,
+                    timestamps=list(bucket_timestamps),
+                    drop_multilevel_cols=True,
+                    routers={"IRS": plan.router} if plan.router is not None else None,
+                    mdps={"IRS": mdp},
+                    use_irs_vectorized_pricing=use_irs_vectorized_pricing,
+                    _disable_barchart_irs_bulk_planner=True,
+                )
+
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    "IRS bulk bucket trading_date=%s requested_timestamps=%s final_rows=%s final_cols=%s fully_cached=%s",
+                    trading_date,
+                    len(bucket_timestamps),
+                    0 if bucket_df is None or bucket_df.empty else int(bucket_df.shape[0]),
+                    0 if bucket_df is None or bucket_df.empty else int(bucket_df.shape[1]),
+                    bucket_is_fully_cached,
+                )
+            if bucket_df is not None and not bucket_df.empty:
+                bucket_frames.append(bucket_df)
+
+        if not bucket_frames:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+        out = pd.concat(bucket_frames, axis=0).sort_index()
+        out = out[~out.index.duplicated(keep="last")]
+        out.index.name = self._date_col
+        return out
 
     def _can_use_irs_curve_store_fast_path(
         self,
@@ -1096,10 +1298,32 @@ class TimeseriesBuilder:
         end: DateLike,
         n_jobs: Optional[int],
         ignore_cache: Optional[bool],
+        ignore_cache_miss: Optional[bool],
+        _disable_barchart_irs_bulk_planner: bool,
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
         use_irs_vectorized_pricing: bool,
     ) -> pd.DataFrame:
+        if not _disable_barchart_irs_bulk_planner:
+            day_buckets = self._prepare_barchart_irs_bulk_buckets(
+                plan=plan,
+                start=start,
+                end=end,
+                freq=freq,
+                timestamps=timestamps,
+            )
+            if day_buckets:
+                return self._execute_barchart_irs_bulk_plan(
+                    plan=plan,
+                    start=start,
+                    end=end,
+                    n_jobs=n_jobs,
+                    ignore_cache=ignore_cache,
+                    ignore_cache_miss=ignore_cache_miss,
+                    use_irs_vectorized_pricing=use_irs_vectorized_pricing,
+                    day_buckets=day_buckets,
+                )
+
         if plan.strategy == "irs_curve_store":
             return self._execute_irs_curve_store_plan(
                 plan=plan,
@@ -1107,6 +1331,7 @@ class TimeseriesBuilder:
                 end=end,
                 n_jobs=n_jobs,
                 ignore_cache=ignore_cache,
+                ignore_cache_miss=ignore_cache_miss,
                 freq=freq,
                 timestamps=timestamps,
                 use_irs_vectorized_pricing=use_irs_vectorized_pricing,
@@ -1121,6 +1346,7 @@ class TimeseriesBuilder:
             end=end,
             n_jobs=n_jobs,
             ignore_cache=ignore_cache,
+            ignore_cache_miss=ignore_cache_miss,
             freq=freq,
             timestamps=timestamps,
         )
@@ -1135,6 +1361,8 @@ class TimeseriesBuilder:
         end: DateLike,
         n_jobs: Optional[int],
         ignore_cache: Optional[bool],
+        ignore_cache_miss: Optional[bool],
+        _disable_barchart_irs_bulk_planner: bool,
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
         use_irs_vectorized_pricing: bool,
@@ -1156,6 +1384,8 @@ class TimeseriesBuilder:
                     end=end,
                     n_jobs=route_jobs,
                     ignore_cache=ignore_cache,
+                    ignore_cache_miss=ignore_cache_miss,
+                    _disable_barchart_irs_bulk_planner=_disable_barchart_irs_bulk_planner,
                     freq=freq,
                     timestamps=timestamps,
                     use_irs_vectorized_pricing=use_irs_vectorized_pricing,
@@ -1172,6 +1402,8 @@ class TimeseriesBuilder:
                         end=end,
                         n_jobs=route_jobs,
                         ignore_cache=ignore_cache,
+                        ignore_cache_miss=ignore_cache_miss,
+                        _disable_barchart_irs_bulk_planner=_disable_barchart_irs_bulk_planner,
                         freq=freq,
                         timestamps=timestamps,
                         use_irs_vectorized_pricing=use_irs_vectorized_pricing,
@@ -1351,6 +1583,7 @@ class TimeseriesBuilder:
                     skip_current_eod=True,
                     fallback_column_name=q.col_name(requested_curve_name),
                     allow_partial=allow_partial,
+                    skip_if_symbol_absent=not intraday and allow_partial,
                 )
             except Exception:
                 q_rows = []
@@ -1942,6 +2175,7 @@ class TimeseriesBuilder:
         end: DateLike,
         n_jobs: Optional[int],
         ignore_cache: Optional[bool],
+        ignore_cache_miss: Optional[bool],
         freq: Optional[str],
         timestamps: Optional[List[datetime.datetime]],
         use_irs_vectorized_pricing: bool,
@@ -1969,7 +2203,7 @@ class TimeseriesBuilder:
         pbar_disable = not getattr(plan.router, "_show_tqdm", True)
 
         def _run_stage(desc: str, total: int, fn):
-            with _tqdm(total=max(1, int(total)), disable=pbar_disable, desc=desc, leave=True) as pbar:
+            with _tqdm(total=max(1, int(total)), disable=pbar_disable, desc=desc, leave=False) as pbar:
                 result = fn()
                 pbar.update(max(1, int(total)))
                 return result
@@ -2032,7 +2266,7 @@ class TimeseriesBuilder:
                     total=len(tasks),
                     disable=pbar_disable,
                     desc=f"PRICING {requested_curve_name} IRSWAPS [{source_desc}, workers={worker_count}]...",
-                    leave=True,
+                    leave=False,
                 ) as pbar:
                     if worker_count > 1 and len(tasks) > 1:
                         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ts-irs-curve-store") as pool:
@@ -2126,20 +2360,25 @@ class TimeseriesBuilder:
                 requested_key_by_ref[ref_point] = ts_key
 
             if not requested_key_by_ref:
-                fallback_df = self._fallback_timeseries_for_missing_points(
-                    product="IRS",
-                    queries=curve_queries,
-                    router=plan.router,
-                    mdp=mdp,
-                    start=start,
-                    end=end,
-                    missing_points=curve_reference_points,
-                    n_jobs=n_jobs,
-                    ignore_cache=ignore_cache,
-                    freq=freq,
-                )
-                if not fallback_df.empty:
-                    curve_frames.append(fallback_df)
+                if ignore_cache_miss:
+                    curve_df = generic_tb._rows_to_frame(rows)
+                    if not curve_df.empty:
+                        curve_frames.append(curve_df)
+                else:
+                    fallback_df = self._fallback_timeseries_for_missing_points(
+                        product="IRS",
+                        queries=curve_queries,
+                        router=plan.router,
+                        mdp=mdp,
+                        start=start,
+                        end=end,
+                        missing_points=curve_reference_points,
+                        n_jobs=n_jobs,
+                        ignore_cache=ignore_cache,
+                        freq=freq,
+                    )
+                    if not fallback_df.empty:
+                        curve_frames.append(fallback_df)
                 continue
 
             analytics_rows: List[Tuple[DateLike, str, float]] = []
@@ -2238,7 +2477,7 @@ class TimeseriesBuilder:
                     total=max(1, raw_curve_total),
                     disable=pbar_disable,
                     desc=f"LOADING {requested_curve_name} raw curves...",
-                    leave=True,
+                    leave=False,
                 ) as pbar:
                     raw_curve_progress = 0
 
@@ -2292,20 +2531,19 @@ class TimeseriesBuilder:
             ]
 
             direct_recovery_curves: Dict[DateLike, Any] = {}
-            if missing_points:
+            if missing_points and not ignore_cache_miss:
                 direct_recovery_started = time.perf_counter()
                 recovered_curve_map: Mapping[Any, Any]
                 try:
-                    recovered_curve_map = mdp.bulk_get_data(
-                        {
-                            "curve_name": requested_curve_name,
-                            "timestamps": sorted(missing_points),
-                            # Reprice requests should bypass computed TS caches,
-                            # but raw-curve recovery should still use CurveStore.
-                            "ignore_cache": False,
-                            "n_jobs": n_jobs,
-                        }
-                    )
+                    recovery_request = {
+                        "curve_name": requested_curve_name,
+                        "timestamps": sorted(missing_points),
+                        # Reprice requests should bypass computed TS caches,
+                        # but raw-curve recovery should still use CurveStore.
+                        "ignore_cache": False,
+                        "n_jobs": n_jobs,
+                    }
+                    recovered_curve_map = mdp.bulk_get_data(recovery_request)
                 except Exception:
                     recovered_curve_map = {}
                     _LOGGER.debug(
@@ -2360,25 +2598,28 @@ class TimeseriesBuilder:
                 for ref_point in curve_reference_points
                 if any((ref_point, idx) not in covered for idx in range(len(curve_queries)))
             ]
-            fallback_started = time.perf_counter()
-            fallback_df = self._fallback_timeseries_for_missing_points(
-                product="IRS",
-                queries=curve_queries,
-                router=plan.router,
-                mdp=mdp,
-                start=start,
-                end=end,
-                missing_points=missing_points,
-                n_jobs=n_jobs,
-                ignore_cache=ignore_cache,
-                freq=freq,
-            )
-            _log_curve_stage(
-                "final router fallback",
-                fallback_started,
-                missing=len(missing_points),
-                fallback_shape=getattr(fallback_df, "shape", None),
-            )
+            if ignore_cache_miss:
+                fallback_df = pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+            else:
+                fallback_started = time.perf_counter()
+                fallback_df = self._fallback_timeseries_for_missing_points(
+                    product="IRS",
+                    queries=curve_queries,
+                    router=plan.router,
+                    mdp=mdp,
+                    start=start,
+                    end=end,
+                    missing_points=missing_points,
+                    n_jobs=n_jobs,
+                    ignore_cache=ignore_cache,
+                    freq=freq,
+                )
+                _log_curve_stage(
+                    "final router fallback",
+                    fallback_started,
+                    missing=len(missing_points),
+                    fallback_shape=getattr(fallback_df, "shape", None),
+                )
             frame_started = time.perf_counter()
             direct_df = generic_tb._rows_to_frame(rows)
             curve_df = direct_df.combine_first(fallback_df) if not fallback_df.empty else direct_df
@@ -2416,6 +2657,7 @@ class TimeseriesBuilder:
         *,
         n_jobs: Optional[int] = 1,
         ignore_cache: Optional[bool] = False,
+        ignore_cache_miss: Optional[bool] = False,
         freq: Optional[str] = None,
         timestamps: Optional[List[datetime.datetime]] = None,
         drop_multilevel_cols: Optional[bool] = True,
@@ -2424,6 +2666,7 @@ class TimeseriesBuilder:
         use_irs_vectorized_pricing: bool = False,
         use_duckdb: Optional[bool] = None,
         duckdb_path: Optional[str] = None,
+        _disable_barchart_irs_bulk_planner: bool = False,
     ) -> pd.DataFrame:
         assert start <= end, "must have end > start"
         flat = _flatten_base_queries(queries)
@@ -2470,6 +2713,8 @@ class TimeseriesBuilder:
             end=end,
             n_jobs=n_jobs,
             ignore_cache=ignore_cache,
+            ignore_cache_miss=ignore_cache_miss,
+            _disable_barchart_irs_bulk_planner=_disable_barchart_irs_bulk_planner,
             freq=freq,
             timestamps=timestamps,
             use_irs_vectorized_pricing=use_irs_vectorized_pricing,
@@ -2587,14 +2832,19 @@ class TimeseriesBuilder:
                     component_timestamps = irs_intraday_timestamps if irs_intraday_timestamps is not None else timestamps
 
                     def _fetch_component_frame(router: Any, component_queries: List[BaseQuery]) -> pd.DataFrame:
+                        route_kwargs: Dict[str, Any] = {
+                            "n_jobs": n_jobs,
+                            "ignore_cache": ignore_cache,
+                            "freq": component_freq,
+                            "timestamps": component_timestamps,
+                        }
+                        if ignore_cache_miss and all(isinstance(query, IRSwapQuery) for query in component_queries):
+                            route_kwargs["ignore_cache_miss"] = True
                         return router.get_timeseries(  # type: ignore[attr-defined]
                             start,
                             end,
                             component_queries,
-                            n_jobs=n_jobs,
-                            ignore_cache=ignore_cache,
-                            freq=component_freq,
-                            timestamps=component_timestamps,
+                            **route_kwargs,
                         )
 
                     def _complete_component_frame(
@@ -2685,7 +2935,7 @@ class TimeseriesBuilder:
 
                 ref_points = pd.bdate_range(start, end).date.tolist()
                 rows = []
-                for d in _tqdm(ref_points, desc="PRICING ASSET SWAPS..."):
+                for d in _tqdm(ref_points, desc="PRICING ASSET SWAPS...", leave=False):
                     for q in request_plan.irswap_asw_queries:
                         try:
                             curve = irs_mdp.get_pricer({"curve_name": q.curve, "timestamp": d})
