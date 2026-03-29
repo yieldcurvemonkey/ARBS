@@ -223,6 +223,89 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             return getattr(active_builder, "_STIRF_CURVE_CONFIGS", {}).get(resolved_curve_name)
         return None
 
+    def _curve_calendar(self, curve_name: str) -> Any:
+        from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
+
+        if curve_name in QUANTLIB_CURVE_DEFINITIONS:
+            return QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"]
+        if "USD" in str(curve_name).upper() and "USD-OIS" in QUANTLIB_CURVE_DEFINITIONS:
+            return QUANTLIB_CURVE_DEFINITIONS["USD-OIS"]["Calendar"]
+        return None
+
+    @staticmethod
+    def _request_calendar_date(
+        timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> datetime.date:
+        if timestamp == "live":
+            return datetime.date.today()
+        if isinstance(timestamp, pd.Timestamp):
+            return timestamp.date()
+        if isinstance(timestamp, datetime.datetime):
+            return timestamp.date()
+        if isinstance(timestamp, datetime.date):
+            return timestamp
+        raise TypeError("timestamp must be datetime.date, datetime.datetime, pd.Timestamp, or 'live'")
+
+    def _requires_strict_eod_calendar_validation(self) -> bool:
+        source = str(self.source).upper()
+        if source in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}:
+            return False
+        if "INTRADAY" in source and "EOD" not in source:
+            return False
+        if source in {"GSQUANT-RL", "GSQUANT_RL"}:
+            return True
+        return "EOD" in source
+
+    def _validate_eod_curve_request_timestamp(
+        self,
+        *,
+        curve_name: str,
+        timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> None:
+        from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
+
+        calendar = self._curve_calendar(curve_name)
+        if calendar is None:
+            return
+
+        request_date = self._request_calendar_date(timestamp)
+        if not calendar.isBusinessDay(datetime_to_ql_date(request_date)):
+            raise ValueError(f"{timestamp} is not a business day in the {calendar}!")
+
+    def _validate_barchart_stirf_request_timestamp(
+        self,
+        *,
+        curve_name: str,
+        timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> None:
+        from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
+
+        calendar = self._curve_calendar(curve_name)
+        if calendar is None:
+            return
+
+        rl_timestamp = self._to_barchart_stirf_timestamp(timestamp)
+        if rl_timestamp == "live":
+            return
+
+        builder = self._get_barchart_stirf_curve_builder()
+        trading_date = builder._trading_date_for_timestamp(rl_timestamp)
+        if not calendar.isBusinessDay(datetime_to_ql_date(trading_date)):
+            raise ValueError(f"{timestamp} maps to non-business trading date {trading_date} in the {calendar}!")
+
+    def _validate_curve_request_timestamp(
+        self,
+        *,
+        curve_name: str,
+        timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+    ) -> None:
+        source = str(self.source).upper()
+        if source in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}:
+            self._validate_barchart_stirf_request_timestamp(curve_name=curve_name, timestamp=timestamp)
+            return
+        if self._requires_strict_eod_calendar_validation():
+            self._validate_eod_curve_request_timestamp(curve_name=curve_name, timestamp=timestamp)
+
     def _build_fixings_cache_for_dates(
         self,
         *,
@@ -671,6 +754,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         request_timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
         builder: Any = None,
         fixings_cache: Optional[Dict[Any, pd.Series]] = None,
+        allow_prior_timestamp: bool = False,
+        max_lookback_days: int = 7,
     ) -> Optional["_IRSwapGenericCurve"]:
         rl_timestamp = self._to_barchart_stirf_timestamp(request_timestamp)
         if rl_timestamp == "live":
@@ -690,47 +775,88 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 timestamps_utc=[rl_timestamp],
             )
 
-        if raw_df is None or raw_df.empty or "timestamp_utc" not in raw_df.columns:
-            return None
-
         requested_key = self._curve_store_timestamp_key(rl_timestamp)
         if requested_key is None:
             return None
 
-        filtered_df = raw_df.loc[
-            raw_df["timestamp_utc"].map(self._curve_store_timestamp_key) == requested_key
-        ].copy()
-        if filtered_df.empty:
-            return None
-
-        if "node_dates" in filtered_df.columns and "discount_factors" in filtered_df.columns:
-            filtered_df = filtered_df.loc[
-                filtered_df.apply(self._curve_store_row_has_nodes, axis=1)
-            ].copy()
-            if filtered_df.empty:
+        def _wrap_single_row(
+            candidate_df: pd.DataFrame,
+            *,
+            target_key: datetime.datetime,
+        ) -> Optional["_IRSwapGenericCurve"]:
+            if candidate_df is None or candidate_df.empty:
                 return None
 
-        curves_by_ts = store.reconstruct_curves_batch(
-            filtered_df,
-            cfg=self._curve_store_cfg(resolved_curve_name, active_builder),
-            max_workers=1,
-        )
-        rl_curve_handle = None
-        for ts_val, curve_val in curves_by_ts.items():
-            if self._curve_store_timestamp_key(ts_val) == requested_key:
-                rl_curve_handle = curve_val
-                break
-        if rl_curve_handle is None:
+            working_df = candidate_df.copy()
+            if "node_dates" in working_df.columns and "discount_factors" in working_df.columns:
+                working_df = working_df.loc[
+                    working_df.apply(self._curve_store_row_has_nodes, axis=1)
+                ].copy()
+                if working_df.empty:
+                    return None
+
+            curves_by_ts = store.reconstruct_curves_batch(
+                working_df,
+                cfg=self._curve_store_cfg(resolved_curve_name, active_builder),
+                max_workers=1,
+            )
+            for ts_val, curve_val in curves_by_ts.items():
+                if self._curve_store_timestamp_key(ts_val) == target_key:
+                    return self._wrap_curve_store_curve(
+                        requested_curve_name=requested_curve_name,
+                        resolved_curve_name=resolved_curve_name,
+                        request_timestamp=request_timestamp,
+                        rl_curve_handle=curve_val,
+                        builder=active_builder,
+                        fixings_cache=fixings_cache,
+                    )
             return None
 
-        return self._wrap_curve_store_curve(
-            requested_curve_name=requested_curve_name,
-            resolved_curve_name=resolved_curve_name,
-            request_timestamp=request_timestamp,
-            rl_curve_handle=rl_curve_handle,
-            builder=active_builder,
-            fixings_cache=fixings_cache,
-        )
+        exact_df = pd.DataFrame()
+        if raw_df is not None and not raw_df.empty and "timestamp_utc" in raw_df.columns:
+            exact_df = raw_df.loc[
+                raw_df["timestamp_utc"].map(self._curve_store_timestamp_key) == requested_key
+            ].copy()
+            exact_curve = _wrap_single_row(exact_df, target_key=requested_key)
+            if exact_curve is not None:
+                return exact_curve
+
+        if not allow_prior_timestamp:
+            return None
+
+        def _read_raw_day(curve_store: Any, curve_name: str, trading_date: datetime.date) -> pd.DataFrame:
+            if hasattr(curve_store, "read_raw_day"):
+                return curve_store.read_raw_day(curve_name, trading_date)
+            if hasattr(curve_store, "read_raw_nodes"):
+                return curve_store.read_raw_nodes(curve_name, start=trading_date, end=trading_date)
+            return pd.DataFrame()
+
+        trading_date = active_builder._trading_date_for_timestamp(rl_timestamp)
+        for day_offset in range(0, max(1, int(max_lookback_days))):
+            search_date = trading_date - datetime.timedelta(days=day_offset)
+            day_df = _read_raw_day(store, resolved_curve_name, search_date)
+            if day_df is None or day_df.empty or "timestamp_utc" not in day_df.columns:
+                continue
+
+            day_ts_keys = day_df["timestamp_utc"].map(self._curve_store_timestamp_key)
+            eligible_mask = day_ts_keys.notna()
+            if day_offset == 0:
+                eligible_mask &= day_ts_keys <= requested_key
+            eligible_df = day_df.loc[eligible_mask].copy()
+            if eligible_df.empty:
+                continue
+
+            eligible_df["_curve_store_ts_key"] = eligible_df["timestamp_utc"].map(self._curve_store_timestamp_key)
+            eligible_df = eligible_df.sort_values("_curve_store_ts_key")
+            latest_key = self._curve_store_timestamp_key(eligible_df["_curve_store_ts_key"].iloc[-1])
+            if latest_key is None:
+                continue
+            latest_df = eligible_df.tail(1).drop(columns=["_curve_store_ts_key"])
+            latest_curve = _wrap_single_row(latest_df, target_key=latest_key)
+            if latest_curve is not None:
+                return latest_curve
+
+        return None
 
     def _load_eris_curve_store_history(
         self,
@@ -1244,25 +1370,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
     def _get_curve(
         self, curve_name: str, timestamp: Union[datetime.datetime, datetime.date, Literal["live"]], kwargs: Optional[Dict[str, Any]] = {}
     ) -> Optional[_IRSwapGenericCurve]:
-        from Query.IRSwaps.backends.quantlib.ql_curve_definitions_map import QUANTLIB_CURVE_DEFINITIONS
-        from Query.IRSwaps.backends.quantlib.utils import datetime_to_ql_date
-
-        try:
-            assert not QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"].isHoliday(
-                datetime_to_ql_date(
-                    timestamp if type(timestamp) == datetime.datetime or type(timestamp) == datetime.date or hasattr(timestamp, "date") else datetime.date.today()
-                )
-            ), f"{timestamp} is a holiday in the {QUANTLIB_CURVE_DEFINITIONS[curve_name]["Calendar"]}!"
-        except:
-            if "USD" in curve_name:
-                curve_name_check = "USD-OIS"
-                assert not QUANTLIB_CURVE_DEFINITIONS[curve_name_check]["Calendar"].isHoliday(
-                    datetime_to_ql_date(
-                        timestamp
-                        if type(timestamp) == datetime.datetime or type(timestamp) == datetime.date or hasattr(timestamp, "date")
-                        else datetime.date.today()
-                    )
-                ), f"{timestamp} is a holiday in the {QUANTLIB_CURVE_DEFINITIONS[curve_name_check]["Calendar"]}!"
+        self._validate_curve_request_timestamp(curve_name=curve_name, timestamp=timestamp)
 
         if self.source.upper() in ["CME_NY_EOD_LIVE-QL_BASIC", "CME_NY_EOD_LIVE_QL_BASIC"]:
             import QuantLib as ql
@@ -1884,7 +1992,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 curve_name=self._resolve_gsquant_reference_curve_name(curve_name),
                 as_of_dates=[timestamp],
             )
-            if not kwargs.get("force_refresh", False) and self._supports_curve_store_raw_curve_fast_path():
+            if self._supports_curve_store_raw_curve_fast_path():
                 try:
                     curve_store_hits = self._load_gsquant_curve_store_history(
                         requested_curve_name=curve_name,
@@ -1931,6 +2039,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                         requested_curve_name=curve_name,
                         request_timestamp=timestamp,
                         builder=builder,
+                        allow_prior_timestamp=bool(local_kwargs.get("ignore_cache_miss", False)),
                     )
                     if curve_store_hit is not None:
                         return curve_store_hit
@@ -2333,7 +2442,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 as_of_dates=bdates,
             )
 
-            if not ignore_cache and self._supports_curve_store_raw_curve_fast_path():
+            if self._supports_curve_store_raw_curve_fast_path():
                 try:
                     out.update(
                         self._load_gsquant_curve_store_history(

@@ -23,6 +23,7 @@ def moving_average_crossover_signal(
     *,
     fast_window: int,
     slow_window: int,
+    ema: bool = False,
 ) -> TechnicalIndicatorSignalResult:
     """Return discrete crossover positions from fast and slow simple moving averages."""
     if fast_window <= 0 or slow_window <= 0:
@@ -31,8 +32,13 @@ def moving_average_crossover_signal(
         raise ValueError("fast_window must be smaller than slow_window.")
 
     raw, was_series = _coerce_numeric_input(raw_series)
-    fast_ma = _apply_series_indicator(raw, lambda series: ta.sma(series, length=fast_window))
-    slow_ma = _apply_series_indicator(raw, lambda series: ta.sma(series, length=slow_window))
+    if ema:
+        fast_ma = _apply_series_indicator(raw, lambda series: ta.ema(series, length=fast_window))
+        slow_ma = _apply_series_indicator(raw, lambda series: ta.ema(series, length=slow_window))
+    else:
+        fast_ma = _apply_series_indicator(raw, lambda series: ta.sma(series, length=fast_window))
+        slow_ma = _apply_series_indicator(raw, lambda series: ta.sma(series, length=slow_window))
+
     spread = fast_ma - slow_ma
 
     desired = _empty_positions_like(raw)

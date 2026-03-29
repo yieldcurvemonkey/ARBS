@@ -127,33 +127,25 @@ def test_query_backtest_can_trade_a_different_asset_than_the_signal(mock_mdp):
     assert open_positions[0].meta["signal_key"] == "signal_leg"
 
 
-class _PartialCacheMDP:
-    def __init__(self, covered_timestamps):
+class _RuntimeIgnoreCacheMDP:
+    def __init__(self):
         from tests.conftest import MockMDP
 
         self._base = MockMDP(source="BARCHART_STIRF-RL", base_rate=0.05)
         self.source = "BARCHART_STIRF-RL"
-        self.covered_timestamps = set(covered_timestamps)
-        self.bulk_requests = []
         self.pricer_requests = []
 
     def bulk_get_data(self, request):
-        self.bulk_requests.append(dict(request))
-        return {
-            timestamp: self._base.get_pricer({"curve_name": request["curve_name"], "timestamp": timestamp})
-            for timestamp in request.get("timestamps", [])
-            if timestamp in self.covered_timestamps
-        }
+        raise AssertionError("run_technical_indicator_query_backtest should not call bulk_get_data when ignore_cache_miss=True")
 
     def get_pricer(self, request):
         self.pricer_requests.append(dict(request))
         return self._base.get_pricer(request)
 
 
-def test_query_backtest_ignore_cache_miss_trims_to_cached_timestamps():
+def test_query_backtest_ignore_cache_miss_is_runtime_only_and_skips_bulk_prefetch():
     index = pd.date_range("2026-01-01 09:00", periods=4, freq="h", tz="UTC")
-    covered = [index[1].to_pydatetime(), index[2].to_pydatetime()]
-    mdp = _PartialCacheMDP(covered)
+    mdp = _RuntimeIgnoreCacheMDP()
     signal_result = _build_signal_result(index, [np.nan, 1.0, 1.0, 0.0])
 
     result = run_technical_indicator_query_backtest(
@@ -171,9 +163,7 @@ def test_query_backtest_ignore_cache_miss_trims_to_cached_timestamps():
         ignore_cache_miss=True,
     )
 
-    assert list(result.mtm_history.index) == [pd.Timestamp(index[1]), pd.Timestamp(index[2])]
-    assert mdp.bulk_requests
-    assert mdp.bulk_requests[0]["ignore_cache_miss"] is True
+    assert list(result.mtm_history.index) == [pd.Timestamp(ts) for ts in index]
     assert all(request.get("ignore_cache_miss") is True for request in mdp.pricer_requests)
 
 
