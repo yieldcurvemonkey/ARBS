@@ -43,6 +43,14 @@ from BT.misc import ql_cal_date_range
 from Caching.curve_store import CurveStore
 from Caching.supabase_curve_sync import CURVE_INTRADAY_BLOCKS_TABLE, SupabaseCurveSync
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+from TB.barchart_irs_bulk import (
+    build_bulk_request as _shared_build_bulk_request,
+    curve_store_trading_date as _shared_curve_store_trading_date,
+    normalize_timestamp_utc_minute as _shared_normalize_timestamp_utc_minute,
+    read_existing_curve_store_timestamps as _shared_read_existing_curve_store_timestamps,
+    safe_warm_raw_curves as _shared_safe_warm_raw_curves,
+    select_missing_curve_store_timestamps as _shared_select_missing_curve_store_timestamps,
+)
 
 
 DEFAULT_SOURCE = "BARCHART_STIRF-RL"
@@ -52,14 +60,14 @@ DEFAULT_CME_TIMEZONE = "America/Chicago"
 DEFAULT_SESSION_START = "07:00"
 DEFAULT_SESSION_END = "17:00"
 DEFAULT_FREQ = "1min"
-DEFAULT_N_JOBS = 8
+DEFAULT_N_JOBS = 16
 DEFAULT_CALIBRATION_EXECUTOR = "process"
 DEFAULT_LOG_DIR = REPO_ROOT / "notebooks" / "logs"
 DEFAULT_CME_SESSION_OPEN = dt.time(17, 0)
 DEFAULT_CME_SESSION_CLOSE = dt.time(16, 0)
 DEFAULT_BACKFILL_BATCH_SIZE = 25
 DEFAULT_CURVES = (DEFAULT_CURVE_NAME,)
-DEFAULT_LIVE_SERVICE_N_JOBS = 12
+DEFAULT_LIVE_SERVICE_N_JOBS = 16
 DEFAULT_LAG_MINUTES = 15
 DEFAULT_WINDOW_TEMPLATE = "cme_trading_day"
 DEFAULT_TS_BASE_DIR = "./data/ts"
@@ -462,22 +470,18 @@ def build_bulk_request(
     calibration_max_workers: int | None = None,
     max_tasks_per_child: int | None = None,
 ) -> dict[str, Any]:
-    request: dict[str, Any] = {
-        "curve_name": curve_name,
-        "timestamps": list(timestamps),
-        "n_jobs": int(n_jobs),
-        "show_tqdm": bool(show_tqdm),
-        "ignore_cache": bool(ignore_cache),
-        "calibration_executor": str(calibration_executor),
-        "auto_prime_bulk": bool(auto_prime_bulk),
-    }
-    if stirf_fetch_max_workers is not None:
-        request["stirf_fetch_max_workers"] = int(stirf_fetch_max_workers)
-    if calibration_max_workers is not None:
-        request["calibration_max_workers"] = int(calibration_max_workers)
-    if max_tasks_per_child is not None:
-        request["max_tasks_per_child"] = int(max_tasks_per_child)
-    return request
+    return _shared_build_bulk_request(
+        curve_name=curve_name,
+        timestamps=timestamps,
+        n_jobs=n_jobs,
+        show_tqdm=show_tqdm,
+        ignore_cache=ignore_cache,
+        calibration_executor=calibration_executor,
+        auto_prime_bulk=auto_prime_bulk,
+        stirf_fetch_max_workers=stirf_fetch_max_workers,
+        calibration_max_workers=calibration_max_workers,
+        max_tasks_per_child=max_tasks_per_child,
+    )
 
 
 def _write_perf_event(perf_log_path: Path | None, payload: dict[str, Any]) -> None:
@@ -1160,22 +1164,11 @@ def _floor_to_minute(value: dt.datetime) -> dt.datetime:
 
 
 def _normalize_timestamp_utc_minute(value: Any) -> dt.datetime | None:
-    if hasattr(value, "to_pydatetime"):
-        value = value.to_pydatetime()
-    if not isinstance(value, dt.datetime):
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=dt.timezone.utc)
-    else:
-        value = value.astimezone(dt.timezone.utc)
-    return _floor_to_minute(value)
+    return _shared_normalize_timestamp_utc_minute(value)
 
 
 def _curve_store_trading_date(value: dt.datetime) -> dt.date:
-    value_chi = value.astimezone(ZoneInfo(DEFAULT_CME_TIMEZONE))
-    if value_chi.hour >= DEFAULT_CME_SESSION_OPEN.hour:
-        return value_chi.date() + dt.timedelta(days=1)
-    return value_chi.date()
+    return _shared_curve_store_trading_date(value)
 
 
 def _cap_end_at_now(
@@ -1391,51 +1384,11 @@ def _read_existing_curve_store_timestamps(
     curve_name: str,
     timestamps: Sequence[dt.datetime],
 ) -> set[dt.datetime]:
-    requested_keys = [
-        ts_key
-        for ts_key in (_normalize_timestamp_utc_minute(timestamp) for timestamp in timestamps)
-        if ts_key is not None
-    ]
-    if not requested_keys:
-        return set()
-
-    requested_key_set = set(requested_keys)
-    ordered_trading_dates = sorted({_curve_store_trading_date(ts_key) for ts_key in requested_keys})
-    df = pd.DataFrame()
-
-    if hasattr(store, "read_raw_nodes"):
-        try:
-            df = store.read_raw_nodes(curve_name, timestamps_utc=sorted(requested_key_set))
-        except TypeError:
-            df = store.read_raw_nodes(
-                curve_name,
-                start=ordered_trading_dates[0],
-                end=ordered_trading_dates[-1],
-            )
-        except Exception:
-            df = pd.DataFrame()
-
-    if (df is None or df.empty or "timestamp_utc" not in df.columns) and hasattr(store, "read_raw_day"):
-        day_frames = []
-        for trading_date in ordered_trading_dates:
-            try:
-                day_df = store.read_raw_day(curve_name, trading_date)
-            except Exception:
-                continue
-            if day_df is not None and not day_df.empty:
-                day_frames.append(day_df)
-        if day_frames:
-            df = pd.concat(day_frames, ignore_index=True, sort=False)
-
-    if df is None or df.empty or "timestamp_utc" not in df.columns:
-        return set()
-
-    present_keys = {
-        ts_key
-        for ts_key in (_normalize_timestamp_utc_minute(value) for value in df["timestamp_utc"])
-        if ts_key is not None
-    }
-    return present_keys & requested_key_set
+    return _shared_read_existing_curve_store_timestamps(
+        store,
+        curve_name=curve_name,
+        timestamps=timestamps,
+    )
 
 
 def _select_missing_curve_store_timestamps(
@@ -1444,24 +1397,11 @@ def _select_missing_curve_store_timestamps(
     curve_name: str,
     timestamps: Sequence[dt.datetime],
 ) -> list[dt.datetime]:
-    ordered_keys: list[dt.datetime] = []
-    original_by_key: dict[dt.datetime, dt.datetime] = {}
-    for timestamp in timestamps:
-        ts_key = _normalize_timestamp_utc_minute(timestamp)
-        if ts_key is None or ts_key in original_by_key:
-            continue
-        ordered_keys.append(ts_key)
-        original_by_key[ts_key] = timestamp
-
-    if not ordered_keys:
-        return []
-
-    present_keys = _read_existing_curve_store_timestamps(
+    return _shared_select_missing_curve_store_timestamps(
         store,
         curve_name=curve_name,
-        timestamps=[original_by_key[key] for key in ordered_keys],
+        timestamps=timestamps,
     )
-    return [original_by_key[key] for key in ordered_keys if key not in present_keys]
 
 
 def _resolve_incremental_timestamp_range(
@@ -1573,48 +1513,19 @@ def _safe_warm_raw_curves(
     calibration_max_workers: int | None = None,
     logger: logging.Logger | None = None,
 ) -> tuple[int, list[dt.datetime]]:
-    timestamp_list = list(timestamps)
-    if not timestamp_list:
-        return 0, []
-
-    def _run(batch: Sequence[dt.datetime], *, depth: int = 0) -> tuple[int, list[dt.datetime]]:
-        batch_list = list(batch)
-        request = build_bulk_request(
-            curve_name=curve_name,
-            timestamps=batch_list,
-            n_jobs=n_jobs,
-            show_tqdm=show_tqdm,
-            ignore_cache=ignore_cache,
-            calibration_executor=calibration_executor,
-            auto_prime_bulk=auto_prime_bulk,
-            stirf_fetch_max_workers=stirf_fetch_max_workers,
-            calibration_max_workers=calibration_max_workers,
-        )
-        try:
-            return len(mdp.bulk_get_data(request)), []
-        except Exception as exc:
-            if len(batch_list) == 1:
-                if logger is not None:
-                    logger.warning(
-                        "RAW %s failed for timestamp=%s (%s)",
-                        curve_name,
-                        batch_list[0].isoformat(),
-                        exc,
-                    )
-                return 0, batch_list
-            if depth == 0 and logger is not None:
-                logger.warning(
-                    "RAW %s failed for %s timestamps (%s); retrying in smaller batches.",
-                    curve_name,
-                    len(batch_list),
-                    exc,
-                )
-            midpoint = max(1, len(batch_list) // 2)
-            left_count, left_failed = _run(batch_list[:midpoint], depth=depth + 1)
-            right_count, right_failed = _run(batch_list[midpoint:], depth=depth + 1)
-            return left_count + right_count, left_failed + right_failed
-
-    return _run(timestamp_list)
+    return _shared_safe_warm_raw_curves(
+        mdp,
+        curve_name=curve_name,
+        timestamps=timestamps,
+        ignore_cache=ignore_cache,
+        n_jobs=n_jobs,
+        calibration_executor=calibration_executor,
+        show_tqdm=show_tqdm,
+        auto_prime_bulk=auto_prime_bulk,
+        stirf_fetch_max_workers=stirf_fetch_max_workers,
+        calibration_max_workers=calibration_max_workers,
+        logger=logger,
+    )
 
 
 def _safe_warm_timeseries(
