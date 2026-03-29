@@ -22,6 +22,8 @@ class QueryPortfolio:
         self.positions: List[ResolvedQueryPosition] = []
         self.orders_log: List[Any] = []
         self.trades_log: List[Any] = []
+        self.unwind_log: List[Any] = []
+        self.closed_positions_log: List[Dict[str, Any]] = []
 
     def add(self, pos: ResolvedQueryPosition) -> None:
         self.positions.append(pos)

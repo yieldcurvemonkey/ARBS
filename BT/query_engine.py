@@ -20,6 +20,43 @@ from Query.Base.query_resolution import resolve_for_request, resolve_query
 RiskFn = Callable[[QueryPortfolio, Callable[[BaseQuery], Any]], Dict[str, float]]
 
 
+class _TimestampHistory(dict):
+    """Dictionary that supports date-based lookups against datetime keys."""
+
+    @staticmethod
+    def _is_plain_date(value: Any) -> bool:
+        return isinstance(value, datetime.date) and not isinstance(value, datetime.datetime)
+
+    def _match_datetime_key(self, key: Any) -> Any:
+        if not self._is_plain_date(key):
+            raise KeyError(key)
+        for existing_key in self.keys():
+            if isinstance(existing_key, datetime.datetime) and existing_key.date() == key:
+                return existing_key
+        raise KeyError(key)
+
+    def __contains__(self, key: object) -> bool:
+        if super().__contains__(key):
+            return True
+        if self._is_plain_date(key):
+            try:
+                self._match_datetime_key(key)
+            except KeyError:
+                return False
+            return True
+        return False
+
+    def __getitem__(self, key: Any) -> Any:
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        return super().__getitem__(self._match_datetime_key(key))
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        if key in self:
+            return self[key]
+        return default
+
+
 # -----------------------------
 # Backtest
 # -----------------------------
@@ -37,9 +74,10 @@ class QueryDrivenBacktest:
     dynamic_triggers: List[Trigger] = field(default_factory=list)
     _cache: Dict[Any, Any] = field(default_factory=dict)
 
-    mtm_history: Dict[datetime.datetime, float] = field(default_factory=dict)
+    mtm_history: Dict[datetime.datetime, float] = field(default_factory=_TimestampHistory)
     realized_pnl: float = 0.0
-    realized_pnl_history: Dict[datetime.datetime, float] = field(default_factory=dict)
+    realized_pnl_history: Dict[datetime.datetime, float] = field(default_factory=_TimestampHistory)
+    position_history: Dict[datetime.datetime, List[ResolvedQueryPosition]] = field(default_factory=dict)
 
     _now: Optional[datetime.datetime] = None
 
@@ -151,6 +189,29 @@ class QueryDrivenBacktest:
     def _cashflow_window_end_for_unwind(self, now: datetime.datetime) -> datetime.datetime:
         return now
 
+    @staticmethod
+    def _snapshot_position(pos: ResolvedQueryPosition) -> ResolvedQueryPosition:
+        return ResolvedQueryPosition(
+            package=list(pos.package),
+            weights=list(pos.weights),
+            opened=pos.opened,
+            source_query=pos.source_query,
+            meta=dict(pos.meta or {}),
+        )
+
+    def _holding_period_steps(self, opened: datetime.datetime, closed: datetime.datetime) -> int:
+        states = self._ensure_time_grid_cache()
+        index_map = self._cache.get(("time_grid_index_map",))
+        if index_map is None:
+            index_map = {state: idx for idx, state in enumerate(states)}
+            self._cache[("time_grid_index_map",)] = index_map
+
+        start_idx = index_map.get(opened)
+        end_idx = index_map.get(closed)
+        if start_idx is None or end_idx is None:
+            return max(0, len([state for state in states if opened <= state <= closed]) - 1)
+        return max(0, int(end_idx) - int(start_idx))
+
     # -------- risk API used by triggers --------
     def get_strategy_risk(self, name: str) -> float:
         now = self._now
@@ -175,21 +236,41 @@ class QueryDrivenBacktest:
 
     # -------- unwinds (realize P&L) --------
     def _handle_unwind(self, order: UnwindOrder, now: datetime.datetime) -> None:
+        self.portfolio.unwind_log.append(order)
         to_close = self.portfolio.pop_matching(order.selector)
         if not to_close:
             self.realized_pnl_history[now] = self.realized_pnl
             return
 
         pnl = 0.0
+        fee = float((order.meta or {}).get("fee", 0.0))
+        fee_per_position = fee / len(to_close) if to_close else 0.0
         for pos in to_close:
             h = self._handler_for_position(pos)
             realized, triggers = h.on_unwind(pos, lambda q: self._pricer_for_query(q, now), now, self)
-            pnl += float(realized)
+            gross_realized = float(realized)
+            net_realized = gross_realized - fee_per_position
+            pnl += net_realized
             if triggers:
                 self.inject_triggers(triggers)
+            self.portfolio.closed_positions_log.append(
+                {
+                    "opened_at": pos.opened,
+                    "closed_at": now,
+                    "holding_period_steps": self._holding_period_steps(pos.opened, now),
+                    "holding_period_days": max(0.0, (now - pos.opened).total_seconds() / 86400.0),
+                    "realized_pnl": net_realized,
+                    "gross_realized_pnl": gross_realized,
+                    "fee_allocated": fee_per_position,
+                    "position": self._snapshot_position(pos),
+                    "source_query": pos.source_query,
+                    "position_meta": dict(pos.meta or {}),
+                    "exit_meta": dict(order.meta or {}),
+                    "handler_name": h.name,
+                }
+            )
 
-        fee = float((order.meta or {}).get("fee", 0.0))
-        self.realized_pnl += pnl - fee
+        self.realized_pnl += pnl
         self.realized_pnl_history[now] = self.realized_pnl
 
     # -------- MTM --------
@@ -219,6 +300,7 @@ class QueryDrivenBacktest:
 
         self.portfolio.positions = new_positions
         self.mtm_history[now] = total
+        self.position_history[now] = [self._snapshot_position(pos) for pos in new_positions]
         return total
 
     def _evaluate_triggers(self, now: datetime.datetime) -> List[QueryOrder]:

@@ -332,7 +332,7 @@ def test_curve_financing_accrues_per_leg_even_when_weights_net_to_zero(monkeypat
     assert bt.frb_component_histories["financing_total"][first_step] == pytest.approx(expected)
 
 
-def test_scalar_and_dated_gc_rate_accrue_identically() -> None:
+def test_decimal_percent_and_dated_gc_rate_accrue_identically() -> None:
     d1 = dt.date(2025, 6, 16)
     d2 = dt.date(2025, 6, 17)
     pricer_table = {
@@ -374,13 +374,65 @@ def test_scalar_and_dated_gc_rate_accrue_identically() -> None:
         return bt
 
     scalar_bt = _run_backtest(0.05)
-    dated_bt = _run_backtest(pd.Series([0.05, 0.05], index=[d1, d2]))
+    percent_bt = _run_backtest(5.0)
+    dated_bt = _run_backtest(pd.Series([5.0, 5.0], index=[d1, d2]))
     first_step = list(_two_day_grid(d1, d2))[0]
 
     assert dated_bt.realized_pnl_history[first_step] == pytest.approx(scalar_bt.realized_pnl_history[first_step])
+    assert percent_bt.realized_pnl_history[first_step] == pytest.approx(scalar_bt.realized_pnl_history[first_step])
     assert dated_bt.frb_component_histories["financing_total"][first_step] == pytest.approx(
         scalar_bt.frb_component_histories["financing_total"][first_step]
     )
+    assert percent_bt.frb_component_histories["financing_total"][first_step] == pytest.approx(
+        scalar_bt.frb_component_histories["financing_total"][first_step]
+    )
+
+
+def test_outright_short_financing_uses_reverse_repo_sign_and_specialness_bps() -> None:
+    d1 = dt.date(2025, 6, 16)
+    d2 = dt.date(2025, 6, 17)
+    mdp = _MockBondMDP(
+        {
+            d1: {"BOND1": _MockBondPricer("BOND1", as_of=d1, clean_price=100.0)},
+            d2: {"BOND1": _MockBondPricer("BOND1", as_of=d2, clean_price=100.0)},
+        }
+    )
+    query = FixedRateBondQuery(
+        cusip="BOND1",
+        value=FixedRateBondValue.NPV,
+        structure_kwargs={"notional": -1_000_000},
+        meta={
+            "financing": {
+                "mode": "gc_plus_specialness",
+                "gc_rate": 5.0,
+                "leg_specialness_bps": {"outright": 200.0},
+                "day_count": "ACT/360",
+                "haircut": 0.0,
+            }
+        },
+        tags=("short-outright",),
+    )
+    enter = DateTrigger(
+        DateTriggerRequirements(dates=[d1]),
+        actions=[AddQueryAction(query=query)],
+    )
+    bt = QueryDrivenBacktest(
+        time_grid=_two_day_grid(d1, d2),
+        mdp=mdp,
+        strategy=QueryStrategy(name="FRB short outright financing", triggers=[enter]),
+        show_progress=False,
+    )
+
+    bt.run()
+
+    position = list(bt.portfolio.iter_positions())[0]
+    assert position.meta["financing_legs"][0]["role"] == "outright"
+    assert position.meta["financing_legs"][0]["direction"] == pytest.approx(-1.0)
+
+    expected = +(1_000_000 * (0.05 - 0.02) / 360.0)
+    first_step = list(_two_day_grid(d1, d2))[0]
+    assert bt.realized_pnl_history[first_step] == pytest.approx(expected)
+    assert bt.frb_component_histories["financing_total"][first_step] == pytest.approx(expected)
 
 
 def test_coupon_financing_and_unwind_fee_realize_once_through_unwind() -> None:

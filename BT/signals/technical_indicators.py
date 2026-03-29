@@ -8,6 +8,7 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
+import tqdm
 
 
 @dataclass(frozen=True)
@@ -436,7 +437,7 @@ def svr_momentum_signal(
                 for pred_start in range(n_train, len(valid_idx), step)
             ]
 
-        for train_start, train_end, pred_start, pred_end in blocks:
+        for train_start, train_end, pred_start, pred_end in tqdm.tqdm(blocks, desc="Building SVR momentum signal...", unit="block"):
             train_idx = valid_idx[train_start:train_end]
             pred_idx = valid_idx[pred_start:pred_end]
             if len(train_idx) < 3 or len(pred_idx) == 0:
@@ -588,7 +589,8 @@ def svr_momentum_signal_optimized(
             ]
 
         # 5. Walk-forward SVR
-        for train_start, train_end, pred_start, pred_end in blocks:
+        # for train_start, train_end, pred_start, pred_end in blocks:
+        for train_start, train_end, pred_start, pred_end in tqdm.tqdm(blocks, desc="Building SVR momentum signal...", unit="block"):
             t_idx = valid_local_idx[train_start:train_end]
             p_idx = valid_local_idx[pred_start:pred_end]
             if len(t_idx) < 3 or len(p_idx) == 0:

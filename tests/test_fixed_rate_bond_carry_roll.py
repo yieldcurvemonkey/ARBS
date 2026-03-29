@@ -129,9 +129,9 @@ def _make_pricers(as_of: dt.date) -> dict[str, _CarryRollBondPricer]:
     }
 
 
-def _expected_carry_bps(days: int) -> float:
+def _expected_carry_bps(days: int, *, gc_fixing_pct: float = 5.0) -> float:
     coupon_accrual = 5.0 * (days / 365.0)
-    financing_cost = 100.0 * 0.05 * (days / 360.0)
+    financing_cost = 100.0 * (float(gc_fixing_pct) / 100.0) * (days / 360.0)
     dv01 = 5.0 * 100.0 / 10_000.0
     return (coupon_accrual - financing_cost) / dv01
 
@@ -240,9 +240,36 @@ def test_resolve_package_picks_requested_outright_from_expanded_universe() -> No
     assert risk_weights == [1.0]
 
 
+def test_carry_roll_uses_us_treasury_gc_fixing_proxy(monkeypatch) -> None:
+    carry_roll_module.clear_roll_spline_cache()
+    monkeypatch.setattr(carry_roll_module, "load_us_treasury_gc_fixing_pct", lambda as_of_date: 4.0)
+    monkeypatch.setattr(
+        carry_roll_module,
+        "load_sofr_fixing_pct",
+        lambda as_of_date: (_ for _ in ()).throw(AssertionError("unexpected SOFR-only financing path")),
+    )
+    monkeypatch.setattr(
+        carry_roll_module,
+        "coupon_accrual_price_per_100",
+        lambda *, coupon_pct, start_date, end_date, **kwargs: float(coupon_pct) * ((end_date - start_date).days / 365.0),
+    )
+
+    as_of = dt.date(2026, 3, 20)
+    pricers = _make_pricers(as_of)
+    query = FixedRateBondQuery(cusip="C5", value=FixedRateBondValue.CARRY_BPS_RUNNING, structure_kwargs={"bpv": 10_000})
+
+    resolved = resolve_query(query, timestamp=dt.datetime(2026, 3, 20, 12, 0), pricer_or_curve=pricers)
+    package, risk_weights = resolved.resolve_package(pricer_or_curve=pricers)
+    vmap = resolved.build_value_map(pricer_or_curve=pricers, package=package, risk_weights=risk_weights)
+
+    assert vmap.apply(FixedRateBondValue.CARRY_BPS_RUNNING, horizon="3M") == pytest.approx(
+        _expected_carry_bps(90, gc_fixing_pct=4.0)
+    )
+
+
 def test_carry_roll_value_map_supports_horizons_and_3m_alias(monkeypatch) -> None:
     carry_roll_module.clear_roll_spline_cache()
-    monkeypatch.setattr(carry_roll_module, "load_sofr_fixing_pct", lambda as_of_date: 5.0)
+    monkeypatch.setattr(carry_roll_module, "load_us_treasury_gc_fixing_pct", lambda as_of_date: 5.0)
     monkeypatch.setattr(
         carry_roll_module,
         "coupon_accrual_price_per_100",
@@ -276,7 +303,7 @@ def test_carry_roll_value_map_supports_horizons_and_3m_alias(monkeypatch) -> Non
 
 def test_curve_carry_roll_aggregates_by_risk_weight(monkeypatch) -> None:
     carry_roll_module.clear_roll_spline_cache()
-    monkeypatch.setattr(carry_roll_module, "load_sofr_fixing_pct", lambda as_of_date: 5.0)
+    monkeypatch.setattr(carry_roll_module, "load_us_treasury_gc_fixing_pct", lambda as_of_date: 5.0)
     monkeypatch.setattr(
         carry_roll_module,
         "coupon_accrual_price_per_100",
@@ -303,7 +330,7 @@ def test_curve_carry_roll_aggregates_by_risk_weight(monkeypatch) -> None:
 
 def test_roll_value_expands_universe_when_initial_handle_is_too_narrow(monkeypatch) -> None:
     carry_roll_module.clear_roll_spline_cache()
-    monkeypatch.setattr(carry_roll_module, "load_sofr_fixing_pct", lambda as_of_date: 5.0)
+    monkeypatch.setattr(carry_roll_module, "load_us_treasury_gc_fixing_pct", lambda as_of_date: 5.0)
     monkeypatch.setattr(
         carry_roll_module,
         "coupon_accrual_price_per_100",
@@ -349,7 +376,7 @@ def test_roll_spline_is_cached_by_date(monkeypatch, tmp_path) -> None:
             return make_interp_spline(self._x, self._y, k=k)
 
     monkeypatch.setattr(carry_roll_module, "GeneralCurveInterpolator", _CountingInterpolator)
-    monkeypatch.setattr(carry_roll_module, "load_sofr_fixing_pct", lambda as_of_date: 5.0)
+    monkeypatch.setattr(carry_roll_module, "load_us_treasury_gc_fixing_pct", lambda as_of_date: 5.0)
     monkeypatch.setattr(
         carry_roll_module,
         "coupon_accrual_price_per_100",
@@ -373,7 +400,7 @@ def test_roll_value_reuses_cached_spline_across_different_narrow_bonds(monkeypat
     monkeypatch.setattr(carry_roll_module, "_ROLL_SPLINE_DISK_CACHE", None)
     monkeypatch.setattr(supabase_engine, "SUPABASE_ENABLED", False)
     carry_roll_module.clear_roll_spline_cache(include_persistent=True)
-    monkeypatch.setattr(carry_roll_module, "load_sofr_fixing_pct", lambda as_of_date: 5.0)
+    monkeypatch.setattr(carry_roll_module, "load_us_treasury_gc_fixing_pct", lambda as_of_date: 5.0)
     monkeypatch.setattr(
         carry_roll_module,
         "coupon_accrual_price_per_100",
@@ -425,7 +452,7 @@ def test_roll_spline_persistent_cache_survives_memory_clear(monkeypatch, tmp_pat
     monkeypatch.setattr(carry_roll_module, "_ROLL_SPLINE_DISK_CACHE", None)
     monkeypatch.setattr(supabase_engine, "SUPABASE_ENABLED", False)
     carry_roll_module.clear_roll_spline_cache(include_persistent=True)
-    monkeypatch.setattr(carry_roll_module, "load_sofr_fixing_pct", lambda as_of_date: 5.0)
+    monkeypatch.setattr(carry_roll_module, "load_us_treasury_gc_fixing_pct", lambda as_of_date: 5.0)
     monkeypatch.setattr(
         carry_roll_module,
         "coupon_accrual_price_per_100",

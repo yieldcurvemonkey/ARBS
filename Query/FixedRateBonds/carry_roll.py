@@ -588,9 +588,9 @@ def compute_carry_roll_columns(
 
     out = ensure_numeric_columns(out, ["ttm", "ytm", "coupon", "dirty_price", "mdur"])
 
-    sofr_pct = load_sofr_fixing_pct(as_of_date=as_of_date)
-    if sofr_pct is not None:
-        sofr_dec = float(sofr_pct) / 100.0
+    gc_fixing_pct = load_us_treasury_gc_fixing_pct(as_of_date=as_of_date)
+    if gc_fixing_pct is not None:
+        gc_fixing_dec = float(gc_fixing_pct) / 100.0
         horizon_defaults: dict[str, datetime.date] = {
             label: advance_horizon_date(as_of_date=as_of_date, horizon_tenor=tenor)
             for label, tenor, _ in CARRY_ROLL_HORIZONS
@@ -663,7 +663,7 @@ def compute_carry_roll_columns(
                     carry_by_horizon[label].append(np.nan)
                     continue
 
-                financing_cost = dirty0 * sofr_dec * (horizon_days / 360.0)
+                financing_cost = dirty0 * gc_fixing_dec * (horizon_days / 360.0)
                 carry_price = coupon_accrual - financing_cost
                 carry_bps = carry_price / dv01
                 if not np.isfinite(carry_bps):

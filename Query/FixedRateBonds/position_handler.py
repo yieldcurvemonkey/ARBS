@@ -126,6 +126,13 @@ class FinancedFixedRateBondHandler(PositionHandler):
 
         raise TypeError(f"Unsupported {label} type: {type(value)!r}")
 
+    @staticmethod
+    def _normalize_rate_decimal(rate: float) -> float:
+        rate = float(rate)
+        if abs(rate) >= 1.0:
+            rate /= 100.0
+        return float(rate)
+
     def _repo_rate_for_leg(self, config: dict[str, Any], *, role: str, as_of: datetime.date) -> float:
         gc_rate = self._resolve_time_value(config["gc_rate"], as_of=as_of, label="gc_rate")
 
@@ -134,7 +141,7 @@ class FinancedFixedRateBondHandler(PositionHandler):
         if leg_special is None:
             leg_special = 0.0
         special_bps = self._resolve_time_value(leg_special, as_of=as_of, label=f"leg_specialness_bps[{role}]")
-        return float(gc_rate) - (float(special_bps) / 10_000.0)
+        return self._normalize_rate_decimal(gc_rate) - (float(special_bps) / 10_000.0)
 
     @staticmethod
     def _year_frac(start: datetime.datetime, end: datetime.datetime, *, day_count: str) -> float:
