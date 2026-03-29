@@ -58,6 +58,11 @@ class Trigger:
         return self.trigger_requirements.calc_type
 
     @property
+    def requirements(self):
+        # Backward-compatible alias used by existing tests/docs.
+        return self.trigger_requirements
+
+    @property
     def risks(self):
         # aligns with GSQuant property behavior :contentReference[oaicite:6]{index=6}
         return [x.risk for x in self.actions if getattr(x, "risk", None) is not None]
@@ -146,10 +151,32 @@ class NotTriggerRequirements(TriggerRequirements):
 @dataclass
 class DateTriggerRequirements(TriggerRequirements):
     dates: Sequence[dt.date]
+    info: Dict[Any, Any] = field(default_factory=dict)
     calc_type: str = "date"
 
     def has_triggered(self, state: dt.datetime, backtest=None) -> TriggerInfo:
-        return TriggerInfo(state.date() in set(self.dates))
+        triggered = state.date() in set(self.dates)
+        return TriggerInfo(triggered, dict(self.info) if triggered else {})
+
+
+@dataclass
+class FlowSignalTriggerRequirements(TriggerRequirements):
+    signal_fn: Callable[[dt.datetime, Any], Any]
+    calc_type: str = "flow_signal"
+
+    def has_triggered(self, state: dt.datetime, backtest=None) -> TriggerInfo:
+        result = self.signal_fn(state, backtest)
+        if isinstance(result, TriggerInfo):
+            return result
+        if isinstance(result, tuple) and len(result) == 2:
+            triggered, info = result
+            return TriggerInfo(bool(triggered), dict(info or {}))
+        if isinstance(result, dict):
+            triggered = result.get("triggered", True)
+            info = dict(result)
+            info.pop("triggered", None)
+            return TriggerInfo(bool(triggered), info)
+        return TriggerInfo(bool(result), {})
 
 
 # 6) PortfolioTrigger (holdings/order book predicate)

@@ -45,6 +45,7 @@ class RVBacktestConfig:
     exit_stop_loss_sd: float = 2.0
     exit_max_holding_days: int = 22
     exit_carry_adjusted: bool = False
+    exit_min_edge_buffer_bp: float = 0.0
     # Portfolio rules
     max_concurrent_trades: Optional[int] = None
     no_duplicate_flies: bool = True
@@ -436,6 +437,25 @@ class _RVQuerySignalAction:
         return float(self.config.entry_min_rsq)
 
     @staticmethod
+    def _economic_exit_enabled(position: Any) -> bool:
+        query = getattr(position, "source_query", None)
+        if getattr(query, "product", None) != "FRB":
+            return False
+        query_meta = getattr(query, "meta", {}) or {}
+        return bool(query_meta.get("financing"))
+
+    def _projected_holding_cost_bp(self, position: Any, *, now: Any, backtest: Any) -> Optional[float]:
+        if not self._economic_exit_enabled(position):
+            return None
+        trade_belly_bpv = float(self.config.trade_belly_bpv)
+        if trade_belly_bpv == 0.0:
+            return None
+        horizon_end = backtest._cashflow_window_end_for_mtm(now)
+        handler = backtest._handler_for_position(position)
+        projected_cost_ccy = float(handler.projected_holding_cost_ccy(position, now, horizon_end, backtest))
+        return projected_cost_ccy / trade_belly_bpv
+
+    @staticmethod
     def _selector(position_id: str):
         return lambda p, position_id=position_id: p.meta.get("rv_position_id") == position_id
 
@@ -489,6 +509,23 @@ class _RVQuerySignalAction:
                     and np.sign(current_zscore) == np.sign(entry_zscore)
                 ):
                     exit_reason = "stop_loss"
+
+            if exit_reason is None and self.config.exit_carry_adjusted and np.isfinite(current_residual):
+                projected_holding_cost_bp = self._projected_holding_cost_bp(pos, now=now, backtest=backtest)
+                if projected_holding_cost_bp is not None:
+                    weights = np.asarray(meta.get("base_weights", []), dtype=float)
+                    unwind_cost_bp = self._cost_bp_equiv(weights) if weights.size else 0.0
+                    expected_edge_bp = abs(current_residual) * 10_000.0
+                    carry_roll_bp = meta.get("carry_roll_bp")
+                    if carry_roll_bp is not None and np.isfinite(float(carry_roll_bp)):
+                        expected_edge_bp += float(meta.get("direction", 0.0) or 0.0) * float(carry_roll_bp)
+                    required_edge_bp = (
+                        unwind_cost_bp
+                        + projected_holding_cost_bp
+                        + float(self.config.exit_min_edge_buffer_bp)
+                    )
+                    if expected_edge_bp <= required_edge_bp:
+                        exit_reason = "economic_exit"
 
             holding_days = len(pd.bdate_range(pos.opened.date(), dt.date())) - 1
             if exit_reason is None and holding_days >= int(self.config.exit_max_holding_days):

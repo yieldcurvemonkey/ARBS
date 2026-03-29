@@ -101,6 +101,15 @@ class PositionHandler:
     ) -> tuple[float, List[Trigger]]:
         return self.value_position(position, pricer_provider, now, backtest), []
 
+    def projected_holding_cost_ccy(
+        self,
+        position: ResolvedQueryPosition,
+        now: datetime.datetime,
+        horizon_end: datetime.datetime,
+        backtest: "QueryDrivenBacktest",
+    ) -> float:
+        return 0.0
+
 
 # --------------- Handler Registry ---------------
 
