@@ -563,13 +563,6 @@ class _JPMRVQuerySignalAction:
             # where body = belly rate, curve = back_rate - front_rate.
             # To isolate the residual, hedge out body and curve exposure
             # with outright swaps sized by the entry betas.
-            #
-            # The butterfly BPV is signed_bpv on the belly.
-            # Body hedge: outright at belly tenor opposing body beta
-            # Curve hedge: outright at back/front tenors opposing curve beta
-            #   curve = back - front, so curve beta gives:
-            #     +beta_curve exposure at back, -beta_curve at front
-            #   hedge is the negative of that.
             belly_bpv_abs = abs(config.trade_belly_bpv)
 
             hedge_base_meta = {

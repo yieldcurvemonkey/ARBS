@@ -1451,9 +1451,18 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             if "ignore_cache" in kwargs:
                 kwargs["force_refresh"] = kwargs.pop("ignore_cache")
 
+            # Filter kwargs to only include parameters accepted by the QL fetcher
+            _ql_eris_valid_keys = {
+                "start_date", "end_date", "bdates", "ql_dc", "ql_cal",
+                "show_tqdm", "interpolation_algo", "enable_extrapolation",
+                "append_intraday", "max_concurrent_tasks",
+                "max_keepalive_connections", "ignore_cache", "force_refresh",
+            }
+            ql_kwargs = {k: v for k, v in kwargs.items() if k in _ql_eris_valid_keys}
+
             if timestamp == "live" or timestamp == datetime.date.today():
                 eff = ErisFuturesFetcher(**self.config)
-                ql_curve, ts = eff.fetch_intraday_discount_curve(show_tqdm=True, enable_extrapolation=True, return_intraday_timestamp=True, **kwargs)
+                ql_curve, ts = eff.fetch_intraday_discount_curve(show_tqdm=True, enable_extrapolation=True, return_intraday_timestamp=True, **ql_kwargs)
             else:
                 ts, ql_curve = next(
                     iter(
@@ -1463,7 +1472,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                             bdates=[timestamp],
                             enable_extrapolation=True,
                             show_tqdm=False,
-                            **kwargs,
+                            **ql_kwargs,
                         ).items()
                     )
                 )
