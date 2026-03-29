@@ -325,6 +325,14 @@ class ComputedTimeseriesStore:
             fallback_column_name=fallback_column_name,
         )
 
+    def has_symbol(self, symbol: str) -> Optional[bool]:
+        if self._duckdb_cache is None or not hasattr(self._duckdb_cache, "has_symbol"):
+            return None
+        try:
+            return bool(self._duckdb_cache.has_symbol(symbol))
+        except Exception:
+            return None
+
     def read_rows(
         self,
         *,
@@ -334,9 +342,15 @@ class ComputedTimeseriesStore:
         skip_current_eod: bool = True,
         fallback_column_name: str | None = None,
         allow_partial: bool = False,
+        skip_if_symbol_absent: bool = False,
     ) -> List[Tuple[DateLike, str, float]]:
         if not reference_points:
             return []
+
+        if skip_if_symbol_absent:
+            has_symbol = self.has_symbol(symbol)
+            if has_symbol is False:
+                return []
 
         # DuckDB fast path
         duckdb_result = self._read_from_duckdb(
