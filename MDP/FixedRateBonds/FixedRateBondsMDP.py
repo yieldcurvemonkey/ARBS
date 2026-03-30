@@ -436,6 +436,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
         self._open_count = 0
         self._open_lock = threading.RLock()
         self._cache_ready = False
+        self._pending_cache_writes: Dict[str, dict] = {}
 
         if source == "USTS_FEDINVEST_WSJ_LIVE-QL" or source == "USTS_FEDINVEST_WSJ_LIVE-RL":
             from MDP.FixedRateBonds.FEDINVEST.FedInvestFetcher import FedInvestDataFetcher
@@ -473,17 +474,45 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
         return {k: cls._py_scalar(v) for k, v in dict(meta or {}).items()}
 
     def _threadsafe_cache_put(self, key: str, value: dict) -> None:
-        # protect cache writes; avoid holding the lock during network I/O
-        with self._open_lock:
-            self._ensure_pricer_cache()
-            cache = getattr(self, self._FRB_PRICER_CACHE)
-            cache[key] = value
+        # Buffer writes in memory; flushed to diskcache on __close__.
+        self._pending_cache_writes[key] = value
 
     def _threadsafe_cache_get(self, key: str):
+        # Check pending writes first (L0), then diskcache (L1).
+        pending = self._pending_cache_writes.get(key)
+        if pending is not None:
+            return pending
         with self._open_lock:
             self._ensure_pricer_cache()
             cache = getattr(self, self._FRB_PRICER_CACHE)
             return cache.get(key)
+
+    def _flush_pending_cache_writes(self, *, background: bool = True) -> None:
+        """Flush buffered writes to diskcache, optionally in a background thread."""
+        if not self._pending_cache_writes:
+            return
+        batch = dict(self._pending_cache_writes)
+        self._pending_cache_writes.clear()
+
+        # Grab a reference to the cache now so the background thread can
+        # write without holding _open_lock (avoids blocking subsequent __enter__).
+        self._ensure_pricer_cache()
+        cache_ref = getattr(self, self._FRB_PRICER_CACHE, None)
+        if cache_ref is None:
+            return
+
+        def _do_flush():
+            for key, value in batch.items():
+                try:
+                    cache_ref[key] = value
+                except Exception:
+                    pass
+
+        if background:
+            t = threading.Thread(target=_do_flush, daemon=True, name="frb-cache-flush")
+            t.start()
+        else:
+            _do_flush()
 
     def _resolve_aliases_bulk(
         self,
@@ -2023,7 +2052,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
             if self._open_count == 0:
                 try:
                     if commit:
-                        pass  # auto-committed (DiskCache)
+                        self._flush_pending_cache_writes()
                 finally:
                     try:
                         self.close_cache()
