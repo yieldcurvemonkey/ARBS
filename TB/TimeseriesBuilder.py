@@ -771,7 +771,7 @@ class TimeseriesBuilder:
             }
             if canonical_product == "IRS" and ignore_cache_miss:
                 route_kwargs["ignore_cache_miss"] = True
-            if prefetched_rows_by_symbol and canonical_product in {"IRS", "FRB"}:
+            if prefetched_rows_by_symbol and canonical_product in {"IRS", "FRB", "USTFUTURE"}:
                 route_kwargs["_prefetched_ts_rows_by_symbol"] = prefetched_rows_by_symbol
             return tb.get_timeseries(  # type: ignore[attr-defined]
                 start,
@@ -1868,6 +1868,52 @@ class TimeseriesBuilder:
             if _is_curve_coverage_complete(
                 reference_points=filtered_reference_points,
                 query_count=len(frb_queries),
+                covered=covered,
+            ):
+                return self._frame_from_cached_rows(product=product, router=router, mdp=mdp, rows=rows), prefetched_rows_by_symbol
+            return None, prefetched_rows_by_symbol
+
+        if product == "USTFUTURE":
+            from Query.USTFutures.USTFutureQuery import USTFutureQuery as _USTFutureQuery
+
+            ustf_queries = [q for q in queries if isinstance(q, _USTFutureQuery)]
+            if len(ustf_queries) != len(queries):
+                return None, {}
+
+            computed_store = getattr(router, "_computed_ts_store", None)
+            symbol_builder = getattr(router, "_ts_symbol_for_query", None)
+            if computed_store is None or not callable(symbol_builder):
+                return None, {}
+
+            rows: List[Tuple[DateLike, str, float]] = []
+            covered: set[Tuple[DateLike, int]] = set()
+            rows_by_symbol: Dict[str, List[Tuple[DateLike, str, float]]] = {}
+            for idx, q in enumerate(ustf_queries):
+                symbol = symbol_builder(q)
+                try:
+                    q_rows = computed_store.read_rows(
+                        symbol=symbol,
+                        reference_points=reference_points,
+                        intraday=intraday,
+                        skip_current_eod=True,
+                        fallback_column_name=q.col_name(),
+                        allow_partial=True,
+                    )
+                except Exception:
+                    q_rows = []
+                if q_rows:
+                    rows_by_symbol[symbol] = list(q_rows)
+                rows.extend(q_rows)
+                covered.update((ref_point, idx) for ref_point, _col, _value in q_rows)
+
+            prefetched_rows_by_symbol = {
+                symbol: tuple(symbol_rows)
+                for symbol, symbol_rows in rows_by_symbol.items()
+                if symbol_rows
+            }
+            if _is_curve_coverage_complete(
+                reference_points=reference_points,
+                query_count=len(ustf_queries),
                 covered=covered,
             ):
                 return self._frame_from_cached_rows(product=product, router=router, mdp=mdp, rows=rows), prefetched_rows_by_symbol
