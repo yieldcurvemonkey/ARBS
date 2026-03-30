@@ -134,7 +134,7 @@ def grid_search(
 def _make_iterator(pairs, show_tqdm):
     if show_tqdm:
         try:
-            from tqdm.auto import tqdm
+            from tqdm import tqdm
 
             return tqdm(pairs, desc="PCA momentum grid search")
         except Exception:

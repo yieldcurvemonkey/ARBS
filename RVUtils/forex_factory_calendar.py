@@ -23,7 +23,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
 from bs4 import BeautifulSoup
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from Caching.timeseries_cache import _atomic_write_bytes, _write_parquet_bytes
 

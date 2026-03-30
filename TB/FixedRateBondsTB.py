@@ -30,6 +30,14 @@ from utils.ql_utils import datetime_to_ql_date
 
 
 _LOGGER_NAME = "FixedRateBondsTB"
+_SOURCE_REQUEST_DATE_EXCLUSIONS: Dict[str, frozenset[datetime.date]] = {
+    "USTS_FEDINVEST_WSJ_LIVE-RL": frozenset(
+        {
+            datetime.date(2014, 9, 12),
+            datetime.date(2014, 11, 21),
+        }
+    ),
+}
 
 
 def _query_fingerprint(q: "FixedRateBondQuery") -> str:
@@ -140,6 +148,8 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         ts_base_dir: Optional[str] = "./data/ts",
         ts_row_group_size: int = 256_000,
         ts_compression: str = "zstd",
+        use_duckdb: bool = True,
+        duckdb_path: Optional[str] = None,
     ):
         LayeredCacheMixin.__init__(
             self,
@@ -164,6 +174,8 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
             base_dir=ts_base_dir or "./data/ts",
             compression=ts_compression,
             row_group_size=int(ts_row_group_size),
+            use_duckdb=use_duckdb,
+            duckdb_path=duckdb_path,
         )
 
     def __enter__(self):
@@ -201,6 +213,47 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         probe_count = max(0, int(reference_point_count)) * max(1, int(query_count))
         return probe_count > cls._ROW_CACHE_L2_SCAN_SUPPRESS_THRESHOLD
 
+    @staticmethod
+    def _reference_point_to_date(ref_point: DateLike) -> datetime.date:
+        if isinstance(ref_point, datetime.datetime):
+            return ref_point.date()
+        return ref_point
+
+    def _excluded_request_dates(self) -> frozenset[datetime.date]:
+        return _SOURCE_REQUEST_DATE_EXCLUSIONS.get(str(self.mdp.source).upper(), frozenset())
+
+    def _filter_reference_points_for_source(self, reference_points: Sequence[DateLike]) -> List[DateLike]:
+        points = list(reference_points)
+        excluded_dates = self._excluded_request_dates()
+        if not excluded_dates:
+            return points
+
+        filtered = [p for p in points if self._reference_point_to_date(p) not in excluded_dates]
+        skipped_dates = sorted(
+            {
+                self._reference_point_to_date(p)
+                for p in points
+                if self._reference_point_to_date(p) in excluded_dates
+            }
+        )
+        if skipped_dates:
+            self._logger.info(
+                "Skipping %d FixedRateBondsTB reference point(s) for source=%s due to known data issues on %s",
+                len(points) - len(filtered),
+                self.mdp.source,
+                ", ".join(d.isoformat() for d in skipped_dates),
+            )
+        return filtered
+
+    def _filter_rows_for_source(
+        self,
+        rows: Sequence[Tuple[DateLike, str, float]],
+    ) -> List[Tuple[DateLike, str, float]]:
+        excluded_dates = self._excluded_request_dates()
+        if not excluded_dates:
+            return list(rows)
+        return [row for row in rows if self._reference_point_to_date(row[0]) not in excluded_dates]
+
     def get_timeseries(
         self,
         start: DateLike,
@@ -232,6 +285,7 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
             else:
                 ref_points = pd.date_range(start, end, freq="D").date.tolist()
 
+        ref_points = self._filter_reference_points_for_source(ref_points)
         flat = self._flatten_queries(queries)
         cached_rows: List[Tuple[DateLike, str, float]] = []
         cached_row_keys: set[Tuple[DateLike, str]] = set()
@@ -250,7 +304,7 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 symbol = self._ts_symbol_for_query(q)
                 prefetched_rows = prefetched_ts_rows_by_symbol.get(symbol)
                 if prefetched_rows is not None:
-                    rows = list(prefetched_rows)
+                    rows = self._filter_rows_for_source(prefetched_rows)
                 else:
                     try:
                         rows = self._computed_ts_store.read_rows(
@@ -261,6 +315,7 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                             fallback_column_name=q.col_name(),
                             allow_partial=True,
                         )
+                        rows = self._filter_rows_for_source(rows)
                     except Exception as ex:
                         self._logger.debug(f"[TS cache] read failed for symbol={symbol}: {ex}")
                         rows = []

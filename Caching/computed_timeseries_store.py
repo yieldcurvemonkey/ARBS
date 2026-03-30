@@ -410,17 +410,40 @@ class ComputedTimeseriesStore:
         if allow_partial:
             if duckdb_result is not None:
                 return duckdb_result
-            if intraday or self._duckdb_cache is None:
-                return self._read_local_rows_without_prefetch(
-                    symbol=symbol,
-                    reference_points=reference_points,
-                    intraday=intraday,
-                    skip_current_eod=skip_current_eod,
-                    fallback_column_name=fallback_column_name,
-                )
+            # DuckDB miss — try Parquet + L2 Supabase prefetch before giving up.
+            # Previously this returned [] when DuckDB was available but empty,
+            # skipping the L2 path entirely and forcing unnecessary repricing.
+            l2_rows = self._read_with_l2_prefetch(
+                symbol=symbol,
+                reference_points=reference_points,
+                intraday=intraday,
+                skip_current_eod=skip_current_eod,
+                fallback_column_name=fallback_column_name,
+            )
+            if l2_rows:
+                self._backfill_duckdb_from_rows(symbol, l2_rows, intraday=intraday)
+                return l2_rows
             return []
 
-        # Fallback to existing Parquet path
+        # Fallback to Parquet + L2 path (non-partial mode)
+        return self._read_with_l2_prefetch(
+            symbol=symbol,
+            reference_points=reference_points,
+            intraday=intraday,
+            skip_current_eod=skip_current_eod,
+            fallback_column_name=fallback_column_name,
+        )
+
+    def _read_with_l2_prefetch(
+        self,
+        *,
+        symbol: str,
+        reference_points: Sequence[DateLike],
+        intraday: bool,
+        skip_current_eod: bool,
+        fallback_column_name: str | None,
+    ) -> List[Tuple[DateLike, str, float]]:
+        """Read from local Parquet, prefetching from Supabase L2 first."""
         start = min(reference_points)
         end = max(reference_points)
         read_start: DateLike = _normalize_intraday_key(start).to_pydatetime() if intraday else start
@@ -466,7 +489,9 @@ class ComputedTimeseriesStore:
         if not missing_dates:
             return rows
 
-        candidate_pull_dates = [trading_date for trading_date in missing_dates if trading_date in local_present_dates]
+        candidate_pull_dates = [trading_date for trading_date in missing_dates if trading_date not in local_present_dates]
+        if not candidate_pull_dates:
+            candidate_pull_dates = missing_dates
         if not candidate_pull_dates:
             return rows
 
@@ -492,6 +517,23 @@ class ComputedTimeseriesStore:
             skip_current_eod=skip_current_eod,
             fallback_column_name=fallback_column_name,
         )
+
+    def _backfill_duckdb_from_rows(
+        self,
+        symbol: str,
+        rows: List[Tuple[DateLike, str, float]],
+        *,
+        intraday: bool = False,
+    ) -> None:
+        """Backfill DuckDB from rows fetched via Parquet/L2 so subsequent reads are fast."""
+        if self._duckdb_cache is None or not rows or intraday:
+            return
+        if getattr(self._duckdb_cache, "_read_only", False):
+            return
+        try:
+            self._duckdb_cache.upsert_rows(symbol, rows)
+        except Exception:
+            logger.warning("DuckDB backfill failed for %s", symbol, exc_info=True)
 
     def _push_days_to_l2(
         self,
