@@ -443,15 +443,15 @@ class ComputedTimeseriesStore:
         skip_current_eod: bool,
         fallback_column_name: str | None,
     ) -> List[Tuple[DateLike, str, float]]:
-        """Read from local Parquet, prefetching from Supabase L2 first."""
+        """Read from local Parquet first; only contact Supabase L2 for missing dates."""
         start = min(reference_points)
         end = max(reference_points)
         read_start: DateLike = _normalize_intraday_key(start).to_pydatetime() if intraday else start
         read_end: DateLike = _normalize_intraday_key(end).to_pydatetime() if intraday else end
-        start_date = _normalize_intraday_key(start).date() if intraday else _normalize_eod_key(start)
-        end_date = _normalize_intraday_key(end).date() if intraday else _normalize_eod_key(end)
 
-        sync = self._prefetch_remote_range(symbol=symbol, start_date=start_date, end_date=end_date)
+        today = datetime.date.today()
+
+        # 1) Read whatever is already on local disk (Parquet).
         df = self._read_df(symbol=symbol, start=read_start, end=read_end)
         rows = self._rows_from_df(
             df=df,
@@ -460,18 +460,12 @@ class ComputedTimeseriesStore:
             skip_current_eod=skip_current_eod,
             fallback_column_name=fallback_column_name,
         )
-        local_present_dates = {
-            _normalize_eod_key(ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts)
-            for ts in (df.index if isinstance(df.index, pd.DatetimeIndex) else [])
-        }
 
-        if sync is None:
-            return rows
-
+        # 2) Compute which dates are still missing.
         skipped_keys = {
             (_normalize_intraday_key(ref_point) if intraday else _normalize_eod_key(ref_point))
             for ref_point in reference_points
-            if (not intraday) and skip_current_eod and (_normalize_eod_key(ref_point) == datetime.date.today())
+            if (not intraday) and skip_current_eod and (_normalize_eod_key(ref_point) == today)
         }
         requested_keys = {
             (_normalize_intraday_key(ref_point) if intraday else _normalize_eod_key(ref_point))
@@ -486,29 +480,69 @@ class ComputedTimeseriesStore:
             key.date() if isinstance(key, pd.Timestamp) else key
             for key in (requested_keys - covered_keys)
         })
+
+        # If everything is locally available, skip remote entirely.
         if not missing_dates:
             return rows
 
+        # 3) Fetch only the missing dates from Supabase L2 (batch).
+        sync = self._prefetch_remote_range(
+            symbol=symbol,
+            start_date=min(missing_dates),
+            end_date=max(missing_dates),
+        )
+        if sync is None:
+            return rows
+
+        local_present_dates = {
+            _normalize_eod_key(ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts)
+            for ts in (df.index if isinstance(df.index, pd.DatetimeIndex) else [])
+        }
         candidate_pull_dates = [trading_date for trading_date in missing_dates if trading_date not in local_present_dates]
         if not candidate_pull_dates:
             candidate_pull_dates = missing_dates
         if not candidate_pull_dates:
             return rows
 
+        # Use batch pull (single SQL query) instead of per-day loop
         pulled_any = False
-        for trading_date in candidate_pull_dates:
+        pull_batch_fn = getattr(sync, "pull_days_batch", None)
+        if callable(pull_batch_fn):
             try:
-                pulled_any = sync.pull_day(symbol, trading_date) or pulled_any
+                fetched = pull_batch_fn(symbol, candidate_pull_dates)
+                pulled_any = bool(fetched)
             except Exception:
                 logger.warning(
-                    "Computed TS L2 pull failed for %s/%s",
+                    "Computed TS L2 batch pull failed for %s (%d dates), falling back to per-day",
                     symbol,
-                    trading_date,
+                    len(candidate_pull_dates),
                     exc_info=True,
                 )
+                for trading_date in candidate_pull_dates:
+                    try:
+                        pulled_any = sync.pull_day(symbol, trading_date) or pulled_any
+                    except Exception:
+                        logger.warning(
+                            "Computed TS L2 pull failed for %s/%s",
+                            symbol,
+                            trading_date,
+                            exc_info=True,
+                        )
+        else:
+            for trading_date in candidate_pull_dates:
+                try:
+                    pulled_any = sync.pull_day(symbol, trading_date) or pulled_any
+                except Exception:
+                    logger.warning(
+                        "Computed TS L2 pull failed for %s/%s",
+                        symbol,
+                        trading_date,
+                        exc_info=True,
+                    )
         if not pulled_any:
             return rows
 
+        # 4) Re-read local Parquet now that L2 data has been written locally.
         df = self._read_df(symbol=symbol, start=read_start, end=read_end)
         return self._rows_from_df(
             df=df,

@@ -153,6 +153,66 @@ class SupabaseComputedTimeseriesSync:
         logger.info("Pulled computed TS %s/%s from Supabase -> %s", symbol, trading_date, dest)
         return True
 
+    def pull_days_batch(
+        self,
+        symbol: str,
+        trading_dates: Sequence[datetime.date],
+    ) -> list[datetime.date]:
+        """Pull multiple days' Parquet blobs in a single SQL query.
+
+        Returns the list of dates that were successfully written locally.
+        Much faster than calling pull_day() in a loop (one round-trip vs N).
+        """
+        if self._engine is None or not trading_dates:
+            return []
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return []
+
+        sorted_dates = sorted(set(trading_dates))
+        with self._engine.begin() as conn:
+            rows = conn.execute(
+                text(f"""
+                    SELECT trading_date, payload, sha256, data_format
+                    FROM {COMPUTED_TIMESERIES_BLOCKS_TABLE}
+                    WHERE symbol = :symbol
+                      AND trading_date BETWEEN :start AND :end
+                    ORDER BY trading_date
+                """),
+                {"symbol": symbol, "start": sorted_dates[0], "end": sorted_dates[-1]},
+            ).fetchall()
+
+        if not rows:
+            return []
+
+        requested = set(sorted_dates)
+        fetched: list[datetime.date] = []
+        for row in rows:
+            if row.trading_date not in requested:
+                continue
+            part_dir = self._partition_dir(symbol, row.trading_date)
+            part_dir.mkdir(parents=True, exist_ok=True)
+            dest = part_dir / f"{row.sha256}.parquet"
+            _atomic_write_bytes(dest, row.payload)
+            for old_path in part_dir.glob("*.parquet"):
+                if old_path == dest:
+                    continue
+                try:
+                    old_path.unlink()
+                except OSError:
+                    pass
+            fetched.append(row.trading_date)
+
+        if fetched:
+            logger.info(
+                "Batch-pulled computed TS %s: %d/%d dates from Supabase",
+                symbol,
+                len(fetched),
+                len(sorted_dates),
+            )
+        return fetched
+
     def prefetch_range(
         self,
         symbol: str,
