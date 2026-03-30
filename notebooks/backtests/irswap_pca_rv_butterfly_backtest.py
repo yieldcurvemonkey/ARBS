@@ -53,7 +53,7 @@ def run_mode(mode: str) -> dict:
         min_zscore_wing=0.3,
         max_adf_pvalue=0.15,
         auto_scan_fly=(mode != "forward_cs"),  # Use manual universe for CS forwards
-        include_carry_roll=True,  # Enabled via UnifiedQuery (fast)
+        include_carry_roll=True,
     )
 
     # For stanchart mode, limit forward starts for speed
