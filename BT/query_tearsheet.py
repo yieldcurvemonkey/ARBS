@@ -25,6 +25,8 @@ _SIZE_PRIORITY: list[tuple[str, str]] = [
     ("signal_direction", "Signal Units"),
 ]
 _MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+_DIRECTION_LABELS = {-1: "Short", 0: "Flat", 1: "Long"}
+_DURATION_BUCKET_ORDER = ["<=1D", "1-3D", "3-7D", "7-14D", "14-30D", "30D+"]
 
 
 @dataclass
@@ -56,8 +58,16 @@ class QueryBacktestAnalytics:
     monthly_pnl: pd.DataFrame
     summary: dict[str, Any]
     summary_frame: pd.DataFrame
+    overview_frame: pd.DataFrame
+    risk_frame: pd.DataFrame
+    activity_frame: pd.DataFrame
+    trade_summary_frame: pd.DataFrame
     product_summary: pd.DataFrame
     tag_summary: pd.DataFrame
+    holding_period_summary: pd.DataFrame
+    exit_reason_summary: pd.DataFrame
+    direction_summary: pd.DataFrame
+    duration_bucket_summary: pd.DataFrame
     drawdown_episodes: pd.DataFrame
     top_trades: pd.DataFrame
     worst_trades: pd.DataFrame
@@ -265,6 +275,10 @@ def build_query_backtest_analytics(
     monthly_pnl = _build_monthly_heatmap(session_pnl)
     product_summary = _build_group_summary(closed_trades, open_positions, group_col="product")
     tag_summary = _build_tag_summary(closed_trades, open_positions)
+    holding_period_summary = _build_holding_period_summary(closed_trades, open_positions)
+    exit_reason_summary = _build_group_summary(closed_trades, open_positions, group_col="exit_reason")
+    direction_summary = _build_group_summary(closed_trades, open_positions, group_col="direction_label")
+    duration_bucket_summary = _build_group_summary(closed_trades, open_positions, group_col="duration_bucket")
     drawdown_episodes = _drawdown_episodes(session_equity)
     summary = _build_summary(
         name=strategy_name,
@@ -281,6 +295,10 @@ def build_query_backtest_analytics(
         open_positions=open_positions,
     )
     summary_frame = _summary_frame(summary)
+    overview_frame = _metric_frame(summary, _overview_summary_specs(summary))
+    risk_frame = _metric_frame(summary, _risk_summary_specs(summary))
+    activity_frame = _metric_frame(summary, _activity_summary_specs(summary))
+    trade_summary_frame = _metric_frame(summary, _trade_summary_specs(summary))
 
     top_trades = (
         closed_trades.sort_values("realized_pnl", ascending=False).head(10).reset_index(drop=True)
@@ -321,8 +339,16 @@ def build_query_backtest_analytics(
         monthly_pnl=monthly_pnl,
         summary=summary,
         summary_frame=summary_frame,
+        overview_frame=overview_frame,
+        risk_frame=risk_frame,
+        activity_frame=activity_frame,
+        trade_summary_frame=trade_summary_frame,
         product_summary=product_summary,
         tag_summary=tag_summary,
+        holding_period_summary=holding_period_summary,
+        exit_reason_summary=exit_reason_summary,
+        direction_summary=direction_summary,
+        duration_bucket_summary=duration_bucket_summary,
         drawdown_episodes=drawdown_episodes,
         top_trades=top_trades,
         worst_trades=worst_trades,
@@ -365,6 +391,38 @@ def _session_timestamp(timestamp: Any) -> pd.Timestamp:
     if chicago.hour >= 17:
         chicago = chicago + pd.Timedelta(days=1)
     return pd.Timestamp(chicago.date())
+
+
+def _direction_label(value: Any) -> str:
+    try:
+        numeric = int(np.sign(float(value)))
+    except (TypeError, ValueError):
+        numeric = 0
+    return _DIRECTION_LABELS.get(numeric, "Flat")
+
+
+def _duration_bucket(days: Any) -> str:
+    try:
+        numeric = float(days)
+    except (TypeError, ValueError):
+        numeric = 0.0
+    if not np.isfinite(numeric) or numeric <= 1.0:
+        return "<=1D"
+    if numeric <= 3.0:
+        return "1-3D"
+    if numeric <= 7.0:
+        return "3-7D"
+    if numeric <= 14.0:
+        return "7-14D"
+    if numeric <= 30.0:
+        return "14-30D"
+    return "30D+"
+
+
+def _safe_ratio_series(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
+    numer = pd.Series(numerator, copy=False, dtype=float)
+    denom = pd.Series(denominator, copy=False, dtype=float).replace(0.0, np.nan)
+    return numer.div(denom)
 
 
 def _is_number(value: Any) -> bool:
@@ -531,7 +589,7 @@ def _build_closed_trade_frame(backtest: QueryDrivenBacktest, *, size_metric: Opt
                 "realized_pnl": float(record.get("realized_pnl", 0.0)),
                 "gross_realized_pnl": float(record.get("gross_realized_pnl", 0.0)),
                 "fee_allocated": float(record.get("fee_allocated", 0.0)),
-                "exit_reason": exit_meta.get("reason") or exit_meta.get("action"),
+                "exit_reason": exit_meta.get("reason") or exit_meta.get("action") or "unspecified",
                 "is_winner": float(record.get("realized_pnl", 0.0)) > 0.0,
                 "exit_meta": exit_meta,
                 "position_meta": dict(record.get("position_meta", {}) or {}),
@@ -556,6 +614,17 @@ def _build_closed_trade_frame(backtest: QueryDrivenBacktest, *, size_metric: Opt
             ]
         )
     frame = pd.DataFrame(rows).sort_values(["closed_at", "opened_at", "query_label"]).reset_index(drop=True)
+    effective_days = frame["holding_period_days"].astype(float).clip(lower=1.0)
+    size_denom = frame["size_abs"].astype(float).replace(0.0, np.nan)
+    frame["entry_session"] = frame["opened_at"].apply(_session_timestamp)
+    frame["exit_session"] = frame["closed_at"].apply(_session_timestamp)
+    frame["direction_label"] = frame["direction"].apply(_direction_label)
+    frame["duration_bucket"] = frame["holding_period_days"].apply(_duration_bucket)
+    frame["pnl_per_day"] = _safe_ratio_series(frame["realized_pnl"], effective_days)
+    frame["gross_pnl_per_day"] = _safe_ratio_series(frame["gross_realized_pnl"], effective_days)
+    frame["pnl_per_size_unit"] = _safe_ratio_series(frame["realized_pnl"], size_denom)
+    frame["gross_pnl_per_size_unit"] = _safe_ratio_series(frame["gross_realized_pnl"], size_denom)
+    frame["fee_pct_of_gross_pnl"] = _safe_ratio_series(frame["fee_allocated"], frame["gross_realized_pnl"].abs())
     return frame
 
 
@@ -600,7 +669,15 @@ def _build_open_positions_frame(
                 "age_steps",
             ]
         )
-    return pd.DataFrame(rows).sort_values(["opened_at", "product", "query_label"]).reset_index(drop=True)
+    frame = pd.DataFrame(rows).sort_values(["opened_at", "product", "query_label"]).reset_index(drop=True)
+    effective_days = frame["age_days"].astype(float).clip(lower=1.0)
+    size_denom = frame["size_abs"].astype(float).replace(0.0, np.nan)
+    frame["entry_session"] = frame["opened_at"].apply(_session_timestamp)
+    frame["direction_label"] = frame["direction"].apply(_direction_label)
+    frame["duration_bucket"] = frame["age_days"].apply(_duration_bucket)
+    frame["mtm_per_day"] = _safe_ratio_series(frame["current_mtm"], effective_days)
+    frame["mtm_per_size_unit"] = _safe_ratio_series(frame["current_mtm"], size_denom)
+    return frame
 
 
 def _build_snapshot_frame(backtest: QueryDrivenBacktest, *, size_metric: Optional[str]) -> pd.DataFrame:
@@ -708,9 +785,13 @@ def _build_group_summary(closed_trades: pd.DataFrame, open_positions: pd.DataFra
         closed_summary = closed_trades.groupby(group_col).agg(
             closed_trades=("position_id", "count"),
             realized_pnl=("realized_pnl", "sum"),
+            gross_realized_pnl=("gross_realized_pnl", "sum"),
+            fee_allocated=("fee_allocated", "sum"),
             avg_trade_pnl=("realized_pnl", "mean"),
+            median_trade_pnl=("realized_pnl", "median"),
             win_rate=("is_winner", "mean"),
             avg_holding_days=("holding_period_days", "mean"),
+            median_holding_days=("holding_period_days", "median"),
         )
     open_summary = pd.DataFrame()
     if not open_positions.empty and group_col in open_positions:
@@ -718,11 +799,20 @@ def _build_group_summary(closed_trades: pd.DataFrame, open_positions: pd.DataFra
             open_positions=("position_id", "count"),
             open_mtm=("current_mtm", "sum"),
             gross_size=("size_abs", "sum"),
+            avg_age_days=("age_days", "mean"),
         )
     if closed_summary.empty and open_summary.empty:
         return pd.DataFrame(columns=["closed_trades", "open_positions", "realized_pnl", "open_mtm", "total_pnl"])
     summary = closed_summary.join(open_summary, how="outer").fillna(0.0)
     summary["total_pnl"] = summary.get("realized_pnl", 0.0) + summary.get("open_mtm", 0.0)
+    if group_col == "duration_bucket":
+        ordered_index = [label for label in _DURATION_BUCKET_ORDER if label in summary.index]
+        remainder = [label for label in summary.index if label not in ordered_index]
+        return summary.reindex(ordered_index + remainder)
+    if group_col == "direction_label":
+        ordered_index = [label for label in ("Long", "Short", "Flat") if label in summary.index]
+        remainder = [label for label in summary.index if label not in ordered_index]
+        return summary.reindex(ordered_index + remainder)
     return summary.sort_values("total_pnl", ascending=False)
 
 
@@ -734,19 +824,93 @@ def _build_tag_summary(closed_trades: pd.DataFrame, open_positions: pd.DataFrame
         closed_summary = closed_tags.groupby("tag").agg(
             closed_trades=("position_id", "count"),
             realized_pnl=("realized_pnl", "sum"),
+            gross_realized_pnl=("gross_realized_pnl", "sum"),
+            fee_allocated=("fee_allocated", "sum"),
             avg_trade_pnl=("realized_pnl", "mean"),
+            median_trade_pnl=("realized_pnl", "median"),
+            win_rate=("is_winner", "mean"),
+            avg_holding_days=("holding_period_days", "mean"),
+            median_holding_days=("holding_period_days", "median"),
         )
     open_summary = pd.DataFrame()
     if not open_tags.empty:
         open_summary = open_tags.groupby("tag").agg(
             open_positions=("position_id", "count"),
             open_mtm=("current_mtm", "sum"),
+            gross_size=("size_abs", "sum"),
+            avg_age_days=("age_days", "mean"),
         )
     if closed_summary.empty and open_summary.empty:
         return pd.DataFrame(columns=["closed_trades", "open_positions", "realized_pnl", "open_mtm", "total_pnl"])
     summary = closed_summary.join(open_summary, how="outer").fillna(0.0)
     summary["total_pnl"] = summary.get("realized_pnl", 0.0) + summary.get("open_mtm", 0.0)
     return summary.sort_values("total_pnl", ascending=False)
+
+
+def _build_holding_period_summary(closed_trades: pd.DataFrame, open_positions: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+
+    def _append(label: str, ages: pd.Series, pnl: pd.Series) -> None:
+        clean_ages = pd.Series(ages, dtype=float).dropna()
+        clean_pnl = pd.Series(pnl, dtype=float).dropna()
+        rows.append(
+            {
+                "segment": label,
+                "count": int(len(clean_ages)),
+                "avg_days": float(clean_ages.mean()) if len(clean_ages) else 0.0,
+                "median_days": float(clean_ages.median()) if len(clean_ages) else 0.0,
+                "p75_days": float(clean_ages.quantile(0.75)) if len(clean_ages) else 0.0,
+                "p90_days": float(clean_ages.quantile(0.90)) if len(clean_ages) else 0.0,
+                "max_days": float(clean_ages.max()) if len(clean_ages) else 0.0,
+                "avg_pnl": float(clean_pnl.mean()) if len(clean_pnl) else 0.0,
+                "median_pnl": float(clean_pnl.median()) if len(clean_pnl) else 0.0,
+            }
+        )
+
+    if not closed_trades.empty:
+        winners = closed_trades.loc[closed_trades["realized_pnl"] > 0.0]
+        losers = closed_trades.loc[closed_trades["realized_pnl"] < 0.0]
+        flats = closed_trades.loc[closed_trades["realized_pnl"] == 0.0]
+        _append("Closed Trades", closed_trades["holding_period_days"], closed_trades["realized_pnl"])
+        _append("Winning Trades", winners["holding_period_days"], winners["realized_pnl"])
+        _append("Losing Trades", losers["holding_period_days"], losers["realized_pnl"])
+        if not flats.empty:
+            _append("Flat Trades", flats["holding_period_days"], flats["realized_pnl"])
+    if not open_positions.empty:
+        _append("Open Positions", open_positions["age_days"], open_positions["current_mtm"])
+
+    if not rows:
+        return pd.DataFrame(columns=["count", "avg_days", "median_days", "p75_days", "p90_days", "max_days", "avg_pnl", "median_pnl"])
+    return pd.DataFrame(rows).set_index("segment")
+
+
+def _trade_streak_summary(closed_trades: pd.DataFrame) -> dict[str, Any]:
+    if closed_trades.empty:
+        return {"max_win_streak": 0, "max_loss_streak": 0, "current_trade_streak": "Flat 0"}
+
+    ordered = closed_trades.sort_values(["closed_at", "opened_at", "query_label"]).reset_index(drop=True)
+    outcomes = pd.Series(np.sign(ordered["realized_pnl"].astype(float).values), dtype=float)
+    if (outcomes != 0.0).sum() == 0:
+        return {"max_win_streak": 0, "max_loss_streak": 0, "current_trade_streak": "Flat 0"}
+
+    streak_ids = (outcomes != outcomes.shift()).cumsum()
+    streaks = outcomes.groupby(streak_ids).agg(["first", "size"])
+    max_win_streak = int(streaks.loc[streaks["first"] > 0.0, "size"].max()) if (streaks["first"] > 0.0).any() else 0
+    max_loss_streak = int(streaks.loc[streaks["first"] < 0.0, "size"].max()) if (streaks["first"] < 0.0).any() else 0
+
+    last_outcome = float(streaks.iloc[-1]["first"])
+    if last_outcome > 0.0:
+        current_trade_streak = f"Win {int(streaks.iloc[-1]['size'])}"
+    elif last_outcome < 0.0:
+        current_trade_streak = f"Loss {int(streaks.iloc[-1]['size'])}"
+    else:
+        current_trade_streak = "Flat 0"
+
+    return {
+        "max_win_streak": max_win_streak,
+        "max_loss_streak": max_loss_streak,
+        "current_trade_streak": current_trade_streak,
+    }
 
 
 def _drawdown_episodes(equity: pd.Series) -> pd.DataFrame:
@@ -839,13 +1003,22 @@ def _build_summary(
     var_95 = float(session_pnl.quantile(0.05)) if len(session_pnl) else 0.0
     cvar_95 = float(session_pnl[session_pnl <= var_95].mean()) if len(session_pnl) and (session_pnl <= var_95).any() else var_95
 
-    gross_profit = float(closed_trades.loc[closed_trades["realized_pnl"] > 0.0, "realized_pnl"].sum()) if not closed_trades.empty else 0.0
-    gross_loss = float(-closed_trades.loc[closed_trades["realized_pnl"] < 0.0, "realized_pnl"].sum()) if not closed_trades.empty else 0.0
-    avg_win = float(closed_trades.loc[closed_trades["realized_pnl"] > 0.0, "realized_pnl"].mean()) if not closed_trades.empty and (closed_trades["realized_pnl"] > 0.0).any() else 0.0
-    avg_loss = float(closed_trades.loc[closed_trades["realized_pnl"] < 0.0, "realized_pnl"].mean()) if not closed_trades.empty and (closed_trades["realized_pnl"] < 0.0).any() else 0.0
+    winning_trades = closed_trades.loc[closed_trades["realized_pnl"] > 0.0] if not closed_trades.empty else pd.DataFrame()
+    losing_trades = closed_trades.loc[closed_trades["realized_pnl"] < 0.0] if not closed_trades.empty else pd.DataFrame()
+    flat_trades = closed_trades.loc[closed_trades["realized_pnl"] == 0.0] if not closed_trades.empty else pd.DataFrame()
+
+    gross_profit = float(winning_trades["realized_pnl"].sum()) if not winning_trades.empty else 0.0
+    gross_loss = float(-losing_trades["realized_pnl"].sum()) if not losing_trades.empty else 0.0
+    avg_win = float(winning_trades["realized_pnl"].mean()) if not winning_trades.empty else 0.0
+    avg_loss = float(losing_trades["realized_pnl"].mean()) if not losing_trades.empty else 0.0
+    median_win = float(winning_trades["realized_pnl"].median()) if not winning_trades.empty else 0.0
+    median_loss = float(losing_trades["realized_pnl"].median()) if not losing_trades.empty else 0.0
+    median_trade_pnl = float(closed_trades["realized_pnl"].median()) if not closed_trades.empty else 0.0
     hit_rate = float((closed_trades["realized_pnl"] > 0.0).mean()) if not closed_trades.empty else 0.0
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0.0 else (np.inf if gross_profit > 0.0 else 0.0)
     payoff_ratio = (avg_win / abs(avg_loss)) if avg_loss < 0.0 else (np.inf if avg_win > 0.0 else 0.0)
+    holding_days = closed_trades["holding_period_days"] if not closed_trades.empty else pd.Series(dtype=float)
+    streak_summary = _trade_streak_summary(closed_trades)
 
     total_pnl = float(step_equity.iloc[-1]) if len(step_equity) else 0.0
     realized_pnl = float(step_realized.iloc[-1]) if len(step_realized) else 0.0
@@ -855,6 +1028,19 @@ def _build_summary(
     avg_open_positions = float(position_counts["open_positions"].mean()) if not position_counts.empty else 0.0
     max_open_positions = float(position_counts["open_positions"].max()) if not position_counts.empty else 0.0
     time_in_market = float((position_counts["open_positions"] > 0.0).mean()) if not position_counts.empty else 0.0
+    positive_session_rate = float((session_pnl > 0.0).mean()) if len(session_pnl) else 0.0
+    negative_session_rate = float((session_pnl < 0.0).mean()) if len(session_pnl) else 0.0
+    active_trading_sessions = int((trade_flow["trade_sides"] > 0.0).sum()) if not trade_flow.empty else 0
+    entry_count = float(trade_flow["entries"].sum()) if not trade_flow.empty else 0.0
+    exit_count = float(trade_flow["exits"].sum()) if not trade_flow.empty else 0.0
+    trade_sides = float(trade_flow["trade_sides"].sum()) if not trade_flow.empty else 0.0
+    avg_entries_per_session = float(trade_flow["entries"].mean()) if not trade_flow.empty else 0.0
+    avg_exits_per_session = float(trade_flow["exits"].mean()) if not trade_flow.empty else 0.0
+    avg_trade_sides_per_session = float(trade_flow["trade_sides"].mean()) if not trade_flow.empty else 0.0
+    avg_entries_per_active_session = entry_count / active_trading_sessions if active_trading_sessions > 0 else 0.0
+    avg_exits_per_active_session = exit_count / active_trading_sessions if active_trading_sessions > 0 else 0.0
+    gross_realized_pnl = float(closed_trades["gross_realized_pnl"].sum()) if not closed_trades.empty else 0.0
+    total_fees = float(closed_trades["fee_allocated"].sum()) if not closed_trades.empty else 0.0
 
     summary: dict[str, Any] = {
         "name": name,
@@ -865,6 +1051,8 @@ def _build_summary(
         "total_pnl": total_pnl,
         "realized_pnl": realized_pnl,
         "open_pnl": open_pnl,
+        "gross_realized_pnl": gross_realized_pnl,
+        "total_fees": total_fees,
         "avg_session_pnl": float(session_pnl.mean()) if len(session_pnl) else 0.0,
         "session_vol": pnl_std * np.sqrt(252.0),
         "sharpe": sharpe,
@@ -873,21 +1061,47 @@ def _build_summary(
         "current_drawdown": current_drawdown,
         "best_session": float(session_pnl.max()) if len(session_pnl) else 0.0,
         "worst_session": float(session_pnl.min()) if len(session_pnl) else 0.0,
+        "positive_session_rate": positive_session_rate,
+        "negative_session_rate": negative_session_rate,
         "var_95": var_95,
         "cvar_95": cvar_95,
-        "entry_count": float(trade_flow["entries"].sum()) if not trade_flow.empty else 0.0,
-        "exit_count": float(trade_flow["exits"].sum()) if not trade_flow.empty else 0.0,
-        "trade_sides": float(trade_flow["trade_sides"].sum()) if not trade_flow.empty else 0.0,
+        "entry_count": entry_count,
+        "exit_count": exit_count,
+        "trade_sides": trade_sides,
+        "active_trading_sessions": active_trading_sessions,
+        "avg_entries_per_session": avg_entries_per_session,
+        "avg_exits_per_session": avg_exits_per_session,
+        "avg_trade_sides_per_session": avg_trade_sides_per_session,
+        "avg_entries_per_active_session": avg_entries_per_active_session,
+        "avg_exits_per_active_session": avg_exits_per_active_session,
         "closed_trade_count": int(len(closed_trades)),
         "open_trade_count": int(len(open_positions)),
+        "winning_trade_count": int(len(winning_trades)),
+        "losing_trade_count": int(len(losing_trades)),
+        "flat_trade_count": int(len(flat_trades)),
         "trade_hit_rate": hit_rate,
         "profit_factor": profit_factor,
+        "gross_profit": gross_profit,
+        "gross_loss": gross_loss,
+        "avg_trade_pnl": float(closed_trades["realized_pnl"].mean()) if not closed_trades.empty else 0.0,
+        "median_trade_pnl": median_trade_pnl,
         "avg_win": avg_win,
+        "median_win": median_win,
         "avg_loss": avg_loss,
+        "median_loss": median_loss,
         "payoff_ratio": payoff_ratio,
         "expectancy": float(closed_trades["realized_pnl"].mean()) if not closed_trades.empty else 0.0,
-        "avg_holding_days": float(closed_trades["holding_period_days"].mean()) if not closed_trades.empty else 0.0,
+        "max_win_trade": float(closed_trades["realized_pnl"].max()) if not closed_trades.empty else 0.0,
+        "max_loss_trade": float(closed_trades["realized_pnl"].min()) if not closed_trades.empty else 0.0,
+        "avg_holding_days": float(holding_days.mean()) if len(holding_days) else 0.0,
+        "median_holding_days": float(holding_days.median()) if len(holding_days) else 0.0,
+        "p90_holding_days": float(holding_days.quantile(0.90)) if len(holding_days) else 0.0,
         "avg_holding_steps": float(closed_trades["holding_period_steps"].mean()) if not closed_trades.empty else 0.0,
+        "avg_winner_holding_days": float(winning_trades["holding_period_days"].mean()) if not winning_trades.empty else 0.0,
+        "avg_loser_holding_days": float(losing_trades["holding_period_days"].mean()) if not losing_trades.empty else 0.0,
+        "max_win_streak": streak_summary["max_win_streak"],
+        "max_loss_streak": streak_summary["max_loss_streak"],
+        "current_trade_streak": streak_summary["current_trade_streak"],
         "avg_open_positions": avg_open_positions,
         "max_open_positions": max_open_positions,
         "time_in_market": time_in_market,
@@ -915,36 +1129,106 @@ def _build_summary(
     return summary
 
 
-def _summary_frame(summary: Mapping[str, Any]) -> pd.DataFrame:
-    rows = [
-        ("Strategy", summary.get("name")),
-        ("Start", summary.get("start")),
-        ("End", summary.get("end")),
-        ("Steps", summary.get("steps")),
-        ("Sessions", summary.get("sessions")),
-        ("Total PnL", summary.get("total_pnl")),
-        ("Realized PnL", summary.get("realized_pnl")),
-        ("Open PnL", summary.get("open_pnl")),
-        ("Sharpe", summary.get("sharpe")),
-        ("Sortino", summary.get("sortino")),
-        ("Max Drawdown", summary.get("max_drawdown")),
-        ("Trade Hit Rate", summary.get("trade_hit_rate")),
-        ("Closed Trades", summary.get("closed_trade_count")),
-        ("Open Trades", summary.get("open_trade_count")),
-        ("Avg Hold Days", summary.get("avg_holding_days")),
-        ("Time In Market", summary.get("time_in_market")),
+def _metric_frame(summary: Mapping[str, Any], specs: list[tuple[str, str, str]]) -> pd.DataFrame:
+    return pd.DataFrame([(label, summary.get(key)) for label, key, _ in specs], columns=["Metric", "Value"])
+
+
+def _overview_summary_specs(summary: Mapping[str, Any]) -> list[tuple[str, str, str]]:
+    specs = [
+        ("Strategy", "name", "auto"),
+        ("Start", "start", "date"),
+        ("End", "end", "date"),
+        ("Steps", "steps", "int"),
+        ("Sessions", "sessions", "int"),
+        ("Total PnL", "total_pnl", "float"),
+        ("Realized PnL", "realized_pnl", "float"),
+        ("Open PnL", "open_pnl", "float"),
+        ("Gross Realized", "gross_realized_pnl", "float"),
+        ("Fees", "total_fees", "float"),
     ]
-    if "total_return_pct" in summary:
-        rows.extend(
+    if "capital_base" in summary:
+        specs.extend(
             [
-                ("Capital Base", summary.get("capital_base")),
-                ("Total Return", summary.get("total_return_pct")),
-                ("Ann. Return", summary.get("annual_return_pct")),
-                ("Ann. Vol", summary.get("annual_vol_pct")),
-                ("Calmar", summary.get("calmar")),
+                ("Capital Base", "capital_base", "float"),
+                ("Total Return", "total_return_pct", "pct"),
+                ("Ann. Return", "annual_return_pct", "pct"),
+                ("Ann. Vol", "annual_vol_pct", "pct"),
+                ("Calmar", "calmar", "ratio"),
             ]
         )
-    return pd.DataFrame(rows, columns=["Metric", "Value"])
+    return specs
+
+
+def _risk_summary_specs(summary: Mapping[str, Any]) -> list[tuple[str, str, str]]:
+    return [
+        ("Avg Session PnL", "avg_session_pnl", "float"),
+        ("Best Session", "best_session", "float"),
+        ("Worst Session", "worst_session", "float"),
+        ("Positive Sessions", "positive_session_rate", "pct"),
+        ("Negative Sessions", "negative_session_rate", "pct"),
+        ("Session Vol", "session_vol", "float"),
+        ("Sharpe", "sharpe", "ratio"),
+        ("Sortino", "sortino", "ratio"),
+        ("Max Drawdown", "max_drawdown", "float"),
+        ("Current Drawdown", "current_drawdown", "float"),
+        ("VaR 95", "var_95", "float"),
+        ("CVaR 95", "cvar_95", "float"),
+    ]
+
+
+def _activity_summary_specs(summary: Mapping[str, Any]) -> list[tuple[str, str, str]]:
+    return [
+        ("Entry Count", "entry_count", "int"),
+        ("Exit Count", "exit_count", "int"),
+        ("Trade Sides", "trade_sides", "int"),
+        ("Active Trading Sessions", "active_trading_sessions", "int"),
+        ("Avg Entries / Session", "avg_entries_per_session", "float"),
+        ("Avg Exits / Session", "avg_exits_per_session", "float"),
+        ("Avg Sides / Session", "avg_trade_sides_per_session", "float"),
+        ("Avg Entries / Active Session", "avg_entries_per_active_session", "float"),
+        ("Avg Exits / Active Session", "avg_exits_per_active_session", "float"),
+        ("Avg Open Positions", "avg_open_positions", "float"),
+        ("Max Open Positions", "max_open_positions", "float"),
+        ("Time In Market", "time_in_market", "pct"),
+    ]
+
+
+def _trade_summary_specs(summary: Mapping[str, Any]) -> list[tuple[str, str, str]]:
+    return [
+        ("Closed Trades", "closed_trade_count", "int"),
+        ("Winning Trades", "winning_trade_count", "int"),
+        ("Losing Trades", "losing_trade_count", "int"),
+        ("Flat Trades", "flat_trade_count", "int"),
+        ("Open Trades", "open_trade_count", "int"),
+        ("Trade Hit Rate", "trade_hit_rate", "pct"),
+        ("Profit Factor", "profit_factor", "ratio"),
+        ("Payoff Ratio", "payoff_ratio", "ratio"),
+        ("Gross Profit", "gross_profit", "float"),
+        ("Gross Loss", "gross_loss", "float"),
+        ("Expectancy", "expectancy", "float"),
+        ("Avg Trade PnL", "avg_trade_pnl", "float"),
+        ("Median Trade PnL", "median_trade_pnl", "float"),
+        ("Avg Win", "avg_win", "float"),
+        ("Median Win", "median_win", "float"),
+        ("Avg Loss", "avg_loss", "float"),
+        ("Median Loss", "median_loss", "float"),
+        ("Max Win Trade", "max_win_trade", "float"),
+        ("Max Loss Trade", "max_loss_trade", "float"),
+        ("Avg Hold Days", "avg_holding_days", "float"),
+        ("Median Hold Days", "median_holding_days", "float"),
+        ("P90 Hold Days", "p90_holding_days", "float"),
+        ("Avg Winner Hold", "avg_winner_holding_days", "float"),
+        ("Avg Loser Hold", "avg_loser_holding_days", "float"),
+        ("Avg Hold Steps", "avg_holding_steps", "float"),
+        ("Max Win Streak", "max_win_streak", "int"),
+        ("Max Loss Streak", "max_loss_streak", "int"),
+        ("Current Trade Streak", "current_trade_streak", "auto"),
+    ]
+
+
+def _summary_frame(summary: Mapping[str, Any]) -> pd.DataFrame:
+    specs = _overview_summary_specs(summary) + _risk_summary_specs(summary) + _activity_summary_specs(summary) + _trade_summary_specs(summary)
+    return _metric_frame(summary, specs)
 
 
 def _format_value(value: Any, *, kind: str = "auto") -> str:
@@ -977,35 +1261,31 @@ def _format_value(value: Any, *, kind: str = "auto") -> str:
 
 def _summary_display_rows(analytics: QueryBacktestAnalytics) -> list[tuple[str, str]]:
     summary = analytics.summary
-    rows = [
-        ("Strategy", _format_value(summary.get("name"))),
-        ("Start", _format_value(summary.get("start"), kind="date")),
-        ("End", _format_value(summary.get("end"), kind="date")),
-        ("Steps", _format_value(summary.get("steps"), kind="int")),
-        ("Sessions", _format_value(summary.get("sessions"), kind="int")),
-        ("Total PnL", _format_value(summary.get("total_pnl"), kind="float")),
-        ("Realized PnL", _format_value(summary.get("realized_pnl"), kind="float")),
-        ("Open PnL", _format_value(summary.get("open_pnl"), kind="float")),
-        ("Sharpe", _format_value(summary.get("sharpe"), kind="ratio")),
-        ("Sortino", _format_value(summary.get("sortino"), kind="ratio")),
-        ("Max Drawdown", _format_value(summary.get("max_drawdown"), kind="float")),
-        ("Trade Hit Rate", _format_value(summary.get("trade_hit_rate"), kind="pct")),
-        ("Closed Trades", _format_value(summary.get("closed_trade_count"), kind="int")),
-        ("Open Trades", _format_value(summary.get("open_trade_count"), kind="int")),
-        ("Avg Hold Days", _format_value(summary.get("avg_holding_days"), kind="float")),
-        ("Time In Market", _format_value(summary.get("time_in_market"), kind="pct")),
-    ]
-    if analytics.capital_base is not None:
-        rows.extend(
-            [
-                ("Capital Base", _format_value(summary.get("capital_base"), kind="float")),
-                ("Total Return", _format_value(summary.get("total_return_pct"), kind="pct")),
-                ("Ann. Return", _format_value(summary.get("annual_return_pct"), kind="pct")),
-                ("Ann. Vol", _format_value(summary.get("annual_vol_pct"), kind="pct")),
-                ("Calmar", _format_value(summary.get("calmar"), kind="ratio")),
-            ]
-        )
-    return rows
+    specs = _overview_summary_specs(summary) + _risk_summary_specs(summary) + _activity_summary_specs(summary) + _trade_summary_specs(summary)
+    return [(label, _format_value(summary.get(key), kind=kind)) for label, key, kind in specs]
+
+
+def _summary_table_layout(rows: list[tuple[str, str]], *, pair_columns: int = 2) -> tuple[list[str], list[list[str]]]:
+    if not rows:
+        return ["Metric", "Value"], []
+    pair_columns = max(1, int(pair_columns))
+    chunk = int(np.ceil(len(rows) / pair_columns))
+    headers: list[str] = []
+    for _ in range(pair_columns):
+        headers.extend(["Metric", "Value"])
+
+    body: list[list[str]] = []
+    for row_idx in range(chunk):
+        body_row: list[str] = []
+        for pair_idx in range(pair_columns):
+            source_idx = pair_idx * chunk + row_idx
+            if source_idx < len(rows):
+                metric, value = rows[source_idx]
+                body_row.extend([metric, value])
+            else:
+                body_row.extend(["", ""])
+        body.append(body_row)
+    return headers, body
 
 
 def _draw_no_data(ax: Any, title: str, message: str) -> None:
@@ -1016,17 +1296,18 @@ def _draw_no_data(ax: Any, title: str, message: str) -> None:
 
 def _plot_summary_table_matplotlib(ax: Any, analytics: QueryBacktestAnalytics) -> None:
     rows = _summary_display_rows(analytics)
+    headers, body = _summary_table_layout(rows, pair_columns=2)
     ax.axis("off")
     table = ax.table(
-        cellText=[[label, value] for label, value in rows],
-        colLabels=["Metric", "Value"],
+        cellText=body,
+        colLabels=headers,
         cellLoc="left",
         colLoc="left",
         loc="center",
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(10)
-    table.scale(1.0, 1.4)
+    table.set_fontsize(8.5)
+    table.scale(1.0, 1.2)
     ax.set_title("Summary", loc="left", fontsize=13, fontweight="bold")
 
 
@@ -1165,10 +1446,12 @@ def _plot_summary_table_plotly(fig: Any, analytics: QueryBacktestAnalytics, *, r
     import plotly.graph_objects as go
 
     rows = _summary_display_rows(analytics)
+    headers, body = _summary_table_layout(rows, pair_columns=2)
+    body_columns = list(map(list, zip(*body))) if body else [[] for _ in headers]
     fig.add_trace(
         go.Table(
-            header=dict(values=["Metric", "Value"], fill_color="#1f77b4", font=dict(color="white"), align="left"),
-            cells=dict(values=[[label for label, _ in rows], [value for _, value in rows]], align="left"),
+            header=dict(values=headers, fill_color="#1f77b4", font=dict(color="white"), align="left"),
+            cells=dict(values=body_columns, align="left"),
         ),
         row=row,
         col=col,

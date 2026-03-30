@@ -8,6 +8,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, DefaultDict, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import numpy as np
@@ -48,6 +49,13 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 _BARCHART_IRS_BULK_MIN_TIMESTAMPS = 2000
 _BARCHART_IRS_BULK_CALIBRATION_EXECUTOR = "thread"
+_EOD_FREQ_ZONES: Dict[str, str] = {
+    "eod": "America/New_York",
+    "nyc_eod": "America/New_York",
+    "chi_eod": "America/Chicago",
+    "ldn_eod": "Europe/London",
+}
+_EOD_FREQ_KEYS = frozenset({"eod", "nyc_eod", "chi_eod", "ldn_eod"})
 _IRSWAP_ADJUSTED_SPREAD_VALUES = {
     value
     for value in (
@@ -104,6 +112,15 @@ def _build_reference_points(
         freq=freq,
         timestamps=timestamps,
     )
+
+
+def _is_eod_frequency(freq: Optional[str]) -> bool:
+    return str(freq or "").strip().lower() in _EOD_FREQ_KEYS
+
+
+def _live_eod_history_end(freq: Optional[str]) -> datetime.date:
+    zone_name = _EOD_FREQ_ZONES.get(str(freq or "").strip().lower(), "America/New_York")
+    return datetime.datetime.now(ZoneInfo(zone_name)).date() - datetime.timedelta(days=1)
 
 
 def _timestamp_utc_key(value: Any) -> Optional[datetime.datetime]:
@@ -778,6 +795,94 @@ class TimeseriesBuilder:
             f"No timeseries router or MDP registered for product '{product}'. "
             f"Available: {available}"
         )
+
+    def _get_live_eod_irs_timeseries(
+        self,
+        *,
+        start: DateLike,
+        flat_queries: List[BaseQuery],
+        n_jobs: Optional[int],
+        ignore_cache: Optional[bool],
+        ignore_cache_miss: Optional[bool],
+        freq: Optional[str],
+        timestamps: Optional[List[datetime.datetime]],
+        merged_routers: Mapping[str, Any],
+        merged_mdps: Mapping[str, MarketDataProvider],
+        drop_multilevel_cols: Optional[bool],
+        _disable_barchart_irs_bulk_planner: bool,
+    ) -> pd.DataFrame:
+        if timestamps is not None:
+            raise NotImplementedError("end='live' does not support explicit timestamps.")
+        if not _is_eod_frequency(freq):
+            raise NotImplementedError("end='live' is currently supported only for EOD frequencies.")
+        if not flat_queries:
+            return pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+        if not all(isinstance(q, IRSwapQuery) for q in flat_queries):
+            raise NotImplementedError("end='live' is currently supported only for IRS queries.")
+
+        _canonical_product, tb, _mdp = self._resolve_product_handles(
+            product="IRS",
+            merged_routers=merged_routers,
+            merged_mdps=merged_mdps,
+        )
+        if tb is None:
+            available = sorted(set(merged_routers.keys()) | set(merged_mdps.keys()))
+            raise KeyError(
+                "end='live' requires an IRS timeseries router. "
+                f"Available: {available}"
+            )
+        start_date = start.date() if isinstance(start, datetime.datetime) else start
+        history_end = _live_eod_history_end(freq)
+        historical_end_bound: DateLike = history_end
+        if isinstance(start, datetime.datetime):
+            if start.tzinfo is None or start.tzinfo.utcoffset(start) is None:
+                historical_end_bound = datetime.datetime.combine(history_end, datetime.time.max)
+            else:
+                historical_end_bound = datetime.datetime.combine(history_end, datetime.time.max, tzinfo=start.tzinfo)
+
+        historical_df = pd.DataFrame().set_index(pd.Index([], name=self._date_col))
+        if start_date <= history_end:
+            historical_df = self.get_timeseries(
+                start=start,
+                end=historical_end_bound,
+                queries=flat_queries,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                ignore_cache_miss=ignore_cache_miss,
+                freq=freq,
+                timestamps=None,
+                drop_multilevel_cols=drop_multilevel_cols,
+                routers=merged_routers,
+                mdps=merged_mdps,
+                _disable_barchart_irs_bulk_planner=_disable_barchart_irs_bulk_planner,
+            )
+
+        live_start: DateLike = history_end + datetime.timedelta(days=1)
+        if isinstance(start, datetime.datetime):
+            next_day = history_end + datetime.timedelta(days=1)
+            if start.tzinfo is None or start.tzinfo.utcoffset(start) is None:
+                live_start = datetime.datetime.combine(next_day, datetime.time.min)
+            else:
+                live_start = datetime.datetime.combine(next_day, datetime.time.min, tzinfo=start.tzinfo)
+        live_df = tb.get_timeseries(  # type: ignore[attr-defined]
+            live_start,
+            "live",
+            flat_queries,
+            n_jobs=n_jobs,
+            ignore_cache=ignore_cache,
+            ignore_cache_miss=ignore_cache_miss,
+            freq=freq,
+            timestamps=None,
+        )
+
+        if historical_df.empty:
+            return live_df
+        if live_df.empty:
+            return historical_df
+
+        out = pd.concat([historical_df, live_df], axis=0)
+        out = out[~out.index.duplicated(keep="last")]
+        return out
 
     @staticmethod
     def _get_irswap_spreads_mdp(merged_mdps: Mapping[str, MarketDataProvider]) -> Optional[MarketDataProvider]:
@@ -2668,7 +2773,6 @@ class TimeseriesBuilder:
         duckdb_path: Optional[str] = None,
         _disable_barchart_irs_bulk_planner: bool = False,
     ) -> pd.DataFrame:
-        assert start <= end, "must have end > start"
         flat = _flatten_base_queries(queries)
 
         merged_routers: Dict[str, Any] = dict(self._routers)
@@ -2677,7 +2781,7 @@ class TimeseriesBuilder:
         merged_mdps: Dict[str, MarketDataProvider] = dict(mdps or {})
 
         if (
-            (use_duckdb is not None or duckdb_path is not None)
+            ((use_duckdb is not None or duckdb_path is not None) or end == "live")
             and merged_routers.get("IRS") is None
             and merged_mdps.get("IRS") is not None
             and any(isinstance(q, IRSwapQuery) for q in flat)
@@ -2691,6 +2795,23 @@ class TimeseriesBuilder:
                 use_duckdb=True if use_duckdb is None else bool(use_duckdb),
                 duckdb_path=duckdb_path,
             )
+
+        if end == "live":
+            return self._get_live_eod_irs_timeseries(
+                start=start,
+                flat_queries=flat,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                ignore_cache_miss=ignore_cache_miss,
+                freq=freq,
+                timestamps=timestamps,
+                merged_routers=merged_routers,
+                merged_mdps=merged_mdps,
+                drop_multilevel_cols=drop_multilevel_cols,
+                _disable_barchart_irs_bulk_planner=_disable_barchart_irs_bulk_planner,
+            )
+
+        assert start <= end, "must have end > start"
 
         per_product_frames: List[Tuple[str, pd.DataFrame]] = []
         product_frames_by_product: Dict[str, pd.DataFrame] = {}

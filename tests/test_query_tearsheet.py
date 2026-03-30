@@ -1,10 +1,12 @@
 import datetime as dt
+from dataclasses import replace
 import matplotlib
 
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
+import pytest
 
 from BT.query_actions import AddQueryAction, UnwindPositionsAction
 from BT.query_engine import QueryDrivenBacktest
@@ -52,6 +54,87 @@ def _build_sample_backtest(simple_time_grid, mock_mdp):
     return backtest
 
 
+def _seed_trade_analytics_history(backtest, simple_time_grid):
+    dates = list(simple_time_grid)
+    base_closed = backtest.portfolio.closed_positions_log[0]
+    open_position = next(iter(backtest.portfolio.iter_positions()))
+
+    long_trade_one = replace(
+        base_closed["position"],
+        meta={**dict(base_closed["position"].meta or {}), "signal_direction": 1, "tags": ["macro-rv", "front-book"]},
+    )
+    long_trade_two = replace(
+        open_position,
+        opened=dates[1],
+        meta={**dict(open_position.meta or {}), "signal_direction": 1, "tags": ["carry", "core-book"]},
+    )
+    short_trade = replace(
+        open_position,
+        opened=dates[0],
+        meta={**dict(open_position.meta or {}), "signal_direction": -1, "tags": ["hedge", "defensive"]},
+    )
+
+    backtest.portfolio.closed_positions_log = [
+        {
+            "opened_at": dates[0],
+            "closed_at": dates[2],
+            "holding_period_steps": 2,
+            "holding_period_days": 2.0,
+            "realized_pnl": 120.0,
+            "gross_realized_pnl": 125.0,
+            "fee_allocated": 5.0,
+            "position": long_trade_one,
+            "source_query": long_trade_one.source_query,
+            "position_meta": dict(long_trade_one.meta or {}),
+            "exit_meta": {"action": "unwind", "reason": "target"},
+            "handler_name": "generic",
+        },
+        {
+            "opened_at": dates[1],
+            "closed_at": dates[3],
+            "holding_period_steps": 2,
+            "holding_period_days": 2.0,
+            "realized_pnl": 80.0,
+            "gross_realized_pnl": 82.0,
+            "fee_allocated": 2.0,
+            "position": long_trade_two,
+            "source_query": long_trade_two.source_query,
+            "position_meta": dict(long_trade_two.meta or {}),
+            "exit_meta": {"action": "unwind", "reason": "target"},
+            "handler_name": "generic",
+        },
+        {
+            "opened_at": dates[0],
+            "closed_at": dates[4],
+            "holding_period_steps": 4,
+            "holding_period_days": 4.0,
+            "realized_pnl": -120.0,
+            "gross_realized_pnl": -118.0,
+            "fee_allocated": 2.0,
+            "position": short_trade,
+            "source_query": short_trade.source_query,
+            "position_meta": dict(short_trade.meta or {}),
+            "exit_meta": {"action": "unwind", "reason": "stop"},
+            "handler_name": "generic",
+        },
+    ]
+    backtest.realized_pnl = 80.0
+    backtest.realized_pnl_history = {
+        dates[0]: 0.0,
+        dates[2]: 120.0,
+        dates[3]: 200.0,
+        dates[4]: 80.0,
+    }
+    backtest.mtm_history = {
+        dates[0]: 0.0,
+        dates[1]: 40.0,
+        dates[2]: 120.0,
+        dates[3]: 210.0,
+        dates[4]: 95.0,
+    }
+    return backtest
+
+
 def test_query_tearsheet_builds_frames_and_engine_logs(simple_time_grid, mock_mdp):
     backtest = _build_sample_backtest(simple_time_grid, mock_mdp)
 
@@ -74,6 +157,29 @@ def test_query_tearsheet_builds_frames_and_engine_logs(simple_time_grid, mock_md
     assert analytics.closed_trades.iloc[0]["product"] == "IRS"
     assert "IRS" in analytics.product_summary.index
     assert not analytics.tag_summary.empty
+
+
+def test_query_tearsheet_builds_detailed_trade_analytics(simple_time_grid, mock_mdp):
+    backtest = _seed_trade_analytics_history(_build_sample_backtest(simple_time_grid, mock_mdp), simple_time_grid)
+
+    analytics = create_query_backtest_tearsheet(backtest, capital_base=5_000_000).analytics
+
+    assert {"direction_label", "duration_bucket", "pnl_per_day", "pnl_per_size_unit"} <= set(analytics.closed_trades.columns)
+    assert analytics.summary["winning_trade_count"] == 2
+    assert analytics.summary["losing_trade_count"] == 1
+    assert analytics.summary["median_holding_days"] == pytest.approx(2.0)
+    assert analytics.summary["avg_holding_days"] == pytest.approx(8.0 / 3.0)
+    assert analytics.summary["max_win_streak"] == 2
+    assert analytics.summary["current_trade_streak"] == "Loss 1"
+    assert analytics.summary["total_fees"] == pytest.approx(9.0)
+    assert analytics.trade_summary_frame.loc[analytics.trade_summary_frame["Metric"] == "Median Hold Days", "Value"].iloc[0] == pytest.approx(2.0)
+    assert analytics.holding_period_summary.loc["Winning Trades", "avg_days"] == pytest.approx(2.0)
+    assert analytics.exit_reason_summary.loc["target", "closed_trades"] == pytest.approx(2.0)
+    assert analytics.exit_reason_summary.loc["target", "realized_pnl"] == pytest.approx(200.0)
+    assert analytics.direction_summary.loc["Long", "closed_trades"] == pytest.approx(2.0)
+    assert analytics.direction_summary.loc["Short", "closed_trades"] == pytest.approx(1.0)
+    assert analytics.duration_bucket_summary.loc["1-3D", "closed_trades"] == pytest.approx(2.0)
+    assert analytics.duration_bucket_summary.loc["3-7D", "closed_trades"] == pytest.approx(1.0)
 
 
 def test_query_tearsheet_renders_matplotlib_and_plotly(simple_time_grid, mock_mdp):

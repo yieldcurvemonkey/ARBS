@@ -9,6 +9,7 @@ from typing import DefaultDict, Dict, Iterable, List, Mapping, Optional, Sequenc
 import re
 import pandas as pd
 from tqdm import tqdm
+from zoneinfo import ZoneInfo
 
 import logging
 
@@ -32,6 +33,12 @@ from utils.ql_utils import datetime_to_ql_date
 from BT.misc import ql_cal_date_range
 
 _LOGGER_NAME = "IRSwapsTB"
+_EOD_FREQ_ZONES: Dict[str, str] = {
+    "eod": "America/New_York",
+    "nyc_eod": "America/New_York",
+    "chi_eod": "America/Chicago",
+    "ldn_eod": "Europe/London",
+}
 
 
 def _query_fingerprint(q: "IRSwapQuery") -> str:
@@ -42,6 +49,7 @@ def _query_fingerprint(q: "IRSwapQuery") -> str:
         "structure": q.structure.name if getattr(q, "structure", None) else None,
         "value": ([_canonicalize_value(v) for v in q.value] if isinstance(q.value, list) else _canonicalize_value(q.value)),
         "structure_kwargs": _canonicalize_value(q.structure_kwargs or {}),
+        "value_kwargs": _canonicalize_value(q.value_kwargs or {}),
         "name": q.name,
         "risk_weight": q.risk_weight,
         # Note: we purposely DO NOT include q.curve here; it's a separate axis in the key
@@ -78,6 +86,17 @@ def _build_row_for_query(
     ref_dt: DateLike,
     date_col: str,
 ) -> Tuple[DateLike, str, float]:
+    def _value_apply_kwargs(q_eff: IRSwapQuery) -> Dict[str, object]:
+        apply_kwargs = {
+            key: value
+            for key, value in dict(getattr(q_eff, "structure_kwargs", {}) or {}).items()
+            if value is not None and key not in {"curve", "package", "risk_weights"}
+        }
+        for key, value in dict(getattr(q_eff, "value_kwargs", {}) or {}).items():
+            if value is not None:
+                apply_kwargs[key] = value
+        return apply_kwargs
+
     q_eff = resolve_query(q, timestamp=ref_dt, pricer_or_curve=curve)
     if getattr(q, "name", None):
         # Explicit labels should be preserved verbatim so callers can disambiguate queries.
@@ -89,25 +108,25 @@ def _build_row_for_query(
             col_name = q.col_name()
     pkg, rw = q_eff.resolve_package(pricer_or_curve=curve, is_for_timeseries=True)
     val_map = q_eff.build_value_map(pricer_or_curve=curve, package=pkg, risk_weights=rw)
-    value = val_map.apply(value=q_eff.value, **q.value_kwargs)
+    value = val_map.apply(value=q_eff.value, **_value_apply_kwargs(q_eff))
     return ref_dt, col_name, float(value)
 
 
 def _build_rows_for_chunk(
-    chunk: List[Tuple[DateLike, IRSwapQuery, _IRSwapGenericCurve]],
+    chunk: List[Tuple[DateLike, IRSwapQuery, _IRSwapGenericCurve, object]],
     date_col: str,
 ) -> Tuple[
-    List[Tuple[Tuple[DateLike, str, float], IRSwapQuery, DateLike]],
-    List[Tuple[IRSwapQuery, DateLike, Exception]],
+    List[Tuple[Tuple[DateLike, str, float], IRSwapQuery, object]],
+    List[Tuple[IRSwapQuery, DateLike, object, Exception]],
 ]:
-    rows: List[Tuple[Tuple[DateLike, str, float], IRSwapQuery, DateLike]] = []
-    errors: List[Tuple[IRSwapQuery, DateLike, Exception]] = []
-    for d, q, curve in chunk:
+    rows: List[Tuple[Tuple[DateLike, str, float], IRSwapQuery, object]] = []
+    errors: List[Tuple[IRSwapQuery, DateLike, object, Exception]] = []
+    for pricing_ref_point, q, curve, request_ref_point in chunk:
         try:
-            row = _build_row_for_query(curve, q, d, date_col)
-            rows.append((row, q, d))
+            row = _build_row_for_query(curve, q, pricing_ref_point, date_col)
+            rows.append((row, q, request_ref_point))
         except Exception as e:
-            errors.append((q, d, e))
+            errors.append((q, pricing_ref_point, request_ref_point, e))
     return rows, errors
 
 
@@ -122,6 +141,42 @@ def _is_today(d: DateLike) -> bool:
     elif isinstance(d, datetime.date):
         return d == datetime.date.today()
     return False
+
+
+def _is_eod_frequency(freq: Optional[str]) -> bool:
+    return str(freq or "").strip().lower() in _EOD_FREQ_ZONES
+
+
+def _live_eod_history_end(freq: Optional[str]) -> datetime.date:
+    zone_name = _EOD_FREQ_ZONES.get(str(freq or "").strip().lower(), "America/New_York")
+    return datetime.datetime.now(ZoneInfo(zone_name)).date() - datetime.timedelta(days=1)
+
+
+def _live_output_timestamp(
+    *,
+    start: DateLike,
+    freq: Optional[str],
+    historical_ref_points: Sequence[DateLike],
+) -> datetime.datetime:
+    zone_name = _EOD_FREQ_ZONES.get(str(freq or "").strip().lower(), "America/New_York")
+    zone = ZoneInfo(zone_name)
+
+    out_tz = None
+    for ref_point in historical_ref_points:
+        if isinstance(ref_point, datetime.datetime) and ref_point.tzinfo is not None and ref_point.tzinfo.utcoffset(ref_point) is not None:
+            out_tz = ref_point.tzinfo
+            break
+    if out_tz is None and isinstance(start, datetime.datetime) and start.tzinfo is not None and start.tzinfo.utcoffset(start) is not None:
+        out_tz = start.tzinfo
+
+    now_local = datetime.datetime.now(zone)
+    return now_local.astimezone(out_tz) if out_tz is not None else now_local
+
+
+def _sorted_request_points(points: Iterable[object]) -> List[object]:
+    non_live = [point for point in points if point != "live"]
+    live = [point for point in points if point == "live"]
+    return sorted(non_live) + live
 
 
 def _curve_store_source_family(mdp: Optional[IRSwapsMDP]) -> Optional[str]:
@@ -280,7 +335,7 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             filtered = [
                 ref_point
                 for ref_point in filtered
-                if ql.UnitedStates(ql.UnitedStates.GovernmentBond).isBusinessDay(datetime_to_ql_date(ref_point))
+                if ref_point == "live" or ql.UnitedStates(ql.UnitedStates.GovernmentBond).isBusinessDay(datetime_to_ql_date(ref_point))
             ]
 
         return filtered
@@ -299,12 +354,37 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         _prefetched_ts_rows_by_symbol: Optional[Mapping[str, Sequence[Tuple[DateLike, str, float]]]] = None,
     ) -> pd.DataFrame:
         has_timestamps = timestamps is not None and len(timestamps) > 0
-        is_intraday = (not has_timestamps) and isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
-        if is_intraday:
-            assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
-        eff_freq = (freq or "1T") if is_intraday else freq
-        ref_points = self._build_reference_points(start=start, end=end, freq=eff_freq, timestamps=timestamps)
-        use_intraday_cache = has_timestamps or is_intraday
+        live_eod_mode = end == "live"
+        live_output_index: Optional[datetime.datetime] = None
+        if live_eod_mode:
+            if has_timestamps:
+                raise NotImplementedError("IRSwapsTB end='live' does not support explicit timestamps.")
+            if not _is_eod_frequency(freq):
+                raise NotImplementedError("IRSwapsTB end='live' is currently supported only for EOD frequencies.")
+            start_date = start.date() if isinstance(start, datetime.datetime) else start
+            historical_ref_points: List[DateLike] = []
+            history_end = _live_eod_history_end(freq)
+            if start_date <= history_end:
+                historical_ref_points = self._build_reference_points(
+                    start=start,
+                    end=history_end,
+                    freq=freq,
+                    timestamps=None,
+                )
+            live_output_index = _live_output_timestamp(
+                start=start,
+                freq=freq,
+                historical_ref_points=historical_ref_points,
+            )
+            ref_points = [*historical_ref_points, "live"]
+            use_intraday_cache = False
+        else:
+            is_intraday = (not has_timestamps) and isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
+            if is_intraday:
+                assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
+            eff_freq = (freq or "1T") if is_intraday else freq
+            ref_points = self._build_reference_points(start=start, end=end, freq=eff_freq, timestamps=timestamps)
+            use_intraday_cache = has_timestamps or is_intraday
 
         flat = self._flatten_queries(queries)
         by_curve = _group_queries_by_curve(flat)
@@ -327,7 +407,8 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         if self._use_ts_cache and not ignore_cache:
             for curve_name, qs in by_curve.items():
                 curve_ref_points = ref_points_by_curve.get(curve_name, [])
-                if not curve_ref_points:
+                cacheable_ref_points = [ref_point for ref_point in curve_ref_points if ref_point != "live"]
+                if not cacheable_ref_points:
                     continue
                 for q in qs:
                     symbol = self._ts_symbol_for_query(curve_name, q)
@@ -338,7 +419,7 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         try:
                             rows = self._computed_ts_store.read_rows(
                                 symbol=symbol,
-                                reference_points=curve_ref_points,
+                                reference_points=cacheable_ref_points,
                                 intraday=use_intraday_cache,
                                 skip_current_eod=True,
                                 fallback_column_name=q.col_name(curve_name),
@@ -391,20 +472,34 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                     else:
                         to_fetch[curve_name].add(d)
 
-        new_rows_with_q: List[Tuple[Tuple[DateLike, str, float], IRSwapQuery, str, datetime.date]] = []
+        new_rows_with_q: List[Tuple[Tuple[DateLike, str, float], IRSwapQuery, str, object]] = []
         for curve_name, missing_points in to_fetch.items():
             if not missing_points:
                 continue
 
+            request_points = _sorted_request_points(missing_points)
             bulk_request = {
                 "curve_name": curve_name,
-                "timestamps": sorted(missing_points),
+                "timestamps": request_points,
                 "ignore_cache": ignore_cache,
                 "n_jobs": n_jobs,
             }
             if ignore_cache_miss:
                 bulk_request["ignore_cache_miss"] = True
-            built_map: Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve] = self.mdp.bulk_get_data(bulk_request)
+            built_map: Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve] = {}
+            historical_request_points = [point for point in request_points if point != "live"]
+            if historical_request_points:
+                historical_request = dict(bulk_request)
+                historical_request["timestamps"] = historical_request_points
+                built_map.update(self.mdp.bulk_get_data(historical_request))
+            if "live" in request_points:
+                live_request = {
+                    "curve_name": curve_name,
+                    "timestamps": ["live"],
+                    "ignore_cache": ignore_cache,
+                    "n_jobs": n_jobs,
+                }
+                built_map.update(self.mdp.bulk_get_data(live_request))
 
             qs = by_curve[curve_name]
             total_tasks = len(missing_points) * len(qs)
@@ -416,8 +511,8 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 desc=f"PRICING {curve_name} IRSWAPS [workers={worker_count}]...",
                 leave=False,
             ) as pbar:
-                tasks: List[Tuple[datetime.datetime | datetime.date, IRSwapQuery, _IRSwapGenericCurve]] = []
-                for d in sorted(missing_points):
+                tasks: List[Tuple[DateLike, IRSwapQuery, _IRSwapGenericCurve, object]] = []
+                for d in request_points:
                     curve = built_map.get(d)
                     if curve is None and d == datetime.date.today():
                         curve = built_map.get("live")
@@ -425,15 +520,16 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         self._logger.warning(f"No curve returned for curve='{curve_name}' on date='{d}'.")
                         pbar.update(len(qs))
                         continue
+                    pricing_ref_point: DateLike = live_output_index if (d == "live" and live_output_index is not None) else d
                     for q in qs:
-                        tasks.append((d, q, curve))
+                        tasks.append((pricing_ref_point, q, curve, d))
 
                 if tasks:
                     if (n_jobs or 1) > 1:
                         max_workers = int(n_jobs) if n_jobs and n_jobs > 1 else None
                         mw = int(max_workers or 1)
                         chunk_size = max(16, len(tasks) // max(1, mw * 4))
-                        task_chunks: List[List[Tuple[datetime.datetime | datetime.date, IRSwapQuery, _IRSwapGenericCurve]]] = [
+                        task_chunks: List[List[Tuple[DateLike, IRSwapQuery, _IRSwapGenericCurve, object]]] = [
                             tasks[i : i + chunk_size]
                             for i in range(0, len(tasks), chunk_size)
                         ]
@@ -446,21 +542,23 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                                 chunk = fut_map[fut]
                                 try:
                                     rows, errs = fut.result()
-                                    for row, q, d in rows:
-                                        new_rows_with_q.append((row, q, curve_name, d))
-                                    for q, d, e in errs:
+                                    for row, q, request_ref_point in rows:
+                                        new_rows_with_q.append((row, q, curve_name, request_ref_point))
+                                    for q, _pricing_ref_point, request_ref_point, e in errs:
                                         self._logger.exception(
-                                            f"Pricing failed for curve='{curve_name}', date='{d}', query='{q}'. Error: {e}"
+                                            f"Pricing failed for curve='{curve_name}', date='{request_ref_point}', query='{q}'. Error: {e}"
                                         )
                                 finally:
                                     pbar.update(len(chunk))
                     else:
-                        for d, q, curve in tasks:
+                        for pricing_ref_point, q, curve, request_ref_point in tasks:
                             try:
-                                row = _build_row_for_query(curve, q, d, self._date_col)
-                                new_rows_with_q.append((row, q, curve_name, d))
+                                row = _build_row_for_query(curve, q, pricing_ref_point, self._date_col)
+                                new_rows_with_q.append((row, q, curve_name, request_ref_point))
                             except Exception as e:
-                                self._logger.exception(f"Pricing failed for curve='{curve_name}', date='{d}', query='{q}'. Error: {e}")
+                                self._logger.exception(
+                                    f"Pricing failed for curve='{curve_name}', date='{request_ref_point}', query='{q}'. Error: {e}"
+                                )
                             finally:
                                 pbar.update(1)
 
@@ -474,12 +572,15 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
         if self._use_ts_cache and new_rows_with_q:
             grouped: Dict[str, List[Tuple[DateLike, str, float]]] = defaultdict(list)
-            for (dt_like, col, val), q, curve_name, _d in new_rows_with_q:
+            for (dt_like, col, val), q, curve_name, request_ref_point in new_rows_with_q:
+                if request_ref_point == "live":
+                    continue
                 grouped[self._ts_symbol_for_query(curve_name, q)].append((dt_like, col, float(val)))
-            try:
-                self._computed_ts_store.append_many_rows(rows_by_symbol=grouped)
-            except Exception as ex:
-                self._logger.warning(f"[TS cache] bulk append failed: {ex}")
+            if grouped:
+                try:
+                    self._computed_ts_store.append_many_rows(rows_by_symbol=grouped)
+                except Exception as ex:
+                    self._logger.warning(f"[TS cache] bulk append failed: {ex}")
 
         all_rows = cached_rows + [r for (r, _q, _cn, _d) in new_rows_with_q]
         if not all_rows:
