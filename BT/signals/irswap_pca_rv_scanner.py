@@ -208,9 +208,13 @@ def build_rate_queries(config: IRSwapPCARVConfig) -> list:
 
 
 def build_carry_roll_queries(config: IRSwapPCARVConfig) -> list:
-    """Build carry and roll-down queries matching the rate queries."""
-    from Query.IRSwaps.IRSwapQuery import IRSwapQuery
-    from Query.IRSwaps.IRSwapValue import IRSwapValue
+    """Build carry and roll-down queries matching the rate queries.
+
+    Uses UnifiedQuery for carry/roll to leverage the horizon parameter
+    and avoid slow per-curve pricing.
+    """
+    from Query.Unified.UnifiedQuery import UnifiedQuery
+    from Query.Unified.registry import UnifiedValue
 
     queries = []
     tenors_to_query = []
@@ -226,12 +230,16 @@ def build_carry_roll_queries(config: IRSwapPCARVConfig) -> list:
 
     for fwd, tenor in tenors_to_query:
         t = f"{fwd}x{tenor}" if fwd else tenor
-        queries.append(
-            IRSwapQuery(curve=config.curve, tenor=t, value=IRSwapValue.CARRY_BPS_RUNNING)
-        )
-        queries.append(
-            IRSwapQuery(curve=config.curve, tenor=t, value=IRSwapValue.ROLL_BPS_RUNNING)
-        )
+        queries.append(UnifiedQuery(
+            curve=config.curve, tenor=t,
+            value=UnifiedValue.IRS_CARRY_BPS_RUNNING,
+            structure_kwargs={"horizon": config.carry_horizon},
+        ))
+        queries.append(UnifiedQuery(
+            curve=config.curve, tenor=t,
+            value=UnifiedValue.IRS_ROLL_BPS_RUNNING,
+            structure_kwargs={"horizon": config.carry_horizon},
+        ))
     return queries
 
 
@@ -283,19 +291,31 @@ def reshape_carry_roll_panel(
     df: pd.DataFrame,
     config: IRSwapPCARVConfig,
 ) -> Dict[Optional[str], pd.DataFrame]:
-    """Reshape carry/roll-down data into panels matching rate panels."""
+    """Reshape carry/roll-down data into panels matching rate panels.
+
+    Handles column names from both IRSwapQuery and UnifiedQuery formats.
+    """
     panels: Dict[Optional[str], pd.DataFrame] = {}
+
+    def _find_col(df_cols, tenor_key, metric):
+        """Find column matching tenor and carry/roll metric."""
+        metric_upper = metric.upper()
+        for c in df_cols:
+            c_upper = c.upper()
+            if tenor_key.upper() in c_upper and metric_upper in c_upper:
+                return c
+        return None
 
     if config.curve_input_mode in ("spot", "forward_cs"):
         tenor_list = config.cs_forward_tenors if config.curve_input_mode == "forward_cs" else config.spot_tenors
         cols = {}
         for tenor in tenor_list:
-            carry_matches = [c for c in df.columns if tenor in c and "CARRY" in c.upper()]
-            roll_matches = [c for c in df.columns if tenor in c and "ROLL" in c.upper()]
-            if carry_matches:
-                cols[f"{tenor}_carry"] = df[carry_matches[0]]
-            if roll_matches:
-                cols[f"{tenor}_roll"] = df[roll_matches[0]]
+            carry_col = _find_col(df.columns, tenor, "CARRY")
+            roll_col = _find_col(df.columns, tenor, "ROLL")
+            if carry_col:
+                cols[f"{tenor}_carry"] = df[carry_col]
+            if roll_col:
+                cols[f"{tenor}_roll"] = df[roll_col]
         if cols:
             panels[None] = pd.DataFrame(cols, index=df.index)
 
@@ -304,12 +324,12 @@ def reshape_carry_roll_panel(
             cols = {}
             for tenor in config.spot_tenors:
                 key = f"{fwd}x{tenor}" if fwd else tenor
-                carry_matches = [c for c in df.columns if key in c and "CARRY" in c.upper()]
-                roll_matches = [c for c in df.columns if key in c and "ROLL" in c.upper()]
-                if carry_matches:
-                    cols[f"{tenor}_carry"] = df[carry_matches[0]]
-                if roll_matches:
-                    cols[f"{tenor}_roll"] = df[roll_matches[0]]
+                carry_col = _find_col(df.columns, key, "CARRY")
+                roll_col = _find_col(df.columns, key, "ROLL")
+                if carry_col:
+                    cols[f"{tenor}_carry"] = df[carry_col]
+                if roll_col:
+                    cols[f"{tenor}_roll"] = df[roll_col]
             if cols:
                 panels[fwd] = pd.DataFrame(cols, index=df.index)
 
@@ -756,26 +776,34 @@ def _fit_ou(
     if len(clean) < 60:
         raise ValueError(f"Insufficient data for OU fit: {len(clean)} points")
 
+    # Scale fly series to bps for numerical stability in OU fitting.
+    # The arbitragelab optimizer converges poorly on tiny rate-decimal values
+    # (e.g., 0.001 = 10bps). Scaling to bps gives values ~10-100 which the
+    # MLE optimizer handles much better.
+    BPS_SCALE = 10_000.0
+    clean_bps = clean * BPS_SCALE
+
     theta = np.nan
     mu = np.nan
     sigma = np.nan
     half_life = np.nan
 
-    # Primary: arbitragelab OrnsteinUhlenbeck
+    # Primary: arbitragelab OrnsteinUhlenbeck (fit in bps space)
     try:
         from RVUtils.arbitragelab.arbitragelab.optimal_mean_reversion.ou_model import OrnsteinUhlenbeck
 
         ou = OrnsteinUhlenbeck()
         ou.fit(
-            data=clean.values,
+            data=clean_bps.values,
             data_frequency="D",
             discount_rate=config.ou_discount_rate,
             transaction_cost=config.ou_transaction_cost,
         )
-        theta_est, mu_est, sigma_sq, mll = ou.optimal_coefficients(clean.values)
-        theta = float(theta_est)
-        mu = float(mu_est)  # annualized speed
-        sigma = float(np.sqrt(max(sigma_sq, 0)))
+        theta_bps, mu_est, sigma_sq_bps, mll = ou.optimal_coefficients(clean_bps.values)
+        # Convert theta and sigma back to rate-decimal space
+        theta = float(theta_bps) / BPS_SCALE
+        mu = float(mu_est)  # annualized speed (dimensionless, same in bps or rate space)
+        sigma = float(np.sqrt(max(sigma_sq_bps, 0))) / BPS_SCALE  # back to rate space
         # arbitragelab returns half_life in YEARS — convert to business days
         hl_years = float(ou.half_life()) if mu > 1e-10 else 999.0
         half_life = hl_years * 252  # convert to business days
@@ -788,8 +816,8 @@ def _fit_ou(
     except Exception as exc:
         logger.warning("arbitragelab OU fit failed, using AR(1) fallback: %s", exc)
 
-        # Fallback: AR(1) regression with correct time convention
-        y = clean.values
+        # Fallback: AR(1) regression (in bps space for numerical stability)
+        y = clean_bps.values
         dy = np.diff(y)
         x = y[:-1]
         if len(x) < 10:
@@ -798,21 +826,20 @@ def _fit_ou(
         # Discrete AR(1): x_{t+1} = a + b*x_t + eps
         # => dx = a + (b-1)*x_t + eps
         # For OU: dx = k*(theta - x)*dt + sigma*dW
-        # Matching: (b-1) = -k*dt, a = k*theta*dt
-        # With dt=1 (daily), k = -(b-1) = 1-b, theta = a/k
+        # With dt=1 day: slope = -k_daily, intercept = k_daily * theta
         coeffs = np.polyfit(x, dy, 1)
         slope, intercept = coeffs[0], coeffs[1]
 
-        # slope ≈ -k (daily frequency, dt=1 day)
         k_daily = float(-slope)
         if k_daily <= 0:
-            k_daily = 1e-6  # Non-mean-reverting
+            k_daily = 1e-6
 
-        mu = k_daily  # Speed in daily units
-        theta = float(-intercept / slope) if abs(slope) > 1e-12 else float(clean.mean())
-        residuals = dy - (slope * x + intercept)
-        sigma = float(np.std(residuals) * np.sqrt(252))  # Annualize
-        half_life = float(np.log(2) / k_daily)  # Days
+        theta_bps = float(-intercept / slope) if abs(slope) > 1e-12 else float(clean_bps.mean())
+        theta = theta_bps / BPS_SCALE  # back to rate space
+        mu = k_daily  # daily speed
+        residuals_ar = dy - (slope * x + intercept)
+        sigma = float(np.std(residuals_ar)) / BPS_SCALE  # back to rate space, daily
+        half_life = float(np.log(2) / k_daily)  # in days
 
     # ADF test
     try:

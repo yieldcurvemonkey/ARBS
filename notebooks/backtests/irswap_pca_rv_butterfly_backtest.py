@@ -53,7 +53,7 @@ def run_mode(mode: str) -> dict:
         min_zscore_wing=0.3,
         max_adf_pvalue=0.15,
         auto_scan_fly=(mode != "forward_cs"),  # Use manual universe for CS forwards
-        include_carry_roll=False,  # Disable carry/roll for speed (per-curve pricing is slow)
+        include_carry_roll=True,  # Enabled via UnifiedQuery (fast)
     )
 
     # For stanchart mode, limit forward starts for speed
@@ -283,6 +283,7 @@ if __name__ == "__main__":
     print("=" * 70)
 
     results = []
+    # Run all modes sequentially. To test a single mode, comment out the others.
     for mode in ["spot", "forward_stanchart", "forward_cs"]:
         try:
             r = run_mode(mode)
