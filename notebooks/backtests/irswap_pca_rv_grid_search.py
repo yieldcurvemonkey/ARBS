@@ -151,8 +151,10 @@ def run_vectorized_grid(mode: str) -> pd.DataFrame:
     if mode == "forward_stanchart":
         base_config.forward_starts = list(STANCHART_FWD)
     if mode == "forward_cs":
-        base_config.fly_universe = list(CS_FLIES)
-        base_config.auto_scan_fly = False
+        # Use auto-scan to find ALL butterfly patterns across CS forwards.
+        # The old manual 10-fly universe was far too narrow — auto-scan
+        # finds 50-80+ candidates per date across the 16 forward tenors.
+        base_config.auto_scan_fly = True
 
     mdp = IRSwapsMDP(source=base_config.source)
     ts = TimeseriesBuilder()
