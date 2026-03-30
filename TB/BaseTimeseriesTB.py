@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
-from tqdm.auto import tqdm as _tqdm
+from tqdm import tqdm as _tqdm
 
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base.BaseQuery import BaseQuery

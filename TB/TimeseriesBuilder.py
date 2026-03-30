@@ -666,6 +666,8 @@ class TimeseriesBuilder:
 
         self._generic_router_cache: Dict[str, _GenericTimeseriesTB] = {}
         self._specialized_router_cache: Dict[str, object] = {}
+        self._use_duckdb: Optional[bool] = None
+        self._duckdb_path: Optional[str] = None
 
     def register_router(self, product: str, tb_obj: object) -> None:
         self._routers[product] = tb_obj
@@ -701,7 +703,12 @@ class TimeseriesBuilder:
         if router_cls is None:
             return None
 
-        router = router_cls(mdp=mdp, date_col=self._date_col, show_tqdm=True)
+        kwargs: Dict[str, Any] = {"mdp": mdp, "date_col": self._date_col, "show_tqdm": True}
+        if canonical_product in ("IRS", "FRB") and self._use_duckdb is not None:
+            kwargs["use_duckdb"] = self._use_duckdb
+        if canonical_product in ("IRS", "FRB") and self._duckdb_path is not None:
+            kwargs["duckdb_path"] = self._duckdb_path
+        router = router_cls(**kwargs)
         self._specialized_router_cache[canonical_product] = router
         return router
 
@@ -2774,6 +2781,12 @@ class TimeseriesBuilder:
         _disable_barchart_irs_bulk_planner: bool = False,
     ) -> pd.DataFrame:
         flat = _flatten_base_queries(queries)
+
+        # Persist DuckDB config so _get_specialized_router can use it
+        if use_duckdb is not None:
+            self._use_duckdb = use_duckdb
+        if duckdb_path is not None:
+            self._duckdb_path = duckdb_path
 
         merged_routers: Dict[str, Any] = dict(self._routers)
         if routers:

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import QuantLib as ql
-from tqdm.auto import tqdm as _tqdm
+from tqdm import tqdm as _tqdm
 
 from BT.misc import ql_cal_date_range
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP

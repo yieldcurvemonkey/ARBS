@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 
 import pandas as pd
-from tqdm.auto import tqdm as _tqdm
+from tqdm import tqdm as _tqdm
 
 from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP, IRSwaptionMarketContext
