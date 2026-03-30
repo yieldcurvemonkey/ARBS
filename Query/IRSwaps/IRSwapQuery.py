@@ -91,6 +91,12 @@ _structure_kwargs_formatters: Dict[IRSwapStructure, Callable[[Dict[str, Any]], s
     IRSwapStructure.FLY: lambda kw: _format_struct_kwargs(IRSwapStructure.FLY, kw),
 }
 
+_HORIZON_VALUE_IDS = {
+    IRSwapValue.CARRY_BPS_RUNNING,
+    IRSwapValue.ROLL_BPS_RUNNING,
+    IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING,
+}
+
 
 # -------------------------------- IRSwapQuery --------------------------------
 
@@ -318,6 +324,21 @@ class IRSwapQuery(BaseQuery):
 
     def col_name(self, cube_name: Optional[str] = None) -> str:
         """Human-friendly label for dataframes/plots."""
+        def _value_label() -> str:
+            if not isinstance(self.value, IRSwapValue):
+                return "MULTI"
+
+            label = self.value.name
+            if self.value not in _HORIZON_VALUE_IDS:
+                return label
+
+            horizon = (self.value_kwargs or {}).get("horizon")
+            if horizon is None:
+                horizon = (self.structure_kwargs or {}).get("horizon")
+            if horizon in (None, ""):
+                return label
+            return f"{label} {horizon}"
+
         if cube_name:
             object.__setattr__(self, "_curve_name", cube_name)
 
@@ -340,7 +361,7 @@ class IRSwapQuery(BaseQuery):
         fmt = _structure_kwargs_formatters[structure](self.structure_kwargs or {})
 
         prefix = f"{curve_label} " if curve_label else ""
-        suffix = f"{structure.name} {self.value.name if isinstance(self.value, IRSwapValue) else 'MULTI'}"
+        suffix = f"{structure.name} {_value_label()}"
         to_return = f"{prefix}{suffix}"
         rws = "/".join([str(rw) for rw in self.structure_kwargs.get("risk_weights", [])])
 
@@ -364,8 +385,6 @@ class IRSwapQuery(BaseQuery):
                     to_return = f"{verb} {prefix}{swap_name} {rws} {suffix}"
             else:
                 to_return = f"{verb} {prefix}{suffix}"
-
-        # TODO add value_kwargs
 
         return re.sub(r"\s\s+", " ", to_return).replace("REC 0.0k/bp", "").replace("PAID 0.0k/bp", "")
 

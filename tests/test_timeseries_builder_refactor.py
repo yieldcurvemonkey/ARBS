@@ -1449,6 +1449,126 @@ def test_timeseries_builder_route_partial_computed_cache_hit_reuses_prefetched_i
     ]
 
 
+def test_timeseries_builder_live_eod_irs_forwards_live_timestamp_without_caching(monkeypatch, tmp_path):
+    import TB.IRSwapsTB as irs_tb_module
+
+    class _LiveIRSMdp(MarketDataProvider):
+        def __init__(self):
+            super().__init__(source=f"TEST_IRS_LIVE_{uuid.uuid4().hex}")
+            self.bulk_requests: List[Dict[str, Any]] = []
+
+        def get_pricer(self, request: Dict[str, Any]) -> Dict[str, Any]:
+            return dict(request)
+
+        def bulk_get_data(self, request: Dict[str, Any]) -> Dict[Any, str]:
+            self.bulk_requests.append(dict(request))
+            return {
+                ts: f"curve::{ts}"
+                for ts in request.get("timestamps", [])
+            }
+
+    mdp = _LiveIRSMdp()
+    router = IRSwapsTB(mdp, show_tqdm=False, ts_base_dir=str(tmp_path), use_duckdb=False)
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    append_many_rows_calls: List[Dict[str, List[Tuple[Any, str, float]]]] = []
+    monkeypatch.setattr(
+        router._computed_ts_store,
+        "append_many_rows",
+        lambda rows_by_symbol: append_many_rows_calls.append(dict(rows_by_symbol)),
+    )
+    monkeypatch.setattr(
+        irs_tb_module,
+        "_build_row_for_query",
+        lambda curve, q, ref_dt, date_col: (ref_dt, q.col_name(q.curve), 4.25 if curve == "curve::live" else 4.0),
+    )
+
+    out = tb.get_timeseries(
+        start=datetime.date.today(),
+        end="live",
+        queries=[q],
+        freq="nyc_eod",
+        ignore_cache_miss=True,
+    )
+
+    assert len(out.index) == 1
+    assert isinstance(out.index[0], datetime.datetime)
+    assert list(out[q.col_name()]) == [4.25]
+    assert mdp.bulk_requests == [
+        {
+            "curve_name": "USD-SOFR-1D",
+            "timestamps": ["live"],
+            "ignore_cache": False,
+            "n_jobs": 1,
+        }
+    ]
+    assert append_many_rows_calls == []
+
+
+def test_timeseries_builder_live_eod_irs_appends_live_row_after_historical_series(monkeypatch):
+    import TB.TimeseriesBuilder as ts_builder_module
+
+    class _LiveAppendRouter:
+        def __init__(self):
+            self.calls: List[Dict[str, Any]] = []
+            self.mdp = MagicMock()
+
+        def get_timeseries(
+            self,
+            start,
+            end,
+            queries,
+            *,
+            n_jobs=1,
+            ignore_cache=False,
+            ignore_cache_miss=False,
+            freq=None,
+            timestamps=None,
+            _prefetched_ts_rows_by_symbol=None,
+        ) -> pd.DataFrame:
+            _ = n_jobs, ignore_cache, ignore_cache_miss, freq, timestamps, _prefetched_ts_rows_by_symbol
+            self.calls.append({"start": start, "end": end, "queries": list(queries)})
+            col = queries[0].col_name()
+            if end == "live":
+                idx = pd.Index(
+                    [datetime.datetime(2025, 1, 8, 10, 0, tzinfo=datetime.timezone.utc)],
+                    name="Date",
+                )
+                return pd.DataFrame({col: [4.25]}, index=idx)
+            idx = pd.Index(
+                [
+                    datetime.date(2025, 1, 6),
+                    datetime.date(2025, 1, 7),
+                ],
+                name="Date",
+            )
+            return pd.DataFrame({col: [4.10, 4.15]}, index=idx)
+
+    monkeypatch.setattr(ts_builder_module, "_live_eod_history_end", lambda freq: datetime.date(2025, 1, 7))
+
+    router = _LiveAppendRouter()
+    tb = TimeseriesBuilder(irswaps_tb=router)
+    q = IRSwapQuery(curve="USD-SOFR-1D", tenor="5Y", value=IRSwapValue.RATE)
+
+    out = tb.get_timeseries(
+        start=datetime.date(2025, 1, 6),
+        end="live",
+        queries=[q],
+        freq="nyc_eod",
+    )
+
+    assert list(out.index) == [
+        datetime.date(2025, 1, 6),
+        datetime.date(2025, 1, 7),
+        datetime.datetime(2025, 1, 8, 10, 0, tzinfo=datetime.timezone.utc),
+    ]
+    assert list(out[q.col_name()]) == [4.10, 4.15, 4.25]
+    assert len(router.calls) == 2
+    assert router.calls[0]["end"] == datetime.date(2025, 1, 7)
+    assert router.calls[1]["end"] == "live"
+
+
 def test_timeseries_builder_curve_store_fast_path_recovers_missing_points_via_bulk_mdp(monkeypatch):
     import TB.IRSwapsTB as irs_tb_module
 

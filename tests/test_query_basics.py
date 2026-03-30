@@ -222,6 +222,33 @@ class TestQueryTags:
         assert query.name == "5Y SOFR Receiver"
 
 
+class TestQueryLabels:
+    """Test human-readable query labels."""
+
+    def test_col_name_includes_horizon_for_roll_value(self):
+        query = IRSwapQuery(
+            structure=IRSwapStructure.OUTRIGHT,
+            value=IRSwapValue.ROLL_BPS_RUNNING,
+            tenor="1Y1Y",
+            curve="USD-SOFR-1D",
+            structure_kwargs={"horizon": "3m"},
+        )
+
+        assert query.col_name() == "USD-SOFR-1D 1Y1Y OUTRIGHT ROLL_BPS_RUNNING 3m"
+
+    def test_col_name_prefers_value_kwargs_horizon_for_carry_roll_value(self):
+        query = IRSwapQuery(
+            structure=IRSwapStructure.OUTRIGHT,
+            value=IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING,
+            tenor="1Y1Y",
+            curve="USD-SOFR-1D",
+            structure_kwargs={"horizon": "3m"},
+            value_kwargs={"horizon": "6m"},
+        )
+
+        assert query.col_name() == "USD-SOFR-1D 1Y1Y OUTRIGHT CARRY_AND_ROLL_BPS_RUNNING 6m"
+
+
 class TestQueryArithmetic:
     """Test query arithmetic operations (if implemented)."""
 
