@@ -36,6 +36,7 @@ class _FakeFixedRateBondsMDP(MarketDataProvider):
     def __init__(self, source: str):
         super().__init__(source=source)
         self.bulk_calls = 0
+        self.bulk_timestamps: list[list[Any]] = []
 
     def get_pricer(self, request: Dict[str, Any]) -> Dict[str, Any]:
         return {}
@@ -51,6 +52,7 @@ class _FakeFixedRateBondsMDP(MarketDataProvider):
     ) -> Dict[Any, Dict[str, Any]]:
         _ = show_tqdm, force_refresh, max_workers
         self.bulk_calls += 1
+        self.bulk_timestamps.append(list(timestamps))
         return {ts: {cusip: {"cusip": cusip, "timestamp": ts} for cusip in cusips} for ts in timestamps}
 
 
@@ -350,6 +352,62 @@ def test_fixedratebonds_tb_suppresses_row_cache_l2_reads_for_large_daily_scans(m
     assert probe_cache.contains_flags
     assert all(flag is False for flag in probe_cache.contains_flags)
     assert probe_cache._l2_read is True
+
+
+def test_fixedratebonds_tb_skips_known_bad_fedinvest_rl_daily_dates(monkeypatch, tmp_path):
+    import TB.FixedRateBondsTB as frb_tb_module
+
+    q = FixedRateBondQuery(cusip="CT10", value=FixedRateBondValue.YTM)
+    mdp = _FakeFixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
+    tb = FixedRateBondsTB(mdp, show_tqdm=False, use_ts_cache=False, ts_base_dir=str(tmp_path))
+
+    monkeypatch.setattr(
+        frb_tb_module,
+        "_build_row_for_query",
+        lambda pr_map, q, ref_dt, date_col: (ref_dt, q.col_name(), float(ref_dt.day)),
+    )
+
+    out = tb.get_timeseries(
+        start=datetime.date(2014, 9, 11),
+        end=datetime.date(2014, 9, 15),
+        queries=[q],
+        ignore_cache=True,
+        n_jobs=1,
+    )
+
+    assert mdp.bulk_calls == 1
+    assert mdp.bulk_timestamps == [[datetime.date(2014, 9, 11), datetime.date(2014, 9, 15)]]
+    assert list(out.index) == [datetime.date(2014, 9, 11), datetime.date(2014, 9, 15)]
+
+
+def test_fixedratebonds_tb_skips_known_bad_fedinvest_rl_intraday_timestamps(monkeypatch, tmp_path):
+    import TB.FixedRateBondsTB as frb_tb_module
+
+    bad_ts = datetime.datetime(2014, 11, 21, 14, 0, tzinfo=datetime.timezone.utc)
+    good_ts = datetime.datetime(2014, 11, 24, 14, 0, tzinfo=datetime.timezone.utc)
+    q = FixedRateBondQuery(cusip="CT10", value=FixedRateBondValue.YTM)
+    mdp = _FakeFixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-RL")
+    tb = FixedRateBondsTB(mdp, show_tqdm=False, use_ts_cache=False, ts_base_dir=str(tmp_path))
+
+    monkeypatch.setattr(
+        frb_tb_module,
+        "_build_row_for_query",
+        lambda pr_map, q, ref_dt, date_col: (ref_dt, q.col_name(), 4.25),
+    )
+
+    out = tb.get_timeseries(
+        start=bad_ts,
+        end=good_ts,
+        queries=[q],
+        timestamps=[bad_ts, good_ts],
+        freq="1H",
+        ignore_cache=True,
+        n_jobs=1,
+    )
+
+    assert mdp.bulk_calls == 1
+    assert mdp.bulk_timestamps == [[good_ts]]
+    assert list(out.index) == [good_ts]
 
 
 def test_fixedratebonds_build_row_fast_paths_simple_ytm_queries(monkeypatch):
