@@ -889,3 +889,71 @@ def expand_pricer_universe_for_carry_roll(
         }
     )
     return expanded or pricers
+
+
+# ---------------------------------------------------------------------------
+# Bridge: use CashSpline for roll calculation
+# ---------------------------------------------------------------------------
+def fit_roll_spline_via_cash_spline(
+    ttm: np.ndarray,
+    ytm: np.ndarray,
+    *,
+    ranks: Optional[np.ndarray] = None,
+    cusips: Optional[np.ndarray] = None,
+    config: Optional[Any] = None,
+    as_of_date: Optional[datetime.date] = None,
+) -> Optional[Callable[[np.ndarray], np.ndarray]]:
+    """Build a roll spline using the new CashSpline framework.
+
+    Drop-in replacement for ``fit_roll_spline`` that leverages the full
+    flexibility of ``CashSplineBuilder`` and its caching infrastructure.
+
+    Parameters
+    ----------
+    ttm, ytm : ndarray
+        Per-bond time-to-maturity and yield.
+    ranks : ndarray, optional
+        OTR rank per bond (enables filtering).
+    cusips : ndarray, optional
+        Bond identifiers.
+    config : CashSplineConfig, optional
+        Defaults to ``ROLL_SPLINE_CONFIG``.
+    as_of_date : date, optional
+        For caching.
+
+    Returns
+    -------
+    callable or None
+        ``f(ttm_array) -> ytm_array``
+    """
+    from MDP.FixedRateBonds.cash_spline import (
+        CashSpline,
+        CashSplineBuilder,
+        ROLL_SPLINE_CONFIG,
+        get_cached_spline,
+        put_cached_spline,
+    )
+
+    if config is None:
+        config = ROLL_SPLINE_CONFIG
+
+    if as_of_date is not None:
+        cached = get_cached_spline(as_of_date, config)
+        if cached is not None:
+            return cached.curve_func
+
+    builder = CashSplineBuilder(config)
+    try:
+        spline = builder.fit(
+            ttm=ttm,
+            y=ytm,
+            cusips=cusips,
+            ranks=ranks,
+            as_of_date=as_of_date,
+        )
+    except (ValueError, Exception):
+        return None
+
+    if as_of_date is not None:
+        put_cached_spline(spline)
+    return spline.curve_func

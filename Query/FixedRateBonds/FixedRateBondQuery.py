@@ -122,6 +122,16 @@ class FixedRateBondQuery(BaseQuery):
         carry_roll_values.discard(None)
         return any(value in carry_roll_values for value in self._all_value_ids())
 
+    def _uses_spline_universe(self) -> bool:
+        spline_values = {
+            getattr(FixedRateBondValue, "SPLINE_SPREAD", None),
+            getattr(FixedRateBondValue, "SPLINE_Z_SCORE", None),
+            getattr(FixedRateBondValue, "SPLINE_RMSE", None),
+            getattr(FixedRateBondValue, "SPLINE_RMSE_BUCKET", None),
+        }
+        spline_values.discard(None)
+        return any(value in spline_values for value in self._all_value_ids())
+
     def col_name(self, cube_name: Optional[str] = None) -> str:
         curve_label = cube_name or self.curve or ""
         struct_name = self.structure.name
@@ -326,7 +336,7 @@ class FixedRateBondQuery(BaseQuery):
                 req[self.mdp_time_key] = _request_datetime(now)
             # "live" or concrete value: leave as-is
 
-        if self._uses_carry_roll_universe():
+        if self._uses_carry_roll_universe() or self._uses_spline_universe():
             from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 
             ts_value = req[self.mdp_time_key]
