@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 import hashlib
+import html as html_lib
 import importlib.util
 import itertools
 import json
@@ -11,11 +13,11 @@ import random
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
@@ -63,6 +65,22 @@ _RETURN_COLUMNS = [
     "PreviousRevised",
     "PreviousRevisionDirection",
     "SourceURL",
+]
+
+_TRANSCRIPT_RETURN_COLUMNS = [
+    "EventId",
+    "Date",
+    "Title",
+    "Speaker",
+    "SourceType",
+    "OfficialSourceURL",
+    "OfficialSourceLatestURL",
+    "OfficialSourceDomain",
+    "TranscriptURL",
+    "TranscriptFormat",
+    "TranscriptSource",
+    "TranscriptStatus",
+    "TranscriptText",
 ]
 
 
@@ -150,6 +168,62 @@ class _ThemeSpec:
             mask &= ~frame["Title"].str.contains(pattern, case=False, regex=True, na=False)
 
         return mask
+
+
+@dataclass(frozen=True)
+class ForexFactoryEventDetail:
+    event_id: int
+    official_source_url: str | None = None
+    official_source_latest_url: str | None = None
+    official_source_domain: str | None = None
+    speaker: str | None = None
+    description: str | None = None
+    specs: Mapping[str, str] = field(default_factory=dict)
+    linked_story_count: int = 0
+    raw: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ForexFactoryEventTranscript:
+    event_id: int
+    date: dt.date
+    title: str
+    speaker: str | None = None
+    source_type: str | None = None
+    official_source_url: str | None = None
+    official_source_latest_url: str | None = None
+    official_source_domain: str | None = None
+    transcript_url: str | None = None
+    transcript_format: str | None = None
+    transcript_source: str | None = None
+    transcript_status: str = "not_found"
+    transcript_text: str | None = None
+
+    def as_record(self) -> dict[str, object]:
+        return {
+            "EventId": self.event_id,
+            "Date": self.date,
+            "Title": self.title,
+            "Speaker": self.speaker,
+            "SourceType": self.source_type,
+            "OfficialSourceURL": self.official_source_url,
+            "OfficialSourceLatestURL": self.official_source_latest_url,
+            "OfficialSourceDomain": self.official_source_domain,
+            "TranscriptURL": self.transcript_url,
+            "TranscriptFormat": self.transcript_format,
+            "TranscriptSource": self.transcript_source,
+            "TranscriptStatus": self.transcript_status,
+            "TranscriptText": self.transcript_text,
+        }
+
+
+@dataclass(frozen=True)
+class _TranscriptIndexEntry:
+    date: dt.date
+    url: str
+    title: str
+    speaker: str | None = None
+    location: str | None = None
 
 
 _NYC_TIMEZONE = ZoneInfo("America/New_York")
@@ -560,6 +634,41 @@ _IMPACT_CLASS_MAP = {
     "grey": (ForexFactoryImpact.NON_ECONOMIC.value, 0),
 }
 
+_FOMC_PRESS_CONFERENCE_URL_TEMPLATE = "https://www.federalreserve.gov/mediacenter/files/FOMCpresconf{datestr}.pdf"
+_BOARD_SPEECH_INDEX_URL_TEMPLATE = "https://www.federalreserve.gov/newsevents/speech/{year}-speeches.htm"
+_BOARD_TESTIMONY_INDEX_URL_TEMPLATE = "https://www.federalreserve.gov/newsevents/testimony/{year}-testimony.htm"
+_NYFED_SPEECH_INDEX_URL = "https://www.newyorkfed.org/newsevents/speeches/index"
+_TRANSCRIPT_TOKEN_STOPWORDS = {
+    "and",
+    "as",
+    "bank",
+    "board",
+    "chair",
+    "chief",
+    "conference",
+    "delivery",
+    "executive",
+    "fed",
+    "federal",
+    "fomc",
+    "for",
+    "governor",
+    "interview",
+    "member",
+    "officer",
+    "of",
+    "participates",
+    "prepared",
+    "press",
+    "remarks",
+    "reserve",
+    "speaks",
+    "speak",
+    "testifies",
+    "the",
+    "vice",
+}
+
 
 def _default_cache_dir() -> Path:
     try:
@@ -608,6 +717,30 @@ def _event_text(node) -> str:
     if node is None:
         return ""
     return _normalize_text(node.get_text(" ", strip=True))
+
+
+def _html_fragment_text(value: str | None) -> str:
+    if not value:
+        return ""
+    soup = BeautifulSoup(value, "lxml")
+    return _normalize_text(html_lib.unescape(soup.get_text(" ", strip=True)))
+
+
+def _normalize_domain(url: str | None) -> str | None:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        return None
+    domain = parsed.netloc.lower()
+    return domain[4:] if domain.startswith("www.") else domain
+
+
+def _tokenize_transcript_hint(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    tokens = {token for token in re.findall(r"[A-Za-z]+", value.lower()) if len(token) > 1}
+    return {token for token in tokens if token not in _TRANSCRIPT_TOKEN_STOPWORDS}
 
 
 def _calendar_week_anchor(value: dt.date) -> dt.date:
@@ -840,6 +973,11 @@ class ForexFactoryCalendarFetcher:
         self._proxy_rotation_enabled = (
             _proxy_rotation_enabled() if proxy_rotation_enabled is None and not proxies else bool(proxy_rotation_enabled)
         )
+        self._event_detail_cache: dict[tuple[int, int], ForexFactoryEventDetail] = {}
+        self._text_url_cache: dict[str, str] = {}
+        self._board_speech_index_cache: dict[int, list[_TranscriptIndexEntry]] = {}
+        self._board_testimony_index_cache: dict[int, list[_TranscriptIndexEntry]] = {}
+        self._newyorkfed_speech_index_cache: list[_TranscriptIndexEntry] | None = None
         if output_timezone and self._output_timezone is None:
             raise ValueError(f"Unknown output timezone: {output_timezone}")
 
@@ -965,6 +1103,103 @@ class ForexFactoryCalendarFetcher:
             return _empty_frame()
         return self._normalize_frame(pd.concat(non_empty, ignore_index=True))
 
+    def fetch_event_detail(
+        self,
+        event_id: int,
+        *,
+        site_id: int = 1,
+        force_refresh: bool = False,
+    ) -> ForexFactoryEventDetail:
+        event_id = int(event_id)
+        site_id = int(site_id)
+        cache_key = (site_id, event_id)
+        if not force_refresh and cache_key in self._event_detail_cache:
+            return self._event_detail_cache[cache_key]
+
+        payload = self._request_json(f"{self.base_url}/details/{site_id}-{event_id}")
+        raw_detail = payload.get("data", payload) if isinstance(payload, Mapping) else {}
+        detail = self._parse_event_detail(event_id=event_id, payload=raw_detail if isinstance(raw_detail, Mapping) else {})
+        self._event_detail_cache[cache_key] = detail
+        return detail
+
+    def fetch_event_transcript(
+        self,
+        event_id: int,
+        event_date: dt.date | dt.datetime | str,
+        title: str,
+        *,
+        site_id: int = 1,
+        detail: ForexFactoryEventDetail | None = None,
+    ) -> ForexFactoryEventTranscript:
+        resolved_date = _coerce_date(event_date)
+        title = str(title)
+        detail = detail or self.fetch_event_detail(event_id, site_id=site_id)
+        source_type = self._classify_transcript_source(title=title, detail=detail)
+
+        if source_type == "fomc_press_conference":
+            return self._resolve_fomc_press_conference_transcript(
+                event_id=int(event_id),
+                event_date=resolved_date,
+                title=title,
+                detail=detail,
+            )
+        if source_type in {"board_speech", "board_testimony"}:
+            return self._resolve_board_event_transcript(
+                event_id=int(event_id),
+                event_date=resolved_date,
+                title=title,
+                detail=detail,
+                source_type=source_type,
+            )
+        if source_type == "newyorkfed_speech":
+            return self._resolve_newyorkfed_event_transcript(
+                event_id=int(event_id),
+                event_date=resolved_date,
+                title=title,
+                detail=detail,
+            )
+
+        status = "unsupported" if detail.official_source_domain else "not_found"
+        return ForexFactoryEventTranscript(
+            event_id=int(event_id),
+            date=resolved_date,
+            title=title,
+            speaker=detail.speaker,
+            source_type=source_type,
+            official_source_url=detail.official_source_url,
+            official_source_latest_url=detail.official_source_latest_url,
+            official_source_domain=detail.official_source_domain,
+            transcript_status=status,
+        )
+
+    def fetch_transcripts(
+        self,
+        frame: pd.DataFrame,
+        *,
+        site_id: int = 1,
+        show_tqdm: bool = True,
+    ) -> pd.DataFrame:
+        if frame.empty:
+            return pd.DataFrame(columns=_TRANSCRIPT_RETURN_COLUMNS)
+
+        records: list[dict[str, object]] = []
+        rows = list(frame[["EventId", "Date", "Title"]].itertuples(index=False, name=None))
+        iterator = self._progress_iter(
+            rows,
+            desc="Resolving Forex Factory transcripts",
+            show_tqdm=show_tqdm,
+        )
+        for event_id, event_date, title in iterator:
+            transcript = self.fetch_event_transcript(
+                event_id=int(event_id),
+                event_date=event_date,
+                title=str(title),
+                site_id=site_id,
+            )
+            records.append(transcript.as_record())
+
+        return pd.DataFrame.from_records(records, columns=_TRANSCRIPT_RETURN_COLUMNS)
+
     def rotate_proxy(self) -> tuple[dict[str, str] | None, str | None]:
         if not self._proxy_rotation_enabled:
             return self._clear_session_proxy()
@@ -1001,6 +1236,388 @@ class ForexFactoryCalendarFetcher:
             mask &= theme_mask
 
         return frame.loc[mask].reset_index(drop=True)
+
+    def _parse_event_detail(
+        self,
+        *,
+        event_id: int,
+        payload: Mapping[str, object],
+    ) -> ForexFactoryEventDetail:
+        source_url: str | None = None
+        source_latest_url: str | None = None
+        source_domain: str | None = None
+        speaker: str | None = None
+        description: str | None = None
+        specs: dict[str, str] = {}
+
+        for raw_spec in payload.get("specs", []) or []:
+            if not isinstance(raw_spec, Mapping):
+                continue
+            title = _html_fragment_text(str(raw_spec.get("title") or ""))
+            html_value = str(raw_spec.get("html") or "")
+            value_text = _html_fragment_text(html_value)
+            if title:
+                specs[title] = value_text
+
+            if title == "Source":
+                soup = BeautifulSoup(html_value, "lxml")
+                links = [anchor.get("href", "").strip() for anchor in soup.select("a[href]")]
+                links = [link for link in links if link]
+                source_url = links[0] if links else None
+                source_latest_url = links[1] if len(links) > 1 else None
+                source_domain = _normalize_domain(source_url)
+            elif title == "Speaker" and value_text:
+                speaker = value_text
+            elif title == "Description" and value_text:
+                description = value_text
+
+        linked_threads = payload.get("linked_threads")
+        linked_story_count = 0
+        if isinstance(linked_threads, Mapping):
+            news_items = linked_threads.get("news", [])
+            if isinstance(news_items, Sequence):
+                linked_story_count = len(news_items)
+
+        return ForexFactoryEventDetail(
+            event_id=event_id,
+            official_source_url=source_url,
+            official_source_latest_url=source_latest_url,
+            official_source_domain=source_domain,
+            speaker=speaker,
+            description=description,
+            specs=specs,
+            linked_story_count=linked_story_count,
+            raw=dict(payload),
+        )
+
+    def _classify_transcript_source(
+        self,
+        *,
+        title: str,
+        detail: ForexFactoryEventDetail,
+    ) -> str | None:
+        normalized_title = title.lower()
+        source_domain = (detail.official_source_domain or "").lower()
+
+        if "fomc press conference" in normalized_title:
+            return "fomc_press_conference"
+        if source_domain == "federalreserve.gov":
+            if "testif" in normalized_title:
+                return "board_testimony"
+            if any(token in normalized_title for token in ("speaks", "remarks", "interview", "participates")):
+                return "board_speech"
+        if source_domain == "newyorkfed.org":
+            return "newyorkfed_speech"
+        return None
+
+    def _resolve_fomc_press_conference_transcript(
+        self,
+        *,
+        event_id: int,
+        event_date: dt.date,
+        title: str,
+        detail: ForexFactoryEventDetail,
+    ) -> ForexFactoryEventTranscript:
+        transcript_url = _FOMC_PRESS_CONFERENCE_URL_TEMPLATE.format(datestr=event_date.strftime("%Y%m%d"))
+        try:
+            payload = self._request_bytes(transcript_url)
+            transcript_text = self._extract_pdf_text(payload)
+            status = "resolved" if transcript_text else "not_found"
+        except Exception:
+            transcript_text = None
+            status = "not_found"
+
+        return ForexFactoryEventTranscript(
+            event_id=event_id,
+            date=event_date,
+            title=title,
+            speaker=detail.speaker,
+            source_type="fomc_press_conference",
+            official_source_url=detail.official_source_url,
+            official_source_latest_url=detail.official_source_latest_url,
+            official_source_domain=detail.official_source_domain,
+            transcript_url=transcript_url,
+            transcript_format="pdf",
+            transcript_source="fomc_press_conference_pdf",
+            transcript_status=status,
+            transcript_text=transcript_text,
+        )
+
+    def _resolve_board_event_transcript(
+        self,
+        *,
+        event_id: int,
+        event_date: dt.date,
+        title: str,
+        detail: ForexFactoryEventDetail,
+        source_type: str,
+    ) -> ForexFactoryEventTranscript:
+        if source_type == "board_testimony":
+            entries = self._fetch_board_testimony_index(event_date.year)
+            transcript_source = "board_testimony_html"
+        else:
+            entries = self._fetch_board_speech_index(event_date.year)
+            transcript_source = "board_speech_html"
+
+        match = self._match_transcript_index_entry(
+            entries=entries,
+            event_date=event_date,
+            title=title,
+            speaker=detail.speaker,
+        )
+        if match is None:
+            return ForexFactoryEventTranscript(
+                event_id=event_id,
+                date=event_date,
+                title=title,
+                speaker=detail.speaker,
+                source_type=source_type,
+                official_source_url=detail.official_source_url,
+                official_source_latest_url=detail.official_source_latest_url,
+                official_source_domain=detail.official_source_domain,
+                transcript_source=transcript_source,
+                transcript_status="not_found",
+            )
+
+        transcript_text = self._extract_federalreserve_article_text(self._request_text(match.url))
+        status = "resolved" if transcript_text else "not_found"
+        return ForexFactoryEventTranscript(
+            event_id=event_id,
+            date=event_date,
+            title=title,
+            speaker=detail.speaker or match.speaker,
+            source_type=source_type,
+            official_source_url=detail.official_source_url,
+            official_source_latest_url=detail.official_source_latest_url,
+            official_source_domain=detail.official_source_domain,
+            transcript_url=match.url,
+            transcript_format="html",
+            transcript_source=transcript_source,
+            transcript_status=status,
+            transcript_text=transcript_text,
+        )
+
+    def _resolve_newyorkfed_event_transcript(
+        self,
+        *,
+        event_id: int,
+        event_date: dt.date,
+        title: str,
+        detail: ForexFactoryEventDetail,
+    ) -> ForexFactoryEventTranscript:
+        entries = self._fetch_newyorkfed_speech_index()
+        match = self._match_transcript_index_entry(
+            entries=entries,
+            event_date=event_date,
+            title=title,
+            speaker=detail.speaker,
+        )
+        if match is None:
+            return ForexFactoryEventTranscript(
+                event_id=event_id,
+                date=event_date,
+                title=title,
+                speaker=detail.speaker,
+                source_type="newyorkfed_speech",
+                official_source_url=detail.official_source_url,
+                official_source_latest_url=detail.official_source_latest_url,
+                official_source_domain=detail.official_source_domain,
+                transcript_source="newyorkfed_speech_html",
+                transcript_status="not_found",
+            )
+
+        transcript_text = self._extract_newyorkfed_article_text(self._request_text(match.url))
+        status = "resolved" if transcript_text else "not_found"
+        return ForexFactoryEventTranscript(
+            event_id=event_id,
+            date=event_date,
+            title=title,
+            speaker=detail.speaker or match.speaker,
+            source_type="newyorkfed_speech",
+            official_source_url=detail.official_source_url,
+            official_source_latest_url=detail.official_source_latest_url,
+            official_source_domain=detail.official_source_domain,
+            transcript_url=match.url,
+            transcript_format="html",
+            transcript_source="newyorkfed_speech_html",
+            transcript_status=status,
+            transcript_text=transcript_text,
+        )
+
+    def _fetch_board_speech_index(self, year: int) -> list[_TranscriptIndexEntry]:
+        if year not in self._board_speech_index_cache:
+            html = self._request_text(_BOARD_SPEECH_INDEX_URL_TEMPLATE.format(year=int(year)))
+            self._board_speech_index_cache[year] = self._parse_federalreserve_index_html(html=html, kind="speech")
+        return self._board_speech_index_cache[year]
+
+    def _fetch_board_testimony_index(self, year: int) -> list[_TranscriptIndexEntry]:
+        if year not in self._board_testimony_index_cache:
+            html = self._request_text(_BOARD_TESTIMONY_INDEX_URL_TEMPLATE.format(year=int(year)))
+            self._board_testimony_index_cache[year] = self._parse_federalreserve_index_html(html=html, kind="testimony")
+        return self._board_testimony_index_cache[year]
+
+    def _fetch_newyorkfed_speech_index(self) -> list[_TranscriptIndexEntry]:
+        if self._newyorkfed_speech_index_cache is None:
+            html = self._request_text(_NYFED_SPEECH_INDEX_URL)
+            self._newyorkfed_speech_index_cache = self._parse_newyorkfed_index_html(html)
+        return self._newyorkfed_speech_index_cache
+
+    def _parse_federalreserve_index_html(
+        self,
+        *,
+        html: str,
+        kind: str,
+    ) -> list[_TranscriptIndexEntry]:
+        soup = BeautifulSoup(html, "lxml")
+        entries: list[_TranscriptIndexEntry] = []
+        path_token = f"/newsevents/{kind}/"
+        for row in soup.select("div.row"):
+            link = row.select_one(f'a[href*="{path_token}"]')
+            time_node = row.select_one("time")
+            if link is None or time_node is None:
+                continue
+            try:
+                event_date = pd.Timestamp(_normalize_text(time_node.get_text(" ", strip=True))).date()
+            except Exception:
+                continue
+
+            paragraphs = row.select("p")
+            speaker = None
+            location = None
+            for paragraph in paragraphs:
+                classes = paragraph.get("class", [])
+                text = _normalize_text(paragraph.get_text(" ", strip=True))
+                if not text:
+                    continue
+                if "news__speaker" in classes:
+                    speaker = text
+                elif text != _normalize_text(link.get_text(" ", strip=True)):
+                    location = text
+
+            entries.append(
+                _TranscriptIndexEntry(
+                    date=event_date,
+                    url=urljoin("https://www.federalreserve.gov", link.get("href", "")),
+                    title=_normalize_text(link.get_text(" ", strip=True)),
+                    speaker=speaker,
+                    location=location,
+                )
+            )
+        return entries
+
+    def _parse_newyorkfed_index_html(self, html: str) -> list[_TranscriptIndexEntry]:
+        soup = BeautifulSoup(html, "lxml")
+        entries: list[_TranscriptIndexEntry] = []
+        for row in soup.select("tr"):
+            link = row.select_one('a.paraHeader[href*="/newsevents/speeches/"]')
+            date_cell = row.select_one("td.dirColL")
+            if link is None or date_cell is None:
+                continue
+            try:
+                event_date = pd.Timestamp(_normalize_text(date_cell.get_text(" ", strip=True))).date()
+            except Exception:
+                continue
+
+            title = _normalize_text(link.get_text(" ", strip=True))
+            speaker = None
+            if ":" in title:
+                prefix, _ = title.split(":", 1)
+                speaker = _normalize_text(prefix)
+
+            entries.append(
+                _TranscriptIndexEntry(
+                    date=event_date,
+                    url=urljoin("https://www.newyorkfed.org", link.get("href", "")),
+                    title=title,
+                    speaker=speaker,
+                )
+            )
+        return entries
+
+    def _match_transcript_index_entry(
+        self,
+        *,
+        entries: Sequence[_TranscriptIndexEntry],
+        event_date: dt.date,
+        title: str,
+        speaker: str | None,
+    ) -> _TranscriptIndexEntry | None:
+        candidates = [entry for entry in entries if entry.date == event_date]
+        if not candidates:
+            return None
+
+        speaker_tokens = _tokenize_transcript_hint(speaker) or _tokenize_transcript_hint(title)
+        title_tokens = _tokenize_transcript_hint(title)
+        best_entry: _TranscriptIndexEntry | None = None
+        best_score = -10**6
+
+        for entry in candidates:
+            entry_speaker_tokens = _tokenize_transcript_hint(entry.speaker) or _tokenize_transcript_hint(entry.title)
+            entry_title_tokens = _tokenize_transcript_hint(entry.title)
+            score = 0
+            if speaker_tokens:
+                overlap = len(speaker_tokens & entry_speaker_tokens)
+                score += 10 * overlap
+                if overlap == 0:
+                    score -= 5
+            if title_tokens:
+                score += 3 * len(title_tokens & entry_title_tokens)
+            if "testif" in title.lower() and entry.location and "committee" in entry.location.lower():
+                score += 1
+            if score > best_score:
+                best_score = score
+                best_entry = entry
+
+        if best_entry is None:
+            return None
+        if best_score > 0:
+            return best_entry
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    def _extract_federalreserve_article_text(self, html: str) -> str:
+        soup = BeautifulSoup(html, "lxml")
+        article = soup.select_one("#article")
+        if article is None:
+            return ""
+
+        candidates = [node for node in article.select("div.col-xs-12.col-sm-8.col-md-8") if node.select("p")]
+        best = max(candidates, key=lambda node: len(node.select("p")), default=article)
+        return self._extract_structured_text(best)
+
+    def _extract_newyorkfed_article_text(self, html: str) -> str:
+        soup = BeautifulSoup(html, "lxml")
+        node = (
+            soup.select_one("div.ts-article-text")
+            or soup.select_one("#sC-component-text-no-media")
+            or soup.select_one("div[id^='sC-component-text']")
+        )
+        return self._extract_structured_text(node)
+
+    def _extract_structured_text(self, node) -> str:
+        if node is None:
+            return ""
+        soup = BeautifulSoup(str(node), "lxml")
+        for element in soup.select("script, style, noscript, sup"):
+            element.decompose()
+
+        segments: list[str] = []
+        for tag in soup.select("p, li, h1, h2, h3, h4"):
+            text = _normalize_text(html_lib.unescape(tag.get_text(" ", strip=True)))
+            if text:
+                segments.append(text)
+
+        if segments:
+            return "\n\n".join(segments)
+        return _normalize_text(html_lib.unescape(soup.get_text("\n", strip=True)))
+
+    def _extract_pdf_text(self, payload: bytes) -> str:
+        import pdfplumber
+
+        with pdfplumber.open(io.BytesIO(payload)) as pdf:
+            parts = [(page.extract_text() or "").strip() for page in pdf.pages]
+        return "\n\n".join(part for part in parts if part)
 
     def _cache_path(self, week_anchor: dt.date) -> Path:
         return self._cache_dir / f"{week_anchor.isoformat()}.json"
@@ -1148,7 +1765,7 @@ class ForexFactoryCalendarFetcher:
                 return cached
 
         url = f"{self.base_url}?week={_format_day_query(week_anchor)}"
-        html = self._request_week_html(url)
+        html = self._request_week_html(url, force_refresh=force_refresh)
 
         if use_cache:
             self._save_cached_week(cache_path, url=url, html=html)
@@ -1314,7 +1931,7 @@ class ForexFactoryCalendarFetcher:
 
     def _progress_iter(
         self,
-        items: Sequence[dt.date],
+        items: Sequence[object],
         *,
         desc: str,
         show_tqdm: bool,
@@ -1347,7 +1964,7 @@ class ForexFactoryCalendarFetcher:
                     self._session.proxies.update(self._manual_proxies)
             return None, None
 
-    def _request_week_html(self, url: str) -> str:
+    def _request_response(self, url: str):
         attempts = 2 if self._proxy_rotation_enabled else 1
         last_exc: Exception | None = None
         for attempt in range(attempts):
@@ -1355,13 +1972,49 @@ class ForexFactoryCalendarFetcher:
                 self._configure_session_proxy(force_rotate_proxy=attempt > 0)
                 response = self._session.get(url, timeout=self._global_timeout)
                 response.raise_for_status()
-                response.encoding = response.encoding or response.apparent_encoding
-                return response.text
+                return response
             except Exception as exc:
                 last_exc = exc
         if last_exc is not None:
             raise last_exc
-        raise RuntimeError(f"Failed to fetch Forex Factory week URL: {url}")
+        raise RuntimeError(f"Failed to fetch URL: {url}")
+
+    def _request_text(self, url: str, *, force_refresh: bool = False) -> str:
+        if not force_refresh and url in self._text_url_cache:
+            return self._text_url_cache[url]
+
+        response = self._request_response(url)
+        if hasattr(response, "encoding"):
+            try:
+                response.encoding = response.encoding or response.apparent_encoding
+            except Exception:
+                pass
+        text = response.text
+        self._text_url_cache[url] = text
+        return text
+
+    def _request_json(self, url: str) -> dict[str, object]:
+        response = self._request_response(url)
+        try:
+            payload = response.json()
+        except Exception:
+            payload = json.loads(response.text)
+        if not isinstance(payload, dict):
+            raise ValueError(f"Expected JSON object from {url}")
+        return payload
+
+    def _request_bytes(self, url: str) -> bytes:
+        response = self._request_response(url)
+        if hasattr(response, "content"):
+            content = response.content
+            if isinstance(content, bytes):
+                return content
+            return bytes(content)
+        encoding = getattr(response, "encoding", None) or "utf-8"
+        return str(getattr(response, "text", "")).encode(encoding, errors="ignore")
+
+    def _request_week_html(self, url: str, *, force_refresh: bool = False) -> str:
+        return self._request_text(url, force_refresh=force_refresh)
 
     def _load_cached_week(self, cache_path: Path) -> tuple[str, str] | None:
         if not cache_path.exists():
@@ -1674,6 +2327,8 @@ def fetch_forex_factory_calendar(
 
 
 __all__ = [
+    "ForexFactoryEventDetail",
+    "ForexFactoryEventTranscript",
     "ForexFactoryCalendarFetcher",
     "ForexFactoryImpact",
     "ForexFactoryTheme",

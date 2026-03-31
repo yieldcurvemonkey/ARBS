@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -8,13 +9,32 @@ from RVUtils.forex_factory_calendar import ForexFactoryCalendarFetcher, ForexFac
 
 
 class _DummyResponse:
-    def __init__(self, text: str) -> None:
+    def __init__(
+        self,
+        text: str = "",
+        *,
+        json_data: dict[str, object] | None = None,
+        content: bytes | None = None,
+        status_code: int = 200,
+    ) -> None:
+        if json_data is not None and not text:
+            text = json.dumps(json_data)
         self.text = text
         self.encoding = "utf-8"
         self.apparent_encoding = "utf-8"
+        self.content = content if content is not None else text.encode("utf-8")
+        self.status_code = status_code
+        self._json_data = json_data
 
     def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
         return None
+
+    def json(self) -> dict[str, object]:
+        if self._json_data is None:
+            raise ValueError("No JSON payload available")
+        return self._json_data
 
 
 class _DummySession:
@@ -26,7 +46,14 @@ class _DummySession:
 
     def get(self, url: str, timeout: int):
         self.calls.append(url)
-        return _DummyResponse(self.payload_by_url[url])
+        payload = self.payload_by_url[url]
+        if isinstance(payload, _DummyResponse):
+            return payload
+        if isinstance(payload, bytes):
+            return _DummyResponse(content=payload)
+        if isinstance(payload, dict):
+            return _DummyResponse(json_data=payload)
+        return _DummyResponse(str(payload))
 
 
 class _RecordingSession:
@@ -343,6 +370,84 @@ def _sample_payloads() -> dict[str, str]:
     }
 
 
+def _detail_payload(
+    *,
+    event_id: int,
+    source_url: str,
+    latest_url: str | None = None,
+    speaker: str | None = None,
+    description: str | None = None,
+) -> dict[str, object]:
+    source_html = f'<a rel="nofollow noopener" target="_blank" href="{source_url}">Official Source</a>'
+    if latest_url:
+        source_html += f' (<a rel="nofollow noopener" target="_blank" href="{latest_url}">latest release</a>)'
+
+    specs = [{"title": "Source", "html": source_html}]
+    if speaker:
+        specs.append({"title": "Speaker", "html": speaker})
+    if description:
+        specs.append({"title": "Description", "html": description})
+
+    return {
+        "data": {
+            "event_id": event_id,
+            "specs": specs,
+            "linked_threads": {"news": [], "threads": []},
+        }
+    }
+
+
+def _board_index_html(*, kind: str, entries: list[dict[str, object]]) -> str:
+    rows: list[str] = []
+    for entry in entries:
+        event_date = entry["date"]
+        assert isinstance(event_date, dt.date)
+        rows.append(
+            "<div class='row'>"
+            "<div class='col-xs-3 col-md-2 eventlist__time'>"
+            f"<time>{event_date.month}/{event_date.day}/{event_date.year}</time>"
+            "</div>"
+            "<div class='col-xs-9 col-md-10 eventlist__event'>"
+            f"<p><a href='{entry['href']}'><em>{entry['title']}</em></a></p>"
+            f"<p class='news__speaker'>{entry['speaker']}</p>"
+            f"<p>{entry['location']}</p>"
+            "</div>"
+            "</div>"
+        )
+    return f"<html><body>{''.join(rows)}</body></html>"
+
+
+def _board_article_html(*paragraphs: str) -> str:
+    body = "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs)
+    return (
+        "<html><body><div id='article'>"
+        "<div class='heading col-xs-12 col-sm-8 col-md-8'><p class='article__time'>March 07, 2025</p></div>"
+        f"<div class='col-xs-12 col-sm-8 col-md-8'>{body}</div>"
+        "</div></body></html>"
+    )
+
+
+def _nyfed_index_html(entries: list[dict[str, object]]) -> str:
+    rows: list[str] = []
+    for entry in entries:
+        event_date = entry["date"]
+        assert isinstance(event_date, dt.date)
+        rows.append(
+            "<tr>"
+            f"<td class='dirColL'><div>{event_date.strftime('%b')} {event_date.day}, {event_date.year}</div></td>"
+            "<td class='dirColR'><div class='tablTitle'>"
+            f"<a href='{entry['href']}' class='paraHeader'>{entry['title']}</a>"
+            "</div></td>"
+            "</tr>"
+        )
+    return f"<html><body><table>{''.join(rows)}</table></body></html>"
+
+
+def _nyfed_article_html(*paragraphs: str) -> str:
+    body = "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs)
+    return f"<html><body><div id='sC-component-text-no-media' class='ts-article-text'>{body}</div></body></html>"
+
+
 def test_fetch_week_parses_required_fields_and_metadata(tmp_path):
     session = _DummySession(_sample_payloads())
     fetcher = ForexFactoryCalendarFetcher(session=session, cache_dir=tmp_path / "html", core_base_dir=tmp_path / "core")
@@ -599,3 +704,194 @@ def test_parse_timestamp_handles_dst_fall_back_ambiguity(tmp_path):
     )
 
     assert parsed == pd.Timestamp("2022-11-06 06:00:00+00:00")
+
+
+def test_fetch_event_detail_parses_source_links_and_domain(tmp_path):
+    detail_url = "https://www.forexfactory.com/calendar/details/1-141224"
+    session = _DummySession(
+        {
+            detail_url: _detail_payload(
+                event_id=141224,
+                source_url="https://www.federalreserve.gov/",
+                latest_url="https://www.youtube.com/user/FedReserveBoard",
+                speaker="Jerome H. Powell",
+                description="Prepared remarks followed by Q&A.",
+            )
+        }
+    )
+    fetcher = ForexFactoryCalendarFetcher(session=session, cache_dir=tmp_path / "html", core_base_dir=tmp_path / "core")
+
+    detail = fetcher.fetch_event_detail(141224)
+
+    assert detail.event_id == 141224
+    assert detail.official_source_url == "https://www.federalreserve.gov/"
+    assert detail.official_source_latest_url == "https://www.youtube.com/user/FedReserveBoard"
+    assert detail.official_source_domain == "federalreserve.gov"
+    assert detail.speaker == "Jerome H. Powell"
+    assert detail.description == "Prepared remarks followed by Q&A."
+    assert detail.specs["Source"] == "Official Source ( latest release )"
+
+
+def test_fetch_event_transcript_resolves_fomc_press_conference_pdf(monkeypatch, tmp_path):
+    detail_url = "https://www.forexfactory.com/calendar/details/1-141224"
+    pdf_url = "https://www.federalreserve.gov/mediacenter/files/FOMCpresconf20250319.pdf"
+    session = _DummySession(
+        {
+            detail_url: _detail_payload(
+                event_id=141224,
+                source_url="https://www.federalreserve.gov/",
+                latest_url="https://www.youtube.com/user/FedReserveBoard",
+                speaker="Jerome H. Powell",
+            ),
+            pdf_url: b"%PDF-sample",
+        }
+    )
+    fetcher = ForexFactoryCalendarFetcher(session=session, cache_dir=tmp_path / "html", core_base_dir=tmp_path / "core")
+    monkeypatch.setattr(fetcher, "_extract_pdf_text", lambda payload: "Transcript of Chair Powell's Press Conference")
+
+    transcript = fetcher.fetch_event_transcript(
+        141224,
+        dt.date(2025, 3, 19),
+        "FOMC Press Conference",
+    )
+
+    assert transcript.source_type == "fomc_press_conference"
+    assert transcript.transcript_url == pdf_url
+    assert transcript.transcript_format == "pdf"
+    assert transcript.transcript_source == "fomc_press_conference_pdf"
+    assert transcript.transcript_status == "resolved"
+    assert transcript.transcript_text == "Transcript of Chair Powell's Press Conference"
+    assert session.calls == [detail_url, pdf_url]
+
+
+def test_fetch_event_transcript_resolves_board_speech_from_index(monkeypatch, tmp_path):
+    detail_url = "https://www.forexfactory.com/calendar/details/1-145001"
+    index_url = "https://www.federalreserve.gov/newsevents/speech/2025-speeches.htm"
+    article_url = "https://www.federalreserve.gov/newsevents/speech/powell20250307a.htm"
+    session = _DummySession(
+        {
+            detail_url: _detail_payload(
+                event_id=145001,
+                source_url="https://www.federalreserve.gov/",
+                speaker="Chair Jerome H. Powell",
+            ),
+            index_url: _board_index_html(
+                kind="speech",
+                entries=[
+                    {
+                        "date": dt.date(2025, 3, 7),
+                        "href": "/newsevents/speech/powell20250307a.htm",
+                        "title": "Economic Outlook",
+                        "speaker": "Chair Jerome H. Powell",
+                        "location": "At the University of Chicago Booth School of Business 2025 U.S. Monetary Policy Forum",
+                    }
+                ],
+            ),
+            article_url: _board_article_html(
+                "Thank you, Anil. I appreciate the opportunity to speak at this forum.",
+                "Despite elevated levels of uncertainty, the U.S. economy continues to be in a good place.",
+            ),
+        }
+    )
+    fetcher = ForexFactoryCalendarFetcher(session=session, cache_dir=tmp_path / "html", core_base_dir=tmp_path / "core")
+
+    transcript = fetcher.fetch_event_transcript(
+        145001,
+        dt.date(2025, 3, 7),
+        "Fed Chair Powell Speaks",
+    )
+
+    assert transcript.source_type == "board_speech"
+    assert transcript.transcript_url == article_url
+    assert transcript.transcript_format == "html"
+    assert transcript.transcript_source == "board_speech_html"
+    assert transcript.transcript_status == "resolved"
+    assert "Despite elevated levels of uncertainty" in (transcript.transcript_text or "")
+    assert session.calls == [detail_url, index_url, article_url]
+
+
+def test_fetch_event_transcript_resolves_board_testimony_from_index(tmp_path):
+    detail_url = "https://www.forexfactory.com/calendar/details/1-145002"
+    index_url = "https://www.federalreserve.gov/newsevents/testimony/2025-testimony.htm"
+    article_url = "https://www.federalreserve.gov/newsevents/testimony/powell20250211a.htm"
+    session = _DummySession(
+        {
+            detail_url: _detail_payload(
+                event_id=145002,
+                source_url="https://www.federalreserve.gov/",
+                speaker="Chair Jerome H. Powell",
+            ),
+            index_url: _board_index_html(
+                kind="testimony",
+                entries=[
+                    {
+                        "date": dt.date(2025, 2, 11),
+                        "href": "/newsevents/testimony/powell20250211a.htm",
+                        "title": "Semiannual Monetary Policy Report to the Congress",
+                        "speaker": "Chair Jerome H. Powell",
+                        "location": "Before the Committee on Banking, Housing, and Urban Affairs, U.S. Senate",
+                    }
+                ],
+            ),
+            article_url: _board_article_html(
+                "Chairman Scott, Ranking Member Warren, and other members of the Committee, thank you.",
+                "I am pleased to present the Federal Reserve's Semiannual Monetary Policy Report.",
+            ),
+        }
+    )
+    fetcher = ForexFactoryCalendarFetcher(session=session, cache_dir=tmp_path / "html", core_base_dir=tmp_path / "core")
+
+    transcript = fetcher.fetch_event_transcript(
+        145002,
+        dt.date(2025, 2, 11),
+        "Fed Chair Powell Testifies",
+    )
+
+    assert transcript.source_type == "board_testimony"
+    assert transcript.transcript_url == article_url
+    assert transcript.transcript_source == "board_testimony_html"
+    assert transcript.transcript_status == "resolved"
+    assert "Semiannual Monetary Policy Report" in (transcript.transcript_text or "")
+
+
+def test_fetch_event_transcript_resolves_newyorkfed_speech_from_index(tmp_path):
+    detail_url = "https://www.forexfactory.com/calendar/details/1-145874"
+    index_url = "https://www.newyorkfed.org/newsevents/speeches/index"
+    article_url = "https://www.newyorkfed.org/newsevents/speeches/2025/wil250321"
+    session = _DummySession(
+        {
+            detail_url: _detail_payload(
+                event_id=145874,
+                source_url="https://www.newyorkfed.org/",
+                latest_url="https://www.newyorkfed.org/press#speeches",
+                speaker="John C. Williams",
+            ),
+            index_url: _nyfed_index_html(
+                [
+                    {
+                        "date": dt.date(2025, 3, 21),
+                        "href": "/newsevents/speeches/2025/wil250321",
+                        "title": "Williams: Certain Uncertainty",
+                    }
+                ]
+            ),
+            article_url: _nyfed_article_html(
+                "Good morning, everyone. I'm so pleased to be here with you today.",
+                "Today I will discuss the economy and monetary policy in the context of a changing and uncertain landscape.",
+            ),
+        }
+    )
+    fetcher = ForexFactoryCalendarFetcher(session=session, cache_dir=tmp_path / "html", core_base_dir=tmp_path / "core")
+
+    transcript = fetcher.fetch_event_transcript(
+        145874,
+        dt.date(2025, 3, 21),
+        "FOMC Member Williams Speaks",
+    )
+
+    assert transcript.source_type == "newyorkfed_speech"
+    assert transcript.transcript_url == article_url
+    assert transcript.transcript_format == "html"
+    assert transcript.transcript_source == "newyorkfed_speech_html"
+    assert transcript.transcript_status == "resolved"
+    assert "changing and uncertain landscape" in (transcript.transcript_text or "")
