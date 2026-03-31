@@ -1386,6 +1386,193 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
             # auto-committed (DiskCache)
             return self._build_pricer_from_args(args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn")
 
+    # ------------------------------------------------------------------
+    # Cash spline construction (CORE: compute once, read everywhere)
+    # ------------------------------------------------------------------
+    def fetch_cash_spline(
+        self,
+        as_of_date: datetime.date,
+        *,
+        config: Optional["CashSplineConfig"] = None,
+        cusips: Optional[List[str]] = None,
+        force_refresh: bool = False,
+        **kwargs,
+    ) -> Optional["CashSpline"]:
+        """Build (or retrieve from cache) a fitted cash spline for *as_of_date*.
+
+        Parameters
+        ----------
+        as_of_date : date
+            Valuation date.
+        config : CashSplineConfig, optional
+            Spline configuration.  Defaults to ``JPM_PAR_CURVE_CONFIG``.
+        cusips : list[str], optional
+            Restrict to these CUSIPs (after reference-data filtering).
+            When *None*, uses all eligible CUSIPs from reference data.
+        force_refresh : bool
+            Bypass cache and refit.
+
+        Returns
+        -------
+        CashSpline or None
+        """
+        from MDP.FixedRateBonds.cash_spline import (
+            CashSpline,
+            CashSplineBuilder,
+            CashSplineConfig,
+            JPM_PAR_CURVE_CONFIG,
+            get_cached_spline,
+            put_cached_spline,
+        )
+
+        if config is None:
+            config = JPM_PAR_CURVE_CONFIG
+
+        # --- Cache check ---
+        if not force_refresh:
+            cached = get_cached_spline(as_of_date, config)
+            if cached is not None:
+                return cached
+
+        # --- Load reference data & pricers ---
+        ref_df = self.get_bond_reference_data(as_of_date=as_of_date, kwargs=kwargs)
+        if ref_df is None or ref_df.empty:
+            _logger.warning("No reference data for %s", as_of_date)
+            return None
+
+        eligible_cusips = ref_df["cusip"].tolist() if "cusip" in ref_df.columns else []
+        if cusips:
+            eligible_cusips = [c for c in eligible_cusips if c in set(cusips)]
+        if not eligible_cusips:
+            _logger.warning("No eligible CUSIPs for spline on %s", as_of_date)
+            return None
+
+        # Fetch pricers for all eligible bonds
+        pricers = self.get_data({
+            "cusips": eligible_cusips,
+            "timestamp": as_of_date,
+            **kwargs,
+        })
+        if not pricers:
+            _logger.warning("No pricers returned for %s", as_of_date)
+            return None
+
+        # --- Build bond data frame ---
+        rows = []
+        for cusip, pricer in pricers.items():
+            try:
+                ttm = float(pricer.time_to_maturity())
+                ytm_val = float(pricer.ytm())
+                meta = pricer.meta() if hasattr(pricer, "meta") else {}
+                rank = None
+                if isinstance(meta, dict):
+                    rank = meta.get("rank")
+                elif hasattr(meta, "rank"):
+                    rank = meta.rank
+
+                row = {
+                    "cusip": cusip,
+                    "ttm": ttm,
+                    "ytm": ytm_val,
+                }
+                if rank is not None:
+                    row["rank"] = rank
+
+                # BPV weight = mod_dur * dirty_price / 10000
+                try:
+                    mdur = float(pricer.mod_duration())
+                    dp = float(pricer.dirty_price())
+                    row["bpv"] = mdur * dp / 10_000.0
+                except Exception:
+                    pass
+
+                rows.append(row)
+            except Exception:
+                continue
+
+        if not rows:
+            _logger.warning("Could not extract bond data for spline on %s", as_of_date)
+            return None
+
+        bond_df = pd.DataFrame(rows)
+
+        # Apply BPV weighting if configured
+        import numpy as _np
+
+        weights = None
+        if config.weighting == "bpv" and "bpv" in bond_df.columns:
+            bpv = bond_df["bpv"].to_numpy(dtype=float)
+            bpv = _np.where(_np.isfinite(bpv) & (bpv > 0), bpv, _np.nan)
+            # Weight = 1/BPV (normalize to yield-space)
+            inv_bpv = 1.0 / bpv
+            inv_bpv = _np.where(_np.isfinite(inv_bpv), inv_bpv, 0.0)
+            if inv_bpv.sum() > 0:
+                weights = inv_bpv / inv_bpv.sum()
+
+        # --- Fit ---
+        builder = CashSplineBuilder(config)
+        try:
+            spline = builder.fit(
+                ttm=bond_df["ttm"].to_numpy(),
+                y=bond_df["ytm"].to_numpy(),
+                cusips=bond_df["cusip"].to_numpy(),
+                ranks=bond_df["rank"].to_numpy() if "rank" in bond_df.columns else None,
+                weights=weights,
+                as_of_date=as_of_date,
+            )
+        except ValueError as exc:
+            _logger.warning("Spline fit failed for %s: %s", as_of_date, exc)
+            return None
+
+        # --- Cache ---
+        put_cached_spline(spline)
+        return spline
+
+    def bulk_fetch_cash_splines(
+        self,
+        dates: Sequence[datetime.date],
+        *,
+        config: Optional["CashSplineConfig"] = None,
+        cusips: Optional[List[str]] = None,
+        force_refresh: bool = False,
+        max_workers: int = 4,
+        show_tqdm: bool = False,
+        **kwargs,
+    ) -> Dict[datetime.date, Optional["CashSpline"]]:
+        """Build splines for multiple dates (parallelized).
+
+        Returns dict mapping each date to its fitted CashSpline (or None).
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        results: Dict[datetime.date, Any] = {}
+        dates_to_fetch = list(dates)
+
+        def _fetch_one(d: datetime.date):
+            return d, self.fetch_cash_spline(
+                d, config=config, cusips=cusips,
+                force_refresh=force_refresh, **kwargs,
+            )
+
+        iterator = dates_to_fetch
+        if show_tqdm:
+            try:
+                iterator = tqdm.tqdm(dates_to_fetch, desc="Cash splines")
+            except Exception:
+                pass
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futs = {pool.submit(_fetch_one, d): d for d in dates_to_fetch}
+            for fut in as_completed(futs):
+                try:
+                    dt, spline = fut.result()
+                    results[dt] = spline
+                except Exception as exc:
+                    results[futs[fut]] = None
+                    _logger.warning("Spline build failed for %s: %s", futs[fut], exc)
+
+        return results
+
     def get_bond_reference_data(self, as_of_date: datetime.date, kwargs={}):
         if kwargs.get("cme_tcf", None):
             from MDP.FixedRateBonds.reference_data_cache.cme_tcf import read_cme_tcf_with_headers
