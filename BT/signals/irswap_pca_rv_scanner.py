@@ -804,13 +804,17 @@ def _fit_ou(
         theta = float(theta_bps) / BPS_SCALE
         mu = float(mu_est)  # annualized speed (dimensionless, same in bps or rate space)
         sigma = float(np.sqrt(max(sigma_sq_bps, 0))) / BPS_SCALE  # back to rate space
-        # arbitragelab returns half_life in YEARS — convert to business days
-        hl_years = float(ou.half_life()) if mu > 1e-10 else 999.0
+        # arbitragelab returns half_life in YEARS — convert to business days.
+        # The optimizer lower-bounds mu at 1e-5; when it hits that floor the
+        # fit is degenerate (no mean-reversion detected).  Detect this by
+        # checking whether the implied half-life exceeds a sane ceiling.
+        MAX_HL_DAYS = 10_000  # ~40 years — anything above is nonsensical
+        hl_years = float(ou.half_life()) if mu > 1e-10 else np.inf
         half_life = hl_years * 252  # convert to business days
 
-        # Sanity: reject if half-life in days is implausible
-        if half_life < 1.0:
-            logger.warning("arbitragelab OU half_life=%.1fd too small (mu_ann=%.4f), using AR(1) fallback", half_life, mu)
+        # Sanity: reject if half-life in days is implausible (too small OR too large)
+        if half_life < 1.0 or half_life > MAX_HL_DAYS:
+            logger.warning("arbitragelab OU half_life=%.1fd (mu_ann=%.6f), using AR(1) fallback", half_life, mu)
             raise ValueError("Implausible half_life from arbitragelab")
 
     except Exception as exc:
