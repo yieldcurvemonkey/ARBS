@@ -39,6 +39,73 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Picklable tail-linearized evaluator (for disk caching)
+# ---------------------------------------------------------------------------
+class _TailLinearizedEvaluator:
+    """Wraps a base interpolation callable with linear tails.
+
+    Picklable — can be stored via diskcache / Supabase L2.
+    """
+
+    __slots__ = (
+        "base_func", "x_min", "x_max",
+        "left_base", "left_slope",
+        "right_anchor", "right_base", "right_slope",
+    )
+
+    def __init__(
+        self,
+        *,
+        base_func: Any,
+        x_min: float,
+        x_max: float,
+        left_base: float,
+        left_slope: float,
+        right_anchor: float,
+        right_base: float,
+        right_slope: float,
+    ) -> None:
+        self.base_func = base_func
+        self.x_min = x_min
+        self.x_max = x_max
+        self.left_base = left_base
+        self.left_slope = left_slope
+        self.right_anchor = right_anchor
+        self.right_base = right_base
+        self.right_slope = right_slope
+
+    def __call__(self, t) -> np.ndarray:
+        arr = np.atleast_1d(np.asarray(t, dtype=float))
+        out = np.asarray(self.base_func(arr), dtype=float)
+        left_mask = arr < self.x_min
+        if np.any(left_mask):
+            out = out.copy()
+            out[left_mask] = self.left_base + self.left_slope * (arr[left_mask] - self.x_min)
+        right_mask = arr > self.x_max
+        if np.any(right_mask):
+            if not np.any(left_mask):
+                out = out.copy()
+            out[right_mask] = self.right_base + self.right_slope * (arr[right_mask] - self.right_anchor)
+        return out
+
+    def __getstate__(self) -> dict:
+        return {
+            "base_func": self.base_func,
+            "x_min": self.x_min,
+            "x_max": self.x_max,
+            "left_base": self.left_base,
+            "left_slope": self.left_slope,
+            "right_anchor": self.right_anchor,
+            "right_base": self.right_base,
+            "right_slope": self.right_slope,
+        }
+
+    def __setstate__(self, state: dict) -> None:
+        for k, v in state.items():
+            setattr(self, k, v)
+
+
+# ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
 class SplineMethod(str, Enum):
@@ -727,35 +794,31 @@ class CashSplineBuilder:
         x: np.ndarray,
         y: np.ndarray,
     ) -> Callable:
-        """Wrap ``base_func`` with linear tails beyond data boundaries."""
+        """Wrap ``base_func`` with linear tails beyond data boundaries.
+
+        Returns a picklable :class:`_TailLinearizedEvaluator`.
+        """
         if len(x) < 2:
             return base_func
 
-        x_min, x_max = float(x[0]), float(x[-1])
-        # Left tail
+        x_min = float(x[0])
+        x_max = float(x[-1])
         left_slope = float(y[1] - y[0]) / float(x[1] - x[0]) if x[1] != x[0] else 0.0
         left_base = float(y[0])
-        # Right tail (from second-to-last point)
         right_anchor = float(x[-2])
-        right_base = float(base_func(np.array([right_anchor]))[0]) if len(x) >= 2 else float(y[-1])
+        right_base = float(np.asarray(base_func(np.array([right_anchor])), dtype=float).flat[0])
         right_slope = float(y[-1] - y[-2]) / float(x[-1] - x[-2]) if x[-1] != x[-2] else 0.0
 
-        def wrapped(t: npt.ArrayLike) -> np.ndarray:
-            arr = np.atleast_1d(np.asarray(t, dtype=float))
-            out = np.asarray(base_func(arr), dtype=float)
-            # Left extrapolation
-            left_mask = arr < x_min
-            if np.any(left_mask):
-                out = out.copy()
-                out[left_mask] = left_base + left_slope * (arr[left_mask] - x_min)
-            # Right extrapolation
-            right_mask = arr >= right_anchor + (x_max - right_anchor)
-            if np.any(right_mask):
-                out = out.copy() if not left_mask.any() else out
-                out[right_mask] = right_base + right_slope * (arr[right_mask] - right_anchor)
-            return out
-
-        return wrapped
+        return _TailLinearizedEvaluator(
+            base_func=base_func,
+            x_min=x_min,
+            x_max=x_max,
+            left_base=left_base,
+            left_slope=left_slope,
+            right_anchor=right_anchor,
+            right_base=right_base,
+            right_slope=right_slope,
+        )
 
     @staticmethod
     def _is_parametric(method: str) -> bool:
