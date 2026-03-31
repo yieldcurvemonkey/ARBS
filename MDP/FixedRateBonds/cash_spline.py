@@ -330,6 +330,56 @@ class CashSpline:
             return pd.Series(scores, index=self.fit_cusips, name="z_score")
         return pd.Series(scores, name="z_score")
 
+    # ---- Per-CUSIP lookups (for Value pattern integration) ----
+    def spread_for_cusip(self, cusip: str) -> float:
+        """Yield error (bp) for a single CUSIP.  Returns NaN if not in fit."""
+        if self.fit_cusips is None or self.residuals is None:
+            return float("nan")
+        cusip_list = list(self.fit_cusips)
+        if cusip not in cusip_list:
+            return float("nan")
+        idx = cusip_list.index(cusip)
+        return float(self.residuals[idx] * 100.0)
+
+    def z_score_for_cusip(
+        self,
+        cusip: str,
+        lookback_residuals: Optional[pd.DataFrame] = None,
+    ) -> float:
+        """Z-score of yield error for a single CUSIP.
+
+        Parameters
+        ----------
+        cusip : str
+        lookback_residuals : DataFrame, optional
+            Historical residuals (rows=dates, cols=CUSIPs, values in pct
+            units matching ``self.residuals``).  Falls back to
+            cross-sectional std when omitted.
+        """
+        if self.fit_cusips is None or self.residuals is None:
+            return float("nan")
+        cusip_list = list(self.fit_cusips)
+        if cusip not in cusip_list:
+            return float("nan")
+        idx = cusip_list.index(cusip)
+        err = self.residuals[idx]
+
+        if lookback_residuals is not None and cusip in lookback_residuals.columns:
+            sigma = lookback_residuals[cusip].dropna().std()
+            return float(err / sigma) if sigma > 1e-12 else float("nan")
+
+        sigma = float(np.std(self.residuals))
+        return float(err / sigma) if sigma > 1e-12 else float("nan")
+
+    def rmse_bucket(self, lo: float, hi: float) -> float:
+        """RMSE (bp) for bonds with TTM in [lo, hi)."""
+        if self.fit_ttm is None or self.residuals is None:
+            return float("nan")
+        mask = (self.fit_ttm >= lo) & (self.fit_ttm < hi)
+        if not np.any(mask):
+            return float("nan")
+        return float(np.sqrt(np.mean(self.residuals[mask] ** 2)) * 100.0)
+
     def to_frame(self) -> pd.DataFrame:
         """Summary DataFrame of the fit — one row per bond."""
         data: Dict[str, Any] = {}

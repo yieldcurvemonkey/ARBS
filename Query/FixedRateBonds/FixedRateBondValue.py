@@ -15,6 +15,12 @@ from Query.FixedRateBonds.carry_roll import (
     normalize_horizon_spec,
     safe_float,
 )
+from Query.FixedRateBonds.spline_values import (
+    MATURITY_BUCKETS,
+    compute_spline_for_date,
+    expand_pricer_universe_for_spline,
+    parse_bucket,
+)
 
 
 class FixedRateBondValue(Enum):
@@ -29,6 +35,12 @@ class FixedRateBondValue(Enum):
     CARRY_BPS_RUNNING = auto()
     ROLL_BPS_RUNNING = auto()
     CARRY_AND_ROLL_BPS_RUNNING = auto()
+
+    # Spline-derived metrics
+    SPLINE_SPREAD = auto()        # Per-CUSIP yield error vs fitted spline (bp)
+    SPLINE_Z_SCORE = auto()       # Per-CUSIP z-score of yield error
+    SPLINE_RMSE = auto()          # Whole-curve RMSE (bp) — date-level aggregate
+    SPLINE_RMSE_BUCKET = auto()   # Maturity-bucket RMSE (bp) — pass bucket via value_kwargs
 
 
 # _frb_structure_sign_mapper = {
@@ -113,6 +125,7 @@ class FixedRateBondValueFunctionMap(BaseValueFunctionMap[FixedRateBondValue, flo
     ):
         super().__init__(FixedRateBondValue, package=package, risk_weights=risk_weights, pricer=pricer)
         self._carry_roll_lookup_cache: Optional[pd.DataFrame] = None
+        self._spline_cache: Optional[Any] = None  # CashSpline, cached per value-map instance
 
     def _create_map(self) -> Dict[FixedRateBondValue, Callable[..., float]]:
         return {
@@ -127,6 +140,10 @@ class FixedRateBondValueFunctionMap(BaseValueFunctionMap[FixedRateBondValue, flo
             FixedRateBondValue.ROLL_BPS_RUNNING: self._roll_bps_running,
             FixedRateBondValue.CARRY_AND_ROLL_BPS_RUNNING: self._carry_and_roll_bps_running,
             # FixedRateBondValue.CONVEXITY: self._convexity,
+            FixedRateBondValue.SPLINE_SPREAD: self._spline_spread,
+            FixedRateBondValue.SPLINE_Z_SCORE: self._spline_z_score,
+            FixedRateBondValue.SPLINE_RMSE: self._spline_rmse,
+            FixedRateBondValue.SPLINE_RMSE_BUCKET: self._spline_rmse_bucket,
         }
 
     def _frame_covers_package(self, frame: pd.DataFrame) -> bool:
@@ -238,3 +255,88 @@ class FixedRateBondValueFunctionMap(BaseValueFunctionMap[FixedRateBondValue, flo
             kwargs["risk_weights"][i] * abs(_rebuild_pricer(_resolve_leg_pricer(kwargs["pricer"], leg), leg).convexity())
             for i, leg in enumerate(kwargs["package"])
         )
+
+    # ------------------------------------------------------------------
+    # Spline-derived values
+    # ------------------------------------------------------------------
+    def _get_spline(self, **kwargs: Any) -> Optional[Any]:
+        """Lazily build / cache a CashSpline for the current date.
+
+        Mirrors ``_carry_roll_lookup()`` — builds once per value-map
+        instance, expands the pricer universe if the initial set is
+        insufficient for a cross-sectional fit.
+        """
+        if self._spline_cache is not None:
+            return self._spline_cache
+
+        pricers = kwargs["pricer"]
+        if not pricers:
+            return None
+
+        first_pricer = next(iter(pricers.values()))
+        as_of_date = first_pricer.reference_date()
+        config = kwargs.get("spline_config")  # from value_kwargs
+
+        spline = compute_spline_for_date(pricers, as_of_date, config)
+
+        # If the fit failed or didn't cover the package, expand
+        if spline is None or (spline.fit_cusips is not None and len(spline.fit_cusips) < 10):
+            expanded = expand_pricer_universe_for_spline(
+                pricers=pricers, as_of_date=as_of_date,
+            )
+            spline = compute_spline_for_date(expanded, as_of_date, config)
+
+        self._spline_cache = spline
+        return spline
+
+    def _spline_spread(self, **kwargs: Any) -> float:
+        """Weighted sum of per-leg spline spreads (bp).
+
+        For OUTRIGHT: the yield error of the single bond.
+        For CURVE: difference of yield errors (spread of spreads).
+        For FLY: weighted combination of yield errors.
+        """
+        spline = self._get_spline(**kwargs)
+        if spline is None:
+            return float("nan")
+        total = 0.0
+        for i, leg in enumerate(kwargs["package"]):
+            spread_bp = spline.spread_for_cusip(str(leg.cusip))
+            if pd.isna(spread_bp):
+                return float("nan")
+            total += kwargs["risk_weights"][i] * float(spread_bp)
+        return float(total)
+
+    def _spline_z_score(self, **kwargs: Any) -> float:
+        """Weighted sum of per-leg z-scores of spline yield errors."""
+        spline = self._get_spline(**kwargs)
+        if spline is None:
+            return float("nan")
+        total = 0.0
+        for i, leg in enumerate(kwargs["package"]):
+            z = spline.z_score_for_cusip(str(leg.cusip))
+            if pd.isna(z):
+                return float("nan")
+            total += kwargs["risk_weights"][i] * float(z)
+        return float(total)
+
+    def _spline_rmse(self, **kwargs: Any) -> float:
+        """Date-level aggregate: RMSE of the entire fitted curve (bp)."""
+        spline = self._get_spline(**kwargs)
+        if spline is None:
+            return float("nan")
+        return float(spline.rmse) if spline.rmse is not None else float("nan")
+
+    def _spline_rmse_bucket(self, **kwargs: Any) -> float:
+        """Maturity-bucket RMSE (bp).
+
+        Pass ``bucket="7-10Y"`` via ``value_kwargs``.  Valid buckets:
+        ``0-2Y``, ``2-3Y``, ``3-5Y``, ``5-7Y``, ``7-10Y``, ``10-15Y``,
+        ``15-20Y``, ``20-30Y``, or ``ALL``.
+        """
+        spline = self._get_spline(**kwargs)
+        if spline is None:
+            return float("nan")
+        bucket_name = kwargs.get("bucket", "ALL")
+        lo, hi = parse_bucket(str(bucket_name))
+        return spline.rmse_bucket(lo, hi)
