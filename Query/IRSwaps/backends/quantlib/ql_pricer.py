@@ -26,6 +26,10 @@ def build_ql_irswap(
     if bpv is not None:
         bpv = -bpv
 
+    # idk what conventions are: pos risk -> long duration/rec fixed
+    if bpv is not None:
+        bpv = -bpv
+
     def _normalize_side(rp: Optional[str], nom: float) -> bool:
         # True -> receive fixed, False -> pay fixed
         if rp is None:

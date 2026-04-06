@@ -141,6 +141,7 @@ class QueryDrivenBacktest:
                 q = o.query
                 pricer_or_curve = self._pricer_for_query(q, now)
                 package, weights = q.resolve_package(pricer_or_curve=pricer_or_curve)
+                print(package[0].nominal(), package[0].fixedLegBPS(), package[0].startDate(), package[0].maturityDate())
                 self.portfolio.add(
                     ResolvedQueryPosition(
                         package=package,
