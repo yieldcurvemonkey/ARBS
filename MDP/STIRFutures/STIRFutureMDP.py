@@ -899,8 +899,10 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         """
         chi = pytz.timezone("America/Chicago")
         ts_chi = ts_dt.astimezone(chi)
-        start = chi.localize(datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day, 0, 1))
-        end = chi.localize(datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day, 23, 59))
+        # EOD endpoint returns naive-datetime index at midnight; use a window
+        # that captures the target date and a few days prior as fallback.
+        start = datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day) - datetime.timedelta(days=5)
+        end = datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day, 23, 59)
 
         barchart_syms = [_to_barchart_symbol(_normalize_symbol(t) or t) for t in tickers]
         max_concurrent = min(len(barchart_syms), 36) + 1
