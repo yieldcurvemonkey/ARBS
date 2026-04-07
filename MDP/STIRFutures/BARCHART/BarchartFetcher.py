@@ -41,9 +41,18 @@ class BaseFetcher:
     ):
         self._global_timeout = global_timeout
         self._proxies = proxies if proxies else {"http": None, "https": None}
+
+        # httpx/socksio only understands socks5:// — not socks5h:// (remote DNS).
+        # requests/PySocks handles socks5h natively, so keep self._proxies as-is
+        # for the token-fetch Session but downgrade the scheme for httpx transports.
+        def _httpx_proxy_url(url: Optional[str]) -> Optional[str]:
+            if url and url.startswith("socks5h://"):
+                return "socks5://" + url[len("socks5h://"):]
+            return url
+
         self._httpx_proxies = {
-            "http://": httpx.AsyncHTTPTransport(proxy=self._proxies["http"]),
-            "https://": httpx.AsyncHTTPTransport(proxy=self._proxies["https"]),
+            "http://": httpx.AsyncHTTPTransport(proxy=_httpx_proxy_url(self._proxies["http"])),
+            "https://": httpx.AsyncHTTPTransport(proxy=_httpx_proxy_url(self._proxies["https"])),
         }
 
         self._debug_verbose = debug_verbose
