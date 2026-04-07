@@ -15,6 +15,7 @@ class STIRFutureValue(Enum):
     PRICE = auto()
     PV01 = auto()
     DV01 = auto()
+    OPEN_INTEREST = auto()
 
 
 _stir_structure_sign_mapper = {
@@ -81,6 +82,7 @@ class STIRFutureValueFunctionMap(BaseValueFunctionMap[STIRFutureValue, float]):
             STIRFutureValue.PRICE: self._price,
             STIRFutureValue.PV01: self._pv01,
             STIRFutureValue.DV01: self._dv01,
+            STIRFutureValue.OPEN_INTEREST: self._open_interest,
         }
 
     def _rate(self, **kwargs: Any) -> float:
@@ -106,3 +108,12 @@ class STIRFutureValueFunctionMap(BaseValueFunctionMap[STIRFutureValue, float]):
             float(rw) * _package_price(pr, pk)
             for rw, pr, pk in zip(kwargs["risk_weights"], kwargs["pricer"].values(), kwargs["package"])
         )
+
+    def _open_interest(self, **kwargs: Any) -> float:
+        total = 0.0
+        for rw, pr in zip(kwargs["risk_weights"], kwargs["pricer"].values()):
+            meta = pr.meta() if callable(getattr(pr, "meta", None)) else {}
+            oi = (meta or {}).get("openinterest")
+            if oi is not None:
+                total += abs(float(rw)) * float(oi)
+        return total

@@ -885,6 +885,57 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     df = df.loc[full_index]
         return df
 
+    def _fetch_barchart_eod_oi(
+        self,
+        tickers: List[str],
+        ts_dt: datetime.datetime,
+        *,
+        show_tqdm: bool = False,
+    ) -> pd.DataFrame:
+        """Fetch EOD open interest for *tickers* on the date of *ts_dt*.
+
+        Returns a DataFrame with symbols as columns and OI as values,
+        indexed by date.  Returns an empty DataFrame on any failure.
+        """
+        chi = pytz.timezone("America/Chicago")
+        ts_chi = ts_dt.astimezone(chi)
+        start = chi.localize(datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day, 0, 1))
+        end = chi.localize(datetime.datetime(ts_chi.year, ts_chi.month, ts_chi.day, 23, 59))
+
+        barchart_syms = [_to_barchart_symbol(_normalize_symbol(t) or t) for t in tickers]
+        max_concurrent = min(len(barchart_syms), 36) + 1
+
+        for fetcher_kwargs in (
+            {"force_rotate_proxy": False, "clear_session_tokens": False},
+            {"force_rotate_proxy": True, "clear_session_tokens": True},
+        ):
+            bcf = self._get_barchart_fetcher(required_concurrency=max_concurrent, **fetcher_kwargs)
+            try:
+                df = bcf.barchart_timeseries_api(
+                    barchart_symbols=barchart_syms,
+                    start_date=start,
+                    end_date=end,
+                    interval=None,
+                    one_df=True,
+                    merge_val_col="Open Interest",
+                    show_tqdm=show_tqdm,
+                    max_concurrent_tasks=max_concurrent,
+                    max_keepalive_connections=max(36, max_concurrent) + 1,
+                )
+                if df is not None and not df.empty:
+                    df = df.copy()
+                    df.columns = [_from_barchart_symbol(c) for c in df.columns]
+                    return df
+            except Exception:
+                pass
+            finally:
+                try:
+                    bcf.close()
+                except Exception:
+                    pass
+
+        return pd.DataFrame()
+
     def _fetch_tos_live_quotes(self, tickers: List[str], ts_dt: datetime.datetime) -> pd.DataFrame:
         tos_map = {t: _to_tos_symbol(t) for t in tickers}
         quote_kwargs: Dict[str, Any] = {"symbols": list(tos_map.values())}
@@ -1057,6 +1108,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         # ---------- fetch missing ----------
         all_missing = sorted({t for lst in to_fetch.values() for t in lst})
         price_df = pd.DataFrame()
+        oi_df = pd.DataFrame()
 
         if all_missing:
             if src == "WEBULL_STIRF-RL":
@@ -1072,11 +1124,25 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     interval=interval,
                     full_day_intraday=floor_req_to_minute,
                 )
+                if want_eod and src == "BARCHART_STIRF-RL":
+                    try:
+                        oi_df = self._fetch_barchart_eod_oi(all_missing, ts_dt, show_tqdm=show_tqdm)
+                    except Exception:
+                        oi_df = pd.DataFrame()
 
             price_df = price_df.ffill().bfill()
             if price_df.empty:
                 raise RuntimeError(f"{src} returned no data for requested STIR futures.")
 
+        def _lookup_oi(symbol: str) -> Optional[float]:
+            if oi_df.empty or symbol not in oi_df.columns:
+                return None
+            series = oi_df[symbol].dropna()
+            if series.empty:
+                return None
+            return float(series.iloc[-1])
+
+        if all_missing:
             # Retain full-day DataFrame for downstream fast-path bulk lookups.
             if floor_req_to_minute and not price_df.empty:
                 from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
@@ -1087,6 +1153,7 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             if not use_live:
                 for t in price_df.columns:
                     series = price_df[t].dropna()
+                    oi_val = _lookup_oi(t)
                     for curr_ts, px in series.items():
                         curr_ts_iso = _cache_ts_iso(curr_ts, floor_minute=floor_req_to_minute)
                         args = {
@@ -1095,6 +1162,8 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                             "timestamp": curr_ts_iso,
                             "schema": 1,
                         }
+                        if oi_val is not None:
+                            args["openinterest"] = oi_val
                         self._threadsafe_cache_put(f"{curr_ts_iso}-{t}-{src}", args)
 
         # ---------- pass 2: build outputs from cache / fetched ----------
@@ -1121,6 +1190,9 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                             "timestamp": _cache_ts_iso(idx, floor_minute=floor_req_to_minute),
                             "schema": 1,
                         }
+                        oi_val = _lookup_oi(t)
+                        if oi_val is not None:
+                            args["openinterest"] = oi_val
 
                         idx_iso = _cache_ts_iso(idx, floor_minute=floor_req_to_minute)
                         if not use_live:
@@ -1164,6 +1236,9 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         "timestamp": _cache_ts_iso(idx, floor_minute=floor_req_to_minute),
                         "schema": 1,
                     }
+                    oi_val = _lookup_oi(t)
+                    if oi_val is not None:
+                        args["openinterest"] = oi_val
                     if not use_live:
                         idx_iso = _cache_ts_iso(idx, floor_minute=floor_req_to_minute)
                         self._threadsafe_cache_put(f"{idx_iso}-{t}-{src}", args)
