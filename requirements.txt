@@ -1,11 +1,11 @@
 # ARBS working dependency set
-# Pinned to versions installed in conda env `stir` on 2026-03-19.
+# Updated 2026-04-07 — regenerated from full import scan of the repo.
 #
-# This is intentionally not a full machine-wide `pip freeze`.
-# It captures the packages imported by the repo's modules, scripts,
-# tests, and notebooks so a fresh clone can reproduce the working setup.
+# Pinned versions carried forward from the conda env `stir` where available.
+# This captures every third-party package imported by the repo's modules,
+# scripts, tests, and notebooks so a fresh clone can reproduce the working setup.
 
-# Core analytics and pricing
+# ── Core analytics and pricing ──────────────────────────────────────
 numpy==2.3.2
 pandas==2.3.1
 pyarrow==21.0.0
@@ -15,8 +15,10 @@ scipy==1.15.3
 scikit-learn==1.7.2
 statsmodels==0.14.5
 networkx==3.4.2
+arch>=7.0
+joblib>=1.4
 
-# Local cache / storage / sync
+# ── Local cache / storage / sync ────────────────────────────────────
 cloudpickle==3.1.2
 diskcache==5.6.3
 duckdb==1.4.4
@@ -24,13 +26,15 @@ platformdirs==4.3.8
 psycopg2-binary==2.9.10
 SQLAlchemy==2.0.37
 
-# Fetching / parsing / transport
+# ── Fetching / parsing / transport ──────────────────────────────────
 aiohttp==3.12.15
 beautifulsoup4==4.13.4
 Brotli==1.1.0
 cryptography==46.0.3
 gs-quant==1.4.26
-httpx==0.28.1
+h2>=4.0
+httpx[http2]==0.28.1
+lxml==6.0.2
 python-dateutil==2.9.0.post0
 PyYAML==6.0.2
 pytz==2024.2
@@ -39,20 +43,17 @@ requests==2.32.4
 selenium==4.36.0
 ujson==5.10.0
 zstandard==0.25.0
-lxml==6.0.2
 
-# Visualization / research
+# ── Visualization / research ────────────────────────────────────────
 matplotlib==3.10.5
 plotly==6.3.1
 polars==1.32.3
 seaborn==0.13.2
 tqdm==4.67.1
 
-# Mean-reversion analytics (optional — fallback to AR(1) if unavailable)
-# arbitragelab==1.0.0
-
-# Notebook / test tooling used in this repo
+# ── Notebook / test tooling ─────────────────────────────────────────
 ipykernel==6.30.1
 jupyterlab==4.4.7
+nbconvert>=7.16
 nest-asyncio==1.6.0
 pytest==9.0.2
