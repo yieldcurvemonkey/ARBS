@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum, auto
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Union
 
 from Query.Base.BaseValue import BaseValueFunctionMap
 from Query.STIRFutures._STIRFutureGenericPricable import _STIRFutureGenericPricable
@@ -109,11 +109,13 @@ class STIRFutureValueFunctionMap(BaseValueFunctionMap[STIRFutureValue, float]):
             for rw, pr, pk in zip(kwargs["risk_weights"], kwargs["pricer"].values(), kwargs["package"])
         )
 
-    def _open_interest(self, **kwargs: Any) -> float:
-        total = 0.0
-        for rw, pr in zip(kwargs["risk_weights"], kwargs["pricer"].values()):
+    def _open_interest(self, **kwargs: Any) -> Union[float, Dict[str, float]]:
+        result: Dict[str, float] = {}
+        for pr in kwargs["pricer"].values():
             meta = pr.meta() if callable(getattr(pr, "meta", None)) else {}
             oi = (meta or {}).get("openinterest")
             if oi is not None:
-                total += abs(float(rw)) * float(oi)
-        return total
+                result[pr.id()] = float(oi)
+        if len(result) == 1:
+            return next(iter(result.values()))
+        return result
