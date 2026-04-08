@@ -495,6 +495,8 @@ _FOMC_DATES_PARSED = [pd.Timestamp(d) for d in _FOMC_DATES]
 def days_to_next_fomc(dt: pd.Timestamp) -> int:
     """Business days until the next FOMC announcement."""
     dt_date = pd.Timestamp(dt).normalize()
+    if dt_date.tzinfo is not None:
+        dt_date = dt_date.tz_localize(None)
     for fomc in _FOMC_DATES_PARSED:
         if fomc >= dt_date:
             return max(0, len(pd.bdate_range(dt_date, fomc)) - 1)
@@ -553,14 +555,13 @@ def compute_regime_filters(
     # Composite: regime_ok
     result["regime_ok"] = True
 
+    # NOTE: Hurst is checked PER-SPREAD at entry time in the signal table
+    # builder, not as a global filter. The average Hurst across all spreads
+    # is typically ~0.5-0.6 and would kill all entries if used globally.
     if hurst_max is not None:
         hurst_cols = [c for c in result.columns if c.startswith("hurst_")]
         if hurst_cols:
-            # Per-spread hurst is checked at entry time in signal table builder;
-            # here we set a global flag based on the average hurst
-            avg_hurst = result[hurst_cols].mean(axis=1)
-            result["avg_hurst"] = avg_hurst
-            result["regime_ok"] = result["regime_ok"] & (avg_hurst <= hurst_max)
+            result["avg_hurst"] = result[hurst_cols].mean(axis=1)
 
     if adx_max is not None and "adx" in result.columns:
         result["regime_ok"] = result["regime_ok"] & (result["adx"] <= adx_max)
