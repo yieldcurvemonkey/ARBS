@@ -393,6 +393,269 @@ class SFRFlyExitTrigger(Trigger):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# REGIME FILTERS
+# ═══════════════════════════════════════════════════════════════════════
+
+def compute_hurst_exponent(series: pd.Series, max_lag: int = 20) -> pd.Series:
+    """Rolling Hurst exponent via rescaled range (R/S) method.
+
+    H < 0.5 → mean-reverting, H = 0.5 → random walk, H > 0.5 → trending.
+    Returns Series aligned to input index (NaN during warmup).
+    """
+    n = len(series)
+    hurst = pd.Series(np.nan, index=series.index)
+    window = max(max_lag * 3, 60)  # need enough data for R/S regression
+
+    for i in range(window, n):
+        ts = series.iloc[i - window:i].dropna().values
+        if len(ts) < window // 2:
+            continue
+        lags = range(2, max_lag + 1)
+        rs_values = []
+        for lag in lags:
+            # Split into sub-series of length lag
+            n_sub = len(ts) // lag
+            if n_sub < 1:
+                continue
+            rs_list = []
+            for j in range(n_sub):
+                sub = ts[j * lag:(j + 1) * lag]
+                mean_sub = sub.mean()
+                devs = np.cumsum(sub - mean_sub)
+                r = devs.max() - devs.min()
+                s = sub.std(ddof=1)
+                if s > 0:
+                    rs_list.append(r / s)
+            if rs_list:
+                rs_values.append((np.log(lag), np.log(np.mean(rs_list))))
+
+        if len(rs_values) >= 4:
+            x = np.array([v[0] for v in rs_values])
+            y = np.array([v[1] for v in rs_values])
+            # OLS: y = H * x + c
+            n_pts = len(x)
+            H = (n_pts * (x * y).sum() - x.sum() * y.sum()) / \
+                (n_pts * (x * x).sum() - x.sum() ** 2)
+            hurst.iloc[i] = float(np.clip(H, 0, 1))
+
+    return hurst
+
+
+def compute_adx(series: pd.Series, window: int = 14) -> pd.Series:
+    """Simplified ADX (Average Directional Index) for a single series.
+
+    Uses absolute changes as proxy for directional movement since we
+    don't have OHLC — just daily closes.
+
+    Higher ADX → stronger trend. >25 = trending, <20 = range-bound.
+    """
+    changes = series.diff()
+    pos_dm = changes.clip(lower=0)
+    neg_dm = (-changes).clip(lower=0)
+
+    atr = series.diff().abs().rolling(window, min_periods=window // 2).mean()
+    atr = atr.replace(0, np.nan)
+
+    pos_di = (pos_dm.rolling(window, min_periods=window // 2).mean() / atr) * 100
+    neg_di = (neg_dm.rolling(window, min_periods=window // 2).mean() / atr) * 100
+
+    dx = (abs(pos_di - neg_di) / (pos_di + neg_di).replace(0, np.nan)) * 100
+    adx = dx.rolling(window, min_periods=window // 2).mean()
+
+    return adx
+
+
+# FOMC meeting dates 2020-2027 (announcement days)
+_FOMC_DATES = [
+    # 2020
+    "2020-01-29", "2020-03-03", "2020-03-15", "2020-04-29", "2020-06-10",
+    "2020-07-29", "2020-09-16", "2020-11-05", "2020-12-16",
+    # 2021
+    "2021-01-27", "2021-03-17", "2021-04-28", "2021-06-16",
+    "2021-07-28", "2021-09-22", "2021-11-03", "2021-12-15",
+    # 2022
+    "2022-01-26", "2022-03-16", "2022-05-04", "2022-06-15",
+    "2022-07-27", "2022-09-21", "2022-11-02", "2022-12-14",
+    # 2023
+    "2023-02-01", "2023-03-22", "2023-05-03", "2023-06-14",
+    "2023-07-26", "2023-09-20", "2023-11-01", "2023-12-13",
+    # 2024
+    "2024-01-31", "2024-03-20", "2024-05-01", "2024-06-12",
+    "2024-07-31", "2024-09-18", "2024-11-07", "2024-12-18",
+    # 2025
+    "2025-01-29", "2025-03-19", "2025-05-07", "2025-06-18",
+    "2025-07-30", "2025-09-17", "2025-10-29", "2025-12-17",
+    # 2026
+    "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
+    "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-16",
+]
+_FOMC_DATES_PARSED = [pd.Timestamp(d) for d in _FOMC_DATES]
+
+
+def days_to_next_fomc(dt: pd.Timestamp) -> int:
+    """Business days until the next FOMC announcement."""
+    dt_date = pd.Timestamp(dt).normalize()
+    for fomc in _FOMC_DATES_PARSED:
+        if fomc >= dt_date:
+            return max(0, len(pd.bdate_range(dt_date, fomc)) - 1)
+    return 999  # no upcoming FOMC in the list
+
+
+def compute_regime_filters(
+    spread_ts: pd.DataFrame,
+    rates: pd.DataFrame,
+    config: dict,
+) -> pd.DataFrame:
+    """Compute regime filters for each date.
+
+    Returns DataFrame with columns:
+      - hurst_{col}: Hurst exponent per spread (H < 0.5 = mean-reverting)
+      - adx: ADX of the mid-curve strip rate (>25 = trending)
+      - days_to_fomc: business days until next FOMC
+      - regime_ok: bool, True if all enabled filters pass
+
+    Config keys:
+      - regime_hurst_max: max Hurst to allow entry (e.g., 0.5). None=disabled.
+      - regime_adx_max: max ADX to allow entry (e.g., 25). None=disabled.
+      - regime_fomc_blackout_days: no entries within N bdays of FOMC. None=disabled.
+      - regime_adx_column: which rate column for ADX (default: mid-curve).
+      - regime_hurst_window: lag depth for Hurst (default: 20).
+      - regime_adx_window: ADX window (default: 14).
+    """
+    hurst_max = config.get("regime_hurst_max")
+    adx_max = config.get("regime_adx_max")
+    fomc_blackout = config.get("regime_fomc_blackout_days")
+
+    result = pd.DataFrame(index=spread_ts.index)
+
+    # Hurst per spread
+    if hurst_max is not None:
+        hurst_lag = config.get("regime_hurst_window", 20)
+        for col in spread_ts.columns:
+            result[f"hurst_{col}"] = compute_hurst_exponent(spread_ts[col], max_lag=hurst_lag)
+
+    # ADX on mid-curve strip rate
+    if adx_max is not None:
+        adx_window = config.get("regime_adx_window", 14)
+        # Use mid-curve contract (SFR5 or 5th column) as proxy for regime
+        rate_cols = list(rates.columns)
+        mid_col = rate_cols[min(4, len(rate_cols) - 1)]
+        adx_col = config.get("regime_adx_column", mid_col)
+        if adx_col in rates.columns:
+            result["adx"] = compute_adx(rates[adx_col], window=adx_window)
+        else:
+            result["adx"] = compute_adx(rates[mid_col], window=adx_window)
+
+    # FOMC proximity
+    if fomc_blackout is not None:
+        result["days_to_fomc"] = [days_to_next_fomc(dt) for dt in spread_ts.index]
+
+    # Composite: regime_ok
+    result["regime_ok"] = True
+
+    if hurst_max is not None:
+        hurst_cols = [c for c in result.columns if c.startswith("hurst_")]
+        if hurst_cols:
+            # Per-spread hurst is checked at entry time in signal table builder;
+            # here we set a global flag based on the average hurst
+            avg_hurst = result[hurst_cols].mean(axis=1)
+            result["avg_hurst"] = avg_hurst
+            result["regime_ok"] = result["regime_ok"] & (avg_hurst <= hurst_max)
+
+    if adx_max is not None and "adx" in result.columns:
+        result["regime_ok"] = result["regime_ok"] & (result["adx"] <= adx_max)
+
+    if fomc_blackout is not None and "days_to_fomc" in result.columns:
+        result["regime_ok"] = result["regime_ok"] & (result["days_to_fomc"] > fomc_blackout)
+
+    return result
+
+
+def build_spread_signal_table_with_regime(
+    spread_ts: pd.DataFrame,
+    zscore_ts: pd.DataFrame,
+    vol_ts: pd.DataFrame,
+    roll_ts: pd.DataFrame,
+    risk_adj_roll_ts: pd.DataFrame,
+    rates: pd.DataFrame,
+    config: dict,
+) -> Dict[pd.Timestamp, List["SpreadSignal"]]:
+    """Build spread signal table WITH regime filters.
+
+    Same as build_spread_signal_table but additionally applies:
+      - Hurst exponent filter (per-spread: H < regime_hurst_max)
+      - ADX filter (global: ADX < regime_adx_max)
+      - FOMC blackout (global: days_to_fomc > regime_fomc_blackout_days)
+
+    Falls back to build_spread_signal_table if no regime filters are configured.
+    """
+    has_regime = any(config.get(k) is not None for k in [
+        "regime_hurst_max", "regime_adx_max", "regime_fomc_blackout_days",
+    ])
+
+    if not has_regime:
+        return build_spread_signal_table(
+            spread_ts, zscore_ts, vol_ts, roll_ts, risk_adj_roll_ts, config
+        )
+
+    regime = compute_regime_filters(spread_ts, rates, config)
+    hurst_max = config.get("regime_hurst_max")
+
+    signal_table: Dict[pd.Timestamp, List[SpreadSignal]] = {}
+
+    for dt_idx in spread_ts.index:
+        # Global regime check
+        if dt_idx in regime.index and not regime.loc[dt_idx, "regime_ok"]:
+            continue
+
+        signals = []
+        for col in spread_ts.columns:
+            level = spread_ts.loc[dt_idx, col]
+            z = zscore_ts.loc[dt_idx, col] if dt_idx in zscore_ts.index else np.nan
+            vol = vol_ts.loc[dt_idx, col] if dt_idx in vol_ts.index else np.nan
+            roll = roll_ts.loc[dt_idx, col] if dt_idx in roll_ts.index else np.nan
+            radj = risk_adj_roll_ts.loc[dt_idx, col] if dt_idx in risk_adj_roll_ts.index else np.nan
+
+            if np.isnan(z) or np.isnan(level):
+                continue
+
+            direction = "pay_spread" if z < 0 else "receive_spread"
+
+            passes = True
+            if abs(z) < config.get("entry_min_zscore", 1.5):
+                passes = False
+            if config.get("entry_max_vol") and not np.isnan(vol):
+                if vol > config["entry_max_vol"]:
+                    passes = False
+            if config.get("entry_require_carry") and not np.isnan(roll):
+                carry_aligned = (direction == "pay_spread" and roll > 0) or \
+                                (direction == "receive_spread" and roll < 0)
+                if not carry_aligned:
+                    passes = False
+
+            # Per-spread Hurst filter
+            if passes and hurst_max is not None:
+                hurst_col = f"hurst_{col}"
+                if hurst_col in regime.columns and dt_idx in regime.index:
+                    h = regime.loc[dt_idx, hurst_col]
+                    if not np.isnan(h) and h > hurst_max:
+                        passes = False
+
+            signals.append(SpreadSignal(
+                spread_id=col, level=float(level), zscore=float(z),
+                vol=float(vol) if not np.isnan(vol) else 0.0,
+                roll=float(roll) if not np.isnan(roll) else 0.0,
+                risk_adj_roll=float(radj) if not np.isnan(radj) else 0.0,
+                direction=direction, passes_entry=passes,
+            ))
+
+        if signals:
+            signal_table[pd.Timestamp(dt_idx)] = signals
+
+    return signal_table
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # CALENDAR SPREAD (2-leg) TRIGGERS
 # ═══════════════════════════════════════════════════════════════════════
 
