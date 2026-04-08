@@ -141,8 +141,26 @@ def _fly_tag(signal: FlySignal) -> str:
     return f"sfr_fly_{signal.fly_id.replace('/', '_')}"
 
 
+def _sfr_to_imm_tenor(label: str) -> str:
+    """Convert SFR rank label to IMM tenor.
+
+    'SFR1' -> 'IMM_1xIMM_2'
+    'M26'  -> 'M26' (pass through specific contract labels)
+    """
+    import re
+    m = re.match(r"^SFR(\d+)$", label)
+    if m:
+        rank = int(m.group(1))
+        return f"IMM_{rank}xIMM_{rank + 1}"
+    return label
+
+
 def _make_fly_query(signal: FlySignal, config: dict):
-    """Build an IRSwapQuery for the SOFR fly."""
+    """Build an IRSwapQuery for the SOFR fly.
+
+    Handles both CM labels (SFR1/SFR2/SFR3 -> IMM tenors)
+    and specific contract labels (M26/U26/Z26 -> pass-through).
+    """
     from Query.IRSwaps.IRSwapQuery import IRSwapQuery
     from Query.IRSwaps.IRSwapStructure import IRSwapStructure
 
@@ -150,7 +168,10 @@ def _make_fly_query(signal: FlySignal, config: dict):
     if len(parts) != 3:
         raise ValueError(f"Expected 3-leg fly id, got: {signal.fly_id}")
 
-    front_tenor, belly_tenor, back_tenor = parts
+    front_tenor = _sfr_to_imm_tenor(parts[0])
+    belly_tenor = _sfr_to_imm_tenor(parts[1])
+    back_tenor = _sfr_to_imm_tenor(parts[2])
+
     bpv = config.get("belly_bpv", 100_000)
     direction_sign = 1.0 if signal.direction == "buy_belly" else -1.0
 
