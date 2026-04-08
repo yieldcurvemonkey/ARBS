@@ -608,36 +608,107 @@ class _SFRSpreadExitReqs(TriggerRequirements):
                 entry_z = entry_meta.get("entry_zscore", 0)
                 direction = entry_meta.get("direction", sig.direction)
                 current_z = sig.zscore
+                entry_lvl = entry_meta.get("entry_level", 0)
+                entry_vol = entry_meta.get("entry_vol", 0)
+                dir_sign = 1 if direction == "pay_spread" else -1
+                unrealized = dir_sign * (sig.level - entry_lvl)
 
+                # Track peak unrealized (stored in meta, updated each step)
+                peak_unreal = entry_meta.get("_peak_unrealized", 0.0)
+                if unrealized > peak_unreal:
+                    peak_unreal = unrealized
+                    pos.meta["_peak_unrealized"] = peak_unreal
+
+                # Track consecutive adverse z-score moves
+                prev_z = entry_meta.get("_prev_zscore", entry_z)
+                z_improving = (dir_sign > 0 and current_z > prev_z) or \
+                              (dir_sign < 0 and current_z < prev_z)
+                if z_improving:
+                    pos.meta["_adverse_streak"] = 0
+                else:
+                    pos.meta["_adverse_streak"] = entry_meta.get("_adverse_streak", 0) + 1
+                pos.meta["_prev_zscore"] = current_z
+                adverse_streak = pos.meta.get("_adverse_streak", 0)
+
+                # ── Exit checks (priority order) ──
+
+                # 1. Mean reversion: z-score crossed zero
                 if self.config.get("exit_mean_reversion", True):
                     if direction == "pay_spread" and current_z >= 0:
                         exit_reason = "mean_reversion"
                     elif direction == "receive_spread" and current_z <= 0:
                         exit_reason = "mean_reversion"
 
+                # 2. Take profit: z-score decayed below threshold
                 tp_z = self.config.get("exit_take_profit_zscore")
                 if not exit_reason and tp_z is not None:
                     if abs(current_z) < tp_z:
                         exit_reason = "tp_zscore"
 
+                # 3. Stop-loss: z-score worsened by N sigma
                 stop_sd = self.config.get("exit_stop_loss_sd")
                 if not exit_reason and stop_sd is not None:
                     if abs(current_z) - abs(entry_z) > stop_sd:
                         exit_reason = "stop_zscore"
 
-                # Level-based TP/SL
-                entry_lvl = entry_meta.get("entry_level", 0)
-                dir_sign = 1 if direction == "pay_spread" else -1
-                unrealized = dir_sign * (sig.level - entry_lvl)
-
+                # 4. Fixed bp take-profit
                 tp_bp = self.config.get("exit_take_profit_bp")
                 if not exit_reason and tp_bp is not None and unrealized >= tp_bp:
                     exit_reason = "tp_bp"
 
+                # 5. Fixed bp stop-loss
                 sl_bp = self.config.get("exit_stop_loss_bp")
                 if not exit_reason and sl_bp is not None and unrealized <= sl_bp:
                     exit_reason = "stop_bp"
 
+                # 6. Trailing stop: exit if given back X% of peak unrealized
+                trail_pct = self.config.get("exit_trailing_stop_pct")
+                if not exit_reason and trail_pct is not None and peak_unreal > 0:
+                    giveback = peak_unreal - unrealized
+                    if giveback > peak_unreal * trail_pct:
+                        exit_reason = "trailing_stop"
+
+                # 7. Trailing stop in bp: exit if drawdown from peak exceeds threshold
+                trail_bp = self.config.get("exit_trailing_stop_bp")
+                if not exit_reason and trail_bp is not None and peak_unreal > 0:
+                    giveback = peak_unreal - unrealized
+                    if giveback > trail_bp:
+                        exit_reason = "trailing_stop_bp"
+
+                # 8. Momentum exit: z-score moved against us for N consecutive days
+                mom_days = self.config.get("exit_adverse_momentum_days")
+                if not exit_reason and mom_days is not None:
+                    if adverse_streak >= mom_days:
+                        exit_reason = "adverse_momentum"
+
+                # 9. Vol-scaled stop: stop if unrealized loss exceeds N * entry_vol
+                vol_stop_mult = self.config.get("exit_vol_scaled_stop")
+                if not exit_reason and vol_stop_mult is not None and entry_vol > 0:
+                    # Convert daily vol to the holding-period vol
+                    vol_threshold = entry_vol * vol_stop_mult / np.sqrt(252)
+                    if unrealized < -vol_threshold:
+                        exit_reason = "vol_stop"
+
+                # 10. Time-decay stop: tighten stop as max hold approaches
+                time_decay_stop = self.config.get("exit_time_decay_stop")
+                if not exit_reason and time_decay_stop and hasattr(pos, "opened"):
+                    max_hold = self.config.get("exit_max_holding_days", 22)
+                    if max_hold:
+                        days_held = (ts - pd.Timestamp(pos.opened)).days
+                        pct_elapsed = min(days_held / max_hold, 1.0)
+                        # Stop tightens linearly: at day 0 = full stop, at max_hold = 0
+                        base_stop = self.config.get("exit_stop_loss_bp", -5.0) or -5.0
+                        tightened_stop = base_stop * (1.0 - 0.7 * pct_elapsed)
+                        if unrealized < tightened_stop:
+                            exit_reason = "time_decay_stop"
+
+                # 11. Breakeven stop: after earning X bp, don't let it go negative
+                be_threshold = self.config.get("exit_breakeven_after_bp")
+                if not exit_reason and be_threshold is not None:
+                    if peak_unreal >= be_threshold and unrealized <= 0:
+                        exit_reason = "breakeven_stop"
+
+            # 12. Max holding period (always last)
             if exit_reason is None and hasattr(pos, "opened"):
                 max_hold = self.config.get("exit_max_holding_days", 22)
                 if max_hold is not None:
