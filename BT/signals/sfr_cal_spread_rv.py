@@ -763,6 +763,78 @@ def build_snapshot_from_prices(
 # Specific Trade Analysis
 # ═══════════════════════════════════════════════════════════════════
 
+def analyze_specific_spread(
+    rates_panel: pd.DataFrame,
+    front: str,
+    back: str,
+    config: Optional[SFRCalSpreadRVConfig] = None,
+) -> Dict[str, Any]:
+    """Analyze a specific calendar spread (e.g., SFR1/SFR2 = M26/U26).
+
+    Convention: spread = (back - front) * 100 bps.  Positive = steepening.
+
+    Returns dict with level, z-score, vol, roll, risk-adj roll, and time series.
+    """
+    if config is None:
+        config = SFRCalSpreadRVConfig()
+
+    cols = list(rates_panel.columns)
+    if front not in cols or back not in cols:
+        raise ValueError(f"Contracts {front}/{back} not all in panel columns: {cols}")
+
+    # Spread time series
+    spd_ts = (rates_panel[back] - rates_panel[front]) * 100
+    spd_ts = spd_ts.dropna()
+
+    if len(spd_ts) < 2:
+        raise ValueError("Insufficient data for spread analysis")
+
+    latest = float(spd_ts.iloc[-1])
+    prev = float(spd_ts.iloc[-2])
+    change = latest - prev
+
+    # Z-score
+    mu = spd_ts.rolling(config.zscore_window, min_periods=20).mean()
+    sigma = spd_ts.rolling(config.zscore_window, min_periods=20).std().replace(0, np.nan)
+    zs_ts = (spd_ts - mu) / sigma
+    zscore = float(zs_ts.iloc[-1])
+
+    # Vol
+    vol = float(spd_ts.diff().rolling(config.vol_window, min_periods=10).std().iloc[-1] * np.sqrt(252))
+
+    # Roll: spread at (front-1, back-1) minus current
+    fi = cols.index(front)
+    bi = cols.index(back)
+    gap = bi - fi
+
+    roll = np.nan
+    if fi >= 1:
+        roll_front = cols[fi - 1]
+        roll_back = cols[bi - 1]
+        if roll_front in cols and roll_back in cols:
+            roll_spd = float((rates_panel[roll_back].iloc[-1] - rates_panel[roll_front].iloc[-1]) * 100)
+            roll = roll_spd - latest
+
+    risk_adj = roll / vol if vol != 0 and not np.isnan(vol) else np.nan
+
+    return {
+        "trade": f"{front}/{back}",
+        "structure": "spread",
+        "gap": gap,
+        "level_bp": round(latest, 2),
+        "prev_close_bp": round(prev, 2),
+        "change_bp": round(change, 2),
+        "zscore": round(zscore, 2) if not np.isnan(zscore) else None,
+        "vol_ann": round(vol, 2) if not np.isnan(vol) else None,
+        "roll_bp": round(roll, 2) if not np.isnan(roll) else None,
+        "risk_adj_roll": round(risk_adj, 2) if not np.isnan(risk_adj) else None,
+        "timeseries": spd_ts,
+        "zscore_ts": zs_ts,
+        "mean": round(float(mu.iloc[-1]), 2) if not np.isnan(mu.iloc[-1]) else None,
+        "std": round(float(sigma.iloc[-1]), 2) if not np.isnan(sigma.iloc[-1]) else None,
+    }
+
+
 def analyze_specific_fly(
     rates_panel: pd.DataFrame,
     front: str,

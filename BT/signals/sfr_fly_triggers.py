@@ -1,6 +1,10 @@
-"""Trigger adapter wiring SFRCalSpreadRV fly screener into QueryDrivenBacktest.
+"""Trigger adapters wiring SFRCalSpreadRV screener into QueryDrivenBacktest.
 
-Pre-computes a signal table (dict[date, list[FlySignal]]) from the screener
+Supports both:
+  - FLY triggers: 3-leg butterflies (SFRFlyEntryTrigger / SFRFlyExitTrigger)
+  - SPREAD triggers: 2-leg calendar spreads (SFRSpreadEntryTrigger / SFRSpreadExitTrigger)
+
+Pre-computes a signal table (dict[date, list[Signal]]) from the screener
 analytics, then triggers do simple date-based lookups for entry/exit.
 
 Pattern follows pca_rv_triggers.py exactly.
@@ -386,3 +390,277 @@ class SFRFlyExitTrigger(Trigger):
             trigger_requirements=reqs,
             actions=actions or [_SFRFlyExitAction()],
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CALENDAR SPREAD (2-leg) TRIGGERS
+# ═══════════════════════════════════════════════════════════════════════
+
+@dataclass
+class SpreadSignal:
+    """A single calendar spread signal at a point in time."""
+    spread_id: str         # e.g., "SFR1/SFR2" or "M26/U26"
+    level: float           # spread level in bps (back - front)
+    zscore: float
+    vol: float
+    roll: float
+    risk_adj_roll: float
+    direction: str         # "pay_spread" (steepener) or "receive_spread" (flattener)
+    passes_entry: bool
+
+
+def build_spread_signal_table(
+    spread_ts: pd.DataFrame,
+    zscore_ts: pd.DataFrame,
+    vol_ts: pd.DataFrame,
+    roll_ts: pd.DataFrame,
+    risk_adj_roll_ts: pd.DataFrame,
+    config: dict,
+) -> Dict[pd.Timestamp, List[SpreadSignal]]:
+    """Build a date-keyed signal table for calendar spreads.
+
+    Convention: z < 0 → spread is cheap (too flat) → pay spread (steepener)
+                z > 0 → spread is rich (too steep)  → receive spread (flattener)
+    """
+    signal_table: Dict[pd.Timestamp, List[SpreadSignal]] = {}
+
+    for dt_idx in spread_ts.index:
+        signals = []
+        for col in spread_ts.columns:
+            level = spread_ts.loc[dt_idx, col]
+            z = zscore_ts.loc[dt_idx, col] if dt_idx in zscore_ts.index else np.nan
+            vol = vol_ts.loc[dt_idx, col] if dt_idx in vol_ts.index else np.nan
+            roll = roll_ts.loc[dt_idx, col] if dt_idx in roll_ts.index else np.nan
+            radj = risk_adj_roll_ts.loc[dt_idx, col] if dt_idx in risk_adj_roll_ts.index else np.nan
+
+            if np.isnan(z) or np.isnan(level):
+                continue
+
+            direction = "pay_spread" if z < 0 else "receive_spread"
+
+            passes = True
+            if abs(z) < config.get("entry_min_zscore", 1.5):
+                passes = False
+            if config.get("entry_max_vol") and not np.isnan(vol):
+                if vol > config["entry_max_vol"]:
+                    passes = False
+            if config.get("entry_require_carry") and not np.isnan(roll):
+                carry_aligned = (direction == "pay_spread" and roll > 0) or \
+                                (direction == "receive_spread" and roll < 0)
+                if not carry_aligned:
+                    passes = False
+
+            signals.append(SpreadSignal(
+                spread_id=col, level=float(level), zscore=float(z),
+                vol=float(vol) if not np.isnan(vol) else 0.0,
+                roll=float(roll) if not np.isnan(roll) else 0.0,
+                risk_adj_roll=float(radj) if not np.isnan(radj) else 0.0,
+                direction=direction, passes_entry=passes,
+            ))
+
+        if signals:
+            signal_table[pd.Timestamp(dt_idx)] = signals
+
+    return signal_table
+
+
+def _spread_tag(signal: SpreadSignal) -> str:
+    return f"sfr_spd_{signal.spread_id.replace('/', '_')}"
+
+
+def _make_spread_query(signal: SpreadSignal, config: dict):
+    """Build an IRSwapQuery CURVE for a 2-leg calendar spread."""
+    from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+    from Query.IRSwaps.IRSwapStructure import IRSwapStructure
+
+    parts = signal.spread_id.split("/")
+    if len(parts) != 2:
+        raise ValueError(f"Expected 2-leg spread id, got: {signal.spread_id}")
+
+    front_tenor = _sfr_to_imm_tenor(parts[0])
+    back_tenor = _sfr_to_imm_tenor(parts[1])
+
+    bpv = config.get("belly_bpv", 100_000)
+    # pay_spread = long the spread (steepener): receive back, pay front → positive bpv
+    # receive_spread = short the spread (flattener): pay back, receive front → negative bpv
+    direction_sign = 1.0 if signal.direction == "pay_spread" else -1.0
+
+    curve = config.get("curve", "USD-SOFR-1D-Q12STIRT")
+
+    return IRSwapQuery(
+        structure=IRSwapStructure.CURVE,
+        curve=curve,
+        structure_kwargs={
+            "front_tenor": front_tenor,
+            "back_tenor": back_tenor,
+            "bpv": direction_sign * bpv,
+        },
+        tags=[_spread_tag(signal)],
+    )
+
+
+# ── Spread Actions ────────────────────────────────────────────────
+
+class _SFRSpreadEntryAction:
+    risk: Optional[str] = None
+    def __call__(self, *, now, backtest, info) -> List[QueryOrder]:
+        return info.get(_SFRSpreadEntryAction, [])
+
+
+class _SFRSpreadExitAction:
+    risk: Optional[str] = None
+    def __call__(self, *, now, backtest, info) -> List[UnwindOrder]:
+        return info.get(_SFRSpreadExitAction, [])
+
+
+# ── Spread Entry Trigger ──────────────────────────────────────────
+
+@dataclass
+class _SFRSpreadEntryReqs(TriggerRequirements):
+    signal_table: Dict[pd.Timestamp, List[SpreadSignal]] = field(default_factory=dict)
+    config: dict = field(default_factory=dict)
+
+    def has_triggered(self, state: dt.datetime, backtest=None) -> TriggerInfo:
+        signals = _match_signal_table(self.signal_table, state)
+        passing = [s for s in signals if isinstance(s, SpreadSignal) and s.passes_entry]
+
+        if not passing:
+            return TriggerInfo(False)
+
+        max_concurrent = self.config.get("max_concurrent_trades")
+        if backtest is not None:
+            open_tags = set()
+            for pos in backtest.portfolio.positions:
+                open_tags.update((pos.meta or {}).get("tags", []))
+
+            if self.config.get("no_duplicate_flies", True):
+                passing = [s for s in passing if _spread_tag(s) not in open_tags]
+
+            if max_concurrent is not None:
+                n_open = len(backtest.portfolio.positions)
+                if n_open >= max_concurrent:
+                    return TriggerInfo(False)
+                passing = passing[:max_concurrent - n_open]
+
+        if not passing:
+            return TriggerInfo(False)
+
+        orders = []
+        for s in passing:
+            try:
+                q = _make_spread_query(s, self.config)
+                orders.append(QueryOrder(
+                    timestamp=state, query=q,
+                    meta={
+                        "action": "sfr_spread_entry",
+                        "tags": [_spread_tag(s)],
+                        "direction": s.direction,
+                        "entry_zscore": s.zscore,
+                        "entry_level": s.level,
+                        "entry_vol": s.vol,
+                        "entry_roll": s.roll,
+                    },
+                ))
+            except Exception as exc:
+                logger.debug("Failed spread query for %s: %s", s.spread_id, exc)
+
+        if not orders:
+            return TriggerInfo(False)
+        return TriggerInfo(True, {_SFRSpreadEntryAction: orders})
+
+
+@dataclass
+class SFRSpreadEntryTrigger(Trigger):
+    """Fires when SFR spread screener identifies passing trades."""
+    def __init__(self, signal_table, config, actions=None):
+        reqs = _SFRSpreadEntryReqs(signal_table=signal_table, config=config)
+        super().__init__(trigger_requirements=reqs, actions=actions or [_SFRSpreadEntryAction()])
+
+
+# ── Spread Exit Trigger ───────────────────────────────────────────
+
+@dataclass
+class _SFRSpreadExitReqs(TriggerRequirements):
+    signal_table: Dict[pd.Timestamp, List[SpreadSignal]] = field(default_factory=dict)
+    config: dict = field(default_factory=dict)
+
+    def has_triggered(self, state: dt.datetime, backtest=None) -> TriggerInfo:
+        if backtest is None or not backtest.portfolio.positions:
+            return TriggerInfo(False)
+
+        ts = pd.Timestamp(state)
+        signals_today = _match_signal_table(self.signal_table, state)
+        signal_by_tag = {_spread_tag(s): s for s in signals_today if isinstance(s, SpreadSignal)}
+
+        unwinds = []
+        for pos in backtest.portfolio.positions:
+            tags = set((pos.meta or {}).get("tags", []))
+            spd_tags = [t for t in tags if t.startswith("sfr_spd_")]
+            if not spd_tags:
+                continue
+
+            tag = spd_tags[0]
+            entry_meta = pos.meta or {}
+            exit_reason = None
+
+            if tag in signal_by_tag:
+                sig = signal_by_tag[tag]
+                entry_z = entry_meta.get("entry_zscore", 0)
+                direction = entry_meta.get("direction", sig.direction)
+                current_z = sig.zscore
+
+                if self.config.get("exit_mean_reversion", True):
+                    if direction == "pay_spread" and current_z >= 0:
+                        exit_reason = "mean_reversion"
+                    elif direction == "receive_spread" and current_z <= 0:
+                        exit_reason = "mean_reversion"
+
+                tp_z = self.config.get("exit_take_profit_zscore")
+                if not exit_reason and tp_z is not None:
+                    if abs(current_z) < tp_z:
+                        exit_reason = "tp_zscore"
+
+                stop_sd = self.config.get("exit_stop_loss_sd")
+                if not exit_reason and stop_sd is not None:
+                    if abs(current_z) - abs(entry_z) > stop_sd:
+                        exit_reason = "stop_zscore"
+
+                # Level-based TP/SL
+                entry_lvl = entry_meta.get("entry_level", 0)
+                dir_sign = 1 if direction == "pay_spread" else -1
+                unrealized = dir_sign * (sig.level - entry_lvl)
+
+                tp_bp = self.config.get("exit_take_profit_bp")
+                if not exit_reason and tp_bp is not None and unrealized >= tp_bp:
+                    exit_reason = "tp_bp"
+
+                sl_bp = self.config.get("exit_stop_loss_bp")
+                if not exit_reason and sl_bp is not None and unrealized <= sl_bp:
+                    exit_reason = "stop_bp"
+
+            if exit_reason is None and hasattr(pos, "opened"):
+                max_hold = self.config.get("exit_max_holding_days", 22)
+                if max_hold is not None:
+                    days_held = (ts - pd.Timestamp(pos.opened)).days
+                    if days_held >= max_hold:
+                        exit_reason = "max_holding"
+
+            if exit_reason is not None:
+                _tag = tag
+                unwinds.append(UnwindOrder(
+                    timestamp=state,
+                    selector=lambda p, _t=_tag: _t in set((p.meta or {}).get("tags", [])),
+                    meta={"action": "sfr_spread_exit", "reason": exit_reason},
+                ))
+
+        if not unwinds:
+            return TriggerInfo(False)
+        return TriggerInfo(True, {_SFRSpreadExitAction: unwinds})
+
+
+@dataclass
+class SFRSpreadExitTrigger(Trigger):
+    """Fires when open SFR spread positions hit exit conditions."""
+    def __init__(self, signal_table, config, actions=None):
+        reqs = _SFRSpreadExitReqs(signal_table=signal_table, config=config)
+        super().__init__(trigger_requirements=reqs, actions=actions or [_SFRSpreadExitAction()])
