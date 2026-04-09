@@ -58,7 +58,7 @@ class CCPBasisFairValueResult:
 _FRED_SERIES: Dict[str, str] = {
     "SOFR": "SOFR",
     "EFFR": "DFF",
-    "BGCR": "BGCR",
+    "OBFR": "OBFR",
     "BBB_OAS": "BAMLC0A4CBBB",
 }
 
@@ -170,7 +170,7 @@ class CCPBasisFairValueModel:
         # --- 2. FRED macro data ---
         fred_frames: Dict[str, pd.Series] = {}
         try:
-            fred = Fred()
+            fred = Fred(api_key="e06f51338bf093283ce1331c2826b3db")
             for name, series_id in _FRED_SERIES.items():
                 try:
                     s = fred.get_series(
@@ -236,9 +236,9 @@ class CCPBasisFairValueModel:
         if "SOFR" in raw_df.columns and "EFFR" in raw_df.columns:
             factors["sofr_ois_spread"] = (raw_df["SOFR"] - raw_df["EFFR"]) * 100
 
-        # --- 3. Repo-OIS spread: BGCR - EFFR (bps) ---
-        if "BGCR" in raw_df.columns and "EFFR" in raw_df.columns:
-            factors["repo_ois_spread"] = (raw_df["BGCR"] - raw_df["EFFR"]) * 100
+        # --- 3. Repo-funding spread: SOFR - OBFR (bps) ---
+        if "SOFR" in raw_df.columns and "OBFR" in raw_df.columns:
+            factors["repo_funding_spread"] = (raw_df["SOFR"] - raw_df["OBFR"]) * 100
 
         # --- 4. BBB Corporate OAS (already in bps from FRED) ---
         if "BBB_OAS" in raw_df.columns:
