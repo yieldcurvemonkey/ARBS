@@ -283,3 +283,14 @@ class PackageTypeMapping:
 
 
 PACKAGE_TYPES = PackageTypeMapping()
+
+# Priority order for special tenor resolution (lowest to highest).
+# When multiple types match, the highest-priority type wins as primary.
+SPECIAL_TENOR_PRIORITY: list[str] = [
+    "STANDARD",
+    "IMM",
+    "FOMC",
+    "MAC",
+    "MATCHED_MATURITY",
+    "INVOICE_SWAP",
+]

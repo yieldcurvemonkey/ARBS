@@ -39,6 +39,17 @@ ProductType = Literal[
     "UNKNOWN",
 ]
 
+SpecialTenorType = Literal[
+    "STANDARD",
+    "IMM",
+    "FOMC",
+    "MATCHED_MATURITY",
+    "INVOICE_SWAP",
+    "MAC",
+]
+
+SpecialTenorConfidence = Literal["high", "medium", "low"]
+
 OptionType = Literal["CALL", "PUT"]
 ExerciseStyle = Literal["EUROPEAN", "AMERICAN", "BERMUDAN"]
 
