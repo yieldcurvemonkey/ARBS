@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -365,3 +366,117 @@ def replay_lifecycle_full(
         resolved.status = "ACTIVE"
 
     return resolved
+
+
+def build_lifecycle_summary_from_resolved(
+    resolved: ResolvedTrade,
+    file_dates: Optional[Dict[str, date]] = None,
+    *,
+    execution_timestamp_col: str = "Execution Timestamp",
+    event_timestamp_col: str = "Event timestamp",
+    action_col: str = "Action type",
+    event_type_col: str = "Event type",
+    amendment_indicator_col: str = "Amendment indicator",
+    dissemination_col: str = "Dissemination Identifier",
+    original_dissemination_col: str = "Original Dissemination Identifier",
+) -> "LifecycleSummary":
+    """
+    Build a LifecycleSummary from a ResolvedTrade's history.
+
+    Converts the ResolvedTrade's history snapshots into LifecycleEvents
+    and delegates to build_summary(). This is a bridge between the
+    existing lifecycle pipeline and the new V2 correction tracking.
+
+    Args:
+        resolved: ResolvedTrade with populated history
+        file_dates: Mapping of dissemination_id -> file_date. If None,
+            all events get a default date from execution timestamp.
+
+    Returns:
+        LifecycleSummary with correction flags and field-level diffs
+    """
+    from SDRUtils.core.lifecycle_v2 import LifecycleEvent, LifecycleSummary, build_summary
+
+    if not resolved.history:
+        return LifecycleSummary()
+
+    if file_dates is None:
+        file_dates = {}
+
+    events: list[LifecycleEvent] = []
+    prev_state: Optional[Dict[str, Any]] = None
+
+    # Use resolved.actions for authoritative per-event action types,
+    # since history snapshots accumulate state and may not reflect
+    # the action that produced each snapshot.
+    actions_list = resolved.actions  # list of (action_type, timestamp)
+
+    message_ids = resolved.message_ids  # list of dissemination IDs in order
+
+    for idx, snapshot in enumerate(resolved.history):
+        # Use authoritative per-event data from actions/message_ids,
+        # since history snapshots accumulate state.
+        if idx < len(message_ids):
+            dissem_id = message_ids[idx]
+        else:
+            dissem_id = str(snapshot.get(dissemination_col, ""))
+
+        if idx < len(actions_list):
+            action = actions_list[idx][0]
+        else:
+            action = snapshot.get(action_col, "")
+        event_type = snapshot.get(event_type_col)
+        if isinstance(event_type, float) and pd.isna(event_type):
+            event_type = None
+
+        amendment = snapshot.get(amendment_indicator_col)
+        if isinstance(amendment, str):
+            amendment = amendment.upper() == "TRUE"
+        elif not isinstance(amendment, bool):
+            amendment = None
+
+        event_ts_raw = snapshot.get(event_timestamp_col)
+        exec_ts_raw = snapshot.get(execution_timestamp_col)
+        event_ts = pd.Timestamp(event_ts_raw) if event_ts_raw is not None else pd.Timestamp.now()
+        exec_ts = pd.Timestamp(exec_ts_raw) if exec_ts_raw is not None else event_ts
+
+        # Convert to datetime
+        event_dt = event_ts.to_pydatetime() if hasattr(event_ts, "to_pydatetime") else datetime.now()
+        exec_dt = exec_ts.to_pydatetime() if hasattr(exec_ts, "to_pydatetime") else event_dt
+
+        # Determine file_date
+        fd = file_dates.get(dissem_id)
+        if fd is None:
+            fd = event_ts.date() if hasattr(event_ts, "date") else date.today()
+
+        # Compute changed economics by diffing with previous state
+        changed: Dict[str, Any] = {}
+        if prev_state is not None:
+            for field_name in ECONOMICS_FIELDS:
+                old_val = prev_state.get(field_name)
+                new_val = snapshot.get(field_name)
+                if new_val is not None and not _is_null_value(new_val):
+                    if old_val is None or _is_null_value(old_val) or str(old_val) != str(new_val):
+                        changed[field_name] = new_val
+
+        orig_dissem = snapshot.get(original_dissemination_col)
+        if isinstance(orig_dissem, float) and pd.isna(orig_dissem):
+            orig_dissem = None
+        elif orig_dissem is not None:
+            orig_dissem = str(orig_dissem)
+
+        events.append(LifecycleEvent(
+            action_type=str(action),
+            event_type=str(event_type) if event_type is not None else None,
+            amendment_indicator=amendment,
+            event_timestamp=event_dt,
+            execution_timestamp=exec_dt,
+            dissemination_id=dissem_id,
+            original_dissemination_id=orig_dissem,
+            file_date=fd,
+            changed_economics=changed,
+        ))
+
+        prev_state = snapshot
+
+    return build_summary(events)

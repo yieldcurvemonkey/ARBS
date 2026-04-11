@@ -36,6 +36,11 @@ def detect_curve_trades_df(
     platform_col: str = "Platform identifier",
     require_same_cleared_flag: bool = True,
     cleared_col: str = "Cleared",
+    # V2 rate-index and tenor-segment awareness
+    rate_index_col: str = "rate_index",
+    tenor_segment_col: str = "tenor_segment",
+    time_window_short: int = 30,
+    time_window_medium: int = 60,
 ) -> pd.DataFrame:
     """
     Fast curve detection on the classifications dataframe.
@@ -81,6 +86,10 @@ def detect_curve_trades_df(
         cols.append(platform_col)
     if require_same_cleared_flag and cleared_col in out.columns:
         cols.append(cleared_col)
+    if rate_index_col in out.columns:
+        cols.append(rate_index_col)
+    if tenor_segment_col in out.columns:
+        cols.append(tenor_segment_col)
 
     cand = out.loc[m, cols].copy()
     if cand.empty:
@@ -108,6 +117,23 @@ def detect_curve_trades_df(
     plat = cand[platform_col].astype("string").to_numpy() if (require_same_platform and platform_col in cand.columns) else None
     clr = cand[cleared_col].astype("string").to_numpy() if (require_same_cleared_flag and cleared_col in cand.columns) else None
 
+    # V2 rate-index and tenor-segment arrays (None when columns absent → backward compat)
+    _has_ridx = rate_index_col in cand.columns
+    ridx = cand[rate_index_col].fillna("_UNKNOWN_").astype(str).to_numpy() if _has_ridx else None
+    _has_tseg = tenor_segment_col in cand.columns
+    tseg = cand[tenor_segment_col].astype("string").to_numpy() if _has_tseg else None
+
+    # Eviction uses conservative (widest) window when V2 present
+    _evict_window = time_window_seconds if tseg is None else max(time_window_short, time_window_medium)
+
+    def _effective_window(i: int, j: int) -> int:
+        if tseg is None:
+            return time_window_seconds
+        si, sj = tseg[i], tseg[j]
+        if si == "MEDIUM" or sj == "MEDIUM":
+            return time_window_medium
+        return time_window_short
+
     # direction as array (avoid cand.iloc in hot loop)
     if require_opposite_direction and direction_col and direction_col in cand.columns:
         dirv = pd.to_numeric(cand[direction_col], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
@@ -115,6 +141,8 @@ def detect_curve_trades_df(
         dirv = None
 
     def _econ_ok(i: int, j: int) -> bool:
+        if ridx is not None and ridx[i] != ridx[j]:
+            return False
         if ccy is not None and ccy[i] != ccy[j]:
             return False
         if eff is not None and eff[i] != eff[j]:
@@ -157,7 +185,7 @@ def detect_curve_trades_df(
 
     def _evict_old(curr_t: int):
         nonlocal left
-        while left < len(cand) and (curr_t - tsec[left] > time_window_seconds):
+        while left < len(cand) and (curr_t - tsec[left] > _evict_window):
             left += 1
 
     for i in range(len(cand)):
@@ -183,7 +211,7 @@ def detect_curve_trades_df(
             for j in lst[h:]:
                 if matched[j]:
                     continue
-                if tsec[i] - tsec[j] > time_window_seconds:
+                if tsec[i] - tsec[j] > _effective_window(i, j):
                     continue
 
                 # economic guards (fast array comparisons)

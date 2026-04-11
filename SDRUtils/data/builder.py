@@ -1018,7 +1018,10 @@ class SDRDataBuilder:
             if new_df.empty:
                 return pd.DataFrame()
             new_df = new_df.sort_values(by=ts_col)
-            return new_df[(new_df[ts_col] >= start_timestamp) & (new_df[ts_col] <= end_timestamp)].reset_index(drop=True)
+            new_df = new_df[(new_df[ts_col] >= start_timestamp) & (new_df[ts_col] <= end_timestamp)].reset_index(drop=True)
+            if "file_date" not in new_df.columns:
+                new_df["file_date"] = datetime.now(timezone.utc).date()
+            return new_df
 
         # --- existing cache-aware path ---
         cache_df = _read_intraday_cache(cache_fp)
@@ -1120,6 +1123,11 @@ class SDRDataBuilder:
                 _save_daily_dict(fresh, self._parquet_cache_dir, agency=agency, asset_class=asset_class)
 
         merged = {**cached_days, **fresh} if not ignore_cache else (fresh if isinstance(fresh, dict) else {})
+
+        # Tag each day's DataFrame with file_date for look-ahead bias detection
+        for day, day_df in merged.items():
+            if not day_df.empty and "file_date" not in day_df.columns:
+                merged[day] = day_df.assign(file_date=day)
 
         if one_df:
             return _concat_dfs(

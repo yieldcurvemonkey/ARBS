@@ -3,6 +3,9 @@ USD product modules for SDR analytics.
 
 This package provides product-specific implementations for USD derivatives:
 - USD swaps (OIS + fixed-float)
+- SOFR OIS (v2 linear product classification)
+- Fed Funds OIS (v2 linear product classification)
+- Basis swaps (v2 linear product classification)
 - Swaptions (placeholder)
 - Caps/Floors (placeholder)
 """
@@ -25,6 +28,20 @@ from SDRUtils.products._swaps.filters import (
     is_sofr_swap,
 )
 
+# V2 linear product modules
+from SDRUtils.products.usd.linear_base import (
+    TenorSegment,
+    LinearProductType,
+    RateIndex,
+    BasisType,
+    USDLinearClassification,
+    BasisSwapClassification,
+)
+from SDRUtils.products.usd.upi_classifier import classify_rate_index, UPIClassification
+from SDRUtils.products.usd.sofr_ois import classify_sofr_ois_trade
+from SDRUtils.products.usd.fed_funds_ois import classify_fed_funds_ois_trade
+from SDRUtils.products.usd.basis_swaps import classify_basis_swap_trade
+
 __all__ = [
     "USDProductBase",
     "USD_SwapProduct",
@@ -39,6 +56,18 @@ __all__ = [
     "new_sofr_swap_trades",
     "sofr_swap_trades",
     "is_sofr_swap",
+    # V2 linear products
+    "TenorSegment",
+    "LinearProductType",
+    "RateIndex",
+    "BasisType",
+    "USDLinearClassification",
+    "BasisSwapClassification",
+    "UPIClassification",
+    "classify_rate_index",
+    "classify_sofr_ois_trade",
+    "classify_fed_funds_ois_trade",
+    "classify_basis_swap_trade",
 ]
 
 registry.register_product(USD_SwapProduct())

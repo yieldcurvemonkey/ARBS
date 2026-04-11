@@ -43,6 +43,11 @@ from SDRUtils.products._swaps.filters import (
 )
 from SDRUtils.products.usd.base import USDProductBase
 from SDRUtils.packages.utils import merge_package_legs_to_one_row
+from SDRUtils.products.usd.upi_classifier import classify_rate_index
+from SDRUtils.products.usd.linear_base import LinearProductType
+from SDRUtils.products.usd.sofr_ois import classify_sofr_ois_trade
+from SDRUtils.products.usd.fed_funds_ois import classify_fed_funds_ois_trade
+from SDRUtils.products.usd.basis_swaps import classify_basis_swap_trade
 
 
 def classify_usd_swap_trade(
@@ -444,6 +449,98 @@ def _risk_from_estimated_pv01(value: Any) -> float:
         return float("nan")
 
 
+def _classify_messages_v2(
+    messages: pd.DataFrame,
+    exec_date=None,
+    curve_source: str = "ERIS_EOD_LIVE-RL_BASIC",
+    **kwargs,
+):
+    """
+    V2 classification: routes trades through SOFR/FF/basis classifiers
+    with segment-appropriate DV01 curves.
+
+    Short-end (<=3Y): BARCHART_STIRF-RL
+    Medium-term (>3Y): ERIS_EOD_LIVE-RL_BASIC
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    filtered = messages[
+        (messages["Action type"] == "NEWT") & (messages["Event type"] == "TRAD")
+    ].copy()
+
+    if filtered.empty:
+        return []
+
+    # Lazy-load curves per segment (only when needed)
+    _curves = {}
+
+    def _get_curve(segment_key: str):
+        if segment_key not in _curves:
+            try:
+                if segment_key == "SHORT":
+                    src = kwargs.get("short_curve_source", "BARCHART_STIRF-RL")
+                    mdp = IRSwapsMDP(source=src)
+                else:
+                    src = kwargs.get("medium_curve_source", curve_source)
+                    mdp = IRSwapsMDP(source=src)
+                _curves[segment_key] = mdp.get_pricer(dict(
+                    curve_name="USD-SOFR-1D", timestamp=exec_date,
+                ))
+            except Exception as e:
+                logger.warning(f"Failed to load {segment_key} curve: {e}")
+                _curves[segment_key] = None
+        return _curves[segment_key]
+
+    classifications = []
+
+    for _, row in tqdm(filtered.iterrows(), desc="V2 Classifying", unit="trade", total=len(filtered)):
+        trade_id = row.get(TRADE_ID)
+        try:
+            upi = classify_rate_index(
+                row.get("UPI Underlier Name"),
+                row.get("UPI FISN"),
+            )
+
+            if upi.product_type == LinearProductType.BASIS:
+                c = classify_basis_swap_trade(row, trade_id=trade_id)
+            elif upi.rate_index is not None and "FED_FUNDS" in upi.rate_index.value:
+                c = classify_fed_funds_ois_trade(row, trade_id=trade_id)
+            elif upi.rate_index is not None:
+                c = classify_sofr_ois_trade(row, trade_id=trade_id)
+            else:
+                # Fallback to V1 classifier
+                curve = _get_curve("MEDIUM")
+                c = classify_usd_swap_trade(row, trade_id=trade_id, curve=curve)
+
+            # Compute PV01 with segment-appropriate curve if not already set
+            if hasattr(c, 'tenor_segment') and c.tenor_segment is not None:
+                seg = c.tenor_segment.value if hasattr(c.tenor_segment, 'value') else str(c.tenor_segment)
+                curve = _get_curve(seg)
+            else:
+                curve = _get_curve("MEDIUM")
+
+            if curve is not None and c.estimated_pv01 is None:
+                try:
+                    pkg, _ = IRSwapQuery(
+                        curve="USD-SOFR-1D",
+                        effective_date=c.effective_date.date() if hasattr(c.effective_date, 'date') else c.effective_date,
+                        maturity_date=c.expiration_date.date() if hasattr(c.expiration_date, 'date') else c.expiration_date,
+                        structure_kwargs={"notional": c.notional or 1_000_000},
+                    ).resolve_package(pricer_or_curve=curve)
+                    if pkg:
+                        c.estimated_pv01 = curve.pv01(pkg[0])
+                except Exception:
+                    pass
+
+            classifications.append(c)
+        except Exception as e:
+            logger.error(f"V2 classification failed for {trade_id}: {e}")
+
+    return classifications
+
+
 class USD_SwapProduct(USDProductBase):
     """
     USD swap product implementation.
@@ -490,6 +587,7 @@ class USD_SwapProduct(USDProductBase):
         detect_spreadover=True,
         ignore_cache: bool = False,
         merge_package_legs: bool = False,
+        use_v2_classification: bool = False,
         **kwargs: Any,
     ):
         sdr = SDRDataBuilder(cache_path=cache_path, show_tqdm=True)
@@ -574,14 +672,15 @@ class USD_SwapProduct(USDProductBase):
 
             day_df = raw_sdr_trades_df[raw_sdr_trades_df["_execution_date"] == exec_date]
 
-            # classifications = [
-            #     self.classify_trade(row, trade_id=row.get(TRADE_ID), curve=curve)
-            #     for _, row in tqdm(day_df.iterrows(), total=day_df.shape[0], desc=f"Classifying Trades {exec_date}")
-            # ]
-            classifications = self.classify_messages(
-                day_df,
-                curve=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date)),
-            )
+            if use_v2_classification:
+                classifications = _classify_messages_v2(
+                    day_df, exec_date=exec_date, curve_source=curve_source, **kwargs,
+                )
+            else:
+                classifications = self.classify_messages(
+                    day_df,
+                    curve=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date)),
+                )
             classifications_df = classifications_to_dataframe(classifications)
             if not classifications_df.empty:
                 classifications_df[TRADE_ID] = classifications_df[TRADE_ID].astype("string")
