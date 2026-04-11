@@ -74,3 +74,86 @@ class TestSwapTradeClassificationFields:
     def test_is_mac_default_false(self):
         c = self._make_classification()
         assert c.is_mac is False
+
+
+from SDRUtils.core.tenors import classify_intrinsic_special_tenor
+
+
+class TestIntrinsicSpecialTenor:
+    """Tests for Phase 1 intrinsic special tenor classification."""
+
+    def test_standard_tenor_returns_standard(self):
+        """A normal 10Y swap should be STANDARD."""
+        typ, conf, tags = classify_intrinsic_special_tenor(
+            effective_date=pd.Timestamp("2026-01-09"),
+            expiration_date=pd.Timestamp("2036-01-09"),
+            tenor_label="10Y",
+            forward_label="spot",
+            is_forward=False,
+        )
+        assert typ == "STANDARD"
+        assert conf == "high"
+        assert tags == []
+
+    def test_imm_maturity_detected(self):
+        """Swap maturing on IMM date (3rd Wed of Dec 2026) should tag IMM."""
+        # 3rd Wednesday of December 2026 = Dec 16 (pure IMM, no FOMC overlap)
+        typ, conf, tags = classify_intrinsic_special_tenor(
+            effective_date=pd.Timestamp("2026-01-09"),
+            expiration_date=pd.Timestamp("2026-12-16"),
+            tenor_label="IMM_Z2026",
+            forward_label="spot",
+            is_forward=False,
+        )
+        assert typ == "IMM"
+        assert "IMM" in tags
+
+    def test_imm_forward_detected(self):
+        """Forward-starting on IMM date should tag IMM."""
+        # 3rd Wednesday of June 2027 = Jun 16 (pure IMM, no FOMC overlap)
+        typ, conf, tags = classify_intrinsic_special_tenor(
+            effective_date=pd.Timestamp("2027-06-16"),
+            expiration_date=pd.Timestamp("2029-06-16"),
+            tenor_label="2Y",
+            forward_label="IMM_M2027",
+            is_forward=True,
+        )
+        assert typ == "IMM"
+        assert "IMM" in tags
+
+    def test_fomc_maturity_detected(self):
+        """Swap maturing on FOMC date should tag FOMC."""
+        # FOMC meeting Jan 29, 2025
+        typ, conf, tags = classify_intrinsic_special_tenor(
+            effective_date=pd.Timestamp("2025-01-02"),
+            expiration_date=pd.Timestamp("2025-01-29"),
+            tenor_label="FOMC_20250129",
+            forward_label="spot",
+            is_forward=False,
+        )
+        assert typ == "FOMC"
+        assert "FOMC" in tags
+
+    def test_fomc_takes_priority_over_imm_when_both_match(self):
+        """If both FOMC and IMM labels present, FOMC wins (higher priority)."""
+        typ, conf, tags = classify_intrinsic_special_tenor(
+            effective_date=pd.Timestamp("2025-01-29"),
+            expiration_date=pd.Timestamp("2025-06-18"),
+            tenor_label="IMM_M2025",
+            forward_label="FOMC_20250129",
+            is_forward=True,
+        )
+        assert typ == "FOMC"
+        assert "IMM" in tags
+        assert "FOMC" in tags
+
+    def test_labels_checked_not_just_dates(self):
+        """Even if date doesn't match QL IMM, label prefix is enough."""
+        typ, conf, tags = classify_intrinsic_special_tenor(
+            effective_date=pd.Timestamp("2026-01-09"),
+            expiration_date=pd.Timestamp("2026-12-16"),
+            tenor_label="IMM_Z2026",
+            forward_label="spot",
+            is_forward=False,
+        )
+        assert "IMM" in tags

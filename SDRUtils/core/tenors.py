@@ -285,6 +285,54 @@ def build_trade_label(
         return f"spot {tenor_label}"
 
 
+def classify_intrinsic_special_tenor(
+    effective_date: Optional[pd.Timestamp],
+    expiration_date: Optional[pd.Timestamp],
+    tenor_label: str,
+    forward_label: str,
+    is_forward: bool,
+) -> tuple[str, str, list[str]]:
+    """
+    Classify special tenor using only the trade's own dates and labels.
+
+    This is Phase 1 of special tenor detection — no external reference data needed.
+    Detects: STANDARD, IMM, FOMC.
+
+    Returns:
+        (special_tenor_type, special_tenor_confidence, special_tenor_tags)
+    """
+    tags: list[str] = []
+
+    # Check labels for IMM/FOMC (already computed by tenor_to_label / forward_to_label)
+    if tenor_label.startswith("IMM_") or forward_label.startswith("IMM_"):
+        tags.append("IMM")
+    if tenor_label.startswith("FOMC_") or forward_label.startswith("FOMC_"):
+        tags.append("FOMC")
+
+    # Check expiration date directly against IMM/FOMC calendars
+    if expiration_date is not None and "IMM" not in tags:
+        if get_imm_label(expiration_date) is not None:
+            tags.append("IMM")
+
+    if expiration_date is not None and "FOMC" not in tags:
+        if get_fomc_label(expiration_date) is not None:
+            tags.append("FOMC")
+
+    # Check effective date for forward-starting trades
+    if is_forward and effective_date is not None:
+        if "IMM" not in tags and get_imm_label(effective_date) is not None:
+            tags.append("IMM")
+        if "FOMC" not in tags and get_fomc_label(effective_date) is not None:
+            tags.append("FOMC")
+
+    if not tags:
+        return "STANDARD", "high", []
+
+    # FOMC is higher priority than IMM in intrinsic phase
+    primary = "FOMC" if "FOMC" in tags else "IMM"
+    return primary, "high", tags
+
+
 # Backward compatibility aliases
 _get_imm_label = get_imm_label
 _get_fomc_label = get_fomc_label
