@@ -680,6 +680,165 @@ def _build_curve_default_label(curve: Any, idx: int) -> str:
     return f"{base} ({_format_label_timestamp(ts)})"
 
 
+_QUARTERLY_IMM_MONTH_CODES: Dict[int, str] = {
+    3: "H",
+    6: "M",
+    9: "U",
+    12: "Z",
+}
+
+
+def _curve_reference_key_for_plot(curve: Any) -> str:
+    for attr in ("reference_key", "node_reference_key", "id"):
+        value = getattr(curve, attr, None)
+        if callable(value):
+            try:
+                value = value()
+            except TypeError:
+                continue
+        if isinstance(value, str):
+            raw = value.strip()
+            if raw:
+                return raw
+    raise ValueError("Could not determine a reference curve key for IMM forward plotting.")
+
+
+def _curve_reference_date_for_plot(curve: Any) -> datetime.date:
+    nodes = getattr(curve, "nodes", None)
+    keys = getattr(nodes, "keys", None)
+    if isinstance(keys, (list, tuple)) and keys:
+        first = keys[0]
+    else:
+        raw_nodes = getattr(nodes, "nodes", None)
+        if isinstance(raw_nodes, dict) and raw_nodes:
+            first = next(iter(raw_nodes.keys()))
+        else:
+            raise ValueError("Could not determine the curve reference date from its nodes.")
+
+    if isinstance(first, datetime.datetime):
+        return first.date()
+    if isinstance(first, datetime.date):
+        return first
+    if hasattr(first, "year") and hasattr(first, "month") and hasattr(first, "day"):
+        return datetime.date(int(first.year), int(first.month), int(first.day))
+    raise ValueError(f"Unsupported curve node date type for plotting: {type(first)}")
+
+
+def _quarterly_imm_code(date_like: Union[datetime.date, datetime.datetime, pd.Timestamp]) -> str:
+    month_code = _QUARTERLY_IMM_MONTH_CODES.get(int(date_like.month))
+    if month_code is None:
+        raise ValueError(f"Expected a quarterly IMM date, got month={date_like.month}.")
+    return f"{month_code}{int(date_like.year) % 100:02d}"
+
+
+def _build_quarterly_imm_forward_pairs(
+    reference_date: Union[datetime.date, datetime.datetime, pd.Timestamp],
+    *,
+    count: int = 12,
+) -> List[Tuple[datetime.datetime, datetime.datetime]]:
+    ref_dt = pd.Timestamp(reference_date).to_pydatetime()
+    current = ref_dt + datetime.timedelta(days=1)
+    imm_dates: List[datetime.datetime] = []
+    for _ in range(count + 1):
+        current = rl.scheduling.next_imm(current)
+        imm_dates.append(current)
+    return list(zip(imm_dates[:-1], imm_dates[1:]))
+
+
+def _format_quarterly_imm_pair_label(
+    effective_date: Union[datetime.date, datetime.datetime, pd.Timestamp],
+    maturity_date: Union[datetime.date, datetime.datetime, pd.Timestamp],
+) -> str:
+    return f"IMM_{_quarterly_imm_code(effective_date)}xIMM_{_quarterly_imm_code(maturity_date)}"
+
+
+def _quarterly_imm_forward_rate(
+    curve: rl.Curve,
+    *,
+    effective_date: Union[datetime.date, datetime.datetime, pd.Timestamp],
+    maturity_date: Union[datetime.date, datetime.datetime, pd.Timestamp],
+) -> float:
+    curve_key = _curve_reference_key_for_plot(curve)
+    curve_def = RATESLIB_CURVE_DEFINITIONS.get(curve_key)
+    if curve_def is None:
+        raise ValueError(f"Could not find rateslib curve definitions for '{curve_key}'.")
+
+    effective = pd.Timestamp(effective_date)
+    maturity = pd.Timestamp(maturity_date)
+    irs = rl.IRS(
+        effective=rl.dt(effective.year, effective.month, effective.day),
+        termination=rl.dt(maturity.year, maturity.month, maturity.day),
+        spec=curve_def["ReferenceRate"],
+        curves=curve,
+    )
+    return float(irs.rate(curves=curve).real)
+
+
+def _plot_first_twelve_quarterly_imm_forwards(
+    curves: Sequence[rl.Curve],
+    *,
+    labels: Optional[Sequence[str]] = None,
+    difference: bool = False,
+):
+    import matplotlib.pyplot as plt
+
+    base_pairs = _build_quarterly_imm_forward_pairs(_curve_reference_date_for_plot(curves[0]), count=12)
+    x_labels = [_format_quarterly_imm_pair_label(eff, mat) for eff, mat in base_pairs]
+    x_values = list(range(len(x_labels)))
+
+    outright_series: List[List[float]] = []
+    for curve in curves:
+        curve_rates: List[float] = []
+        for effective_date, maturity_date in base_pairs:
+            try:
+                rate = _quarterly_imm_forward_rate(
+                    curve,
+                    effective_date=effective_date,
+                    maturity_date=maturity_date,
+                )
+            except Exception:
+                rate = math.nan
+            curve_rates.append(rate)
+        outright_series.append(curve_rates)
+
+    if difference:
+        plot_series = []
+        base_rates = outright_series[0]
+        for comparator_rates in outright_series[1:]:
+            plot_series.append(
+                [
+                    math.nan if (pd.isna(base_rate) or pd.isna(comp_rate)) else float(comp_rate - base_rate)
+                    for base_rate, comp_rate in zip(base_rates, comparator_rates)
+                ]
+            )
+        plot_labels = list(labels[1:]) if labels is not None else None
+    else:
+        plot_series = outright_series
+        plot_labels = list(labels) if labels is not None else None
+
+    fig, ax = plt.subplots()
+    lines = []
+    for idx, series in enumerate(plot_series):
+        label = None
+        if plot_labels is not None and idx < len(plot_labels):
+            label = str(plot_labels[idx])
+        line = ax.plot(x_values, series, label=label)
+        lines.extend(line)
+
+    ax.set_xticks(x_values)
+    ax.set_xticklabels(x_labels, rotation=45, ha="right")
+    ax.margins(x=0.02)
+
+    if difference:
+        ax.axhline(0.0, color="black", linewidth=0.8, linestyle="--", alpha=0.35)
+
+    if plot_labels and any(str(label).strip() for label in plot_labels):
+        ax.legend()
+
+    fig.tight_layout()
+    return fig, ax, lines
+
+
 def plot_overnight_forward_curves(
     curves: Sequence[rl.Curve],
     labels: Optional[Sequence[str]] = None,
@@ -688,6 +847,7 @@ def plot_overnight_forward_curves(
     right: Optional[Union[str, datetime.date, datetime.datetime, pd.Timestamp]] = None,
     difference: bool = False,
     title: Optional[str] = None,
+    quarterly_imm_forwards: bool = False,
 ):
     """
     Overlay overnight forward curves from a list of rateslib curves on one figure.
@@ -706,6 +866,9 @@ def plot_overnight_forward_curves(
         If True, plot comparator-minus-base differences.
     title
         Optional chart title.
+    quarterly_imm_forwards
+        If True, ignore `tenor`/`left`/`right` and plot the first 12 quarterly IMM
+        forward rates from the base curve reference date, e.g. `IMM_Z26xIMM_H27`.
     """
     curve_list = list(curves or [])
     if not curve_list:
@@ -725,49 +888,57 @@ def plot_overnight_forward_curves(
         if len(use_labels) != len(curve_list):
             raise ValueError("`labels` length must match number of `curves`.")
 
-    plot_kwargs: Dict[str, Any] = {
-        "tenor": tenor,
-        "difference": bool(difference),
-    }
-    left_bound = _to_plot_bound(left)
-    right_bound = _to_plot_bound(right)
-    if left_bound is not None:
-        plot_kwargs["left"] = left_bound
-    if right_bound is not None:
-        plot_kwargs["right"] = right_bound
-    if len(curve_list) > 1:
-        plot_kwargs["comparators"] = curve_list[1:]
-    if use_labels:
-        plot_kwargs["labels"] = use_labels
+    if quarterly_imm_forwards:
+        fig, ax, lines = _plot_first_twelve_quarterly_imm_forwards(
+            curve_list,
+            labels=use_labels,
+            difference=bool(difference),
+        )
+    else:
+        plot_kwargs: Dict[str, Any] = {
+            "tenor": tenor,
+            "difference": bool(difference),
+        }
+        left_bound = _to_plot_bound(left)
+        right_bound = _to_plot_bound(right)
+        if left_bound is not None:
+            plot_kwargs["left"] = left_bound
+        if right_bound is not None:
+            plot_kwargs["right"] = right_bound
+        if len(curve_list) > 1:
+            plot_kwargs["comparators"] = curve_list[1:]
+        if use_labels:
+            plot_kwargs["labels"] = use_labels
 
-    fig, ax, lines = curve_list[0].plot(**plot_kwargs)
-    try:
-        import matplotlib.dates as mdates
-        import matplotlib.ticker as mticker
+        fig, ax, lines = curve_list[0].plot(**plot_kwargs)
+        try:
+            import matplotlib.dates as mdates
+            import matplotlib.ticker as mticker
 
-        # Increase major tick density so more x labels are shown.
-        x_sample = None
-        if lines:
-            x_data = lines[0].get_xdata()
-            if len(x_data):
-                x_sample = x_data[0]
+            # Increase major tick density so more x labels are shown.
+            x_sample = None
+            if lines:
+                x_data = lines[0].get_xdata()
+                if len(x_data):
+                    x_sample = x_data[0]
 
-        is_date_axis = isinstance(x_sample, (datetime.date, datetime.datetime, pd.Timestamp))
-        if is_date_axis:
-            locator = mdates.AutoDateLocator(minticks=10, maxticks=20)
-            ax.xaxis.set_major_locator(locator)
-            ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
-        else:
-            ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=14, min_n_ticks=8))
+            is_date_axis = isinstance(x_sample, (datetime.date, datetime.datetime, pd.Timestamp))
+            if is_date_axis:
+                locator = mdates.AutoDateLocator(minticks=10, maxticks=20)
+                ax.xaxis.set_major_locator(locator)
+                ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+            else:
+                ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=14, min_n_ticks=8))
 
-        ax.tick_params(axis="x", labelrotation=45)
-        fig.tight_layout()
-    except Exception:
-        pass
+            ax.tick_params(axis="x", labelrotation=45)
+            fig.tight_layout()
+        except Exception:
+            pass
 
     if title:
         try:
             ax.set_title(title)
+            fig.tight_layout()
         except Exception:
             pass
     return fig, ax, lines
