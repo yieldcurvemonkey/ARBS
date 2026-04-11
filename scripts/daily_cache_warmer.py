@@ -223,7 +223,7 @@ def warm_stirf_cme_session(start, end):
         log.info("No business days in range for STIRF backfill")
         return None
 
-    curves = ["USD-SOFR-1D-Q12STIRT", "CAD-CORRA-Q8STIRT"]
+    curves = ["USD-SOFR-1D-Q12STIRT", "USD-SOFR-1D-Q16STIRT", "CAD-CORRA-Q8STIRT"]
     python_exe = sys.executable
     script = os.path.join(REPO_ROOT, "scripts", "stirf_curve_service.py")
 
