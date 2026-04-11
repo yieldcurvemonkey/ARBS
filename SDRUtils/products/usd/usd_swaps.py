@@ -729,6 +729,9 @@ class USD_SwapProduct(USDProductBase):
             if detect_spreadover:
                 package_df = detect_spreadovers(package_df)
 
+            # Final rollup: resolve unified special_tenor fields from all detectors
+            package_df = _resolve_special_tenor_priority(package_df)
+
             # Normalize mixed object/string numerics before parquet serialization.
             package_df = _prepare_cache_dataframe_for_arrow(package_df)
 
