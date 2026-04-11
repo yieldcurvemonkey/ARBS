@@ -34,6 +34,11 @@ def detect_fly_trades_df(
     # Optional: if you want to prohibit mixing cleared/uncleared etc.
     require_same_cleared_flag: bool = True,
     cleared_col: str = "Cleared",
+    # V2 rate-index and tenor-segment awareness
+    rate_index_col: str = "rate_index",
+    tenor_segment_col: str = "tenor_segment",
+    time_window_short: int = 30,
+    time_window_medium: int = 60,
 ) -> pd.DataFrame:
     """
     Fast fly detection on the classifications dataframe.
@@ -86,6 +91,10 @@ def detect_fly_trades_df(
             cols.append(platform_col)
         if require_same_cleared_flag and cleared_col in out.columns:
             cols.append(cleared_col)
+        if rate_index_col in out.columns:
+            cols.append(rate_index_col)
+        if tenor_segment_col in out.columns:
+            cols.append(tenor_segment_col)
 
         cols = list(dict.fromkeys(cols))
 
@@ -124,6 +133,22 @@ def detect_fly_trades_df(
         plat = cand[platform_col].astype("string").to_numpy() if (require_same_platform and platform_col in cand.columns) else None
         clr = cand[cleared_col].astype("string").to_numpy() if (require_same_cleared_flag and cleared_col in cand.columns) else None
 
+        # V2 rate-index and tenor-segment arrays (None when absent → backward compat)
+        _has_ridx = rate_index_col in cand.columns
+        ridx = cand[rate_index_col].fillna("_UNKNOWN_").astype(str).to_numpy() if _has_ridx else None
+        _has_tseg = tenor_segment_col in cand.columns
+        tseg = cand[tenor_segment_col].astype("string").to_numpy() if _has_tseg else None
+
+        _evict_window = time_window_seconds if tseg is None else max(time_window_short, time_window_medium)
+
+        def _effective_window(i: int, j: int) -> int:
+            if tseg is None:
+                return time_window_seconds
+            si, sj = tseg[i], tseg[j]
+            if si == "MEDIUM" or sj == "MEDIUM":
+                return time_window_medium
+            return time_window_short
+
         # Buckets
         pv_bucket = _pv01_bucket(pv01, belly_ratio_tolerance)
         ten_bucket = np.floor(ten_axis / 0.25).astype(np.int32)
@@ -141,7 +166,7 @@ def detect_fly_trades_df(
 
         def _evict(curr_t: int):
             nonlocal left
-            while left < len(cand) and (curr_t - tsec[left] > time_window_seconds):
+            while left < len(cand) and (curr_t - tsec[left] > _evict_window):
                 left += 1
 
         def _active_list(key: Tuple[int, int]) -> List[int]:
@@ -156,6 +181,8 @@ def detect_fly_trades_df(
 
         # Fast econ guard between i and j
         def _econ_ok(i: int, j: int) -> bool:
+            if ridx is not None and ridx[i] != ridx[j]:
+                return False
             if ccy is not None and ccy[i] != ccy[j]:
                 return False
             if eff is not None and eff[i] != eff[j]:
@@ -205,7 +232,7 @@ def detect_fly_trades_df(
                 for j in wing_candidates:
                     if matched[j] or j == i:
                         continue
-                    if tsec[i] - tsec[j] > time_window_seconds:
+                    if tsec[i] - tsec[j] > _effective_window(i, j):
                         continue
                     if not _econ_ok(i, j):
                         continue
