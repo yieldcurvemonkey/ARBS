@@ -30,7 +30,7 @@ from SDRUtils.config import PRODUCT_TYPES, TRADE_ID, USD_CONVENTIONS
 from SDRUtils.core.classification import SwapTradeClassification, classifications_to_dataframe, classify_product_type
 from SDRUtils.core.dates import calculate_forward_start_years, calculate_tenor_years, to_ql_date
 from SDRUtils.core.parsing import parse_notional
-from SDRUtils.core.tenors import build_trade_label, forward_to_label, tenor_from_dates, tenor_to_label
+from SDRUtils.core.tenors import build_trade_label, classify_intrinsic_special_tenor, forward_to_label, tenor_from_dates, tenor_to_label
 from SDRUtils.data.builder import SDRDataBuilder
 from SDRUtils.packages.curve import detect_curve_trades_df
 from SDRUtils.packages.fly import detect_fly_trades_df
@@ -105,6 +105,15 @@ def classify_usd_swap_trade(
     # Build trade label
     trade_label = build_trade_label(forward_label, tenor_label, is_forward)
 
+    # Phase 1: intrinsic special tenor classification
+    special_tenor_type, special_tenor_confidence, special_tenor_tags = classify_intrinsic_special_tenor(
+        effective_date=effective_date,
+        expiration_date=expiration_date,
+        tenor_label=tenor_label,
+        forward_label=forward_label,
+        is_forward=is_forward,
+    )
+
     # Extract notional and rate
     notional, is_notional_capped = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
     fixed_rate = row.get("Fixed rate-Leg 1", row.get("Fixed rate-Leg 2"))
@@ -142,6 +151,9 @@ def classify_usd_swap_trade(
         fixed_rate=fixed_rate if pd.notna(fixed_rate) else None,
         estimated_pv01=pv01,
         package_type="OUTRIGHT",
+        special_tenor_type=special_tenor_type,
+        special_tenor_confidence=special_tenor_confidence,
+        special_tenor_tags=special_tenor_tags,
     )
 
 

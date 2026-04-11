@@ -157,3 +157,39 @@ class TestIntrinsicSpecialTenor:
             is_forward=False,
         )
         assert "IMM" in tags
+
+
+from SDRUtils.products.usd.usd_swaps import classify_usd_swap_trade
+
+
+class TestClassifyUsdSwapTradeSpecialTenor:
+    """Verify Phase 1 is wired into classify_usd_swap_trade."""
+
+    def _make_row(self, **overrides):
+        defaults = {
+            "Action type": "NEWT",
+            "Event type": "TRAD",
+            "Execution Timestamp": "2026-01-07 21:00:00+00:00",
+            "Effective Date": "2026-01-09",
+            "Expiration Date": "2036-01-09",
+            "UPI FISN": "NA/T Swap Fxd Flt OIS USD",
+            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "Notional amount-Leg 1": "100,000,000",
+            "Notional currency-Leg 1": "USD",
+            "Fixed rate-Leg 1": 0.04,
+        }
+        defaults.update(overrides)
+        return pd.Series(defaults)
+
+    def test_standard_swap_has_standard_type(self):
+        row = self._make_row()
+        c = classify_usd_swap_trade(row, trade_id=1, curve=None)
+        assert c.special_tenor_type == "STANDARD"
+        assert c.special_tenor_tags == []
+
+    def test_imm_maturity_swap_has_imm_type(self):
+        # 3rd Wednesday of December 2026 = Dec 16 (pure IMM, no FOMC overlap)
+        row = self._make_row(**{"Expiration Date": "2026-12-16"})
+        c = classify_usd_swap_trade(row, trade_id=2, curve=None)
+        assert c.special_tenor_type == "IMM"
+        assert "IMM" in c.special_tenor_tags
