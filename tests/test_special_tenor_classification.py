@@ -193,3 +193,185 @@ class TestClassifyUsdSwapTradeSpecialTenor:
         c = classify_usd_swap_trade(row, trade_id=2, curve=None)
         assert c.special_tenor_type == "IMM"
         assert "IMM" in c.special_tenor_tags
+
+
+from SDRUtils.products.usd.usd_swaps import _is_round_notional, _resolve_special_tenor_priority
+import numpy as np
+
+
+class TestIsRoundNotional:
+    """Tests for round-notional detection."""
+
+    def test_exact_multiple_of_5m_is_round(self):
+        assert _is_round_notional(100_000_000) is True
+        assert _is_round_notional(250_000_000) is True
+        assert _is_round_notional(5_000_000) is True
+
+    def test_non_multiple_is_not_round(self):
+        assert _is_round_notional(147_300_000) is False
+        assert _is_round_notional(103_500_000) is False
+
+    def test_nan_is_not_round(self):
+        assert _is_round_notional(float("nan")) is False
+
+    def test_zero_is_not_round(self):
+        assert _is_round_notional(0) is False
+
+    def test_negative_is_not_round(self):
+        assert _is_round_notional(-100_000_000) is False
+
+
+class TestResolveSpecialTenorPriority:
+    """Tests for the final rollup that resolves unified special_tenor fields."""
+
+    def _make_df(self, rows):
+        return pd.DataFrame(rows)
+
+    def test_standard_swap_stays_standard(self):
+        df = self._make_df([{
+            "special_tenor_type": "STANDARD",
+            "special_tenor_confidence": "high",
+            "special_tenor_tags": "[]",
+            "matched_ust_maturity": False,
+            "invoice_swap_ticker": None,
+            "is_mac": False,
+            "forward_label": "spot",
+            "notional": 100_000_000,
+            "tenor_years": 10.0,
+            "effective_date": "2026-01-09",
+            "expiration_date": "2036-01-09",
+        }])
+        result = _resolve_special_tenor_priority(df)
+        assert result["special_tenor_type"].iloc[0] == "STANDARD"
+
+    def test_mms_upgrades_standard_to_matched_maturity(self):
+        df = self._make_df([{
+            "special_tenor_type": "STANDARD",
+            "special_tenor_confidence": "high",
+            "special_tenor_tags": "[]",
+            "matched_ust_maturity": True,
+            "matched_ust_maturity_trade_confidence": "high",
+            "invoice_swap_ticker": None,
+            "is_mac": False,
+            "forward_label": "1Y",
+            "notional": 147_300_000,
+            "tenor_years": 10.0,
+            "effective_date": "2026-01-09",
+            "expiration_date": "2036-01-09",
+        }])
+        result = _resolve_special_tenor_priority(df)
+        assert result["special_tenor_type"].iloc[0] == "MATCHED_MATURITY"
+        assert "MATCHED_MATURITY" in result["special_tenor_tags"].iloc[0]
+
+    def test_invoice_swap_wins_over_matched_maturity(self):
+        df = self._make_df([{
+            "special_tenor_type": "STANDARD",
+            "special_tenor_confidence": "high",
+            "special_tenor_tags": "[]",
+            "matched_ust_maturity": True,
+            "matched_ust_maturity_trade_confidence": "high",
+            "invoice_swap_ticker": "TYA",
+            "is_mac": False,
+            "forward_label": "1Y",
+            "notional": 147_300_000,
+            "tenor_years": 10.0,
+            "effective_date": "2026-01-09",
+            "expiration_date": "2036-01-09",
+        }])
+        result = _resolve_special_tenor_priority(df)
+        assert result["special_tenor_type"].iloc[0] == "INVOICE_SWAP"
+        assert "MATCHED_MATURITY" in result["special_tenor_tags"].iloc[0]
+        assert "INVOICE_SWAP" in result["special_tenor_tags"].iloc[0]
+
+    def test_spot_round_notional_mms_gets_low_confidence(self):
+        df = self._make_df([{
+            "special_tenor_type": "STANDARD",
+            "special_tenor_confidence": "high",
+            "special_tenor_tags": "[]",
+            "matched_ust_maturity": True,
+            "matched_ust_maturity_trade_confidence": "high",
+            "invoice_swap_ticker": None,
+            "is_mac": False,
+            "forward_label": "spot",
+            "notional": 100_000_000,
+            "tenor_years": 10.0,
+            "effective_date": "2026-01-09",
+            "expiration_date": "2036-01-09",
+        }])
+        result = _resolve_special_tenor_priority(df)
+        assert result["special_tenor_type"].iloc[0] == "MATCHED_MATURITY"
+        assert result["special_tenor_confidence"].iloc[0] == "low"
+
+    def test_spot_nonround_notional_mms_gets_medium_confidence(self):
+        df = self._make_df([{
+            "special_tenor_type": "STANDARD",
+            "special_tenor_confidence": "high",
+            "special_tenor_tags": "[]",
+            "matched_ust_maturity": True,
+            "matched_ust_maturity_trade_confidence": "high",
+            "invoice_swap_ticker": None,
+            "is_mac": False,
+            "forward_label": "spot",
+            "notional": 147_300_000,
+            "tenor_years": 10.0,
+            "effective_date": "2026-01-09",
+            "expiration_date": "2036-01-09",
+        }])
+        result = _resolve_special_tenor_priority(df)
+        assert result["special_tenor_type"].iloc[0] == "MATCHED_MATURITY"
+        assert result["special_tenor_confidence"].iloc[0] == "medium"
+
+    def test_forward_mms_gets_high_confidence_regardless_of_notional(self):
+        df = self._make_df([{
+            "special_tenor_type": "STANDARD",
+            "special_tenor_confidence": "high",
+            "special_tenor_tags": "[]",
+            "matched_ust_maturity": True,
+            "matched_ust_maturity_trade_confidence": "high",
+            "invoice_swap_ticker": None,
+            "is_mac": False,
+            "forward_label": "1Y",
+            "notional": 100_000_000,
+            "tenor_years": 10.0,
+            "effective_date": "2027-01-09",
+            "expiration_date": "2037-01-09",
+        }])
+        result = _resolve_special_tenor_priority(df)
+        assert result["special_tenor_confidence"].iloc[0] == "high"
+
+    def test_mac_tags_added(self):
+        df = self._make_df([{
+            "special_tenor_type": "IMM",
+            "special_tenor_confidence": "high",
+            "special_tenor_tags": "['IMM']",
+            "matched_ust_maturity": False,
+            "invoice_swap_ticker": None,
+            "is_mac": True,
+            "forward_label": "spot",
+            "notional": 100_000_000,
+            "tenor_years": 10.0,
+            "effective_date": "2026-03-18",
+            "expiration_date": "2036-03-18",
+        }])
+        result = _resolve_special_tenor_priority(df)
+        assert result["special_tenor_type"].iloc[0] == "MAC"
+        assert "IMM" in result["special_tenor_tags"].iloc[0]
+        assert "MAC" in result["special_tenor_tags"].iloc[0]
+
+    def test_short_tenor_mms_gets_low_confidence(self):
+        df = self._make_df([{
+            "special_tenor_type": "STANDARD",
+            "special_tenor_confidence": "high",
+            "special_tenor_tags": "[]",
+            "matched_ust_maturity": True,
+            "matched_ust_maturity_trade_confidence": "high",
+            "invoice_swap_ticker": None,
+            "is_mac": False,
+            "forward_label": "1Y",
+            "notional": 147_300_000,
+            "tenor_years": 0.5,
+            "effective_date": "2026-01-09",
+            "expiration_date": "2026-07-09",
+        }])
+        result = _resolve_special_tenor_priority(df)
+        assert result["special_tenor_confidence"].iloc[0] == "low"

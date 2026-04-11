@@ -430,6 +430,97 @@ def _coerce_numeric_like(series: pd.Series) -> pd.Series:
     return pd.to_numeric(normalized, errors="coerce")
 
 
+def _is_round_notional(notional: float, threshold: float = 5_000_000) -> bool:
+    """True if notional is a 'round' number (divisible by threshold with no remainder)."""
+    if pd.isna(notional) or notional <= 0:
+        return False
+    return (notional % threshold) == 0
+
+
+def _resolve_special_tenor_priority(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    After all detectors have run, resolve unified special_tenor fields.
+
+    Reads existing detection columns (matched_ust_maturity, invoice_swap_ticker,
+    is_mac) and merges them with Phase 1 intrinsic tags. Applies priority
+    hierarchy and round-notional confidence adjustment.
+
+    Priority (lowest to highest):
+        STANDARD < IMM < FOMC < MAC < MATCHED_MATURITY < INVOICE_SWAP
+    """
+    from SDRUtils.config import SPECIAL_TENOR_PRIORITY
+
+    out = df.copy()
+
+    if out.empty:
+        return out
+
+    priority_map = {t: i for i, t in enumerate(SPECIAL_TENOR_PRIORITY)}
+
+    def _parse_tags(val) -> list[str]:
+        if isinstance(val, list):
+            return val
+        if isinstance(val, str):
+            val = val.strip()
+            if val.startswith("[") and val.endswith("]"):
+                inner = val[1:-1].strip()
+                if not inner:
+                    return []
+                return [t.strip().strip("'\"") for t in inner.split(",")]
+            return [val] if val else []
+        return []
+
+    def _resolve_row(row):
+        tags = list(_parse_tags(row.get("special_tenor_tags", [])))
+        intrinsic_type = str(row.get("special_tenor_type", "STANDARD"))
+
+        # Collect Phase 2 detections
+        if row.get("matched_ust_maturity") is True or str(row.get("matched_ust_maturity")).lower() == "true":
+            if "MATCHED_MATURITY" not in tags:
+                tags.append("MATCHED_MATURITY")
+
+        if pd.notna(row.get("invoice_swap_ticker")) and str(row.get("invoice_swap_ticker")).strip():
+            if "INVOICE_SWAP" not in tags:
+                tags.append("INVOICE_SWAP")
+
+        if row.get("is_mac") is True or str(row.get("is_mac")).lower() == "true":
+            if "MAC" not in tags:
+                tags.append("MAC")
+
+        # Determine primary type by priority
+        if not tags:
+            return "STANDARD", "high", []
+
+        primary = max(tags, key=lambda t: priority_map.get(t, -1))
+
+        # Confidence scoring for MATCHED_MATURITY
+        conf = "high"
+        if primary in ("MATCHED_MATURITY", "INVOICE_SWAP"):
+            fwd = str(row.get("forward_label", "spot")).strip().lower()
+            is_spot = fwd == "spot"
+            notional = pd.to_numeric(row.get("notional"), errors="coerce")
+            tenor_y = pd.to_numeric(row.get("tenor_years"), errors="coerce")
+
+            if pd.notna(tenor_y) and tenor_y < 1.0:
+                conf = "low"
+            elif is_spot:
+                if _is_round_notional(notional if pd.notna(notional) else 0):
+                    conf = "low"
+                else:
+                    conf = "medium"
+            # Forward-starting or invoice: keep "high"
+
+        return primary, conf, tags
+
+    results = out.apply(_resolve_row, axis=1, result_type="expand")
+    results.columns = ["special_tenor_type", "special_tenor_confidence", "special_tenor_tags"]
+    out["special_tenor_type"] = results["special_tenor_type"]
+    out["special_tenor_confidence"] = results["special_tenor_confidence"]
+    out["special_tenor_tags"] = results["special_tenor_tags"]
+
+    return out
+
+
 def _prepare_cache_dataframe_for_arrow(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     numeric_columns = [
@@ -674,4 +765,6 @@ __all__ = [
     "detect_invoice_swaps",
     "detect_mac_swaps",
     "detect_spreadovers",
+    "_is_round_notional",
+    "_resolve_special_tenor_priority",
 ]
