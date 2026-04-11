@@ -39,6 +39,17 @@ ProductType = Literal[
     "UNKNOWN",
 ]
 
+SpecialTenorType = Literal[
+    "STANDARD",
+    "IMM",
+    "FOMC",
+    "MATCHED_MATURITY",
+    "INVOICE_SWAP",
+    "MAC",
+]
+
+SpecialTenorConfidence = Literal["high", "medium", "low"]
+
 OptionType = Literal["CALL", "PUT"]
 ExerciseStyle = Literal["EUROPEAN", "AMERICAN", "BERMUDAN"]
 
@@ -90,6 +101,16 @@ class SwapTradeClassification(TradeClassification):
 
     # Rates
     fixed_rate: Optional[float]
+
+    # Unified special tenor classification
+    special_tenor_type: SpecialTenorType = field(default="STANDARD", kw_only=True)
+    special_tenor_confidence: SpecialTenorConfidence = field(default="high", kw_only=True)
+    special_tenor_tags: List[str] = field(default_factory=list, kw_only=True)
+
+    # Reference data enrichment (populated by Phase 2 detectors)
+    matched_ust_cusip: Optional[str] = field(default=None, kw_only=True)
+    invoice_swap_ticker: Optional[str] = field(default=None, kw_only=True)
+    is_mac: bool = field(default=False, kw_only=True)
 
 
 @dataclass
