@@ -68,8 +68,8 @@ class IRClearingHouseBasisSwapsMDP(MarketDataProvider):
         pair = find_asset_pair(coverage, ccy=ccy, index=index, tenor=tenor, clearing_house_a=ch_a, clearing_house_b=ch_b)
 
         basis_data = fetch_clearing_house_basis(
-            asset_id_a=pair["asset_id_a"],
-            asset_id_b=pair["asset_id_b"],
+            asset_id_a=pair["asset_id_b"],
+            asset_id_b=pair["asset_id_a"],
             start=start,
             end=end,
             gs_client_id=self._gs_client_id,

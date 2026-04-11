@@ -834,9 +834,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                     "SFRCM10",
                     "SFRCM11",
                     "SFRCM12",
+                    "SFRCM13",
                 ],
                 "reference_key": "USD-SOFR-1D",
-                "max_tenor_from_timestamp_months": 36,
+                "max_tenor_from_timestamp_months": 39,
                 "rl_irs_spec": "usd_irs_lt_2y",
             },
             "USD-SOFR-1D-Q16STIRT": {
@@ -859,9 +860,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                     "SFRCM14",
                     "SFRCM15",
                     "SFRCM16",
+                    "SFRCM17",
                 ],
                 "reference_key": "USD-SOFR-1D",
-                "max_tenor_from_timestamp_months": 48,
+                "max_tenor_from_timestamp_months": 51,
                 "rl_irs_spec": "usd_irs",
             },
             "USD-SOFR-1D-Q20STIRT": {
