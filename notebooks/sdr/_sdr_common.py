@@ -8,6 +8,7 @@ for data loading, enrichment, filtering, and visualization defaults.
 from __future__ import annotations
 
 import datetime
+import os
 from typing import List, Literal, Optional
 
 import matplotlib.pyplot as plt
@@ -124,6 +125,49 @@ def notebook_setup():
 # Data loading
 # ---------------------------------------------------------------------------
 
+def _coerce_object_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Downcast object columns to reduce memory after concat."""
+    # Skip columns that contain non-scalar types or timestamps
+    skip_patterns = ("timestamp", "date", "time", "tags")
+    for col in df.columns:
+        if df[col].dtype != object:
+            continue
+        if any(p in col.lower() for p in skip_patterns):
+            continue
+        try:
+            # Try numeric first
+            numeric = pd.to_numeric(df[col], errors="coerce")
+            if numeric.notna().sum() > 0.5 * len(df):
+                df[col] = numeric
+                continue
+            # Try category for low-cardinality strings
+            n_unique = df[col].nunique()
+            if n_unique < 200:
+                df[col] = df[col].astype("category")
+        except TypeError:
+            # Column contains unhashable types (lists, dicts) — skip
+            continue
+    return df
+
+
+def _monthly_chunks(start: datetime.datetime, end: datetime.datetime):
+    """Yield (chunk_start, chunk_end) monthly windows."""
+    current = start
+    while current < end:
+        next_month = current.replace(day=1) + datetime.timedelta(days=32)
+        chunk_end = min(next_month.replace(day=1) - datetime.timedelta(seconds=1), end)
+        # Ensure timezone matches
+        if start.tzinfo and not chunk_end.tzinfo:
+            chunk_end = chunk_end.replace(tzinfo=start.tzinfo)
+        yield current, chunk_end
+        current = chunk_end + datetime.timedelta(seconds=1)
+        if start.tzinfo and not current.tzinfo:
+            current = current.replace(tzinfo=start.tzinfo)
+
+
+_PRECOMPUTED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_precomputed_trades.parquet")
+
+
 def load_classified_trades(
     start: datetime.datetime,
     end: datetime.datetime,
@@ -134,8 +178,12 @@ def load_classified_trades(
     """
     Load and classify SDR trades for a date range.
 
-    Wraps USD_SwapProduct.build_classification_dataframe() with
-    automatic DV01 and volume bucket enrichment.
+    If a pre-computed parquet file exists covering the requested range,
+    reads from disk (fast). Otherwise, wraps
+    USD_SwapProduct.build_classification_dataframe() with chunked loading.
+
+    For ranges >60 days, loads in monthly chunks to avoid MemoryError
+    from concat of mismatched-schema DataFrames.
 
     Returns DataFrame with classification columns including:
         trade_id, execution_timestamp, effective_date, expiration_date,
@@ -147,22 +195,70 @@ def load_classified_trades(
         platform_identifier, cleared, block_trade_election_indicator,
         is_spreadover, is_asset_swap
     """
+    # Check for pre-computed parquet file first (fast path)
+    if os.path.exists(_PRECOMPUTED_PATH):
+        print(f"  Using precomputed data from {_PRECOMPUTED_PATH}")
+        df = pd.read_parquet(_PRECOMPUTED_PATH, engine="pyarrow")
+        # Filter to requested date range
+        df["execution_date"] = pd.to_datetime(df["execution_date"]).dt.date
+        start_date = start.date() if hasattr(start, "date") else start
+        end_date = end.date() if hasattr(end, "date") else end
+        df = df[(df["execution_date"] >= start_date) & (df["execution_date"] <= end_date)]
+        return df
+
     product = USD_SwapProduct()
-    df = product.build_classification_dataframe(
-        start=start,
-        end=end,
-        cache_path=cache_path,
-        detect_curve=detect_packages,
-        detect_fly=detect_packages,
-        detect_mms=detect_packages,
-        detect_invoice=detect_packages,
-        detect_mac=detect_packages,
-        detect_spreadover=detect_packages,
-        curve_source=curve_source,
-    )
+
+    span_days = (end - start).days
+    if span_days <= 60:
+        # Short range: load directly
+        df = product.build_classification_dataframe(
+            start=start,
+            end=end,
+            cache_path=cache_path,
+            detect_curve=detect_packages,
+            detect_fly=detect_packages,
+            detect_mms=detect_packages,
+            detect_invoice=detect_packages,
+            detect_mac=detect_packages,
+            detect_spreadover=detect_packages,
+            curve_source=curve_source,
+        )
+    else:
+        # Long range: load monthly chunks to avoid MemoryError
+        chunks = []
+        for chunk_start, chunk_end in _monthly_chunks(start, end):
+            print(f"  Loading {chunk_start.date()} to {chunk_end.date()}...")
+            try:
+                chunk = product.build_classification_dataframe(
+                    start=chunk_start,
+                    end=chunk_end,
+                    cache_path=cache_path,
+                    detect_curve=detect_packages,
+                    detect_fly=detect_packages,
+                    detect_mms=detect_packages,
+                    detect_invoice=detect_packages,
+                    detect_mac=detect_packages,
+                    detect_spreadover=detect_packages,
+                    curve_source=curve_source,
+                )
+                if not chunk.empty:
+                    # Drop heavy list-typed column that causes object-dtype blowup
+                    if "special_tenor_tags" in chunk.columns:
+                        chunk = chunk.drop(columns=["special_tenor_tags"])
+                    chunk = _coerce_object_columns(chunk)
+                    chunks.append(chunk)
+            except Exception as e:
+                print(f"  WARNING: Failed to load {chunk_start.date()}-{chunk_end.date()}: {e}")
+        if not chunks:
+            return pd.DataFrame()
+        df = pd.concat(chunks, ignore_index=True)
 
     if df.empty:
         return df
+
+    # Drop special_tenor_tags if it survived (contains Python lists → object dtype)
+    if "special_tenor_tags" in df.columns:
+        df = df.drop(columns=["special_tenor_tags"])
 
     df = add_dv01_columns(df)
     df = add_volume_buckets(df)
@@ -384,6 +480,10 @@ def plot_stacked_area(
 ):
     """Stacked area chart from a pivot table."""
     fig, ax = plt.subplots(figsize=figsize)
+    if pivot_df.empty or len(pivot_df) == 0 or pivot_df.select_dtypes(include="number").shape[1] == 0:
+        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(title)
+        return fig, ax
     cols = pivot_df.columns.tolist()
     colors = [color_map.get(c, None) if color_map else None for c in cols]
     colors = [c for c in colors if c is not None] or None
@@ -404,6 +504,10 @@ def plot_stacked_bar(
 ):
     """Stacked bar chart from a pivot table."""
     fig, ax = plt.subplots(figsize=figsize)
+    if pivot_df.empty or len(pivot_df) == 0 or pivot_df.select_dtypes(include="number").shape[1] == 0:
+        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(title)
+        return fig, ax
     cols = pivot_df.columns.tolist()
     colors = [color_map.get(c, None) if color_map else None for c in cols]
     colors = [c for c in colors if c is not None] or None
@@ -424,6 +528,10 @@ def plot_heatmap(
 ):
     """Heatmap from a pivot table."""
     fig, ax = plt.subplots(figsize=figsize)
+    if pivot_df.empty:
+        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(title)
+        return fig, ax
     sns.heatmap(pivot_df, annot=True, fmt=fmt, cmap=cmap, ax=ax, linewidths=0.5)
     ax.set_title(title)
     plt.tight_layout()
