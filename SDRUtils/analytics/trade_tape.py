@@ -301,6 +301,47 @@ class TradeTape(SDRAnalyzer):
         return df
 
     def _enrich_rv(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 6: temporal clusters, daily VWAP, rate vs VWAP."""
+        # Trade clustering
+        clustered = trade_clustering(
+            df,
+            ts_col="execution_timestamp",
+            gap_seconds=self._cluster_gap_seconds,
+        )
+        df["cluster_id"] = clustered["cluster_id"].values
+        df["cluster_size"] = df.groupby("cluster_id")["cluster_id"].transform("size")
+
+        # Multi-meeting cluster detection (FOMC trades spanning multiple meetings)
+        df["is_multi_meeting_cluster"] = False
+        if "fomc_meeting_label" in df.columns:
+            fomc_in_cluster = (
+                df[df["fomc_meeting_label"] != ""]
+                .groupby("cluster_id")["fomc_meeting_label"]
+                .nunique()
+            )
+            multi_ids = fomc_in_cluster[fomc_in_cluster > 1].index
+            df.loc[df["cluster_id"].isin(multi_ids), "is_multi_meeting_cluster"] = True
+
+        # Daily tenor VWAP
+        df["daily_tenor_vwap"] = np.nan
+        df["rate_vs_vwap_bp"] = np.nan
+
+        rate = pd.to_numeric(df.get("fixed_rate"), errors="coerce")
+        has_rate = rate.notna()
+        if has_rate.any() and "tenor_label" in df.columns and "execution_date" in df.columns:
+            vwap_df = daily_vwap(
+                df[has_rate],
+                group_col="tenor_label",
+                rate_col="fixed_rate",
+                weight_col="dv01",
+                date_col="execution_date",
+            )
+            if not vwap_df.empty:
+                vwap_map = vwap_df.set_index(["execution_date", "tenor_label"])["vwap"]
+                keys = list(zip(df["execution_date"], df["tenor_label"]))
+                df["daily_tenor_vwap"] = [vwap_map.get(k, np.nan) for k in keys]
+                df["rate_vs_vwap_bp"] = (rate - df["daily_tenor_vwap"]) * 10_000
+
         return df
 
     def _build_enriched_label(self, df: pd.DataFrame) -> pd.DataFrame:
