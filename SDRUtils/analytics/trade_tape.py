@@ -208,6 +208,66 @@ class TradeTape(SDRAnalyzer):
 
         return df
 
+    @staticmethod
+    def _detect_off_date(df: pd.DataFrame, tolerance_days: int = 5) -> pd.DataFrame:
+        """Flag broken-date swaps whose expiry doesn't match the standard anniversary.
+
+        Uses QuantLib USD calendar to compute the business-day-adjusted
+        standard maturity. A 7Y swap from 2026-04-14 should expire on
+        the modified-following-adjusted 2033-04-14. If the actual expiry
+        differs by more than ``tolerance_days`` business days, the trade
+        is flagged as off-date.
+
+        Adds columns: ``is_off_date`` (bool), ``tenor_display`` (str).
+        ``tenor_display`` is ``~7Y`` for off-date or ``7Y`` for standard.
+        """
+        import re
+
+        import QuantLib as ql
+
+        from SDRUtils.config import USD_CONVENTIONS
+        from SDRUtils.core.dates import to_ql_date
+
+        cal = USD_CONVENTIONS.calendar
+        bdc = USD_CONVENTIONS.business_day_convention
+
+        df["is_off_date"] = False
+        df["tenor_display"] = df["tenor_label"].astype(str)
+
+        eff = pd.to_datetime(df.get("effective_date"), errors="coerce")
+        exp = pd.to_datetime(df.get("expiration_date"), errors="coerce")
+        tlabel = df["tenor_label"].astype(str)
+
+        year_pattern = re.compile(r"^(\d+)Y$")
+
+        for idx in df.index:
+            m = year_pattern.match(str(tlabel.at[idx]))
+            if not m:
+                continue
+            n_years = int(m.group(1))
+            e, x = eff.at[idx], exp.at[idx]
+            if pd.isna(e) or pd.isna(x):
+                continue
+
+            ql_eff = to_ql_date(e)
+            ql_exp = to_ql_date(x)
+            if ql_eff is None or ql_exp is None:
+                continue
+
+            # Standard maturity: effective + N years, adjusted to business day
+            ql_standard = cal.adjust(
+                cal.advance(ql_eff, ql.Period(n_years, ql.Years)),
+                bdc,
+            )
+
+            # Count business days between actual expiry and standard
+            bd_diff = abs(cal.businessDaysBetween(ql_exp, ql_standard))
+            if bd_diff > tolerance_days:
+                df.at[idx, "is_off_date"] = True
+                df.at[idx, "tenor_display"] = f"~{n_years}Y"
+
+        return df
+
     def _enrich_lifecycle(self, df: pd.DataFrame) -> pd.DataFrame:
         """Layer 2: lifecycle type, new-risk, compression, reset-opt flags."""
         action = df["event_action"].astype(str).str.upper()
@@ -270,9 +330,10 @@ class TradeTape(SDRAnalyzer):
         else:
             df["has_spread"] = False
 
-        # Defaults
+        # Defaults — use tenor_display (with ~7Y off-date notation) if available
         df["n_package_legs"] = 1
-        df["package_tenors"] = df["tenor_label"].astype(str)
+        tenor_src = "tenor_display" if "tenor_display" in df.columns else "tenor_label"
+        df["package_tenors"] = df[tenor_src].astype(str)
         df["package_structure"] = ""
 
         # Build trade_id -> index lookup (string keys for type safety)
@@ -299,7 +360,7 @@ class TradeTape(SDRAnalyzer):
                     continue
 
                 leg_rows = df.loc[leg_indices].sort_values("tenor_years")
-                tenors = "/".join(leg_rows["tenor_label"].astype(str).values)
+                tenors = "/".join(leg_rows[tenor_src].astype(str).values)
                 df.at[idx, "n_package_legs"] = len(leg_indices)
                 df.at[idx, "package_tenors"] = tenors
 
@@ -499,8 +560,8 @@ class TradeTape(SDRAnalyzer):
             else:
                 parts.append(str(fwd))
 
-            # 4. Tenors (from package_tenors if package, else tenor_label)
-            tenors = str(row.get("package_tenors", row.get("tenor_label", "")))
+            # 4. Tenors (package_tenors uses tenor_display with ~7Y off-date notation)
+            tenors = str(row.get("package_tenors", row.get("tenor_display", row.get("tenor_label", ""))))
             if tenors and tenors.lower() not in ("nan", "none"):
                 parts.append(tenors)
 
@@ -574,6 +635,7 @@ class TradeTape(SDRAnalyzer):
         df = self._ensure_prerequisites(df)
         df = self._enrich_classification(df)
         df = self._enrich_upi_reference(df)
+        df = self._detect_off_date(df)
         df = self._enrich_lifecycle(df)
         df = self._enrich_quality(df)
         df = self._enrich_packages(df)
