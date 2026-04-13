@@ -688,4 +688,109 @@ def price_fomc_meetings(
         for label, key, err in pricing_errors[:5]:
             print(f"    {label} ({key}): {err}")
 
-    return pd.DataFrame(records)
+    result = pd.DataFrame(records)
+
+    # Strip accrued fixings from in-progress meetings to get forward-only rates
+    if not result.empty:
+        result = _strip_accrued_fixings(result, fomc_df, curves_dict)
+
+    return result
+
+
+def _strip_accrued_fixings(
+    rates_df: pd.DataFrame,
+    fomc_df: pd.DataFrame,
+    curves_dict: dict,
+) -> pd.DataFrame:
+    """
+    For in-progress meetings (eff < today < mat), decompose the blended
+    implied rate into accrued (known fixings) and forward-only components.
+
+    The forward-only rate is the actionable number for market makers.
+    Full-period blended rates mix realized history with expectations.
+
+    Adds columns: sofr_fwd_rate, ois_fwd_rate, accrued_days, remaining_days
+    """
+    from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
+
+    pricing_date = curves_dict.get("pricing_date", datetime.date.today())
+
+    # Fetch fixings for decomposition
+    fixing_series = {}
+    for curve_key, fixing_curve in [("SOFR", "USD-SOFR-1D"), ("OIS", "USD-OIS")]:
+        try:
+            f = _fetch_fixings(as_of_date=pricing_date, curve_name=fixing_curve)
+            fixing_series[curve_key] = f.sort_index() if f is not None else pd.Series(dtype=float)
+        except Exception:
+            fixing_series[curve_key] = pd.Series(dtype=float)
+
+    # Build schedule lookup
+    schedule = fomc_df.set_index("meeting_label")[["effective_date", "maturity_date"]]
+
+    for col_prefix, curve_key in [("sofr", "SOFR"), ("ois", "OIS")]:
+        implied_col = f"{col_prefix}_implied_rate"
+        fwd_col = f"{col_prefix}_fwd_rate"
+        rates_df[fwd_col] = np.nan
+
+        fixings = fixing_series.get(curve_key, pd.Series(dtype=float))
+
+        for idx, row in rates_df.iterrows():
+            label = row["meeting_label"]
+            full_rate = row.get(implied_col)
+            if pd.isna(full_rate) or label not in schedule.index:
+                rates_df.loc[idx, fwd_col] = full_rate
+                continue
+
+            eff = schedule.loc[label, "effective_date"]
+            mat = schedule.loc[label, "maturity_date"]
+            if hasattr(eff, "date"):
+                eff = eff.date()
+            if hasattr(mat, "date"):
+                mat = mat.date()
+
+            total_days = (mat - eff).days
+            if total_days <= 0 or eff >= pricing_date or fixings.empty:
+                rates_df.loc[idx, fwd_col] = full_rate
+                continue
+
+            # In-progress: strip accrued fixings
+            accrued = fixings[
+                (fixings.index >= pd.Timestamp(eff)) &
+                (fixings.index < pd.Timestamp(pricing_date))
+            ]
+            accrued_n = len(accrued)
+            remaining = total_days - accrued_n
+
+            if accrued_n > 0 and remaining > 0:
+                accrued_avg = accrued.mean()
+                fwd_rate = (full_rate * total_days - accrued_avg * accrued_n) / remaining
+                rates_df.loc[idx, fwd_col] = fwd_rate
+            else:
+                rates_df.loc[idx, fwd_col] = full_rate
+
+    # Add day counts
+    rates_df["accrued_days"] = 0
+    rates_df["remaining_days"] = 0
+    for idx, row in rates_df.iterrows():
+        label = row["meeting_label"]
+        if label not in schedule.index:
+            continue
+        eff = schedule.loc[label, "effective_date"]
+        mat = schedule.loc[label, "maturity_date"]
+        if hasattr(eff, "date"):
+            eff = eff.date()
+        if hasattr(mat, "date"):
+            mat = mat.date()
+        total = (mat - eff).days
+        if eff < pricing_date:
+            sofr_fix = fixing_series.get("SOFR", pd.Series(dtype=float))
+            accrued_n = len(sofr_fix[
+                (sofr_fix.index >= pd.Timestamp(eff)) &
+                (sofr_fix.index < pd.Timestamp(pricing_date))
+            ])
+            rates_df.loc[idx, "accrued_days"] = accrued_n
+            rates_df.loc[idx, "remaining_days"] = total - accrued_n
+        else:
+            rates_df.loc[idx, "remaining_days"] = total
+
+    return rates_df
