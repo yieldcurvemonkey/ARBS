@@ -161,6 +161,9 @@ class TradeTape(SDRAnalyzer):
             df["risk"] = pv01.abs().round(-2)
         if "tenor_bucket" not in df.columns:
             df = add_volume_buckets(df)
+        # Drop garbage dv01 column if present (from legacy add_dv01_columns)
+        if "dv01" in df.columns:
+            df = df.drop(columns=["dv01"])
         return df
 
     # -- placeholder layers (Tasks 2-8 fill these in) ----------------------
