@@ -214,3 +214,100 @@ class TestBuildSummary:
         assert summary.is_terminated
         assert summary.economics_changed
         assert summary.correction_lag_seconds > 50000  # > 14 hours
+
+
+from SDRUtils.core.lifecycle_v2 import flatten_lifecycle_summary
+from SDRUtils.core.lifecycle import ResolvedTrade
+
+
+class TestFlattenLifecycleSummary:
+    def _newt(self, file_date=date(2026, 3, 9)):
+        return LifecycleEvent(
+            action_type="NEWT", event_type="TRAD", amendment_indicator=None,
+            event_timestamp=datetime(2026, 3, 9, 14, 0, 5),
+            execution_timestamp=datetime(2026, 3, 9, 14, 0, 0),
+            dissemination_id="100", original_dissemination_id=None,
+            file_date=file_date, changed_economics={},
+        )
+
+    def test_newt_only_flat(self):
+        summary = build_summary([self._newt()])
+        resolved = ResolvedTrade(synthetic_uti="100", status="ACTIVE")
+        flat = flatten_lifecycle_summary(summary, resolved)
+
+        assert flat["lc_n_events"] == 1
+        assert flat["lc_status"] == "ACTIVE"
+        assert flat["lc_is_corrected"] is False
+        assert flat["lc_was_amended"] is False
+        assert flat["lc_was_null_filled"] is False
+        assert flat["lc_was_revived"] is False
+        assert flat["lc_has_economics_change"] is False
+        assert flat["lc_correction_crossed_day"] is False
+        assert flat["lc_correction_lag_seconds"] == 0
+        assert flat["lc_fields_changed"] == ""
+
+    def test_corrected_trade_flat(self):
+        chain = [
+            self._newt(),
+            LifecycleEvent(
+                action_type="CORR", event_type=None, amendment_indicator=None,
+                event_timestamp=datetime(2026, 3, 10, 4, 0, 55),
+                execution_timestamp=datetime(2026, 3, 9, 14, 0, 0),
+                dissemination_id="200", original_dissemination_id="100",
+                file_date=date(2026, 3, 10),
+                changed_economics={"Fixed rate-Leg 1": 0.045},
+            ),
+        ]
+        summary = build_summary(chain)
+        resolved = ResolvedTrade(synthetic_uti="100", status="ACTIVE")
+        flat = flatten_lifecycle_summary(summary, resolved)
+
+        assert flat["lc_n_events"] == 2
+        assert flat["lc_is_corrected"] is True
+        assert flat["lc_has_economics_change"] is True
+        assert flat["lc_correction_crossed_day"] is True
+        assert flat["lc_correction_lag_seconds"] > 0
+        assert "Fixed rate-Leg 1" in flat["lc_fields_changed"]
+
+    def test_terminated_trade_flat(self):
+        chain = [
+            self._newt(),
+            LifecycleEvent(
+                action_type="TERM", event_type="ETRM", amendment_indicator=None,
+                event_timestamp=datetime(2026, 3, 9, 15, 15, 56),
+                execution_timestamp=datetime(2026, 3, 9, 14, 0, 0),
+                dissemination_id="300", original_dissemination_id="100",
+                file_date=date(2026, 3, 9), changed_economics={},
+            ),
+        ]
+        summary = build_summary(chain)
+        resolved = ResolvedTrade(synthetic_uti="100", status="TERMINATED")
+        flat = flatten_lifecycle_summary(summary, resolved)
+
+        assert flat["lc_status"] == "TERMINATED"
+        assert flat["lc_n_events"] == 2
+
+    def test_multiple_fields_changed(self):
+        chain = [
+            self._newt(),
+            LifecycleEvent(
+                action_type="MODI", event_type="TRAD", amendment_indicator=True,
+                event_timestamp=datetime(2026, 3, 9, 15, 0, 0),
+                execution_timestamp=datetime(2026, 3, 9, 14, 0, 0),
+                dissemination_id="201", original_dissemination_id="100",
+                file_date=date(2026, 3, 9),
+                changed_economics={
+                    "Notional amount-Leg 1": "12,000,000",
+                    "Fixed rate-Leg 1": 0.045,
+                },
+            ),
+        ]
+        summary = build_summary(chain)
+        resolved = ResolvedTrade(synthetic_uti="100", status="ACTIVE")
+        flat = flatten_lifecycle_summary(summary, resolved)
+
+        assert flat["lc_was_amended"] is True
+        fields = flat["lc_fields_changed"].split(",")
+        assert len(fields) == 2
+        assert "Notional amount-Leg 1" in fields
+        assert "Fixed rate-Leg 1" in fields

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 
 @dataclass(frozen=True)
@@ -101,3 +101,28 @@ def build_summary(chain: list[LifecycleEvent]) -> LifecycleSummary:
         summary.correction_lag_seconds = max(0, int(delta.total_seconds()))
 
     return summary
+
+
+def flatten_lifecycle_summary(
+    summary: LifecycleSummary,
+    resolved: Any,
+) -> Dict[str, Any]:
+    """Flatten LifecycleSummary + ResolvedTrade status into a dict of lc_* columns.
+
+    These columns are simple types (bool, int, str) suitable for
+    parquet serialization and DataFrame merge.
+    """
+    fields_str = ",".join(sorted(summary.fields_changed)) if summary.fields_changed else ""
+
+    return {
+        "lc_n_events": len(summary.chain),
+        "lc_status": getattr(resolved, "status", "UNKNOWN"),
+        "lc_is_corrected": summary.was_corrected,
+        "lc_was_amended": summary.was_economically_modified,
+        "lc_was_null_filled": summary.was_null_filled,
+        "lc_was_revived": summary.was_revived,
+        "lc_has_economics_change": summary.economics_changed,
+        "lc_correction_crossed_day": summary.arrived_in_later_file,
+        "lc_correction_lag_seconds": summary.correction_lag_seconds,
+        "lc_fields_changed": fields_str,
+    }
