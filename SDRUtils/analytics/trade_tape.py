@@ -19,7 +19,6 @@ from ..products._swaptions.upi import _load_swaps_df, _norm_upi, build_upi_path
 from .filters import (
     add_execution_date,
     add_volume_buckets,
-    daily_vwap,
 )
 from .flow import assign_trade_type, bucket_forward_start, classify_venue, infer_ccp
 from .fomc import (
@@ -494,26 +493,6 @@ class TradeTape(SDRAnalyzer):
             )
             multi_ids = fomc_in_cluster[fomc_in_cluster > 1].index
             df.loc[df["cluster_id"].isin(multi_ids), "is_multi_meeting_cluster"] = True
-
-        # Daily tenor VWAP
-        df["daily_tenor_vwap"] = np.nan
-        df["rate_vs_vwap_bp"] = np.nan
-
-        rate = pd.to_numeric(df.get("fixed_rate", pd.Series(np.nan, index=df.index)), errors="coerce")
-        has_rate = rate.notna()
-        if has_rate.any() and "tenor_label" in df.columns and "execution_date" in df.columns:
-            vwap_df = daily_vwap(
-                df[has_rate],
-                group_col="tenor_label",
-                rate_col="fixed_rate",
-                weight_col="risk",
-                date_col="execution_date",
-            )
-            if not vwap_df.empty:
-                vwap_map = vwap_df.set_index(["execution_date", "tenor_label"])["vwap"]
-                keys = list(zip(df["execution_date"], df["tenor_label"]))
-                df["daily_tenor_vwap"] = [vwap_map.get(k, np.nan) for k in keys]
-                df["rate_vs_vwap_bp"] = (rate - df["daily_tenor_vwap"]) * 10_000
 
         return df
 
