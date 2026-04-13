@@ -210,6 +210,94 @@ class TradeTape(SDRAnalyzer):
         return df
 
     def _enrich_context(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 5: event windows, FOMC meeting label/proximity, session."""
+        # Event classifications (FOMC, month-end, quarter-end)
+        df = add_event_classifications(
+            df,
+            date_col="execution_timestamp",
+            include_me=True,
+            include_qe=True,
+            include_fomc=True,
+        )
+
+        # FOMC meeting label and proximity for FOMC-dated trades
+        df["fomc_meeting_label"] = ""
+        df["fomc_proximity"] = ""
+
+        fomc_mask = df["special_tenor_type"].astype(str).str.upper() == "FOMC"
+        if fomc_mask.any():
+            try:
+                schedule = load_fomc_schedule()
+                if not schedule.empty:
+                    mat_to_label = dict(
+                        zip(
+                            schedule["maturity_date"].dt.date,
+                            schedule["meeting_label"],
+                        )
+                    )
+                    eff_to_label = dict(
+                        zip(
+                            schedule["effective_date"].dt.date,
+                            schedule["meeting_label"],
+                        )
+                    )
+
+                    def _assign_meeting(row):
+                        exp = pd.to_datetime(row.get("expiration_date"))
+                        eff = pd.to_datetime(row.get("effective_date"))
+                        if pd.notna(exp):
+                            d = exp.date() if hasattr(exp, "date") else exp
+                            lbl = mat_to_label.get(d)
+                            if lbl:
+                                return lbl
+                        if pd.notna(eff):
+                            d = eff.date() if hasattr(eff, "date") else eff
+                            lbl = eff_to_label.get(d)
+                            if lbl:
+                                return lbl
+                        return ""
+
+                    df.loc[fomc_mask, "fomc_meeting_label"] = (
+                        df[fomc_mask].apply(_assign_meeting, axis=1)
+                    )
+
+                    # Proximity requires meeting_eff column
+                    meeting_eff_map = dict(
+                        zip(
+                            schedule["meeting_label"],
+                            schedule["effective_date"],
+                        )
+                    )
+                    labelled = df["fomc_meeting_label"] != ""
+                    if labelled.any():
+                        df.loc[labelled, "fomc_proximity"] = df[labelled].apply(
+                            lambda r: classify_meeting_proximity(
+                                pd.Series({
+                                    "execution_timestamp": r["execution_timestamp"],
+                                    "meeting_eff": meeting_eff_map.get(
+                                        r["fomc_meeting_label"]
+                                    ),
+                                }),
+                                schedule,
+                            ),
+                            axis=1,
+                        )
+            except Exception:
+                pass  # schedule not available
+
+        # Execution session (Eastern Time)
+        ts = pd.to_datetime(df["execution_timestamp"], errors="coerce")
+        try:
+            ts_et = ts.dt.tz_convert("America/New_York")
+        except TypeError:
+            try:
+                ts_et = ts.dt.tz_localize("UTC").dt.tz_convert("America/New_York")
+            except Exception:
+                ts_et = ts
+
+        df["execution_hour_et"] = ts_et.dt.hour
+        df["execution_session"] = df["execution_hour_et"].map(_hour_to_session)
+
         return df
 
     def _enrich_rv(self, df: pd.DataFrame) -> pd.DataFrame:
