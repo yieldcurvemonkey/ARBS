@@ -480,3 +480,53 @@ def build_lifecycle_summary_from_resolved(
         prev_state = snapshot
 
     return build_summary(events)
+
+
+def group_by_uti(
+    df: pd.DataFrame,
+    dissemination_col: str = "Dissemination Identifier",
+    original_dissemination_col: str = "Original Dissemination Identifier",
+) -> Dict[str, pd.DataFrame]:
+    """Group raw SDR rows into lifecycle chains using Union-Find on dissemination IDs.
+
+    Each row's ``dissemination_col`` is linked to its ``original_dissemination_col``.
+    Connected components form UTI groups.  The root of each group (typically the
+    NEWT's dissemination ID) is used as the group key.
+
+    Returns:
+        Mapping of root dissemination ID -> sub-DataFrame of all rows in that chain.
+    """
+    # --- Union-Find ---
+    parent: Dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent[x], parent[x])  # path compression
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    # Build union-find from dissemination -> original links
+    dissem_ids = df[dissemination_col].astype(str)
+    orig_ids = df[original_dissemination_col]
+
+    for dissem, orig in zip(dissem_ids, orig_ids):
+        parent.setdefault(dissem, dissem)
+        if pd.notna(orig):
+            orig_str = str(orig)
+            parent.setdefault(orig_str, orig_str)
+            union(orig_str, dissem)
+
+    # Assign each row to its root
+    roots = dissem_ids.map(find)
+
+    # Group by root
+    groups: Dict[str, pd.DataFrame] = {}
+    for root, sub_df in df.groupby(roots.values):
+        groups[root] = sub_df
+
+    return groups

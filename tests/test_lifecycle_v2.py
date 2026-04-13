@@ -311,3 +311,85 @@ class TestFlattenLifecycleSummary:
         assert len(fields) == 2
         assert "Notional amount-Leg 1" in fields
         assert "Fixed rate-Leg 1" in fields
+
+
+import pandas as pd
+from SDRUtils.core.lifecycle import group_by_uti
+
+
+class TestGroupByUti:
+    def test_single_newt(self):
+        """A lone NEWT forms its own group."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100"],
+            "Original Dissemination Identifier": [None],
+            "Action type": ["NEWT"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 1
+        assert "100" in groups
+        assert len(groups["100"]) == 1
+
+    def test_newt_plus_modi(self):
+        """NEWT + MODI pointing to same original form one group."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "Original Dissemination Identifier": [None, "100"],
+            "Action type": ["NEWT", "MODI"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 1
+        root = list(groups.keys())[0]
+        assert len(groups[root]) == 2
+
+    def test_newt_plus_corr_plus_term(self):
+        """Full chain: NEWT -> CORR -> TERM grouped together."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200", "300"],
+            "Original Dissemination Identifier": [None, "100", "100"],
+            "Action type": ["NEWT", "CORR", "TERM"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 1
+        root = list(groups.keys())[0]
+        assert len(groups[root]) == 3
+
+    def test_two_independent_trades(self):
+        """Two unrelated NEWTs form two separate groups."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200", "300"],
+            "Original Dissemination Identifier": [None, None, "200"],
+            "Action type": ["NEWT", "NEWT", "MODI"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 2
+
+    def test_transitive_chain(self):
+        """A -> B -> C should all end up in same group via transitivity."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["A", "B", "C"],
+            "Original Dissemination Identifier": [None, "A", "B"],
+            "Action type": ["NEWT", "MODI", "MODI"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 1
+
+    def test_nan_original_treated_as_self(self):
+        """NaN in Original Dissemination Identifier means self-referencing (NEWT)."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "Original Dissemination Identifier": [float("nan"), "100"],
+            "Action type": ["NEWT", "CORR"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 1
+
+    def test_orphan_modi_forms_singleton(self):
+        """MODI pointing to unknown original forms its own singleton group."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "999"],
+            "Original Dissemination Identifier": [None, "UNKNOWN_ID"],
+            "Action type": ["NEWT", "MODI"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 2  # "100" group + "999"/"UNKNOWN_ID" group
