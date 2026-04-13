@@ -456,17 +456,86 @@ class TradeTape(SDRAnalyzer):
             self.compute()
         df = self._result
         n = len(df)
-        return {}  # placeholder -- Task 9
+        n_new = int(df["is_new_risk"].sum()) if "is_new_risk" in df.columns else 0
+        n_comp = int(df["is_compression"].sum()) if "is_compression" in df.columns else 0
+
+        return {
+            "n_trades": n,
+            "n_new_risk": n_new,
+            "pct_new_risk": round(n_new / max(n, 1) * 100, 1),
+            "pct_compression": round(n_comp / max(n, 1) * 100, 1),
+            "pct_ufro": round(
+                df["is_ufro"].sum() / max(n, 1) * 100, 1
+            ) if "is_ufro" in df.columns else 0,
+            "pct_block": round(
+                df["is_block"].sum() / max(n, 1) * 100, 1
+            ) if "is_block" in df.columns else 0,
+            "pct_capped": round(
+                df["is_capped"].sum() / max(n, 1) * 100, 1
+            ) if "is_capped" in df.columns else 0,
+            "top_trade_types": (
+                df["trade_type"].value_counts().head(5).to_dict()
+                if "trade_type" in df.columns else {}
+            ),
+            "venue_split": (
+                df["venue"].value_counts().to_dict()
+                if "venue" in df.columns else {}
+            ),
+            "ccp_split": (
+                df["ccp"].value_counts().to_dict()
+                if "ccp" in df.columns else {}
+            ),
+        }
 
     def clean_tape(self) -> pd.DataFrame:
-        """Tape filtered to new-risk only, no UFRO/compression/reset-opt."""
+        """Tape filtered to new-risk only, no UFRO/compression/reset-opt.
+
+        Returns the 'real' organic flow: NEWT trades with tenor >= 0.5Y,
+        excluding off-market-coupon (UFRO) trades.
+        """
         if self._result is None:
             self.compute()
         df = self._result
-        return pd.DataFrame(columns=df.columns)  # placeholder -- Task 9
+
+        mask = pd.Series(True, index=df.index)
+        if "is_new_risk" in df.columns:
+            mask &= df["is_new_risk"]
+        if "is_ufro" in df.columns:
+            mask &= ~df["is_ufro"]
+        if "is_compression" in df.columns:
+            mask &= ~df["is_compression"]
+        if "is_reset_optimization" in df.columns:
+            mask &= ~df["is_reset_optimization"]
+
+        return df[mask].copy()
 
     def package_summary(self) -> pd.DataFrame:
-        """One row per package_id with structure description."""
+        """One row per package_id with structure description.
+
+        Returns:
+            DataFrame with columns: package_id, package_structure,
+            n_legs, trade_type, total_dv01, total_notional, has_spread,
+            rate_index_clean.
+        """
         if self._result is None:
             self.compute()
-        return pd.DataFrame()  # placeholder -- Task 9
+        df = self._result
+
+        pkg = df[df.get("is_package", pd.Series(False, index=df.index))].copy()
+        if pkg.empty or "package_id" not in pkg.columns:
+            return pd.DataFrame()
+
+        return (
+            pkg.groupby("package_id")
+            .agg(
+                package_structure=("package_structure", "first"),
+                n_legs=("package_id", "size"),
+                trade_type=("trade_type", "first"),
+                total_dv01=("dv01", "sum"),
+                total_notional=("notional", "sum"),
+                has_spread=("has_spread", "first"),
+                rate_index_clean=("rate_index_clean", "first"),
+            )
+            .sort_values("total_dv01", ascending=False)
+            .reset_index()
+        )
