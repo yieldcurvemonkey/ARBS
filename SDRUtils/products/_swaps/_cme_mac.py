@@ -172,6 +172,7 @@ def _calculate_mac_expiration_date(row: pd.Series) -> pd.Timestamp | None:
         return None
 
     # Use US Govt Bond calendar for date advancement; Following is a reasonable convention here.
+    ql_start = _USG_CAL.adjust(ql_start, ql.Following)  # Ensure start is a business day
     ql_exp = _USG_CAL.advance(ql_start, period, ql.Following, False)
 
     return _to_pd_ts(ql_exp)
