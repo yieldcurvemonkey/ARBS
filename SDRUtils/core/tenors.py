@@ -73,7 +73,9 @@ def _standard_tenor_label(years: float, *, is_swaptions: bool = False) -> tuple[
 
 def _standard_forward_label(years: float, *, is_swaptions: bool = False) -> tuple[str, bool]:
     """Return the standard forward label and whether it matched a benchmark cleanly."""
-    if years <= 0.009 and not is_swaptions:
+    # T+2 settlement can span up to 6 calendar days (Friday + holiday Monday)
+    # 6/360 ≈ 0.017; use 0.02 as safe threshold
+    if years <= 0.02 and not is_swaptions:
         return "spot", True
 
     if years < 1:

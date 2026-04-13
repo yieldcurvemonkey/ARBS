@@ -487,9 +487,14 @@ class TradeTape(SDRAnalyzer):
                 if pt == "OIS_SWAP":
                     parts.append("1D Constant")
 
-            # 3. Forward
+            # 3. Forward (normalize T+2 settlement labels to Spot)
             fwd = row.get("forward_label", "spot")
-            if pd.isna(fwd) or str(fwd).lower() == "spot":
+            fwd_years = row.get("forward_start_years", 0.0)
+            try:
+                fwd_years = float(fwd_years) if pd.notna(fwd_years) else 0.0
+            except (ValueError, TypeError):
+                fwd_years = 0.0
+            if pd.isna(fwd) or str(fwd).lower() == "spot" or fwd_years <= 0.02:
                 parts.append("Spot")
             else:
                 parts.append(str(fwd))
