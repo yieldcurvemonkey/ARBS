@@ -601,3 +601,70 @@ class TestBuildClassificationLifecycleIntegration:
         row_200 = merged[merged["Dissemination Identifier"] == "200"].iloc[0]
         assert row_200["lc_n_events"] == 1
         assert row_200["lc_was_amended"] == False
+
+
+from SDRUtils.analytics.compression import detect_compression_signals
+
+
+class TestTradeTapeEnrichLifecycle:
+    """Test TradeTape._enrich_lifecycle with pre-resolved lc_* columns."""
+
+    def _base_df(self, with_lc_columns: bool = True):
+        """Create minimal DataFrame matching TradeTape input expectations."""
+        df = pd.DataFrame({
+            "event_action": ["NEWT-TRAD", "NEWT-TRAD", "NEWT-TRAD"],
+            "execution_timestamp": pd.to_datetime([
+                "2026-03-09 14:00:00+00:00",
+                "2026-03-09 14:05:00+00:00",
+                "2026-03-09 14:10:00+00:00",
+            ]),
+            "tenor_label": ["5Y", "10Y", "2Y"],
+            "tenor_years": [5.0, 10.0, 2.0],
+            "notional": [10_000_000, 20_000_000, 5_000_000],
+            "platform_identifier": ["SEF", "SEF", "SEF"],
+            "package_type": ["OUTRIGHT", "OUTRIGHT", "OUTRIGHT"],
+        })
+        if with_lc_columns:
+            df["lc_n_events"] = [1, 3, 1]
+            df["lc_status"] = ["ACTIVE", "ACTIVE", "TERMINATED"]
+            df["lc_is_corrected"] = [False, True, False]
+            df["lc_was_amended"] = [False, True, False]
+            df["lc_was_null_filled"] = [False, True, False]
+            df["lc_was_revived"] = [False, False, False]
+            df["lc_has_economics_change"] = [False, True, False]
+            df["lc_correction_crossed_day"] = [False, True, False]
+            df["lc_correction_lag_seconds"] = [0, 50000, 0]
+            df["lc_fields_changed"] = ["", "Notional amount-Leg 1", ""]
+        return df
+
+    def test_with_lc_columns(self):
+        """When lc_* columns present, use them instead of string parsing."""
+        from SDRUtils.analytics.trade_tape import TradeTape
+
+        df = self._base_df(with_lc_columns=True)
+        tape = TradeTape(df)
+        result = tape._enrich_lifecycle(df)
+
+        # Trade 0: ACTIVE with 1 event = new risk
+        assert result.iloc[0]["is_new_risk"] == True
+        assert result.iloc[0]["lifecycle_type"] == "NEW_TRADE"
+
+        # Trade 1: ACTIVE with 3 events, corrected = not new risk
+        assert result.iloc[1]["is_new_risk"] == False
+        assert result.iloc[1]["is_corrected"] == True
+        assert result.iloc[1]["correction_crossed_day"] == True
+
+        # Trade 2: TERMINATED = not new risk
+        assert result.iloc[2]["lifecycle_type"] == "TERMINATION"
+
+    def test_without_lc_columns_fallback(self):
+        """When lc_* columns absent, fall back to string parsing."""
+        from SDRUtils.analytics.trade_tape import TradeTape
+
+        df = self._base_df(with_lc_columns=False)
+        tape = TradeTape(df)
+        result = tape._enrich_lifecycle(df)
+
+        # Should still produce lifecycle_type via string parsing
+        assert all(result["lifecycle_type"] == "NEW_TRADE")
+        assert all(result["is_new_risk"])

@@ -280,20 +280,31 @@ class TradeTape(SDRAnalyzer):
         return df
 
     def _enrich_lifecycle(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Layer 2: lifecycle type, new-risk, compression, reset-opt flags."""
-        action = df["event_action"].astype(str).str.upper()
-
-        # Extract first token (e.g. "NEWT-TRAD" -> "NEWT", "NEWT" -> "NEWT")
-        action_prefix = action.str.split(r"[-\s]", n=1).str[0]
-
-        lifecycle_map = {
-            "NEWT": "NEW_TRADE",
-            "TERM": "TERMINATION",
-            "CORR": "CORRECTION",
-            "MODI": "MODIFICATION",
-        }
-        df["lifecycle_type"] = action_prefix.map(lifecycle_map).fillna("OTHER")
-        df["is_new_risk"] = action_prefix == "NEWT"
+        """Layer 2: lifecycle type, new-risk, correction flags, compression, reset-opt."""
+        if "lc_status" in df.columns:
+            # Pre-resolved lifecycle from classification pipeline
+            lc_status = df["lc_status"].fillna("ACTIVE")
+            status_map = {
+                "ACTIVE": "NEW_TRADE",
+                "TERMINATED": "TERMINATION",
+                "ERRORED": "OTHER",
+            }
+            df["lifecycle_type"] = lc_status.map(status_map).fillna("OTHER")
+            df["is_new_risk"] = (df["lc_n_events"].fillna(1) <= 1) & (lc_status == "ACTIVE")
+            df["is_corrected"] = df["lc_is_corrected"].fillna(False)
+            df["correction_crossed_day"] = df["lc_correction_crossed_day"].fillna(False)
+        else:
+            # Fallback for old cached data without lc_* columns
+            action = df["event_action"].astype(str).str.upper()
+            action_prefix = action.str.split(r"[-\s]", n=1).str[0]
+            lifecycle_map = {
+                "NEWT": "NEW_TRADE",
+                "TERM": "TERMINATION",
+                "CORR": "CORRECTION",
+                "MODI": "MODIFICATION",
+            }
+            df["lifecycle_type"] = action_prefix.map(lifecycle_map).fillna("OTHER")
+            df["is_new_risk"] = action_prefix == "NEWT"
 
         # Reuse compression signals for consistency
         signals = detect_compression_signals(df)
