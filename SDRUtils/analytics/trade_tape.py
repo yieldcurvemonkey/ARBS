@@ -142,6 +142,25 @@ class TradeTape(SDRAnalyzer):
         return df
 
     def _enrich_quality(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 3: UFRO, off-market, capped, block, quality flags."""
+        df = flag_outliers(df, threshold_bp=self._off_market_threshold_bp)
+
+        # Block trade flag
+        col = "block_trade_election_indicator"
+        if col in df.columns:
+            df["is_block"] = df[col].astype(str).str.upper().isin({"TRUE", "1"})
+        else:
+            df["is_block"] = False
+
+        # Add COMPRESSION to quality_flags for lifecycle events
+        if "is_compression" in df.columns and "quality_flags" in df.columns:
+            comp_mask = df["is_compression"]
+            df.loc[comp_mask, "quality_flags"] = df.loc[comp_mask, "quality_flags"].apply(
+                lambda flags: flags + [TradeQualityFlag.COMPRESSION.value]
+                if TradeQualityFlag.COMPRESSION.value not in flags
+                else flags
+            )
+
         return df
 
     def _enrich_packages(self, df: pd.DataFrame) -> pd.DataFrame:
