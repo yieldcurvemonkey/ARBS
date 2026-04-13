@@ -8,7 +8,7 @@ market context, relative value, and an enriched trade label.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
@@ -23,7 +23,6 @@ from .filters import (
 )
 from .flow import assign_trade_type, bucket_forward_start, classify_venue, infer_ccp
 from .fomc import (
-    assign_fomc_meeting,
     classify_meeting_proximity,
     classify_rate_index,
     load_fomc_schedule,
@@ -225,7 +224,7 @@ class TradeTape(SDRAnalyzer):
         df["fomc_meeting_label"] = ""
         df["fomc_proximity"] = ""
 
-        fomc_mask = df["special_tenor_type"].astype(str).str.upper() == "FOMC"
+        fomc_mask = df.get("special_tenor_type", pd.Series("", index=df.index)).astype(str).str.upper() == "FOMC"
         if fomc_mask.any():
             try:
                 schedule = load_fomc_schedule()
@@ -327,7 +326,7 @@ class TradeTape(SDRAnalyzer):
         df["daily_tenor_vwap"] = np.nan
         df["rate_vs_vwap_bp"] = np.nan
 
-        rate = pd.to_numeric(df.get("fixed_rate"), errors="coerce")
+        rate = pd.to_numeric(df.get("fixed_rate", pd.Series(np.nan, index=df.index)), errors="coerce")
         has_rate = rate.notna()
         if has_rate.any() and "tenor_label" in df.columns and "execution_date" in df.columns:
             vwap_df = daily_vwap(
@@ -383,11 +382,8 @@ class TradeTape(SDRAnalyzer):
                 )
 
         # Stage 3: build prefix tokens
-        tokens = pd.Series("", index=df.index, dtype=str)
-
         # (a) Rate index prefix
-        idx_prefix = df["rate_index_clean"].map(_INDEX_PREFIX).fillna("")
-        tokens = idx_prefix
+        tokens = df["rate_index_clean"].map(_INDEX_PREFIX).fillna("")
 
         # (b) Lifecycle prefix (non-NEWT only)
         lifecycle_prefix = df["lifecycle_type"].map({
@@ -525,8 +521,10 @@ class TradeTape(SDRAnalyzer):
             self.compute()
         df = self._result
 
-        pkg = df[df.get("is_package", pd.Series(False, index=df.index))].copy()
-        if pkg.empty or "package_id" not in pkg.columns:
+        if "is_package" not in df.columns or "package_id" not in df.columns:
+            return pd.DataFrame()
+        pkg = df[df["is_package"]].copy()
+        if pkg.empty:
             return pd.DataFrame()
 
         return (
