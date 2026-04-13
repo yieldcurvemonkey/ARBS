@@ -539,3 +539,65 @@ class TestResolveLifecycleForDay:
         result = resolve_lifecycle_for_day(df)
         assert result.index.name == "Dissemination Identifier"
         assert "100" in result.index
+
+
+class TestBuildClassificationLifecycleIntegration:
+    """Test that resolve_lifecycle_for_day output merges correctly with classification output."""
+
+    def test_lifecycle_columns_merge_on_dissem_id(self):
+        """Simulate the merge that happens in build_classification_dataframe."""
+        # Simulated classifications_df (what classify_messages returns after to_dataframe)
+        classifications_df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "event_action": ["NEWT-TRAD", "NEWT-TRAD"],
+            "tenor_label": ["5Y", "10Y"],
+        })
+
+        # Simulated raw day_df with lifecycle events
+        day_df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200", "300"],
+            "Original Dissemination Identifier": [None, None, "100"],
+            "Action type": ["NEWT", "NEWT", "MODI"],
+            "Event type": ["TRAD", "TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-09 14:00:05"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+                pd.Timestamp("2026-03-09 14:10:00"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+                pd.Timestamp("2026-03-09 14:00:00"),
+            ],
+            "Amendment indicator": [None, None, True],
+            "file_date": [date(2026, 3, 9), date(2026, 3, 9), date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000, 20_000_000, 5_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.050, 0.045],
+        })
+
+        lifecycle_df = resolve_lifecycle_for_day(day_df)
+
+        # Merge as it would happen in build_classification_dataframe
+        classifications_df["Dissemination Identifier"] = classifications_df["Dissemination Identifier"].astype("string")
+        lifecycle_df.index = lifecycle_df.index.astype("string")
+
+        merged = classifications_df.merge(
+            lifecycle_df,
+            left_on="Dissemination Identifier",
+            right_index=True,
+            how="left",
+        )
+
+        assert len(merged) == 2  # Same row count as classifications
+        assert "lc_status" in merged.columns
+        assert "lc_n_events" in merged.columns
+
+        # Trade 100 had a MODI, so n_events=2
+        row_100 = merged[merged["Dissemination Identifier"] == "100"].iloc[0]
+        assert row_100["lc_n_events"] == 2
+        assert row_100["lc_was_amended"] == True
+
+        # Trade 200 had only NEWT, so n_events=1
+        row_200 = merged[merged["Dissemination Identifier"] == "200"].iloc[0]
+        assert row_200["lc_n_events"] == 1
+        assert row_200["lc_was_amended"] == False

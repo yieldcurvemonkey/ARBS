@@ -790,6 +790,22 @@ class USD_SwapProduct(USDProductBase):
                 day_df = day_df.copy()
                 day_df[TRADE_ID] = day_df[TRADE_ID].astype("string")
 
+            # --- Lifecycle V2 resolution ---
+            # Pass full day's raw data (all action types) through lifecycle resolver.
+            # Only NEWT-bearing UTI groups produce output; result is indexed by
+            # NEWT dissemination ID for merge onto classified rows.
+            from SDRUtils.core.lifecycle import resolve_lifecycle_for_day
+
+            lifecycle_df = resolve_lifecycle_for_day(day_df)
+            if not lifecycle_df.empty and not classifications_df.empty:
+                lifecycle_df.index = lifecycle_df.index.astype("string")
+                classifications_df = classifications_df.merge(
+                    lifecycle_df,
+                    left_on=TRADE_ID,
+                    right_index=True,
+                    how="left",
+                )
+
             package_df = classifications_df.merge(
                 day_df[
                     # this is temp
