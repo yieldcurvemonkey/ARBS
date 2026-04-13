@@ -517,6 +517,40 @@ def price_fomc_meetings(
                 )
                 package, _ = query.resolve_package(pricer_or_curve=curve)
                 rec[col_name] = curve.fair_rate(package[0])
+            except ValueError as ve:
+                # Rateslib calendar mismatch (e.g. Good Friday EFFR fixing
+                # present but not in rateslib holiday calendar).
+                # Pop offending dates from curve._fixings and retry.
+                if "fixings" in str(ve):
+                    import re as _re
+                    ts_strs = _re.findall(
+                        r"Timestamp\('([^']+)'\)", str(ve)
+                    )
+                    fix = getattr(curve, "_fixings", None)
+                    if fix is not None and isinstance(fix, pd.Series):
+                        for ts_str in ts_strs:
+                            ts = pd.Timestamp(ts_str)
+                            if ts in fix.index:
+                                fix.drop(ts, inplace=True)
+                        # Retry
+                        try:
+                            package, _ = query.resolve_package(
+                                pricer_or_curve=curve
+                            )
+                            rec[col_name] = curve.fair_rate(package[0])
+                        except Exception as e2:
+                            rec[col_name] = np.nan
+                            pricing_errors.append(
+                                (label, curve_key, str(e2))
+                            )
+                    else:
+                        rec[col_name] = np.nan
+                        pricing_errors.append(
+                            (label, curve_key, str(ve))
+                        )
+                else:
+                    rec[col_name] = np.nan
+                    pricing_errors.append((label, curve_key, str(ve)))
             except Exception as e:
                 rec[col_name] = np.nan
                 pricing_errors.append((label, curve_key, str(e)))
