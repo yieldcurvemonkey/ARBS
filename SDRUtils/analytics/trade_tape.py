@@ -530,22 +530,28 @@ class TradeTape(SDRAnalyzer):
                 if pt == "OIS_SWAP":
                     parts.append("1D Constant")
 
-            # 3. Forward (normalize T+2 settlement labels to Spot)
-            fwd = row.get("forward_label", "spot")
-            fwd_years = row.get("forward_start_years", 0.0)
-            try:
-                fwd_years = float(fwd_years) if pd.notna(fwd_years) else 0.0
-            except (ValueError, TypeError):
-                fwd_years = 0.0
-            if pd.isna(fwd) or str(fwd).lower() == "spot" or fwd_years <= 0.02:
-                parts.append("Spot")
+            # 3+4. Forward + Tenor (FOMC-dated swaps get special handling)
+            fomc_label = str(row.get("fomc_meeting_label", "")).strip()
+            if fomc_label and fomc_label.lower() not in ("", "nan", "none"):
+                # FOMC-dated swap: "FOMC APR26" replaces forward + tenor
+                parts.append(f"FOMC {fomc_label.upper()}")
             else:
-                parts.append(str(fwd))
+                # 3. Forward (normalize T+2 settlement labels to Spot)
+                fwd = row.get("forward_label", "spot")
+                fwd_years = row.get("forward_start_years", 0.0)
+                try:
+                    fwd_years = float(fwd_years) if pd.notna(fwd_years) else 0.0
+                except (ValueError, TypeError):
+                    fwd_years = 0.0
+                if pd.isna(fwd) or str(fwd).lower() == "spot" or fwd_years <= 0.02:
+                    parts.append("Spot")
+                else:
+                    parts.append(str(fwd))
 
-            # 4. Tenors (package_tenors uses tenor_display with ~7Y off-date notation)
-            tenors = str(row.get("package_tenors", row.get("tenor_display", row.get("tenor_label", ""))))
-            if tenors and tenors.lower() not in ("nan", "none"):
-                parts.append(tenors)
+                # 4. Tenors (package_tenors uses tenor_display with ~7Y off-date notation)
+                tenors = str(row.get("package_tenors", row.get("tenor_display", row.get("tenor_label", ""))))
+                if tenors and tenors.lower() not in ("nan", "none"):
+                    parts.append(tenors)
 
             # 5. Structure
             trade_type = str(row.get("trade_type", "OUTRIGHT")).upper()
