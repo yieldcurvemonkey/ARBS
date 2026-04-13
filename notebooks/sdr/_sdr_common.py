@@ -545,3 +545,147 @@ def format_dv01(val: float) -> str:
     if abs(val) >= 1e3:
         return f"${val / 1e3:.0f}K"
     return f"${val:.0f}"
+
+
+# ---------------------------------------------------------------------------
+# Curve helpers (FOMC analytics)
+# ---------------------------------------------------------------------------
+
+def get_current_fixing(
+    curve_name: str = "USD-SOFR-1D",
+    as_of_date: Optional[datetime.date] = None,
+) -> float:
+    """
+    Fetch the latest overnight fixing rate dynamically.
+
+    Uses NY Fed API (primary) with FRED fallback via the fixings cache.
+
+    Args:
+        curve_name: "USD-SOFR-1D" for SOFR, "USD-OIS" for EFFR
+        as_of_date: Date to fetch fixing for (default: today)
+
+    Returns:
+        Latest fixing as decimal (e.g., 0.043 for 4.30%)
+    """
+    from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
+
+    if as_of_date is None:
+        as_of_date = datetime.date.today()
+
+    fixings = _fetch_fixings(as_of_date=as_of_date, curve_name=curve_name)
+    if fixings is None or fixings.empty:
+        raise ValueError(f"No fixings available for {curve_name} as of {as_of_date}")
+
+    # fixings is a Series indexed by date, values in decimal (e.g., 0.043)
+    # Filter to dates <= as_of_date, take the latest
+    valid = fixings[fixings.index <= pd.Timestamp(as_of_date)]
+    if valid.empty:
+        raise ValueError(f"No fixings on or before {as_of_date} for {curve_name}")
+
+    latest_date = valid.index.max()
+    rate = float(valid.loc[latest_date])
+    return rate
+
+
+def build_fomc_curves(
+    pricing_date: Optional[datetime.date] = None,
+    sofr_curve_name: str = "USD-SOFR-1D-Q12xM12STIRT",
+    ois_curve_name: str = "USD-OIS-Q12xM12STIRT-SERFFX-MIX23",
+) -> dict:
+    """
+    Build both SOFR and OIS (Fed Funds) short-end curves for FOMC pricing.
+
+    Uses BARCHART_STIRF-RL source — purpose-built STIR futures curves.
+
+    Returns:
+        dict with keys "SOFR", "OIS", "pricing_date".
+        Each curve is a pricer object (or None if build failed).
+    """
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+
+    if pricing_date is None:
+        pricing_date = pd.Timestamp(datetime.date.today()) - pd.tseries.offsets.BDay(0)
+        if pricing_date.date() > datetime.date.today():
+            pricing_date = pd.Timestamp(datetime.date.today()) - pd.tseries.offsets.BDay(1)
+        pricing_date = pricing_date.date()
+
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    result = {"SOFR": None, "OIS": None, "pricing_date": pricing_date}
+
+    for key, curve_name in [("SOFR", sofr_curve_name), ("OIS", ois_curve_name)]:
+        try:
+            result[key] = mdp.get_pricer(dict(
+                curve_name=curve_name,
+                timestamp=pricing_date,
+            ))
+        except Exception as e:
+            print(f"  WARNING: Failed to build {key} curve ({curve_name}): {e}")
+
+    return result
+
+
+def price_fomc_meetings(
+    fomc_df: pd.DataFrame,
+    curves_dict: dict,
+    schedule_key: str = "USD-SOFR-1D",
+) -> pd.DataFrame:
+    """
+    Price each FOMC meeting period on both SOFR and OIS curves.
+
+    Args:
+        fomc_df: DataFrame with meeting_label, effective_date, maturity_date
+        curves_dict: Output of build_fomc_curves()
+        schedule_key: Curve key for IRSwapQuery (both curves share FOMC schedule)
+
+    Returns:
+        DataFrame with meeting_label, sofr_implied_rate, ois_implied_rate
+    """
+    from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+    from Query.IRSwaps.IRSwapValue import IRSwapValue
+
+    records = []
+    pricing_errors = []
+
+    for _, row in fomc_df.iterrows():
+        label = row["meeting_label"]
+        eff = row["effective_date"]
+        mat = row["maturity_date"]
+
+        if hasattr(eff, "date"):
+            eff = eff.date()
+        if hasattr(mat, "date"):
+            mat = mat.date()
+
+        # Skip expired meetings
+        if mat < datetime.date.today():
+            continue
+
+        rec = {"meeting_label": label}
+
+        for curve_key, col_name in [("SOFR", "sofr_implied_rate"), ("OIS", "ois_implied_rate")]:
+            curve = curves_dict.get(curve_key)
+            if curve is None:
+                rec[col_name] = np.nan
+                continue
+            try:
+                query = IRSwapQuery(
+                    curve=schedule_key,
+                    effective_date=eff,
+                    maturity_date=mat,
+                    value=IRSwapValue.RATE,
+                )
+                package, _ = query.resolve_package(pricer_or_curve=curve)
+                rec[col_name] = curve.fair_rate(package[0])
+            except Exception as e:
+                rec[col_name] = np.nan
+                pricing_errors.append((label, curve_key, str(e)))
+
+        records.append(rec)
+
+    if pricing_errors:
+        n = len(pricing_errors)
+        print(f"  {n} pricing error(s):")
+        for label, key, err in pricing_errors[:5]:
+            print(f"    {label} ({key}): {err}")
+
+    return pd.DataFrame(records)
