@@ -15,6 +15,7 @@ import pandas as pd
 
 from ._base import SDRAnalyzer
 from .compression import detect_compression_signals
+from ..products._swaptions.upi import _load_swaps_df, _norm_upi, build_upi_path
 from .filters import (
     add_execution_date,
     add_volume_buckets,
@@ -49,6 +50,79 @@ def _hour_to_session(hour: int) -> str:
         if lo <= hour < hi:
             return label
     return "Asia"  # 18-23 and 0-1
+
+
+# ---------------------------------------------------------------------------
+# ANNA DSB UPI reference helpers
+# ---------------------------------------------------------------------------
+
+_UNIT_SUFFIX = {
+    "DAY": "D", "WEEK": "W", "MNTH": "M", "MONTH": "M", "YEAR": "Y",
+}
+
+
+def _term_label(value: object, unit: object) -> str:
+    """Convert ANNA DSB term value+unit to compact label (e.g. '1D', '3M')."""
+    if value is None or unit is None or pd.isna(value) or pd.isna(unit):
+        return ""
+    try:
+        v = int(float(str(value).strip()))
+    except (ValueError, TypeError):
+        return ""
+    u = str(unit).strip().upper()
+    for prefix, suf in _UNIT_SUFFIX.items():
+        if u.startswith(prefix):
+            return f"{v}{suf}"
+    return ""
+
+
+def _load_swap_upi_lookup() -> pd.DataFrame:
+    """Load ANNA DSB swap reference data and return a lookup DataFrame.
+
+    Returns DataFrame indexed by normalized UPI with columns:
+    upi_reset_freq, upi_notional_schedule, upi_delivery_type
+    """
+    try:
+        swaps = _load_swaps_df(None)
+    except Exception:
+        return pd.DataFrame()
+    if swaps.empty:
+        return pd.DataFrame()
+
+    # Build compact columns from ANNA DSB attributes
+    out = pd.DataFrame(index=swaps.index)
+    out["upi"] = swaps["swap_Identifier_UPI"]
+
+    # Reset frequency: e.g. "1" + "DAYS" -> "1D"
+    out["upi_reset_freq"] = swaps.apply(
+        lambda r: _term_label(
+            r.get("swap_Attributes_ReferenceRateTermValue"),
+            r.get("swap_Attributes_ReferenceRateTermUnit"),
+        ),
+        axis=1,
+    )
+
+    # Notional schedule: CONSTANT, AMORTIZING, ACCRETING, CUSTOM
+    out["upi_notional_schedule"] = (
+        swaps.get("swap_Attributes_NotionalSchedule", pd.Series("", index=swaps.index))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.title()
+    )
+
+    # Delivery type: PHYS, CASH
+    out["upi_delivery_type"] = (
+        swaps.get("swap_Attributes_DeliveryType", pd.Series("", index=swaps.index))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
+    # Deduplicate on UPI (keep first)
+    out = out.drop_duplicates(subset="upi", keep="first")
+    return out.set_index("upi")
 
 
 class TradeTape(SDRAnalyzer):
@@ -106,6 +180,32 @@ class TradeTape(SDRAnalyzer):
             lambda x: classify_venue(x)
         )
         df["ccp"] = df.apply(infer_ccp, axis=1)
+        return df
+
+    def _enrich_upi_reference(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 1b: merge ANNA DSB UPI reference data for reset/schedule/delivery."""
+        # Defaults (fallback when UPI lookup misses)
+        df["upi_reset_freq"] = ""
+        df["upi_notional_schedule"] = ""
+        df["upi_delivery_type"] = ""
+
+        upi_col = "unique_product_identifier"
+        if upi_col not in df.columns:
+            return df
+
+        try:
+            lookup = _load_swap_upi_lookup()
+        except Exception:
+            return df
+        if lookup.empty:
+            return df
+
+        # Normalize trade UPIs and merge
+        norm_upis = df[upi_col].astype(str).map(_norm_upi)
+        for col in ["upi_reset_freq", "upi_notional_schedule", "upi_delivery_type"]:
+            mapped = norm_upis.map(lookup[col])
+            df[col] = mapped.fillna("").values
+
         return df
 
     def _enrich_lifecycle(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -376,10 +476,16 @@ class TradeTape(SDRAnalyzer):
             if underlier and underlier.lower() not in ("nan", "none", ""):
                 parts.append(underlier)
 
-            # 2. Reset / compounding
-            pt = str(row.get("product_type", "")).upper()
-            if pt == "OIS_SWAP":
-                parts.append("1D Constant")
+            # 2. Reset frequency + notional schedule (from ANNA DSB UPI)
+            reset = str(row.get("upi_reset_freq", "")).strip()
+            schedule = str(row.get("upi_notional_schedule", "")).strip()
+            if reset or schedule:
+                parts.append(f"{reset} {schedule}".strip())
+            else:
+                # Fallback for trades without UPI match
+                pt = str(row.get("product_type", "")).upper()
+                if pt == "OIS_SWAP":
+                    parts.append("1D Constant")
 
             # 3. Forward
             fwd = row.get("forward_label", "spot")
@@ -432,10 +538,14 @@ class TradeTape(SDRAnalyzer):
                     except (TypeError, ValueError, KeyError):
                         pass
 
-            # 8. Settlement
-            cleared = str(row.get("cleared", "")).upper()
-            if cleared in ("Y", "TRUE", "I"):
-                parts.append("PHYS")
+            # 8. Settlement / delivery type (from ANNA DSB, fallback to cleared)
+            delivery = str(row.get("upi_delivery_type", "")).strip().upper()
+            if delivery and delivery.lower() not in ("nan", "none", ""):
+                parts.append(delivery)
+            else:
+                cleared = str(row.get("cleared", "")).upper()
+                if cleared in ("Y", "TRUE", "I"):
+                    parts.append("PHYS")
 
             return " ".join(parts)
 
@@ -458,6 +568,7 @@ class TradeTape(SDRAnalyzer):
             return df
         df = self._ensure_prerequisites(df)
         df = self._enrich_classification(df)
+        df = self._enrich_upi_reference(df)
         df = self._enrich_lifecycle(df)
         df = self._enrich_quality(df)
         df = self._enrich_packages(df)
