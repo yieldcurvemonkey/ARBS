@@ -345,6 +345,89 @@ class TradeTape(SDRAnalyzer):
         return df
 
     def _build_enriched_label(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 7: enrich trade_label with prefix tags.
+
+        Mirrors the swaption ``_backfill_swaption_fields`` pattern:
+        prefix tokens are prepended to the base label.
+
+        Token order: [INDEX] [LIFECYCLE] [QUALITY] [STRUCTURE] base_label
+        Examples: SOFR spot 10Y, SOFR UFRO spot 5Y, FF CURVE 2Y/5Y
+        """
+        from SDRUtils.core.tenors import build_trade_label
+
+        # Stage 1: ensure base label exists
+        missing_label = (
+            df["trade_label"].isna()
+            | (df["trade_label"].astype(str).str.strip() == "")
+        )
+        if missing_label.any():
+            df.loc[missing_label, "trade_label"] = df[missing_label].apply(
+                lambda r: build_trade_label(
+                    str(r.get("forward_label", "spot")),
+                    str(r.get("tenor_label", "UNK")),
+                    bool(r.get("is_forward", False)),
+                ),
+                axis=1,
+            )
+
+        # Stage 2: for packages, replace base label with slash-joined tenors
+        if "package_structure" in df.columns:
+            pkg_mask = df["is_package"] & df["package_structure"].astype(str).str.contains("/")
+            if pkg_mask.any():
+                # Extract tenor part from package_structure ("10Y/5Y Curve" -> "10Y/5Y")
+                df.loc[pkg_mask, "trade_label"] = (
+                    df.loc[pkg_mask, "package_structure"]
+                    .str.rsplit(" ", n=1)
+                    .str[0]
+                )
+
+        # Stage 3: build prefix tokens
+        tokens = pd.Series("", index=df.index, dtype=str)
+
+        # (a) Rate index prefix
+        idx_prefix = df["rate_index_clean"].map(_INDEX_PREFIX).fillna("")
+        tokens = idx_prefix
+
+        # (b) Lifecycle prefix (non-NEWT only)
+        lifecycle_prefix = df["lifecycle_type"].map({
+            "TERMINATION": "TERM",
+            "CORRECTION": "CORR",
+            "MODIFICATION": "MODI",
+        }).fillna("")
+        has_lifecycle = lifecycle_prefix != ""
+        tokens = tokens.where(~has_lifecycle, tokens + " " + lifecycle_prefix)
+
+        # (c) Quality prefix: UFRO or BLOCK (pick the most important one)
+        quality_prefix = pd.Series("", index=df.index, dtype=str)
+        if "is_ufro" in df.columns:
+            quality_prefix = quality_prefix.where(~df["is_ufro"], "UFRO")
+        if "is_block" in df.columns:
+            # BLOCK only if not already UFRO
+            block_only = df.get("is_block", False) & (quality_prefix == "")
+            quality_prefix = quality_prefix.where(~block_only, "BLOCK")
+        has_quality = quality_prefix != ""
+        tokens = tokens.where(~has_quality, tokens + " " + quality_prefix)
+
+        # (d) Structure prefix (CURVE/FLY for packages)
+        structure_prefix = pd.Series("", index=df.index, dtype=str)
+        if "trade_type" in df.columns:
+            pkg_type = df["trade_type"].where(
+                df["trade_type"].isin({"CURVE", "FLY"}), ""
+            )
+            structure_prefix = pkg_type
+        has_structure = structure_prefix != ""
+        tokens = tokens.where(~has_structure, tokens + " " + structure_prefix)
+
+        # Stage 4: prepend tokens to trade_label
+        tokens = tokens.str.strip()
+        has_prefix = tokens != ""
+        df.loc[has_prefix, "trade_label"] = (
+            tokens[has_prefix] + " " + df.loc[has_prefix, "trade_label"].astype(str)
+        ).str.strip()
+
+        # Clean up any double spaces
+        df["trade_label"] = df["trade_label"].str.replace(r"\s+", " ", regex=True).str.strip()
+
         return df
 
     # -- public interface --------------------------------------------------
