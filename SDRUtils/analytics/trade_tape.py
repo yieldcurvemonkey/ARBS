@@ -164,6 +164,49 @@ class TradeTape(SDRAnalyzer):
         return df
 
     def _enrich_packages(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 4: package detection, structure derivation, leg count."""
+        pkg = df["package_type"].fillna("").astype(str).str.upper()
+        df["is_package"] = ~pkg.isin({"", "OUTRIGHT", "NAN", "NONE"})
+
+        # Package transaction spread
+        spread_col = "package_transaction_spread"
+        if spread_col in df.columns:
+            spread_val = pd.to_numeric(df[spread_col], errors="coerce")
+            df["has_spread"] = spread_val.notna() & (spread_val != 0)
+        else:
+            df["has_spread"] = False
+
+        # Package leg count and structure
+        df["n_package_legs"] = 1
+        df["package_structure"] = ""
+
+        pkg_id_col = "package_id"
+        if pkg_id_col in df.columns and df["is_package"].any():
+            pkg_groups = (
+                df[df["is_package"]]
+                .groupby(pkg_id_col)
+                .agg(
+                    n_legs=("tenor_label", "size"),
+                    tenors=("tenor_label", lambda x: "/".join(
+                        x.dropna().astype(str).tolist()
+                    )),
+                    pkg_type=("trade_type", "first"),
+                )
+            )
+            # Map back to df
+            for pkg_id, row in pkg_groups.iterrows():
+                mask = df[pkg_id_col] == pkg_id
+                df.loc[mask, "n_package_legs"] = row["n_legs"]
+                structure = f"{row['tenors']} {row['pkg_type'].title()}"
+                df.loc[mask, "package_structure"] = structure.strip()
+
+        # Non-package outrights get a simple structure
+        outright_mask = ~df["is_package"]
+        if outright_mask.any():
+            df.loc[outright_mask, "package_structure"] = (
+                df.loc[outright_mask, "tenor_label"].astype(str) + " Outright"
+            )
+
         return df
 
     def _enrich_context(self, df: pd.DataFrame) -> pd.DataFrame:
