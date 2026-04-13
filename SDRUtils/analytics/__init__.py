@@ -75,6 +75,7 @@ from SDRUtils.analytics.fomc import (
     price_fomc_meetings,
     FOMCAnalyzer,
 )
+from SDRUtils.analytics.trade_tape import TradeTape
 
 __all__ = [
     # Seasonality
@@ -125,4 +126,6 @@ __all__ = [
     "build_fomc_curves",
     "price_fomc_meetings",
     "FOMCAnalyzer",
+    # Trade Tape
+    "TradeTape",
 ]
