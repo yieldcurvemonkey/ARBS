@@ -214,3 +214,457 @@ class TestBuildSummary:
         assert summary.is_terminated
         assert summary.economics_changed
         assert summary.correction_lag_seconds > 50000  # > 14 hours
+
+
+from SDRUtils.core.lifecycle_v2 import flatten_lifecycle_summary
+from SDRUtils.core.lifecycle import ResolvedTrade
+
+
+class TestFlattenLifecycleSummary:
+    def _newt(self, file_date=date(2026, 3, 9)):
+        return LifecycleEvent(
+            action_type="NEWT", event_type="TRAD", amendment_indicator=None,
+            event_timestamp=datetime(2026, 3, 9, 14, 0, 5),
+            execution_timestamp=datetime(2026, 3, 9, 14, 0, 0),
+            dissemination_id="100", original_dissemination_id=None,
+            file_date=file_date, changed_economics={},
+        )
+
+    def test_newt_only_flat(self):
+        summary = build_summary([self._newt()])
+        resolved = ResolvedTrade(synthetic_uti="100", status="ACTIVE")
+        flat = flatten_lifecycle_summary(summary, resolved)
+
+        assert flat["lc_n_events"] == 1
+        assert flat["lc_status"] == "ACTIVE"
+        assert flat["lc_is_corrected"] is False
+        assert flat["lc_was_amended"] is False
+        assert flat["lc_was_null_filled"] is False
+        assert flat["lc_was_revived"] is False
+        assert flat["lc_has_economics_change"] is False
+        assert flat["lc_correction_crossed_day"] is False
+        assert flat["lc_correction_lag_seconds"] == 0
+        assert flat["lc_fields_changed"] == ""
+
+    def test_corrected_trade_flat(self):
+        chain = [
+            self._newt(),
+            LifecycleEvent(
+                action_type="CORR", event_type=None, amendment_indicator=None,
+                event_timestamp=datetime(2026, 3, 10, 4, 0, 55),
+                execution_timestamp=datetime(2026, 3, 9, 14, 0, 0),
+                dissemination_id="200", original_dissemination_id="100",
+                file_date=date(2026, 3, 10),
+                changed_economics={"Fixed rate-Leg 1": 0.045},
+            ),
+        ]
+        summary = build_summary(chain)
+        resolved = ResolvedTrade(synthetic_uti="100", status="ACTIVE")
+        flat = flatten_lifecycle_summary(summary, resolved)
+
+        assert flat["lc_n_events"] == 2
+        assert flat["lc_is_corrected"] is True
+        assert flat["lc_has_economics_change"] is True
+        assert flat["lc_correction_crossed_day"] is True
+        assert flat["lc_correction_lag_seconds"] > 0
+        assert "Fixed rate-Leg 1" in flat["lc_fields_changed"]
+
+    def test_terminated_trade_flat(self):
+        chain = [
+            self._newt(),
+            LifecycleEvent(
+                action_type="TERM", event_type="ETRM", amendment_indicator=None,
+                event_timestamp=datetime(2026, 3, 9, 15, 15, 56),
+                execution_timestamp=datetime(2026, 3, 9, 14, 0, 0),
+                dissemination_id="300", original_dissemination_id="100",
+                file_date=date(2026, 3, 9), changed_economics={},
+            ),
+        ]
+        summary = build_summary(chain)
+        resolved = ResolvedTrade(synthetic_uti="100", status="TERMINATED")
+        flat = flatten_lifecycle_summary(summary, resolved)
+
+        assert flat["lc_status"] == "TERMINATED"
+        assert flat["lc_n_events"] == 2
+
+    def test_multiple_fields_changed(self):
+        chain = [
+            self._newt(),
+            LifecycleEvent(
+                action_type="MODI", event_type="TRAD", amendment_indicator=True,
+                event_timestamp=datetime(2026, 3, 9, 15, 0, 0),
+                execution_timestamp=datetime(2026, 3, 9, 14, 0, 0),
+                dissemination_id="201", original_dissemination_id="100",
+                file_date=date(2026, 3, 9),
+                changed_economics={
+                    "Notional amount-Leg 1": "12,000,000",
+                    "Fixed rate-Leg 1": 0.045,
+                },
+            ),
+        ]
+        summary = build_summary(chain)
+        resolved = ResolvedTrade(synthetic_uti="100", status="ACTIVE")
+        flat = flatten_lifecycle_summary(summary, resolved)
+
+        assert flat["lc_was_amended"] is True
+        fields = flat["lc_fields_changed"].split(",")
+        assert len(fields) == 2
+        assert "Notional amount-Leg 1" in fields
+        assert "Fixed rate-Leg 1" in fields
+
+
+import pandas as pd
+from SDRUtils.core.lifecycle import group_by_uti
+
+
+class TestGroupByUti:
+    def test_single_newt(self):
+        """A lone NEWT forms its own group."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100"],
+            "Original Dissemination Identifier": [None],
+            "Action type": ["NEWT"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 1
+        assert "100" in groups
+        assert len(groups["100"]) == 1
+
+    def test_newt_plus_modi(self):
+        """NEWT + MODI pointing to same original form one group."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "Original Dissemination Identifier": [None, "100"],
+            "Action type": ["NEWT", "MODI"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 1
+        root = list(groups.keys())[0]
+        assert len(groups[root]) == 2
+
+    def test_newt_plus_corr_plus_term(self):
+        """Full chain: NEWT -> CORR -> TERM grouped together."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200", "300"],
+            "Original Dissemination Identifier": [None, "100", "100"],
+            "Action type": ["NEWT", "CORR", "TERM"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 1
+        root = list(groups.keys())[0]
+        assert len(groups[root]) == 3
+
+    def test_two_independent_trades(self):
+        """Two unrelated NEWTs form two separate groups."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200", "300"],
+            "Original Dissemination Identifier": [None, None, "200"],
+            "Action type": ["NEWT", "NEWT", "MODI"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 2
+
+    def test_transitive_chain(self):
+        """A -> B -> C should all end up in same group via transitivity."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["A", "B", "C"],
+            "Original Dissemination Identifier": [None, "A", "B"],
+            "Action type": ["NEWT", "MODI", "MODI"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 1
+
+    def test_nan_original_treated_as_self(self):
+        """NaN in Original Dissemination Identifier means self-referencing (NEWT)."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "Original Dissemination Identifier": [float("nan"), "100"],
+            "Action type": ["NEWT", "CORR"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 1
+
+    def test_orphan_modi_forms_singleton(self):
+        """MODI pointing to unknown original forms its own singleton group."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "999"],
+            "Original Dissemination Identifier": [None, "UNKNOWN_ID"],
+            "Action type": ["NEWT", "MODI"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 2  # "100" group + "999"/"UNKNOWN_ID" group
+
+
+from SDRUtils.core.lifecycle import resolve_lifecycle_for_day
+
+
+class TestResolveLifecycleForDay:
+    def test_single_newt_day(self):
+        """Day with one NEWT produces one lifecycle row."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100"],
+            "Original Dissemination Identifier": [None],
+            "Action type": ["NEWT"],
+            "Event type": ["TRAD"],
+            "Event timestamp": [pd.Timestamp("2026-03-09 14:00:05")],
+            "Execution Timestamp": [pd.Timestamp("2026-03-09 14:00:00")],
+            "Amendment indicator": [None],
+            "file_date": [date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000],
+            "Fixed rate-Leg 1": [0.045],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["lc_n_events"] == 1
+        assert row["lc_status"] == "ACTIVE"
+        assert row["lc_is_corrected"] == False
+
+    def test_newt_plus_modi_same_day(self):
+        """NEWT + MODI on same day produces enriched lifecycle row."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "Original Dissemination Identifier": [None, "100"],
+            "Action type": ["NEWT", "MODI"],
+            "Event type": ["TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-09 14:00:05"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:00:00"),
+            ],
+            "Amendment indicator": [None, True],
+            "file_date": [date(2026, 3, 9), date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000, 5_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.045],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["lc_n_events"] == 2
+        assert row["lc_was_amended"] == True
+
+    def test_lifecycle_only_chain_excluded(self):
+        """MODI/CORR without NEWT on this day produces no output rows."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["200", "300"],
+            "Original Dissemination Identifier": ["100", "100"],
+            "Action type": ["MODI", "CORR"],
+            "Event type": ["TRAD", None],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-10 10:00:00"),
+                pd.Timestamp("2026-03-10 10:05:00"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:00:00"),
+            ],
+            "Amendment indicator": [False, None],
+            "file_date": [date(2026, 3, 10), date(2026, 3, 10)],
+            "Notional amount-Leg 1": [10_000_000, 10_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.046],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert len(result) == 0
+
+    def test_two_trades_same_day(self):
+        """Two independent NEWTs produce two lifecycle rows."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "Original Dissemination Identifier": [None, None],
+            "Action type": ["NEWT", "NEWT"],
+            "Event type": ["TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+            ],
+            "Amendment indicator": [None, None],
+            "file_date": [date(2026, 3, 9), date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000, 20_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.050],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert len(result) == 2
+
+    def test_newt_term_same_day(self):
+        """NEWT + TERM on same day shows TERMINATED status."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "300"],
+            "Original Dissemination Identifier": [None, "100"],
+            "Action type": ["NEWT", "TERM"],
+            "Event type": ["TRAD", "ETRM"],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-09 14:00:05"),
+                pd.Timestamp("2026-03-09 15:15:56"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:00:00"),
+            ],
+            "Amendment indicator": [None, None],
+            "file_date": [date(2026, 3, 9), date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000, 10_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.045],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert len(result) == 1
+        assert result.iloc[0]["lc_status"] == "TERMINATED"
+
+    def test_result_indexed_by_newt_dissem_id(self):
+        """Result index is the NEWT dissemination ID for merge compatibility."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "Original Dissemination Identifier": [None, "100"],
+            "Action type": ["NEWT", "MODI"],
+            "Event type": ["TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-09 14:00:05"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:00:00"),
+            ],
+            "Amendment indicator": [None, True],
+            "file_date": [date(2026, 3, 9), date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000, 5_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.045],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert result.index.name == "Dissemination Identifier"
+        assert "100" in result.index
+
+
+class TestBuildClassificationLifecycleIntegration:
+    """Test that resolve_lifecycle_for_day output merges correctly with classification output."""
+
+    def test_lifecycle_columns_merge_on_dissem_id(self):
+        """Simulate the merge that happens in build_classification_dataframe."""
+        # Simulated classifications_df (what classify_messages returns after to_dataframe)
+        classifications_df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "event_action": ["NEWT-TRAD", "NEWT-TRAD"],
+            "tenor_label": ["5Y", "10Y"],
+        })
+
+        # Simulated raw day_df with lifecycle events
+        day_df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200", "300"],
+            "Original Dissemination Identifier": [None, None, "100"],
+            "Action type": ["NEWT", "NEWT", "MODI"],
+            "Event type": ["TRAD", "TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-09 14:00:05"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+                pd.Timestamp("2026-03-09 14:10:00"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+                pd.Timestamp("2026-03-09 14:00:00"),
+            ],
+            "Amendment indicator": [None, None, True],
+            "file_date": [date(2026, 3, 9), date(2026, 3, 9), date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000, 20_000_000, 5_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.050, 0.045],
+        })
+
+        lifecycle_df = resolve_lifecycle_for_day(day_df)
+
+        # Merge as it would happen in build_classification_dataframe
+        classifications_df["Dissemination Identifier"] = classifications_df["Dissemination Identifier"].astype("string")
+        lifecycle_df.index = lifecycle_df.index.astype("string")
+
+        merged = classifications_df.merge(
+            lifecycle_df,
+            left_on="Dissemination Identifier",
+            right_index=True,
+            how="left",
+        )
+
+        assert len(merged) == 2  # Same row count as classifications
+        assert "lc_status" in merged.columns
+        assert "lc_n_events" in merged.columns
+
+        # Trade 100 had a MODI, so n_events=2
+        row_100 = merged[merged["Dissemination Identifier"] == "100"].iloc[0]
+        assert row_100["lc_n_events"] == 2
+        assert row_100["lc_was_amended"] == True
+
+        # Trade 200 had only NEWT, so n_events=1
+        row_200 = merged[merged["Dissemination Identifier"] == "200"].iloc[0]
+        assert row_200["lc_n_events"] == 1
+        assert row_200["lc_was_amended"] == False
+
+
+from SDRUtils.analytics.compression import detect_compression_signals
+
+
+class TestTradeTapeEnrichLifecycle:
+    """Test TradeTape._enrich_lifecycle with pre-resolved lc_* columns."""
+
+    def _base_df(self, with_lc_columns: bool = True):
+        """Create minimal DataFrame matching TradeTape input expectations."""
+        df = pd.DataFrame({
+            "event_action": ["NEWT-TRAD", "NEWT-TRAD", "NEWT-TRAD"],
+            "execution_timestamp": pd.to_datetime([
+                "2026-03-09 14:00:00+00:00",
+                "2026-03-09 14:05:00+00:00",
+                "2026-03-09 14:10:00+00:00",
+            ]),
+            "tenor_label": ["5Y", "10Y", "2Y"],
+            "tenor_years": [5.0, 10.0, 2.0],
+            "notional": [10_000_000, 20_000_000, 5_000_000],
+            "platform_identifier": ["SEF", "SEF", "SEF"],
+            "package_type": ["OUTRIGHT", "OUTRIGHT", "OUTRIGHT"],
+        })
+        if with_lc_columns:
+            df["lc_n_events"] = [1, 3, 1]
+            df["lc_status"] = ["ACTIVE", "ACTIVE", "TERMINATED"]
+            df["lc_is_corrected"] = [False, True, False]
+            df["lc_was_amended"] = [False, True, False]
+            df["lc_was_null_filled"] = [False, True, False]
+            df["lc_was_revived"] = [False, False, False]
+            df["lc_has_economics_change"] = [False, True, False]
+            df["lc_correction_crossed_day"] = [False, True, False]
+            df["lc_correction_lag_seconds"] = [0, 50000, 0]
+            df["lc_fields_changed"] = ["", "Notional amount-Leg 1", ""]
+        return df
+
+    def test_with_lc_columns(self):
+        """When lc_* columns present, use them instead of string parsing."""
+        from SDRUtils.analytics.trade_tape import TradeTape
+
+        df = self._base_df(with_lc_columns=True)
+        tape = TradeTape(df)
+        result = tape._enrich_lifecycle(df)
+
+        # Trade 0: ACTIVE with 1 event = new risk
+        assert result.iloc[0]["is_new_risk"] == True
+        assert result.iloc[0]["lifecycle_type"] == "NEW_TRADE"
+
+        # Trade 1: ACTIVE with 3 events, corrected = not new risk
+        assert result.iloc[1]["is_new_risk"] == False
+        assert result.iloc[1]["is_corrected"] == True
+        assert result.iloc[1]["correction_crossed_day"] == True
+
+        # Trade 2: TERMINATED = not new risk
+        assert result.iloc[2]["lifecycle_type"] == "TERMINATION"
+
+    def test_without_lc_columns_fallback(self):
+        """When lc_* columns absent, fall back to string parsing."""
+        from SDRUtils.analytics.trade_tape import TradeTape
+
+        df = self._base_df(with_lc_columns=False)
+        tape = TradeTape(df)
+        result = tape._enrich_lifecycle(df)
+
+        # Should still produce lifecycle_type via string parsing
+        assert all(result["lifecycle_type"] == "NEW_TRADE")
+        assert all(result["is_new_risk"])
