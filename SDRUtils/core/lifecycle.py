@@ -517,9 +517,10 @@ def group_by_uti(
     for dissem, orig in zip(dissem_ids, orig_ids):
         parent.setdefault(dissem, dissem)
         if pd.notna(orig):
-            orig_str = str(orig)
-            parent.setdefault(orig_str, orig_str)
-            union(orig_str, dissem)
+            orig_str = str(orig).strip()
+            if orig_str:  # skip empty strings (SDR uses '' for NEWT self-references)
+                parent.setdefault(orig_str, orig_str)
+                union(orig_str, dissem)
 
     # Assign each row to its root
     roots = dissem_ids.map(find)
