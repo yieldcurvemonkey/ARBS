@@ -394,6 +394,16 @@ class TestGroupByUti:
         groups = group_by_uti(df)
         assert len(groups) == 2  # "100" group + "999"/"UNKNOWN_ID" group
 
+    def test_empty_string_original_treated_as_self(self):
+        """Empty string in Original Dissemination Identifier (real SDR pattern for NEWTs)."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200", "300"],
+            "Original Dissemination Identifier": ["", "", "100"],
+            "Action type": ["NEWT", "NEWT", "MODI"],
+        })
+        groups = group_by_uti(df)
+        assert len(groups) == 2  # "100"+"300" group and "200" singleton
+
 
 from SDRUtils.core.lifecycle import resolve_lifecycle_for_day
 
