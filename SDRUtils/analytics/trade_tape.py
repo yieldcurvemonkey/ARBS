@@ -607,6 +607,8 @@ class TradeTape(SDRAnalyzer):
 
     def compute(self) -> pd.DataFrame:
         """Run all enrichment layers and return the fully enriched tape."""
+        from tqdm.auto import tqdm
+
         if self._result is not None:
             return self._result
 
@@ -614,16 +616,25 @@ class TradeTape(SDRAnalyzer):
         if df.empty:
             self._result = df
             return df
-        df = self._ensure_prerequisites(df)
-        df = self._enrich_classification(df)
-        df = self._enrich_upi_reference(df)
-        df = self._detect_off_date(df)
-        df = self._enrich_lifecycle(df)
-        df = self._enrich_quality(df)
-        df = self._enrich_packages(df)
-        df = self._enrich_context(df)
-        df = self._enrich_rv(df)
-        df = self._build_enriched_label(df)
+
+        steps = [
+            ("Prerequisites", self._ensure_prerequisites),
+            ("Classification", self._enrich_classification),
+            ("UPI reference", self._enrich_upi_reference),
+            ("Off-date detection", self._detect_off_date),
+            ("Lifecycle", self._enrich_lifecycle),
+            ("Quality flags", self._enrich_quality),
+            ("Packages", self._enrich_packages),
+            ("Market context", self._enrich_context),
+            ("Clustering", self._enrich_rv),
+            ("Tape labels", self._build_enriched_label),
+        ]
+
+        pbar = tqdm(steps, desc="TradeTape", unit="layer")
+        for name, fn in pbar:
+            pbar.set_postfix_str(name)
+            df = fn(df)
+        pbar.close()
 
         self._result = df
         return df
