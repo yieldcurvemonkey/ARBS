@@ -127,7 +127,7 @@ def _load_swap_upi_lookup() -> pd.DataFrame:
 class TradeTape(SDRAnalyzer):
     """Unified trade enrichment pipeline.
 
-    Takes a classified DataFrame (from ``load_classified_trades`` or
+    Takes a classified DataFrame (from ``load_usd_swaps`` or
     ``build_classification_dataframe``) and produces a fully enriched
     tape with ~35 new columns across 7 layers.
 
