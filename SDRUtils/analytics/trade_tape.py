@@ -182,6 +182,15 @@ class TradeTape(SDRAnalyzer):
             lambda x: classify_venue(x)
         )
         df["ccp"] = df.apply(infer_ccp, axis=1)
+
+        # Unwind/novation flag: effective_date before execution = backdated
+        df["is_unwind"] = False
+        fwd_yrs = pd.to_numeric(
+            df.get("forward_start_years", pd.Series(0.0, index=df.index)),
+            errors="coerce",
+        ).fillna(0.0)
+        df["is_unwind"] = fwd_yrs < -0.02  # more than ~7 days backdated
+
         return df
 
     def _enrich_upi_reference(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -564,6 +573,8 @@ class TradeTape(SDRAnalyzer):
 
             # 6. Flags
             flags: list[str] = []
+            if row.get("is_unwind", False):
+                flags.append("UNWIND")
             if row.get("is_mac", False):
                 flags.append("MAC")
             if row.get("is_ufro", False):
@@ -701,6 +712,8 @@ class TradeTape(SDRAnalyzer):
             mask &= ~df["is_compression"]
         if "is_reset_optimization" in df.columns:
             mask &= ~df["is_reset_optimization"]
+        if "is_unwind" in df.columns:
+            mask &= ~df["is_unwind"]
 
         return df[mask].copy()
 
