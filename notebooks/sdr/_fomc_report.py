@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 import nest_asyncio; nest_asyncio.apply()
 import pandas as pd, numpy as np, datetime
-import _sdr_common as sdr
+import _usd_swaps_common as sdr
 from Query.IRSwaps._CENTRAL_BANK_DATES import _CENTRAL_BANK_DATES
 
 pd.set_option('display.max_columns', 20)

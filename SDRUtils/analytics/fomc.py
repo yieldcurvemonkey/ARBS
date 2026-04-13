@@ -244,7 +244,7 @@ def compute_cut_probabilities(
 
 
 # ---------------------------------------------------------------------------
-# Curve helpers (moved from _sdr_common.py)
+# Curve helpers (moved from _usd_swaps_common.py)
 # ---------------------------------------------------------------------------
 
 

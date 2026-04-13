@@ -188,7 +188,7 @@ def _monthly_chunks(start: datetime.datetime, end: datetime.datetime):
 _PRECOMPUTED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_precomputed_trades.parquet")
 
 
-def load_classified_trades(
+def load_usd_swaps(
     start: datetime.datetime,
     end: datetime.datetime,
     cache_path: str = DEFAULT_CACHE_PATH,

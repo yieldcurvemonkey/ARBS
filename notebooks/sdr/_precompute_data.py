@@ -11,14 +11,14 @@ import nest_asyncio
 nest_asyncio.apply()
 
 import datetime
-import _sdr_common as sdr
+import _usd_swaps_common as sdr
 
 START = datetime.datetime(2026, 1, 10, tzinfo=datetime.timezone.utc)
 END = datetime.datetime(2026, 4, 10, 23, 59, 59, tzinfo=datetime.timezone.utc)
 OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_precomputed_trades.parquet")
 
 print(f"Loading classified trades: {START.date()} to {END.date()}")
-df = sdr.load_classified_trades(START, END)
+df = sdr.load_usd_swaps(START, END)
 
 if df.empty:
     print("ERROR: No data loaded. Check date range and cache.")

@@ -98,9 +98,9 @@ def run_notebook(nb_name: str) -> dict:
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(script)
 
-    # Force reload _sdr_common to pick up fixes between runs
-    if "_sdr_common" in sys.modules:
-        del sys.modules["_sdr_common"]
+    # Force reload _usd_swaps_common to pick up fixes between runs
+    if "_usd_swaps_common" in sys.modules:
+        del sys.modules["_usd_swaps_common"]
 
     # Execute in isolated namespace
     ns = {"__name__": "__main__", "__file__": str(nb_path)}
