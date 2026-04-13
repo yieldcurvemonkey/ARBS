@@ -309,16 +309,13 @@ def build_fomc_curves(
     from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 
     if pricing_date is None:
-        pricing_date = (
-            pd.Timestamp(datetime.date.today())
-            - pd.tseries.offsets.BDay(0)
-        )
-        if pricing_date.date() > datetime.date.today():
-            pricing_date = (
-                pd.Timestamp(datetime.date.today())
-                - pd.tseries.offsets.BDay(1)
-            )
-        pricing_date = pricing_date.date()
+        today = datetime.date.today()
+        # Roll to most recent business day (handles weekends + holidays)
+        bday = pd.Timestamp(today) - pd.tseries.offsets.BDay(0)
+        if bday.date() >= today:
+            # Today is not a business day or is today — use prior bday for data
+            bday = pd.Timestamp(today) - pd.tseries.offsets.BDay(1)
+        pricing_date = bday.date()
 
     mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
     result: Dict[str, Any] = {
@@ -596,7 +593,12 @@ class FOMCAnalyzer(SDRAnalyzer):
             else get_current_fixing("USD-OIS")
         )
         self._pricing_date = pricing_date
-        self._schedule = load_fomc_schedule(curve_name)
+        full_schedule = load_fomc_schedule(curve_name)
+        # Filter to meetings not yet expired (maturity > today - 90d for context)
+        cutoff = pd.Timestamp(datetime.date.today()) - pd.Timedelta(days=90)
+        self._schedule = full_schedule[
+            pd.to_datetime(full_schedule["maturity_date"]) >= cutoff
+        ].reset_index(drop=True)
         self._curves: Optional[dict] = None
         self._fomc_trades_df: Optional[pd.DataFrame] = None
 
@@ -864,6 +866,11 @@ class FOMCAnalyzer(SDRAnalyzer):
             "n_meetings": n_meetings,
             "n_traded": n_traded,
             "total_fomc_dv01": total_dv01,
+            "total_fomc_dv01_fmt": (
+                f"${total_dv01/1e9:.0f}B" if total_dv01 else "$0"
+            ),
+            "current_sofr": f"{self._current_sofr*100:.4f}%",
+            "current_effr": f"{self._current_effr*100:.4f}%",
             "next_meeting": next_meeting,
             "next_p_cut_sofr": next_p_cut,
             "cumulative_easing_sofr": cum_easing,
