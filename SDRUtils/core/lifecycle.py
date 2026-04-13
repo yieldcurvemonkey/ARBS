@@ -530,3 +530,78 @@ def group_by_uti(
         groups[root] = sub_df
 
     return groups
+
+
+def resolve_lifecycle_for_day(
+    day_df: pd.DataFrame,
+    file_date_col: str = "file_date",
+    dissemination_col: str = "Dissemination Identifier",
+    original_dissemination_col: str = "Original Dissemination Identifier",
+    action_col: str = "Action type",
+    event_timestamp_col: str = "Event timestamp",
+) -> pd.DataFrame:
+    """Resolve lifecycle metadata for a single day's raw SDR data.
+
+    Groups rows by UTI, replays lifecycle per group, builds
+    ``LifecycleSummary``, and flattens to ``lc_*`` columns.
+
+    Only UTI groups containing a NEWT action produce output rows.
+    The result is indexed by the NEWT dissemination ID so it can be
+    merged onto the classified DataFrame.
+
+    Returns:
+        DataFrame with ``lc_*`` columns, indexed by NEWT dissemination ID.
+        Empty DataFrame if no NEWT-bearing groups found.
+    """
+    from SDRUtils.core.lifecycle_v2 import flatten_lifecycle_summary
+
+    if day_df.empty:
+        return pd.DataFrame()
+
+    groups = group_by_uti(day_df, dissemination_col, original_dissemination_col)
+
+    records: list[dict] = []
+
+    for uti, group_df in groups.items():
+        # Only process groups that contain a NEWT
+        actions = group_df[action_col].values
+        if "NEWT" not in actions:
+            continue
+
+        # Find the NEWT row's dissemination ID (join key for classification)
+        newt_mask = group_df[action_col] == "NEWT"
+        newt_dissem_id = str(group_df.loc[newt_mask, dissemination_col].iloc[0])
+
+        # Replay lifecycle
+        resolved = replay_lifecycle_full(
+            group_df,
+            synthetic_uti=uti,
+            action_col=action_col,
+            event_timestamp_col=event_timestamp_col,
+        )
+
+        # Build file_dates mapping for cross-day detection
+        file_dates_map: Dict[str, date] = {}
+        if file_date_col in group_df.columns:
+            for _, row in group_df.iterrows():
+                did = str(row[dissemination_col])
+                fd = row[file_date_col]
+                if pd.notna(fd):
+                    if isinstance(fd, datetime):
+                        fd = fd.date()
+                    file_dates_map[did] = fd
+
+        # Bridge to V2 summary
+        summary = build_lifecycle_summary_from_resolved(resolved, file_dates_map)
+
+        # Flatten to lc_* columns
+        flat = flatten_lifecycle_summary(summary, resolved)
+        flat[dissemination_col] = newt_dissem_id
+        records.append(flat)
+
+    if not records:
+        return pd.DataFrame()
+
+    result = pd.DataFrame(records)
+    result = result.set_index(dissemination_col)
+    return result

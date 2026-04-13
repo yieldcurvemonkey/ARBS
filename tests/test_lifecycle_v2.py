@@ -393,3 +393,149 @@ class TestGroupByUti:
         })
         groups = group_by_uti(df)
         assert len(groups) == 2  # "100" group + "999"/"UNKNOWN_ID" group
+
+
+from SDRUtils.core.lifecycle import resolve_lifecycle_for_day
+
+
+class TestResolveLifecycleForDay:
+    def test_single_newt_day(self):
+        """Day with one NEWT produces one lifecycle row."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100"],
+            "Original Dissemination Identifier": [None],
+            "Action type": ["NEWT"],
+            "Event type": ["TRAD"],
+            "Event timestamp": [pd.Timestamp("2026-03-09 14:00:05")],
+            "Execution Timestamp": [pd.Timestamp("2026-03-09 14:00:00")],
+            "Amendment indicator": [None],
+            "file_date": [date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000],
+            "Fixed rate-Leg 1": [0.045],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["lc_n_events"] == 1
+        assert row["lc_status"] == "ACTIVE"
+        assert row["lc_is_corrected"] == False
+
+    def test_newt_plus_modi_same_day(self):
+        """NEWT + MODI on same day produces enriched lifecycle row."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "Original Dissemination Identifier": [None, "100"],
+            "Action type": ["NEWT", "MODI"],
+            "Event type": ["TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-09 14:00:05"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:00:00"),
+            ],
+            "Amendment indicator": [None, True],
+            "file_date": [date(2026, 3, 9), date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000, 5_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.045],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["lc_n_events"] == 2
+        assert row["lc_was_amended"] == True
+
+    def test_lifecycle_only_chain_excluded(self):
+        """MODI/CORR without NEWT on this day produces no output rows."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["200", "300"],
+            "Original Dissemination Identifier": ["100", "100"],
+            "Action type": ["MODI", "CORR"],
+            "Event type": ["TRAD", None],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-10 10:00:00"),
+                pd.Timestamp("2026-03-10 10:05:00"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:00:00"),
+            ],
+            "Amendment indicator": [False, None],
+            "file_date": [date(2026, 3, 10), date(2026, 3, 10)],
+            "Notional amount-Leg 1": [10_000_000, 10_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.046],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert len(result) == 0
+
+    def test_two_trades_same_day(self):
+        """Two independent NEWTs produce two lifecycle rows."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "Original Dissemination Identifier": [None, None],
+            "Action type": ["NEWT", "NEWT"],
+            "Event type": ["TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+            ],
+            "Amendment indicator": [None, None],
+            "file_date": [date(2026, 3, 9), date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000, 20_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.050],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert len(result) == 2
+
+    def test_newt_term_same_day(self):
+        """NEWT + TERM on same day shows TERMINATED status."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "300"],
+            "Original Dissemination Identifier": [None, "100"],
+            "Action type": ["NEWT", "TERM"],
+            "Event type": ["TRAD", "ETRM"],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-09 14:00:05"),
+                pd.Timestamp("2026-03-09 15:15:56"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:00:00"),
+            ],
+            "Amendment indicator": [None, None],
+            "file_date": [date(2026, 3, 9), date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000, 10_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.045],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert len(result) == 1
+        assert result.iloc[0]["lc_status"] == "TERMINATED"
+
+    def test_result_indexed_by_newt_dissem_id(self):
+        """Result index is the NEWT dissemination ID for merge compatibility."""
+        df = pd.DataFrame({
+            "Dissemination Identifier": ["100", "200"],
+            "Original Dissemination Identifier": [None, "100"],
+            "Action type": ["NEWT", "MODI"],
+            "Event type": ["TRAD", "TRAD"],
+            "Event timestamp": [
+                pd.Timestamp("2026-03-09 14:00:05"),
+                pd.Timestamp("2026-03-09 14:05:00"),
+            ],
+            "Execution Timestamp": [
+                pd.Timestamp("2026-03-09 14:00:00"),
+                pd.Timestamp("2026-03-09 14:00:00"),
+            ],
+            "Amendment indicator": [None, True],
+            "file_date": [date(2026, 3, 9), date(2026, 3, 9)],
+            "Notional amount-Leg 1": [10_000_000, 5_000_000],
+            "Fixed rate-Leg 1": [0.045, 0.045],
+        })
+        result = resolve_lifecycle_for_day(df)
+        assert result.index.name == "Dissemination Identifier"
+        assert "100" in result.index
