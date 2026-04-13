@@ -109,6 +109,7 @@ class TradeTape(SDRAnalyzer):
         df["forward_bucket"] = df["forward_label"].map(bucket_forward_start)
         df["rate_index_clean"] = (
             df["upi_underlier_name"]
+            .astype(str)
             .fillna("")
             .map(classify_rate_index)
         )
@@ -165,7 +166,7 @@ class TradeTape(SDRAnalyzer):
 
     def _enrich_packages(self, df: pd.DataFrame) -> pd.DataFrame:
         """Layer 4: package detection, structure derivation, leg count."""
-        pkg = df["package_type"].fillna("").astype(str).str.upper()
+        pkg = df["package_type"].astype(str).fillna("").str.upper()
         df["is_package"] = ~pkg.isin({"", "OUTRIGHT", "NAN", "NONE"})
 
         # Package transaction spread
@@ -438,6 +439,9 @@ class TradeTape(SDRAnalyzer):
             return self._result
 
         df = self._df.copy()
+        if df.empty:
+            self._result = df
+            return df
         df = self._ensure_prerequisites(df)
         df = self._enrich_classification(df)
         df = self._enrich_lifecycle(df)
