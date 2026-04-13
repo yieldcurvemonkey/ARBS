@@ -119,6 +119,26 @@ class TradeTape(SDRAnalyzer):
         return df
 
     def _enrich_lifecycle(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 2: lifecycle type, new-risk, compression, reset-opt flags."""
+        action = df["event_action"].astype(str).str.upper()
+
+        # Extract first token (e.g. "NEWT-TRAD" -> "NEWT", "NEWT" -> "NEWT")
+        action_prefix = action.str.split(r"[-\s]", n=1).str[0]
+
+        lifecycle_map = {
+            "NEWT": "NEW_TRADE",
+            "TERM": "TERMINATION",
+            "CORR": "CORRECTION",
+            "MODI": "MODIFICATION",
+        }
+        df["lifecycle_type"] = action_prefix.map(lifecycle_map).fillna("OTHER")
+        df["is_new_risk"] = action_prefix == "NEWT"
+
+        # Reuse compression signals for consistency
+        signals = detect_compression_signals(df)
+        df["is_compression"] = signals["is_lifecycle"].values
+        df["is_reset_optimization"] = signals["is_reset_opt"].values
+
         return df
 
     def _enrich_quality(self, df: pd.DataFrame) -> pd.DataFrame:
