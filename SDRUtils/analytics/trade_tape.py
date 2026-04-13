@@ -104,6 +104,18 @@ class TradeTape(SDRAnalyzer):
     # -- placeholder layers (Tasks 2-8 fill these in) ----------------------
 
     def _enrich_classification(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 1: trade type, forward bucket, rate index, venue, CCP."""
+        df["trade_type"] = df.apply(assign_trade_type, axis=1)
+        df["forward_bucket"] = df["forward_label"].map(bucket_forward_start)
+        df["rate_index_clean"] = (
+            df["upi_underlier_name"]
+            .fillna("")
+            .map(classify_rate_index)
+        )
+        df["venue"] = df["platform_identifier"].map(
+            lambda x: classify_venue(x)
+        )
+        df["ccp"] = df.apply(infer_ccp, axis=1)
         return df
 
     def _enrich_lifecycle(self, df: pd.DataFrame) -> pd.DataFrame:
