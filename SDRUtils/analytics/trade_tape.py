@@ -16,7 +16,6 @@ import pandas as pd
 from ._base import SDRAnalyzer
 from .compression import detect_compression_signals
 from .filters import (
-    add_dv01_columns,
     add_execution_date,
     add_volume_buckets,
     daily_vwap,
@@ -52,16 +51,6 @@ def _hour_to_session(hour: int) -> str:
     return "Asia"  # 18-23 and 0-1
 
 
-# ---------------------------------------------------------------------------
-# Rate-index abbreviation for trade labels
-# ---------------------------------------------------------------------------
-
-_INDEX_PREFIX = {
-    "SOFR": "SOFR",
-    "FED_FUNDS": "FF",
-}
-
-
 class TradeTape(SDRAnalyzer):
     """Unified trade enrichment pipeline.
 
@@ -91,11 +80,12 @@ class TradeTape(SDRAnalyzer):
     # -- prerequisites -----------------------------------------------------
 
     def _ensure_prerequisites(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add execution_date, dv01, and tenor_bucket if missing."""
+        """Add execution_date, risk, and tenor_bucket if missing."""
         if "execution_date" not in df.columns:
             df = add_execution_date(df)
-        if "dv01" not in df.columns:
-            df = add_dv01_columns(df)
+        if "risk" not in df.columns:
+            pv01 = pd.to_numeric(df.get("estimated_pv01", 0), errors="coerce")
+            df["risk"] = pv01.abs().round(-2)
         if "tenor_bucket" not in df.columns:
             df = add_volume_buckets(df)
         return df
@@ -164,7 +154,11 @@ class TradeTape(SDRAnalyzer):
         return df
 
     def _enrich_packages(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Layer 4: package detection, structure derivation, leg count."""
+        """Layer 4: package detection, structure derivation, leg count.
+
+        Uses ``package_legs`` array (trade IDs) to resolve actual legs
+        rather than grouping by ``package_id`` which can collide.
+        """
         pkg = df["package_type"].astype(str).fillna("").str.upper()
         df["is_package"] = ~pkg.isin({"", "OUTRIGHT", "NAN", "NONE"})
 
@@ -176,31 +170,49 @@ class TradeTape(SDRAnalyzer):
         else:
             df["has_spread"] = False
 
-        # Package leg count and structure
+        # Defaults
         df["n_package_legs"] = 1
+        df["package_tenors"] = df["tenor_label"].astype(str)
         df["package_structure"] = ""
 
-        pkg_id_col = "package_id"
-        if pkg_id_col in df.columns and df["is_package"].any():
-            pkg_groups = (
-                df[df["is_package"]]
-                .groupby(pkg_id_col)
-                .agg(
-                    n_legs=("tenor_label", "size"),
-                    tenors=("tenor_label", lambda x: "/".join(
-                        x.dropna().astype(str).tolist()
-                    )),
-                    pkg_type=("trade_type", "first"),
-                )
-            )
-            # Map back to df
-            for pkg_id, row in pkg_groups.iterrows():
-                mask = df[pkg_id_col] == pkg_id
-                df.loc[mask, "n_package_legs"] = row["n_legs"]
-                structure = f"{row['tenors']} {row['pkg_type'].title()}"
-                df.loc[mask, "package_structure"] = structure.strip()
+        # Build trade_id -> index lookup (string keys for type safety)
+        tid_to_idx: dict[str, int] = {}
+        if "trade_id" in df.columns:
+            for idx, tid in df["trade_id"].items():
+                tid_to_idx[str(tid)] = idx
 
-        # Non-package outrights get a simple structure
+        # Resolve package legs from package_legs array
+        legs_col = "package_legs"
+        if legs_col in df.columns and df["is_package"].any() and tid_to_idx:
+            for idx in df.index[df["is_package"]]:
+                legs = df.at[idx, legs_col]
+                if legs is None or (isinstance(legs, float) and pd.isna(legs)):
+                    continue
+                try:
+                    leg_ids = [str(x) for x in legs]
+                except (TypeError, ValueError):
+                    continue
+
+                # Resolve leg indices
+                leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
+                if len(leg_indices) < 2:
+                    continue
+
+                leg_rows = df.loc[leg_indices].sort_values("tenor_years")
+                tenors = "/".join(leg_rows["tenor_label"].astype(str).values)
+                df.at[idx, "n_package_legs"] = len(leg_indices)
+                df.at[idx, "package_tenors"] = tenors
+
+        # Build package_structure from tenors + trade_type
+        pkg_mask = df["is_package"]
+        if pkg_mask.any():
+            df.loc[pkg_mask, "package_structure"] = (
+                df.loc[pkg_mask, "package_tenors"]
+                + " "
+                + df.loc[pkg_mask, "trade_type"].str.title()
+            ).str.strip()
+
+        # Non-package outrights
         outright_mask = ~df["is_package"]
         if outright_mask.any():
             df.loc[outright_mask, "package_structure"] = (
@@ -333,7 +345,7 @@ class TradeTape(SDRAnalyzer):
                 df[has_rate],
                 group_col="tenor_label",
                 rate_col="fixed_rate",
-                weight_col="dv01",
+                weight_col="risk",
                 date_col="execution_date",
             )
             if not vwap_df.empty:
@@ -345,85 +357,91 @@ class TradeTape(SDRAnalyzer):
         return df
 
     def _build_enriched_label(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Layer 7: enrich trade_label with prefix tags.
+        """Layer 7: build professional ``tape_label``.
 
-        Mirrors the swaption ``_backfill_swaption_fields`` pattern:
-        prefix tokens are prepended to the base label.
-
-        Token order: [INDEX] [LIFECYCLE] [QUALITY] [STRUCTURE] base_label
-        Examples: SOFR spot 10Y, SOFR UFRO spot 5Y, FF CURVE 2Y/5Y
+        Format: [underlier] [reset] [forward] [tenors] [structure] [flags] [mac_coupons] [settlement]
+        Example: USD-SOFR-COMPOUND 1D Constant Spot 5Y Outright PHYS
         """
-        from SDRUtils.core.tenors import build_trade_label
+        # Build trade_id -> index lookup for MAC coupon resolution
+        tid_to_idx: dict[str, int] = {}
+        if "trade_id" in df.columns:
+            for idx, tid in df["trade_id"].items():
+                tid_to_idx[str(tid)] = idx
 
-        # Stage 1: ensure base label exists
-        missing_label = (
-            df["trade_label"].isna()
-            | (df["trade_label"].astype(str).str.strip() == "")
-        )
-        if missing_label.any():
-            df.loc[missing_label, "trade_label"] = df[missing_label].apply(
-                lambda r: build_trade_label(
-                    str(r.get("forward_label", "spot")),
-                    str(r.get("tenor_label", "UNK")),
-                    bool(r.get("is_forward", False)),
-                ),
-                axis=1,
-            )
+        def _label_for_row(row: pd.Series) -> str:
+            parts: list[str] = []
 
-        # Stage 2: for packages, replace base label with slash-joined tenors
-        if "package_structure" in df.columns:
-            pkg_mask = df["is_package"] & df["package_structure"].astype(str).str.contains("/")
-            if pkg_mask.any():
-                # Extract tenor part from package_structure ("10Y/5Y Curve" -> "10Y/5Y")
-                df.loc[pkg_mask, "trade_label"] = (
-                    df.loc[pkg_mask, "package_structure"]
-                    .str.rsplit(" ", n=1)
-                    .str[0]
-                )
+            # 1. Underlier name
+            underlier = str(row.get("upi_underlier_name", "")).strip()
+            if underlier and underlier.lower() not in ("nan", "none", ""):
+                parts.append(underlier)
 
-        # Stage 3: build prefix tokens
-        # (a) Rate index prefix
-        tokens = df["rate_index_clean"].map(_INDEX_PREFIX).fillna("")
+            # 2. Reset / compounding
+            pt = str(row.get("product_type", "")).upper()
+            if pt == "OIS_SWAP":
+                parts.append("1D Constant")
 
-        # (b) Lifecycle prefix (non-NEWT only)
-        lifecycle_prefix = df["lifecycle_type"].map({
-            "TERMINATION": "TERM",
-            "CORRECTION": "CORR",
-            "MODIFICATION": "MODI",
-        }).fillna("")
-        has_lifecycle = lifecycle_prefix != ""
-        tokens = tokens.where(~has_lifecycle, tokens + " " + lifecycle_prefix)
+            # 3. Forward
+            fwd = row.get("forward_label", "spot")
+            if pd.isna(fwd) or str(fwd).lower() == "spot":
+                parts.append("Spot")
+            else:
+                parts.append(str(fwd))
 
-        # (c) Quality prefix: UFRO or BLOCK (pick the most important one)
-        quality_prefix = pd.Series("", index=df.index, dtype=str)
-        if "is_ufro" in df.columns:
-            quality_prefix = quality_prefix.where(~df["is_ufro"], "UFRO")
-        if "is_block" in df.columns:
-            # BLOCK only if not already UFRO
-            block_only = df.get("is_block", False) & (quality_prefix == "")
-            quality_prefix = quality_prefix.where(~block_only, "BLOCK")
-        has_quality = quality_prefix != ""
-        tokens = tokens.where(~has_quality, tokens + " " + quality_prefix)
+            # 4. Tenors (from package_tenors if package, else tenor_label)
+            tenors = str(row.get("package_tenors", row.get("tenor_label", "")))
+            if tenors and tenors.lower() not in ("nan", "none"):
+                parts.append(tenors)
 
-        # (d) Structure prefix (CURVE/FLY for packages)
-        structure_prefix = pd.Series("", index=df.index, dtype=str)
-        if "trade_type" in df.columns:
-            pkg_type = df["trade_type"].where(
-                df["trade_type"].isin({"CURVE", "FLY"}), ""
-            )
-            structure_prefix = pkg_type
-        has_structure = structure_prefix != ""
-        tokens = tokens.where(~has_structure, tokens + " " + structure_prefix)
+            # 5. Structure
+            trade_type = str(row.get("trade_type", "OUTRIGHT")).upper()
+            if trade_type in ("CURVE", "FLY"):
+                parts.append(trade_type)
+            elif trade_type == "SPREADOVER":
+                parts.append("Spreadover")
+            else:
+                parts.append("Outright")
 
-        # Stage 4: prepend tokens to trade_label
-        tokens = tokens.str.strip()
-        has_prefix = tokens != ""
-        df.loc[has_prefix, "trade_label"] = (
-            tokens[has_prefix] + " " + df.loc[has_prefix, "trade_label"].astype(str)
-        ).str.strip()
+            # 6. Flags
+            flags: list[str] = []
+            if row.get("is_mac", False):
+                flags.append("MAC")
+            if row.get("is_ufro", False):
+                flags.append("UFRO")
+            if row.get("is_block", False):
+                flags.append("BLOCK")
+            # Lifecycle flags for non-NEWT
+            ltype = str(row.get("lifecycle_type", "")).upper()
+            if ltype in ("TERMINATION", "CORRECTION", "MODIFICATION"):
+                flags.append(ltype[:4])
+            if flags:
+                parts.append(" ".join(flags))
 
-        # Clean up any double spaces
-        df["trade_label"] = df["trade_label"].str.replace(r"\s+", " ", regex=True).str.strip()
+            # 7. MAC coupons — show fixed rates of legs
+            if row.get("is_mac", False):
+                legs = row.get("package_legs")
+                if legs is not None and not (isinstance(legs, float) and pd.isna(legs)):
+                    try:
+                        leg_ids = [str(x) for x in legs]
+                        leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
+                        if leg_indices:
+                            rates = df.loc[leg_indices, "fixed_rate"].dropna()
+                            if not rates.empty:
+                                rate_strs = [f"{r*100:.2f}" for r in rates.values]
+                                parts.append(f"({'/'.join(rate_strs)})")
+                    except (TypeError, ValueError, KeyError):
+                        pass
+
+            # 8. Settlement
+            cleared = str(row.get("cleared", "")).upper()
+            if cleared in ("Y", "TRUE", "I"):
+                parts.append("PHYS")
+
+            return " ".join(parts)
+
+        df["tape_label"] = df.apply(_label_for_row, axis=1)
+        # Clean double spaces
+        df["tape_label"] = df["tape_label"].str.replace(r"\s+", " ", regex=True).str.strip()
 
         return df
 
@@ -514,7 +532,7 @@ class TradeTape(SDRAnalyzer):
 
         Returns:
             DataFrame with columns: package_id, package_structure,
-            n_legs, trade_type, total_dv01, total_notional, has_spread,
+            n_legs, trade_type, total_risk, total_notional, has_spread,
             rate_index_clean.
         """
         if self._result is None:
@@ -533,11 +551,11 @@ class TradeTape(SDRAnalyzer):
                 package_structure=("package_structure", "first"),
                 n_legs=("package_id", "size"),
                 trade_type=("trade_type", "first"),
-                total_dv01=("dv01", "sum"),
+                total_risk=("risk", "sum"),
                 total_notional=("notional", "sum"),
                 has_spread=("has_spread", "first"),
                 rate_index_clean=("rate_index_clean", "first"),
             )
-            .sort_values("total_dv01", ascending=False)
+            .sort_values("total_risk", ascending=False)
             .reset_index()
         )

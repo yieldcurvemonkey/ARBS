@@ -226,7 +226,7 @@ class LiquidityScorer(SDRAnalyzer):
         tenor_col: str = "tenor_label",
         date_col: str = "execution_date",
         ts_col: str = "execution_timestamp",
-        value_col: str = "dv01",
+        value_col: str = "risk",
         min_trades: int = 10,
     ) -> None:
         super().__init__(df)

@@ -812,7 +812,7 @@ class FOMCAnalyzer(SDRAnalyzer):
         rates["fixed_rate"] = pd.to_numeric(rates["fixed_rate"])
         return (
             rates.groupby("meeting_label")
-            .apply(lambda g: vwap(g, rate_col="fixed_rate", weight_col="dv01"))
+            .apply(lambda g: vwap(g, rate_col="fixed_rate", weight_col="risk"))
             .rename("sdr_implied_rate")
         )
 
@@ -868,7 +868,7 @@ class FOMCAnalyzer(SDRAnalyzer):
         n_traded = (
             trades["meeting_label"].nunique() if not trades.empty else 0
         )
-        total_dv01 = trades["dv01"].sum() if not trades.empty else 0.0
+        total_risk = trades["risk"].sum() if not trades.empty else 0.0
 
         # Next meeting
         next_meeting = (
@@ -899,9 +899,9 @@ class FOMCAnalyzer(SDRAnalyzer):
         return {
             "n_meetings": n_meetings,
             "n_traded": n_traded,
-            "total_fomc_dv01": total_dv01,
-            "total_fomc_dv01_fmt": (
-                f"${total_dv01/1e9:.0f}B" if total_dv01 else "$0"
+            "total_fomc_risk": total_risk,
+            "total_fomc_risk_fmt": (
+                f"${total_risk/1e6:.0f}M" if total_risk else "$0"
             ),
             "current_sofr": f"{self._current_sofr*100:.4f}%",
             "current_effr": f"{self._current_effr*100:.4f}%",

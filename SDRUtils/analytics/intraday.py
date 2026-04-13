@@ -16,7 +16,7 @@ def intraday_cumulative_dv01(
     df: pd.DataFrame,
     date_col: str = "execution_date",
     ts_col: str = "execution_timestamp",
-    value_col: str = "dv01",
+    value_col: str = "risk",
 ) -> pd.DataFrame:
     """Running cumulative DV01 through each trading day.
 
@@ -54,7 +54,7 @@ def intraday_cumulative_dv01(
 def hourly_distribution(
     df: pd.DataFrame,
     ts_col: str = "execution_timestamp",
-    value_col: str = "dv01",
+    value_col: str = "risk",
     timezone: str = "UTC",
 ) -> pd.DataFrame:
     """Aggregate a value column by hour of day.

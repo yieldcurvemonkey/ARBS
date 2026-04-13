@@ -115,7 +115,7 @@ _MONTH_ORDER: List[str] = [
 def seasonality_heatmap_data(
     df: pd.DataFrame,
     date_col: str = "execution_date",
-    value_col: str = "dv01",
+    value_col: str = "risk",
 ) -> pd.DataFrame:
     """Build a weekday-by-month pivot of mean daily values.
 

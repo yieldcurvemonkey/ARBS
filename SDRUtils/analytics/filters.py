@@ -282,7 +282,7 @@ def daily_dv01_by_group(
     df: pd.DataFrame,
     group_col: str,
     date_col: str = "execution_date",
-    value_col: str = "dv01",
+    value_col: str = "risk",
 ) -> pd.DataFrame:
     """Pivot table: daily DV01 by a grouping column.
 
@@ -325,7 +325,7 @@ def rolling_zscore(
 def vwap(
     df: pd.DataFrame,
     rate_col: str = "fixed_rate",
-    weight_col: str = "dv01",
+    weight_col: str = "risk",
 ) -> float:
     """Volume-weighted average rate.
 
@@ -349,7 +349,7 @@ def daily_vwap(
     df: pd.DataFrame,
     group_col: str = "tenor_label",
     rate_col: str = "fixed_rate",
-    weight_col: str = "dv01",
+    weight_col: str = "risk",
     date_col: str = "execution_date",
 ) -> pd.DataFrame:
     """Daily VWAP per group (e.g., per tenor).
