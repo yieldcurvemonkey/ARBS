@@ -470,10 +470,10 @@ class TestUnfilteredRawDf:
         import _usd_swaps_common as sdr
 
         swaps = USD_SwapProduct()
-        # End at March 11 to capture full March 10 events (midnight cutoff)
+        # +1 day extension in unfiltered raw handles midnight cutoff
         classified_df, raw_df = swaps.build_classification_dataframe(
             datetime(2026, 3, 9),
-            datetime(2026, 3, 11),
+            datetime(2026, 3, 10),
             cache_path=sdr.DEFAULT_CACHE_PATH,
             return_raw=True,
         )
@@ -492,10 +492,10 @@ class TestUnfilteredRawDf:
         import _usd_swaps_common as sdr
 
         swaps = USD_SwapProduct()
-        # End at March 11 to capture full March 10 events (TERM at 11:36 AM)
+        # Tight end — +1 day extension in unfiltered raw captures Mar 10 events
         classified_df, raw_df = swaps.build_classification_dataframe(
             datetime(2026, 3, 9),
-            datetime(2026, 3, 11),
+            datetime(2026, 3, 10),
             cache_path=sdr.DEFAULT_CACHE_PATH,
             return_raw=True,
         )
@@ -536,3 +536,167 @@ class TestBuildClassificationReturnRawEdgeCases:
         import inspect
         sig = inspect.signature(swaps.build_classification_dataframe)
         assert "return_raw" in sig.parameters
+
+
+class TestLoadUsdSwapsAlwaysRaw:
+    """load_usd_swaps always carries raw_df."""
+
+    def test_result_has_raw_df_attribute(self):
+        """Result should have .raw_df even without return_raw."""
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'notebooks', 'sdr'))
+        import importlib
+        import _usd_swaps_common as sdr
+        importlib.reload(sdr)
+
+        result = sdr.load_usd_swaps(
+            datetime(2026, 3, 9),
+            datetime(2026, 3, 10),
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert hasattr(result, 'raw_df')
+        assert isinstance(result.raw_df, pd.DataFrame)
+        assert len(result.raw_df) > len(result)
+
+    def test_return_raw_true_still_works(self):
+        """Explicit return_raw=True still returns tuple."""
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'notebooks', 'sdr'))
+        import importlib
+        import _usd_swaps_common as sdr
+        importlib.reload(sdr)
+
+        classified, raw = sdr.load_usd_swaps(
+            datetime(2026, 3, 9),
+            datetime(2026, 3, 10),
+            return_raw=True,
+        )
+        assert isinstance(classified, pd.DataFrame)
+        assert isinstance(raw, pd.DataFrame)
+
+
+class TestBuildEnrichedLabelCrossDay:
+    """_build_enriched_label reflects xd_* columns."""
+
+    def _make_tape_df(self, xd_status="ACTIVE", xd_has_partial_unwind=False):
+        return pd.DataFrame({
+            "trade_id": ["A1"],
+            "upi_underlier_name": ["USD-SOFR-COMPOUND"],
+            "product_type": ["OIS_SWAP"],
+            "upi_reset_freq": [""],
+            "upi_notional_schedule": [""],
+            "forward_label": ["spot"],
+            "forward_start_years": [0.0],
+            "tenor_label": ["10Y"],
+            "tenor_display": ["10Y"],
+            "trade_type": ["OUTRIGHT"],
+            "lifecycle_type": ["NEW_TRADE"],
+            "is_unwind": [False],
+            "is_mac": [False],
+            "is_ufro": [False],
+            "is_block": [False],
+            "cleared": ["I"],
+            "xd_status": [xd_status],
+            "xd_has_partial_unwind": [xd_has_partial_unwind],
+            "xd_is_terminated": [xd_status == "TERMINATED"],
+        })
+
+    def test_terminated_label_has_xd_term_flag(self):
+        tape = TradeTape(self._make_tape_df(xd_status="TERMINATED"))
+        df = tape._build_enriched_label(self._make_tape_df(xd_status="TERMINATED"))
+        assert "XD-TERM" in df.iloc[0]["tape_label"]
+
+    def test_partial_unwind_label_has_flag(self):
+        tape = TradeTape(self._make_tape_df(xd_status="PARTIAL_UNWIND", xd_has_partial_unwind=True))
+        df = tape._build_enriched_label(self._make_tape_df(xd_status="PARTIAL_UNWIND", xd_has_partial_unwind=True))
+        assert "PARTIAL-UNWIND" in df.iloc[0]["tape_label"]
+
+    def test_active_no_xd_flag(self):
+        tape = TradeTape(self._make_tape_df())
+        df = tape._build_enriched_label(self._make_tape_df())
+        label = df.iloc[0]["tape_label"]
+        assert "XD-TERM" not in label
+        assert "PARTIAL-UNWIND" not in label
+
+
+class TestCleanTapeCrossDay:
+    """clean_tape excludes cross-day terminated trades."""
+
+    def _make_classified_df(self):
+        return pd.DataFrame({
+            "trade_id": ["A1", "B1"],
+            "execution_timestamp": pd.to_datetime(["2026-03-09 14:00:00+00:00", "2026-03-09 15:00:00+00:00"]),
+            "event_action": ["NEWT", "NEWT"],
+            "tenor_label": ["10Y", "5Y"],
+            "tenor_years": [10.0, 5.0],
+            "forward_label": ["spot", "spot"],
+            "forward_start_years": [0.0, 0.0],
+            "notional": [25_000_000, 50_000_000],
+            "fixed_rate": [0.04, 0.045],
+            "estimated_pv01": [9000, 4500],
+            "product_type": ["OIS_SWAP", "OIS_SWAP"],
+            "upi_underlier_name": ["USD-SOFR-COMPOUND", "USD-SOFR-COMPOUND"],
+            "unique_product_identifier": ["", ""],
+            "platform_identifier": ["XXXX", "XXXX"],
+            "cleared": ["I", "I"],
+            "prime_brokerage_transaction_indicator": [False, False],
+            "block_trade_election_indicator": [False, False],
+            "large_notional_off-facility_swap_election_indicator": [False, False],
+            "other_payment_type": ["", ""],
+            "other_payment_amount": [0, 0],
+            "package_indicator": ["", ""],
+            "package_transaction_spread": [0, 0],
+            "package_type": ["OUTRIGHT", "OUTRIGHT"],
+            "special_tenor_type": ["", ""],
+        })
+
+    def test_xd_terminated_excluded_from_clean(self):
+        cdf = self._make_classified_df()
+        # Add columns needed for compute() to succeed
+        cdf["effective_date"] = pd.to_datetime("2026-03-11")
+        cdf["expiration_date"] = pd.to_datetime(["2036-03-11", "2031-03-11"])
+        tape = TradeTape(cdf)
+        tape.compute()
+        tape._result.loc[tape._result["trade_id"] == "A1", "xd_is_terminated"] = True
+        clean = tape.clean_tape()
+        assert "A1" not in clean["trade_id"].values
+        assert "B1" in clean["trade_id"].values
+
+
+class TestSummaryCrossDay:
+    """summary() includes cross-day lifecycle stats."""
+
+    def test_summary_has_xd_keys(self):
+        df = pd.DataFrame({
+            "trade_id": ["A1"],
+            "execution_timestamp": pd.to_datetime(["2026-03-09 14:00:00+00:00"]),
+            "event_action": ["NEWT"],
+            "tenor_label": ["10Y"],
+            "tenor_years": [10.0],
+            "forward_label": ["spot"],
+            "forward_start_years": [0.0],
+            "notional": [25_000_000],
+            "fixed_rate": [0.04],
+            "estimated_pv01": [9000],
+            "product_type": ["OIS_SWAP"],
+            "upi_underlier_name": ["USD-SOFR-COMPOUND"],
+            "unique_product_identifier": [""],
+            "platform_identifier": ["XXXX"],
+            "cleared": ["I"],
+            "prime_brokerage_transaction_indicator": [False],
+            "block_trade_election_indicator": [False],
+            "large_notional_off-facility_swap_election_indicator": [False],
+            "other_payment_type": [""],
+            "other_payment_amount": [0],
+            "package_indicator": [""],
+            "package_transaction_spread": [0],
+            "package_type": ["OUTRIGHT"],
+            "special_tenor_type": [""],
+            "effective_date": pd.to_datetime(["2026-03-11"]),
+            "expiration_date": pd.to_datetime(["2036-03-11"]),
+        })
+        tape = TradeTape(df)
+        tape.compute()
+        s = tape.summary()
+        assert "n_xd_terminated" in s
+        assert "n_xd_partial_unwind" in s
