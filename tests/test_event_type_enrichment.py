@@ -383,3 +383,42 @@ class TestSummaryEventType:
         assert "n_exercise_born" in s
         assert "n_clearing_terminations" in s
         assert "n_non_standard_term" in s
+
+
+EXAMPLE_CSV = os.path.join(os.path.dirname(__file__), "..", "notebooks", "sdr", "sdr_example.csv")
+
+
+@pytest.mark.skipif(not os.path.exists(EXAMPLE_CSV), reason="sdr_example.csv not available")
+class TestEventTypeRealData:
+    """Integration tests with real SDR data."""
+
+    @pytest.fixture
+    def raw_df(self):
+        df = pd.read_csv(EXAMPLE_CSV, low_memory=False, dtype={
+            "Dissemination Identifier": str,
+            "Original Dissemination Identifier": str,
+        })
+        df["Original Dissemination Identifier"] = df["Original Dissemination Identifier"].fillna("")
+        return df
+
+    def test_nova_count(self, raw_df):
+        nova = raw_df[raw_df["Event type"] == "NOVA"]
+        assert len(nova) > 1500
+
+    def test_comp_count(self, raw_df):
+        comp = raw_df[raw_df["Event type"] == "COMP"]
+        assert len(comp) > 2000
+
+    def test_exer_count(self, raw_df):
+        exer = raw_df[raw_df["Event type"] == "EXER"]
+        assert len(exer) > 500
+
+    def test_clrg_count(self, raw_df):
+        clrg = raw_df[raw_df["Event type"] == "CLRG"]
+        assert len(clrg) > 400
+
+    def test_nova_action_type_breakdown(self, raw_df):
+        nova = raw_df[raw_df["Event type"] == "NOVA"]
+        actions = nova["Action type"].value_counts()
+        assert "NEWT" in actions.index
+        assert "TERM" in actions.index
