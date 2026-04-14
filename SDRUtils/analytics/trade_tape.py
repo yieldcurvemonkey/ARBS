@@ -644,6 +644,12 @@ class TradeTape(SDRAnalyzer):
             ltype = str(row.get("lifecycle_type", "")).upper()
             if ltype in ("TERMINATION", "CORRECTION", "MODIFICATION"):
                 flags.append(ltype[:4])
+            # Cross-day lifecycle flags
+            xd_status = str(row.get("xd_status", "")).upper()
+            if xd_status == "TERMINATED" and ltype != "TERMINATION":
+                flags.append("XD-TERM")
+            if row.get("xd_has_partial_unwind", False):
+                flags.append("PARTIAL-UNWIND")
             if flags:
                 parts.append(" ".join(flags))
 
@@ -724,6 +730,8 @@ class TradeTape(SDRAnalyzer):
         n = len(df)
         n_new = int(df["is_new_risk"].sum()) if "is_new_risk" in df.columns else 0
         n_comp = int(df["is_compression"].sum()) if "is_compression" in df.columns else 0
+        n_xd_term = int(df["xd_is_terminated"].sum()) if "xd_is_terminated" in df.columns else 0
+        n_xd_partial = int(df["xd_has_partial_unwind"].sum()) if "xd_has_partial_unwind" in df.columns else 0
 
         return {
             "n_trades": n,
@@ -751,6 +759,8 @@ class TradeTape(SDRAnalyzer):
                 df["ccp"].value_counts().to_dict()
                 if "ccp" in df.columns else {}
             ),
+            "n_xd_terminated": n_xd_term,
+            "n_xd_partial_unwind": n_xd_partial,
         }
 
     def clean_tape(self) -> pd.DataFrame:
@@ -774,6 +784,8 @@ class TradeTape(SDRAnalyzer):
             mask &= ~df["is_reset_optimization"]
         if "is_unwind" in df.columns:
             mask &= ~df["is_unwind"]
+        if "xd_is_terminated" in df.columns:
+            mask &= ~df["xd_is_terminated"].fillna(False).astype(bool)
 
         return df[mask].copy()
 

@@ -115,6 +115,34 @@ DEFAULT_CACHE_PATH = "C:/sdr_cache"
 
 
 # ---------------------------------------------------------------------------
+# TapeResult — DataFrame subclass carrying raw SDR data
+# ---------------------------------------------------------------------------
+
+class _TapeResult(pd.DataFrame):
+    """DataFrame that carries unfiltered raw SDR data for TradeTape.
+
+    Usage::
+
+        df = sdr.load_usd_swaps(...)
+        tape = TradeTape(df, raw_df=df.raw_df)  # cross-day resolution
+    """
+
+    _metadata = ["raw_df"]
+
+    def __init__(self, *args, raw_df: pd.DataFrame | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.raw_df = raw_df if raw_df is not None else pd.DataFrame()
+
+    @property
+    def _constructor(self):
+        def _c(*args, **kwargs):
+            result = _TapeResult(*args, **kwargs)
+            result.raw_df = self.raw_df
+            return result
+        return _c
+
+
+# ---------------------------------------------------------------------------
 # Notebook setup
 # ---------------------------------------------------------------------------
 
@@ -216,8 +244,11 @@ def load_usd_swaps(
     product = USD_SwapProduct()
 
     span_days = (end - start).days
+    raw_df = pd.DataFrame()
+
     if span_days <= 60:
-        result = product.build_classification_dataframe(
+        # Always fetch raw for cross-day lifecycle resolution
+        classified_df, raw_df = product.build_classification_dataframe(
             start=start,
             end=end,
             cache_path=cache_path,
@@ -228,11 +259,11 @@ def load_usd_swaps(
             detect_mac=detect_packages,
             detect_spreadover=detect_packages,
             curve_source=curve_source,
-            return_raw=return_raw,
+            return_raw=True,
         )
         if return_raw:
-            return result  # already a (classified_df, raw_df) tuple
-        df = result
+            return classified_df, raw_df
+        df = classified_df
     else:
         if return_raw:
             raise ValueError(
@@ -275,7 +306,9 @@ def load_usd_swaps(
     df = add_dv01_columns(df)
     df = add_volume_buckets(df)
     df = add_execution_date(df)
-    return df
+
+    # Wrap result with raw_df for TradeTape cross-day resolution
+    return _TapeResult(df, raw_df=raw_df)
 
 
 # ---------------------------------------------------------------------------
