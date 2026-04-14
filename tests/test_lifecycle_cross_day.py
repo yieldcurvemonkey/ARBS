@@ -397,3 +397,62 @@ class TestBuildClassificationReturnRaw:
         import inspect
         sig = inspect.signature(USD_SwapProduct.build_classification_dataframe)
         assert "return_raw" in sig.parameters
+
+
+import os
+
+EXAMPLE_CSV = os.path.join(os.path.dirname(__file__), "..", "notebooks", "sdr", "sdr_example.csv")
+
+
+@pytest.mark.skipif(not os.path.exists(EXAMPLE_CSV), reason="sdr_example.csv not available")
+class TestCrossDayRealData:
+    """Integration tests using real SDR data from sdr_example.csv."""
+
+    @pytest.fixture
+    def raw_df(self):
+        # CRITICAL: load dissem ID columns as str to avoid float64 precision loss
+        df = pd.read_csv(EXAMPLE_CSV, low_memory=False, dtype={
+            "Dissemination Identifier": str,
+            "Original Dissemination Identifier": str,
+        })
+        df["Original Dissemination Identifier"] = df["Original Dissemination Identifier"].fillna("")
+        df["file_date"] = pd.to_datetime(df["Event timestamp"], errors="coerce").dt.date
+        for col in ["Notional amount-Leg 1", "Notional amount-Leg 2"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(",", ""), errors="coerce"
+                )
+        return df
+
+    def test_trade_2304676889_lifecycle(self, raw_df):
+        """Known cross-day trade: 25M SOFR 10Y NEWT+22 events+TERM spanning 2 days."""
+        newt_dissem = "2304676889000000101"
+
+        result = resolve_lifecycle_cross_day(
+            raw_df, {newt_dissem}, skip_intraday_only=False,
+        )
+
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert bool(row["xd_is_terminated"]) is True
+        assert row["xd_n_events"] == 22
+        assert row["xd_n_days_spanned"] == 2
+
+    def test_cross_day_events_detected(self, raw_df):
+        """Verify resolver finds cross-day groups in real data."""
+        newt_mask = raw_df["Action type"] == "NEWT"
+        all_newt_ids = set(raw_df.loc[newt_mask, "Dissemination Identifier"].astype(str))
+
+        result = resolve_lifecycle_cross_day(
+            raw_df, all_newt_ids, skip_intraday_only=True,
+        )
+
+        # With proper string IDs, should find 600+ cross-day groups
+        assert len(result) > 100
+        # Some should be terminated
+        assert result["xd_is_terminated"].any()
+        # Some should have partial unwinds
+        assert result["xd_has_partial_unwind"].any()
+        # Some should have notional changes
+        has_notional_change = result["xd_notional_pct_remaining"] < 1.0
+        assert has_notional_change.any()
