@@ -240,3 +240,146 @@ class TestNovationMatching:
         tape = TradeTape(df)
         result = tape._enrich_event_type(df.copy())
         assert pd.isna(result.iloc[0]["novation_match_id"])
+
+
+class TestEventTypeLabelIntegration:
+    """Labels, clean_tape, summary reflect event type flags."""
+
+    def _make_tape_df(self, event_action="NEWT-NOVA", event_type="NOVA"):
+        return pd.DataFrame({
+            "trade_id": ["A1"],
+            "upi_underlier_name": ["USD-SOFR-COMPOUND"],
+            "product_type": ["OIS_SWAP"],
+            "upi_reset_freq": [""],
+            "upi_notional_schedule": [""],
+            "forward_label": ["spot"],
+            "forward_start_years": [0.0],
+            "tenor_label": ["10Y"],
+            "tenor_display": ["10Y"],
+            "trade_type": ["OUTRIGHT"],
+            "lifecycle_type": ["NEW_TRADE"],
+            "is_unwind": [False],
+            "is_mac": [False],
+            "is_ufro": [False],
+            "is_block": [False],
+            "cleared": ["I"],
+            "is_novation_born": [event_type == "NOVA" and "NEWT" in event_action],
+            "is_novation_terminated": [event_type == "NOVA" and "TERM" in event_action],
+            "is_exercise_born": [event_type == "EXER"],
+            "is_clearing_termination": [event_type == "CLRG"],
+            "xd_status": ["ACTIVE"],
+            "xd_has_partial_unwind": [False],
+        })
+
+    def test_nova_in_label(self):
+        tape = TradeTape(self._make_tape_df("NEWT-NOVA", "NOVA"))
+        df = tape._build_enriched_label(self._make_tape_df("NEWT-NOVA", "NOVA"))
+        assert "NOVA-IN" in df.iloc[0]["tape_label"]
+
+    def test_nova_out_label(self):
+        tape = TradeTape(self._make_tape_df("TERM-NOVA", "NOVA"))
+        df = tape._build_enriched_label(self._make_tape_df("TERM-NOVA", "NOVA"))
+        assert "NOVA-OUT" in df.iloc[0]["tape_label"]
+
+    def test_exer_label(self):
+        tape = TradeTape(self._make_tape_df("NEWT-EXER", "EXER"))
+        df = tape._build_enriched_label(self._make_tape_df("NEWT-EXER", "EXER"))
+        assert "EXER" in df.iloc[0]["tape_label"]
+
+    def test_clrg_label(self):
+        tape = TradeTape(self._make_tape_df("TERM-CLRG", "CLRG"))
+        df = tape._build_enriched_label(self._make_tape_df("TERM-CLRG", "CLRG"))
+        assert "CLRG" in df.iloc[0]["tape_label"]
+
+
+class TestCleanTapeEventType:
+    """clean_tape excludes novation-terminated and clearing-terminated."""
+
+    def _make_classified_df(self):
+        return pd.DataFrame({
+            "trade_id": ["A1", "B1", "C1"],
+            "execution_timestamp": pd.to_datetime([
+                "2026-03-09 14:00:00+00:00",
+                "2026-03-09 15:00:00+00:00",
+                "2026-03-09 16:00:00+00:00",
+            ]),
+            "event_action": ["TERM-NOVA", "TERM-CLRG", "NEWT-TRAD"],
+            "event_type": ["NOVA", "CLRG", "TRAD"],
+            "tenor_label": ["10Y", "5Y", "10Y"],
+            "tenor_years": [10.0, 5.0, 10.0],
+            "forward_label": ["spot", "spot", "spot"],
+            "forward_start_years": [0.0, 0.0, 0.0],
+            "notional": [25_000_000, 50_000_000, 25_000_000],
+            "fixed_rate": [0.04, 0.045, 0.04],
+            "estimated_pv01": [9000, 4500, 9000],
+            "product_type": ["OIS_SWAP", "OIS_SWAP", "OIS_SWAP"],
+            "upi_underlier_name": ["USD-SOFR-COMPOUND"] * 3,
+            "unique_product_identifier": [""] * 3,
+            "platform_identifier": ["XXXX"] * 3,
+            "cleared": ["I"] * 3,
+            "prime_brokerage_transaction_indicator": [False] * 3,
+            "block_trade_election_indicator": [False] * 3,
+            "large_notional_off-facility_swap_election_indicator": [False] * 3,
+            "other_payment_type": [""] * 3,
+            "other_payment_amount": [0] * 3,
+            "package_indicator": [""] * 3,
+            "package_transaction_spread": [0] * 3,
+            "package_type": ["OUTRIGHT"] * 3,
+            "special_tenor_type": [""] * 3,
+            "effective_date": pd.to_datetime(["2026-03-11"] * 3),
+            "expiration_date": pd.to_datetime(["2036-03-11", "2031-03-11", "2036-03-11"]),
+            "non-standardized_term_indicator": [False] * 3,
+        })
+
+    def test_nova_and_clrg_excluded(self):
+        tape = TradeTape(self._make_classified_df())
+        tape.compute()
+        clean = tape.clean_tape()
+        ids = clean["trade_id"].values
+        assert "A1" not in ids  # TERM+NOVA excluded
+        assert "B1" not in ids  # TERM+CLRG excluded
+        assert "C1" in ids     # NEWT+TRAD kept
+
+
+class TestSummaryEventType:
+    """summary() includes event type counts."""
+
+    def test_summary_has_event_type_keys(self):
+        df = pd.DataFrame({
+            "trade_id": ["A1"],
+            "execution_timestamp": pd.to_datetime(["2026-03-09 14:00:00+00:00"]),
+            "event_action": ["NEWT-TRAD"],
+            "event_type": ["TRAD"],
+            "tenor_label": ["10Y"],
+            "tenor_years": [10.0],
+            "forward_label": ["spot"],
+            "forward_start_years": [0.0],
+            "notional": [25_000_000],
+            "fixed_rate": [0.04],
+            "estimated_pv01": [9000],
+            "product_type": ["OIS_SWAP"],
+            "upi_underlier_name": ["USD-SOFR-COMPOUND"],
+            "unique_product_identifier": [""],
+            "platform_identifier": ["XXXX"],
+            "cleared": ["I"],
+            "prime_brokerage_transaction_indicator": [False],
+            "block_trade_election_indicator": [False],
+            "large_notional_off-facility_swap_election_indicator": [False],
+            "other_payment_type": [""],
+            "other_payment_amount": [0],
+            "package_indicator": [""],
+            "package_transaction_spread": [0],
+            "package_type": ["OUTRIGHT"],
+            "special_tenor_type": [""],
+            "effective_date": pd.to_datetime(["2026-03-11"]),
+            "expiration_date": pd.to_datetime(["2036-03-11"]),
+            "non-standardized_term_indicator": [False],
+        })
+        tape = TradeTape(df)
+        tape.compute()
+        s = tape.summary()
+        assert "n_novations" in s
+        assert "n_compressions_spec" in s
+        assert "n_exercise_born" in s
+        assert "n_clearing_terminations" in s
+        assert "n_non_standard_term" in s

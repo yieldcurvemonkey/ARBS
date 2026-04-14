@@ -774,6 +774,15 @@ class TradeTape(SDRAnalyzer):
                 flags.append("XD-TERM")
             if row.get("xd_has_partial_unwind", False):
                 flags.append("PARTIAL-UNWIND")
+            # Event type flags
+            if row.get("is_novation_born", False):
+                flags.append("NOVA-IN")
+            if row.get("is_novation_terminated", False):
+                flags.append("NOVA-OUT")
+            if row.get("is_exercise_born", False):
+                flags.append("EXER")
+            if row.get("is_clearing_termination", False):
+                flags.append("CLRG")
             if flags:
                 parts.append(" ".join(flags))
 
@@ -857,6 +866,11 @@ class TradeTape(SDRAnalyzer):
         n_comp = int(df["is_compression"].sum()) if "is_compression" in df.columns else 0
         n_xd_term = int(df["xd_is_terminated"].sum()) if "xd_is_terminated" in df.columns else 0
         n_xd_partial = int(df["xd_has_partial_unwind"].sum()) if "xd_has_partial_unwind" in df.columns else 0
+        n_nova = int(df["is_novation"].sum()) if "is_novation" in df.columns else 0
+        n_comp_spec = int(df["is_compression_spec"].sum()) if "is_compression_spec" in df.columns else 0
+        n_exer = int(df["is_exercise_born"].sum()) if "is_exercise_born" in df.columns else 0
+        n_clrg = int(df["is_clearing_termination"].sum()) if "is_clearing_termination" in df.columns else 0
+        n_nst = int(df["is_non_standard_term"].sum()) if "is_non_standard_term" in df.columns else 0
 
         return {
             "n_trades": n,
@@ -886,6 +900,11 @@ class TradeTape(SDRAnalyzer):
             ),
             "n_xd_terminated": n_xd_term,
             "n_xd_partial_unwind": n_xd_partial,
+            "n_novations": n_nova,
+            "n_compressions_spec": n_comp_spec,
+            "n_exercise_born": n_exer,
+            "n_clearing_terminations": n_clrg,
+            "n_non_standard_term": n_nst,
         }
 
     def clean_tape(self) -> pd.DataFrame:
@@ -911,6 +930,10 @@ class TradeTape(SDRAnalyzer):
             mask &= ~df["is_unwind"]
         if "xd_is_terminated" in df.columns:
             mask &= ~df["xd_is_terminated"].fillna(False).astype(bool)
+        if "is_novation_terminated" in df.columns:
+            mask &= ~df["is_novation_terminated"].fillna(False).astype(bool)
+        if "is_clearing_termination" in df.columns:
+            mask &= ~df["is_clearing_termination"].fillna(False).astype(bool)
 
         return df[mask].copy()
 
