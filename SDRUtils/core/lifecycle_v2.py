@@ -126,3 +126,74 @@ def flatten_lifecycle_summary(
         "lc_correction_lag_seconds": summary.correction_lag_seconds,
         "lc_fields_changed": fields_str,
     }
+
+
+def _safe_notional(state: Optional[Dict[str, Any]]) -> float:
+    """Extract Notional amount-Leg 1 from state dict, coercing to float."""
+    import math
+
+    if state is None:
+        return float("nan")
+    raw = state.get("Notional amount-Leg 1")
+    if raw is None:
+        return float("nan")
+    try:
+        val = float(str(raw).replace(",", ""))
+        return val
+    except (ValueError, TypeError):
+        return float("nan")
+
+
+def flatten_cross_day_summary(
+    summary: LifecycleSummary,
+    resolved: Any,
+) -> Dict[str, Any]:
+    """Flatten LifecycleSummary + ResolvedTrade into xd_* columns for cross-day resolution.
+
+    Same structure as flatten_lifecycle_summary but with additional notional
+    tracking and partial-unwind detection for multi-day lifecycle chains.
+    """
+    import math
+
+    fields_str = ",".join(sorted(summary.fields_changed)) if summary.fields_changed else ""
+
+    # Notional extraction with numeric coercion
+    inception_notional = _safe_notional(resolved.inception_state)
+    current_notional = _safe_notional(resolved.current_state)
+
+    # Pct remaining — guard division by zero/None
+    if math.isnan(inception_notional) or inception_notional == 0:
+        pct_remaining = float("nan")
+    else:
+        pct_remaining = current_notional / inception_notional
+
+    # Partial unwind: notional decreased (regardless of terminated or active)
+    has_partial_unwind = (
+        not math.isnan(inception_notional)
+        and not math.isnan(current_notional)
+        and inception_notional > 0
+        and current_notional < inception_notional
+    )
+
+    # Status: ERRORED > TERMINATED > PARTIAL_UNWIND > ACTIVE
+    status = getattr(resolved, "status", "UNKNOWN")
+    if status == "ACTIVE" and has_partial_unwind:
+        status = "PARTIAL_UNWIND"
+
+    # Days spanned: count distinct file_dates in chain
+    n_days = len({evt.file_date for evt in summary.chain}) if summary.chain else 1
+
+    return {
+        "xd_n_events": len(summary.chain),
+        "xd_status": status,
+        "xd_inception_notional": inception_notional,
+        "xd_current_notional": current_notional,
+        "xd_notional_pct_remaining": pct_remaining,
+        "xd_is_terminated": summary.is_terminated,
+        "xd_has_partial_unwind": has_partial_unwind,
+        "xd_was_corrected": summary.was_corrected,
+        "xd_was_amended": summary.was_economically_modified,
+        "xd_fields_changed": fields_str,
+        "xd_correction_lag_seconds": summary.correction_lag_seconds,
+        "xd_n_days_spanned": n_days,
+    }
