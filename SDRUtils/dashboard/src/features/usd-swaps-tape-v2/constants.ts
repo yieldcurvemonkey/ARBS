@@ -1,0 +1,113 @@
+// Tokens and defaults for the USD swap tape v2 feature.
+import type { LifecycleType, TimeseriesMetricKey, TimeseriesViewKey } from './types'
+
+export const POLL_INTERVAL_MS = 30_000
+export const ROW_ESTIMATE_PX = 44
+export const EMPTY_VALUE = '—'
+
+export const TAPE_V2_API_BASE = '/api/usd-swaps-tape-v2'
+
+export const LIFECYCLE_ORDER: LifecycleType[] = [
+  'NEW_RISK',
+  'UNWIND',
+  'COMPRESSION',
+  'TERMINATION',
+  'NOVATION',
+  'RESET_OPT',
+  'CORRECTION',
+  'CLEARING_TERM',
+  'EXERCISE_BORN',
+]
+
+export const LIFECYCLE_LABELS: Record<LifecycleType, string> = {
+  NEW_RISK: 'NEW',
+  UNWIND: 'UNW',
+  COMPRESSION: 'CMP',
+  TERMINATION: 'TERM',
+  NOVATION: 'NOVA',
+  RESET_OPT: 'RST',
+  CORRECTION: 'CORR',
+  CLEARING_TERM: 'CLR',
+  EXERCISE_BORN: 'XERC',
+  OTHER: 'OTHER',
+}
+
+// Unified lifecycle palette — rendered as Tailwind class strings.
+export const LIFECYCLE_TONES: Record<LifecycleType, string> = {
+  NEW_RISK: 'bg-emerald-900/40 text-emerald-200',
+  UNWIND: 'bg-red-900/40 text-red-200',
+  COMPRESSION: 'bg-zinc-800/60 text-zinc-400',
+  TERMINATION: 'bg-rose-900/40 text-rose-200',
+  NOVATION: 'bg-purple-900/40 text-purple-200',
+  RESET_OPT: 'bg-neutral-800/60 text-neutral-400',
+  CORRECTION: 'bg-sky-900/40 text-sky-200',
+  CLEARING_TERM: 'bg-red-950/60 text-red-100 border border-red-500/40',
+  EXERCISE_BORN: 'bg-amber-900/40 text-amber-200',
+  OTHER: 'bg-slate-800/60 text-slate-300',
+}
+
+export const TRADE_TYPE_TONES: Record<string, string> = {
+  OUTRIGHT: 'bg-slate-800/60 text-slate-300',
+  CURVE: 'bg-sky-900/40 text-sky-200',
+  FLY: 'bg-indigo-900/40 text-indigo-200',
+  SPREADOVER: 'bg-fuchsia-900/40 text-fuchsia-200',
+  MATCHED_MATURITY: 'bg-teal-900/40 text-teal-200',
+  MAC: 'bg-cyan-900/40 text-cyan-200',
+  IMM: 'bg-lime-900/40 text-lime-200',
+  FOMC: 'bg-amber-900/40 text-amber-200',
+}
+
+export const FLAG_CHIP_TONES = {
+  BLK: 'bg-orange-900/40 text-orange-200',
+  UFRO: 'bg-orange-900/40 text-orange-200',
+  OFF_MKT: 'bg-yellow-900/40 text-yellow-200',
+  CAPPED: 'bg-rose-900/40 text-rose-200',
+  OFF_DATE: 'bg-yellow-900/40 text-yellow-200',
+  NSTD: 'bg-purple-900/40 text-purple-200',
+  FOMC: 'bg-amber-900/40 text-amber-200',
+} as const
+
+export const TIMESERIES_METRICS: Array<{ key: TimeseriesMetricKey; label: string }> = [
+  { key: 'notional', label: 'Notional' },
+  { key: 'risk', label: 'DV01' },
+  { key: 'trade_count', label: 'Trade Count' },
+  { key: 'fixed_rate', label: 'Weighted Fixed Rate' },
+]
+
+export const TIMESERIES_VIEWS: Array<{ key: TimeseriesViewKey; label: string }> = [
+  { key: 'INTRADAY', label: 'Intraday' },
+  { key: 'DAILY_CLOSE', label: 'Daily close' },
+  { key: 'DAILY_OHLC', label: 'Daily OHLC' },
+]
+
+// Default column definitions — consumed by TradeTapeTable/columns.tsx
+export const COLUMN_DEFS = [
+  { key: 'select', header: '', width: 40 },
+  { key: 'expand', header: '', width: 36 },
+  { key: 'time', header: 'Time', width: 92 },
+  { key: 'lifecycle', header: 'Lifecycle', width: 90 },
+  { key: 'tape_label', header: 'Tape Label', width: 420 },
+  { key: 'trade_type', header: 'Type', width: 110 },
+  { key: 'package_structure', header: 'Structure', width: 150 },
+  { key: 'tenor', header: 'Tenor', width: 72 },
+  { key: 'dv01', header: 'DV01', width: 96 },
+  { key: 'notional', header: 'Notional', width: 110 },
+  { key: 'rate', header: 'Rate', width: 84 },
+  { key: 'venue', header: 'Venue', width: 72 },
+  { key: 'ccp', header: 'CCP', width: 64 },
+  { key: 'session', header: 'Session', width: 76 },
+  { key: 'flags', header: 'Flags', width: 140 },
+  { key: 'actions', header: '', width: 56 },
+] as const
+
+export const CLEAN_TAPE_HIDDEN_LIFECYCLES: LifecycleType[] = [
+  'UNWIND',
+  'COMPRESSION',
+  'RESET_OPT',
+  'CLEARING_TERM',
+]
+
+export const DEFAULT_FLAG_FILTER_STATE = {
+  lifecycleAllSelected: true,
+  clean: false,
+}
