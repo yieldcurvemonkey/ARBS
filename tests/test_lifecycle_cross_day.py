@@ -458,6 +458,59 @@ class TestCrossDayRealData:
         assert has_notional_change.any()
 
 
+@pytest.mark.skipif(not os.path.exists(EXAMPLE_CSV), reason="sdr_example.csv not available")
+class TestUnfilteredRawDf:
+    """Verify unfiltered raw_df contains lifecycle events missing from filtered pass."""
+
+    def test_unfiltered_raw_has_more_rows(self):
+        """Unfiltered raw_df should have significantly more rows than filtered."""
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'notebooks', 'sdr'))
+        from SDRUtils.products.usd.usd_swaps import USD_SwapProduct
+        import _usd_swaps_common as sdr
+
+        swaps = USD_SwapProduct()
+        # End at March 11 to capture full March 10 events (midnight cutoff)
+        classified_df, raw_df = swaps.build_classification_dataframe(
+            datetime(2026, 3, 9),
+            datetime(2026, 3, 11),
+            cache_path=sdr.DEFAULT_CACHE_PATH,
+            return_raw=True,
+        )
+
+        action_counts = raw_df["Action type"].value_counts()
+        assert "MODI" in action_counts.index
+        assert "TERM" in action_counts.index
+        assert len(raw_df) > len(classified_df)
+
+    def test_trade_2304676889_cross_day_chain_complete(self):
+        """Known cross-day trade should have full lifecycle chain in unfiltered raw."""
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'notebooks', 'sdr'))
+        from SDRUtils.products.usd.usd_swaps import USD_SwapProduct
+        from SDRUtils.core.lifecycle import resolve_lifecycle_cross_day
+        import _usd_swaps_common as sdr
+
+        swaps = USD_SwapProduct()
+        # End at March 11 to capture full March 10 events (TERM at 11:36 AM)
+        classified_df, raw_df = swaps.build_classification_dataframe(
+            datetime(2026, 3, 9),
+            datetime(2026, 3, 11),
+            cache_path=sdr.DEFAULT_CACHE_PATH,
+            return_raw=True,
+        )
+
+        result = resolve_lifecycle_cross_day(
+            raw_df, {"2304676889000000101"}, skip_intraday_only=False,
+        )
+
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["xd_n_events"] > 14  # was 14 with filtered, should be 22
+        assert row["xd_n_days_spanned"] == 2
+        assert bool(row["xd_is_terminated"]) is True
+
+
 class TestBuildClassificationReturnRawEdgeCases:
     """Edge case tests for return_raw parameter."""
 

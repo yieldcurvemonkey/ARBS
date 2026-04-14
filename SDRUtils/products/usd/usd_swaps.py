@@ -704,9 +704,23 @@ class USD_SwapProduct(USDProductBase):
             ignore_cache=ignore_cache,
         )
 
+        # When return_raw requested, grab unfiltered RATES data for cross-day
+        # lifecycle resolution.  Lifecycle events (MODI, TERM, CORR) often lack
+        # UPI metadata and would be dropped by the product filter.  The
+        # unfiltered pass hits the same cached parquet slices — negligible cost.
+        unfiltered_raw_df = pd.DataFrame()
+        if return_raw:
+            unfiltered_raw_df = sdr.grab_sdr_trades(
+                start_timestamp=start,
+                end_timestamp=end,
+                agency="CFTC",
+                asset_class="RATES",
+                ignore_cache=ignore_cache,
+            )
+
         if raw_sdr_trades_df.empty:
             if return_raw:
-                return pd.DataFrame(), pd.DataFrame()
+                return pd.DataFrame(), unfiltered_raw_df
             return pd.DataFrame()
 
         # TODO review needed
@@ -766,11 +780,11 @@ class USD_SwapProduct(USDProductBase):
                 final_df["risk"] = final_df["estimated_pv01"].apply(_risk_from_estimated_pv01)
                 final_df["risk"] = (final_df["risk"] / 100).round().mul(100)
                 if return_raw:
-                    return final_df, raw_sdr_trades_df
+                    return final_df, unfiltered_raw_df
                 return final_df
 
             if return_raw:
-                return pd.DataFrame(), pd.DataFrame()
+                return pd.DataFrame(), unfiltered_raw_df
             return pd.DataFrame()
 
         built_frames = []
@@ -884,7 +898,7 @@ class USD_SwapProduct(USDProductBase):
         final_df["risk"] = final_df["estimated_pv01"].apply(_risk_from_estimated_pv01)
         final_df["risk"] = (final_df["risk"] / 100).round().mul(100)
         if return_raw:
-            return final_df, raw_sdr_trades_df
+            return final_df, unfiltered_raw_df
         return final_df
 
 
