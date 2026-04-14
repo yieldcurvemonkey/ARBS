@@ -530,21 +530,32 @@ class TradeTape(SDRAnalyzer):
         df["package_tenors"] = df[tenor_src].astype(str)
         df["package_structure"] = ""
 
-        # Build trade_id -> index lookup (vectorized)
-        tid_to_idx: dict[str, int] = {}
-        if "trade_id" in df.columns:
-            tid_to_idx = dict(zip(df["trade_id"].astype(str), df.index))
-
-        # Resolve package legs from package_legs array (batched assignment)
+        # Resolve package legs from package_legs array (batched assignment).
+        # Uses positional numpy indexing throughout to avoid per-row .loc[]
+        # DataFrame slices and sort_values, each of which allocates a new
+        # frame. On 9K packages that overhead dominates.
         legs_col = "package_legs"
-        if legs_col in df.columns and df["is_package"].any() and tid_to_idx:
-            pkg_indices = df.index[df["is_package"]].tolist()
+        if "trade_id" in df.columns and legs_col in df.columns and df["is_package"].any():
+            import numpy as np
+
+            # Positional lookup: trade_id -> integer position in df
+            tid_arr = df["trade_id"].astype(str).to_numpy()
+            tid_to_pos: dict[str, int] = {tid: i for i, tid in enumerate(tid_arr)}
+
+            # Pre-materialize columns as numpy arrays for O(1) positional access
+            tenor_years_arr = df["tenor_years"].to_numpy()
+            tenor_src_arr = df[tenor_src].astype(str).to_numpy()
+            legs_arr = df[legs_col].to_numpy()
+            is_pkg_arr = df["is_package"].to_numpy()
+            df_indices = df.index.to_numpy()
+
+            pkg_positions = np.where(is_pkg_arr)[0]
             valid_indices: list = []
             n_legs_arr: list[int] = []
             tenors_arr: list[str] = []
 
-            for idx in pkg_indices:
-                legs = df.at[idx, legs_col]
+            for pos in pkg_positions:
+                legs = legs_arr[pos]
                 if legs is None or (isinstance(legs, float) and pd.isna(legs)):
                     continue
                 try:
@@ -552,14 +563,19 @@ class TradeTape(SDRAnalyzer):
                 except (TypeError, ValueError):
                     continue
 
-                leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
-                if len(leg_indices) < 2:
+                leg_positions = [tid_to_pos[lid] for lid in leg_ids if lid in tid_to_pos]
+                if len(leg_positions) < 2:
                     continue
 
-                leg_rows = df.loc[leg_indices].sort_values("tenor_years")
-                valid_indices.append(idx)
-                n_legs_arr.append(len(leg_indices))
-                tenors_arr.append("/".join(leg_rows[tenor_src].astype(str).values))
+                # Sort leg positions by tenor_years using numpy (much cheaper
+                # than df.loc[...].sort_values on a 100+-col frame)
+                leg_pos_arr = np.asarray(leg_positions)
+                sort_order = np.argsort(tenor_years_arr[leg_pos_arr], kind="stable")
+                sorted_tenors = tenor_src_arr[leg_pos_arr[sort_order]]
+
+                valid_indices.append(df_indices[pos])
+                n_legs_arr.append(len(leg_positions))
+                tenors_arr.append("/".join(sorted_tenors))
 
             if valid_indices:
                 df.loc[valid_indices, "n_package_legs"] = n_legs_arr

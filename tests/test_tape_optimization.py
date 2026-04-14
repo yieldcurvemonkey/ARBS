@@ -79,3 +79,85 @@ class TestPartAEquivalence:
         actual = df[["trade_id"] + pkg_cols].set_index("trade_id").sort_index()
 
         pd.testing.assert_frame_equal(expected, actual, check_dtype=False)
+
+    def test_full_compute_output_unchanged(self, golden):
+        """Full compute() output matches golden snapshot."""
+        classified_df = golden["classified_df"].copy()
+        raw_df = golden["raw_df"]
+        tape = TradeTape(classified_df, raw_df=raw_df)
+        # use_cache=False so we exercise full pipeline
+        if "use_cache" in TradeTape.compute.__code__.co_varnames:
+            enriched = tape.compute(use_cache=False)
+        else:
+            enriched = tape.compute()
+
+        expected = golden["enriched"].set_index("trade_id").sort_index()
+        actual = enriched.set_index("trade_id").sort_index()
+
+        # Check all columns exist
+        assert set(expected.columns) == set(actual.columns), (
+            f"Column mismatch: missing {set(expected.columns) - set(actual.columns)}, "
+            f"extra {set(actual.columns) - set(expected.columns)}"
+        )
+
+        # Compare values column-by-column (full frame compare can be memory-heavy)
+        for col in expected.columns:
+            if col in {"tape_label"}:  # string col with complex formatting
+                pd.testing.assert_series_equal(
+                    expected[col], actual[col], check_dtype=False, check_names=False,
+                )
+            else:
+                try:
+                    pd.testing.assert_series_equal(
+                        expected[col], actual[col], check_dtype=False, check_names=False,
+                    )
+                except AssertionError as e:
+                    raise AssertionError(f"Column '{col}' differs: {e}") from e
+
+
+class TestPartAPerformance:
+    """Performance guardrails for Part A optimizations."""
+
+    def test_cross_day_lifecycle_under_8s(self, golden):
+        from SDRUtils.core.lifecycle import resolve_lifecycle_cross_day
+
+        raw_df = golden["raw_df"]
+        classified_ids = set(golden["classified_df"]["trade_id"].astype(str).values)
+
+        t0 = time.perf_counter()
+        resolve_lifecycle_cross_day(raw_df, classified_ids)
+        elapsed = time.perf_counter() - t0
+        assert elapsed < 8.0, f"cross-day lifecycle regressed to {elapsed:.2f}s (target <8s)"
+
+    def test_packages_enrichment_under_1s(self, golden):
+        classified_df = golden["classified_df"].copy()
+        raw_df = golden["raw_df"]
+        tape = TradeTape(classified_df, raw_df=raw_df)
+        df = tape._df.copy()
+        df = tape._ensure_prerequisites(df)
+        df = tape._enrich_classification(df)
+        df = tape._enrich_upi_reference(df)
+        df = tape._detect_off_date(df)
+        df = tape._enrich_lifecycle(df)
+        df = tape._enrich_cross_day_lifecycle(df)
+        df = tape._enrich_event_type(df)
+        df = tape._enrich_quality(df)
+
+        t0 = time.perf_counter()
+        tape._enrich_packages(df)
+        elapsed = time.perf_counter() - t0
+        assert elapsed < 1.0, f"_enrich_packages regressed to {elapsed:.2f}s (target <1s)"
+
+    def test_full_compute_under_15s(self, golden):
+        classified_df = golden["classified_df"].copy()
+        raw_df = golden["raw_df"]
+        tape = TradeTape(classified_df, raw_df=raw_df)
+
+        t0 = time.perf_counter()
+        # use_cache=False once available; otherwise just compute()
+        if "use_cache" in TradeTape.compute.__code__.co_varnames:
+            tape.compute(use_cache=False)
+        else:
+            tape.compute()
+        elapsed = time.perf_counter() - t0
+        assert elapsed < 15.0, f"full compute() regressed to {elapsed:.2f}s (target <15s)"

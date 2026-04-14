@@ -655,29 +655,70 @@ def resolve_lifecycle_cross_day(
     if raw_df.empty:
         return pd.DataFrame()
 
-    groups = group_by_uti(raw_df, dissemination_col, original_dissemination_col)
+    # --- Union-Find to assign every row its UTI root (inlined from group_by_uti
+    # so we can keep roots as a column and do vectorized filtering before the
+    # expensive per-UTI replay loop) ---
+    parent: Dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent[x], parent[x])
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    dissem_ids = raw_df[dissemination_col].astype(str)
+    orig_ids = raw_df[original_dissemination_col]
+    for dissem, orig in zip(dissem_ids.values, orig_ids.values):
+        parent.setdefault(dissem, dissem)
+        if pd.notna(orig):
+            orig_str = str(orig).strip()
+            if orig_str:
+                parent.setdefault(orig_str, orig_str)
+                union(orig_str, dissem)
+
+    roots = dissem_ids.map(find)
+
+    # --- Vectorized pre-filter: find eligible UTI roots before looping ---
+    actions_series = raw_df[action_col]
+    # NEWT dissem_id per UTI root (first NEWT wins)
+    newt_mask_all = actions_series == "NEWT"
+    if not newt_mask_all.any():
+        return pd.DataFrame()
+    newt_dissem_per_root = (
+        dissem_ids[newt_mask_all]
+        .groupby(roots[newt_mask_all].values)
+        .first()
+    )
+    # Keep only roots whose NEWT dissem_id is in the classified set
+    classified_mask = newt_dissem_per_root.isin(classified_dissem_ids)
+    eligible_newt = newt_dissem_per_root[classified_mask]
+    if eligible_newt.empty:
+        return pd.DataFrame()
+
+    # Multi-day filter
+    if skip_intraday_only and file_date_col in raw_df.columns:
+        n_dates = raw_df[file_date_col].groupby(roots.values).nunique(dropna=True)
+        multi_day_roots = n_dates[n_dates > 1].index
+        eligible_newt = eligible_newt[eligible_newt.index.isin(multi_day_roots)]
+        if eligible_newt.empty:
+            return pd.DataFrame()
+
+    eligible_root_set = set(eligible_newt.index)
+
+    # Slice raw_df down to only rows in eligible UTIs, then groupby
+    eligible_row_mask = roots.isin(eligible_root_set).values
+    eligible_df = raw_df[eligible_row_mask]
+    eligible_roots = roots[eligible_row_mask]
 
     records: list[dict] = []
 
-    for uti, group_df in groups.items():
-        # Must contain a NEWT
-        actions = group_df[action_col].values
-        if "NEWT" not in actions:
-            continue
-
-        # Find NEWT dissemination ID
-        newt_mask = group_df[action_col] == "NEWT"
-        newt_dissem_id = str(group_df.loc[newt_mask, dissemination_col].iloc[0])
-
-        # Filter: only groups whose NEWT is in the classified set
-        if newt_dissem_id not in classified_dissem_ids:
-            continue
-
-        # Optimization: skip intra-day-only groups
-        if skip_intraday_only and file_date_col in group_df.columns:
-            file_dates = group_df[file_date_col].dropna().unique()
-            if len(file_dates) <= 1:
-                continue
+    for uti, group_df in eligible_df.groupby(eligible_roots.values, sort=False):
+        newt_dissem_id = eligible_newt.loc[uti]
 
         # Replay full lifecycle
         resolved = replay_lifecycle_full(
