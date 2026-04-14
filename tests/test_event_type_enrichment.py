@@ -178,3 +178,65 @@ class TestCompressionSpecOverride:
         row = result.iloc[0]
         assert bool(row["is_compression_spec"]) is True
         assert bool(row["is_compression"]) is True
+
+
+class TestNovationMatching:
+    """Conservative novation chain matching."""
+
+    def _make_nova_pair(self):
+        """TERM+NOVA and NEWT+NOVA with matching criteria."""
+        return pd.DataFrame({
+            "trade_id": ["OLD1", "NEW1"],
+            "event_action": ["TERM-NOVA", "NEWT-NOVA"],
+            "event_type": ["NOVA", "NOVA"],
+            "execution_timestamp": pd.to_datetime([
+                "2026-03-09 14:00:00+00:00",
+                "2026-03-09 14:00:30+00:00",
+            ]),
+            "tenor_years": [10.0, 10.0],
+            "notional": [25_000_000, 25_000_000],
+            "upi_underlier_name": ["USD-SOFR-COMPOUND", "USD-SOFR-COMPOUND"],
+            "non-standardized_term_indicator": [False, False],
+        })
+
+    def test_matched_pair_gets_shared_id(self):
+        df = self._make_nova_pair()
+        tape = TradeTape(df)
+        result = tape._enrich_event_type(df.copy())
+        assert result.iloc[0]["novation_match_id"] == result.iloc[1]["novation_match_id"]
+        assert pd.notna(result.iloc[0]["novation_match_id"])
+
+    def test_matched_pair_confidence_high(self):
+        df = self._make_nova_pair()
+        tape = TradeTape(df)
+        result = tape._enrich_event_type(df.copy())
+        assert result.iloc[0]["novation_confidence"] == "HIGH"
+
+    def test_unmatched_nova_has_nan_match_id(self):
+        df = pd.DataFrame({
+            "trade_id": ["OLD1"],
+            "event_action": ["TERM-NOVA"],
+            "event_type": ["NOVA"],
+            "execution_timestamp": pd.to_datetime(["2026-03-09 14:00:00+00:00"]),
+            "tenor_years": [10.0],
+            "notional": [25_000_000],
+            "upi_underlier_name": ["USD-SOFR-COMPOUND"],
+            "non-standardized_term_indicator": [False],
+        })
+        tape = TradeTape(df)
+        result = tape._enrich_event_type(df.copy())
+        assert pd.isna(result.iloc[0]["novation_match_id"])
+
+    def test_different_notional_no_match(self):
+        df = self._make_nova_pair()
+        df.loc[1, "notional"] = 50_000_000  # different notional
+        tape = TradeTape(df)
+        result = tape._enrich_event_type(df.copy())
+        assert pd.isna(result.iloc[0]["novation_match_id"])
+
+    def test_timestamp_beyond_60s_no_match(self):
+        df = self._make_nova_pair()
+        df.loc[1, "execution_timestamp"] = pd.Timestamp("2026-03-09 14:05:00+00:00")
+        tape = TradeTape(df)
+        result = tape._enrich_event_type(df.copy())
+        assert pd.isna(result.iloc[0]["novation_match_id"])

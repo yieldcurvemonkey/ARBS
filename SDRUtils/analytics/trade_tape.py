@@ -124,6 +124,85 @@ def _load_swap_upi_lookup() -> pd.DataFrame:
     return out.set_index("upi")
 
 
+def _match_novation_pairs(df: pd.DataFrame) -> pd.DataFrame:
+    """Conservative heuristic matching of TERM+NOVA <-> NEWT+NOVA pairs.
+
+    Match criteria:
+    - Same notional (exact)
+    - Same tenor_years (within 0.1Y)
+    - Timestamps within 60 seconds
+    - Same upi_underlier_name
+
+    Greedy 1:1 matching. Unmatched trades get NaN.
+    """
+    df["novation_match_id"] = pd.Series(dtype="object", index=df.index)
+    df["novation_confidence"] = pd.Series(dtype="object", index=df.index)
+
+    term_nova = df[df.get("is_novation_terminated", pd.Series(False, index=df.index)) == True]
+    newt_nova = df[df.get("is_novation_born", pd.Series(False, index=df.index)) == True]
+
+    if term_nova.empty or newt_nova.empty:
+        return df
+
+    matched_newt_indices = set()
+    match_seq = 0
+
+    for t_idx, t_row in term_nova.iterrows():
+        t_ts = pd.to_datetime(t_row.get("execution_timestamp"))
+        t_notional = t_row.get("notional", 0)
+        t_tenor = t_row.get("tenor_years", 0)
+        t_underlier = str(t_row.get("upi_underlier_name", ""))
+
+        best_idx = None
+        best_score = 0
+
+        for n_idx, n_row in newt_nova.iterrows():
+            if n_idx in matched_newt_indices:
+                continue
+
+            # Mandatory gates: notional must match exactly
+            if t_notional != n_row.get("notional", -1):
+                continue
+
+            # Mandatory gate: timestamps within 60s
+            n_ts = pd.to_datetime(n_row.get("execution_timestamp"))
+            try:
+                if abs((t_ts - n_ts).total_seconds()) > 60:
+                    continue
+            except (TypeError, AttributeError):
+                continue
+
+            score = 2  # notional + timestamp already matched
+
+            # Criterion 3: tenor within 0.1Y
+            n_tenor = n_row.get("tenor_years", -999)
+            try:
+                if abs(float(t_tenor) - float(n_tenor)) <= 0.1:
+                    score += 1
+            except (ValueError, TypeError):
+                pass
+
+            # Criterion 4: same underlier
+            if t_underlier == str(n_row.get("upi_underlier_name", "")):
+                score += 1
+
+            if score >= 3 and score > best_score:
+                best_score = score
+                best_idx = n_idx
+
+        if best_idx is not None:
+            match_id = f"nova_{match_seq}"
+            confidence = "HIGH" if best_score == 4 else "MEDIUM"
+            df.at[t_idx, "novation_match_id"] = match_id
+            df.at[t_idx, "novation_confidence"] = confidence
+            df.at[best_idx, "novation_match_id"] = match_id
+            df.at[best_idx, "novation_confidence"] = confidence
+            matched_newt_indices.add(best_idx)
+            match_seq += 1
+
+    return df
+
+
 class TradeTape(SDRAnalyzer):
     """Unified trade enrichment pipeline.
 
@@ -391,9 +470,12 @@ class TradeTape(SDRAnalyzer):
         else:
             df["is_non_standard_term"] = False
 
-        # Initialize novation matching columns (populated in Task 4)
-        df["novation_match_id"] = pd.Series(dtype="object", index=df.index)
-        df["novation_confidence"] = pd.Series(dtype="object", index=df.index)
+        # Novation chain matching
+        if df["is_novation"].any():
+            df = _match_novation_pairs(df)
+        else:
+            df["novation_match_id"] = pd.Series(dtype="object", index=df.index)
+            df["novation_confidence"] = pd.Series(dtype="object", index=df.index)
 
         # Override heuristic compression with spec signal
         if "is_compression" in df.columns:
