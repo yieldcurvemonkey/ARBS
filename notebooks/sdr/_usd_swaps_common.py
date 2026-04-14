@@ -203,14 +203,14 @@ def load_usd_swaps(
     USD_SwapProduct.build_classification_dataframe() with chunked loading.
     """
     # Check for pre-computed parquet file first (fast path)
-    if os.path.exists(_PRECOMPUTED_PATH):
-        print(f"  Using precomputed data from {_PRECOMPUTED_PATH}")
-        df = pd.read_parquet(_PRECOMPUTED_PATH, engine="pyarrow")
-        df["execution_date"] = pd.to_datetime(df["execution_date"]).dt.date
-        start_date = start.date() if hasattr(start, "date") else start
-        end_date = end.date() if hasattr(end, "date") else end
-        df = df[(df["execution_date"] >= start_date) & (df["execution_date"] <= end_date)]
-        return df
+    # if os.path.exists(_PRECOMPUTED_PATH):
+    #     print(f"  Using precomputed data from {_PRECOMPUTED_PATH}")
+    #     df = pd.read_parquet(_PRECOMPUTED_PATH, engine="pyarrow")
+    #     df["execution_date"] = pd.to_datetime(df["execution_date"]).dt.date
+    #     start_date = start.date() if hasattr(start, "date") else start
+    #     end_date = end.date() if hasattr(end, "date") else end
+    #     df = df[(df["execution_date"] >= start_date) & (df["execution_date"] <= end_date)]
+    #     return df
 
     product = USD_SwapProduct()
 

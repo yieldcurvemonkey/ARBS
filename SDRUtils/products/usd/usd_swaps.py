@@ -768,98 +768,103 @@ class USD_SwapProduct(USDProductBase):
 
         built_frames = []
         for exec_date in missing_dates:
-            # ignore dates falling outside of execution
-            # consequence: will drop modifications
-            if exec_date > end.date() or exec_date < start.date():
-                continue
+            try:
+                # ignore dates falling outside of execution
+                # consequence: will drop modifications
+                if exec_date > end.date() or exec_date < start.date():
+                    continue
 
-            day_df = raw_sdr_trades_df[raw_sdr_trades_df["_execution_date"] == exec_date]
+                day_df = raw_sdr_trades_df[raw_sdr_trades_df["_execution_date"] == exec_date]
 
-            if use_v2_classification:
-                classifications = _classify_messages_v2(
-                    day_df, exec_date=exec_date, curve_source=curve_source, **kwargs,
-                )
-            else:
-                classifications = self.classify_messages(
-                    day_df,
-                    curve=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date)),
-                )
-            classifications_df = classifications_to_dataframe(classifications)
-            if not classifications_df.empty:
-                classifications_df[TRADE_ID] = classifications_df[TRADE_ID].astype("string")
-                day_df = day_df.copy()
-                day_df[TRADE_ID] = day_df[TRADE_ID].astype("string")
+                if use_v2_classification:
+                    classifications = _classify_messages_v2(
+                        day_df, exec_date=exec_date, curve_source=curve_source, **kwargs,
+                    )
+                else:
+                    classifications = self.classify_messages(
+                        day_df,
+                        curve=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date)),
+                    )
+                classifications_df = classifications_to_dataframe(classifications)
+                if not classifications_df.empty:
+                    classifications_df[TRADE_ID] = classifications_df[TRADE_ID].astype("string")
+                    day_df = day_df.copy()
+                    day_df[TRADE_ID] = day_df[TRADE_ID].astype("string")
 
-            # --- Lifecycle V2 resolution ---
-            # Pass full day's raw data (all action types) through lifecycle resolver.
-            # Only NEWT-bearing UTI groups produce output; result is indexed by
-            # NEWT dissemination ID for merge onto classified rows.
-            from SDRUtils.core.lifecycle import resolve_lifecycle_for_day
+                # --- Lifecycle V2 resolution ---
+                # Pass full day's raw data (all action types) through lifecycle resolver.
+                # Only NEWT-bearing UTI groups produce output; result is indexed by
+                # NEWT dissemination ID for merge onto classified rows.
+                from SDRUtils.core.lifecycle import resolve_lifecycle_for_day
 
-            lifecycle_df = resolve_lifecycle_for_day(day_df)
-            if not lifecycle_df.empty and not classifications_df.empty:
-                lifecycle_df.index = lifecycle_df.index.astype("string")
-                classifications_df = classifications_df.merge(
-                    lifecycle_df,
-                    left_on=TRADE_ID,
-                    right_index=True,
+                lifecycle_df = resolve_lifecycle_for_day(day_df)
+                if not lifecycle_df.empty and not classifications_df.empty:
+                    lifecycle_df.index = lifecycle_df.index.astype("string")
+                    classifications_df = classifications_df.merge(
+                        lifecycle_df,
+                        left_on=TRADE_ID,
+                        right_index=True,
+                        how="left",
+                    )
+
+                package_df = classifications_df.merge(
+                    day_df[
+                        # this is temp
+                        [
+                            TRADE_ID,
+                            "UPI Underlier Name",
+                            "Unique Product Identifier",
+                            "Platform identifier",
+                            "Cleared",
+                            "Prime brokerage transaction indicator",
+                            "Block trade election indicator",
+                            "Large notional off-facility swap election indicator",
+                            "Other payment type",  # non-par
+                            "Other payment amount",
+                            "Package indicator",
+                            "Package transaction spread",
+                        ]
+                    ],
+                    on=TRADE_ID,
                     how="left",
                 )
 
-            package_df = classifications_df.merge(
-                day_df[
-                    # this is temp
-                    [
-                        TRADE_ID,
-                        "UPI Underlier Name",
-                        "Unique Product Identifier",
-                        "Platform identifier",
-                        "Cleared",
-                        "Prime brokerage transaction indicator",
-                        "Block trade election indicator",
-                        "Large notional off-facility swap election indicator",
-                        "Other payment type",  # non-par
-                        "Other payment amount",
-                        "Package indicator",
-                        "Package transaction spread",
-                    ]
-                ],
-                on=TRADE_ID,
-                how="left",
-            )
+                package_df = package_df.drop(columns=[TRADE_ID])
+                package_df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", col.lower()).lower().replace(" ", "_") for col in package_df.columns]
 
-            package_df = package_df.drop(columns=[TRADE_ID])
-            package_df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", col.lower()).lower().replace(" ", "_") for col in package_df.columns]
+                if detect_fly:
+                    package_df = detect_fly_trades_df(package_df)
+                if detect_curve:
+                    package_df = detect_curve_trades_df(package_df)
+                if detect_mms:
+                    package_df = detect_mms_trades_df(package_df)
+                if detect_invoice:
+                    package_df = detect_invoice_swaps(package_df)
+                if detect_mac:
+                    package_df = detect_mac_swaps(package_df)
+                if detect_spreadover:
+                    package_df = detect_spreadovers(package_df)
 
-            if detect_fly:
-                package_df = detect_fly_trades_df(package_df)
-            if detect_curve:
-                package_df = detect_curve_trades_df(package_df)
-            if detect_mms:
-                package_df = detect_mms_trades_df(package_df)
-            if detect_invoice:
-                package_df = detect_invoice_swaps(package_df)
-            if detect_mac:
-                package_df = detect_mac_swaps(package_df)
-            if detect_spreadover:
-                package_df = detect_spreadovers(package_df)
+                # Final rollup: resolve unified special_tenor fields from all detectors
+                package_df = _resolve_special_tenor_priority(package_df)
 
-            # Final rollup: resolve unified special_tenor fields from all detectors
-            package_df = _resolve_special_tenor_priority(package_df)
+                # Normalize mixed object/string numerics before parquet serialization.
+                package_df = _prepare_cache_dataframe_for_arrow(package_df)
 
-            # Normalize mixed object/string numerics before parquet serialization.
-            package_df = _prepare_cache_dataframe_for_arrow(package_df)
+                count = len(day_df)
+                date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
+                date_dir.mkdir(parents=True, exist_ok=True)
+                cache_fp = date_dir / f"{count}.parquet"
+                tmp_fp = cache_fp.with_suffix(".parquet.tmp")
+                table = pa.Table.from_pandas(package_df, preserve_index=False)
+                pq.write_table(table, tmp_fp, compression="zstd")
+                tmp_fp.replace(cache_fp)
 
-            count = len(day_df)
-            date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
-            date_dir.mkdir(parents=True, exist_ok=True)
-            cache_fp = date_dir / f"{count}.parquet"
-            tmp_fp = cache_fp.with_suffix(".parquet.tmp")
-            table = pa.Table.from_pandas(package_df, preserve_index=False)
-            pq.write_table(table, tmp_fp, compression="zstd")
-            tmp_fp.replace(cache_fp)
-
-            built_frames.append(package_df)
+                built_frames.append(package_df)
+            
+            # todo handle errors
+            except Exception as e: 
+                pass
 
         all_frames = [*cached_frames, *built_frames]
         if not all_frames:

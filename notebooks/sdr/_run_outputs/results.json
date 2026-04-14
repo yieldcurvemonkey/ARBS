@@ -1,0 +1,163 @@
+[
+  {
+    "notebook": "01_flow_decomposition.ipynb",
+    "status": "CELL_ERRORS",
+    "error": "[Cell 0] ModuleNotFoundError: No module named 'SDRUtils'; [Cell 1] NameError: name 'sdr' is not defined; [Cell 3] NameError: name 'df' is not defined; [Cell 5] NameError: name 'sdr' is not defined; [Cell 7] NameError: name 'df' is not defined; [Cell 9] NameError: name 'df' is not defined; [Cell 11] NameError: name 'df' is not defined; [Cell 13] NameError: name 'df' is not defined",
+    "outputs": [
+      "ERROR [Cell 0] ModuleNotFoundError: No module named 'SDRUtils'",
+      "ERROR [Cell 1] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 3] NameError: name 'df' is not defined",
+      "ERROR [Cell 5] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 7] NameError: name 'df' is not defined",
+      "ERROR [Cell 9] NameError: name 'df' is not defined",
+      "ERROR [Cell 11] NameError: name 'df' is not defined",
+      "ERROR [Cell 13] NameError: name 'df' is not defined"
+    ]
+  },
+  {
+    "notebook": "02_volume_regime.ipynb",
+    "status": "CELL_ERRORS",
+    "error": "[Cell 0] ModuleNotFoundError: No module named 'SDRUtils'; [Cell 2] NameError: name 'sdr' is not defined; [Cell 4] NameError: name 'df' is not defined; [Cell 6] NameError: name 'sdr' is not defined; [Cell 8] NameError: name 'sdr' is not defined; [Cell 10] NameError: name 'df' is not defined; [Cell 12] ModuleNotFoundError: No module named 'SDRUtils'",
+    "outputs": [
+      "ERROR [Cell 0] ModuleNotFoundError: No module named 'SDRUtils'",
+      "ERROR [Cell 2] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 4] NameError: name 'df' is not defined",
+      "ERROR [Cell 6] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 8] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 10] NameError: name 'df' is not defined",
+      "ERROR [Cell 12] ModuleNotFoundError: No module named 'SDRUtils'"
+    ]
+  },
+  {
+    "notebook": "03_liquidity_scoring.ipynb",
+    "status": "CELL_ERRORS",
+    "error": "[Cell 0] ModuleNotFoundError: No module named 'SDRUtils'; [Cell 2] NameError: name 'trades' is not defined; [Cell 4] NameError: name 'sdr' is not defined; [Cell 6] NameError: name 'trades' is not defined; [Cell 8] NameError: name 'trades' is not defined; [Cell 10] NameError: name 'benchmark' is not defined; [Cell 12] NameError: name 'sdr' is not defined",
+    "outputs": [
+      "ERROR [Cell 0] ModuleNotFoundError: No module named 'SDRUtils'",
+      "ERROR [Cell 2] NameError: name 'trades' is not defined",
+      "ERROR [Cell 4] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 6] NameError: name 'trades' is not defined",
+      "ERROR [Cell 8] NameError: name 'trades' is not defined",
+      "ERROR [Cell 10] NameError: name 'benchmark' is not defined",
+      "ERROR [Cell 12] NameError: name 'sdr' is not defined"
+    ]
+  },
+  {
+    "notebook": "04_spreadover_analytics.ipynb",
+    "status": "CELL_ERRORS",
+    "error": "[Cell 0] ModuleNotFoundError: No module named 'SDRUtils'; [Cell 2] NameError: name 'sdr' is not defined; [Cell 4] NameError: name 'spreadovers' is not defined; [Cell 6] NameError: name 'sdr' is not defined; [Cell 8] NameError: name 'spreadovers' is not defined; [Cell 10] NameError: name 'spreadovers' is not defined",
+    "outputs": [
+      "ERROR [Cell 0] ModuleNotFoundError: No module named 'SDRUtils'",
+      "ERROR [Cell 2] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 4] NameError: name 'spreadovers' is not defined",
+      "ERROR [Cell 6] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 8] NameError: name 'spreadovers' is not defined",
+      "ERROR [Cell 10] NameError: name 'spreadovers' is not defined"
+    ]
+  },
+  {
+    "notebook": "05_sofr_ff_basis.ipynb",
+    "status": "CELL_ERRORS",
+    "error": "[Cell 0] ModuleNotFoundError: No module named 'SDRUtils'; [Cell 2] NameError: name 'sdr' is not defined; [Cell 4] NameError: name 'sdr' is not defined; [Cell 6] NameError: name 'basis' is not defined; [Cell 8] NameError: name 'ff_daily' is not defined; [Cell 10] NameError: name 'get_fomc_dates' is not defined",
+    "outputs": [
+      "ERROR [Cell 0] ModuleNotFoundError: No module named 'SDRUtils'",
+      "ERROR [Cell 2] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 4] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 6] NameError: name 'basis' is not defined",
+      "ERROR [Cell 8] NameError: name 'ff_daily' is not defined",
+      "ERROR [Cell 10] NameError: name 'get_fomc_dates' is not defined"
+    ]
+  },
+  {
+    "notebook": "06_cme_lch_basis.ipynb",
+    "status": "CELL_ERRORS",
+    "error": "[Cell 0] ModuleNotFoundError: No module named 'SDRUtils'; [Cell 2] NameError: name 'df' is not defined; [Cell 4] NameError: name 'sdr' is not defined; [Cell 6] NameError: name 'cleared' is not defined; [Cell 8] NameError: name 'cleared' is not defined",
+    "outputs": [
+      "ERROR [Cell 0] ModuleNotFoundError: No module named 'SDRUtils'",
+      "ERROR [Cell 2] NameError: name 'df' is not defined",
+      "ERROR [Cell 4] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 6] NameError: name 'cleared' is not defined",
+      "[Cell 8] CCP switch detection requires directional information (pay/receive)\nwhich is not directly available in CFTC SDR data.\nAlternative: look for same-day, same-tenor, same-notional pairs across CCPs.",
+      "ERROR [Cell 8] NameError: name 'cleared' is not defined"
+    ]
+  },
+  {
+    "notebook": "07_compression_analytics.ipynb",
+    "status": "CELL_ERRORS",
+    "error": "[Cell 0] ModuleNotFoundError: No module named 'SDRUtils'; [Cell 2] NameError: name 'df' is not defined; [Cell 4] NameError: name 'non_reset' is not defined; [Cell 6] NameError: name 'df' is not defined; [Cell 8] NameError: name 'reset_opt' is not defined; [Cell 10] NameError: name 'df' is not defined; [Cell 12] NameError: name 'raw_daily' is not defined",
+    "outputs": [
+      "ERROR [Cell 0] ModuleNotFoundError: No module named 'SDRUtils'",
+      "ERROR [Cell 2] NameError: name 'df' is not defined",
+      "ERROR [Cell 4] NameError: name 'non_reset' is not defined",
+      "ERROR [Cell 6] NameError: name 'df' is not defined",
+      "ERROR [Cell 8] NameError: name 'reset_opt' is not defined",
+      "ERROR [Cell 10] NameError: name 'df' is not defined",
+      "ERROR [Cell 12] NameError: name 'raw_daily' is not defined"
+    ]
+  },
+  {
+    "notebook": "08_block_cap_analysis.ipynb",
+    "status": "CELL_ERRORS",
+    "error": "[Cell 0] ModuleNotFoundError: No module named 'SDRUtils'; [Cell 2] NameError: name 'sdr' is not defined; [Cell 4] NameError: name 'sdr' is not defined; [Cell 6] NameError: name 'blocks' is not defined; [Cell 8] NameError: name 'df' is not defined; [Cell 10] NameError: name 'blocks' is not defined",
+    "outputs": [
+      "ERROR [Cell 0] ModuleNotFoundError: No module named 'SDRUtils'",
+      "ERROR [Cell 2] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 4] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 6] NameError: name 'blocks' is not defined",
+      "ERROR [Cell 8] NameError: name 'df' is not defined",
+      "ERROR [Cell 10] NameError: name 'blocks' is not defined"
+    ]
+  },
+  {
+    "notebook": "09_tenor_maturity.ipynb",
+    "status": "CELL_ERRORS",
+    "error": "[Cell 0] ModuleNotFoundError: No module named 'SDRUtils'; [Cell 2] NameError: name 'df' is not defined; [Cell 4] NameError: name 'sdr' is not defined; [Cell 6] NameError: name 'df' is not defined; [Cell 8] NameError: name 'df' is not defined; [Cell 10] NameError: name 'df' is not defined; [Cell 12] NameError: name 'df' is not defined",
+    "outputs": [
+      "ERROR [Cell 0] ModuleNotFoundError: No module named 'SDRUtils'",
+      "ERROR [Cell 2] NameError: name 'df' is not defined",
+      "ERROR [Cell 4] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 6] NameError: name 'df' is not defined",
+      "ERROR [Cell 8] NameError: name 'df' is not defined",
+      "ERROR [Cell 10] NameError: name 'df' is not defined",
+      "ERROR [Cell 12] NameError: name 'df' is not defined"
+    ]
+  },
+  {
+    "notebook": "10_event_flow.ipynb",
+    "status": "CELL_ERRORS",
+    "error": "[Cell 0] ModuleNotFoundError: No module named 'SDRUtils'; [Cell 2] NameError: name 'get_fomc_dates' is not defined; [Cell 4] NameError: name 'df' is not defined; [Cell 6] NameError: name 'df_events' is not defined; [Cell 8] NameError: name 'analyze_seasonality_by_event' is not defined; [Cell 10] NameError: name 'START' is not defined; [Cell 12] NameError: name 'df' is not defined",
+    "outputs": [
+      "ERROR [Cell 0] ModuleNotFoundError: No module named 'SDRUtils'",
+      "ERROR [Cell 2] NameError: name 'get_fomc_dates' is not defined",
+      "ERROR [Cell 4] NameError: name 'df' is not defined",
+      "ERROR [Cell 6] NameError: name 'df_events' is not defined",
+      "ERROR [Cell 8] NameError: name 'analyze_seasonality_by_event' is not defined",
+      "ERROR [Cell 10] NameError: name 'START' is not defined",
+      "ERROR [Cell 12] NameError: name 'df' is not defined"
+    ]
+  },
+  {
+    "notebook": "11_fomc_swaps.ipynb",
+    "status": "CELL_ERRORS",
+    "error": "[Cell 1] ModuleNotFoundError: No module named 'SDRUtils'; [Cell 2] ModuleNotFoundError: No module named 'Query'; [Cell 3] NameError: name 'sdr' is not defined; [Cell 5] NameError: name 'fomc_trades' is not defined; [Cell 6] NameError: name 'fomc_trades' is not defined; [Cell 7] NameError: name 'fomc_trades' is not defined; [Cell 9] NameError: name 'fomc_trades' is not defined; [Cell 11] NameError: name 'fomc_trades' is not defined; [Cell 13] NameError: name 'fomc_trades' is not defined; [Cell 14] ModuleNotFoundError: No module named 'MDP'; [Cell 15] NameError: name 'fomc_df' is not defined; [Cell 17] NameError: name 'implied_df' is not defined; [Cell 19] NameError: name 'implied_df' is not defined; [Cell 22] NameError: name 'implied_df' is not defined; [Cell 24] NameError: name 'START' is not defined",
+    "outputs": [
+      "ERROR [Cell 1] ModuleNotFoundError: No module named 'SDRUtils'",
+      "ERROR [Cell 2] ModuleNotFoundError: No module named 'Query'",
+      "ERROR [Cell 3] NameError: name 'sdr' is not defined",
+      "ERROR [Cell 5] NameError: name 'fomc_trades' is not defined",
+      "ERROR [Cell 6] NameError: name 'fomc_trades' is not defined",
+      "ERROR [Cell 7] NameError: name 'fomc_trades' is not defined",
+      "ERROR [Cell 9] NameError: name 'fomc_trades' is not defined",
+      "ERROR [Cell 11] NameError: name 'fomc_trades' is not defined",
+      "ERROR [Cell 13] NameError: name 'fomc_trades' is not defined",
+      "ERROR [Cell 14] ModuleNotFoundError: No module named 'MDP'",
+      "ERROR [Cell 15] NameError: name 'fomc_df' is not defined",
+      "ERROR [Cell 17] NameError: name 'implied_df' is not defined",
+      "ERROR [Cell 19] NameError: name 'implied_df' is not defined",
+      "[Cell 20] CurveStore not available. Skipping historical comparison.",
+      "ERROR [Cell 22] NameError: name 'implied_df' is not defined",
+      "[Cell 24] ======================================================================\nFOMC-DATED SWAP ANALYTICS SUMMARY\n======================================================================",
+      "ERROR [Cell 24] NameError: name 'START' is not defined"
+    ]
+  }
+]

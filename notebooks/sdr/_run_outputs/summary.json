@@ -1,0 +1,57 @@
+[
+  {
+    "notebook": "01_flow_decomposition.ipynb",
+    "status": "OK",
+    "error": null
+  },
+  {
+    "notebook": "02_volume_regime.ipynb",
+    "status": "OK",
+    "error": null
+  },
+  {
+    "notebook": "03_liquidity_scoring.ipynb",
+    "status": "OK",
+    "error": null
+  },
+  {
+    "notebook": "04_spreadover_analytics.ipynb",
+    "status": "ERROR",
+    "error": "ValueError: cannot convert float NaN to integer"
+  },
+  {
+    "notebook": "05_sofr_ff_basis.ipynb",
+    "status": "OK",
+    "error": null
+  },
+  {
+    "notebook": "06_cme_lch_basis.ipynb",
+    "status": "OK",
+    "error": null
+  },
+  {
+    "notebook": "07_compression_analytics.ipynb",
+    "status": "OK",
+    "error": null
+  },
+  {
+    "notebook": "08_block_cap_analysis.ipynb",
+    "status": "OK",
+    "error": null
+  },
+  {
+    "notebook": "09_tenor_maturity.ipynb",
+    "status": "ERROR",
+    "error": "ZeroDivisionError: division by zero"
+  },
+  {
+    "notebook": "10_event_flow.ipynb",
+    "status": "OK",
+    "error": null
+  },
+  {
+    "notebook": "11_fomc_swaps.ipynb",
+    "status": "OK",
+    "error": null
+  }
+]
