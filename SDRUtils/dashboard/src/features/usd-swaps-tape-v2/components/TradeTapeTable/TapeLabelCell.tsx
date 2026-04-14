@@ -3,17 +3,9 @@
 import type { JSX } from 'react'
 import { FLAG_CHIP_TONES } from '../../constants'
 import type { UsdSwapTapeRow } from '../../types'
+import { indexTone, structureOf } from './TapeLabelCell.helpers'
 
-function indexTone(index: string | null | undefined): string {
-  switch (index) {
-    case 'SOFR':
-      return 'bg-emerald-900/40 text-emerald-200'
-    case 'FED_FUNDS':
-      return 'bg-amber-900/40 text-amber-200'
-    default:
-      return 'bg-slate-800/60 text-slate-300'
-  }
-}
+export { indexTone, structureOf } from './TapeLabelCell.helpers'
 
 function Chip({ className = '', children }: { className?: string; children: React.ReactNode }) {
   return (
@@ -43,12 +35,6 @@ function InlineFlag({
       {children}
     </span>
   )
-}
-
-function structureOf(row: UsdSwapTapeRow): string {
-  if (row.package_structure) return row.package_structure
-  if (row.package_type) return String(row.package_type)
-  return ''
 }
 
 export function TapeLabelCell({ row }: { row: UsdSwapTapeRow }): JSX.Element {
@@ -102,4 +88,3 @@ export function TapeLabelCell({ row }: { row: UsdSwapTapeRow }): JSX.Element {
   )
 }
 
-export const __test_helpers = { indexTone, structureOf }
