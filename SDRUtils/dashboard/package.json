@@ -12,7 +12,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
-    "test:swaptions": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPatterns=swaptions"
+    "test:swaptions": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPatterns=swaptions",
+    "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPatterns=__tests__/e2e"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.4",
