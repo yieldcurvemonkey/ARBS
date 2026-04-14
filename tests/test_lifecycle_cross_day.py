@@ -511,6 +511,20 @@ class TestUnfilteredRawDf:
         assert bool(row["xd_is_terminated"]) is True
 
 
+class TestLoadUsdSwapsReturnRaw:
+    """Tests for return_raw parameter on load_usd_swaps."""
+
+    def test_return_raw_parameter_exists(self):
+        """Verify load_usd_swaps accepts return_raw parameter."""
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'notebooks', 'sdr'))
+        import _usd_swaps_common as sdr
+        import inspect
+        sig = inspect.signature(sdr.load_usd_swaps)
+        assert "return_raw" in sig.parameters
+        assert sig.parameters["return_raw"].default is False
+
+
 class TestBuildClassificationReturnRawEdgeCases:
     """Edge case tests for return_raw parameter."""
 

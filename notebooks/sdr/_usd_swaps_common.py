@@ -194,6 +194,7 @@ def load_usd_swaps(
     cache_path: str = DEFAULT_CACHE_PATH,
     curve_source: str = "ERIS_EOD_LIVE-RL_BASIC",
     detect_packages: bool = True,
+    return_raw: bool = False,
 ) -> pd.DataFrame:
     """
     Load and classify SDR trades for a date range.
@@ -216,7 +217,7 @@ def load_usd_swaps(
 
     span_days = (end - start).days
     if span_days <= 60:
-        df = product.build_classification_dataframe(
+        result = product.build_classification_dataframe(
             start=start,
             end=end,
             cache_path=cache_path,
@@ -227,8 +228,17 @@ def load_usd_swaps(
             detect_mac=detect_packages,
             detect_spreadover=detect_packages,
             curve_source=curve_source,
+            return_raw=return_raw,
         )
+        if return_raw:
+            return result  # already a (classified_df, raw_df) tuple
+        df = result
     else:
+        if return_raw:
+            raise ValueError(
+                "return_raw=True not supported for date ranges > 60 days. "
+                "Use build_classification_dataframe directly for chunked loading."
+            )
         chunks = []
         for chunk_start, chunk_end in _monthly_chunks(start, end):
             print(f"  Loading {chunk_start.date()} to {chunk_end.date()}...")
