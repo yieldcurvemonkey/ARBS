@@ -8,6 +8,9 @@ market context, relative value, and an enriched trade label.
 """
 from __future__ import annotations
 
+import hashlib
+import os
+import pickle
 from typing import Any, Dict, List
 
 import numpy as np
@@ -49,6 +52,17 @@ def _hour_to_session(hour: int) -> str:
         if lo <= hour < hi:
             return label
     return "Asia"  # 18-23 and 0-1
+
+
+# ---------------------------------------------------------------------------
+# Result cache versioning
+# ---------------------------------------------------------------------------
+
+TRADE_TAPE_CACHE_VERSION = "v1"
+DEFAULT_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "notebooks", "sdr", "_cache", "trade_tape",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +244,57 @@ class TradeTape(SDRAnalyzer):
         self._raw_df = raw_df
         self._cluster_gap_seconds = cluster_gap_seconds
         self._off_market_threshold_bp = off_market_threshold_bp
+
+    # -- result cache ------------------------------------------------------
+
+    def _cache_key(self) -> str:
+        """Deterministic hash of inputs that affect compute() output."""
+        df = self._df
+        parts: list[str] = [str(len(df))]
+        if "execution_timestamp" in df.columns and not df.empty:
+            parts.append(str(df["execution_timestamp"].min()))
+            parts.append(str(df["execution_timestamp"].max()))
+        if "trade_id" in df.columns and not df.empty:
+            parts.append(
+                hashlib.sha256(
+                    "".join(sorted(df["trade_id"].astype(str))).encode()
+                ).hexdigest()[:16]
+            )
+        parts.append(
+            str(len(self._raw_df)) if self._raw_df is not None else "no_raw"
+        )
+        parts.append(str(self._cluster_gap_seconds))
+        parts.append(str(self._off_market_threshold_bp))
+        parts.append(TRADE_TAPE_CACHE_VERSION)
+        return hashlib.sha256("|".join(parts).encode()).hexdigest()[:20]
+
+    def _cache_path(self, cache_dir: str | None = None) -> str:
+        directory = cache_dir or DEFAULT_CACHE_DIR
+        return os.path.join(directory, f"{self._cache_key()}.pkl")
+
+    def _try_load_cache(self, cache_dir: str | None = None) -> pd.DataFrame | None:
+        """Return cached DataFrame for current inputs, or None on miss/corruption."""
+        path = self._cache_path(cache_dir)
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except Exception as e:
+            import warnings
+            warnings.warn(f"TradeTape cache load failed ({path}): {e}")
+            return None
+
+    def _save_cache(self, df: pd.DataFrame, cache_dir: str | None = None) -> None:
+        """Persist compute() output to the cache directory."""
+        path = self._cache_path(cache_dir)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            with open(path, "wb") as f:
+                pickle.dump(df, f, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception as e:
+            import warnings
+            warnings.warn(f"TradeTape cache save failed ({path}): {e}")
 
     # -- prerequisites -----------------------------------------------------
 
@@ -530,17 +595,32 @@ class TradeTape(SDRAnalyzer):
         df["package_tenors"] = df[tenor_src].astype(str)
         df["package_structure"] = ""
 
-        # Build trade_id -> index lookup (string keys for type safety)
-        tid_to_idx: dict[str, int] = {}
-        if "trade_id" in df.columns:
-            for idx, tid in df["trade_id"].items():
-                tid_to_idx[str(tid)] = idx
-
-        # Resolve package legs from package_legs array
+        # Resolve package legs from package_legs array (batched assignment).
+        # Uses positional numpy indexing throughout to avoid per-row .loc[]
+        # DataFrame slices and sort_values, each of which allocates a new
+        # frame. On 9K packages that overhead dominates.
         legs_col = "package_legs"
-        if legs_col in df.columns and df["is_package"].any() and tid_to_idx:
-            for idx in df.index[df["is_package"]]:
-                legs = df.at[idx, legs_col]
+        if "trade_id" in df.columns and legs_col in df.columns and df["is_package"].any():
+            import numpy as np
+
+            # Positional lookup: trade_id -> integer position in df
+            tid_arr = df["trade_id"].astype(str).to_numpy()
+            tid_to_pos: dict[str, int] = {tid: i for i, tid in enumerate(tid_arr)}
+
+            # Pre-materialize columns as numpy arrays for O(1) positional access
+            tenor_years_arr = df["tenor_years"].to_numpy()
+            tenor_src_arr = df[tenor_src].astype(str).to_numpy()
+            legs_arr = df[legs_col].to_numpy()
+            is_pkg_arr = df["is_package"].to_numpy()
+            df_indices = df.index.to_numpy()
+
+            pkg_positions = np.where(is_pkg_arr)[0]
+            valid_indices: list = []
+            n_legs_arr: list[int] = []
+            tenors_arr: list[str] = []
+
+            for pos in pkg_positions:
+                legs = legs_arr[pos]
                 if legs is None or (isinstance(legs, float) and pd.isna(legs)):
                     continue
                 try:
@@ -548,15 +628,23 @@ class TradeTape(SDRAnalyzer):
                 except (TypeError, ValueError):
                     continue
 
-                # Resolve leg indices
-                leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
-                if len(leg_indices) < 2:
+                leg_positions = [tid_to_pos[lid] for lid in leg_ids if lid in tid_to_pos]
+                if len(leg_positions) < 2:
                     continue
 
-                leg_rows = df.loc[leg_indices].sort_values("tenor_years")
-                tenors = "/".join(leg_rows[tenor_src].astype(str).values)
-                df.at[idx, "n_package_legs"] = len(leg_indices)
-                df.at[idx, "package_tenors"] = tenors
+                # Sort leg positions by tenor_years using numpy (much cheaper
+                # than df.loc[...].sort_values on a 100+-col frame)
+                leg_pos_arr = np.asarray(leg_positions)
+                sort_order = np.argsort(tenor_years_arr[leg_pos_arr], kind="stable")
+                sorted_tenors = tenor_src_arr[leg_pos_arr[sort_order]]
+
+                valid_indices.append(df_indices[pos])
+                n_legs_arr.append(len(leg_positions))
+                tenors_arr.append("/".join(sorted_tenors))
+
+            if valid_indices:
+                df.loc[valid_indices, "n_package_legs"] = n_legs_arr
+                df.loc[valid_indices, "package_tenors"] = tenors_arr
 
         # Build package_structure from tenors + trade_type
         pkg_mask = df["is_package"]
@@ -820,8 +908,20 @@ class TradeTape(SDRAnalyzer):
 
     # -- public interface --------------------------------------------------
 
-    def compute(self) -> pd.DataFrame:
-        """Run all enrichment layers and return the fully enriched tape."""
+    def compute(
+        self,
+        use_cache: bool = True,
+        cache_dir: str | None = None,
+    ) -> pd.DataFrame:
+        """Run all enrichment layers and return the fully enriched tape.
+
+        Args:
+            use_cache: When True, check pickle cache before running the
+                pipeline and persist output to cache on success.  False
+                forces a full recompute and skips writing.
+            cache_dir: Override the default cache directory
+                (``notebooks/sdr/_cache/trade_tape``).  Mostly for tests.
+        """
         from tqdm.auto import tqdm
 
         if self._result is not None:
@@ -831,6 +931,12 @@ class TradeTape(SDRAnalyzer):
         if df.empty:
             self._result = df
             return df
+
+        if use_cache:
+            cached = self._try_load_cache(cache_dir)
+            if cached is not None:
+                self._result = cached
+                return cached
 
         steps = [
             ("Prerequisites", self._ensure_prerequisites),
@@ -854,7 +960,25 @@ class TradeTape(SDRAnalyzer):
         pbar.close()
 
         self._result = df
+        if use_cache and not df.empty:
+            self._save_cache(df, cache_dir)
         return df
+
+    @classmethod
+    def clear_cache(cls, cache_dir: str | None = None) -> int:
+        """Delete all cached tape files. Returns count of files removed."""
+        directory = cache_dir or DEFAULT_CACHE_DIR
+        if not os.path.isdir(directory):
+            return 0
+        n = 0
+        for fn in os.listdir(directory):
+            if fn.endswith(".pkl"):
+                try:
+                    os.remove(os.path.join(directory, fn))
+                    n += 1
+                except OSError:
+                    pass
+        return n
 
     def summary(self) -> Dict[str, Any]:
         """Key stats for the enriched tape."""

@@ -288,14 +288,24 @@ def replay_lifecycle_full(
     state: Optional[Dict[str, object]] = None
     inception_state: Optional[Dict[str, object]] = None
 
-    # Collect message IDs and actions
-    for _, row in messages.iterrows():
-        dissem_id = row.get(dissemination_col)
-        if dissem_id and not pd.isna(dissem_id):
-            resolved.message_ids.append(str(dissem_id))
+    # Resolve column positions once — SDR column names contain spaces / casing
+    # that don't become valid namedtuple attributes, so we index by position.
+    col_names = list(messages.columns)
+    col_positions = {col: idx for idx, col in enumerate(col_names)}
+    dissem_pos = col_positions.get(dissemination_col)
+    action_pos = col_positions.get(action_col)
+    ts_pos = col_positions.get(event_timestamp_col)
+    amend_pos = col_positions.get(amendment_indicator_col)
 
-        action = row.get(action_col)
-        timestamp = row.get(event_timestamp_col)
+    # Collect message IDs and actions — itertuples avoids per-row Series alloc
+    for row in messages.itertuples(index=False, name=None):
+        if dissem_pos is not None:
+            dissem_id = row[dissem_pos]
+            if dissem_id and not pd.isna(dissem_id):
+                resolved.message_ids.append(str(dissem_id))
+
+        action = row[action_pos] if action_pos is not None else None
+        timestamp = row[ts_pos] if ts_pos is not None else None
         resolved.actions.append((action, timestamp))
 
     # Check for lifecycle updates (MODI/CORR without being the only action)
@@ -306,10 +316,10 @@ def replay_lifecycle_full(
     if "NEWT" not in action_types:
         resolved.quality_flags.append("MISSING_NEWT")
 
-    # Replay lifecycle
-    for _, row in messages.iterrows():
-        action = row.get(action_col)
-        row_data = row.to_dict()
+    # Replay lifecycle — dict(zip(...)) is much cheaper than .iterrows Series alloc
+    for row_tuple in messages.itertuples(index=False, name=None):
+        action = row_tuple[action_pos] if action_pos is not None else None
+        row_data = dict(zip(col_names, row_tuple))
 
         if action == "NEWT":
             state = row_data.copy()
@@ -317,7 +327,7 @@ def replay_lifecycle_full(
             inception_state = state.copy()
 
         elif action == "MODI":
-            is_amendment = row.get(amendment_indicator_col)
+            is_amendment = row_tuple[amend_pos] if amend_pos is not None else None
             if is_amendment is True or (isinstance(is_amendment, str) and is_amendment.upper() == "TRUE"):
                 state = _update_state(state, row_data, overwrite=True, economics_only=True)
                 state = _update_state(state, row_data, overwrite=False)
@@ -581,16 +591,18 @@ def resolve_lifecycle_for_day(
             event_timestamp_col=event_timestamp_col,
         )
 
-        # Build file_dates mapping for cross-day detection
+        # Build file_dates mapping for cross-day detection — vectorized
         file_dates_map: Dict[str, date] = {}
         if file_date_col in group_df.columns:
-            for _, row in group_df.iterrows():
-                did = str(row[dissemination_col])
-                fd = row[file_date_col]
-                if pd.notna(fd):
-                    if isinstance(fd, datetime):
-                        fd = fd.date()
-                    file_dates_map[did] = fd
+            fd_col = group_df[file_date_col]
+            mask = fd_col.notna()
+            if mask.any():
+                dissem_arr = group_df.loc[mask, dissemination_col].astype(str).to_numpy()
+                fd_arr = fd_col[mask].to_numpy()
+                file_dates_map = {
+                    did: (fd.date() if isinstance(fd, datetime) else fd)
+                    for did, fd in zip(dissem_arr, fd_arr)
+                }
 
         # Bridge to V2 summary
         summary = build_lifecycle_summary_from_resolved(resolved, file_dates_map)
@@ -643,29 +655,70 @@ def resolve_lifecycle_cross_day(
     if raw_df.empty:
         return pd.DataFrame()
 
-    groups = group_by_uti(raw_df, dissemination_col, original_dissemination_col)
+    # --- Union-Find to assign every row its UTI root (inlined from group_by_uti
+    # so we can keep roots as a column and do vectorized filtering before the
+    # expensive per-UTI replay loop) ---
+    parent: Dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent[x], parent[x])
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    dissem_ids = raw_df[dissemination_col].astype(str)
+    orig_ids = raw_df[original_dissemination_col]
+    for dissem, orig in zip(dissem_ids.values, orig_ids.values):
+        parent.setdefault(dissem, dissem)
+        if pd.notna(orig):
+            orig_str = str(orig).strip()
+            if orig_str:
+                parent.setdefault(orig_str, orig_str)
+                union(orig_str, dissem)
+
+    roots = dissem_ids.map(find)
+
+    # --- Vectorized pre-filter: find eligible UTI roots before looping ---
+    actions_series = raw_df[action_col]
+    # NEWT dissem_id per UTI root (first NEWT wins)
+    newt_mask_all = actions_series == "NEWT"
+    if not newt_mask_all.any():
+        return pd.DataFrame()
+    newt_dissem_per_root = (
+        dissem_ids[newt_mask_all]
+        .groupby(roots[newt_mask_all].values)
+        .first()
+    )
+    # Keep only roots whose NEWT dissem_id is in the classified set
+    classified_mask = newt_dissem_per_root.isin(classified_dissem_ids)
+    eligible_newt = newt_dissem_per_root[classified_mask]
+    if eligible_newt.empty:
+        return pd.DataFrame()
+
+    # Multi-day filter
+    if skip_intraday_only and file_date_col in raw_df.columns:
+        n_dates = raw_df[file_date_col].groupby(roots.values).nunique(dropna=True)
+        multi_day_roots = n_dates[n_dates > 1].index
+        eligible_newt = eligible_newt[eligible_newt.index.isin(multi_day_roots)]
+        if eligible_newt.empty:
+            return pd.DataFrame()
+
+    eligible_root_set = set(eligible_newt.index)
+
+    # Slice raw_df down to only rows in eligible UTIs, then groupby
+    eligible_row_mask = roots.isin(eligible_root_set).values
+    eligible_df = raw_df[eligible_row_mask]
+    eligible_roots = roots[eligible_row_mask]
 
     records: list[dict] = []
 
-    for uti, group_df in groups.items():
-        # Must contain a NEWT
-        actions = group_df[action_col].values
-        if "NEWT" not in actions:
-            continue
-
-        # Find NEWT dissemination ID
-        newt_mask = group_df[action_col] == "NEWT"
-        newt_dissem_id = str(group_df.loc[newt_mask, dissemination_col].iloc[0])
-
-        # Filter: only groups whose NEWT is in the classified set
-        if newt_dissem_id not in classified_dissem_ids:
-            continue
-
-        # Optimization: skip intra-day-only groups
-        if skip_intraday_only and file_date_col in group_df.columns:
-            file_dates = group_df[file_date_col].dropna().unique()
-            if len(file_dates) <= 1:
-                continue
+    for uti, group_df in eligible_df.groupby(eligible_roots.values, sort=False):
+        newt_dissem_id = eligible_newt.loc[uti]
 
         # Replay full lifecycle
         resolved = replay_lifecycle_full(
@@ -675,16 +728,18 @@ def resolve_lifecycle_cross_day(
             event_timestamp_col=event_timestamp_col,
         )
 
-        # Build file_dates mapping
+        # Build file_dates mapping — vectorized
         file_dates_map: Dict[str, date] = {}
         if file_date_col in group_df.columns:
-            for _, row in group_df.iterrows():
-                did = str(row[dissemination_col])
-                fd = row[file_date_col]
-                if pd.notna(fd):
-                    if isinstance(fd, datetime):
-                        fd = fd.date()
-                    file_dates_map[did] = fd
+            fd_col = group_df[file_date_col]
+            mask = fd_col.notna()
+            if mask.any():
+                dissem_arr = group_df.loc[mask, dissemination_col].astype(str).to_numpy()
+                fd_arr = fd_col[mask].to_numpy()
+                file_dates_map = {
+                    did: (fd.date() if isinstance(fd, datetime) else fd)
+                    for did, fd in zip(dissem_arr, fd_arr)
+                }
 
         # Bridge to summary
         summary = build_lifecycle_summary_from_resolved(resolved, file_dates_map)
