@@ -376,3 +376,24 @@ class TestTradeTapeCrossDay:
         b1_row = df[df["trade_id"] == "B1"].iloc[0]
         assert b1_row["xd_status"] == "ACTIVE"
         assert b1_row["xd_notional_pct_remaining"] == 1.0
+
+
+class TestBuildClassificationReturnRaw:
+    """Tests for return_raw parameter on build_classification_dataframe."""
+
+    def test_return_raw_false_returns_dataframe(self):
+        """Default behavior unchanged — returns a single DataFrame."""
+        from SDRUtils.products.usd.usd_swaps import USD_SwapProduct
+
+        import inspect
+        sig = inspect.signature(USD_SwapProduct.build_classification_dataframe)
+        assert "return_raw" in sig.parameters
+        assert sig.parameters["return_raw"].default is False
+
+    def test_return_raw_true_returns_tuple(self):
+        """When return_raw=True, returns (classified_df, raw_df) tuple."""
+        from SDRUtils.products.usd.usd_swaps import USD_SwapProduct
+
+        import inspect
+        sig = inspect.signature(USD_SwapProduct.build_classification_dataframe)
+        assert "return_raw" in sig.parameters

@@ -691,6 +691,7 @@ class USD_SwapProduct(USDProductBase):
         ignore_cache: bool = False,
         merge_package_legs: bool = False,
         use_v2_classification: bool = False,
+        return_raw: bool = False,
         **kwargs: Any,
     ):
         sdr = SDRDataBuilder(cache_path=cache_path, show_tqdm=True)
@@ -762,8 +763,12 @@ class USD_SwapProduct(USDProductBase):
                     final_df = merge_package_legs_to_one_row(final_df)
                 final_df["risk"] = final_df["estimated_pv01"].apply(_risk_from_estimated_pv01)
                 final_df["risk"] = (final_df["risk"] / 100).round().mul(100)
+                if return_raw:
+                    return final_df, raw_sdr_trades_df
                 return final_df
 
+            if return_raw:
+                return pd.DataFrame(), pd.DataFrame()
             return pd.DataFrame()
 
         built_frames = []
@@ -876,6 +881,8 @@ class USD_SwapProduct(USDProductBase):
             final_df = merge_package_legs_to_one_row(final_df)
         final_df["risk"] = final_df["estimated_pv01"].apply(_risk_from_estimated_pv01)
         final_df["risk"] = (final_df["risk"] / 100).round().mul(100)
+        if return_raw:
+            return final_df, raw_sdr_trades_df
         return final_df
 
 
