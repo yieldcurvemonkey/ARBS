@@ -144,3 +144,39 @@ def test_attach_manual_links_joins_trade_ids(test_engine):
     assert matched["manual_link_id"].notna().all()
     others = enriched[~enriched["trade_id"].isin(["T_CURVE_2Y", "T_CURVE_10Y"])]
     assert others["manual_link_id"].isna().all()
+
+
+def test_run_ingest_records_run_row(test_engine, monkeypatch):
+    """Smoke-test the observability lifecycle: start+finish rows land."""
+    from SDRUtils._swappulse_scripts import ingest_usdswaps_tape as mod
+
+    df = sample_classified_df()
+
+    class _Fake:
+        @staticmethod
+        def load_usd_swaps(*a, **kw):  # noqa: D401
+            return df, None
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "notebooks.sdr._usd_swaps_common",
+        _Fake,
+    )
+    rc = mod.run_ingest(
+        pg_url=str(test_engine.url),
+        start_date="2026-04-14",
+        end_date="2026-04-14",
+        use_cache=False,
+    )
+    assert rc == 0
+    from sqlalchemy import text
+    with test_engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT status, rows_in, rows_out FROM "
+                "arbs_usd_swap_tape_ingestion_runs_v1 ORDER BY run_id DESC LIMIT 1"
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "success"
+    assert row[1] == len(df)
