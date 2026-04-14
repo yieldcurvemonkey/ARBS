@@ -234,3 +234,5 @@ _temp_raw_raw_trades.csv
 notebooks/logs/
 
 temp.ipynb
+
+tests/fixtures/tape_golden_mar_2_6.pkl
