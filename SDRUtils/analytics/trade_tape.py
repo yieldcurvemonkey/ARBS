@@ -124,6 +124,85 @@ def _load_swap_upi_lookup() -> pd.DataFrame:
     return out.set_index("upi")
 
 
+def _match_novation_pairs(df: pd.DataFrame) -> pd.DataFrame:
+    """Conservative heuristic matching of TERM+NOVA <-> NEWT+NOVA pairs.
+
+    Match criteria:
+    - Same notional (exact)
+    - Same tenor_years (within 0.1Y)
+    - Timestamps within 60 seconds
+    - Same upi_underlier_name
+
+    Greedy 1:1 matching. Unmatched trades get NaN.
+    """
+    df["novation_match_id"] = pd.Series(dtype="object", index=df.index)
+    df["novation_confidence"] = pd.Series(dtype="object", index=df.index)
+
+    term_nova = df[df.get("is_novation_terminated", pd.Series(False, index=df.index)) == True]
+    newt_nova = df[df.get("is_novation_born", pd.Series(False, index=df.index)) == True]
+
+    if term_nova.empty or newt_nova.empty:
+        return df
+
+    matched_newt_indices = set()
+    match_seq = 0
+
+    for t_idx, t_row in term_nova.iterrows():
+        t_ts = pd.to_datetime(t_row.get("execution_timestamp"))
+        t_notional = t_row.get("notional", 0)
+        t_tenor = t_row.get("tenor_years", 0)
+        t_underlier = str(t_row.get("upi_underlier_name", ""))
+
+        best_idx = None
+        best_score = 0
+
+        for n_idx, n_row in newt_nova.iterrows():
+            if n_idx in matched_newt_indices:
+                continue
+
+            # Mandatory gates: notional must match exactly
+            if t_notional != n_row.get("notional", -1):
+                continue
+
+            # Mandatory gate: timestamps within 60s
+            n_ts = pd.to_datetime(n_row.get("execution_timestamp"))
+            try:
+                if abs((t_ts - n_ts).total_seconds()) > 60:
+                    continue
+            except (TypeError, AttributeError):
+                continue
+
+            score = 2  # notional + timestamp already matched
+
+            # Criterion 3: tenor within 0.1Y
+            n_tenor = n_row.get("tenor_years", -999)
+            try:
+                if abs(float(t_tenor) - float(n_tenor)) <= 0.1:
+                    score += 1
+            except (ValueError, TypeError):
+                pass
+
+            # Criterion 4: same underlier
+            if t_underlier == str(n_row.get("upi_underlier_name", "")):
+                score += 1
+
+            if score >= 3 and score > best_score:
+                best_score = score
+                best_idx = n_idx
+
+        if best_idx is not None:
+            match_id = f"nova_{match_seq}"
+            confidence = "HIGH" if best_score == 4 else "MEDIUM"
+            df.at[t_idx, "novation_match_id"] = match_id
+            df.at[t_idx, "novation_confidence"] = confidence
+            df.at[best_idx, "novation_match_id"] = match_id
+            df.at[best_idx, "novation_confidence"] = confidence
+            matched_newt_indices.add(best_idx)
+            match_seq += 1
+
+    return df
+
+
 class TradeTape(SDRAnalyzer):
     """Unified trade enrichment pipeline.
 
@@ -358,6 +437,51 @@ class TradeTape(SDRAnalyzer):
             df["xd_inception_notional"] = df["xd_inception_notional"].fillna(df["notional"])
         if "xd_current_notional" in df.columns and "notional" in df.columns:
             df["xd_current_notional"] = df["xd_current_notional"].fillna(df["notional"])
+
+        return df
+
+    def _enrich_event_type(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 2c: CFTC spec Event type flags (NOVA, COMP, EXER, CLRG)."""
+        # Extract event_type — prefer dedicated column, fallback to event_action
+        if "event_type" in df.columns:
+            et = df["event_type"].astype(str).str.upper().str.strip()
+        elif "event_action" in df.columns:
+            parts = df["event_action"].astype(str).str.split("-", n=1)
+            et = parts.str[1].fillna("").str.upper().str.strip()
+        else:
+            return df
+
+        # Action type prefix for directional flags
+        action = df.get("event_action", pd.Series("", index=df.index))
+        action_prefix = action.astype(str).str.split("-", n=1).str[0].str.upper()
+
+        # Boolean flags
+        df["is_compression_spec"] = et == "COMP"
+        df["is_exercise_born"] = et == "EXER"
+        df["is_novation"] = et == "NOVA"
+        df["is_novation_born"] = (et == "NOVA") & (action_prefix == "NEWT")
+        df["is_novation_terminated"] = (et == "NOVA") & (action_prefix == "TERM")
+        df["is_clearing_termination"] = (et == "CLRG")
+
+        # Non-standardized term indicator passthrough
+        nst_col = "non-standardized_term_indicator"
+        if nst_col in df.columns:
+            df["is_non_standard_term"] = df[nst_col].astype(str).str.upper().isin({"TRUE", "1"})
+        else:
+            df["is_non_standard_term"] = False
+
+        # Novation chain matching
+        if df["is_novation"].any():
+            df = _match_novation_pairs(df)
+        else:
+            df["novation_match_id"] = pd.Series(dtype="object", index=df.index)
+            df["novation_confidence"] = pd.Series(dtype="object", index=df.index)
+
+        # Override heuristic compression with spec signal
+        if "is_compression" in df.columns:
+            df["is_compression"] = df["is_compression"] | df["is_compression_spec"]
+        else:
+            df["is_compression"] = df["is_compression_spec"]
 
         return df
 
@@ -650,6 +774,15 @@ class TradeTape(SDRAnalyzer):
                 flags.append("XD-TERM")
             if row.get("xd_has_partial_unwind", False):
                 flags.append("PARTIAL-UNWIND")
+            # Event type flags
+            if row.get("is_novation_born", False):
+                flags.append("NOVA-IN")
+            if row.get("is_novation_terminated", False):
+                flags.append("NOVA-OUT")
+            if row.get("is_exercise_born", False):
+                flags.append("EXER")
+            if row.get("is_clearing_termination", False):
+                flags.append("CLRG")
             if flags:
                 parts.append(" ".join(flags))
 
@@ -706,6 +839,7 @@ class TradeTape(SDRAnalyzer):
             ("Off-date detection", self._detect_off_date),
             ("Lifecycle", self._enrich_lifecycle),
             ("Cross-day lifecycle", self._enrich_cross_day_lifecycle),
+            ("Event type", self._enrich_event_type),
             ("Quality flags", self._enrich_quality),
             ("Packages", self._enrich_packages),
             ("Market context", self._enrich_context),
@@ -732,6 +866,11 @@ class TradeTape(SDRAnalyzer):
         n_comp = int(df["is_compression"].sum()) if "is_compression" in df.columns else 0
         n_xd_term = int(df["xd_is_terminated"].sum()) if "xd_is_terminated" in df.columns else 0
         n_xd_partial = int(df["xd_has_partial_unwind"].sum()) if "xd_has_partial_unwind" in df.columns else 0
+        n_nova = int(df["is_novation"].sum()) if "is_novation" in df.columns else 0
+        n_comp_spec = int(df["is_compression_spec"].sum()) if "is_compression_spec" in df.columns else 0
+        n_exer = int(df["is_exercise_born"].sum()) if "is_exercise_born" in df.columns else 0
+        n_clrg = int(df["is_clearing_termination"].sum()) if "is_clearing_termination" in df.columns else 0
+        n_nst = int(df["is_non_standard_term"].sum()) if "is_non_standard_term" in df.columns else 0
 
         return {
             "n_trades": n,
@@ -761,6 +900,11 @@ class TradeTape(SDRAnalyzer):
             ),
             "n_xd_terminated": n_xd_term,
             "n_xd_partial_unwind": n_xd_partial,
+            "n_novations": n_nova,
+            "n_compressions_spec": n_comp_spec,
+            "n_exercise_born": n_exer,
+            "n_clearing_terminations": n_clrg,
+            "n_non_standard_term": n_nst,
         }
 
     def clean_tape(self) -> pd.DataFrame:
@@ -786,6 +930,10 @@ class TradeTape(SDRAnalyzer):
             mask &= ~df["is_unwind"]
         if "xd_is_terminated" in df.columns:
             mask &= ~df["xd_is_terminated"].fillna(False).astype(bool)
+        if "is_novation_terminated" in df.columns:
+            mask &= ~df["is_novation_terminated"].fillna(False).astype(bool)
+        if "is_clearing_termination" in df.columns:
+            mask &= ~df["is_clearing_termination"].fillna(False).astype(bool)
 
         return df[mask].copy()
 
