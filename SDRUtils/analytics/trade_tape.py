@@ -530,16 +530,20 @@ class TradeTape(SDRAnalyzer):
         df["package_tenors"] = df[tenor_src].astype(str)
         df["package_structure"] = ""
 
-        # Build trade_id -> index lookup (string keys for type safety)
+        # Build trade_id -> index lookup (vectorized)
         tid_to_idx: dict[str, int] = {}
         if "trade_id" in df.columns:
-            for idx, tid in df["trade_id"].items():
-                tid_to_idx[str(tid)] = idx
+            tid_to_idx = dict(zip(df["trade_id"].astype(str), df.index))
 
-        # Resolve package legs from package_legs array
+        # Resolve package legs from package_legs array (batched assignment)
         legs_col = "package_legs"
         if legs_col in df.columns and df["is_package"].any() and tid_to_idx:
-            for idx in df.index[df["is_package"]]:
+            pkg_indices = df.index[df["is_package"]].tolist()
+            valid_indices: list = []
+            n_legs_arr: list[int] = []
+            tenors_arr: list[str] = []
+
+            for idx in pkg_indices:
                 legs = df.at[idx, legs_col]
                 if legs is None or (isinstance(legs, float) and pd.isna(legs)):
                     continue
@@ -548,15 +552,18 @@ class TradeTape(SDRAnalyzer):
                 except (TypeError, ValueError):
                     continue
 
-                # Resolve leg indices
                 leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
                 if len(leg_indices) < 2:
                     continue
 
                 leg_rows = df.loc[leg_indices].sort_values("tenor_years")
-                tenors = "/".join(leg_rows[tenor_src].astype(str).values)
-                df.at[idx, "n_package_legs"] = len(leg_indices)
-                df.at[idx, "package_tenors"] = tenors
+                valid_indices.append(idx)
+                n_legs_arr.append(len(leg_indices))
+                tenors_arr.append("/".join(leg_rows[tenor_src].astype(str).values))
+
+            if valid_indices:
+                df.loc[valid_indices, "n_package_legs"] = n_legs_arr
+                df.loc[valid_indices, "package_tenors"] = tenors_arr
 
         # Build package_structure from tenors + trade_type
         pkg_mask = df["is_package"]

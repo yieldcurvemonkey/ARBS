@@ -52,3 +52,30 @@ class TestPartAEquivalence:
             actual.loc[common],
             check_dtype=False,
         )
+
+    def test_packages_enrichment_output_unchanged(self, golden):
+        """_enrich_packages produces same output for package columns."""
+        classified_df = golden["classified_df"].copy()
+        raw_df = golden["raw_df"]
+        tape = TradeTape(classified_df, raw_df=raw_df)
+
+        # Run through prerequisites + prereq layers for packages
+        df = tape._df.copy()
+        df = tape._ensure_prerequisites(df)
+        df = tape._enrich_classification(df)
+        df = tape._enrich_upi_reference(df)
+        df = tape._detect_off_date(df)
+        df = tape._enrich_lifecycle(df)
+        df = tape._enrich_cross_day_lifecycle(df)
+        df = tape._enrich_event_type(df)
+        df = tape._enrich_quality(df)
+        df = tape._enrich_packages(df)
+
+        # Compare package columns to golden
+        pkg_cols = ["is_package", "has_spread", "n_package_legs",
+                    "package_tenors", "package_structure"]
+        enriched = golden["enriched"]
+        expected = enriched[["trade_id"] + pkg_cols].set_index("trade_id").sort_index()
+        actual = df[["trade_id"] + pkg_cols].set_index("trade_id").sort_index()
+
+        pd.testing.assert_frame_equal(expected, actual, check_dtype=False)
