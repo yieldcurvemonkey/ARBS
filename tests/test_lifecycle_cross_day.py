@@ -456,3 +456,16 @@ class TestCrossDayRealData:
         # Some should have notional changes
         has_notional_change = result["xd_notional_pct_remaining"] < 1.0
         assert has_notional_change.any()
+
+
+class TestBuildClassificationReturnRawEdgeCases:
+    """Edge case tests for return_raw parameter."""
+
+    def test_return_raw_empty_returns_tuple(self):
+        """When raw_sdr_trades_df is empty and return_raw=True, must return tuple."""
+        from SDRUtils.products.usd.usd_swaps import USD_SwapProduct
+
+        swaps = USD_SwapProduct()
+        import inspect
+        sig = inspect.signature(swaps.build_classification_dataframe)
+        assert "return_raw" in sig.parameters

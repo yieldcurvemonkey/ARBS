@@ -705,7 +705,9 @@ class USD_SwapProduct(USDProductBase):
         )
 
         if raw_sdr_trades_df.empty:
-            return raw_sdr_trades_df
+            if return_raw:
+                return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame()
 
         # TODO review needed
         # Execution Timestamp = Date and time a transaction was originally executed, resulting in the generation of a new UTI. This data element remains unchanged throughout the life of the UTI.
