@@ -591,16 +591,18 @@ def resolve_lifecycle_for_day(
             event_timestamp_col=event_timestamp_col,
         )
 
-        # Build file_dates mapping for cross-day detection
+        # Build file_dates mapping for cross-day detection — vectorized
         file_dates_map: Dict[str, date] = {}
         if file_date_col in group_df.columns:
-            for _, row in group_df.iterrows():
-                did = str(row[dissemination_col])
-                fd = row[file_date_col]
-                if pd.notna(fd):
-                    if isinstance(fd, datetime):
-                        fd = fd.date()
-                    file_dates_map[did] = fd
+            fd_col = group_df[file_date_col]
+            mask = fd_col.notna()
+            if mask.any():
+                dissem_arr = group_df.loc[mask, dissemination_col].astype(str).to_numpy()
+                fd_arr = fd_col[mask].to_numpy()
+                file_dates_map = {
+                    did: (fd.date() if isinstance(fd, datetime) else fd)
+                    for did, fd in zip(dissem_arr, fd_arr)
+                }
 
         # Bridge to V2 summary
         summary = build_lifecycle_summary_from_resolved(resolved, file_dates_map)
@@ -685,16 +687,18 @@ def resolve_lifecycle_cross_day(
             event_timestamp_col=event_timestamp_col,
         )
 
-        # Build file_dates mapping
+        # Build file_dates mapping — vectorized
         file_dates_map: Dict[str, date] = {}
         if file_date_col in group_df.columns:
-            for _, row in group_df.iterrows():
-                did = str(row[dissemination_col])
-                fd = row[file_date_col]
-                if pd.notna(fd):
-                    if isinstance(fd, datetime):
-                        fd = fd.date()
-                    file_dates_map[did] = fd
+            fd_col = group_df[file_date_col]
+            mask = fd_col.notna()
+            if mask.any():
+                dissem_arr = group_df.loc[mask, dissemination_col].astype(str).to_numpy()
+                fd_arr = fd_col[mask].to_numpy()
+                file_dates_map = {
+                    did: (fd.date() if isinstance(fd, datetime) else fd)
+                    for did, fd in zip(dissem_arr, fd_arr)
+                }
 
         # Bridge to summary
         summary = build_lifecycle_summary_from_resolved(resolved, file_dates_map)
