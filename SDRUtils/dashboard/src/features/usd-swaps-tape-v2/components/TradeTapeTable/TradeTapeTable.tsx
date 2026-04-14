@@ -47,6 +47,8 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         rowClassName={rowClassName as any}
         loading={loading}
         selectionMode={onSelectionChange ? 'multiple' : undefined}
+        cellSelection={false}
+        metaKeySelection={false}
         selection={selected as any}
         onSelectionChange={onSelectionChange as any}
         expandedRows={expandedRows as any}

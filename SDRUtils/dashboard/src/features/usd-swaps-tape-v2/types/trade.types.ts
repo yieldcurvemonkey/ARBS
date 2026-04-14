@@ -38,6 +38,9 @@ export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   is_exercise_born?: boolean | null
   is_clearing_termination?: boolean | null
   is_non_standard_term?: boolean | null
+  upi_reset_freq?: string | null
+  upi_notional_schedule?: string | null
+  upi_delivery_type?: string | null
   xd_status?: string | null
   xd_is_terminated?: boolean | null
   xd_has_partial_unwind?: boolean | null
