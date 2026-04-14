@@ -279,3 +279,100 @@ class TestResolveCrossDayLifecycle:
         result = resolve_lifecycle_cross_day(raw_df, {"A1"}, skip_intraday_only=False)
         assert len(result) == 1
         assert result.iloc[0]["xd_n_events"] == 2
+
+
+from unittest.mock import patch
+from SDRUtils.analytics.trade_tape import TradeTape
+
+
+class TestTradeTapeCrossDay:
+    """Tests for TradeTape cross-day lifecycle layer."""
+
+    def _minimal_classified_df(self) -> pd.DataFrame:
+        """Build a minimal classified DataFrame with required TradeTape columns."""
+        return pd.DataFrame({
+            "trade_id": ["A1", "B1"],
+            "execution_timestamp": pd.to_datetime(["2026-03-09 14:00:00+00:00", "2026-03-09 15:00:00+00:00"]),
+            "event_action": ["NEWT", "NEWT"],
+            "tenor_label": ["5Y", "10Y"],
+            "tenor_years": [5.0, 10.0],
+            "forward_label": ["spot", "spot"],
+            "forward_start_years": [0.0, 0.0],
+            "notional": [25_000_000, 50_000_000],
+            "fixed_rate": [0.04, 0.045],
+            "estimated_pv01": [4500, 9000],
+            "product_type": ["OIS_SWAP", "OIS_SWAP"],
+            "upi_underlier_name": ["USD-SOFR-COMPOUND", "USD-SOFR-COMPOUND"],
+            "unique_product_identifier": ["", ""],
+            "platform_identifier": ["XXXX", "XXXX"],
+            "cleared": ["I", "I"],
+            "prime_brokerage_transaction_indicator": [False, False],
+            "block_trade_election_indicator": [False, False],
+            "large_notional_off-facility_swap_election_indicator": [False, False],
+            "other_payment_type": ["", ""],
+            "other_payment_amount": [0, 0],
+            "package_indicator": ["", ""],
+            "package_transaction_spread": [0, 0],
+            "package_type": ["OUTRIGHT", "OUTRIGHT"],
+            "special_tenor_type": ["", ""],
+        })
+
+    def test_no_raw_df_no_xd_columns(self):
+        """TradeTape without raw_df should not have xd_* columns."""
+        tape = TradeTape(self._minimal_classified_df())
+        # Just call the cross-day layer directly
+        df = tape._enrich_cross_day_lifecycle(self._minimal_classified_df())
+        assert not any(c.startswith("xd_") for c in df.columns)
+
+    def test_with_raw_df_adds_xd_columns(self):
+        """TradeTape with raw_df containing cross-day events adds xd_* columns."""
+        classified = self._minimal_classified_df()
+        raw_df = pd.DataFrame([
+            {
+                "Dissemination Identifier": "A1",
+                "Original Dissemination Identifier": "",
+                "Action type": "NEWT",
+                "Event type": "TRAD",
+                "Event timestamp": "2026-03-09 14:00:00",
+                "Execution Timestamp": "2026-03-09 14:00:00",
+                "Amendment indicator": False,
+                "file_date": date(2026, 3, 9),
+                "Notional amount-Leg 1": 25_000_000,
+            },
+            {
+                "Dissemination Identifier": "A2",
+                "Original Dissemination Identifier": "A1",
+                "Action type": "TERM",
+                "Event type": "ETRM",
+                "Event timestamp": "2026-03-10 12:00:00",
+                "Execution Timestamp": "2026-03-10 12:00:00",
+                "Amendment indicator": False,
+                "file_date": date(2026, 3, 10),
+                "Notional amount-Leg 1": 0,
+            },
+            {
+                "Dissemination Identifier": "B1",
+                "Original Dissemination Identifier": "",
+                "Action type": "NEWT",
+                "Event type": "TRAD",
+                "Event timestamp": "2026-03-09 15:00:00",
+                "Execution Timestamp": "2026-03-09 15:00:00",
+                "Amendment indicator": False,
+                "file_date": date(2026, 3, 9),
+                "Notional amount-Leg 1": 50_000_000,
+            },
+        ])
+
+        tape = TradeTape(classified, raw_df=raw_df)
+        df = tape._enrich_cross_day_lifecycle(classified.copy())
+
+        # A1 has cross-day events, B1 does not
+        assert "xd_status" in df.columns
+        a1_row = df[df["trade_id"] == "A1"].iloc[0]
+        assert a1_row["xd_status"] == "TERMINATED"
+        assert bool(a1_row["xd_is_terminated"]) is True
+
+        # B1 should have defaults (intra-day only, skipped)
+        b1_row = df[df["trade_id"] == "B1"].iloc[0]
+        assert b1_row["xd_status"] == "ACTIVE"
+        assert b1_row["xd_notional_pct_remaining"] == 1.0
