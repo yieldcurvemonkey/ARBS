@@ -708,11 +708,15 @@ class USD_SwapProduct(USDProductBase):
         # lifecycle resolution.  Lifecycle events (MODI, TERM, CORR) often lack
         # UPI metadata and would be dropped by the product filter.  The
         # unfiltered pass hits the same cached parquet slices — negligible cost.
+        # Extend end by +1 day to capture follow-up events that arrive after
+        # the user's end timestamp (e.g. TERM at 11:36 AM on end date).
         unfiltered_raw_df = pd.DataFrame()
         if return_raw:
+            from datetime import timedelta as _td
+            unfiltered_end = end + _td(days=1)
             unfiltered_raw_df = sdr.grab_sdr_trades(
                 start_timestamp=start,
-                end_timestamp=end,
+                end_timestamp=unfiltered_end,
                 agency="CFTC",
                 asset_class="RATES",
                 ignore_cache=ignore_cache,

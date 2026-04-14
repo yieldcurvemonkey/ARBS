@@ -470,10 +470,10 @@ class TestUnfilteredRawDf:
         import _usd_swaps_common as sdr
 
         swaps = USD_SwapProduct()
-        # End at March 11 to capture full March 10 events (midnight cutoff)
+        # +1 day extension in unfiltered raw handles midnight cutoff
         classified_df, raw_df = swaps.build_classification_dataframe(
             datetime(2026, 3, 9),
-            datetime(2026, 3, 11),
+            datetime(2026, 3, 10),
             cache_path=sdr.DEFAULT_CACHE_PATH,
             return_raw=True,
         )
@@ -492,10 +492,10 @@ class TestUnfilteredRawDf:
         import _usd_swaps_common as sdr
 
         swaps = USD_SwapProduct()
-        # End at March 11 to capture full March 10 events (TERM at 11:36 AM)
+        # Tight end — +1 day extension in unfiltered raw captures Mar 10 events
         classified_df, raw_df = swaps.build_classification_dataframe(
             datetime(2026, 3, 9),
-            datetime(2026, 3, 11),
+            datetime(2026, 3, 10),
             cache_path=sdr.DEFAULT_CACHE_PATH,
             return_raw=True,
         )
