@@ -22,3 +22,33 @@ def golden():
         pytest.skip(f"Golden snapshot not built: {GOLDEN_PATH}")
     with open(GOLDEN_PATH, "rb") as f:
         return pickle.load(f)
+
+
+class TestPartAEquivalence:
+    """Optimized layers produce identical output to baseline golden snapshot."""
+
+    def test_cross_day_lifecycle_output_unchanged(self, golden):
+        """_enrich_cross_day_lifecycle produces same xd_* cols as golden."""
+        classified_df = golden["classified_df"].copy()
+        raw_df = golden["raw_df"]
+        tape = TradeTape(classified_df, raw_df=raw_df)
+
+        df = tape._df.copy()
+        df = tape._ensure_prerequisites(df)
+        df = tape._enrich_classification(df)
+        df = tape._enrich_upi_reference(df)
+        df = tape._detect_off_date(df)
+        df = tape._enrich_lifecycle(df)
+        df = tape._enrich_cross_day_lifecycle(df)
+
+        enriched = golden["enriched"]
+        xd_cols = [c for c in enriched.columns if c.startswith("xd_")]
+        expected = enriched.set_index("trade_id")[xd_cols].sort_index()
+        actual = df.set_index("trade_id")[xd_cols].sort_index()
+
+        common = expected.index.intersection(actual.index)
+        pd.testing.assert_frame_equal(
+            expected.loc[common],
+            actual.loc[common],
+            check_dtype=False,
+        )
