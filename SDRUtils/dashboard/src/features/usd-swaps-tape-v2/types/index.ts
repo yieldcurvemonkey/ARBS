@@ -1,2 +1,5 @@
 export * from './trade.types'
-// filter.types, chart.types, link.types, sidecar.types added in later tasks
+export * from './filter.types'
+export * from './chart.types'
+export * from './link.types'
+export * from './sidecar.types'
