@@ -1,8 +1,7 @@
 'use client'
-// ABOUTME: Virtual-scrolling PrimeReact DataTable for the USD swap tape v2.
+// ABOUTME: PrimeReact DataTable for the USD swap tape v2.
 import type { JSX } from 'react'
 import { DataTable } from 'primereact/datatable'
-import { ROW_ESTIMATE_PX } from '../../constants'
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
 import { getColumns, rowClassName } from './columns'
@@ -42,7 +41,6 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         size="small"
         scrollable
         scrollHeight="flex"
-        virtualScrollerOptions={{ itemSize: ROW_ESTIMATE_PX, lazy: !!onLoadMore }}
         stripedRows={false}
         rowClassName={rowClassName as any}
         loading={loading}

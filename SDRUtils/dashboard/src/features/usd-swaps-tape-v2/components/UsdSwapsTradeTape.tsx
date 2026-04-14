@@ -38,7 +38,6 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   const [activeSidecar, setActiveSidecar] = useState<SidecarName>('risk')
   const [timelineVisible, setTimelineVisible] = useState(true)
 
-  const asOf = todayIso()
   const tape = useTradeTapeData({
     filter: search,
     columnFilterPayloadKey:
@@ -48,6 +47,17 @@ export default function UsdSwapsTradeTape(): JSX.Element {
     columnFilterOperator: columnFilters.operator,
     flagFilters: flagFilters.state,
   })
+
+  // Pick the as-of date from the latest row we actually have data for, so
+  // the sidecar aggregates query the same day the tape is showing. Falls
+  // back to today when the tape is empty (first load / no data yet).
+  const asOf = useMemo(() => {
+    const latest = tape.rows[0]?.as_of_date
+    if (typeof latest === 'string' && latest.length >= 10) {
+      return latest.slice(0, 10)
+    }
+    return todayIso()
+  }, [tape.rows])
 
   const fields = useMemo(
     () => [
