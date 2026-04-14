@@ -5,12 +5,30 @@ Provides:
 - Mock market data providers
 - Sample time grids
 - Fixture data for curves and instruments
+- Test-database URL resolution for integration tests
 """
 
 import datetime
+import os
 import pytest
 from typing import Any, Dict, List, Tuple
 from dataclasses import dataclass
+
+
+@pytest.fixture
+def pg_test_url() -> str:
+    """Return the test Postgres URL, skipping the test if unavailable.
+
+    Reads ``PG_TEST_URL`` (preferred) or falls back to ``DATABASE_URL``.
+    Tests that require a live Postgres instance (e.g. tape ingest schema
+    migrations, API integration tests) consume this fixture. When neither
+    env var is set, the test is skipped so contributors without a local
+    Postgres can still run the rest of the suite.
+    """
+    url = os.environ.get("PG_TEST_URL") or os.environ.get("DATABASE_URL")
+    if not url:
+        pytest.skip("PG_TEST_URL / DATABASE_URL not set; skipping DB test")
+    return url
 
 # Mock pricer that returns predictable values
 @dataclass
