@@ -143,10 +143,12 @@ class TradeTape(SDRAnalyzer):
         self,
         df: pd.DataFrame,
         *,
+        raw_df: pd.DataFrame | None = None,
         cluster_gap_seconds: int = 120,
         off_market_threshold_bp: float = 10.0,
     ) -> None:
         super().__init__(df)
+        self._raw_df = raw_df
         self._cluster_gap_seconds = cluster_gap_seconds
         self._off_market_threshold_bp = off_market_threshold_bp
 
@@ -310,6 +312,52 @@ class TradeTape(SDRAnalyzer):
         signals = detect_compression_signals(df)
         df["is_compression"] = signals["is_lifecycle"].values
         df["is_reset_optimization"] = signals["is_reset_opt"].values
+
+        return df
+
+    def _enrich_cross_day_lifecycle(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 2b: cross-day lifecycle resolution from full raw data."""
+        if self._raw_df is None:
+            return df
+
+        from SDRUtils.core.lifecycle import resolve_lifecycle_cross_day
+
+        classified_ids = set(df["trade_id"].astype(str).values)
+        xd_df = resolve_lifecycle_cross_day(self._raw_df, classified_ids)
+
+        if xd_df.empty:
+            return df
+
+        xd_df.index = xd_df.index.astype(str)
+        df = df.merge(
+            xd_df,
+            left_on="trade_id",
+            right_index=True,
+            how="left",
+        )
+
+        # Fill defaults for trades without cross-day events
+        defaults = {
+            "xd_n_events": 1,
+            "xd_status": "ACTIVE",
+            "xd_notional_pct_remaining": 1.0,
+            "xd_is_terminated": False,
+            "xd_has_partial_unwind": False,
+            "xd_was_corrected": False,
+            "xd_was_amended": False,
+            "xd_fields_changed": "",
+            "xd_correction_lag_seconds": 0,
+            "xd_n_days_spanned": 1,
+        }
+        for col, default in defaults.items():
+            if col in df.columns:
+                df[col] = df[col].fillna(default)
+
+        # Fill notional defaults from trade notional
+        if "xd_inception_notional" in df.columns and "notional" in df.columns:
+            df["xd_inception_notional"] = df["xd_inception_notional"].fillna(df["notional"])
+        if "xd_current_notional" in df.columns and "notional" in df.columns:
+            df["xd_current_notional"] = df["xd_current_notional"].fillna(df["notional"])
 
         return df
 
@@ -651,6 +699,7 @@ class TradeTape(SDRAnalyzer):
             ("UPI reference", self._enrich_upi_reference),
             ("Off-date detection", self._detect_off_date),
             ("Lifecycle", self._enrich_lifecycle),
+            ("Cross-day lifecycle", self._enrich_cross_day_lifecycle),
             ("Quality flags", self._enrich_quality),
             ("Packages", self._enrich_packages),
             ("Market context", self._enrich_context),
