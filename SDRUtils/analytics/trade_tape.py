@@ -361,6 +361,48 @@ class TradeTape(SDRAnalyzer):
 
         return df
 
+    def _enrich_event_type(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 2c: CFTC spec Event type flags (NOVA, COMP, EXER, CLRG)."""
+        # Extract event_type — prefer dedicated column, fallback to event_action
+        if "event_type" in df.columns:
+            et = df["event_type"].astype(str).str.upper().str.strip()
+        elif "event_action" in df.columns:
+            parts = df["event_action"].astype(str).str.split("-", n=1)
+            et = parts.str[1].fillna("").str.upper().str.strip()
+        else:
+            return df
+
+        # Action type prefix for directional flags
+        action = df.get("event_action", pd.Series("", index=df.index))
+        action_prefix = action.astype(str).str.split("-", n=1).str[0].str.upper()
+
+        # Boolean flags
+        df["is_compression_spec"] = et == "COMP"
+        df["is_exercise_born"] = et == "EXER"
+        df["is_novation"] = et == "NOVA"
+        df["is_novation_born"] = (et == "NOVA") & (action_prefix == "NEWT")
+        df["is_novation_terminated"] = (et == "NOVA") & (action_prefix == "TERM")
+        df["is_clearing_termination"] = (et == "CLRG")
+
+        # Non-standardized term indicator passthrough
+        nst_col = "non-standardized_term_indicator"
+        if nst_col in df.columns:
+            df["is_non_standard_term"] = df[nst_col].astype(str).str.upper().isin({"TRUE", "1"})
+        else:
+            df["is_non_standard_term"] = False
+
+        # Initialize novation matching columns (populated in Task 4)
+        df["novation_match_id"] = pd.Series(dtype="object", index=df.index)
+        df["novation_confidence"] = pd.Series(dtype="object", index=df.index)
+
+        # Override heuristic compression with spec signal
+        if "is_compression" in df.columns:
+            df["is_compression"] = df["is_compression"] | df["is_compression_spec"]
+        else:
+            df["is_compression"] = df["is_compression_spec"]
+
+        return df
+
     def _enrich_quality(self, df: pd.DataFrame) -> pd.DataFrame:
         """Layer 3: UFRO, off-market, capped, block, quality flags."""
         df = flag_outliers(df, threshold_bp=self._off_market_threshold_bp)
@@ -706,6 +748,7 @@ class TradeTape(SDRAnalyzer):
             ("Off-date detection", self._detect_off_date),
             ("Lifecycle", self._enrich_lifecycle),
             ("Cross-day lifecycle", self._enrich_cross_day_lifecycle),
+            ("Event type", self._enrich_event_type),
             ("Quality flags", self._enrich_quality),
             ("Packages", self._enrich_packages),
             ("Market context", self._enrich_context),
