@@ -133,3 +133,48 @@ class TestEnrichEventTypeFlags:
         tape = TradeTape(df)
         result = tape._enrich_event_type(df.copy())
         assert bool(result.iloc[0]["is_novation_terminated"]) is True
+
+
+class TestCompressionSpecOverride:
+    """is_compression_spec feeds into is_compression."""
+
+    def _make_df(self, event_action="NEWT-COMP", event_type="COMP"):
+        return pd.DataFrame({
+            "trade_id": ["A1"],
+            "execution_timestamp": pd.to_datetime(["2026-03-09 14:00:00+00:00"]),
+            "event_action": [event_action],
+            "event_type": [event_type],
+            "tenor_label": ["10Y"],
+            "tenor_years": [10.0],
+            "forward_label": ["spot"],
+            "forward_start_years": [0.0],
+            "notional": [25_000_000],
+            "fixed_rate": [0.04],
+            "estimated_pv01": [9000],
+            "product_type": ["OIS_SWAP"],
+            "upi_underlier_name": ["USD-SOFR-COMPOUND"],
+            "unique_product_identifier": [""],
+            "platform_identifier": ["XXXX"],
+            "cleared": ["I"],
+            "prime_brokerage_transaction_indicator": [False],
+            "block_trade_election_indicator": [False],
+            "large_notional_off-facility_swap_election_indicator": [False],
+            "other_payment_type": [""],
+            "other_payment_amount": [0],
+            "package_indicator": [""],
+            "package_transaction_spread": [0],
+            "package_type": ["OUTRIGHT"],
+            "special_tenor_type": [""],
+            "effective_date": pd.to_datetime(["2026-03-11"]),
+            "expiration_date": pd.to_datetime(["2036-03-11"]),
+            "non-standardized_term_indicator": [False],
+        })
+
+    def test_newt_comp_is_compression(self):
+        """NEWT+COMP should be flagged is_compression=True via spec signal."""
+        df = self._make_df("NEWT-COMP", "COMP")
+        tape = TradeTape(df)
+        result = tape.compute()
+        row = result.iloc[0]
+        assert bool(row["is_compression_spec"]) is True
+        assert bool(row["is_compression"]) is True
