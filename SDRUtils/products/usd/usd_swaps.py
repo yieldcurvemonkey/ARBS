@@ -848,6 +848,8 @@ class USD_SwapProduct(USDProductBase):
                             "Other payment amount",
                             "Package indicator",
                             "Package transaction spread",
+                            "Event type",
+                            "Non-standardized term indicator",
                         ]
                     ],
                     on=TRADE_ID,
