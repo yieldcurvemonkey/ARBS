@@ -606,3 +606,97 @@ def resolve_lifecycle_for_day(
     result = pd.DataFrame(records)
     result = result.set_index(dissemination_col)
     return result
+
+
+def resolve_lifecycle_cross_day(
+    raw_df: pd.DataFrame,
+    classified_dissem_ids: set[str],
+    *,
+    skip_intraday_only: bool = True,
+    dissemination_col: str = "Dissemination Identifier",
+    original_dissemination_col: str = "Original Dissemination Identifier",
+    action_col: str = "Action type",
+    event_timestamp_col: str = "Event timestamp",
+    file_date_col: str = "file_date",
+) -> pd.DataFrame:
+    """Resolve lifecycle metadata across a full date range.
+
+    Runs Union-Find grouping on all raw SDR rows, replays complete
+    lifecycle chains, and produces ``xd_*`` columns for cross-day
+    enrichment.  Only groups whose NEWT dissemination ID appears in
+    ``classified_dissem_ids`` produce output rows.
+
+    Args:
+        raw_df: Full raw SDR DataFrame (all action types, all dates).
+        classified_dissem_ids: Set of NEWT dissemination IDs from the
+            classified DataFrame (``trade_id`` column values).
+        skip_intraday_only: When True, skip groups where all events
+            share the same ``file_date``.  Optimization that avoids
+            redundant replay for purely intra-day chains.
+
+    Returns:
+        DataFrame with ``xd_*`` columns, indexed by NEWT dissemination ID.
+        Empty DataFrame if no qualifying cross-day groups found.
+    """
+    from SDRUtils.core.lifecycle_v2 import flatten_cross_day_summary
+
+    if raw_df.empty:
+        return pd.DataFrame()
+
+    groups = group_by_uti(raw_df, dissemination_col, original_dissemination_col)
+
+    records: list[dict] = []
+
+    for uti, group_df in groups.items():
+        # Must contain a NEWT
+        actions = group_df[action_col].values
+        if "NEWT" not in actions:
+            continue
+
+        # Find NEWT dissemination ID
+        newt_mask = group_df[action_col] == "NEWT"
+        newt_dissem_id = str(group_df.loc[newt_mask, dissemination_col].iloc[0])
+
+        # Filter: only groups whose NEWT is in the classified set
+        if newt_dissem_id not in classified_dissem_ids:
+            continue
+
+        # Optimization: skip intra-day-only groups
+        if skip_intraday_only and file_date_col in group_df.columns:
+            file_dates = group_df[file_date_col].dropna().unique()
+            if len(file_dates) <= 1:
+                continue
+
+        # Replay full lifecycle
+        resolved = replay_lifecycle_full(
+            group_df,
+            synthetic_uti=uti,
+            action_col=action_col,
+            event_timestamp_col=event_timestamp_col,
+        )
+
+        # Build file_dates mapping
+        file_dates_map: Dict[str, date] = {}
+        if file_date_col in group_df.columns:
+            for _, row in group_df.iterrows():
+                did = str(row[dissemination_col])
+                fd = row[file_date_col]
+                if pd.notna(fd):
+                    if isinstance(fd, datetime):
+                        fd = fd.date()
+                    file_dates_map[did] = fd
+
+        # Bridge to summary
+        summary = build_lifecycle_summary_from_resolved(resolved, file_dates_map)
+
+        # Flatten to xd_* columns
+        flat = flatten_cross_day_summary(summary, resolved)
+        flat[dissemination_col] = newt_dissem_id
+        records.append(flat)
+
+    if not records:
+        return pd.DataFrame()
+
+    result = pd.DataFrame(records)
+    result = result.set_index(dissemination_col)
+    return result

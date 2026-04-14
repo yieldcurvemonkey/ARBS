@@ -147,3 +147,135 @@ class TestFlattenCrossDaySummary:
 
         assert flat["xd_was_corrected"] is True
         assert flat["xd_correction_lag_seconds"] == 82800
+
+
+import pandas as pd
+from SDRUtils.core.lifecycle import resolve_lifecycle_cross_day
+
+
+class TestResolveCrossDayLifecycle:
+    """Tests for resolve_lifecycle_cross_day."""
+
+    def _make_raw_df(self, rows: list[dict]) -> pd.DataFrame:
+        """Build a raw SDR DataFrame from row dicts."""
+        df = pd.DataFrame(rows)
+        # Ensure required columns exist
+        for col in ["Dissemination Identifier", "Original Dissemination Identifier",
+                     "Action type", "Event timestamp", "file_date"]:
+            if col not in df.columns:
+                df[col] = ""
+        return df
+
+    def _newt_row(self, dissem_id: str, ts: str, file_date: date, notional: float = 25_000_000) -> dict:
+        return {
+            "Dissemination Identifier": dissem_id,
+            "Original Dissemination Identifier": "",
+            "Action type": "NEWT",
+            "Event type": "TRAD",
+            "Event timestamp": ts,
+            "Execution Timestamp": ts,
+            "Amendment indicator": False,
+            "file_date": file_date,
+            "Notional amount-Leg 1": notional,
+        }
+
+    def _modi_row(self, dissem_id: str, orig_id: str, ts: str, file_date: date,
+                   notional: float = 25_000_000, amendment: bool = False) -> dict:
+        return {
+            "Dissemination Identifier": dissem_id,
+            "Original Dissemination Identifier": orig_id,
+            "Action type": "MODI",
+            "Event type": None,
+            "Event timestamp": ts,
+            "Execution Timestamp": ts,
+            "Amendment indicator": amendment,
+            "file_date": file_date,
+            "Notional amount-Leg 1": notional,
+        }
+
+    def _term_row(self, dissem_id: str, orig_id: str, ts: str, file_date: date) -> dict:
+        return {
+            "Dissemination Identifier": dissem_id,
+            "Original Dissemination Identifier": orig_id,
+            "Action type": "TERM",
+            "Event type": "ETRM",
+            "Event timestamp": ts,
+            "Execution Timestamp": ts,
+            "Amendment indicator": False,
+            "file_date": file_date,
+            "Notional amount-Leg 1": 0,
+        }
+
+    def test_newt_plus_cross_day_term(self):
+        raw_df = self._make_raw_df([
+            self._newt_row("A1", "2026-03-09 14:00:00", date(2026, 3, 9)),
+            self._term_row("A2", "A1", "2026-03-10 12:00:00", date(2026, 3, 10)),
+        ])
+        result = resolve_lifecycle_cross_day(raw_df, {"A1"})
+
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["xd_status"] == "TERMINATED"
+        assert bool(row["xd_is_terminated"]) is True
+        assert row["xd_n_events"] == 2
+        assert row["xd_n_days_spanned"] == 2
+
+    def test_partial_unwind_chain(self):
+        raw_df = self._make_raw_df([
+            self._newt_row("A1", "2026-03-09 14:00:00", date(2026, 3, 9), notional=25_000_000),
+            self._modi_row("A2", "A1", "2026-03-10 10:00:00", date(2026, 3, 10),
+                           notional=12_000_000, amendment=True),
+            self._modi_row("A3", "A2", "2026-03-10 11:00:00", date(2026, 3, 10),
+                           notional=7_000_000, amendment=True),
+            self._modi_row("A4", "A3", "2026-03-10 12:00:00", date(2026, 3, 10),
+                           notional=5_000_000, amendment=True),
+            self._term_row("A5", "A4", "2026-03-10 13:00:00", date(2026, 3, 10)),
+        ])
+        result = resolve_lifecycle_cross_day(raw_df, {"A1"})
+
+        row = result.iloc[0]
+        assert row["xd_status"] == "TERMINATED"
+        assert bool(row["xd_has_partial_unwind"]) is True
+        assert row["xd_inception_notional"] == 25_000_000
+        assert row["xd_n_events"] == 5
+
+    def test_skip_intraday_only(self):
+        """Groups with all events on same file_date should be skipped when flag is True."""
+        raw_df = self._make_raw_df([
+            self._newt_row("A1", "2026-03-09 14:00:00", date(2026, 3, 9)),
+            self._modi_row("A2", "A1", "2026-03-09 15:00:00", date(2026, 3, 9)),
+        ])
+        result = resolve_lifecycle_cross_day(raw_df, {"A1"}, skip_intraday_only=True)
+        assert result.empty
+
+        result2 = resolve_lifecycle_cross_day(raw_df, {"A1"}, skip_intraday_only=False)
+        assert len(result2) == 1
+
+    def test_classified_ids_filter(self):
+        """Only groups with NEWTs in classified_dissem_ids produce output."""
+        raw_df = self._make_raw_df([
+            self._newt_row("A1", "2026-03-09 14:00:00", date(2026, 3, 9)),
+            self._term_row("A2", "A1", "2026-03-10 12:00:00", date(2026, 3, 10)),
+            self._newt_row("B1", "2026-03-09 15:00:00", date(2026, 3, 9)),
+            self._term_row("B2", "B1", "2026-03-10 13:00:00", date(2026, 3, 10)),
+        ])
+        # Only A1 is classified
+        result = resolve_lifecycle_cross_day(raw_df, {"A1"})
+        assert len(result) == 1
+        assert result.index[0] == "A1"
+
+    def test_empty_raw_df(self):
+        result = resolve_lifecycle_cross_day(pd.DataFrame(), {"A1"})
+        assert result.empty
+
+    def test_newt_empty_string_original_dissem(self):
+        """NEWT with empty-string Original Dissemination Identifier groups correctly."""
+        raw_df = self._make_raw_df([
+            self._newt_row("A1", "2026-03-09 14:00:00", date(2026, 3, 9)),
+            self._modi_row("A2", "A1", "2026-03-10 10:00:00", date(2026, 3, 10)),
+        ])
+        # Verify NEWT's Original Dissemination Identifier is empty string
+        assert raw_df.iloc[0]["Original Dissemination Identifier"] == ""
+        result = resolve_lifecycle_cross_day(raw_df, {"A1"}, skip_intraday_only=False)
+        assert len(result) == 1
+        assert result.iloc[0]["xd_n_events"] == 2
