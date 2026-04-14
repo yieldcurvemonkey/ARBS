@@ -288,14 +288,24 @@ def replay_lifecycle_full(
     state: Optional[Dict[str, object]] = None
     inception_state: Optional[Dict[str, object]] = None
 
-    # Collect message IDs and actions
-    for _, row in messages.iterrows():
-        dissem_id = row.get(dissemination_col)
-        if dissem_id and not pd.isna(dissem_id):
-            resolved.message_ids.append(str(dissem_id))
+    # Resolve column positions once — SDR column names contain spaces / casing
+    # that don't become valid namedtuple attributes, so we index by position.
+    col_names = list(messages.columns)
+    col_positions = {col: idx for idx, col in enumerate(col_names)}
+    dissem_pos = col_positions.get(dissemination_col)
+    action_pos = col_positions.get(action_col)
+    ts_pos = col_positions.get(event_timestamp_col)
+    amend_pos = col_positions.get(amendment_indicator_col)
 
-        action = row.get(action_col)
-        timestamp = row.get(event_timestamp_col)
+    # Collect message IDs and actions — itertuples avoids per-row Series alloc
+    for row in messages.itertuples(index=False, name=None):
+        if dissem_pos is not None:
+            dissem_id = row[dissem_pos]
+            if dissem_id and not pd.isna(dissem_id):
+                resolved.message_ids.append(str(dissem_id))
+
+        action = row[action_pos] if action_pos is not None else None
+        timestamp = row[ts_pos] if ts_pos is not None else None
         resolved.actions.append((action, timestamp))
 
     # Check for lifecycle updates (MODI/CORR without being the only action)
@@ -306,10 +316,10 @@ def replay_lifecycle_full(
     if "NEWT" not in action_types:
         resolved.quality_flags.append("MISSING_NEWT")
 
-    # Replay lifecycle
-    for _, row in messages.iterrows():
-        action = row.get(action_col)
-        row_data = row.to_dict()
+    # Replay lifecycle — dict(zip(...)) is much cheaper than .iterrows Series alloc
+    for row_tuple in messages.itertuples(index=False, name=None):
+        action = row_tuple[action_pos] if action_pos is not None else None
+        row_data = dict(zip(col_names, row_tuple))
 
         if action == "NEWT":
             state = row_data.copy()
@@ -317,7 +327,7 @@ def replay_lifecycle_full(
             inception_state = state.copy()
 
         elif action == "MODI":
-            is_amendment = row.get(amendment_indicator_col)
+            is_amendment = row_tuple[amend_pos] if amend_pos is not None else None
             if is_amendment is True or (isinstance(is_amendment, str) and is_amendment.upper() == "TRUE"):
                 state = _update_state(state, row_data, overwrite=True, economics_only=True)
                 state = _update_state(state, row_data, overwrite=False)
