@@ -8,6 +8,9 @@ market context, relative value, and an enriched trade label.
 """
 from __future__ import annotations
 
+import hashlib
+import os
+import pickle
 from typing import Any, Dict, List
 
 import numpy as np
@@ -49,6 +52,17 @@ def _hour_to_session(hour: int) -> str:
         if lo <= hour < hi:
             return label
     return "Asia"  # 18-23 and 0-1
+
+
+# ---------------------------------------------------------------------------
+# Result cache versioning
+# ---------------------------------------------------------------------------
+
+TRADE_TAPE_CACHE_VERSION = "v1"
+DEFAULT_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "notebooks", "sdr", "_cache", "trade_tape",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +244,57 @@ class TradeTape(SDRAnalyzer):
         self._raw_df = raw_df
         self._cluster_gap_seconds = cluster_gap_seconds
         self._off_market_threshold_bp = off_market_threshold_bp
+
+    # -- result cache ------------------------------------------------------
+
+    def _cache_key(self) -> str:
+        """Deterministic hash of inputs that affect compute() output."""
+        df = self._df
+        parts: list[str] = [str(len(df))]
+        if "execution_timestamp" in df.columns and not df.empty:
+            parts.append(str(df["execution_timestamp"].min()))
+            parts.append(str(df["execution_timestamp"].max()))
+        if "trade_id" in df.columns and not df.empty:
+            parts.append(
+                hashlib.sha256(
+                    "".join(sorted(df["trade_id"].astype(str))).encode()
+                ).hexdigest()[:16]
+            )
+        parts.append(
+            str(len(self._raw_df)) if self._raw_df is not None else "no_raw"
+        )
+        parts.append(str(self._cluster_gap_seconds))
+        parts.append(str(self._off_market_threshold_bp))
+        parts.append(TRADE_TAPE_CACHE_VERSION)
+        return hashlib.sha256("|".join(parts).encode()).hexdigest()[:20]
+
+    def _cache_path(self, cache_dir: str | None = None) -> str:
+        directory = cache_dir or DEFAULT_CACHE_DIR
+        return os.path.join(directory, f"{self._cache_key()}.pkl")
+
+    def _try_load_cache(self, cache_dir: str | None = None) -> pd.DataFrame | None:
+        """Return cached DataFrame for current inputs, or None on miss/corruption."""
+        path = self._cache_path(cache_dir)
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except Exception as e:
+            import warnings
+            warnings.warn(f"TradeTape cache load failed ({path}): {e}")
+            return None
+
+    def _save_cache(self, df: pd.DataFrame, cache_dir: str | None = None) -> None:
+        """Persist compute() output to the cache directory."""
+        path = self._cache_path(cache_dir)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            with open(path, "wb") as f:
+                pickle.dump(df, f, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception as e:
+            import warnings
+            warnings.warn(f"TradeTape cache save failed ({path}): {e}")
 
     # -- prerequisites -----------------------------------------------------
 

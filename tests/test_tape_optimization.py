@@ -161,3 +161,98 @@ class TestPartAPerformance:
             tape.compute()
         elapsed = time.perf_counter() - t0
         assert elapsed < 15.0, f"full compute() regressed to {elapsed:.2f}s (target <15s)"
+
+
+class TestCacheKey:
+    """Cache key is deterministic and sensitive to relevant inputs."""
+
+    def _make_df(self, n=3):
+        return pd.DataFrame({
+            "trade_id": [f"T{i}" for i in range(n)],
+            "execution_timestamp": pd.to_datetime(
+                [f"2026-03-0{i+1} 14:00:00+00:00" for i in range(n)]
+            ),
+            "event_action": ["NEWT-TRAD"] * n,
+            "event_type": ["TRAD"] * n,
+            "tenor_years": [5.0 + i for i in range(n)],
+            "notional": [10_000_000 * (i + 1) for i in range(n)],
+        })
+
+    def test_identical_inputs_produce_same_key(self):
+        df = self._make_df()
+        k1 = TradeTape(df)._cache_key()
+        k2 = TradeTape(df.copy())._cache_key()
+        assert k1 == k2
+
+    def test_different_trade_ids_produce_different_keys(self):
+        df1 = self._make_df()
+        df2 = df1.copy()
+        df2.loc[0, "trade_id"] = "X1"
+        assert TradeTape(df1)._cache_key() != TradeTape(df2)._cache_key()
+
+    def test_config_change_produces_different_key(self):
+        df = self._make_df()
+        k1 = TradeTape(df, cluster_gap_seconds=120)._cache_key()
+        k2 = TradeTape(df, cluster_gap_seconds=60)._cache_key()
+        assert k1 != k2
+
+    def test_raw_df_presence_changes_key(self):
+        df = self._make_df()
+        k1 = TradeTape(df)._cache_key()
+        k2 = TradeTape(df, raw_df=df.copy())._cache_key()
+        assert k1 != k2
+
+    def test_version_bump_invalidates_key(self, monkeypatch):
+        from SDRUtils.analytics import trade_tape as tt_module
+        df = self._make_df()
+        k1 = TradeTape(df)._cache_key()
+        monkeypatch.setattr(tt_module, "TRADE_TAPE_CACHE_VERSION", "v999")
+        k2 = TradeTape(df)._cache_key()
+        assert k1 != k2
+
+
+class TestCacheLoadSave:
+    """_save_cache and _try_load_cache round-trip."""
+
+    def test_save_and_load_round_trip(self, tmp_path):
+        df = pd.DataFrame({
+            "trade_id": ["A", "B"],
+            "execution_timestamp": pd.to_datetime(
+                ["2026-03-01 14:00:00+00:00", "2026-03-02 14:00:00+00:00"]
+            ),
+            "tenor_years": [5.0, 10.0],
+            "notional": [10_000_000, 20_000_000],
+        })
+        tape = TradeTape(df)
+        result_df = df.copy()
+        result_df["enriched_col"] = [1, 2]
+
+        tape._save_cache(result_df, cache_dir=str(tmp_path))
+        loaded = tape._try_load_cache(cache_dir=str(tmp_path))
+
+        assert loaded is not None
+        pd.testing.assert_frame_equal(result_df, loaded)
+
+    def test_load_miss_returns_none(self, tmp_path):
+        df = pd.DataFrame({
+            "trade_id": ["A"],
+            "execution_timestamp": pd.to_datetime(["2026-03-01 14:00:00+00:00"]),
+            "tenor_years": [5.0],
+            "notional": [10_000_000],
+        })
+        tape = TradeTape(df)
+        assert tape._try_load_cache(cache_dir=str(tmp_path)) is None
+
+    def test_corrupted_cache_returns_none(self, tmp_path):
+        df = pd.DataFrame({
+            "trade_id": ["A"],
+            "execution_timestamp": pd.to_datetime(["2026-03-01 14:00:00+00:00"]),
+            "tenor_years": [5.0],
+            "notional": [10_000_000],
+        })
+        tape = TradeTape(df)
+        # Write garbage at the key location
+        key = tape._cache_key()
+        corrupt_path = tmp_path / f"{key}.pkl"
+        corrupt_path.write_bytes(b"not a valid pickle stream")
+        assert tape._try_load_cache(cache_dir=str(tmp_path)) is None
