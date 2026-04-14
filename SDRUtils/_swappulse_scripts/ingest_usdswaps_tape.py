@@ -31,6 +31,7 @@ from ._tape_schema import (
     RUNS_TABLE,
     TAPE_SCHEMA_SQL,
 )
+from .ingest_usdswaps import get_db_connection_string as _legacy_conn_string
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +290,32 @@ def ensure_schema(engine: Engine) -> None:
 # ---------------------------------------------------------------------------
 # DataFrame shaping
 # ---------------------------------------------------------------------------
+
+
+def _normalize_package_id(df: pd.DataFrame) -> pd.DataFrame:
+    """Synthesize 'OUTRIGHT-{trade_id}' for any row missing a package_id.
+
+    Mirrors the normalization in ``ingest_usdswaps.normalize_dataframe`` so
+    that the FK from legs → packages never sees NULL. Trades classified as
+    outrights by the upstream pipeline arrive with ``package_id`` None.
+    """
+    df = df.copy()
+    if "package_id" not in df.columns:
+        df["package_id"] = None
+    mask = df["package_id"].isna() | (df["package_id"].astype(str).str.len() == 0)
+    if mask.any():
+        df.loc[mask, "package_id"] = df.loc[mask, "trade_id"].astype(str).map(
+            lambda tid: f"OUTRIGHT-{tid}"
+        )
+        if "package_type" in df.columns:
+            df.loc[mask & df["package_type"].isna(), "package_type"] = "OUTRIGHT"
+        else:
+            df["package_type"] = df.apply(
+                lambda r: "OUTRIGHT" if r.name in df.index[mask] else r.get("package_type"),
+                axis=1,
+            )
+    df["package_id"] = df["package_id"].astype(str)
+    return df
 
 
 def _leg_order_series(df: pd.DataFrame) -> pd.Series:
@@ -596,6 +623,7 @@ def _upsert(
 def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict:
     """Upsert leg + package rows. Returns stats dict."""
     ensure_schema(engine)
+    tape = _normalize_package_id(tape)
     package_rows = build_package_rows(tape, as_of_date=as_of_date)
     leg_rows = build_leg_rows(tape, as_of_date=as_of_date)
     # Packages must be written first (legs FK them).
@@ -735,7 +763,23 @@ def run_ingest(
     ensure_schema(engine)
     run_id = _start_run(engine, as_of_date=start.date().isoformat())
     try:
-        classified, raw_df = load_usd_swaps(start=start, end=end, return_raw=True)
+        # load_usd_swaps(return_raw=True) can fail inside grab_sdr_trades
+        # when the upstream SDR builder returns an empty frame for the day.
+        # raw_df is optional for TradeTape (only used for cross-day lifecycle),
+        # so fall back to classified-only on raw-fetch failure.
+        try:
+            classified, raw_df = load_usd_swaps(
+                start=start, end=end, return_raw=True
+            )
+        except Exception as raw_err:
+            import warnings
+
+            warnings.warn(
+                f"load_usd_swaps raw fetch failed ({raw_err}); "
+                "continuing with classified-only",
+            )
+            classified = load_usd_swaps(start=start, end=end, return_raw=False)
+            raw_df = None
         cache_hit = False
         # Heuristic: if cache file is already on disk, TradeTape will hit it.
         tape = TradeTape(df=classified, raw_df=raw_df).compute(use_cache=use_cache)
@@ -763,21 +807,34 @@ def run_ingest(
         raise
 
 
+def resolve_pg_url(explicit: str | None = None) -> str:
+    """Resolve a Postgres URL using the same lookup ladder as ingest_usdswaps.
+
+    Precedence: explicit arg → DATABASE_URL env → PG_URL env → the shared
+    SWAPPULSE_DB_* helper on ingest_usdswaps (which itself honours env
+    overrides and falls back to the repo-default Supabase host).
+    """
+    return (
+        explicit
+        or os.environ.get("DATABASE_URL")
+        or os.environ.get("PG_URL")
+        or _legacy_conn_string()
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--pg-url",
-        default=os.environ.get("DATABASE_URL") or os.environ.get("PG_URL"),
-        help="Postgres URL; falls back to DATABASE_URL env var.",
+        default=None,
+        help="Postgres URL. Omit to fall back to DATABASE_URL / PG_URL env vars and then the shared SWAPPULSE_DB_* defaults.",
     )
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--no-cache", action="store_true")
     args = parser.parse_args()
-    if not args.pg_url:
-        raise SystemExit("--pg-url or DATABASE_URL required")
     return run_ingest(
-        pg_url=args.pg_url,
+        pg_url=resolve_pg_url(args.pg_url),
         start_date=args.start_date,
         end_date=args.end_date,
         use_cache=not args.no_cache,

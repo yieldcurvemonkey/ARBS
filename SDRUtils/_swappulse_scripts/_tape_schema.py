@@ -227,76 +227,10 @@ SELECT
   ml.created_at AS link_created_at
 FROM {PACKAGES_TABLE} p
 LEFT JOIN LATERAL (
-    SELECT jsonb_agg(
-        jsonb_build_object(
-            'trade_id', l.trade_id,
-            'package_id', l.package_id,
-            'leg_order', l.leg_order,
-            'as_of_date', l.as_of_date,
-            'execution_timestamp', l.execution_timestamp,
-            'execution_session', l.execution_session,
-            'execution_hour_et', l.execution_hour_et,
-            'tenor_years', l.tenor_years,
-            'tenor_label', l.tenor_label,
-            'tenor_display', l.tenor_display,
-            'forward_start_years', l.forward_start_years,
-            'forward_label', l.forward_label,
-            'forward_bucket', l.forward_bucket,
-            'effective_date', l.effective_date,
-            'expiration_date', l.expiration_date,
-            'notional', l.notional,
-            'notional_currency', l.notional_currency,
-            'risk', l.risk,
-            'fixed_rate', l.fixed_rate,
-            'trade_type', l.trade_type,
-            'rate_index_clean', l.rate_index_clean,
-            'venue', l.venue,
-            'ccp', l.ccp,
-            'platform_identifier', l.platform_identifier,
-            'tape_label', l.tape_label,
-            'upi_reset_freq', l.upi_reset_freq,
-            'upi_notional_schedule', l.upi_notional_schedule,
-            'upi_delivery_type', l.upi_delivery_type,
-            'is_new_risk', l.is_new_risk,
-            'is_unwind', l.is_unwind,
-            'is_compression', l.is_compression,
-            'is_compression_spec', l.is_compression_spec,
-            'is_reset_optimization', l.is_reset_optimization,
-            'is_novation', l.is_novation,
-            'is_novation_born', l.is_novation_born,
-            'is_novation_terminated', l.is_novation_terminated,
-            'is_exercise_born', l.is_exercise_born,
-            'is_clearing_termination', l.is_clearing_termination,
-            'lifecycle_type', l.lifecycle_type,
-            'lc_n_events', l.lc_n_events,
-            'lc_status', l.lc_status,
-            'is_ufro', l.is_ufro,
-            'is_off_market', l.is_off_market,
-            'is_capped', l.is_capped,
-            'is_block', l.is_block,
-            'is_off_date', l.is_off_date,
-            'is_mac', l.is_mac,
-            'is_spreadover', l.is_spreadover,
-            'is_asset_swap', l.is_asset_swap,
-            'is_non_standard_term', l.is_non_standard_term,
-            'quality_flags', l.quality_flags,
-            'is_fomc_dated', l.is_fomc_dated,
-            'fomc_meeting_label', l.fomc_meeting_label,
-            'fomc_proximity', l.fomc_proximity,
-            'is_month_end', l.is_month_end,
-            'is_quarter_end', l.is_quarter_end,
-            'cluster_id', l.cluster_id,
-            'cluster_size', l.cluster_size,
-            'is_multi_meeting_cluster', l.is_multi_meeting_cluster,
-            'xd_status', l.xd_status,
-            'xd_n_events', l.xd_n_events,
-            'xd_notional_pct_remaining', l.xd_notional_pct_remaining,
-            'xd_is_terminated', l.xd_is_terminated,
-            'xd_has_partial_unwind', l.xd_has_partial_unwind,
-            'manual_link_id', l.manual_link_id,
-            'enrichment_metrics', l.enrichment_metrics
-        ) ORDER BY l.leg_order
-    ) AS legs_json
+    -- to_jsonb(l) serializes the whole row so we dodge the Postgres
+    -- jsonb_build_object 100-arg limit (the tape legs table has >50
+    -- hoisted columns).
+    SELECT jsonb_agg(to_jsonb(l) ORDER BY l.leg_order) AS legs_json
     FROM {LEGS_TABLE} l
     WHERE l.package_id = p.package_id
 ) l ON TRUE
