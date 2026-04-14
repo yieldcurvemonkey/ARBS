@@ -908,8 +908,20 @@ class TradeTape(SDRAnalyzer):
 
     # -- public interface --------------------------------------------------
 
-    def compute(self) -> pd.DataFrame:
-        """Run all enrichment layers and return the fully enriched tape."""
+    def compute(
+        self,
+        use_cache: bool = True,
+        cache_dir: str | None = None,
+    ) -> pd.DataFrame:
+        """Run all enrichment layers and return the fully enriched tape.
+
+        Args:
+            use_cache: When True, check pickle cache before running the
+                pipeline and persist output to cache on success.  False
+                forces a full recompute and skips writing.
+            cache_dir: Override the default cache directory
+                (``notebooks/sdr/_cache/trade_tape``).  Mostly for tests.
+        """
         from tqdm.auto import tqdm
 
         if self._result is not None:
@@ -919,6 +931,12 @@ class TradeTape(SDRAnalyzer):
         if df.empty:
             self._result = df
             return df
+
+        if use_cache:
+            cached = self._try_load_cache(cache_dir)
+            if cached is not None:
+                self._result = cached
+                return cached
 
         steps = [
             ("Prerequisites", self._ensure_prerequisites),
@@ -942,7 +960,25 @@ class TradeTape(SDRAnalyzer):
         pbar.close()
 
         self._result = df
+        if use_cache and not df.empty:
+            self._save_cache(df, cache_dir)
         return df
+
+    @classmethod
+    def clear_cache(cls, cache_dir: str | None = None) -> int:
+        """Delete all cached tape files. Returns count of files removed."""
+        directory = cache_dir or DEFAULT_CACHE_DIR
+        if not os.path.isdir(directory):
+            return 0
+        n = 0
+        for fn in os.listdir(directory):
+            if fn.endswith(".pkl"):
+                try:
+                    os.remove(os.path.join(directory, fn))
+                    n += 1
+                except OSError:
+                    pass
+        return n
 
     def summary(self) -> Dict[str, Any]:
         """Key stats for the enriched tape."""

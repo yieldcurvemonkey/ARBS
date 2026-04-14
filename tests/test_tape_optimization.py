@@ -256,3 +256,45 @@ class TestCacheLoadSave:
         corrupt_path = tmp_path / f"{key}.pkl"
         corrupt_path.write_bytes(b"not a valid pickle stream")
         assert tape._try_load_cache(cache_dir=str(tmp_path)) is None
+
+
+class TestComputeCaching:
+    """compute() with use_cache=True writes and reads cache."""
+
+    def _sample_tape(self, golden):
+        classified_df = golden["classified_df"].copy()
+        raw_df = golden["raw_df"]
+        return TradeTape(classified_df, raw_df=raw_df)
+
+    def test_cache_hit_skips_pipeline(self, golden, tmp_path):
+        # First compute: miss, writes cache
+        tape1 = self._sample_tape(golden)
+        out1 = tape1.compute(use_cache=True, cache_dir=str(tmp_path))
+
+        # Second compute: hit, reads from disk (fast)
+        tape2 = self._sample_tape(golden)
+        t0 = time.perf_counter()
+        out2 = tape2.compute(use_cache=True, cache_dir=str(tmp_path))
+        elapsed = time.perf_counter() - t0
+
+        assert elapsed < 2.0, f"cached compute took {elapsed:.2f}s (should be <2s)"
+        pd.testing.assert_frame_equal(
+            out1.set_index("trade_id").sort_index(),
+            out2.set_index("trade_id").sort_index(),
+            check_dtype=False,
+        )
+
+    def test_use_cache_false_does_not_write(self, golden, tmp_path):
+        tape = self._sample_tape(golden)
+        tape.compute(use_cache=False, cache_dir=str(tmp_path))
+        # tmp_path should be empty (no files written)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_clear_cache_removes_files(self, golden, tmp_path):
+        tape = self._sample_tape(golden)
+        tape.compute(use_cache=True, cache_dir=str(tmp_path))
+        assert len(list(tmp_path.iterdir())) == 1
+
+        n_deleted = TradeTape.clear_cache(cache_dir=str(tmp_path))
+        assert n_deleted == 1
+        assert list(tmp_path.iterdir()) == []
