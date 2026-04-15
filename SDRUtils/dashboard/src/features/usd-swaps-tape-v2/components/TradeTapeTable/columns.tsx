@@ -38,10 +38,6 @@ function displayPlatform(row: UsdSwapTapeRow): string {
   return row.platform_identifier ?? firstLeg(row)?.platform_identifier ?? EMPTY_VALUE
 }
 
-function displayType(row: UsdSwapTapeRow): string {
-  return row.trade_type ?? firstLeg(row)?.trade_type ?? row.package_type ?? EMPTY_VALUE
-}
-
 export function getColumns(
   config: ColumnConfig = { selection: true },
 ): JSX.Element[] {
@@ -90,14 +86,6 @@ export function getColumns(
       style={{ width: 700 }}
     />,
     <Column
-      key="trade_type"
-      header={renderHeader('Type')}
-      body={(row: UsdSwapTapeRow) => (
-        <span className="text-xs text-gray-300">{displayType(row)}</span>
-      )}
-      style={{ width: 120 }}
-    />,
-    <Column
       key="dv01"
       header={renderHeader('DV01')}
       body={(row: UsdSwapTapeRow) => (
@@ -119,13 +107,13 @@ export function getColumns(
     />,
     <Column
       key="rate"
-      header={renderHeader('Rate')}
+      header={renderHeader('Reported LvL')}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-xs text-gray-200">
           {formatRate(row.weighted_fixed_rate ?? null)}
         </span>
       )}
-      style={{ width: 84 }}
+      style={{ width: 110 }}
     />,
   )
   return cols
