@@ -43,7 +43,7 @@ function Chip({
 export function FilterChips(props: FilterChipsProps): JSX.Element {
   return (
     <div
-      className="flex flex-wrap items-center gap-2 px-3 py-1 border-b border-slate-800"
+      className="flex flex-wrap items-center gap-2 px-3 py-0.5 border-b border-slate-800"
       data-testid="filter-chips"
     >
       {props.fields.map((f) => (

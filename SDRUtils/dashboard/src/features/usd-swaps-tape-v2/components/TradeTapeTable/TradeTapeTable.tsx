@@ -1,6 +1,6 @@
 'use client'
 // ABOUTME: PrimeReact DataTable for the USD swap tape v2.
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import {
   DataTable,
@@ -9,6 +9,7 @@ import {
   type DataTableSortEvent,
 } from 'primereact/datatable'
 import { ROW_ESTIMATE_PX } from '../../constants'
+import { useColumnFilters, useTableControls } from '../../hooks'
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
 import { getColumns, rowClassName, type MetricMode } from './columns'
@@ -34,7 +35,12 @@ export interface TradeTapeTableProps {
   selected?: UsdSwapTapeRow[]
   onSelectionChange?: (e: { value: UsdSwapTapeRow[] }) => void
   onOpenTimeseries?: (row: UsdSwapTapeRow) => void
-  search?: string
+  /**
+   * Optional right-side slot rendered in the filter bar — used by the parent
+   * to inject extras like a "Link N selected" action without pushing filter
+   * state back up.
+   */
+  actionSlot?: ReactNode
 }
 
 // Approximate page size used when extending the VirtualScroller's `totalRecords`
@@ -42,6 +48,11 @@ export interface TradeTapeTableProps {
 // pattern so the scroller keeps asking for more until the server reports
 // `hasMore=false`.
 const LAZY_LOAD_PAGE_SIZE = 50
+
+// Search input has a debounce so we aren't pushing a URL change on every
+// keypress; 200ms feels instant in typing, and keeps the URL history clean
+// enough that the browser's back button still works as a reasonable undo.
+const SEARCH_URL_DEBOUNCE_MS = 200
 
 export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   const {
@@ -54,7 +65,25 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     onRowToggle,
     selected,
     onSelectionChange,
+    actionSlot,
   } = props
+
+  // URL-backed column filter state (shared with the parent useTradeTapeData
+  // hook so the `columnFilters` URL param also drives the server query).
+  const columnFilters = useColumnFilters()
+  // URL-backed search + sort state.
+  const table = useTableControls()
+
+  // Local controlled input for the search box — we debounce writes to the
+  // URL param so each keystroke doesn't hammer `router.replace`.
+  const [searchDraft, setSearchDraft] = useState(table.search)
+  useEffect(() => setSearchDraft(table.search), [table.search])
+  useEffect(() => {
+    if (searchDraft === table.search) return
+    const id = setTimeout(() => table.setSearch(searchDraft), SEARCH_URL_DEBOUNCE_MS)
+    return () => clearTimeout(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchDraft])
 
   // Guards against double-triggering `onLoadMore` within a single paging cycle.
   // The VirtualScroller's `onLazyLoad` can fire repeatedly while the user
@@ -80,15 +109,22 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     [],
   )
 
-  const [filters, setFilters] = useState<DataTableFilterMeta>({})
-  const [sortField, setSortField] = useState<string | null>(null)
-  const [sortOrder, setSortOrder] = useState<1 | -1 | 0>(0)
-
   const displayRows = useMemo(() => {
-    const fuzzied = applyFuzzy(rows, props.search ?? '')
-    const filtered = applyColumnFilters(fuzzied, filters)
-    return applySort(filtered, sortField, sortOrder)
-  }, [rows, props.search, filters, sortField, sortOrder])
+    const fuzzied = applyFuzzy(rows, table.search)
+    const filtered = applyColumnFilters(
+      fuzzied,
+      columnFilters.filters as DataTableFilterMeta,
+      columnFilters.operator,
+    )
+    return applySort(filtered, table.sortField, table.sortOrder)
+  }, [
+    rows,
+    table.search,
+    table.sortField,
+    table.sortOrder,
+    columnFilters.filters,
+    columnFilters.operator,
+  ])
 
   // When column/search filters cut the visible list below the viewport height,
   // eagerly pull the next page so the scroll-triggered lazy load actually has
@@ -161,9 +197,15 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
       .join(' ')
       .trim()
 
+  const handleResetAll = useCallback(() => {
+    columnFilters.reset()
+    table.reset()
+    setSearchDraft('')
+  }, [columnFilters, table])
+
   return (
     <div
-      className="flex flex-col flex-1 bg-slate-950 text-slate-100"
+      className="flex flex-col flex-1 min-h-0 bg-slate-950 text-slate-100"
       data-testid="trade-tape-table"
     >
       <style jsx global>{`
@@ -218,6 +260,63 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
             inset 0 -1px 0 rgba(125, 211, 252, 0.4) !important;
         }
       `}</style>
+
+      {/* Filter bar — lives inside the table component so fuzzy search,
+         column filter operator, and reset are colocated with the DataTable
+         they drive, mirroring the swaption tape. All controls write to the
+         URL so the view is shareable. */}
+      <div
+        className="flex items-center gap-2 px-3 py-1 bg-slate-900/50 border-b border-slate-800"
+        data-testid="trade-tape-filters"
+      >
+        <span className="whitespace-nowrap text-[11px] text-slate-400">
+          {displayRows.length} rows
+          {hasMore ? ' (more available)' : ''}
+        </span>
+        <input
+          type="search"
+          placeholder="Filter tape…"
+          aria-label="global tape filter"
+          value={searchDraft}
+          onChange={(e) => setSearchDraft(e.target.value)}
+          className="flex-1 bg-slate-950/60 border border-slate-800 rounded px-2 py-0.5 text-sm text-slate-100 focus:outline-none focus:border-slate-600"
+        />
+        <div className="flex items-center gap-1 text-xs text-slate-400">
+          <button
+            type="button"
+            aria-pressed={columnFilters.operator === 'and'}
+            onClick={() => columnFilters.setOperator('and')}
+            className={`px-2 py-0.5 rounded ${
+              columnFilters.operator === 'and'
+                ? 'bg-slate-700 text-slate-100'
+                : 'bg-slate-800/60'
+            }`}
+          >
+            AND
+          </button>
+          <button
+            type="button"
+            aria-pressed={columnFilters.operator === 'or'}
+            onClick={() => columnFilters.setOperator('or')}
+            className={`px-2 py-0.5 rounded ${
+              columnFilters.operator === 'or'
+                ? 'bg-slate-700 text-slate-100'
+                : 'bg-slate-800/60'
+            }`}
+          >
+            OR
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={handleResetAll}
+          className="text-xs px-2 py-1 rounded bg-slate-800/60 text-slate-300 hover:bg-slate-700/60"
+        >
+          Reset
+        </button>
+        {actionSlot}
+      </div>
+
       <DataTable
         value={displayRows}
         dataKey="package_id"
@@ -238,14 +337,17 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
             <LegsSubTable row={row} />
           </div>
         )}
-        filters={filters}
-        onFilter={(e: DataTableFilterEvent) => setFilters(e.filters as DataTableFilterMeta)}
+        filters={columnFilters.filters as DataTableFilterMeta}
+        onFilter={(e: DataTableFilterEvent) =>
+          columnFilters.setFilters(e.filters as any)
+        }
         filterDisplay="menu"
-        sortField={sortField ?? undefined}
-        sortOrder={sortOrder}
+        sortField={table.sortField ?? undefined}
+        sortOrder={table.sortOrder}
         onSort={(e: DataTableSortEvent) => {
-          setSortField((e.sortField as string) || null)
-          setSortOrder(((e.sortOrder as 1 | -1 | 0) ?? 0))
+          const nextField = (e.sortField as string) || null
+          const nextOrder = ((e.sortOrder as 1 | -1 | 0) ?? 0)
+          table.setSort(nextField, nextOrder)
         }}
         className="usd-swaps-tape-table rounded-2xl border border-gray-800 bg-gradient-to-b from-gray-950 to-gray-900 text-gray-200 shadow-inner"
         tableStyle={{ minWidth: '1188px' }}

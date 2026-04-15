@@ -1,6 +1,6 @@
 'use client'
 // ABOUTME: Global filter bar — search input, AND/OR operator, reset.
-import type { JSX } from 'react'
+import type { JSX, ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 
 export interface TradeTapeFiltersProps {
@@ -9,6 +9,17 @@ export interface TradeTapeFiltersProps {
   operator: 'and' | 'or'
   onOperatorChange: (op: 'and' | 'or') => void
   onReset: () => void
+  /**
+   * Optional left-side status text (e.g. "200 rows (more available)") —
+   * rendered inline with the search input instead of on a dedicated strip
+   * above the table, to save vertical space.
+   */
+  rowSummary?: ReactNode
+  /**
+   * Optional right-side action slot — used for things like a "Link N selected"
+   * button so we don't need a second status strip just for it.
+   */
+  actionSlot?: ReactNode
 }
 
 const DEBOUNCE_MS = 250
@@ -27,17 +38,19 @@ export function TradeTapeFilters(props: TradeTapeFiltersProps): JSX.Element {
 
   return (
     <div
-      className="flex items-center gap-2 px-3 py-2 bg-slate-900/50 border-b border-slate-800"
+      className="flex items-center gap-2 px-3 py-1 bg-slate-900/50 border-b border-slate-800"
       data-testid="trade-tape-filters"
     >
+      {props.rowSummary}
       <input
         type="search"
         placeholder="Filter tape…"
         aria-label="global tape filter"
         value={local}
         onChange={(e) => setLocal(e.target.value)}
-        className="flex-1 bg-slate-950/60 border border-slate-800 rounded px-2 py-1 text-sm text-slate-100 focus:outline-none focus:border-slate-600"
+        className="flex-1 bg-slate-950/60 border border-slate-800 rounded px-2 py-0.5 text-sm text-slate-100 focus:outline-none focus:border-slate-600"
       />
+      {props.actionSlot}
       <div className="flex items-center gap-1 text-xs text-slate-400">
         <button
           type="button"
