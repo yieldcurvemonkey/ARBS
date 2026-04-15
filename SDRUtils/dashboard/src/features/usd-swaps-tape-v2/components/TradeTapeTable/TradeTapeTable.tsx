@@ -170,14 +170,17 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           setSortOrder(((e.sortOrder as 1 | -1 | 0) ?? 0))
         }}
         className="usd-swaps-tape-table rounded-2xl border border-gray-800 bg-gradient-to-b from-gray-950 to-gray-900 text-gray-200 shadow-inner"
-        tableStyle={{ minWidth: '1700px' }}
+        tableStyle={{ minWidth: '1188px' }}
         resizableColumns
         columnResizeMode="fit"
         rowHover
         pt={
           {
+            headerCell: {
+              className: 'py-1 px-1.5 text-[11px] !border-0',
+            },
             bodyCell: {
-              className: 'py-1 px-2 text-xs !border-0',
+              className: 'py-1 px-1.5 text-xs !border-0',
               style: { backgroundColor: 'transparent' },
             },
           } as any

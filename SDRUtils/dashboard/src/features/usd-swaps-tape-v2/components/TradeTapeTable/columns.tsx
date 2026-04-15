@@ -48,12 +48,12 @@ export function getColumns(
   const cols: JSX.Element[] = []
   if (config.selection) {
     cols.push(
-      <Column key="select" selectionMode="multiple" headerStyle={{ width: 40 }} />,
+      <Column key="select" selectionMode="multiple" headerStyle={{ width: 34 }} />,
     )
   }
   if (config.expanderBody) {
     cols.push(
-      <Column key="expand" body={config.expanderBody as any} style={{ width: 48 }} />,
+      <Column key="expand" body={config.expanderBody as any} style={{ width: 40 }} />,
     )
   }
 
@@ -80,11 +80,11 @@ export function getColumns(
       filter
       header={renderHeader('Time')}
       body={(row: UsdSwapTapeRow) => (
-        <span className="text-xs text-gray-300">
+        <span className="whitespace-nowrap text-xs text-gray-300">
           {formatExecutionWindow(row.execution_start, row.execution_end)}
         </span>
       )}
-      style={{ width: 190 }}
+      style={{ width: 108 }}
     />,
     <Column
       key="action"
@@ -93,7 +93,7 @@ export function getColumns(
       filter
       header={renderHeader('Action')}
       body={(row: UsdSwapTapeRow) => <LifecyclePills row={row} />}
-      style={{ width: 132 }}
+      style={{ width: 68 }}
     />,
     <Column
       key="platform"
@@ -107,7 +107,7 @@ export function getColumns(
           {displayPlatform(row)}
         </span>
       )}
-      style={{ width: 120 }}
+      style={{ width: 76 }}
     />,
     <Column
       key="tape_label"
@@ -117,7 +117,7 @@ export function getColumns(
       filter
       header={renderHeader('Tape Label')}
       body={(row: UsdSwapTapeRow) => <TapeLabelCell row={row} />}
-      style={{ width: 700 }}
+      style={{ width: 500 }}
     />,
     <Column
       key="metric"
@@ -134,7 +134,7 @@ export function getColumns(
             : formatNotional(row.total_notional ?? null, { compact: true })}
         </span>
       )}
-      style={{ width: 110 }}
+      style={{ width: 86 }}
     />,
     <Column
       key="rate"
@@ -149,7 +149,7 @@ export function getColumns(
           {formatRate(row.weighted_fixed_rate ?? null)}
         </span>
       )}
-      style={{ width: 110 }}
+      style={{ width: 92 }}
     />,
   )
   return cols

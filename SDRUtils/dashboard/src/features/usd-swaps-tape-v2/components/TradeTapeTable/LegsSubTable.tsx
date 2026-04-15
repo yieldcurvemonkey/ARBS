@@ -169,7 +169,6 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
               <th className="px-2 py-1 text-left">Platform</th>
               <th className="px-2 py-1 text-left">Trade ID</th>
               <th className="px-2 py-1 text-left">Tape Label</th>
-              <th className="px-2 py-1 text-left">Tenor</th>
               <th className="px-2 py-1 text-left">Effective</th>
               <th className="px-2 py-1 text-left">Maturity</th>
               <th className="px-2 py-1 text-right">Notional</th>
@@ -198,9 +197,6 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                   {leg.tape_label ?? EMPTY_VALUE}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1">
-                  {leg.tenor_display ?? leg.tenor_label ?? EMPTY_VALUE}
-                </td>
-                <td className="whitespace-nowrap px-2 py-1">
                   {formatDate(leg.effective_date)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1">
@@ -221,7 +217,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
             ))}
             {legs.length === 0 ? (
               <tr className="border-t border-slate-800/90 text-slate-400">
-                <td className="px-2 py-2" colSpan={14}>
+                <td className="px-2 py-2" colSpan={13}>
                   No leg data available.
                 </td>
               </tr>
