@@ -86,7 +86,14 @@ def _warm_delivery_baskets(
     *,
     force: bool,
 ) -> int:
-    """Warm the delivery-basket cache (and the FRB cash-bond pricers it hydrates).
+    """Warm the delivery-basket cache, UST pricer cache, and FRB cash-bond cache
+    along the exact path used by ``_build_invoice_swap_lookup``.
+
+    Uses ``mdp.get_pricer(include_basket=True)`` rather than the lower-level
+    ``get_delivery_basket`` so the UST pricer cache also gets populated for
+    the specific ``(timestamp=as_of, symbol, source)`` key that the SDR
+    invoice lookup reads. Warming only the basket cache still leaves
+    ``get_pricer`` to fetch Barchart prices on first use.
 
     Returns the number of (root, as_of) pairs that failed to warm.
     """
@@ -103,14 +110,17 @@ def _warm_delivery_baskets(
             warmed = False
             for usts_src in _USTS_MDP_SOURCES:
                 try:
-                    mdp.get_delivery_basket(
-                        as_of=as_of,
-                        symbol=symbol,
-                        usts_mdp_source=usts_src,
-                        ignore_cache=force,
+                    mdp.get_pricer(
+                        request={
+                            "symbols": [symbol],
+                            "timestamp": as_of,
+                            "usts_mdp_source": usts_src,
+                            "include_basket": True,
+                            "force_refresh": force,
+                        }
                     )
                     warmed = True
-                    log.info("Basket warmed: %s @ %s via %s", symbol, as_of, usts_src)
+                    log.info("Basket+pricer warmed: %s @ %s via %s", symbol, as_of, usts_src)
                     break
                 except Exception as exc:
                     log.debug("Basket warm failed (%s / %s): %s", symbol, usts_src, exc)
