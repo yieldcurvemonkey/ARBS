@@ -243,6 +243,61 @@ def warm_stirf_cme_session(start, end):
     return f"STIRF backfill: {len(bdates)} days x {len(curves)} curves"
 
 
+def warm_ustf_invoice_caches(start, end):
+    """Job 5: UST futures delivery basket + pricer caches.
+
+    Populates USTFutureDeliveryBasket_Cache and USTFuturePricer_Cache for the
+    front-month contracts of TU/FV/TY/UXY/US/WN. Without this, the SDR
+    invoice-swap enrichment path (``_build_invoice_swap_lookup``) pays a
+    Barchart + FedInvest round-trip per root on first use — ~90s before the
+    Apr-2026 perf fix, still ~22s with only basket warmed.
+
+    Delegates to scripts/warm_ustf_cache.py which owns the warming logic.
+    The basket cache is keyed by ``as_of`` date, so we warm every business
+    day in the requested range.
+    """
+    import pandas as pd
+    import QuantLib as ql
+
+    cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    bdates = pd.bdate_range(start, end).date.tolist()
+    bdates = [
+        d for d in bdates
+        if cal.isBusinessDay(ql.Date(d.day, d.month, d.year))
+    ]
+
+    if not bdates:
+        log.info("No business days in range for UST futures warm")
+        return None
+
+    python_exe = sys.executable
+    script = os.path.join(REPO_ROOT, "scripts", "warm_ustf_cache.py")
+
+    for as_of in bdates:
+        cmd = [
+            python_exe, script,
+            "--basket-days", "1",
+            "--skip-prices",
+        ]
+        # When warming a historical date, --basket-days alone targets today;
+        # use --backfill-days spanning today->as_of when backfilling.
+        days_back = (datetime.date.today() - as_of).days
+        if days_back > 0:
+            cmd = [python_exe, script, "--backfill-days", str(days_back + 1), "--skip-prices"]
+
+        log.info("Running: %s", " ".join(cmd))
+        result = subprocess.run(cmd, cwd=REPO_ROOT, timeout=600)
+        if result.returncode != 0:
+            log.warning("warm_ustf_cache exited %d for as_of=%s", result.returncode, as_of)
+
+        # Historical backfill call above covers all days up to today — no
+        # need to iterate further.
+        if days_back > 0:
+            break
+
+    return f"UST futures warm: {len(bdates)} day(s)"
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Job registry
 # ─────────────────────────────────────────────────────────────────────
@@ -252,6 +307,7 @@ JOBS = [
     ("ERIS USD-SOFR-1D EOD", warm_eris_eod),
     ("FRB FedInvest EOD", warm_frb_fedinvest_eod),
     ("STIRF CME Session", warm_stirf_cme_session),
+    ("UST Futures Invoice Caches", warm_ustf_invoice_caches),
 ]
 
 
