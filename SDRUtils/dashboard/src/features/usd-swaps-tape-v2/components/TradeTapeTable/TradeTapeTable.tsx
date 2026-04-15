@@ -1,11 +1,11 @@
 'use client'
 // ABOUTME: PrimeReact DataTable for the USD swap tape v2.
-import type { JSX } from 'react'
+import { useCallback, useState, type JSX } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { DataTable } from 'primereact/datatable'
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
-import { getColumns, rowClassName } from './columns'
+import { getColumns, rowClassName, type MetricMode } from './columns'
 
 export interface TradeTapeTableProps {
   rows: UsdSwapTapeRow[]
@@ -30,6 +30,12 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     selected,
     onSelectionChange,
   } = props
+
+  const [metricMode, setMetricMode] = useState<MetricMode>('dv01')
+  const toggleMetric = useCallback(
+    () => setMetricMode((m) => (m === 'dv01' ? 'notional' : 'dv01')),
+    [],
+  )
 
   const selectedIds = new Set((selected ?? []).map((row) => row.package_id))
 
@@ -154,6 +160,8 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         {getColumns({
           selection: !!onSelectionChange,
           expanderBody,
+          metricMode,
+          onToggleMetric: toggleMetric,
         })}
       </DataTable>
       {hasMore ? (

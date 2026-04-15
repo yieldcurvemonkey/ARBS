@@ -15,9 +15,13 @@ import { TapeLabelCell } from './TapeLabelCell'
 
 export { rowClassName } from './columns.helpers'
 
+export type MetricMode = 'dv01' | 'notional'
+
 type ColumnConfig = {
   selection: boolean
   expanderBody?: (row: UsdSwapTapeRow) => JSX.Element
+  metricMode?: MetricMode
+  onToggleMetric?: () => void
 }
 
 function renderHeader(label: string): JSX.Element {
@@ -52,6 +56,21 @@ export function getColumns(
       <Column key="expand" body={config.expanderBody as any} style={{ width: 48 }} />,
     )
   }
+
+  const mode: MetricMode = config.metricMode ?? 'dv01'
+  const metricHeader = (
+    <button
+      type="button"
+      onClick={config.onToggleMetric}
+      className="flex flex-col gap-0.5 text-left hover:text-sky-300"
+      aria-label={`toggle metric (current: ${mode === 'dv01' ? 'DV01' : 'Notional'})`}
+    >
+      <span className="text-[11px] uppercase tracking-wide text-gray-400">
+        {mode === 'dv01' ? 'DV01' : 'Notional'} ⇅
+      </span>
+    </button>
+  )
+
   cols.push(
     <Column
       key="time"
@@ -86,21 +105,14 @@ export function getColumns(
       style={{ width: 700 }}
     />,
     <Column
-      key="dv01"
-      header={renderHeader('DV01')}
+      key="metric"
+      field={mode === 'dv01' ? 'total_risk' : 'total_notional'}
+      header={metricHeader}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-xs text-gray-200">
-          {formatDv01(row.total_risk ?? null, { signed: true })}
-        </span>
-      )}
-      style={{ width: 96 }}
-    />,
-    <Column
-      key="notional"
-      header={renderHeader('Notional')}
-      body={(row: UsdSwapTapeRow) => (
-        <span className="font-mono text-xs text-gray-200">
-          {formatNotional(row.total_notional ?? null, { compact: true })}
+          {mode === 'dv01'
+            ? formatDv01(row.total_risk ?? null, { signed: true })
+            : formatNotional(row.total_notional ?? null, { compact: true })}
         </span>
       )}
       style={{ width: 110 }}
