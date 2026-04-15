@@ -76,6 +76,18 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         end_date = end.date() if isinstance(end, datetime.datetime) else end
         return start_date, end_date
 
+    def delivery_dates(self) -> Tuple[datetime.date, datetime.date]:
+        """Public accessor for the (start, end) delivery window of this contract.
+
+        Callers like the CME invoice-swap lookup need the delivery window and the
+        CTD basket. Previously the lookup fetched the delivery basket separately
+        via ``get_delivery_basket`` AND constructed a pricer via ``get_pricer``
+        (which itself calls ``get_delivery_basket`` again with basket hydration).
+        This accessor lets a single ``get_pricer(include_basket=True)`` cover
+        both needs, halving the FixedRateBondsMDP round-trips per contract.
+        """
+        return self._delivery_dates
+
     def _coerce_basket(self, basket: BasketLike) -> List[RLFixedRateBondPricer]:
         pricers: List[RLFixedRateBondPricer] = []
         for item in basket:

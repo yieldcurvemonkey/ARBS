@@ -226,26 +226,34 @@ def _build_invoice_swap_lookup(
     for root in iterator:
         contract = front_month(as_of, root)
 
-        try:
-            basket = ustf_mdp.get_delivery_basket(as_of=as_of, symbol=contract, usts_mdp_source="USTS_FEDINVEST_WSJ_LIVE-RL")
-        except Exception:
+        # One pricer fetch covers both needs: the (start, end) delivery window
+        # AND the CTD basket. Previously this function called
+        # ``get_delivery_basket`` AND ``get_pricer(include_basket=True)``, which
+        # hydrates the cash-bond basket twice per root (each call rebuilds
+        # ``FixedRateBondsMDP.get_data`` for ~20-30 CUSIPs even on a cache hit).
+        pricer = None
+        for usts_src in ("USTS_FEDINVEST_WSJ_LIVE-RL", "USTS_TRADINGVIEW_LIVE-RL"):
             try:
-                basket = ustf_mdp.get_delivery_basket(as_of=as_of, symbol=contract, usts_mdp_source="USTS_TRADINGVIEW_LIVE-RL")
+                pricer = ustf_mdp.get_pricer(
+                    request={
+                        "symbols": [contract],
+                        "timestamp": as_of,
+                        "usts_mdp_source": usts_src,
+                        "include_basket": True,
+                    }
+                )[contract]
+                break
             except Exception:
                 continue
-
-        try:
-            delivery_start, delivery_end = basket["delivery"]
-        except Exception:
+        if pricer is None:
             continue
 
         try:
-            pricer = ustf_mdp.get_pricer(request={"symbols": [contract], "timestamp": as_of, "usts_mdp_source": "USTS_FEDINVEST_WSJ_LIVE-RL"})[contract]
+            delivery_start, delivery_end = pricer.delivery_dates()
         except Exception:
-            try:
-                pricer = ustf_mdp.get_pricer(request={"symbols": [contract], "timestamp": as_of, "usts_mdp_source": "USTS_TRADINGVIEW_LIVE-RL"})[contract]
-            except Exception:
-                continue
+            # Older pricer backends without delivery_dates — skip rather than
+            # fall back to a second round-trip. Upgrade the backend if needed.
+            continue
 
         for indicator in "ABCDEF":
             ticker = _INDICATOR_TO_TICKER.get(root, {}).get(indicator)
