@@ -2,6 +2,9 @@
 // ABOUTME: Main orchestrator for the USD swap tape v2 feature.
 import type { JSX } from 'react'
 import { useCallback, useMemo, useState } from 'react'
+import 'primereact/resources/themes/lara-dark-indigo/theme.css'
+import 'primereact/resources/primereact.min.css'
+import 'primeicons/primeicons.css'
 import { TradeTapeHeader } from './TradeTapeHeader/TradeTapeHeader'
 import { FilterChips } from './TradeTapeFilters/FilterChips'
 import { TradeTapeFilters } from './TradeTapeFilters/TradeTapeFilters'

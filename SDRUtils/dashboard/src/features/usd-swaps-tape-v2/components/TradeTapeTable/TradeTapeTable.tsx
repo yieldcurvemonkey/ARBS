@@ -1,6 +1,7 @@
 'use client'
 // ABOUTME: PrimeReact DataTable for the USD swap tape v2.
 import type { JSX } from 'react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { DataTable } from 'primereact/datatable'
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
@@ -30,11 +31,92 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     onSelectionChange,
   } = props
 
+  const selectedIds = new Set((selected ?? []).map((row) => row.package_id))
+
+  const toggleRowExpansion = (row: UsdSwapTapeRow) => {
+    if (!onRowToggle) return
+    const next = { ...(expandedRows ?? {}) }
+    if (next[row.package_id]) delete next[row.package_id]
+    else next[row.package_id] = true
+    onRowToggle({ data: next })
+  }
+
+  const expanderBody = (row: UsdSwapTapeRow) => {
+    const canExpand = (row.legs_json ?? []).length > 0
+    if (!canExpand) return <span className="inline-flex h-6 w-6" />
+    const isExpanded = !!expandedRows?.[row.package_id]
+    return (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          toggleRowExpansion(row)
+        }}
+        className="inline-flex h-6 w-6 items-center justify-center rounded border border-gray-700 text-gray-300 hover:border-gray-500 hover:text-gray-100"
+        aria-label={isExpanded ? 'Collapse package details' : 'Expand package details'}
+      >
+        {isExpanded ? (
+          <ChevronDown className="h-4 w-4" />
+        ) : (
+          <ChevronRight className="h-4 w-4" />
+        )}
+      </button>
+    )
+  }
+
+  const dataTableRowClassName = (row: UsdSwapTapeRow) =>
+    [
+      'h-10 text-sm !text-gray-200 transition-[filter,box-shadow] hover:brightness-110 hover:shadow-[inset_0_0_0_1px_rgba(148,163,184,0.5)]',
+      rowClassName(row),
+      row.manual_link_id || row.manual_package_id ? 'manual-linked-row' : '',
+      selectedIds.has(row.package_id) ? 'selected-share-row' : '',
+    ]
+      .join(' ')
+      .trim()
+
   return (
     <div
       className="flex flex-col flex-1 bg-slate-950 text-slate-100"
       data-testid="trade-tape-table"
     >
+      <style jsx global>{`
+        .usd-swaps-tape-table .p-datatable-tbody > tr,
+        .usd-swaps-tape-table .p-datatable-tbody > tr > td {
+          border: none !important;
+        }
+        .usd-swaps-tape-table
+          .p-datatable-tbody
+          > tr.manual-linked-row
+          > td {
+          background-color: rgba(245, 158, 11, 0.18) !important;
+        }
+        .usd-swaps-tape-table
+          .p-datatable-tbody
+          > tr.selected-share-row
+          > td {
+          box-shadow:
+            inset 0 1px 0 rgba(125, 211, 252, 0.4),
+            inset 0 -1px 0 rgba(125, 211, 252, 0.4) !important;
+        }
+        .usd-swaps-tape-table
+          .p-datatable-tbody
+          > tr.selected-share-row
+          > td:first-child {
+          box-shadow:
+            inset 1px 0 0 rgba(125, 211, 252, 0.4),
+            inset 0 1px 0 rgba(125, 211, 252, 0.4),
+            inset 0 -1px 0 rgba(125, 211, 252, 0.4) !important;
+        }
+        .usd-swaps-tape-table
+          .p-datatable-tbody
+          > tr.selected-share-row
+          > td:last-child {
+          box-shadow:
+            inset -1px 0 0 rgba(125, 211, 252, 0.4),
+            inset 0 1px 0 rgba(125, 211, 252, 0.4),
+            inset 0 -1px 0 rgba(125, 211, 252, 0.4) !important;
+        }
+      `}</style>
       <DataTable
         value={rows}
         dataKey="package_id"
@@ -42,7 +124,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         scrollable
         scrollHeight="flex"
         stripedRows={false}
-        rowClassName={rowClassName as any}
+        rowClassName={dataTableRowClassName as any}
         loading={loading}
         selectionMode={onSelectionChange ? 'multiple' : undefined}
         cellSelection={false}
@@ -50,18 +132,35 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         selection={selected as any}
         onSelectionChange={onSelectionChange as any}
         expandedRows={expandedRows as any}
-        onRowToggle={onRowToggle as any}
-        rowExpansionTemplate={(row: UsdSwapTapeRow) => <LegsSubTable row={row} />}
-        className="text-sm"
-        tableStyle={{ minWidth: '1600px' }}
+        rowExpansionTemplate={(row: UsdSwapTapeRow) => (
+          <div className="-mx-2 -my-1 px-0 py-0">
+            <LegsSubTable row={row} />
+          </div>
+        )}
+        className="usd-swaps-tape-table rounded-2xl border border-gray-800 bg-gradient-to-b from-gray-950 to-gray-900 text-gray-200 shadow-inner"
+        tableStyle={{ minWidth: '1700px' }}
+        resizableColumns
+        columnResizeMode="fit"
+        rowHover
+        pt={
+          {
+            bodyCell: {
+              className: 'py-1 px-2 text-xs !border-0',
+              style: { backgroundColor: 'transparent' },
+            },
+          } as any
+        }
       >
-        {getColumns({ expansion: true, selection: !!onSelectionChange })}
+        {getColumns({
+          selection: !!onSelectionChange,
+          expanderBody,
+        })}
       </DataTable>
       {hasMore ? (
-        <div className="py-2 flex justify-center">
+        <div className="flex justify-center py-2">
           <button
             type="button"
-            className="text-xs px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
+            className="rounded bg-slate-800 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700"
             onClick={onLoadMore}
             disabled={loading}
           >

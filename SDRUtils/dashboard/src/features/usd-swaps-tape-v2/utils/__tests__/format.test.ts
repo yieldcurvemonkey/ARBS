@@ -1,7 +1,10 @@
 import { describe, expect, it } from '@jest/globals'
+import { EMPTY_VALUE } from '../../constants'
 import {
   formatClusterSuffix,
+  formatDate,
   formatDv01,
+  formatExecutionWindow,
   formatNotional,
   formatRate,
   formatRateRange,
@@ -10,10 +13,10 @@ import {
 } from '../format'
 
 describe('formatNotional', () => {
-  it('returns em dash for null / undefined / NaN', () => {
-    expect(formatNotional(null)).toBe('—')
-    expect(formatNotional(undefined)).toBe('—')
-    expect(formatNotional(Number.NaN)).toBe('—')
+  it('returns the empty marker for null / undefined / NaN', () => {
+    expect(formatNotional(null)).toBe(EMPTY_VALUE)
+    expect(formatNotional(undefined)).toBe(EMPTY_VALUE)
+    expect(formatNotional(Number.NaN)).toBe(EMPTY_VALUE)
   })
 
   it('formats with commas by default', () => {
@@ -49,17 +52,17 @@ describe('formatRate', () => {
     expect(formatRate(0.04523, { precision: 1 })).toBe('4.5%')
   })
 
-  it('returns em dash on null', () => {
-    expect(formatRate(null)).toBe('—')
+  it('returns the empty marker on null', () => {
+    expect(formatRate(null)).toBe(EMPTY_VALUE)
   })
 })
 
 describe('formatRateRange', () => {
-  it('returns single rate when min≈max', () => {
+  it('returns a single rate when the endpoints match', () => {
     expect(formatRateRange(0.04, 0.04)).toBe('4.000%')
   })
 
-  it('renders range with en-dash when distinct', () => {
+  it('renders both endpoints when the rates differ', () => {
     expect(formatRateRange(0.03, 0.05)).toContain('3.000%')
     expect(formatRateRange(0.03, 0.05)).toContain('5.000%')
   })
@@ -73,23 +76,59 @@ describe('formatTenor', () => {
     expect(formatTenor(row)).toBe('~7Y')
   })
 
-  it('falls back through tenor_label / package_tenors / em-dash', () => {
+  it('falls back through tenor_label / package_tenors / empty marker', () => {
     expect(
       formatTenor({ legs_json: [], tenor_label: '5Y', package_tenors: null } as any),
     ).toBe('5Y')
-    expect(formatTenor({ legs_json: [] } as any)).toBe('—')
+    expect(formatTenor({ legs_json: [] } as any)).toBe(EMPTY_VALUE)
   })
 })
 
 describe('formatTime', () => {
-  it('returns em-dash on null', () => {
-    expect(formatTime(null)).toBe('—')
+  it('returns the empty marker on null', () => {
+    expect(formatTime(null)).toBe(EMPTY_VALUE)
   })
 
   it('returns a HH:MM:SS-ish string for valid ISO', () => {
     const formatted = formatTime('2026-04-14T14:30:15Z')
     expect(formatted.length).toBeGreaterThan(0)
-    expect(formatted).not.toBe('—')
+    expect(formatted).not.toBe(EMPTY_VALUE)
+  })
+})
+
+describe('formatDate', () => {
+  it('returns the empty marker on null', () => {
+    expect(formatDate(null)).toBe(EMPTY_VALUE)
+  })
+
+  it('renders an en-US calendar date for valid ISO input', () => {
+    const formatted = formatDate('2026-04-14T14:30:15Z')
+    expect(formatted.length).toBeGreaterThan(0)
+    expect(formatted).toContain('2026')
+  })
+})
+
+describe('formatExecutionWindow', () => {
+  it('returns the empty marker when the start timestamp is missing', () => {
+    expect(formatExecutionWindow(null, null)).toBe(EMPTY_VALUE)
+  })
+
+  it('renders the full timestamp when start and end match', () => {
+    const formatted = formatExecutionWindow(
+      '2026-04-14T14:30:15Z',
+      '2026-04-14T14:30:15Z',
+    )
+    expect(formatted).toContain('2026')
+    expect(formatted).not.toContain(' / ')
+  })
+
+  it('renders a range when execution_start and execution_end differ', () => {
+    const formatted = formatExecutionWindow(
+      '2026-04-14T14:30:15Z',
+      '2026-04-14T14:31:15Z',
+    )
+    expect(formatted).toContain('2026')
+    expect(formatted).toContain(' / ')
   })
 })
 

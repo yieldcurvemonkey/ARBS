@@ -1,27 +1,27 @@
 import { describe, expect, it } from '@jest/globals'
-import { indexTone, structureOf } from '../TapeLabelCell.helpers'
+import { EMPTY_VALUE } from '../../../constants'
+import { displayTapeLabel } from '../TapeLabelCell.helpers'
 
-describe('TapeLabelCell helpers', () => {
-  it('indexTone maps SOFR to emerald', () => {
-    expect(indexTone('SOFR')).toContain('emerald')
+describe('displayTapeLabel', () => {
+  it('returns the raw package tape label from the row when present', () => {
+    expect(
+      displayTapeLabel({
+        tape_label: 'USD-SOFR-COMPOUND 1D Constant 5Y11M 1Y Outright UFRO PHYS',
+        legs_json: [{ tape_label: 'ignored leg label' }],
+      } as any),
+    ).toBe('USD-SOFR-COMPOUND 1D Constant 5Y11M 1Y Outright UFRO PHYS')
   })
 
-  it('indexTone maps FED_FUNDS to amber', () => {
-    expect(indexTone('FED_FUNDS')).toContain('amber')
+  it('falls back to the first leg tape label when the row-level label is empty', () => {
+    expect(
+      displayTapeLabel({
+        tape_label: '   ',
+        legs_json: [{ tape_label: 'USD-SOFR 5Y Outright' }],
+      } as any),
+    ).toBe('USD-SOFR 5Y Outright')
   })
 
-  it('indexTone falls back to slate for unknowns', () => {
-    expect(indexTone('OTHER')).toContain('slate')
-    expect(indexTone(null)).toContain('slate')
-  })
-
-  it('structureOf prefers package_structure over package_type', () => {
-    const row: any = { package_structure: '2Y/5Y Curve', package_type: 'CURVE' }
-    expect(structureOf(row)).toBe('2Y/5Y Curve')
-  })
-
-  it('structureOf falls back to package_type', () => {
-    const row: any = { package_structure: null, package_type: 'OUTRIGHT' }
-    expect(structureOf(row)).toBe('OUTRIGHT')
+  it('returns the empty marker when no tape label is available', () => {
+    expect(displayTapeLabel({ legs_json: [] } as any)).toBe(EMPTY_VALUE)
   })
 })

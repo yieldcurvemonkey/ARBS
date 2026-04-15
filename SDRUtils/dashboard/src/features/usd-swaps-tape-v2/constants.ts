@@ -83,21 +83,15 @@ export const TIMESERIES_VIEWS: Array<{ key: TimeseriesViewKey; label: string }> 
 // Default column definitions — consumed by TradeTapeTable/columns.tsx
 export const COLUMN_DEFS = [
   { key: 'select', header: '', width: 40 },
-  { key: 'expand', header: '', width: 36 },
-  { key: 'time', header: 'Time', width: 92 },
-  { key: 'lifecycle', header: 'Lifecycle', width: 90 },
-  { key: 'tape_label', header: 'Tape Label', width: 420 },
+  { key: 'expand', header: '', width: 48 },
+  { key: 'time', header: 'Time', width: 190 },
+  { key: 'action', header: 'Action', width: 132 },
+  { key: 'platform', header: 'Platform', width: 120 },
+  { key: 'tape_label', header: 'Tape Label', width: 700 },
   { key: 'trade_type', header: 'Type', width: 110 },
-  { key: 'package_structure', header: 'Structure', width: 150 },
-  { key: 'tenor', header: 'Tenor', width: 72 },
   { key: 'dv01', header: 'DV01', width: 96 },
   { key: 'notional', header: 'Notional', width: 110 },
   { key: 'rate', header: 'Rate', width: 84 },
-  { key: 'venue', header: 'Venue', width: 72 },
-  { key: 'ccp', header: 'CCP', width: 64 },
-  { key: 'session', header: 'Session', width: 76 },
-  { key: 'flags', header: 'Flags', width: 140 },
-  { key: 'actions', header: '', width: 56 },
 ] as const
 
 export const CLEAN_TAPE_HIDDEN_LIFECYCLES: LifecycleType[] = [

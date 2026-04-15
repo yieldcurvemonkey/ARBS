@@ -90,6 +90,41 @@ export function formatTime(ts: string | null | undefined): string {
   })
 }
 
+export function formatDate(ts: string | null | undefined): string {
+  if (!ts) return EMPTY_VALUE
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return EMPTY_VALUE
+  return d.toLocaleDateString('en-US')
+}
+
+export function formatExecutionWindow(
+  start: string | null | undefined,
+  end: string | null | undefined,
+): string {
+  if (!start) return EMPTY_VALUE
+  const startDate = new Date(start)
+  if (Number.isNaN(startDate.getTime())) return EMPTY_VALUE
+  const endDate = end ? new Date(end) : startDate
+  if (Number.isNaN(endDate.getTime())) return EMPTY_VALUE
+  const startStr = `${startDate.toLocaleDateString('en-US')} ${startDate.toLocaleTimeString(
+    'en-US',
+    {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    },
+  )}`
+  const endStr = endDate.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+  if (startDate.getTime() === endDate.getTime()) return startStr
+  return `${startStr} / ${endStr}`
+}
+
 export function formatClusterSuffix(size: number | null | undefined): string {
   if (isNullish(size)) return ''
   if (size < 2) return ''
