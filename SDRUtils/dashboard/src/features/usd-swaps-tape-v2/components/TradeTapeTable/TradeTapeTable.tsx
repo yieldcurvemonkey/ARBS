@@ -167,6 +167,20 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
       data-testid="trade-tape-table"
     >
       <style jsx global>{`
+        /* Propagate the DataTable's scroll height down to the inner
+         * VirtualScroller — with scrollHeight="flex" the wrapper sizes itself
+         * via flex-basis, but the nested virtualscroller doesn't inherit that
+         * height, so the scroll viewport collapses to 0 and no rows render.
+         */
+        .usd-swaps-tape-table .p-datatable-wrapper {
+          flex: 1 1 auto;
+          min-height: 0;
+        }
+        .usd-swaps-tape-table .p-datatable-wrapper > .p-virtualscroller,
+        .usd-swaps-tape-table .p-virtualscroller {
+          height: 100% !important;
+          min-height: 0;
+        }
         .usd-swaps-tape-table .p-datatable-tbody > tr,
         .usd-swaps-tape-table .p-datatable-tbody > tr > td {
           border: none !important;

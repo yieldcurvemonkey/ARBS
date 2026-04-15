@@ -42,7 +42,10 @@ function serializeSet(s: Set<string> | undefined): string {
   return Array.from(s).sort().join(',')
 }
 
-const DEFAULT_PAGE_LIMIT = 50
+// Initial fetch loads a larger batch so traders see a deep tape on first paint,
+// then VirtualScroller lazy-loads subsequent pages at the same size as the
+// swaption tape.
+const DEFAULT_PAGE_LIMIT = 200
 
 function buildQuery(params: UseTradeTapeDataParams, options?: {
   cursor?: string
