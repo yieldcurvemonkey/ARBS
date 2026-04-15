@@ -25,6 +25,14 @@ describe('LegsSubTable', () => {
   it('uses the reduced empty-state colspan after the column removal', () => {
     expect(legsSubTableSource).toContain('colSpan={13}')
   })
+
+  it('prefers leg_tape_label over tape_label so CURVE/FLY legs show the per-leg outright description', () => {
+    // The expanded row for a curve should render "5Y Outright" / "10Y Outright"
+    // on each leg row, not the package-level "5Y/10Y CURVE" label. The backend
+    // populates leg_tape_label per leg and keeps tape_label as the package
+    // structure, so the UI must pick leg_tape_label first.
+    expect(legsSubTableSource).toContain('leg.leg_tape_label ?? leg.tape_label')
+  })
 })
 
 describe('UsdSwapsTradeTape', () => {

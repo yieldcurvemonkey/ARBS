@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS {LEGS_TABLE} (
     ccp TEXT,
     platform_identifier TEXT,
     tape_label TEXT,
+    leg_tape_label TEXT,
     upi_reset_freq TEXT,
     upi_notional_schedule TEXT,
     upi_delivery_type TEXT,
@@ -164,6 +165,10 @@ CREATE INDEX IF NOT EXISTS idx_tape_v1_packages_type ON {PACKAGES_TABLE}(package
 CREATE INDEX IF NOT EXISTS idx_tape_v1_packages_cluster ON {PACKAGES_TABLE}(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_tape_v1_packages_fomc ON {PACKAGES_TABLE}(fomc_meeting_label);
 CREATE INDEX IF NOT EXISTS idx_tape_v1_packages_metrics_gin ON {PACKAGES_TABLE} USING GIN (package_metrics);
+
+-- Additive migrations for columns added after initial rollout. Safe to run
+-- repeatedly because ``ADD COLUMN IF NOT EXISTS`` is idempotent.
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS leg_tape_label TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_tape_v1_legs_package ON {LEGS_TABLE}(package_id);
 CREATE INDEX IF NOT EXISTS idx_tape_v1_legs_exec ON {LEGS_TABLE}(execution_timestamp);

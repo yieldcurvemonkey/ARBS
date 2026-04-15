@@ -18,7 +18,6 @@ export function LifecyclePills({ row }: { row: UsdSwapTapeRow }): JSX.Element {
           aria-label={`${p.label} x ${p.count}`}
         >
           {p.label}
-          {p.count > 1 ? ` ${p.count}` : ''}
         </span>
       ))}
     </div>

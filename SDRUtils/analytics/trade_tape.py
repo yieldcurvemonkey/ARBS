@@ -780,10 +780,21 @@ class TradeTape(SDRAnalyzer):
         return df
 
     def _build_enriched_label(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Layer 7: build professional ``tape_label``.
+        """Layer 7: build professional ``tape_label`` (package scope) and
+        ``leg_tape_label`` (per-leg scope).
+
+        Package-scope format (tape_label on both legs and packages): uses the
+        package tenor pair ("5Y/10Y") and structure ("CURVE"/"FLY"). Used for
+        groupby/search across the tape.
+
+        Leg-scope format (leg_tape_label, legs only): uses the leg's own tenor
+        and "Outright" structure for CURVE/FLY legs, so each package leg shows
+        its own outright description in the expanded sub-table. For all other
+        trade types the two labels are identical.
 
         Format: [underlier] [reset] [forward] [tenors] [structure] [flags] [mac_coupons] [settlement]
-        Example: USD-SOFR-COMPOUND 1D Constant Spot 5Y Outright PHYS
+        Example (package): USD-SOFR-COMPOUND 1D Constant Spot 5Y/10Y CURVE PHYS
+        Example (leg): USD-SOFR-COMPOUND 1D Constant Spot 5Y Outright PHYS
         """
         # Build trade_id -> index lookup for MAC coupon resolution
         tid_to_idx: dict[str, int] = {}
@@ -791,7 +802,7 @@ class TradeTape(SDRAnalyzer):
             for idx, tid in df["trade_id"].items():
                 tid_to_idx[str(tid)] = idx
 
-        def _label_for_row(row: pd.Series) -> str:
+        def _label_for_row(row: pd.Series, *, leg_scope: bool = False) -> str:
             parts: list[str] = []
 
             # 1. Underlier name
@@ -812,6 +823,10 @@ class TradeTape(SDRAnalyzer):
 
             trade_type = str(row.get("trade_type", "OUTRIGHT")).upper()
 
+            # Render a CURVE/FLY leg as a single-leg outright when leg_scope=True
+            # so the expanded sub-table shows "5Y Outright" / "10Y Outright".
+            leg_as_outright = leg_scope and trade_type in ("CURVE", "FLY")
+
             # 3+4. Forward + Tenor (FOMC-dated swaps get special handling)
             fomc_label = str(row.get("fomc_meeting_label", "")).strip()
             if fomc_label and fomc_label.lower() not in ("", "nan", "none"):
@@ -820,10 +835,17 @@ class TradeTape(SDRAnalyzer):
                 # For CURVE/FLY packages, still append the leg tenor pair
                 # (e.g. "5Y/30Y") — the FOMC anchor describes the shared start
                 # but the package's tenor structure is what identifies the trade.
-                if trade_type in ("CURVE", "FLY"):
+                # In leg scope we fall through to the single-leg tenor below.
+                if trade_type in ("CURVE", "FLY") and not leg_as_outright:
                     pkg_tenors = str(row.get("package_tenors", "")).strip()
                     if pkg_tenors and pkg_tenors.lower() not in ("nan", "none"):
                         parts.append(pkg_tenors)
+                elif leg_as_outright:
+                    leg_tenor = str(
+                        row.get("tenor_display", row.get("tenor_label", ""))
+                    ).strip()
+                    if leg_tenor and leg_tenor.lower() not in ("nan", "none"):
+                        parts.append(leg_tenor)
             else:
                 # 3. Forward (normalize T+2 settlement labels to Spot)
                 fwd = row.get("forward_label", "spot")
@@ -837,13 +859,24 @@ class TradeTape(SDRAnalyzer):
                 else:
                     parts.append(str(fwd))
 
-                # 4. Tenors (package_tenors uses tenor_display with ~7Y off-date notation)
-                tenors = str(row.get("package_tenors", row.get("tenor_display", row.get("tenor_label", ""))))
+                # 4. Tenors — leg scope uses the leg's own tenor; package scope
+                # uses the combined package_tenors (e.g. "5Y/10Y").
+                if leg_as_outright:
+                    tenors = str(row.get("tenor_display", row.get("tenor_label", "")))
+                else:
+                    tenors = str(
+                        row.get(
+                            "package_tenors",
+                            row.get("tenor_display", row.get("tenor_label", "")),
+                        )
+                    )
                 if tenors and tenors.lower() not in ("nan", "none"):
                     parts.append(tenors)
 
             # 5. Structure
-            if trade_type in ("CURVE", "FLY"):
+            if leg_as_outright:
+                parts.append("Outright")
+            elif trade_type in ("CURVE", "FLY"):
                 parts.append(trade_type)
             elif trade_type == "SPREADOVER":
                 parts.append("Spreadover")
@@ -917,8 +950,14 @@ class TradeTape(SDRAnalyzer):
             return " ".join(parts)
 
         df["tape_label"] = df.apply(_label_for_row, axis=1)
+        df["leg_tape_label"] = df.apply(
+            lambda r: _label_for_row(r, leg_scope=True), axis=1
+        )
         # Clean double spaces
         df["tape_label"] = df["tape_label"].str.replace(r"\s+", " ", regex=True).str.strip()
+        df["leg_tape_label"] = (
+            df["leg_tape_label"].str.replace(r"\s+", " ", regex=True).str.strip()
+        )
 
         return df
 

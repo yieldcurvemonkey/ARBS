@@ -65,6 +65,7 @@ LEG_COLUMNS: tuple[str, ...] = (
     "ccp",
     "platform_identifier",
     "tape_label",
+    "leg_tape_label",
     "upi_reset_freq",
     "upi_notional_schedule",
     "upi_delivery_type",
@@ -463,20 +464,40 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         records, desc="Building tape leg rows", unit="row", leave=False
     ):
         rec["as_of_date"] = as_of_date
-        # leg_order: default 0 when missing/None, otherwise keep actual value.
-        lo = _int_or_none(rec.get("leg_order"))
-        rec["leg_order"] = lo if lo is not None else 0
-        for c in _LEG_INT_COLS:
-            rec[c] = _int_or_none(rec.get(c))
-        for c in _LEG_NUM_COLS:
-            rec[c] = _num_or_none(rec.get(c))
-        for c in _LEG_BOOL_COLS:
-            rec[c] = _bool_or_none(rec.get(c))
-        for c in _LEG_TEXT_COLS:
-            rec[c] = _str_or_none(rec.get(c))
-        for c in _LEG_TS_COLS:
-            rec[c] = _to_db_value(rec.get(c))
-
+        # Type coercions
+        rec["leg_order"] = _int_or_none(rec.get("leg_order")) or 0
+        rec["execution_hour_et"] = _int_or_none(rec.get("execution_hour_et"))
+        rec["tenor_years"] = _num_or_none(rec.get("tenor_years"))
+        rec["forward_start_years"] = _num_or_none(rec.get("forward_start_years"))
+        rec["notional"] = _num_or_none(rec.get("notional"))
+        rec["risk"] = _num_or_none(rec.get("risk"))
+        rec["fixed_rate"] = _num_or_none(rec.get("fixed_rate"))
+        rec["lc_n_events"] = _int_or_none(rec.get("lc_n_events"))
+        rec["xd_n_events"] = _int_or_none(rec.get("xd_n_events"))
+        rec["xd_notional_pct_remaining"] = _num_or_none(rec.get("xd_notional_pct_remaining"))
+        rec["cluster_size"] = _int_or_none(rec.get("cluster_size"))
+        for bool_col in (
+            "is_new_risk", "is_unwind", "is_compression", "is_compression_spec",
+            "is_reset_optimization", "is_novation", "is_novation_born",
+            "is_novation_terminated", "is_exercise_born", "is_clearing_termination",
+            "is_ufro", "is_off_market", "is_capped", "is_block", "is_off_date",
+            "is_mac", "is_spreadover", "is_asset_swap", "is_non_standard_term",
+            "is_fomc_dated", "is_month_end", "is_quarter_end",
+            "is_multi_meeting_cluster", "xd_is_terminated", "xd_has_partial_unwind",
+        ):
+            rec[bool_col] = _bool_or_none(rec.get(bool_col))
+        for text_col in (
+            "trade_id", "package_id", "execution_session", "tenor_label",
+            "tenor_display", "forward_label", "forward_bucket", "notional_currency",
+            "trade_type", "rate_index_clean", "venue", "ccp", "platform_identifier",
+            "tape_label", "leg_tape_label", "upi_reset_freq", "upi_notional_schedule",
+            "upi_delivery_type", "lifecycle_type", "lc_status", "fomc_meeting_label",
+            "fomc_proximity", "cluster_id", "xd_status",
+        ):
+            rec[text_col] = _str_or_none(rec.get(text_col))
+        rec["execution_timestamp"] = _to_db_value(rec.get("execution_timestamp"))
+        rec["effective_date"] = _to_db_value(rec.get("effective_date"))
+        rec["expiration_date"] = _to_db_value(rec.get("expiration_date"))
         flags = rec.get("quality_flags")
         if flags is None or (isinstance(flags, float) and math.isnan(flags)):
             flags = []
@@ -488,6 +509,40 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             rec["quality_flags"] = []
         rec["enrichment_metrics"] = _to_jsonable(rec.get("enrichment_metrics")) or {}
     return records
+
+
+def _structural_risk(
+    risk: pd.Series, tenor_years: pd.Series, trade_type: str
+) -> Optional[float]:
+    """Representative package DV01 for the front-of-tape DV01 cell.
+
+    Curves and flies have offsetting leg risks, so summing them is misleading:
+    a 5s10s curve with +41.5k / +41.6k legs would display +83.1k, which isn't
+    meaningful. Convention here:
+    - CURVE: back-leg DV01 (leg with the longest tenor).
+    - FLY: belly-leg DV01 (middle tenor after sorting).
+    - Anything else: sum of leg DV01s (unchanged behaviour).
+
+    Returns None if no leg has a non-null risk.
+    """
+    if not risk.notna().any():
+        return None
+    tt = (trade_type or "").upper()
+    if tt in ("CURVE", "FLY"):
+        valid_mask = risk.notna() & tenor_years.notna()
+        if valid_mask.any():
+            ordered = tenor_years[valid_mask].sort_values(kind="stable")
+            if tt == "CURVE":
+                # Back leg = longest tenor.
+                target_idx = ordered.index[-1]
+            else:
+                # Belly = middle tenor after sorting. For a conventional 3-leg
+                # fly this lands on the middle leg; for 2-leg inputs we fall
+                # back to the longer-tenor leg so the value is still well
+                # defined. len // 2 gives the right answer in both cases.
+                target_idx = ordered.index[len(ordered) // 2]
+            return _num_or_none(risk.loc[target_idx])
+    return _num_or_none(risk.sum(skipna=True))
 
 
 def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
@@ -517,6 +572,9 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         g = group.sort_values(["execution_timestamp", "trade_id"])
         notional = pd.to_numeric(g.get("notional", pd.Series(dtype=float)), errors="coerce")
         risk = pd.to_numeric(g.get("risk", pd.Series(dtype=float)), errors="coerce")
+        tenor_years_series = pd.to_numeric(
+            g.get("tenor_years", pd.Series(dtype=float)), errors="coerce"
+        )
         fixed = pd.to_numeric(g.get("fixed_rate", pd.Series(dtype=float)), errors="coerce")
         abs_notional = notional.abs()
 
@@ -546,6 +604,7 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
 
         package_type = _consistent_str(g, "package_type") or "OUTRIGHT"
         trade_type = _consistent_str(g, "trade_type") or package_type
+        structural_risk = _structural_risk(risk, tenor_years_series, trade_type)
 
         rec: dict[str, Any] = {
             "package_id": str(package_id),
@@ -564,7 +623,7 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "legs_count": int(len(g)),
             "total_notional": _num_or_none(notional.sum(skipna=True)) if notional.notna().any() else None,
             "gross_notional": _num_or_none(abs_notional.sum(skipna=True)) if abs_notional.notna().any() else None,
-            "total_risk": _num_or_none(risk.sum(skipna=True)) if risk.notna().any() else None,
+            "total_risk": structural_risk,
             "gross_risk": _num_or_none(risk.abs().sum(skipna=True)) if risk.notna().any() else None,
             "weighted_fixed_rate": weighted_fixed_rate,
             "min_fixed_rate": _num_or_none(fixed.min(skipna=True)) if fixed.notna().any() else None,
