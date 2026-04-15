@@ -39,8 +39,22 @@ def _format_months_label(total_months: int) -> str:
     return f"{years_part}Y{months_part}M"
 
 
-def _standard_tenor_label(years: float, *, is_swaptions: bool = False) -> tuple[str, bool]:
-    """Return the standard tenor label and whether it matched a benchmark cleanly."""
+def _standard_tenor_label(
+    years: float,
+    *,
+    is_swaptions: bool = False,
+    days_fallback: bool = False,
+) -> tuple[str, bool]:
+    """Return the standard tenor label and whether it matched a benchmark cleanly.
+
+    Args:
+        years: Tenor in year fractions.
+        is_swaptions: Apply swaption-specific shortcuts.
+        days_fallback: When True, inputs that do not match a standard benchmark
+            fall back to raw days (e.g. ``"73D"``) rather than a rounded months
+            bucket. Used for forward-start labels so we never emit a misleading
+            "2M" for what is really a 73-day forward.
+    """
     if years == 0:
         return "0D", True
     if years < 0:
@@ -62,6 +76,10 @@ def _standard_tenor_label(years: float, *, is_swaptions: bool = False) -> tuple[
             return "1M", True
         return label, True
 
+    # No benchmark match — choose a fallback representation.
+    if days_fallback:
+        return f"{int(round(days))}D", False
+
     if years < 1:
         if days < 28:
             return f"{int(round(days))}D", False
@@ -79,7 +97,17 @@ def _standard_forward_label(years: float, *, is_swaptions: bool = False) -> tupl
         return "spot", True
 
     if years < 1:
-        return _standard_tenor_label(years, is_swaptions=is_swaptions)
+        # Swap forward starts < 1Y: when the period does not land on a standard
+        # bucket (1W/2W/1M/2M/3M/6M/9M), return raw days rather than rounding to
+        # months. Previously a 73-day forward rendered as "2M" which materially
+        # misrepresents the trade (see bug report: "thats not really a 2m forward
+        # swap"). Swaption labels keep the month-bucket behavior by design — the
+        # nc-period for bermudans is typically expressed in months (e.g. "6Mnc4Y").
+        return _standard_tenor_label(
+            years,
+            is_swaptions=is_swaptions,
+            days_fallback=not is_swaptions,
+        )
 
     total_months_float = years * 12.0
     total_months = int(round(total_months_float))
@@ -192,6 +220,7 @@ def tenor_from_dates(
     expiration_date: pd.Timestamp,
     *,
     is_swaptions: bool = False,
+    days_tolerance: int = 3,
 ) -> str:
     """
     Build tenor label using calendar components between two dates.
@@ -200,6 +229,10 @@ def tenor_from_dates(
         effective_date: Start date of the swap
         expiration_date: End date of the swap
         is_swaptions: Whether to apply swaption-specific rules
+        days_tolerance: Maximum ``days_part`` value that is still treated as a
+            clean year/month combination. Captures the 1-3 day noise introduced
+            by business-day adjustments so a 3Y6M+2d swap renders as ``"3Y6M"``
+            rather than falling through to the bucketed ``"~4Y"``.
 
     Returns:
         Tenor label string
@@ -221,6 +254,16 @@ def tenor_from_dates(
         return f"{years_part}Y"
 
     if days_part == 0:
+        if years_part == 0:
+            return f"{months_part}M"
+        if months_part == 0:
+            return f"{years_part}Y"
+        return f"{years_part}Y{months_part}M"
+
+    # Small residual days_part (business-day adjustment) — treat as the clean
+    # Y/M combination. Avoids off-date buckets for trades that are genuinely
+    # clean like 5Y6M with a weekend/holiday roll.
+    if abs(days_part) <= days_tolerance:
         if years_part == 0:
             return f"{months_part}M"
         if months_part == 0:

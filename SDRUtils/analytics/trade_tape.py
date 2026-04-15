@@ -810,11 +810,20 @@ class TradeTape(SDRAnalyzer):
                 if pt == "OIS_SWAP":
                     parts.append("1D Constant")
 
+            trade_type = str(row.get("trade_type", "OUTRIGHT")).upper()
+
             # 3+4. Forward + Tenor (FOMC-dated swaps get special handling)
             fomc_label = str(row.get("fomc_meeting_label", "")).strip()
             if fomc_label and fomc_label.lower() not in ("", "nan", "none"):
-                # FOMC-dated swap: "FOMC APR26" replaces forward + tenor
+                # FOMC-dated swap: "FOMC APR26" replaces forward + tenor for outrights.
                 parts.append(f"FOMC {fomc_label.upper()}")
+                # For CURVE/FLY packages, still append the leg tenor pair
+                # (e.g. "5Y/30Y") — the FOMC anchor describes the shared start
+                # but the package's tenor structure is what identifies the trade.
+                if trade_type in ("CURVE", "FLY"):
+                    pkg_tenors = str(row.get("package_tenors", "")).strip()
+                    if pkg_tenors and pkg_tenors.lower() not in ("nan", "none"):
+                        parts.append(pkg_tenors)
             else:
                 # 3. Forward (normalize T+2 settlement labels to Spot)
                 fwd = row.get("forward_label", "spot")
@@ -834,13 +843,20 @@ class TradeTape(SDRAnalyzer):
                     parts.append(tenors)
 
             # 5. Structure
-            trade_type = str(row.get("trade_type", "OUTRIGHT")).upper()
             if trade_type in ("CURVE", "FLY"):
                 parts.append(trade_type)
             elif trade_type == "SPREADOVER":
                 parts.append("Spreadover")
             else:
-                parts.append("Outright")
+                # Trade is a package leg per SDR reporting (Package indicator=True)
+                # but no peer leg was paired by our detectors (curve/fly/MMS). Labelling
+                # this as "Outright" misrepresents the execution structure — prefer
+                # "Package" so downstream consumers can see it was part of a bundle.
+                pkg_ind = row.get("package_indicator")
+                is_sdr_package = (pkg_ind is True) or (
+                    str(pkg_ind).strip().lower() in ("true", "1")
+                )
+                parts.append("Package" if is_sdr_package else "Outright")
 
             # 6. Flags
             flags: list[str] = []
