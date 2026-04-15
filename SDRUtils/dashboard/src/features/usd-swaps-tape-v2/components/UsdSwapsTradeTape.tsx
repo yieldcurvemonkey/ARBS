@@ -7,7 +7,10 @@ import 'primereact/resources/primereact.min.css'
 import 'primeicons/primeicons.css'
 import { TradeTapeHeader } from './TradeTapeHeader/TradeTapeHeader'
 import { FilterChips } from './TradeTapeFilters/FilterChips'
-import { TradeTapeFilters } from './TradeTapeFilters/TradeTapeFilters'
+// Global fuzzy search, column-filter AND/OR toggle, sort, and Reset now live
+// inside TradeTapeTable itself (mirroring SwaptionTradeTape.tsx.bak) and are
+// URL-synced via the useColumnFilters / useTableControls hooks — the page
+// header only owns flag filters + clean-tape toggles.
 import { TradeTapeTable } from './TradeTapeTable/TradeTapeTable'
 import { TimeseriesChart } from './TradeTapeCharts/TimeseriesChart'
 import { FlowHistoryGrid } from './TradeTapeCharts/FlowHistoryGrid'
@@ -30,17 +33,19 @@ function todayIso(): string {
 
 export default function UsdSwapsTradeTape(): JSX.Element {
   const flagFilters = useFlagFilters()
+  // Still read column-filter state at this level so the server query rehydrates
+  // when the user pastes a URL that already contains ?columnFilters=… — the
+  // DataTable's own copy of this state lives inside TradeTapeTable.
   const columnFilters = useColumnFilters()
   const expansion = useRowExpansion()
   const selection = useRowSelection()
 
-  const [search, setSearch] = useState('')
   const [activeModal, setActiveModal] = useState<ModalName>(null)
 
   const tape = useTradeTapeData({
-    // search is handled client-side via fuzzy filter in TradeTapeTable — do NOT
-    // forward it to the server. The server still receives column filters and
-    // the URL-synced filter payload so power-user SQL-style filters keep working.
+    // Fuzzy search is handled client-side in TradeTapeTable — do NOT forward
+    // it to the server. The server still receives column filters and the
+    // URL-synced filter payload so power-user SQL-style filters keep working.
     columnFilterPayloadKey:
       Object.keys(columnFilters.filters).length > 0
         ? JSON.stringify(columnFilters.filters)
@@ -123,34 +128,6 @@ export default function UsdSwapsTradeTape(): JSX.Element {
         onFilterByLifecycle={handleFilterByLifecycle}
       />
       <FilterChips fields={fields} />
-      <TradeTapeFilters
-        search={search}
-        onSearch={setSearch}
-        operator={columnFilters.operator}
-        onOperatorChange={columnFilters.setOperator}
-        onReset={() => {
-          setSearch('')
-          columnFilters.reset()
-          flagFilters.resetAll()
-        }}
-        rowSummary={
-          <span className="whitespace-nowrap text-[11px] text-slate-400">
-            {tape.rows.length} rows
-            {tape.hasMore ? ' (more available)' : ''}
-          </span>
-        }
-        actionSlot={
-          selection.count > 0 ? (
-            <button
-              type="button"
-              className="whitespace-nowrap text-[11px] text-sky-200 hover:text-sky-100"
-              onClick={() => setActiveModal('links')}
-            >
-              Link {selection.count} selected
-            </button>
-          ) : null
-        }
-      />
       <div className="flex flex-1 overflow-hidden">
         <TradeTapeTable
           rows={tape.rows}
@@ -163,7 +140,17 @@ export default function UsdSwapsTradeTape(): JSX.Element {
           selected={selection.selected}
           onSelectionChange={selection.onSelectionChange}
           onOpenTimeseries={() => setActiveModal('timeseries')}
-          search={search}
+          actionSlot={
+            selection.count > 0 ? (
+              <button
+                type="button"
+                className="whitespace-nowrap text-[11px] text-sky-200 hover:text-sky-100"
+                onClick={() => setActiveModal('links')}
+              >
+                Link {selection.count} selected
+              </button>
+            ) : null
+          }
         />
       </div>
       <TimeseriesChart

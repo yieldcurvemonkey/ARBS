@@ -60,6 +60,7 @@ function matchOne(value: any, matchValue: any, mode: string): boolean {
 export function applyColumnFilters(
   rows: UsdSwapTapeRow[],
   filters: DataTableFilterMeta | Record<string, any>,
+  operator: 'and' | 'or' = 'and',
 ): UsdSwapTapeRow[] {
   const entries = Object.entries(filters ?? {}).filter(([, meta]) => {
     if (!meta) return false
@@ -69,7 +70,7 @@ export function applyColumnFilters(
   })
   if (!entries.length) return rows
   return rows.filter((row) => {
-    return entries.every(([field, meta]) => {
+    const matches = entries.map(([field, meta]) => {
       const m: any = meta
       const matchValue =
         'constraints' in m ? m.constraints?.[0]?.value : m.value
@@ -79,6 +80,9 @@ export function applyColumnFilters(
       const value = (row as any)[field]
       return matchOne(value, matchValue, mode)
     })
+    return operator === 'or'
+      ? matches.some(Boolean)
+      : matches.every(Boolean)
   })
 }
 

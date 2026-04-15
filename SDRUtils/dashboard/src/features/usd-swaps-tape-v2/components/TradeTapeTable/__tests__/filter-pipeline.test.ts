@@ -84,6 +84,35 @@ describe('applyColumnFilters', () => {
       }),
     ).toHaveLength(2)
   })
+
+  it('AND combinator requires every constraint to match', () => {
+    const a = mkRow({ package_id: 'A', tape_label: 'USD-SOFR 5Y', total_risk: 100 })
+    const b = mkRow({ package_id: 'B', tape_label: 'USD-SOFR 2Y', total_risk: 300 })
+    const filtered = applyColumnFilters(
+      [a, b],
+      {
+        tape_label: { value: 'sofr', matchMode: FilterMatchMode.CONTAINS },
+        total_risk: { value: 200, matchMode: FilterMatchMode.GREATER_THAN },
+      },
+      'and',
+    )
+    expect(filtered.map((r) => r.package_id)).toEqual(['B'])
+  })
+
+  it('OR combinator includes rows matching any single constraint', () => {
+    const a = mkRow({ package_id: 'A', tape_label: 'USD-SOFR 5Y', total_risk: 100 })
+    const b = mkRow({ package_id: 'B', tape_label: 'USD-FEDFUNDS 2Y', total_risk: 300 })
+    const c = mkRow({ package_id: 'C', tape_label: 'EUR-ESTR 5Y', total_risk: 50 })
+    const filtered = applyColumnFilters(
+      [a, b, c],
+      {
+        tape_label: { value: 'sofr', matchMode: FilterMatchMode.CONTAINS },
+        total_risk: { value: 200, matchMode: FilterMatchMode.GREATER_THAN },
+      },
+      'or',
+    )
+    expect(filtered.map((r) => r.package_id)).toEqual(['A', 'B'])
+  })
 })
 
 describe('applySort', () => {
