@@ -17,7 +17,6 @@ import { FlowHistoryGrid } from './TradeTapeCharts/FlowHistoryGrid'
 import { ManualLinksDialog } from './ManualLinksDialog/ManualLinksDialog'
 import { UsdSwapsMethodologyModal } from './UsdSwapsMethodologyModal'
 import {
-  useColumnFilters,
   useFlagFilters,
   useRowExpansion,
   useRowSelection,
@@ -33,26 +32,23 @@ function todayIso(): string {
 
 export default function UsdSwapsTradeTape(): JSX.Element {
   const flagFilters = useFlagFilters()
-  // Still read column-filter state at this level so the server query rehydrates
-  // when the user pastes a URL that already contains ?columnFilters=… — the
-  // DataTable's own copy of this state lives inside TradeTapeTable.
-  const columnFilters = useColumnFilters()
   const expansion = useRowExpansion()
   const selection = useRowSelection()
 
   const [activeModal, setActiveModal] = useState<ModalName>(null)
 
-  const tape = useTradeTapeData({
-    // Fuzzy search is handled client-side in TradeTapeTable — do NOT forward
-    // it to the server. The server still receives column filters and the
-    // URL-synced filter payload so power-user SQL-style filters keep working.
-    columnFilterPayloadKey:
-      Object.keys(columnFilters.filters).length > 0
-        ? JSON.stringify(columnFilters.filters)
-        : undefined,
-    columnFilterOperator: columnFilters.operator,
-    flagFilters: flagFilters.state,
-  })
+  // `flagFilters.state` is reconstructed from URL params on each render; key
+  // the fetch params off the serialized query string instead so the tape hook
+  // only refetches when the URL-backed filter state actually changes.
+  const tapeQueryParams = useMemo(
+    () => ({
+      flagFilters: flagFilters.state,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [flagFilters.queryString],
+  )
+
+  const tape = useTradeTapeData(tapeQueryParams)
 
   // Pick the as-of date from the latest row we actually have data for so
   // related drill-down views stay anchored to the same trading day. Falls
@@ -113,7 +109,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
       : 'live'
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-slate-950 text-slate-100 pb-2">
+    <div className="usd-swaps-tape-shell flex h-full min-h-0 flex-col bg-slate-950 text-slate-100 pb-12">
       <TradeTapeHeader
         asOfDate={asOf}
         liveStatus={liveStatus}
@@ -128,7 +124,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
         onFilterByLifecycle={handleFilterByLifecycle}
       />
       <FilterChips fields={fields} />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         <TradeTapeTable
           rows={tape.rows}
           loading={tape.loading}
@@ -153,6 +149,30 @@ export default function UsdSwapsTradeTape(): JSX.Element {
           }
         />
       </div>
+      <style jsx global>{`
+        .usd-swaps-tape-shell {
+          --usd-swaps-tape-scale: 0.9;
+          zoom: var(--usd-swaps-tape-scale);
+        }
+        @supports not (zoom: 1) {
+          .usd-swaps-tape-shell {
+            transform: scale(var(--usd-swaps-tape-scale));
+            transform-origin: top left;
+            width: calc(100% / var(--usd-swaps-tape-scale));
+          }
+        }
+        @media (max-width: 1024px) {
+          .usd-swaps-tape-shell {
+            --usd-swaps-tape-scale: 1;
+            transform: none;
+            width: 100%;
+          }
+        }
+        .usd-swaps-tape-shell .p-column-filter-overlay,
+        .usd-swaps-tape-shell .p-column-filter-overlay * {
+          font-size: 0.7rem !important;
+        }
+      `}</style>
       <TimeseriesChart
         open={activeModal === 'timeseries'}
         onClose={() => setActiveModal(null)}

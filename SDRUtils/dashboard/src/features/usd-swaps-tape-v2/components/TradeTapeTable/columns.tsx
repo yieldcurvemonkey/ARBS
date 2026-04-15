@@ -26,8 +26,8 @@ type ColumnConfig = {
 
 function renderHeader(label: string): JSX.Element {
   return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[11px] uppercase tracking-wide text-gray-400">
+    <div className="flex flex-col">
+      <span className="text-[10px] uppercase tracking-wide text-gray-400">
         {label}
       </span>
     </div>
@@ -48,12 +48,12 @@ export function getColumns(
   const cols: JSX.Element[] = []
   if (config.selection) {
     cols.push(
-      <Column key="select" selectionMode="multiple" headerStyle={{ width: 34 }} />,
+      <Column key="select" selectionMode="multiple" headerStyle={{ width: 30 }} />,
     )
   }
   if (config.expanderBody) {
     cols.push(
-      <Column key="expand" body={config.expanderBody as any} style={{ width: 40 }} />,
+      <Column key="expand" body={config.expanderBody as any} style={{ width: 36 }} />,
     )
   }
 
@@ -62,10 +62,10 @@ export function getColumns(
     <button
       type="button"
       onClick={config.onToggleMetric}
-      className="flex flex-col gap-0.5 text-left hover:text-sky-300"
+      className="flex flex-col text-left hover:text-sky-300"
       aria-label={`toggle metric (current: ${mode === 'dv01' ? 'DV01' : 'Notional'})`}
     >
-      <span className="text-[11px] uppercase tracking-wide text-gray-400">
+      <span className="text-[10px] uppercase tracking-wide text-gray-400">
         {mode === 'dv01' ? 'DV01' : 'Notional'} ⇅
       </span>
     </button>
@@ -80,11 +80,11 @@ export function getColumns(
       filter
       header={renderHeader('Time')}
       body={(row: UsdSwapTapeRow) => (
-        <span className="whitespace-nowrap text-xs text-gray-300">
+        <span className="whitespace-nowrap text-[11px] text-gray-300">
           {formatExecutionWindow(row.execution_start, row.execution_end)}
         </span>
       )}
-      style={{ width: 108 }}
+      style={{ width: 102 }}
     />,
     <Column
       key="action"
@@ -93,7 +93,7 @@ export function getColumns(
       filter
       header={renderHeader('Action')}
       body={(row: UsdSwapTapeRow) => <LifecyclePills row={row} />}
-      style={{ width: 68 }}
+      style={{ width: 64 }}
     />,
     <Column
       key="platform"
@@ -103,11 +103,11 @@ export function getColumns(
       filter
       header={renderHeader('Platform')}
       body={(row: UsdSwapTapeRow) => (
-        <span className="text-xs text-gray-300 truncate">
+        <span className="truncate text-[11px] text-gray-300">
           {displayPlatform(row)}
         </span>
       )}
-      style={{ width: 76 }}
+      style={{ width: 72 }}
     />,
     <Column
       key="tape_label"
@@ -117,7 +117,7 @@ export function getColumns(
       filter
       header={renderHeader('Tape Label')}
       body={(row: UsdSwapTapeRow) => <TapeLabelCell row={row} />}
-      style={{ width: 500 }}
+      style={{ width: 470 }}
     />,
     <Column
       key="metric"
@@ -128,13 +128,13 @@ export function getColumns(
       dataType="numeric"
       header={metricHeader}
       body={(row: UsdSwapTapeRow) => (
-        <span className="font-mono text-xs text-gray-200">
+        <span className="font-mono text-[11px] text-gray-200">
           {mode === 'dv01'
             ? formatDv01(row.total_risk ?? null, { signed: true })
             : formatNotional(row.total_notional ?? null, { compact: true })}
         </span>
       )}
-      style={{ width: 86 }}
+      style={{ width: 82 }}
     />,
     <Column
       key="rate"
@@ -145,11 +145,11 @@ export function getColumns(
       dataType="numeric"
       header={renderHeader('Reported LvL')}
       body={(row: UsdSwapTapeRow) => (
-        <span className="font-mono text-xs text-gray-200">
+        <span className="font-mono text-[11px] text-gray-200">
           {formatRate(row.weighted_fixed_rate ?? null)}
         </span>
       )}
-      style={{ width: 92 }}
+      style={{ width: 88 }}
     />,
   )
   return cols

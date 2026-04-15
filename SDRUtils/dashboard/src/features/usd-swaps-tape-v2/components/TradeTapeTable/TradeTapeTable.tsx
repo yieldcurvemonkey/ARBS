@@ -68,8 +68,8 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     actionSlot,
   } = props
 
-  // URL-backed column filter state (shared with the parent useTradeTapeData
-  // hook so the `columnFilters` URL param also drives the server query).
+  // URL-backed column-filter state; the DataTable owns it locally so a pasted
+  // URL restores the same view without pushing this state back to the parent.
   const columnFilters = useColumnFilters()
   // URL-backed search + sort state.
   const table = useTableControls()
@@ -108,6 +108,8 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     () => setMetricMode((m) => (m === 'dv01' ? 'notional' : 'dv01')),
     [],
   )
+  const effectiveSortField = table.sortField ?? 'execution_start'
+  const effectiveSortOrder: 1 | -1 | 0 = table.sortField ? table.sortOrder : -1
 
   const displayRows = useMemo(() => {
     const fuzzied = applyFuzzy(rows, table.search)
@@ -116,12 +118,12 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
       columnFilters.filters as DataTableFilterMeta,
       columnFilters.operator,
     )
-    return applySort(filtered, table.sortField, table.sortOrder)
+    return applySort(filtered, effectiveSortField, effectiveSortOrder)
   }, [
     rows,
     table.search,
-    table.sortField,
-    table.sortOrder,
+    effectiveSortField,
+    effectiveSortOrder,
     columnFilters.filters,
     columnFilters.operator,
   ])
@@ -189,7 +191,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
 
   const dataTableRowClassName = (row: UsdSwapTapeRow) =>
     [
-      'h-10 text-sm !text-gray-200 transition-[filter,box-shadow] hover:brightness-110 hover:shadow-[inset_0_0_0_1px_rgba(148,163,184,0.5)]',
+      'h-9 text-[11px] !text-gray-200 transition-[filter,box-shadow] hover:brightness-110 hover:shadow-[inset_0_0_0_1px_rgba(148,163,184,0.5)]',
       rowClassName(row),
       row.manual_link_id || row.manual_package_id ? 'manual-linked-row' : '',
       selectedIds.has(row.package_id) ? 'selected-share-row' : '',
@@ -266,10 +268,10 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
          they drive, mirroring the swaption tape. All controls write to the
          URL so the view is shareable. */}
       <div
-        className="flex items-center gap-2 px-3 py-1 bg-slate-900/50 border-b border-slate-800"
+        className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-900/50 px-3 py-1"
         data-testid="trade-tape-filters"
       >
-        <span className="whitespace-nowrap text-[11px] text-slate-400">
+        <span className="whitespace-nowrap text-[10px] text-slate-400">
           {displayRows.length} rows
           {hasMore ? ' (more available)' : ''}
         </span>
@@ -279,14 +281,14 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           aria-label="global tape filter"
           value={searchDraft}
           onChange={(e) => setSearchDraft(e.target.value)}
-          className="flex-1 bg-slate-950/60 border border-slate-800 rounded px-2 py-0.5 text-sm text-slate-100 focus:outline-none focus:border-slate-600"
+          className="flex-1 rounded border border-slate-800 bg-slate-950/60 px-2 py-0.5 text-[13px] text-slate-100 focus:border-slate-600 focus:outline-none"
         />
-        <div className="flex items-center gap-1 text-xs text-slate-400">
+        <div className="flex items-center gap-1 text-[10px] text-slate-400">
           <button
             type="button"
             aria-pressed={columnFilters.operator === 'and'}
             onClick={() => columnFilters.setOperator('and')}
-            className={`px-2 py-0.5 rounded ${
+            className={`rounded px-2 py-0.5 ${
               columnFilters.operator === 'and'
                 ? 'bg-slate-700 text-slate-100'
                 : 'bg-slate-800/60'
@@ -298,7 +300,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
             type="button"
             aria-pressed={columnFilters.operator === 'or'}
             onClick={() => columnFilters.setOperator('or')}
-            className={`px-2 py-0.5 rounded ${
+            className={`rounded px-2 py-0.5 ${
               columnFilters.operator === 'or'
                 ? 'bg-slate-700 text-slate-100'
                 : 'bg-slate-800/60'
@@ -310,7 +312,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         <button
           type="button"
           onClick={handleResetAll}
-          className="text-xs px-2 py-1 rounded bg-slate-800/60 text-slate-300 hover:bg-slate-700/60"
+          className="rounded bg-slate-800/60 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700/60"
         >
           Reset
         </button>
@@ -325,7 +327,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         scrollHeight="flex"
         stripedRows={false}
         rowClassName={dataTableRowClassName as any}
-        loading={loading}
+        loading={loading && displayRows.length === 0}
         selectionMode={onSelectionChange ? 'multiple' : undefined}
         cellSelection={false}
         metaKeySelection={false}
@@ -342,15 +344,15 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           columnFilters.setFilters(e.filters as any)
         }
         filterDisplay="menu"
-        sortField={table.sortField ?? undefined}
-        sortOrder={table.sortOrder}
+        sortField={effectiveSortField}
+        sortOrder={effectiveSortOrder}
         onSort={(e: DataTableSortEvent) => {
           const nextField = (e.sortField as string) || null
           const nextOrder = ((e.sortOrder as 1 | -1 | 0) ?? 0)
           table.setSort(nextField, nextOrder)
         }}
         className="usd-swaps-tape-table rounded-2xl border border-gray-800 bg-gradient-to-b from-gray-950 to-gray-900 text-gray-200 shadow-inner"
-        tableStyle={{ minWidth: '1188px' }}
+        tableStyle={{ minWidth: '1120px' }}
         resizableColumns
         columnResizeMode="fit"
         rowHover
@@ -371,11 +373,10 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
             headerCell: {
               // Match the swaption tape's denser header — slightly wider
               // x-padding, same 11px font size.
-              className: 'py-1 px-2 text-[11px] !border-0',
+              className: 'px-2 py-0.5 text-[10px] !border-0',
             },
             bodyCell: {
-              className: 'py-1 px-2 text-xs !border-0',
-              // Keep the cell transparent so the tr-level tint shows through.
+              className: 'px-2 py-0.5 text-[11px] !border-0',
               style: { backgroundColor: 'transparent' },
             },
           } as any

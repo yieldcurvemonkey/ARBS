@@ -36,10 +36,10 @@ function StatButton({
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col items-start text-left hover:bg-slate-800/40 px-1.5 py-0 rounded leading-tight"
+      className="flex flex-col items-start rounded px-1 py-0 text-left leading-none hover:bg-slate-800/40"
     >
-      <span className="text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
-      <span className="font-mono tabular-nums text-slate-100 text-sm">{value}</span>
+      <span className="text-[9px] uppercase tracking-wide text-slate-400">{label}</span>
+      <span className="font-mono tabular-nums text-[13px] text-slate-100">{value}</span>
     </button>
   )
 }
@@ -53,12 +53,12 @@ export function TradeTapeHeader(props: TradeTapeHeaderProps): JSX.Element {
         ? 'bg-amber-500'
         : 'bg-red-500'
   return (
-    <header className="flex flex-col gap-0.5 px-3 py-1 bg-slate-900/70 border-b border-slate-800">
+    <header className="flex flex-col gap-px border-b border-slate-800 bg-slate-900/70 px-3 py-1">
       {/* Strip 1: title + controls */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2.5">
         <h1 className="text-sm font-semibold text-slate-100">USD swap tape</h1>
         {props.asOfDate ? (
-          <span className="text-xs text-slate-400 font-mono">as of {props.asOfDate}</span>
+          <span className="font-mono text-[11px] text-slate-400">as of {props.asOfDate}</span>
         ) : null}
         <span
           title={`live status: ${props.liveStatus}`}
@@ -68,28 +68,28 @@ export function TradeTapeHeader(props: TradeTapeHeaderProps): JSX.Element {
         <div className="flex-1" />
         <button
           type="button"
-          className="text-xs px-2 py-1 rounded bg-slate-800/70 text-slate-200 hover:bg-slate-700/70"
+          className="rounded bg-slate-800/70 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700/70"
           onClick={props.onRefresh}
         >
           Refresh
         </button>
         <button
           type="button"
-          className="text-xs px-2 py-1 rounded bg-slate-800/70 text-slate-200 hover:bg-slate-700/70"
+          className="rounded bg-slate-800/70 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700/70"
           onClick={props.onOpenFlowHistory}
         >
           Flow history
         </button>
         <button
           type="button"
-          className="text-xs px-2 py-1 rounded bg-slate-800/70 text-slate-200 hover:bg-slate-700/70"
+          className="rounded bg-slate-800/70 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700/70"
           onClick={props.onOpenMethodology}
         >
           Methodology
         </button>
       </div>
       {/* Strip 2: summary stats */}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-0.5">
         <StatButton
           label="Trades"
           value={summary.tradeCount.toLocaleString()}
@@ -123,7 +123,7 @@ export function TradeTapeHeader(props: TradeTapeHeaderProps): JSX.Element {
         />
       </div>
       {/* Strip 3: lifecycle pills */}
-      <div className="flex items-center">
+      <div className="flex items-center overflow-x-auto pb-px">
         <FlagChips
           counts={summary.lifecycleCounts}
           selected={props.flagFilters.lifecycle}

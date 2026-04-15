@@ -12,7 +12,7 @@ export interface FlagChipsProps {
 
 export function FlagChips(props: FlagChipsProps): JSX.Element {
   return (
-    <div className="flex items-center gap-1" data-testid="flag-chips">
+    <div className="flex items-center gap-0.5" data-testid="flag-chips">
       {LIFECYCLE_ORDER.map((type) => {
         const active = props.selected.has(type)
         const count = props.counts[type] ?? 0
@@ -24,7 +24,7 @@ export function FlagChips(props: FlagChipsProps): JSX.Element {
             aria-pressed={active}
             aria-label={`toggle lifecycle ${LIFECYCLE_LABELS[type]}`}
             onClick={() => props.onToggle(type)}
-            className={`px-1.5 py-0.5 rounded text-[11px] font-semibold uppercase tracking-wide ${
+            className={`rounded px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${
               active ? tone : 'bg-slate-900/40 text-slate-500 line-through'
             }`}
           >

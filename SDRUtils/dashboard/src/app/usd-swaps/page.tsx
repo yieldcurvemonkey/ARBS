@@ -13,8 +13,8 @@ export default function UsdSwapsPage() {
       fallback={<div className="p-4 text-sm text-slate-400">Loading tape…</div>}
     >
       <div
-        className="-mx-4 -my-6 flex flex-col"
-        style={{ height: 'calc(100vh - 4.25rem)' }}
+        className="-mx-4 -mb-10 -mt-6 flex flex-col"
+        style={{ height: 'calc(100vh - 4.25rem + 8rem)' }}
       >
         <UsdSwapsTradeTape />
       </div>

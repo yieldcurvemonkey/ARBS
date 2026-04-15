@@ -29,7 +29,7 @@ function Chip({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`px-2 py-0.5 rounded text-[11px] ${
+      className={`rounded px-1.5 py-px text-[10px] ${
         active
           ? 'bg-sky-900/50 text-sky-200 border border-sky-700/40'
           : 'bg-slate-800/60 text-slate-400 border border-slate-700/60 hover:text-slate-200'
@@ -43,12 +43,12 @@ function Chip({
 export function FilterChips(props: FilterChipsProps): JSX.Element {
   return (
     <div
-      className="flex flex-wrap items-center gap-2 px-3 py-0.5 border-b border-slate-800"
+      className="flex flex-wrap items-center gap-1 border-b border-slate-800 px-3 py-0.5"
       data-testid="filter-chips"
     >
       {props.fields.map((f) => (
         <div key={String(f.key)} className="flex items-center gap-1">
-          <span className="text-[10px] uppercase text-slate-400 mr-1">{f.label}</span>
+          <span className="mr-1 text-[9px] uppercase text-slate-400">{f.label}</span>
           {f.values.map((v) => (
             <Chip
               key={v}

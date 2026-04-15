@@ -2,7 +2,7 @@
 import type { LifecycleType, TimeseriesMetricKey, TimeseriesViewKey } from './types'
 
 export const POLL_INTERVAL_MS = 30_000
-export const ROW_ESTIMATE_PX = 44
+export const ROW_ESTIMATE_PX = 40
 export const EMPTY_VALUE = '—'
 
 export const TAPE_V2_API_BASE = '/api/usd-swaps-tape-v2'
