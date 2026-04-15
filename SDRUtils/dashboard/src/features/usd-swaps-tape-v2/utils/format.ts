@@ -97,6 +97,10 @@ export function formatDate(ts: string | null | undefined): string {
   return d.toLocaleDateString('en-US')
 }
 
+// All tape timestamps are rendered in the NYC trading-desk timezone, regardless
+// of the viewer's browser locale, to match how desk traders read the tape.
+const NYC_TIMEZONE = 'America/New_York'
+
 export function formatExecutionWindow(
   start: string | null | undefined,
   end: string | null | undefined,
@@ -106,16 +110,17 @@ export function formatExecutionWindow(
   if (Number.isNaN(startDate.getTime())) return EMPTY_VALUE
   const endDate = end ? new Date(end) : startDate
   if (Number.isNaN(endDate.getTime())) return EMPTY_VALUE
-  const startStr = `${startDate.toLocaleDateString('en-US')} ${startDate.toLocaleTimeString(
-    'en-US',
-    {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    },
-  )}`
+  const startStr = `${startDate.toLocaleDateString('en-US', {
+    timeZone: NYC_TIMEZONE,
+  })} ${startDate.toLocaleTimeString('en-US', {
+    timeZone: NYC_TIMEZONE,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })}`
   const endStr = endDate.toLocaleTimeString('en-US', {
+    timeZone: NYC_TIMEZONE,
     hour12: false,
     hour: '2-digit',
     minute: '2-digit',

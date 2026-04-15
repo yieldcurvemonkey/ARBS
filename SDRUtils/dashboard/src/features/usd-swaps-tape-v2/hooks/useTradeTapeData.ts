@@ -9,6 +9,12 @@ export interface UseTradeTapeDataParams {
   columnFilterOperator?: 'and' | 'or'
   flagFilters?: FlagFilterState | null
   pollingEnabled?: boolean
+  /**
+   * Page size for cursor pagination. Matches the swaption tape default of 50,
+   * which keeps individual fetches snappy and lets the VirtualScroller lazy
+   * load chain pages as the user scrolls.
+   */
+  limit?: number
 }
 
 export interface UseTradeTapeDataReturn {
@@ -36,11 +42,15 @@ function serializeSet(s: Set<string> | undefined): string {
   return Array.from(s).sort().join(',')
 }
 
+const DEFAULT_PAGE_LIMIT = 50
+
 function buildQuery(params: UseTradeTapeDataParams, options?: {
   cursor?: string
   since?: string
 }): URLSearchParams {
   const q = new URLSearchParams()
+  const limit = params.limit ?? DEFAULT_PAGE_LIMIT
+  q.set('limit', String(limit))
   if (options?.cursor) q.set('cursor', options.cursor)
   if (options?.since) q.set('since', options.since)
   if (params.filter) q.set('filter', params.filter)
@@ -176,6 +186,7 @@ export function useTradeTapeData(
     params.columnFilterPayloadKey,
     params.columnFilterOperator,
     params.flagFilters,
+    params.limit,
   ])
 
   // Polling for new rows via ?since=latestExecutionStart

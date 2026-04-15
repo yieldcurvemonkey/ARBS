@@ -57,6 +57,24 @@ export const TRADE_TYPE_TONES: Record<string, string> = {
   FOMC: 'bg-amber-900/40 text-amber-200',
 }
 
+// Full-row background tints keyed by trade_type / package_type, applied to
+// every tape row. Mirrors the swaption tape's PACKAGE_TONES palette: distinct
+// low-alpha colors per structure so the trader can at-a-glance tell curves
+// from outrights from flies. `!bg-*` so the tint wins over PrimeReact's
+// default tr styling.
+export const TRADE_TYPE_ROW_TONES: Record<string, string> = {
+  OUTRIGHT: '!bg-gray-800/50',
+  CURVE: '!bg-sky-900/30',
+  FLY: '!bg-indigo-900/30',
+  SPREADOVER: '!bg-fuchsia-900/30',
+  MATCHED_MATURITY: '!bg-teal-900/30',
+  MAC: '!bg-cyan-900/30',
+  IMM: '!bg-lime-900/30',
+  FOMC: '!bg-amber-900/30',
+}
+
+export const TRADE_TYPE_DEFAULT_ROW_TONE = '!bg-gray-900/30'
+
 export const FLAG_CHIP_TONES = {
   BLK: 'bg-orange-900/40 text-orange-200',
   UFRO: 'bg-orange-900/40 text-orange-200',

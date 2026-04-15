@@ -130,6 +130,16 @@ describe('formatExecutionWindow', () => {
     expect(formatted).toContain('2026')
     expect(formatted).toContain(' / ')
   })
+
+  it('renders timestamps in the NYC trading timezone regardless of viewer locale', () => {
+    // 2026-04-14T14:30:15Z is 10:30:15 local in New York (EDT, UTC-4).
+    const formatted = formatExecutionWindow(
+      '2026-04-14T14:30:15Z',
+      '2026-04-14T14:31:15Z',
+    )
+    expect(formatted).toContain('10:30:15')
+    expect(formatted).toContain('10:31:15')
+  })
 })
 
 describe('formatClusterSuffix', () => {
