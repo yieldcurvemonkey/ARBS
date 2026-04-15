@@ -747,17 +747,27 @@ def run_ingest(
     end_date: Optional[str] = None,
     use_cache: bool = True,
 ) -> int:
-    """Full pipeline: load classified df → TradeTape.compute() → write → record run."""
+    """Full pipeline: load classified df → TradeTape.compute() → write → record run.
+
+    ``start_date`` / ``end_date`` name inclusive calendar days (YYYY-MM-DD).
+    The underlying ``load_usd_swaps`` expects ``[start, end)`` timestamps, so
+    ``end`` is bumped to ``end_date + 1 day`` at midnight UTC. Same-day runs
+    (``start_date == end_date``) therefore cover a full 24-hour window. This
+    matches the classification stage in ``run_usdswaps_pipeline._run_classification_range``.
+    """
+    from datetime import timedelta
+
     from notebooks.sdr._usd_swaps_common import load_usd_swaps
 
     start = (
         datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         if start_date else datetime.now(tz=timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     )
-    end = (
+    end_day = (
         datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         if end_date else start
     )
+    end = end_day + timedelta(days=1)
 
     engine = create_engine(pg_url)
     ensure_schema(engine)

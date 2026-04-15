@@ -1205,5 +1205,13 @@ class SDRDataBuilder:
         if "report_slice" in out.columns:
             out = out.drop(columns=["report_slice"])
 
+        # Defense: ``_concat_dfs`` returns a bare ``pd.DataFrame()`` (zero
+        # columns) when every input frame is empty — happens for
+        # zero-duration windows or when ``filter_func`` rejects every row.
+        # Short-circuit so callers see an empty frame instead of a
+        # ``KeyError: 'Event timestamp'`` when indexing the missing column.
+        if out.empty or "Event timestamp" not in out.columns:
+            return out
+
         out = out[(out["Event timestamp"] >= start_timestamp.astimezone(pytz.utc)) & (out["Event timestamp"] <= end_timestamp.astimezone(pytz.utc))]
         return out
