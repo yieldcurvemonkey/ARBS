@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from tqdm.auto import tqdm
 
 from SDRUtils.analytics.trade_tape import TradeTape
 
@@ -397,6 +398,44 @@ def _consistent_str(group: pd.DataFrame, col: str) -> str | None:
     return None
 
 
+_LEG_INT_COLS: tuple[str, ...] = (
+    "execution_hour_et",
+    "lc_n_events",
+    "xd_n_events",
+    "cluster_size",
+)
+_LEG_NUM_COLS: tuple[str, ...] = (
+    "tenor_years",
+    "forward_start_years",
+    "notional",
+    "risk",
+    "fixed_rate",
+    "xd_notional_pct_remaining",
+)
+_LEG_BOOL_COLS: tuple[str, ...] = (
+    "is_new_risk", "is_unwind", "is_compression", "is_compression_spec",
+    "is_reset_optimization", "is_novation", "is_novation_born",
+    "is_novation_terminated", "is_exercise_born", "is_clearing_termination",
+    "is_ufro", "is_off_market", "is_capped", "is_block", "is_off_date",
+    "is_mac", "is_spreadover", "is_asset_swap", "is_non_standard_term",
+    "is_fomc_dated", "is_month_end", "is_quarter_end",
+    "is_multi_meeting_cluster", "xd_is_terminated", "xd_has_partial_unwind",
+)
+_LEG_TEXT_COLS: tuple[str, ...] = (
+    "trade_id", "package_id", "execution_session", "tenor_label",
+    "tenor_display", "forward_label", "forward_bucket", "notional_currency",
+    "trade_type", "rate_index_clean", "venue", "ccp", "platform_identifier",
+    "tape_label", "upi_reset_freq", "upi_notional_schedule",
+    "upi_delivery_type", "lifecycle_type", "lc_status", "fomc_meeting_label",
+    "fomc_proximity", "cluster_id", "xd_status",
+)
+_LEG_TS_COLS: tuple[str, ...] = (
+    "execution_timestamp",
+    "effective_date",
+    "expiration_date",
+)
+
+
 def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
     if tape.empty:
         return []
@@ -411,12 +450,19 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
     if "quality_flags" not in df.columns:
         df["quality_flags"] = df.apply(_quality_flag_list, axis=1)
 
-    rows: list[dict] = []
-    for _, row in df.iterrows():
-        rec: dict[str, Any] = {col: None for col in LEG_COLUMNS}
-        for col in LEG_COLUMNS:
-            if col in row.index:
-                rec[col] = row[col]
+    # Extract a frame with exactly LEG_COLUMNS (missing filled with None) and
+    # convert to records in one shot. to_dict(orient="records") is ~10x
+    # cheaper than iterrows() on wide (60+ col) frames because it avoids
+    # building a Series per row.
+    extracted = pd.DataFrame({
+        col: df[col] if col in df.columns else None
+        for col in LEG_COLUMNS
+    }, index=df.index)
+    records: list[dict[str, Any]] = extracted.to_dict(orient="records")
+
+    for rec in tqdm(
+        records, desc="Building tape leg rows", unit="row", leave=False
+    ):
         rec["as_of_date"] = as_of_date
         # Type coercions
         rec["leg_order"] = _int_or_none(rec.get("leg_order")) or 0
@@ -462,8 +508,7 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         else:
             rec["quality_flags"] = []
         rec["enrichment_metrics"] = _to_jsonable(rec.get("enrichment_metrics")) or {}
-        rows.append(rec)
-    return rows
+    return records
 
 
 def _structural_risk(
@@ -516,7 +561,14 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         ("CLEARING_TERM", "is_clearing_termination"),
         ("EXERCISE_BORN", "is_exercise_born"),
     ]
-    for package_id, group in tape.groupby("package_id", sort=False):
+    groups = tape.groupby("package_id", sort=False)
+    for package_id, group in tqdm(
+        groups,
+        total=groups.ngroups,
+        desc="Aggregating tape packages",
+        unit="pkg",
+        leave=False,
+    ):
         g = group.sort_values(["execution_timestamp", "trade_id"])
         notional = pd.to_numeric(g.get("notional", pd.Series(dtype=float)), errors="coerce")
         risk = pd.to_numeric(g.get("risk", pd.Series(dtype=float)), errors="coerce")
@@ -631,32 +683,94 @@ def _upsert(
     *,
     conflict_col: str,
     json_cols: set[str],
+    batch_size: int = 10_000,
+    progress_desc: Optional[str] = None,
 ) -> int:
+    """Batched INSERT .. ON CONFLICT DO UPDATE.
+
+    Fast path uses psycopg2's ``execute_values`` which collapses N round-trips
+    to a handful of multi-row statements; that is 10-100x faster than
+    SQLAlchemy's generic executemany on wide upserts with JSONB + GIN
+    indexes. Mirrors :func:`ingest_usdswaps.upsert_dataframe`.
+
+    Falls back to SQLAlchemy ``text()`` + ``executemany``, still batched and
+    progress-reported, when psycopg2 is unavailable (e.g. psycopg3-only envs).
+    """
     if not rows:
         return 0
     cols = list(columns)
-    placeholders = ", ".join(f":{c}" for c in cols)
     col_list = ", ".join(cols)
     update_cols = [c for c in cols if c != conflict_col]
     updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+
+    # Normalize payload once (same coercion for both paths).
+    payload: list[dict] = []
+    for rec in rows:
+        out = {c: _to_db_value(rec.get(c)) for c in cols}
+        for c in json_cols:
+            if c in cols:
+                out[c] = json.dumps(
+                    _to_jsonable(rec.get(c)) if rec.get(c) is not None else {}
+                )
+        payload.append(out)
+
+    total = len(payload)
+    desc = progress_desc or f"Writing {table}"
+
+    # Fast path: psycopg2 execute_values.
+    try:
+        from psycopg2.extras import execute_values
+    except Exception:
+        execute_values = None
+
+    if execute_values is not None:
+        upsert_sql = f"""
+            INSERT INTO {table} ({col_list})
+            VALUES %s
+            ON CONFLICT ({conflict_col}) DO UPDATE
+            SET {updates},
+                updated_at = NOW()
+        """
+        raw_conn = engine.raw_connection()
+        try:
+            with raw_conn.cursor() as cur:
+                for start_idx in tqdm(
+                    range(0, total, batch_size), desc=desc, unit="batch"
+                ):
+                    batch = payload[start_idx : start_idx + batch_size]
+                    values = [tuple(rec[c] for c in cols) for rec in batch]
+                    execute_values(
+                        cur,
+                        upsert_sql,
+                        values,
+                        page_size=min(len(values), 2_000),
+                    )
+            raw_conn.commit()
+        except Exception:
+            raw_conn.rollback()
+            raise
+        finally:
+            raw_conn.close()
+        return total
+
+    # Fallback path: SQLAlchemy executemany, but still batched + progress.
+    placeholders = ", ".join(f":{c}" for c in cols)
     sql = text(
         f"""
         INSERT INTO {table} ({col_list})
         VALUES ({placeholders})
         ON CONFLICT ({conflict_col}) DO UPDATE
-        SET {updates}, updated_at = NOW()
+        SET {updates},
+            updated_at = NOW()
         """
     )
-    payload = []
-    for rec in rows:
-        out = {c: _to_db_value(rec.get(c)) for c in cols}
-        for c in json_cols:
-            if c in cols:
-                out[c] = json.dumps(_to_jsonable(rec.get(c)) if rec.get(c) is not None else {})
-        payload.append(out)
     with engine.begin() as conn:
-        conn.execute(sql, payload)
-    return len(payload)
+        for start_idx in tqdm(
+            range(0, total, batch_size), desc=desc, unit="batch"
+        ):
+            batch = payload[start_idx : start_idx + batch_size]
+            conn.execute(sql, batch)
+    return total
 
 
 def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict:
@@ -673,6 +787,7 @@ def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict
         package_rows,
         conflict_col="package_id",
         json_cols=JSON_PKG_COLS,
+        progress_desc="Writing tape packages",
     )
     n_legs = _upsert(
         engine,
@@ -681,6 +796,7 @@ def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict
         leg_rows,
         conflict_col="trade_id",
         json_cols=JSON_LEG_COLS,
+        progress_desc="Writing tape legs",
     )
     return {"packages_written": n_pkgs, "legs_written": n_legs}
 
