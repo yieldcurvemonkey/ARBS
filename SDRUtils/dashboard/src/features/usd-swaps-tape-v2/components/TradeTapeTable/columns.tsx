@@ -74,6 +74,10 @@ export function getColumns(
   cols.push(
     <Column
       key="time"
+      field="execution_start"
+      filterField="execution_start"
+      sortable
+      filter
       header={renderHeader('Time')}
       body={(row: UsdSwapTapeRow) => (
         <span className="text-xs text-gray-300">
@@ -84,12 +88,19 @@ export function getColumns(
     />,
     <Column
       key="action"
+      field="action_label"
+      filterField="action_label"
+      filter
       header={renderHeader('Action')}
       body={(row: UsdSwapTapeRow) => <LifecyclePills row={row} />}
       style={{ width: 132 }}
     />,
     <Column
       key="platform"
+      field="platform_identifier"
+      filterField="platform_identifier"
+      sortable
+      filter
       header={renderHeader('Platform')}
       body={(row: UsdSwapTapeRow) => (
         <span className="text-xs text-gray-300 truncate">
@@ -100,6 +111,10 @@ export function getColumns(
     />,
     <Column
       key="tape_label"
+      field="tape_label"
+      filterField="tape_label"
+      sortable
+      filter
       header={renderHeader('Tape Label')}
       body={(row: UsdSwapTapeRow) => <TapeLabelCell row={row} />}
       style={{ width: 700 }}
@@ -107,6 +122,10 @@ export function getColumns(
     <Column
       key="metric"
       field={mode === 'dv01' ? 'total_risk' : 'total_notional'}
+      filterField={mode === 'dv01' ? 'total_risk' : 'total_notional'}
+      sortable
+      filter
+      dataType="numeric"
       header={metricHeader}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-xs text-gray-200">
@@ -119,6 +138,11 @@ export function getColumns(
     />,
     <Column
       key="rate"
+      field="weighted_fixed_rate"
+      filterField="weighted_fixed_rate"
+      sortable
+      filter
+      dataType="numeric"
       header={renderHeader('Reported LvL')}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-xs text-gray-200">
