@@ -26,6 +26,12 @@ export function lifecyclePillsFor(row: UsdSwapTapeRow): Array<{
       })
     }
   }
+  // Drop the NEW pill when the mix also contains any non-NEW lifecycle —
+  // e.g. an unwind/termination that started as a new risk shouldn't read as "new".
+  const hasNonNew = pills.some((p) => p.type !== 'NEW_RISK')
+  if (hasNonNew) {
+    return pills.filter((p) => p.type !== 'NEW_RISK')
+  }
   return pills
 }
 
