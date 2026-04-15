@@ -12,8 +12,12 @@ Usage:
     # Daily warm (today only — matches the incremental SDR ingest)
     python scripts/warm_ustf_cache.py
 
-    # Warm a window (e.g. before a multi-day backfill)
+    # Warm a window ending today (e.g. before a multi-day backfill)
     python scripts/warm_ustf_cache.py --backfill-days 7
+
+    # Warm specific backfill dates (matches `pipeline backfill --date`)
+    python scripts/warm_ustf_cache.py --target-dates 2026-04-09
+    python scripts/warm_ustf_cache.py --target-dates 2026-04-09,2026-04-10
 
     # Restrict to a subset of roots
     python scripts/warm_ustf_cache.py --roots TY,US,WN
@@ -171,6 +175,16 @@ def main() -> int:
         help="Shortcut: set both --price-window-days and --basket-days to this value.",
     )
     parser.add_argument(
+        "--target-dates",
+        type=lambda s: [datetime.date.fromisoformat(d.strip()) for d in s.split(",") if d.strip()],
+        default=None,
+        help=(
+            "Comma-separated ISO dates to warm (e.g. 2026-04-09 or 2026-04-09,2026-04-10). "
+            "When set, overrides --basket-days / --backfill-days for basket warming and "
+            "covers the price-timeseries window to span the earliest target through today."
+        ),
+    )
+    parser.add_argument(
         "--skip-prices",
         action="store_true",
         help="Skip the price-timeseries warm (only warm baskets).",
@@ -194,15 +208,27 @@ def main() -> int:
         args.basket_days = args.backfill_days
 
     today = datetime.date.today()
-    price_start = today - datetime.timedelta(days=args.price_window_days)
-    basket_days = _business_days(today, args.basket_days)
+
+    if args.target_dates:
+        target_dates = sorted(set(args.target_dates))
+        basket_days = target_dates
+        earliest = target_dates[0]
+        # Cover the whole span earliest..today so the price-timeseries cache
+        # hits for any as_of in the requested set (prices are warmed as a
+        # continuous calendar window; baskets only for the specific dates).
+        span_days = max((today - earliest).days, args.price_window_days)
+        price_start = today - datetime.timedelta(days=span_days)
+    else:
+        basket_days = _business_days(today, args.basket_days)
+        price_start = today - datetime.timedelta(days=args.price_window_days)
 
     mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
 
+    symbol_as_of = basket_days[-1] if basket_days else today
     symbols: List[str] = []
     for root in args.roots:
         try:
-            symbols.append(_front_month_symbol(root, today))
+            symbols.append(_front_month_symbol(root, symbol_as_of))
         except Exception as exc:
             log.warning("Failed to resolve front-month for %s: %s", root, exc)
 
