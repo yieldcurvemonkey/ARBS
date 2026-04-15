@@ -6,9 +6,10 @@ const buildQuery = __internal.buildQuery
 describe('useTradeTapeData buildQuery', () => {
   it('always emits a page size so the server caps each fetch predictably', () => {
     const q = buildQuery({})
-    // Default page size matches the swaption tape, which keeps individual
-    // fetches snappy while letting the VirtualScroller chain pages.
-    expect(q.get('limit')).toBe('50')
+    // Default page size is intentionally larger than the swaption tape so
+    // traders see a deep tape on first paint; VirtualScroller still chains
+    // additional pages at the same size as the server scrolls further back.
+    expect(q.get('limit')).toBe('200')
   })
 
   it('honours a caller-supplied limit override', () => {
