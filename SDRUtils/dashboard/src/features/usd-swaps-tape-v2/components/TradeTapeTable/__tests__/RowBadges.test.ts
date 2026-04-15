@@ -1,5 +1,15 @@
 import { describe, expect, it } from '@jest/globals'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { flagBadgesFor, lifecyclePillsFor } from '../RowBadges.helpers'
+
+const rowBadgesSource = readFileSync(
+  resolve(
+    process.cwd(),
+    'src/features/usd-swaps-tape-v2/components/TradeTapeTable/RowBadges.tsx',
+  ),
+  'utf8',
+)
 
 const row = (overrides: Record<string, any> = {}): any => ({
   package_id: 'P1',
@@ -52,6 +62,16 @@ describe('lifecyclePillsFor — NEW hygiene', () => {
       row({ lifecycle_mix: { NEW_RISK: 1, TERMINATION: 1 } }),
     )
     expect(pills.map((p) => p.type)).toEqual(['TERMINATION'])
+  })
+})
+
+describe('LifecyclePills rendering', () => {
+  it('does not append the mix count to the pill label (visual only — "NEW 2" reads as "NEW")', () => {
+    // Count stays on the pill object for aria-labels / telemetry, but the
+    // visible label must not include the numeric suffix. We verify via source
+    // because this component lives above a Jest DOM renderer in this repo.
+    expect(rowBadgesSource).not.toContain('p.count > 1')
+    expect(rowBadgesSource).not.toContain('` ${p.count}`')
   })
 })
 

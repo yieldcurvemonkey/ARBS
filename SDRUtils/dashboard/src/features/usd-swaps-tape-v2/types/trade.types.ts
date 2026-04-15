@@ -14,6 +14,11 @@ export type LifecycleType =
 
 export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   tape_label?: string | null
+  // Per-leg tape label — for CURVE/FLY packages this is the leg's own
+  // outright description (e.g. "USD-SOFR 5Y Outright"), while `tape_label`
+  // remains the package-level structure label ("5Y/10Y CURVE"). Undefined on
+  // older rows ingested before the column was added.
+  leg_tape_label?: string | null
   trade_type?: string | null
   tenor_display?: string | null
   venue?: string | null
