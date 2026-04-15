@@ -723,53 +723,79 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 return out
 
             if is_in_wsj_buffer:
-                wsj = WSJFetcher()
-                mapping = {get_isin_from_cusip(c, "US")[2:]: c for c in alias_to_cusip.values()}
-                wide = wsj.ust_intraday_timeseries(mapping, show_tqdm=show_tqdm)
+                self._ensure_pricer_cache()
+                cache = getattr(self, self._FRB_PRICER_CACHE)
+                force_refresh = bool(kwargs.get("force_refresh", False))
 
-                est = pytz.timezone("America/New_York")
-                t_3pm = est.localize(datetime.datetime(timestamp.year, timestamp.month, timestamp.day, 15, 0, 0)).astimezone(pytz.UTC)
-                idx = wide.index
-                pos = idx.get_indexer([t_3pm], method="nearest")[0]
-                nearest_ts = idx[pos]
-                if abs(nearest_ts - t_3pm) > pd.Timedelta("360min"):
-                    raise ValueError(f"No intraday snapshot within 60min of 3pm ET. Nearest: {nearest_ts}")
-
+                alias_to_fetch: Dict[str, str] = {}
                 for original, cusip in alias_to_cusip.items():
-                    try:
-                        y = wide[cusip].iloc[pos]
-                        if pd.isna(y):
-                            col = wide[cusip].dropna()
-                            if col.empty:
-                                raise ValueError(f"No intraday data for {cusip} near 3pm")
-                            nearest_ts = col.index[col.index.get_indexer([t_3pm], method="nearest")[0]]
-                            y = col.loc[nearest_ts]
+                    cache_key = f"{timestamp.isoformat()}-{cusip}-{self.source.upper()}"
+                    cached = cache.get(cache_key)
+                    if cached is not None and not force_refresh:
+                        if hasattr(cached, "__class__") and cached.__class__.__name__ in (
+                            "RLFixedRateBondPricer",
+                            "QLFixedRateBondPricer",
+                        ):
+                            out[original] = cached
+                            continue
+                        out[original] = self._build_pricer_from_args(
+                            cached, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn"
+                        )
+                        continue
+                    alias_to_fetch[original] = cusip
 
-                        meta = dict(meta_by_cusip[cusip])
-                        meta["timestamp"] = nearest_ts
-                        if self.source.upper() == "USTS_FEDINVEST_WSJ_LIVE-RL":
-                            out[original] = RLFixedRateBondPricer(
-                                rl_frb_id="USTS",
-                                reference_date=nearest_ts.date(),
-                                issue_date=meta["issue_date"],
-                                maturity_date=meta["maturity_date"],
-                                cpn=meta["cpn"],
-                                ytm=float(y),
-                                meta_data=meta,
+                if alias_to_fetch:
+                    wsj = WSJFetcher()
+                    mapping = {get_isin_from_cusip(c, "US")[2:]: c for c in alias_to_fetch.values()}
+                    wide = wsj.ust_intraday_timeseries(mapping, show_tqdm=show_tqdm)
+
+                    est = pytz.timezone("America/New_York")
+                    t_3pm = est.localize(datetime.datetime(timestamp.year, timestamp.month, timestamp.day, 15, 0, 0)).astimezone(pytz.UTC)
+                    idx = wide.index
+                    pos = idx.get_indexer([t_3pm], method="nearest")[0]
+                    nearest_ts = idx[pos]
+                    if abs(nearest_ts - t_3pm) > pd.Timedelta("360min"):
+                        raise ValueError(f"No intraday snapshot within 60min of 3pm ET. Nearest: {nearest_ts}")
+
+                    for original, cusip in alias_to_fetch.items():
+                        try:
+                            y = wide[cusip].iloc[pos]
+                            ts_for_meta = nearest_ts
+                            if pd.isna(y):
+                                col = wide[cusip].dropna()
+                                if col.empty:
+                                    raise ValueError(f"No intraday data for {cusip} near 3pm")
+                                ts_for_meta = col.index[col.index.get_indexer([t_3pm], method="nearest")[0]]
+                                y = col.loc[ts_for_meta]
+
+                            meta = dict(meta_by_cusip[cusip])
+                            meta["timestamp"] = ts_for_meta
+                            if self.source.upper() == "USTS_FEDINVEST_WSJ_LIVE-RL":
+                                args = {
+                                    "rl_frb_id": "USTS",
+                                    "reference_date": ts_for_meta.date().isoformat(),
+                                    "ytm": float(y),
+                                    "meta_data": self._pyify_meta(meta),
+                                    "schema": 1,
+                                    "source": "wsj_intraday",
+                                }
+                            else:
+                                args = {
+                                    "ql_frb_id": "USTS",
+                                    "reference_date": ts_for_meta.date().isoformat(),
+                                    "ytm": float(y),
+                                    "meta_data": self._pyify_meta(meta),
+                                    "schema": 1,
+                                    "source": "wsj_intraday",
+                                }
+                            cache_key = f"{timestamp.isoformat()}-{cusip}-{self.source.upper()}"
+                            cache[cache_key] = args
+                            out[original] = self._build_pricer_from_args(
+                                args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn"
                             )
-                        else:
-                            out[original] = QLFixedRateBondPricer(
-                                ql_frb_id="USTS",
-                                reference_date=nearest_ts.date(),
-                                issue_date=meta["issue_date"],
-                                maturity_date=meta["maturity_date"],
-                                cpn=meta["cpn"],
-                                ytm=float(y),
-                                meta_data=meta,
-                            )
-                    except:
-                        # TODO handle errors
-                        pass
+                        except Exception:
+                            # TODO handle errors
+                            pass
                 return out
 
         elif self.source.upper() == "USTS_TRADINGVIEW_LIVE-RL":
@@ -1199,6 +1225,20 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
 
             wsj_buffer = ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(ql.Date.todaysDate(), ql.Period("-5D"))
             if ql.Date(timestamp.day, timestamp.month, timestamp.year) > wsj_buffer:
+                self._ensure_pricer_cache()
+                cache = getattr(self, self._FRB_PRICER_CACHE)
+                cache_key = f"{timestamp.isoformat()}-{cusip}-{self.source.upper()}"
+                cached = cache.get(cache_key)
+                if cached is not None and not kwargs.get("force_refresh", False):
+                    if hasattr(cached, "__class__") and cached.__class__.__name__ in (
+                        "RLFixedRateBondPricer",
+                        "QLFixedRateBondPricer",
+                    ):
+                        return cached
+                    return self._build_pricer_from_args(
+                        cached, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn"
+                    )
+
                 wsj_key = get_isin_from_cusip(cusip, "US")[2:]
 
                 # pandas series with timezone aware datetime index in utc
@@ -1222,25 +1262,27 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 meta_data = ref_df.iloc[0].to_dict()
                 meta_data["timestamp"] = closest_snapshot_time
                 if self.source.upper() == "USTS_FEDINVEST_WSJ_LIVE-RL":
-                    return RLFixedRateBondPricer(
-                        rl_frb_id="USTS",
-                        reference_date=closest_snapshot_time.date(),
-                        issue_date=meta_data["issue_date"],
-                        maturity_date=meta_data["maturity_date"],
-                        cpn=meta_data["cpn"],
-                        ytm=closest_snapshot,
-                        meta_data=meta_data,
-                    )
+                    args = {
+                        "rl_frb_id": "USTS",
+                        "reference_date": closest_snapshot_time.date().isoformat(),
+                        "ytm": float(closest_snapshot),
+                        "meta_data": self._pyify_meta(meta_data),
+                        "schema": 1,
+                        "source": "wsj_intraday",
+                    }
                 else:
-                    return QLFixedRateBondPricer(
-                        ql_frb_id="USTS",
-                        reference_date=closest_snapshot_time.date(),
-                        issue_date=meta_data["issue_date"],
-                        maturity_date=meta_data["maturity_date"],
-                        cpn=meta_data["cpn"],
-                        ytm=closest_snapshot,
-                        meta_data=meta_data,
-                    )
+                    args = {
+                        "ql_frb_id": "USTS",
+                        "reference_date": closest_snapshot_time.date().isoformat(),
+                        "ytm": float(closest_snapshot),
+                        "meta_data": self._pyify_meta(meta_data),
+                        "schema": 1,
+                        "source": "wsj_intraday",
+                    }
+                cache[cache_key] = args
+                return self._build_pricer_from_args(
+                    args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn"
+                )
 
             timestamp_dt = datetime.datetime(timestamp.year, timestamp.month, timestamp.day)
 
