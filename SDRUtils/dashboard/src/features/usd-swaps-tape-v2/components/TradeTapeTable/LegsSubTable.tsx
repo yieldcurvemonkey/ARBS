@@ -175,7 +175,6 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
               <th className="px-2 py-1 text-right">Notional</th>
               <th className="px-2 py-1 text-right">DV01</th>
               <th className="px-2 py-1 text-right">Rate</th>
-              <th className="px-2 py-1 text-left">UFRO</th>
               <th className="px-2 py-1 text-left">Flags</th>
               <th className="px-2 py-1 text-left">X-Day</th>
             </tr>
@@ -216,20 +215,13 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
                   {formatRate(leg.fixed_rate ?? null)}
                 </td>
-                <td className="whitespace-nowrap px-2 py-1">
-                  {leg.is_ufro
-                    ? leg.fixed_rate === null || leg.fixed_rate === undefined
-                      ? 'Flagged'
-                      : formatRate(leg.fixed_rate)
-                    : EMPTY_VALUE}
-                </td>
                 <td className="px-2 py-1">{qualityFlagsBody(leg)}</td>
                 <td className="whitespace-nowrap px-2 py-1">{crossDayProgress(leg)}</td>
               </tr>
             ))}
             {legs.length === 0 ? (
               <tr className="border-t border-slate-800/90 text-slate-400">
-                <td className="px-2 py-2" colSpan={15}>
+                <td className="px-2 py-2" colSpan={14}>
                   No leg data available.
                 </td>
               </tr>
