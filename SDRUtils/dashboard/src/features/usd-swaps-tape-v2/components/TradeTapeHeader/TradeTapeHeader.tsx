@@ -36,7 +36,7 @@ function StatButton({
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col items-start text-left hover:bg-slate-800/40 px-2 py-1 rounded"
+      className="flex flex-col items-start text-left hover:bg-slate-800/40 px-1.5 py-0 rounded leading-tight"
     >
       <span className="text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
       <span className="font-mono tabular-nums text-slate-100 text-sm">{value}</span>
@@ -53,7 +53,7 @@ export function TradeTapeHeader(props: TradeTapeHeaderProps): JSX.Element {
         ? 'bg-amber-500'
         : 'bg-red-500'
   return (
-    <header className="flex flex-col gap-1 px-3 py-2 bg-slate-900/70 border-b border-slate-800">
+    <header className="flex flex-col gap-0.5 px-3 py-1 bg-slate-900/70 border-b border-slate-800">
       {/* Strip 1: title + controls */}
       <div className="flex items-center gap-3">
         <h1 className="text-sm font-semibold text-slate-100">USD swap tape</h1>

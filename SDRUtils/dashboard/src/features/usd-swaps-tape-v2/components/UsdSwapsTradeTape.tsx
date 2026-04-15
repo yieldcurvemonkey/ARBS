@@ -108,7 +108,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
       : 'live'
 
   return (
-    <div className="flex flex-col h-screen bg-slate-950 text-slate-100">
+    <div className="flex flex-col h-full min-h-0 bg-slate-950 text-slate-100 pb-2">
       <TradeTapeHeader
         asOfDate={asOf}
         liveStatus={liveStatus}
@@ -133,21 +133,24 @@ export default function UsdSwapsTradeTape(): JSX.Element {
           columnFilters.reset()
           flagFilters.resetAll()
         }}
+        rowSummary={
+          <span className="whitespace-nowrap text-[11px] text-slate-400">
+            {tape.rows.length} rows
+            {tape.hasMore ? ' (more available)' : ''}
+          </span>
+        }
+        actionSlot={
+          selection.count > 0 ? (
+            <button
+              type="button"
+              className="whitespace-nowrap text-[11px] text-sky-200 hover:text-sky-100"
+              onClick={() => setActiveModal('links')}
+            >
+              Link {selection.count} selected
+            </button>
+          ) : null
+        }
       />
-      <div className="flex items-center justify-between px-3 py-1 text-xs text-slate-400 border-b border-slate-800">
-        <span>
-          {tape.rows.length} rows{tape.hasMore ? ' (more available)' : ''}
-        </span>
-        {selection.count > 0 ? (
-          <button
-            type="button"
-            className="text-xs text-sky-200 hover:text-sky-100"
-            onClick={() => setActiveModal('links')}
-          >
-            Link {selection.count} selected
-          </button>
-        ) : null}
-      </div>
       <div className="flex flex-1 overflow-hidden">
         <TradeTapeTable
           rows={tape.rows}
