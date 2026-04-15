@@ -42,7 +42,9 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   const [timelineVisible, setTimelineVisible] = useState(true)
 
   const tape = useTradeTapeData({
-    filter: search,
+    // search is handled client-side via fuzzy filter in TradeTapeTable — do NOT
+    // forward it to the server. The server still receives column filters and
+    // the URL-synced filter payload so power-user SQL-style filters keep working.
     columnFilterPayloadKey:
       Object.keys(columnFilters.filters).length > 0
         ? JSON.stringify(columnFilters.filters)
@@ -187,6 +189,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
           selected={selection.selected}
           onSelectionChange={selection.onSelectionChange}
           onOpenTimeseries={() => setActiveModal('timeseries')}
+          search={search}
         />
         {activeSidecar ? (
           <SidecarDrawer

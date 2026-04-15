@@ -3,7 +3,9 @@ import { rowClassName } from '../columns.helpers'
 
 const base = {
   package_id: 'P1',
-  package_type: 'OUTRIGHT',
+  // Intentionally omit package_type/trade_type here so existing lifecycle-only
+  // assertions stay isolated from the trade-type border accent added in Task 3.
+  package_type: null,
   legs_count: 1,
   execution_start: '2026-04-14T14:30:00Z',
   execution_end: '2026-04-14T14:30:00Z',
@@ -54,5 +56,34 @@ describe('rowClassName', () => {
 
   it('correction renders sky', () => {
     expect(rowClassName({ ...base, is_correction_any: true } as any)).toContain('sky')
+  })
+})
+
+describe('rowClassName — trade_type accent', () => {
+  it('adds left-border accent for OUTRIGHT trade_type', () => {
+    const cls = rowClassName({ ...base, trade_type: 'OUTRIGHT', is_new_risk: true } as any)
+    expect(cls).toMatch(/border-l-2/)
+    expect(cls).toMatch(/border-slate/)
+  })
+
+  it('uses CURVE color for CURVE trade_type', () => {
+    const cls = rowClassName({ ...base, trade_type: 'CURVE' } as any)
+    expect(cls).toMatch(/border-sky/)
+  })
+
+  it('uses FLY color for FLY trade_type', () => {
+    const cls = rowClassName({ ...base, trade_type: 'FLY' } as any)
+    expect(cls).toMatch(/border-indigo/)
+  })
+
+  it('falls back to package_type when trade_type missing', () => {
+    const cls = rowClassName({ ...base, package_type: 'CURVE' } as any)
+    expect(cls).toMatch(/border-sky/)
+  })
+
+  it('composes with lifecycle color (unwind keeps red background AND adds border)', () => {
+    const cls = rowClassName({ ...base, trade_type: 'FLY', is_unwind: true } as any)
+    expect(cls).toMatch(/bg-red-950\/25/)
+    expect(cls).toMatch(/border-indigo/)
   })
 })

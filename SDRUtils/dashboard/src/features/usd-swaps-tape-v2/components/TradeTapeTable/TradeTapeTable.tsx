@@ -1,11 +1,17 @@
 'use client'
 // ABOUTME: PrimeReact DataTable for the USD swap tape v2.
-import type { JSX } from 'react'
+import { useCallback, useMemo, useState, type JSX } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import { DataTable } from 'primereact/datatable'
+import {
+  DataTable,
+  type DataTableFilterEvent,
+  type DataTableFilterMeta,
+  type DataTableSortEvent,
+} from 'primereact/datatable'
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
-import { getColumns, rowClassName } from './columns'
+import { getColumns, rowClassName, type MetricMode } from './columns'
+import { applyColumnFilters, applyFuzzy, applySort } from './filter-pipeline'
 
 export interface TradeTapeTableProps {
   rows: UsdSwapTapeRow[]
@@ -17,6 +23,7 @@ export interface TradeTapeTableProps {
   selected?: UsdSwapTapeRow[]
   onSelectionChange?: (e: { value: UsdSwapTapeRow[] }) => void
   onOpenTimeseries?: (row: UsdSwapTapeRow) => void
+  search?: string
 }
 
 export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
@@ -30,6 +37,22 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     selected,
     onSelectionChange,
   } = props
+
+  const [metricMode, setMetricMode] = useState<MetricMode>('dv01')
+  const toggleMetric = useCallback(
+    () => setMetricMode((m) => (m === 'dv01' ? 'notional' : 'dv01')),
+    [],
+  )
+
+  const [filters, setFilters] = useState<DataTableFilterMeta>({})
+  const [sortField, setSortField] = useState<string | null>(null)
+  const [sortOrder, setSortOrder] = useState<1 | -1 | 0>(0)
+
+  const displayRows = useMemo(() => {
+    const fuzzied = applyFuzzy(rows, props.search ?? '')
+    const filtered = applyColumnFilters(fuzzied, filters)
+    return applySort(filtered, sortField, sortOrder)
+  }, [rows, props.search, filters, sortField, sortOrder])
 
   const selectedIds = new Set((selected ?? []).map((row) => row.package_id))
 
@@ -118,7 +141,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         }
       `}</style>
       <DataTable
-        value={rows}
+        value={displayRows}
         dataKey="package_id"
         size="small"
         scrollable
@@ -137,6 +160,15 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
             <LegsSubTable row={row} />
           </div>
         )}
+        filters={filters}
+        onFilter={(e: DataTableFilterEvent) => setFilters(e.filters as DataTableFilterMeta)}
+        filterDisplay="menu"
+        sortField={sortField ?? undefined}
+        sortOrder={sortOrder}
+        onSort={(e: DataTableSortEvent) => {
+          setSortField((e.sortField as string) || null)
+          setSortOrder(((e.sortOrder as 1 | -1 | 0) ?? 0))
+        }}
         className="usd-swaps-tape-table rounded-2xl border border-gray-800 bg-gradient-to-b from-gray-950 to-gray-900 text-gray-200 shadow-inner"
         tableStyle={{ minWidth: '1700px' }}
         resizableColumns
@@ -154,6 +186,8 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         {getColumns({
           selection: !!onSelectionChange,
           expanderBody,
+          metricMode,
+          onToggleMetric: toggleMetric,
         })}
       </DataTable>
       {hasMore ? (

@@ -88,10 +88,8 @@ export const COLUMN_DEFS = [
   { key: 'action', header: 'Action', width: 132 },
   { key: 'platform', header: 'Platform', width: 120 },
   { key: 'tape_label', header: 'Tape Label', width: 700 },
-  { key: 'trade_type', header: 'Type', width: 110 },
-  { key: 'dv01', header: 'DV01', width: 96 },
-  { key: 'notional', header: 'Notional', width: 110 },
-  { key: 'rate', header: 'Rate', width: 84 },
+  { key: 'risk_or_notional', header: 'DV01', width: 110 }, // toggles to Notional
+  { key: 'rate', header: 'Reported LvL', width: 110 },
 ] as const
 
 export const CLEAN_TAPE_HIDDEN_LIFECYCLES: LifecycleType[] = [

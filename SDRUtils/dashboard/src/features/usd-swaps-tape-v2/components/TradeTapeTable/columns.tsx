@@ -15,9 +15,13 @@ import { TapeLabelCell } from './TapeLabelCell'
 
 export { rowClassName } from './columns.helpers'
 
+export type MetricMode = 'dv01' | 'notional'
+
 type ColumnConfig = {
   selection: boolean
   expanderBody?: (row: UsdSwapTapeRow) => JSX.Element
+  metricMode?: MetricMode
+  onToggleMetric?: () => void
 }
 
 function renderHeader(label: string): JSX.Element {
@@ -38,10 +42,6 @@ function displayPlatform(row: UsdSwapTapeRow): string {
   return row.platform_identifier ?? firstLeg(row)?.platform_identifier ?? EMPTY_VALUE
 }
 
-function displayType(row: UsdSwapTapeRow): string {
-  return row.trade_type ?? firstLeg(row)?.trade_type ?? row.package_type ?? EMPTY_VALUE
-}
-
 export function getColumns(
   config: ColumnConfig = { selection: true },
 ): JSX.Element[] {
@@ -56,9 +56,28 @@ export function getColumns(
       <Column key="expand" body={config.expanderBody as any} style={{ width: 48 }} />,
     )
   }
+
+  const mode: MetricMode = config.metricMode ?? 'dv01'
+  const metricHeader = (
+    <button
+      type="button"
+      onClick={config.onToggleMetric}
+      className="flex flex-col gap-0.5 text-left hover:text-sky-300"
+      aria-label={`toggle metric (current: ${mode === 'dv01' ? 'DV01' : 'Notional'})`}
+    >
+      <span className="text-[11px] uppercase tracking-wide text-gray-400">
+        {mode === 'dv01' ? 'DV01' : 'Notional'} ⇅
+      </span>
+    </button>
+  )
+
   cols.push(
     <Column
       key="time"
+      field="execution_start"
+      filterField="execution_start"
+      sortable
+      filter
       header={renderHeader('Time')}
       body={(row: UsdSwapTapeRow) => (
         <span className="text-xs text-gray-300">
@@ -69,12 +88,19 @@ export function getColumns(
     />,
     <Column
       key="action"
+      field="action_label"
+      filterField="action_label"
+      filter
       header={renderHeader('Action')}
       body={(row: UsdSwapTapeRow) => <LifecyclePills row={row} />}
       style={{ width: 132 }}
     />,
     <Column
       key="platform"
+      field="platform_identifier"
+      filterField="platform_identifier"
+      sortable
+      filter
       header={renderHeader('Platform')}
       body={(row: UsdSwapTapeRow) => (
         <span className="text-xs text-gray-300 truncate">
@@ -85,47 +111,45 @@ export function getColumns(
     />,
     <Column
       key="tape_label"
+      field="tape_label"
+      filterField="tape_label"
+      sortable
+      filter
       header={renderHeader('Tape Label')}
       body={(row: UsdSwapTapeRow) => <TapeLabelCell row={row} />}
       style={{ width: 700 }}
     />,
     <Column
-      key="trade_type"
-      header={renderHeader('Type')}
-      body={(row: UsdSwapTapeRow) => (
-        <span className="text-xs text-gray-300">{displayType(row)}</span>
-      )}
-      style={{ width: 120 }}
-    />,
-    <Column
-      key="dv01"
-      header={renderHeader('DV01')}
+      key="metric"
+      field={mode === 'dv01' ? 'total_risk' : 'total_notional'}
+      filterField={mode === 'dv01' ? 'total_risk' : 'total_notional'}
+      sortable
+      filter
+      dataType="numeric"
+      header={metricHeader}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-xs text-gray-200">
-          {formatDv01(row.total_risk ?? null, { signed: true })}
-        </span>
-      )}
-      style={{ width: 96 }}
-    />,
-    <Column
-      key="notional"
-      header={renderHeader('Notional')}
-      body={(row: UsdSwapTapeRow) => (
-        <span className="font-mono text-xs text-gray-200">
-          {formatNotional(row.total_notional ?? null, { compact: true })}
+          {mode === 'dv01'
+            ? formatDv01(row.total_risk ?? null, { signed: true })
+            : formatNotional(row.total_notional ?? null, { compact: true })}
         </span>
       )}
       style={{ width: 110 }}
     />,
     <Column
       key="rate"
-      header={renderHeader('Rate')}
+      field="weighted_fixed_rate"
+      filterField="weighted_fixed_rate"
+      sortable
+      filter
+      dataType="numeric"
+      header={renderHeader('Reported LvL')}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-xs text-gray-200">
           {formatRate(row.weighted_fixed_rate ?? null)}
         </span>
       )}
-      style={{ width: 84 }}
+      style={{ width: 110 }}
     />,
   )
   return cols
