@@ -4,9 +4,16 @@ import { __internal } from '../useTradeTapeData'
 const buildQuery = __internal.buildQuery
 
 describe('useTradeTapeData buildQuery', () => {
-  it('emits an empty query when no params are set', () => {
+  it('always emits a page size so the server caps each fetch predictably', () => {
     const q = buildQuery({})
-    expect(q.toString()).toBe('')
+    // Default page size matches the swaption tape, which keeps individual
+    // fetches snappy while letting the VirtualScroller chain pages.
+    expect(q.get('limit')).toBe('50')
+  })
+
+  it('honours a caller-supplied limit override', () => {
+    const q = buildQuery({ limit: 200 })
+    expect(q.get('limit')).toBe('200')
   })
 
   it('serializes global filter + column filters + operator', () => {

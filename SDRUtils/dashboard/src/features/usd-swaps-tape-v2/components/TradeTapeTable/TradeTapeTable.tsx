@@ -1,21 +1,32 @@
 'use client'
 // ABOUTME: PrimeReact DataTable for the USD swap tape v2.
-import { useCallback, useMemo, useState, type JSX } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
+import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import {
   DataTable,
   type DataTableFilterEvent,
   type DataTableFilterMeta,
   type DataTableSortEvent,
 } from 'primereact/datatable'
+import { ROW_ESTIMATE_PX } from '../../constants'
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
 import { getColumns, rowClassName, type MetricMode } from './columns'
 import { applyColumnFilters, applyFuzzy, applySort } from './filter-pipeline'
 
+// PrimeReact's `VirtualScrollerLazyEvent` types `first` / `last` as
+// `number | VirtualScrollerState`; we only care about the numeric case and
+// fall back safely otherwise.
+type VirtualScrollerLazyLoadEvent = {
+  first?: number | unknown
+  last?: number | unknown
+  rows?: number
+}
+
 export interface TradeTapeTableProps {
   rows: UsdSwapTapeRow[]
   loading: boolean
+  loadingMore?: boolean
   onLoadMore?: () => void
   hasMore?: boolean
   expandedRows?: Record<string, boolean>
@@ -26,10 +37,17 @@ export interface TradeTapeTableProps {
   search?: string
 }
 
+// Approximate page size used when extending the VirtualScroller's `totalRecords`
+// past the currently-loaded row count. Matches the swaption tape's lazy-load
+// pattern so the scroller keeps asking for more until the server reports
+// `hasMore=false`.
+const LAZY_LOAD_PAGE_SIZE = 50
+
 export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   const {
     rows,
     loading,
+    loadingMore,
     onLoadMore,
     hasMore,
     expandedRows,
@@ -37,6 +55,24 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     selected,
     onSelectionChange,
   } = props
+
+  // Guards against double-triggering `onLoadMore` within a single paging cycle.
+  // The VirtualScroller's `onLazyLoad` can fire repeatedly while the user
+  // continues to scroll; without this, we'd queue multiple fetches before the
+  // first one resolves and the parent hook updates `loadingMore`.
+  const loadMoreInFlight = useRef(false)
+  useEffect(() => {
+    if (!loadingMore) loadMoreInFlight.current = false
+  }, [loadingMore])
+
+  const requestLoadMore = useCallback(() => {
+    if (!onLoadMore) return
+    if (!hasMore) return
+    if (loadingMore) return
+    if (loadMoreInFlight.current) return
+    loadMoreInFlight.current = true
+    onLoadMore()
+  }, [hasMore, loadingMore, onLoadMore])
 
   const [metricMode, setMetricMode] = useState<MetricMode>('dv01')
   const toggleMetric = useCallback(
@@ -53,6 +89,34 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     const filtered = applyColumnFilters(fuzzied, filters)
     return applySort(filtered, sortField, sortOrder)
   }, [rows, props.search, filters, sortField, sortOrder])
+
+  // When column/search filters cut the visible list below the viewport height,
+  // eagerly pull the next page so the scroll-triggered lazy load actually has
+  // something to chew on. Mirrors the legacy auto-load in SwaptionTradeTape.
+  useEffect(() => {
+    if (!hasMore || loadingMore) return
+    const approximateVisibleRows =
+      typeof window !== 'undefined'
+        ? Math.ceil((window.innerHeight * 0.7) / ROW_ESTIMATE_PX)
+        : 20
+    if (displayRows.length < approximateVisibleRows + 5) {
+      requestLoadMore()
+    }
+  }, [displayRows.length, hasMore, loadingMore, requestLoadMore])
+
+  const handleVirtualLoad = useCallback(
+    (event: VirtualScrollerLazyLoadEvent) => {
+      const first = typeof event.first === 'number' ? event.first : 0
+      const last =
+        typeof event.last === 'number'
+          ? event.last
+          : first + (event.rows ?? 0)
+      if (last >= displayRows.length - 5) {
+        requestLoadMore()
+      }
+    },
+    [displayRows.length, requestLoadMore],
+  )
 
   const selectedIds = new Set((selected ?? []).map((row) => row.package_id))
 
@@ -174,13 +238,28 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         resizableColumns
         columnResizeMode="fit"
         rowHover
+        lazy
+        totalRecords={
+          hasMore ? displayRows.length + LAZY_LOAD_PAGE_SIZE : displayRows.length
+        }
+        virtualScrollerOptions={{
+          itemSize: ROW_ESTIMATE_PX,
+          lazy: true,
+          // PrimeReact's VirtualScrollerLazyEvent widens first/last to
+          // `number | VirtualScrollerState`; we only care about numeric
+          // indices, so cast the handler rather than fight the type.
+          onLazyLoad: handleVirtualLoad as any,
+        }}
         pt={
           {
             headerCell: {
-              className: 'py-1 px-1.5 text-[11px] !border-0',
+              // Match the swaption tape's denser header — slightly wider
+              // x-padding, same 11px font size.
+              className: 'py-1 px-2 text-[11px] !border-0',
             },
             bodyCell: {
-              className: 'py-1 px-1.5 text-xs !border-0',
+              className: 'py-1 px-2 text-xs !border-0',
+              // Keep the cell transparent so the tr-level tint shows through.
               style: { backgroundColor: 'transparent' },
             },
           } as any
@@ -193,16 +272,10 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           onToggleMetric: toggleMetric,
         })}
       </DataTable>
-      {hasMore ? (
-        <div className="flex justify-center py-2">
-          <button
-            type="button"
-            className="rounded bg-slate-800 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700"
-            onClick={onLoadMore}
-            disabled={loading}
-          >
-            Load more
-          </button>
+      {loadingMore ? (
+        <div className="flex items-center justify-center gap-2 py-1 text-[11px] text-slate-400">
+          <RefreshCw className="h-3 w-3 animate-spin" />
+          Loading more packages...
         </div>
       ) : null}
     </div>
