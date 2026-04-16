@@ -1,6 +1,17 @@
 'use client'
 // ABOUTME: PrimeReact DataTable for the USD swap tape v2.
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react'
+// NOTE(feedback-round-1): removed the global fuzzy search input, AND/OR
+// toggle, and the manual filter pipeline in favor of PrimeReact's native
+// per-column filtering (filters prop) and sort (sortField / sortOrder),
+// both URL-synced through useColumnFilters.
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type JSX,
+  type ReactNode,
+} from 'react'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import {
   DataTable,
@@ -8,12 +19,12 @@ import {
   type DataTableFilterMeta,
   type DataTableSortEvent,
 } from 'primereact/datatable'
+import { useState } from 'react'
 import { ROW_ESTIMATE_PX } from '../../constants'
-import { useColumnFilters, useTableControls } from '../../hooks'
+import { useColumnFilters } from '../../hooks'
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
 import { getColumns, rowClassName, type MetricMode } from './columns'
-import { applyColumnFilters, applyFuzzy, applySort } from './filter-pipeline'
 
 // PrimeReact's `VirtualScrollerLazyEvent` types `first` / `last` as
 // `number | VirtualScrollerState`; we only care about the numeric case and
@@ -49,11 +60,6 @@ export interface TradeTapeTableProps {
 // `hasMore=false`.
 const LAZY_LOAD_PAGE_SIZE = 50
 
-// Search input has a debounce so we aren't pushing a URL change on every
-// keypress; 200ms feels instant in typing, and keeps the URL history clean
-// enough that the browser's back button still works as a reasonable undo.
-const SEARCH_URL_DEBOUNCE_MS = 200
-
 export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   const {
     rows,
@@ -68,27 +74,10 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     actionSlot,
   } = props
 
-  // URL-backed column-filter state; the DataTable owns it locally so a pasted
-  // URL restores the same view without pushing this state back to the parent.
+  // URL-backed column filter + sort state.
   const columnFilters = useColumnFilters()
-  // URL-backed search + sort state.
-  const table = useTableControls()
-
-  // Local controlled input for the search box — we debounce writes to the
-  // URL param so each keystroke doesn't hammer `router.replace`.
-  const [searchDraft, setSearchDraft] = useState(table.search)
-  useEffect(() => setSearchDraft(table.search), [table.search])
-  useEffect(() => {
-    if (searchDraft === table.search) return
-    const id = setTimeout(() => table.setSearch(searchDraft), SEARCH_URL_DEBOUNCE_MS)
-    return () => clearTimeout(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchDraft])
 
   // Guards against double-triggering `onLoadMore` within a single paging cycle.
-  // The VirtualScroller's `onLazyLoad` can fire repeatedly while the user
-  // continues to scroll; without this, we'd queue multiple fetches before the
-  // first one resolves and the parent hook updates `loadingMore`.
   const loadMoreInFlight = useRef(false)
   useEffect(() => {
     if (!loadingMore) loadMoreInFlight.current = false
@@ -108,29 +97,15 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     () => setMetricMode((m) => (m === 'dv01' ? 'notional' : 'dv01')),
     [],
   )
-  const effectiveSortField = table.sortField ?? 'execution_start'
-  const effectiveSortOrder: 1 | -1 | 0 = table.sortField ? table.sortOrder : -1
 
-  const displayRows = useMemo(() => {
-    const fuzzied = applyFuzzy(rows, table.search)
-    const filtered = applyColumnFilters(
-      fuzzied,
-      columnFilters.filters as DataTableFilterMeta,
-      columnFilters.operator,
-    )
-    return applySort(filtered, effectiveSortField, effectiveSortOrder)
-  }, [
-    rows,
-    table.search,
-    effectiveSortField,
-    effectiveSortOrder,
-    columnFilters.filters,
-    columnFilters.operator,
-  ])
+  const effectiveSortField = columnFilters.sortField ?? 'execution_start'
+  const effectiveSortOrder: 1 | -1 | 0 =
+    (columnFilters.sortOrder ?? -1) as 1 | -1 | 0
 
-  // When column/search filters cut the visible list below the viewport height,
-  // eagerly pull the next page so the scroll-triggered lazy load actually has
-  // something to chew on. Mirrors the legacy auto-load in SwaptionTradeTape.
+  // DataTable handles filtering internally from the `filters` prop. We keep
+  // the unfiltered `rows` as input and let PrimeReact filter+sort on its own.
+  const displayRows = rows
+
   useEffect(() => {
     if (!hasMore || loadingMore) return
     const approximateVisibleRows =
@@ -201,9 +176,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
 
   const handleResetAll = useCallback(() => {
     columnFilters.reset()
-    table.reset()
-    setSearchDraft('')
-  }, [columnFilters, table])
+  }, [columnFilters])
 
   return (
     <div
@@ -211,11 +184,6 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
       data-testid="trade-tape-table"
     >
       <style jsx global>{`
-        /* Propagate the DataTable's scroll height down to the inner
-         * VirtualScroller — with scrollHeight="flex" the wrapper sizes itself
-         * via flex-basis, but the nested virtualscroller doesn't inherit that
-         * height, so the scroll viewport collapses to 0 and no rows render.
-         */
         .usd-swaps-tape-table .p-datatable-wrapper {
           flex: 1 1 auto;
           min-height: 0;
@@ -263,10 +231,6 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         }
       `}</style>
 
-      {/* Filter bar — lives inside the table component so fuzzy search,
-         column filter operator, and reset are colocated with the DataTable
-         they drive, mirroring the swaption tape. All controls write to the
-         URL so the view is shareable. */}
       <div
         className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-900/50 px-3 py-1"
         data-testid="trade-tape-filters"
@@ -275,46 +239,13 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           {displayRows.length} rows
           {hasMore ? ' (more available)' : ''}
         </span>
-        <input
-          type="search"
-          placeholder="Filter tape…"
-          aria-label="global tape filter"
-          value={searchDraft}
-          onChange={(e) => setSearchDraft(e.target.value)}
-          className="flex-1 rounded border border-slate-800 bg-slate-950/60 px-2 py-0.5 text-[13px] text-slate-100 focus:border-slate-600 focus:outline-none"
-        />
-        <div className="flex items-center gap-1 text-[10px] text-slate-400">
-          <button
-            type="button"
-            aria-pressed={columnFilters.operator === 'and'}
-            onClick={() => columnFilters.setOperator('and')}
-            className={`rounded px-2 py-0.5 ${
-              columnFilters.operator === 'and'
-                ? 'bg-slate-700 text-slate-100'
-                : 'bg-slate-800/60'
-            }`}
-          >
-            AND
-          </button>
-          <button
-            type="button"
-            aria-pressed={columnFilters.operator === 'or'}
-            onClick={() => columnFilters.setOperator('or')}
-            className={`rounded px-2 py-0.5 ${
-              columnFilters.operator === 'or'
-                ? 'bg-slate-700 text-slate-100'
-                : 'bg-slate-800/60'
-            }`}
-          >
-            OR
-          </button>
-        </div>
+        <div className="flex-1" />
         <button
           type="button"
           onClick={handleResetAll}
           className="rounded bg-slate-800/60 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700/60"
         >
-          Reset
+          Reset filters
         </button>
         {actionSlot}
       </div>
@@ -348,8 +279,11 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         sortOrder={effectiveSortOrder}
         onSort={(e: DataTableSortEvent) => {
           const nextField = (e.sortField as string) || null
-          const nextOrder = ((e.sortOrder as 1 | -1 | 0) ?? 0)
-          table.setSort(nextField, nextOrder)
+          const nextOrder = ((e.sortOrder as 1 | -1 | 0) ?? 0) as 1 | -1 | 0
+          columnFilters.setSort(
+            nextField,
+            nextOrder === 0 ? null : (nextOrder as 1 | -1),
+          )
         }}
         className="usd-swaps-tape-table rounded-2xl border border-gray-800 bg-gradient-to-b from-gray-950 to-gray-900 text-gray-200 shadow-inner"
         tableStyle={{ minWidth: '1120px' }}
@@ -363,16 +297,11 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         virtualScrollerOptions={{
           itemSize: ROW_ESTIMATE_PX,
           lazy: true,
-          // PrimeReact's VirtualScrollerLazyEvent widens first/last to
-          // `number | VirtualScrollerState`; we only care about numeric
-          // indices, so cast the handler rather than fight the type.
           onLazyLoad: handleVirtualLoad as any,
         }}
         pt={
           {
             headerCell: {
-              // Match the swaption tape's denser header — slightly wider
-              // x-padding, same 11px font size.
               className: 'px-2 py-0.5 text-[10px] !border-0',
             },
             bodyCell: {
