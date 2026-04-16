@@ -75,33 +75,52 @@ describe('rowClassName', () => {
   })
 })
 
-describe('rowClassName — trade_type tint', () => {
+describe('rowClassName — trade_type tint (Bloomberg muted palette)', () => {
   it('paints the full row with the OUTRIGHT tone and border accent', () => {
     const cls = rowClassName({
       ...base,
       trade_type: 'OUTRIGHT',
       is_new_risk: true,
     } as any)
-    expect(cls).toContain('!bg-gray-800/50')
+    expect(cls).toContain('!bg-slate-800/30')
     expect(cls).toMatch(/border-l-2/)
     expect(cls).toMatch(/border-slate/)
   })
 
   it('uses CURVE tint + border for CURVE trade_type', () => {
     const cls = rowClassName({ ...base, trade_type: 'CURVE' } as any)
-    expect(cls).toContain('!bg-sky-900/30')
+    expect(cls).toContain('!bg-blue-900/30')
     expect(cls).toMatch(/border-sky/)
   })
 
   it('uses FLY tint + border for FLY trade_type', () => {
     const cls = rowClassName({ ...base, trade_type: 'FLY' } as any)
-    expect(cls).toContain('!bg-indigo-900/30')
+    expect(cls).toContain('!bg-yellow-900/25')
     expect(cls).toMatch(/border-indigo/)
+  })
+
+  it('STRADDLE rows get the teal tint', () => {
+    const cls = rowClassName({ ...base, package_type: 'STRADDLE' } as any)
+    expect(cls).toContain('!bg-teal-900/30')
+  })
+
+  it('STRANGLE rows get the fuchsia tint', () => {
+    const cls = rowClassName({ ...base, package_type: 'STRANGLE' } as any)
+    expect(cls).toContain('!bg-fuchsia-900/25')
+  })
+
+  it('UNWIND overrides the structure tint with red regardless of structure', () => {
+    const cls = rowClassName({
+      ...base,
+      package_type: 'STRADDLE',
+      is_unwind: true,
+    } as any)
+    expect(cls).toContain('!bg-red-900/40')
   })
 
   it('falls back to package_type when trade_type missing', () => {
     const cls = rowClassName({ ...base, package_type: 'CURVE' } as any)
-    expect(cls).toContain('!bg-sky-900/30')
+    expect(cls).toContain('!bg-blue-900/30')
     expect(cls).toMatch(/border-sky/)
   })
 

@@ -64,10 +64,14 @@ export const TRADE_TYPE_TONES: Record<string, string> = {
 // low-alpha colors per structure so the trader can at-a-glance tell curves
 // from outrights from flies. `!bg-*` so the tint wins over PrimeReact's
 // default tr styling.
+// feedback-round-1: Bloomberg-muted row tints keyed by package_structure.
+// UNWIND override wins via rowClassName's inactiveLifecycle branch.
 export const TRADE_TYPE_ROW_TONES: Record<string, string> = {
-  OUTRIGHT: '!bg-gray-800/50',
-  CURVE: '!bg-sky-900/30',
-  FLY: '!bg-indigo-900/30',
+  OUTRIGHT: '!bg-slate-800/30',
+  CURVE: '!bg-blue-900/30',
+  FLY: '!bg-yellow-900/25',
+  STRADDLE: '!bg-teal-900/30',
+  STRANGLE: '!bg-fuchsia-900/25',
   SPREADOVER: '!bg-fuchsia-900/30',
   MATCHED_MATURITY: '!bg-teal-900/30',
   MAC: '!bg-cyan-900/30',
