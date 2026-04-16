@@ -44,10 +44,22 @@ export interface TradeTapeTableProps {
   rows: UsdSwapTapeRow[]
   loading: boolean
   loadingMore?: boolean
-  onLoadMore?: () => void
+  onLoadMore?: () => void | Promise<void>
   hasMore?: boolean
   expandedRows?: Record<string, boolean>
+  /**
+   * Full-replacement callback kept for PrimeReact's native `onRowToggle`
+   * event (fires if the user triggers expansion through PrimeReact's own
+   * machinery rather than our custom button).
+   */
   onRowToggle?: (e: { data: Record<string, boolean> }) => void
+  /**
+   * Preferred per-row toggle — takes a packageId and is expected to use
+   * functional setState on the caller's side so multiple successive clicks
+   * never drop prior expansion state. Fixes the "expanding row B closes row
+   * A" bug caused by stale-closure reads of `expandedRows` prop.
+   */
+  onToggleRow?: (packageId: string) => void
   selected?: UsdSwapTapeRow[]
   onSelectionChange?: (e: { value: UsdSwapTapeRow[] }) => void
   onOpenTimeseries?: (row: UsdSwapTapeRow) => void
@@ -74,6 +86,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     hasMore,
     expandedRows,
     onRowToggle,
+    onToggleRow,
     selected,
     onSelectionChange,
     actionSlot,
@@ -83,18 +96,27 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   const columnFilters = useColumnFilters()
 
   // Guards against double-triggering `onLoadMore` within a single paging cycle.
+  // Historically this flag could get stuck `true` when `onLoadMore` bailed
+  // silently (e.g. poll in flight), leaving pagination dead until a page
+  // refresh — the exact "initial filter needs a refresh" regression reported
+  // by traders. Reset is now tied to the awaited promise's finally block
+  // instead of only to `loadingMore` transitions.
   const loadMoreInFlight = useRef(false)
   useEffect(() => {
     if (!loadingMore) loadMoreInFlight.current = false
   }, [loadingMore])
 
-  const requestLoadMore = useCallback(() => {
+  const requestLoadMore = useCallback(async () => {
     if (!onLoadMore) return
     if (!hasMore) return
     if (loadingMore) return
     if (loadMoreInFlight.current) return
     loadMoreInFlight.current = true
-    onLoadMore()
+    try {
+      await onLoadMore()
+    } finally {
+      loadMoreInFlight.current = false
+    }
   }, [hasMore, loadingMore, onLoadMore])
 
   const [metricMode, setMetricMode] = useState<MetricMode>('dv01')
@@ -186,6 +208,14 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   const selectedIds = new Set((selected ?? []).map((row) => row.package_id))
 
   const toggleRowExpansion = (row: UsdSwapTapeRow) => {
+    // Preferred path: defer to the caller's functional-setState toggle so
+    // rapid successive clicks on different rows never drop each other's
+    // state. Falls back to the legacy full-replacement `onRowToggle` prop
+    // only if the parent did not wire up `onToggleRow`.
+    if (onToggleRow) {
+      onToggleRow(row.package_id)
+      return
+    }
     if (!onRowToggle) return
     const next = { ...(expandedRows ?? {}) }
     if (next[row.package_id]) delete next[row.package_id]
@@ -288,9 +318,36 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         data-testid="trade-tape-filters"
       >
         <span className="whitespace-nowrap text-[10px] text-slate-400">
-          {displayRows.length} rows
-          {hasMore ? ' (more available)' : ''}
+          {filtersActive
+            ? `${displayRows.length} matching · ${rows.length} loaded`
+            : `${displayRows.length} rows`}
+          {hasMore ? ' · more available' : ''}
         </span>
+        {hasMore ? (
+          <button
+            type="button"
+            onClick={() => {
+              void requestLoadMore()
+            }}
+            disabled={!!loadingMore}
+            data-testid="trade-tape-load-more"
+            className="rounded bg-sky-900/40 px-2 py-0.5 text-[11px] text-sky-200 hover:bg-sky-900/70 disabled:cursor-not-allowed disabled:opacity-60"
+            title={
+              filtersActive
+                ? 'Load another page from the server and re-apply your filter'
+                : 'Load another page from the server'
+            }
+          >
+            {loadingMore ? (
+              <span className="inline-flex items-center gap-1">
+                <RefreshCw className="h-3 w-3 animate-spin" />
+                Loading
+              </span>
+            ) : (
+              'Load more'
+            )}
+          </button>
+        ) : null}
         <div className="flex-1" />
         <button
           type="button"

@@ -9,6 +9,20 @@ export interface UseRowExpansionReturn {
   setExpanded: (rows: UsdSwapTapeRow[]) => void
 }
 
+// Exported so unit tests can exercise the functional-setState path without
+// pulling in a full React renderer. Any call site that mutates expansion
+// state should go through this helper so the "rapid clicks drop prior
+// rows" regression stays fixed.
+export function toggleRowExpansionReducer(
+  prev: Record<string, boolean>,
+  packageId: string,
+): Record<string, boolean> {
+  const next = { ...prev }
+  if (next[packageId]) delete next[packageId]
+  else next[packageId] = true
+  return next
+}
+
 export function useRowExpansion(): UseRowExpansionReturn {
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({})
 
@@ -18,12 +32,7 @@ export function useRowExpansion(): UseRowExpansionReturn {
   )
 
   const toggleOne = useCallback((packageId: string) => {
-    setExpandedRows((prev) => {
-      const next = { ...prev }
-      if (next[packageId]) delete next[packageId]
-      else next[packageId] = true
-      return next
-    })
+    setExpandedRows((prev) => toggleRowExpansionReducer(prev, packageId))
   }, [])
 
   const clear = useCallback(() => setExpandedRows({}), [])

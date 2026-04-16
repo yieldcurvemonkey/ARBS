@@ -114,7 +114,7 @@ export const COLUMN_DEFS = [
   { key: 'pkg', header: 'Pkg', width: 96 },
   { key: 'pkg_ind', header: 'Pkg Ind', width: 84 },
   { key: 'tape_label', header: 'Tape Label', width: 700 },
-  { key: 'risk_or_notional', header: 'DV01', width: 110 }, // toggles to Notional
+  { key: 'risk_or_notional', header: 'Risk', width: 110 }, // toggles to Notional
   { key: 'rate', header: 'Reported LvL', width: 110 },
   { key: 'other_lvl', header: 'Other Lvl', width: 110 },
 ] as const
