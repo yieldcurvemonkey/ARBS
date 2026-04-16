@@ -5,7 +5,10 @@ import { useCallback, useMemo } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import type { DataTableFilterMeta } from 'primereact/datatable'
 import { buildColumnFilterPayload } from '../components/TradeTapeTable/filter-utils'
-import { rehydrateFilters } from './useColumnFilters.helpers'
+import {
+  mergeWithInitialFilters,
+  rehydrateFilters,
+} from './useColumnFilters.helpers'
 
 export const COLUMN_FILTER_QUERY_KEY = 'columnFilters'
 export const SORT_FIELD_QUERY_KEY = 'sort_field'
@@ -34,7 +37,9 @@ export function useColumnFilters(): UseColumnFiltersReturn {
   const searchParams = useSearchParams()
 
   const filters = useMemo<DataTableFilterMeta>(() => {
-    return rehydrateFilters(searchParams?.get(COLUMN_FILTER_QUERY_KEY) ?? null)
+    return mergeWithInitialFilters(
+      rehydrateFilters(searchParams?.get(COLUMN_FILTER_QUERY_KEY) ?? null),
+    )
   }, [searchParams])
 
   const sortField = useMemo<string | null>(() => {

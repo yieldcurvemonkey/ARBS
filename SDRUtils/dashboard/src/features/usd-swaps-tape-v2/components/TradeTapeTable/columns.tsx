@@ -12,12 +12,8 @@ import {
   formatOtherLvl,
   formatRate,
 } from '../../utils/format'
-import { ActionColumnFilter } from './ActionColumnFilter'
-import { matchActionSelection } from './ActionColumnFilter.helpers'
 import { LifecyclePills } from './RowBadges'
 import { TapeLabelCell } from './TapeLabelCell'
-import { TimestampColumnFilter } from './TimestampColumnFilter'
-import { matchTimestampRange } from './TimestampColumnFilter.helpers'
 
 export { rowClassName } from './columns.helpers'
 
@@ -29,6 +25,25 @@ type ColumnConfig = {
   metricMode?: MetricMode
   onToggleMetric?: () => void
 }
+
+// Matches the text match-mode options SwaptionTradeTape uses for its time
+// column — gives users contains/equals/greater-than/etc. against the
+// ISO timestamp string.
+const TIME_FILTER_MATCH_MODE_OPTIONS = [
+  { label: 'Contains', value: FilterMatchMode.CONTAINS },
+  { label: 'Equals', value: FilterMatchMode.EQUALS },
+  { label: 'Not equals', value: FilterMatchMode.NOT_EQUALS },
+  { label: 'Greater than', value: FilterMatchMode.GREATER_THAN },
+  {
+    label: 'Greater than or equal',
+    value: FilterMatchMode.GREATER_THAN_OR_EQUAL_TO,
+  },
+  { label: 'Less than', value: FilterMatchMode.LESS_THAN },
+  {
+    label: 'Less than or equal',
+    value: FilterMatchMode.LESS_THAN_OR_EQUAL_TO,
+  },
+]
 
 function renderHeader(label: string): JSX.Element {
   return (
@@ -84,21 +99,7 @@ export function getColumns(
       filterField="execution_start"
       sortable
       filter
-      showFilterMenu
-      dataType="date"
-      filterMatchMode={FilterMatchMode.CUSTOM}
-      filterElement={(options: any) => (
-        <TimestampColumnFilter
-          value={options.value as [string | null, string | null] | null}
-          filterCallback={(v) => options.filterCallback(v, options.index)}
-        />
-      )}
-      filterFunction={(value: unknown, filter: unknown) =>
-        matchTimestampRange(
-          value as string,
-          filter as [string | null, string | null] | null,
-        )
-      }
+      filterMatchModeOptions={TIME_FILTER_MATCH_MODE_OPTIONS}
       header={renderHeader('Time')}
       body={(row: UsdSwapTapeRow) => (
         <span className="whitespace-nowrap text-[11px] text-gray-300">
@@ -112,17 +113,6 @@ export function getColumns(
       field="lifecycle_type"
       filterField="lifecycle_type"
       filter
-      showFilterMenu
-      filterMatchMode={FilterMatchMode.CUSTOM}
-      filterElement={(options: any) => (
-        <ActionColumnFilter
-          value={options.value as any}
-          filterCallback={(v) => options.filterCallback(v, options.index)}
-        />
-      )}
-      filterFunction={(value: unknown, filter: unknown) =>
-        matchActionSelection(value as any, filter as any)
-      }
       header={renderHeader('Action')}
       body={(row: UsdSwapTapeRow) => <LifecyclePills row={row} />}
       style={{ width: 64 }}
@@ -133,9 +123,6 @@ export function getColumns(
       filterField="platform_identifier"
       sortable
       filter
-      showFilterMenu
-      showAddButton
-      filterMatchMode={FilterMatchMode.CONTAINS}
       header={renderHeader('Platform')}
       body={(row: UsdSwapTapeRow) => (
         <span className="truncate text-[11px] text-gray-300">
@@ -150,9 +137,6 @@ export function getColumns(
       filterField="tape_label"
       sortable
       filter
-      showFilterMenu
-      showAddButton
-      filterMatchMode={FilterMatchMode.CONTAINS}
       header={renderHeader('Tape Label')}
       body={(row: UsdSwapTapeRow) => <TapeLabelCell row={row} />}
       style={{ width: 470 }}
@@ -163,10 +147,7 @@ export function getColumns(
       filterField={mode === 'dv01' ? 'total_risk' : 'total_notional'}
       sortable
       filter
-      showFilterMenu
-      showFilterOperator
       dataType="numeric"
-      filterMatchMode={FilterMatchMode.EQUALS}
       header={metricHeader}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-[11px] text-gray-200">
@@ -183,10 +164,7 @@ export function getColumns(
       filterField="weighted_fixed_rate"
       sortable
       filter
-      showFilterMenu
-      showFilterOperator
       dataType="numeric"
-      filterMatchMode={FilterMatchMode.EQUALS}
       header={renderHeader('Reported LvL')}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-[11px] text-gray-200">
