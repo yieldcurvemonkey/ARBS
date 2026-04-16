@@ -13,43 +13,18 @@ describe('useTradeTapeData buildQuery', () => {
   })
 
   it('honours a caller-supplied limit override', () => {
-    const q = buildQuery({ limit: 200 })
-    expect(q.get('limit')).toBe('200')
+    const q = buildQuery({ limit: 50 })
+    expect(q.get('limit')).toBe('50')
   })
 
-  it('serializes global filter + column filters + operator', () => {
-    const q = buildQuery({
-      filter: 'SOFR',
-      columnFilterPayloadKey: '{"a":1}',
-      columnFilterOperator: 'or',
-    })
-    expect(q.get('filter')).toBe('SOFR')
-    expect(q.get('columnFilters')).toBe('{"a":1}')
-    expect(q.get('columnFilterOp')).toBe('or')
-  })
-
-  it('serializes flag filter sets as CSV in sorted order', () => {
-    const q = buildQuery({
-      flagFilters: {
-        lifecycle: new Set(['UNWIND', 'NEW_RISK'] as any),
-        tradeTypes: new Set(['OUTRIGHT', 'CURVE']),
-        venues: new Set(['D2D']),
-        ccps: new Set(),
-        sessions: new Set(),
-        rateIndex: new Set(['SOFR']),
-        tenors: new Set(['5Y', '10Y']),
-        fomcMeeting: 'APR26',
-        clean: true,
-      },
-    })
-    expect(q.get('clean')).toBe('true')
-    expect(q.get('lifecycle')).toBe('new_risk,unwind')
-    expect(q.get('tradeTypes')).toBe('CURVE,OUTRIGHT')
-    expect(q.get('venues')).toBe('D2D')
-    expect(q.get('rateIndex')).toBe('SOFR')
-    expect(q.get('tenors')).toBe('10Y,5Y')
-    expect(q.get('fomcMeeting')).toBe('APR26')
-    expect(q.has('ccps')).toBe(false)
+  it('does NOT emit any filter query params — filtering is client-only post feedback round 1', () => {
+    const q = buildQuery({} as any)
+    expect(q.has('filter')).toBe(false)
+    expect(q.has('columnFilters')).toBe(false)
+    expect(q.has('lifecycle')).toBe(false)
+    expect(q.has('tradeTypes')).toBe(false)
+    expect(q.has('venues')).toBe(false)
+    expect(q.has('clean')).toBe(false)
   })
 
   it('attaches cursor / since when provided', () => {

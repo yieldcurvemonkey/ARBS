@@ -1,13 +1,9 @@
 // Hook for managing USD swap tape v2 data fetching, polling, and cursor pagination.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { TAPE_V2_API_BASE, POLL_INTERVAL_MS } from '../constants'
-import type { UsdSwapTapeResponse, UsdSwapTapeRow, FlagFilterState } from '../types'
+import type { UsdSwapTapeResponse, UsdSwapTapeRow } from '../types'
 
 export interface UseTradeTapeDataParams {
-  filter?: string
-  columnFilterPayloadKey?: string
-  columnFilterOperator?: 'and' | 'or'
-  flagFilters?: FlagFilterState | null
   pollingEnabled?: boolean
   /**
    * Page size for cursor pagination. Matches the swaption tape default of 50,
@@ -37,11 +33,6 @@ export interface UseTradeTapeDataReturn {
   refetch: () => Promise<void>
 }
 
-function serializeSet(s: Set<string> | undefined): string {
-  if (!s || s.size === 0) return ''
-  return Array.from(s).sort().join(',')
-}
-
 // Initial fetch loads a larger batch so traders see a deep tape on first paint,
 // then VirtualScroller lazy-loads subsequent pages at the same size as the
 // swaption tape.
@@ -56,32 +47,6 @@ function buildQuery(params: UseTradeTapeDataParams, options?: {
   q.set('limit', String(limit))
   if (options?.cursor) q.set('cursor', options.cursor)
   if (options?.since) q.set('since', options.since)
-  if (params.filter) q.set('filter', params.filter)
-  if (params.columnFilterPayloadKey) {
-    q.set('columnFilters', params.columnFilterPayloadKey)
-    q.set('columnFilterOp', params.columnFilterOperator ?? 'and')
-  }
-  const ff = params.flagFilters
-  if (ff) {
-    if (ff.clean) q.set('clean', 'true')
-    const lc = serializeSet(
-      new Set(Array.from(ff.lifecycle).map((l) => l.toLowerCase())),
-    )
-    if (lc) q.set('lifecycle', lc)
-    const tt = serializeSet(ff.tradeTypes)
-    if (tt) q.set('tradeTypes', tt)
-    const v = serializeSet(ff.venues)
-    if (v) q.set('venues', v)
-    const c = serializeSet(ff.ccps)
-    if (c) q.set('ccps', c)
-    const s = serializeSet(ff.sessions)
-    if (s) q.set('sessions', s)
-    const r = serializeSet(ff.rateIndex)
-    if (r) q.set('rateIndex', r)
-    const tn = serializeSet(ff.tenors)
-    if (tn) q.set('tenors', tn)
-    if (ff.fomcMeeting) q.set('fomcMeeting', ff.fomcMeeting)
-  }
   return q
 }
 
@@ -176,7 +141,7 @@ export function useTradeTapeData(
     await fetchTape({ replace: true })
   }, [fetchTape])
 
-  // Reset on filter change
+  // Reset on limit change (no more server-side filtering).
   useEffect(() => {
     setRows([])
     setNextCursor(null)
@@ -184,13 +149,7 @@ export function useTradeTapeData(
     setLatestExecutionStart(null)
     fetchTape({ replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    params.filter,
-    params.columnFilterPayloadKey,
-    params.columnFilterOperator,
-    params.flagFilters,
-    params.limit,
-  ])
+  }, [params.limit])
 
   // Polling for new rows via ?since=latestExecutionStart
   useEffect(() => {
