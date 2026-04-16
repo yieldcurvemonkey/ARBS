@@ -84,7 +84,22 @@ export async function resolveDisplayView(): Promise<TapeDisplayView> {
       `tape display view ${DISPLAY_VIEW} not found — run ingest_usdswaps_tape`,
     )
   }
-  cached = { view: DISPLAY_VIEW, columns: COLUMNS.join(', ') }
+  // Display view schema evolves via ingest_usdswaps_tape; SELECTing a column
+  // that the live view doesn't expose yet (e.g. a freshly-added field whose
+  // ingest hasn't run here) throws `column d.<x> does not exist` and blanks
+  // the tape. Intersect the intended projection with the view's actual
+  // columns so deploys stay tolerant of lagging ingests.
+  const present = await query<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns
+     WHERE table_name = $1`,
+    [DISPLAY_VIEW],
+  )
+  const availableColumns = new Set(present.rows.map((r) => r.column_name))
+  const projected = COLUMNS.filter((qualified) => {
+    const name = qualified.replace(/^d\./, '')
+    return availableColumns.has(name)
+  })
+  cached = { view: DISPLAY_VIEW, columns: projected.join(', ') }
   cachedAt = now
   return cached
 }
