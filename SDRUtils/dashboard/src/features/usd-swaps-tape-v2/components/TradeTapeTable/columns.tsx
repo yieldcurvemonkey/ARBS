@@ -15,6 +15,11 @@ import {
 import { getFilterDisplayLabel } from './filter-utils'
 import { LifecyclePills } from './RowBadges'
 import { TapeLabelCell } from './TapeLabelCell'
+import {
+  packageIndicatorDisplay,
+  packageTypeBadgeClassName,
+  packageTypeDisplayLabel,
+} from './columns.helpers'
 
 export { rowClassName } from './columns.helpers'
 
@@ -70,6 +75,14 @@ function displayPlatform(row: UsdSwapTapeRow): string {
   return row.platform_identifier ?? firstLeg(row)?.platform_identifier ?? EMPTY_VALUE
 }
 
+const compactFilterMenuProps = {
+  filterMenuClassName: 'usd-swaps-tape-filter-menu',
+  filterMenuStyle: { width: '10rem' },
+  showFilterOperator: false,
+  showAddButton: false,
+  maxConstraints: 1,
+} as const
+
 export function getColumns(
   config: ColumnConfig = { selection: true },
 ): JSX.Element[] {
@@ -118,12 +131,13 @@ export function getColumns(
       filterField="execution_start"
       sortable
       filter
+      {...compactFilterMenuProps}
       header={renderHeader(
         'Time',
         summaryFor('execution_start', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => (
-        <span className="whitespace-nowrap text-[11px] text-gray-300">
+        <span className="whitespace-nowrap text-[12px] text-gray-300">
           {formatExecutionWindow(row.execution_start, row.execution_end)}
         </span>
       )}
@@ -134,6 +148,7 @@ export function getColumns(
       field="lifecycle_type"
       filterField="lifecycle_type"
       filter
+      {...compactFilterMenuProps}
       header={renderHeader(
         'Action',
         summaryFor('lifecycle_type', config.activeFilters),
@@ -147,16 +162,36 @@ export function getColumns(
       filterField="platform_identifier"
       sortable
       filter
+      {...compactFilterMenuProps}
       header={renderHeader(
         'Platform',
         summaryFor('platform_identifier', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => (
-        <span className="truncate text-[11px] text-gray-300">
+        <span className="truncate text-[12px] text-gray-300">
           {displayPlatform(row)}
         </span>
       )}
       style={{ width: 72 }}
+    />,
+    <Column
+      key="pkg"
+      field="package_type"
+      filterField="package_type"
+      filter
+      {...compactFilterMenuProps}
+      header={renderHeader(
+        'Pkg',
+        summaryFor('package_type', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) => (
+        <span
+          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packageTypeBadgeClassName(row.package_type)}`}
+        >
+          {packageTypeDisplayLabel(row.package_type)}
+        </span>
+      )}
+      style={{ width: 92 }}
     />,
     <Column
       key="tape_label"
@@ -164,6 +199,7 @@ export function getColumns(
       filterField="tape_label"
       sortable
       filter
+      {...compactFilterMenuProps}
       header={renderHeader(
         'Tape Label',
         summaryFor('tape_label', config.activeFilters),
@@ -172,15 +208,33 @@ export function getColumns(
       style={{ width: 470 }}
     />,
     <Column
+      key="pkg_ind"
+      field="package_indicator"
+      filterField="package_indicator"
+      filter
+      {...compactFilterMenuProps}
+      header={renderHeader(
+        'Pkg Ind',
+        summaryFor('package_indicator', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) => (
+        <span className="font-mono text-[12px] text-gray-300">
+          {packageIndicatorDisplay(row.package_indicator)}
+        </span>
+      )}
+      style={{ width: 74 }}
+    />,
+    <Column
       key="metric"
       field={metricField}
       filterField={metricField}
       sortable
       filter
       dataType="numeric"
+      {...compactFilterMenuProps}
       header={metricHeader}
       body={(row: UsdSwapTapeRow) => (
-        <span className="font-mono text-[11px] text-gray-200">
+        <span className="font-mono text-[13px] text-gray-200">
           {mode === 'dv01'
             ? formatDv01(row.total_risk ?? null, { signed: true })
             : formatNotional(row.total_notional ?? null, { compact: true })}
@@ -195,12 +249,13 @@ export function getColumns(
       sortable
       filter
       dataType="numeric"
+      {...compactFilterMenuProps}
       header={renderHeader(
         'Reported LvL',
         summaryFor('weighted_fixed_rate', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => (
-        <span className="font-mono text-[11px] text-gray-200">
+        <span className="font-mono text-[13px] text-gray-200">
           {formatRate(row.weighted_fixed_rate ?? null)}
         </span>
       )}
@@ -211,6 +266,7 @@ export function getColumns(
       field="other_lvl_reported"
       filterField="other_lvl_reported"
       filter
+      {...compactFilterMenuProps}
       header={renderHeader(
         'Other Lvl',
         summaryFor('other_lvl_reported', config.activeFilters),
@@ -226,7 +282,7 @@ export function getColumns(
         return (
           <div
             data-testid="other-lvl-cell"
-            className="flex flex-col font-mono text-[11px] text-gray-200"
+            className="flex flex-col font-mono text-[13px] text-gray-200"
           >
             <span>{lines.opaLine}</span>
             <span>{lines.ptpLine}</span>

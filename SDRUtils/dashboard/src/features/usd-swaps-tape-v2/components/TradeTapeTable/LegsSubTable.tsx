@@ -1,27 +1,14 @@
 'use client'
-// ABOUTME: Expanded package detail panel — per-leg breakdown only.
+// ABOUTME: Expanded package detail panel - per-leg breakdown only.
 import type { JSX } from 'react'
-import { EMPTY_VALUE, LIFECYCLE_LABELS, LIFECYCLE_TONES } from '../../constants'
+import { EMPTY_VALUE } from '../../constants'
 import type { UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
 import {
   formatDate,
   formatDv01,
-  formatExecutionWindow,
   formatNotional,
   formatRate,
 } from '../../utils/format'
-
-function lifecycleBody(leg: UsdSwapTapeLeg) {
-  const type = leg.lifecycle_type
-  if (!type) return EMPTY_VALUE
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${LIFECYCLE_TONES[type] ?? ''}`}
-    >
-      {LIFECYCLE_LABELS[type] ?? type}
-    </span>
-  )
-}
 
 function tradeIdBody(leg: UsdSwapTapeLeg) {
   const tid = leg.trade_id ?? EMPTY_VALUE
@@ -176,9 +163,6 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
           <thead>
             <tr className="text-[10px] uppercase tracking-wide text-slate-400">
               <th className="px-2 py-1 text-left">#</th>
-              <th className="px-2 py-1 text-left">Action</th>
-              <th className="px-2 py-1 text-left">Time</th>
-              <th className="px-2 py-1 text-left">Platform</th>
               <th className="px-2 py-1 text-left">Trade ID</th>
               <th className="px-2 py-1 text-left">Tape Label</th>
               <th className="px-2 py-1 text-left">Effective</th>
@@ -198,13 +182,6 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                 className="border-t border-slate-800/90 text-slate-200"
               >
                 <td className="whitespace-nowrap px-2 py-1">{leg.leg_order ?? index + 1}</td>
-                <td className="whitespace-nowrap px-2 py-1">{lifecycleBody(leg)}</td>
-                <td className="whitespace-nowrap px-2 py-1">
-                  {formatExecutionWindow(leg.execution_timestamp, leg.execution_timestamp)}
-                </td>
-                <td className="whitespace-nowrap px-2 py-1">
-                  {leg.platform_identifier ?? EMPTY_VALUE}
-                </td>
                 <td className="whitespace-nowrap px-2 py-1">{tradeIdBody(leg)}</td>
                 <td className="max-w-[360px] px-2 py-1 font-mono text-[11px] text-slate-100">
                   {leg.leg_tape_label ?? leg.tape_label ?? EMPTY_VALUE}
@@ -239,7 +216,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
             ))}
             {legs.length === 0 ? (
               <tr className="border-t border-slate-800/90 text-slate-400">
-                <td className="px-2 py-2" colSpan={14}>
+                <td className="px-2 py-2" colSpan={11}>
                   No leg data available.
                 </td>
               </tr>

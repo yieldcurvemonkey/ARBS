@@ -13,6 +13,7 @@ const COLUMNS = [
   'd.execution_end',
   'd.package_structure',
   'd.package_type',
+  'd.package_indicator',
   'd.package_tenors',
   'd.n_package_legs',
   'd.legs_count',

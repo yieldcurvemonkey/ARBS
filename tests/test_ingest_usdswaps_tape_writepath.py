@@ -4,6 +4,9 @@ Skip gracefully when no test Postgres is available.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
@@ -75,6 +78,39 @@ def test_build_package_rows_lifecycle_mix_sums_correctly():
     assert unw["lifecycle_mix"].get("UNWIND", 0) >= 1
 
 
+def test_build_rows_relabel_false_positive_sdr_package_as_outright():
+    tape = pd.DataFrame(
+        [
+            {
+                "trade_id": "T_FALSE_PACKAGE_1",
+                "package_id": "P_FALSE_PACKAGE_1",
+                "execution_timestamp": datetime(2026, 4, 9, 20, 56, 52, tzinfo=timezone.utc),
+                "tenor_label": "10Y",
+                "tenor_display": "10Y",
+                "forward_label": "Spot",
+                "package_type": "OUTRIGHT",
+                "trade_type": "OUTRIGHT",
+                "package_indicator": True,
+                "n_package_legs": 1,
+                "notional": 100_000_000.0,
+                "risk": 20_000.0,
+                "fixed_rate": 0.03829,
+                "upi_delivery_type": "PHYS",
+                "tape_label": "USD-SOFR-COMPOUND 1D Constant Spot 10Y Package PHYS",
+                "leg_tape_label": "USD-SOFR-COMPOUND 1D Constant Spot 10Y Package PHYS",
+            }
+        ]
+    )
+
+    legs = build_leg_rows(tape, as_of_date="2026-04-09")
+    packages = build_package_rows(tape, as_of_date="2026-04-09")
+
+    assert legs[0]["tape_label"] == "USD-SOFR-COMPOUND 1D Constant Spot 10Y Outright PHYS"
+    assert legs[0]["leg_tape_label"] == "USD-SOFR-COMPOUND 1D Constant Spot 10Y Outright PHYS"
+    assert packages[0]["tape_label"] == "USD-SOFR-COMPOUND 1D Constant Spot 10Y Outright PHYS"
+    assert packages[0]["package_indicator"] is True
+
+
 # --------------------------------------------------------------------------
 # DB-backed integration tests — skipped when no test Postgres is available
 # --------------------------------------------------------------------------
@@ -105,8 +141,18 @@ def test_write_tape_rows_persists_all_lifecycle_types(test_engine):
     with test_engine.connect() as conn:
         n_legs = conn.execute(text(f"SELECT COUNT(*) FROM {LEGS_TABLE}")).scalar()
         n_pkgs = conn.execute(text(f"SELECT COUNT(*) FROM {PACKAGES_TABLE}")).scalar()
+        curve_pkg_ind = conn.execute(
+            text(
+                f"""
+                SELECT package_indicator
+                FROM {PACKAGES_TABLE}
+                WHERE package_id = 'P_CURVE_1'
+                """
+            )
+        ).scalar()
     assert n_legs == len(tape)
     assert n_pkgs == tape["package_id"].nunique()
+    assert curve_pkg_ind is True
 
 
 def test_write_is_idempotent(test_engine):

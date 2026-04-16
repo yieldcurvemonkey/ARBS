@@ -1,5 +1,10 @@
 export { useTradeTapeData } from './useTradeTapeData'
-export { useColumnFilters, SERVER_FILTER_FIELDS } from './useColumnFilters'
+export {
+  useColumnFilters,
+  SERVER_FILTER_FIELDS,
+  DEFAULT_SORT_FIELD,
+  DEFAULT_SORT_ORDER,
+} from './useColumnFilters'
 export {
   useTableControls,
   SEARCH_QUERY_KEY,

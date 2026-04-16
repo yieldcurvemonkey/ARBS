@@ -8,13 +8,13 @@ export { flagBadgesFor, lifecyclePillsFor } from './RowBadges.helpers'
 
 export function LifecyclePills({ row }: { row: UsdSwapTapeRow }): JSX.Element {
   const pills = lifecyclePillsFor(row)
-  if (pills.length === 0) return <span className="text-slate-500 text-xs">—</span>
+  if (pills.length === 0) return <span className="text-slate-500 text-[12px]">-</span>
   return (
     <div className="flex items-center gap-1" data-testid="lifecycle-pills">
       {pills.map((p) => (
         <span
           key={p.type}
-          className={`px-1 py-0.5 rounded text-[10px] font-semibold ${p.className}`}
+          className={`px-1 py-0.5 rounded text-[11px] font-semibold ${p.className}`}
           aria-label={`${p.label} x ${p.count}`}
         >
           {p.label}
@@ -26,7 +26,7 @@ export function LifecyclePills({ row }: { row: UsdSwapTapeRow }): JSX.Element {
 
 export function FlagBadges({ row }: { row: UsdSwapTapeRow }): JSX.Element {
   const badges = flagBadgesFor(row)
-  if (badges.length === 0) return <span className="text-slate-500 text-xs">—</span>
+  if (badges.length === 0) return <span className="text-slate-500 text-xs">-</span>
   return (
     <div className="flex items-center gap-1" data-testid="flag-badges">
       {badges.map((b) => (

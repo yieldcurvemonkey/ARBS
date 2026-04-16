@@ -1,6 +1,13 @@
 import { describe, expect, it } from '@jest/globals'
 import { FilterMatchMode, FilterOperator } from 'primereact/api'
-import { rehydrateFilters, serializeFilters } from '../useColumnFilters.helpers'
+import {
+  DEFAULT_SORT_FIELD,
+  DEFAULT_SORT_ORDER,
+  parseSortField,
+  parseSortOrder,
+  rehydrateFilters,
+  serializeFilters,
+} from '../useColumnFilters.helpers'
 
 describe('useColumnFilters URL helpers', () => {
   it('rehydrate of empty / invalid input returns an empty object', () => {
@@ -65,5 +72,18 @@ describe('useColumnFilters URL helpers', () => {
       FilterMatchMode.CONTAINS,
     )
     expect((out.tape_label as any).operator).toBe(FilterOperator.AND)
+  })
+
+  it('defaults sort state to execution_start descending when URL params are absent', () => {
+    expect(parseSortField(null)).toBe(DEFAULT_SORT_FIELD)
+    expect(parseSortField('')).toBe(DEFAULT_SORT_FIELD)
+    expect(parseSortOrder(null)).toBe(DEFAULT_SORT_ORDER)
+    expect(parseSortOrder('0')).toBe(DEFAULT_SORT_ORDER)
+  })
+
+  it('preserves explicit sort params from the URL', () => {
+    expect(parseSortField('weighted_fixed_rate')).toBe('weighted_fixed_rate')
+    expect(parseSortOrder('1')).toBe(1)
+    expect(parseSortOrder('-1')).toBe(DEFAULT_SORT_ORDER)
   })
 })

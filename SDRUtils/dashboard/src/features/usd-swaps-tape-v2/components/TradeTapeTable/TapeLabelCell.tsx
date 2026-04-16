@@ -8,7 +8,10 @@ export { displayTapeLabel } from './TapeLabelCell.helpers'
 
 export function TapeLabelCell({ row }: { row: UsdSwapTapeRow }): JSX.Element {
   return (
-    <span className="font-mono text-xs text-gray-200" data-testid="tape-label-cell">
+    <span
+      className="font-mono text-[13px] text-gray-200"
+      data-testid="tape-label-cell"
+    >
       {displayTapeLabel(row)}
     </span>
   )

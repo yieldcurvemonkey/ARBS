@@ -11,6 +11,18 @@ import {
 } from '../../constants'
 import type { UsdSwapTapeRow } from '../../types'
 
+const PACKAGE_BADGE_TONES: Record<string, string> = {
+  OUTRIGHT: 'border-slate-600/40 bg-slate-800/60 text-slate-200',
+  CURVE: 'border-sky-500/40 bg-sky-900/40 text-sky-200',
+  FLY: 'border-indigo-500/40 bg-indigo-900/40 text-indigo-200',
+}
+
+const PACKAGE_LABELS: Record<string, string> = {
+  OUTRIGHT: 'Outright',
+  CURVE: 'Curve',
+  FLY: 'Fly',
+}
+
 // Left-edge accent borders, kept from the original palette — they're a second
 // cheap signal orthogonal to the full-row tint (useful when a trader is color
 // blind or viewing on a dim screen).
@@ -72,6 +84,35 @@ function livelycleAccent(row: UsdSwapTapeRow): string {
   if (row.is_novation_any) return 'ring-1 ring-purple-500/30'
   if (row.is_correction_any) return 'ring-1 ring-sky-500/30'
   return ''
+}
+
+export function normalizePackageType(value: unknown): string {
+  const normalized = String(value ?? '')
+    .trim()
+    .toUpperCase()
+  if (!normalized || normalized === 'NAN' || normalized === 'NONE') {
+    return 'OUTRIGHT'
+  }
+  return normalized
+}
+
+export function packageTypeDisplayLabel(value: unknown): string {
+  const normalized = normalizePackageType(value)
+  return PACKAGE_LABELS[normalized] ?? normalized
+}
+
+export function packageTypeBadgeClassName(value: unknown): string {
+  return PACKAGE_BADGE_TONES[normalizePackageType(value)] ?? PACKAGE_BADGE_TONES.OUTRIGHT
+}
+
+export function packageIndicatorDisplay(value: unknown): string {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['true', 't', '1', 'yes', 'y'].includes(normalized)) {
+      return 'true'
+    }
+  }
+  return value === true ? 'true' : 'false'
 }
 
 export function rowClassName(row: UsdSwapTapeRow): string {

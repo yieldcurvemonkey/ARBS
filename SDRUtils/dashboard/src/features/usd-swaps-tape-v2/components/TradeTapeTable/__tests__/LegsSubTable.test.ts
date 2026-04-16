@@ -16,22 +16,22 @@ const tradeTapeSource = readFileSync(
 )
 
 describe('LegsSubTable', () => {
-  it('omits tenor cells from the expanded legs table source', () => {
+  it('omits tenor and duplicated top-level columns from the expanded legs table source', () => {
     expect(legsSubTableSource).not.toContain('>Tenor<')
-    expect(legsSubTableSource).not.toContain('leg.tenor_display ?? leg.tenor_label ?? EMPTY_VALUE')
-    // feedback-round-1: added OPA column → 14 <th> now.
-    expect((legsSubTableSource.match(/<th /g) ?? []).length).toBe(14)
+    expect(legsSubTableSource).not.toContain('>Action<')
+    expect(legsSubTableSource).not.toContain('>Time<')
+    expect(legsSubTableSource).not.toContain('>Platform<')
+    expect(legsSubTableSource).not.toContain(
+      'leg.tenor_display ?? leg.tenor_label ?? EMPTY_VALUE',
+    )
+    expect((legsSubTableSource.match(/<th /g) ?? []).length).toBe(11)
   })
 
   it('uses the reduced empty-state colspan after the column removal', () => {
-    expect(legsSubTableSource).toContain('colSpan={14}')
+    expect(legsSubTableSource).toContain('colSpan={11}')
   })
 
   it('prefers leg_tape_label over tape_label so CURVE/FLY legs show the per-leg outright description', () => {
-    // The expanded row for a curve should render "5Y Outright" / "10Y Outright"
-    // on each leg row, not the package-level "5Y/10Y CURVE" label. The backend
-    // populates leg_tape_label per leg and keeps tape_label as the package
-    // structure, so the UI must pick leg_tape_label first.
     expect(legsSubTableSource).toContain('leg.leg_tape_label ?? leg.tape_label')
   })
 

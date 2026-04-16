@@ -13,6 +13,7 @@ import argparse
 import json
 import math
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
@@ -120,6 +121,7 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     "execution_end",
     "package_structure",
     "package_type",
+    "package_indicator",
     "package_tenors",
     "n_package_legs",
     "legs_count",
@@ -240,6 +242,22 @@ def _bool_or_none(val: Any) -> Optional[bool]:
     val = _to_db_value(val)
     if val is None:
         return None
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, np.integer)):
+        return bool(val)
+    if isinstance(val, (float, np.floating)):
+        if math.isnan(float(val)):
+            return None
+        return bool(val)
+    if isinstance(val, str):
+        normalized = val.strip().lower()
+        if normalized in {"", "nan", "none", "null", "nat"}:
+            return None
+        if normalized in {"true", "t", "1", "yes", "y"}:
+            return True
+        if normalized in {"false", "f", "0", "no", "n"}:
+            return False
     return bool(val)
 
 
@@ -415,6 +433,63 @@ def _consistent_num(group: pd.DataFrame, col: str) -> float | None:
     return float(vals[0])
 
 
+_DISPLAY_OUTRIGHT_TYPES = {"", "OUTRIGHT", "NAN", "NONE"}
+
+
+def _force_outright_label(label: Any) -> str | None:
+    text = _str_or_none(label)
+    if not text:
+        return text
+    return re.sub(r"\bPackage\b", "Outright", text, flags=re.IGNORECASE)
+
+
+def _normalize_false_positive_package_labels(tape: pd.DataFrame) -> pd.DataFrame:
+    """Rewrite raw-SDR package-flagged single legs back to display outrights.
+
+    Some single-leg trades arrive with ``package_indicator=True`` even though
+    the dashboard receives them as standalone legs rather than as a linked
+    multi-leg structure. Keep the raw indicator for auditability, but normalize
+    the display label from ``Package`` to ``Outright`` so the tape matches what
+    traders actually see.
+    """
+    if tape.empty or "package_indicator" not in tape.columns:
+        return tape.copy()
+
+    df = tape.copy()
+    package_indicator = df["package_indicator"].map(_bool_or_none).eq(True)
+    trade_type = (
+        df.get("trade_type", pd.Series("", index=df.index))
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+    package_type = (
+        df.get("package_type", pd.Series("", index=df.index))
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+    n_package_legs = pd.to_numeric(
+        df.get("n_package_legs", pd.Series(1, index=df.index)),
+        errors="coerce",
+    )
+
+    mask = (
+        package_indicator
+        & trade_type.isin(_DISPLAY_OUTRIGHT_TYPES)
+        & package_type.isin(_DISPLAY_OUTRIGHT_TYPES)
+        & (n_package_legs.fillna(1) <= 1)
+    )
+    if not mask.any():
+        return df
+
+    for col in ("tape_label", "leg_tape_label"):
+        if col in df.columns:
+            df.loc[mask, col] = df.loc[mask, col].map(_force_outright_label)
+
+    return df
+
+
 _LEG_INT_COLS: tuple[str, ...] = (
     "execution_hour_et",
     "lc_n_events",
@@ -458,7 +533,7 @@ _LEG_TS_COLS: tuple[str, ...] = (
 def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
     if tape.empty:
         return []
-    df = tape.copy()
+    df = _normalize_false_positive_package_labels(tape)
     if "leg_order" not in df.columns:
         df["leg_order"] = _leg_order_series(df)
     df["execution_hour_et"] = _hour_et_series(df["execution_timestamp"])
@@ -580,6 +655,7 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
     """Aggregate the per-trade TradeTape output into one row per package_id."""
     if tape.empty:
         return []
+    tape = _normalize_false_positive_package_labels(tape)
     rows: list[dict] = []
     lifecycle_keys = [
         ("NEW_RISK", "is_new_risk"),
@@ -630,7 +706,8 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         def _any(flag: str) -> bool | None:
             if flag not in g.columns:
                 return None
-            return bool(g[flag].fillna(False).astype(bool).any())
+            normalized = g[flag].map(_bool_or_none)
+            return bool(normalized.eq(True).any())
 
         package_type = _consistent_str(g, "package_type") or "OUTRIGHT"
         trade_type = _consistent_str(g, "trade_type") or package_type
@@ -648,6 +725,7 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "execution_end": _to_db_value(execution_end),
             "package_structure": _package_structure_label(g),
             "package_type": package_type,
+            "package_indicator": _any("package_indicator"),
             "package_tenors": _package_tenors_str(g) or None,
             "n_package_legs": int(len(g)),
             "legs_count": int(len(g)),

@@ -84,3 +84,35 @@ def test_display_view_exists(test_engine):
             WHERE table_name = 'arbs_usd_swap_tape_display_v1'
         """))
         assert result.fetchone() is not None
+
+
+def test_schema_exposes_package_indicator_on_packages_and_view(test_engine):
+    with test_engine.connect() as conn:
+        _apply_schema(conn)
+        conn.commit()
+        package_cols = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'arbs_usd_swap_tape_packages_v1'
+                    """
+                )
+            )
+        }
+        view_cols = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'arbs_usd_swap_tape_display_v1'
+                    """
+                )
+            )
+        }
+    assert "package_indicator" in package_cols
+    assert "package_indicator" in view_cols

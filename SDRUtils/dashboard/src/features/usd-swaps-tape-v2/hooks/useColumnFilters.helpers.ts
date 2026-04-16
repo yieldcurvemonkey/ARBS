@@ -11,6 +11,9 @@ import {
   type ColumnFilterPayload,
 } from '../components/TradeTapeTable/filter-utils'
 
+export const DEFAULT_SORT_FIELD = 'execution_start'
+export const DEFAULT_SORT_ORDER = -1 as const
+
 // Menu-mode filter shape (PrimeReact uses `{ operator, constraints[] }` per
 // field when `filterDisplay="menu"`). Seeding every filterable column with an
 // empty AND/contains entry lets the popup overlay render a populated form
@@ -28,7 +31,9 @@ export function buildInitialFilters(): DataTableFilterMeta {
     execution_start: text(),
     lifecycle_type: text(),
     platform_identifier: text(),
+    package_type: text(),
     tape_label: text(),
+    package_indicator: text(),
     total_risk: numeric(),
     total_notional: numeric(),
     weighted_fixed_rate: numeric(),
@@ -93,6 +98,17 @@ export function mergeWithInitialFilters(
     next[field] = value
   }
   return next as DataTableFilterMeta
+}
+
+export function parseSortField(rawValue: string | null | undefined): string {
+  return rawValue || DEFAULT_SORT_FIELD
+}
+
+export function parseSortOrder(
+  rawValue: string | null | undefined,
+): typeof DEFAULT_SORT_ORDER | 1 {
+  if (rawValue === '1') return 1
+  return DEFAULT_SORT_ORDER
 }
 
 export function serializeFilters(filters: DataTableFilterMeta): string {

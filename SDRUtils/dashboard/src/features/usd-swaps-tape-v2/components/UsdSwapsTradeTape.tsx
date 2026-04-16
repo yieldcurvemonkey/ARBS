@@ -73,9 +73,71 @@ export default function UsdSwapsTradeTape(): JSX.Element {
               width: 100%;
             }
           }
-          .usd-swaps-tape-shell .p-column-filter-overlay,
-          .usd-swaps-tape-shell .p-column-filter-overlay * {
+          .usd-swaps-tape-filter-menu,
+          .usd-swaps-tape-filter-menu * {
             font-size: 0.7rem !important;
+          }
+          .usd-swaps-tape-filter-menu {
+            width: 10rem !important;
+            min-width: 10rem !important;
+            border-radius: 0.5rem !important;
+          }
+          .usd-swaps-tape-filter-menu
+            .p-column-filter-row-items {
+            padding: 0.25rem 0 !important;
+          }
+          .usd-swaps-tape-filter-menu
+            .p-column-filter-row-items
+            .p-column-filter-row-item {
+            padding: 0.35rem 0.55rem !important;
+          }
+          .usd-swaps-tape-filter-menu
+            .p-column-filter-operator {
+            padding: 0.45rem 0.65rem !important;
+          }
+          .usd-swaps-tape-filter-menu
+            .p-column-filter-constraint {
+            padding: 0.5rem !important;
+          }
+          .usd-swaps-tape-filter-menu
+            .p-column-filter-constraint
+            .p-column-filter-matchmode-dropdown {
+            margin-bottom: 0.25rem !important;
+          }
+          .usd-swaps-tape-filter-menu
+            .p-column-filter-constraint
+            .p-column-filter-remove-button {
+            margin-top: 0.25rem !important;
+          }
+          .usd-swaps-tape-filter-menu
+            .p-column-filter-add-rule {
+            padding: 0.45rem 0.65rem !important;
+          }
+          .usd-swaps-tape-filter-menu
+            .p-column-filter-buttonbar {
+            gap: 0.35rem !important;
+            padding: 0.5rem !important;
+          }
+          .usd-swaps-tape-filter-menu .p-inputtext,
+          .usd-swaps-tape-filter-menu .p-dropdown,
+          .usd-swaps-tape-filter-menu .p-button {
+            border-radius: 0.4rem !important;
+            font-size: 0.7rem !important;
+          }
+          .usd-swaps-tape-filter-menu .p-inputtext,
+          .usd-swaps-tape-filter-menu .p-dropdown-label {
+            padding: 0.35rem 0.45rem !important;
+          }
+          .usd-swaps-tape-filter-menu .p-dropdown,
+          .usd-swaps-tape-filter-menu .p-button {
+            min-height: 1.7rem !important;
+          }
+          .usd-swaps-tape-filter-menu .p-dropdown-trigger {
+            width: 1.5rem !important;
+          }
+          .usd-swaps-tape-filter-menu .p-button {
+            min-width: 3.1rem !important;
+            padding: 0.3rem 0.5rem !important;
           }
           /* Make the funnel-icon button low-key — only really visible when a
              filter is active (the active state class is added by PrimeReact). */

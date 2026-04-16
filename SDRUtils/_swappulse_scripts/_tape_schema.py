@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS {PACKAGES_TABLE} (
     execution_end TIMESTAMPTZ NOT NULL,
     package_structure TEXT,
     package_type TEXT,
+    package_indicator BOOLEAN,
     package_tenors TEXT,
     n_package_legs INTEGER,
     legs_count INTEGER NOT NULL,
@@ -177,6 +178,7 @@ ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS other_payment_amount NUMERIC;
 ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS other_payment_currency TEXT;
 ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS package_transaction_price NUMERIC;
 ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS package_transaction_price_currency TEXT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS package_indicator BOOLEAN;
 
 CREATE INDEX IF NOT EXISTS idx_tape_v1_legs_package ON {LEGS_TABLE}(package_id);
 CREATE INDEX IF NOT EXISTS idx_tape_v1_legs_exec ON {LEGS_TABLE}(execution_timestamp);
@@ -206,6 +208,7 @@ SELECT
   p.execution_end,
   p.package_structure,
   p.package_type,
+  p.package_indicator,
   p.package_tenors,
   p.n_package_legs,
   p.legs_count,

@@ -21,7 +21,11 @@ import {
 } from 'primereact/datatable'
 import { useState } from 'react'
 import { ROW_ESTIMATE_PX } from '../../constants'
-import { useColumnFilters } from '../../hooks'
+import {
+  DEFAULT_SORT_FIELD,
+  DEFAULT_SORT_ORDER,
+  useColumnFilters,
+} from '../../hooks'
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
 import { getColumns, rowClassName, type MetricMode } from './columns'
@@ -99,9 +103,9 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     [],
   )
 
-  const effectiveSortField = columnFilters.sortField ?? 'execution_start'
+  const effectiveSortField = columnFilters.sortField ?? DEFAULT_SORT_FIELD
   const effectiveSortOrder: 1 | -1 | 0 =
-    (columnFilters.sortOrder ?? -1) as 1 | -1 | 0
+    (columnFilters.sortOrder ?? DEFAULT_SORT_ORDER) as 1 | -1 | 0
 
   // PrimeReact's DataTable runs in `lazy` mode (required so the
   // VirtualScroller can drive cursor pagination through onLazyLoad). In lazy

@@ -6,13 +6,18 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import type { DataTableFilterMeta } from 'primereact/datatable'
 import { buildColumnFilterPayload } from '../components/TradeTapeTable/filter-utils'
 import {
+  DEFAULT_SORT_FIELD,
+  DEFAULT_SORT_ORDER,
   mergeWithInitialFilters,
+  parseSortField,
+  parseSortOrder,
   rehydrateFilters,
 } from './useColumnFilters.helpers'
 
 export const COLUMN_FILTER_QUERY_KEY = 'columnFilters'
 export const SORT_FIELD_QUERY_KEY = 'sort_field'
 export const SORT_ORDER_QUERY_KEY = 'sort_order'
+export { DEFAULT_SORT_FIELD, DEFAULT_SORT_ORDER } from './useColumnFilters.helpers'
 
 // Kept for backward compat with any remaining SWR cache keys that referenced
 // this constant. The field list is no longer authoritative — filtering is
@@ -43,14 +48,11 @@ export function useColumnFilters(): UseColumnFiltersReturn {
   }, [searchParams])
 
   const sortField = useMemo<string | null>(() => {
-    return searchParams?.get(SORT_FIELD_QUERY_KEY) || null
+    return parseSortField(searchParams?.get(SORT_FIELD_QUERY_KEY))
   }, [searchParams])
 
   const sortOrder = useMemo<SortOrder>(() => {
-    const raw = searchParams?.get(SORT_ORDER_QUERY_KEY)
-    if (raw === '1') return 1
-    if (raw === '-1') return -1
-    return null
+    return parseSortOrder(searchParams?.get(SORT_ORDER_QUERY_KEY))
   }, [searchParams])
 
   const writeParams = useCallback(
@@ -83,8 +85,8 @@ export function useColumnFilters(): UseColumnFiltersReturn {
           params.set(SORT_FIELD_QUERY_KEY, field)
           params.set(SORT_ORDER_QUERY_KEY, String(order))
         } else {
-          params.delete(SORT_FIELD_QUERY_KEY)
-          params.delete(SORT_ORDER_QUERY_KEY)
+          params.set(SORT_FIELD_QUERY_KEY, DEFAULT_SORT_FIELD)
+          params.set(SORT_ORDER_QUERY_KEY, String(DEFAULT_SORT_ORDER))
         }
       })
     },
@@ -94,8 +96,8 @@ export function useColumnFilters(): UseColumnFiltersReturn {
   const reset = useCallback(() => {
     writeParams((params) => {
       params.delete(COLUMN_FILTER_QUERY_KEY)
-      params.delete(SORT_FIELD_QUERY_KEY)
-      params.delete(SORT_ORDER_QUERY_KEY)
+      params.set(SORT_FIELD_QUERY_KEY, DEFAULT_SORT_FIELD)
+      params.set(SORT_ORDER_QUERY_KEY, String(DEFAULT_SORT_ORDER))
     })
   }, [writeParams])
 

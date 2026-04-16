@@ -1,5 +1,10 @@
 import { describe, expect, it } from '@jest/globals'
 import { rowClassName } from '../columns.helpers'
+import {
+  packageIndicatorDisplay,
+  packageTypeBadgeClassName,
+  packageTypeDisplayLabel,
+} from '../columns.helpers'
 import { formatOtherLvl } from '../../../utils/format'
 import { COLUMN_DEFS } from '../../../constants'
 
@@ -150,6 +155,11 @@ describe('other_lvl column wiring', () => {
     expect(def!.header).toBe('Other Lvl')
   })
 
+  it('COLUMN_DEFS registers pkg and pkg_ind columns in the tape header set', () => {
+    expect(COLUMN_DEFS.find((d) => d.key === 'pkg')?.header).toBe('Pkg')
+    expect(COLUMN_DEFS.find((d) => d.key === 'pkg_ind')?.header).toBe('Pkg Ind')
+  })
+
   it('formatOtherLvl produces stacked OPA/PTP lines for a row fixture', () => {
     const legs = [
       { other_payment_amount: 15627.6, other_payment_currency: 'USD' as const },
@@ -176,5 +186,25 @@ describe('other_lvl column wiring', () => {
     })
     expect(result.opaLine).toBe('OPA: \u2014')
     expect(result.ptpLine).toBe('PTP: \u2014')
+  })
+})
+
+describe('package column helpers', () => {
+  it('formats supported package types with trader-facing labels', () => {
+    expect(packageTypeDisplayLabel('OUTRIGHT')).toBe('Outright')
+    expect(packageTypeDisplayLabel('CURVE')).toBe('Curve')
+    expect(packageTypeDisplayLabel('FLY')).toBe('Fly')
+  })
+
+  it('maps package type badges onto the swaption-style tone palette', () => {
+    expect(packageTypeBadgeClassName('OUTRIGHT')).toContain('bg-slate-800')
+    expect(packageTypeBadgeClassName('CURVE')).toContain('bg-sky-900')
+    expect(packageTypeBadgeClassName('FLY')).toContain('bg-indigo-900')
+  })
+
+  it('renders package indicator values as explicit true/false text', () => {
+    expect(packageIndicatorDisplay(true)).toBe('true')
+    expect(packageIndicatorDisplay(false)).toBe('false')
+    expect(packageIndicatorDisplay(null)).toBe('false')
   })
 })
