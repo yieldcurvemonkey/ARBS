@@ -1,5 +1,7 @@
 import { describe, expect, it } from '@jest/globals'
 import { rowClassName } from '../columns.helpers'
+import { formatOtherLvl } from '../../../utils/format'
+import { COLUMN_DEFS } from '../../../constants'
 
 const base = {
   package_id: 'P1',
@@ -113,5 +115,47 @@ describe('rowClassName — trade_type tint', () => {
     // Trade-type border should still be visible so traders can tell the
     // structure even on an inactive row.
     expect(cls).toMatch(/border-indigo/)
+  })
+})
+
+describe('other_lvl column wiring', () => {
+  // NOTE(feedback-round-1): testing the column body through getColumns would
+  // require importing columns.tsx, and the project's ts-jest config uses
+  // `jsx: preserve` — which leaves JSX unparsed inside Jest. Tests below
+  // exercise the same logic at the formatter + COLUMN_DEFS boundary.
+
+  it('COLUMN_DEFS registers other_lvl with width 110', () => {
+    const def = COLUMN_DEFS.find((d) => d.key === 'other_lvl')
+    expect(def).toBeTruthy()
+    expect(def!.width).toBe(110)
+    expect(def!.header).toBe('Other Lvl')
+  })
+
+  it('formatOtherLvl produces stacked OPA/PTP lines for a row fixture', () => {
+    const legs = [
+      { other_payment_amount: 15627.6, other_payment_currency: 'USD' as const },
+      { other_payment_amount: null },
+    ]
+    const result = formatOtherLvl({
+      legOpa: legs.map((l) => l.other_payment_amount ?? null),
+      opaCurrency: legs.map((l) =>
+        'other_payment_currency' in l ? l.other_payment_currency ?? null : null,
+      ),
+      ptp: -671880,
+      ptpCurrency: 'USD',
+    })
+    expect(result.opaLine).toBe('OPA: 15.6k')
+    expect(result.ptpLine).toBe('PTP: -671.9k')
+  })
+
+  it('formatOtherLvl em-dashes both lines when OPA and PTP are null', () => {
+    const result = formatOtherLvl({
+      legOpa: [null],
+      opaCurrency: [null],
+      ptp: null,
+      ptpCurrency: null,
+    })
+    expect(result.opaLine).toBe('OPA: \u2014')
+    expect(result.ptpLine).toBe('PTP: \u2014')
   })
 })

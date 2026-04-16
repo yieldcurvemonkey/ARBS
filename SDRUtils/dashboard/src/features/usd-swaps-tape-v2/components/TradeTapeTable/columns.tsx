@@ -8,6 +8,7 @@ import {
   formatDv01,
   formatExecutionWindow,
   formatNotional,
+  formatOtherLvl,
   formatRate,
 } from '../../utils/format'
 import { LifecyclePills } from './RowBadges'
@@ -150,6 +151,32 @@ export function getColumns(
         </span>
       )}
       style={{ width: 88 }}
+    />,
+    <Column
+      key="other_lvl"
+      field="other_lvl_reported"
+      filterField="other_lvl_reported"
+      filter
+      header={renderHeader('Other Lvl')}
+      body={(row: UsdSwapTapeRow) => {
+        const legs = row.legs_json ?? []
+        const lines = formatOtherLvl({
+          legOpa: legs.map((l) => l.other_payment_amount ?? null),
+          opaCurrency: legs.map((l) => l.other_payment_currency ?? null),
+          ptp: row.package_transaction_price ?? null,
+          ptpCurrency: row.package_transaction_price_currency ?? null,
+        })
+        return (
+          <div
+            data-testid="other-lvl-cell"
+            className="flex flex-col font-mono text-[11px] text-gray-200"
+          >
+            <span>{lines.opaLine}</span>
+            <span>{lines.ptpLine}</span>
+          </div>
+        )
+      }}
+      style={{ width: 110 }}
     />,
   )
   return cols
