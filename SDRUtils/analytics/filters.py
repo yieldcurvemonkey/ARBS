@@ -257,22 +257,6 @@ def filter_compression_heuristic(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(columns=df.columns)
 
 
-def filter_reset_optimization(df: pd.DataFrame) -> pd.DataFrame:
-    """Identify single-period / FRA-like reset optimization activity.
-
-    These are algorithmic trades (not organic demand) that inflate volume stats.
-    Signals: tenor_years < 0.5 (roughly 6 months or less).
-
-    Args:
-        df: DataFrame with ``tenor_years`` column.
-
-    Returns:
-        Filtered DataFrame containing likely reset optimization trades.
-    """
-    tenor = pd.to_numeric(df.get("tenor_years"), errors="coerce").fillna(999)
-    return df[tenor < 0.5].copy()
-
-
 # ---------------------------------------------------------------------------
 # Aggregation helpers
 # ---------------------------------------------------------------------------

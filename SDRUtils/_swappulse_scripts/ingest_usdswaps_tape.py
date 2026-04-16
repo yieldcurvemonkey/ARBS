@@ -556,7 +556,6 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         ("COMPRESSION", "is_compression"),
         ("TERMINATION", None),  # count via lifecycle_type
         ("NOVATION", "is_novation"),
-        ("RESET_OPT", "is_reset_optimization"),
         ("CORRECTION", None),
         ("CLEARING_TERM", "is_clearing_termination"),
         ("EXERCISE_BORN", "is_exercise_born"),

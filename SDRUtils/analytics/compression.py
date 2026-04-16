@@ -10,7 +10,7 @@ from typing import Tuple
 
 import pandas as pd
 
-from .filters import filter_new_risk, filter_reset_optimization
+from .filters import filter_new_risk
 
 
 # ---------------------------------------------------------------------------
@@ -24,15 +24,13 @@ def detect_compression_signals(df: pd.DataFrame) -> pd.DataFrame:
     Signals:
     - ``is_newt``: ``event_action`` == NEWT (new-risk candidate)
     - ``is_lifecycle``: ``event_action`` in TERM/CORR/MODI (non-NEWT)
-    - ``is_reset_opt``: ``tenor_years`` < 0.5 (single-period / FRA-like)
 
     Args:
-        df: DataFrame with optional ``event_action`` and ``tenor_years``
-            columns.
+        df: DataFrame with optional ``event_action`` column.
 
     Returns:
-        Copy of *df* with ``is_newt``, ``is_lifecycle``, and
-        ``is_reset_opt`` boolean columns added.
+        Copy of *df* with ``is_newt`` and ``is_lifecycle`` boolean columns
+        added.
     """
     df = df.copy()
 
@@ -44,9 +42,6 @@ def detect_compression_signals(df: pd.DataFrame) -> pd.DataFrame:
         df["is_newt"] = True
         df["is_lifecycle"] = False
 
-    tenor = pd.to_numeric(df.get("tenor_years"), errors="coerce").fillna(999)
-    df["is_reset_opt"] = tenor < 0.5
-
     return df
 
 
@@ -57,32 +52,26 @@ def detect_compression_signals(df: pd.DataFrame) -> pd.DataFrame:
 
 def clean_volume_decomposition(
     df: pd.DataFrame,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Split trades into three non-overlapping volume categories.
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Split trades into two non-overlapping volume categories.
 
-    1. **clean_new_risk** -- NEWT trades with tenor >= 0.5 yr (organic flow)
-    2. **reset_optimization** -- NEWT trades with tenor < 0.5 yr (algo noise)
-    3. **lifecycle** -- non-NEWT events (TERM/CORR/MODI compression)
+    1. **clean_new_risk** -- NEWT trades (organic flow)
+    2. **lifecycle** -- non-NEWT events (TERM/CORR/MODI compression)
 
-    Uses :func:`~SDRUtils.analytics.filters.filter_new_risk` and
-    :func:`~SDRUtils.analytics.filters.filter_reset_optimization` as
-    the authoritative filter implementations.
+    Uses :func:`~SDRUtils.analytics.filters.filter_new_risk` as the
+    authoritative filter implementation.
 
     Args:
-        df: DataFrame with optional ``event_action`` and ``tenor_years``
-            columns.
+        df: DataFrame with optional ``event_action`` column.
 
     Returns:
-        Tuple of ``(clean_new_risk, reset_optimization, lifecycle)``
-        DataFrames.  The three frames partition *df* with no overlap.
+        Tuple of ``(clean_new_risk, lifecycle)`` DataFrames. The two frames
+        partition *df* with no overlap.
     """
-    newt = filter_new_risk(df)
-    lifecycle = df[~df.index.isin(newt.index)].copy()
+    clean_new_risk = filter_new_risk(df)
+    lifecycle = df[~df.index.isin(clean_new_risk.index)].copy()
 
-    reset_opt = filter_reset_optimization(newt)
-    clean_new_risk = newt[~newt.index.isin(reset_opt.index)].copy()
-
-    return clean_new_risk, reset_opt, lifecycle
+    return clean_new_risk, lifecycle
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +87,7 @@ def monthly_compression_ratio(
 
     Resamples both series to month-end, then computes
     ``(1 - clean / raw) * 100``.  A result of 33 means 33 % of reported
-    volume was non-new-risk (compression + reset optimisation).
+    volume was non-new-risk (lifecycle/compression events).
 
     Args:
         raw_daily: Daily total DV01 series (all trades), indexed by date.
