@@ -156,6 +156,18 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
       className="rounded-xl border border-slate-800/80 bg-slate-950/70 px-4 py-3"
       data-testid={`legs-subtable-${row.package_id}`}
     >
+      {row.package_transaction_price != null ? (
+        <div className="mb-2 flex items-baseline gap-2 text-[10px] uppercase tracking-wide text-slate-400">
+          <span>Package Transaction Price</span>
+          <span className="font-mono text-[12px] text-slate-100">
+            {formatNotional(row.package_transaction_price, { compact: true })}
+            {row.package_transaction_price_currency &&
+            row.package_transaction_price_currency !== 'USD'
+              ? ` ${row.package_transaction_price_currency}`
+              : ''}
+          </span>
+        </div>
+      ) : null}
       <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
         Leg Details
       </div>
@@ -174,6 +186,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
               <th className="px-2 py-1 text-right">Notional</th>
               <th className="px-2 py-1 text-right">DV01</th>
               <th className="px-2 py-1 text-right">Rate</th>
+              <th className="px-2 py-1 text-right">OPA</th>
               <th className="px-2 py-1 text-left">Flags</th>
               <th className="px-2 py-1 text-left">X-Day</th>
             </tr>
@@ -211,13 +224,22 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
                   {formatRate(leg.fixed_rate ?? null)}
                 </td>
+                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
+                  {leg.other_payment_amount != null
+                    ? `${formatNotional(leg.other_payment_amount, { compact: true })}${
+                        leg.other_payment_currency && leg.other_payment_currency !== 'USD'
+                          ? ` ${leg.other_payment_currency}`
+                          : ''
+                      }`
+                    : EMPTY_VALUE}
+                </td>
                 <td className="px-2 py-1">{qualityFlagsBody(leg)}</td>
                 <td className="whitespace-nowrap px-2 py-1">{crossDayProgress(leg)}</td>
               </tr>
             ))}
             {legs.length === 0 ? (
               <tr className="border-t border-slate-800/90 text-slate-400">
-                <td className="px-2 py-2" colSpan={13}>
+                <td className="px-2 py-2" colSpan={14}>
                   No leg data available.
                 </td>
               </tr>

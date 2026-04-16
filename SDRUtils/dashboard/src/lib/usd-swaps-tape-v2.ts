@@ -25,6 +25,8 @@ const COLUMNS = [
   'd.max_fixed_rate',
   'd.has_spread',
   'd.package_transaction_spread',
+  'd.package_transaction_price',
+  'd.package_transaction_price_currency',
   'd.rate_index_clean',
   'd.venue',
   'd.ccp',

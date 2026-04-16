@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS {PACKAGES_TABLE} (
     max_fixed_rate NUMERIC,
     has_spread BOOLEAN,
     package_transaction_spread NUMERIC,
+    package_transaction_price NUMERIC,
+    package_transaction_price_currency TEXT,
     rate_index_clean TEXT,
     venue TEXT,
     ccp TEXT,
@@ -93,6 +95,8 @@ CREATE TABLE IF NOT EXISTS {LEGS_TABLE} (
     notional_currency TEXT,
     risk NUMERIC,
     fixed_rate NUMERIC,
+    other_payment_amount NUMERIC,
+    other_payment_currency TEXT,
     trade_type TEXT,
     rate_index_clean TEXT,
     venue TEXT,
@@ -169,6 +173,10 @@ CREATE INDEX IF NOT EXISTS idx_tape_v1_packages_metrics_gin ON {PACKAGES_TABLE} 
 -- Additive migrations for columns added after initial rollout. Safe to run
 -- repeatedly because ``ADD COLUMN IF NOT EXISTS`` is idempotent.
 ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS leg_tape_label TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS other_payment_amount NUMERIC;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS other_payment_currency TEXT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS package_transaction_price NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS package_transaction_price_currency TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_tape_v1_legs_package ON {LEGS_TABLE}(package_id);
 CREATE INDEX IF NOT EXISTS idx_tape_v1_legs_exec ON {LEGS_TABLE}(execution_timestamp);
@@ -199,6 +207,8 @@ SELECT
   p.max_fixed_rate,
   p.has_spread,
   p.package_transaction_spread,
+  p.package_transaction_price,
+  p.package_transaction_price_currency,
   p.rate_index_clean,
   p.venue,
   p.ccp,

@@ -1,6 +1,7 @@
 'use client'
 // ABOUTME: Column body templates for the main TradeTapeTable.
 import type { JSX } from 'react'
+import { FilterMatchMode } from 'primereact/api'
 import { Column } from 'primereact/column'
 import { EMPTY_VALUE } from '../../constants'
 import type { UsdSwapTapeRow } from '../../types'
@@ -8,10 +9,15 @@ import {
   formatDv01,
   formatExecutionWindow,
   formatNotional,
+  formatOtherLvl,
   formatRate,
 } from '../../utils/format'
+import { ActionColumnFilter } from './ActionColumnFilter'
+import { matchActionSelection } from './ActionColumnFilter.helpers'
 import { LifecyclePills } from './RowBadges'
 import { TapeLabelCell } from './TapeLabelCell'
+import { TimestampColumnFilter } from './TimestampColumnFilter'
+import { matchTimestampRange } from './TimestampColumnFilter.helpers'
 
 export { rowClassName } from './columns.helpers'
 
@@ -78,6 +84,21 @@ export function getColumns(
       filterField="execution_start"
       sortable
       filter
+      showFilterMenu
+      dataType="date"
+      filterMatchMode={FilterMatchMode.CUSTOM}
+      filterElement={(options: any) => (
+        <TimestampColumnFilter
+          value={options.value as [string | null, string | null] | null}
+          filterCallback={(v) => options.filterCallback(v, options.index)}
+        />
+      )}
+      filterFunction={(value: unknown, filter: unknown) =>
+        matchTimestampRange(
+          value as string,
+          filter as [string | null, string | null] | null,
+        )
+      }
       header={renderHeader('Time')}
       body={(row: UsdSwapTapeRow) => (
         <span className="whitespace-nowrap text-[11px] text-gray-300">
@@ -88,9 +109,20 @@ export function getColumns(
     />,
     <Column
       key="action"
-      field="action_label"
-      filterField="action_label"
+      field="lifecycle_type"
+      filterField="lifecycle_type"
       filter
+      showFilterMenu
+      filterMatchMode={FilterMatchMode.CUSTOM}
+      filterElement={(options: any) => (
+        <ActionColumnFilter
+          value={options.value as any}
+          filterCallback={(v) => options.filterCallback(v, options.index)}
+        />
+      )}
+      filterFunction={(value: unknown, filter: unknown) =>
+        matchActionSelection(value as any, filter as any)
+      }
       header={renderHeader('Action')}
       body={(row: UsdSwapTapeRow) => <LifecyclePills row={row} />}
       style={{ width: 64 }}
@@ -101,6 +133,9 @@ export function getColumns(
       filterField="platform_identifier"
       sortable
       filter
+      showFilterMenu
+      showAddButton
+      filterMatchMode={FilterMatchMode.CONTAINS}
       header={renderHeader('Platform')}
       body={(row: UsdSwapTapeRow) => (
         <span className="truncate text-[11px] text-gray-300">
@@ -115,6 +150,9 @@ export function getColumns(
       filterField="tape_label"
       sortable
       filter
+      showFilterMenu
+      showAddButton
+      filterMatchMode={FilterMatchMode.CONTAINS}
       header={renderHeader('Tape Label')}
       body={(row: UsdSwapTapeRow) => <TapeLabelCell row={row} />}
       style={{ width: 470 }}
@@ -125,7 +163,10 @@ export function getColumns(
       filterField={mode === 'dv01' ? 'total_risk' : 'total_notional'}
       sortable
       filter
+      showFilterMenu
+      showFilterOperator
       dataType="numeric"
+      filterMatchMode={FilterMatchMode.EQUALS}
       header={metricHeader}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-[11px] text-gray-200">
@@ -142,7 +183,10 @@ export function getColumns(
       filterField="weighted_fixed_rate"
       sortable
       filter
+      showFilterMenu
+      showFilterOperator
       dataType="numeric"
+      filterMatchMode={FilterMatchMode.EQUALS}
       header={renderHeader('Reported LvL')}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-[11px] text-gray-200">
@@ -150,6 +194,32 @@ export function getColumns(
         </span>
       )}
       style={{ width: 88 }}
+    />,
+    <Column
+      key="other_lvl"
+      field="other_lvl_reported"
+      filterField="other_lvl_reported"
+      filter
+      header={renderHeader('Other Lvl')}
+      body={(row: UsdSwapTapeRow) => {
+        const legs = row.legs_json ?? []
+        const lines = formatOtherLvl({
+          legOpa: legs.map((l) => l.other_payment_amount ?? null),
+          opaCurrency: legs.map((l) => l.other_payment_currency ?? null),
+          ptp: row.package_transaction_price ?? null,
+          ptpCurrency: row.package_transaction_price_currency ?? null,
+        })
+        return (
+          <div
+            data-testid="other-lvl-cell"
+            className="flex flex-col font-mono text-[11px] text-gray-200"
+          >
+            <span>{lines.opaLine}</span>
+            <span>{lines.ptpLine}</span>
+          </div>
+        )
+      }}
+      style={{ width: 110 }}
     />,
   )
   return cols

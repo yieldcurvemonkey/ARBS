@@ -59,6 +59,8 @@ LEG_COLUMNS: tuple[str, ...] = (
     "notional_currency",
     "risk",
     "fixed_rate",
+    "other_payment_amount",
+    "other_payment_currency",
     "trade_type",
     "rate_index_clean",
     "venue",
@@ -130,6 +132,8 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     "max_fixed_rate",
     "has_spread",
     "package_transaction_spread",
+    "package_transaction_price",
+    "package_transaction_price_currency",
     "rate_index_clean",
     "venue",
     "ccp",
@@ -398,6 +402,19 @@ def _consistent_str(group: pd.DataFrame, col: str) -> str | None:
     return None
 
 
+def _consistent_num(group: pd.DataFrame, col: str) -> float | None:
+    """Pick the single numeric value per group; fall back to first on disagreement."""
+    if col not in group.columns:
+        return None
+    vals = pd.to_numeric(
+        group[col].astype(str).str.replace(",", ""),
+        errors="coerce",
+    ).dropna().unique().tolist()
+    if not vals:
+        return None
+    return float(vals[0])
+
+
 _LEG_INT_COLS: tuple[str, ...] = (
     "execution_hour_et",
     "lc_n_events",
@@ -410,6 +427,7 @@ _LEG_NUM_COLS: tuple[str, ...] = (
     "notional",
     "risk",
     "fixed_rate",
+    "other_payment_amount",
     "xd_notional_pct_remaining",
 )
 _LEG_BOOL_COLS: tuple[str, ...] = (
@@ -424,6 +442,7 @@ _LEG_BOOL_COLS: tuple[str, ...] = (
 _LEG_TEXT_COLS: tuple[str, ...] = (
     "trade_id", "package_id", "execution_session", "tenor_label",
     "tenor_display", "forward_label", "forward_bucket", "notional_currency",
+    "other_payment_currency",
     "trade_type", "rate_index_clean", "venue", "ccp", "platform_identifier",
     "tape_label", "upi_reset_freq", "upi_notional_schedule",
     "upi_delivery_type", "lifecycle_type", "lc_status", "fomc_meeting_label",
@@ -450,6 +469,16 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
     if "quality_flags" not in df.columns:
         df["quality_flags"] = df.apply(_quality_flag_list, axis=1)
 
+    # OPA (feedback round 1): normalize from raw CFTC column names if the
+    # classifier/TradeTape hasn't already produced snake_case equivalents.
+    if "other_payment_amount" not in df.columns and "Other payment amount" in df.columns:
+        df["other_payment_amount"] = pd.to_numeric(
+            df["Other payment amount"].astype(str).str.replace(",", ""),
+            errors="coerce",
+        )
+    if "other_payment_currency" not in df.columns and "Other payment currency" in df.columns:
+        df["other_payment_currency"] = df["Other payment currency"].astype("string")
+
     # Extract a frame with exactly LEG_COLUMNS (missing filled with None) and
     # convert to records in one shot. to_dict(orient="records") is ~10x
     # cheaper than iterrows() on wide (60+ col) frames because it avoids
@@ -472,6 +501,7 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         rec["notional"] = _num_or_none(rec.get("notional"))
         rec["risk"] = _num_or_none(rec.get("risk"))
         rec["fixed_rate"] = _num_or_none(rec.get("fixed_rate"))
+        rec["other_payment_amount"] = _num_or_none(rec.get("other_payment_amount"))
         rec["lc_n_events"] = _int_or_none(rec.get("lc_n_events"))
         rec["xd_n_events"] = _int_or_none(rec.get("xd_n_events"))
         rec["xd_notional_pct_remaining"] = _num_or_none(rec.get("xd_notional_pct_remaining"))
@@ -489,6 +519,7 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         for text_col in (
             "trade_id", "package_id", "execution_session", "tenor_label",
             "tenor_display", "forward_label", "forward_bucket", "notional_currency",
+            "other_payment_currency",
             "trade_type", "rate_index_clean", "venue", "ccp", "platform_identifier",
             "tape_label", "leg_tape_label", "upi_reset_freq", "upi_notional_schedule",
             "upi_delivery_type", "lifecycle_type", "lc_status", "fomc_meeting_label",
@@ -635,6 +666,16 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "package_transaction_spread": _num_or_none(
                 g["package_transaction_spread"].iloc[0]
                 if "package_transaction_spread" in g.columns else None
+            ),
+            "package_transaction_price": (
+                _consistent_num(g, "package_transaction_price")
+                if "package_transaction_price" in g.columns
+                else _consistent_num(g, "Package transaction price")
+            ),
+            "package_transaction_price_currency": (
+                _consistent_str(g, "package_transaction_price_currency")
+                if "package_transaction_price_currency" in g.columns
+                else _consistent_str(g, "Package transaction price currency")
             ),
             "rate_index_clean": _consistent_str(g, "rate_index_clean"),
             "venue": _consistent_str(g, "venue"),

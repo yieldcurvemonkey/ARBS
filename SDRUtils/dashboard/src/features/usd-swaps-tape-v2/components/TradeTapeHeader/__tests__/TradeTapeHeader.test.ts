@@ -1,5 +1,40 @@
 import { describe, expect, it } from '@jest/globals'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { summarize } from '../TradeTapeHeader.helpers'
+
+const headerSource = readFileSync(
+  resolve(
+    process.cwd(),
+    'src/features/usd-swaps-tape-v2/components/TradeTapeHeader/TradeTapeHeader.tsx',
+  ),
+  'utf8',
+)
+
+describe('TradeTapeHeader shape (feedback round 1)', () => {
+  it('no longer renders FlagChips', () => {
+    expect(headerSource).not.toContain('FlagChips')
+  })
+
+  it('no longer renders Flow history / Methodology buttons', () => {
+    expect(headerSource).not.toContain('Flow history')
+    expect(headerSource).not.toContain('Methodology')
+  })
+
+  it('no longer renders CleanTapeToggle', () => {
+    expect(headerSource).not.toContain('CleanTapeToggle')
+  })
+
+  it('prop interface is trimmed to asOfDate / liveStatus / rows / onRefresh', () => {
+    expect(headerSource).not.toContain('flagFilters')
+    expect(headerSource).not.toContain('onOpenFlowHistory')
+    expect(headerSource).not.toContain('onOpenMethodology')
+    expect(headerSource).not.toContain('onToggleLifecycle')
+    expect(headerSource).not.toContain('onApplyClean')
+    expect(headerSource).not.toContain('onResetClean')
+    expect(headerSource).not.toContain('onFilterByLifecycle')
+  })
+})
 
 const row = (overrides: Record<string, any>): any => ({
   package_id: overrides.package_id ?? 'P1',
