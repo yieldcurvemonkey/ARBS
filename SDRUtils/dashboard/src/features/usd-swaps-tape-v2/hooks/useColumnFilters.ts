@@ -1,31 +1,29 @@
-// URL-synced PrimeReact column filter state.
+// URL-synced PrimeReact column filter state + sort.
+// NOTE(feedback-round-1): replaced fuzzy/operator params with a full
+// DataTableFilterMeta round-trip plus sort_field / sort_order.
 import { useCallback, useMemo } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import type { ColumnFilterPayload } from '../types'
+import type { DataTableFilterMeta } from 'primereact/datatable'
+import { buildColumnFilterPayload } from '../components/TradeTapeTable/filter-utils'
+import { rehydrateFilters } from './useColumnFilters.helpers'
 
-export const SERVER_FILTER_FIELDS = [
-  'time',
-  'tape_label',
-  'trade_type',
-  'package_structure',
-  'tenor',
-  'notional',
-  'dv01',
-  'rate',
-  'venue',
-  'ccp',
-  'session',
-  'rate_index',
-  'fomc_meeting',
-  'lifecycle',
-  'flags',
-] as const
+export const COLUMN_FILTER_QUERY_KEY = 'columnFilters'
+export const SORT_FIELD_QUERY_KEY = 'sort_field'
+export const SORT_ORDER_QUERY_KEY = 'sort_order'
+
+// Kept for backward compat with any remaining SWR cache keys that referenced
+// this constant. The field list is no longer authoritative — filtering is
+// fully client-side and every column is filterable.
+export const SERVER_FILTER_FIELDS: readonly string[] = []
+
+export type SortOrder = 1 | -1 | null
 
 export interface UseColumnFiltersReturn {
-  filters: ColumnFilterPayload
-  operator: 'and' | 'or'
-  setFilters: (next: ColumnFilterPayload) => void
-  setOperator: (op: 'and' | 'or') => void
+  filters: DataTableFilterMeta
+  sortField: string | null
+  sortOrder: SortOrder
+  setFilters: (next: DataTableFilterMeta) => void
+  setSort: (field: string | null, order: SortOrder) => void
   reset: () => void
   queryString: string
 }
@@ -35,24 +33,24 @@ export function useColumnFilters(): UseColumnFiltersReturn {
   const pathname = usePathname()
   const searchParams = useSearchParams()
 
-  const filters = useMemo<ColumnFilterPayload>(() => {
-    const raw = searchParams.get('columnFilters')
-    if (!raw) return {}
-    try {
-      const parsed = JSON.parse(raw)
-      return parsed && typeof parsed === 'object' ? parsed : {}
-    } catch {
-      return {}
-    }
+  const filters = useMemo<DataTableFilterMeta>(() => {
+    return rehydrateFilters(searchParams?.get(COLUMN_FILTER_QUERY_KEY) ?? null)
   }, [searchParams])
 
-  const operator = useMemo<'and' | 'or'>(() => {
-    return searchParams.get('columnFilterOp') === 'or' ? 'or' : 'and'
+  const sortField = useMemo<string | null>(() => {
+    return searchParams?.get(SORT_FIELD_QUERY_KEY) || null
+  }, [searchParams])
+
+  const sortOrder = useMemo<SortOrder>(() => {
+    const raw = searchParams?.get(SORT_ORDER_QUERY_KEY)
+    if (raw === '1') return 1
+    if (raw === '-1') return -1
+    return null
   }, [searchParams])
 
   const writeParams = useCallback(
     (mutator: (params: URLSearchParams) => void) => {
-      const next = new URLSearchParams(searchParams?.toString())
+      const next = new URLSearchParams(searchParams?.toString() ?? '')
       mutator(next)
       router.replace(`${pathname}?${next.toString()}`, { scroll: false })
     },
@@ -60,23 +58,29 @@ export function useColumnFilters(): UseColumnFiltersReturn {
   )
 
   const setFilters = useCallback(
-    (next: ColumnFilterPayload) => {
+    (next: DataTableFilterMeta) => {
       writeParams((params) => {
-        if (next && Object.keys(next).length) {
-          params.set('columnFilters', JSON.stringify(next))
+        const payload = buildColumnFilterPayload(next)
+        if (Object.keys(payload).length) {
+          params.set(COLUMN_FILTER_QUERY_KEY, JSON.stringify(payload))
         } else {
-          params.delete('columnFilters')
+          params.delete(COLUMN_FILTER_QUERY_KEY)
         }
       })
     },
     [writeParams],
   )
 
-  const setOperator = useCallback(
-    (op: 'and' | 'or') => {
+  const setSort = useCallback(
+    (field: string | null, order: SortOrder) => {
       writeParams((params) => {
-        if (op === 'or') params.set('columnFilterOp', 'or')
-        else params.delete('columnFilterOp')
+        if (field && order) {
+          params.set(SORT_FIELD_QUERY_KEY, field)
+          params.set(SORT_ORDER_QUERY_KEY, String(order))
+        } else {
+          params.delete(SORT_FIELD_QUERY_KEY)
+          params.delete(SORT_ORDER_QUERY_KEY)
+        }
       })
     },
     [writeParams],
@@ -84,17 +88,32 @@ export function useColumnFilters(): UseColumnFiltersReturn {
 
   const reset = useCallback(() => {
     writeParams((params) => {
-      params.delete('columnFilters')
-      params.delete('columnFilterOp')
+      params.delete(COLUMN_FILTER_QUERY_KEY)
+      params.delete(SORT_FIELD_QUERY_KEY)
+      params.delete(SORT_ORDER_QUERY_KEY)
     })
   }, [writeParams])
 
   const queryString = useMemo(() => {
     const q = new URLSearchParams()
-    if (Object.keys(filters).length) q.set('columnFilters', JSON.stringify(filters))
-    if (operator === 'or') q.set('columnFilterOp', 'or')
+    const payload = buildColumnFilterPayload(filters)
+    if (Object.keys(payload).length) {
+      q.set(COLUMN_FILTER_QUERY_KEY, JSON.stringify(payload))
+    }
+    if (sortField && sortOrder) {
+      q.set(SORT_FIELD_QUERY_KEY, sortField)
+      q.set(SORT_ORDER_QUERY_KEY, String(sortOrder))
+    }
     return q.toString()
-  }, [filters, operator])
+  }, [filters, sortField, sortOrder])
 
-  return { filters, operator, setFilters, setOperator, reset, queryString }
+  return {
+    filters,
+    sortField,
+    sortOrder,
+    setFilters,
+    setSort,
+    reset,
+    queryString,
+  }
 }
