@@ -6,6 +6,7 @@ import {
   formatDv01,
   formatExecutionWindow,
   formatNotional,
+  formatOtherLvl,
   formatRate,
   formatRateRange,
   formatTenor,
@@ -150,5 +151,28 @@ describe('formatClusterSuffix', () => {
 
   it('formats +N for larger clusters', () => {
     expect(formatClusterSuffix(5)).toBe(' (+4)')
+  })
+})
+
+describe('formatOtherLvl', () => {
+  it('returns em-dashes when OPA + PTP both null', () => {
+    const result = formatOtherLvl({ legOpa: [null, null], ptp: null })
+    expect(result.opaLine).toBe('OPA: \u2014')
+    expect(result.ptpLine).toBe('PTP: \u2014')
+  })
+  it('stacks non-null leg OPAs comma-separated', () => {
+    const result = formatOtherLvl({ legOpa: [15627.6, null, -2100], ptp: -671880 })
+    expect(result.opaLine).toBe('OPA: 15.6k, -2.1k')
+    expect(result.ptpLine).toBe('PTP: -671.9k')
+  })
+  it('appends currency suffix only on non-USD values', () => {
+    const result = formatOtherLvl({
+      legOpa: [15627.6],
+      ptp: -671880,
+      opaCurrency: ['EUR'],
+      ptpCurrency: 'USD',
+    })
+    expect(result.opaLine).toBe('OPA: 15.6k EUR')
+    expect(result.ptpLine).toBe('PTP: -671.9k')
   })
 })

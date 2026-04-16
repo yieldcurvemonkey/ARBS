@@ -135,3 +135,53 @@ export function formatClusterSuffix(size: number | null | undefined): string {
   if (size < 2) return ''
   return ` (+${size - 1})`
 }
+
+// Compact, signed, lowercase-suffix formatter for OPA / PTP cells. Distinct
+// from formatNotional which uses uppercase suffixes and a >=1K threshold —
+// trader readout here needs "2.1k" for -2100, not "-2,100".
+function formatSignedCompact(n: number): string {
+  const sign = n < 0 ? '-' : ''
+  const abs = Math.abs(n)
+  if (abs >= 1e9) {
+    const scaled = abs / 1e9
+    const precision = scaled >= 100 ? 0 : 1
+    return `${sign}${scaled.toFixed(precision)}b`
+  }
+  if (abs >= 1e6) {
+    const scaled = abs / 1e6
+    const precision = scaled >= 100 ? 0 : 1
+    return `${sign}${scaled.toFixed(precision)}m`
+  }
+  const scaled = abs / 1e3
+  const precision = scaled >= 100 ? 1 : 1
+  return `${sign}${scaled.toFixed(precision)}k`
+}
+
+export function formatOtherLvl(input: {
+  legOpa: Array<number | null | undefined>
+  ptp: number | null | undefined
+  opaCurrency?: Array<string | null | undefined>
+  ptpCurrency?: string | null | undefined
+}): { opaLine: string; ptpLine: string } {
+  const opaParts: string[] = []
+  input.legOpa.forEach((v, i) => {
+    if (v === null || v === undefined || Number.isNaN(v)) return
+    const ccy = input.opaCurrency?.[i]
+    const formatted = formatSignedCompact(Number(v))
+    opaParts.push(ccy && ccy !== 'USD' ? `${formatted} ${ccy}` : formatted)
+  })
+  const opaLine = opaParts.length ? `OPA: ${opaParts.join(', ')}` : `OPA: ${EMPTY_VALUE}`
+
+  let ptpLine: string
+  if (input.ptp === null || input.ptp === undefined || Number.isNaN(input.ptp)) {
+    ptpLine = `PTP: ${EMPTY_VALUE}`
+  } else {
+    const formatted = formatSignedCompact(Number(input.ptp))
+    ptpLine =
+      input.ptpCurrency && input.ptpCurrency !== 'USD'
+        ? `PTP: ${formatted} ${input.ptpCurrency}`
+        : `PTP: ${formatted}`
+  }
+
+  return { opaLine, ptpLine }
+}
