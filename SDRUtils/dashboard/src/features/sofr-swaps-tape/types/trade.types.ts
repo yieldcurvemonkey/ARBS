@@ -19,6 +19,8 @@ export type SofrSwapTapeLeg = {
   estimated_pv01?: number | null
   risk?: number | null
   fixed_rate?: number | null
+  other_payment_amount?: number | null
+  other_payment_currency?: string | null
   platform_identifier?: string | null
   cleared?: string | null
   package_type?: string | null
@@ -67,6 +69,8 @@ export type SofrSwapTapeRow = {
   max_fixed_rate?: number | null
   package_indicator?: boolean | null
   package_transaction_spread?: number | null
+  package_transaction_price?: number | null
+  package_transaction_price_currency?: string | null
   package_metrics: Record<string, any> | null
   legs_json: SofrSwapTapeLeg[]
   platform_identifier?: string | null
