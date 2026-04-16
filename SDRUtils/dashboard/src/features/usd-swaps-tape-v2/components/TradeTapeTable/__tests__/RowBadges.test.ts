@@ -75,6 +75,21 @@ describe('LifecyclePills rendering', () => {
   })
 })
 
+describe('LIFECYCLE_TONES palette (feedback round 1 saturated)', () => {
+  it('UNWIND pill uses the saturated red-500 tone with ring outline', async () => {
+    const { LIFECYCLE_TONES } = await import('../../../constants')
+    expect(LIFECYCLE_TONES.UNWIND).toMatch(/bg-red-500\/30/)
+    expect(LIFECYCLE_TONES.UNWIND).toMatch(/ring-red-400/)
+  })
+
+  it('NEW_RISK uses emerald-500; COMPRESSION uses sky-500; NOVATION uses violet-500', async () => {
+    const { LIFECYCLE_TONES } = await import('../../../constants')
+    expect(LIFECYCLE_TONES.NEW_RISK).toMatch(/bg-emerald-500/)
+    expect(LIFECYCLE_TONES.COMPRESSION).toMatch(/bg-sky-500/)
+    expect(LIFECYCLE_TONES.NOVATION).toMatch(/bg-violet-500/)
+  })
+})
+
 describe('flagBadgesFor', () => {
   it('emits block + UFRO + cap + off-date in order when all set', () => {
     const badges = flagBadgesFor(

@@ -33,17 +33,19 @@ export const LIFECYCLE_LABELS: Record<LifecycleType, string> = {
 }
 
 // Unified lifecycle palette — rendered as Tailwind class strings.
+// NOTE(feedback-round-1): saturated variant + ring outline so lifecycle
+// pills read cleanly against the new package-structure row tints.
 export const LIFECYCLE_TONES: Record<LifecycleType, string> = {
-  NEW_RISK: 'bg-emerald-900/40 text-emerald-200',
-  UNWIND: 'bg-red-900/40 text-red-200',
-  COMPRESSION: 'bg-zinc-800/60 text-zinc-400',
-  TERMINATION: 'bg-rose-900/40 text-rose-200',
-  NOVATION: 'bg-purple-900/40 text-purple-200',
-  RESET_OPT: 'bg-neutral-800/60 text-neutral-400',
-  CORRECTION: 'bg-sky-900/40 text-sky-200',
-  CLEARING_TERM: 'bg-red-950/60 text-red-100 border border-red-500/40',
-  EXERCISE_BORN: 'bg-amber-900/40 text-amber-200',
-  OTHER: 'bg-slate-800/60 text-slate-300',
+  NEW_RISK: 'bg-emerald-500/30 text-emerald-100 ring-1 ring-emerald-400/40',
+  UNWIND: 'bg-red-500/30 text-red-100 ring-1 ring-red-400/40',
+  COMPRESSION: 'bg-sky-500/30 text-sky-100 ring-1 ring-sky-400/40',
+  TERMINATION: 'bg-zinc-500/30 text-zinc-100 ring-1 ring-zinc-400/40',
+  NOVATION: 'bg-violet-500/30 text-violet-100 ring-1 ring-violet-400/40',
+  RESET_OPT: 'bg-amber-500/30 text-amber-100 ring-1 ring-amber-400/40',
+  CORRECTION: 'bg-orange-500/30 text-orange-100 ring-1 ring-orange-400/40',
+  CLEARING_TERM: 'bg-teal-500/30 text-teal-100 ring-1 ring-teal-400/40',
+  EXERCISE_BORN: 'bg-pink-500/30 text-pink-100 ring-1 ring-pink-400/40',
+  OTHER: 'bg-slate-500/30 text-slate-100 ring-1 ring-slate-400/40',
 }
 
 export const TRADE_TYPE_TONES: Record<string, string> = {
