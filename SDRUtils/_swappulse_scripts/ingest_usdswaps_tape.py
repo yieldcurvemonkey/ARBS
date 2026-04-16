@@ -132,6 +132,8 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     "max_fixed_rate",
     "has_spread",
     "package_transaction_spread",
+    "package_transaction_price",
+    "package_transaction_price_currency",
     "rate_index_clean",
     "venue",
     "ccp",
@@ -400,6 +402,19 @@ def _consistent_str(group: pd.DataFrame, col: str) -> str | None:
     return None
 
 
+def _consistent_num(group: pd.DataFrame, col: str) -> float | None:
+    """Pick the single numeric value per group; fall back to first on disagreement."""
+    if col not in group.columns:
+        return None
+    vals = pd.to_numeric(
+        group[col].astype(str).str.replace(",", ""),
+        errors="coerce",
+    ).dropna().unique().tolist()
+    if not vals:
+        return None
+    return float(vals[0])
+
+
 _LEG_INT_COLS: tuple[str, ...] = (
     "execution_hour_et",
     "lc_n_events",
@@ -651,6 +666,16 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "package_transaction_spread": _num_or_none(
                 g["package_transaction_spread"].iloc[0]
                 if "package_transaction_spread" in g.columns else None
+            ),
+            "package_transaction_price": (
+                _consistent_num(g, "package_transaction_price")
+                if "package_transaction_price" in g.columns
+                else _consistent_num(g, "Package transaction price")
+            ),
+            "package_transaction_price_currency": (
+                _consistent_str(g, "package_transaction_price_currency")
+                if "package_transaction_price_currency" in g.columns
+                else _consistent_str(g, "Package transaction price currency")
             ),
             "rate_index_clean": _consistent_str(g, "rate_index_clean"),
             "venue": _consistent_str(g, "venue"),
