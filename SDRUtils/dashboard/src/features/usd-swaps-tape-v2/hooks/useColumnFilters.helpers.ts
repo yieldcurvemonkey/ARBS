@@ -11,31 +11,36 @@ import {
   type ColumnFilterPayload,
 } from '../components/TradeTapeTable/filter-utils'
 
-// Seed every filterable column with an empty AND-constrained entry so
-// PrimeReact's menu-mode filter overlay has a `{operator, constraints}`
-// object to render (Match All / Contains / input / Add Rule). Without this
-// the overlay renders only the Clear/Apply footer.
+// Menu-mode filter shape (PrimeReact uses `{ operator, constraints[] }` per
+// field when `filterDisplay="menu"`). Seeding every filterable column with an
+// empty AND/contains entry lets the popup overlay render a populated form
+// (Match All / Contains / input / Add Rule) on first open.
 export function buildInitialFilters(): DataTableFilterMeta {
-  const textField = () => ({
+  const text = () => ({
     operator: FilterOperator.AND,
     constraints: [{ value: null, matchMode: DEFAULT_TEXT_MATCH_MODE }],
   })
-  const numericField = () => ({
+  const numeric = () => ({
     operator: FilterOperator.AND,
     constraints: [{ value: null, matchMode: DEFAULT_NUMERIC_MATCH_MODE }],
   })
   return {
-    execution_start: textField(),
-    lifecycle_type: textField(),
-    platform_identifier: textField(),
-    tape_label: textField(),
-    total_risk: numericField(),
-    total_notional: numericField(),
-    weighted_fixed_rate: numericField(),
-    other_lvl_reported: textField(),
+    execution_start: text(),
+    lifecycle_type: text(),
+    platform_identifier: text(),
+    tape_label: text(),
+    total_risk: numeric(),
+    total_notional: numeric(),
+    weighted_fixed_rate: numeric(),
+    other_lvl_reported: text(),
   } as DataTableFilterMeta
 }
 
+// Tolerant of two URL shapes:
+//   1. Flat (current writer):   { field: { value, matchMode } }
+//   2. Menu (legacy bookmarks): { field: { operator, constraints[...] } }
+// In both cases we hydrate back into the menu-mode shape the overlay form
+// expects.
 export function rehydrateFilters(rawValue: string | null): DataTableFilterMeta {
   if (!rawValue) return {}
   let parsed: ColumnFilterPayload | null = null
@@ -47,22 +52,31 @@ export function rehydrateFilters(rawValue: string | null): DataTableFilterMeta {
   if (!parsed || typeof parsed !== 'object') return {}
   const next: DataTableFilterMeta = {}
   for (const [field, rawFilter] of Object.entries(parsed)) {
-    if (!rawFilter) continue
-    const constraints = Array.isArray(rawFilter.constraints)
-      ? rawFilter.constraints
-      : []
-    const active = constraints.filter((c) => !isEmptyFilterValue(c?.value))
-    if (!active.length) continue
+    if (!rawFilter || typeof rawFilter !== 'object') continue
+    const constraintsList: Array<{ value: unknown; matchMode?: string }> =
+      Array.isArray((rawFilter as any).constraints)
+        ? (rawFilter as any).constraints.filter(
+            (c: any) => !isEmptyFilterValue(c?.value),
+          )
+        : !isEmptyFilterValue((rawFilter as any).value)
+          ? [
+              {
+                value: (rawFilter as any).value,
+                matchMode: (rawFilter as any).matchMode,
+              },
+            ]
+          : []
+    if (!constraintsList.length) continue
     next[field] = {
       operator:
-        rawFilter.operator === FilterOperator.OR
+        (rawFilter as any).operator === FilterOperator.OR
           ? FilterOperator.OR
           : FilterOperator.AND,
-      constraints: active.map((c) => ({
+      constraints: constraintsList.map((c) => ({
         value: c.value,
         matchMode: (c.matchMode ?? FilterMatchMode.CONTAINS) as any,
       })),
-    }
+    } as any
   }
   return next
 }

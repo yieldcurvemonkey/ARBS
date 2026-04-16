@@ -77,6 +77,21 @@ export default function UsdSwapsTradeTape(): JSX.Element {
           .usd-swaps-tape-shell .p-column-filter-overlay * {
             font-size: 0.7rem !important;
           }
+          /* Make the funnel-icon button low-key — only really visible when a
+             filter is active (the active state class is added by PrimeReact). */
+          .usd-swaps-tape-shell .p-column-filter-menu-button {
+            width: 1.1rem !important;
+            height: 1.1rem !important;
+            color: rgba(148, 163, 184, 0.55) !important;
+          }
+          .usd-swaps-tape-shell .p-column-filter-menu-button:hover {
+            color: rgb(125, 211, 252) !important;
+            background: rgba(30, 41, 59, 0.6) !important;
+          }
+          .usd-swaps-tape-shell
+            .p-column-filter-menu-button.p-column-filter-menu-button-active {
+            color: rgb(125, 211, 252) !important;
+          }
         `}</style>
         <ManualLinksDialog
           open={activeModal === 'links'}

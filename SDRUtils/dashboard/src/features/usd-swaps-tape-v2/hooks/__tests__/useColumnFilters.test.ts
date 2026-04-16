@@ -10,13 +10,11 @@ describe('useColumnFilters URL helpers', () => {
     expect(rehydrateFilters('null')).toEqual({})
   })
 
-  it('serialize + rehydrate round-trips a full DataTableFilterMeta', () => {
+  it('serialize + rehydrate round-trips a menu-mode filter map', () => {
     const input = {
       tape_label: {
         operator: FilterOperator.AND,
-        constraints: [
-          { value: '5Y', matchMode: FilterMatchMode.CONTAINS },
-        ],
+        constraints: [{ value: '5Y', matchMode: FilterMatchMode.CONTAINS }],
       },
       total_risk: {
         operator: FilterOperator.OR,
@@ -32,7 +30,6 @@ describe('useColumnFilters URL helpers', () => {
     expect(url).toContain('total_risk')
 
     const out = rehydrateFilters(url)
-    expect(out.tape_label).toBeTruthy()
     expect((out.tape_label as any).constraints[0].value).toBe('5Y')
     expect((out.total_risk as any).operator).toBe(FilterOperator.OR)
     expect((out.total_risk as any).constraints).toHaveLength(2)
@@ -48,7 +45,7 @@ describe('useColumnFilters URL helpers', () => {
     expect(serializeFilters(input)).toBe('')
   })
 
-  it('rehydrate drops fields whose constraints are all empty', () => {
+  it('rehydrate drops fields whose menu constraints are all empty', () => {
     const raw = JSON.stringify({
       tape_label: {
         operator: FilterOperator.AND,
@@ -56,5 +53,17 @@ describe('useColumnFilters URL helpers', () => {
       },
     })
     expect(rehydrateFilters(raw)).toEqual({})
+  })
+
+  it('rehydrate accepts the flat { value, matchMode } shape for back-compat', () => {
+    const raw = JSON.stringify({
+      tape_label: { value: '5Y', matchMode: FilterMatchMode.CONTAINS },
+    })
+    const out = rehydrateFilters(raw)
+    expect((out.tape_label as any).constraints[0].value).toBe('5Y')
+    expect((out.tape_label as any).constraints[0].matchMode).toBe(
+      FilterMatchMode.CONTAINS,
+    )
+    expect((out.tape_label as any).operator).toBe(FilterOperator.AND)
   })
 })
