@@ -112,8 +112,8 @@ export const COLUMN_DEFS = [
   { key: 'action', header: 'Action', width: 132 },
   { key: 'platform', header: 'Platform', width: 120 },
   { key: 'pkg', header: 'Pkg', width: 96 },
-  { key: 'tape_label', header: 'Tape Label', width: 700 },
   { key: 'pkg_ind', header: 'Pkg Ind', width: 84 },
+  { key: 'tape_label', header: 'Tape Label', width: 700 },
   { key: 'risk_or_notional', header: 'DV01', width: 110 }, // toggles to Notional
   { key: 'rate', header: 'Reported LvL', width: 110 },
   { key: 'other_lvl', header: 'Other Lvl', width: 110 },

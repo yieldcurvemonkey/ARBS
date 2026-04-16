@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS {LEGS_TABLE} (
     venue TEXT,
     ccp TEXT,
     platform_identifier TEXT,
+    cleared TEXT,
     tape_label TEXT,
     leg_tape_label TEXT,
     upi_reset_freq TEXT,
@@ -179,6 +180,7 @@ ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS other_payment_currency TEXT;
 ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS package_transaction_price NUMERIC;
 ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS package_transaction_price_currency TEXT;
 ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS package_indicator BOOLEAN;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS cleared TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_tape_v1_legs_package ON {LEGS_TABLE}(package_id);
 CREATE INDEX IF NOT EXISTS idx_tape_v1_legs_exec ON {LEGS_TABLE}(execution_timestamp);

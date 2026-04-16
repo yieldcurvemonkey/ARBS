@@ -24,11 +24,16 @@ describe('LegsSubTable', () => {
     expect(legsSubTableSource).not.toContain(
       'leg.tenor_display ?? leg.tenor_label ?? EMPTY_VALUE',
     )
-    expect((legsSubTableSource.match(/<th /g) ?? []).length).toBe(11)
+    expect((legsSubTableSource.match(/<th /g) ?? []).length).toBe(12)
   })
 
   it('uses the reduced empty-state colspan after the column removal', () => {
-    expect(legsSubTableSource).toContain('colSpan={11}')
+    expect(legsSubTableSource).toContain('colSpan={12}')
+  })
+
+  it('surfaces the per-leg Cleared status column', () => {
+    expect(legsSubTableSource).toContain('>Cleared<')
+    expect(legsSubTableSource).toContain('leg.cleared')
   })
 
   it('prefers leg_tape_label over tape_label so CURVE/FLY legs show the per-leg outright description', () => {

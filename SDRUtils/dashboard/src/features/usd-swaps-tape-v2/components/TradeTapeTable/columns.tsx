@@ -194,20 +194,6 @@ export function getColumns(
       style={{ width: 92 }}
     />,
     <Column
-      key="tape_label"
-      field="tape_label"
-      filterField="tape_label"
-      sortable
-      filter
-      {...compactFilterMenuProps}
-      header={renderHeader(
-        'Tape Label',
-        summaryFor('tape_label', config.activeFilters),
-      )}
-      body={(row: UsdSwapTapeRow) => <TapeLabelCell row={row} />}
-      style={{ width: 470 }}
-    />,
-    <Column
       key="pkg_ind"
       field="package_indicator"
       filterField="package_indicator"
@@ -223,6 +209,20 @@ export function getColumns(
         </span>
       )}
       style={{ width: 74 }}
+    />,
+    <Column
+      key="tape_label"
+      field="tape_label"
+      filterField="tape_label"
+      sortable
+      filter
+      {...compactFilterMenuProps}
+      header={renderHeader(
+        'Tape Label',
+        summaryFor('tape_label', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) => <TapeLabelCell row={row} />}
+      style={{ width: 470 }}
     />,
     <Column
       key="metric"

@@ -205,6 +205,12 @@ describe('package column helpers', () => {
   it('renders package indicator values as explicit true/false text', () => {
     expect(packageIndicatorDisplay(true)).toBe('true')
     expect(packageIndicatorDisplay(false)).toBe('false')
-    expect(packageIndicatorDisplay(null)).toBe('false')
+    // Null/undefined means the DB column isn't populated for this row — show
+    // the shared empty marker so traders can't mistake it for a real `false`.
+    expect(packageIndicatorDisplay(null)).toBe('—')
+    expect(packageIndicatorDisplay(undefined)).toBe('—')
+    expect(packageIndicatorDisplay('true')).toBe('true')
+    expect(packageIndicatorDisplay('false')).toBe('false')
+    expect(packageIndicatorDisplay('')).toBe('—')
   })
 })
