@@ -1,10 +1,9 @@
 'use client'
-// ABOUTME: Three-strip tape header — title, summary stats, lifecycle mix.
+// ABOUTME: Slim tape header — title, summary stats, refresh. Filtering
+// moved to per-column filter menus inside TradeTapeTable (feedback round 1).
 import type { JSX } from 'react'
 import { formatDv01, formatNotional } from '../../utils/format'
-import type { FlagFilterState, LifecycleType, UsdSwapTapeRow } from '../../types'
-import { CleanTapeToggle } from './CleanTapeToggle'
-import { FlagChips } from './FlagChips'
+import type { UsdSwapTapeRow } from '../../types'
 import { summarize } from './TradeTapeHeader.helpers'
 
 export { summarize } from './TradeTapeHeader.helpers'
@@ -13,14 +12,7 @@ export interface TradeTapeHeaderProps {
   asOfDate: string | null
   liveStatus: 'live' | 'amber' | 'offline'
   rows: UsdSwapTapeRow[]
-  flagFilters: FlagFilterState
   onRefresh: () => void
-  onOpenFlowHistory: () => void
-  onOpenMethodology: () => void
-  onToggleLifecycle: (type: LifecycleType) => void
-  onApplyClean: () => void
-  onResetClean: () => void
-  onFilterByLifecycle: (type: LifecycleType) => void
 }
 
 function StatButton({
@@ -54,7 +46,7 @@ export function TradeTapeHeader(props: TradeTapeHeaderProps): JSX.Element {
         : 'bg-red-500'
   return (
     <header className="flex flex-col gap-px border-b border-slate-800 bg-slate-900/70 px-3 py-1">
-      {/* Strip 1: title + controls */}
+      {/* Strip 1: title + refresh */}
       <div className="flex items-center gap-2.5">
         <h1 className="text-sm font-semibold text-slate-100">USD swap tape</h1>
         {props.asOfDate ? (
@@ -73,20 +65,6 @@ export function TradeTapeHeader(props: TradeTapeHeaderProps): JSX.Element {
         >
           Refresh
         </button>
-        <button
-          type="button"
-          className="rounded bg-slate-800/70 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700/70"
-          onClick={props.onOpenFlowHistory}
-        >
-          Flow history
-        </button>
-        <button
-          type="button"
-          className="rounded bg-slate-800/70 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700/70"
-          onClick={props.onOpenMethodology}
-        >
-          Methodology
-        </button>
       </div>
       {/* Strip 2: summary stats */}
       <div className="flex items-center gap-0.5">
@@ -97,7 +75,6 @@ export function TradeTapeHeader(props: TradeTapeHeaderProps): JSX.Element {
         <StatButton
           label="New risk"
           value={summary.newRisk.toLocaleString()}
-          onClick={() => props.onFilterByLifecycle('NEW_RISK')}
         />
         <StatButton
           label="Gross DV01"
@@ -114,20 +91,6 @@ export function TradeTapeHeader(props: TradeTapeHeaderProps): JSX.Element {
         <StatButton
           label="Clusters"
           value={summary.clusterCount.toLocaleString()}
-        />
-        <div className="flex-1" />
-        <CleanTapeToggle
-          clean={props.flagFilters.clean}
-          onApply={props.onApplyClean}
-          onReset={props.onResetClean}
-        />
-      </div>
-      {/* Strip 3: lifecycle pills */}
-      <div className="flex items-center overflow-x-auto pb-px">
-        <FlagChips
-          counts={summary.lifecycleCounts}
-          selected={props.flagFilters.lifecycle}
-          onToggle={props.onToggleLifecycle}
         />
       </div>
     </header>

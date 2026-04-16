@@ -50,32 +50,11 @@ export default function UsdSwapsTradeTape(): JSX.Element {
 
   return (
     <div className="usd-swaps-tape-shell flex h-full min-h-0 flex-col bg-slate-950 text-slate-100 pb-12">
-      {/* NOTE(feedback-round-1): header prop set is being slimmed in the
-          next commit (Task 11). Passing noop handlers here keeps the type
-          check green between the Task 10 deletions and the Task 11 header
-          refactor without widening scope of a single commit. */}
       <TradeTapeHeader
         asOfDate={asOf}
         liveStatus={liveStatus}
         rows={tape.rows}
-        flagFilters={{
-          lifecycle: new Set(),
-          tradeTypes: new Set(),
-          venues: new Set(),
-          ccps: new Set(),
-          sessions: new Set(),
-          rateIndex: new Set(),
-          tenors: new Set(),
-          fomcMeeting: null,
-          clean: false,
-        }}
         onRefresh={() => tape.refetch()}
-        onOpenFlowHistory={() => {}}
-        onOpenMethodology={() => {}}
-        onToggleLifecycle={() => {}}
-        onApplyClean={() => {}}
-        onResetClean={() => {}}
-        onFilterByLifecycle={() => {}}
       />
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <TradeTapeTable
