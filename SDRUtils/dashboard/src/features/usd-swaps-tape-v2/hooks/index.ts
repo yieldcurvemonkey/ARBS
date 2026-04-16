@@ -7,7 +7,6 @@ export {
   SORT_ORDER_QUERY_KEY,
 } from './useTableControls'
 export type { SortDirection, UseTableControlsReturn } from './useTableControls'
-export { useFlagFilters } from './useFlagFilters'
 export { useRowExpansion } from './useRowExpansion'
 export { useRowSelection } from './useRowSelection'
 export { useSavedUser } from './useSavedUser'
