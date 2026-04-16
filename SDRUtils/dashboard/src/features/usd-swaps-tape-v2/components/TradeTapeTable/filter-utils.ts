@@ -1,5 +1,5 @@
-// ABOUTME: Pure-logic per-column filter helpers — ported from
-// SwaptionTradeTape.tsx.bak to power feedback-round-1 column filters.
+// ABOUTME: Pure-logic per-column filter helpers — power the inline row
+// filter inputs (filterDisplay="row") in TradeTapeTable.
 import { FilterMatchMode, FilterOperator } from 'primereact/api'
 import type { DataTableFilterMeta } from 'primereact/datatable'
 
@@ -11,11 +11,14 @@ export type ColumnFilterConstraint = {
   matchMode?: string
 }
 
+// URL payload shape — flat per-field { value, matchMode }. The legacy
+// menu-mode { operator, constraints[] } shape is still understood by
+// `rehydrateFilters` for back-compat with old bookmarks.
 export type ColumnFilterPayload = Record<
   string,
-  {
+  ColumnFilterConstraint & {
     operator?: string
-    constraints: ColumnFilterConstraint[]
+    constraints?: ColumnFilterConstraint[]
   }
 >
 
@@ -39,6 +42,10 @@ export function parseFilterNumber(value: any): number | null {
   return null
 }
 
+// Serialize the menu-mode filter map into the URL payload. Each field is
+// preserved with its `{ operator, constraints[...] }` so multi-constraint
+// AND/OR rules round-trip across reloads. Empty constraints are stripped so
+// shared links stay clean.
 export function buildColumnFilterPayload(
   filters: DataTableFilterMeta,
 ): ColumnFilterPayload {
@@ -50,26 +57,18 @@ export function buildColumnFilterPayload(
       filterMeta.constraints,
     )
       ? filterMeta.constraints
-      : [
-          {
-            value: filterMeta.value,
-            matchMode: filterMeta.matchMode,
-          },
-        ]
-    const activeConstraints = constraints
-      .map((constraint) => ({
-        value: constraint?.value,
-        matchMode: constraint?.matchMode,
-      }))
-      .filter((constraint) => !isEmptyFilterValue(constraint.value))
-    if (!activeConstraints.length) return
+      : [{ value: filterMeta.value, matchMode: filterMeta.matchMode }]
+    const active = constraints
+      .map((c) => ({ value: c?.value, matchMode: c?.matchMode }))
+      .filter((c) => !isEmptyFilterValue(c.value))
+    if (!active.length) return
     payload[field] = {
       operator:
         filterMeta.operator === FilterOperator.OR
           ? FilterOperator.OR
           : FilterOperator.AND,
-      constraints: activeConstraints,
-    }
+      constraints: active,
+    } as any
   })
   return payload
 }

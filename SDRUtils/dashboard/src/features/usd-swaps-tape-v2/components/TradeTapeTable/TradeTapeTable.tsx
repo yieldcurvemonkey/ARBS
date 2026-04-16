@@ -25,6 +25,7 @@ import { useColumnFilters } from '../../hooks'
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
 import { getColumns, rowClassName, type MetricMode } from './columns'
+import { hasActiveConstraints, matchFilterMeta } from './filter-utils'
 
 // PrimeReact's `VirtualScrollerLazyEvent` types `first` / `last` as
 // `number | VirtualScrollerState`; we only care about the numeric case and
@@ -102,9 +103,56 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   const effectiveSortOrder: 1 | -1 | 0 =
     (columnFilters.sortOrder ?? -1) as 1 | -1 | 0
 
-  // DataTable handles filtering internally from the `filters` prop. We keep
-  // the unfiltered `rows` as input and let PrimeReact filter+sort on its own.
-  const displayRows = rows
+  // PrimeReact's DataTable runs in `lazy` mode (required so the
+  // VirtualScroller can drive cursor pagination through onLazyLoad). In lazy
+  // mode the table does NOT apply `filters` or `sortField`/`sortOrder` to the
+  // `value` prop — it only emits the corresponding events. We therefore have
+  // to filter + sort the rows ourselves before handing them to the table,
+  // otherwise the per-column filter overlay updates URL state but the visible
+  // rows never change (the bug we are fixing).
+  const activeFilterEntries = useMemo(() => {
+    return Object.entries(columnFilters.filters ?? {}).filter(([, meta]) =>
+      hasActiveConstraints(meta),
+    )
+  }, [columnFilters.filters])
+
+  const displayRows = useMemo<UsdSwapTapeRow[]>(() => {
+    let result: UsdSwapTapeRow[] = rows
+    if (activeFilterEntries.length > 0) {
+      result = result.filter((row) =>
+        activeFilterEntries.every(([field, meta]) =>
+          matchFilterMeta((row as Record<string, unknown>)[field], meta),
+        ),
+      )
+    }
+    if (effectiveSortField && effectiveSortOrder !== 0) {
+      const field = effectiveSortField
+      const dir = effectiveSortOrder === 1 ? 1 : -1
+      result = [...result].sort((a, b) => {
+        const av = (a as Record<string, unknown>)[field] as
+          | string
+          | number
+          | null
+          | undefined
+        const bv = (b as Record<string, unknown>)[field] as
+          | string
+          | number
+          | null
+          | undefined
+        // Push nullish to the bottom regardless of direction.
+        if (av == null && bv == null) return 0
+        if (av == null) return 1
+        if (bv == null) return -1
+        if (typeof av === 'number' && typeof bv === 'number') {
+          return (av - bv) * dir
+        }
+        return String(av).localeCompare(String(bv)) * dir
+      })
+    }
+    return result
+  }, [rows, activeFilterEntries, effectiveSortField, effectiveSortOrder])
+
+  const filtersActive = activeFilterEntries.length > 0
 
   useEffect(() => {
     if (!hasMore || loadingMore) return
@@ -292,7 +340,15 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         rowHover
         lazy
         totalRecords={
-          hasMore ? displayRows.length + LAZY_LOAD_PAGE_SIZE : displayRows.length
+          // When filters are active, server pagination cannot help us — the
+          // filter is client-side, so the virtual scroller must size to the
+          // visible (filtered) row count. Without this, the scroller leaves a
+          // huge blank tail under a small filtered result set.
+          filtersActive
+            ? displayRows.length
+            : hasMore
+              ? displayRows.length + LAZY_LOAD_PAGE_SIZE
+              : displayRows.length
         }
         virtualScrollerOptions={{
           itemSize: ROW_ESTIMATE_PX,
@@ -316,6 +372,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           expanderBody,
           metricMode,
           onToggleMetric: toggleMetric,
+          activeFilters: columnFilters.filters as DataTableFilterMeta,
         })}
       </DataTable>
       {loadingMore ? (

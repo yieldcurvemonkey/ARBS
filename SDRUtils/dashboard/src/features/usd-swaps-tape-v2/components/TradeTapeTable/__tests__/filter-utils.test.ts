@@ -86,7 +86,7 @@ describe('matchFilterMeta', () => {
 })
 
 describe('buildColumnFilterPayload', () => {
-  it('returns an empty payload when all constraints are empty', () => {
+  it('returns an empty payload when all menu constraints are empty', () => {
     const payload = buildColumnFilterPayload({
       tape_label: {
         operator: FilterOperator.AND,
@@ -95,7 +95,7 @@ describe('buildColumnFilterPayload', () => {
     } as any)
     expect(payload).toEqual({})
   })
-  it('serializes active constraints with operator', () => {
+  it('serializes a menu-mode filter preserving operator + constraints', () => {
     const payload = buildColumnFilterPayload({
       tape_label: {
         operator: FilterOperator.OR,
@@ -109,9 +109,18 @@ describe('buildColumnFilterPayload', () => {
         constraints: [{ value: null, matchMode: FilterMatchMode.GREATER_THAN }],
       },
     } as any)
-    expect(payload.tape_label.operator).toBe(FilterOperator.OR)
-    expect(payload.tape_label.constraints).toHaveLength(2)
+    expect((payload.tape_label as any).operator).toBe(FilterOperator.OR)
+    expect((payload.tape_label as any).constraints).toHaveLength(2)
     expect(payload.total_risk).toBeUndefined()
+  })
+  it('also accepts a flat { value, matchMode } shape and wraps it', () => {
+    const payload = buildColumnFilterPayload({
+      tape_label: { value: 'Fed', matchMode: FilterMatchMode.CONTAINS },
+    } as any)
+    expect((payload.tape_label as any).operator).toBe(FilterOperator.AND)
+    expect((payload.tape_label as any).constraints).toEqual([
+      { value: 'Fed', matchMode: FilterMatchMode.CONTAINS },
+    ])
   })
 })
 

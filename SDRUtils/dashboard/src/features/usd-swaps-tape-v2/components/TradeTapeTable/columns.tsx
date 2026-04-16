@@ -1,8 +1,8 @@
 'use client'
 // ABOUTME: Column body templates for the main TradeTapeTable.
 import type { JSX } from 'react'
-import { FilterMatchMode } from 'primereact/api'
 import { Column } from 'primereact/column'
+import type { DataTableFilterMeta } from 'primereact/datatable'
 import { EMPTY_VALUE } from '../../constants'
 import type { UsdSwapTapeRow } from '../../types'
 import {
@@ -12,6 +12,7 @@ import {
   formatOtherLvl,
   formatRate,
 } from '../../utils/format'
+import { getFilterDisplayLabel } from './filter-utils'
 import { LifecyclePills } from './RowBadges'
 import { TapeLabelCell } from './TapeLabelCell'
 
@@ -24,35 +25,41 @@ type ColumnConfig = {
   expanderBody?: (row: UsdSwapTapeRow) => JSX.Element
   metricMode?: MetricMode
   onToggleMetric?: () => void
+  /**
+   * Current per-column filter state. Used to render a subtle "preview" line
+   * under each column title (e.g. `contains "Fed"`). Editing still happens in
+   * the popup overlay (filterDisplay="menu") opened via the funnel icon.
+   */
+  activeFilters?: DataTableFilterMeta
 }
 
-// Matches the text match-mode options SwaptionTradeTape uses for its time
-// column — gives users contains/equals/greater-than/etc. against the
-// ISO timestamp string.
-const TIME_FILTER_MATCH_MODE_OPTIONS = [
-  { label: 'Contains', value: FilterMatchMode.CONTAINS },
-  { label: 'Equals', value: FilterMatchMode.EQUALS },
-  { label: 'Not equals', value: FilterMatchMode.NOT_EQUALS },
-  { label: 'Greater than', value: FilterMatchMode.GREATER_THAN },
-  {
-    label: 'Greater than or equal',
-    value: FilterMatchMode.GREATER_THAN_OR_EQUAL_TO,
-  },
-  { label: 'Less than', value: FilterMatchMode.LESS_THAN },
-  {
-    label: 'Less than or equal',
-    value: FilterMatchMode.LESS_THAN_OR_EQUAL_TO,
-  },
-]
-
-function renderHeader(label: string): JSX.Element {
+function renderHeader(label: string, summary?: string | null): JSX.Element {
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col leading-tight">
       <span className="text-[10px] uppercase tracking-wide text-gray-400">
         {label}
       </span>
+      {summary ? (
+        <span
+          className="mt-0.5 truncate text-[9px] font-normal normal-case tracking-normal text-sky-300/70"
+          title={summary}
+        >
+          {summary}
+        </span>
+      ) : null}
     </div>
   )
+}
+
+function summaryFor(
+  field: string,
+  active: DataTableFilterMeta | undefined,
+): string | null {
+  if (!active) return null
+  const meta = (active as Record<string, unknown>)[field]
+  if (!meta) return null
+  const label = getFilterDisplayLabel(meta)
+  return label || null
 }
 
 function firstLeg(row: UsdSwapTapeRow) {
@@ -79,17 +86,29 @@ export function getColumns(
   }
 
   const mode: MetricMode = config.metricMode ?? 'dv01'
+  const metricField = mode === 'dv01' ? 'total_risk' : 'total_notional'
+  const metricSummary = summaryFor(metricField, config.activeFilters)
   const metricHeader = (
-    <button
-      type="button"
-      onClick={config.onToggleMetric}
-      className="flex flex-col text-left hover:text-sky-300"
-      aria-label={`toggle metric (current: ${mode === 'dv01' ? 'DV01' : 'Notional'})`}
-    >
-      <span className="text-[10px] uppercase tracking-wide text-gray-400">
-        {mode === 'dv01' ? 'DV01' : 'Notional'} ⇅
-      </span>
-    </button>
+    <div className="flex flex-col leading-tight">
+      <button
+        type="button"
+        onClick={config.onToggleMetric}
+        className="flex flex-col text-left hover:text-sky-300"
+        aria-label={`toggle metric (current: ${mode === 'dv01' ? 'DV01' : 'Notional'})`}
+      >
+        <span className="text-[10px] uppercase tracking-wide text-gray-400">
+          {mode === 'dv01' ? 'DV01' : 'Notional'} ⇅
+        </span>
+      </button>
+      {metricSummary ? (
+        <span
+          className="mt-0.5 truncate text-[9px] font-normal normal-case tracking-normal text-sky-300/70"
+          title={metricSummary}
+        >
+          {metricSummary}
+        </span>
+      ) : null}
+    </div>
   )
 
   cols.push(
@@ -99,8 +118,10 @@ export function getColumns(
       filterField="execution_start"
       sortable
       filter
-      filterMatchModeOptions={TIME_FILTER_MATCH_MODE_OPTIONS}
-      header={renderHeader('Time')}
+      header={renderHeader(
+        'Time',
+        summaryFor('execution_start', config.activeFilters),
+      )}
       body={(row: UsdSwapTapeRow) => (
         <span className="whitespace-nowrap text-[11px] text-gray-300">
           {formatExecutionWindow(row.execution_start, row.execution_end)}
@@ -113,7 +134,10 @@ export function getColumns(
       field="lifecycle_type"
       filterField="lifecycle_type"
       filter
-      header={renderHeader('Action')}
+      header={renderHeader(
+        'Action',
+        summaryFor('lifecycle_type', config.activeFilters),
+      )}
       body={(row: UsdSwapTapeRow) => <LifecyclePills row={row} />}
       style={{ width: 64 }}
     />,
@@ -123,7 +147,10 @@ export function getColumns(
       filterField="platform_identifier"
       sortable
       filter
-      header={renderHeader('Platform')}
+      header={renderHeader(
+        'Platform',
+        summaryFor('platform_identifier', config.activeFilters),
+      )}
       body={(row: UsdSwapTapeRow) => (
         <span className="truncate text-[11px] text-gray-300">
           {displayPlatform(row)}
@@ -137,14 +164,17 @@ export function getColumns(
       filterField="tape_label"
       sortable
       filter
-      header={renderHeader('Tape Label')}
+      header={renderHeader(
+        'Tape Label',
+        summaryFor('tape_label', config.activeFilters),
+      )}
       body={(row: UsdSwapTapeRow) => <TapeLabelCell row={row} />}
       style={{ width: 470 }}
     />,
     <Column
       key="metric"
-      field={mode === 'dv01' ? 'total_risk' : 'total_notional'}
-      filterField={mode === 'dv01' ? 'total_risk' : 'total_notional'}
+      field={metricField}
+      filterField={metricField}
       sortable
       filter
       dataType="numeric"
@@ -165,7 +195,10 @@ export function getColumns(
       sortable
       filter
       dataType="numeric"
-      header={renderHeader('Reported LvL')}
+      header={renderHeader(
+        'Reported LvL',
+        summaryFor('weighted_fixed_rate', config.activeFilters),
+      )}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-[11px] text-gray-200">
           {formatRate(row.weighted_fixed_rate ?? null)}
@@ -178,7 +211,10 @@ export function getColumns(
       field="other_lvl_reported"
       filterField="other_lvl_reported"
       filter
-      header={renderHeader('Other Lvl')}
+      header={renderHeader(
+        'Other Lvl',
+        summaryFor('other_lvl_reported', config.activeFilters),
+      )}
       body={(row: UsdSwapTapeRow) => {
         const legs = row.legs_json ?? []
         const lines = formatOtherLvl({
