@@ -186,7 +186,18 @@ CREATE INDEX IF NOT EXISTS idx_tape_v1_legs_metrics_gin ON {LEGS_TABLE} USING GI
 CREATE INDEX IF NOT EXISTS idx_tape_v1_legs_flags_gin ON {LEGS_TABLE} USING GIN (quality_flags);
 
 -- Display view: packages with jsonb_agg of legs + manual-link metadata
-CREATE OR REPLACE VIEW {DISPLAY_VIEW} AS
+--
+-- Dropped-and-recreated (rather than CREATE OR REPLACE) because Postgres
+-- CREATE OR REPLACE VIEW refuses to rename or reorder existing view columns
+-- — it can only append new columns at the end of the SELECT list. When we
+-- inserted package_transaction_price / _currency before rate_index_clean
+-- (PR #257), existing deployments with the prior view shape would error:
+--   cannot change name of view column "rate_index_clean"
+--     to "package_transaction_price"
+-- DROP + CREATE keeps migrations idempotent and order-agnostic.
+DROP VIEW IF EXISTS {DISPLAY_VIEW};
+
+CREATE VIEW {DISPLAY_VIEW} AS
 SELECT
   p.package_id,
   p.manual_link_id,
