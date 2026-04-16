@@ -88,7 +88,8 @@ def sample_classified_df() -> pd.DataFrame:
             event_action="TERM",
             event_type="NOVA",
         ),
-        # RESET_OPTIMIZATION (short-dated compression-spec-like payload)
+        # Short-dated NEWT (previously tagged RESET_OPTIMIZATION by a
+        # tenor<0.5 heuristic; flag removed — now flows as regular new-risk).
         _row(
             trade_id="T_RST_1",
             package_id="P_RST_1",

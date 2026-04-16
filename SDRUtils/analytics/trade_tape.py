@@ -455,7 +455,11 @@ class TradeTape(SDRAnalyzer):
         # Reuse compression signals for consistency
         signals = detect_compression_signals(df)
         df["is_compression"] = signals["is_lifecycle"].values
-        df["is_reset_optimization"] = signals["is_reset_opt"].values
+        # Always False: the prior tenor<0.5 "reset optimization" heuristic was a
+        # misnomer (flagged any short-dated NEWT, not true reset-opt cycles) and
+        # has been removed. Column retained as False so downstream schema /
+        # dashboard SQL (``NOT d.is_reset_optimization_any``) keep working.
+        df["is_reset_optimization"] = False
 
         return df
 
@@ -1087,10 +1091,10 @@ class TradeTape(SDRAnalyzer):
         }
 
     def clean_tape(self) -> pd.DataFrame:
-        """Tape filtered to new-risk only, no UFRO/compression/reset-opt.
+        """Tape filtered to new-risk only, no UFRO/compression/unwind.
 
-        Returns the 'real' organic flow: NEWT trades with tenor >= 0.5Y,
-        excluding off-market-coupon (UFRO) trades.
+        Returns the 'real' organic flow: NEWT trades, excluding
+        off-market-coupon (UFRO) and lifecycle events.
         """
         if self._result is None:
             self.compute()
@@ -1103,8 +1107,6 @@ class TradeTape(SDRAnalyzer):
             mask &= ~df["is_ufro"]
         if "is_compression" in df.columns:
             mask &= ~df["is_compression"]
-        if "is_reset_optimization" in df.columns:
-            mask &= ~df["is_reset_optimization"]
         if "is_unwind" in df.columns:
             mask &= ~df["is_unwind"]
         if "xd_is_terminated" in df.columns:

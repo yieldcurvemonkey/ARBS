@@ -46,7 +46,6 @@ from SDRUtils.analytics.filters import (  # noqa: F401
     filter_new_risk, filter_outrights, filter_packages,
     filter_by_rate_index, filter_by_basis_type, filter_spreadovers,
     filter_blocks, filter_capped, filter_compression_heuristic,
-    filter_reset_optimization,
     daily_dv01_by_group, rolling_zscore, vwap, daily_vwap,
 )
 from SDRUtils.analytics.flow import (  # noqa: F401
