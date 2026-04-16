@@ -185,3 +185,7 @@ Replace `LIFECYCLE_TONES` in `constants.ts` with the following set (1px ring for
 4. Frontend changes — shipped together as one feature branch.
 
 No feature flag required; schema additions are additive, frontend consumes new fields with null-safe formatters.
+
+---
+
+**Status:** implemented on 68c6295 (2026-04-16). Feedback items 1–4 landed; #5 (package detection) remains on hold.
