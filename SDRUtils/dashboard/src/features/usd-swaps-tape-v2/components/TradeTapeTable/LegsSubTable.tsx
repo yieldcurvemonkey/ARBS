@@ -34,6 +34,46 @@ function maturityDateOf(leg: UsdSwapTapeLeg): string | null | undefined {
   return leg.swap_maturity_date ?? leg.expiration_date
 }
 
+// Display label for the CFTC "Cleared" field. Per Part 43 Appendix 1, the
+// reported values are single-letter codes:
+//   C = cleared
+//   U = uncleared
+//   I = intend to clear (pre-clearing window)
+// Anything else (rare) is surfaced verbatim so ops can spot bad data.
+const CLEARED_LABELS: Record<string, string> = {
+  C: 'Cleared',
+  U: 'Uncleared',
+  I: 'Intent',
+  Y: 'Cleared',
+  N: 'Uncleared',
+}
+
+const CLEARED_BADGE_TONES: Record<string, string> = {
+  C: 'bg-emerald-900/40 text-emerald-200',
+  U: 'bg-rose-900/40 text-rose-200',
+  I: 'bg-sky-900/40 text-sky-200',
+  Y: 'bg-emerald-900/40 text-emerald-200',
+  N: 'bg-rose-900/40 text-rose-200',
+}
+
+function clearedBody(leg: UsdSwapTapeLeg) {
+  const raw = leg.cleared
+  if (raw === null || raw === undefined || raw === '') {
+    return <span className="text-slate-500">{EMPTY_VALUE}</span>
+  }
+  const key = String(raw).trim().toUpperCase()
+  const label = CLEARED_LABELS[key] ?? key
+  const tone = CLEARED_BADGE_TONES[key] ?? 'bg-slate-800/60 text-slate-300'
+  return (
+    <span
+      className={`inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase ${tone}`}
+      title={`Cleared code: ${key}`}
+    >
+      {label}
+    </span>
+  )
+}
+
 function crossDayProgress(leg: UsdSwapTapeLeg) {
   const pct = leg.xd_notional_pct_remaining
   if (pct === null || pct === undefined || pct >= 0.999) {
@@ -171,6 +211,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
               <th className="px-2 py-1 text-right">DV01</th>
               <th className="px-2 py-1 text-right">Rate</th>
               <th className="px-2 py-1 text-right">OPA</th>
+              <th className="px-2 py-1 text-left">Cleared</th>
               <th className="px-2 py-1 text-left">Flags</th>
               <th className="px-2 py-1 text-left">X-Day</th>
             </tr>
@@ -210,13 +251,14 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                       }`
                     : EMPTY_VALUE}
                 </td>
+                <td className="whitespace-nowrap px-2 py-1">{clearedBody(leg)}</td>
                 <td className="px-2 py-1">{qualityFlagsBody(leg)}</td>
                 <td className="whitespace-nowrap px-2 py-1">{crossDayProgress(leg)}</td>
               </tr>
             ))}
             {legs.length === 0 ? (
               <tr className="border-t border-slate-800/90 text-slate-400">
-                <td className="px-2 py-2" colSpan={11}>
+                <td className="px-2 py-2" colSpan={12}>
                   No leg data available.
                 </td>
               </tr>

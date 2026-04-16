@@ -106,11 +106,25 @@ export function packageTypeBadgeClassName(value: unknown): string {
 }
 
 export function packageIndicatorDisplay(value: unknown): string {
+  // Null/undefined means the column isn't populated on this row (e.g. DB view
+  // lags the tape ingest). Showing "false" would be wrong — the SDR flag is
+  // genuinely unknown, not False — so fall back to the shared empty marker.
+  if (value === null || value === undefined) return '—'
   if (typeof value === 'string') {
     const normalized = value.trim().toLowerCase()
+    if (normalized === '' || normalized === 'nan' || normalized === 'none' || normalized === 'null') {
+      return '—'
+    }
     if (['true', 't', '1', 'yes', 'y'].includes(normalized)) {
       return 'true'
     }
+    if (['false', 'f', '0', 'no', 'n'].includes(normalized)) {
+      return 'false'
+    }
+  }
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) return '—'
+    return value ? 'true' : 'false'
   }
   return value === true ? 'true' : 'false'
 }
