@@ -941,6 +941,7 @@ def run_ingest(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     use_cache: bool = True,
+    cache_path: Optional[str] = None,
 ) -> int:
     """Full pipeline: load classified df → TradeTape.compute() → write → record run.
 
@@ -949,10 +950,19 @@ def run_ingest(
     ``end`` is bumped to ``end_date + 1 day`` at midnight UTC. Same-day runs
     (``start_date == end_date``) therefore cover a full 24-hour window. This
     matches the classification stage in ``run_usdswaps_pipeline._run_classification_range``.
+
+    ``cache_path`` must point at the SAME SDR classification cache directory
+    used by the classification stage (``ingest_usdswaps._resolve_cache_path``),
+    otherwise the tape stage reads stale pre-fix classifications while the
+    classification stage writes fresh parquet elsewhere. Defaults to the shared
+    resolver so both stages land on the same directory by default.
     """
     from datetime import timedelta
 
     from notebooks.sdr._usd_swaps_common import load_usd_swaps
+    from SDRUtils._swappulse_scripts.ingest_usdswaps import _resolve_cache_path
+
+    resolved_cache_path = _resolve_cache_path(cache_path)
 
     start = (
         datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -974,7 +984,7 @@ def run_ingest(
         # so fall back to classified-only on raw-fetch failure.
         try:
             classified, raw_df = load_usd_swaps(
-                start=start, end=end, return_raw=True
+                start=start, end=end, cache_path=resolved_cache_path, return_raw=True
             )
         except Exception as raw_err:
             import warnings
@@ -983,7 +993,9 @@ def run_ingest(
                 f"load_usd_swaps raw fetch failed ({raw_err}); "
                 "continuing with classified-only",
             )
-            classified = load_usd_swaps(start=start, end=end, return_raw=False)
+            classified = load_usd_swaps(
+                start=start, end=end, cache_path=resolved_cache_path, return_raw=False
+            )
             raw_df = None
         cache_hit = False
         # Heuristic: if cache file is already on disk, TradeTape will hit it.

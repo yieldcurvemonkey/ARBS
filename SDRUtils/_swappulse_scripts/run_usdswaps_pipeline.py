@@ -115,8 +115,15 @@ def _run_tape_for_dates(
     pg_url: Optional[str],
     use_cache: bool,
     stop_on_error: bool,
+    cache_path: Optional[str] = None,
 ) -> int:
-    """Run the enriched tape build one day at a time."""
+    """Run the enriched tape build one day at a time.
+
+    ``cache_path`` is forwarded to ``ingest_usdswaps_tape.run_ingest`` so the
+    tape stage reads the *same* classification parquet cache that the
+    classification stage just wrote. Passing None falls through to the shared
+    ``_resolve_cache_path`` default inside ``ingest_usdswaps``.
+    """
     failures = 0
     resolved_pg_url = ingest_usdswaps_tape.resolve_pg_url(pg_url)
     for d in dates:
@@ -128,6 +135,7 @@ def _run_tape_for_dates(
                 start_date=iso,
                 end_date=iso,
                 use_cache=use_cache,
+                cache_path=cache_path,
             )
         except Exception as exc:
             failures += 1
@@ -195,6 +203,7 @@ def cmd_backfill(args: argparse.Namespace) -> int:
         pg_url=args.pg_url,
         use_cache=not args.no_tape_cache,
         stop_on_error=not args.continue_on_error,
+        cache_path=args.cache_path,
     )
     return 1 if failures else 0
 
@@ -229,6 +238,7 @@ def cmd_incremental(args: argparse.Namespace) -> int:
         pg_url=args.pg_url,
         use_cache=not args.no_tape_cache,
         stop_on_error=False,
+        cache_path=args.cache_path,
     )
     return 1 if failures else 0
 
@@ -323,6 +333,7 @@ def cmd_service(args: argparse.Namespace) -> int:
                     start_date=today.isoformat(),
                     end_date=today.isoformat(),
                     use_cache=not args.no_tape_cache,
+                    cache_path=cache_path,
                 )
             except Exception as exc:
                 print(f"Tape cycle {iteration} failed: {exc}")
