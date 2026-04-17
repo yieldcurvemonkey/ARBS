@@ -180,16 +180,41 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
 
   const filtersActive = activeFilterEntries.length > 0
 
+  // Max rows to chain-load when filters are active. Filters are client-side,
+  // so surfacing every match means dragging down every cursor page the
+  // server will give us; cap at 20k to bound the pathological case.
+  const MAX_FILTERED_AUTOLOAD_ROWS = 20_000
+
   useEffect(() => {
     if (!hasMore || loadingMore) return
+    if (filtersActive) {
+      // Column filter is on: the viewport-fill heuristic is wrong here —
+      // the user wants to see every row that matches their filter, not
+      // just enough to cover the screen. Chain-load until `hasMore`
+      // flips false (or the safety cap trips) so the UI never leaves
+      // the trader staring at a short filtered result set while there
+      // are still unscanned rows on the server. Fixes the "need to
+      // refresh after applying a column filter" desk report.
+      if (rows.length < MAX_FILTERED_AUTOLOAD_ROWS) {
+        void requestLoadMore()
+      }
+      return
+    }
     const approximateVisibleRows =
       typeof window !== 'undefined'
         ? Math.ceil((window.innerHeight * 0.7) / ROW_ESTIMATE_PX)
         : 20
     if (displayRows.length < approximateVisibleRows + 5) {
-      requestLoadMore()
+      void requestLoadMore()
     }
-  }, [displayRows.length, hasMore, loadingMore, requestLoadMore])
+  }, [
+    displayRows.length,
+    rows.length,
+    filtersActive,
+    hasMore,
+    loadingMore,
+    requestLoadMore,
+  ])
 
   const handleVirtualLoad = useCallback(
     (event: VirtualScrollerLazyLoadEvent) => {
@@ -204,6 +229,39 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     },
     [displayRows.length, requestLoadMore],
   )
+
+  // Belt-and-suspenders scroll trigger. PrimeReact's onLazyLoad only fires
+  // when the virtualscroller decides it needs a fresh page; under slow
+  // scroll the `last` index can stay put for long stretches and the loader
+  // never kicks. Attach a raw scroll listener on the scrollable element and
+  // fire `requestLoadMore` as soon as the user is within ~1.5 viewports of
+  // the tail — this covers the "slowly scrolling doesn't fetch" bug the
+  // desk reported.
+  const tableWrapperRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const root = tableWrapperRef.current
+    if (!root) return
+    const scroller = root.querySelector<HTMLElement>('.p-virtualscroller')
+    if (!scroller) return
+    const NEAR_BOTTOM_PX = Math.max(
+      ROW_ESTIMATE_PX * 10,
+      Math.round(scroller.clientHeight * 1.5),
+    )
+    const onScroll = () => {
+      if (!hasMore || loadingMore) return
+      const remaining =
+        scroller.scrollHeight - (scroller.scrollTop + scroller.clientHeight)
+      if (remaining <= NEAR_BOTTOM_PX) {
+        void requestLoadMore()
+      }
+    }
+    scroller.addEventListener('scroll', onScroll, { passive: true })
+    // Prime once after mount in case the user starts already near the tail.
+    onScroll()
+    return () => {
+      scroller.removeEventListener('scroll', onScroll)
+    }
+  }, [hasMore, loadingMore, requestLoadMore, displayRows.length])
 
   const selectedIds = new Set((selected ?? []).map((row) => row.package_id))
 
@@ -262,6 +320,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
 
   return (
     <div
+      ref={tableWrapperRef}
       className="flex flex-col flex-1 min-h-0 bg-slate-950 text-slate-100"
       data-testid="trade-tape-table"
     >
