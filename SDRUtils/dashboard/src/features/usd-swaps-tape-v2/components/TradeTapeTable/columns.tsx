@@ -279,18 +279,20 @@ export function getColumns(
           opaCurrency: legs.map((l) => l.other_payment_currency ?? null),
           ptp: row.package_transaction_price ?? null,
           ptpCurrency: row.package_transaction_price_currency ?? null,
+          pts: row.package_transaction_spread ?? null,
         })
         return (
           <div
             data-testid="other-lvl-cell"
-            className="flex flex-col font-mono text-[13px] text-gray-200"
+            className="flex flex-col font-mono text-[10px] leading-tight text-gray-200"
           >
             <span>{lines.opaLine}</span>
             <span>{lines.ptpLine}</span>
+            <span>{lines.ptsLine}</span>
           </div>
         )
       }}
-      style={{ width: 110 }}
+      style={{ width: 118 }}
     />,
   )
   return cols

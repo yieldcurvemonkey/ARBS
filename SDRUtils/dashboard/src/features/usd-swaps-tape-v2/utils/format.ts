@@ -161,12 +161,36 @@ function formatSignedCompact(n: number): string {
   return `${sign}${scaled.toFixed(precision)}k`
 }
 
+// Format the Package Transaction Spread (PTS). Raw SDR reports it as a
+// decimal, typically in the 0.0001–0.05 range (i.e. 1bp–500bp). Render as
+// basis points with two decimals when the value is small, and as percent
+// once the magnitude exceeds ~1%. Empty-marker when missing.
+function formatPackageSpread(n: number): string {
+  const abs = Math.abs(n)
+  if (abs >= 1) {
+    // Already in percent-scaled units — e.g. SDR report in %. Show as %.
+    return `${n.toFixed(3)}%`
+  }
+  if (abs >= 0.01) {
+    return `${(n * 100).toFixed(3)}%`
+  }
+  // Default: bps with sign preserved.
+  const bps = n * 10000
+  return `${bps.toFixed(2)}bp`
+}
+
 export function formatOtherLvl(input: {
   legOpa: Array<number | null | undefined>
   ptp: number | null | undefined
   opaCurrency?: Array<string | null | undefined>
   ptpCurrency?: string | null | undefined
-}): { opaLine: string; ptpLine: string } {
+  /**
+   * Package Transaction Spread — raw SDR field, typically a decimal
+   * representing the spread over a benchmark (e.g. 0.0025 = 25bp).
+   * Optional for backward compat with callers that pre-date the field.
+   */
+  pts?: number | null | undefined
+}): { opaLine: string; ptpLine: string; ptsLine: string } {
   const opaParts: string[] = []
   input.legOpa.forEach((v, i) => {
     if (v === null || v === undefined || Number.isNaN(v)) return
@@ -187,5 +211,12 @@ export function formatOtherLvl(input: {
         : `PTP: ${formatted}`
   }
 
-  return { opaLine, ptpLine }
+  let ptsLine: string
+  if (input.pts === null || input.pts === undefined || Number.isNaN(input.pts)) {
+    ptsLine = `PTS: ${EMPTY_VALUE}`
+  } else {
+    ptsLine = `PTS: ${formatPackageSpread(Number(input.pts))}`
+  }
+
+  return { opaLine, ptpLine, ptsLine }
 }

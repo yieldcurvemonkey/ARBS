@@ -170,7 +170,7 @@ describe('other_lvl column wiring', () => {
     expect(COLUMN_DEFS.find((d) => d.key === 'pkg_ind')?.header).toBe('Pkg Ind')
   })
 
-  it('formatOtherLvl produces stacked OPA/PTP lines for a row fixture', () => {
+  it('formatOtherLvl produces stacked OPA/PTP/PTS lines for a row fixture', () => {
     const legs = [
       { other_payment_amount: 15627.6, other_payment_currency: 'USD' as const },
       { other_payment_amount: null },
@@ -182,20 +182,24 @@ describe('other_lvl column wiring', () => {
       ),
       ptp: -671880,
       ptpCurrency: 'USD',
+      pts: 0.0025,
     })
     expect(result.opaLine).toBe('OPA: 15.6k')
     expect(result.ptpLine).toBe('PTP: -671.9k')
+    expect(result.ptsLine).toBe('PTS: 25.00bp')
   })
 
-  it('formatOtherLvl em-dashes both lines when OPA and PTP are null', () => {
+  it('formatOtherLvl em-dashes all three lines when OPA, PTP, and PTS are null', () => {
     const result = formatOtherLvl({
       legOpa: [null],
       opaCurrency: [null],
       ptp: null,
       ptpCurrency: null,
+      pts: null,
     })
     expect(result.opaLine).toBe('OPA: \u2014')
     expect(result.ptpLine).toBe('PTP: \u2014')
+    expect(result.ptsLine).toBe('PTS: \u2014')
   })
 })
 

@@ -165,10 +165,11 @@ describe('formatClusterSuffix', () => {
 })
 
 describe('formatOtherLvl', () => {
-  it('returns em-dashes when OPA + PTP both null', () => {
-    const result = formatOtherLvl({ legOpa: [null, null], ptp: null })
+  it('returns em-dashes when OPA + PTP + PTS all null', () => {
+    const result = formatOtherLvl({ legOpa: [null, null], ptp: null, pts: null })
     expect(result.opaLine).toBe('OPA: \u2014')
     expect(result.ptpLine).toBe('PTP: \u2014')
+    expect(result.ptsLine).toBe('PTS: \u2014')
   })
   it('stacks non-null leg OPAs comma-separated', () => {
     const result = formatOtherLvl({ legOpa: [15627.6, null, -2100], ptp: -671880 })
@@ -184,5 +185,28 @@ describe('formatOtherLvl', () => {
     })
     expect(result.opaLine).toBe('OPA: 15.6k EUR')
     expect(result.ptpLine).toBe('PTP: -671.9k')
+  })
+  it('renders Package Transaction Spread in bps for small decimal values', () => {
+    // Raw SDR decimals like 0.0025 = 25bp — common for curve / fly packages.
+    expect(formatOtherLvl({ legOpa: [], ptp: null, pts: 0.0025 }).ptsLine).toBe(
+      'PTS: 25.00bp',
+    )
+    expect(formatOtherLvl({ legOpa: [], ptp: null, pts: -0.0005 }).ptsLine).toBe(
+      'PTS: -5.00bp',
+    )
+  })
+  it('renders Package Transaction Spread as percent when magnitude is larger', () => {
+    expect(formatOtherLvl({ legOpa: [], ptp: null, pts: 0.025 }).ptsLine).toBe(
+      'PTS: 2.500%',
+    )
+    expect(formatOtherLvl({ legOpa: [], ptp: null, pts: 1.5 }).ptsLine).toBe(
+      'PTS: 1.500%',
+    )
+  })
+  it('falls back to the empty marker when PTS is missing', () => {
+    expect(formatOtherLvl({ legOpa: [], ptp: null }).ptsLine).toBe('PTS: \u2014')
+    expect(formatOtherLvl({ legOpa: [], ptp: null, pts: null }).ptsLine).toBe(
+      'PTS: \u2014',
+    )
   })
 })
