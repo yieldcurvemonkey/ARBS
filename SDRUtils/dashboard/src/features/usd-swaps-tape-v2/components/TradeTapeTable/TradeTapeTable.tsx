@@ -419,7 +419,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         pt={
           {
             headerCell: {
-              className: 'px-2 py-0.5 text-[10px] !border-0',
+              className: 'px-2 py-0.5 text-[12px] !border-0',
             },
             bodyCell: {
               className: 'px-2 py-0.5 text-[11px] !border-0',

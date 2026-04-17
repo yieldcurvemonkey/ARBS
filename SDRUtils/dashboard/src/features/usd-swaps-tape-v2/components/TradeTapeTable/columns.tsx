@@ -41,12 +41,12 @@ type ColumnConfig = {
 function renderHeader(label: string, summary?: string | null): JSX.Element {
   return (
     <div className="flex flex-col leading-tight">
-      <span className="text-[10px] uppercase tracking-wide text-gray-400">
+      <span className="text-[12px] uppercase tracking-wide text-gray-400">
         {label}
       </span>
       {summary ? (
         <span
-          className="mt-0.5 truncate text-[9px] font-normal normal-case tracking-normal text-sky-300/70"
+          className="mt-0.5 truncate text-[10px] font-normal normal-case tracking-normal text-sky-300/70"
           title={summary}
         >
           {summary}
@@ -110,13 +110,13 @@ export function getColumns(
         className="flex flex-col text-left hover:text-sky-300"
         aria-label={`toggle metric (current: ${metricLabel})`}
       >
-        <span className="text-[10px] uppercase tracking-wide text-gray-400">
+        <span className="text-[12px] uppercase tracking-wide text-gray-400">
           {metricLabel} ⇅
         </span>
       </button>
       {metricSummary ? (
         <span
-          className="mt-0.5 truncate text-[9px] font-normal normal-case tracking-normal text-sky-300/70"
+          className="mt-0.5 truncate text-[10px] font-normal normal-case tracking-normal text-sky-300/70"
           title={metricSummary}
         >
           {metricSummary}
@@ -161,7 +161,6 @@ export function getColumns(
       key="platform"
       field="platform_identifier"
       filterField="platform_identifier"
-      sortable
       filter
       {...compactFilterMenuProps}
       header={renderHeader(
@@ -173,7 +172,7 @@ export function getColumns(
           {displayPlatform(row)}
         </span>
       )}
-      style={{ width: 72 }}
+      style={{ width: 56 }}
     />,
     <Column
       key="pkg"
@@ -247,7 +246,6 @@ export function getColumns(
       key="rate"
       field="weighted_fixed_rate"
       filterField="weighted_fixed_rate"
-      sortable
       filter
       dataType="numeric"
       {...compactFilterMenuProps}
@@ -256,11 +254,11 @@ export function getColumns(
         summaryFor('weighted_fixed_rate', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => (
-        <span className="font-mono text-[13px] text-gray-200">
+        <span className="font-mono text-[15px] font-semibold text-gray-100">
           {formatRate(row.weighted_fixed_rate ?? null)}
         </span>
       )}
-      style={{ width: 88 }}
+      style={{ width: 72 }}
     />,
     <Column
       key="other_lvl"

@@ -65,10 +65,39 @@ describe('parseTapeLabelSegments', () => {
     expect(segs.every((s) => !s.isTenor)).toBe(true)
   })
 
-  it('does not touch 1D (reset frequency) which is not a tenor suffix', () => {
+  it('does not touch "1D" (reset frequency) because it precedes "Constant"', () => {
     const segs = parseTapeLabelSegments('USD-SOFR-COMPOUND 1D Constant Spot 5Y Outright PHYS')
-    // "1D" should NOT be bolded because the tenor regex requires [YMW] not D.
+    // "1D Constant" is the reset spec, not a forward; the negative lookahead
+    // in the day-count branch keeps it plain.
     expect(segs.find((s) => s.text === '1D')?.isTenor).toBeFalsy()
+  })
+
+  it('bolds the literal forward "Spot"', () => {
+    const segs = parseTapeLabelSegments('USD-SOFR-COMPOUND 1D Constant Spot 5Y Outright PHYS')
+    const tenors = segs.filter((s) => s.isTenor).map((s) => s.text)
+    expect(tenors).toContain('Spot')
+    expect(tenors).toContain('5Y')
+  })
+
+  it('bolds a day-count forward start like "74D" but keeps the trailing tenor bold too', () => {
+    const segs = parseTapeLabelSegments(
+      'USD-Federal Funds-OIS Compound 1D Constant 74D 6M Outright PHYS',
+    )
+    const tenors = segs.filter((s) => s.isTenor).map((s) => s.text)
+    expect(tenors).toContain('74D')
+    expect(tenors).toContain('6M')
+    // And the reset frequency "1D" remains plain.
+    expect(segs.find((s) => s.text === '1D')?.isTenor).toBeFalsy()
+  })
+
+  it('bolds a 70D forward alongside FOMC-dated anchors in the same label', () => {
+    const segs = parseTapeLabelSegments(
+      'USD-Federal Funds-OIS Compound 1D Constant 70D 6M FOMC APR26 Outright PHYS',
+    )
+    const tenors = segs.filter((s) => s.isTenor).map((s) => s.text)
+    expect(tenors).toContain('70D')
+    expect(tenors).toContain('6M')
+    expect(tenors).toContain('FOMC APR26')
   })
 
   it('returns the empty marker untouched', () => {
