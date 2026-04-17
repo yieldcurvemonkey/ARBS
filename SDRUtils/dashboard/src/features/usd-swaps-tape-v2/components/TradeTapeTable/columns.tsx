@@ -78,9 +78,11 @@ function displayPlatform(row: UsdSwapTapeRow): string {
 const compactFilterMenuProps = {
   filterMenuClassName: 'usd-swaps-tape-filter-menu',
   filterMenuStyle: { width: '10rem' },
-  showFilterOperator: false,
-  showAddButton: false,
-  maxConstraints: 1,
+  // Keep the menu compact, but allow traders to stack native PrimeReact
+  // AND/OR rules within a single column filter.
+  showFilterOperator: true,
+  showAddButton: true,
+  maxConstraints: 4,
 } as const
 
 export function getColumns(

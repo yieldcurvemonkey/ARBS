@@ -1,4 +1,6 @@
 import { describe, expect, it } from '@jest/globals'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { rowClassName } from '../columns.helpers'
 import {
   packageIndicatorDisplay,
@@ -7,6 +9,14 @@ import {
 } from '../columns.helpers'
 import { formatOtherLvl } from '../../../utils/format'
 import { COLUMN_DEFS } from '../../../constants'
+
+const columnsSource = readFileSync(
+  resolve(
+    process.cwd(),
+    'src/features/usd-swaps-tape-v2/components/TradeTapeTable/columns.tsx',
+  ),
+  'utf8',
+)
 
 const base = {
   package_id: 'P1',
@@ -186,6 +196,14 @@ describe('other_lvl column wiring', () => {
     })
     expect(result.opaLine).toBe('OPA: \u2014')
     expect(result.ptpLine).toBe('PTP: \u2014')
+  })
+})
+
+describe('column filter menu wiring', () => {
+  it('keeps PrimeReact menu filters in multi-rule mode', () => {
+    expect(columnsSource).toContain('showFilterOperator: true')
+    expect(columnsSource).toContain('showAddButton: true')
+    expect(columnsSource).toContain('maxConstraints: 4')
   })
 })
 
