@@ -161,22 +161,15 @@ function formatSignedCompact(n: number): string {
   return `${sign}${scaled.toFixed(precision)}k`
 }
 
-// Format the Package Transaction Spread (PTS). Raw SDR reports it as a
-// decimal, typically in the 0.0001–0.05 range (i.e. 1bp–500bp). Render as
-// basis points with two decimals when the value is small, and as percent
-// once the magnitude exceeds ~1%. Empty-marker when missing.
+// Format the Package Transaction Spread (PTS). Rendered as-is from the
+// raw SDR field — scale-aware unit inference (bp vs %) proved misleading
+// given the SDR reporters disagree on the underlying units. Trim trailing
+// zeros so the cell stays compact.
 function formatPackageSpread(n: number): string {
-  const abs = Math.abs(n)
-  if (abs >= 1) {
-    // Already in percent-scaled units — e.g. SDR report in %. Show as %.
-    return `${n.toFixed(3)}%`
-  }
-  if (abs >= 0.01) {
-    return `${(n * 100).toFixed(3)}%`
-  }
-  // Default: bps with sign preserved.
-  const bps = n * 10000
-  return `${bps.toFixed(2)}bp`
+  // toLocaleString with up to 6 fraction digits preserves precision for
+  // small decimals (0.00025) without dragging a long tail for whole-ish
+  // values (1.5 stays "1.5", not "1.500000").
+  return n.toLocaleString(undefined, { maximumFractionDigits: 6 })
 }
 
 export function formatOtherLvl(input: {

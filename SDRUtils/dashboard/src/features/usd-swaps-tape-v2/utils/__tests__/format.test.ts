@@ -186,21 +186,22 @@ describe('formatOtherLvl', () => {
     expect(result.opaLine).toBe('OPA: 15.6k EUR')
     expect(result.ptpLine).toBe('PTP: -671.9k')
   })
-  it('renders Package Transaction Spread in bps for small decimal values', () => {
-    // Raw SDR decimals like 0.0025 = 25bp — common for curve / fly packages.
+  it('renders Package Transaction Spread as the raw value, no unit coercion', () => {
+    // Scale-aware bp/% conversion was removed because SDR reporters
+    // disagree on units — show the raw decimal exactly as received.
     expect(formatOtherLvl({ legOpa: [], ptp: null, pts: 0.0025 }).ptsLine).toBe(
-      'PTS: 25.00bp',
+      'PTS: 0.0025',
     )
     expect(formatOtherLvl({ legOpa: [], ptp: null, pts: -0.0005 }).ptsLine).toBe(
-      'PTS: -5.00bp',
-    )
-  })
-  it('renders Package Transaction Spread as percent when magnitude is larger', () => {
-    expect(formatOtherLvl({ legOpa: [], ptp: null, pts: 0.025 }).ptsLine).toBe(
-      'PTS: 2.500%',
+      'PTS: -0.0005',
     )
     expect(formatOtherLvl({ legOpa: [], ptp: null, pts: 1.5 }).ptsLine).toBe(
-      'PTS: 1.500%',
+      'PTS: 1.5',
+    )
+  })
+  it('trims trailing zeros on the PTS value', () => {
+    expect(formatOtherLvl({ legOpa: [], ptp: null, pts: 0.1 }).ptsLine).toBe(
+      'PTS: 0.1',
     )
   })
   it('falls back to the empty marker when PTS is missing', () => {
