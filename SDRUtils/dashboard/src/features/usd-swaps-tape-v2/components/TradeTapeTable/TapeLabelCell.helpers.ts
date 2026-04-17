@@ -11,12 +11,16 @@ export function displayTapeLabel(row: UsdSwapTapeRow): string {
   return EMPTY_VALUE
 }
 
-// Match tenor-style segments so TapeLabelCell can bold them:
+// Match the forward / tenor / anchor segments so TapeLabelCell can bold them:
 //   - FOMC anchor: "FOMC APR26"
+//   - Literal forward "Spot"
+//   - Day-count forward start: "74D", "70D" (note: the reset-frequency "1D
+//     Constant" token must NOT match — negative lookahead for " Constant"
+//     skips it while still catching true forward-start days)
 //   - Outright tenor: "5Y", "18M", "5Y11M", "1.5Y"
 //   - Curve / fly package tenors: "5Y/10Y", "2Y/5Y/30Y"
 const TENOR_SEGMENT_RE =
-  /(FOMC\s+[A-Z]{3,4}\d{2})|(\d+(?:\.\d+)?[YMW](?:\d+[YMW])?(?:\/\d+(?:\.\d+)?[YMW](?:\d+[YMW])?)*)/g
+  /(FOMC\s+[A-Z]{3,4}\d{2})|(\bSpot\b)|(\b\d+D\b(?!\s+Constant))|(\b\d+(?:\.\d+)?[YMW](?:\d+[YMW])?(?:\/\d+(?:\.\d+)?[YMW](?:\d+[YMW])?)*)/g
 
 export interface TapeLabelSegment {
   text: string
