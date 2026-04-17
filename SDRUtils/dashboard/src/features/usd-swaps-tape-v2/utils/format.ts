@@ -34,12 +34,16 @@ export function formatNotional(
 
 export function formatDv01(
   n: number | null | undefined,
-  opts: { signed?: boolean } = {},
+  opts: { signed?: boolean; signNegativeOnly?: boolean } = {},
 ): string {
   if (isNullish(n)) return EMPTY_VALUE
   const value = Number(n)
   const abs = Math.abs(value)
   const formatted = formatNotional(abs, { compact: true })
+  if (opts.signNegativeOnly) {
+    if (value < 0) return `\u2212${formatted}`
+    return formatted
+  }
   if (!opts.signed) return formatted
   if (value < 0) return `\u2212${formatted}`
   if (value > 0) return `+${formatted}`
