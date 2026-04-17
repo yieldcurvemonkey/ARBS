@@ -12,7 +12,9 @@ export function displayTapeLabel(row: UsdSwapTapeRow): string {
 }
 
 // Match the forward / tenor / anchor segments so TapeLabelCell can bold them:
-//   - FOMC anchor: "FOMC APR26"
+//   - FOMC meeting anchor: "FOMC APR26"
+//   - IMM contract anchor: "IMM_M2026", "IMM_H2027" (month code + 4-digit
+//     year, e.g. H/M/U/Z for Mar/Jun/Sep/Dec)
 //   - Literal forward "Spot"
 //   - Day-count forward start: "74D", "70D" (note: the reset-frequency "1D
 //     Constant" token must NOT match — negative lookahead for " Constant"
@@ -20,7 +22,7 @@ export function displayTapeLabel(row: UsdSwapTapeRow): string {
 //   - Outright tenor: "5Y", "18M", "5Y11M", "1.5Y"
 //   - Curve / fly package tenors: "5Y/10Y", "2Y/5Y/30Y"
 const TENOR_SEGMENT_RE =
-  /(FOMC\s+[A-Z]{3,4}\d{2})|(\bSpot\b)|(\b\d+D\b(?!\s+Constant))|(\b\d+(?:\.\d+)?[YMW](?:\d+[YMW])?(?:\/\d+(?:\.\d+)?[YMW](?:\d+[YMW])?)*)/g
+  /(FOMC\s+[A-Z]{3,4}\d{2})|(\bIMM_[A-Z]\d{4}\b)|(\bSpot\b)|(\b\d+D\b(?!\s+Constant))|(\b\d+(?:\.\d+)?[YMW](?:\d+[YMW])?(?:\/\d+(?:\.\d+)?[YMW](?:\d+[YMW])?)*)/g
 
 export interface TapeLabelSegment {
   text: string

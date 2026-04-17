@@ -100,6 +100,24 @@ describe('parseTapeLabelSegments', () => {
     expect(tenors).toContain('FOMC APR26')
   })
 
+  it('bolds an IMM contract anchor like "IMM_M2026" alongside the tenor', () => {
+    const segs = parseTapeLabelSegments(
+      'USD-SOFR-COMPOUND 1D Constant IMM_M2026 5Y Outright MAC UFRO BLOCK PHYS',
+    )
+    const tenors = segs.filter((s) => s.isTenor).map((s) => s.text)
+    expect(tenors).toContain('IMM_M2026')
+    expect(tenors).toContain('5Y')
+  })
+
+  it('bolds IMM anchors with different month codes and year', () => {
+    const segs = parseTapeLabelSegments(
+      'USD-SOFR-COMPOUND 1D Constant IMM_H2027 10Y Outright PHYS',
+    )
+    const tenors = segs.filter((s) => s.isTenor).map((s) => s.text)
+    expect(tenors).toContain('IMM_H2027')
+    expect(tenors).toContain('10Y')
+  })
+
   it('returns the empty marker untouched', () => {
     const segs = parseTapeLabelSegments(EMPTY_VALUE)
     expect(segs).toEqual([{ text: EMPTY_VALUE, isTenor: false }])
