@@ -39,6 +39,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
             hasMore={tape.hasMore}
             expandedRows={expansion.expandedRows}
             onRowToggle={expansion.onRowToggle}
+            onToggleRow={expansion.toggleOne}
             selected={selection.selected}
             onSelectionChange={selection.onSelectionChange}
             actionSlot={

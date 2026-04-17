@@ -102,6 +102,7 @@ export function getColumns(
 
   const mode: MetricMode = config.metricMode ?? 'dv01'
   const metricField = mode === 'dv01' ? 'total_risk' : 'total_notional'
+  const metricLabel = mode === 'dv01' ? 'Risk' : 'Notional'
   const metricSummary = summaryFor(metricField, config.activeFilters)
   const metricHeader = (
     <div className="flex flex-col leading-tight">
@@ -109,10 +110,10 @@ export function getColumns(
         type="button"
         onClick={config.onToggleMetric}
         className="flex flex-col text-left hover:text-sky-300"
-        aria-label={`toggle metric (current: ${mode === 'dv01' ? 'DV01' : 'Notional'})`}
+        aria-label={`toggle metric (current: ${metricLabel})`}
       >
         <span className="text-[10px] uppercase tracking-wide text-gray-400">
-          {mode === 'dv01' ? 'DV01' : 'Notional'} ⇅
+          {metricLabel} ⇅
         </span>
       </button>
       {metricSummary ? (
@@ -236,13 +237,13 @@ export function getColumns(
       {...compactFilterMenuProps}
       header={metricHeader}
       body={(row: UsdSwapTapeRow) => (
-        <span className="font-mono text-[13px] text-gray-200">
+        <span className="font-mono text-[15px] font-semibold text-gray-100">
           {mode === 'dv01'
-            ? formatDv01(row.total_risk ?? null, { signed: true })
+            ? formatDv01(row.total_risk ?? null, { signNegativeOnly: true })
             : formatNotional(row.total_notional ?? null, { compact: true })}
         </span>
       )}
-      style={{ width: 82 }}
+      style={{ width: 96 }}
     />,
     <Column
       key="rate"

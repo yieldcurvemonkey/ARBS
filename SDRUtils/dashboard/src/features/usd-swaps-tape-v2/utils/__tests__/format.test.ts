@@ -42,6 +42,16 @@ describe('formatDv01', () => {
     expect(formatDv01(-1_500_000, { signed: true })).toBe('\u22121.5M')
     expect(formatDv01(0, { signed: true })).toBe('0')
   })
+
+  it('with signNegativeOnly, drops the + for positives but keeps the − for negatives', () => {
+    // Matches the trade-tape column feedback: "+" is visual noise but the
+    // receive-side (negative) risk must still be obviously signed.
+    expect(formatDv01(1_500_000, { signNegativeOnly: true })).toBe('1.5M')
+    expect(formatDv01(-1_500_000, { signNegativeOnly: true })).toBe(
+      '\u22121.5M',
+    )
+    expect(formatDv01(0, { signNegativeOnly: true })).toBe('0')
+  })
 })
 
 describe('formatRate', () => {
