@@ -7,6 +7,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type JSX,
@@ -262,6 +263,44 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
       scroller.removeEventListener('scroll', onScroll)
     }
   }, [hasMore, loadingMore, requestLoadMore, displayRows.length])
+
+  // Poll-induced "screen shake": every 30s the hook fetches rows with
+  // execution_start > latestExecutionStart and prepends them at the top of
+  // the DESC-sorted tape, which silently shifts every row in the viewport
+  // down by N * ROW_ESTIMATE_PX and makes the user lose their place.
+  // Preserve the user's apparent scroll position by offsetting scrollTop in
+  // a layout effect — runs before the browser paints so there's no flash.
+  //
+  // Important: cursor-based loadMore APPENDS at the bottom (older rows), so
+  // its row-growth must NOT shift scroll. Distinguish the two cases by
+  // watching the top row's package_id: if it changed, new rows were
+  // prepended; if it's stable, loadMore appended and scroll is already
+  // correct.
+  const previousRowsLengthRef = useRef(rows.length)
+  const previousTopPackageIdRef = useRef<string | null>(
+    rows[0]?.package_id ?? null,
+  )
+  useLayoutEffect(() => {
+    const prev = previousRowsLengthRef.current
+    const curr = rows.length
+    const prevTop = previousTopPackageIdRef.current
+    const currTop = rows[0]?.package_id ?? null
+    previousRowsLengthRef.current = curr
+    previousTopPackageIdRef.current = currTop
+    if (curr <= prev) return
+    if (prevTop === null || prevTop === currTop) return
+    const added = curr - prev
+    const root = tableWrapperRef.current
+    if (!root) return
+    const scroller = root.querySelector<HTMLElement>('.p-virtualscroller')
+    if (!scroller) return
+    // Near-top threshold: if the user is within ~2 rows of the top, treat
+    // them as "watching the stream" and let the new rows scroll into view
+    // naturally rather than pinning their position.
+    const NEAR_TOP_PX = ROW_ESTIMATE_PX * 2
+    if (scroller.scrollTop <= NEAR_TOP_PX) return
+    scroller.scrollTop += added * ROW_ESTIMATE_PX
+  }, [rows])
 
   const selectedIds = new Set((selected ?? []).map((row) => row.package_id))
 
