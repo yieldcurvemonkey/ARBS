@@ -186,7 +186,7 @@ describe('other_lvl column wiring', () => {
     })
     expect(result.opaLine).toBe('OPA: 15.6k')
     expect(result.ptpLine).toBe('PTP: -671.9k')
-    expect(result.ptsLine).toBe('PTS: 25.00bp')
+    expect(result.ptsLine).toBe('PTS: 0.0025')
   })
 
   it('formatOtherLvl em-dashes all three lines when OPA, PTP, and PTS are null', () => {
