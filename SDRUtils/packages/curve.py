@@ -32,6 +32,8 @@ def detect_curve_trades_df(
     allow_gap_curves: bool = True,
     require_same_underlier: bool = True,
     underlier_col: str = "UPI Underlier Name",
+    require_same_upi: bool = True,
+    upi_col: str = "Unique Product Identifier",
     require_same_platform: bool = True,
     platform_col: str = "Platform identifier",
     require_same_cleared_flag: bool = True,
@@ -82,6 +84,8 @@ def detect_curve_trades_df(
 
     if require_same_underlier and underlier_col in out.columns:
         cols.append(underlier_col)
+    if require_same_upi and upi_col in out.columns:
+        cols.append(upi_col)
     if require_same_platform and platform_col in out.columns:
         cols.append(platform_col)
     if require_same_cleared_flag and cleared_col in out.columns:
@@ -114,6 +118,7 @@ def detect_curve_trades_df(
     fwd_label = cand[forward_label_col].astype("string").to_numpy() if _use_fwd_label else None
     fwd_years = pd.to_numeric(cand[forward_years_col], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64) if _use_fwd_years else None
     und = cand[underlier_col].astype("string").to_numpy() if (require_same_underlier and underlier_col in cand.columns) else None
+    upi = cand[upi_col].astype("string").to_numpy() if (require_same_upi and upi_col in cand.columns) else None
     plat = cand[platform_col].astype("string").to_numpy() if (require_same_platform and platform_col in cand.columns) else None
     clr = cand[cleared_col].astype("string").to_numpy() if (require_same_cleared_flag and cleared_col in cand.columns) else None
 
@@ -154,6 +159,8 @@ def detect_curve_trades_df(
             if not (allow_gap_curves and tenor[i] == tenor[j]):
                 return False
         if und is not None and und[i] != und[j]:
+            return False
+        if upi is not None and upi[i] != upi[j]:
             return False
         if plat is not None and plat[i] != plat[j]:
             return False
