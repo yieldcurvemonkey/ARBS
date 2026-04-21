@@ -1026,6 +1026,18 @@ class TradeTape(SDRAnalyzer):
 
             # 6. Flags
             flags: list[str] = []
+            # Invoice swap ticker (TVA, TYB, UBI, …) — when present, surface
+            # the CME product code inline so the desk doesn't need the side
+            # panel. Takes precedence over generic MMS tagging.
+            invoice_ticker = row.get("invoice_swap_ticker")
+            if invoice_ticker is not None:
+                invoice_ticker_str = str(invoice_ticker).strip().upper()
+                if invoice_ticker_str and invoice_ticker_str.lower() not in ("nan", "none"):
+                    flags.append(invoice_ticker_str)
+            # Matched-maturity swap (CTD-aligned coupon / maturity, no invoice
+            # ticker resolved) — surface as "MMS" so it's filterable in the tape.
+            elif str(row.get("special_tenor_type", "")).upper() == "MATCHED_MATURITY":
+                flags.append("MMS")
             if row.get("is_unwind", False):
                 flags.append("UNWIND")
             if row.get("is_mac", False):
