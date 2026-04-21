@@ -32,6 +32,7 @@ from .fomc import (
     short_meeting_label,
 )
 from ..core.tenors import get_imm_label
+from Query.IRSwaps._CME_INVOICE_SWAP_TICKERS import invoice_swap_product_label
 from .intraday import trade_clustering
 from .seasonality import add_event_classifications
 from .trade_quality import TradeQualityFlag, flag_outliers
@@ -947,9 +948,17 @@ class TradeTape(SDRAnalyzer):
             # so the expanded sub-table shows "5Y Outright" / "10Y Outright".
             leg_as_outright = leg_scope and trade_type in ("CURVE", "FLY")
 
-            # 3+4. Forward + Tenor (FOMC-dated swaps get special handling)
+            # 3+4. Forward + Tenor (FOMC-dated + invoice-swap get special handling)
+            # Invoice-swap trades render the CME product name + ticker in
+            # place of forward + tenor, since (eff, ctd_mat) is fully
+            # identified by the invoice-swap spec. Example:
+            #   "USD-SOFR-OIS Compound 1D Constant ULTRA TREASURY INVOICE UBA Outright PHYS"
+            invoice_ticker_raw = row.get("invoice_swap_ticker")
+            invoice_label = invoice_swap_product_label(invoice_ticker_raw)
             fomc_label = str(row.get("fomc_meeting_label", "")).strip()
-            if fomc_label and fomc_label.lower() not in ("", "nan", "none"):
+            if invoice_label:
+                parts.append(invoice_label)
+            elif fomc_label and fomc_label.lower() not in ("", "nan", "none"):
                 # FOMC-dated swap: "FOMC APR26" replaces forward + tenor for outrights.
                 parts.append(f"FOMC {fomc_label.upper()}")
                 # For CURVE/FLY packages, still append the leg tenor pair
@@ -1013,6 +1022,11 @@ class TradeTape(SDRAnalyzer):
                 parts.append(trade_type)
             elif trade_type == "SPREADOVER":
                 parts.append("Spreadover")
+            elif trade_type == "INVOICE":
+                # Invoice swap: structure is "Outright" (SDR sees the IRS leg
+                # alone). The INVOICE package type is surfaced via the PKG
+                # column / package_type field, not the label text.
+                parts.append("Outright")
             else:
                 # Trade is a package leg per SDR reporting (Package indicator=True)
                 # but no peer leg was paired by our detectors (curve/fly/MMS). Labelling
@@ -1026,17 +1040,13 @@ class TradeTape(SDRAnalyzer):
 
             # 6. Flags
             flags: list[str] = []
-            # Invoice swap ticker (TVA, TYB, UBI, …) — when present, surface
-            # the CME product code inline so the desk doesn't need the side
-            # panel. Takes precedence over generic MMS tagging.
-            invoice_ticker = row.get("invoice_swap_ticker")
-            if invoice_ticker is not None:
-                invoice_ticker_str = str(invoice_ticker).strip().upper()
-                if invoice_ticker_str and invoice_ticker_str.lower() not in ("nan", "none"):
-                    flags.append(invoice_ticker_str)
-            # Matched-maturity swap (CTD-aligned coupon / maturity, no invoice
-            # ticker resolved) — surface as "MMS" so it's filterable in the tape.
-            elif str(row.get("special_tenor_type", "")).upper() == "MATCHED_MATURITY":
+            # Matched-maturity swap (CTD-aligned coupon / maturity) without a
+            # resolved invoice ticker — surface as "MMS" so it's filterable.
+            # Invoice swaps themselves render the product label above, so we
+            # don't need to re-tag them here.
+            if not invoice_label and str(
+                row.get("special_tenor_type", "")
+            ).upper() == "MATCHED_MATURITY":
                 flags.append("MMS")
             if row.get("is_unwind", False):
                 flags.append("UNWIND")

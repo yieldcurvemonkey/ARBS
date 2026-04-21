@@ -103,6 +103,46 @@ def test_no_spec_match_does_not_touch_confidence(lookup, base_row):
     assert out.loc[0, "matched_ust_maturity_trade_confidence"] == "low"
 
 
+def test_invoice_match_sets_package_type_invoice(lookup, base_row):
+    """Ticker hit -> package_type = trade_type = "INVOICE" so the PKG
+    column in the dashboard groups invoice swaps as a distinct bucket."""
+    row = dict(base_row)
+    row["package_type"] = "OUTRIGHT"
+    row["trade_type"] = "OUTRIGHT"
+    df = pd.DataFrame([row])
+    out = _apply_invoice_swap_lookup(
+        df,
+        lookup,
+        effective_col="effective_date",
+        maturity_col="expiration_date",
+        confidence_col="matched_ust_maturity_trade_confidence",
+        require_high_confidence=True,
+        output_col="invoice_swap_ticker",
+    )
+    assert out.loc[0, "package_type"] == "INVOICE"
+    assert out.loc[0, "trade_type"] == "INVOICE"
+
+
+def test_no_spec_match_does_not_touch_package_type(lookup, base_row):
+    row = dict(base_row)
+    row["effective_date"] = pd.Timestamp("2026-07-06")
+    row["expiration_date"] = pd.Timestamp("2033-05-15")  # Not in lookup
+    row["package_type"] = "OUTRIGHT"
+    row["trade_type"] = "OUTRIGHT"
+    df = pd.DataFrame([row])
+    out = _apply_invoice_swap_lookup(
+        df,
+        lookup,
+        effective_col="effective_date",
+        maturity_col="expiration_date",
+        confidence_col="matched_ust_maturity_trade_confidence",
+        require_high_confidence=True,
+        output_col="invoice_swap_ticker",
+    )
+    assert out.loc[0, "package_type"] == "OUTRIGHT"
+    assert out.loc[0, "trade_type"] == "OUTRIGHT"
+
+
 def test_empty_confidence_series_on_spec_match(lookup, base_row):
     row = dict(base_row)
     row["matched_ust_maturity"] = False
