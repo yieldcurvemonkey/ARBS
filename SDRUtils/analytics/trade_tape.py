@@ -622,6 +622,56 @@ class TradeTape(SDRAnalyzer):
             df_indices = df.index.to_numpy()
 
             pkg_positions = np.where(is_pkg_arr)[0]
+
+            # --- UPI validator (safety net) -------------------------------
+            # Catches SDR-native packages that bypass our detectors: if any
+            # multi-leg group carries >1 distinct Unique Product Identifier,
+            # the group is a false positive -> reset to OUTRIGHT.
+            upi_col_raw = "Unique Product Identifier"
+            upi_col_snake = "unique_product_identifier"
+            upi_col = (
+                upi_col_raw if upi_col_raw in df.columns else
+                upi_col_snake if upi_col_snake in df.columns else None
+            )
+            if upi_col is not None and len(pkg_positions) > 0:
+                upi_arr = df[upi_col].astype(str).to_numpy()
+                to_unpackage: list = []
+                for pos in pkg_positions:
+                    legs = legs_arr[pos]
+                    if legs is None or (isinstance(legs, float) and pd.isna(legs)):
+                        continue
+                    try:
+                        leg_ids = [str(x) for x in legs]
+                    except (TypeError, ValueError):
+                        continue
+                    leg_positions = [tid_to_pos[lid] for lid in leg_ids if lid in tid_to_pos]
+                    if len(leg_positions) < 2:
+                        continue
+                    leg_upis = {
+                        upi_arr[p] for p in leg_positions
+                        if upi_arr[p] and upi_arr[p].lower() not in ("nan", "none", "")
+                    }
+                    if len(leg_upis) > 1:
+                        to_unpackage.extend(df_indices[p] for p in leg_positions)
+
+                if to_unpackage:
+                    df.loc[to_unpackage, "package_type"] = "OUTRIGHT"
+                    if "package_id" in df.columns:
+                        df.loc[to_unpackage, "package_id"] = None
+                    if "package_legs" in df.columns:
+                        df.loc[to_unpackage, "package_legs"] = None
+                    df.loc[to_unpackage, "is_package"] = False
+                    if "trade_type" in df.columns:
+                        df.loc[to_unpackage, "trade_type"] = "OUTRIGHT"
+                    # Recompute is_package mask + cached arrays so the rest of
+                    # this method (tenor join, structure label) respects the
+                    # un-package.
+                    pkg = df["package_type"].astype(str).fillna("").str.upper()
+                    df["is_package"] = ~pkg.isin({"", "OUTRIGHT", "NAN", "NONE"})
+                    is_pkg_arr = df["is_package"].to_numpy()
+                    legs_arr = df[legs_col].to_numpy()
+                    pkg_positions = np.where(is_pkg_arr)[0]
+
             valid_indices: list = []
             n_legs_arr: list[int] = []
             tenors_arr: list[str] = []
