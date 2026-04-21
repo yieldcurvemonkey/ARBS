@@ -27,8 +27,11 @@ from .flow import assign_trade_type, bucket_forward_start, classify_venue, infer
 from .fomc import (
     classify_meeting_proximity,
     classify_rate_index,
+    consecutive_meeting_pair,
     load_fomc_schedule,
+    short_meeting_label,
 )
+from ..core.tenors import get_imm_label
 from .intraday import trade_clustering
 from .seasonality import add_event_classifications
 from .trade_quality import TradeQualityFlag, flag_outliers
@@ -702,23 +705,86 @@ class TradeTape(SDRAnalyzer):
                     )
 
                     def _assign_meeting(row):
-                        exp = pd.to_datetime(row.get("expiration_date"))
-                        eff = pd.to_datetime(row.get("effective_date"))
-                        if pd.notna(exp):
-                            d = exp.date() if hasattr(exp, "date") else exp
-                            lbl = mat_to_label.get(d)
-                            if lbl:
-                                return lbl
-                        if pd.notna(eff):
-                            d = eff.date() if hasattr(eff, "date") else eff
-                            lbl = eff_to_label.get(d)
-                            if lbl:
-                                return lbl
-                        return ""
+                        """Return ``(label, append_tenor)`` for a single row.
 
-                    df.loc[fomc_mask, "fomc_meeting_label"] = (
-                        df[fomc_mask].apply(_assign_meeting, axis=1)
-                    )
+                        * Tier 1 consecutive -> ``("APR26", False)``
+                        * Tier 3a non-consecutive FOMC/FOMC -> ``("APR26 DEC26", False)``
+                        * Tier 3b FOMC + constant tenor -> ``("APR26", True)``
+                        * Tier 2 (quarterly IMM + constant-tenor mat) -> ``("", False)``
+                          so the downstream forward+tenor branch prints
+                          ``"IMM_Z2026 10Y"``.
+                        """
+                        eff = pd.to_datetime(row.get("effective_date"), errors="coerce")
+                        mat = pd.to_datetime(row.get("expiration_date"), errors="coerce")
+                        if pd.isna(eff) or pd.isna(mat):
+                            return ("", False)
+                        eff_date = eff.date()
+                        mat_date = mat.date()
+                        eff_lbl_raw = eff_to_label.get(eff_date)
+                        # Prefer the meeting that STARTS at mat (eff_to_label)
+                        # so endpoint-to-endpoint labels like "APR26 DEC26"
+                        # resolve cleanly. Fall back to mat_to_label for
+                        # completeness.
+                        mat_lbl_raw = eff_to_label.get(mat_date) or mat_to_label.get(mat_date)
+
+                        # Tier 1 — consecutive FOMC meetings.
+                        if eff_lbl_raw and mat_lbl_raw and consecutive_meeting_pair(
+                            eff, mat, schedule
+                        ):
+                            return (short_meeting_label(eff_lbl_raw), False)
+
+                        # Tier 2 — quarterly IMM eff + constant-tenor mat.
+                        if get_imm_label(eff) is not None and not mat_lbl_raw:
+                            tenor_label = str(row.get("tenor_label", ""))
+                            if not (
+                                tenor_label.startswith("IMM_")
+                                or tenor_label.startswith("FOMC_")
+                            ):
+                                return ("", False)
+
+                        # Tier 3a — FOMC eff + FOMC mat but non-consecutive.
+                        if eff_lbl_raw and mat_lbl_raw:
+                            return (
+                                short_meeting_label(eff_lbl_raw)
+                                + " "
+                                + short_meeting_label(mat_lbl_raw),
+                                False,
+                            )
+
+                        # Tier 3b — FOMC eff + constant-tenor mat. Flag that
+                        # the label builder should append the tenor display
+                        # so the final tape_label reads "FOMC APR26 10Y".
+                        if eff_lbl_raw:
+                            return (short_meeting_label(eff_lbl_raw), True)
+
+                        return ("", False)
+
+                    # Broaden the mask — tier rules consume eff AND mat, so we
+                    # can't rely on the upstream ``special_tenor_type == FOMC``
+                    # gate alone.
+                    def _eff_hits(d):
+                        ts = pd.to_datetime(d, errors="coerce")
+                        if pd.isna(ts):
+                            return False
+                        return eff_to_label.get(ts.date()) is not None
+
+                    candidate_mask = df["effective_date"].map(_eff_hits) | fomc_mask
+
+                    if "fomc_label_append_tenor" not in df.columns:
+                        df["fomc_label_append_tenor"] = False
+                    if candidate_mask.any():
+                        assignments = df[candidate_mask].apply(
+                            _assign_meeting, axis=1, result_type="expand"
+                        )
+                        assignments.columns = [
+                            "_fomc_label", "_fomc_append_tenor"
+                        ]
+                        df.loc[candidate_mask, "fomc_meeting_label"] = (
+                            assignments["_fomc_label"]
+                        )
+                        df.loc[candidate_mask, "fomc_label_append_tenor"] = (
+                            assignments["_fomc_append_tenor"]
+                        )
 
                     # Proximity requires meeting_eff column
                     meeting_eff_map = dict(
@@ -850,6 +916,19 @@ class TradeTape(SDRAnalyzer):
                     ).strip()
                     if leg_tenor and leg_tenor.lower() not in ("nan", "none"):
                         parts.append(leg_tenor)
+                elif row.get("fomc_label_append_tenor", False):
+                    # Tier 3b — FOMC eff + constant-maturity tenor. Append
+                    # the tenor so tape_label reads "FOMC APR26 10Y".
+                    tenor_display = str(
+                        row.get("tenor_display", row.get("tenor_label", ""))
+                    ).strip()
+                    if (
+                        tenor_display
+                        and tenor_display.lower() not in ("nan", "none")
+                        and not tenor_display.startswith("IMM_")
+                        and not tenor_display.startswith("FOMC_")
+                    ):
+                        parts.append(tenor_display)
             else:
                 # 3. Forward (normalize T+2 settlement labels to Spot)
                 fwd = row.get("forward_label", "spot")
