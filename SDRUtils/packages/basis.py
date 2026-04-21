@@ -42,6 +42,8 @@ def detect_basis_packages_df(
     cleared_col: str = "Cleared",
     require_same_platform: bool = True,
     require_same_cleared: bool = True,
+    require_same_upi: bool = True,
+    upi_col: str = "Unique Product Identifier",
 ) -> pd.DataFrame:
     """
     Detect basis swap packages (curves and flies) from classified trades.
@@ -89,6 +91,7 @@ def detect_basis_packages_df(
     fwd = cand[forward_label_col].astype("string").to_numpy() if forward_label_col in cand.columns else None
     plat = cand[platform_col].astype("string").to_numpy() if (require_same_platform and platform_col in cand.columns) else None
     clr = cand[cleared_col].astype("string").to_numpy() if (require_same_cleared and cleared_col in cand.columns) else None
+    upi = cand[upi_col].astype("string").to_numpy() if (require_same_upi and upi_col in cand.columns) else None
 
     n = len(cand)
     matched = np.zeros(n, dtype=bool)
@@ -109,6 +112,8 @@ def detect_basis_packages_df(
         if plat is not None and plat[i] != plat[j]:
             return False
         if clr is not None and clr[i] != clr[j]:
+            return False
+        if upi is not None and upi[i] != upi[j]:
             return False
         return True
 

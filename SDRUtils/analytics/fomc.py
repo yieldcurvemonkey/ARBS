@@ -7,6 +7,7 @@ meeting-by-meeting analysis of FOMC-dated swaps with dual-curve (SOFR/OIS) suppo
 from __future__ import annotations
 
 import datetime
+import re
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -14,6 +15,43 @@ import pandas as pd
 
 from ._base import SDRAnalyzer
 from .filters import vwap
+
+
+_MONTH_ABBR = (
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+)
+
+
+def short_meeting_label(raw: Optional[str]) -> str:
+    """Normalize an FOMC meeting label to the compact ``MMMYY`` form.
+
+    Accepts ``APR26``, ``FOMC_APR2026``, ``FOMC APR2026``, ``FOMC_20260428``.
+    Returns ``""`` for None/empty/unrecognized input.
+    """
+    if not raw:
+        return ""
+    s = str(raw).strip().upper()
+    if not s:
+        return ""
+    s = s.replace("FOMC_", "").replace("FOMC ", "").strip()
+
+    if re.fullmatch(r"[A-Z]{3}\d{2}", s):
+        return s
+
+    m = re.fullmatch(r"([A-Z]{3})(\d{4})", s)
+    if m:
+        return f"{m.group(1)}{m.group(2)[2:]}"
+
+    m = re.fullmatch(r"(\d{4})(\d{2})(\d{2})", s)
+    if m:
+        try:
+            dt = datetime.datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            return f"{_MONTH_ABBR[dt.month - 1]}{dt.year % 100:02d}"
+        except ValueError:
+            return ""
+
+    return ""
 
 # ---------------------------------------------------------------------------
 # Standalone helpers
@@ -50,6 +88,47 @@ def load_fomc_schedule(curve_name: str = "USD-SOFR-1D") -> pd.DataFrame:
         df["effective_date"] = pd.to_datetime(df["effective_date"])
         df["maturity_date"] = pd.to_datetime(df["maturity_date"])
     return df
+
+
+def consecutive_meeting_pair(
+    effective_date: pd.Timestamp,
+    maturity_date: pd.Timestamp,
+    schedule_df: pd.DataFrame,
+) -> bool:
+    """Return True iff ``effective_date`` and ``maturity_date`` line up
+    with two adjacent rows of the FOMC schedule.
+
+    The schedule is assumed to be sorted by ``effective_date`` (as produced
+    by :func:`load_fomc_schedule`). A pair is consecutive iff:
+
+    - ``effective_date`` matches some row ``i``'s ``effective_date``, AND
+    - ``maturity_date`` matches row ``i+1``'s ``effective_date`` OR row
+      ``i``'s ``maturity_date`` (SDR trades report either).
+    """
+    if schedule_df is None or schedule_df.empty:
+        return False
+    eff = pd.to_datetime(effective_date, errors="coerce")
+    mat = pd.to_datetime(maturity_date, errors="coerce")
+    if pd.isna(eff) or pd.isna(mat):
+        return False
+    if mat <= eff:
+        return False
+
+    eff_dates = schedule_df["effective_date"].dt.normalize()
+    mat_dates = schedule_df["maturity_date"].dt.normalize()
+    eff_n = eff.normalize()
+    mat_n = mat.normalize()
+
+    match = eff_dates == eff_n
+    if not match.any():
+        return False
+    i = match.idxmax()
+    pos = schedule_df.index.get_loc(i)
+    if pos + 1 >= len(schedule_df):
+        return False
+    next_eff = eff_dates.iloc[pos + 1]
+    this_mat = mat_dates.iloc[pos]
+    return bool(mat_n == next_eff or mat_n == this_mat)
 
 
 def classify_rate_index(upi_underlier: str) -> str:
