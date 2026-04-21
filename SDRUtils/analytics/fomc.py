@@ -52,6 +52,47 @@ def load_fomc_schedule(curve_name: str = "USD-SOFR-1D") -> pd.DataFrame:
     return df
 
 
+def consecutive_meeting_pair(
+    effective_date: pd.Timestamp,
+    maturity_date: pd.Timestamp,
+    schedule_df: pd.DataFrame,
+) -> bool:
+    """Return True iff ``effective_date`` and ``maturity_date`` line up
+    with two adjacent rows of the FOMC schedule.
+
+    The schedule is assumed to be sorted by ``effective_date`` (as produced
+    by :func:`load_fomc_schedule`). A pair is consecutive iff:
+
+    - ``effective_date`` matches some row ``i``'s ``effective_date``, AND
+    - ``maturity_date`` matches row ``i+1``'s ``effective_date`` OR row
+      ``i``'s ``maturity_date`` (SDR trades report either).
+    """
+    if schedule_df is None or schedule_df.empty:
+        return False
+    eff = pd.to_datetime(effective_date, errors="coerce")
+    mat = pd.to_datetime(maturity_date, errors="coerce")
+    if pd.isna(eff) or pd.isna(mat):
+        return False
+    if mat <= eff:
+        return False
+
+    eff_dates = schedule_df["effective_date"].dt.normalize()
+    mat_dates = schedule_df["maturity_date"].dt.normalize()
+    eff_n = eff.normalize()
+    mat_n = mat.normalize()
+
+    match = eff_dates == eff_n
+    if not match.any():
+        return False
+    i = match.idxmax()
+    pos = schedule_df.index.get_loc(i)
+    if pos + 1 >= len(schedule_df):
+        return False
+    next_eff = eff_dates.iloc[pos + 1]
+    this_mat = mat_dates.iloc[pos]
+    return bool(mat_n == next_eff or mat_n == this_mat)
+
+
 def classify_rate_index(upi_underlier: str) -> str:
     """Classify a UPI underlier name into a rate-index bucket.
 
