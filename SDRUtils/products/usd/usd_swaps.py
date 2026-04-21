@@ -354,6 +354,16 @@ def _apply_invoice_swap_lookup(
         else:
             df_merged["matched_ust_maturity"] = False
             df_merged.loc[hit_mask, "matched_ust_maturity"] = True
+        # PKG flag: invoice swap is its own package type. Distinct from
+        # OUTRIGHT (single-leg SDR report) and from CURVE/FLY/BASIS
+        # (multi-leg SDR-internal packages). Surfaces in the dashboard
+        # PKG column so invoice swaps are filterable as a group.
+        if "package_type" not in df_merged.columns:
+            df_merged["package_type"] = "OUTRIGHT"
+        df_merged.loc[hit_mask, "package_type"] = "INVOICE"
+        if "trade_type" not in df_merged.columns:
+            df_merged["trade_type"] = "OUTRIGHT"
+        df_merged.loc[hit_mask, "trade_type"] = "INVOICE"
 
     cols_to_drop = [
         maturity_norm_col,

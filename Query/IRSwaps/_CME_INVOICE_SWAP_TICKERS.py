@@ -66,6 +66,42 @@ _CME_INVOICE_SWAP_TICKERS = {
     "UBF": {"root": "WN", "delivery": "first"},
 }
 
+# Human-readable product name per futures root, for tape-label rendering.
+# Kept short enough to sit inline in the trade-tape row, but specific enough
+# that the desk can tell a 10Y from a TU at a glance. Examples:
+#   "2Y TREASURY INVOICE TVA"     (root TU)
+#   "10Y TREASURY INVOICE TYA"    (root TY)
+#   "ULTRA 10Y TREASURY INVOICE TNA"  (root UXY)
+#   "ULTRA TREASURY INVOICE UBA"  (root WN)
+_INVOICE_SWAP_PRODUCT_NAMES = {
+    "TU":  "2Y TREASURY INVOICE",
+    "FV":  "5Y TREASURY INVOICE",
+    "TY":  "10Y TREASURY INVOICE",
+    "UXY": "ULTRA 10Y TREASURY INVOICE",
+    "US":  "TREASURY BOND INVOICE",
+    "WN":  "ULTRA TREASURY INVOICE",
+}
+
+
+def invoice_swap_product_label(ticker: str | None) -> str:
+    """Return ``"{PRODUCT_NAME} {TICKER}"`` for a recognized invoice-swap
+    ticker, or just the upper-cased ticker if the product is unknown.
+    Empty string for None / blank input.
+    """
+    if ticker is None:
+        return ""
+    t = str(ticker).strip().upper()
+    if not t or t.lower() in ("nan", "none"):
+        return ""
+    spec = _CME_INVOICE_SWAP_TICKERS.get(t)
+    if not spec:
+        return t
+    product = _INVOICE_SWAP_PRODUCT_NAMES.get(spec["root"])
+    if not product:
+        return t
+    return f"{product} {t}"
+
+
 # Indicator letter -> ticker, per (futures root, CTD delivery indicator).
 # Per CME conventions: indicators A/B/C refer to CTD candidates 1/2/3 on the
 # LAST-delivery date; indicators D/E/F refer to CTD candidates 1/2/3 on the
