@@ -923,7 +923,23 @@ class TradeTape(SDRAnalyzer):
             for idx, tid in df["trade_id"].items():
                 tid_to_idx[str(tid)] = idx
 
-        def _label_for_row(row: pd.Series, *, leg_scope: bool = False) -> str:
+        def _ust_maturity_alias(row: pd.Series) -> str:
+            """Return a ``MMYY`` alias for a UST coupon maturity on the
+            ``expiration_date`` of the row. Empty string if the date cannot
+            be parsed. Matches the Query/FixedRateBonds alias style
+            (``'0236'`` == UST maturing Feb 2036).
+            """
+            exp = pd.to_datetime(row.get("expiration_date"), errors="coerce")
+            if pd.isna(exp):
+                return ""
+            return f"{int(exp.month):02d}{int(exp.year) % 100:02d}"
+
+        def _label_for_row(
+            row: pd.Series,
+            *,
+            leg_scope: bool = False,
+            use_ust_alias: bool = False,
+        ) -> str:
             parts: list[str] = []
 
             # 1. Underlier name
@@ -1012,6 +1028,17 @@ class TradeTape(SDRAnalyzer):
                             row.get("tenor_display", row.get("tenor_label", "")),
                         )
                     )
+                # Secondary UST alias for MATCHED_MATURITY trades — replace
+                # the raw tenor ("9Y10M") with the "MMYY" UST-maturity
+                # shorthand ("0236" == Feb 2036), matching the alias scheme
+                # in Query/FixedRateBonds/FixedRateBondQuery.py.
+                if use_ust_alias and (
+                    str(row.get("special_tenor_type", "")).upper() == "MATCHED_MATURITY"
+                    or bool(row.get("matched_ust_maturity", False))
+                ):
+                    alias = _ust_maturity_alias(row)
+                    if alias:
+                        tenors = alias
                 if tenors and tenors.lower() not in ("nan", "none"):
                     parts.append(tenors)
 
@@ -1108,10 +1135,19 @@ class TradeTape(SDRAnalyzer):
         df["leg_tape_label"] = df.apply(
             lambda r: _label_for_row(r, leg_scope=True), axis=1
         )
+        # Secondary label: MATCHED_MATURITY rows use the "MMYY" UST-maturity
+        # alias (e.g. "0236") in place of the raw tenor ("9Y10M"). Non-MMS
+        # rows render identically to tape_label.
+        df["tape_label_ust_alias"] = df.apply(
+            lambda r: _label_for_row(r, use_ust_alias=True), axis=1
+        )
         # Clean double spaces
         df["tape_label"] = df["tape_label"].str.replace(r"\s+", " ", regex=True).str.strip()
         df["leg_tape_label"] = (
             df["leg_tape_label"].str.replace(r"\s+", " ", regex=True).str.strip()
+        )
+        df["tape_label_ust_alias"] = (
+            df["tape_label_ust_alias"].str.replace(r"\s+", " ", regex=True).str.strip()
         )
 
         return df

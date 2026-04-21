@@ -453,6 +453,11 @@ def detect_spreadovers(package_df: pd.DataFrame):
     )
     copy_df["is_spreadover"] = False
     copy_df.loc[broker_spreadover_mask, "is_spreadover"] = True
+    # PKG flag: surface SPREADOVER in the package_type column so the
+    # dashboard PKG bucket groups them alongside CURVE/FLY/INVOICE/OUTRIGHT.
+    if "package_type" not in copy_df.columns:
+        copy_df["package_type"] = "OUTRIGHT"
+    copy_df.loc[broker_spreadover_mask, "package_type"] = "SPREADOVER"
 
     asset_swap_mask = (
         (copy_df["package_legs"].isna())
