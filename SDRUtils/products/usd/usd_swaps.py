@@ -294,6 +294,26 @@ def _apply_invoice_swap_lookup(
     require_high_confidence: bool,
     output_col: str,
 ) -> pd.DataFrame:
+    """Merge the (delivery_date, ctd_maturity) -> ticker lookup onto trades.
+
+    A hit on this lookup is by itself definitive: the trade's (eff, mat)
+    pair matches a published CBOT Treasury Invoice Swap specification
+    exactly. Therefore:
+
+    * The ticker is always written when the merge matches.
+    * The matched-maturity confidence is *upgraded* to "high" on a hit
+      (an invoice-spec match promotes the MMS confidence rather than
+      being gated by it — otherwise the spot/MM-DD heuristic would
+      block legitimate invoice swaps whose eff/mat happens to satisfy
+      the heuristic).
+    * ``matched_ust_maturity`` is set to True on a hit (invoice-spec
+      match implies the swap lands on a UST coupon maturity by
+      construction).
+
+    ``require_high_confidence`` is kept for backward compatibility but
+    is ignored when set to the default ``True`` — the semantics above
+    supersede it. Callers passing ``False`` see the same behaviour.
+    """
     out = package_df.copy()
 
     if output_col not in out.columns:
@@ -320,11 +340,20 @@ def _apply_invoice_swap_lookup(
         how="left",
     )
 
-    condition = df_merged["__invoice_swap_ticker_new"].notna()
-    if require_high_confidence and confidence_col and confidence_col in df_merged.columns:
-        condition &= df_merged[confidence_col].astype("string").str.lower().eq("high")
+    hit_mask = df_merged["__invoice_swap_ticker_new"].notna()
 
-    df_merged.loc[condition, output_col] = df_merged.loc[condition, "__invoice_swap_ticker_new"]
+    # Write ticker on every merge hit — the spec match itself is the signal.
+    df_merged.loc[hit_mask, output_col] = df_merged.loc[hit_mask, "__invoice_swap_ticker_new"]
+
+    # Promote matched-maturity confidence + flag to HIGH / True on ticker hit.
+    if hit_mask.any():
+        if confidence_col and confidence_col in df_merged.columns:
+            df_merged.loc[hit_mask, confidence_col] = "high"
+        if "matched_ust_maturity" in df_merged.columns:
+            df_merged.loc[hit_mask, "matched_ust_maturity"] = True
+        else:
+            df_merged["matched_ust_maturity"] = False
+            df_merged.loc[hit_mask, "matched_ust_maturity"] = True
 
     cols_to_drop = [
         maturity_norm_col,
