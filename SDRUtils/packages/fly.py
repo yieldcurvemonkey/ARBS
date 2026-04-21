@@ -29,6 +29,8 @@ def detect_fly_trades_df(
     allow_gap_flies: bool = True,
     require_same_underlier: bool = True,
     underlier_col: str = "UPI Underlier Name",
+    require_same_upi: bool = True,
+    upi_col: str = "Unique Product Identifier",
     require_same_platform: bool = True,
     platform_col: str = "Platform identifier",
     # Optional: if you want to prohibit mixing cleared/uncleared etc.
@@ -87,6 +89,8 @@ def detect_fly_trades_df(
                 cols.append(forward_years_col)
         if require_same_underlier and underlier_col in out.columns:
             cols.append(underlier_col)
+        if require_same_upi and upi_col in out.columns:
+            cols.append(upi_col)
         if require_same_platform and platform_col in out.columns:
             cols.append(platform_col)
         if require_same_cleared_flag and cleared_col in out.columns:
@@ -130,6 +134,7 @@ def detect_fly_trades_df(
         )
 
         und = cand[underlier_col].astype("string").to_numpy() if (require_same_underlier and underlier_col in cand.columns) else None
+        upi = cand[upi_col].astype("string").to_numpy() if (require_same_upi and upi_col in cand.columns) else None
         plat = cand[platform_col].astype("string").to_numpy() if (require_same_platform and platform_col in cand.columns) else None
         clr = cand[cleared_col].astype("string").to_numpy() if (require_same_cleared_flag and cleared_col in cand.columns) else None
 
@@ -194,6 +199,8 @@ def detect_fly_trades_df(
             if fwd_years is not None and abs(fwd_years[i] - fwd_years[j]) > forward_years_tol:
                 return False
             if und is not None and und[i] != und[j]:
+                return False
+            if upi is not None and upi[i] != upi[j]:
                 return False
             if plat is not None and plat[i] != plat[j]:
                 return False
