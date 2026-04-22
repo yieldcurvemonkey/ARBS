@@ -245,8 +245,12 @@ def detect_curve_trades_df(
 
         if best_j >= 0:
             pkg_counter += 1
-            pid = f"CURVE_{pkg_counter}"
             legs = [str(trade_ids[best_j]), str(trade_ids[i])]
+            # Use the smallest leg trade_id as the suffix so the package_id
+            # is globally unique across detector invocations. SDR trade_ids
+            # are unique per reported trade, so min(legs) never collides.
+            # Counter kept for readability only (first "N" qualifier).
+            pid = f"CURVE_{pkg_counter}_{min(legs)}"
 
             matched[best_j] = True
             matched[i] = True
