@@ -269,8 +269,10 @@ def detect_fly_trades_df(
 
                         if belly_rel <= belly_ratio_tolerance and wings_rel <= belly_ratio_tolerance:
                             pkg_counter += 1
-                            pid = f"FLY_{pkg_counter}"
                             legs = [str(trade_ids[j]), str(trade_ids[i]), str(trade_ids[k])]
+                            # Globally-unique suffix: smallest leg trade_id.
+                            # Prevents FLY_N collisions across daily detector runs.
+                            pid = f"FLY_{pkg_counter}_{min(legs)}"
 
                             for idx in (j, i, k):
                                 matched[idx] = True

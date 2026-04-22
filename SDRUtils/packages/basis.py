@@ -150,8 +150,11 @@ def detect_basis_packages_df(
             pkg_name = BasisPackageType.BASIS_CURVE.value
 
         pkg_counter += 1
-        pid = f"BPKG_{pkg_counter}"
         leg_ids = [trade_ids[k] for k in legs]
+        # Globally-unique suffix: smallest leg trade_id. Prevents BPKG_N
+        # collisions across daily detector runs (which would cause
+        # merge_package_legs_to_one_row to collapse unrelated trades).
+        pid = f"BPKG_{pkg_counter}_{min(str(x) for x in leg_ids)}"
 
         for k in legs:
             matched[k] = True
