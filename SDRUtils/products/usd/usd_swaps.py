@@ -441,15 +441,55 @@ def detect_mac_swaps(package_df: pd.DataFrame) -> pd.DataFrame:
     return out.drop(columns=["_mac_eff", "_mac_exp", "_fixed_rate", "_fixed_rate_bp"], errors="ignore")
 
 
+#: Upper bound on a plausible swap-vs-UST spreadover in decimal rate terms.
+#: ``0.01`` = 1% = 100 bps. Any CFTC-reported spread above this is a scale
+#: error or a non-spread field leaking into the column; real USD spreadovers
+#: rarely exceed -80 bps in magnitude even on the long end.
+_SPREADOVER_SPREAD_ABS_CEILING: float = 0.01
+
+
 def detect_spreadovers(package_df: pd.DataFrame):
+    """Detect broker-reported swap-vs-UST spreadovers.
+
+    Tight gate — all conditions must hold:
+
+    * ``package_legs`` is NaN (not already paired by curve/fly/basis detectors)
+    * ``package_indicator == True`` (CFTC package flag)
+    * ``forward_label == "spot"``
+    * ``package_transaction_spread`` coerces to a non-zero float
+    * ``|package_transaction_spread| <= 0.01`` (100 bps; rejects reporting errors)
+    * ``invoice_swap_ticker`` is empty (mutual exclusion — invoice swaps also
+      carry ``package_indicator=True`` but belong to their own bucket)
+
+    The previous gate flagged any row with a non-null spread, which pulled
+    in exact-zero routing tags, orders of magnitude scale-error outliers,
+    and invoice-swap rows. The tight version reduces false positives
+    without depending on matched-maturity signals (spreadovers are DV01-
+    matched hedges; the IRS maturity typically does NOT land on a UST
+    coupon date, so ``matched_ust_maturity`` is orthogonal).
+    """
     copy_df = package_df.copy()
+
+    spread_num = pd.to_numeric(
+        copy_df.get("package_transaction_spread"), errors="coerce"
+    )
+    invoice_ticker_col = copy_df.get(
+        "invoice_swap_ticker", pd.Series([None] * len(copy_df), index=copy_df.index)
+    )
+    has_invoice_ticker = (
+        invoice_ticker_col.notna()
+        & (invoice_ticker_col.astype(str).str.strip() != "")
+        & (invoice_ticker_col.astype(str).str.strip().str.lower() != "nan")
+    )
 
     broker_spreadover_mask = (
         (copy_df["package_legs"].isna())
         & (copy_df["package_indicator"] == True)
-        & (copy_df["package_transaction_spread"].notna())
-        # & (copy_df["package_transaction_spread"] != "")
         & (copy_df["forward_label"] == "spot")
+        & spread_num.notna()
+        & (spread_num != 0)
+        & (spread_num.abs() <= _SPREADOVER_SPREAD_ABS_CEILING)
+        & (~has_invoice_ticker)
     )
     copy_df["is_spreadover"] = False
     copy_df.loc[broker_spreadover_mask, "is_spreadover"] = True
@@ -460,11 +500,8 @@ def detect_spreadovers(package_df: pd.DataFrame):
     copy_df.loc[broker_spreadover_mask, "package_type"] = "SPREADOVER"
 
     asset_swap_mask = (
-        (copy_df["package_legs"].isna())
-        & (copy_df["package_indicator"] == True)
-        & (copy_df["package_transaction_spread"].notna())
-        & (copy_df["other_payment_type"] == "UFRO")
-        & (copy_df["forward_label"] == "spot")
+        broker_spreadover_mask
+        & (copy_df.get("other_payment_type") == "UFRO")
     )
     copy_df["is_asset_swap"] = False
     copy_df.loc[asset_swap_mask, "is_asset_swap"] = True

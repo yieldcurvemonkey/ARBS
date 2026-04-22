@@ -15,10 +15,13 @@ def row_template():
         "trade_id": "T1",
         "package_legs": None,
         "package_indicator": True,
-        "package_transaction_spread": 12.5,
+        # Decimal fraction (CFTC reporting unit): -0.00125 == -12.5 bps,
+        # a typical 5Y spreadover quote.
+        "package_transaction_spread": -0.00125,
         "forward_label": "spot",
         "other_payment_type": None,
         "package_type": "OUTRIGHT",
+        "invoice_swap_ticker": None,
     }
 
 
