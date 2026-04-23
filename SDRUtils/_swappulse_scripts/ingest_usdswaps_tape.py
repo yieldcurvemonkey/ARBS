@@ -622,34 +622,37 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
 def _structural_risk(
     risk: pd.Series, tenor_years: pd.Series, trade_type: str
 ) -> Optional[float]:
-    """Representative package DV01 for the front-of-tape DV01 cell.
+    """Street-convention package DV01 for the front-of-tape RISK cell.
 
-    Curves and flies have offsetting leg risks, so summing them is misleading:
-    a 5s10s curve with +41.5k / +41.6k legs would display +83.1k, which isn't
-    meaningful. Convention here:
-    - CURVE: back-leg DV01 (leg with the longest tenor).
-    - FLY: belly-leg DV01 (middle tenor after sorting).
-    - Anything else: sum of leg DV01s (unchanged behaviour).
+    CURVE and FLY legs carry opposite signs by construction (pay one side,
+    receive the other), so a signed sum cancels out and is meaningless.
+    Convention matches how the desk headlines each structure:
+
+    * CURVE — single-leg headline: ``max(|leg_dv01|)``. A 5Y/30Y curve
+      with legs +25k / +24k reports as 25k (the larger-DV01 leg, which
+      is what the desk quotes as the "size"). Do NOT sum the legs.
+    * FLY — belly DV01 only (absolute value). A 50k belly + two 25k wings
+      reports as 50k. Wings are auto-implied as belly/2, so surfacing the
+      belly alone is the least ambiguous headline. Belly = middle-tenor
+      leg after sorting by ``tenor_years``.
+    * Anything else (OUTRIGHT / MATCHED_MATURITY / INVOICE / SPREADOVER /
+      MAC / …) — signed sum, preserving direction.
 
     Returns None if no leg has a non-null risk.
     """
     if not risk.notna().any():
         return None
     tt = (trade_type or "").upper()
-    if tt in ("CURVE", "FLY"):
+    if tt == "CURVE":
+        return _num_or_none(risk.abs().max(skipna=True))
+    if tt == "FLY":
         valid_mask = risk.notna() & tenor_years.notna()
         if valid_mask.any():
             ordered = tenor_years[valid_mask].sort_values(kind="stable")
-            if tt == "CURVE":
-                # Back leg = longest tenor.
-                target_idx = ordered.index[-1]
-            else:
-                # Belly = middle tenor after sorting. For a conventional 3-leg
-                # fly this lands on the middle leg; for 2-leg inputs we fall
-                # back to the longer-tenor leg so the value is still well
-                # defined. len // 2 gives the right answer in both cases.
-                target_idx = ordered.index[len(ordered) // 2]
-            return _num_or_none(risk.loc[target_idx])
+            belly_idx = ordered.index[len(ordered) // 2]
+            return _num_or_none(abs(risk.loc[belly_idx]))
+        # Fallback: no tenor info, emit max abs (single-leg headline).
+        return _num_or_none(risk.abs().max(skipna=True))
     return _num_or_none(risk.sum(skipna=True))
 
 
@@ -918,7 +921,51 @@ def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict
         json_cols=JSON_LEG_COLS,
         progress_desc="Writing tape legs",
     )
-    return {"packages_written": n_pkgs, "legs_written": n_legs}
+    n_orphans = _delete_orphan_packages(engine)
+    return {
+        "packages_written": n_pkgs,
+        "legs_written": n_legs,
+        "orphan_packages_deleted": n_orphans,
+    }
+
+
+def _delete_orphan_packages(engine: Engine) -> int:
+    """Delete package rows that have no legs pointing at them.
+
+    Defensive maintenance step — runs after every ingest. Two ways a
+    package can end up orphaned:
+
+    1. **Leg FK re-parented to a new package_id.** The legs table upserts
+       on ``trade_id``, so a trade that was part of CURVE_A yesterday and
+       is now part of CURVE_B (detector produced a different package_id)
+       has its leg row's ``package_id`` FK flipped to CURVE_B. Package row
+       CURVE_A is left behind with zero legs pointing at it.
+
+       The globally-unique ``CURVE_N_<min_leg>`` fix in
+       ``SDRUtils/packages/curve.py`` et al. prevents most of these, but
+       any detector change that shifts leg assignments still creates
+       orphans on re-ingest.
+
+    2. **Package-only write, leg write failed.** If a prior run wrote
+       packages but crashed before legs, the package is stranded.
+
+    Orphans don't render an expand chevron in the dashboard (the view's
+    ``legs_json`` aggregates to empty), so they're visible noise. Cleaning
+    them up post-write keeps the tape tidy.
+    """
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                f"""
+                DELETE FROM {PACKAGES_TABLE} p
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {LEGS_TABLE} l
+                    WHERE l.package_id = p.package_id
+                )
+                """
+            )
+        )
+        return int(result.rowcount or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -1082,6 +1129,12 @@ def run_ingest(
         tape = TradeTape(df=classified, raw_df=raw_df).compute(use_cache=use_cache)
         tape = attach_manual_links(engine, tape)
         stats = write_tape_rows(engine, tape, as_of_date=start.date().isoformat())
+        orphans_cleaned = int(stats.get("orphan_packages_deleted") or 0)
+        if orphans_cleaned:
+            print(
+                f"  Cleaned up {orphans_cleaned:,} orphan package row(s) left "
+                f"behind by re-assigned legs."
+            )
         _finish_run(
             engine,
             run_id,

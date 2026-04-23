@@ -8,13 +8,41 @@ const COMPACT_UNITS: [number, string][] = [
   [1e3, 'K'],
 ]
 
+// Headline ladder: the round DV01 / notional sizes traders actually
+// quote. Scaled compact values that fall within HEADLINE_SNAP_TOLERANCE
+// of a ladder entry are snapped onto it (49.9K -> 50K, 24.9K -> 25K,
+// 72K -> 75K). Values that aren't close to any ladder entry round to
+// integer instead so odd sizes like 35K / 46K stay legible.
+const HEADLINE_LADDER: number[] = [
+  1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10, 15, 20, 25, 30, 40, 50, 75,
+  100, 150, 200, 250, 300, 400, 500, 750,
+]
+const HEADLINE_SNAP_TOLERANCE = 0.05
+
 function isNullish(n: number | null | undefined): n is null | undefined {
   return n === null || n === undefined || Number.isNaN(n)
 }
 
+function snapToHeadlineLadder(scaled: number): number {
+  // Returns the scaled value with the sign preserved, snapped to the
+  // nearest ladder entry iff within tolerance; otherwise integer-rounded.
+  const abs = Math.abs(scaled)
+  let bestEntry = abs
+  let bestDiff = Number.POSITIVE_INFINITY
+  for (const entry of HEADLINE_LADDER) {
+    const rel = Math.abs(abs - entry) / entry
+    if (rel < bestDiff) {
+      bestDiff = rel
+      bestEntry = entry
+    }
+  }
+  const chosen = bestDiff <= HEADLINE_SNAP_TOLERANCE ? bestEntry : Math.round(abs)
+  return scaled < 0 ? -chosen : chosen
+}
+
 export function formatNotional(
   n: number | null | undefined,
-  opts: { compact?: boolean } = {},
+  opts: { compact?: boolean; headline?: boolean } = {},
 ): string {
   if (isNullish(n)) return EMPTY_VALUE
   const value = Number(n)
@@ -24,6 +52,19 @@ export function formatNotional(
   for (const [threshold, suffix] of COMPACT_UNITS) {
     if (Math.abs(value) >= threshold) {
       const scaled = value / threshold
+      // "headline" mode snaps to the desk's round-size ladder
+      // (49.9K -> "50K", 24.9K -> "25K", 72K -> "75K") and falls back to
+      // integer rounding for values that aren't close to any ladder
+      // entry. Default (non-headline) keeps the legacy 1-decimal render
+      // for mid-range values so notional still shows meaningful precision
+      // (e.g. 1.5M vs 1.6M).
+      if (opts.headline) {
+        const snapped = snapToHeadlineLadder(scaled)
+        const snappedAbs = Math.abs(snapped)
+        const precision = snappedAbs >= 100 || Number.isInteger(snappedAbs) ? 0 : 1
+        const formatted = snapped.toFixed(precision).replace(/\.0+$/, '')
+        return `${formatted}${suffix}`
+      }
       const precision = Math.abs(scaled) >= 100 ? 0 : 1
       const formatted = scaled.toFixed(precision).replace(/\.0+$/, '')
       return `${formatted}${suffix}`
@@ -39,7 +80,9 @@ export function formatDv01(
   if (isNullish(n)) return EMPTY_VALUE
   const value = Number(n)
   const abs = Math.abs(value)
-  const formatted = formatNotional(abs, { compact: true })
+  // RISK headline rounding: snap scaled compact values to integers so the
+  // RISK column reads as traders quote it (49.9K -> 50K, 9.8K -> 10K).
+  const formatted = formatNotional(abs, { compact: true, headline: true })
   if (opts.signNegativeOnly) {
     if (value < 0) return `\u2212${formatted}`
     return formatted
@@ -69,6 +112,42 @@ export function formatRateRange(
   if (isNullish(max)) return formatRate(min)
   if (Math.abs(Number(min) - Number(max)) < 1e-9) return formatRate(min)
   return `${formatRate(min)} – ${formatRate(max)}`
+}
+
+/**
+ * Render the "Reported LvL" cell value.
+ *
+ * For CURVE and FLY packages, every leg has its own reported fixed rate
+ * and the desk wants both surfaced inline:
+ *
+ *   CURVE  ->  "3.622% / 3.827%"
+ *   FLY    ->  "3.622% / 3.800% / 4.100%"
+ *
+ * For every other trade type (OUTRIGHT / INVOICE / SPREADOVER / MAC / …)
+ * the cell falls back to the package-level weighted_fixed_rate.
+ *
+ * If a CURVE/FLY row is missing per-leg rates (e.g. <2 legs populated or
+ * all fixed_rate values are null), the weighted_fixed_rate is used as a
+ * safety net so the cell never renders the empty marker just because a
+ * leg came through without a rate.
+ */
+export function formatReportedLvl(row: UsdSwapTapeRow): string {
+  // The tape display view only selects ``package_type`` — the row-level
+  // ``trade_type`` column is not projected for aggregated package rows,
+  // so ``row.trade_type`` is typically undefined on the main tape. Prefer
+  // ``package_type`` and fall back to ``trade_type`` only as a backstop.
+  const kind = String(row.package_type ?? row.trade_type ?? '').toUpperCase()
+  const isMultiLeg = kind === 'CURVE' || kind === 'FLY'
+  if (isMultiLeg) {
+    const legs = row.legs_json ?? []
+    const legRates = legs
+      .map((l) => l?.fixed_rate)
+      .filter((r): r is number => !isNullish(r as number | null | undefined))
+    if (legRates.length >= 2) {
+      return legRates.map((r) => formatRate(r)).join(' / ')
+    }
+  }
+  return formatRate(row.weighted_fixed_rate ?? null)
 }
 
 export function formatTenor(row: UsdSwapTapeRow): string {

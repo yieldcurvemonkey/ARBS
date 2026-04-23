@@ -377,13 +377,37 @@ def _apply_invoice_swap_lookup(
     return df_merged.drop(columns=existing_cols_to_drop, errors="ignore")
 
 
+#: Coupon-match precision for MAC swap detection. MAC swaps use strictly
+#: standardized coupons (e.g. 3.00%, 3.25%, 3.50%), so the reported fixed
+#: rate must match the MAC coupon exactly — no basis-point tolerance. We
+#: scale both sides to integer "hundred-thousandths of a percent" (0.00001%)
+#: before comparing, which tolerates harmless IEEE-754 round-trip noise
+#: (e.g. a 4.00% coupon coming back as 0.0399999999) but will NOT collapse
+#: 3.999% onto 4.000%.
+_MAC_COUPON_SCALE = 10_000_000  # rate * 10^7  (7 decimals on the decimal
+#                                 fraction = 5 decimals on the percentage)
+
+
+def _coupon_scaled(rate: float) -> Optional[int]:
+    """Scale a decimal-fraction rate (0.04 == 4%) to an integer key for
+    exact-match MAC coupon comparison. Returns None on NaN."""
+    if rate is None or (isinstance(rate, float) and pd.isna(rate)):
+        return None
+    try:
+        return int(round(float(rate) * _MAC_COUPON_SCALE))
+    except (TypeError, ValueError):
+        return None
+
+
 def detect_mac_swaps(package_df: pd.DataFrame) -> pd.DataFrame:
     out = package_df.copy()
 
     out["_mac_eff"] = pd.to_datetime(out.get("effective_date"), errors="coerce").dt.normalize()
     out["_mac_exp"] = pd.to_datetime(out.get("expiration_date"), errors="coerce").dt.normalize()
     out["_fixed_rate"] = pd.to_numeric(out.get("fixed_rate"), errors="coerce")
-    out["_fixed_rate_bp"] = (out["_fixed_rate"] * 10000).round().astype("Int64")
+    # EXACT coupon match only (no bp-tolerance). See _MAC_COUPON_SCALE
+    # comment for the precision rationale.
+    out["_fixed_rate_key"] = out["_fixed_rate"].map(_coupon_scaled).astype("Int64")
 
     mac_lookup_frames: list[pd.DataFrame] = []
     mac_cache: dict[tuple[int, int], pd.DataFrame] = {}
@@ -400,7 +424,7 @@ def detect_mac_swaps(package_df: pd.DataFrame) -> pd.DataFrame:
 
     if not mac_lookup_frames:
         out["is_mac"] = False
-        return out.drop(columns=["_mac_eff", "_mac_exp", "_fixed_rate", "_fixed_rate_bp"], errors="ignore")
+        return out.drop(columns=["_mac_eff", "_mac_exp", "_fixed_rate", "_fixed_rate_key"], errors="ignore")
 
     mac_lookup = pd.concat(mac_lookup_frames, ignore_index=True)
     mac_lookup = mac_lookup.dropna(subset=["imm_start_date", "expiration_date", "coupon"]).copy()
@@ -408,17 +432,19 @@ def detect_mac_swaps(package_df: pd.DataFrame) -> pd.DataFrame:
     mac_lookup["_mac_eff"] = pd.to_datetime(mac_lookup["imm_start_date"], errors="coerce").dt.normalize()
     mac_lookup["_mac_exp"] = pd.to_datetime(mac_lookup["expiration_date"], errors="coerce").dt.normalize()
     mac_lookup["_mac_coupon"] = pd.to_numeric(mac_lookup["coupon"], errors="coerce") / 100.0
-    mac_lookup["_mac_coupon_bp"] = (mac_lookup["_mac_coupon"] * 10000).round().astype("Int64")
+    mac_lookup["_mac_coupon_key"] = mac_lookup["_mac_coupon"].map(_coupon_scaled).astype("Int64")
 
-    mac_lookup = mac_lookup[["_mac_eff", "_mac_exp", "_mac_coupon_bp"]].drop_duplicates()
+    mac_lookup = mac_lookup[["_mac_eff", "_mac_exp", "_mac_coupon_key"]].drop_duplicates()
 
     tol_days = 5
-    exp_lists = mac_lookup.groupby(["_mac_eff", "_mac_coupon_bp"])["_mac_exp"].apply(lambda s: tuple(pd.Series(s).dropna().unique())).to_dict()
+    exp_lists = mac_lookup.groupby(["_mac_eff", "_mac_coupon_key"])["_mac_exp"].apply(
+        lambda s: tuple(pd.Series(s).dropna().unique())
+    ).to_dict()
 
-    def _row_is_mac(eff, exp, coupon_bp) -> bool:
-        if pd.isna(eff) or pd.isna(exp) or pd.isna(coupon_bp):
+    def _row_is_mac(eff, exp, coupon_key) -> bool:
+        if pd.isna(eff) or pd.isna(exp) or pd.isna(coupon_key):
             return False
-        exps = exp_lists.get((eff, int(coupon_bp)))
+        exps = exp_lists.get((eff, int(coupon_key)))
         if not exps:
             return False
         exp = pd.Timestamp(exp)
@@ -427,18 +453,17 @@ def detect_mac_swaps(package_df: pd.DataFrame) -> pd.DataFrame:
                 return True
         return False
 
-    # out["is_mac"] = [_row_is_mac(eff, exp, cpn) for eff, exp, cpn in zip(out["_mac_eff"].values, out["_mac_exp"].values, out["_fixed_rate_bp"].values)]
     out["is_mac"] = [
         _row_is_mac(eff, exp, cpn)
         for eff, exp, cpn in tqdm(
-            zip(out["_mac_eff"].values, out["_mac_exp"].values, out["_fixed_rate_bp"].values),
+            zip(out["_mac_eff"].values, out["_mac_exp"].values, out["_fixed_rate_key"].values),
             total=len(out),
             desc="Detecting MAC swaps",
             leave=False,
         )
     ]
 
-    return out.drop(columns=["_mac_eff", "_mac_exp", "_fixed_rate", "_fixed_rate_bp"], errors="ignore")
+    return out.drop(columns=["_mac_eff", "_mac_exp", "_fixed_rate", "_fixed_rate_key"], errors="ignore")
 
 
 #: Upper bound on a plausible swap-vs-UST spreadover in decimal rate terms.

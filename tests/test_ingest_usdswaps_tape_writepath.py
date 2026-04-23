@@ -165,6 +165,53 @@ def test_write_is_idempotent(test_engine):
     assert n_legs == len(tape)
 
 
+def test_write_tape_rows_cleans_up_orphan_packages(test_engine):
+    """A package row whose legs were re-assigned to a different package_id
+    (e.g. a re-ingest under a changed detector) is garbage. The write path
+    must clean it up so the dashboard doesn't render unexpandable rows.
+    """
+    df = sample_classified_df()
+    tape = TradeTape(df=df, raw_df=None).compute(use_cache=False)
+    write_tape_rows(test_engine, tape, as_of_date="2026-04-14")
+
+    # Simulate an orphan: insert a package row with no legs pointing at it.
+    with test_engine.begin() as conn:
+        conn.execute(
+            text(
+                f"""
+                INSERT INTO {PACKAGES_TABLE}
+                  (package_id, as_of_date, package_type, package_structure,
+                   package_tenors, total_risk, gross_risk, total_notional,
+                   gross_notional)
+                VALUES
+                  ('CURVE_ORPHAN_TEST', :asof, 'CURVE', '5Y/10Y CURVE',
+                   '5Y/10Y', 40000, 40000, 100000000, 100000000)
+                """
+            ),
+            {"asof": "2026-04-14"},
+        )
+        exists_before = conn.execute(
+            text(
+                f"SELECT COUNT(*) FROM {PACKAGES_TABLE} "
+                f"WHERE package_id = 'CURVE_ORPHAN_TEST'"
+            )
+        ).scalar()
+    assert exists_before == 1
+
+    # Next write_tape_rows invocation should clean up the orphan.
+    stats = write_tape_rows(test_engine, tape, as_of_date="2026-04-14")
+    assert stats.get("orphan_packages_deleted", 0) >= 1
+
+    with test_engine.connect() as conn:
+        exists_after = conn.execute(
+            text(
+                f"SELECT COUNT(*) FROM {PACKAGES_TABLE} "
+                f"WHERE package_id = 'CURVE_ORPHAN_TEST'"
+            )
+        ).scalar()
+    assert exists_after == 0
+
+
 def test_attach_manual_links_joins_trade_ids(test_engine):
     """Insert a manual link for the curve package, confirm trade_id mapping."""
     with test_engine.begin() as conn:

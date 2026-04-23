@@ -11,6 +11,7 @@ import {
   formatNotional,
   formatOtherLvl,
   formatRate,
+  formatReportedLvl,
 } from '../../utils/format'
 import { getFilterDisplayLabel } from './filter-utils'
 import { LifecyclePills } from './RowBadges'
@@ -257,7 +258,7 @@ export function getColumns(
       )}
       body={(row: UsdSwapTapeRow) => (
         <span className="font-mono text-[15px] font-semibold text-gray-100">
-          {formatRate(row.weighted_fixed_rate ?? null)}
+          {formatReportedLvl(row)}
         </span>
       )}
       style={{ width: 72 }}

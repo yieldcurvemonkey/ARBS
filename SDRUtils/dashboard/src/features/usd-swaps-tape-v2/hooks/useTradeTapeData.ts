@@ -50,6 +50,103 @@ function buildQuery(params: UseTradeTapeDataParams, options?: {
   return q
 }
 
+/**
+ * Collapse rows that point at the same logical trade pair and drop stale
+ * orphan packages that have no legs attached.
+ *
+ * Pre-fix, the per-day detector used a local ``CURVE_N`` counter — so the
+ * same 2-leg curve reported across multiple ingest runs landed in the
+ * ``arbs_usd_swap_tape_packages_v1`` table multiple times under different
+ * package_ids. Two side-effects in the dashboard:
+ *
+ *   1. Duplicate rows: both surviving package_ids render, differing only
+ *      in aggregated fields like platform_identifier.
+ *   2. Orphan rows with empty legs_json: when a later ingest re-classified
+ *      a leg's ``trade_id`` under a fresh package_id, the leg's
+ *      ``package_id`` FK flipped to the new package (legs upsert on
+ *      ``trade_id``), leaving the OLD package row behind with nothing
+ *      pointing at it. The LEFT JOIN LATERAL in the display view returns
+ *      an empty ``legs_json`` for those packages, so the row shows up in
+ *      the tape but has no chevron / no expansion content.
+ *
+ * The backend fix (globally-unique ``CURVE_N_<min_leg>`` etc.) stops new
+ * duplicates from forming but can't retro-clean existing stale rows.
+ *
+ * Dedupe signature: execution_start + execution_end + package_type +
+ * package_tenors + total_risk + weighted_fixed_rate + package_transaction_spread.
+ * That tuple uniquely identifies a logical package trade — two entries
+ * that agree on all seven fields are the same economic fill reported twice.
+ *
+ * Outrights (package_type=OUTRIGHT) have unique package_ids
+ * (``OUTRIGHT-<trade_id>``) that get folded into the signature via
+ * ``package_id`` so two genuinely different outrights with coincidentally-
+ * matching fields never collide.
+ *
+ * When duplicates are found, prefer the variant with more legs (so the
+ * healthy package beats an orphan with zero legs), then prefer the one
+ * with the richest platform_identifier / venue, then first-seen.
+ *
+ * After dedup, any surviving row whose ``legs_json`` is still empty is
+ * dropped — it can't be expanded and represents orphan state from the
+ * legacy bug.
+ */
+function dedupeDuplicatePackages(rows: UsdSwapTapeRow[]): UsdSwapTapeRow[] {
+  const isPackage = (r: UsdSwapTapeRow) => {
+    const t = String(r.package_type ?? '').toUpperCase()
+    return t && t !== 'OUTRIGHT' && t !== 'NONE' && t !== ''
+  }
+  const signatureKey = (r: UsdSwapTapeRow) => {
+    if (!isPackage(r)) {
+      // Outrights are keyed by package_id (= "OUTRIGHT-<trade_id>") so
+      // two genuinely different outrights that happen to tie on all
+      // aggregate fields still render as two rows.
+      return `OUT|${r.package_id}`
+    }
+    return [
+      'PKG',
+      r.execution_start ?? '',
+      r.execution_end ?? '',
+      String(r.package_type ?? ''),
+      String(r.package_tenors ?? ''),
+      r.total_risk ?? '',
+      r.weighted_fixed_rate ?? '',
+      r.package_transaction_spread ?? '',
+    ].join('|')
+  }
+  const legCount = (r: UsdSwapTapeRow) =>
+    Array.isArray(r.legs_json) ? r.legs_json.length : 0
+  const richness = (r: UsdSwapTapeRow) => {
+    // Weights picked so leg count dominates: an orphan with zero legs can
+    // never beat a healthy variant that has at least one leg, even if the
+    // orphan has a populated platform.
+    let score = legCount(r) * 10
+    const platform = (r as { platform_identifier?: string | null })
+      .platform_identifier
+    if (platform && String(platform).trim() !== '') score += 2
+    if (r.venue && String(r.venue).trim() !== '') score += 1
+    return score
+  }
+
+  const best = new Map<string, UsdSwapTapeRow>()
+  const order: string[] = []
+  for (const row of rows) {
+    const key = signatureKey(row)
+    const prior = best.get(key)
+    if (!prior) {
+      best.set(key, row)
+      order.push(key)
+      continue
+    }
+    if (richness(row) > richness(prior)) {
+      best.set(key, row)
+    }
+  }
+  // Final pass: drop rows that are still orphans (no legs to show / expand).
+  return order
+    .map((k) => best.get(k)!)
+    .filter((r): r is UsdSwapTapeRow => Boolean(r) && legCount(r) > 0)
+}
+
 export function useTradeTapeData(
   params: UseTradeTapeDataParams,
 ): UseTradeTapeDataReturn {
@@ -69,14 +166,15 @@ export function useTradeTapeData(
   const upsertRows = useCallback(
     (incoming: UsdSwapTapeRow[], replace: boolean) => {
       if (replace) {
-        setRows(incoming)
+        setRows(dedupeDuplicatePackages(incoming))
       } else {
         setRows((prev) => {
           const map = new Map(prev.map((r) => [r.package_id, r]))
           incoming.forEach((r) => map.set(r.package_id, r))
-          return Array.from(map.values()).sort((a, b) =>
+          const combined = Array.from(map.values()).sort((a, b) =>
             b.execution_start.localeCompare(a.execution_start),
           )
+          return dedupeDuplicatePackages(combined)
         })
       }
     },
@@ -179,4 +277,4 @@ export function useTradeTapeData(
   }
 }
 
-export const __internal = { buildQuery }
+export const __internal = { buildQuery, dedupeDuplicatePackages }

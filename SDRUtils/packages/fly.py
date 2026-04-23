@@ -283,6 +283,72 @@ def detect_fly_trades_df(
             key_i = (int(ten_bucket[i]), int(pv_bucket[i]))
             store.setdefault(key_i, []).append(i)
 
+        # --- Second pass: order-independent fly detection ---------------
+        # The streaming loop above only matches flys where the belly arrives
+        # AFTER both wings, because it can only see wings that are already
+        # in the store. Belly-first or belly-middle arrivals leak through
+        # undetected and then get mis-paired by the curve detector as a
+        # 2-leg package with the belly dangling as an outright.
+        #
+        # Re-scan the remaining unmatched rows and do a simple O(n^2)
+        # combinatorial search per candidate belly, since all other
+        # trades are now visible. All economic guards from the streaming
+        # pass (_econ_ok, belly/wing DV01 tolerance, time window) are
+        # re-applied here.
+        for i in range(len(cand)):
+            if matched[i]:
+                continue
+            belly_pv = pv01[i]
+            if belly_pv <= 0:
+                continue
+            target_wing = belly_pv / 2.0
+
+            best_short = (-1, 1e9)
+            best_long = (-1, 1e9)
+            for j in range(len(cand)):
+                if matched[j] or j == i:
+                    continue
+                if abs(int(tsec[i]) - int(tsec[j])) > _effective_window(i, j):
+                    continue
+                if not _econ_ok(i, j):
+                    continue
+                w = pv01[j]
+                if w <= 0:
+                    continue
+                rel = abs(w - target_wing) / max(target_wing, 1e-12)
+                if rel > belly_ratio_tolerance:
+                    continue
+                if ten_axis[j] < ten_axis[i]:
+                    if rel < best_short[1]:
+                        best_short = (j, rel)
+                elif ten_axis[j] > ten_axis[i]:
+                    if rel < best_long[1]:
+                        best_long = (j, rel)
+
+            j_idx, k_idx = best_short[0], best_long[0]
+            if j_idx < 0 or k_idx < 0:
+                continue
+            if matched[j_idx] or matched[k_idx]:
+                continue
+            if not (_econ_ok(j_idx, k_idx) and _econ_ok(i, k_idx) and _econ_ok(i, j_idx)):
+                continue
+
+            wing_avg = 0.5 * (pv01[j_idx] + pv01[k_idx])
+            expected_belly = 2.0 * wing_avg
+            belly_rel = abs(belly_pv - expected_belly) / max(expected_belly, 1e-12)
+            wings_rel = abs(pv01[j_idx] - pv01[k_idx]) / max(wing_avg, 1e-12)
+            if belly_rel > belly_ratio_tolerance or wings_rel > belly_ratio_tolerance:
+                continue
+
+            pkg_counter += 1
+            legs = [str(trade_ids[j_idx]), str(trade_ids[i]), str(trade_ids[k_idx])]
+            pid = f"FLY_{pkg_counter}_{min(legs)}"
+            for idx in (j_idx, i, k_idx):
+                matched[idx] = True
+                pkg_type[idx] = "FLY"
+                pkg_ids[idx] = pid
+                pkg_legs[idx] = legs
+
         res = pd.DataFrame({trade_id_col: trade_ids, "_pkg_type": pkg_type, "_pkg_id": pkg_ids, "_pkg_legs": pkg_legs})
         out = out.merge(res, on=trade_id_col, how="left")
 
