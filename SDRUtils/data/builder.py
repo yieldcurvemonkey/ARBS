@@ -1068,7 +1068,15 @@ class SDRDataBuilder:
             ts_col=ts_col,
         )
 
-        combined = pd.concat([cache_df, new_df], ignore_index=True).drop_duplicates(subset=["report_slice", ts_col]).sort_values(by=ts_col)
+        # M11: DTCC disseminates the same message across multiple intraday
+        # slices; report_slice is slice-local, so dedup must key on the
+        # globally-unique Dissemination Identifier with keep="last" to
+        # retain the most recent slice's view (may carry corrections).
+        combined = (
+            pd.concat([cache_df, new_df], ignore_index=True)
+            .drop_duplicates(subset=["Dissemination Identifier"], keep="last")
+            .sort_values(by=ts_col)
+        )
         _write_intraday_cache(combined, cache_fp)
 
         return combined[(combined[ts_col] >= start_timestamp) & (combined[ts_col] <= end_timestamp)].reset_index(drop=True)

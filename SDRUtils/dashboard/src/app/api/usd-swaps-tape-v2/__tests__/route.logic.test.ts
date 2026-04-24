@@ -6,7 +6,7 @@ import {
   parseParams,
 } from '../route.logic'
 
-const VIEW = 'arbs_usd_swap_tape_display_v1'
+const VIEW = 'arbs_usd_swap_tape_display_v2'
 const COLUMNS = 'd.*'
 
 function paramsOf(qs: string) {

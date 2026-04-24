@@ -481,6 +481,35 @@ def build_lifecycle_summary_from_resolved(
         elif orig_dissem is not None:
             orig_dissem = str(orig_dissem)
 
+        # H13: scheduled amortization is a MODI whose only change is a step
+        # on the notional/effective-date schedule. Amendment indicator is
+        # False AND the only economics change is Notional amount-Leg 1
+        # matching the next step of the scheduled sequence.
+        is_schedule_step = False
+        if (
+            str(action) == "MODI"
+            and amendment is False
+            and "Notional amount-Leg 1" in changed
+            and prev_state is not None
+        ):
+            schedule_field = "Notional amount in effect on associated effective date-Leg 1"
+            schedule_cell = snapshot.get(schedule_field) or prev_state.get(schedule_field)
+            if schedule_cell is not None and not _is_null_value(schedule_cell):
+                try:
+                    from SDRUtils.core.parsing import parse_schedule
+
+                    schedule_vals = parse_schedule(schedule_cell)
+                    new_notional = float(str(changed["Notional amount-Leg 1"]).replace(",", ""))
+                    for v in schedule_vals:
+                        try:
+                            if abs(float(v) - new_notional) / max(abs(new_notional), 1.0) < 1e-6:
+                                is_schedule_step = True
+                                break
+                        except (TypeError, ValueError):
+                            continue
+                except (TypeError, ValueError, ImportError):
+                    pass
+
         events.append(LifecycleEvent(
             action_type=str(action),
             event_type=str(event_type) if event_type is not None else None,
@@ -491,6 +520,7 @@ def build_lifecycle_summary_from_resolved(
             original_dissemination_id=orig_dissem,
             file_date=fd,
             changed_economics=changed,
+            is_schedule_step=is_schedule_step,
         ))
 
         prev_state = snapshot

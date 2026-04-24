@@ -26,12 +26,14 @@ from tqdm.auto import tqdm
 
 from SDRUtils.analytics.trade_tape import TradeTape
 
-from ._tape_schema import (
-    LEGS_TABLE,
+from ._tape_schema import TAPE_SCHEMA_SQL  # v1 DDL for back-compat migration
+from ._tape_schema_v2 import (
+    DISPLAY_VIEW_V2,
+    LEGS_TABLE_V2 as LEGS_TABLE,
     MANUAL_LINKS_TABLE,
-    PACKAGES_TABLE,
-    RUNS_TABLE,
-    TAPE_SCHEMA_SQL,
+    PACKAGES_TABLE_V2 as PACKAGES_TABLE,
+    RUNS_TABLE_V2 as RUNS_TABLE,
+    TAPE_SCHEMA_SQL_V2,
 )
 from .ingest_usdswaps import get_db_connection_string as _legacy_conn_string
 
@@ -46,6 +48,8 @@ LEG_COLUMNS: tuple[str, ...] = (
     "leg_order",
     "as_of_date",
     "execution_timestamp",
+    "original_execution_timestamp",
+    "clearing_accepted_timestamp",
     "execution_session",
     "execution_hour_et",
     "tenor_years",
@@ -58,6 +62,8 @@ LEG_COLUMNS: tuple[str, ...] = (
     "expiration_date",
     "notional",
     "notional_currency",
+    "notional_source",
+    "is_notional_capped",
     "risk",
     "fixed_rate",
     "other_payment_amount",
@@ -85,7 +91,22 @@ LEG_COLUMNS: tuple[str, ...] = (
     "is_clearing_termination",
     "lifecycle_type",
     "lc_n_events",
+    "lc_n_events_economic",
+    "lc_n_valuation_events",
     "lc_status",
+    "lc_was_amended",
+    "lc_was_null_filled",
+    "lc_was_scheduled_amortization",
+    "lc_has_economics_change",
+    "state_machine_violation",
+    "violation_reason",
+    "economic_class",
+    "contributes_to_flow",
+    "contributes_to_volume",
+    "contributes_to_pnl",
+    "contributes_to_pnl_as_delta",
+    "on_p43",
+    "economic_class_reason",
     "is_ufro",
     "is_off_market",
     "is_capped",
@@ -120,6 +141,8 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     "as_of_date",
     "execution_start",
     "execution_end",
+    "original_execution_start",
+    "clearing_accepted_start",
     "package_structure",
     "package_type",
     "package_indicator",
@@ -154,6 +177,12 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     "is_clearing_termination_any",
     "is_correction_any",
     "lifecycle_mix",
+    "economic_class_primary",
+    "contributes_to_flow_any",
+    "contributes_to_volume_any",
+    "contributes_to_pnl_any",
+    "on_p43_any",
+    "state_machine_violation_any",
     "is_fomc_dated",
     "fomc_meeting_label",
     "cluster_id",
@@ -295,11 +324,10 @@ def _str_or_none(val: Any) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def ensure_schema(engine: Engine) -> None:
-    """Create tables / indexes / view if they don't already exist."""
+def _execute_ddl_bundle(engine: Engine, ddl: str) -> None:
     with engine.begin() as conn:
         buffer: list[str] = []
-        for line in TAPE_SCHEMA_SQL.splitlines():
+        for line in ddl.splitlines():
             buffer.append(line)
             stripped = line.strip()
             if stripped.endswith(";"):
@@ -310,6 +338,18 @@ def ensure_schema(engine: Engine) -> None:
         tail = "\n".join(buffer).strip()
         if tail:
             conn.execute(text(tail))
+
+
+def ensure_schema(engine: Engine) -> None:
+    """Create v2 tables / indexes / view if they don't already exist.
+
+    Also runs the v1 DDL so the frozen rollback tables remain valid on
+    fresh environments (§4.11). Writes after Phase 4 cutover target v2
+    only; v1 is preserved for instant rollback via the dashboard's
+    TAPE_DISPLAY_VIEW constant.
+    """
+    _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL)
+    _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL_V2)
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +619,8 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         rec["fixed_rate"] = _num_or_none(rec.get("fixed_rate"))
         rec["other_payment_amount"] = _num_or_none(rec.get("other_payment_amount"))
         rec["lc_n_events"] = _int_or_none(rec.get("lc_n_events"))
+        rec["lc_n_events_economic"] = _int_or_none(rec.get("lc_n_events_economic"))
+        rec["lc_n_valuation_events"] = _int_or_none(rec.get("lc_n_valuation_events"))
         rec["xd_n_events"] = _int_or_none(rec.get("xd_n_events"))
         rec["xd_notional_pct_remaining"] = _num_or_none(rec.get("xd_notional_pct_remaining"))
         rec["cluster_size"] = _int_or_none(rec.get("cluster_size"))
@@ -590,20 +632,36 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "is_mac", "is_spreadover", "is_asset_swap", "is_non_standard_term",
             "is_fomc_dated", "is_month_end", "is_quarter_end",
             "is_multi_meeting_cluster", "xd_is_terminated", "xd_has_partial_unwind",
+            # v2 additions
+            "is_notional_capped",
+            "lc_was_amended", "lc_was_null_filled",
+            "lc_was_scheduled_amortization", "lc_has_economics_change",
+            "state_machine_violation",
+            "contributes_to_flow", "contributes_to_volume",
+            "contributes_to_pnl", "contributes_to_pnl_as_delta", "on_p43",
         ):
             rec[bool_col] = _bool_or_none(rec.get(bool_col))
         for text_col in (
             "trade_id", "package_id", "execution_session", "tenor_label",
             "tenor_display", "forward_label", "forward_bucket", "notional_currency",
+            "notional_source",
             "other_payment_currency",
             "trade_type", "rate_index_clean", "venue", "ccp", "platform_identifier",
             "cleared",
             "tape_label", "leg_tape_label", "upi_reset_freq", "upi_notional_schedule",
             "upi_delivery_type", "lifecycle_type", "lc_status", "fomc_meeting_label",
             "fomc_proximity", "cluster_id", "xd_status",
+            # v2 additions
+            "violation_reason", "economic_class", "economic_class_reason",
         ):
             rec[text_col] = _str_or_none(rec.get(text_col))
         rec["execution_timestamp"] = _to_db_value(rec.get("execution_timestamp"))
+        rec["original_execution_timestamp"] = _to_db_value(
+            rec.get("original_execution_timestamp")
+        )
+        rec["clearing_accepted_timestamp"] = _to_db_value(
+            rec.get("clearing_accepted_timestamp")
+        )
         rec["effective_date"] = _to_db_value(rec.get("effective_date"))
         rec["expiration_date"] = _to_db_value(rec.get("expiration_date"))
         flags = rec.get("quality_flags")
@@ -728,6 +786,14 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "as_of_date": as_of_date,
             "execution_start": _to_db_value(execution_start),
             "execution_end": _to_db_value(execution_end),
+            "original_execution_start": _to_db_value(
+                g["original_execution_timestamp"].min()
+                if "original_execution_timestamp" in g.columns else execution_start
+            ),
+            "clearing_accepted_start": _to_db_value(
+                g["clearing_accepted_timestamp"].min(skipna=True)
+                if "clearing_accepted_timestamp" in g.columns else None
+            ),
             "package_structure": _package_structure_label(g),
             "package_type": package_type,
             "package_indicator": _any("package_indicator"),
@@ -776,6 +842,20 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "is_clearing_termination_any": _any("is_clearing_termination"),
             "is_correction_any": bool(lifecycle_mix.get("CORRECTION", 0) > 0),
             "lifecycle_mix": lifecycle_mix,
+            # Phase 3/4 economic-class rollups
+            "economic_class_primary": (
+                _consistent_str(g, "economic_class")
+                or (
+                    g["economic_class"].value_counts().idxmax()
+                    if "economic_class" in g.columns and g["economic_class"].notna().any()
+                    else None
+                )
+            ),
+            "contributes_to_flow_any": _any("contributes_to_flow"),
+            "contributes_to_volume_any": _any("contributes_to_volume"),
+            "contributes_to_pnl_any": _any("contributes_to_pnl"),
+            "on_p43_any": _any("on_p43"),
+            "state_machine_violation_any": _any("state_machine_violation"),
             "is_fomc_dated": _any("is_fomc_dated"),
             "fomc_meeting_label": _consistent_str(g, "fomc_meeting_label"),
             "cluster_id": _consistent_str(g, "cluster_id"),

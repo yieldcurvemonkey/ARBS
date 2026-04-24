@@ -1,9 +1,12 @@
 // ABOUTME: Resolver for the USD swap tape v2 display view and column list.
 import { query } from '@/lib/db'
+import { TAPE_DISPLAY_VIEW } from '@/app/api/usd-swaps-tape-v2/route.logic'
 
-export const DISPLAY_VIEW = 'arbs_usd_swap_tape_display_v1'
-export const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v1'
-export const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v1'
+// Phase 4 cutover: DISPLAY_VIEW reads from the Phase-4 constant. v1 is
+// preserved frozen; to roll back, flip TAPE_DISPLAY_VIEW in route.logic.ts.
+export const DISPLAY_VIEW = TAPE_DISPLAY_VIEW
+export const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
+export const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
 
 const COLUMNS = [
   'd.package_id',
@@ -11,6 +14,8 @@ const COLUMNS = [
   'd.as_of_date',
   'd.execution_start',
   'd.execution_end',
+  'd.original_execution_start',
+  'd.clearing_accepted_start',
   'd.package_structure',
   'd.package_type',
   'd.package_indicator',
@@ -45,6 +50,13 @@ const COLUMNS = [
   'd.is_clearing_termination_any',
   'd.is_correction_any',
   'd.lifecycle_mix',
+  // Phase 3/4 economic-class rollups
+  'd.economic_class_primary',
+  'd.contributes_to_flow_any',
+  'd.contributes_to_volume_any',
+  'd.contributes_to_pnl_any',
+  'd.on_p43_any',
+  'd.state_machine_violation_any',
   'd.is_fomc_dated',
   'd.fomc_meeting_label',
   'd.cluster_id',

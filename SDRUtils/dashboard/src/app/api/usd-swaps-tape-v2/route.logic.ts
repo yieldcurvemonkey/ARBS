@@ -1,6 +1,10 @@
 // ABOUTME: Pure helpers for the tape v2 main route — parse filters, build WHERE clauses.
 // No DB access here; unit-testable in isolation.
 
+// Phase 4 cutover constant. Flip to 'arbs_usd_swap_tape_display_v1' to
+// roll back to the frozen v1 view without a rebuild (design §4.11).
+export const TAPE_DISPLAY_VIEW = 'arbs_usd_swap_tape_display_v2'
+
 export const DEFAULT_LIMIT = 200
 export const MAX_LIMIT = 500
 
