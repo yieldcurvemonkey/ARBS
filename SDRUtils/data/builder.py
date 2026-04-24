@@ -380,7 +380,7 @@ class DTCCFetcher(BaseFetcher):
         use_pyarrow: Optional[bool] = False,
         one_df: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
-        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Event timestamp",
+        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Execution Timestamp",
     ) -> Dict[date, pd.DataFrame] | pd.DataFrame:
         bdates = pd.date_range(
             start=start_date,
@@ -443,7 +443,7 @@ class DTCCFetcher(BaseFetcher):
         max_extraction_workers: Optional[int] = 3,
         use_pyarrow: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
-        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Event timestamp",
+        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Execution Timestamp",
     ) -> pd.DataFrame:
         slice_ids = self._get_dtcc_intraday_slide_ids(agency=agency, asset_class=asset_class, start_timestamp=start_timestamp, end_timestamp=end_timestamp)
 
@@ -999,7 +999,7 @@ class SDRDataBuilder:
         end_timestamp = pd.to_datetime(end_timestamp, utc=True)
 
         cache_fp = self._parquet_cache_dir / "intraday.csv"
-        ts_col = "Event timestamp"
+        ts_col = "Execution Timestamp"
 
         # If ignoring cache, fetch exactly requested window and do not read/write intraday.csv
         if ignore_cache:
@@ -1149,7 +1149,7 @@ class SDRDataBuilder:
         agency: Literal["CFTC", "SEC"],
         asset_class: Literal["COMMODITIES", "CREDITS", "EQUITIES", "FOREX", "RATES"],
         *,
-        ts_col: Literal["Event timestamp", "Execution Timestamp"] = "Event timestamp",
+        ts_col: Literal["Event timestamp", "Execution Timestamp"] = "Execution Timestamp",
         filter_func: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = lambda df: df,
         ignore_cache: bool = False,
     ) -> pd.DataFrame:

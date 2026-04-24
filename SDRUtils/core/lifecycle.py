@@ -445,14 +445,20 @@ def build_lifecycle_summary_from_resolved(
         elif not isinstance(amendment, bool):
             amendment = None
 
+        from SDRUtils.core.parsing import parse_sdr_timestamp
+
         event_ts_raw = snapshot.get(event_timestamp_col)
         exec_ts_raw = snapshot.get(execution_timestamp_col)
-        event_ts = pd.Timestamp(event_ts_raw) if event_ts_raw is not None else pd.Timestamp.now()
-        exec_ts = pd.Timestamp(exec_ts_raw) if exec_ts_raw is not None else event_ts
+        event_ts = parse_sdr_timestamp(event_ts_raw)
+        if pd.isna(event_ts):
+            event_ts = pd.Timestamp.now(tz="UTC")
+        exec_ts = parse_sdr_timestamp(exec_ts_raw)
+        if pd.isna(exec_ts):
+            exec_ts = event_ts
 
-        # Convert to datetime
-        event_dt = event_ts.to_pydatetime() if hasattr(event_ts, "to_pydatetime") else datetime.now()
-        exec_dt = exec_ts.to_pydatetime() if hasattr(exec_ts, "to_pydatetime") else event_dt
+        # Convert to tz-aware datetime (UTC)
+        event_dt = event_ts.to_pydatetime()
+        exec_dt = exec_ts.to_pydatetime()
 
         # Determine file_date
         fd = file_dates.get(dissem_id)

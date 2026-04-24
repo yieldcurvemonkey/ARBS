@@ -493,10 +493,25 @@ def detect_spreadovers(package_df: pd.DataFrame):
     matched hedges; the IRS maturity typically does NOT land on a UST
     coupon date, so ``matched_ust_maturity`` is orthogonal).
     """
+    from SDRUtils.core.parsing import mask_sentinels, parse_notation_scalar
+
     copy_df = package_df.copy()
 
-    spread_num = pd.to_numeric(
+    # B4 — apply notation code ([#105]: 1=monetary, 3=decimal, 4=bps) BEFORE
+    # comparing to the bps-ceiling gate. Also mask the 9.9999999999 "unknown"
+    # sentinel (B5) so it does not parade as a real wide spread.
+    raw_spread = pd.to_numeric(
         copy_df.get("package_transaction_spread"), errors="coerce"
+    )
+    raw_spread = mask_sentinels(raw_spread, "spread_decimal")
+    notation_col = copy_df.get(
+        "package_transaction_spread_notation",
+        pd.Series([None] * len(copy_df), index=copy_df.index),
+    )
+    spread_num = pd.Series(
+        [parse_notation_scalar(v, n) for v, n in zip(raw_spread, notation_col)],
+        index=copy_df.index,
+        dtype="float64",
     )
     invoice_ticker_col = copy_df.get(
         "invoice_swap_ticker", pd.Series([None] * len(copy_df), index=copy_df.index)
@@ -841,11 +856,10 @@ class USD_SwapProduct(USDProductBase):
                 return pd.DataFrame(), unfiltered_raw_df
             return pd.DataFrame()
 
-        # TODO review needed
-        # Execution Timestamp = Date and time a transaction was originally executed, resulting in the generation of a new UTI. This data element remains unchanged throughout the life of the UTI.
-        # Event Timestamp = Date and time of occurrence of the event as determined by the reporting counterparty or a service provider
-        # exec_dates = pd.to_datetime(raw_sdr_trades_df["Execution Timestamp"], errors="coerce").dt.date
-        exec_dates = pd.to_datetime(raw_sdr_trades_df["Event timestamp"], errors="coerce").dt.date
+        # §43.3(a)(4), §43.5: Execution Timestamp is the event-study timing
+        # anchor; Event timestamp lags by 15min–24 business hours for
+        # post-priced and block trades. See audit finding B3.
+        exec_dates = pd.to_datetime(raw_sdr_trades_df["Execution Timestamp"], errors="coerce").dt.date
         raw_sdr_trades_df = raw_sdr_trades_df.assign(_execution_date=exec_dates)
 
         curve_source = str(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).replace("/", "_")
@@ -962,6 +976,9 @@ class USD_SwapProduct(USDProductBase):
                             "Other payment amount",
                             "Package indicator",
                             "Package transaction spread",
+                            "Package transaction spread notation",
+                            "Package transaction price",
+                            "Package transaction price notation",
                             "Event type",
                             "Non-standardized term indicator",
                         ]
