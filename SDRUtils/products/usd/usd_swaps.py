@@ -119,7 +119,13 @@ def classify_usd_swap_trade(
         is_forward=is_forward,
     )
 
-    # Extract notional and rate
+    # Extract notional and rate.
+    # N3: Leg-1 is the fixed leg for USD OIS by convention; the Leg-2
+    # fallback only fires on malformed rows where Leg-1 is empty. On an
+    # IRS basis swap (both legs floating) this fallback silently swaps
+    # to the wrong leg's notional. Upstream product classification gates
+    # basis swaps out of this path — if that gating changes, revisit this
+    # fallback.
     notional, is_notional_capped = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
     fixed_rate = row.get("Fixed rate-Leg 1", row.get("Fixed rate-Leg 2"))
     # Keep the existing SOFR curve approximation for all USD swap underliers.

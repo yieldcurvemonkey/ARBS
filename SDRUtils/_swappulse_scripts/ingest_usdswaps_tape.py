@@ -26,6 +26,7 @@ from tqdm.auto import tqdm
 
 from SDRUtils.analytics.trade_tape import TradeTape
 
+from ._tape_monitoring_v2 import MONITORING_SQL_V2
 from ._tape_schema import TAPE_SCHEMA_SQL  # v1 DDL for back-compat migration
 from ._tape_schema_v2 import (
     DISPLAY_VIEW_V2,
@@ -362,6 +363,8 @@ def ensure_schema(engine: Engine) -> None:
     """
     _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL)
     _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL_V2)
+    # Phase 6 monitoring view
+    _execute_ddl_bundle(engine, MONITORING_SQL_V2)
 
 
 # ---------------------------------------------------------------------------

@@ -144,9 +144,13 @@ def parse_sdr_timestamp(value: Any) -> pd.Timestamp:
 def parse_schedule(cell: Any) -> List[Any]:
     """Parse a `;`-delimited SDR schedule cell into a list.
 
-    Used for multi-row schedule fields like Notional in effect per period
-    and associated effective dates. Numeric cells are returned as ``float``,
-    otherwise stripped strings. Empty/NaN → empty list.
+    N7: the SDR public tape uses ``;`` (semicolon) — not ``,`` — as the
+    delimiter inside multi-value cells such as [#33] Effective date of
+    the notional amount-Leg 1 and [#34] Notional amount in effect on
+    associated effective date-Leg 1. Commas inside numeric values are
+    stripped separately. Used for schedule fields and other multi-row
+    data elements. Numeric cells are returned as ``float``, otherwise
+    stripped strings. Empty/NaN → empty list.
     """
     if cell is None:
         return []
