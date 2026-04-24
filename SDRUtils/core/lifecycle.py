@@ -528,6 +528,51 @@ def build_lifecycle_summary_from_resolved(
     return build_summary(events)
 
 
+def validate_d2_chain(
+    df: pd.DataFrame,
+    *,
+    dissemination_col: str = "Dissemination Identifier",
+    original_dissemination_col: str = "Original Dissemination Identifier",
+    action_col: str = "Action type",
+    amendment_col: str = "Amendment indicator",
+) -> pd.DataFrame:
+    """Emit ``d2_missing`` quality flag for CORR/EROR/TERM/REVI/MODI(Amend=True) rows.
+
+    Appendix A [D1-D4]: any lifecycle message that references a prior
+    trade MUST carry [#2] Original Dissemination Identifier linking
+    back. A NULL D2 on one of those actions breaks the lifecycle chain.
+
+    Returns the DataFrame with a new boolean column ``d2_missing``
+    (True when violation present).
+    """
+    if df.empty:
+        df["d2_missing"] = False
+        return df
+
+    if action_col not in df.columns:
+        df["d2_missing"] = False
+        return df
+
+    actions = df[action_col].astype(str).str.upper()
+    requires_d2 = actions.isin({"CORR", "EROR", "TERM", "REVI", "MODI"})
+
+    # For MODI, only Amendment=True requires D2 (amendment points at prior
+    # state). Amendment=False / None MODIs are null-fill and don't mandate D2.
+    if amendment_col in df.columns:
+        amend_series = df[amendment_col]
+        amend_true = amend_series.astype(str).str.upper() == "TRUE"
+        modi_mask = (actions == "MODI")
+        requires_d2 = requires_d2 & ~(modi_mask & ~amend_true)
+
+    d2 = df.get(original_dissemination_col)
+    if d2 is None:
+        df["d2_missing"] = requires_d2
+        return df
+    d2_null = d2.isna() | (d2.astype(str).str.strip() == "")
+    df["d2_missing"] = requires_d2 & d2_null
+    return df
+
+
 def group_by_uti(
     df: pd.DataFrame,
     dissemination_col: str = "Dissemination Identifier",

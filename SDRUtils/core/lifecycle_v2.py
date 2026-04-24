@@ -217,6 +217,41 @@ def flatten_lifecycle_summary(
     }
 
 
+def compute_event_deltas(chain: list[LifecycleEvent]) -> List[float]:
+    """Compute per-event notional deltas against the immediately-prior state.
+
+    M2 fix: the prior aggregator measured partial-unwind deltas against
+    inception rather than the preceding state. For a chain NEWT(10M) +
+    MODI(-3M) + MODI(-2M) that produces deltas [0, -3M, -2M] rather than
+    [0, -3M, -5M]. Operates on the economic chain only — VALU/MARU
+    don't change notional and would report spurious zeros.
+
+    Notional is read from ``changed_economics['Notional amount-Leg 1']``
+    when present, so the caller must have diffed state before building
+    the chain (see ``build_lifecycle_summary_from_resolved``).
+    """
+    deltas: List[float] = []
+    prev: Optional[float] = None
+    for evt in chain:
+        if evt.action_type in VALUATION_ACTIONS:
+            continue
+        raw = evt.changed_economics.get("Notional amount-Leg 1") if evt.changed_economics else None
+        if raw is None:
+            deltas.append(0.0)
+            continue
+        try:
+            current = float(str(raw).replace(",", ""))
+        except (TypeError, ValueError):
+            deltas.append(0.0)
+            continue
+        if prev is None:
+            deltas.append(0.0)
+        else:
+            deltas.append(current - prev)
+        prev = current
+    return deltas
+
+
 def _safe_notional(state: Optional[Dict[str, Any]]) -> float:
     """Extract Notional amount-Leg 1 from state dict, coercing to float."""
     import math

@@ -130,6 +130,18 @@ LEG_COLUMNS: tuple[str, ...] = (
     "xd_notional_pct_remaining",
     "xd_is_terminated",
     "xd_has_partial_unwind",
+    # Phase 5 structural
+    "schedule_truncated",
+    "schedule_row_count",
+    "schedule_notional_series",
+    "missing_required_fields",
+    "cap_band_violation",
+    "rc_timeline_json",
+    "other_payment_ufro",
+    "other_payment_uwin",
+    "other_payment_pexh",
+    "frequency_anomaly",
+    "d2_missing",
     "manual_link_id",
     "enrichment_metrics",
 )
@@ -639,6 +651,9 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "state_machine_violation",
             "contributes_to_flow", "contributes_to_volume",
             "contributes_to_pnl", "contributes_to_pnl_as_delta", "on_p43",
+            # Phase 5 bool columns
+            "schedule_truncated", "cap_band_violation",
+            "frequency_anomaly", "d2_missing",
         ):
             rec[bool_col] = _bool_or_none(rec.get(bool_col))
         for text_col in (
@@ -664,6 +679,26 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         )
         rec["effective_date"] = _to_db_value(rec.get("effective_date"))
         rec["expiration_date"] = _to_db_value(rec.get("expiration_date"))
+        # Phase 5 numeric / list / text normalization
+        rec["schedule_row_count"] = _int_or_none(rec.get("schedule_row_count"))
+        rec["other_payment_ufro"] = _num_or_none(rec.get("other_payment_ufro"))
+        rec["other_payment_uwin"] = _num_or_none(rec.get("other_payment_uwin"))
+        rec["other_payment_pexh"] = _num_or_none(rec.get("other_payment_pexh"))
+        rec["rc_timeline_json"] = _str_or_none(rec.get("rc_timeline_json"))
+        sched = rec.get("schedule_notional_series")
+        if sched is None or (isinstance(sched, float) and math.isnan(sched)):
+            rec["schedule_notional_series"] = None
+        elif isinstance(sched, (list, tuple, np.ndarray)):
+            rec["schedule_notional_series"] = [
+                _num_or_none(v) for v in list(sched)
+            ]
+        mrf = rec.get("missing_required_fields")
+        if mrf is None or (isinstance(mrf, float) and math.isnan(mrf)):
+            rec["missing_required_fields"] = []
+        elif isinstance(mrf, (list, tuple, np.ndarray)):
+            rec["missing_required_fields"] = [str(v) for v in list(mrf) if v is not None]
+        else:
+            rec["missing_required_fields"] = [str(mrf)]
         flags = rec.get("quality_flags")
         if flags is None or (isinstance(flags, float) and math.isnan(flags)):
             flags = []

@@ -62,7 +62,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v4-p4"
+TRADE_TAPE_CACHE_VERSION = "v5-p5"
 DEFAULT_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "notebooks", "sdr", "_cache", "trade_tape",
@@ -632,6 +632,28 @@ class TradeTape(SDRAnalyzer):
                 action_prefix == "NEWT"
             )
 
+        return df
+
+    def _enrich_phase5_structural(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 2f: Phase-5 structural columns (schedule, collateral,
+        cap-band, RC timeline, other-payment decomposition, frequency
+        anomaly). Additive; every downstream consumer remains safe on
+        legacy DataFrames because each helper defaults to empty/False
+        when its input columns are absent.
+        """
+        from SDRUtils.core.cap_bands import enrich_cap_band_column
+        from SDRUtils.core.collateral_required import enrich_collateral_columns
+        from SDRUtils.core.frequency_anomaly import enrich_frequency_anomaly_column
+        from SDRUtils.core.other_payments import enrich_other_payments_columns
+        from SDRUtils.core.rc_timeline import enrich_rc_timeline_column
+        from SDRUtils.core.schedule_model import enrich_schedule_columns
+
+        df = enrich_schedule_columns(df)
+        df = enrich_collateral_columns(df)
+        df = enrich_cap_band_column(df)
+        df = enrich_rc_timeline_column(df)
+        df = enrich_other_payments_columns(df)
+        df = enrich_frequency_anomaly_column(df)
         return df
 
     def _enrich_exec_timestamps(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -1304,6 +1326,7 @@ class TradeTape(SDRAnalyzer):
             ("Event type", self._enrich_event_type),
             ("Economic class", self._enrich_economic_class),
             ("Exec timestamps", self._enrich_exec_timestamps),
+            ("Phase 5 structural", self._enrich_phase5_structural),
             ("Quality flags", self._enrich_quality),
             ("Packages", self._enrich_packages),
             ("Market context", self._enrich_context),
