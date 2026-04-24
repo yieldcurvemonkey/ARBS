@@ -320,9 +320,40 @@ describe('formatReportedLvl', () => {
     const row = {
       ...baseRow,
       trade_type: 'curve',
-      legs_json: [{ fixed_rate: 0.01 }, { fixed_rate: 0.02 }],
+      legs_json: [
+        { fixed_rate: 0.01, tenor_years: 2 },
+        { fixed_rate: 0.02, tenor_years: 10 },
+      ],
     } as unknown as UsdSwapTapeRow
     expect(formatReportedLvl(row)).toBe('1.000% / 2.000%')
+  })
+
+  it('orders CURVE legs by tenor: front leg first, back leg last', () => {
+    // Legs arrive in reverse order (back leg first in legs_json) — must
+    // still render short-tenor-first.
+    const row = {
+      ...baseRow,
+      package_type: 'CURVE',
+      legs_json: [
+        { fixed_rate: 0.03878, tenor_years: 30 }, // back leg (30Y)
+        { fixed_rate: 0.04132, tenor_years: 10 }, // front leg (10Y)
+      ],
+    } as unknown as UsdSwapTapeRow
+    expect(formatReportedLvl(row)).toBe('4.132% / 3.878%')
+  })
+
+  it('orders FLY legs: short wing / belly / long wing', () => {
+    // User spec: front wing (short) -> belly (middle) -> back wing (long).
+    const row = {
+      ...baseRow,
+      package_type: 'FLY',
+      legs_json: [
+        { fixed_rate: 0.04100, tenor_years: 10 }, // long wing
+        { fixed_rate: 0.03800, tenor_years: 7 },  // belly
+        { fixed_rate: 0.03622, tenor_years: 5 },  // short wing
+      ],
+    } as unknown as UsdSwapTapeRow
+    expect(formatReportedLvl(row)).toBe('3.622% / 3.800% / 4.100%')
   })
 
   it('recognises CURVE via package_type when trade_type is absent', () => {

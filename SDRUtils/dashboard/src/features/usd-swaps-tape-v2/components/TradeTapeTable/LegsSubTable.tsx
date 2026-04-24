@@ -3,6 +3,7 @@
 import type { JSX } from 'react'
 import { EMPTY_VALUE } from '../../constants'
 import type { UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
+import { computeLegSummary } from './LegsSubTable.helpers'
 import {
   formatDate,
   formatDv01,
@@ -176,15 +177,54 @@ function qualityFlagsBody(leg: UsdSwapTapeLeg) {
 }
 
 export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
-  const legs = (row.legs_json ?? []) as UsdSwapTapeLeg[]
+  // Desk convention: render tenor-ascending so front legs (short duration)
+  // appear above back legs (long duration). legs_json order from the
+  // display view isn't guaranteed — sort defensively.
+  const legs = [
+    ...((row.legs_json ?? []) as UsdSwapTapeLeg[]),
+  ].sort((a, b) => {
+    const at = typeof a?.tenor_years === 'number' ? a.tenor_years : Number.POSITIVE_INFINITY
+    const bt = typeof b?.tenor_years === 'number' ? b.tenor_years : Number.POSITIVE_INFINITY
+    return at - bt
+  })
+
+  // PTP / PTS values live at the package level; repeat them on each leg
+  // row so the expanded table reads standalone without forcing the user
+  // to consult the top row.
+  const ptp = row.package_transaction_price
+  const ptpCurrency = row.package_transaction_price_currency
+  const pts = row.package_transaction_spread
+  const ptpText =
+    ptp != null
+      ? `${formatNotional(ptp, { compact: true })}${
+          ptpCurrency && ptpCurrency !== 'USD' ? ` ${ptpCurrency}` : ''
+        }`
+      : EMPTY_VALUE
+  const ptsText = pts != null ? String(pts) : EMPTY_VALUE
+
+  // Package-level summary row (see LegsSubTable.helpers for the per-pkg
+  // aggregation rules). Rendered as the last body row to give the desk a
+  // one-glance read of the spread, risk, and other-payment totals.
+  const summary = computeLegSummary(row)
+  const summaryOpaText =
+    summary.opa != null
+      ? formatNotional(summary.opa, { compact: true })
+      : EMPTY_VALUE
+  const summaryPtpText =
+    summary.ptp != null
+      ? `${formatNotional(summary.ptp, { compact: true })}${
+          ptpCurrency && ptpCurrency !== 'USD' ? ` ${ptpCurrency}` : ''
+        }`
+      : EMPTY_VALUE
+  const summaryPtsText = summary.pts != null ? String(summary.pts) : EMPTY_VALUE
 
   return (
     <div
-      className="rounded-xl border border-slate-800/80 bg-slate-950/70 px-4 py-3"
+      className="rounded-xl border border-slate-800/80 bg-slate-950/70 px-4 py-1"
       data-testid={`legs-subtable-${row.package_id}`}
     >
       {row.package_transaction_price != null ? (
-        <div className="mb-2 flex items-baseline gap-2 text-[10px] uppercase tracking-wide text-slate-400">
+        <div className="mb-1 flex items-baseline gap-2 text-[10px] uppercase tracking-wide text-slate-400">
           <span>Package Transaction Price</span>
           <span className="font-mono text-[12px] text-slate-100">
             {formatNotional(row.package_transaction_price, { compact: true })}
@@ -195,10 +235,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
           </span>
         </div>
       ) : null}
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-        Leg Details
-      </div>
-      <div className="mt-2 overflow-x-auto">
+      <div className="overflow-x-auto">
         <table className="min-w-full text-xs">
           <thead>
             <tr className="text-[10px] uppercase tracking-wide text-slate-400">
@@ -208,9 +245,11 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
               <th className="px-2 py-1 text-left">Effective</th>
               <th className="px-2 py-1 text-left">Maturity</th>
               <th className="px-2 py-1 text-right">Notional</th>
-              <th className="px-2 py-1 text-right">DV01</th>
+              <th className="px-2 py-1 text-right">Risk</th>
               <th className="px-2 py-1 text-right">Rate</th>
               <th className="px-2 py-1 text-right">OPA</th>
+              <th className="px-2 py-1 text-right">PTP</th>
+              <th className="px-2 py-1 text-right">PTS</th>
               <th className="px-2 py-1 text-left">Cleared</th>
               <th className="px-2 py-1 text-left">Flags</th>
               <th className="px-2 py-1 text-left">X-Day</th>
@@ -222,7 +261,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                 key={leg.trade_id ?? `${row.package_id}-${index}`}
                 className="border-t border-slate-800/90 text-slate-200"
               >
-                <td className="whitespace-nowrap px-2 py-1">{leg.leg_order ?? index + 1}</td>
+                <td className="whitespace-nowrap px-2 py-1">{index + 1}</td>
                 <td className="whitespace-nowrap px-2 py-1">{tradeIdBody(leg)}</td>
                 <td className="max-w-[360px] px-2 py-1 font-mono text-[11px] text-slate-100">
                   {leg.leg_tape_label ?? leg.tape_label ?? EMPTY_VALUE}
@@ -237,7 +276,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                   {formatNotional(leg.notional ?? null, { compact: true })}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
-                  {formatDv01(leg.risk ?? null, { signed: true })}
+                  {formatDv01(leg.risk ?? null)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
                   {formatRate(leg.fixed_rate ?? null)}
@@ -251,6 +290,8 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                       }`
                     : EMPTY_VALUE}
                 </td>
+                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">{ptpText}</td>
+                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">{ptsText}</td>
                 <td className="whitespace-nowrap px-2 py-1">{clearedBody(leg)}</td>
                 <td className="px-2 py-1">{qualityFlagsBody(leg)}</td>
                 <td className="whitespace-nowrap px-2 py-1">{crossDayProgress(leg)}</td>
@@ -258,11 +299,43 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
             ))}
             {legs.length === 0 ? (
               <tr className="border-t border-slate-800/90 text-slate-400">
-                <td className="px-2 py-2" colSpan={12}>
+                <td className="px-2 py-2" colSpan={14}>
                   No leg data available.
                 </td>
               </tr>
-            ) : null}
+            ) : (
+              <tr
+                className="border-t-2 border-slate-600 bg-slate-900/80 font-semibold text-slate-100"
+                data-testid={`legs-subtable-summary-${row.package_id}`}
+              >
+                <td className="whitespace-nowrap px-2 py-1 text-slate-400">Σ</td>
+                <td className="px-2 py-1" />
+                <td className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-400">
+                  Summary
+                </td>
+                <td className="px-2 py-1" />
+                <td className="px-2 py-1" />
+                <td className="px-2 py-1" />
+                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
+                  {formatDv01(summary.risk)}
+                </td>
+                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
+                  {formatRate(summary.rate)}
+                </td>
+                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
+                  {summaryOpaText}
+                </td>
+                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
+                  {summaryPtpText}
+                </td>
+                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
+                  {summaryPtsText}
+                </td>
+                <td className="px-2 py-1" />
+                <td className="px-2 py-1" />
+                <td className="px-2 py-1" />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

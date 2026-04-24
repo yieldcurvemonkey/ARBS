@@ -123,3 +123,35 @@ def test_unknown_trade_type_falls_back_to_signed_sum():
 
 def test_empty_risk_returns_none():
     assert _structural_risk(_risk([]), _tenors([]), "CURVE") is None
+
+
+def test_composite_curve_type_uses_max_absolute():
+    """SPREADOVER_CURVE / MATCHED_MATURITY_CURVE follow the CURVE
+    headline convention (max leg |DV01|)."""
+    result = _structural_risk(
+        _risk([+25_000.0, +24_000.0]), _tenors([5.0, 30.0]), "SPREADOVER_CURVE"
+    )
+    assert result == pytest.approx(25_000.0)
+
+    result = _structural_risk(
+        _risk([+25_000.0, +24_000.0]), _tenors([5.0, 30.0]), "MATCHED_MATURITY_CURVE"
+    )
+    assert result == pytest.approx(25_000.0)
+
+
+def test_composite_fly_type_uses_belly_dv01():
+    """SPREADOVER_FLY / MATCHED_MATURITY_FLY follow the FLY headline
+    convention (belly |DV01|)."""
+    result = _structural_risk(
+        _risk([+25_000.0, -50_000.0, +25_000.0]),
+        _tenors([5.0, 7.0, 9.0]),
+        "SPREADOVER_FLY",
+    )
+    assert result == pytest.approx(50_000.0)
+
+    result = _structural_risk(
+        _risk([+25_000.0, -50_000.0, +25_000.0]),
+        _tenors([5.0, 7.0, 9.0]),
+        "MATCHED_MATURITY_FLY",
+    )
+    assert result == pytest.approx(50_000.0)

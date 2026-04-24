@@ -643,9 +643,12 @@ def _structural_risk(
     if not risk.notna().any():
         return None
     tt = (trade_type or "").upper()
-    if tt == "CURVE":
+    # Composite package types (e.g. "SPREADOVER_CURVE", "MATCHED_MATURITY_FLY")
+    # from detect_sub_package_curve_fly follow the same headline convention
+    # as their base CURVE / FLY — match by suffix.
+    if tt == "CURVE" or tt.endswith("_CURVE"):
         return _num_or_none(risk.abs().max(skipna=True))
-    if tt == "FLY":
+    if tt == "FLY" or tt.endswith("_FLY"):
         valid_mask = risk.notna() & tenor_years.notna()
         if valid_mask.any():
             ordered = tenor_years[valid_mask].sort_values(kind="stable")

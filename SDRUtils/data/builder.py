@@ -1068,6 +1068,26 @@ class SDRDataBuilder:
             ts_col=ts_col,
         )
 
+        # Defensive guard against empty/malformed intraday pulls: if
+        # ``new_df`` came back without the expected timestamp column (e.g.
+        # DTCC had no data for the window, or the fetcher returned a
+        # schema-less empty frame), don't try to sort on a missing column.
+        # Fall back to whatever the cache already had; write nothing new.
+        new_has_ts = (not new_df.empty) and (ts_col in new_df.columns)
+        cache_has_ts = (not cache_df.empty) and (ts_col in cache_df.columns)
+        if not new_has_ts and not cache_has_ts:
+            return pd.DataFrame()
+        if not new_has_ts:
+            return cache_df[
+                (cache_df[ts_col] >= start_timestamp) & (cache_df[ts_col] <= end_timestamp)
+            ].reset_index(drop=True)
+        if not cache_has_ts:
+            new_df = new_df.sort_values(by=ts_col).reset_index(drop=True)
+            _write_intraday_cache(new_df, cache_fp)
+            return new_df[
+                (new_df[ts_col] >= start_timestamp) & (new_df[ts_col] <= end_timestamp)
+            ].reset_index(drop=True)
+
         combined = pd.concat([cache_df, new_df], ignore_index=True).drop_duplicates(subset=["report_slice", ts_col]).sort_values(by=ts_col)
         _write_intraday_cache(combined, cache_fp)
 

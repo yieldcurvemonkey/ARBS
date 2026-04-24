@@ -960,9 +960,18 @@ class TradeTape(SDRAnalyzer):
 
             trade_type = str(row.get("trade_type", "OUTRIGHT")).upper()
 
+            # Composite detector output (e.g. "SPREADOVER_CURVE",
+            # "MATCHED_MATURITY_FLY") behaves the same as the base CURVE /
+            # FLY for structure rendering. Helpers:
+            def _is_curvey(tt: str) -> bool:
+                return tt == "CURVE" or tt.endswith("_CURVE")
+
+            def _is_flyey(tt: str) -> bool:
+                return tt == "FLY" or tt.endswith("_FLY")
+
             # Render a CURVE/FLY leg as a single-leg outright when leg_scope=True
             # so the expanded sub-table shows "5Y Outright" / "10Y Outright".
-            leg_as_outright = leg_scope and trade_type in ("CURVE", "FLY")
+            leg_as_outright = leg_scope and (_is_curvey(trade_type) or _is_flyey(trade_type))
 
             # 3+4. Forward + Tenor (FOMC-dated + invoice-swap get special handling)
             # Invoice-swap trades render the CME product name + ticker in
@@ -981,7 +990,7 @@ class TradeTape(SDRAnalyzer):
                 # (e.g. "5Y/30Y") — the FOMC anchor describes the shared start
                 # but the package's tenor structure is what identifies the trade.
                 # In leg scope we fall through to the single-leg tenor below.
-                if trade_type in ("CURVE", "FLY") and not leg_as_outright:
+                if (_is_curvey(trade_type) or _is_flyey(trade_type)) and not leg_as_outright:
                     pkg_tenors = str(row.get("package_tenors", "")).strip()
                     if pkg_tenors and pkg_tenors.lower() not in ("nan", "none"):
                         parts.append(pkg_tenors)
@@ -1045,8 +1054,10 @@ class TradeTape(SDRAnalyzer):
             # 5. Structure
             if leg_as_outright:
                 parts.append("Outright")
-            elif trade_type in ("CURVE", "FLY"):
-                parts.append(trade_type)
+            elif _is_curvey(trade_type):
+                parts.append("CURVE")
+            elif _is_flyey(trade_type):
+                parts.append("FLY")
             elif trade_type == "SPREADOVER":
                 parts.append("Spreadover")
             elif trade_type == "INVOICE":

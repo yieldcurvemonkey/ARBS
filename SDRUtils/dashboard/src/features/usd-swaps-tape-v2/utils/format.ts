@@ -140,7 +140,15 @@ export function formatReportedLvl(row: UsdSwapTapeRow): string {
   const isMultiLeg = kind === 'CURVE' || kind === 'FLY'
   if (isMultiLeg) {
     const legs = row.legs_json ?? []
-    const legRates = legs
+    // Desk convention: render tenor-ascending so the CURVE reads
+    // "front / back" and FLY reads "short wing / belly / long wing".
+    // Input ``legs_json`` ordering is not guaranteed — sort defensively.
+    const sorted = [...legs].sort((a, b) => {
+      const at = typeof a?.tenor_years === 'number' ? a.tenor_years : Number.POSITIVE_INFINITY
+      const bt = typeof b?.tenor_years === 'number' ? b.tenor_years : Number.POSITIVE_INFINITY
+      return at - bt
+    })
+    const legRates = sorted
       .map((l) => l?.fixed_rate)
       .filter((r): r is number => !isNullish(r as number | null | undefined))
     if (legRates.length >= 2) {
