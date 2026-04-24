@@ -232,10 +232,41 @@ describe('formatOtherLvl', () => {
     expect(result.ptpLine).toBe('PTP: \u2014')
     expect(result.ptsLine).toBe('PTS: \u2014')
   })
-  it('stacks non-null leg OPAs comma-separated', () => {
+  it('stacks non-null leg OPAs slash-separated', () => {
     const result = formatOtherLvl({ legOpa: [15627.6, null, -2100], ptp: -671880 })
-    expect(result.opaLine).toBe('OPA: 15.6k, -2.1k')
+    expect(result.opaLine).toBe('OPA: 15.6k / -2.1k')
     expect(result.ptpLine).toBe('PTP: -671.9k')
+  })
+
+  it('renders per-leg PTP values with slash delimiter when legPtp supplied', () => {
+    const result = formatOtherLvl({
+      legOpa: [null, null],
+      legPtp: [100_000, 50_000],
+      ptp: 75_000,
+      pts: null,
+    })
+    // formatSignedCompact always emits 1-decimal K/M scaling.
+    expect(result.ptpLine).toBe('PTP: 100.0k / 50.0k')
+  })
+
+  it('renders per-leg PTS values with slash delimiter when legPts supplied', () => {
+    const result = formatOtherLvl({
+      legOpa: [null, null],
+      legPts: [0.0025, -0.0005],
+      ptp: null,
+      pts: 0.0010,
+    })
+    expect(result.ptsLine).toBe('PTS: 0.0025 / -0.0005')
+  })
+
+  it('falls back to the scalar pts when legPts is empty or all nullish', () => {
+    const result = formatOtherLvl({
+      legOpa: [],
+      legPts: [null, null],
+      pts: -0.004,
+      ptp: null,
+    })
+    expect(result.ptsLine).toBe('PTS: -0.004')
   })
   it('appends currency suffix only on non-USD values', () => {
     const result = formatOtherLvl({
@@ -354,6 +385,31 @@ describe('formatReportedLvl', () => {
       ],
     } as unknown as UsdSwapTapeRow
     expect(formatReportedLvl(row)).toBe('3.622% / 3.800% / 4.100%')
+  })
+
+  it('recognises SPREADOVER_CURVE composite types (per-leg rates)', () => {
+    const row = {
+      ...baseRow,
+      package_type: 'SPREADOVER_CURVE',
+      legs_json: [
+        { fixed_rate: 0.03650, tenor_years: 5 },
+        { fixed_rate: 0.03878, tenor_years: 10 },
+      ],
+    } as unknown as UsdSwapTapeRow
+    expect(formatReportedLvl(row)).toBe('3.650% / 3.878%')
+  })
+
+  it('recognises MATCHED_MATURITY_FLY composite types (per-leg rates)', () => {
+    const row = {
+      ...baseRow,
+      package_type: 'MATCHED_MATURITY_FLY',
+      legs_json: [
+        { fixed_rate: 0.035, tenor_years: 5 },
+        { fixed_rate: 0.038, tenor_years: 7 },
+        { fixed_rate: 0.041, tenor_years: 10 },
+      ],
+    } as unknown as UsdSwapTapeRow
+    expect(formatReportedLvl(row)).toBe('3.500% / 3.800% / 4.100%')
   })
 
   it('recognises CURVE via package_type when trade_type is absent', () => {

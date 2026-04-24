@@ -141,10 +141,18 @@ export default function UsdSwapsTradeTape(): JSX.Element {
             padding: 0.3rem 0.5rem !important;
           }
           /* Make the funnel-icon button low-key — only really visible when a
-             filter is active (the active state class is added by PrimeReact). */
+             filter is active (the active state class is added by PrimeReact).
+
+             Hit-area sizing: the icon itself stays small (font-size keeps the
+             glyph at ~0.7rem) but the button is a 1.6rem x 1.6rem square with
+             extra padding, so clicking "near" the funnel no longer lands on
+             the sortable header label and flips the sort by accident. */
           .usd-swaps-tape-shell .p-column-filter-menu-button {
-            width: 1.1rem !important;
-            height: 1.1rem !important;
+            min-width: 1.6rem !important;
+            min-height: 1.6rem !important;
+            width: 1.6rem !important;
+            height: 1.6rem !important;
+            padding: 0.35rem !important;
             color: rgba(148, 163, 184, 0.55) !important;
           }
           .usd-swaps-tape-shell .p-column-filter-menu-button:hover {

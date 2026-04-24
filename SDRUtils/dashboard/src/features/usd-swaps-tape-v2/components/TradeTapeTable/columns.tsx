@@ -274,13 +274,38 @@ export function getColumns(
         summaryFor('other_lvl_reported', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => {
-        const legs = row.legs_json ?? []
+        // Sort legs tenor-ASC so per-leg OPA / PTP / PTS render front-to-back
+        // (front leg / belly / back leg), matching the Reported LvL column.
+        const legs = [...(row.legs_json ?? [])].sort((a, b) => {
+          const at = typeof a?.tenor_years === 'number' ? a.tenor_years : Number.POSITIVE_INFINITY
+          const bt = typeof b?.tenor_years === 'number' ? b.tenor_years : Number.POSITIVE_INFINITY
+          return at - bt
+        })
+        // For composite CURVE / FLY (SPREADOVER_CURVE, MATCHED_MATURITY_FLY…)
+        // each leg carries its own broker-reported PTP / PTS. The backend
+        // persists per-leg values when present; render them when at least
+        // one leg has a non-null value, otherwise fall through to the
+        // package-level scalar.
+        const kind = String(row.package_type ?? row.trade_type ?? '').toUpperCase()
+        const isMultiLeg =
+          kind === 'CURVE' ||
+          kind === 'FLY' ||
+          kind.endsWith('_CURVE') ||
+          kind.endsWith('_FLY')
+        const legPtp = isMultiLeg
+          ? legs.map((l) => (l as any).package_transaction_price ?? null)
+          : undefined
+        const legPts = isMultiLeg
+          ? legs.map((l) => (l as any).package_transaction_spread ?? null)
+          : undefined
         const lines = formatOtherLvl({
           legOpa: legs.map((l) => l.other_payment_amount ?? null),
           opaCurrency: legs.map((l) => l.other_payment_currency ?? null),
           ptp: row.package_transaction_price ?? null,
           ptpCurrency: row.package_transaction_price_currency ?? null,
           pts: row.package_transaction_spread ?? null,
+          legPtp,
+          legPts,
         })
         return (
           <div

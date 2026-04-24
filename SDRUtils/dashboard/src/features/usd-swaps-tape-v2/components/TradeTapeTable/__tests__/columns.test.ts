@@ -150,6 +150,42 @@ describe('rowClassName — trade_type tint (Bloomberg muted palette)', () => {
     // structure even on an inactive row.
     expect(cls).toMatch(/border-indigo/)
   })
+
+  // Composite package types (SPREADOVER_CURVE, SPREADOVER_FLY,
+  // MATCHED_MATURITY_CURVE, MATCHED_MATURITY_FLY) are derivative structures —
+  // they're still curves/flies at heart but each leg is itself a spreadover /
+  // matched-maturity. Trader feedback: keep the CURVE/FLY family tint +
+  // accent-border, but dim the tone slightly so composites read as a related
+  // but distinct class when scrolling the tape.
+  it('SPREADOVER_CURVE rows get a lighter CURVE tint + sky border', () => {
+    const cls = rowClassName({ ...base, package_type: 'SPREADOVER_CURVE' } as any)
+    expect(cls).toContain('!bg-blue-900/20')
+    expect(cls).toMatch(/border-sky/)
+  })
+
+  it('MATCHED_MATURITY_CURVE rows get a lighter CURVE tint + sky border', () => {
+    const cls = rowClassName({
+      ...base,
+      package_type: 'MATCHED_MATURITY_CURVE',
+    } as any)
+    expect(cls).toContain('!bg-blue-900/20')
+    expect(cls).toMatch(/border-sky/)
+  })
+
+  it('SPREADOVER_FLY rows get a lighter FLY tint + indigo border', () => {
+    const cls = rowClassName({ ...base, package_type: 'SPREADOVER_FLY' } as any)
+    expect(cls).toContain('!bg-yellow-900/15')
+    expect(cls).toMatch(/border-indigo/)
+  })
+
+  it('MATCHED_MATURITY_FLY rows get a lighter FLY tint + indigo border', () => {
+    const cls = rowClassName({
+      ...base,
+      package_type: 'MATCHED_MATURITY_FLY',
+    } as any)
+    expect(cls).toContain('!bg-yellow-900/15')
+    expect(cls).toMatch(/border-indigo/)
+  })
 })
 
 describe('other_lvl column wiring', () => {
@@ -208,6 +244,41 @@ describe('column filter menu wiring', () => {
     expect(columnsSource).toContain('showFilterOperator: true')
     expect(columnsSource).toContain('showAddButton: true')
     expect(columnsSource).toContain('maxConstraints: 4')
+  })
+})
+
+// The funnel icon button sits inside the header cell right next to the
+// sortable label. Before this change it was 1.1rem x 1.1rem — a 17px hit
+// target — so traders frequently clicked the label by accident and flipped
+// the sort instead of opening the filter popup. Enlarge the hit area without
+// growing the icon itself (add padding; keep the icon small visually).
+describe('filter button hit area', () => {
+  const tradeTapeSource = readFileSync(
+    resolve(
+      process.cwd(),
+      'src/features/usd-swaps-tape-v2/components/UsdSwapsTradeTape.tsx',
+    ),
+    'utf8',
+  )
+
+  // Helper: extract the block of rules scoped to the filter-menu button so
+  // assertions are robust to rule reordering.
+  function filterButtonBlock(): string {
+    const match = tradeTapeSource.match(
+      /\.p-column-filter-menu-button\s*\{[^}]+\}/g,
+    )
+    return (match ?? []).join('\n')
+  }
+
+  it('sizes the funnel button hit area at least 1.6rem x 1.6rem', () => {
+    const block = filterButtonBlock()
+    expect(block).toMatch(/min-width:\s*1\.[6-9]rem/)
+    expect(block).toMatch(/min-height:\s*1\.[6-9]rem/)
+  })
+
+  it('adds padding around the funnel icon to widen the click target', () => {
+    const block = filterButtonBlock()
+    expect(block).toMatch(/padding:\s*0\.(25|3|35|4|45|5)rem/)
   })
 })
 

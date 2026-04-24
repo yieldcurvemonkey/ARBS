@@ -290,8 +290,24 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                       }`
                     : EMPTY_VALUE}
                 </td>
-                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">{ptpText}</td>
-                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">{ptsText}</td>
+                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
+                  {(() => {
+                    const legPtp = (leg as any).package_transaction_price
+                    if (legPtp != null) {
+                      const legCcy = (leg as any).package_transaction_price_currency
+                      return `${formatNotional(legPtp, { compact: true })}${
+                        legCcy && legCcy !== 'USD' ? ` ${legCcy}` : ''
+                      }`
+                    }
+                    return ptpText
+                  })()}
+                </td>
+                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
+                  {(() => {
+                    const legPts = (leg as any).package_transaction_spread
+                    return legPts != null ? String(legPts) : ptsText
+                  })()}
+                </td>
                 <td className="whitespace-nowrap px-2 py-1">{clearedBody(leg)}</td>
                 <td className="px-2 py-1">{qualityFlagsBody(leg)}</td>
                 <td className="whitespace-nowrap px-2 py-1">{crossDayProgress(leg)}</td>

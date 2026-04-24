@@ -77,6 +77,14 @@ export const TRADE_TYPE_ROW_TONES: Record<string, string> = {
   MAC: '!bg-cyan-900/30',
   IMM: '!bg-lime-900/30',
   FOMC: '!bg-amber-900/30',
+  // Composite CURVE / FLY families (SPREADOVER_*, MATCHED_MATURITY_*) are
+  // still curves/flies structurally — keep the same hue so the trader's eye
+  // groups them with their base class, but dim the alpha one notch so they
+  // read as the "derivative" variant rather than a plain outright curve/fly.
+  SPREADOVER_CURVE: '!bg-blue-900/20',
+  MATCHED_MATURITY_CURVE: '!bg-blue-900/20',
+  SPREADOVER_FLY: '!bg-yellow-900/15',
+  MATCHED_MATURITY_FLY: '!bg-yellow-900/15',
 }
 
 export const TRADE_TYPE_DEFAULT_ROW_TONE = '!bg-gray-900/30'
