@@ -191,7 +191,7 @@ describe('rowClassName — trade_type tint (Bloomberg muted palette)', () => {
   // but distinct class when scrolling the tape.
   it('SPREADOVER_CURVE rows get a lighter CURVE tint + sky border', () => {
     const cls = rowClassName({ ...base, package_type: 'SPREADOVER_CURVE' } as any)
-    expect(cls).toContain('!bg-blue-900/20')
+    expect(cls).toContain('!bg-blue-900/15')
     expect(cls).toMatch(/border-sky/)
   })
 
@@ -200,13 +200,13 @@ describe('rowClassName — trade_type tint (Bloomberg muted palette)', () => {
       ...base,
       package_type: 'MATCHED_MATURITY_CURVE',
     } as any)
-    expect(cls).toContain('!bg-blue-900/20')
+    expect(cls).toContain('!bg-blue-900/15')
     expect(cls).toMatch(/border-sky/)
   })
 
   it('SPREADOVER_FLY rows get a lighter FLY tint + indigo border', () => {
     const cls = rowClassName({ ...base, package_type: 'SPREADOVER_FLY' } as any)
-    expect(cls).toContain('!bg-yellow-900/15')
+    expect(cls).toContain('!bg-yellow-900/10')
     expect(cls).toMatch(/border-indigo/)
   })
 
@@ -215,7 +215,7 @@ describe('rowClassName — trade_type tint (Bloomberg muted palette)', () => {
       ...base,
       package_type: 'MATCHED_MATURITY_FLY',
     } as any)
-    expect(cls).toContain('!bg-yellow-900/15')
+    expect(cls).toContain('!bg-yellow-900/10')
     expect(cls).toMatch(/border-indigo/)
   })
 })

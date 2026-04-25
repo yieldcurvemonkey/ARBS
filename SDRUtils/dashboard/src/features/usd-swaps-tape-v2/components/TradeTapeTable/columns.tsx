@@ -141,7 +141,7 @@ export function getColumns(
         summaryFor('execution_start', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => (
-        <span className="whitespace-nowrap font-mono text-[11px] text-slate-400">
+        <span className="whitespace-nowrap font-mono text-[12px] text-slate-200">
           {formatExecutionWindow(row.execution_start, row.execution_end)}
         </span>
       )}
@@ -284,7 +284,7 @@ export function getColumns(
       {...compactFilterMenuProps}
       header={metricHeader}
       body={(row: UsdSwapTapeRow) => (
-        <span className="block text-right font-mono text-[12px] font-semibold text-slate-100">
+        <span className="block text-right font-mono text-[14px] font-bold tracking-tight text-slate-50">
           {mode === 'dv01'
             ? formatDv01(row.total_risk ?? null, { signNegativeOnly: true })
             : formatNotional(row.total_notional ?? null, { compact: true })}
@@ -304,7 +304,7 @@ export function getColumns(
         summaryFor('weighted_fixed_rate', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => (
-        <span className="block text-right font-mono text-[12px] font-semibold text-slate-100">
+        <span className="block text-right font-mono text-[14px] font-bold tracking-tight text-slate-50">
           {formatReportedLvl(row)}
         </span>
       )}
@@ -357,7 +357,7 @@ export function getColumns(
         return (
           <div
             data-testid="other-lvl-cell"
-            className="flex flex-col items-end font-mono text-[10px] leading-tight text-slate-400"
+            className="flex flex-col items-end font-mono text-[12px] font-semibold leading-tight text-slate-100"
           >
             <span>{lines.opaLine}</span>
             <span>{lines.ptpLine}</span>
