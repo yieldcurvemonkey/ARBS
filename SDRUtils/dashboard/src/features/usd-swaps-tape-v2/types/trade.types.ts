@@ -10,7 +10,33 @@ export type LifecycleType =
   | 'CORRECTION'
   | 'CLEARING_TERM'
   | 'EXERCISE_BORN'
+  // Phase 2-3 additions: the canonical Economic-vs-Admin matrix
+  // distinguishes amendments from null-fills, scheduled amortization
+  // from amendments, and EROR/REVI from straight terminations.
+  | 'AMENDMENT'
+  | 'NULL_FILL'
+  | 'SCHED_AMORT'
+  | 'ERROR'
+  | 'ERROR_RECOVERY'
+  | 'PORT_TRANSFER'
+  | 'VALUATION'
   | 'OTHER'
+
+/**
+ * Coarse SDR Economic-vs-Administrative classification (matrix kind).
+ * Aggregators read ``contributes_to_*`` gates instead of branching on this
+ * enum; rendered in the dashboard as a column badge.
+ */
+export type EconomicClass =
+  | 'ECONOMIC_FLOW'
+  | 'ECONOMIC_UNWIND'
+  | 'ECONOMIC_AMENDMENT'
+  | 'RESTATEMENT'
+  | 'ADMINISTRATIVE'
+  | 'VALUATION'
+  | 'ERROR'
+  | 'ERROR_RECOVERY'
+  | 'UNKNOWN'
 
 export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   tape_label?: string | null
@@ -51,6 +77,42 @@ export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   xd_has_partial_unwind?: boolean | null
   xd_notional_pct_remaining?: number | null
   quality_flags?: string[] | null
+  // Phase 1: timestamp split + notional source. ``original_execution_timestamp``
+  // is the event-study anchor (alpha exec for β/γ clearing rows);
+  // ``clearing_accepted_timestamp`` is non-null only on β/γ NEWT-CLRG legs.
+  original_execution_timestamp?: string | null
+  clearing_accepted_timestamp?: string | null
+  notional_source?: 'p43_capped' | 'p43_uncapped' | 'p45' | string | null
+  is_notional_capped?: boolean | null
+  // Phase 2: dual-chain lifecycle + state-machine validator.
+  lc_n_events_economic?: number | null
+  lc_n_valuation_events?: number | null
+  lc_was_amended?: boolean | null
+  lc_was_null_filled?: boolean | null
+  lc_was_scheduled_amortization?: boolean | null
+  lc_has_economics_change?: boolean | null
+  state_machine_violation?: boolean | null
+  violation_reason?: string | null
+  // Phase 3: Economic-vs-Admin matrix (per-leg).
+  economic_class?: EconomicClass | string | null
+  contributes_to_flow?: boolean | null
+  contributes_to_volume?: boolean | null
+  contributes_to_pnl?: boolean | null
+  contributes_to_pnl_as_delta?: boolean | null
+  on_p43?: boolean | null
+  economic_class_reason?: string | null
+  // Phase 5: cross-cutting structural columns.
+  schedule_truncated?: boolean | null
+  schedule_row_count?: number | null
+  schedule_notional_series?: number[] | null
+  missing_required_fields?: string[] | null
+  cap_band_violation?: boolean | null
+  rc_timeline_json?: string | null
+  other_payment_ufro?: number | null
+  other_payment_uwin?: number | null
+  other_payment_pexh?: number | null
+  frequency_anomaly?: boolean | null
+  d2_missing?: boolean | null
 }
 
 export type UsdSwapTapeRow = SofrSwapTapeRow & {
@@ -81,6 +143,17 @@ export type UsdSwapTapeRow = SofrSwapTapeRow & {
   cluster_id?: string | null
   cluster_size?: number | null
   lifecycle_mix?: Record<string, number> | null
+  // Package-level rollups of the Phase 3/4 matrix + Phase 1 timestamp
+  // split. ``*_any`` follow the existing convention: True if any leg
+  // contributes; False otherwise. Null when ingest hasn't backfilled yet.
+  original_execution_start?: string | null
+  clearing_accepted_start?: string | null
+  economic_class_primary?: string | null
+  contributes_to_flow_any?: boolean | null
+  contributes_to_volume_any?: boolean | null
+  contributes_to_pnl_any?: boolean | null
+  on_p43_any?: boolean | null
+  state_machine_violation_any?: boolean | null
   legs_json: UsdSwapTapeLeg[]
 }
 

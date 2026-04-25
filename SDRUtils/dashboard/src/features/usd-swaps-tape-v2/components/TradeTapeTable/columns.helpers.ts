@@ -59,7 +59,17 @@ function tradeTypeTone(row: UsdSwapTapeRow): string {
 // Lifecycles we render as "inactive" — unwinds, compressions, resets, and
 // terminations are not fresh risk; the trader scans past them. Red/neutral
 // tones make that distinction pop without hiding the row outright.
+//
+// Phase 3 cutover: when the matrix tags a row as ADMINISTRATIVE / VALUATION,
+// it's never "fresh risk" regardless of the legacy is_*_any signals — gate
+// on `contributes_to_flow_any === false` so β/γ clearing, partial novations,
+// VALU spam, and null-fill MODIs all read as inactive consistently.
 function isInactiveLifecycle(row: UsdSwapTapeRow): boolean {
+  if (row.contributes_to_flow_any === false) return true
+  // State-machine violations are critical compliance signals — promote
+  // them to the inactive branch so the yellow tone wins regardless of
+  // the underlying trade type or new-risk status.
+  if (row.state_machine_violation_any) return true
   return Boolean(
     row.is_clearing_termination_any ||
       row.is_unwind ||
@@ -73,6 +83,11 @@ function isInactiveLifecycle(row: UsdSwapTapeRow): boolean {
 // from compressions from clearing-terminations at a glance. Loosely mirrors
 // the original lifecycleClass heuristics.
 function inactiveLifecycleTone(row: UsdSwapTapeRow): string {
+  // State-machine violations dominate any other signal — they're the
+  // most actionable thing on the row, so paint them yellow regardless.
+  if (row.state_machine_violation_any) {
+    return '!bg-yellow-900/40 !text-yellow-100 border-l-2 border-yellow-400'
+  }
   if (row.is_clearing_termination_any) {
     return '!bg-red-950/60 !text-red-100 border-l-2 border-red-500'
   }
@@ -81,6 +96,12 @@ function inactiveLifecycleTone(row: UsdSwapTapeRow): string {
   if (row.is_compression_any) return '!bg-zinc-900/50 !text-zinc-400 italic'
   if (row.is_reset_optimization_any)
     return '!bg-neutral-900/50 !text-neutral-400'
+  // Phase 3: administrative-only branch — null-fills, scheduled
+  // amortization, port transfers, VALU. Render muted slate so they
+  // don't compete with the trader's eye scan for real economic events.
+  if (row.contributes_to_flow_any === false) {
+    return '!bg-slate-900/40 !text-slate-400 italic'
+  }
   return '!bg-red-900/30 !text-red-100'
 }
 
@@ -88,6 +109,9 @@ function inactiveLifecycleTone(row: UsdSwapTapeRow): string {
 // flagging (novations, corrections). Layered on top of the trade-type tone
 // via the optional secondary class.
 function livelycleAccent(row: UsdSwapTapeRow): string {
+  // State-machine violation > everything else: yellow ring even on
+  // active rows so the data-quality signal is impossible to miss.
+  if (row.state_machine_violation_any) return 'ring-2 ring-yellow-400/60'
   if (row.is_novation_any) return 'ring-1 ring-purple-500/30'
   if (row.is_correction_any) return 'ring-1 ring-sky-500/30'
   return ''

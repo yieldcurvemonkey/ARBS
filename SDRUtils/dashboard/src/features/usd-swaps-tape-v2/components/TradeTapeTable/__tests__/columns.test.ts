@@ -88,6 +88,38 @@ describe('rowClassName', () => {
     const cls = rowClassName({ ...base, is_correction_any: true } as any)
     expect(cls).toContain('ring-sky')
   })
+
+  // Phase 3 cutover: matrix tags an admin row as inactive even when no
+  // legacy is_*_any flag is set (e.g. an SDR port transfer that didn't
+  // land in the legacy lifecycle taxonomy).
+  it('contributes_to_flow_any=false renders an inactive admin tone', () => {
+    const cls = rowClassName({
+      ...base,
+      contributes_to_flow_any: false,
+    } as any)
+    expect(cls).toContain('!bg-slate-900/40')
+    expect(cls).toContain('italic')
+  })
+
+  it('state_machine_violation_any paints yellow regardless of trade type', () => {
+    const cls = rowClassName({
+      ...base,
+      trade_type: 'CURVE',
+      state_machine_violation_any: true,
+    } as any)
+    expect(cls).toContain('!bg-yellow-900/40')
+    expect(cls).toContain('border-yellow-400')
+  })
+
+  it('state_machine_violation on a live row still surfaces a yellow ring', () => {
+    const cls = rowClassName({
+      ...base,
+      is_new_risk: true,
+      state_machine_violation_any: true,
+    } as any)
+    // Violation routes through the inactive branch (yellow tone wins).
+    expect(cls).toContain('yellow')
+  })
 })
 
 describe('rowClassName — trade_type tint (Bloomberg muted palette)', () => {
@@ -204,6 +236,18 @@ describe('other_lvl column wiring', () => {
   it('COLUMN_DEFS registers pkg and pkg_ind columns in the tape header set', () => {
     expect(COLUMN_DEFS.find((d) => d.key === 'pkg')?.header).toBe('Pkg')
     expect(COLUMN_DEFS.find((d) => d.key === 'pkg_ind')?.header).toBe('Pkg Ind')
+  })
+
+  it('COLUMN_DEFS includes the Phase 3 economic-class column', () => {
+    const col = COLUMN_DEFS.find((d) => d.key === 'class')
+    expect(col).toBeTruthy()
+    expect(col!.header).toBe('Class')
+  })
+
+  it('COLUMN_DEFS includes the Phase 4-5 quality-flag column', () => {
+    const col = COLUMN_DEFS.find((d) => d.key === 'quality')
+    expect(col).toBeTruthy()
+    expect(col!.header).toBe('Q')
   })
 
   it('formatOtherLvl produces stacked OPA/PTP/PTS lines for a row fixture', () => {

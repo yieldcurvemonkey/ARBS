@@ -14,7 +14,7 @@ import {
   formatReportedLvl,
 } from '../../utils/format'
 import { getFilterDisplayLabel } from './filter-utils'
-import { LifecyclePills } from './RowBadges'
+import { EconomicClassBadge, LifecyclePills, QualityBadges } from './RowBadges'
 import { TapeLabelCell } from './TapeLabelCell'
 import {
   packageIndicatorDisplay,
@@ -158,7 +158,24 @@ export function getColumns(
         summaryFor('lifecycle_type', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => <LifecyclePills row={row} />}
-      style={{ width: 64 }}
+      style={{ width: 88 }}
+    />,
+    // Phase 3 Economic-vs-Admin matrix kind. Dedicated column rather
+    // than a sub-pill in Action so traders can sort/filter on it
+    // (e.g. show ECONOMIC_FLOW only, hide ADMIN/VALU spam).
+    <Column
+      key="class"
+      field="economic_class_primary"
+      filterField="economic_class_primary"
+      filter
+      sortable
+      {...compactFilterMenuProps}
+      header={renderHeader(
+        'Class',
+        summaryFor('economic_class_primary', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) => <EconomicClassBadge row={row} />}
+      style={{ width: 84 }}
     />,
     <Column
       key="platform"
@@ -319,6 +336,23 @@ export function getColumns(
         )
       }}
       style={{ width: 118 }}
+    />,
+    // Phase 4-5 quality / compliance flag stack. Renders state-machine
+    // violation, cap-band, freq anomaly, schedule truncation, D2-missing,
+    // clearing-acceptance lag, P45-only signals. Most rows show a single
+    // dot (clean); compliance-relevant rows light up.
+    <Column
+      key="quality"
+      field="state_machine_violation_any"
+      filterField="state_machine_violation_any"
+      filter
+      {...compactFilterMenuProps}
+      header={renderHeader(
+        'Q',
+        summaryFor('state_machine_violation_any', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) => <QualityBadges row={row} />}
+      style={{ width: 96 }}
     />,
   )
   return cols

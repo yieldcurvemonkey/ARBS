@@ -60,6 +60,17 @@ describe('buildCleanTapeClause', () => {
     expect(clause).toContain('NOT d.is_reset_optimization_any')
     expect(clause).toContain('NOT d.is_clearing_termination_any')
   })
+
+  it('drops matrix-administrative rows (Phase 3)', () => {
+    const clause = buildCleanTapeClause()
+    expect(clause).toContain('contributes_to_flow_any')
+    expect(clause).toContain('TRUE')
+  })
+
+  it('drops state-machine-violating rows', () => {
+    const clause = buildCleanTapeClause()
+    expect(clause).toContain('state_machine_violation_any')
+  })
 })
 
 describe('buildLifecycleClause', () => {
