@@ -643,6 +643,16 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         rec["risk"] = _num_or_none(rec.get("risk"))
         rec["fixed_rate"] = _num_or_none(rec.get("fixed_rate"))
         rec["other_payment_amount"] = _num_or_none(rec.get("other_payment_amount"))
+        # Per-leg package economics (composite SPREADOVER_CURVE etc.)
+        rec["package_transaction_spread"] = _num_or_none(
+            rec.get("package_transaction_spread")
+        )
+        rec["package_transaction_price"] = _num_or_none(
+            rec.get("package_transaction_price")
+        )
+        rec["package_transaction_price_currency"] = _str_or_none(
+            rec.get("package_transaction_price_currency")
+        )
         rec["lc_n_events"] = _int_or_none(rec.get("lc_n_events"))
         rec["lc_n_events_economic"] = _int_or_none(rec.get("lc_n_events_economic"))
         rec["lc_n_valuation_events"] = _int_or_none(rec.get("lc_n_valuation_events"))
