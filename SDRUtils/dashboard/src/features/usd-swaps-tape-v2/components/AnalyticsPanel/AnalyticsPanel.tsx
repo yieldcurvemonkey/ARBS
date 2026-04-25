@@ -4,11 +4,14 @@
 // for a focused trade.
 import type { JSX } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { FilterMatchMode, FilterOperator } from 'primereact/api'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
   useAnalyticsTimeseries,
   useExtremesData,
   useRarityData,
 } from '../../hooks'
+import { COLUMN_FILTER_QUERY_KEY } from '../../hooks/useColumnFilters'
 import { FocusedTradeBar } from './FocusedTradeBar'
 import { TimeseriesTab } from './TimeseriesTab'
 import { TradeRarityTab } from './TradeRarityTab'
@@ -166,6 +169,40 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
     : rarityState.basis === 'idb' ? rarity.focusedPercentile.idb
     : rarity.focusedPercentile.combined
 
+  // Histogram brushing — clicking a bar on the Trade Rarity tab writes
+  // a per-column filter to the URL so the tape below filters down to
+  // packages whose weighted_fixed_rate falls in the bin's [start, end]
+  // bps range. Only fires for the fixed_rate histogram metric; DV01 /
+  // notional bins fall through to a no-op (the package-level metrics
+  // those would filter on aren't symmetric with the leg-level series
+  // the histogram pulls from).
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const onBinBrush = useCallback(
+    (binStartBps: number, binEndBps: number, metric: 'fixed_rate' | 'dv01' | 'notional') => {
+      if (metric !== 'fixed_rate') return
+      // Tape's `weighted_fixed_rate` column lives as a decimal (0.03842
+      // = 3.842% = 384.2 bps). Convert the histogram bin's bps bounds
+      // before writing the filter or the trader sees an empty tape.
+      const start = binStartBps / 10_000
+      const end = binEndBps / 10_000
+      const next = new URLSearchParams(searchParams?.toString() ?? '')
+      const payload = {
+        weighted_fixed_rate: {
+          operator: FilterOperator.AND,
+          constraints: [
+            { value: start, matchMode: FilterMatchMode.GREATER_THAN_OR_EQUAL_TO },
+            { value: end, matchMode: FilterMatchMode.LESS_THAN },
+          ],
+        },
+      }
+      next.set(COLUMN_FILTER_QUERY_KEY, JSON.stringify(payload))
+      router.replace(`${pathname}?${next.toString()}`, { scroll: false })
+    },
+    [pathname, router, searchParams],
+  )
+
   return (
     <div
       className="flex min-h-0 flex-col border-t-2 border-indigo-500/40 bg-slate-950"
@@ -300,6 +337,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               focusedPercentile={focusedPercentile}
               histogramHeight={histogramHeight}
               loading={rarity.loading}
+              onBinBrush={onBinBrush}
             />
           ) : null}
           {activeTab === 'levels' ? (

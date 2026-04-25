@@ -145,6 +145,10 @@ export interface TradeRarityTabProps {
   // skeleton loading state so the trader sees layout-sized placeholders
   // instead of a spinner that pops the chart in/out of view.
   loading?: boolean
+  // Histogram brushing — clicking a Bar fires this callback with the
+  // bin's [start, end] bounds and the metric. Parent (AnalyticsPanel)
+  // wires it to the tape's per-column filter URL state.
+  onBinBrush?: (binStart: number, binEnd: number, metric: 'fixed_rate' | 'dv01' | 'notional') => void
 }
 
 const BIN_METRIC_UNITS: Record<NonNullable<TradeRarityTabProps['binMetric']>, string> = {
@@ -172,7 +176,7 @@ function PercentileSkeleton(): JSX.Element {
 }
 
 export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
-  const { focused, state, setState, bins, stats, metricRows, recency, focusedPercentile, loading } = props
+  const { focused, state, setState, bins, stats, metricRows, recency, focusedPercentile, loading, onBinBrush } = props
   const histogramHeight = props.histogramHeight ?? 280
   const binMetric = props.binMetric ?? 'fixed_rate'
   const binMetricUnit = BIN_METRIC_UNITS[binMetric]
@@ -180,6 +184,10 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
   const { basis, histogramMetric, settingsOpen, primaryTol, sizeTol } = state
   const isInitialLoad = loading && bins.length === 0
   const noSamples = !loading && stats.count === 0
+  const handleBarClick = (data: { binStart: number; binEnd: number } | null | undefined) => {
+    if (!onBinBrush || !data || binMetric !== 'fixed_rate') return
+    onBinBrush(data.binStart, data.binEnd, binMetric)
+  }
 
   const focusedBin = bins.find(
     (b) => focused.fixed_rate_bps >= b.binStart && focused.fixed_rate_bps < b.binEnd,
@@ -410,8 +418,24 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
                   stroke="rgba(34, 211, 238, 0.3)"
                   strokeDasharray="2 4"
                 />
-                <Bar yAxisId="count" dataKey="idb" stackId="a" fill={ANALYTICS_COLORS.idb} fillOpacity={0.85} />
-                <Bar yAxisId="count" dataKey="custy" stackId="a" fill={ANALYTICS_COLORS.custy} fillOpacity={0.85} />
+                <Bar
+                  yAxisId="count"
+                  dataKey="idb"
+                  stackId="a"
+                  fill={ANALYTICS_COLORS.idb}
+                  fillOpacity={0.85}
+                  onClick={handleBarClick as any}
+                  style={onBinBrush && binMetric === 'fixed_rate' ? { cursor: 'pointer' } : undefined}
+                />
+                <Bar
+                  yAxisId="count"
+                  dataKey="custy"
+                  stackId="a"
+                  fill={ANALYTICS_COLORS.custy}
+                  fillOpacity={0.85}
+                  onClick={handleBarClick as any}
+                  style={onBinBrush && binMetric === 'fixed_rate' ? { cursor: 'pointer' } : undefined}
+                />
                 <Line
                   yAxisId="count"
                   type="monotone"
