@@ -189,9 +189,19 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
     onBinBrush(data.binStart, data.binEnd, binMetric)
   }
 
-  const focusedBin = bins.find(
-    (b) => focused.fixed_rate_bps >= b.binStart && focused.fixed_rate_bps < b.binEnd,
-  )
+  // P2-06: half-open intervals (>=binStart && <binEnd) drop the
+  // focused trade onto a phantom "no bin" when its rate exactly equals
+  // the last bin's binEnd, causing the reference dot + "Focused sits
+  // in bin [—] · 0 prints" footer to silently disappear at the
+  // distribution's upper edge. Allow the last bin to be inclusive at
+  // the top so the dot lands cleanly.
+  const focusedBin = bins.find((b, i) => {
+    const isLast = i === bins.length - 1
+    return (
+      focused.fixed_rate_bps >= b.binStart &&
+      (isLast ? focused.fixed_rate_bps <= b.binEnd : focused.fixed_rate_bps < b.binEnd)
+    )
+  })
 
   const primaryPct = focusedPercentile
 
