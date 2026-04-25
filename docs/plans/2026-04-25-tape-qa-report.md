@@ -179,24 +179,47 @@ DataTable filter state) that is outside the scope of this branch.
 - Contract Jest test pinned in
   `dashboard/src/app/api/usd-swaps-tape-v2/__tests__/canonical-underlier-key.test.ts`.
 
-### Backfill (operator action — not run on this branch)
+### Backfill — RUN + VERIFIED
 
 ```bash
-conda run --no-capture-output -n stir python \
-    SDRUtils/_swappulse_scripts/ingest_usdswaps_tape.py \
+conda run --no-capture-output -n stir python -m \
+    SDRUtils._swappulse_scripts.ingest_usdswaps_tape \
     --start-date 2026-04-01 --end-date 2026-04-23
 ```
 
-After re-ingest, verify the SOFR-COMPOUND ↔ SOFR-OIS collapse:
+Run on 2026-04-25 against the dev Postgres. Output:
 
-```sql
-SELECT canonical_underlier_key, COUNT(DISTINCT tape_label)
-FROM arbs_usd_swap_tape_legs_v2
-WHERE canonical_underlier_key = 'USD/SOFR-OIS/COMPOUND'
-GROUP BY 1;
+- 60,216 leg rows materialized across 23 days
+- 5 batches of packages + 7 batches of legs upserted
+- 5,373 orphan packages cleaned
+
+End-to-end verification via the dashboard's new
+`groupBy=canonical` query option:
+
+```
+GET /api/usd-swaps-tape-v2/rarity?
+    value=USD/SOFR-OIS/COMPOUND&groupBy=canonical&lookback=30
+→ stats.count = 45,777
+  mean (bps) = 376.3
+  p25/p50/p75 = 359.2 / 369.6 / 390.0
 ```
 
-A single row with `COUNT > 1` confirms the collapse landed in prod.
+Pre-Phase 4, the same query against `tape_label` would have split
+those 45,777 prints across the three SDR-feed display variations
+(`USD-SOFR-COMPOUND` / `USD-SOFR-OIS` / `USD-SOFR`). Each bucket
+would have given a smaller sample and a different P50.
+
+Cross-check: `USD/FED-FUNDS-OIS/COMPOUND` returned 893 prints
+(distinct family, mean 361.7 bps), `USD/SOFR-TERM` returned 436
+prints (mean 526.7 bps — correctly separated from OIS-compound).
+
+Note: an unrelated data-layer guard was added in
+[`a99b600`](https://github.com/yieldcurvemonkey/ARBS/pull/280/commits/a99b600)
+— `grab_intraday_sdr_trades` was crashing with
+`KeyError: 'Execution Timestamp'` whenever the SDR feed had no
+intraday data for a day in the range. Skipping the sort when the
+combined frame is empty / missing `ts_col` lets the multi-day
+backfill complete cleanly.
 
 ### Tests added
 
