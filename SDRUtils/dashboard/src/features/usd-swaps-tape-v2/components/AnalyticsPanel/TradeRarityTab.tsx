@@ -135,12 +135,30 @@ export interface TradeRarityTabProps {
   // basis (combined/custy/idb). Parent picks which member to pass.
   focusedPercentile: number
   histogramHeight?: number
+  // True while the underlying /rarity fetch is in flight. Drives the
+  // skeleton loading state so the trader sees layout-sized placeholders
+  // instead of a spinner that pops the chart in/out of view.
+  loading?: boolean
+}
+
+function PercentileSkeleton(): JSX.Element {
+  return (
+    <div className="flex h-9 items-center gap-2 rounded border border-slate-800 bg-slate-950/60 px-2">
+      <div className="h-3 w-[140px] animate-pulse rounded bg-slate-800" />
+      <div className="h-3 w-[80px] animate-pulse rounded bg-slate-800" />
+      <div className="h-3 w-[40px] animate-pulse rounded bg-slate-800" />
+      <div className="h-2 w-[180px] animate-pulse rounded-full bg-slate-800" />
+      <div className="ml-auto h-3 w-[64px] animate-pulse rounded bg-slate-800" />
+    </div>
+  )
 }
 
 export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
-  const { focused, state, setState, bins, stats, metricRows, recency, focusedPercentile } = props
+  const { focused, state, setState, bins, stats, metricRows, recency, focusedPercentile, loading } = props
   const histogramHeight = props.histogramHeight ?? 280
   const { basis, histogramMetric, settingsOpen, primaryTol, sizeTol } = state
+  const isInitialLoad = loading && bins.length === 0
+  const noSamples = !loading && stats.count === 0
 
   const focusedBin = bins.find(
     (b) => focused.fixed_rate_bps >= b.binStart && focused.fixed_rate_bps < b.binEnd,
@@ -260,18 +278,39 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
         source="/api/usd-swaps-tape-v2/rarity"
       />
 
-      <div className="flex flex-col gap-1">
-        {metricRows.map((m) => (
-          <PercentileRow
-            key={m.key}
-            metric={{
-              ...m,
-              percentile: m.key === 'fixed_rate' ? primaryPct : m.percentile,
-            }}
-            isPrimary={m.primary}
-          />
-        ))}
-      </div>
+      {isInitialLoad ? (
+        <div className="flex flex-col gap-1" data-testid="rarity-loading-skeleton">
+          <PercentileSkeleton />
+          <PercentileSkeleton />
+          <PercentileSkeleton />
+        </div>
+      ) : noSamples ? (
+        <div
+          className="rounded border border-dashed border-slate-700 bg-slate-900/40 p-3 font-mono text-[11px] text-slate-300"
+          data-testid="rarity-empty-state"
+        >
+          <span className="font-semibold text-slate-200">No prints in lookback window.</span>
+          <div className="mt-1 text-[10.5px] text-slate-500">
+            The {focused.tape_label} bucket hasn't traded in the configured 90-day window —
+            either the tenor is too rare, the trade type doesn't print to this tape, or the
+            most recent print is older than the lookback. Widen the rate / size tolerance in
+            the gear menu, or pin the trade and check back after the next ingest run.
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {metricRows.map((m) => (
+            <PercentileRow
+              key={m.key}
+              metric={{
+                ...m,
+                percentile: m.key === 'fixed_rate' ? primaryPct : m.percentile,
+              }}
+              isPrimary={m.primary}
+            />
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-[1.5fr_1fr] gap-2.5">
         <div className="flex flex-col gap-1.5 rounded border border-slate-800 bg-slate-950/60 p-2.5">

@@ -19,6 +19,7 @@ import {
   DOCK_MAX_RESERVE_PX,
   DOCK_MIN_PX,
   RARITY_DEFAULT_STATE,
+  RARITY_PREFS_STORAGE_KEY,
   TIMESERIES_DEFAULT_STATE,
 } from './constants'
 import type {
@@ -46,7 +47,50 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('timeseries')
   const [tsState, setTsState] = useState<TimeseriesState>(TIMESERIES_DEFAULT_STATE)
+  // Rarity prefs persist to localStorage so the trader doesn't have to
+  // reconfigure the basis / similarity thresholds on every dock open.
+  // Initial mount reads server-side default; useEffect below restores
+  // any saved prefs after hydration so SSR + CSR markup matches.
   const [rarityState, setRarityState] = useState<RarityState>(RARITY_DEFAULT_STATE)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const raw = window.localStorage.getItem(RARITY_PREFS_STORAGE_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Partial<RarityState>
+      setRarityState((s) => ({
+        ...s,
+        basis: parsed.basis ?? s.basis,
+        histogramMetric: parsed.histogramMetric ?? s.histogramMetric,
+        primaryTol: typeof parsed.primaryTol === 'number' ? parsed.primaryTol : s.primaryTol,
+        sizeTol: typeof parsed.sizeTol === 'number' ? parsed.sizeTol : s.sizeTol,
+      }))
+    } catch {
+      /* ignore corrupt storage payloads */
+    }
+  }, [])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const persisted = {
+      basis: rarityState.basis,
+      histogramMetric: rarityState.histogramMetric,
+      primaryTol: rarityState.primaryTol,
+      sizeTol: rarityState.sizeTol,
+    }
+    try {
+      window.localStorage.setItem(
+        RARITY_PREFS_STORAGE_KEY,
+        JSON.stringify(persisted),
+      )
+    } catch {
+      /* quota or private mode — fall back to in-memory */
+    }
+  }, [
+    rarityState.basis,
+    rarityState.histogramMetric,
+    rarityState.primaryTol,
+    rarityState.sizeTol,
+  ])
 
   // Resizable panel height — ns-resize handle drags the top edge up/down.
   // Start null on both server + client to avoid a SSR/CSR mismatch when
@@ -222,6 +266,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               recency={rarity.recency}
               focusedPercentile={focusedPercentile}
               histogramHeight={histogramHeight}
+              loading={rarity.loading}
             />
           ) : null}
           {activeTab === 'levels' ? (

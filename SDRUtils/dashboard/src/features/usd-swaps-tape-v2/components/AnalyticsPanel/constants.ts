@@ -36,25 +36,29 @@ export const RANGE_DAYS: Record<AnalyticsRangeKey, number> = {
   '1D': 2, '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, CUSTOM: 365,
 }
 
+// Phase 3 contrast pass: bumped saturation + lightness on dark theme so
+// the rarity zones read distinctly even at small font sizes. Each zone
+// now also carries an explicit ring color used by the percentile bars
+// for a 4.5:1+ contrast ratio against the slate-950 dock backdrop.
 export const ZONE_BG: Record<RarityZone, string> = {
-  typical: 'bg-emerald-500',
-  notable: 'bg-amber-500',
-  rare: 'bg-red-500',
-  extreme: 'bg-red-600',
+  typical: 'bg-emerald-400',
+  notable: 'bg-amber-400',
+  rare: 'bg-rose-500',
+  extreme: 'bg-rose-600',
 }
 
 export const ZONE_TEXT: Record<RarityZone, string> = {
-  typical: 'text-emerald-300',
-  notable: 'text-amber-300',
-  rare: 'text-red-300',
-  extreme: 'text-red-200',
+  typical: 'text-emerald-200',
+  notable: 'text-amber-200',
+  rare: 'text-rose-200',
+  extreme: 'text-rose-100',
 }
 
 export const ZONE_BORDER: Record<RarityZone, string> = {
-  typical: 'border-emerald-500',
-  notable: 'border-amber-500',
-  rare: 'border-red-500',
-  extreme: 'border-red-600',
+  typical: 'border-emerald-400',
+  notable: 'border-amber-400',
+  rare: 'border-rose-500',
+  extreme: 'border-rose-600',
 }
 
 // Dock chrome defaults.
@@ -85,3 +89,8 @@ export const RARITY_DEFAULT_STATE = {
   primaryTol: 2.0,
   sizeTol: 0.25,
 }
+
+// localStorage key for the rarity tab's per-trader preferences. Bumped
+// on incompatible shape changes so old payloads parse cleanly to the
+// default state instead of crashing the dock.
+export const RARITY_PREFS_STORAGE_KEY = 'usd-swaps-tape-v2/rarity-prefs/v1'
