@@ -24,12 +24,21 @@ describe('LegsSubTable', () => {
     expect(legsSubTableSource).not.toContain(
       'leg.tenor_display ?? leg.tenor_label ?? EMPTY_VALUE',
     )
-    // 12 original columns + PTP + PTS = 14
-    expect((legsSubTableSource.match(/<th /g) ?? []).length).toBe(14)
+    // 14 baseline columns + Phase 3 Class + Phase 1 Exec Ts = 16
+    expect((legsSubTableSource.match(/<th /g) ?? []).length).toBe(16)
   })
 
-  it('uses the reduced empty-state colspan after the column removal', () => {
-    expect(legsSubTableSource).toContain('colSpan={14}')
+  it('uses the reduced empty-state colspan after the column additions', () => {
+    expect(legsSubTableSource).toContain('colSpan={16}')
+  })
+
+  it('surfaces the Phase 3 Class column for the matrix kind', () => {
+    expect(legsSubTableSource).toContain('>Class<')
+  })
+
+  it('surfaces the Phase 1 Exec Ts column with original/clearing-accept split', () => {
+    expect(legsSubTableSource).toContain('>Exec Ts<')
+    expect(legsSubTableSource).toContain('execTimestampPair')
   })
 
   it('surfaces the per-leg Cleared status column', () => {

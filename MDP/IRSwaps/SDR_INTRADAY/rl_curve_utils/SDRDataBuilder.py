@@ -374,7 +374,7 @@ class DTCCFetcher(BaseFetcher):
         use_pyarrow: Optional[bool] = False,
         one_df: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
-        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Event timestamp",
+        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Execution Timestamp",
     ) -> Dict[date, pd.DataFrame] | pd.DataFrame:
         bdates = pd.date_range(
             start=start_date,
@@ -437,7 +437,7 @@ class DTCCFetcher(BaseFetcher):
         max_extraction_workers: Optional[int] = 3,
         use_pyarrow: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
-        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Event timestamp",
+        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Execution Timestamp",
     ) -> pd.DataFrame:
         slice_ids = self._get_dtcc_intraday_slide_ids(agency=agency, asset_class=asset_class, start_timestamp=start_timestamp, end_timestamp=end_timestamp)
 
@@ -897,7 +897,7 @@ class SDRDataBuilder:
 
         cache_fp = self._parquet_cache_dir / "intraday.csv"
         cache_df = _read_intraday_cache(cache_fp)
-        ts_col = "Event timestamp"
+        ts_col = "Execution Timestamp"
 
         if not cache_df.empty and self._intraday_cache_ttl is not None:
             try:
@@ -1005,7 +1005,7 @@ class SDRDataBuilder:
         agency: Literal["CFTC", "SEC"],
         asset_class: Literal["COMMODITIES", "CREDITS", "EQUITIES", "FOREX", "RATES"],
         *,
-        ts_col: Literal["Event timestamp", "Execution Timestamp"] = "Event timestamp",
+        ts_col: Literal["Event timestamp", "Execution Timestamp"] = "Execution Timestamp",
         filter_func: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = lambda df: df,
     ) -> pd.DataFrame:
         # TODO convert this to utc

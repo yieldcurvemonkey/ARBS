@@ -183,8 +183,14 @@ class TestCompressionSpecOverride:
 class TestNovationMatching:
     """Conservative novation chain matching."""
 
-    def _make_nova_pair(self):
-        """TERM+NOVA and NEWT+NOVA with matching criteria."""
+    def _make_nova_pair(self, *, with_prior_uti: bool = False):
+        """TERM+NOVA and NEWT+NOVA with matching criteria.
+
+        Post-H2 rewrite: Prior UTI is the authoritative link. When
+        ``with_prior_uti`` is True, the NEWT-NOVA carries
+        ``original_dissemination_id`` pointing at the TERM-NOVA's trade_id.
+        """
+        prior_values = ["", "OLD1"] if with_prior_uti else [None, None]
         return pd.DataFrame({
             "trade_id": ["OLD1", "NEW1"],
             "event_action": ["TERM-NOVA", "NEWT-NOVA"],
@@ -196,6 +202,7 @@ class TestNovationMatching:
             "tenor_years": [10.0, 10.0],
             "notional": [25_000_000, 25_000_000],
             "upi_underlier_name": ["USD-SOFR-COMPOUND", "USD-SOFR-COMPOUND"],
+            "original_dissemination_id": prior_values,
             "non-standardized_term_indicator": [False, False],
         })
 
@@ -206,11 +213,19 @@ class TestNovationMatching:
         assert result.iloc[0]["novation_match_id"] == result.iloc[1]["novation_match_id"]
         assert pd.notna(result.iloc[0]["novation_match_id"])
 
-    def test_matched_pair_confidence_high(self):
-        df = self._make_nova_pair()
+    def test_matched_pair_confidence_high_on_prior_uti(self):
+        """H2 rewrite: HIGH confidence only when Prior UTI links."""
+        df = self._make_nova_pair(with_prior_uti=True)
         tape = TradeTape(df)
         result = tape._enrich_event_type(df.copy())
         assert result.iloc[0]["novation_confidence"] == "HIGH"
+
+    def test_matched_pair_without_prior_uti_is_medium(self):
+        """Heuristic match (no Prior UTI) tops out at MEDIUM."""
+        df = self._make_nova_pair(with_prior_uti=False)
+        tape = TradeTape(df)
+        result = tape._enrich_event_type(df.copy())
+        assert result.iloc[0]["novation_confidence"] == "MEDIUM"
 
     def test_unmatched_nova_has_nan_match_id(self):
         df = pd.DataFrame({
@@ -227,16 +242,20 @@ class TestNovationMatching:
         result = tape._enrich_event_type(df.copy())
         assert pd.isna(result.iloc[0]["novation_match_id"])
 
-    def test_different_notional_no_match(self):
-        df = self._make_nova_pair()
-        df.loc[1, "notional"] = 50_000_000  # different notional
+    def test_different_notional_still_matches_with_prior_uti(self):
+        """H2: partial novations transfer a slice of the notional; the
+        notional equality gate is explicitly dropped. Prior UTI links
+        them."""
+        df = self._make_nova_pair(with_prior_uti=True)
+        df.loc[1, "notional"] = 5_000_000  # partial slice, 20% of 25M
         tape = TradeTape(df)
         result = tape._enrich_event_type(df.copy())
-        assert pd.isna(result.iloc[0]["novation_match_id"])
+        assert pd.notna(result.iloc[0]["novation_match_id"])
 
-    def test_timestamp_beyond_60s_no_match(self):
+    def test_timestamp_beyond_300s_no_match(self):
+        """Window relaxed from 60s to 300s to cover clearing-accept lag."""
         df = self._make_nova_pair()
-        df.loc[1, "execution_timestamp"] = pd.Timestamp("2026-03-09 14:05:00+00:00")
+        df.loc[1, "execution_timestamp"] = pd.Timestamp("2026-03-09 14:10:00+00:00")
         tape = TradeTape(df)
         result = tape._enrich_event_type(df.copy())
         assert pd.isna(result.iloc[0]["novation_match_id"])

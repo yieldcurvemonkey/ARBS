@@ -1,6 +1,10 @@
 // ABOUTME: Pure helpers for the tape v2 main route — parse filters, build WHERE clauses.
 // No DB access here; unit-testable in isolation.
 
+// Phase 4 cutover constant. Flip to 'arbs_usd_swap_tape_display_v1' to
+// roll back to the frozen v1 view without a rebuild (design §4.11).
+export const TAPE_DISPLAY_VIEW = 'arbs_usd_swap_tape_display_v2'
+
 export const DEFAULT_LIMIT = 200
 export const MAX_LIMIT = 500
 
@@ -153,6 +157,13 @@ export function buildCleanTapeClause(): string {
     'NOT d.is_reset_optimization_any',
     'NOT d.is_clearing_termination_any',
     "COALESCE((d.lifecycle_mix->>'NOVATION'), '0')::int = 0",
+    // Phase 3 cutover: drop anything the matrix tags as administrative
+    // (β/γ NEWT-CLRG, partial novations, null-fill MODIs, port transfers,
+    // VALU/MARU spam) and any row that the state-machine validator
+    // flagged. The legacy is_*_any guards above remain so legacy v1 rows
+    // (which lack contributes_to_flow_any) stay filtered too.
+    'COALESCE(d.contributes_to_flow_any, TRUE) = TRUE',
+    'COALESCE(d.state_machine_violation_any, FALSE) = FALSE',
   ].join(' AND ')
 }
 

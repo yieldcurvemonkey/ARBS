@@ -37,6 +37,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   // Auto-opens the dock on first selection so analytics surface as soon
   // as there's something real to render.
   const firstSelected = selection.selected[0] ?? null
+  const focusedPackageId = focus.focused?.package_id ?? null
   const derivedFocused = useMemo(
     () => normalizeFocusedTrade(firstSelected),
     [firstSelected],
@@ -68,6 +69,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
             onToggleRow={expansion.toggleOne}
             selected={selection.selected}
             onSelectionChange={selection.onSelectionChange}
+            focusedPackageId={focusedPackageId}
             actionSlot={
               <div className="flex items-center gap-2">
                 {selection.count > 0 ? (
@@ -212,6 +214,76 @@ export default function UsdSwapsTradeTape(): JSX.Element {
           .usd-swaps-tape-shell
             .p-column-filter-menu-button.p-column-filter-menu-button-active {
             color: rgb(125, 211, 252) !important;
+          }
+          /* ---------------------------------------------------------------
+           * Analytics Dock visual language alignment
+           *
+           * The Analytics Dock prototype uses a specific dense, mono-typed
+           * tape: slate-900/60 header bar, slate-500 9.5px uppercase
+           * tracking-wider column titles, mono 11px body cells, ~30px row
+           * height with 5px vertical padding, and a tinted indigo
+           * treatment on the focused row. Apply those rules here so the
+           * table reads consistently with the dock that lives below it.
+           * --------------------------------------------------------------- */
+          .usd-swaps-tape-shell
+            .usd-swaps-tape-table
+            .p-datatable-thead
+            > tr
+            > th {
+            background-color: rgba(15, 23, 42, 0.6) !important;
+            border-bottom: 1px solid rgb(30, 41, 59) !important;
+            padding: 0.25rem 0.5rem !important;
+          }
+          .usd-swaps-tape-shell
+            .usd-swaps-tape-table
+            .p-datatable-thead
+            > tr
+            > th
+            .p-column-header-content {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          }
+          /* The renderHeader helper produces its own label markup; the
+             rule above only sets the header cell chrome. */
+          .usd-swaps-tape-shell
+            .usd-swaps-tape-table
+            .p-datatable-tbody
+            > tr {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          }
+          .usd-swaps-tape-shell
+            .usd-swaps-tape-table
+            .p-datatable-tbody
+            > tr
+            > td {
+            padding: 5px 0.5rem !important;
+            font-size: 11px !important;
+          }
+          .usd-swaps-tape-shell
+            .usd-swaps-tape-table
+            .p-datatable-tbody
+            > tr.focused-trade-row > td {
+            background-color: rgba(99, 102, 241, 0.15) !important;
+            box-shadow:
+              inset 0 1px 0 rgba(129, 140, 248, 0.5),
+              inset 0 -1px 0 rgba(129, 140, 248, 0.5) !important;
+          }
+          .usd-swaps-tape-shell
+            .usd-swaps-tape-table
+            .p-datatable-tbody
+            > tr.focused-trade-row > td:first-child {
+            box-shadow:
+              inset 1px 0 0 rgba(129, 140, 248, 0.5),
+              inset 0 1px 0 rgba(129, 140, 248, 0.5),
+              inset 0 -1px 0 rgba(129, 140, 248, 0.5) !important;
+          }
+          .usd-swaps-tape-shell
+            .usd-swaps-tape-table
+            .p-datatable-tbody
+            > tr.focused-trade-row > td:last-child {
+            box-shadow:
+              inset -1px 0 0 rgba(129, 140, 248, 0.5),
+              inset 0 1px 0 rgba(129, 140, 248, 0.5),
+              inset 0 -1px 0 rgba(129, 140, 248, 0.5) !important;
           }
         `}</style>
         <ManualLinksDialog

@@ -445,14 +445,20 @@ def build_lifecycle_summary_from_resolved(
         elif not isinstance(amendment, bool):
             amendment = None
 
+        from SDRUtils.core.parsing import parse_sdr_timestamp
+
         event_ts_raw = snapshot.get(event_timestamp_col)
         exec_ts_raw = snapshot.get(execution_timestamp_col)
-        event_ts = pd.Timestamp(event_ts_raw) if event_ts_raw is not None else pd.Timestamp.now()
-        exec_ts = pd.Timestamp(exec_ts_raw) if exec_ts_raw is not None else event_ts
+        event_ts = parse_sdr_timestamp(event_ts_raw)
+        if pd.isna(event_ts):
+            event_ts = pd.Timestamp.now(tz="UTC")
+        exec_ts = parse_sdr_timestamp(exec_ts_raw)
+        if pd.isna(exec_ts):
+            exec_ts = event_ts
 
-        # Convert to datetime
-        event_dt = event_ts.to_pydatetime() if hasattr(event_ts, "to_pydatetime") else datetime.now()
-        exec_dt = exec_ts.to_pydatetime() if hasattr(exec_ts, "to_pydatetime") else event_dt
+        # Convert to tz-aware datetime (UTC)
+        event_dt = event_ts.to_pydatetime()
+        exec_dt = exec_ts.to_pydatetime()
 
         # Determine file_date
         fd = file_dates.get(dissem_id)
@@ -475,6 +481,35 @@ def build_lifecycle_summary_from_resolved(
         elif orig_dissem is not None:
             orig_dissem = str(orig_dissem)
 
+        # H13: scheduled amortization is a MODI whose only change is a step
+        # on the notional/effective-date schedule. Amendment indicator is
+        # False AND the only economics change is Notional amount-Leg 1
+        # matching the next step of the scheduled sequence.
+        is_schedule_step = False
+        if (
+            str(action) == "MODI"
+            and amendment is False
+            and "Notional amount-Leg 1" in changed
+            and prev_state is not None
+        ):
+            schedule_field = "Notional amount in effect on associated effective date-Leg 1"
+            schedule_cell = snapshot.get(schedule_field) or prev_state.get(schedule_field)
+            if schedule_cell is not None and not _is_null_value(schedule_cell):
+                try:
+                    from SDRUtils.core.parsing import parse_schedule
+
+                    schedule_vals = parse_schedule(schedule_cell)
+                    new_notional = float(str(changed["Notional amount-Leg 1"]).replace(",", ""))
+                    for v in schedule_vals:
+                        try:
+                            if abs(float(v) - new_notional) / max(abs(new_notional), 1.0) < 1e-6:
+                                is_schedule_step = True
+                                break
+                        except (TypeError, ValueError):
+                            continue
+                except (TypeError, ValueError, ImportError):
+                    pass
+
         events.append(LifecycleEvent(
             action_type=str(action),
             event_type=str(event_type) if event_type is not None else None,
@@ -485,11 +520,57 @@ def build_lifecycle_summary_from_resolved(
             original_dissemination_id=orig_dissem,
             file_date=fd,
             changed_economics=changed,
+            is_schedule_step=is_schedule_step,
         ))
 
         prev_state = snapshot
 
     return build_summary(events)
+
+
+def validate_d2_chain(
+    df: pd.DataFrame,
+    *,
+    dissemination_col: str = "Dissemination Identifier",
+    original_dissemination_col: str = "Original Dissemination Identifier",
+    action_col: str = "Action type",
+    amendment_col: str = "Amendment indicator",
+) -> pd.DataFrame:
+    """Emit ``d2_missing`` quality flag for CORR/EROR/TERM/REVI/MODI(Amend=True) rows.
+
+    Appendix A [D1-D4]: any lifecycle message that references a prior
+    trade MUST carry [#2] Original Dissemination Identifier linking
+    back. A NULL D2 on one of those actions breaks the lifecycle chain.
+
+    Returns the DataFrame with a new boolean column ``d2_missing``
+    (True when violation present).
+    """
+    if df.empty:
+        df["d2_missing"] = False
+        return df
+
+    if action_col not in df.columns:
+        df["d2_missing"] = False
+        return df
+
+    actions = df[action_col].astype(str).str.upper()
+    requires_d2 = actions.isin({"CORR", "EROR", "TERM", "REVI", "MODI"})
+
+    # For MODI, only Amendment=True requires D2 (amendment points at prior
+    # state). Amendment=False / None MODIs are null-fill and don't mandate D2.
+    if amendment_col in df.columns:
+        amend_series = df[amendment_col]
+        amend_true = amend_series.astype(str).str.upper() == "TRUE"
+        modi_mask = (actions == "MODI")
+        requires_d2 = requires_d2 & ~(modi_mask & ~amend_true)
+
+    d2 = df.get(original_dissemination_col)
+    if d2 is None:
+        df["d2_missing"] = requires_d2
+        return df
+    d2_null = d2.isna() | (d2.astype(str).str.strip() == "")
+    df["d2_missing"] = requires_d2 & d2_null
+    return df
 
 
 def group_by_uti(

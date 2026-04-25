@@ -1,11 +1,12 @@
-// ABOUTME: Port of sofr-swaps-tape/flow-history against the tape v1 leg table.
-// Forward/tenor classification is done at leg grain since the tape v1 packages
-// table doesn't persist those as package-level columns.
+// ABOUTME: Flow history for the USD swap tape v2. Uses the v2 leg table
+// and filters on contributes_to_flow (matrix signal) so compression,
+// clearing β/γ, novation transfers, and null-fill MODIs never inflate
+// the flow aggregator (findings B1, B2, B6, H9, H11, H12).
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v1'
-const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v1'
+const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
 
 type FlowHistoryRow = {
   trade_date: string | Date
@@ -114,7 +115,7 @@ export async function GET(request: Request) {
     const sql = `
       WITH base AS (
         SELECT
-          l.execution_timestamp::date AS trade_date,
+          COALESCE(l.original_execution_timestamp, l.execution_timestamp)::date AS trade_date,
           l.forward_start_years AS forward_years,
           l.tenor_years AS tenor_years,
           ABS(COALESCE(l.notional, 0)) AS gross_notional,
@@ -125,8 +126,13 @@ export async function GET(request: Request) {
             ELSE 'custy'
           END AS platform_type
         FROM ${LEGS_TABLE} l
-        WHERE l.execution_timestamp >= $1
-          AND l.execution_timestamp < ($2::date + interval '1 day')
+        WHERE COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1
+          AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) < ($2::date + interval '1 day')
+          -- B1, B2, B6, H9, H11, H12: only rows the Economic-vs-Admin
+          -- matrix flags as flow-contributing count. Compression,
+          -- clearing β/γ, PB mirror, AFFL inter-affiliate, null-fill
+          -- MODIs, and VALU spam are all excluded by this gate.
+          AND COALESCE(l.contributes_to_flow, FALSE) = TRUE
       ),
       classified AS (
         SELECT

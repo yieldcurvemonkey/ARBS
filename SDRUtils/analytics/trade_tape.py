@@ -62,7 +62,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v1"
+TRADE_TAPE_CACHE_VERSION = "v5-p5"
 DEFAULT_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "notebooks", "sdr", "_cache", "trade_tape",
@@ -143,13 +143,17 @@ def _load_swap_upi_lookup() -> pd.DataFrame:
 
 
 def _match_novation_pairs(df: pd.DataFrame) -> pd.DataFrame:
-    """Conservative heuristic matching of TERM+NOVA <-> NEWT+NOVA pairs.
+    """Match TERM-NOVA ↔ NEWT-NOVA pairs via Prior UTI linkage.
 
-    Match criteria:
-    - Same notional (exact)
-    - Same tenor_years (within 0.1Y)
-    - Timestamps within 60 seconds
-    - Same upi_underlier_name
+    H2 rewrite: the previous gate required notional equality — which is
+    wrong for partial novations where the NEWT-NOVA slice carries only
+    the transferred portion (e.g. 3M of a 10M). The canonical linkage is
+    via [#2] Original Dissemination Identifier (Prior UTI) on the NEWT
+    pointing back to the TERM, plus a timestamp window and same-underlier
+    check as safety net.
+
+    Partial novation also produces a MODI-NOVA residual on the old RC —
+    handled downstream by netting via the matrix (contributes_to_flow=False).
 
     Greedy 1:1 matching. Unmatched trades get NaN.
     """
@@ -162,37 +166,48 @@ def _match_novation_pairs(df: pd.DataFrame) -> pd.DataFrame:
     if term_nova.empty or newt_nova.empty:
         return df
 
-    matched_newt_indices = set()
+    # Build trade_id → index lookup for Prior-UTI joins.
+    trade_id_col = "trade_id" if "trade_id" in df.columns else None
+
+    matched_newt_indices: set = set()
     match_seq = 0
 
     for t_idx, t_row in term_nova.iterrows():
         t_ts = pd.to_datetime(t_row.get("execution_timestamp"))
-        t_notional = t_row.get("notional", 0)
         t_tenor = t_row.get("tenor_years", 0)
         t_underlier = str(t_row.get("upi_underlier_name", ""))
+        t_trade_id = str(t_row.get("trade_id", "")) if trade_id_col else ""
 
         best_idx = None
         best_score = 0
+        prior_uti_hit = False
 
         for n_idx, n_row in newt_nova.iterrows():
             if n_idx in matched_newt_indices:
                 continue
 
-            # Mandatory gates: notional must match exactly
-            if t_notional != n_row.get("notional", -1):
-                continue
+            score = 0
 
-            # Mandatory gate: timestamps within 60s
+            # Primary match: Prior UTI on the NEWT points at the TERM's
+            # dissemination/trade_id. This is the authoritative link per
+            # §45.8(g) / [Example 4].
+            n_prior = n_row.get("original_dissemination_id") or n_row.get(
+                "Original Dissemination Identifier"
+            )
+            if n_prior is not None and str(n_prior).strip() == t_trade_id and t_trade_id:
+                score += 3
+                prior_uti_hit = True
+
+            # Timestamp proximity (relaxed: 300s to accommodate clearing
+            # acceptance lag for centrally-cleared novations).
             n_ts = pd.to_datetime(n_row.get("execution_timestamp"))
             try:
-                if abs((t_ts - n_ts).total_seconds()) > 60:
-                    continue
+                delta = abs((t_ts - n_ts).total_seconds())
             except (TypeError, AttributeError):
-                continue
+                delta = None
+            if delta is not None and delta <= 300:
+                score += 1
 
-            score = 2  # notional + timestamp already matched
-
-            # Criterion 3: tenor within 0.1Y
             n_tenor = n_row.get("tenor_years", -999)
             try:
                 if abs(float(t_tenor) - float(n_tenor)) <= 0.1:
@@ -200,17 +215,19 @@ def _match_novation_pairs(df: pd.DataFrame) -> pd.DataFrame:
             except (ValueError, TypeError):
                 pass
 
-            # Criterion 4: same underlier
             if t_underlier == str(n_row.get("upi_underlier_name", "")):
                 score += 1
 
-            if score >= 3 and score > best_score:
+            # Accept either the authoritative Prior-UTI match or a
+            # 3-criterion heuristic fallback (time + tenor + underlier).
+            min_score = 3
+            if score >= min_score and score > best_score:
                 best_score = score
                 best_idx = n_idx
 
         if best_idx is not None:
             match_id = f"nova_{match_seq}"
-            confidence = "HIGH" if best_score == 4 else "MEDIUM"
+            confidence = "HIGH" if prior_uti_hit else "MEDIUM"
             df.at[t_idx, "novation_match_id"] = match_id
             df.at[t_idx, "novation_confidence"] = confidence
             df.at[best_idx, "novation_match_id"] = match_id
@@ -264,6 +281,18 @@ class TradeTape(SDRAnalyzer):
                     "".join(sorted(df["trade_id"].astype(str))).encode()
                 ).hexdigest()[:16]
             )
+        # Also fingerprint action/event/amendment so small synthetic
+        # test DataFrames don't collide on the cache key when only the
+        # action mix differs. Pre-phase-1 caches keyed only on row count
+        # + timestamps + trade_id, which caused unit tests to silently
+        # hit each others' stale pickles.
+        for col in ("event_action", "event_type", "amendment_indicator"):
+            if col in df.columns and not df.empty:
+                parts.append(
+                    hashlib.sha256(
+                        "|".join(df[col].astype(str).values).encode()
+                    ).hexdigest()[:12]
+                )
         parts.append(
             str(len(self._raw_df)) if self._raw_df is not None else "no_raw"
         )
@@ -440,11 +469,18 @@ class TradeTape(SDRAnalyzer):
                 "ERRORED": "OTHER",
             }
             df["lifecycle_type"] = lc_status.map(status_map).fillna("OTHER")
-            df["is_new_risk"] = (df["lc_n_events"].fillna(1) <= 1) & (lc_status == "ACTIVE")
+            # Prefer the B7-corrected economic count when available; fall
+            # back to the union-chain count for legacy caches.
+            if "lc_n_events_economic" in df.columns:
+                n_events = df["lc_n_events_economic"].fillna(1)
+            else:
+                n_events = df["lc_n_events"].fillna(1)
+            df["is_new_risk"] = (n_events <= 1) & (lc_status == "ACTIVE")
             df["is_corrected"] = df["lc_is_corrected"].fillna(False)
             df["correction_crossed_day"] = df["lc_correction_crossed_day"].fillna(False)
         else:
-            # Fallback for old cached data without lc_* columns
+            # Fallback for old cached data without lc_* columns. Complete
+            # lifecycle_map to cover every Tech Spec action (B8).
             action = df["event_action"].astype(str).str.upper()
             action_prefix = action.str.split(r"[-\s]", n=1).str[0]
             lifecycle_map = {
@@ -452,6 +488,11 @@ class TradeTape(SDRAnalyzer):
                 "TERM": "TERMINATION",
                 "CORR": "CORRECTION",
                 "MODI": "MODIFICATION",
+                "REVI": "REVIVE",
+                "EROR": "ERROR",
+                "VALU": "VALUATION",
+                "MARU": "MARGIN_UPDATE",
+                "PRTO": "PORT_TRANSFER",
             }
             df["lifecycle_type"] = action_prefix.map(lifecycle_map).fillna("OTHER")
             df["is_new_risk"] = action_prefix == "NEWT"
@@ -528,13 +569,18 @@ class TradeTape(SDRAnalyzer):
         action = df.get("event_action", pd.Series("", index=df.index))
         action_prefix = action.astype(str).str.split("-", n=1).str[0].str.upper()
 
-        # Boolean flags
-        df["is_compression_spec"] = et == "COMP"
-        df["is_exercise_born"] = et == "EXER"
-        df["is_novation"] = et == "NOVA"
+        # H4: event-type flags are only meaningful on lifecycle actions.
+        # VALU/MARU/CORR/EROR/REVI carry event_type fields that are not
+        # lifecycle signals — reading them as NOVA/COMP/CLRG causes false
+        # positives. Gate every flag on action ∈ {NEWT, TERM, MODI}.
+        lifecycle_gate = action_prefix.isin({"NEWT", "TERM", "MODI"})
+
+        df["is_compression_spec"] = (et == "COMP") & lifecycle_gate
+        df["is_exercise_born"] = (et == "EXER") & lifecycle_gate
+        df["is_novation"] = (et == "NOVA") & lifecycle_gate
         df["is_novation_born"] = (et == "NOVA") & (action_prefix == "NEWT")
         df["is_novation_terminated"] = (et == "NOVA") & (action_prefix == "TERM")
-        df["is_clearing_termination"] = (et == "CLRG")
+        df["is_clearing_termination"] = (et == "CLRG") & lifecycle_gate
 
         # Non-standardized term indicator passthrough
         nst_col = "non-standardized_term_indicator"
@@ -555,6 +601,92 @@ class TradeTape(SDRAnalyzer):
             df["is_compression"] = df["is_compression"] | df["is_compression_spec"]
         else:
             df["is_compression"] = df["is_compression_spec"]
+
+        return df
+
+    def _enrich_economic_class(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 2d: canonical Economic-vs-Administrative matrix (Phase 3).
+
+        Reads the matrix in SDRUtils.core.economic_classification and
+        materializes ``economic_class``, ``contributes_to_flow``,
+        ``contributes_to_volume``, ``contributes_to_pnl``,
+        ``contributes_to_pnl_as_delta``, ``on_p43``, and
+        ``economic_class_reason`` columns. Every downstream aggregator
+        reads those columns instead of hand-rolled event-type filters.
+
+        Also rewrites ``is_new_risk`` on the Phase-3 gate so downstream
+        consumers see the canonical definition (H9).
+        """
+        from SDRUtils.core.economic_classification import enrich_economic_class
+
+        df = enrich_economic_class(df)
+
+        # H9: is_new_risk now follows economic_class, not raw NEWT prefix.
+        # Only ECONOMIC_FLOW rows represent new external risk; NEWT-CLRG
+        # (β/γ) and NEWT-NOVA are administrative and must not be counted.
+        if "economic_class" in df.columns and "event_action" in df.columns:
+            action_prefix = (
+                df["event_action"].astype(str).str.split("-", n=1).str[0].str.upper()
+            )
+            df["is_new_risk"] = (df["economic_class"] == "ECONOMIC_FLOW") & (
+                action_prefix == "NEWT"
+            )
+
+        return df
+
+    def _enrich_phase5_structural(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 2f: Phase-5 structural columns (schedule, collateral,
+        cap-band, RC timeline, other-payment decomposition, frequency
+        anomaly). Additive; every downstream consumer remains safe on
+        legacy DataFrames because each helper defaults to empty/False
+        when its input columns are absent.
+        """
+        from SDRUtils.core.cap_bands import enrich_cap_band_column
+        from SDRUtils.core.collateral_required import enrich_collateral_columns
+        from SDRUtils.core.frequency_anomaly import enrich_frequency_anomaly_column
+        from SDRUtils.core.other_payments import enrich_other_payments_columns
+        from SDRUtils.core.rc_timeline import enrich_rc_timeline_column
+        from SDRUtils.core.schedule_model import enrich_schedule_columns
+
+        df = enrich_schedule_columns(df)
+        df = enrich_collateral_columns(df)
+        df = enrich_cap_band_column(df)
+        df = enrich_rc_timeline_column(df)
+        df = enrich_other_payments_columns(df)
+        df = enrich_frequency_anomaly_column(df)
+        return df
+
+    def _enrich_exec_timestamps(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 2e: split execution timestamps (H1).
+
+        ``original_execution_timestamp`` is the event-study anchor: the
+        time the trade was first struck. For β/γ clearing rows (which
+        inherit the alpha's terms) this is the alpha's execution_timestamp,
+        not the clearing-acceptance timestamp.
+        ``clearing_accepted_timestamp`` is the raw execution_timestamp on
+        β/γ NEWT-CLRG rows; NULL everywhere else.
+
+        This lets FOMC-proximity, novation-pair matching, and intraday
+        curve snapshots bucket on the correct timing anchor.
+        """
+        exec_ts = df.get("execution_timestamp")
+        if exec_ts is None:
+            return df
+
+        df["original_execution_timestamp"] = exec_ts
+        df["clearing_accepted_timestamp"] = pd.NaT
+
+        # β/γ NEWT-CLRG rows: clearing-accept timestamp = this row's
+        # execution_timestamp; original anchor = alpha's (we don't have
+        # the alpha at this enrichment layer, so we emit the clearing
+        # timestamp and leave original_execution_timestamp equal to the
+        # current exec for now; Phase 4 downstream aggregator joins in
+        # the alpha link).
+        if "event_action" in df.columns:
+            ea = df["event_action"].astype(str).str.upper()
+            clrg_mask = ea == "NEWT-CLRG"
+            if clrg_mask.any():
+                df.loc[clrg_mask, "clearing_accepted_timestamp"] = exec_ts[clrg_mask]
 
         return df
 
@@ -1203,6 +1335,9 @@ class TradeTape(SDRAnalyzer):
             ("Lifecycle", self._enrich_lifecycle),
             ("Cross-day lifecycle", self._enrich_cross_day_lifecycle),
             ("Event type", self._enrich_event_type),
+            ("Economic class", self._enrich_economic_class),
+            ("Exec timestamps", self._enrich_exec_timestamps),
+            ("Phase 5 structural", self._enrich_phase5_structural),
             ("Quality flags", self._enrich_quality),
             ("Packages", self._enrich_packages),
             ("Market context", self._enrich_context),

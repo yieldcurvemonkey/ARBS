@@ -1,8 +1,12 @@
 'use client'
 // ABOUTME: Expanded package detail panel - per-leg breakdown only.
 import type { JSX } from 'react'
-import { EMPTY_VALUE } from '../../constants'
-import type { UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
+import {
+  ECONOMIC_CLASS_LABELS,
+  ECONOMIC_CLASS_TONES,
+  EMPTY_VALUE,
+} from '../../constants'
+import type { EconomicClass, UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
 import { computeLegSummary } from './LegsSubTable.helpers'
 import {
   formatDate,
@@ -10,6 +14,63 @@ import {
   formatNotional,
   formatRate,
 } from '../../utils/format'
+
+function formatTime(value: string | null | undefined): string {
+  if (!value) return EMPTY_VALUE
+  try {
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return EMPTY_VALUE
+    return d.toISOString().replace('T', ' ').slice(0, 19) + 'Z'
+  } catch {
+    return EMPTY_VALUE
+  }
+}
+
+function classBadge(leg: UsdSwapTapeLeg) {
+  const raw = leg.economic_class as string | null | undefined
+  if (!raw) return <span className="text-slate-500">{EMPTY_VALUE}</span>
+  const kind: EconomicClass =
+    raw in ECONOMIC_CLASS_LABELS ? (raw as EconomicClass) : 'UNKNOWN'
+  const className = ECONOMIC_CLASS_TONES[kind] ?? ECONOMIC_CLASS_TONES.UNKNOWN
+  const label = ECONOMIC_CLASS_LABELS[kind] ?? raw
+  const reason = leg.economic_class_reason ?? ''
+  return (
+    <span
+      className={`inline-flex items-center rounded px-1 py-0.5 text-[10px] font-semibold ${className}`}
+      title={reason ? `${kind}: ${reason}` : kind}
+    >
+      {label}
+    </span>
+  )
+}
+
+function execTimestampPair(leg: UsdSwapTapeLeg) {
+  const orig = leg.original_execution_timestamp ?? leg.execution_timestamp
+  const accepted = leg.clearing_accepted_timestamp
+  const origText = formatTime(orig)
+  if (!accepted) {
+    return (
+      <span
+        className="font-mono text-[11px] text-slate-200"
+        title="original execution timestamp"
+      >
+        {origText}
+      </span>
+    )
+  }
+  const acceptedText = formatTime(accepted)
+  return (
+    <div
+      className="flex flex-col leading-tight"
+      title="β/γ clearing leg: original alpha exec on top, clearing-accept below"
+    >
+      <span className="font-mono text-[11px] text-slate-200">{origText}</span>
+      <span className="font-mono text-[10px] text-teal-300/80">
+        ↳ {acceptedText}
+      </span>
+    </div>
+  )
+}
 
 function tradeIdBody(leg: UsdSwapTapeLeg) {
   const tid = leg.trade_id ?? EMPTY_VALUE
@@ -145,6 +206,115 @@ function legBadges(leg: UsdSwapTapeLeg) {
       ),
     )
   }
+  // Phase 2-5 per-leg compliance / quality signals.
+  if (leg.state_machine_violation) {
+    badges.push(
+      flagBadge(
+        'violation',
+        'VIOL',
+        'bg-red-900/60 text-red-100',
+        leg.violation_reason
+          ? `state-machine violation: ${leg.violation_reason}`
+          : 'state-machine violation',
+      ),
+    )
+  }
+  if (leg.cap_band_violation) {
+    badges.push(
+      flagBadge(
+        'cap-band',
+        'CAP!',
+        'bg-rose-900/60 text-rose-100',
+        '§43.4(f) cap-band violation: capped notional exceeds tenor cap',
+      ),
+    )
+  }
+  if (leg.frequency_anomaly) {
+    badges.push(
+      flagBadge(
+        'freq',
+        'FREQ',
+        'bg-fuchsia-900/40 text-fuchsia-200',
+        'underlier vs reset-frequency mismatch',
+      ),
+    )
+  }
+  if (leg.schedule_truncated) {
+    badges.push(
+      flagBadge(
+        'truncated',
+        'TRUNC',
+        'bg-yellow-900/40 text-yellow-200',
+        `schedule truncated to first 10 rows (full count: ${
+          leg.schedule_row_count ?? '?'
+        })`,
+      ),
+    )
+  }
+  if (leg.d2_missing) {
+    badges.push(
+      flagBadge(
+        'd2-miss',
+        'D2!',
+        'bg-amber-900/60 text-amber-100',
+        'missing Original Dissemination Identifier on lifecycle action',
+      ),
+    )
+  }
+  if (leg.lc_was_amended) {
+    badges.push(
+      flagBadge(
+        'amended',
+        'AMND',
+        'bg-emerald-700/40 text-emerald-100',
+        'has at least one MODI Amendment=True (real economic amendment)',
+      ),
+    )
+  }
+  if (leg.lc_was_null_filled) {
+    badges.push(
+      flagBadge(
+        'null-fill',
+        'NULL',
+        'bg-slate-700/40 text-slate-200',
+        'has MODI Amendment=False (null-fill / post-price backfill)',
+      ),
+    )
+  }
+  if (leg.lc_was_scheduled_amortization) {
+    badges.push(
+      flagBadge(
+        'sched',
+        'SCHED',
+        'bg-cyan-700/30 text-cyan-100',
+        'has scheduled amortization step (notional schedule advance)',
+      ),
+    )
+  }
+  if (
+    leg.notional_source &&
+    leg.notional_source !== 'p43_uncapped' &&
+    leg.notional_source !== ''
+  ) {
+    badges.push(
+      flagBadge(
+        'notional-src',
+        leg.notional_source.toUpperCase(),
+        'bg-zinc-800/60 text-zinc-300',
+        `notional sourced from: ${leg.notional_source}`,
+      ),
+    )
+  }
+  if (leg.on_p43 === false) {
+    badges.push(
+      flagBadge(
+        'p45only',
+        'P45',
+        'bg-zinc-800/60 text-zinc-300',
+        'event not on Part 43 public tape (P45-only)',
+      ),
+    )
+  }
   for (const value of leg.quality_flags ?? []) {
     badges.push(
       flagBadge(
@@ -241,6 +411,10 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
             <tr className="text-[10px] uppercase tracking-wide text-slate-400">
               <th className="px-2 py-1 text-left">#</th>
               <th className="px-2 py-1 text-left">Trade ID</th>
+              {/* Phase 3: per-leg matrix kind */}
+              <th className="px-2 py-1 text-left">Class</th>
+              {/* Phase 1: original execution timestamp + clearing-accept */}
+              <th className="px-2 py-1 text-left">Exec Ts</th>
               <th className="px-2 py-1 text-left">Tape Label</th>
               <th className="px-2 py-1 text-left">Effective</th>
               <th className="px-2 py-1 text-left">Maturity</th>
@@ -263,6 +437,10 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
               >
                 <td className="whitespace-nowrap px-2 py-1">{index + 1}</td>
                 <td className="whitespace-nowrap px-2 py-1">{tradeIdBody(leg)}</td>
+                <td className="whitespace-nowrap px-2 py-1">{classBadge(leg)}</td>
+                <td className="whitespace-nowrap px-2 py-1">
+                  {execTimestampPair(leg)}
+                </td>
                 <td className="max-w-[360px] px-2 py-1 font-mono text-[11px] text-slate-100">
                   {leg.leg_tape_label ?? leg.tape_label ?? EMPTY_VALUE}
                 </td>
@@ -315,7 +493,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
             ))}
             {legs.length === 0 ? (
               <tr className="border-t border-slate-800/90 text-slate-400">
-                <td className="px-2 py-2" colSpan={14}>
+                <td className="px-2 py-2" colSpan={16}>
                   No leg data available.
                 </td>
               </tr>
@@ -325,6 +503,8 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                 data-testid={`legs-subtable-summary-${row.package_id}`}
               >
                 <td className="whitespace-nowrap px-2 py-1 text-slate-400">Σ</td>
+                <td className="px-2 py-1" />
+                <td className="px-2 py-1" />
                 <td className="px-2 py-1" />
                 <td className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-400">
                   Summary
@@ -355,6 +535,71 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
           </tbody>
         </table>
       </div>
+      {/* Phase 5: UFRO/UWIN/PEXH per-leg breakdown when any non-zero. */}
+      {legs.some(
+        (l) =>
+          (l.other_payment_ufro ?? 0) !== 0 ||
+          (l.other_payment_uwin ?? 0) !== 0 ||
+          (l.other_payment_pexh ?? 0) !== 0,
+      ) ? (
+        <div
+          className="mt-1 flex flex-wrap items-baseline gap-3 text-[10px] uppercase tracking-wide text-slate-400"
+          data-testid={`legs-subtable-other-payment-${row.package_id}`}
+        >
+          <span className="font-semibold text-slate-300">Other Payment:</span>
+          <span>
+            UFRO{' '}
+            <span className="font-mono text-[12px] text-slate-100">
+              {formatNotional(
+                legs.reduce((s, l) => s + (l.other_payment_ufro ?? 0), 0),
+                { compact: true },
+              )}
+            </span>
+          </span>
+          <span>
+            UWIN{' '}
+            <span className="font-mono text-[12px] text-slate-100">
+              {formatNotional(
+                legs.reduce((s, l) => s + (l.other_payment_uwin ?? 0), 0),
+                { compact: true },
+              )}
+            </span>
+          </span>
+          <span>
+            PEXH{' '}
+            <span className="font-mono text-[12px] text-slate-100">
+              {formatNotional(
+                legs.reduce((s, l) => s + (l.other_payment_pexh ?? 0), 0),
+                { compact: true },
+              )}
+            </span>
+          </span>
+        </div>
+      ) : null}
+      {/* Phase 5: collateralisation required-fields gaps. */}
+      {legs.some(
+        (l) => (l.missing_required_fields ?? []).length > 0,
+      ) ? (
+        <div
+          className="mt-1 flex flex-wrap items-baseline gap-2 text-[10px] uppercase tracking-wide text-amber-300"
+          data-testid={`legs-subtable-missing-required-${row.package_id}`}
+        >
+          <span className="font-semibold">Missing required fields:</span>
+          {Array.from(
+            new Set(
+              legs.flatMap((l) => l.missing_required_fields ?? []),
+            ),
+          ).map((field) => (
+            <span
+              key={field}
+              className="rounded bg-amber-900/40 px-1 py-0.5 font-mono text-[11px] normal-case text-amber-200"
+              title="Appendix E required field missing for this row's collateralisation category"
+            >
+              {field}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

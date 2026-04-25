@@ -161,6 +161,7 @@ def calculate_forward_start_years(
     conventions: Optional[CurrencyConventions] = None,
     adjust_to_business_day: bool = False,
     use_execution_date_only: bool = True,
+    day_count_code: Optional[str] = None,
 ) -> float:
     """
     Calculate forward start year fraction.
@@ -173,12 +174,19 @@ def calculate_forward_start_years(
         conventions: Currency conventions to use (defaults to USD)
         adjust_to_business_day: Whether to adjust dates to business days
         use_execution_date_only: Use only the date portion of execution_timestamp
+        day_count_code: Appendix C code (``A004``..``A020`` / ``NARR``) from
+            Data Element [#53]. When given, overrides the convention day
+            counter; unknown or ``NARR`` falls back to ``conventions.day_counter``.
 
     Returns:
         Year fraction from execution to effective date (negative if past)
     """
+    from SDRUtils.core.conventions import resolve_day_counter
+
     if conventions is None:
         conventions = USD_CONVENTIONS
+
+    day_counter = resolve_day_counter(day_count_code, conventions.day_counter)
 
     exec_ts = to_naive_timestamp(execution_timestamp)
     if pd.isna(exec_ts):
@@ -199,7 +207,7 @@ def calculate_forward_start_years(
     if ql_eff == ql_exec:
         return 0.0
 
-    val = conventions.day_counter.yearFraction(min(ql_exec, ql_eff), max(ql_exec, ql_eff))
+    val = day_counter.yearFraction(min(ql_exec, ql_eff), max(ql_exec, ql_eff))
     return val if ql_eff > ql_exec else -val
 
 

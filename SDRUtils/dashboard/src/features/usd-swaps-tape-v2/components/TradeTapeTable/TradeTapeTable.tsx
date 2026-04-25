@@ -64,6 +64,12 @@ export interface TradeTapeTableProps {
   onSelectionChange?: (e: { value: UsdSwapTapeRow[] }) => void
   onOpenTimeseries?: (row: UsdSwapTapeRow) => void
   /**
+   * Package ID currently focused in the analytics dock. Tape highlights
+   * the matching row with the indigo focused-trade treatment that mirrors
+   * the dock's "Focused trade" context bar (see Analytics Dock design).
+   */
+  focusedPackageId?: string | null
+  /**
    * Optional right-side slot rendered in the filter bar — used by the parent
    * to inject extras like a "Link N selected" action without pushing filter
    * state back up.
@@ -89,6 +95,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     onToggleRow,
     selected,
     onSelectionChange,
+    focusedPackageId,
     actionSlot,
   } = props
 
@@ -310,6 +317,14 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
       rowClassName(row),
       row.manual_link_id || row.manual_package_id ? 'manual-linked-row' : '',
       selectedIds.has(row.package_id) ? 'selected-share-row' : '',
+      // Mirror the Analytics Dock's "Focused trade" treatment on the
+      // exact row the dock is currently rendering analytics for. The
+      // indigo tint + ring is applied via the focused-trade-row CSS
+      // selector in UsdSwapsTradeTape.tsx so it survives PrimeReact's
+      // own row hover / selection styling.
+      focusedPackageId && row.package_id === focusedPackageId
+        ? 'focused-trade-row'
+        : '',
     ]
       .join(' ')
       .trim()
@@ -372,16 +387,57 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         }
       `}</style>
 
+      {/* Tape toolbar — mirrors the Analytics Dock's chrome: mono title +
+          row-count chip on the left, quick-filter pill snapshot, and
+          right-aligned utility buttons (Reset filters, Load more, plus
+          the parent-injected actionSlot which carries the Show/Hide
+          Analytics toggle). */}
       <div
-        className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-900/50 px-3 py-1"
+        className="flex items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-1.5"
         data-testid="trade-tape-filters"
       >
-        <span className="whitespace-nowrap text-[10px] text-slate-400">
+        <span className="font-mono text-[11px] text-slate-300">
+          USD Swaps Tape
+          <span className="text-slate-600"> · </span>
+          <span className="text-slate-500">v2</span>
+        </span>
+        <span
+          className="rounded bg-slate-800 px-1.5 py-[1px] font-mono text-[10px] text-slate-300"
+          title={
+            filtersActive
+              ? `${rows.length} loaded; ${displayRows.length} match the active filter`
+              : `${displayRows.length} rows in tape`
+          }
+        >
           {filtersActive
             ? `${displayRows.length} matching · ${rows.length} loaded`
             : `${displayRows.length} rows`}
-          {hasMore ? ' · more available' : ''}
+          {hasMore ? ' · more' : ''}
         </span>
+        {/* Quick filter context pills — surface that the table is on the
+            v2 dataset with a reset/clean toggle handled per-column.
+            Visual only; mirrors the Analytics Dock prototype's filter
+            pill row so the two surfaces feel unified. */}
+        <div className="ml-1 flex items-center gap-1 font-mono text-[10px] text-slate-500">
+          {filtersActive ? (
+            <span
+              className="rounded border border-sky-700/50 bg-sky-900/30 px-1.5 py-[1px] text-sky-200"
+              title="Per-column filters active"
+            >
+              Filtered
+            </span>
+          ) : (
+            <span
+              className="rounded border border-slate-800 px-1.5 py-[1px]"
+              title="No filters active"
+            >
+              All rows
+            </span>
+          )}
+          <span className="rounded border border-slate-800 px-1.5 py-[1px]">
+            Today
+          </span>
+        </div>
         {hasMore ? (
           <button
             type="button"
@@ -390,7 +446,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
             }}
             disabled={!!loadingMore}
             data-testid="trade-tape-load-more"
-            className="rounded bg-sky-900/40 px-2 py-0.5 text-[11px] text-sky-200 hover:bg-sky-900/70 disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded border border-slate-700 bg-sky-900/30 px-2 py-[3px] font-mono text-[10.5px] text-sky-200 hover:bg-sky-900/60 disabled:cursor-not-allowed disabled:opacity-60"
             title={
               filtersActive
                 ? 'Load another page from the server and re-apply your filter'
@@ -411,7 +467,8 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         <button
           type="button"
           onClick={handleResetAll}
-          className="rounded bg-slate-800/60 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700/60"
+          className="rounded border border-slate-700 px-2 py-[3px] font-mono text-[10.5px] text-slate-300 hover:bg-slate-800"
+          title="Clear every per-column filter"
         >
           Reset filters
         </button>

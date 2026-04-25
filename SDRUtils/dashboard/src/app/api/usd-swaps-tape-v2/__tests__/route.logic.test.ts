@@ -6,7 +6,7 @@ import {
   parseParams,
 } from '../route.logic'
 
-const VIEW = 'arbs_usd_swap_tape_display_v1'
+const VIEW = 'arbs_usd_swap_tape_display_v2'
 const COLUMNS = 'd.*'
 
 function paramsOf(qs: string) {
@@ -59,6 +59,17 @@ describe('buildCleanTapeClause', () => {
     expect(clause).toContain('NOT d.is_ufro_any')
     expect(clause).toContain('NOT d.is_reset_optimization_any')
     expect(clause).toContain('NOT d.is_clearing_termination_any')
+  })
+
+  it('drops matrix-administrative rows (Phase 3)', () => {
+    const clause = buildCleanTapeClause()
+    expect(clause).toContain('contributes_to_flow_any')
+    expect(clause).toContain('TRUE')
+  })
+
+  it('drops state-machine-violating rows', () => {
+    const clause = buildCleanTapeClause()
+    expect(clause).toContain('state_machine_violation_any')
   })
 })
 

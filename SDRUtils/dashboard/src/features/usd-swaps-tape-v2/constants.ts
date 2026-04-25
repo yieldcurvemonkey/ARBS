@@ -1,5 +1,6 @@
 // Tokens and defaults for the USD swap tape v2 feature.
 import type {
+  EconomicClass,
   LifecycleType,
   TimeseriesMetricKey,
   TimeseriesRangeKey,
@@ -22,6 +23,15 @@ export const LIFECYCLE_ORDER: LifecycleType[] = [
   'CORRECTION',
   'CLEARING_TERM',
   'EXERCISE_BORN',
+  // Phase 2-3 additions ordered after the original set so existing
+  // dashboards that iterate the array don't reorder visually.
+  'AMENDMENT',
+  'NULL_FILL',
+  'SCHED_AMORT',
+  'ERROR',
+  'ERROR_RECOVERY',
+  'PORT_TRANSFER',
+  'VALUATION',
 ]
 
 export const LIFECYCLE_LABELS: Record<LifecycleType, string> = {
@@ -34,6 +44,13 @@ export const LIFECYCLE_LABELS: Record<LifecycleType, string> = {
   CORRECTION: 'CORR',
   CLEARING_TERM: 'CLR',
   EXERCISE_BORN: 'XERC',
+  AMENDMENT: 'AMND',
+  NULL_FILL: 'NULL',
+  SCHED_AMORT: 'SCHED',
+  ERROR: 'EROR',
+  ERROR_RECOVERY: 'REVI',
+  PORT_TRANSFER: 'PRTO',
+  VALUATION: 'VALU',
   OTHER: 'OTHER',
 }
 
@@ -50,7 +67,47 @@ export const LIFECYCLE_TONES: Record<LifecycleType, string> = {
   CORRECTION: 'bg-orange-500/30 text-orange-100 ring-1 ring-orange-400/40',
   CLEARING_TERM: 'bg-teal-500/30 text-teal-100 ring-1 ring-teal-400/40',
   EXERCISE_BORN: 'bg-pink-500/30 text-pink-100 ring-1 ring-pink-400/40',
+  // MODI sub-states. AMEND is a real economic event so it gets the same
+  // emerald family as NEW; NULL_FILL and SCHED_AMORT are administrative
+  // and fade to slate/neutral.
+  AMENDMENT: 'bg-emerald-700/40 text-emerald-100 ring-1 ring-emerald-300/40',
+  NULL_FILL: 'bg-slate-700/30 text-slate-200 ring-1 ring-slate-400/30 italic',
+  SCHED_AMORT: 'bg-cyan-700/30 text-cyan-100 ring-1 ring-cyan-300/40 italic',
+  // §45.14 error/recovery — yellow-ish to draw the trader's eye.
+  ERROR: 'bg-yellow-700/40 text-yellow-100 ring-1 ring-yellow-300/50',
+  ERROR_RECOVERY: 'bg-yellow-500/30 text-yellow-100 ring-1 ring-yellow-300/40',
+  PORT_TRANSFER: 'bg-zinc-600/30 text-zinc-200 ring-1 ring-zinc-400/30',
+  // VALU/MARU are EOD valuations — explicitly muted so they don't compete
+  // visually with real lifecycle activity.
+  VALUATION: 'bg-zinc-800/40 text-zinc-400 ring-1 ring-zinc-600/30',
   OTHER: 'bg-slate-500/30 text-slate-100 ring-1 ring-slate-400/40',
+}
+
+// Phase 3 economic-class column palette. The matrix is the source of
+// truth for every flow/volume/PnL aggregator; the dashboard surfaces
+// the kind directly so traders can see *why* a row is or isn't in flow.
+export const ECONOMIC_CLASS_LABELS: Record<EconomicClass, string> = {
+  ECONOMIC_FLOW: 'FLOW',
+  ECONOMIC_UNWIND: 'UNW',
+  ECONOMIC_AMENDMENT: 'AMND',
+  RESTATEMENT: 'RST',
+  ADMINISTRATIVE: 'ADMIN',
+  VALUATION: 'VALU',
+  ERROR: 'EROR',
+  ERROR_RECOVERY: 'REVI',
+  UNKNOWN: '?',
+}
+
+export const ECONOMIC_CLASS_TONES: Record<EconomicClass, string> = {
+  ECONOMIC_FLOW: 'bg-emerald-500/30 text-emerald-100 ring-1 ring-emerald-400/40',
+  ECONOMIC_UNWIND: 'bg-red-500/30 text-red-100 ring-1 ring-red-400/40',
+  ECONOMIC_AMENDMENT: 'bg-emerald-700/40 text-emerald-100 ring-1 ring-emerald-300/40',
+  RESTATEMENT: 'bg-orange-500/30 text-orange-100 ring-1 ring-orange-400/40',
+  ADMINISTRATIVE: 'bg-zinc-700/30 text-zinc-300 ring-1 ring-zinc-500/30 italic',
+  VALUATION: 'bg-zinc-800/40 text-zinc-400 ring-1 ring-zinc-600/30',
+  ERROR: 'bg-yellow-700/40 text-yellow-100 ring-1 ring-yellow-300/50',
+  ERROR_RECOVERY: 'bg-yellow-500/30 text-yellow-100 ring-1 ring-yellow-300/40',
+  UNKNOWN: 'bg-fuchsia-700/40 text-fuchsia-100 ring-1 ring-fuchsia-300/50',
 }
 
 export const TRADE_TYPE_TONES: Record<string, string> = {
@@ -102,6 +159,16 @@ export const FLAG_CHIP_TONES = {
   OFF_DATE: 'bg-yellow-900/40 text-yellow-200',
   NSTD: 'bg-purple-900/40 text-purple-200',
   FOMC: 'bg-amber-900/40 text-amber-200',
+  // Phase 4-5 compliance / data-quality chips. Distinct red/violet hues
+  // so the trader can visually triage state-machine vs cap-band issues
+  // when scanning the tape.
+  VIOL: 'bg-red-900/60 text-red-100 ring-1 ring-red-500/60',
+  CAP_BAND: 'bg-rose-900/60 text-rose-100 ring-1 ring-rose-400/40',
+  FREQ_ANOM: 'bg-fuchsia-900/40 text-fuchsia-200',
+  D2_MISS: 'bg-amber-900/60 text-amber-100',
+  TRUNC: 'bg-yellow-900/40 text-yellow-200',
+  CLR_ACC: 'bg-teal-900/40 text-teal-200',
+  P43_OFF: 'bg-zinc-800/60 text-zinc-300',
 } as const
 
 export const TIMESERIES_METRICS: Array<{ key: TimeseriesMetricKey; label: string }> = [
@@ -139,6 +206,9 @@ export const COLUMN_DEFS = [
   { key: 'expand', header: '', width: 48 },
   { key: 'time', header: 'Time', width: 190 },
   { key: 'action', header: 'Action', width: 132 },
+  // Phase 3: Economic-vs-Admin matrix kind, surfaced as a column so
+  // traders can immediately see *why* a row is/isn't in flow.
+  { key: 'class', header: 'Class', width: 84 },
   { key: 'platform', header: 'Platform', width: 120 },
   { key: 'pkg', header: 'Pkg', width: 96 },
   { key: 'pkg_ind', header: 'Pkg Ind', width: 84 },
@@ -146,6 +216,9 @@ export const COLUMN_DEFS = [
   { key: 'risk_or_notional', header: 'Risk', width: 110 }, // toggles to Notional
   { key: 'rate', header: 'Reported LvL', width: 110 },
   { key: 'other_lvl', header: 'Other Lvl', width: 110 },
+  // Phase 4-5 compliance/quality flag stack (state-machine, cap-band,
+  // freq anomaly, schedule truncation, d2-missing, clearing-accept lag).
+  { key: 'quality', header: 'Q', width: 96 },
 ] as const
 
 export const CLEAN_TAPE_HIDDEN_LIFECYCLES: LifecycleType[] = [
@@ -153,6 +226,12 @@ export const CLEAN_TAPE_HIDDEN_LIFECYCLES: LifecycleType[] = [
   'COMPRESSION',
   'RESET_OPT',
   'CLEARING_TERM',
+  // Phase 3 admin classes — "clean tape" hides VALU spam, null-fills, and
+  // scheduled amortization steps so the trader sees only economic events.
+  'NULL_FILL',
+  'SCHED_AMORT',
+  'VALUATION',
+  'PORT_TRANSFER',
 ]
 
 export const DEFAULT_FLAG_FILTER_STATE = {

@@ -160,14 +160,15 @@ def classify_product_type(row: pd.Series) -> ProductType:
     if "FLOOR" in upi_fisn:
         return "FLOOR"
 
+    # N5 (deferred): strike-based option inference is disabled until the
+    # strike is notation-normalised. If re-enabled, the strike MUST be
+    # routed through SDRUtils.core.parsing.parse_notation_scalar paired
+    # with [#64] Strike price notation (1=monetary, 3=decimal, 4=bps),
+    # otherwise package-spread-style B4/B5 bugs will recur.
     # strike = _to_float(row.get("Strike Price"))
     # first_exercise = row.get("First exercise date")
-    # normalize if you want:
-    # first_exercise = pd.to_datetime(first_exercise, errors="coerce") if not isinstance(first_exercise, pd.Timestamp) else first_exercise
-    # Strike-based option inference (now safe)
-    # if pd.notna(strike) and strike > 0:
-    #     if pd.notna(first_exercise):
-    #         return "SWAPTION_CALL"  # default if unclear
+    # if pd.notna(strike) and strike > 0 and pd.notna(first_exercise):
+    #     return "SWAPTION_CALL"
 
     # OIS swap inference
     if "SWAP" in upi_fisn and "OIS" in upi_fisn:

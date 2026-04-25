@@ -380,7 +380,7 @@ class DTCCFetcher(BaseFetcher):
         use_pyarrow: Optional[bool] = False,
         one_df: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
-        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Event timestamp",
+        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Execution Timestamp",
     ) -> Dict[date, pd.DataFrame] | pd.DataFrame:
         bdates = pd.date_range(
             start=start_date,
@@ -443,7 +443,7 @@ class DTCCFetcher(BaseFetcher):
         max_extraction_workers: Optional[int] = 3,
         use_pyarrow: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
-        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Event timestamp",
+        ts_col: Optional[Literal["Event timestamp", "Execution Timestamp"]] = "Execution Timestamp",
     ) -> pd.DataFrame:
         slice_ids = self._get_dtcc_intraday_slide_ids(agency=agency, asset_class=asset_class, start_timestamp=start_timestamp, end_timestamp=end_timestamp)
 
@@ -999,7 +999,7 @@ class SDRDataBuilder:
         end_timestamp = pd.to_datetime(end_timestamp, utc=True)
 
         cache_fp = self._parquet_cache_dir / "intraday.csv"
-        ts_col = "Event timestamp"
+        ts_col = "Execution Timestamp"
 
         # If ignoring cache, fetch exactly requested window and do not read/write intraday.csv
         if ignore_cache:
@@ -1068,27 +1068,15 @@ class SDRDataBuilder:
             ts_col=ts_col,
         )
 
-        # Defensive guard against empty/malformed intraday pulls: if
-        # ``new_df`` came back without the expected timestamp column (e.g.
-        # DTCC had no data for the window, or the fetcher returned a
-        # schema-less empty frame), don't try to sort on a missing column.
-        # Fall back to whatever the cache already had; write nothing new.
-        new_has_ts = (not new_df.empty) and (ts_col in new_df.columns)
-        cache_has_ts = (not cache_df.empty) and (ts_col in cache_df.columns)
-        if not new_has_ts and not cache_has_ts:
-            return pd.DataFrame()
-        if not new_has_ts:
-            return cache_df[
-                (cache_df[ts_col] >= start_timestamp) & (cache_df[ts_col] <= end_timestamp)
-            ].reset_index(drop=True)
-        if not cache_has_ts:
-            new_df = new_df.sort_values(by=ts_col).reset_index(drop=True)
-            _write_intraday_cache(new_df, cache_fp)
-            return new_df[
-                (new_df[ts_col] >= start_timestamp) & (new_df[ts_col] <= end_timestamp)
-            ].reset_index(drop=True)
-
-        combined = pd.concat([cache_df, new_df], ignore_index=True).drop_duplicates(subset=["report_slice", ts_col]).sort_values(by=ts_col)
+        # M11: DTCC disseminates the same message across multiple intraday
+        # slices; report_slice is slice-local, so dedup must key on the
+        # globally-unique Dissemination Identifier with keep="last" to
+        # retain the most recent slice's view (may carry corrections).
+        combined = (
+            pd.concat([cache_df, new_df], ignore_index=True)
+            .drop_duplicates(subset=["Dissemination Identifier"], keep="last")
+            .sort_values(by=ts_col)
+        )
         _write_intraday_cache(combined, cache_fp)
 
         return combined[(combined[ts_col] >= start_timestamp) & (combined[ts_col] <= end_timestamp)].reset_index(drop=True)
@@ -1169,7 +1157,7 @@ class SDRDataBuilder:
         agency: Literal["CFTC", "SEC"],
         asset_class: Literal["COMMODITIES", "CREDITS", "EQUITIES", "FOREX", "RATES"],
         *,
-        ts_col: Literal["Event timestamp", "Execution Timestamp"] = "Event timestamp",
+        ts_col: Literal["Event timestamp", "Execution Timestamp"] = "Execution Timestamp",
         filter_func: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = lambda df: df,
         ignore_cache: bool = False,
     ) -> pd.DataFrame:

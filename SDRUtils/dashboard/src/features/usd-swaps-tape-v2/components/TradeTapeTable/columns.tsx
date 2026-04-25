@@ -14,7 +14,7 @@ import {
   formatReportedLvl,
 } from '../../utils/format'
 import { getFilterDisplayLabel } from './filter-utils'
-import { LifecyclePills } from './RowBadges'
+import { EconomicClassBadge, LifecyclePills, QualityBadges } from './RowBadges'
 import { TapeLabelCell } from './TapeLabelCell'
 import {
   packageIndicatorDisplay,
@@ -42,12 +42,12 @@ type ColumnConfig = {
 function renderHeader(label: string, summary?: string | null): JSX.Element {
   return (
     <div className="flex flex-col leading-tight">
-      <span className="text-[12px] uppercase tracking-wide text-gray-400">
+      <span className="font-mono text-[9.5px] uppercase tracking-wider text-slate-500">
         {label}
       </span>
       {summary ? (
         <span
-          className="mt-0.5 truncate text-[10px] font-normal normal-case tracking-normal text-sky-300/70"
+          className="mt-0.5 truncate font-mono text-[10px] font-normal normal-case tracking-normal text-sky-300/70"
           title={summary}
         >
           {summary}
@@ -113,13 +113,13 @@ export function getColumns(
         className="flex flex-col text-left hover:text-sky-300"
         aria-label={`toggle metric (current: ${metricLabel})`}
       >
-        <span className="text-[12px] uppercase tracking-wide text-gray-400">
+        <span className="font-mono text-[9.5px] uppercase tracking-wider text-slate-500">
           {metricLabel} ⇅
         </span>
       </button>
       {metricSummary ? (
         <span
-          className="mt-0.5 truncate text-[10px] font-normal normal-case tracking-normal text-sky-300/70"
+          className="mt-0.5 truncate font-mono text-[10px] font-normal normal-case tracking-normal text-sky-300/70"
           title={metricSummary}
         >
           {metricSummary}
@@ -141,7 +141,7 @@ export function getColumns(
         summaryFor('execution_start', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => (
-        <span className="whitespace-nowrap text-[12px] text-gray-300">
+        <span className="whitespace-nowrap font-mono text-[11px] text-slate-400">
           {formatExecutionWindow(row.execution_start, row.execution_end)}
         </span>
       )}
@@ -158,7 +158,24 @@ export function getColumns(
         summaryFor('lifecycle_type', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => <LifecyclePills row={row} />}
-      style={{ width: 64 }}
+      style={{ width: 88 }}
+    />,
+    // Phase 3 Economic-vs-Admin matrix kind. Dedicated column rather
+    // than a sub-pill in Action so traders can sort/filter on it
+    // (e.g. show ECONOMIC_FLOW only, hide ADMIN/VALU spam).
+    <Column
+      key="class"
+      field="economic_class_primary"
+      filterField="economic_class_primary"
+      filter
+      sortable
+      {...compactFilterMenuProps}
+      header={renderHeader(
+        'Class',
+        summaryFor('economic_class_primary', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) => <EconomicClassBadge row={row} />}
+      style={{ width: 84 }}
     />,
     <Column
       key="platform"
@@ -170,11 +187,41 @@ export function getColumns(
         'Platform',
         summaryFor('platform_identifier', config.activeFilters),
       )}
-      body={(row: UsdSwapTapeRow) => (
-        <span className="truncate text-[12px] text-gray-300">
-          {displayPlatform(row)}
-        </span>
-      )}
+      body={(row: UsdSwapTapeRow) => {
+        const venue = String(row.venue ?? firstLeg(row)?.venue ?? '').toUpperCase()
+        const platformText = displayPlatform(row)
+        const isIdb = venue === 'D2D'
+        const isCusty = venue === 'D2C'
+        const dotColor = isIdb
+          ? '#38bdf8' /* sky-400 → IDB */
+          : isCusty
+            ? '#f59e0b' /* amber-500 → CUSTY */
+            : '#64748b' /* slate-500 fallback */
+        const textTone = isIdb
+          ? 'text-sky-200'
+          : isCusty
+            ? 'text-amber-200'
+            : 'text-slate-300'
+        return (
+          <span
+            className="inline-flex items-center gap-1.5 font-mono text-[11px]"
+            title={
+              isIdb
+                ? 'D2D / Inter-dealer broker (IDB)'
+                : isCusty
+                  ? 'D2C / Customer (CUSTY)'
+                  : 'Venue unknown'
+            }
+          >
+            <span
+              aria-hidden
+              className="inline-block rounded-full"
+              style={{ width: 6, height: 6, backgroundColor: dotColor }}
+            />
+            <span className={`truncate ${textTone}`}>{platformText}</span>
+          </span>
+        )
+      }}
       style={{ width: 56 }}
     />,
     <Column
@@ -207,7 +254,7 @@ export function getColumns(
         summaryFor('package_indicator', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => (
-        <span className="font-mono text-[12px] text-gray-300">
+        <span className="font-mono text-[11px] text-slate-300">
           {packageIndicatorDisplay(row.package_indicator)}
         </span>
       )}
@@ -237,7 +284,7 @@ export function getColumns(
       {...compactFilterMenuProps}
       header={metricHeader}
       body={(row: UsdSwapTapeRow) => (
-        <span className="font-mono text-[15px] font-semibold text-gray-100">
+        <span className="block text-right font-mono text-[12px] font-semibold text-slate-100">
           {mode === 'dv01'
             ? formatDv01(row.total_risk ?? null, { signNegativeOnly: true })
             : formatNotional(row.total_notional ?? null, { compact: true })}
@@ -257,7 +304,7 @@ export function getColumns(
         summaryFor('weighted_fixed_rate', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => (
-        <span className="font-mono text-[15px] font-semibold text-gray-100">
+        <span className="block text-right font-mono text-[12px] font-semibold text-slate-100">
           {formatReportedLvl(row)}
         </span>
       )}
@@ -310,7 +357,7 @@ export function getColumns(
         return (
           <div
             data-testid="other-lvl-cell"
-            className="flex flex-col font-mono text-[10px] leading-tight text-gray-200"
+            className="flex flex-col items-end font-mono text-[10px] leading-tight text-slate-400"
           >
             <span>{lines.opaLine}</span>
             <span>{lines.ptpLine}</span>
@@ -319,6 +366,23 @@ export function getColumns(
         )
       }}
       style={{ width: 118 }}
+    />,
+    // Phase 4-5 quality / compliance flag stack. Renders state-machine
+    // violation, cap-band, freq anomaly, schedule truncation, D2-missing,
+    // clearing-acceptance lag, P45-only signals. Most rows show a single
+    // dot (clean); compliance-relevant rows light up.
+    <Column
+      key="quality"
+      field="state_machine_violation_any"
+      filterField="state_machine_violation_any"
+      filter
+      {...compactFilterMenuProps}
+      header={renderHeader(
+        'Q',
+        summaryFor('state_machine_violation_any', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) => <QualityBadges row={row} />}
+      style={{ width: 96 }}
     />,
   )
   return cols
