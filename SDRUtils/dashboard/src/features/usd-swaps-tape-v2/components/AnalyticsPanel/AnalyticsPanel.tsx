@@ -140,6 +140,14 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
     lookback: 90,
     primaryTol: rarityState.primaryTol,
     sizeTol: rarityState.sizeTol,
+    // UX-02: pipe the trader-selected histogram metric so the server
+    // re-bins the distribution in the right units (rate-bps / DV01 /
+    // notional-MM) instead of always returning rate-bps bins.
+    binMetric: rarityState.histogramMetric === 'dv01'
+      ? 'dv01'
+      : rarityState.histogramMetric === 'notional'
+        ? 'notional'
+        : 'fixed_rate',
   })
   const extremes = useExtremesData(focused, {
     primaryTol: rarityState.primaryTol,
@@ -261,6 +269,8 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               state={rarityState}
               setState={setRarityState}
               bins={rarity.bins}
+              binMetric={rarity.binMetric}
+              binWidth={rarity.binWidth}
               stats={rarity.stats}
               metricRows={rarity.metricRows}
               recency={rarity.recency}

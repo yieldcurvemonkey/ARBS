@@ -72,15 +72,16 @@ function PercentileRow(props: { metric: MetricRow; isPrimary?: boolean }): JSX.E
 interface HistogramTooltipProps {
   active?: boolean
   payload?: Array<{ payload: HistogramBin }>
+  unit?: string
 }
 
-function HistogramTooltip({ active, payload }: HistogramTooltipProps): JSX.Element | null {
+function HistogramTooltip({ active, payload, unit = 'bps' }: HistogramTooltipProps): JSX.Element | null {
   if (!active || !payload || payload.length === 0) return null
   const d = payload[0].payload
   return (
     <div className="rounded border border-slate-700 bg-slate-950/95 px-2.5 py-2 font-mono text-[11px] text-slate-200 shadow-xl">
       <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">
-        {d.binStart.toFixed(0)} – {d.binEnd.toFixed(0)} bps
+        {d.binStart.toFixed(0)} – {d.binEnd.toFixed(0)} {unit}
       </div>
       <div className="flex items-center justify-between gap-3">
         <span className="flex items-center gap-1.5">
@@ -125,6 +126,11 @@ export interface TradeRarityTabProps {
   state: RarityState
   setState: Dispatch<SetStateAction<RarityState>>
   bins: HistogramBin[]
+  // UX-02: server tells us which metric the bins are in + the bin
+  // width so the histogram axis labels and tooltip render with the
+  // right units (bps / USD-per-bp / USD millions).
+  binMetric?: 'fixed_rate' | 'dv01' | 'notional'
+  binWidth?: number
   stats: DistributionStats
   metricRows: MetricRow[]
   // Recency may be null when the bucket has no qualifying recent prints
@@ -139,6 +145,18 @@ export interface TradeRarityTabProps {
   // skeleton loading state so the trader sees layout-sized placeholders
   // instead of a spinner that pops the chart in/out of view.
   loading?: boolean
+}
+
+const BIN_METRIC_UNITS: Record<NonNullable<TradeRarityTabProps['binMetric']>, string> = {
+  fixed_rate: 'bps',
+  dv01: 'USD/bp',
+  notional: 'USD mm',
+}
+
+const BIN_METRIC_AXIS_LABELS: Record<NonNullable<TradeRarityTabProps['binMetric']>, string> = {
+  fixed_rate: 'Fixed Rate (bps)',
+  dv01: 'DV01 (USD/bp)',
+  notional: 'Notional (USD mm)',
 }
 
 function PercentileSkeleton(): JSX.Element {
@@ -156,6 +174,9 @@ function PercentileSkeleton(): JSX.Element {
 export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
   const { focused, state, setState, bins, stats, metricRows, recency, focusedPercentile, loading } = props
   const histogramHeight = props.histogramHeight ?? 280
+  const binMetric = props.binMetric ?? 'fixed_rate'
+  const binMetricUnit = BIN_METRIC_UNITS[binMetric]
+  const binMetricAxisLabel = BIN_METRIC_AXIS_LABELS[binMetric]
   const { basis, histogramMetric, settingsOpen, primaryTol, sizeTol } = state
   const isInitialLoad = loading && bins.length === 0
   const noSamples = !loading && stats.count === 0
@@ -340,7 +361,7 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
                   axisLine={{ stroke: ANALYTICS_COLORS.slate800 }}
                   tickLine={{ stroke: ANALYTICS_COLORS.slate800 }}
                   label={{
-                    value: 'Fixed Rate (bps)',
+                    value: binMetricAxisLabel,
                     position: 'insideBottom',
                     offset: -8,
                     style: {
@@ -380,7 +401,7 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
                     },
                   }}
                 />
-                <Tooltip content={<HistogramTooltip />} cursor={{ fill: 'rgba(148,163,184,0.06)' }} />
+                <Tooltip content={<HistogramTooltip unit={binMetricUnit} />} cursor={{ fill: 'rgba(148,163,184,0.06)' }} />
                 <ReferenceArea
                   yAxisId="count"
                   x1={stats.p25}
