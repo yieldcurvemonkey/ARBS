@@ -2,7 +2,7 @@
 // (or null when nothing is selected). Flattens leg-level fields up to the
 // analytics surface so tabs can read fixed_rate_bps / dv01_usd_per_bp /
 // notional_usd directly rather than walking legs_json every render.
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useState } from 'react'
 import type {
   FocusedTrade,
   PlatformKind,
@@ -22,21 +22,18 @@ function aggregateLeg<T extends number | null | undefined>(
   return sum
 }
 
-// Heuristic: venues like TULLETT / ICAP / TRADITION / BGC are interdealer.
-// Anything else — TRADEWEB / BLOOMBERG / MARKETAXESS / direct — treat as
-// dealer-to-client (custy). Mirrors the swaptions-tape isCustyPlatform logic
-// without pulling in that package's types.
-const IDB_VENUES = new Set([
-  'TULLETT', 'TULLETT PREBON', 'ICAP', 'TRADITION', 'BGC', 'BGC PARTNERS',
-  'DEALERWEB', 'IDB', 'BROKERTEC',
-])
+// Mirrors the server-side platformCaseSql in lib/usd-swaps-tape-v2/analytics.ts:
+// D2D venue → IDB, else MIC code lookup, else custy.
+const IDB_MICS = new Set(['BGCD', 'ISWV', 'TPSE'])
 
 function inferPlatform(row: UsdSwapTapeRow | null): PlatformKind {
-  if (!row) return 'IDB'
+  if (!row) return 'CUSTY'
   const venue = String(row.venue ?? '').toUpperCase()
-  if (IDB_VENUES.has(venue)) return 'IDB'
-  // Broker keys can arrive as "tullett prebon" substrings too.
-  for (const v of IDB_VENUES) if (venue.includes(v)) return 'IDB'
+  if (venue === 'D2D') return 'IDB'
+  const mic = String(
+    row.platform_identifier ?? row.legs_json?.[0]?.platform_identifier ?? '',
+  ).toUpperCase()
+  if (IDB_MICS.has(mic)) return 'IDB'
   return 'CUSTY'
 }
 
@@ -72,8 +69,9 @@ export function normalizeFocusedTrade(row: UsdSwapTapeRow | null): FocusedTrade 
     row.tape_label ?? row.package_tenors ?? String(row.package_type ?? 'USD-SOFR')
   const platform = inferPlatform(row)
   const side = inferSide(row)
+  const legLifecycle = firstLeg?.lifecycle_type ?? null
   return {
-    id: String(row.package_id ?? row.trade_id ?? 'UNKNOWN'),
+    id: String(row.package_id ?? 'UNKNOWN'),
     tape_label: label,
     package_structure: String(row.package_structure ?? row.package_type ?? 'OUTRIGHT'),
     package_tenors: row.package_tenors ?? null,
@@ -86,34 +84,12 @@ export function normalizeFocusedTrade(row: UsdSwapTapeRow | null): FocusedTrade 
     side,
     platform,
     venue: String(row.venue ?? 'UNKNOWN'),
-    execution_start: row.execution_start ?? row.execution_timestamp ?? null,
+    execution_start: row.execution_start ?? null,
     execution_session: row.execution_session ?? null,
-    lifecycle_type: (row.lifecycle_type as string | null) ?? null,
+    lifecycle_type: legLifecycle,
     is_block: Boolean(row.is_block_any),
     source: row,
   }
-}
-
-// Demo focused trade used when no row is selected — matches the
-// prototype's mock so the dock looks populated out of the box.
-const DEMO_FOCUSED: FocusedTrade = {
-  id: 'USDS-10Y-DEMO',
-  tape_label: 'USD-SOFR 10Y Outright',
-  package_structure: 'OUTRIGHT',
-  package_tenors: '10Y',
-  trade_type: 'OUTRIGHT',
-  tenor_years: 10,
-  fixed_rate_bps: 384.2,
-  weighted_fixed_rate: 0.03842,
-  dv01_usd_per_bp: 150_000,
-  notional_usd: 173_410_000,
-  side: 'PAY',
-  platform: 'IDB',
-  venue: 'TRADEWEB',
-  execution_start: null,
-  execution_session: 'US',
-  lifecycle_type: 'NEW_RISK',
-  is_block: true,
 }
 
 export interface UseFocusedTradeReturn {
@@ -121,10 +97,6 @@ export interface UseFocusedTradeReturn {
   setFocused: (row: UsdSwapTapeRow | null) => void
   setFocusedRaw: (f: FocusedTrade | null) => void
   clear: () => void
-  // Convenience: returns demo trade when focused is null so the dock
-  // always has something to render.
-  focusedOrDemo: FocusedTrade
-  isDemo: boolean
 }
 
 export function useFocusedTrade(initial?: UsdSwapTapeRow | null): UseFocusedTradeReturn {
@@ -135,13 +107,5 @@ export function useFocusedTrade(initial?: UsdSwapTapeRow | null): UseFocusedTrad
     setFocusedRaw(normalizeFocusedTrade(row))
   }, [])
   const clear = useCallback(() => setFocusedRaw(null), [])
-  const focusedOrDemo = useMemo(() => focused ?? DEMO_FOCUSED, [focused])
-  return {
-    focused,
-    setFocused,
-    setFocusedRaw,
-    clear,
-    focusedOrDemo,
-    isDemo: focused === null,
-  }
+  return { focused, setFocused, setFocusedRaw, clear }
 }

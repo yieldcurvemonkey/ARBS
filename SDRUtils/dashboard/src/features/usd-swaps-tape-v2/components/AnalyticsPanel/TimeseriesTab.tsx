@@ -147,25 +147,31 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
 
   const metricConf = ANALYTICS_METRICS.find((m) => m.key === metric) ?? ANALYTICS_METRICS[0]
   const isIntraday = view === 'INTRADAY'
-  const isVolume = view === 'VOLUME'
+  // DV01 always renders as stacked bars; VOLUME view forces bars for any
+  // metric (trader's vega-style volume chart ask). Fixed rate, spread,
+  // and tenor stay as line plots.
+  const renderBars = view === 'VOLUME' || metric === 'dv01'
   const rawData = isIntraday ? intraday : filterRangeDays(dailyClose, range)
 
-  // Re-project the series for metrics other than fixed_rate by deriving
-  // from fixed_rate + DV01 so shapes stay plausible without needing per-
-  // metric backend wiring yet.
+  // Re-project the series for metrics other than fixed_rate. Null stays
+  // null — the chart draws gaps on days where one side didn't print
+  // instead of dropping to zero, which would otherwise drag the y-axis
+  // down to the floor and flatten the visible signal.
   const data = useMemo(() => {
     return rawData.map((d, i) => {
-      let idb = d.idbClose ?? 0
-      let custy = d.custyClose ?? 0
+      let idb: number | null = d.idbClose ?? null
+      let custy: number | null = d.custyClose ?? null
       if (metric === 'spread_to_mid') {
-        idb = (d.idbClose ?? 0) * 0 + ((d.idbClose ?? 0) - (d.custyClose ?? 0)) * 0.6
-        custy = ((d.custyClose ?? 0) - (d.idbClose ?? 0)) * 0.6
+        idb = d.idbClose != null && d.custyClose != null ? (d.idbClose - d.custyClose) * 0.6 : null
+        custy = d.idbClose != null && d.custyClose != null ? (d.custyClose - d.idbClose) * 0.6 : null
       } else if (metric === 'dv01') {
-        idb = (d.idbDv01 ?? 0) / 1000
-        custy = (d.custyDv01 ?? 0) / 1000
+        idb = d.idbDv01 != null ? d.idbDv01 / 1000 : null
+        custy = d.custyDv01 != null ? d.custyDv01 / 1000 : null
       } else if (metric === 'notional') {
-        idb = ((d.idbDv01 ?? 0) * 11.5) / 1e6
-        custy = ((d.custyDv01 ?? 0) * 11.5) / 1e6
+        // Rough DV01-to-notional ratio for the preview; real notional
+        // series wires through once the timeseries route takes metric=.
+        idb = d.idbDv01 != null ? (d.idbDv01 * 11.5) / 1e6 : null
+        custy = d.custyDv01 != null ? (d.custyDv01 * 11.5) / 1e6 : null
       } else if (metric === 'tenor_years') {
         idb = focused.tenor_years
         custy = focused.tenor_years
@@ -173,8 +179,8 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
       return {
         ...d,
         idxPos: i,
-        idbClose: +idb.toFixed(2),
-        custyClose: +custy.toFixed(2),
+        idbClose: idb != null ? +idb.toFixed(2) : null,
+        custyClose: custy != null ? +custy.toFixed(2) : null,
       }
     })
   }, [rawData, metric, focused.tenor_years])
@@ -190,14 +196,24 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
             ? -0.9
             : focused.tenor_years
 
-  const yDomain: [number | string, number | string] = [
-    yMin === '' ? 'auto' : Number(yMin),
-    yMax === '' ? 'auto' : Number(yMax),
-  ]
+  // Recharts treats numeric domain values as hard limits only when paired
+  // with a non-string companion. When yMin is set but yMax is 'auto',
+  // Recharts falls back to its data-driven auto-extent. Force both sides
+  // explicit (min set → use 'dataMax + 1%' for the other end so the chart
+  // clamps predictably).
+  const yDomainLow: number | string = yMin === '' ? 'auto' : Number(yMin)
+  const yDomainHigh: number | string = yMax === '' ? 'auto' : Number(yMax)
+  const yDomain: [number | string, number | string] = [yDomainLow, yDomainHigh]
+  const allowDataOverflow = yMin !== '' || yMax !== ''
 
   const yFmt = (v: number): string => {
     if (metric === 'fixed_rate' || metric === 'spread_to_mid') return v.toFixed(1)
-    if (metric === 'dv01') return `${v.toFixed(0)}K`
+    if (metric === 'dv01' || view === 'VOLUME') {
+      const abs = Math.abs(v)
+      if (abs >= 1e6) return `${(v / 1e6).toFixed(1)}M`
+      if (abs >= 1e3) return `${Math.round(v / 1e3)}K`
+      return v.toFixed(0)
+    }
     if (metric === 'notional') return v.toFixed(0)
     return String(v)
   }
@@ -371,6 +387,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               tick={{ fontSize: 10, fill: ANALYTICS_COLORS.slate400, fontFamily: 'ui-monospace' }}
               tickFormatter={yFmt}
               domain={yDomain}
+              allowDataOverflow={allowDataOverflow}
               axisLine={{ stroke: ANALYTICS_COLORS.slate800 }}
               tickLine={{ stroke: ANALYTICS_COLORS.slate800 }}
               label={{
@@ -392,31 +409,31 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               cursor={{ stroke: ANALYTICS_COLORS.slate700, strokeDasharray: '3 3' }}
             />
 
-            {metric === 'fixed_rate' && showSigmaBands && !isVolume ? (
-              <>
-                <ReferenceArea
-                  y1={stats.mean - 2 * stats.stddev}
-                  y2={stats.mean + 2 * stats.stddev}
-                  fill={ANALYTICS_COLORS.sigma2}
-                  ifOverflow="extendDomain"
-                />
-                <ReferenceArea
-                  y1={stats.mean - stats.stddev}
-                  y2={stats.mean + stats.stddev}
-                  fill={ANALYTICS_COLORS.sigma1}
-                  ifOverflow="extendDomain"
-                />
-              </>
+            {metric === 'fixed_rate' && showSigmaBands && !renderBars ? (
+              <ReferenceArea
+                y1={stats.mean - 2 * stats.stddev}
+                y2={stats.mean + 2 * stats.stddev}
+                fill={ANALYTICS_COLORS.sigma2}
+                ifOverflow="hidden"
+              />
+            ) : null}
+            {metric === 'fixed_rate' && showSigmaBands && !renderBars ? (
+              <ReferenceArea
+                y1={stats.mean - stats.stddev}
+                y2={stats.mean + stats.stddev}
+                fill={ANALYTICS_COLORS.sigma1}
+                ifOverflow="hidden"
+              />
             ) : null}
 
-            {metric === 'fixed_rate' && showIqrBand && !isVolume ? (
+            {metric === 'fixed_rate' && showIqrBand && !renderBars ? (
               <ReferenceArea
                 y1={stats.p25}
                 y2={stats.p75}
                 fill={ANALYTICS_COLORS.iqr}
                 stroke={ANALYTICS_COLORS.iqrRing}
                 strokeDasharray="2 4"
-                ifOverflow="extendDomain"
+                ifOverflow="hidden"
                 label={{
                   value: `IQR  P25 ${stats.p25.toFixed(1)}  –  P75 ${stats.p75.toFixed(1)}`,
                   position: 'insideTopRight',
@@ -427,7 +444,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               />
             ) : null}
 
-            {metric === 'fixed_rate' && !isVolume ? (
+            {metric === 'fixed_rate' && !renderBars ? (
               <ReferenceLine
                 y={focusedValue}
                 stroke={ANALYTICS_COLORS.focused}
@@ -444,45 +461,52 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               />
             ) : null}
 
-            {isVolume ? (
-              <>
-                {showCusty ? (
-                  <Bar dataKey="custyDv01" stackId="dv01" fill={ANALYTICS_COLORS.custy} fillOpacity={0.85} name="Custy DV01" />
-                ) : null}
-                {showIdb ? (
-                  <Bar dataKey="idbDv01" stackId="dv01" fill={ANALYTICS_COLORS.idb} fillOpacity={0.9} name="IDB DV01" />
-                ) : null}
-              </>
-            ) : (
-              <>
-                {showCusty ? (
-                  <Line
-                    type="monotone"
-                    dataKey="custyClose"
-                    stroke={ANALYTICS_COLORS.custy}
-                    strokeWidth={1.4}
-                    dot={showDots ? { r: 1.5, fill: ANALYTICS_COLORS.custy } : false}
-                    activeDot={{ r: 4, stroke: '#0f172a', strokeWidth: 1.5 }}
-                    name="Custy"
-                    isAnimationActive={false}
-                  />
-                ) : null}
-                {showIdb ? (
-                  <Line
-                    type="monotone"
-                    dataKey="idbClose"
-                    stroke={ANALYTICS_COLORS.idb}
-                    strokeWidth={1.6}
-                    dot={showDots ? { r: 1.5, fill: ANALYTICS_COLORS.idb } : false}
-                    activeDot={{ r: 4, stroke: '#0f172a', strokeWidth: 1.5 }}
-                    name="IDB"
-                    isAnimationActive={false}
-                  />
-                ) : null}
-              </>
-            )}
+            {renderBars && showCusty ? (
+              <Bar
+                dataKey="custyDv01"
+                stackId="dv01"
+                fill={ANALYTICS_COLORS.custy}
+                fillOpacity={0.85}
+                name="Custy DV01"
+              />
+            ) : null}
+            {renderBars && showIdb ? (
+              <Bar
+                dataKey="idbDv01"
+                stackId="dv01"
+                fill={ANALYTICS_COLORS.idb}
+                fillOpacity={0.9}
+                name="IDB DV01"
+              />
+            ) : null}
+            {!renderBars && showCusty ? (
+              <Line
+                type="monotone"
+                dataKey="custyClose"
+                stroke={ANALYTICS_COLORS.custy}
+                strokeWidth={1.4}
+                dot={showDots ? { r: 1.5, fill: ANALYTICS_COLORS.custy } : false}
+                activeDot={{ r: 4, stroke: '#0f172a', strokeWidth: 1.5 }}
+                name="Custy"
+                isAnimationActive={false}
+                connectNulls
+              />
+            ) : null}
+            {!renderBars && showIdb ? (
+              <Line
+                type="monotone"
+                dataKey="idbClose"
+                stroke={ANALYTICS_COLORS.idb}
+                strokeWidth={1.6}
+                dot={showDots ? { r: 1.5, fill: ANALYTICS_COLORS.idb } : false}
+                activeDot={{ r: 4, stroke: '#0f172a', strokeWidth: 1.5 }}
+                name="IDB"
+                isAnimationActive={false}
+                connectNulls
+              />
+            ) : null}
 
-            {metric === 'fixed_rate' && !isVolume && data.length > 0 ? (
+            {metric === 'fixed_rate' && !renderBars && data.length > 0 ? (
               <ReferenceDot
                 x={data[data.length - 1].ts}
                 y={focusedValue}
@@ -505,7 +529,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               IDB
             </span>
           ) : null}
-          {metric === 'fixed_rate' && !isVolume ? (
+          {metric === 'fixed_rate' && !renderBars ? (
             <span className="flex items-center gap-1.5">
               <span
                 className="inline-block h-[2px] w-4 border-t border-dashed"
@@ -514,7 +538,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               Focused trade
             </span>
           ) : null}
-          {metric === 'fixed_rate' && showIqrBand && !isVolume ? (
+          {metric === 'fixed_rate' && showIqrBand && !renderBars ? (
             <span className="flex items-center gap-1.5">
               <span
                 className="inline-block h-2 w-3 rounded-sm"

@@ -1,5 +1,10 @@
 // Tokens and defaults for the USD swap tape v2 feature.
-import type { LifecycleType, TimeseriesMetricKey, TimeseriesViewKey } from './types'
+import type {
+  LifecycleType,
+  TimeseriesMetricKey,
+  TimeseriesRangeKey,
+  TimeseriesViewKey,
+} from './types'
 
 export const POLL_INTERVAL_MS = 30_000
 export const ROW_ESTIMATE_PX = 40
@@ -110,6 +115,22 @@ export const TIMESERIES_VIEWS: Array<{ key: TimeseriesViewKey; label: string }> 
   { key: 'INTRADAY', label: 'Intraday' },
   { key: 'DAILY_CLOSE', label: 'Daily close' },
   { key: 'DAILY_OHLC', label: 'Daily OHLC' },
+  // VOLUME — daily-summed DV01 stacked-bar view. Swap analog of the
+  // swaption tape's "daily vega" bar chart; trader asked for this shape
+  // during the 2026-04 chat.
+  { key: 'VOLUME', label: 'Volume' },
+]
+
+// Range presets for the analytics dock's timeseries tab. CUSTOM defers
+// to a date-picker surface elsewhere in the UI.
+export const TIMESERIES_RANGE_OPTIONS: Array<{ key: TimeseriesRangeKey; label: string }> = [
+  { key: '1D', label: '1D' },
+  { key: '1W', label: '1W' },
+  { key: '1M', label: '1M' },
+  { key: '3M', label: '3M' },
+  { key: '6M', label: '6M' },
+  { key: '1Y', label: '1Y' },
+  { key: 'CUSTOM', label: 'Custom' },
 ]
 
 // Default column definitions — consumed by TradeTapeTable/columns.tsx
