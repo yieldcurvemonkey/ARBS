@@ -11,6 +11,8 @@ const GROUP_BY_COLUMN: Record<string, string> = {
   tape_label: 'l.tape_label',
   trade_type: 'l.trade_type',
   tenor: 'l.tenor_label',
+  // Phase 4 canonical underlier (see SDRUtils/core/underlier_canonical.py).
+  canonical: 'l.canonical_underlier_key',
 }
 
 export async function GET(request: Request) {

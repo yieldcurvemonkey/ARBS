@@ -32,6 +32,7 @@ from .fomc import (
     short_meeting_label,
 )
 from ..core.tenors import get_imm_label
+from ..core.underlier_canonical import canonical_underlier_key
 from Query.IRSwaps._CME_INVOICE_SWAP_TICKERS import invoice_swap_product_label
 from .intraday import trade_clustering
 from .seasonality import add_event_classifications
@@ -62,7 +63,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v5-p5"
+TRADE_TAPE_CACHE_VERSION = "v6-canonical"
 DEFAULT_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "notebooks", "sdr", "_cache", "trade_tape",
@@ -356,6 +357,16 @@ class TradeTape(SDRAnalyzer):
             .astype(str)
             .fillna("")
             .map(classify_rate_index)
+        )
+        # Phase 4 canonical underlier key — collapses SDR-feed display
+        # variations of the same economic underlier into a single
+        # comparable key. Persisted on the v2 leg table so the
+        # dashboard's rarity / extremes / package-analytics queries
+        # can group on the canonical form rather than the raw name.
+        df["canonical_underlier_key"] = (
+            df["upi_underlier_name"]
+            .astype(str)
+            .map(canonical_underlier_key)
         )
         df["venue"] = df["platform_identifier"].map(
             lambda x: classify_venue(x)

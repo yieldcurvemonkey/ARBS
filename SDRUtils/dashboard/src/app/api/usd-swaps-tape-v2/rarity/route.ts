@@ -60,6 +60,9 @@ export async function GET(req: Request) {
     package: 'l.package_id',
     trade_type: 'l.trade_type',
     tenor: 'l.tenor_label',
+    // Phase 4: groupBy=canonical lets the dashboard pull a single
+    // distribution across SDR-feed name variations of the same swap.
+    canonical: 'l.canonical_underlier_key',
   }
   const filterCol = groupCol[groupBy]
   if (!filterCol) {

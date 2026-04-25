@@ -64,6 +64,10 @@ export async function GET(req: Request) {
     package: 'l.package_id',
     trade_type: 'l.trade_type',
     tenor: 'l.tenor_label',
+    // Phase 4: canonical underlier key — collapses SDR-feed display
+    // variations of the same economic underlier into one bucket. Pass
+    // groupBy=canonical with value=USD/SOFR-OIS/COMPOUND etc.
+    canonical: 'l.canonical_underlier_key',
   }
   const filterCol = groupCol[groupBy]
   if (!filterCol) {

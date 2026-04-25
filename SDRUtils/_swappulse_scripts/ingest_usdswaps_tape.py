@@ -80,6 +80,12 @@ LEG_COLUMNS: tuple[str, ...] = (
     "upi_reset_freq",
     "upi_notional_schedule",
     "upi_delivery_type",
+    # Phase 4 canonical underlier key — collapses SDR-feed display
+    # variations of the same economic underlier (e.g.
+    # 'USD-SOFR-COMPOUND' vs 'USD-SOFR-OIS' vs 'USD-SOFR') into a
+    # single comparable key. Read by the dashboard's rarity / extremes
+    # / package-analytics queries (groupBy=canonical).
+    "canonical_underlier_key",
     "is_new_risk",
     "is_unwind",
     "is_compression",
@@ -588,6 +594,10 @@ _LEG_TEXT_COLS: tuple[str, ...] = (
     "tape_label", "upi_reset_freq", "upi_notional_schedule",
     "upi_delivery_type", "lifecycle_type", "lc_status", "fomc_meeting_label",
     "fomc_proximity", "cluster_id", "xd_status",
+    # Phase 4 canonical underlier key — text column on the v2 leg
+    # table; computed by SDRUtils.core.underlier_canonical and
+    # materialized by analytics.trade_tape.compute().
+    "canonical_underlier_key",
 )
 _LEG_TS_COLS: tuple[str, ...] = (
     "execution_timestamp",
