@@ -167,16 +167,41 @@ export function qualityBadgesFor(row: UsdSwapTapeRow): Array<{
       title: 'CORR/EROR/TERM/REVI/MODI(Amend=True) without [#2] Original Dissemination Identifier',
     })
   }
-  if (
-    row.clearing_accepted_start ||
-    legs.some((l) => l.clearing_accepted_timestamp)
-  ) {
+  // P2-02: only flag a CLR-lag badge when the gap between original
+  // execution and clearing acceptance is meaningfully long. Every β/γ
+  // NEWT-CLRG row has a non-null clearing-accept timestamp by
+  // definition, so the old `!= null` check fired CLR on every cleared
+  // trade — pure badge noise. 60s threshold matches the SDR's typical
+  // sub-second cleared-direct path (anything longer is worth the
+  // trader's attention).
+  const CLR_LAG_THRESHOLD_MS = 60_000
+  const hasMeaningfulClearLag = (
+    orig: string | Date | null | undefined,
+    accept: string | Date | null | undefined,
+  ): boolean => {
+    if (!orig || !accept) return false
+    const o = orig instanceof Date ? orig.getTime() : new Date(String(orig)).getTime()
+    const a = accept instanceof Date ? accept.getTime() : new Date(String(accept)).getTime()
+    if (Number.isNaN(o) || Number.isNaN(a)) return false
+    return a - o >= CLR_LAG_THRESHOLD_MS
+  }
+  const packageHasLag = hasMeaningfulClearLag(
+    row.original_execution_start,
+    row.clearing_accepted_start,
+  )
+  const legHasLag = legs.some((l) =>
+    hasMeaningfulClearLag(
+      (l as { original_execution_timestamp?: string | Date | null }).original_execution_timestamp,
+      l.clearing_accepted_timestamp as string | Date | null | undefined,
+    ),
+  )
+  if (packageHasLag || legHasLag) {
     badges.push({
       key: 'CLR',
       className: FLAG_CHIP_TONES.CLR_ACC,
       label: 'CLR',
       ariaLabel: 'clearing acceptance lag',
-      title: 'clearing-accept timestamp differs from original execution',
+      title: 'clearing-accept timestamp differs from original execution by ≥ 60s',
     })
   }
   if (

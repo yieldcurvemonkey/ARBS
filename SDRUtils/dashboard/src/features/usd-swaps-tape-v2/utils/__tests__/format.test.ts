@@ -235,7 +235,9 @@ describe('formatOtherLvl', () => {
   it('stacks non-null leg OPAs slash-separated', () => {
     const result = formatOtherLvl({ legOpa: [15627.6, null, -2100], ptp: -671880 })
     expect(result.opaLine).toBe('OPA: 15.6k / -2.1k')
-    expect(result.ptpLine).toBe('PTP: -671.9k')
+    // P2-01: scaled values >= 100 drop to 0 decimals so 6-figure PTPs
+    // stay narrow. 15.6 (< 100) keeps the 1-decimal precision.
+    expect(result.ptpLine).toBe('PTP: -672k')
   })
 
   it('renders per-leg PTP values with slash delimiter when legPtp supplied', () => {
@@ -245,8 +247,9 @@ describe('formatOtherLvl', () => {
       ptp: 75_000,
       pts: null,
     })
-    // formatSignedCompact always emits 1-decimal K/M scaling.
-    expect(result.ptpLine).toBe('PTP: 100.0k / 50.0k')
+    // P2-01 precision rule: scaled >= 100 → 0 decimals (100k);
+    // scaled < 100 → 1 decimal (50.0k).
+    expect(result.ptpLine).toBe('PTP: 100k / 50.0k')
   })
 
   it('renders per-leg PTS values with slash delimiter when legPts supplied', () => {
@@ -276,7 +279,8 @@ describe('formatOtherLvl', () => {
       ptpCurrency: 'USD',
     })
     expect(result.opaLine).toBe('OPA: 15.6k EUR')
-    expect(result.ptpLine).toBe('PTP: -671.9k')
+    // P2-01: 671.88 ≥ 100 → 0 decimals.
+    expect(result.ptpLine).toBe('PTP: -672k')
   })
   it('renders Package Transaction Spread as the raw value, no unit coercion', () => {
     // Scale-aware bp/% conversion was removed because SDR reporters
