@@ -3,13 +3,16 @@ import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 
 const MAX_TIMESERIES_ROWS = 50_000
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v1'
+// Phase 2 cutover: legacy raw-tick timeseries route reads from v2 too.
+const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
 
 const GROUP_BY_COLUMN: Record<string, string> = {
   package: 'l.package_id',
   tape_label: 'l.tape_label',
   trade_type: 'l.trade_type',
   tenor: 'l.tenor_label',
+  // Phase 4 canonical underlier (see SDRUtils/core/underlier_canonical.py).
+  canonical: 'l.canonical_underlier_key',
 }
 
 export async function GET(request: Request) {
@@ -59,7 +62,7 @@ export async function GET(request: Request) {
 
     const sql = `
       SELECT
-        l.execution_timestamp AS ts,
+        COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
         ${metricExpr} AS value,
         l.notional::float AS notional,
         l.risk::float AS risk,
@@ -71,8 +74,8 @@ export async function GET(request: Request) {
         l.trade_type AS trade_type
       FROM ${LEGS_TABLE} l
       WHERE ${column} = $1
-        AND l.execution_timestamp >= $2::timestamptz
-      ORDER BY l.execution_timestamp ASC
+        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $2::timestamptz
+      ORDER BY COALESCE(l.original_execution_timestamp, l.execution_timestamp) ASC
       LIMIT ${MAX_TIMESERIES_ROWS}
     `
     const result = await query(sql, params)

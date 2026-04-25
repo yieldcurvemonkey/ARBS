@@ -4,14 +4,14 @@ export {
   SERVER_FILTER_FIELDS,
   DEFAULT_SORT_FIELD,
   DEFAULT_SORT_ORDER,
-} from './useColumnFilters'
-export {
-  useTableControls,
-  SEARCH_QUERY_KEY,
   SORT_FIELD_QUERY_KEY,
   SORT_ORDER_QUERY_KEY,
-} from './useTableControls'
-export type { SortDirection, UseTableControlsReturn } from './useTableControls'
+} from './useColumnFilters'
+// useTableControls + SEARCH_QUERY_KEY were the legacy fuzzy-search /
+// sort hook from before the per-column filter cutover; nothing in the
+// app imports them any more. Removed (P1-05) so a future
+// SORT_FIELD_QUERY_KEY collision can't silently split-brain the URL
+// back into the old shape.
 export { useRowExpansion } from './useRowExpansion'
 export { useRowSelection } from './useRowSelection'
 export { useSavedUser } from './useSavedUser'

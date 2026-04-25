@@ -9,7 +9,10 @@ import {
 } from '@/lib/swaptions-tape'
 
 const MAX_TIMESERIES_ROWS = 50000
-const IDB_MIC_CODES = ['BGCD', 'ISWV', 'TPSE']
+// Authoritative dealer (IDB) SEF MIC list. Mirrors the v2 swap-tape
+// analytics module. Earlier 3-element list (BGCD/ISWV/TPSE) excluded
+// Dealerweb / ICAP-Global / Tradition flow from the IDB bucket.
+const IDB_MIC_CODES = ['BGCD', 'DWSF', 'IGDL', 'ISWV', 'TPSE', 'TSEF']
 const COMICALLY_LARGE_CUSTY_NOTIONAL = 100_000_000_000_000
 
 function parseSeriesKey(seriesKey: string): {
@@ -109,7 +112,7 @@ export async function GET(request: Request) {
           AND NOT EXISTS (
             SELECT 1
             FROM regexp_split_to_table(upper(coalesce(plat.platform_identifier, '')), '[\\s,;/]+') AS token
-            WHERE token IN ('BGCD', 'ISWV', 'TPSE')
+            WHERE token IN (${IDB_MIC_CODES.map((c) => `'${c}'`).join(', ')})
           )
         )`
       )

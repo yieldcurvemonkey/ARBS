@@ -10,8 +10,12 @@ function toIsoString(value: unknown): string | null {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value.toISOString()
   }
+  // If the raw string can't be parsed as a date, return null instead of
+  // echoing the bad value back as `nextCursor`. Echoing would break the
+  // next pagination request with a Postgres cast error and silently
+  // halt the trader's lazy-scroll.
   const parsed = new Date(String(value))
-  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString()
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
 }
 
 export async function GET(req: Request) {
@@ -37,12 +41,21 @@ export async function GET(req: Request) {
     const latestExecutionStart = rows.length
       ? toIsoString(rows[0]?.execution_start)
       : null
-    return NextResponse.json({
-      rows,
-      nextCursor,
-      hasMore,
-      latestExecutionStart,
-    })
+    // Pagination cache: tape data is append-mostly + polled every 30s
+    // by the client. A 15s shared cache lets multiple browser tabs (and
+    // an upstream CDN if one ever sits in front) reuse the same page
+    // payload while still surfacing fresh prints within the polling
+    // cadence. Skip the cache header on cursor / since requests so the
+    // pagination tail and incremental polls always hit the DB.
+    const headers: Record<string, string> = {}
+    const isCursorOrPoll = !!parsed.value.cursor || !!parsed.value.since
+    if (!isCursorOrPoll) {
+      headers['Cache-Control'] = 'public, s-maxage=15, stale-while-revalidate=60'
+    }
+    return NextResponse.json(
+      { rows, nextCursor, hasMore, latestExecutionStart },
+      { headers },
+    )
   } catch (error: any) {
     return NextResponse.json(
       { error: error?.message ?? 'failed to load tape' },

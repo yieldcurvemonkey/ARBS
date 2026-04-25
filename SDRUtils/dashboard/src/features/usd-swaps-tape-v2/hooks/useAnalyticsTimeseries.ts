@@ -2,7 +2,16 @@
 // from /api/usd-swaps-tape-v2/analytics-timeseries. Lazy-loaded per
 // view: intraday payload only fires when the user actually switches to
 // the intraday tab, and daily loads don't re-run on view-only changes.
-import { useCallback, useEffect, useState } from 'react'
+//
+// Phase 2 perf hardening:
+//   * AbortController per fetch — when the bucket / range / view swaps
+//     mid-flight, the prior request is cancelled instead of racing to
+//     update state with stale data.
+//   * In-memory result cache keyed by (bucket, view, range) so flipping
+//     between tabs doesn't re-issue the same SQL.
+//   * Cache TTL bound (60s) so traders see fresh prints when polling
+//     bumps an active bucket.
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { TAPE_V2_API_BASE } from '../constants'
 import type {
   AnalyticsRangeKey,
@@ -20,23 +29,43 @@ export interface UseAnalyticsTimeseriesReturn {
   refetch: () => void
 }
 
+type CacheEntry = {
+  points: TimeseriesPointAug[]
+  fetchedAt: number
+}
+
+const RESULT_CACHE_TTL_MS = 60_000
+const resultCache = new Map<string, CacheEntry>()
+
+function cacheKey(bucket: string, view: 'INTRADAY' | 'DAILY_CLOSE', range: AnalyticsRangeKey): string {
+  return `${bucket}::${view}::${range}`
+}
+
 async function fetchSeries(
   bucket: string,
   view: 'INTRADAY' | 'DAILY_CLOSE',
   range: AnalyticsRangeKey,
+  signal: AbortSignal,
 ): Promise<TimeseriesPointAug[]> {
+  const key = cacheKey(bucket, view, range)
+  const cached = resultCache.get(key)
+  if (cached && Date.now() - cached.fetchedAt < RESULT_CACHE_TTL_MS) {
+    return cached.points
+  }
   const q = new URLSearchParams({
     value: bucket,
     view,
     range,
     groupBy: 'tape_label',
   })
-  const res = await fetch(`${TAPE_V2_API_BASE}/analytics-timeseries?${q}`)
+  const res = await fetch(`${TAPE_V2_API_BASE}/analytics-timeseries?${q}`, { signal })
   if (!res.ok) {
     throw new Error(`analytics-timeseries ${view} ${res.status}`)
   }
   const data = await res.json()
-  return (data.points ?? []) as TimeseriesPointAug[]
+  const points = (data.points ?? []) as TimeseriesPointAug[]
+  resultCache.set(key, { points, fetchedAt: Date.now() })
+  return points
 }
 
 export function useAnalyticsTimeseries(
@@ -49,40 +78,47 @@ export function useAnalyticsTimeseries(
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const dailyAbortRef = useRef<AbortController | null>(null)
+  const intradayAbortRef = useRef<AbortController | null>(null)
+
   const bucket = focused?.tape_label ?? null
   const needsIntraday = view === 'INTRADAY'
 
-  // Daily fetch — fires whenever the bucket or range changes. Covers
-  // DAILY_CLOSE / DAILY_OHLC / VOLUME. INTRADAY doesn't need this.
   const fetchDaily = useCallback(async () => {
     if (!bucket || needsIntraday) return
+    dailyAbortRef.current?.abort()
+    const controller = new AbortController()
+    dailyAbortRef.current = controller
     setLoading(true)
     setError(null)
     try {
-      const daily = await fetchSeries(bucket, 'DAILY_CLOSE', range)
+      const daily = await fetchSeries(bucket, 'DAILY_CLOSE', range, controller.signal)
+      if (controller.signal.aborted) return
       setDailyClose(daily)
     } catch (e) {
+      if ((e as { name?: string })?.name === 'AbortError') return
       setError(e instanceof Error ? e.message : 'analytics-timeseries failed')
     } finally {
-      setLoading(false)
+      if (!controller.signal.aborted) setLoading(false)
     }
   }, [bucket, range, needsIntraday])
 
-  // Intraday fetch — fires only when the user picks the INTRADAY view.
-  // Server pins the window to last 72h regardless of range selector;
-  // intraday is intrinsically short-term and pulling a month of ticks
-  // is the primary cause of the earlier slowness.
   const fetchIntraday = useCallback(async () => {
     if (!bucket || !needsIntraday) return
+    intradayAbortRef.current?.abort()
+    const controller = new AbortController()
+    intradayAbortRef.current = controller
     setLoading(true)
     setError(null)
     try {
-      const intra = await fetchSeries(bucket, 'INTRADAY', '1D')
+      const intra = await fetchSeries(bucket, 'INTRADAY', '1D', controller.signal)
+      if (controller.signal.aborted) return
       setIntraday(intra)
     } catch (e) {
+      if ((e as { name?: string })?.name === 'AbortError') return
       setError(e instanceof Error ? e.message : 'analytics-timeseries failed')
     } finally {
-      setLoading(false)
+      if (!controller.signal.aborted) setLoading(false)
     }
   }, [bucket, needsIntraday])
 
@@ -96,14 +132,29 @@ export function useAnalyticsTimeseries(
     setIntraday([])
   }, [bucket])
 
+  // Abort any in-flight fetch on unmount so navigating away from the
+  // dock doesn't leak fetches that update state on a torn-down hook.
+  useEffect(() => {
+    return () => {
+      dailyAbortRef.current?.abort()
+      intradayAbortRef.current?.abort()
+    }
+  }, [])
+
   const pickForView = useCallback(
     (v: AnalyticsViewKey) => (v === 'INTRADAY' ? intraday : dailyClose),
     [intraday, dailyClose],
   )
 
   const refetch = useCallback(async () => {
+    if (bucket) {
+      resultCache.delete(cacheKey(bucket, 'DAILY_CLOSE', range))
+      resultCache.delete(cacheKey(bucket, 'INTRADAY', '1D'))
+    }
     await (needsIntraday ? fetchIntraday() : fetchDaily())
-  }, [fetchDaily, fetchIntraday, needsIntraday])
+  }, [bucket, range, fetchDaily, fetchIntraday, needsIntraday])
 
   return { dailyClose, intraday, loading, error, pickForView, refetch }
 }
+
+export const __internal = { resultCache, cacheKey }

@@ -379,7 +379,7 @@ Required gating includes:
 
 - original package type is OUTRIGHT
 - single leg only
-- IDB platform (BGCD, ISWV, TPSE)
+- IDB platform (BGCD, DWSF, IGDL, ISWV, TPSE, TSEF)
 - leg appears ATM by offset checks
 - leg style text matches EURO VANILLA PHYS
 - signature does not already have a complete straddle pair

@@ -4,11 +4,14 @@
 // for a focused trade.
 import type { JSX } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { FilterMatchMode, FilterOperator } from 'primereact/api'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
   useAnalyticsTimeseries,
   useExtremesData,
   useRarityData,
 } from '../../hooks'
+import { COLUMN_FILTER_QUERY_KEY } from '../../hooks/useColumnFilters'
 import { FocusedTradeBar } from './FocusedTradeBar'
 import { TimeseriesTab } from './TimeseriesTab'
 import { TradeRarityTab } from './TradeRarityTab'
@@ -19,6 +22,7 @@ import {
   DOCK_MAX_RESERVE_PX,
   DOCK_MIN_PX,
   RARITY_DEFAULT_STATE,
+  RARITY_PREFS_STORAGE_KEY,
   TIMESERIES_DEFAULT_STATE,
 } from './constants'
 import type {
@@ -46,7 +50,50 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('timeseries')
   const [tsState, setTsState] = useState<TimeseriesState>(TIMESERIES_DEFAULT_STATE)
+  // Rarity prefs persist to localStorage so the trader doesn't have to
+  // reconfigure the basis / similarity thresholds on every dock open.
+  // Initial mount reads server-side default; useEffect below restores
+  // any saved prefs after hydration so SSR + CSR markup matches.
   const [rarityState, setRarityState] = useState<RarityState>(RARITY_DEFAULT_STATE)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const raw = window.localStorage.getItem(RARITY_PREFS_STORAGE_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Partial<RarityState>
+      setRarityState((s) => ({
+        ...s,
+        basis: parsed.basis ?? s.basis,
+        histogramMetric: parsed.histogramMetric ?? s.histogramMetric,
+        primaryTol: typeof parsed.primaryTol === 'number' ? parsed.primaryTol : s.primaryTol,
+        sizeTol: typeof parsed.sizeTol === 'number' ? parsed.sizeTol : s.sizeTol,
+      }))
+    } catch {
+      /* ignore corrupt storage payloads */
+    }
+  }, [])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const persisted = {
+      basis: rarityState.basis,
+      histogramMetric: rarityState.histogramMetric,
+      primaryTol: rarityState.primaryTol,
+      sizeTol: rarityState.sizeTol,
+    }
+    try {
+      window.localStorage.setItem(
+        RARITY_PREFS_STORAGE_KEY,
+        JSON.stringify(persisted),
+      )
+    } catch {
+      /* quota or private mode — fall back to in-memory */
+    }
+  }, [
+    rarityState.basis,
+    rarityState.histogramMetric,
+    rarityState.primaryTol,
+    rarityState.sizeTol,
+  ])
 
   // Resizable panel height — ns-resize handle drags the top edge up/down.
   // Start null on both server + client to avoid a SSR/CSR mismatch when
@@ -80,10 +127,17 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
     [panelHeight, panelHeightVh],
   )
 
-  // Keyboard: Esc closes dock.
+  // Keyboard: Esc closes dock — but only when no PrimeReact Dialog or
+  // similar focus-trapping modal is open. Without this scope, Esc on
+  // ManualLinksDialog would close both the dialog and the dock at the
+  // same time, dropping the trader's row selection state.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      const dialogOpen =
+        document.querySelector('.p-dialog:not(.p-dialog-hidden)') !== null
+      if (dialogOpen) return
+      onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -96,6 +150,14 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
     lookback: 90,
     primaryTol: rarityState.primaryTol,
     sizeTol: rarityState.sizeTol,
+    // UX-02: pipe the trader-selected histogram metric so the server
+    // re-bins the distribution in the right units (rate-bps / DV01 /
+    // notional-MM) instead of always returning rate-bps bins.
+    binMetric: rarityState.histogramMetric === 'dv01'
+      ? 'dv01'
+      : rarityState.histogramMetric === 'notional'
+        ? 'notional'
+        : 'fixed_rate',
   })
   const extremes = useExtremesData(focused, {
     primaryTol: rarityState.primaryTol,
@@ -106,6 +168,40 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
     rarityState.basis === 'custy' ? rarity.focusedPercentile.custy
     : rarityState.basis === 'idb' ? rarity.focusedPercentile.idb
     : rarity.focusedPercentile.combined
+
+  // Histogram brushing — clicking a bar on the Trade Rarity tab writes
+  // a per-column filter to the URL so the tape below filters down to
+  // packages whose weighted_fixed_rate falls in the bin's [start, end]
+  // bps range. Only fires for the fixed_rate histogram metric; DV01 /
+  // notional bins fall through to a no-op (the package-level metrics
+  // those would filter on aren't symmetric with the leg-level series
+  // the histogram pulls from).
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const onBinBrush = useCallback(
+    (binStartBps: number, binEndBps: number, metric: 'fixed_rate' | 'dv01' | 'notional') => {
+      if (metric !== 'fixed_rate') return
+      // Tape's `weighted_fixed_rate` column lives as a decimal (0.03842
+      // = 3.842% = 384.2 bps). Convert the histogram bin's bps bounds
+      // before writing the filter or the trader sees an empty tape.
+      const start = binStartBps / 10_000
+      const end = binEndBps / 10_000
+      const next = new URLSearchParams(searchParams?.toString() ?? '')
+      const payload = {
+        weighted_fixed_rate: {
+          operator: FilterOperator.AND,
+          constraints: [
+            { value: start, matchMode: FilterMatchMode.GREATER_THAN_OR_EQUAL_TO },
+            { value: end, matchMode: FilterMatchMode.LESS_THAN },
+          ],
+        },
+      }
+      next.set(COLUMN_FILTER_QUERY_KEY, JSON.stringify(payload))
+      router.replace(`${pathname}?${next.toString()}`, { scroll: false })
+    },
+    [pathname, router, searchParams],
+  )
 
   return (
     <div
@@ -134,12 +230,28 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
             loading…
           </span>
         ) : null}
-        {ts.error || rarity.error || extremes.error ? (
+        {ts.error ? (
           <span
             className="rounded bg-rose-500/15 px-1.5 py-[1px] font-mono text-[9.5px] text-rose-200 ring-1 ring-rose-500/30"
-            title={ts.error ?? rarity.error ?? extremes.error ?? ''}
+            title={ts.error}
           >
-            fetch error
+            timeseries error
+          </span>
+        ) : null}
+        {rarity.error ? (
+          <span
+            className="rounded bg-rose-500/15 px-1.5 py-[1px] font-mono text-[9.5px] text-rose-200 ring-1 ring-rose-500/30"
+            title={rarity.error}
+          >
+            rarity error
+          </span>
+        ) : null}
+        {extremes.error ? (
+          <span
+            className="rounded bg-rose-500/15 px-1.5 py-[1px] font-mono text-[9.5px] text-rose-200 ring-1 ring-rose-500/30"
+            title={extremes.error}
+          >
+            extremes error
           </span>
         ) : null}
         <span className="ml-auto flex items-center gap-1 font-mono text-[10px] text-slate-500">
@@ -186,7 +298,11 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               key: 'rarity',
               label: 'Trade Rarity',
               icon: '◉',
-              badge: `P${Math.round(focusedPercentile)}`,
+              // Only display the percentile badge once the rarity API
+              // has settled. Before then `focusedPercentile` defaults
+              // to 50, which the trader could mis-read as a real "P50"
+              // result. Ellipsis communicates "in flight" instead.
+              badge: rarity.stats.count > 0 ? `P${Math.round(focusedPercentile)}` : '…',
             },
             { key: 'levels', label: 'Traded Levels', icon: '◈', badge: String(extremes.extremes.length) },
           ]}
@@ -207,17 +323,21 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               chartHeight={chartHeight}
             />
           ) : null}
-          {activeTab === 'rarity' && rarity.recency ? (
+          {activeTab === 'rarity' ? (
             <TradeRarityTab
               focused={focused}
               state={rarityState}
               setState={setRarityState}
               bins={rarity.bins}
+              binMetric={rarity.binMetric}
+              binWidth={rarity.binWidth}
               stats={rarity.stats}
               metricRows={rarity.metricRows}
               recency={rarity.recency}
               focusedPercentile={focusedPercentile}
               histogramHeight={histogramHeight}
+              loading={rarity.loading}
+              onBinBrush={onBinBrush}
             />
           ) : null}
           {activeTab === 'levels' ? (

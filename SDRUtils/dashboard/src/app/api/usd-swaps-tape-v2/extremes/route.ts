@@ -11,7 +11,8 @@ import {
   safeNum,
 } from '@/lib/usd-swaps-tape-v2/analytics'
 
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v1'
+// Phase 2 cutover: extremes reads from the v2 leg table.
+const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
 
 type ExtremeDbRow = {
   label: string
@@ -48,6 +49,9 @@ export async function GET(req: Request) {
     package: 'l.package_id',
     trade_type: 'l.trade_type',
     tenor: 'l.tenor_label',
+    // Phase 4: canonical underlier — see /analytics-timeseries route
+    // and SDRUtils/core/underlier_canonical.py for the collapsing rule.
+    canonical: 'l.canonical_underlier_key',
   }
   const filterCol = groupCol[groupBy]
   if (!filterCol) {
@@ -83,7 +87,7 @@ export async function GET(req: Request) {
       sinceParamIdx: number | null,
     ) => {
       const sinceFilter = sinceParamIdx
-        ? `AND l.execution_timestamp >= $${sinceParamIdx}::timestamptz`
+        ? `AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $${sinceParamIdx}::timestamptz`
         : ''
       return `
         (SELECT
@@ -92,7 +96,7 @@ export async function GET(req: Request) {
            l.fixed_rate::float AS fixed_rate,
            l.risk::float AS risk,
            l.notional::float AS notional,
-           l.execution_timestamp AS ts,
+           COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
            l.venue AS venue,
            ${platformExpr} AS platform
          FROM ${LEGS_TABLE} l
@@ -147,7 +151,7 @@ export async function GET(req: Request) {
       if (sizeBand) sParams.push(focusedNotional, sizeBand)
       const similarSql = `
         SELECT
-          l.execution_timestamp AS ts,
+          COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
           l.fixed_rate::float AS fixed_rate,
           l.risk::float AS risk,
           l.notional::float AS notional,
@@ -155,12 +159,12 @@ export async function GET(req: Request) {
           l.venue AS venue
         FROM ${LEGS_TABLE} l
         WHERE ${filterCol} = $1
-          AND l.execution_timestamp >= $2::timestamptz
+          AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $2::timestamptz
           AND l.fixed_rate IS NOT NULL
           AND ABS(l.fixed_rate - $3::float) <= $4::float
           ${sizeFilter}
           AND NOT COALESCE(l.is_unwind, false)
-        ORDER BY l.execution_timestamp DESC
+        ORDER BY COALESCE(l.original_execution_timestamp, l.execution_timestamp) DESC
         LIMIT 8
       `
       const res = await query<SimilarDbRow>(similarSql, sParams)

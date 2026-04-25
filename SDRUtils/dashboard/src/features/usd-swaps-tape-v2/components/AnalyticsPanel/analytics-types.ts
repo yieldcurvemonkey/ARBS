@@ -115,15 +115,27 @@ export type RecencyEntry = {
   tradeId?: string
 }
 
+// All sub-records may come back null when the focused bucket has no
+// qualifying data (e.g. no similar print in the lookback, or notional
+// missing on every leg making bucket-rank meaningless). The Rarity tab
+// renders a per-card empty state in those cases.
+export type AllTimeExtreme = {
+  value: number
+  displayValue: string
+  date: string
+  platform: PlatformKind
+  venue: string
+}
+
 export type RecencyBucket = {
-  lastSimilar: RecencyEntry
-  frequency90d: { count: number; avgIntervalDays: number; lookbackDays: number }
+  lastSimilar: RecencyEntry | null
+  frequency90d: { count: number; avgIntervalDays: number; lookbackDays: number } | null
   allTimeRecord: {
-    largestNotional: { value: number; displayValue: string; date: string; platform: PlatformKind; venue: string }
-    highestRate: { value: number; displayValue: string; date: string; platform: PlatformKind; venue: string }
-    lowestRate: { value: number; displayValue: string; date: string; platform: PlatformKind; venue: string }
-  }
-  bucketRank: { rank: number; total: number; by: string }
+    largestNotional: AllTimeExtreme | null
+    highestRate: AllTimeExtreme | null
+    lowestRate: AllTimeExtreme | null
+  } | null
+  bucketRank: { rank: number; total: number; by: string } | null
 }
 
 export type ExtremeScope = 'All-time' | '52 weeks' | '30 days'

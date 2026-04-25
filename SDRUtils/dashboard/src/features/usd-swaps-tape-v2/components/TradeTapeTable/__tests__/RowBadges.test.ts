@@ -203,11 +203,24 @@ describe('qualityBadgesFor (Phase 4-5 compliance flags)', () => {
     expect(badges.map((b) => b.key)).toContain('D2')
   })
 
-  it('emits CLR when clearing_accepted_start is set on the package', () => {
+  it('emits CLR when clearing_accepted_start lags original_execution by ≥ 60s', () => {
     const badges = qualityBadgesFor(
-      row({ clearing_accepted_start: '2026-04-09T16:45:00Z' }),
+      row({
+        original_execution_start: '2026-04-09T16:45:00Z',
+        clearing_accepted_start: '2026-04-09T16:46:30Z',
+      }),
     )
     expect(badges.map((b) => b.key)).toContain('CLR')
+  })
+
+  it('does NOT emit CLR for sub-second clearing acceptance (P2-02 noise fix)', () => {
+    const badges = qualityBadgesFor(
+      row({
+        original_execution_start: '2026-04-09T16:45:00Z',
+        clearing_accepted_start: '2026-04-09T16:45:00.250Z',
+      }),
+    )
+    expect(badges.map((b) => b.key)).not.toContain('CLR')
   })
 
   it('emits P45 when on_p43_any is False', () => {

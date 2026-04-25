@@ -108,7 +108,7 @@ function inactiveLifecycleTone(row: UsdSwapTapeRow): string {
 // Softer tints for lifecycle events that are still "live" risk but worth
 // flagging (novations, corrections). Layered on top of the trade-type tone
 // via the optional secondary class.
-function livelycleAccent(row: UsdSwapTapeRow): string {
+function lifecycleAccent(row: UsdSwapTapeRow): string {
   // State-machine violation > everything else: yellow ring even on
   // active rows so the data-quality signal is impossible to miss.
   if (row.state_machine_violation_any) return 'ring-2 ring-yellow-400/60'
@@ -171,7 +171,7 @@ export function rowClassName(row: UsdSwapTapeRow): string {
       .filter(Boolean)
       .join(' ')
   }
-  return [tradeTypeTone(row), tradeTypeBorder(row), livelycleAccent(row)]
+  return [tradeTypeTone(row), tradeTypeBorder(row), lifecycleAccent(row)]
     .filter(Boolean)
     .join(' ')
 }

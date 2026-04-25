@@ -29,7 +29,10 @@ describe('LegsSubTable', () => {
   })
 
   it('uses the reduced empty-state colspan after the column additions', () => {
-    expect(legsSubTableSource).toContain('colSpan={16}')
+    // P3-06: colSpan now references the LEG_COL_COUNT constant so a
+    // future column add can't drift the empty-state width.
+    expect(legsSubTableSource).toContain('colSpan={LEG_COL_COUNT}')
+    expect(legsSubTableSource).toMatch(/const LEG_COL_COUNT = 16/)
   })
 
   it('surfaces the Phase 3 Class column for the matrix kind', () => {

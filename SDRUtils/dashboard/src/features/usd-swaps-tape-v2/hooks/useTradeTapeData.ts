@@ -171,8 +171,21 @@ export function useTradeTapeData(
         setRows((prev) => {
           const map = new Map(prev.map((r) => [r.package_id, r]))
           incoming.forEach((r) => map.set(r.package_id, r))
+          // The pg driver hands back `timestamp with time zone` as a JS
+          // Date for fresh rows but as ISO strings for already-merged
+          // rows that round-tripped through JSON. localeCompare on a
+          // Date returns the toString form ("Thu Apr 09 2026 …") which
+          // sorts unrelated to time. Coerce both sides to ISO strings
+          // first so the merged set keeps a deterministic newest-first
+          // order across polling and pagination upserts.
+          const toKey = (v: unknown): string => {
+            if (v instanceof Date) {
+              return Number.isNaN(v.getTime()) ? '' : v.toISOString()
+            }
+            return v == null ? '' : String(v)
+          }
           const combined = Array.from(map.values()).sort((a, b) =>
-            b.execution_start.localeCompare(a.execution_start),
+            toKey(b.execution_start).localeCompare(toKey(a.execution_start)),
           )
           return dedupeDuplicatePackages(combined)
         })
@@ -192,6 +205,12 @@ export function useTradeTapeData(
       abortRef.current?.abort()
       const controller = new AbortController()
       abortRef.current = controller
+      // 15s safety timeout — without this a hung network keeps
+      // fetchInFlight stuck true and the 30s poll silently swallows
+      // every subsequent tick. Once the timeout fires, the AbortError
+      // is treated as a normal abort below and the in-flight latch
+      // resets, so polling resumes on the next interval.
+      const timeoutId = setTimeout(() => controller.abort(), 15_000)
 
       const isCursor = !!options?.cursor
       const isPoll = !!options?.since
@@ -222,6 +241,7 @@ export function useTradeTapeData(
         else if (isPoll) setPollError(msg)
         else setInitialError(msg)
       } finally {
+        clearTimeout(timeoutId)
         setLoading(false)
         setLoadingMore(false)
         fetchInFlight.current = false

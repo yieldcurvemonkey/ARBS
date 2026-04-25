@@ -764,7 +764,12 @@ const METRIC_SCHEMA = {
 const STRADDLE_STYLE = "EURO VANILLA PHYS";
 const STRADDLE_SPLIT_FACTOR = 0.5;
 const BPVOL_DAY_DIVISOR = 15.87;
-const IDB_MIC_CODES = ["BGCD", "ISWV", "TPSE"] as const;
+// Authoritative dealer (IDB) SEF MIC list — see
+// SDRUtils/dashboard/src/lib/usd-swaps-tape-v2/analytics.ts for the
+// SEF breakdown. Pre-2026-04-25 this set was just BGCD/ISWV/TPSE,
+// which mis-bucketed Dealerweb / ICAP-Global / Tradition flow into
+// custy on the swaptions tape's IDB metrics.
+const IDB_MIC_CODES = ["BGCD", "DWSF", "IGDL", "ISWV", "TPSE", "TSEF"] as const;
 const CUSTY_MIC_CODES = ["BILT", "XXXX", "TWSF", "BBSF", "XOFF"] as const;
 const IDB_MIC_SET = new Set<string>(IDB_MIC_CODES);
 const CUSTY_MIC_SET = new Set<string>(CUSTY_MIC_CODES);

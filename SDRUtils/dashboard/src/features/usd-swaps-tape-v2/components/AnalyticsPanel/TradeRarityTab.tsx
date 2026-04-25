@@ -72,15 +72,16 @@ function PercentileRow(props: { metric: MetricRow; isPrimary?: boolean }): JSX.E
 interface HistogramTooltipProps {
   active?: boolean
   payload?: Array<{ payload: HistogramBin }>
+  unit?: string
 }
 
-function HistogramTooltip({ active, payload }: HistogramTooltipProps): JSX.Element | null {
+function HistogramTooltip({ active, payload, unit = 'bps' }: HistogramTooltipProps): JSX.Element | null {
   if (!active || !payload || payload.length === 0) return null
   const d = payload[0].payload
   return (
     <div className="rounded border border-slate-700 bg-slate-950/95 px-2.5 py-2 font-mono text-[11px] text-slate-200 shadow-xl">
       <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">
-        {d.binStart.toFixed(0)} – {d.binEnd.toFixed(0)} bps
+        {d.binStart.toFixed(0)} – {d.binEnd.toFixed(0)} {unit}
       </div>
       <div className="flex items-center justify-between gap-3">
         <span className="flex items-center gap-1.5">
@@ -125,23 +126,82 @@ export interface TradeRarityTabProps {
   state: RarityState
   setState: Dispatch<SetStateAction<RarityState>>
   bins: HistogramBin[]
+  // UX-02: server tells us which metric the bins are in + the bin
+  // width so the histogram axis labels and tooltip render with the
+  // right units (bps / USD-per-bp / USD millions).
+  binMetric?: 'fixed_rate' | 'dv01' | 'notional'
+  binWidth?: number
   stats: DistributionStats
   metricRows: MetricRow[]
-  recency: RecencyBucket
+  // Recency may be null when the bucket has no qualifying recent prints
+  // — the histogram + percentile rows still render, only the recency
+  // cards are hidden in that case.
+  recency: RecencyBucket | null
   // Focused-trade percentile pre-computed server-side for the active
   // basis (combined/custy/idb). Parent picks which member to pass.
   focusedPercentile: number
   histogramHeight?: number
+  // True while the underlying /rarity fetch is in flight. Drives the
+  // skeleton loading state so the trader sees layout-sized placeholders
+  // instead of a spinner that pops the chart in/out of view.
+  loading?: boolean
+  // Histogram brushing — clicking a Bar fires this callback with the
+  // bin's [start, end] bounds and the metric. Parent (AnalyticsPanel)
+  // wires it to the tape's per-column filter URL state.
+  onBinBrush?: (binStart: number, binEnd: number, metric: 'fixed_rate' | 'dv01' | 'notional') => void
+}
+
+const BIN_METRIC_UNITS: Record<NonNullable<TradeRarityTabProps['binMetric']>, string> = {
+  fixed_rate: 'bps',
+  dv01: 'USD/bp',
+  notional: 'USD mm',
+}
+
+const BIN_METRIC_AXIS_LABELS: Record<NonNullable<TradeRarityTabProps['binMetric']>, string> = {
+  fixed_rate: 'Fixed Rate (bps)',
+  dv01: 'DV01 (USD/bp)',
+  notional: 'Notional (USD mm)',
+}
+
+function PercentileSkeleton(): JSX.Element {
+  return (
+    <div className="flex h-9 items-center gap-2 rounded border border-slate-800 bg-slate-950/60 px-2">
+      <div className="h-3 w-[140px] animate-pulse rounded bg-slate-800" />
+      <div className="h-3 w-[80px] animate-pulse rounded bg-slate-800" />
+      <div className="h-3 w-[40px] animate-pulse rounded bg-slate-800" />
+      <div className="h-2 w-[180px] animate-pulse rounded-full bg-slate-800" />
+      <div className="ml-auto h-3 w-[64px] animate-pulse rounded bg-slate-800" />
+    </div>
+  )
 }
 
 export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
-  const { focused, state, setState, bins, stats, metricRows, recency, focusedPercentile } = props
+  const { focused, state, setState, bins, stats, metricRows, recency, focusedPercentile, loading, onBinBrush } = props
   const histogramHeight = props.histogramHeight ?? 280
+  const binMetric = props.binMetric ?? 'fixed_rate'
+  const binMetricUnit = BIN_METRIC_UNITS[binMetric]
+  const binMetricAxisLabel = BIN_METRIC_AXIS_LABELS[binMetric]
   const { basis, histogramMetric, settingsOpen, primaryTol, sizeTol } = state
+  const isInitialLoad = loading && bins.length === 0
+  const noSamples = !loading && stats.count === 0
+  const handleBarClick = (data: { binStart: number; binEnd: number } | null | undefined) => {
+    if (!onBinBrush || !data || binMetric !== 'fixed_rate') return
+    onBinBrush(data.binStart, data.binEnd, binMetric)
+  }
 
-  const focusedBin = bins.find(
-    (b) => focused.fixed_rate_bps >= b.binStart && focused.fixed_rate_bps < b.binEnd,
-  )
+  // P2-06: half-open intervals (>=binStart && <binEnd) drop the
+  // focused trade onto a phantom "no bin" when its rate exactly equals
+  // the last bin's binEnd, causing the reference dot + "Focused sits
+  // in bin [—] · 0 prints" footer to silently disappear at the
+  // distribution's upper edge. Allow the last bin to be inclusive at
+  // the top so the dot lands cleanly.
+  const focusedBin = bins.find((b, i) => {
+    const isLast = i === bins.length - 1
+    return (
+      focused.fixed_rate_bps >= b.binStart &&
+      (isLast ? focused.fixed_rate_bps <= b.binEnd : focused.fixed_rate_bps < b.binEnd)
+    )
+  })
 
   const primaryPct = focusedPercentile
 
@@ -257,18 +317,39 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
         source="/api/usd-swaps-tape-v2/rarity"
       />
 
-      <div className="flex flex-col gap-1">
-        {metricRows.map((m) => (
-          <PercentileRow
-            key={m.key}
-            metric={{
-              ...m,
-              percentile: m.key === 'fixed_rate' ? primaryPct : m.percentile,
-            }}
-            isPrimary={m.primary}
-          />
-        ))}
-      </div>
+      {isInitialLoad ? (
+        <div className="flex flex-col gap-1" data-testid="rarity-loading-skeleton">
+          <PercentileSkeleton />
+          <PercentileSkeleton />
+          <PercentileSkeleton />
+        </div>
+      ) : noSamples ? (
+        <div
+          className="rounded border border-dashed border-slate-700 bg-slate-900/40 p-3 font-mono text-[11px] text-slate-300"
+          data-testid="rarity-empty-state"
+        >
+          <span className="font-semibold text-slate-200">No prints in lookback window.</span>
+          <div className="mt-1 text-[10.5px] text-slate-500">
+            The {focused.tape_label} bucket hasn't traded in the configured 90-day window —
+            either the tenor is too rare, the trade type doesn't print to this tape, or the
+            most recent print is older than the lookback. Widen the rate / size tolerance in
+            the gear menu, or pin the trade and check back after the next ingest run.
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {metricRows.map((m) => (
+            <PercentileRow
+              key={m.key}
+              metric={{
+                ...m,
+                percentile: m.key === 'fixed_rate' ? primaryPct : m.percentile,
+              }}
+              isPrimary={m.primary}
+            />
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-[1.5fr_1fr] gap-2.5">
         <div className="flex flex-col gap-1.5 rounded border border-slate-800 bg-slate-950/60 p-2.5">
@@ -298,7 +379,7 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
                   axisLine={{ stroke: ANALYTICS_COLORS.slate800 }}
                   tickLine={{ stroke: ANALYTICS_COLORS.slate800 }}
                   label={{
-                    value: 'Fixed Rate (bps)',
+                    value: binMetricAxisLabel,
                     position: 'insideBottom',
                     offset: -8,
                     style: {
@@ -338,7 +419,7 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
                     },
                   }}
                 />
-                <Tooltip content={<HistogramTooltip />} cursor={{ fill: 'rgba(148,163,184,0.06)' }} />
+                <Tooltip content={<HistogramTooltip unit={binMetricUnit} />} cursor={{ fill: 'rgba(148,163,184,0.06)' }} />
                 <ReferenceArea
                   yAxisId="count"
                   x1={stats.p25}
@@ -347,8 +428,24 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
                   stroke="rgba(34, 211, 238, 0.3)"
                   strokeDasharray="2 4"
                 />
-                <Bar yAxisId="count" dataKey="idb" stackId="a" fill={ANALYTICS_COLORS.idb} fillOpacity={0.85} />
-                <Bar yAxisId="count" dataKey="custy" stackId="a" fill={ANALYTICS_COLORS.custy} fillOpacity={0.85} />
+                <Bar
+                  yAxisId="count"
+                  dataKey="idb"
+                  stackId="a"
+                  fill={ANALYTICS_COLORS.idb}
+                  fillOpacity={0.85}
+                  onClick={handleBarClick as any}
+                  style={onBinBrush && binMetric === 'fixed_rate' ? { cursor: 'pointer' } : undefined}
+                />
+                <Bar
+                  yAxisId="count"
+                  dataKey="custy"
+                  stackId="a"
+                  fill={ANALYTICS_COLORS.custy}
+                  fillOpacity={0.85}
+                  onClick={handleBarClick as any}
+                  style={onBinBrush && binMetric === 'fixed_rate' ? { cursor: 'pointer' } : undefined}
+                />
                 <Line
                   yAxisId="count"
                   type="monotone"
@@ -431,80 +528,118 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
 
         <div className="flex flex-col gap-1.5">
           <RecencyCard title="Last similar trade" accent="emerald">
-            <div className="flex items-baseline gap-2">
-              <span className="font-mono text-[16px] text-slate-100">
-                {fmtDaysAgo(recency.lastSimilar.daysAgo)}
-              </span>
-              <span className="font-mono text-[10px] text-slate-500">{recency.lastSimilar.date}</span>
-            </div>
-            <div className="font-mono text-[10.5px] text-slate-400">
-              rate <span className="text-slate-200">{recency.lastSimilar.value.toFixed(2)}</span>
-              <span className="text-slate-500"> bps</span>
-              <span className="mx-1.5 text-slate-700">·</span>
-              <PlatformDot platform={recency.lastSimilar.platform} size={6} />
-              <span
-                className={`ml-1 ${
-                  recency.lastSimilar.platform === 'CUSTY' ? 'text-amber-200' : 'text-sky-200'
-                }`}
+            {recency?.lastSimilar ? (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-mono text-[16px] text-slate-100">
+                    {fmtDaysAgo(recency.lastSimilar.daysAgo)}
+                  </span>
+                  <span className="font-mono text-[10px] text-slate-500">{recency.lastSimilar.date}</span>
+                </div>
+                <div className="font-mono text-[10.5px] text-slate-400">
+                  rate <span className="text-slate-200">{recency.lastSimilar.value.toFixed(2)}</span>
+                  <span className="text-slate-500"> bps</span>
+                  <span className="mx-1.5 text-slate-700">·</span>
+                  <PlatformDot platform={recency.lastSimilar.platform} size={6} />
+                  <span
+                    className={`ml-1 ${
+                      recency.lastSimilar.platform === 'CUSTY' ? 'text-amber-200' : 'text-sky-200'
+                    }`}
+                  >
+                    {recency.lastSimilar.platform}
+                  </span>
+                  <span className="mx-1.5 text-slate-700">·</span>
+                  <span className="text-slate-300">{recency.lastSimilar.venue}</span>
+                </div>
+              </>
+            ) : (
+              <div
+                className="font-mono text-[10.5px] text-slate-500"
+                title="No prints within the configured rate ± size tolerance window"
               >
-                {recency.lastSimilar.platform}
-              </span>
-              <span className="mx-1.5 text-slate-700">·</span>
-              <span className="text-slate-300">{recency.lastSimilar.venue}</span>
-            </div>
+                No similar trade in lookback window
+              </div>
+            )}
           </RecencyCard>
 
           <RecencyCard title="Frequency · last 90 days" accent="sky">
-            <div className="flex items-baseline gap-2">
-              <span className="font-mono text-[16px] text-slate-100">{recency.frequency90d.count}</span>
-              <span className="font-mono text-[10px] text-slate-400">
-                similar trades · avg{' '}
-                <span className="text-slate-200">{recency.frequency90d.avgIntervalDays.toFixed(1)}</span> days apart
-              </span>
-            </div>
-            <div className="h-1 rounded-full bg-slate-800">
-              <div
-                className="h-full rounded-full bg-sky-500/70"
-                style={{ width: `${Math.min(recency.frequency90d.count / 60, 1) * 100}%` }}
-              />
-            </div>
+            {recency?.frequency90d ? (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-mono text-[16px] text-slate-100">{recency.frequency90d.count}</span>
+                  <span className="font-mono text-[10px] text-slate-400">
+                    similar trades · avg{' '}
+                    <span className="text-slate-200">{recency.frequency90d.avgIntervalDays.toFixed(1)}</span> days apart
+                  </span>
+                </div>
+                <div className="h-1 rounded-full bg-slate-800">
+                  <div
+                    className="h-full rounded-full bg-sky-500/70"
+                    style={{ width: `${Math.min(recency.frequency90d.count / 60, 1) * 100}%` }}
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="font-mono text-[10.5px] text-slate-500">No frequency data</div>
+            )}
           </RecencyCard>
 
           <RecencyCard title="Bucket rank" accent="fuchsia">
-            <div className="flex items-baseline gap-2">
-              <span className="font-mono text-[16px] text-slate-100">
-                #{recency.bucketRank.rank}
-                <span className="text-slate-500"> / {recency.bucketRank.total.toLocaleString()}</span>
-              </span>
-              <span className="font-mono text-[10px] text-slate-500">by {recency.bucketRank.by}</span>
-            </div>
-            <div className="font-mono text-[10px] text-slate-400">
-              top{' '}
-              <span className="text-fuchsia-300">
-                {((recency.bucketRank.rank / recency.bucketRank.total) * 100).toFixed(1)}%
-              </span>{' '}
-              in the {focused.tape_label} bucket this quarter
-            </div>
+            {recency?.bucketRank ? (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-mono text-[16px] text-slate-100">
+                    #{recency.bucketRank.rank}
+                    <span className="text-slate-500"> / {recency.bucketRank.total.toLocaleString()}</span>
+                  </span>
+                  <span className="font-mono text-[10px] text-slate-500">by {recency.bucketRank.by}</span>
+                </div>
+                <div className="font-mono text-[10px] text-slate-400">
+                  top{' '}
+                  <span className="text-fuchsia-300">
+                    {((recency.bucketRank.rank / recency.bucketRank.total) * 100).toFixed(1)}%
+                  </span>{' '}
+                  in the {focused.tape_label} bucket this quarter
+                </div>
+              </>
+            ) : (
+              <div
+                className="font-mono text-[10.5px] text-slate-500"
+                title="Bucket rank requires a focused notional; the trade may be an outright with missing leg notional"
+              >
+                Rank unavailable for this trade
+              </div>
+            )}
           </RecencyCard>
 
           <RecencyCard title={`All-time records · ${focused.tape_label}`} accent="amber">
-            <div className="flex flex-col gap-1 font-mono text-[10.5px]">
-              <div className="flex items-baseline justify-between">
-                <span className="text-slate-500">largest notional</span>
-                <span className="text-slate-200">{recency.allTimeRecord.largestNotional.displayValue}</span>
-                <span className="text-slate-500">{recency.allTimeRecord.largestNotional.date}</span>
+            {recency?.allTimeRecord ? (
+              <div className="flex flex-col gap-1 font-mono text-[10.5px]">
+                {recency.allTimeRecord.largestNotional ? (
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-slate-500">largest notional</span>
+                    <span className="text-slate-200">{recency.allTimeRecord.largestNotional.displayValue}</span>
+                    <span className="text-slate-500">{recency.allTimeRecord.largestNotional.date}</span>
+                  </div>
+                ) : null}
+                {recency.allTimeRecord.highestRate ? (
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-slate-500">high rate</span>
+                    <span className="text-slate-200">{recency.allTimeRecord.highestRate.displayValue} bps</span>
+                    <span className="text-slate-500">{recency.allTimeRecord.highestRate.date}</span>
+                  </div>
+                ) : null}
+                {recency.allTimeRecord.lowestRate ? (
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-slate-500">low rate</span>
+                    <span className="text-slate-200">{recency.allTimeRecord.lowestRate.displayValue} bps</span>
+                    <span className="text-slate-500">{recency.allTimeRecord.lowestRate.date}</span>
+                  </div>
+                ) : null}
               </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-slate-500">high rate</span>
-                <span className="text-slate-200">{recency.allTimeRecord.highestRate.displayValue} bps</span>
-                <span className="text-slate-500">{recency.allTimeRecord.highestRate.date}</span>
-              </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-slate-500">low rate</span>
-                <span className="text-slate-200">{recency.allTimeRecord.lowestRate.displayValue} bps</span>
-                <span className="text-slate-500">{recency.allTimeRecord.lowestRate.date}</span>
-              </div>
-            </div>
+            ) : (
+              <div className="font-mono text-[10.5px] text-slate-500">No historical prints</div>
+            )}
           </RecencyCard>
         </div>
       </div>

@@ -32,6 +32,11 @@ export const LIFECYCLE_ORDER: LifecycleType[] = [
   'ERROR_RECOVERY',
   'PORT_TRANSFER',
   'VALUATION',
+  // OTHER is the catch-all bucket for lifecycle codes the SDR feed
+  // didn't classify. Keep it last so the column-filter dropdown still
+  // surfaces it and the lifecycle-pill renderer doesn't drop those
+  // rows on the floor.
+  'OTHER',
 ]
 
 export const LIFECYCLE_LABELS: Record<LifecycleType, string> = {

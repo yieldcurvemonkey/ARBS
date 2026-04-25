@@ -16,7 +16,14 @@ import {
   safeNum,
 } from '@/lib/usd-swaps-tape-v2/analytics'
 
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v1'
+// Phase 2 cutover: rarity reads from the v2 leg table to pick up the
+// composite (filter, original_execution_timestamp DESC) indexes.
+const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+
+// Phase 2 cap: trim the worst-case sample pull. 50k SDR legs over a 90d
+// lookback is already plenty for a stable distribution; rare buckets
+// will return everything they have.
+const RARITY_SAMPLE_CAP = 50_000
 
 type SampleRow = {
   ts: string
@@ -53,6 +60,9 @@ export async function GET(req: Request) {
     package: 'l.package_id',
     trade_type: 'l.trade_type',
     tenor: 'l.tenor_label',
+    // Phase 4: groupBy=canonical lets the dashboard pull a single
+    // distribution across SDR-feed name variations of the same swap.
+    canonical: 'l.canonical_underlier_key',
   }
   const filterCol = groupCol[groupBy]
   if (!filterCol) {
@@ -67,7 +77,16 @@ export async function GET(req: Request) {
   const focusedRateBps = Number(searchParams.get('focusedRate') ?? 'NaN')
   const focusedDv01 = Number(searchParams.get('focusedDv01') ?? 'NaN')
   const focusedNotional = Number(searchParams.get('focusedNotional') ?? 'NaN')
-  const binWidth = Number(searchParams.get('binWidth') ?? '1')
+  // UX-02: bin the histogram by whichever metric the trader selected
+  // in the Rarity tab. The percentile rows + recency cards continue
+  // to be rate-anchored (the question "how rare is this rate" is the
+  // primary trader ask); only the histogram x-axis swaps.
+  const binMetricRaw = (searchParams.get('binMetric') ?? 'fixed_rate').toLowerCase()
+  const binMetric: 'fixed_rate' | 'dv01' | 'notional' =
+    binMetricRaw === 'dv01' || binMetricRaw === 'notional'
+      ? binMetricRaw
+      : 'fixed_rate'
+  const binWidthOverride = searchParams.get('binWidth')
 
   const platformExpr = platformCaseSql('l')
   const startDate = new Date(Date.now() - lookback * 86_400_000).toISOString()
@@ -76,7 +95,7 @@ export async function GET(req: Request) {
     // Pull the full sample set for stats + histogram + recency.
     const sampleSql = `
       SELECT
-        l.execution_timestamp AS ts,
+        COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
         l.fixed_rate::float AS fixed_rate,
         l.risk::float AS risk,
         l.notional::float AS notional,
@@ -86,11 +105,11 @@ export async function GET(req: Request) {
         l.package_id AS package_id
       FROM ${LEGS_TABLE} l
       WHERE ${filterCol} = $1
-        AND l.execution_timestamp >= $2::timestamptz
+        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $2::timestamptz
         AND l.fixed_rate IS NOT NULL
         AND NOT COALESCE(l.is_unwind, false)
-      ORDER BY l.execution_timestamp DESC
-      LIMIT 50000
+      ORDER BY COALESCE(l.original_execution_timestamp, l.execution_timestamp) DESC
+      LIMIT ${RARITY_SAMPLE_CAP}
     `
     const { rows: samples } = await query<SampleRow>(sampleSql, [value, startDate])
 
@@ -115,25 +134,49 @@ export async function GET(req: Request) {
       ? percentileRank(focusedRateBps, [...idbRateBps].sort((a, b) => a - b))
       : 50
 
-    // Histogram with configurable bin width (default 1 bp).
-    const binMin = Math.floor(stats.min - 2)
-    const binMax = Math.ceil(stats.max + 2)
-    const binCount = Math.max(1, Math.ceil((binMax - binMin) / binWidth))
+    // Pick the value series + bin width for the selected metric.
+    // bps for fixed_rate (1-bp bins by default), USD/bp for DV01
+    // (snap-to-K bins), USD millions for notional (1M bins).
+    const valueByPlatform = samples.map((s) => ({
+      platform: s.platform,
+      value:
+        binMetric === 'dv01'
+          ? Math.abs(safeNum(s.risk))
+          : binMetric === 'notional'
+            ? Math.abs(safeNum(s.notional)) / 1e6
+            : rateToBps(s.fixed_rate),
+    }))
+    const allValues = valueByPlatform.map((v) => v.value)
+    const valueStats = distributionStats(allValues)
+    const defaultBinWidth =
+      binMetric === 'dv01'
+        ? Math.max(1_000, Math.round((valueStats.max - valueStats.min) / 30))
+        : binMetric === 'notional'
+          ? 1
+          : 1
+    const binWidth =
+      binWidthOverride !== null ? Number(binWidthOverride) : defaultBinWidth
+    const safeBinWidth = Number.isFinite(binWidth) && binWidth > 0
+      ? binWidth
+      : defaultBinWidth
+
+    const binMin = Math.floor(valueStats.min - safeBinWidth)
+    const binMax = Math.ceil(valueStats.max + safeBinWidth)
+    const binCount = Math.max(1, Math.ceil((binMax - binMin) / safeBinWidth))
     const bins = Array.from({ length: binCount }, (_, i) => ({
-      binStart: binMin + i * binWidth,
-      binEnd: binMin + (i + 1) * binWidth,
-      mid: binMin + i * binWidth + binWidth / 2,
+      binStart: binMin + i * safeBinWidth,
+      binEnd: binMin + (i + 1) * safeBinWidth,
+      mid: binMin + i * safeBinWidth + safeBinWidth / 2,
       custy: 0,
       idb: 0,
       total: 0,
       cumPct: 0,
       kdeScaled: 0,
     }))
-    for (const s of samples) {
-      const v = rateToBps(s.fixed_rate)
-      const idx = Math.floor((v - binMin) / binWidth)
+    for (const v of valueByPlatform) {
+      const idx = Math.floor((v.value - binMin) / safeBinWidth)
       if (idx >= 0 && idx < binCount) {
-        if (s.platform === 'CUSTY') bins[idx].custy++
+        if (v.platform === 'CUSTY') bins[idx].custy++
         else bins[idx].idb++
       }
     }
@@ -145,16 +188,16 @@ export async function GET(req: Request) {
       b.cumPct = totalCount > 0 ? (cum / totalCount) * 100 : 0
     }
     // KDE overlay — same-axis scaling with count so Recharts can stack.
-    const bandwidth = Math.max(0.5, stats.stddev / 3)
+    const bandwidth = Math.max(safeBinWidth / 2, valueStats.stddev / 3)
     const maxCount = Math.max(1, ...bins.map((b) => b.total))
     let maxKde = 1e-9
     for (const b of bins) {
       let sum = 0
-      for (const v of rateBps) {
+      for (const v of allValues) {
         const z = (b.mid - v) / bandwidth
         sum += Math.exp(-0.5 * z * z)
       }
-      const kde = sum / (rateBps.length * bandwidth * Math.sqrt(2 * Math.PI))
+      const kde = sum / (allValues.length * bandwidth * Math.sqrt(2 * Math.PI))
       ;(b as typeof b & { kde: number }).kde = kde
       if (kde > maxKde) maxKde = kde
     }
@@ -235,17 +278,22 @@ export async function GET(req: Request) {
     // All-time records within the bucket (no lookback cutoff).
     const recordSql = `
       (SELECT l.fixed_rate::float AS fixed_rate, l.risk::float AS risk, l.notional::float AS notional,
-              l.execution_timestamp AS ts, l.venue AS venue, ${platformExpr} AS platform
+              COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
+              l.venue AS venue, ${platformExpr} AS platform
        FROM ${LEGS_TABLE} l
        WHERE ${filterCol} = $1 AND l.fixed_rate IS NOT NULL AND NOT COALESCE(l.is_unwind, false)
        ORDER BY l.fixed_rate DESC NULLS LAST LIMIT 1)
       UNION ALL
-      (SELECT l.fixed_rate::float, l.risk::float, l.notional::float, l.execution_timestamp, l.venue, ${platformExpr}
+      (SELECT l.fixed_rate::float, l.risk::float, l.notional::float,
+              COALESCE(l.original_execution_timestamp, l.execution_timestamp),
+              l.venue, ${platformExpr}
        FROM ${LEGS_TABLE} l
        WHERE ${filterCol} = $1 AND l.fixed_rate IS NOT NULL AND NOT COALESCE(l.is_unwind, false)
        ORDER BY l.fixed_rate ASC NULLS LAST LIMIT 1)
       UNION ALL
-      (SELECT l.fixed_rate::float, l.risk::float, l.notional::float, l.execution_timestamp, l.venue, ${platformExpr}
+      (SELECT l.fixed_rate::float, l.risk::float, l.notional::float,
+              COALESCE(l.original_execution_timestamp, l.execution_timestamp),
+              l.venue, ${platformExpr}
        FROM ${LEGS_TABLE} l
        WHERE ${filterCol} = $1 AND l.notional IS NOT NULL AND NOT COALESCE(l.is_unwind, false)
        ORDER BY ABS(l.notional) DESC NULLS LAST LIMIT 1)
@@ -259,6 +307,12 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       bins,
+      // Echo the bin metric + width so the client can render axis
+      // labels and tooltips with the right units. Default behaviour
+      // when the client doesn't ask is fixed_rate / 1bp bins (matches
+      // pre-UX-02 contract).
+      binMetric,
+      binWidth: safeBinWidth,
       stats,
       metricRows,
       recency: {

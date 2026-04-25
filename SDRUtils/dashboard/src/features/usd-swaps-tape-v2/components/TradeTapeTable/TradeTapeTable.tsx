@@ -285,7 +285,13 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     }
   }, [hasMore, loadingMore, requestLoadMore, displayRows.length])
 
-  const selectedIds = new Set((selected ?? []).map((row) => row.package_id))
+  // Memoize so the row className builder doesn't re-create the Set on
+  // every poll tick + every keystroke in a filter input. With 200+ rows
+  // the unmemoised version was visibly janky during the 30s tape poll.
+  const selectedIds = useMemo(
+    () => new Set((selected ?? []).map((row) => row.package_id)),
+    [selected],
+  )
 
   const toggleRowExpansion = (row: UsdSwapTapeRow) => {
     // Preferred path: defer to the caller's functional-setState toggle so

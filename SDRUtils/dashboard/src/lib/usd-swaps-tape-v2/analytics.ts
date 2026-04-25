@@ -7,13 +7,44 @@
 //
 // The SDR feed exposes two signals:
 //   - `venue`: coarse D2D / D2C tag ("dealer-to-dealer" / "dealer-to-client")
-//   - `platform_identifier`: MIC-style code (BGCD/ISWV/TPSE = IDB,
-//     BILT/BBSF/TWSF/XOFF/XXXX = custy)
+//   - `platform_identifier`: MIC-style code
+//
+// Authoritative dealer (IDB) MICs:
+//   BGCD — BGC Derivative Markets L.P.
+//   DWSF — Dealerweb SEF LLC
+//   IGDL — ICAP Global Derivatives Ltd
+//   ISWV — ICAP Global Derivatives Ltd – Voice
+//   TPSE — TP SEF Inc
+//   TSEF — Tradition SEF
+//
+// Authoritative custy MICs:
+//   TWSF, BBSF, BILT, XOFF, XXXX
 //
 // D2D maps cleanly to IDB. Anything else (D2C or null) we call custy.
 // The MIC code is kept as a fallback so the logic still works if a
-// future feed drops the venue column.
-export const IDB_MIC_SET = ['BGCD', 'ISWV', 'TPSE'] as const
+// future feed drops the venue column. Earlier revisions of this set
+// only listed BGCD / ISWV / TPSE, which mis-bucketed Dealerweb /
+// ICAP-Global / Tradition flow into custy.
+export const IDB_MIC_SET = [
+  'BGCD',
+  'DWSF',
+  'IGDL',
+  'ISWV',
+  'TPSE',
+  'TSEF',
+] as const
+
+// Explicit custy whitelist used by tests + the venue chip's tooltip
+// disambiguation. Anything not in IDB_MIC_SET *and* not in this set
+// falls through to CUSTY anyway, but pinning it makes the contract
+// reviewable.
+export const CUSTY_MIC_SET = [
+  'TWSF',
+  'BBSF',
+  'BILT',
+  'XOFF',
+  'XXXX',
+] as const
 
 export function platformCaseSql(alias: string): string {
   const micLikes = IDB_MIC_SET

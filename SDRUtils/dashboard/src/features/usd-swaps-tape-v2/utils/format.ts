@@ -251,7 +251,12 @@ function formatSignedCompact(n: number): string {
     return `${sign}${scaled.toFixed(precision)}m`
   }
   const scaled = abs / 1e3
-  const precision = scaled >= 100 ? 1 : 1
+  // P2-01: 1235 → "1.2k"; 12345 → "12k"; 123456 → "123k". Earlier
+  // ternary collapsed to ``? 1 : 1`` so 123456 rendered as "123.5k"
+  // (1-decimal noise on a 6-figure value). Drop to 0 fraction digits
+  // once the scaled value crosses 100 so the OPA / PTP / PTS lines
+  // stay narrow.
+  const precision = scaled >= 100 ? 0 : 1
   return `${sign}${scaled.toFixed(precision)}k`
 }
 

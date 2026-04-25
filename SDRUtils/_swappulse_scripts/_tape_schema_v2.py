@@ -218,6 +218,14 @@ CREATE TABLE IF NOT EXISTS {RUNS_TABLE_V2} (
 
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_date ON {PACKAGES_TABLE_V2}(as_of_date, execution_start DESC);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_orig_date ON {PACKAGES_TABLE_V2}(as_of_date, original_execution_start DESC);
+-- Pagination scan: the main tape route does
+-- ``WHERE d.execution_start < $cursor ORDER BY d.execution_start DESC
+-- LIMIT 201`` with no as_of_date filter, so the composite index above
+-- can't lead. A single-column DESC NULLS LAST index turns cursor pages
+-- into a fast btree range scan instead of a seq-scan on the packages
+-- table.
+CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_exec_start
+  ON {PACKAGES_TABLE_V2}(execution_start DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_type ON {PACKAGES_TABLE_V2}(package_type, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_cluster ON {PACKAGES_TABLE_V2}(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_fomc ON {PACKAGES_TABLE_V2}(fomc_meeting_label);
@@ -244,6 +252,32 @@ CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_violation ON {LEGS_TABLE_V2}(state_m
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_cluster ON {LEGS_TABLE_V2}(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_metrics_gin ON {LEGS_TABLE_V2} USING GIN (enrichment_metrics);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_flags_gin ON {LEGS_TABLE_V2} USING GIN (quality_flags);
+
+-- Phase 2 perf indexes for the analytics-dock routes. Each route filters
+-- on a category column ({{rate_index_clean | tape_label | canonical_underlier_key}})
+-- and orders / range-scans by the original-execution timestamp. A composite
+-- (filter, ts DESC) index turns those queries into a single index range
+-- scan instead of a seq-scan + sort. NULLS LAST keeps the descending
+-- range scan tight on the recent-end of the data, which is what
+-- DAILY_CLOSE / INTRADAY / extremes queries actually want.
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_rate_idx_orig
+  ON {LEGS_TABLE_V2}(rate_index_clean, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_tape_label_orig
+  ON {LEGS_TABLE_V2}(tape_label, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_trade_type_orig
+  ON {LEGS_TABLE_V2}(trade_type, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_tenor_orig
+  ON {LEGS_TABLE_V2}(tenor_label, original_execution_timestamp DESC NULLS LAST);
+
+-- Phase 4 canonical underlier key: per-row collapse of SDR underlier-name
+-- variations ('USD-SOFR-OIS Compound 1D Constant' vs 'USD-SOFR-COMPOUND
+-- 1D Constant', etc.) into a single comparable key. Persisted by the
+-- ingest pipeline (see SDRUtils/core/underlier_canonical.py); read by
+-- the rarity / traded-levels / package-analytics routes. Additive
+-- ALTER + IF NOT EXISTS keeps re-runs idempotent.
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS canonical_underlier_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_canonical_orig
+  ON {LEGS_TABLE_V2}(canonical_underlier_key, original_execution_timestamp DESC NULLS LAST);
 
 DROP VIEW IF EXISTS {DISPLAY_VIEW_V2};
 

@@ -1,6 +1,11 @@
 'use client'
 // ABOUTME: Expanded package detail panel - per-leg breakdown only.
 import type { JSX } from 'react'
+
+// Centralised column count for the leg sub-table. Bump in lock-step
+// with the <th> list below so the empty-state colspan + the summary
+// row's trailing pad columns stay correct when a column is added.
+const LEG_COL_COUNT = 16
 import {
   ECONOMIC_CLASS_LABELS,
   ECONOMIC_CLASS_TONES,
@@ -408,7 +413,10 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
       <div className="overflow-x-auto">
         <table className="min-w-full text-xs">
           <thead>
-            <tr className="text-[10px] uppercase tracking-wide text-slate-400">
+            <tr
+              className="text-[10px] uppercase tracking-wide text-slate-400"
+              data-leg-table-header
+            >
               <th className="px-2 py-1 text-left">#</th>
               <th className="px-2 py-1 text-left">Trade ID</th>
               {/* Phase 3: per-leg matrix kind */}
@@ -493,7 +501,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
             ))}
             {legs.length === 0 ? (
               <tr className="border-t border-slate-800/90 text-slate-400">
-                <td className="px-2 py-2" colSpan={16}>
+                <td className="px-2 py-2" colSpan={LEG_COL_COUNT}>
                   No leg data available.
                 </td>
               </tr>

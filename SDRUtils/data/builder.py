@@ -1072,11 +1072,19 @@ class SDRDataBuilder:
         # slices; report_slice is slice-local, so dedup must key on the
         # globally-unique Dissemination Identifier with keep="last" to
         # retain the most recent slice's view (may carry corrections).
-        combined = (
-            pd.concat([cache_df, new_df], ignore_index=True)
-            .drop_duplicates(subset=["Dissemination Identifier"], keep="last")
-            .sort_values(by=ts_col)
+        combined = pd.concat([cache_df, new_df], ignore_index=True).drop_duplicates(
+            subset=["Dissemination Identifier"], keep="last"
         )
+        # Guard against empty / mis-shaped intraday slices: when the
+        # SDR feed has nothing to disseminate (weekend / pre-open
+        # window) the concat'd frame can be empty *and* missing
+        # ts_col, which used to throw a KeyError on sort_values and
+        # blow up the entire ingest run for the day. Skip the sort
+        # in that case and return an empty DataFrame so the caller's
+        # `if not intra_df.empty` guard kicks in cleanly.
+        if combined.empty or ts_col not in combined.columns:
+            return pd.DataFrame()
+        combined = combined.sort_values(by=ts_col)
         _write_intraday_cache(combined, cache_fp)
 
         return combined[(combined[ts_col] >= start_timestamp) & (combined[ts_col] <= end_timestamp)].reset_index(drop=True)

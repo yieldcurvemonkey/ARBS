@@ -265,7 +265,8 @@ describe('other_lvl column wiring', () => {
       pts: 0.0025,
     })
     expect(result.opaLine).toBe('OPA: 15.6k')
-    expect(result.ptpLine).toBe('PTP: -671.9k')
+    // P2-01: 671.88 ≥ 100 → 0 decimals.
+    expect(result.ptpLine).toBe('PTP: -672k')
     expect(result.ptsLine).toBe('PTS: 0.0025')
   })
 

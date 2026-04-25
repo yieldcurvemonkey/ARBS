@@ -37,7 +37,12 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   // Auto-opens the dock on first selection so analytics surface as soon
   // as there's something real to render.
   const firstSelected = selection.selected[0] ?? null
-  const focusedPackageId = focus.focused?.package_id ?? null
+  // FocusedTrade carries the package_id under `id` (set by
+  // useFocusedTrade.normalizeFocusedTrade). Reading `.package_id` here
+  // silently produced `undefined`, which meant the indigo focused-row
+  // highlight in the tape was never applied — the dock + tape diverged
+  // on which row the trader was inspecting.
+  const focusedPackageId = focus.focused?.id ?? null
   const derivedFocused = useMemo(
     () => normalizeFocusedTrade(firstSelected),
     [firstSelected],
