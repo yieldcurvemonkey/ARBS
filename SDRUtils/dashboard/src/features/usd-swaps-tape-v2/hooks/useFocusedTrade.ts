@@ -23,8 +23,10 @@ function aggregateLeg<T extends number | null | undefined>(
 }
 
 // Mirrors the server-side platformCaseSql in lib/usd-swaps-tape-v2/analytics.ts:
-// D2D venue → IDB, else MIC code lookup, else custy.
-const IDB_MICS = new Set(['BGCD', 'ISWV', 'TPSE'])
+// D2D venue → IDB, else MIC code lookup, else custy. Dealer MIC list
+// is authoritative — see the comment in analytics.ts for the SEF
+// breakdown (BGC / Dealerweb / ICAP-Global × 2 / TP / Tradition).
+const IDB_MICS = new Set(['BGCD', 'DWSF', 'IGDL', 'ISWV', 'TPSE', 'TSEF'])
 
 function inferPlatform(row: UsdSwapTapeRow | null): PlatformKind {
   if (!row) return 'CUSTY'

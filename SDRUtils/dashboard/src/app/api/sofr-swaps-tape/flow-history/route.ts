@@ -5,6 +5,11 @@ import { query } from '@/lib/db'
 const LEGS_TABLE = 'arbs_usd_swap_legs_v2'
 const PACKAGES_TABLE = 'arbs_usd_swap_packages_v2'
 
+// Authoritative dealer (IDB) SEF MIC list. Mirrors the v2 swap-tape
+// analytics module — see SDRUtils/dashboard/src/lib/usd-swaps-tape-v2/analytics.ts.
+const IDB_MIC_CODES = ['BGCD', 'DWSF', 'IGDL', 'ISWV', 'TPSE', 'TSEF']
+const IDB_MIC_LITERAL = IDB_MIC_CODES.map((c) => `'${c}'`).join(', ')
+
 type FlowHistoryRow = {
   trade_date: string | Date
   bucket: string
@@ -142,7 +147,7 @@ export async function GET(request: Request) {
             WHEN EXISTS (
               SELECT 1
               FROM regexp_split_to_table(upper(li.platform_identifier), '[\\s,;/]+') AS token
-              WHERE token IN ('BGCD', 'ISWV', 'TPSE')
+              WHERE token IN (${IDB_MIC_LITERAL})
             ) THEN 'idb'
             ELSE 'custy'
           END AS platform_type

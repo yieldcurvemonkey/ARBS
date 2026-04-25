@@ -19,7 +19,10 @@ const HISTOGRAM_CLIP_LOWER_Q = 0.01;
 const HISTOGRAM_CLIP_UPPER_Q = 0.99;
 const HISTOGRAM_CLIP_SPAN_RATIO = 3;
 
-const IDB_MIC_SET = new Set(['BGCD', 'ISWV', 'TPSE']);
+// Authoritative dealer (IDB) SEF MIC list. See
+// SDRUtils/dashboard/src/lib/usd-swaps-tape-v2/analytics.ts for the
+// per-MIC SEF breakdown.
+const IDB_MIC_SET = new Set(['BGCD', 'DWSF', 'IGDL', 'ISWV', 'TPSE', 'TSEF']);
 const CUSTY_MIC_SET = new Set(['BILT', 'XXXX', 'TWSF', 'BBSF', 'XOFF']);
 
 const PRIMARY_METRIC_FALLBACK: MetricConfig = {

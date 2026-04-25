@@ -6,7 +6,9 @@ import { parseSeriesKey } from '@/lib/sofr-swaps-api-utils'
 
 const MAX_TIMESERIES_ROWS = 50_000
 const LEGS_TABLE = 'arbs_usd_swap_legs_v2'
-const IDB_MIC_CODES = ['BGCD', 'ISWV', 'TPSE']
+// Authoritative dealer (IDB) SEF MIC list. Mirrors the v2 swap-tape
+// analytics module.
+const IDB_MIC_CODES = ['BGCD', 'DWSF', 'IGDL', 'ISWV', 'TPSE', 'TSEF']
 const FORWARD_YEARS_TOLERANCE = 0.06
 const TENOR_YEARS_TOLERANCE = 0.1
 const SPOT_FORWARD_MAX_YEARS = 0.08
@@ -90,7 +92,7 @@ export async function GET(request: Request) {
           `EXISTS (
             SELECT 1
             FROM regexp_split_to_table(upper(coalesce(plat.platform_identifier, '')), '[\\s,;/]+') AS token
-            WHERE token IN ('BGCD', 'ISWV', 'TPSE')
+            WHERE token IN (${IDB_MIC_CODES.map((c) => `'${c}'`).join(', ')})
           )`
         )
       } else if (normalizedPlatform === 'custy') {
@@ -98,7 +100,7 @@ export async function GET(request: Request) {
           `NOT EXISTS (
             SELECT 1
             FROM regexp_split_to_table(upper(coalesce(plat.platform_identifier, '')), '[\\s,;/]+') AS token
-            WHERE token IN ('BGCD', 'ISWV', 'TPSE')
+            WHERE token IN (${IDB_MIC_CODES.map((c) => `'${c}'`).join(', ')})
           )`
         )
       } else {

@@ -19,6 +19,11 @@ type QuadrantHistoryRow = {
 
 const COMICALLY_LARGE_CUSTY_NOTIONAL = 100_000_000_000_000
 
+// Authoritative dealer (IDB) SEF MIC list. Mirrors the v2 swap-tape
+// analytics module — see SDRUtils/dashboard/src/lib/usd-swaps-tape-v2/analytics.ts.
+const IDB_MIC_CODES = ['BGCD', 'DWSF', 'IGDL', 'ISWV', 'TPSE', 'TSEF']
+const IDB_MIC_LITERAL = IDB_MIC_CODES.map((c) => `'${c}'`).join(', ')
+
 function parseNumber(value: string | null): number | null {
   if (!value) return null
   const parsed = Number(value)
@@ -183,7 +188,7 @@ export async function GET(request: Request) {
             WHEN EXISTS (
               SELECT 1
               FROM regexp_split_to_table(upper(platform_identifier), '[\\s,;/]+') AS token
-              WHERE token IN ('BGCD', 'ISWV', 'TPSE')
+              WHERE token IN (${IDB_MIC_LITERAL})
             ) THEN 'idb'
             ELSE 'custy'
           END AS platform_type

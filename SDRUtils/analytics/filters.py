@@ -38,7 +38,17 @@ TENOR_BUCKET_RANGES = {
 
 BENCHMARK_TENORS: List[str] = ["2Y", "3Y", "5Y", "7Y", "10Y", "20Y", "30Y"]
 
-D2D_PLATFORMS = {"ICAU", "BGCD", "TLAD", "TRAD", "DWUS", "BILT", "MARF"}
+# Dealer (D2D / IDB) platform identifiers — authoritative SEF MIC list:
+#   BGCD — BGC Derivative Markets L.P.
+#   DWSF — Dealerweb SEF LLC
+#   IGDL — ICAP Global Derivatives Ltd
+#   ISWV — ICAP Global Derivatives Ltd – Voice
+#   TPSE — TP SEF Inc
+#   TSEF — Tradition SEF
+# Pre-2026-04-25 this set carried stale codes (TLAD/TRAD/DWUS/MARF/ICAU)
+# and incorrectly included BILT (which is a custy / Bilateral platform),
+# so the Python D2D classifier mis-bucketed customer flow as dealer.
+D2D_PLATFORMS = {"BGCD", "DWSF", "IGDL", "ISWV", "TPSE", "TSEF"}
 
 # ---------------------------------------------------------------------------
 # Enrichment helpers
