@@ -171,8 +171,21 @@ export function useTradeTapeData(
         setRows((prev) => {
           const map = new Map(prev.map((r) => [r.package_id, r]))
           incoming.forEach((r) => map.set(r.package_id, r))
+          // The pg driver hands back `timestamp with time zone` as a JS
+          // Date for fresh rows but as ISO strings for already-merged
+          // rows that round-tripped through JSON. localeCompare on a
+          // Date returns the toString form ("Thu Apr 09 2026 …") which
+          // sorts unrelated to time. Coerce both sides to ISO strings
+          // first so the merged set keeps a deterministic newest-first
+          // order across polling and pagination upserts.
+          const toKey = (v: unknown): string => {
+            if (v instanceof Date) {
+              return Number.isNaN(v.getTime()) ? '' : v.toISOString()
+            }
+            return v == null ? '' : String(v)
+          }
           const combined = Array.from(map.values()).sort((a, b) =>
-            b.execution_start.localeCompare(a.execution_start),
+            toKey(b.execution_start).localeCompare(toKey(a.execution_start)),
           )
           return dedupeDuplicatePackages(combined)
         })

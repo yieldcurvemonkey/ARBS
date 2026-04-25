@@ -10,8 +10,12 @@ function toIsoString(value: unknown): string | null {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value.toISOString()
   }
+  // If the raw string can't be parsed as a date, return null instead of
+  // echoing the bad value back as `nextCursor`. Echoing would break the
+  // next pagination request with a Postgres cast error and silently
+  // halt the trader's lazy-scroll.
   const parsed = new Date(String(value))
-  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString()
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
 }
 
 export async function GET(req: Request) {

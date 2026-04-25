@@ -186,7 +186,11 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               key: 'rarity',
               label: 'Trade Rarity',
               icon: '◉',
-              badge: `P${Math.round(focusedPercentile)}`,
+              // Only display the percentile badge once the rarity API
+              // has settled. Before then `focusedPercentile` defaults
+              // to 50, which the trader could mis-read as a real "P50"
+              // result. Ellipsis communicates "in flight" instead.
+              badge: rarity.stats.count > 0 ? `P${Math.round(focusedPercentile)}` : '…',
             },
             { key: 'levels', label: 'Traded Levels', icon: '◈', badge: String(extremes.extremes.length) },
           ]}
@@ -207,7 +211,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               chartHeight={chartHeight}
             />
           ) : null}
-          {activeTab === 'rarity' && rarity.recency ? (
+          {activeTab === 'rarity' ? (
             <TradeRarityTab
               focused={focused}
               state={rarityState}

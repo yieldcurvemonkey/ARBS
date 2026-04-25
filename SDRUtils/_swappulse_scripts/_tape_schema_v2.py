@@ -245,6 +245,32 @@ CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_cluster ON {LEGS_TABLE_V2}(cluster_i
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_metrics_gin ON {LEGS_TABLE_V2} USING GIN (enrichment_metrics);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_flags_gin ON {LEGS_TABLE_V2} USING GIN (quality_flags);
 
+-- Phase 2 perf indexes for the analytics-dock routes. Each route filters
+-- on a category column ({{rate_index_clean | tape_label | canonical_underlier_key}})
+-- and orders / range-scans by the original-execution timestamp. A composite
+-- (filter, ts DESC) index turns those queries into a single index range
+-- scan instead of a seq-scan + sort. NULLS LAST keeps the descending
+-- range scan tight on the recent-end of the data, which is what
+-- DAILY_CLOSE / INTRADAY / extremes queries actually want.
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_rate_idx_orig
+  ON {LEGS_TABLE_V2}(rate_index_clean, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_tape_label_orig
+  ON {LEGS_TABLE_V2}(tape_label, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_trade_type_orig
+  ON {LEGS_TABLE_V2}(trade_type, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_tenor_orig
+  ON {LEGS_TABLE_V2}(tenor_label, original_execution_timestamp DESC NULLS LAST);
+
+-- Phase 4 canonical underlier key: per-row collapse of SDR underlier-name
+-- variations ('USD-SOFR-OIS Compound 1D Constant' vs 'USD-SOFR-COMPOUND
+-- 1D Constant', etc.) into a single comparable key. Persisted by the
+-- ingest pipeline (see SDRUtils/core/underlier_canonical.py); read by
+-- the rarity / traded-levels / package-analytics routes. Additive
+-- ALTER + IF NOT EXISTS keeps re-runs idempotent.
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS canonical_underlier_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_canonical_orig
+  ON {LEGS_TABLE_V2}(canonical_underlier_key, original_execution_timestamp DESC NULLS LAST);
+
 DROP VIEW IF EXISTS {DISPLAY_VIEW_V2};
 
 CREATE VIEW {DISPLAY_VIEW_V2} AS

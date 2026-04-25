@@ -1,6 +1,9 @@
 // Fetches all-time / 52w / 30d extremes + recent-similar trades for the
 // analytics dock's Traded Levels tab from /api/usd-swaps-tape-v2/extremes.
-import { useCallback, useEffect, useState } from 'react'
+//
+// Phase 2 perf: AbortController per fetch — when the focused trade
+// flips mid-flight (rapid row clicks), the prior request is cancelled.
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { TAPE_V2_API_BASE } from '../constants'
 import type {
   ExtremeRow,
@@ -24,6 +27,7 @@ export function useExtremesData(
   const [recentSimilar, setRecentSimilar] = useState<RecentSimilarRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   const bucket = focused?.tape_label ?? null
   const rate = focused?.fixed_rate_bps ?? null
@@ -36,6 +40,9 @@ export function useExtremesData(
       setExtremes([]); setRecentSimilar([])
       return
     }
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     setLoading(true)
     setError(null)
     try {
@@ -47,21 +54,29 @@ export function useExtremesData(
       })
       if (rate != null) q.set('focusedRate', String(rate))
       if (notional != null) q.set('focusedNotional', String(notional))
-      const res = await fetch(`${TAPE_V2_API_BASE}/extremes?${q}`)
+      const res = await fetch(`${TAPE_V2_API_BASE}/extremes?${q}`, { signal: controller.signal })
       if (!res.ok) throw new Error(`extremes ${res.status}`)
       const data = await res.json()
+      if (controller.signal.aborted) return
       setExtremes(data.extremes ?? [])
       setRecentSimilar(data.recentSimilar ?? [])
     } catch (e) {
+      if ((e as { name?: string })?.name === 'AbortError') return
       setError(e instanceof Error ? e.message : 'extremes failed')
     } finally {
-      setLoading(false)
+      if (!controller.signal.aborted) setLoading(false)
     }
   }, [bucket, rate, notional, primaryTol, sizeTol])
 
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort()
+    }
+  }, [])
 
   return { extremes, recentSimilar, loading, error, refetch: fetchData }
 }

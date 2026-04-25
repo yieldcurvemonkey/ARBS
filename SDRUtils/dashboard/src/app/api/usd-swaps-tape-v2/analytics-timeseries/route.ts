@@ -11,7 +11,17 @@ import {
   safeNum,
 } from '@/lib/usd-swaps-tape-v2/analytics'
 
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v1'
+// Phase 2 cutover: analytics-timeseries reads from the v2 leg table so it
+// benefits from the new (filter, original_execution_timestamp DESC)
+// composite indexes added in _tape_schema_v2.py. v1 stays the rollback
+// target; flip this constant to revert.
+const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+
+// Phase 2 cap: at most this many daily rows / intraday ticks per request.
+// Daily series LIMIT covers ~5y of trading days; intraday is intrinsically
+// bounded by the 72h anchor window and stays at the smaller cap.
+const DAILY_ROW_CAP = 2000
+const INTRADAY_TICK_CAP = 5000
 
 type DailyRow = {
   day: string
@@ -80,23 +90,24 @@ export async function GET(req: Request) {
       const INTRADAY_HOURS = 72
       const intradaySql = `
         WITH anchor AS (
-          SELECT COALESCE(MAX(l.execution_timestamp), NOW()) AS last_ts
+          SELECT COALESCE(MAX(l.original_execution_timestamp), MAX(l.execution_timestamp), NOW()) AS last_ts
           FROM ${LEGS_TABLE} l
           WHERE ${filterCol} = $1 AND NOT COALESCE(l.is_unwind, false)
         )
         SELECT
-          l.execution_timestamp AS ts,
+          COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
           ${platformExpr} AS platform,
           l.fixed_rate::float AS fixed_rate,
           l.risk::float AS risk,
           l.notional::float AS notional
         FROM ${LEGS_TABLE} l, anchor
         WHERE ${filterCol} = $1
-          AND l.execution_timestamp >= anchor.last_ts - INTERVAL '${INTRADAY_HOURS} hours'
+          AND COALESCE(l.original_execution_timestamp, l.execution_timestamp)
+              >= anchor.last_ts - INTERVAL '${INTRADAY_HOURS} hours'
           AND l.fixed_rate IS NOT NULL
           AND NOT COALESCE(l.is_unwind, false)
-        ORDER BY l.execution_timestamp ASC
-        LIMIT 2000
+        ORDER BY COALESCE(l.original_execution_timestamp, l.execution_timestamp) ASC
+        LIMIT ${INTRADAY_TICK_CAP}
       `
       // startDate/endDate params retained for API shape parity; actual
       // window is anchor-derived above.
@@ -129,16 +140,22 @@ export async function GET(req: Request) {
     const sql = `
       WITH classified AS (
         SELECT
-          l.execution_timestamp AS ts,
+          COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
           l.fixed_rate::float AS fixed_rate,
           l.risk::float AS risk,
           l.notional::float AS notional,
           ${platformExpr} AS platform,
-          DATE_TRUNC('day', l.execution_timestamp AT TIME ZONE 'America/New_York') AS day
+          DATE_TRUNC(
+            'day',
+            COALESCE(l.original_execution_timestamp, l.execution_timestamp)
+              AT TIME ZONE 'America/New_York'
+          ) AS day
         FROM ${LEGS_TABLE} l
         WHERE ${filterCol} = $1
-          AND l.execution_timestamp >= $2::timestamptz
-          AND l.execution_timestamp <= $3::timestamptz
+          AND COALESCE(l.original_execution_timestamp, l.execution_timestamp)
+              >= $2::timestamptz
+          AND COALESCE(l.original_execution_timestamp, l.execution_timestamp)
+              <= $3::timestamptz
           AND NOT COALESCE(l.is_unwind, false)
       ),
       per_day_platform AS (
@@ -174,7 +191,7 @@ export async function GET(req: Request) {
       FROM per_day_platform
       GROUP BY day
       ORDER BY day ASC
-      LIMIT 2000
+      LIMIT ${DAILY_ROW_CAP}
     `
     const { rows } = await query<DailyRow>(sql, [
       value,

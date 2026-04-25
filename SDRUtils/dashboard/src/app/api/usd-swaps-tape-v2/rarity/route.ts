@@ -16,7 +16,14 @@ import {
   safeNum,
 } from '@/lib/usd-swaps-tape-v2/analytics'
 
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v1'
+// Phase 2 cutover: rarity reads from the v2 leg table to pick up the
+// composite (filter, original_execution_timestamp DESC) indexes.
+const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+
+// Phase 2 cap: trim the worst-case sample pull. 50k SDR legs over a 90d
+// lookback is already plenty for a stable distribution; rare buckets
+// will return everything they have.
+const RARITY_SAMPLE_CAP = 50_000
 
 type SampleRow = {
   ts: string
@@ -76,7 +83,7 @@ export async function GET(req: Request) {
     // Pull the full sample set for stats + histogram + recency.
     const sampleSql = `
       SELECT
-        l.execution_timestamp AS ts,
+        COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
         l.fixed_rate::float AS fixed_rate,
         l.risk::float AS risk,
         l.notional::float AS notional,
@@ -86,11 +93,11 @@ export async function GET(req: Request) {
         l.package_id AS package_id
       FROM ${LEGS_TABLE} l
       WHERE ${filterCol} = $1
-        AND l.execution_timestamp >= $2::timestamptz
+        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $2::timestamptz
         AND l.fixed_rate IS NOT NULL
         AND NOT COALESCE(l.is_unwind, false)
-      ORDER BY l.execution_timestamp DESC
-      LIMIT 50000
+      ORDER BY COALESCE(l.original_execution_timestamp, l.execution_timestamp) DESC
+      LIMIT ${RARITY_SAMPLE_CAP}
     `
     const { rows: samples } = await query<SampleRow>(sampleSql, [value, startDate])
 
@@ -235,17 +242,22 @@ export async function GET(req: Request) {
     // All-time records within the bucket (no lookback cutoff).
     const recordSql = `
       (SELECT l.fixed_rate::float AS fixed_rate, l.risk::float AS risk, l.notional::float AS notional,
-              l.execution_timestamp AS ts, l.venue AS venue, ${platformExpr} AS platform
+              COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
+              l.venue AS venue, ${platformExpr} AS platform
        FROM ${LEGS_TABLE} l
        WHERE ${filterCol} = $1 AND l.fixed_rate IS NOT NULL AND NOT COALESCE(l.is_unwind, false)
        ORDER BY l.fixed_rate DESC NULLS LAST LIMIT 1)
       UNION ALL
-      (SELECT l.fixed_rate::float, l.risk::float, l.notional::float, l.execution_timestamp, l.venue, ${platformExpr}
+      (SELECT l.fixed_rate::float, l.risk::float, l.notional::float,
+              COALESCE(l.original_execution_timestamp, l.execution_timestamp),
+              l.venue, ${platformExpr}
        FROM ${LEGS_TABLE} l
        WHERE ${filterCol} = $1 AND l.fixed_rate IS NOT NULL AND NOT COALESCE(l.is_unwind, false)
        ORDER BY l.fixed_rate ASC NULLS LAST LIMIT 1)
       UNION ALL
-      (SELECT l.fixed_rate::float, l.risk::float, l.notional::float, l.execution_timestamp, l.venue, ${platformExpr}
+      (SELECT l.fixed_rate::float, l.risk::float, l.notional::float,
+              COALESCE(l.original_execution_timestamp, l.execution_timestamp),
+              l.venue, ${platformExpr}
        FROM ${LEGS_TABLE} l
        WHERE ${filterCol} = $1 AND l.notional IS NOT NULL AND NOT COALESCE(l.is_unwind, false)
        ORDER BY ABS(l.notional) DESC NULLS LAST LIMIT 1)

@@ -81,6 +81,14 @@ export function TradedLevelsTab(props: TradedLevelsTabProps): JSX.Element {
           <div>Platform</div>
         </div>
 
+        {extremes.length === 0 ? (
+          <div className="px-3 py-4 text-center font-mono text-[10.5px] text-slate-500">
+            No prints yet for this bucket — the rarity / extremes engine
+            needs at least one settled trade in the lookback to populate
+            this list. Pin the trade and check back after the next
+            ingest run.
+          </div>
+        ) : null}
         {extremes.map((r) => {
           const isHigh = r.label.includes('high')
           const isLow = r.label.includes('low')
@@ -139,7 +147,7 @@ export function TradedLevelsTab(props: TradedLevelsTabProps): JSX.Element {
             Recent similar trades · within ±2 bps, ±25% size
           </span>
           <span className="font-mono text-[10px] text-slate-500">
-            {recentSimilar.length} shown · 47 in last 90d
+            {recentSimilar.length} shown
           </span>
         </div>
         <div className="grid grid-cols-[80px_100px_120px_140px_180px_100px_1fr] items-center gap-2 border-b border-slate-800 bg-slate-900/20 px-2.5 py-1 font-mono text-[9.5px] uppercase tracking-wider text-slate-500">

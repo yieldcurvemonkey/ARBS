@@ -127,7 +127,10 @@ export interface TradeRarityTabProps {
   bins: HistogramBin[]
   stats: DistributionStats
   metricRows: MetricRow[]
-  recency: RecencyBucket
+  // Recency may be null when the bucket has no qualifying recent prints
+  // — the histogram + percentile rows still render, only the recency
+  // cards are hidden in that case.
+  recency: RecencyBucket | null
   // Focused-trade percentile pre-computed server-side for the active
   // basis (combined/custy/idb). Parent picks which member to pass.
   focusedPercentile: number
@@ -431,80 +434,118 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
 
         <div className="flex flex-col gap-1.5">
           <RecencyCard title="Last similar trade" accent="emerald">
-            <div className="flex items-baseline gap-2">
-              <span className="font-mono text-[16px] text-slate-100">
-                {fmtDaysAgo(recency.lastSimilar.daysAgo)}
-              </span>
-              <span className="font-mono text-[10px] text-slate-500">{recency.lastSimilar.date}</span>
-            </div>
-            <div className="font-mono text-[10.5px] text-slate-400">
-              rate <span className="text-slate-200">{recency.lastSimilar.value.toFixed(2)}</span>
-              <span className="text-slate-500"> bps</span>
-              <span className="mx-1.5 text-slate-700">·</span>
-              <PlatformDot platform={recency.lastSimilar.platform} size={6} />
-              <span
-                className={`ml-1 ${
-                  recency.lastSimilar.platform === 'CUSTY' ? 'text-amber-200' : 'text-sky-200'
-                }`}
+            {recency?.lastSimilar ? (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-mono text-[16px] text-slate-100">
+                    {fmtDaysAgo(recency.lastSimilar.daysAgo)}
+                  </span>
+                  <span className="font-mono text-[10px] text-slate-500">{recency.lastSimilar.date}</span>
+                </div>
+                <div className="font-mono text-[10.5px] text-slate-400">
+                  rate <span className="text-slate-200">{recency.lastSimilar.value.toFixed(2)}</span>
+                  <span className="text-slate-500"> bps</span>
+                  <span className="mx-1.5 text-slate-700">·</span>
+                  <PlatformDot platform={recency.lastSimilar.platform} size={6} />
+                  <span
+                    className={`ml-1 ${
+                      recency.lastSimilar.platform === 'CUSTY' ? 'text-amber-200' : 'text-sky-200'
+                    }`}
+                  >
+                    {recency.lastSimilar.platform}
+                  </span>
+                  <span className="mx-1.5 text-slate-700">·</span>
+                  <span className="text-slate-300">{recency.lastSimilar.venue}</span>
+                </div>
+              </>
+            ) : (
+              <div
+                className="font-mono text-[10.5px] text-slate-500"
+                title="No prints within the configured rate ± size tolerance window"
               >
-                {recency.lastSimilar.platform}
-              </span>
-              <span className="mx-1.5 text-slate-700">·</span>
-              <span className="text-slate-300">{recency.lastSimilar.venue}</span>
-            </div>
+                No similar trade in lookback window
+              </div>
+            )}
           </RecencyCard>
 
           <RecencyCard title="Frequency · last 90 days" accent="sky">
-            <div className="flex items-baseline gap-2">
-              <span className="font-mono text-[16px] text-slate-100">{recency.frequency90d.count}</span>
-              <span className="font-mono text-[10px] text-slate-400">
-                similar trades · avg{' '}
-                <span className="text-slate-200">{recency.frequency90d.avgIntervalDays.toFixed(1)}</span> days apart
-              </span>
-            </div>
-            <div className="h-1 rounded-full bg-slate-800">
-              <div
-                className="h-full rounded-full bg-sky-500/70"
-                style={{ width: `${Math.min(recency.frequency90d.count / 60, 1) * 100}%` }}
-              />
-            </div>
+            {recency?.frequency90d ? (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-mono text-[16px] text-slate-100">{recency.frequency90d.count}</span>
+                  <span className="font-mono text-[10px] text-slate-400">
+                    similar trades · avg{' '}
+                    <span className="text-slate-200">{recency.frequency90d.avgIntervalDays.toFixed(1)}</span> days apart
+                  </span>
+                </div>
+                <div className="h-1 rounded-full bg-slate-800">
+                  <div
+                    className="h-full rounded-full bg-sky-500/70"
+                    style={{ width: `${Math.min(recency.frequency90d.count / 60, 1) * 100}%` }}
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="font-mono text-[10.5px] text-slate-500">No frequency data</div>
+            )}
           </RecencyCard>
 
           <RecencyCard title="Bucket rank" accent="fuchsia">
-            <div className="flex items-baseline gap-2">
-              <span className="font-mono text-[16px] text-slate-100">
-                #{recency.bucketRank.rank}
-                <span className="text-slate-500"> / {recency.bucketRank.total.toLocaleString()}</span>
-              </span>
-              <span className="font-mono text-[10px] text-slate-500">by {recency.bucketRank.by}</span>
-            </div>
-            <div className="font-mono text-[10px] text-slate-400">
-              top{' '}
-              <span className="text-fuchsia-300">
-                {((recency.bucketRank.rank / recency.bucketRank.total) * 100).toFixed(1)}%
-              </span>{' '}
-              in the {focused.tape_label} bucket this quarter
-            </div>
+            {recency?.bucketRank ? (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-mono text-[16px] text-slate-100">
+                    #{recency.bucketRank.rank}
+                    <span className="text-slate-500"> / {recency.bucketRank.total.toLocaleString()}</span>
+                  </span>
+                  <span className="font-mono text-[10px] text-slate-500">by {recency.bucketRank.by}</span>
+                </div>
+                <div className="font-mono text-[10px] text-slate-400">
+                  top{' '}
+                  <span className="text-fuchsia-300">
+                    {((recency.bucketRank.rank / recency.bucketRank.total) * 100).toFixed(1)}%
+                  </span>{' '}
+                  in the {focused.tape_label} bucket this quarter
+                </div>
+              </>
+            ) : (
+              <div
+                className="font-mono text-[10.5px] text-slate-500"
+                title="Bucket rank requires a focused notional; the trade may be an outright with missing leg notional"
+              >
+                Rank unavailable for this trade
+              </div>
+            )}
           </RecencyCard>
 
           <RecencyCard title={`All-time records · ${focused.tape_label}`} accent="amber">
-            <div className="flex flex-col gap-1 font-mono text-[10.5px]">
-              <div className="flex items-baseline justify-between">
-                <span className="text-slate-500">largest notional</span>
-                <span className="text-slate-200">{recency.allTimeRecord.largestNotional.displayValue}</span>
-                <span className="text-slate-500">{recency.allTimeRecord.largestNotional.date}</span>
+            {recency?.allTimeRecord ? (
+              <div className="flex flex-col gap-1 font-mono text-[10.5px]">
+                {recency.allTimeRecord.largestNotional ? (
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-slate-500">largest notional</span>
+                    <span className="text-slate-200">{recency.allTimeRecord.largestNotional.displayValue}</span>
+                    <span className="text-slate-500">{recency.allTimeRecord.largestNotional.date}</span>
+                  </div>
+                ) : null}
+                {recency.allTimeRecord.highestRate ? (
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-slate-500">high rate</span>
+                    <span className="text-slate-200">{recency.allTimeRecord.highestRate.displayValue} bps</span>
+                    <span className="text-slate-500">{recency.allTimeRecord.highestRate.date}</span>
+                  </div>
+                ) : null}
+                {recency.allTimeRecord.lowestRate ? (
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-slate-500">low rate</span>
+                    <span className="text-slate-200">{recency.allTimeRecord.lowestRate.displayValue} bps</span>
+                    <span className="text-slate-500">{recency.allTimeRecord.lowestRate.date}</span>
+                  </div>
+                ) : null}
               </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-slate-500">high rate</span>
-                <span className="text-slate-200">{recency.allTimeRecord.highestRate.displayValue} bps</span>
-                <span className="text-slate-500">{recency.allTimeRecord.highestRate.date}</span>
-              </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-slate-500">low rate</span>
-                <span className="text-slate-200">{recency.allTimeRecord.lowestRate.displayValue} bps</span>
-                <span className="text-slate-500">{recency.allTimeRecord.lowestRate.date}</span>
-              </div>
-            </div>
+            ) : (
+              <div className="font-mono text-[10.5px] text-slate-500">No historical prints</div>
+            )}
           </RecencyCard>
         </div>
       </div>
