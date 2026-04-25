@@ -124,10 +124,17 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
     [panelHeight, panelHeightVh],
   )
 
-  // Keyboard: Esc closes dock.
+  // Keyboard: Esc closes dock — but only when no PrimeReact Dialog or
+  // similar focus-trapping modal is open. Without this scope, Esc on
+  // ManualLinksDialog would close both the dialog and the dock at the
+  // same time, dropping the trader's row selection state.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      const dialogOpen =
+        document.querySelector('.p-dialog:not(.p-dialog-hidden)') !== null
+      if (dialogOpen) return
+      onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -186,12 +193,28 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
             loading…
           </span>
         ) : null}
-        {ts.error || rarity.error || extremes.error ? (
+        {ts.error ? (
           <span
             className="rounded bg-rose-500/15 px-1.5 py-[1px] font-mono text-[9.5px] text-rose-200 ring-1 ring-rose-500/30"
-            title={ts.error ?? rarity.error ?? extremes.error ?? ''}
+            title={ts.error}
           >
-            fetch error
+            timeseries error
+          </span>
+        ) : null}
+        {rarity.error ? (
+          <span
+            className="rounded bg-rose-500/15 px-1.5 py-[1px] font-mono text-[9.5px] text-rose-200 ring-1 ring-rose-500/30"
+            title={rarity.error}
+          >
+            rarity error
+          </span>
+        ) : null}
+        {extremes.error ? (
+          <span
+            className="rounded bg-rose-500/15 px-1.5 py-[1px] font-mono text-[9.5px] text-rose-200 ring-1 ring-rose-500/30"
+            title={extremes.error}
+          >
+            extremes error
           </span>
         ) : null}
         <span className="ml-auto flex items-center gap-1 font-mono text-[10px] text-slate-500">
