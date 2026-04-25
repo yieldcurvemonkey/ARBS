@@ -74,8 +74,13 @@ export function useRarityData(
         sizeTol: String(sizeTol),
       })
       if (rate != null) q.set('focusedRate', String(rate))
-      if (dv01 != null) q.set('focusedDv01', String(dv01))
-      if (notional != null) q.set('focusedNotional', String(notional))
+      // dv01 / notional are aggregated abs-sums across legs; an orphan
+      // package with no leg data hits this hook with 0 / 0 and would
+      // otherwise produce a bogus P0 percentile + "rank #N" reading.
+      // Drop them when zero so the server treats the rarity row as
+      // notional-unknown and emits null bucketRank instead.
+      if (dv01 != null && dv01 > 0) q.set('focusedDv01', String(dv01))
+      if (notional != null && notional > 0) q.set('focusedNotional', String(notional))
       const res = await fetch(`${TAPE_V2_API_BASE}/rarity?${q}`, { signal: controller.signal })
       if (!res.ok) throw new Error(`rarity ${res.status}`)
       const data = await res.json()

@@ -205,6 +205,12 @@ export function useTradeTapeData(
       abortRef.current?.abort()
       const controller = new AbortController()
       abortRef.current = controller
+      // 15s safety timeout — without this a hung network keeps
+      // fetchInFlight stuck true and the 30s poll silently swallows
+      // every subsequent tick. Once the timeout fires, the AbortError
+      // is treated as a normal abort below and the in-flight latch
+      // resets, so polling resumes on the next interval.
+      const timeoutId = setTimeout(() => controller.abort(), 15_000)
 
       const isCursor = !!options?.cursor
       const isPoll = !!options?.since
@@ -235,6 +241,7 @@ export function useTradeTapeData(
         else if (isPoll) setPollError(msg)
         else setInitialError(msg)
       } finally {
+        clearTimeout(timeoutId)
         setLoading(false)
         setLoadingMore(false)
         fetchInFlight.current = false

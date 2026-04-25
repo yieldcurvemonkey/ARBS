@@ -26,8 +26,16 @@ export function ManualLinksDialog(props: ManualLinksDialogProps): JSX.Element {
     (row.legs_json ?? []).map((l) => String(l.trade_id)).filter(Boolean),
   )
 
+  // A manual link must span at least 2 distinct packages — linking
+  // legs within a single package to itself is meaningless. The
+  // earlier guard only checked tradeIds.length, which let a 3-leg
+  // package self-link.
+  const selectedPackageCount = props.selected.length
+  const canSubmit =
+    !!user && !!manualId.trim() && selectedPackageCount >= 2 && tradeIds.length >= 2
+
   async function onSubmit() {
-    if (!user || !manualId || tradeIds.length < 2) return
+    if (!canSubmit) return
     const result = await createLink({
       manual_package_id: manualId,
       package_type: 'MANUAL',
@@ -43,11 +51,7 @@ export function ManualLinksDialog(props: ManualLinksDialogProps): JSX.Element {
     }
   }
 
-  const disabled =
-    !user ||
-    !manualId.trim() ||
-    tradeIds.length < 2 ||
-    creating
+  const disabled = !canSubmit || creating
 
   return (
     <Dialog

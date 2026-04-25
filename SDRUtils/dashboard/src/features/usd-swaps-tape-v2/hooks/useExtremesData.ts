@@ -53,7 +53,11 @@ export function useExtremesData(
         sizeTol: String(sizeTol),
       })
       if (rate != null) q.set('focusedRate', String(rate))
-      if (notional != null) q.set('focusedNotional', String(notional))
+      // Skip focusedNotional when the focused trade has no leg
+      // notional (orphan packages aggregate to 0). Sending 0 would
+      // narrow the size band to ±0% and silently filter out every
+      // similar print.
+      if (notional != null && notional > 0) q.set('focusedNotional', String(notional))
       const res = await fetch(`${TAPE_V2_API_BASE}/extremes?${q}`, { signal: controller.signal })
       if (!res.ok) throw new Error(`extremes ${res.status}`)
       const data = await res.json()

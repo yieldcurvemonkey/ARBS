@@ -218,6 +218,14 @@ CREATE TABLE IF NOT EXISTS {RUNS_TABLE_V2} (
 
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_date ON {PACKAGES_TABLE_V2}(as_of_date, execution_start DESC);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_orig_date ON {PACKAGES_TABLE_V2}(as_of_date, original_execution_start DESC);
+-- Pagination scan: the main tape route does
+-- ``WHERE d.execution_start < $cursor ORDER BY d.execution_start DESC
+-- LIMIT 201`` with no as_of_date filter, so the composite index above
+-- can't lead. A single-column DESC NULLS LAST index turns cursor pages
+-- into a fast btree range scan instead of a seq-scan on the packages
+-- table.
+CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_exec_start
+  ON {PACKAGES_TABLE_V2}(execution_start DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_type ON {PACKAGES_TABLE_V2}(package_type, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_cluster ON {PACKAGES_TABLE_V2}(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_fomc ON {PACKAGES_TABLE_V2}(fomc_meeting_label);
