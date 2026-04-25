@@ -166,6 +166,44 @@ export function matchFilterMeta(rowValue: any, filterMeta: any): boolean {
       )
 }
 
+/**
+ * Collect every plausible value to test a filter against for a given row +
+ * field. Most package-level fields (tape_label, total_risk, weighted_fixed_rate,
+ * package_type) live directly on the row, so the candidate list is just
+ * `[row[field]]`. A handful of columns the dashboard renders from leg-only
+ * data — Platform (`platform_identifier`), Action (`lifecycle_type`),
+ * per-leg PTS / PTP — are null at the package level; previously the filter
+ * loop saw `undefined` and rejected every row regardless of the user's
+ * input. Walking `legs_json` so any leg can satisfy the constraint mirrors
+ * the body cell's `displayPlatform` fallback and matches trader intent
+ * ("show packages with at least one leg matching X").
+ */
+export function collectFilterCandidates(
+  row: Record<string, unknown> & { legs_json?: Array<Record<string, unknown>> },
+  field: string,
+): unknown[] {
+  const root = row?.[field]
+  if (!isEmptyFilterValue(root)) return [root]
+  const legs = Array.isArray(row?.legs_json) ? row.legs_json : []
+  const legValues = legs
+    .map((leg) => (leg ? leg[field] : undefined))
+    .filter((value) => !isEmptyFilterValue(value))
+  // Fall back to the (nullish) root so the constraint still gets evaluated
+  // — matchFilterMeta treats nullish + a non-empty filter value as a miss,
+  // which is what we want when neither the row nor any leg carries data.
+  return legValues.length > 0 ? legValues : [root]
+}
+
+export function matchFilterMetaWithRow(
+  row: Record<string, unknown> & { legs_json?: Array<Record<string, unknown>> },
+  field: string,
+  filterMeta: any,
+): boolean {
+  if (!filterMeta) return true
+  const candidates = collectFilterCandidates(row, field)
+  return candidates.some((value) => matchFilterMeta(value, filterMeta))
+}
+
 export function hasActiveConstraints(filterMeta: any): boolean {
   if (!filterMeta) return false
   const constraints: ColumnFilterConstraint[] = Array.isArray(

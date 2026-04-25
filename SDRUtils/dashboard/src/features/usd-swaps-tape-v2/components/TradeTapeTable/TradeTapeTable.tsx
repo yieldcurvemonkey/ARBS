@@ -29,7 +29,10 @@ import {
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
 import { getColumns, rowClassName, type MetricMode } from './columns'
-import { hasActiveConstraints, matchFilterMeta } from './filter-utils'
+import {
+  hasActiveConstraints,
+  matchFilterMetaWithRow,
+} from './filter-utils'
 
 // PrimeReact's `VirtualScrollerLazyEvent` types `first` / `last` as
 // `number | VirtualScrollerState`; we only care about the numeric case and
@@ -154,7 +157,19 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     if (activeFilterEntries.length > 0) {
       result = result.filter((row) =>
         activeFilterEntries.every(([field, meta]) =>
-          matchFilterMeta((row as Record<string, unknown>)[field], meta),
+          // Use the row+leg fallback resolver: leg-only fields like
+          // `platform_identifier` and `lifecycle_type` are null at the
+          // package level, so a plain `row[field]` lookup rejected
+          // every package regardless of the user's input. The resolver
+          // mirrors the body cell's leg fallback so a Platform filter
+          // of "TWSF" matches packages whose first leg is on TWSF.
+          matchFilterMetaWithRow(
+            row as Record<string, unknown> & {
+              legs_json?: Array<Record<string, unknown>>
+            },
+            field,
+            meta,
+          ),
         ),
       )
     }

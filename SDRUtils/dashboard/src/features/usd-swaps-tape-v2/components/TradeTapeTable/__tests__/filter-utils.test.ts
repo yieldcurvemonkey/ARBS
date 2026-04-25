@@ -2,10 +2,12 @@ import { describe, expect, it } from '@jest/globals'
 import { FilterMatchMode, FilterOperator } from 'primereact/api'
 import {
   buildColumnFilterPayload,
+  collectFilterCandidates,
   getFilterDisplayLabel,
   hasActiveConstraints,
   isEmptyFilterValue,
   matchFilterMeta,
+  matchFilterMetaWithRow,
   matchFilterValue,
   parseFilterNumber,
 } from '../filter-utils'
@@ -152,5 +154,118 @@ describe('getFilterDisplayLabel', () => {
   })
   it('returns empty string when no active constraints', () => {
     expect(getFilterDisplayLabel({ constraints: [{ value: null }] })).toBe('')
+  })
+})
+
+describe('collectFilterCandidates (leg-fallback resolver)', () => {
+  it('returns [root] when the root field is populated', () => {
+    const row = {
+      package_id: 'P1',
+      tape_label: 'USD-SOFR 5Y Outright',
+      legs_json: [{ tape_label: 'leg-level' }],
+    }
+    expect(collectFilterCandidates(row, 'tape_label')).toEqual([
+      'USD-SOFR 5Y Outright',
+    ])
+  })
+
+  it('falls back to leg values when the root is null (Platform)', () => {
+    const row = {
+      package_id: 'P2',
+      platform_identifier: null,
+      legs_json: [
+        { platform_identifier: 'TWSF' },
+        { platform_identifier: 'BBSF' },
+      ],
+    }
+    expect(collectFilterCandidates(row, 'platform_identifier')).toEqual([
+      'TWSF',
+      'BBSF',
+    ])
+  })
+
+  it('falls back to leg values for lifecycle_type', () => {
+    const row = {
+      package_id: 'P3',
+      lifecycle_type: undefined,
+      legs_json: [
+        { lifecycle_type: 'NEW_TRADE' },
+        { lifecycle_type: 'TERMINATION' },
+      ],
+    }
+    expect(collectFilterCandidates(row, 'lifecycle_type')).toEqual([
+      'NEW_TRADE',
+      'TERMINATION',
+    ])
+  })
+
+  it('returns [root] (nullish) when neither root nor legs carry data', () => {
+    const row = { package_id: 'P4', legs_json: [{}] }
+    expect(collectFilterCandidates(row as any, 'platform_identifier')).toEqual([
+      undefined,
+    ])
+  })
+})
+
+describe('matchFilterMetaWithRow', () => {
+  it('passes a leg-only Platform contains-filter when any leg matches', () => {
+    const row = {
+      package_id: 'P5',
+      platform_identifier: null,
+      legs_json: [{ platform_identifier: 'TWSF' }, { platform_identifier: 'BBSF' }],
+    }
+    const meta = {
+      operator: FilterOperator.AND,
+      constraints: [
+        { value: 'TWSF', matchMode: FilterMatchMode.EQUALS },
+      ],
+    }
+    expect(matchFilterMetaWithRow(row as any, 'platform_identifier', meta)).toBe(
+      true,
+    )
+  })
+
+  it('rejects a leg-only Platform contains-filter when no leg matches', () => {
+    const row = {
+      package_id: 'P6',
+      platform_identifier: null,
+      legs_json: [{ platform_identifier: 'XXXX' }],
+    }
+    const meta = {
+      operator: FilterOperator.AND,
+      constraints: [
+        { value: 'TWSF', matchMode: FilterMatchMode.EQUALS },
+      ],
+    }
+    expect(matchFilterMetaWithRow(row as any, 'platform_identifier', meta)).toBe(
+      false,
+    )
+  })
+
+  it('returns true when filter is empty regardless of row state', () => {
+    const row = { package_id: 'P7', legs_json: [] }
+    expect(
+      matchFilterMetaWithRow(row as any, 'platform_identifier', {
+        constraints: [{ value: '', matchMode: FilterMatchMode.CONTAINS }],
+      }),
+    ).toBe(true)
+  })
+
+  it('honors OR operator across leg values', () => {
+    const row = {
+      package_id: 'P8',
+      platform_identifier: null,
+      legs_json: [{ platform_identifier: 'TWSF' }],
+    }
+    const meta = {
+      operator: FilterOperator.OR,
+      constraints: [
+        { value: 'BBSF', matchMode: FilterMatchMode.EQUALS },
+        { value: 'TWSF', matchMode: FilterMatchMode.EQUALS },
+      ],
+    }
+    expect(matchFilterMetaWithRow(row as any, 'platform_identifier', meta)).toBe(
+      true,
+    )
   })
 })
