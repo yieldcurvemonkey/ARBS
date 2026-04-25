@@ -123,6 +123,14 @@ CREATE TABLE IF NOT EXISTS {LEGS_TABLE_V2} (
     cleared TEXT,
     tape_label TEXT,
     leg_tape_label TEXT,
+    -- Per-leg package economics. SPREADOVER_CURVE / MATCHED_MATURITY_FLY
+    -- composites carry distinct per-leg PTS / PTP values; the package-level
+    -- p.package_transaction_spread is only correct for true single-spread
+    -- packages. The dashboard reads l.package_transaction_spread first
+    -- and falls back to the package row when it's null.
+    package_transaction_spread NUMERIC,
+    package_transaction_price NUMERIC,
+    package_transaction_price_currency TEXT,
     upi_reset_freq TEXT,
     upi_notional_schedule TEXT,
     upi_delivery_type TEXT,
@@ -216,6 +224,15 @@ CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_fomc ON {PACKAGES_TABLE_V2}(fomc
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_flow ON {PACKAGES_TABLE_V2}(contributes_to_flow_any, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_violation ON {PACKAGES_TABLE_V2}(state_machine_violation_any);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_metrics_gin ON {PACKAGES_TABLE_V2} USING GIN (package_metrics);
+
+-- Idempotent migrations for tables that pre-date the v2 columns
+-- introduced after the initial deploy. ADD COLUMN IF NOT EXISTS keeps
+-- this DDL safe to re-run on every ensure_schema() call. Per-leg
+-- package economics were added so SPREADOVER_CURVE / MATCHED_MATURITY_FLY
+-- composites can persist distinct per-leg PTS / PTP values.
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS package_transaction_spread NUMERIC;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS package_transaction_price NUMERIC;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS package_transaction_price_currency TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_package ON {LEGS_TABLE_V2}(package_id);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_exec ON {LEGS_TABLE_V2}(execution_timestamp);
