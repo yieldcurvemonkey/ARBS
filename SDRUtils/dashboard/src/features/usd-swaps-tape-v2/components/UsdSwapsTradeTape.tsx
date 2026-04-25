@@ -1,7 +1,7 @@
 'use client'
 // ABOUTME: Main orchestrator for the USD swap tape v2 feature.
 import type { JSX } from 'react'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { PrimeReactProvider } from 'primereact/api'
 import 'primereact/resources/themes/lara-dark-indigo/theme.css'
 import 'primereact/resources/primereact.min.css'
@@ -11,11 +11,14 @@ import 'primeicons/primeicons.css'
 // per-column inside TradeTapeTable, URL-synced via useColumnFilters.
 import { TradeTapeTable } from './TradeTapeTable/TradeTapeTable'
 import { ManualLinksDialog } from './ManualLinksDialog/ManualLinksDialog'
+import { AnalyticsPanel } from './AnalyticsPanel'
 import {
+  useFocusedTrade,
   useRowExpansion,
   useRowSelection,
   useTradeTapeData,
 } from '../hooks'
+import { normalizeFocusedTrade } from '../hooks/useFocusedTrade'
 
 type ModalName = 'links' | null
 
@@ -24,8 +27,31 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   const selection = useRowSelection()
 
   const [activeModal, setActiveModal] = useState<ModalName>(null)
+  const [analyticsOpen, setAnalyticsOpen] = useState<boolean>(false)
+  const focus = useFocusedTrade()
 
   const tape = useTradeTapeData({})
+
+  // When the user checks a row, make the first-selected row the focus so
+  // the analytics dock tracks their attention without a separate click.
+  // Auto-opens the dock on first selection so analytics surface as soon
+  // as there's something real to render.
+  const firstSelected = selection.selected[0] ?? null
+  const derivedFocused = useMemo(
+    () => normalizeFocusedTrade(firstSelected),
+    [firstSelected],
+  )
+  // Do NOT depend on the whole `focus` object here — useFocusedTrade
+  // returns a fresh object every render, which previously fired this
+  // effect on every render and loop-triggered re-fetches. Pull the
+  // stable callback out of the hook and depend on it directly.
+  const setFocusedRaw = focus.setFocusedRaw
+  useEffect(() => {
+    if (derivedFocused) {
+      setFocusedRaw(derivedFocused)
+      setAnalyticsOpen(true)
+    }
+  }, [derivedFocused, setFocusedRaw])
 
   return (
     <PrimeReactProvider>
@@ -43,18 +69,42 @@ export default function UsdSwapsTradeTape(): JSX.Element {
             selected={selection.selected}
             onSelectionChange={selection.onSelectionChange}
             actionSlot={
-              selection.count > 0 ? (
+              <div className="flex items-center gap-2">
+                {selection.count > 0 ? (
+                  <button
+                    type="button"
+                    className="whitespace-nowrap text-[11px] text-sky-200 hover:text-sky-100"
+                    onClick={() => setActiveModal('links')}
+                  >
+                    Link {selection.count} selected
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  className="whitespace-nowrap text-[11px] text-sky-200 hover:text-sky-100"
-                  onClick={() => setActiveModal('links')}
+                  onClick={() => setAnalyticsOpen((v) => !v)}
+                  title="Open the per-trade analytics dock"
+                  className={`rounded px-2.5 py-1 font-mono text-[10.5px] ring-1 transition-colors ${
+                    analyticsOpen
+                      ? 'bg-indigo-500/20 text-indigo-100 ring-indigo-400/40'
+                      : 'border border-slate-700 text-slate-200 ring-transparent hover:bg-slate-800'
+                  }`}
                 >
-                  Link {selection.count} selected
+                  {analyticsOpen ? '▼ Hide Analytics' : '▲ Show Analytics'}
                 </button>
-              ) : null
+              </div>
             }
           />
         </div>
+        {analyticsOpen ? (
+          <AnalyticsPanel
+            focused={focus.focused}
+            onClose={() => setAnalyticsOpen(false)}
+            onClearFocused={() => {
+              focus.clear()
+              selection.clear()
+            }}
+          />
+        ) : null}
         <style jsx global>{`
           .usd-swaps-tape-shell {
             --usd-swaps-tape-scale: 0.9;
@@ -141,10 +191,18 @@ export default function UsdSwapsTradeTape(): JSX.Element {
             padding: 0.3rem 0.5rem !important;
           }
           /* Make the funnel-icon button low-key — only really visible when a
-             filter is active (the active state class is added by PrimeReact). */
+             filter is active (the active state class is added by PrimeReact).
+
+             Hit-area sizing: the icon itself stays small (font-size keeps the
+             glyph at ~0.7rem) but the button is a 1.6rem x 1.6rem square with
+             extra padding, so clicking "near" the funnel no longer lands on
+             the sortable header label and flips the sort by accident. */
           .usd-swaps-tape-shell .p-column-filter-menu-button {
-            width: 1.1rem !important;
-            height: 1.1rem !important;
+            min-width: 1.6rem !important;
+            min-height: 1.6rem !important;
+            width: 1.6rem !important;
+            height: 1.6rem !important;
+            padding: 0.35rem !important;
             color: rgba(148, 163, 184, 0.55) !important;
           }
           .usd-swaps-tape-shell .p-column-filter-menu-button:hover {

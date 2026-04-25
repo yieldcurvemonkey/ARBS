@@ -137,10 +137,25 @@ export function formatReportedLvl(row: UsdSwapTapeRow): string {
   // so ``row.trade_type`` is typically undefined on the main tape. Prefer
   // ``package_type`` and fall back to ``trade_type`` only as a backstop.
   const kind = String(row.package_type ?? row.trade_type ?? '').toUpperCase()
-  const isMultiLeg = kind === 'CURVE' || kind === 'FLY'
+  // Composite types from the sub-package detector (e.g. SPREADOVER_CURVE,
+  // MATCHED_MATURITY_FLY) are still CURVE / FLY structures — render
+  // per-leg rates the same way as the base types.
+  const isMultiLeg =
+    kind === 'CURVE' ||
+    kind === 'FLY' ||
+    kind.endsWith('_CURVE') ||
+    kind.endsWith('_FLY')
   if (isMultiLeg) {
     const legs = row.legs_json ?? []
-    const legRates = legs
+    // Desk convention: render tenor-ascending so the CURVE reads
+    // "front / back" and FLY reads "short wing / belly / long wing".
+    // Input ``legs_json`` ordering is not guaranteed — sort defensively.
+    const sorted = [...legs].sort((a, b) => {
+      const at = typeof a?.tenor_years === 'number' ? a.tenor_years : Number.POSITIVE_INFINITY
+      const bt = typeof b?.tenor_years === 'number' ? b.tenor_years : Number.POSITIVE_INFINITY
+      return at - bt
+    })
+    const legRates = sorted
       .map((l) => l?.fixed_rate)
       .filter((r): r is number => !isNullish(r as number | null | undefined))
     if (legRates.length >= 2) {
@@ -262,6 +277,14 @@ export function formatOtherLvl(input: {
    * Optional for backward compat with callers that pre-date the field.
    */
   pts?: number | null | undefined
+  /**
+   * Per-leg PTP / PTS arrays. Populated for CURVE / FLY packages (and
+   * their composite ``*_CURVE`` / ``*_FLY`` variants) so the cell reads
+   * ``"PTP: 100k / 50k"`` with one value per leg in tenor-ASC order.
+   * When omitted or all-null the scalar ``ptp`` / ``pts`` falls through.
+   */
+  legPtp?: Array<number | null | undefined>
+  legPts?: Array<number | null | undefined>
 }): { opaLine: string; ptpLine: string; ptsLine: string } {
   const opaParts: string[] = []
   input.legOpa.forEach((v, i) => {
@@ -270,10 +293,19 @@ export function formatOtherLvl(input: {
     const formatted = formatSignedCompact(Number(v))
     opaParts.push(ccy && ccy !== 'USD' ? `${formatted} ${ccy}` : formatted)
   })
-  const opaLine = opaParts.length ? `OPA: ${opaParts.join(', ')}` : `OPA: ${EMPTY_VALUE}`
+  const opaLine = opaParts.length ? `OPA: ${opaParts.join(' / ')}` : `OPA: ${EMPTY_VALUE}`
 
+  // PTP line — prefer per-leg array when supplied + at least one non-null.
+  const legPtpNonNull = (input.legPtp ?? []).filter(
+    (v): v is number => v !== null && v !== undefined && !Number.isNaN(v),
+  )
   let ptpLine: string
-  if (input.ptp === null || input.ptp === undefined || Number.isNaN(input.ptp)) {
+  if (legPtpNonNull.length >= 1) {
+    const ccySuffix =
+      input.ptpCurrency && input.ptpCurrency !== 'USD' ? ` ${input.ptpCurrency}` : ''
+    const parts = legPtpNonNull.map((v) => formatSignedCompact(Number(v)))
+    ptpLine = `PTP: ${parts.join(' / ')}${ccySuffix}`
+  } else if (input.ptp === null || input.ptp === undefined || Number.isNaN(input.ptp)) {
     ptpLine = `PTP: ${EMPTY_VALUE}`
   } else {
     const formatted = formatSignedCompact(Number(input.ptp))
@@ -283,8 +315,15 @@ export function formatOtherLvl(input: {
         : `PTP: ${formatted}`
   }
 
+  // PTS line — same per-leg pattern.
+  const legPtsNonNull = (input.legPts ?? []).filter(
+    (v): v is number => v !== null && v !== undefined && !Number.isNaN(v),
+  )
   let ptsLine: string
-  if (input.pts === null || input.pts === undefined || Number.isNaN(input.pts)) {
+  if (legPtsNonNull.length >= 1) {
+    const parts = legPtsNonNull.map((v) => formatPackageSpread(Number(v)))
+    ptsLine = `PTS: ${parts.join(' / ')}`
+  } else if (input.pts === null || input.pts === undefined || Number.isNaN(input.pts)) {
     ptsLine = `PTS: ${EMPTY_VALUE}`
   } else {
     ptsLine = `PTS: ${formatPackageSpread(Number(input.pts))}`

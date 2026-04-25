@@ -21,6 +21,9 @@ export type SofrSwapTapeLeg = {
   fixed_rate?: number | null
   other_payment_amount?: number | null
   other_payment_currency?: string | null
+  package_transaction_spread?: number | null
+  package_transaction_price?: number | null
+  package_transaction_price_currency?: string | null
   platform_identifier?: string | null
   cleared?: string | null
   package_type?: string | null

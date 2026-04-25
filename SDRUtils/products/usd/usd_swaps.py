@@ -479,6 +479,107 @@ def detect_mac_swaps(package_df: pd.DataFrame) -> pd.DataFrame:
 _SPREADOVER_SPREAD_ABS_CEILING: float = 0.01
 
 
+#: Spread magnitude band for SPREADOVER qualification at the per-leg
+#: level. Mirrors the tight gate in ``detect_spreadovers`` — a leg only
+#: counts as spreadover-eligible if its package_transaction_spread is a
+#: genuine basis-point spread (non-zero, within 100 bps).
+_SPREADOVER_LEG_SPREAD_CEILING: float = 0.01
+
+
+def detect_sub_package_curve_fly(
+    package_df: pd.DataFrame,
+    *,
+    # Accept detector_kwargs for forward-compat but ignore — this post-
+    # pass doesn't re-run detectors.
+    detector_kwargs: dict | None = None,  # noqa: ARG001
+) -> pd.DataFrame:
+    """Upgrade existing CURVE / FLY packages to composite package types
+    when ALL legs individually qualify as MATCHED_MATURITY or SPREADOVER.
+
+    Runs AFTER the primary ``detect_curve`` / ``detect_fly`` pass so any
+    curve- or fly-shaped pair that was already matched stays paired. The
+    composite labelling captures the economic intent for downstream
+    consumers (e.g. the desk PKG filter):
+
+    * A curve whose two legs each mature on a UST coupon  -> MATCHED_MATURITY_CURVE
+    * A curve whose two legs each carry a broker spread    -> SPREADOVER_CURVE
+    * Same logic for FLY.
+
+    When both criteria apply to every leg, SPREADOVER wins (more
+    specific — a broker-reported spread implies a UST cash leg, which
+    matched-maturity only infers).
+
+    No re-detection: the existing CURVE / FLY package_id + package_legs
+    are preserved.
+    """
+    out = package_df.copy()
+    if "package_type" not in out.columns:
+        return out
+
+    # Only CURVE / FLY packages are candidates. Composite types ("..._CURVE",
+    # "..._FLY") are NOT re-upgraded; they're idempotent.
+    base = out["package_type"].astype(str).str.upper()
+    curvey_mask = (base == "CURVE") | (base == "FLY")
+    if not bool(curvey_mask.any()):
+        return out
+
+    has_pkg_id = "package_id" in out.columns
+    if not has_pkg_id:
+        return out
+
+    # Evaluate once, vectorised, whether each leg is MMS / SPREADOVER eligible.
+    leg_mms = (
+        out["matched_ust_maturity"].astype(str).str.lower().isin({"true", "t", "1"})
+        if "matched_ust_maturity" in out.columns
+        else pd.Series(False, index=out.index)
+    )
+
+    spread_num = pd.to_numeric(
+        out.get("package_transaction_spread"), errors="coerce"
+    )
+    pkg_ind = out.get("package_indicator")
+    if pkg_ind is None:
+        pkg_ind = pd.Series(False, index=out.index)
+    pkg_ind_bool = pkg_ind.astype(str).str.lower().isin({"true", "t", "1"})
+    fwd = out.get("forward_label")
+    if fwd is None:
+        fwd_spot = pd.Series(True, index=out.index)
+    else:
+        fwd_spot = fwd.astype(str).str.lower().eq("spot")
+
+    leg_spreadover = (
+        pkg_ind_bool
+        & spread_num.notna()
+        & (spread_num != 0)
+        & (spread_num.abs() <= _SPREADOVER_LEG_SPREAD_CEILING)
+        & fwd_spot
+    )
+
+    # Walk each CURVE / FLY package_id group.
+    for pkg_id, group_idx in out.loc[curvey_mask].groupby("package_id").groups.items():
+        if pkg_id is None or (isinstance(pkg_id, float) and pd.isna(pkg_id)):
+            continue
+        idx = list(group_idx)
+        if not idx:
+            continue
+        base_type = str(out.loc[idx[0], "package_type"]).upper()
+        all_mms = bool(leg_mms.loc[idx].all())
+        all_spreadover = bool(leg_spreadover.loc[idx].all())
+
+        if all_spreadover:
+            new_type = f"SPREADOVER_{base_type}"
+        elif all_mms:
+            new_type = f"MATCHED_MATURITY_{base_type}"
+        else:
+            continue
+
+        out.loc[idx, "package_type"] = new_type
+        if "trade_type" in out.columns:
+            out.loc[idx, "trade_type"] = new_type
+
+    return out
+
+
 def detect_spreadovers(package_df: pd.DataFrame):
     """Detect broker-reported swap-vs-UST spreadovers.
 
@@ -996,10 +1097,26 @@ class USD_SwapProduct(USDProductBase):
                 package_df = package_df.drop(columns=[TRADE_ID])
                 package_df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", col.lower()).lower().replace(" ", "_") for col in package_df.columns]
 
+                # Detectors default to raw-SDR column names ("UPI Underlier
+                # Name", "Platform identifier", "Cleared", "Unique Product
+                # Identifier"). After the snake_case rename above those
+                # columns no longer exist, which silently disables the
+                # platform / underlier / cleared / UPI economic guards.
+                # Bug observed in production: a 10Y + 20Y pair at the same
+                # execution timestamp on platform TWSF was left unpaired
+                # because the 20Y got bundled with a 30Y on platform BBSF
+                # from ~56s earlier — the platform guard had been off.
+                # Pass the correct snake_case names so the guards fire.
+                _snake_detector_cols = dict(
+                    underlier_col="upi_underlier_name",
+                    platform_col="platform_identifier",
+                    cleared_col="cleared",
+                    upi_col="unique_product_identifier",
+                )
                 if detect_fly:
-                    package_df = detect_fly_trades_df(package_df)
+                    package_df = detect_fly_trades_df(package_df, **_snake_detector_cols)
                 if detect_curve:
-                    package_df = detect_curve_trades_df(package_df)
+                    package_df = detect_curve_trades_df(package_df, **_snake_detector_cols)
                 if detect_mms:
                     package_df = detect_mms_trades_df(package_df)
                 if detect_invoice:
@@ -1008,6 +1125,17 @@ class USD_SwapProduct(USDProductBase):
                     package_df = detect_mac_swaps(package_df)
                 if detect_spreadover:
                     package_df = detect_spreadovers(package_df)
+
+                # Second pass: re-run CURVE + FLY detection on trades already
+                # tagged as MATCHED_MATURITY or SPREADOVER. Pairs/triples
+                # that form a spread-curve or spread-fly get composite
+                # package types (e.g. SPREADOVER_CURVE, MATCHED_MATURITY_FLY).
+                # Uses the same detector logic, so economic guards fire the
+                # same way.
+                if detect_curve or detect_fly:
+                    package_df = detect_sub_package_curve_fly(
+                        package_df, detector_kwargs=_snake_detector_cols
+                    )
 
                 # Final rollup: resolve unified special_tenor fields from all detectors
                 package_df = _resolve_special_tenor_priority(package_df)

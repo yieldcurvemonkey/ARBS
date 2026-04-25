@@ -9,6 +9,7 @@ from pandas.tseries.offsets import CustomBusinessDay
 
 
 from SDRUtils.config import PACKAGE_TYPES
+from SDRUtils.core.tenors import get_imm_label
 from SDRUtils.packages.base import PackageDetector
 
 
@@ -327,11 +328,51 @@ def _match_swaps_to_ust_by_maturity(
     matched = tmp["ust_cusip"].notna().values
 
     idx = out.index[m]
+
+    # IMM-forward exclusion: a trade whose forward_label starts with "IMM_"
+    # is anchored on an IMM date, and its maturity lands on (or within a
+    # few days of) the corresponding IMM + tenor anchor — which is NEVER a
+    # UST-cash-leg maturity. UST coupons occasionally coincide with IMM or
+    # IMM+N dates by accident (the 2Y UST issued mid-March has a
+    # March-anniversary maturity that aligns with IMM H-forward + 1Y), so
+    # the maturity-only matcher false-positives on IMM forwards. Matched-
+    # maturity is specifically for swap-spread / asset-swap structures
+    # whose UST cash leg defines the maturity — an IMM forward cannot be
+    # that regardless of whether the maturity happens to tie a UST coupon.
+    #
+    # Secondary guard: even if ``forward_label`` is missing/malformed but
+    # BOTH ``effective_date`` AND ``expiration_date`` land on strict IMM
+    # anchor dates (3rd Wed of Mar/Jun/Sep/Dec), the trade is still an
+    # IMM-on-IMM forward.
+    eff_series = pd.to_datetime(out.loc[idx, "effective_date"], errors="coerce")
+    exp_series = pd.to_datetime(out.loc[idx, swap_maturity_col], errors="coerce")
+    eff_is_imm = eff_series.map(
+        lambda d: get_imm_label(d) is not None if pd.notna(d) else False
+    ).to_numpy()
+    exp_is_imm = exp_series.map(
+        lambda d: get_imm_label(d) is not None if pd.notna(d) else False
+    ).to_numpy()
+    both_imm = eff_is_imm & exp_is_imm
+
+    fwd_label_series = (
+        out.loc[idx, "forward_label"].astype("string").fillna("")
+        if "forward_label" in out.columns
+        else pd.Series([""] * len(idx), index=idx, dtype="string")
+    )
+    imm_forward_label = fwd_label_series.str.upper().str.startswith("IMM_").to_numpy()
+
+    is_imm_forward = imm_forward_label | both_imm
+    matched = matched & ~is_imm_forward
+
     out.loc[idx, "matched_ust_maturity"] = matched
 
-    # Copy UST fields
+    # Copy UST fields — clear them for rows that were dropped by either the
+    # merge miss or the IMM-to-IMM guard so the row doesn't carry stale
+    # UST metadata.
     for c in [c for c in tmp.columns if c.startswith("ust_")]:
-        out.loc[idx, c] = tmp[c].values
+        col = tmp[c].to_numpy().copy()
+        col[~matched] = None
+        out.loc[idx, c] = col
 
     # Record the swap maturity date used
     out.loc[idx, "swap_maturity_date"] = tmp["_swap_maturity_date"].values

@@ -24,11 +24,12 @@ describe('LegsSubTable', () => {
     expect(legsSubTableSource).not.toContain(
       'leg.tenor_display ?? leg.tenor_label ?? EMPTY_VALUE',
     )
-    expect((legsSubTableSource.match(/<th /g) ?? []).length).toBe(12)
+    // 12 original columns + PTP + PTS = 14
+    expect((legsSubTableSource.match(/<th /g) ?? []).length).toBe(14)
   })
 
   it('uses the reduced empty-state colspan after the column removal', () => {
-    expect(legsSubTableSource).toContain('colSpan={12}')
+    expect(legsSubTableSource).toContain('colSpan={14}')
   })
 
   it('surfaces the per-leg Cleared status column', () => {
@@ -48,6 +49,42 @@ describe('LegsSubTable', () => {
   it('renders a per-leg OPA column in the expanded leg table', () => {
     expect(legsSubTableSource).toContain('>OPA<')
     expect(legsSubTableSource).toContain('leg.other_payment_amount')
+  })
+
+  it('renames DV01 header to Risk', () => {
+    expect(legsSubTableSource).not.toContain('>DV01<')
+    expect(legsSubTableSource).toContain('>Risk<')
+  })
+
+  it('renders DV01 without the "+" sign prefix (no signed mode)', () => {
+    // signNegativeOnly:true drops the "+" for positive values but keeps the
+    // "−" for negatives. signed:true would add the "+" back — exclude it.
+    expect(legsSubTableSource).not.toMatch(/formatDv01\([^)]*\{[^}]*signed:\s*true[^}]*\}\)/)
+  })
+
+  it('adds PTP + PTS columns to the expanded leg table', () => {
+    expect(legsSubTableSource).toContain('>PTP<')
+    expect(legsSubTableSource).toContain('>PTS<')
+    // Per-leg PTP / PTS values come from the top-level package row.
+    expect(legsSubTableSource).toContain('row.package_transaction_price')
+    expect(legsSubTableSource).toContain('row.package_transaction_spread')
+  })
+
+  it('sorts legs by tenor ascending so the front leg renders first', () => {
+    // Defensive sort — legs_json ordering from the view is not guaranteed.
+    expect(legsSubTableSource).toContain('.sort(')
+    expect(legsSubTableSource).toContain('tenor_years')
+    // The sort comparator must produce ASC order (a - b, not b - a).
+    expect(legsSubTableSource).toMatch(/return\s+at\s*-\s*bt/)
+  })
+
+  it('# column shows the post-sort row index, not the stale pre-sort leg_order', () => {
+    // If `leg.leg_order` is used, the # cells can render out of order
+    // (e.g. 2, 0, 1 when tenor-ASC displays 5Y/10Y/30Y). The # column
+    // must reflect the row ordering so the user can cross-reference it
+    // with the aggregated summary row at the bottom.
+    expect(legsSubTableSource).not.toContain('leg.leg_order ?? index + 1')
+    expect(legsSubTableSource).not.toContain('leg.leg_order')
   })
 })
 

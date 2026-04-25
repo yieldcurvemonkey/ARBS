@@ -144,6 +144,13 @@ LEG_COLUMNS: tuple[str, ...] = (
     "frequency_anomaly",
     "d2_missing",
     "manual_link_id",
+    # Per-leg broker spread / price — populated from the raw SDR
+    # ``Package transaction spread`` / ``Package transaction price``
+    # fields. For composite CURVE / FLY packages the two legs' spreads
+    # may differ; the front-end needs per-leg values to render them.
+    "package_transaction_spread",
+    "package_transaction_price",
+    "package_transaction_price_currency",
     "enrichment_metrics",
 )
 
@@ -559,6 +566,8 @@ _LEG_NUM_COLS: tuple[str, ...] = (
     "risk",
     "fixed_rate",
     "other_payment_amount",
+    "package_transaction_spread",
+    "package_transaction_price",
     "xd_notional_pct_remaining",
 )
 _LEG_BOOL_COLS: tuple[str, ...] = (
@@ -574,6 +583,7 @@ _LEG_TEXT_COLS: tuple[str, ...] = (
     "trade_id", "package_id", "execution_session", "tenor_label",
     "tenor_display", "forward_label", "forward_bucket", "notional_currency",
     "other_payment_currency",
+    "package_transaction_price_currency",
     "trade_type", "rate_index_clean", "venue", "ccp", "platform_identifier",
     "tape_label", "upi_reset_freq", "upi_notional_schedule",
     "upi_delivery_type", "lifecycle_type", "lc_status", "fomc_meeting_label",
@@ -739,9 +749,12 @@ def _structural_risk(
     if not risk.notna().any():
         return None
     tt = (trade_type or "").upper()
-    if tt == "CURVE":
+    # Composite package types (e.g. "SPREADOVER_CURVE", "MATCHED_MATURITY_FLY")
+    # from detect_sub_package_curve_fly follow the same headline convention
+    # as their base CURVE / FLY — match by suffix.
+    if tt == "CURVE" or tt.endswith("_CURVE"):
         return _num_or_none(risk.abs().max(skipna=True))
-    if tt == "FLY":
+    if tt == "FLY" or tt.endswith("_FLY"):
         valid_mask = risk.notna() & tenor_years.notna()
         if valid_mask.any():
             ordered = tenor_years[valid_mask].sort_values(kind="stable")

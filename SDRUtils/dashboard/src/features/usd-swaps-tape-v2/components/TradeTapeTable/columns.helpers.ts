@@ -35,6 +35,13 @@ const TRADE_TYPE_BORDER: Record<string, string> = {
   MAC: 'border-l-2 border-cyan-500/70',
   IMM: 'border-l-2 border-lime-500/70',
   FOMC: 'border-l-2 border-amber-500/70',
+  // Composite CURVE / FLY variants share the base family's accent color but
+  // at lower opacity, mirroring the row-tint dimming in
+  // constants.TRADE_TYPE_ROW_TONES.
+  SPREADOVER_CURVE: 'border-l-2 border-sky-500/50',
+  MATCHED_MATURITY_CURVE: 'border-l-2 border-sky-500/50',
+  SPREADOVER_FLY: 'border-l-2 border-indigo-500/50',
+  MATCHED_MATURITY_FLY: 'border-l-2 border-indigo-500/50',
 }
 
 function tradeTypeKey(row: UsdSwapTapeRow): string {
