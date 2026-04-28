@@ -23,6 +23,7 @@ from RVUtils.ImpliedDistribution import (
     SFRImpliedDistribution,
 )
 from RVUtils.SFRConvexScreener._carry import structure_pnl_from_rates_bp
+from RVUtils.SFRConvexScreener._carry_roll import structure_carry_roll_bp
 from RVUtils.SFRConvexScreener._distributions import (
     PerContractDistribution,
     extract_bl_marginals,
@@ -192,9 +193,17 @@ def build_snapshot(
         if primary_method not in metrics_by_method:
             primary_method = next(iter(metrics_by_method))
 
-        # Carry / roll: TODO Phase 5 — wire IRSwapQuery via curve_handle.
-        carry_bp = float("nan")
-        rolldown_bp = float("nan")
+        # Carry / roll via IRSwapQuery (best-effort, NaN on failure)
+        if md.curve_handle is not None:
+            carry_bp, rolldown_bp = structure_carry_roll_bp(
+                s.legs,
+                curve_handle=md.curve_handle,
+                curve_name=config.curve_name,
+                horizon="3m",
+            )
+        else:
+            carry_bp = float("nan")
+            rolldown_bp = float("nan")
 
         # IV/RV per leg
         ivrv: List = []
