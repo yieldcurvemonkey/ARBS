@@ -76,9 +76,21 @@ def extract_rnd_breeden_litzenberger(
     grid_max = float(ext_strikes[-1])
     strike_grid = np.linspace(grid_min, grid_max, grid_points)
 
+    warnings: List[str] = []
+
     # 4. 2nd derivative → RND in price space
     d2c_dk2 = spline(strike_grid, nu=2)
     rnd_price = d2c_dk2 / df
+
+    # Detect negative density before clipping
+    neg_mass_raw = float(trapezoid(np.abs(np.minimum(rnd_price, 0.0)), strike_grid))
+    pos_mass_raw = float(trapezoid(np.maximum(rnd_price, 0.0), strike_grid))
+    if neg_mass_raw > 0 and (pos_mass_raw + neg_mass_raw) > 0:
+        frac = neg_mass_raw / (pos_mass_raw + neg_mass_raw)
+        if frac > 1e-4:  # ignore numerical noise below 0.01%
+            warnings.append(
+                f"negative density mass clipped ({frac * 100:.2f}% of total)"
+            )
 
     # Floor at zero (numerical artifacts at tails)
     rnd_price = np.maximum(rnd_price, 0.0)
@@ -95,13 +107,20 @@ def extract_rnd_breeden_litzenberger(
 
     # 6b. Truncate at rate floor (e.g. 0% for SOFR — negative rates impossible)
     if rate_floor is not None:
+        pre_mass = float(trapezoid(rnd_rate, rate_grid))
         floor_mask = rate_grid >= rate_floor
         rate_grid = rate_grid[floor_mask]
         rnd_rate = rnd_rate[floor_mask]
         # Renormalize so density integrates to 1.0
-        total_mass = trapezoid(rnd_rate, rate_grid)
-        if total_mass > 1e-10:
-            rnd_rate = rnd_rate / total_mass
+        post_mass = float(trapezoid(rnd_rate, rate_grid)) if len(rate_grid) > 1 else 0.0
+        if pre_mass > 1e-10:
+            truncated_frac = max(0.0, (pre_mass - post_mass) / pre_mass)
+            if truncated_frac > 1e-4:
+                warnings.append(
+                    f"rate floor at {rate_floor:.2%} truncated {truncated_frac * 100:.2f}% of mass"
+                )
+        if post_mass > 1e-10:
+            rnd_rate = rnd_rate / post_mass
 
     # 7. CDF via trapezoidal integration
     dx = np.diff(rate_grid)
@@ -166,4 +185,5 @@ def extract_rnd_breeden_litzenberger(
         smoothing_param=smoothing_param,
         n_ghost_points=n_ghost_points,
         spline_residual=spline_residual,
+        warnings=tuple(warnings),
     )
