@@ -51,6 +51,7 @@ class BreedenLitzenbergerResult:
     smoothing_param: float
     n_ghost_points: int
     spline_residual: float
+    warnings: Tuple[str, ...] = ()
 
     def percentile(self, p: float) -> float:
         """Return the rate at the p-th percentile (0-100)."""
@@ -86,6 +87,7 @@ class GaussianMixtureResult:
     optimization_success: bool
     # Per-scenario density components: shape (n_scenarios, n_grid_points)
     component_densities: np.ndarray
+    warnings: Tuple[str, ...] = ()
 
     def scenario_weight_dict(self) -> Dict[str, float]:
         return {s.label: float(w) for s, w in zip(self.scenarios, self.weights)}
@@ -99,6 +101,15 @@ class ImpliedDistributionSnapshot:
     as_of: datetime.date
     bl_result: Optional[BreedenLitzenbergerResult]
     gm_result: Optional[GaussianMixtureResult]
+
+    def all_warnings(self) -> Tuple[str, ...]:
+        """Return all child warnings prefixed with their source (``bl::`` / ``gm::``)."""
+        out: List[str] = []
+        if self.bl_result is not None:
+            out.extend(f"bl::{w}" for w in self.bl_result.warnings)
+        if self.gm_result is not None:
+            out.extend(f"gm::{w}" for w in self.gm_result.warnings)
+        return tuple(out)
 
 
 @dataclass(frozen=True)
