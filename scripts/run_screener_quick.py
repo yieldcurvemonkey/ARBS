@@ -34,10 +34,12 @@ def main() -> None:
     as_of = datetime.date.today()
     cfg = SFRConvexScreenerConfig(
         universe_size=12,
+        include_outrights=True,
+        jpm_method=True,
         calendar_gaps=(1, 2, 4),
         fly_gaps=(1, 2, 4),
         primary_joint_method=JointMethod.COMMON_STATE,
-        correlation_window=10,  # smaller for speed
+        correlation_window=10,
         n_simulations=20_000,
     )
     print(f"=== SFR Convex Screener — as_of={as_of} ===", flush=True)
@@ -68,6 +70,28 @@ def main() -> None:
 
     print("\n=== Top 10 by asymmetry ratio alone ===", flush=True)
     print(df.sort_values("asymmetry_ratio", ascending=False)[cols].head(10).to_string(index=False), flush=True)
+
+    print("\n=== Top 10 outrights by asymmetry magnitude (max(A, 1/A)) ===", flush=True)
+    out_df = df[df["type"] == "outright"].copy()
+    if not out_df.empty:
+        out_df["asymmetry_magnitude"] = out_df["asymmetry_ratio"].apply(
+            lambda a: max(a, 1.0 / a) if a > 0 else float("nan")
+        )
+        out_df["preferred_direction"] = out_df["asymmetry_ratio"].apply(
+            lambda a: "PAY (long-rate)" if a >= 1 else "RECEIVE (long-price)"
+        )
+        out_cols = [
+            "structure_id", "asymmetry_ratio", "asymmetry_magnitude",
+            "preferred_direction", "p_profit", "mean_bp", "std_bp", "skew",
+            "tail_ratio",
+        ]
+        out_cols = [c for c in out_cols if c in out_df.columns]
+        print(
+            out_df.sort_values("asymmetry_magnitude", ascending=False)[out_cols].head(10).to_string(index=False),
+            flush=True,
+        )
+    else:
+        print("(no outrights)", flush=True)
 
     paths = write_snapshot(snap, root_dir=Path(cfg.output_root))
     print("\nwritten:", flush=True)
