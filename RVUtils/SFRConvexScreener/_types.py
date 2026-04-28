@@ -77,3 +77,89 @@ class SFRConvexScreenerConfig:
 
     # Reproducibility for copula sampling
     random_seed: int = 17
+
+
+@dataclass(frozen=True)
+class StructureResult:
+    structure_def: "StructureDef"
+    metrics_by_method: Dict[str, Any]  # Dict[str, PayoffMetrics] (forward ref)
+    primary_method: str
+    carry_3m_bp: float
+    rolldown_3m_bp: float
+    iv_rv_diagnostics: Tuple[Any, ...]  # Tuple[IVRVDiagnostic, ...]
+    historical: Optional[Any]  # Optional[HistoricalAsymmetry]
+    warnings: Tuple[str, ...]
+    composite_score: float
+    rank: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "structure_id": self.structure_def.structure_id,
+            "structure_type": self.structure_def.structure_type.value,
+            "legs": [
+                {"contract": l.contract, "weight": l.weight, "price": l.price, "dv01": l.dv01}
+                for l in self.structure_def.legs
+            ],
+            "carry_3m_bp": self.carry_3m_bp,
+            "rolldown_3m_bp": self.rolldown_3m_bp,
+            "metrics_by_method": {
+                name: m.to_dict() for name, m in self.metrics_by_method.items()
+            },
+            "primary_method": self.primary_method,
+            "iv_rv_diagnostics": [
+                {
+                    "contract": d.contract,
+                    "iv_bp": d.iv_bp,
+                    "rv_bp": d.rv_bp,
+                    "iv_rv_ratio": d.iv_rv_ratio,
+                }
+                for d in self.iv_rv_diagnostics
+            ],
+            "historical": (
+                None
+                if self.historical is None
+                else {
+                    "median_asymmetry": self.historical.median_asymmetry,
+                    "p95_asymmetry": self.historical.p95_asymmetry,
+                    "n_observations": self.historical.n_observations,
+                    "current_rn_percentile": self.historical.current_rn_percentile,
+                }
+            ),
+            "warnings": list(self.warnings),
+            "composite_score": self.composite_score,
+            "rank": self.rank,
+        }
+
+
+@dataclass(frozen=True)
+class SFRConvexScreenerSnapshot:
+    as_of: datetime.date
+    results: Tuple[StructureResult, ...]
+    config_summary: Dict[str, Any]
+    run_warnings: Tuple[str, ...] = ()
+
+    def to_dataframe(self) -> pd.DataFrame:
+        rows = []
+        for r in self.results:
+            primary = r.metrics_by_method.get(r.primary_method)
+            row = {
+                "structure_id": r.structure_def.structure_id,
+                "type": r.structure_def.structure_type.value,
+                "rank": r.rank,
+                "composite_score": r.composite_score,
+                "carry_3m_bp": r.carry_3m_bp,
+                "rolldown_3m_bp": r.rolldown_3m_bp,
+                "primary_method": r.primary_method,
+            }
+            if primary is not None:
+                row.update(primary.to_dict())
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "as_of": self.as_of.isoformat(),
+            "config": self.config_summary,
+            "run_warnings": list(self.run_warnings),
+            "results": [r.to_dict() for r in self.results],
+        }

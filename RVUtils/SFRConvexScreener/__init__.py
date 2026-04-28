@@ -11,7 +11,9 @@ from RVUtils.SFRConvexScreener._types import (
     JointMethod,
     Leg,
     SFRConvexScreenerConfig,
+    SFRConvexScreenerSnapshot,
     StructureDef,
+    StructureResult,
     StructureType,
 )
 from RVUtils.SFRConvexScreener._universe import (
@@ -29,8 +31,10 @@ __all__ = [
     "JointMethod",
     "Leg",
     "SFRConvexScreenerConfig",
+    "SFRConvexScreenerSnapshot",
     "SFRMarketData",
     "StructureDef",
+    "StructureResult",
     "StructureType",
     "enumerate_butterflies",
     "enumerate_calendars",
