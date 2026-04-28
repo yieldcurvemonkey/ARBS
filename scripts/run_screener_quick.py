@@ -58,10 +58,10 @@ def main() -> None:
 
     df = df.sort_values("composite_score", ascending=False)
     cols = [
-        "rank", "structure_id", "type", "composite_score",
+        "rank", "structure_id", "type", "direction", "composite_score",
         "asymmetry_ratio", "p_profit", "mean_bp", "std_bp",
-        "skew", "tail_ratio", "carry_3m_bp", "rolldown_3m_bp",
-        "primary_method",
+        "skew", "tail_ratio", "carry_3m_bp", "rolldown_bp",
+        "rolldown_horizon", "is_stale", "primary_method",
     ]
     cols = [c for c in cols if c in df.columns]
 

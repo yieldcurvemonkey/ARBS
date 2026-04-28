@@ -33,7 +33,7 @@ def _trivial_snapshot() -> SFRConvexScreenerSnapshot:
         metrics_by_method={"common_state": metrics},
         primary_method="common_state",
         carry_3m_bp=1.0,
-        rolldown_3m_bp=0.5,
+        rolldown_bp=0.5,
         iv_rv_diagnostics=(),
         historical=None,
         warnings=(),

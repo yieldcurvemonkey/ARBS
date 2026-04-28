@@ -70,7 +70,10 @@ class SFRConvexScreenerConfig:
     n_simulations: int = 100_000
 
     # Carry / horizon
-    horizon_days: int = 63  # ~3M
+    horizon_days: int = 63  # ~3M for the historical realised payoff comparison
+    rolldown_horizon: str = "1m"  # IRSwapValue.ROLL_BPS_RUNNING horizon — 3m
+    # collapses the SR3 IMM-IMM 3M schedule (effective == termination), so
+    # 1m is the safe default. Override only if structures support it.
     historical_lookback_years: int = 5
 
     # Filters
@@ -89,18 +92,69 @@ class SFRConvexScreenerConfig:
     random_seed: int = 17
 
 
+def _format_direction(sd: "StructureDef", *, flip: bool = False) -> str:
+    """Render a structure's preferred trade direction as PAY/RECEIVE strings.
+
+    ``flip=False`` returns the long-rate (as-enumerated) interpretation;
+    ``flip=True`` returns the long-price (mirror) interpretation. Used by
+    :meth:`StructureResult.direction` to surface a 1.5×-asymmetry edge in
+    the natural trader phrasing.
+    """
+    legs = sd.legs
+    sign = -1.0 if flip else 1.0
+    if sd.structure_type is StructureType.OUTRIGHT:
+        leg = legs[0]
+        eff_w = sign * float(leg.weight)
+        verb = "PAY" if eff_w > 0 else "RECEIVE"
+        return f"{verb} {leg.contract}"
+    if sd.structure_type is StructureType.CALENDAR:
+        front = next((l for l in legs if l.weight > 0), legs[0])
+        back = next((l for l in legs if l.weight < 0), legs[-1])
+        if flip:
+            return f"RECEIVE {front.contract} / PAY {back.contract}"
+        return f"PAY {front.contract} / RECEIVE {back.contract}"
+    if sd.structure_type is StructureType.BUTTERFLY:
+        wings = [l.contract for l in legs if l.weight > 0]
+        belly = [l.contract for l in legs if l.weight < 0]
+        if not (len(wings) == 2 and len(belly) == 1):
+            return ""
+        if flip:
+            return (
+                f"RECEIVE {wings[0]}+{wings[1]} / PAY 2x {belly[0]} (long-price fly)"
+            )
+        return f"PAY {wings[0]}+{wings[1]} / RECEIVE 2x {belly[0]} (long-rate fly)"
+    return ""
+
+
 @dataclass(frozen=True)
 class StructureResult:
     structure_def: "StructureDef"
     metrics_by_method: Dict[str, Any]  # Dict[str, PayoffMetrics] (forward ref)
     primary_method: str
-    carry_3m_bp: float
-    rolldown_3m_bp: float
+    carry_3m_bp: float          # Current weighted structure rate × 100 (bp)
+    rolldown_bp: float          # Roll-down for the configured horizon (default 1M)
     iv_rv_diagnostics: Tuple[Any, ...]  # Tuple[IVRVDiagnostic, ...]
     historical: Optional[Any]  # Optional[HistoricalAsymmetry]
     warnings: Tuple[str, ...]
     composite_score: float
     rank: int
+    rolldown_horizon: str = "1m"
+
+    def direction(self) -> str:
+        """Human-readable preferred trade direction.
+
+        Structure weights are in rate-space (long-rate convention). A>1 →
+        the long-rate position (as enumerated) has positive asymmetric
+        edge; A<1 → flip the direction.
+        """
+        primary = self.metrics_by_method.get(self.primary_method)
+        if primary is None:
+            return ""
+        a = primary.asymmetry_ratio
+        if not isinstance(a, (int, float)) or a != a:  # NaN check
+            return ""
+        flip = a < 1.0
+        return _format_direction(self.structure_def, flip=flip)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -111,7 +165,9 @@ class StructureResult:
                 for l in self.structure_def.legs
             ],
             "carry_3m_bp": self.carry_3m_bp,
-            "rolldown_3m_bp": self.rolldown_3m_bp,
+            "rolldown_bp": self.rolldown_bp,
+            "rolldown_horizon": self.rolldown_horizon,
+            "direction": self.direction(),
             "metrics_by_method": {
                 name: m.to_dict() for name, m in self.metrics_by_method.items()
             },
@@ -158,10 +214,12 @@ class SFRConvexScreenerSnapshot:
             row = {
                 "structure_id": r.structure_def.structure_id,
                 "type": r.structure_def.structure_type.value,
+                "direction": r.direction(),
                 "rank": r.rank,
                 "composite_score": r.composite_score,
                 "carry_3m_bp": r.carry_3m_bp,
-                "rolldown_3m_bp": r.rolldown_3m_bp,
+                "rolldown_bp": r.rolldown_bp,
+                "rolldown_horizon": r.rolldown_horizon,
                 "primary_method": r.primary_method,
                 "is_stale": bool(stale_legs),
                 "stale_legs": ",".join(stale_legs) if stale_legs else "",

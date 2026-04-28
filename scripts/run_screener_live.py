@@ -58,7 +58,7 @@ def main() -> None:
     cols = [
         "rank", "structure_id", "type", "composite_score",
         "asymmetry_ratio", "p_profit", "mean_bp", "std_bp",
-        "skew", "tail_ratio", "carry_3m_bp", "rolldown_3m_bp",
+        "skew", "tail_ratio", "carry_3m_bp", "rolldown_bp",
         "primary_method",
     ]
     cols = [c for c in cols if c in df.columns]

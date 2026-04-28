@@ -112,6 +112,7 @@ def _config_summary(config: SFRConvexScreenerConfig) -> Dict[str, Any]:
         "correlation_window": config.correlation_window,
         "n_simulations": config.n_simulations,
         "horizon_days": config.horizon_days,
+        "rolldown_horizon": getattr(config, "rolldown_horizon", "1m"),
         "score_weights": list(config.score_weights),
     }
 
@@ -221,17 +222,17 @@ def build_snapshot(
             if primary_method not in metrics_by_method:
                 primary_method = next(iter(metrics_by_method))
 
-        # Carry = current structure rate level (bp). For SR3 futures the
-        # economic "carry" of holding the position is just the rolldown
-        # (no separate funding component) — we report the current level
-        # in `carry_3m_bp` so users can see where the structure sits today
-        # and the actual 3M roll separately in `rolldown_3m_bp`.
+        # `carry_3m_bp` = current weighted structure rate level (bp);
+        # `rolldown_bp` = roll-down for the configured horizon (default 1m
+        # because rateslib's roll formula collapses 3M IMM-IMM swaps when
+        # horizon == 3m — termination ends up equal to effective).
         carry_bp = current_level_bp(s.legs, futures_df=md.futures_df)
+        roll_horizon = getattr(config, "rolldown_horizon", "1m")
         rolldown_bp = structure_rolldown_bp(
             s.legs,
             curve_handle=md.curve_handle,
             curve_name=config.curve_name,
-            horizon="3m",
+            horizon=roll_horizon,
         )
 
         # IV/RV per leg
@@ -277,7 +278,8 @@ def build_snapshot(
                 "metrics_by_method": metrics_by_method,
                 "primary_method": primary_method,
                 "carry_3m_bp": carry_bp,
-                "rolldown_3m_bp": rolldown_bp,
+                "rolldown_bp": rolldown_bp,
+                "rolldown_horizon": roll_horizon,
                 "iv_rv_diagnostics": tuple(ivrv),
                 "historical": hist,
                 "warnings": tuple(leg_warnings),
@@ -326,7 +328,8 @@ def build_snapshot(
                 metrics_by_method=r["metrics_by_method"],
                 primary_method=r["primary_method"],
                 carry_3m_bp=r["carry_3m_bp"],
-                rolldown_3m_bp=r["rolldown_3m_bp"],
+                rolldown_bp=r["rolldown_bp"],
+                rolldown_horizon=r["rolldown_horizon"],
                 iv_rv_diagnostics=r["iv_rv_diagnostics"],
                 historical=r["historical"],
                 warnings=r["warnings"],
