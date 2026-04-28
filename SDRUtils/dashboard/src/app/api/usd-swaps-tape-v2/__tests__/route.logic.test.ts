@@ -4,6 +4,7 @@ import {
   buildColumnFilterClause,
   buildLifecycleClause,
   buildTapeQuery,
+  parseDatePattern,
   parseParams,
 } from '../route.logic'
 
@@ -492,5 +493,75 @@ describe('buildColumnFilterClause', () => {
     )
     expect(clause).toBeNull()
     expect(params).toEqual([])
+  })
+})
+
+describe('parseDatePattern', () => {
+  // Anchor today to a deterministic value so "current year" defaulting is
+  // testable without time-mocking the runner.
+  const TODAY = new Date('2026-04-28T15:00:00Z')
+
+  it('parses M/D in current NYC year', () => {
+    expect(parseDatePattern('4/21', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses MM/DD with leading zeros', () => {
+    expect(parseDatePattern('04/21', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses M/D/YYYY', () => {
+    expect(parseDatePattern('4/21/2026', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses MM/DD/YYYY', () => {
+    expect(parseDatePattern('04/21/2026', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses M/D/YY (two-digit year, current century)', () => {
+    expect(parseDatePattern('4/21/26', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses YYYY-MM-DD ISO', () => {
+    expect(parseDatePattern('2026-04-21', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses YYYY-M-D ISO without leading zeros', () => {
+    expect(parseDatePattern('2026-4-21', TODAY)).toBe('2026-04-21')
+  })
+
+  it('returns null for unparseable input', () => {
+    expect(parseDatePattern('NEWFLOW', TODAY)).toBeNull()
+    expect(parseDatePattern('5Y', TODAY)).toBeNull()
+    expect(parseDatePattern('', TODAY)).toBeNull()
+    expect(parseDatePattern('04/21 - 04/23', TODAY)).toBeNull()
+    expect(parseDatePattern('>=2026-04-15', TODAY)).toBeNull()
+  })
+
+  it('returns null for impossible dates', () => {
+    expect(parseDatePattern('13/40', TODAY)).toBeNull()
+    expect(parseDatePattern('2026-02-30', TODAY)).toBeNull()
+  })
+
+  it('steps back a year if M/D defaults to a future date', () => {
+    // anchor TODAY = 2027-01-05; trader types 12/30 — they meant
+    // 2026-12-30 (recent past), not 2027-12-30 (future).
+    const earlyJan = new Date('2027-01-05T15:00:00Z')
+    expect(parseDatePattern('12/30', earlyJan)).toBe('2026-12-30')
+  })
+
+  it('does NOT step back when explicit year is supplied (even if future)', () => {
+    const earlyJan = new Date('2027-01-05T15:00:00Z')
+    // 12/30/2027 is explicit — keep it.
+    expect(parseDatePattern('12/30/2027', earlyJan)).toBe('2027-12-30')
+  })
+
+  it('trims whitespace before parsing', () => {
+    expect(parseDatePattern('  04/21  ', TODAY)).toBe('2026-04-21')
+  })
+
+  it('returns null for non-string input', () => {
+    expect(parseDatePattern(null as any, TODAY)).toBeNull()
+    expect(parseDatePattern(undefined as any, TODAY)).toBeNull()
+    expect(parseDatePattern(0 as any, TODAY)).toBeNull()
   })
 })

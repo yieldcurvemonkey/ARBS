@@ -348,6 +348,94 @@ function buildSingleConstraint(
     : `${colExpr} ${op} ${p}`
 }
 
+// ---------------------------------------------------------------------------
+// Date-pattern parser for the execution_start column filter
+//
+// Traders type natural date patterns into the per-column filter input
+// (`04/21`, `4/21/2026`, `2026-04-21`). Pre-this change, those values fell
+// through to client-side substring matching against the NYC display string,
+// which forced the chain-load to drag every day backward from today until
+// a match was found. Parsing the value into a calendar date here lets
+// buildColumnFilterClause emit a single `as_of_date = $1` predicate, hitting
+// the existing idx_tape_v2_packages_date composite index.
+//
+// Returns ISO yyyy-mm-dd. Multi-day patterns and inequality patterns are
+// NOT supported in v1 — see the design doc for deferred follow-ups.
+// ---------------------------------------------------------------------------
+
+const DATE_PATTERN_MD_Y = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?$/
+const DATE_PATTERN_ISO = /^(\d{4})-(\d{1,2})-(\d{1,2})$/
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n)
+}
+
+function isValidYmd(year: number, month: number, day: number): boolean {
+  if (month < 1 || month > 12) return false
+  if (day < 1 || day > 31) return false
+  // Round-trip through Date to validate (catches Feb 30, etc.).
+  const d = new Date(Date.UTC(year, month - 1, day))
+  return (
+    d.getUTCFullYear() === year &&
+    d.getUTCMonth() === month - 1 &&
+    d.getUTCDate() === day
+  )
+}
+
+export function parseDatePattern(
+  raw: unknown,
+  now: Date = new Date(),
+): string | null {
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+
+  // M/D, M/D/YY, M/D/YYYY
+  const mdMatch = trimmed.match(DATE_PATTERN_MD_Y)
+  if (mdMatch) {
+    const month = Number(mdMatch[1])
+    const day = Number(mdMatch[2])
+    const yearRaw = mdMatch[3]
+    let year: number
+    let yearWasExplicit = false
+    if (yearRaw === undefined) {
+      year = now.getFullYear()
+    } else {
+      yearWasExplicit = true
+      year = Number(yearRaw)
+      if (year < 100) year += Math.floor(now.getFullYear() / 100) * 100
+    }
+    if (!isValidYmd(year, month, day)) return null
+
+    // If M/D defaulted to current year and the resulting date is in the
+    // future (e.g. trader types "12/30" on 2027-01-05), step back a year so
+    // they get the recent past.
+    if (!yearWasExplicit) {
+      const candidate = new Date(Date.UTC(year, month - 1, day))
+      const today = new Date(
+        Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
+      )
+      if (candidate.getTime() > today.getTime()) {
+        year -= 1
+        if (!isValidYmd(year, month, day)) return null
+      }
+    }
+    return `${year}-${pad2(month)}-${pad2(day)}`
+  }
+
+  // YYYY-M-D, YYYY-MM-DD
+  const isoMatch = trimmed.match(DATE_PATTERN_ISO)
+  if (isoMatch) {
+    const year = Number(isoMatch[1])
+    const month = Number(isoMatch[2])
+    const day = Number(isoMatch[3])
+    if (!isValidYmd(year, month, day)) return null
+    return `${year}-${pad2(month)}-${pad2(day)}`
+  }
+
+  return null
+}
+
 export function buildColumnFilterClause(
   columnFilters: Record<string, any>,
   params: unknown[],
