@@ -14,6 +14,11 @@ from RVUtils.SFRConvexScreener._types import (
     StructureDef,
     StructureType,
 )
+from RVUtils.SFRConvexScreener._universe import (
+    enumerate_butterflies,
+    enumerate_calendars,
+    enumerate_structures,
+)
 
 __all__ = [
     "JointMethod",
@@ -21,4 +26,7 @@ __all__ = [
     "SFRConvexScreenerConfig",
     "StructureDef",
     "StructureType",
+    "enumerate_butterflies",
+    "enumerate_calendars",
+    "enumerate_structures",
 ]
