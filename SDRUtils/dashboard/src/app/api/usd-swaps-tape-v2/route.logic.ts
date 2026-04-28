@@ -481,16 +481,28 @@ export function buildColumnFilterClause(
   }
 
   // Time bound — emitted whenever any allowlisted clause is active. Snaps
-  // historical lookups to a single day's worth of data via the
-  // idx_tape_v2_packages_date composite index, instead of the cursor scan
-  // dragging every day backward.
+  // historical lookups to a single NYC trading day instead of the cursor
+  // scan dragging every day backward. Bounded on execution_start so the
+  // existing idx_tape_v2_packages_exec_start (execution_start DESC NULLS
+  // LAST) index can drive the range scan. (The packages table also has an
+  // as_of_date column, but it represents the SDR ingest batch date, not
+  // the trade's NYC trading day.)
   if (hasAllowlistedClause) {
     if (parsedDateBound !== null) {
       params.push(parsedDateBound)
-      fieldClauses.push(`d.as_of_date = $${params.length}`)
+      const p = `$${params.length}`
+      fieldClauses.push(
+        `d.execution_start >= (${p}::timestamp AT TIME ZONE 'America/New_York')`,
+      )
+      fieldClauses.push(
+        `d.execution_start <  (${p}::timestamp AT TIME ZONE 'America/New_York') + INTERVAL '1 day'`,
+      )
     } else {
       fieldClauses.push(
-        `d.as_of_date = (now() AT TIME ZONE 'America/New_York')::date`,
+        `d.execution_start >= date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'`,
+      )
+      fieldClauses.push(
+        `d.execution_start <  date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York' + INTERVAL '1 day'`,
       )
     }
   }

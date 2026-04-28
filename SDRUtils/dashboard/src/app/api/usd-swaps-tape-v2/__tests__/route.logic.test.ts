@@ -461,7 +461,7 @@ describe('buildColumnFilterClause', () => {
     expect(params).toEqual(['%10Y%', '%5Y%'])
   })
 
-  it('execution_start with ISO date pattern emits as_of_date bound', () => {
+  it('execution_start with ISO date pattern emits a timestamp-range bound', () => {
     const params: unknown[] = []
     const clause = buildColumnFilterClause(
       {
@@ -472,7 +472,8 @@ describe('buildColumnFilterClause', () => {
       },
       params,
     )
-    expect(clause).toMatch(/d\.as_of_date = \$1/)
+    expect(clause).toMatch(/d\.execution_start >=/)
+    expect(clause).toMatch(/d\.execution_start </)
     expect(params).toEqual(['2026-04-23'])
   })
 
@@ -566,8 +567,14 @@ describe('parseDatePattern', () => {
   })
 })
 
-describe('buildColumnFilterClause as_of_date bound', () => {
-  it('emits as_of_date = TODAY_NYC when other filters are present and execution_start is unset', () => {
+describe('buildColumnFilterClause execution_start range bound', () => {
+  // The bound is emitted on execution_start (timestamptz) with NYC-localised
+  // day boundaries computed in Postgres. The existing
+  // idx_tape_v2_packages_exec_start (execution_start DESC NULLS LAST) index
+  // covers the range scan. We assert the SQL fragment shape; the actual
+  // boundary math is delegated to Postgres.
+
+  it('emits today range bound when other filters are present and execution_start is unset', () => {
     const params: unknown[] = []
     const clause = buildColumnFilterClause(
       {
@@ -579,13 +586,13 @@ describe('buildColumnFilterClause as_of_date bound', () => {
       params,
     )
     expect(clause).toMatch(/d\.tape_label ILIKE \$1/)
-    expect(clause).toMatch(
-      /d\.as_of_date = \(now\(\) AT TIME ZONE 'America\/New_York'\)::date/,
-    )
+    expect(clause).toMatch(/d\.execution_start >=/)
+    expect(clause).toMatch(/d\.execution_start </)
+    expect(clause).toMatch(/America\/New_York/)
     expect(params).toEqual(['%10Y%'])
   })
 
-  it('emits as_of_date = $parsed when execution_start carries a date pattern', () => {
+  it('emits parsed-date range bound when execution_start carries a date pattern', () => {
     const params: unknown[] = []
     const clause = buildColumnFilterClause(
       {
@@ -597,11 +604,14 @@ describe('buildColumnFilterClause as_of_date bound', () => {
       params,
       { now: new Date('2026-04-28T15:00:00Z') },
     )
-    expect(clause).toMatch(/d\.as_of_date = \$1/)
+    expect(clause).toMatch(/d\.execution_start >= \(\$1::timestamp/)
+    expect(clause).toMatch(
+      /d\.execution_start <  \(\$1::timestamp AT TIME ZONE 'America\/New_York'\) \+ INTERVAL '1 day'/,
+    )
     expect(params).toEqual(['2026-04-21'])
   })
 
-  it('combines tape_label clause with as_of_date = parsed when both filters present', () => {
+  it('combines tape_label clause with parsed-date range when both filters present', () => {
     const params: unknown[] = []
     const clause = buildColumnFilterClause(
       {
@@ -618,11 +628,11 @@ describe('buildColumnFilterClause as_of_date bound', () => {
       { now: new Date('2026-04-28T15:00:00Z') },
     )
     expect(clause).toMatch(/d\.tape_label ILIKE \$1/)
-    expect(clause).toMatch(/d\.as_of_date = \$2/)
+    expect(clause).toMatch(/d\.execution_start >= \(\$2::timestamp/)
     expect(params).toEqual(['%10Y%', '2026-04-21'])
   })
 
-  it('falls back to today bound when execution_start filter is unparseable', () => {
+  it('falls back to today range bound when execution_start filter is unparseable', () => {
     const params: unknown[] = []
     const clause = buildColumnFilterClause(
       {
@@ -639,10 +649,10 @@ describe('buildColumnFilterClause as_of_date bound', () => {
       { now: new Date('2026-04-28T15:00:00Z') },
     )
     expect(clause).toMatch(/d\.tape_label ILIKE/)
-    expect(clause).toMatch(
-      /d\.as_of_date = \(now\(\) AT TIME ZONE 'America\/New_York'\)::date/,
-    )
-    expect(clause).not.toMatch(/d\.execution_start/)
+    expect(clause).toMatch(/d\.execution_start >= date_trunc/)
+    expect(clause).toMatch(/America\/New_York/)
+    // Execution_start filter never produces a substring ILIKE.
+    expect(clause).not.toMatch(/d\.execution_start ILIKE/)
   })
 
   it('does not emit any direct execution_start substring clause when a date pattern is present', () => {
@@ -657,18 +667,18 @@ describe('buildColumnFilterClause as_of_date bound', () => {
       params,
       { now: new Date('2026-04-28T15:00:00Z') },
     )
-    expect(clause).toMatch(/d\.as_of_date = \$1/)
-    expect(clause).not.toMatch(/d\.execution_start/)
+    expect(clause).toMatch(/d\.execution_start >=/)
+    expect(clause).not.toMatch(/d\.execution_start ILIKE/)
   })
 
-  it('emits no as_of_date clause when columnFilters is empty (live tape)', () => {
+  it('emits no time-bound clause when columnFilters is empty (live tape)', () => {
     const params: unknown[] = []
     const clause = buildColumnFilterClause({}, params)
     expect(clause).toBeNull()
     expect(params).toEqual([])
   })
 
-  it('emits no as_of_date clause when only non-allowlisted fields are present', () => {
+  it('emits no time-bound clause when only non-allowlisted fields are present', () => {
     const params: unknown[] = []
     const clause = buildColumnFilterClause(
       {
@@ -699,7 +709,7 @@ describe('buildColumnFilterClause as_of_date bound', () => {
       params,
       { now: new Date('2026-04-28T15:00:00Z') },
     )
-    expect(clause).toMatch(/d\.as_of_date = \$1/)
+    expect(clause).toMatch(/d\.execution_start >= \(\$1::timestamp/)
     expect(params).toEqual(['2026-04-21'])
   })
 })
