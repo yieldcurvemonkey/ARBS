@@ -54,10 +54,8 @@ class BreedenLitzenbergerResult:
     warnings: Tuple[str, ...] = ()
 
     def percentile(self, p: float) -> float:
-        """Return the rate at the p-th percentile (0-100)."""
-        idx = np.searchsorted(self.rnd_cumulative, p / 100.0)
-        idx = min(idx, len(self.strike_grid_rate) - 1)
-        return float(self.strike_grid_rate[idx])
+        """Return the rate at the p-th percentile (0-100), linearly interpolated."""
+        return float(np.interp(p / 100.0, self.rnd_cumulative, self.strike_grid_rate))
 
 
 @dataclass(frozen=True)
