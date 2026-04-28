@@ -26,6 +26,7 @@ from RVUtils.SFRConvexScreener._market_data import (
     load_market_data,
     resolve_universe_symbols,
 )
+from RVUtils.SFRConvexScreener.screener import build_snapshot
 
 __all__ = [
     "JointMethod",
@@ -36,6 +37,7 @@ __all__ = [
     "StructureDef",
     "StructureResult",
     "StructureType",
+    "build_snapshot",
     "enumerate_butterflies",
     "enumerate_calendars",
     "enumerate_structures",
