@@ -269,3 +269,92 @@ describe('matchFilterMetaWithRow', () => {
     )
   })
 })
+
+describe('timestamp column filtering', () => {
+  // The Time column renders M/D/YYYY HH:MM:SS in the NYC desk timezone.
+  // The filter should compare against THAT visible string, not the raw
+  // ISO timestamp the SDR feed delivers.
+  const row = {
+    // 2026-04-23T21:22:23Z = 2026-04-23 17:22:23 ET — the value the
+    // user reported couldn't be filtered with "04/23".
+    execution_start: '2026-04-23T21:22:23.000Z',
+  }
+
+  it('returns the NYC-formatted display string for execution_start', () => {
+    const candidates = collectFilterCandidates(row as any, 'execution_start')
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatch(/4\/23\/2026 17:22:23/)
+  })
+
+  it('matches "04/23" with leading zero (the user-reported case)', () => {
+    const meta = {
+      operator: FilterOperator.AND,
+      constraints: [{ value: '04/23', matchMode: FilterMatchMode.CONTAINS }],
+    }
+    expect(matchFilterMetaWithRow(row as any, 'execution_start', meta)).toBe(true)
+  })
+
+  it('matches "4/23" without leading zero', () => {
+    const meta = {
+      operator: FilterOperator.AND,
+      constraints: [{ value: '4/23', matchMode: FilterMatchMode.CONTAINS }],
+    }
+    expect(matchFilterMetaWithRow(row as any, 'execution_start', meta)).toBe(true)
+  })
+
+  it('matches "04/23/2026" (full date)', () => {
+    const meta = {
+      operator: FilterOperator.AND,
+      constraints: [{ value: '04/23/2026', matchMode: FilterMatchMode.CONTAINS }],
+    }
+    expect(matchFilterMetaWithRow(row as any, 'execution_start', meta)).toBe(true)
+  })
+
+  it('matches a partial time like "17:22"', () => {
+    const meta = {
+      operator: FilterOperator.AND,
+      constraints: [{ value: '17:22', matchMode: FilterMatchMode.CONTAINS }],
+    }
+    expect(matchFilterMetaWithRow(row as any, 'execution_start', meta)).toBe(true)
+  })
+
+  it('rejects a non-matching date', () => {
+    const meta = {
+      operator: FilterOperator.AND,
+      constraints: [{ value: '04/22', matchMode: FilterMatchMode.CONTAINS }],
+    }
+    expect(matchFilterMetaWithRow(row as any, 'execution_start', meta)).toBe(false)
+  })
+
+  it('STARTS_WITH respects the formatted display string', () => {
+    const meta = {
+      operator: FilterOperator.AND,
+      constraints: [{ value: '4/23', matchMode: FilterMatchMode.STARTS_WITH }],
+    }
+    expect(matchFilterMetaWithRow(row as any, 'execution_start', meta)).toBe(true)
+  })
+
+  it('handles JS Date row values (pg driver shape)', () => {
+    const dateRow = {
+      execution_start: new Date('2026-04-23T21:22:23.000Z'),
+    }
+    const meta = {
+      operator: FilterOperator.AND,
+      constraints: [{ value: '04/23', matchMode: FilterMatchMode.CONTAINS }],
+    }
+    expect(matchFilterMetaWithRow(dateRow as any, 'execution_start', meta)).toBe(true)
+  })
+
+  it('non-timestamp fields keep raw-string semantics (no leading-zero strip)', () => {
+    // A platform field with a leading-zero token should NOT have the
+    // leading-zero collapse applied — that would break category equality.
+    const platRow = { platform_identifier: '0BLT' }
+    const meta = {
+      operator: FilterOperator.AND,
+      constraints: [{ value: '0BLT', matchMode: FilterMatchMode.EQUALS }],
+    }
+    expect(matchFilterMetaWithRow(platRow as any, 'platform_identifier', meta)).toBe(
+      true,
+    )
+  })
+})
