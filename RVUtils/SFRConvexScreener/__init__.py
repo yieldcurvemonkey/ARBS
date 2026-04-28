@@ -19,14 +19,22 @@ from RVUtils.SFRConvexScreener._universe import (
     enumerate_calendars,
     enumerate_structures,
 )
+from RVUtils.SFRConvexScreener._market_data import (
+    SFRMarketData,
+    load_market_data,
+    resolve_universe_symbols,
+)
 
 __all__ = [
     "JointMethod",
     "Leg",
     "SFRConvexScreenerConfig",
+    "SFRMarketData",
     "StructureDef",
     "StructureType",
     "enumerate_butterflies",
     "enumerate_calendars",
     "enumerate_structures",
+    "load_market_data",
+    "resolve_universe_symbols",
 ]
