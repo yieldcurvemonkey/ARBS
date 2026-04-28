@@ -151,3 +151,124 @@ def build_entry_trigger(
     """Wire a FlowSignalTriggerRequirements that emits AddQueryAction orders."""
     reqs = FlowSignalTriggerRequirements(signal_fn=_entry_signal_fn(signal_table, config))
     return Trigger(trigger_requirements=reqs, actions=[_PassThroughEntryAction()])
+
+
+def _signal_table_by_tag(sigs: List[BacktestSignal]) -> Dict[str, BacktestSignal]:
+    return {f"sfr_screener_{s.structure_def.structure_id}": s for s in sigs}
+
+
+def _position_pnl_bp(pos: Any, backtest: Any, bpv: float) -> Optional[float]:
+    """Approximate position MTM in bp using the engine's mtm_history.
+
+    Returns None on any data shape mismatch or when more than one position
+    is open (per-position decomposition isn't available without per-position
+    MTM hooks). Callers treat None as "TP/SL not evaluable" and skip those
+    exit conditions.
+    """
+    try:
+        mtm_history = getattr(backtest, "mtm_history", {}) or {}
+        if not mtm_history or bpv <= 0:
+            return None
+        n_open = len(getattr(backtest.portfolio, "positions", []) or [])
+        if n_open != 1:
+            return None
+        latest_dt = max(mtm_history.keys())
+        portfolio_pnl_dollar = float(mtm_history[latest_dt])
+        return portfolio_pnl_dollar / float(bpv)
+    except Exception:
+        return None
+
+
+def _exit_signal_fn(table, config):
+    def fn(state: datetime.datetime, backtest=None):
+        if backtest is None or not backtest.portfolio.positions:
+            return TriggerInfo(False)
+
+        target_date = state.date()
+        sigs_today = table.get(target_date) or []
+        signal_by_tag = _signal_table_by_tag(sigs_today)
+
+        unwinds: List[UnwindOrder] = []
+        for pos in backtest.portfolio.positions:
+            tags = set((pos.meta or {}).get("tags", []))
+            screener_tags = [t for t in tags if t.startswith("sfr_screener_")]
+            if not screener_tags:
+                continue
+            tag = screener_tags[0]
+            structure_id = (pos.meta or {}).get(
+                "structure_id", tag.replace("sfr_screener_", "", 1),
+            )
+            entry_meta = pos.meta or {}
+            exit_reason = None
+
+            sig_today = signal_by_tag.get(tag)
+
+            # 1. Asymmetry decay
+            if sig_today is not None and config.exit_asymmetry_threshold is not None:
+                a = float(sig_today.asymmetry_ratio)
+                if a > 0:
+                    edge = (1.0 / a) if entry_meta.get("flip") else a
+                    if edge < config.exit_asymmetry_threshold:
+                        exit_reason = "asymmetry_decay"
+
+            # 2. Take profit / stop loss via mtm_history
+            if exit_reason is None and (config.exit_take_profit_bp is not None
+                                         or config.exit_stop_loss_bp is not None):
+                pnl_bp = _position_pnl_bp(pos, backtest, config.bpv_per_trade)
+                if pnl_bp is not None:
+                    if (config.exit_take_profit_bp is not None
+                            and pnl_bp >= config.exit_take_profit_bp):
+                        exit_reason = "tp_bp"
+                    elif (config.exit_stop_loss_bp is not None
+                            and pnl_bp <= config.exit_stop_loss_bp):
+                        exit_reason = "stop_bp"
+
+            # 3. Max holding
+            if exit_reason is None and config.exit_max_holding_days is not None:
+                opened = getattr(pos, "opened", None)
+                if opened is not None:
+                    if hasattr(opened, "date"):
+                        held = (state.date() - opened.date()).days
+                    else:
+                        held = (state.date() - opened).days
+                    if held >= config.exit_max_holding_days:
+                        exit_reason = "max_holding"
+
+            if exit_reason is None:
+                continue
+
+            _t = tag
+            unwinds.append(
+                UnwindOrder(
+                    timestamp=state,
+                    selector=lambda p, _t=_t: _t in set((p.meta or {}).get("tags", [])),
+                    meta={
+                        "action": "sfr_screener_exit",
+                        "reason": exit_reason,
+                        "structure_id": structure_id,
+                        "fee": float(config.round_trip_cost_bp),
+                    },
+                )
+            )
+
+        if not unwinds:
+            return TriggerInfo(False)
+        return TriggerInfo(True, {UnwindPositionsAction: unwinds})
+
+    return fn
+
+
+class _PassThroughExitAction:
+    risk: Optional[str] = None
+
+    def __call__(self, *, now, backtest, info) -> List[UnwindOrder]:
+        return list(info.get(UnwindPositionsAction, []))
+
+
+def build_exit_trigger(
+    signal_table: Dict[datetime.date, List[BacktestSignal]],
+    config: SFRScreenerBacktestConfig,
+) -> Trigger:
+    """Wire a FlowSignalTriggerRequirements that emits UnwindPositionsAction orders."""
+    reqs = FlowSignalTriggerRequirements(signal_fn=_exit_signal_fn(signal_table, config))
+    return Trigger(trigger_requirements=reqs, actions=[_PassThroughExitAction()])
