@@ -25,9 +25,11 @@ The fix is to scope filter-active queries to a sensible time window:
 
 ## Approach
 
-**Time-bounded SQL when column filters are active.** A new pure helper `parseDatePattern` accepts the trader's `execution_start` filter input and returns a calendar date or null. `buildColumnFilterClause` consumes the parsed date (or falls back to "today") to emit a single equality on `as_of_date`, which is index-backed via the existing `idx_tape_v2_packages_date (as_of_date, execution_start DESC)`.
+**Time-bounded SQL when column filters are active.** A new pure helper `parseDatePattern` accepts the trader's `execution_start` filter input and returns a calendar date or null. `buildColumnFilterClause` consumes the parsed date (or falls back to "today") to emit a NYC-day range clause on `execution_start`.
 
-### `parseDatePattern(raw: string): { yyyymmdd: string } | null`
+The existing `idx_tape_v2_packages_exec_start (execution_start DESC NULLS LAST)` index covers the range scan. (The packages table also has an `as_of_date` column with a composite index, but `as_of_date` represents the SDR ingest **batch date**, not the trade's NYC trading day — confirmed in dev: a row with `execution_start = 2026-04-21T23:36:28Z` carries `as_of_date = 2026-04-01`. Bounding on `as_of_date` would silently miss prints.)
+
+### `parseDatePattern(raw: string, now?: Date): string | null`
 
 Accepts:
 
@@ -55,12 +57,13 @@ Pseudocode:
 2. If `execution_start` field is present:
      a. For each constraint, try parseDatePattern(constraint.value).
      b. If ANY constraint yields a parsed date, capture the FIRST one as `bound`.
-     c. Skip emitting any direct execution_start clause (the date bound covers it).
+     c. Mark hasAllowlistedClause = true even when parsing fails — the trader's
+        intent (filter is active) still trips the today fallback.
+     d. Skip emitting any direct execution_start substring clause.
 3. After walking all fields:
-     - Did at least one allowlisted clause get emitted?
-       - YES + bound parsed: emit `WHERE as_of_date = $bound`.
-       - YES + bound NOT parsed: emit `WHERE as_of_date = (now() AT TIME ZONE 'America/New_York')::date`.
-       - NO clauses at all: emit nothing (live tape).
+     - hasAllowlistedClause + bound parsed: emit a parameterised range using $bound.
+     - hasAllowlistedClause + bound not parsed: emit a today range using NOW() in Postgres.
+     - No allowlisted clauses: emit nothing (live tape).
 ```
 
 Multiple execution_start constraints are tolerated — the first parseable one wins, others are dropped. (Documented; v1 doesn't need full multi-constraint date logic.)
@@ -70,27 +73,33 @@ Multiple execution_start constraints are tolerated — the first parseable one w
 **Trader URL (`execution_start contains "04/21"`):**
 
 ```sql
-WHERE d.as_of_date = $1   -- $1 = '2026-04-21'
+WHERE d.execution_start >= ($1::timestamp AT TIME ZONE 'America/New_York')
+  AND d.execution_start <  ($1::timestamp AT TIME ZONE 'America/New_York') + INTERVAL '1 day'
 ORDER BY d.execution_start DESC
 LIMIT 201
+-- $1 = '2026-04-21'
 ```
 
 **Trader filters `tape_label contains "10Y"` only:**
 
 ```sql
-WHERE (d.tape_label ILIKE $1)             -- $1 = '%10Y%'
-  AND d.as_of_date = (now() AT TIME ZONE 'America/New_York')::date
+WHERE (d.tape_label ILIKE $1)
+  AND d.execution_start >= date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'
+  AND d.execution_start <  date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York' + INTERVAL '1 day'
 ORDER BY d.execution_start DESC
 LIMIT 201
+-- $1 = '%10Y%'
 ```
 
 **Trader filters `tape_label contains "10Y"` AND `execution_start contains "04/21"`:**
 
 ```sql
-WHERE (d.tape_label ILIKE $1)             -- $1 = '%10Y%'
-  AND d.as_of_date = $2                   -- $2 = '2026-04-21'
+WHERE (d.tape_label ILIKE $1)
+  AND d.execution_start >= ($2::timestamp AT TIME ZONE 'America/New_York')
+  AND d.execution_start <  ($2::timestamp AT TIME ZONE 'America/New_York') + INTERVAL '1 day'
 ORDER BY d.execution_start DESC
 LIMIT 201
+-- $1 = '%10Y%', $2 = '2026-04-21'
 ```
 
 **Trader has no column filters (live tape):**
@@ -104,11 +113,11 @@ LIMIT 201
 
 ### Polling under a date bound
 
-`?since=` requests inherit the same `as_of_date` clause via the same `buildColumnFilterClause` invocation. If the trader has scoped to a past day, `?since=...` with a timestamp at end-of-that-day will return zero new rows (correct — no new prints land on closed days). If the trader has scoped to today, polling continues normally.
+`?since=` requests inherit the same time-bound clause via the same `buildColumnFilterClause` invocation. If the trader has scoped to a past day, `?since=...` returns zero new rows after end-of-day (correct — no new prints land on closed days). If the trader has scoped to today, polling continues normally.
 
 ### Cursor pagination under a date bound
 
-The existing `WHERE d.execution_start < $cursor` clause composes with the new `WHERE d.as_of_date = $bound` cleanly. The cursor scan walks back through that day's prints only. When `hasMore=false`, the chain stops without dragging further back. This is the desired behaviour.
+The existing `WHERE d.execution_start < $cursor` clause composes with the time-bound predicates cleanly. The cursor scan walks back through that day's prints only. When `hasMore=false`, the chain stops without dragging further back. This is the desired behaviour.
 
 ### Defensive client-side filter
 
@@ -122,7 +131,7 @@ The existing `WHERE d.execution_start < $cursor` clause composes with the new `W
 | Polling cadence | 30s polling unchanged. `?since=` inherits the date bound naturally. |
 | Manual link / dedupe | `dedupeDuplicatePackages` is downstream of the rows array. Unaffected. |
 | Cache header | `Cache-Control` skipped when `columnFilters` is non-empty (already done in PR #282). |
-| Existing tests stay green | Live tape (no filter) emits no `as_of_date` clause — every existing `buildTapeQuery` test that constructs filterless params still produces a WHERE-free query. |
+| Existing tests stay green | Live tape (no filter) emits no time-bound clause — every existing `buildTapeQuery` test that constructs filterless params still produces a WHERE-free query. |
 
 ## Out of scope (deferred follow-ups)
 
@@ -135,34 +144,35 @@ The existing `WHERE d.execution_start < $cursor` clause composes with the new `W
 ## Risks
 
 - **Year defaulting can surprise.** If today is 2027-01-05 and trader types `12/30`, do they mean 2026 (recent past) or 2027 (future)? The "step back a year if future" rule covers most cases. Documented in the helper.
-- **`as_of_date` vs `execution_start` NYC-day equivalence**. The schema sets `as_of_date` at ingest time and the indexes are keyed on it. If there's any drift between `as_of_date` and the NYC-localized date of `execution_start`, the bound could miss prints. Mitigation: client-side `displayRows` filter still runs as a safety net.
+- **DST boundary at midnight.** A NYC day is 23 or 25 hours twice a year. Letting Postgres compute the boundary via `AT TIME ZONE` handles this correctly per pg semantics.
 - **Trader expects all-history match for tape_label-only filter.** If they were relying on the chain-drag-back behaviour to find historical matches (e.g., "all 10Y prints last week") they'll see only today's. Documented as a known shift; "Show all history" follow-up addresses it.
+- **`as_of_date` is the SDR ingest batch date, not the trade's NYC date.** Confirmed in dev (an execution_start of 2026-04-21T23:36Z carries as_of_date 2026-04-01). Bounding on as_of_date would silently miss prints. We bound on execution_start with NYC-localised range instead.
 
 ## Test plan
 
 **Unit (`route.logic.test.ts`):**
 - `parseDatePattern` matrix: every accepted format returns expected date; every garbage input returns null.
-- `buildColumnFilterClause` emits `as_of_date = today` when `tape_label` set and no execution_start filter.
-- `buildColumnFilterClause` emits `as_of_date = $parsed` when execution_start has a date pattern.
-- `buildColumnFilterClause` does NOT emit `as_of_date` when columnFilters is empty.
+- `buildColumnFilterClause` emits today range when `tape_label` set and no execution_start filter.
+- `buildColumnFilterClause` emits parsed-date range when execution_start has a date pattern.
+- `buildColumnFilterClause` does NOT emit a time-bound clause when columnFilters is empty.
 - `buildColumnFilterClause` skips the direct execution_start substring clause when the bound is captured (no double-clause).
-- `buildColumnFilterClause` falls through to today bound when execution_start filter is unparseable (e.g., `"NEWFLOW"`).
+- `buildColumnFilterClause` falls through to today range when execution_start filter is unparseable (e.g., `"NEWFLOW"`).
 
 **Integration (`route.cache-headers.test.ts` family):**
 - Same cache-skip behaviour as today (no behaviour change there).
 
 **Browser:**
-- Trader URL `?columnFilters={execution_start contains "04/21"}` → single SQL request, single fast response, "matching" count == "loaded" count, no chain-load.
+- Trader URL `?columnFilters={execution_start contains "04/21"}` → bounded server query, "matching" count == "loaded" count, chain completes cleanly with `hasMore=false`.
 - Trader URL `?columnFilters={tape_label contains "10Y"}` → today's matches only; cursor pages within today only; smaller universe.
 - Live tape (no filter) — unchanged.
 
 ## Build sequence
 
 1. Pure `parseDatePattern` helper + unit tests. Commit.
-2. Modify `buildColumnFilterClause` to consume the parsed date + emit `as_of_date` bound (today or parsed). Commit.
+2. Modify `buildColumnFilterClause` to consume the parsed date + emit the NYC-day range bound (today or parsed). Commit.
 3. Browser verify against the trader's URL. Commit any test polish.
 4. Push + extend PR #282 description (or open follow-up PR — decide based on diff size).
 
 ## Rollback
 
-Revert the commits on the feature branch. The pure helper is dead code if the wiring commit is reverted; the `as_of_date` clause is conditional on `columnFilters`, so no-filter requests are byte-identical to today.
+Revert the commits on the feature branch. The pure helper is dead code if the wiring commit is reverted; the time-bound clause is conditional on `columnFilters`, so no-filter requests are byte-identical to today.

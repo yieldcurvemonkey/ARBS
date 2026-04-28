@@ -14,6 +14,8 @@
 
 **Test command:** `cd SDRUtils/dashboard && npm test -- --testPathPatterns=usd-swaps-tape-v2/__tests__/route.logic.test`
 
+> **Post-implementation note (2026-04-28):** The plan originally proposed bounding on `as_of_date = $1`, expecting `as_of_date` to be the trade's NYC date. Live verification revealed `as_of_date` is the SDR **ingest batch** date (e.g. `as_of_date = 2026-04-01` for a row whose `execution_start = 2026-04-21T23:36:28Z`). The actual implementation bounds on `execution_start` with NYC-localised day boundaries computed in Postgres (`execution_start >= ($n::timestamp AT TIME ZONE 'America/New_York')` and `< ... + INTERVAL '1 day'` for the parsed-date case; `date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'` for the today fallback). Index-backed via `idx_tape_v2_packages_exec_start (execution_start DESC NULLS LAST)`. The test snippets below mention `as_of_date` — the actual committed test fragments use the `execution_start` range form. See `route.logic.test.ts` for the canonical set.
+
 ---
 
 ## Task 1: `parseDatePattern` pure helper
