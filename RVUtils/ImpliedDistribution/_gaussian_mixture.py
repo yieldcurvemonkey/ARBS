@@ -8,7 +8,7 @@ Reference: JPM Interest Rate Derivatives, various reports (2023-2026).
 """
 
 import math
-from typing import Sequence
+from typing import List, Sequence
 
 import numpy as np
 from scipy.integrate import cumulative_trapezoid
@@ -55,6 +55,7 @@ def extract_gaussian_mixture(
     optimize_stds: bool = True,
     initial_std_bps: float = 30.0,
     grid_points: int = 2000,
+    rmse_warn_threshold: float = 1e-3,
 ) -> GaussianMixtureResult:
     """Extract scenario weights via Gaussian mixture decomposition.
 
@@ -137,6 +138,12 @@ def extract_gaussian_mixture(
         options={"maxiter": 5000, "ftol": 1e-14},
     )
 
+    warnings: List[str] = []
+    if not result.success:
+        warnings.append(
+            f"GM optimizer failed to converge: {result.message}"
+        )
+
     opt_weights, opt_stds = _unpack(result.x)
     # Clean up: floor small negatives, renormalize
     opt_weights = np.maximum(opt_weights, 0.0)
@@ -148,6 +155,11 @@ def extract_gaussian_mixture(
     model_calls = _mixture_call_prices(market_strikes, tte, df, means_rate, opt_stds, opt_weights)
     rmse = float(np.sqrt(np.mean((model_calls - market_calls) ** 2)))
     max_err = float(np.max(np.abs(model_calls - market_calls)))
+
+    if rmse > rmse_warn_threshold:
+        warnings.append(
+            f"GM fit quality poor: RMSE={rmse:.4e} > {rmse_warn_threshold:.0e}"
+        )
 
     # Build composite density on fine grid (rate space)
     rate_min = float(means_rate.min() - 4.0 * opt_stds.max())
@@ -178,4 +190,5 @@ def extract_gaussian_mixture(
         max_abs_error_price=max_err,
         optimization_success=result.success,
         component_densities=component_densities,
+        warnings=tuple(warnings),
     )
