@@ -103,6 +103,29 @@ def test_payoff_pdf_common_state_returns_array_with_finite_support():
     np.testing.assert_allclose(outcomes_bp, fake_outcomes * 100.0)
 
 
+def test_payoff_pdf_common_state_accepts_linear_combination_column():
+    """The real implementation in `_joint_analytics.py` uses
+    `value_name='linear_combination'` for linear-combination distributions —
+    `payoff_pdf_common_state` must handle either column name."""
+    from unittest.mock import MagicMock
+
+    fake_outcomes = np.array([-5.0, 0.0, 7.0])
+    fake_probs = np.array([0.3, 0.4, 0.3])
+    snap = MagicMock(spec=["linear_combination_distribution"])
+    snap.linear_combination_distribution.return_value = AnnotatedResult(
+        data=pd.DataFrame({"linear_combination": fake_outcomes, "probability": fake_probs}),
+        metadata=ViewMetadata(support="exact"),
+    )
+
+    legs = (
+        Leg(contract="A", weight=1, price=96.5, dv01=25),
+        Leg(contract="B", weight=-1, price=96.6, dv01=25),
+    )
+    outcomes_bp, probs = payoff_pdf_common_state(legs, joint=snap)
+    np.testing.assert_allclose(outcomes_bp, fake_outcomes * 100.0)
+    np.testing.assert_allclose(probs.sum(), 1.0, atol=1e-9)
+
+
 def test_payoff_pdf_gaussian_copula_recovers_expected_mean_for_independent_uniform():
     """Independent uniform marginals: 1*X1 - 1*X2 has mean 0, std sqrt(2/3)% ≈ 81.6 bp."""
     rng = np.random.default_rng(seed=42)
@@ -122,6 +145,28 @@ def test_payoff_pdf_gaussian_copula_recovers_expected_mean_for_independent_unifo
     )
     assert abs(samples_bp.mean()) < 5.0
     assert 70.0 < samples_bp.std() < 95.0
+
+
+def test_payoff_pdf_outright_returns_marginal_centred_at_forward():
+    """The outright payoff PDF is the BL marginal recentred so that
+    payoff = (rate - forward) * weight * 100, in bp."""
+    from RVUtils.SFRConvexScreener._distributions import payoff_pdf_outright
+
+    bl = _bl_with_uniform("SFRZ26", 3.5)  # uniform on [2.5, 4.5]
+    marginals = {"SFRZ26": PerContractDistribution(symbol="SFRZ26", bl=bl)}
+
+    leg_pay = Leg(contract="SFRZ26", weight=1.0, price=96.5, dv01=25)
+    outcomes_bp, probs = payoff_pdf_outright(leg_pay, marginals=marginals)
+    # Uniform centred at 3.5 → payoffs uniform on [-100, +100] bp
+    assert outcomes_bp.min() < -90
+    assert outcomes_bp.max() > 90
+    assert abs((outcomes_bp * probs).sum()) < 1.0  # mean ~ 0
+    assert abs(probs.sum() - 1.0) < 1e-6
+
+    # Receiver convention (weight=-1) flips the sign
+    leg_recv = Leg(contract="SFRZ26", weight=-1.0, price=96.5, dv01=25)
+    outcomes_bp_r, _ = payoff_pdf_outright(leg_recv, marginals=marginals)
+    np.testing.assert_allclose(np.sort(outcomes_bp), -np.sort(outcomes_bp_r)[::-1])
 
 
 def test_payoff_pdf_perfect_correlation_uses_front_marginal_only():

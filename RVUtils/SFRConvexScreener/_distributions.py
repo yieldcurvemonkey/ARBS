@@ -43,11 +43,37 @@ def extract_bl_marginals(
     *,
     dist_extractor: Optional[Any] = None,
     scenario_config: Optional[FedScenarioConfig] = None,
+    jpm_method: bool = False,
 ) -> Dict[str, PerContractDistribution]:
-    """Run BL extraction on each smile. Fail-soft per contract."""
+    """Run BL extraction on each smile. Fail-soft per contract.
+
+    Parameters
+    ----------
+    jpm_method : bool
+        When True, follow JPM Tech Appendix A more strictly: use raw market
+        vols (no SABR fit, no SABR-grid extrapolation), 4th-order spline on
+        observed strikes plus linear ghost points, smoothing parameter 1e-4,
+        25bp bins. Default False keeps the SABR + ghost-points hybrid that
+        ARBS has used historically (smoother tails at the cost of leaning
+        on the SABR β/ρ/ν parameters).
+    """
     if dist_extractor is None:
         scenarios = scenario_config or FedScenarioConfig.default_sofr_scenarios()
-        dist_extractor = SFRImpliedDistribution(scenario_config=scenarios)
+        if jpm_method:
+            dist_extractor = SFRImpliedDistribution(
+                scenario_config=scenarios,
+                use_sabr_vols=False,
+                sabr_extrapolation=False,
+                # Per Appendix A: 4th-order spline, smoothing 1e-4,
+                # 10 ghost points, 25bp bins. These are already the
+                # ARBS defaults — we just disable the SABR resampling.
+                smoothing_param=1e-4,
+                spline_order=4,
+                n_ghost_points=10,
+                bin_width_bps=25.0,
+            )
+        else:
+            dist_extractor = SFRImpliedDistribution(scenario_config=scenarios)
 
     out: Dict[str, PerContractDistribution] = {}
     for symbol, smile in smiles.items():
@@ -81,7 +107,20 @@ def payoff_pdf_common_state(
     weights = {leg.contract: float(leg.weight) for leg in legs}
     annotated = joint.linear_combination_distribution(weights)
     df: pd.DataFrame = annotated.data
-    outcomes_pct = np.asarray(df["value"], dtype=float)
+    # `_group_distribution` names the value column either "value" or
+    # "linear_combination" depending on the caller — accept either.
+    if "value" in df.columns:
+        value_col = "value"
+    elif "linear_combination" in df.columns:
+        value_col = "linear_combination"
+    else:
+        non_prob = [c for c in df.columns if c != "probability"]
+        if not non_prob:
+            raise KeyError(
+                f"linear_combination_distribution returned unexpected columns {list(df.columns)}"
+            )
+        value_col = non_prob[0]
+    outcomes_pct = np.asarray(df[value_col], dtype=float)
     probs = np.asarray(df["probability"], dtype=float)
     if probs.sum() > 0:
         probs = probs / probs.sum()
@@ -158,3 +197,34 @@ def payoff_pdf_perfect_correlation(
     if total > 0:
         probs = probs / total
     return payoff_bp, probs
+
+
+def payoff_pdf_outright(
+    leg: Leg,
+    *,
+    marginals: Mapping[str, PerContractDistribution],
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Single-contract directional payoff PDF.
+
+    Returns the BL marginal centred at the contract forward — outcomes in bp
+    relative to forward, weighted by the contract's RN density. With
+    ``leg.weight = +1`` the resulting distribution is the realised rate
+    change in bp; ``leg.weight = -1`` flips the sign (long-price /
+    receiver convention).
+    """
+    bl = marginals[leg.contract].bl
+    grid = bl.strike_grid_rate
+    payoff_bp = (grid - bl.input.forward_rate) * float(leg.weight) * 100.0
+    density = bl.rnd_density.copy()
+    dx = np.diff(grid)
+    probs = np.zeros_like(density)
+    if len(dx) > 0:
+        probs[:-1] = 0.5 * (density[:-1] + density[1:]) * dx
+        probs[-1] = probs[-2] if len(probs) > 1 else 1.0
+    total = probs.sum()
+    if total > 0:
+        probs = probs / total
+    # Sort by payoff so downstream metrics (CDF interpolation) work for
+    # both leg.weight = +1 and -1.
+    order = np.argsort(payoff_bp)
+    return payoff_bp[order], probs[order]

@@ -29,6 +29,7 @@ from RVUtils.SFRConvexScreener._distributions import (
     extract_bl_marginals,
     payoff_pdf_common_state,
     payoff_pdf_historical_gaussian_copula,
+    payoff_pdf_outright,
     payoff_pdf_perfect_correlation,
 )
 from RVUtils.SFRConvexScreener._historical import (
@@ -49,6 +50,7 @@ from RVUtils.SFRConvexScreener._types import (
     SFRConvexScreenerConfig,
     SFRConvexScreenerSnapshot,
     StructureResult,
+    StructureType,
 )
 from RVUtils.SFRConvexScreener._universe import enumerate_structures
 
@@ -98,6 +100,8 @@ def _calibrate_joint(
 def _config_summary(config: SFRConvexScreenerConfig) -> Dict[str, Any]:
     return {
         "universe_size": config.universe_size,
+        "include_outrights": getattr(config, "include_outrights", True),
+        "jpm_method": getattr(config, "jpm_method", False),
         "calendar_gaps": list(config.calendar_gaps),
         "fly_gaps": list(config.fly_gaps),
         "joint_methods": [m.value for m in config.joint_methods],
@@ -128,8 +132,10 @@ def build_snapshot(
             run_warnings=tuple(list(md.warnings) + ["no structures enumerated"]),
         )
 
-    # 1. BL marginals
-    marginals: Dict[str, PerContractDistribution] = extract_bl_marginals(md.smiles)
+    # 1. BL marginals (optionally use JPM Tech Appendix A method)
+    marginals: Dict[str, PerContractDistribution] = extract_bl_marginals(
+        md.smiles, jpm_method=getattr(config, "jpm_method", False),
+    )
 
     # 2. Joint snapshot (common-state)
     current_rate = float("nan")
@@ -158,40 +164,57 @@ def build_snapshot(
             continue
 
         metrics_by_method: Dict[str, PayoffMetrics] = {}
-        if JointMethod.COMMON_STATE in config.joint_methods and joint_snapshot is not None:
-            try:
-                outcomes_bp, probs = payoff_pdf_common_state(s.legs, joint=joint_snapshot)
-                metrics_by_method["common_state"] = metrics_from_pdf(outcomes_bp, probs)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("common-state PDF failed for %s: %s", s.structure_id, exc)
 
-        if JointMethod.HISTORICAL_GAUSSIAN_COPULA in config.joint_methods:
+        # Outrights have a single leg — no joint dependence; use the BL
+        # marginal directly. This is the JPM EUR Dec26 example: the
+        # asymmetry of receiving an outright contract is exactly the
+        # asymmetry of its RN PDF.
+        is_outright = s.structure_type is StructureType.OUTRIGHT
+        if is_outright:
             try:
-                samples = payoff_pdf_historical_gaussian_copula(
-                    s.legs,
-                    marginals=marginals,
-                    corr_matrix=corr,
-                    n_sim=config.n_simulations,
-                    rng=rng,
-                )
-                metrics_by_method["historical_gaussian_copula"] = metrics_from_samples(samples)
+                outcomes_bp, probs = payoff_pdf_outright(s.legs[0], marginals=marginals)
+                metrics_by_method["marginal"] = metrics_from_pdf(outcomes_bp, probs)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("copula PDF failed for %s: %s", s.structure_id, exc)
+                logger.warning("marginal PDF failed for %s: %s", s.structure_id, exc)
+        else:
+            if JointMethod.COMMON_STATE in config.joint_methods and joint_snapshot is not None:
+                try:
+                    outcomes_bp, probs = payoff_pdf_common_state(s.legs, joint=joint_snapshot)
+                    metrics_by_method["common_state"] = metrics_from_pdf(outcomes_bp, probs)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("common-state PDF failed for %s: %s", s.structure_id, exc)
 
-        if JointMethod.PERFECT_CORRELATION in config.joint_methods:
-            try:
-                outcomes_bp, probs = payoff_pdf_perfect_correlation(s.legs, marginals=marginals)
-                metrics_by_method["perfect_correlation"] = metrics_from_pdf(outcomes_bp, probs)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("perfect-corr PDF failed for %s: %s", s.structure_id, exc)
+            if JointMethod.HISTORICAL_GAUSSIAN_COPULA in config.joint_methods:
+                try:
+                    samples = payoff_pdf_historical_gaussian_copula(
+                        s.legs,
+                        marginals=marginals,
+                        corr_matrix=corr,
+                        n_sim=config.n_simulations,
+                        rng=rng,
+                    )
+                    metrics_by_method["historical_gaussian_copula"] = metrics_from_samples(samples)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("copula PDF failed for %s: %s", s.structure_id, exc)
+
+            if JointMethod.PERFECT_CORRELATION in config.joint_methods:
+                try:
+                    outcomes_bp, probs = payoff_pdf_perfect_correlation(s.legs, marginals=marginals)
+                    metrics_by_method["perfect_correlation"] = metrics_from_pdf(outcomes_bp, probs)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("perfect-corr PDF failed for %s: %s", s.structure_id, exc)
 
         if not metrics_by_method:
             logger.warning("no metrics produced for %s — skipping", s.structure_id)
             continue
 
-        primary_method = config.primary_joint_method.value
-        if primary_method not in metrics_by_method:
+        if is_outright:
+            # Outrights have only one method; use it.
             primary_method = next(iter(metrics_by_method))
+        else:
+            primary_method = config.primary_joint_method.value
+            if primary_method not in metrics_by_method:
+                primary_method = next(iter(metrics_by_method))
 
         # Carry / roll via IRSwapQuery (best-effort, NaN on failure)
         if md.curve_handle is not None:

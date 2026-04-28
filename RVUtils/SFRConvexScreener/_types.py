@@ -12,6 +12,7 @@ import pandas as pd
 
 
 class StructureType(Enum):
+    OUTRIGHT = "outright"
     CALENDAR = "calendar"
     BUTTERFLY = "butterfly"
 
@@ -41,8 +42,13 @@ class StructureDef:
 class SFRConvexScreenerConfig:
     # Universe
     universe_size: int = 12
+    include_outrights: bool = True
     calendar_gaps: Tuple[int, ...] = (1, 2, 4)
     fly_gaps: Tuple[int, ...] = (1, 2, 4)
+
+    # Methodology flag — when True, use raw market vols (no SABR
+    # extrapolation) per JPM Tech Appendix A.
+    jpm_method: bool = False
 
     # Curve / data sources
     curve_source: str = "BARCHART_STIRF-RL"

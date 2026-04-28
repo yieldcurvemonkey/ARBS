@@ -19,6 +19,7 @@ from RVUtils.SFRConvexScreener._types import (
 from RVUtils.SFRConvexScreener._universe import (
     enumerate_butterflies,
     enumerate_calendars,
+    enumerate_outrights,
     enumerate_structures,
 )
 from RVUtils.SFRConvexScreener._market_data import (
@@ -41,6 +42,7 @@ __all__ = [
     "build_snapshot",
     "enumerate_butterflies",
     "enumerate_calendars",
+    "enumerate_outrights",
     "enumerate_structures",
     "load_market_data",
     "resolve_universe_symbols",

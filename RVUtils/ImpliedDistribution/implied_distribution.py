@@ -88,6 +88,20 @@ class SFRImpliedDistribution:
     * **Gaussian-mixture optimizer.** SLSQP can fail to converge on
       ill-conditioned smiles; failures and high-RMSE fits are flagged in
       ``GaussianMixtureResult.warnings``.
+
+    JPM Tech Appendix A compatibility
+    ---------------------------------
+    The default configuration matches the JPM Interest Rate Strategy
+    "Inferring Market Expectations from SOFR Futures Options" methodology
+    on the *spline mechanics* (4th-order smoothing spline, smoothing
+    parameter 1e-4, 10 ghost points per side via linear extrapolation,
+    25bp Fed-funds-target bins). The *strike selection* differs by
+    default — we resample the SABR-fit smile across a fine strike grid,
+    whereas the appendix uses raw OTM call premiums plus put-call
+    parity-converted OTM put premiums (filtered to OI ≥ 100). To match
+    the appendix more strictly, construct the orchestrator with
+    ``use_sabr_vols=False`` and ``sabr_extrapolation=False``. The screener
+    exposes this via ``SFRConvexScreenerConfig(jpm_method=True)``.
     """
 
     def __init__(

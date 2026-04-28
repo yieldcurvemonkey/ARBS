@@ -85,6 +85,28 @@ def _read_meta(p: Any, key: str) -> Any:
     return None
 
 
+def _last_business_day(d: datetime.date) -> datetime.date:
+    """Return the most recent business day strictly before ``d``."""
+    return (pd.Timestamp(d) - pd.tseries.offsets.BDay(1)).date()
+
+
+def _try_with_fallback(fn, *, as_of: datetime.date, max_fallback_days: int = 5):
+    """Invoke ``fn(date)`` starting from ``as_of`` and walk back up to
+    ``max_fallback_days`` business days on transient failures.
+
+    Returns ``(value, effective_date, error_or_None)``.
+    """
+    last_exc: Optional[Exception] = None
+    candidate = as_of
+    for _ in range(max_fallback_days + 1):
+        try:
+            return fn(candidate), candidate, None
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            candidate = _last_business_day(candidate)
+    return None, candidate, last_exc
+
+
 def load_market_data(
     config: SFRConvexScreenerConfig, *, as_of: datetime.date
 ) -> SFRMarketData:
@@ -92,16 +114,23 @@ def load_market_data(
     sr3_symbols = tuple(_sfr_to_sr3(s) for s in sfr_symbols)
     warnings: List[str] = []
 
-    # 1. OIS curve
+    # 1. OIS curve — fall back to last business day if today rejected
     curve_mdp = IRSwapsMDP(source=config.curve_source)
-    try:
-        curve_handle = curve_mdp.get_pricer(
-            request={"curve_name": config.curve_name, "timestamp": as_of}
+
+    def _fetch_curve(d: datetime.date):
+        return curve_mdp.get_pricer(
+            request={"curve_name": config.curve_name, "timestamp": d}
         )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("curve fetch failed: %s", exc)
-        warnings.append(f"curve fetch failed: {exc}")
-        curve_handle = None
+
+    curve_handle, curve_asof, curve_err = _try_with_fallback(
+        _fetch_curve, as_of=as_of, max_fallback_days=5,
+    )
+    if curve_handle is None:
+        logger.warning("curve fetch failed (final): %s", curve_err)
+        warnings.append(f"curve fetch failed: {curve_err}")
+    elif curve_asof != as_of:
+        logger.info("curve fetched from fallback date %s", curve_asof)
+        warnings.append(f"curve fetched from fallback date {curve_asof.isoformat()}")
 
     # 2. Futures snapshot (price + OI + volume)
     fut_mdp = STIRFutureMDP(source=config.curve_source)
@@ -151,18 +180,28 @@ def load_market_data(
         logger.warning("bulk price-panel fetch failed: %s", exc)
         warnings.append(f"bulk price-panel fetch failed: {exc}")
 
-    # 4. SABR smiles per contract
+    # 4. SABR smiles per contract — fall back to previous business day if today fails
     opt_mdp = STIRFutureOptionMDP(source=config.options_source)
     smiles: Dict[str, Any] = {}
     for sfr in sfr_symbols:
-        try:
-            smile = opt_mdp.fetch_sabr_smile({
-                "symbol": sfr, "as_of": as_of, "strike_offsets_bps": "listed",
+        def _fetch_smile(d: datetime.date, _sym: str = sfr):
+            return opt_mdp.fetch_sabr_smile({
+                "symbol": _sym, "as_of": d, "strike_offsets_bps": "listed",
             })
-            smiles[sfr] = smile
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("SABR smile fetch failed for %s: %s", sfr, exc)
-            warnings.append(f"smile fetch failed for {sfr}: {exc}")
+
+        smile, smile_asof, smile_err = _try_with_fallback(
+            _fetch_smile, as_of=as_of, max_fallback_days=5,
+        )
+        if smile is None:
+            logger.warning("SABR smile fetch failed for %s (final): %s", sfr, smile_err)
+            warnings.append(f"smile fetch failed for {sfr}: {smile_err}")
+            continue
+        if smile_asof != as_of:
+            logger.info("smile for %s fetched from fallback date %s", sfr, smile_asof)
+            warnings.append(
+                f"smile for {sfr} fetched from fallback {smile_asof.isoformat()}"
+            )
+        smiles[sfr] = smile
 
     return SFRMarketData(
         as_of=as_of,

@@ -17,6 +17,27 @@ def _make_leg(contract: str, weight: float) -> Leg:
     return Leg(contract=contract, weight=float(weight), price=float("nan"), dv01=25.0)
 
 
+def enumerate_outrights(symbols: Sequence[str]) -> List[StructureDef]:
+    """One ``OUTRIGHT`` structure per contract — single leg with weight=+1.
+
+    The asymmetry of the BL marginal directly tells us whether paying or
+    receiving the contract has the better-asymmetric directional payoff.
+    Convention: weight=+1 → P&L distribution is the realised rate change in
+    bp, so ``asymmetry > 1`` means *paying* has positive asymmetric edge
+    (equivalently, *receiving* has negative asymmetric edge).
+    """
+    out: List[StructureDef] = []
+    for sym in symbols:
+        out.append(
+            StructureDef(
+                structure_id=f"{sym}_OUTRIGHT",
+                structure_type=StructureType.OUTRIGHT,
+                legs=(_make_leg(sym, 1.0),),
+            )
+        )
+    return out
+
+
 def enumerate_calendars(symbols: Sequence[str], gap: int) -> List[StructureDef]:
     out: List[StructureDef] = []
     n = len(symbols)
@@ -51,6 +72,8 @@ def enumerate_structures(
     symbols: Sequence[str], config: SFRConvexScreenerConfig
 ) -> List[StructureDef]:
     out: List[StructureDef] = []
+    if getattr(config, "include_outrights", True):
+        out.extend(enumerate_outrights(symbols))
     for g in config.calendar_gaps:
         out.extend(enumerate_calendars(symbols, g))
     for g in config.fly_gaps:
