@@ -28,14 +28,18 @@ from RVUtils.SFRConvexScreener._market_data import (
     resolve_universe_symbols,
 )
 from RVUtils.SFRConvexScreener._export import write_snapshot
+from RVUtils.SFRConvexScreener._backtest_signals import BacktestSignal
+from RVUtils.SFRConvexScreener._backtest_triggers import SFRScreenerBacktestConfig
 from RVUtils.SFRConvexScreener.screener import build_snapshot
 
 __all__ = [
+    "BacktestSignal",
     "JointMethod",
     "Leg",
     "SFRConvexScreenerConfig",
     "SFRConvexScreenerSnapshot",
     "SFRMarketData",
+    "SFRScreenerBacktestConfig",
     "StructureDef",
     "StructureResult",
     "StructureType",
