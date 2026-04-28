@@ -13,6 +13,7 @@ import { TradeTapeTable } from './TradeTapeTable/TradeTapeTable'
 import { ManualLinksDialog } from './ManualLinksDialog/ManualLinksDialog'
 import { AnalyticsPanel } from './AnalyticsPanel'
 import {
+  useColumnFilters,
   useFocusedTrade,
   useRowExpansion,
   useRowSelection,
@@ -30,7 +31,14 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   const [analyticsOpen, setAnalyticsOpen] = useState<boolean>(false)
   const focus = useFocusedTrade()
 
-  const tape = useTradeTapeData({})
+  // Per-column filters live in the URL via useColumnFilters; thread the
+  // serialised payload into the data hook so the route applies the
+  // filter via WHERE clauses. When no filter is active the value is
+  // null and the unfiltered initial fetch keeps its Cache-Control hit.
+  const orchestratorColumnFilters = useColumnFilters()
+  const tape = useTradeTapeData({
+    columnFilters: orchestratorColumnFilters.serializedColumnFilters,
+  })
 
   // When the user checks a row, make the first-selected row the focus so
   // the analytics dock tracks their attention without a separate click.

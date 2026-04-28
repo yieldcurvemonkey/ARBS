@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals'
 import { FilterMatchMode, FilterOperator } from 'primereact/api'
 import {
+  buildSerializedColumnFilters,
   DEFAULT_SORT_FIELD,
   DEFAULT_SORT_ORDER,
   parseSortField,
@@ -85,5 +86,32 @@ describe('useColumnFilters URL helpers', () => {
     expect(parseSortField('weighted_fixed_rate')).toBe('weighted_fixed_rate')
     expect(parseSortOrder('1')).toBe(1)
     expect(parseSortOrder('-1')).toBe(DEFAULT_SORT_ORDER)
+  })
+
+  it('buildSerializedColumnFilters returns null when no field has constraints', () => {
+    expect(buildSerializedColumnFilters({} as any)).toBeNull()
+  })
+
+  it('buildSerializedColumnFilters returns null when every constraint is empty', () => {
+    const empty = {
+      tape_label: {
+        operator: FilterOperator.AND,
+        constraints: [{ value: null, matchMode: FilterMatchMode.CONTAINS }],
+      },
+    } as any
+    expect(buildSerializedColumnFilters(empty)).toBeNull()
+  })
+
+  it('buildSerializedColumnFilters returns a JSON string of the active payload', () => {
+    const filters = {
+      tape_label: {
+        operator: FilterOperator.AND,
+        constraints: [{ value: '10Y', matchMode: FilterMatchMode.CONTAINS }],
+      },
+    } as any
+    const json = buildSerializedColumnFilters(filters)
+    expect(typeof json).toBe('string')
+    expect(json!).toContain('tape_label')
+    expect(json!).toContain('10Y')
   })
 })

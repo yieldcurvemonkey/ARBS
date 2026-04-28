@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import type { DataTableFilterMeta } from 'primereact/datatable'
 import { buildColumnFilterPayload } from '../components/TradeTapeTable/filter-utils'
 import {
+  buildSerializedColumnFilters,
   DEFAULT_SORT_FIELD,
   DEFAULT_SORT_ORDER,
   mergeWithInitialFilters,
@@ -34,6 +35,14 @@ export interface UseColumnFiltersReturn {
   setSort: (field: string | null, order: SortOrder) => void
   reset: () => void
   queryString: string
+  /**
+   * Pre-serialised JSON ready to hand to the tape route's `columnFilters`
+   * query param. Null when no field has an active constraint. Memoised
+   * by the active filters object so reference equality is stable across
+   * unrelated re-renders, which lets `useTradeTapeData`'s reset effect
+   * fire only on real filter changes.
+   */
+  serializedColumnFilters: string | null
 }
 
 export function useColumnFilters(): UseColumnFiltersReturn {
@@ -114,6 +123,11 @@ export function useColumnFilters(): UseColumnFiltersReturn {
     return q.toString()
   }, [filters, sortField, sortOrder])
 
+  const serializedColumnFilters = useMemo<string | null>(
+    () => buildSerializedColumnFilters(filters),
+    [filters],
+  )
+
   return {
     filters,
     sortField,
@@ -122,5 +136,6 @@ export function useColumnFilters(): UseColumnFiltersReturn {
     setSort,
     reset,
     queryString,
+    serializedColumnFilters,
   }
 }
