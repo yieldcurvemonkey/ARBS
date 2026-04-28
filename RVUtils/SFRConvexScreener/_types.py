@@ -49,6 +49,10 @@ class SFRConvexScreenerConfig:
     # Methodology flag — when True, use raw market vols (no SABR
     # extrapolation) per JPM Tech Appendix A.
     jpm_method: bool = False
+    # Ghost-point extension distance (bp of price per ghost). Override
+    # only if you want non-default tail extrapolation reach. ARBS default
+    # 5bp; jpm_method default 25bp.
+    ghost_extension_bps: Optional[float] = None
 
     # Curve / data sources
     curve_source: str = "BARCHART_STIRF-RL"
@@ -148,6 +152,9 @@ class SFRConvexScreenerSnapshot:
         rows = []
         for r in self.results:
             primary = r.metrics_by_method.get(r.primary_method)
+            stale_legs = [
+                w.split("::")[0] for w in r.warnings if "stale_smile_asof" in w
+            ]
             row = {
                 "structure_id": r.structure_def.structure_id,
                 "type": r.structure_def.structure_type.value,
@@ -156,6 +163,8 @@ class SFRConvexScreenerSnapshot:
                 "carry_3m_bp": r.carry_3m_bp,
                 "rolldown_3m_bp": r.rolldown_3m_bp,
                 "primary_method": r.primary_method,
+                "is_stale": bool(stale_legs),
+                "stale_legs": ",".join(stale_legs) if stale_legs else "",
             }
             if primary is not None:
                 row.update(primary.to_dict())

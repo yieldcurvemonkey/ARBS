@@ -34,6 +34,8 @@ class SFRMarketData:
     futures_df: pd.DataFrame
     price_panel: pd.DataFrame
     smiles: Dict[str, Any]
+    smile_asof_by_symbol: Dict[str, datetime.date] = field(default_factory=dict)
+    curve_asof: Optional[datetime.date] = None
     warnings: Tuple[str, ...] = ()
 
 
@@ -183,6 +185,7 @@ def load_market_data(
     # 4. SABR smiles per contract — fall back to previous business day if today fails
     opt_mdp = STIRFutureOptionMDP(source=config.options_source)
     smiles: Dict[str, Any] = {}
+    smile_asof_by_symbol: Dict[str, datetime.date] = {}
     for sfr in sfr_symbols:
         def _fetch_smile(d: datetime.date, _sym: str = sfr):
             return opt_mdp.fetch_sabr_smile({
@@ -202,6 +205,7 @@ def load_market_data(
                 f"smile for {sfr} fetched from fallback {smile_asof.isoformat()}"
             )
         smiles[sfr] = smile
+        smile_asof_by_symbol[sfr] = smile_asof
 
     return SFRMarketData(
         as_of=as_of,
@@ -211,5 +215,7 @@ def load_market_data(
         futures_df=futures_df,
         price_panel=price_panel,
         smiles=smiles,
+        smile_asof_by_symbol=smile_asof_by_symbol,
+        curve_asof=curve_asof if curve_handle is not None else None,
         warnings=tuple(warnings),
     )

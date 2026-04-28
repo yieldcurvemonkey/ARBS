@@ -1,15 +1,26 @@
-"""Wire structure carry / 3M roll-down via IRSwapQuery + ROLL_BPS_RUNNING.
+"""Structure carry / 3M roll-down helpers.
 
-Pure-string helper ``sfr_to_imm_tenor`` is unit-tested offline; the curve-aware
-``structure_carry_roll_bp`` requires a live curve handle and is exercised only
-through the integration test in :mod:`tests/test_sfr_convex_screener_orchestrator`.
+Two things to compute:
+
+* ``current_level_bp(legs, futures_df)``: the structure's *current* rate
+  level in bp = ``100 * sum(weight * rate)``. Doesn't need the OIS curve
+  — just reads contract rates from the futures snapshot. This is what
+  the design doc Section 5.1 calls "current_level_bp".
+* ``structure_rolldown_bp(legs, curve_handle, curve_name, horizon)``: the
+  3M roll-down via ``IRSwapValue.ROLL_BPS_RUNNING`` per IMM-IMM tenor.
+  Best-effort; returns ``nan`` on failure (curve mismatches, missing
+  schedule, etc.).
 """
 
 from __future__ import annotations
 
+import datetime
 import logging
 import re
-from typing import Sequence, Tuple
+from typing import Any, Mapping, Sequence
+
+import numpy as np
+import pandas as pd
 
 from RVUtils.SFRConvexScreener._types import Leg
 
@@ -37,42 +48,104 @@ def sfr_to_imm_tenor(symbol: str) -> str:
     return f"IMM_{code}{full_year}xIMM_{next_code}{next_year}"
 
 
-def structure_carry_roll_bp(
+def current_level_bp(
     legs: Sequence[Leg],
     *,
-    curve_handle,
+    futures_df: pd.DataFrame,
+) -> float:
+    """Current structure rate level in bp = ``100 * Σ weight_i × rate_i``.
+
+    Reads rates directly from the futures snapshot — no curve needed.
+    Returns ``nan`` if any leg's rate is missing.
+    """
+    if futures_df is None or futures_df.empty or "rate" not in futures_df.columns:
+        return float("nan")
+    total = 0.0
+    for leg in legs:
+        try:
+            r = float(futures_df.loc[leg.contract, "rate"])
+        except (KeyError, TypeError, ValueError):
+            return float("nan")
+        if not np.isfinite(r):
+            return float("nan")
+        total += float(leg.weight) * r
+    return total * 100.0
+
+
+def _curve_reference_date(curve_handle: Any) -> Any:
+    """Best-effort extraction of the curve's reference date.
+
+    Falls back to "live" if the handle doesn't expose ``reference_date()``.
+    """
+    if curve_handle is None:
+        return "live"
+    for attr in ("reference_date", "as_of_date", "as_of"):
+        v = getattr(curve_handle, attr, None)
+        if callable(v):
+            try:
+                return v()
+            except Exception:  # noqa: BLE001
+                continue
+        if v is not None:
+            return v
+    return "live"
+
+
+def structure_rolldown_bp(
+    legs: Sequence[Leg],
+    *,
+    curve_handle: Any,
     curve_name: str,
     horizon: str = "3m",
-) -> Tuple[float, float]:
-    """Compute carry (rate today) and 3M roll-down (bp/3M) for the structure.
+) -> float:
+    """Compute the 3M roll-down (bp) of a long-rate structure via
+    ``IRSwapValue.ROLL_BPS_RUNNING`` summed with leg weights.
 
-    Returns ``(carry_bp, rolldown_bp)``. Either may be ``nan`` if the
-    underlying query fails.
+    Returns ``nan`` if the IRSwapQuery integration fails for any leg.
     """
+    if curve_handle is None:
+        return float("nan")
     try:
         from Query.IRSwaps.IRSwapQuery import IRSwapQuery
         from Query.IRSwaps.IRSwapValue import IRSwapValue
     except Exception as exc:  # noqa: BLE001
         logger.warning("IRSwapQuery import failed: %s", exc)
-        return float("nan"), float("nan")
+        return float("nan")
 
-    carry_bp = 0.0
+    ref_dt = _curve_reference_date(curve_handle)
     roll_bp = 0.0
     try:
         for leg in legs:
             tenor = sfr_to_imm_tenor(leg.contract)
             q = IRSwapQuery(curve=curve_name, tenor=tenor).resolve_query(
-                "live", pricer_or_curve=curve_handle,
+                ref_dt, pricer_or_curve=curve_handle,
             )
             pkg, rws = q.resolve_package(pricer_or_curve=curve_handle)
             vmap = q.build_value_map(
                 pricer_or_curve=curve_handle, package=pkg, risk_weights=rws,
             )
-            carry_bp += leg.weight * vmap.apply(value=IRSwapValue.RATE).real * 100.0
-            roll_bp += leg.weight * vmap.apply(
-                value=IRSwapValue.ROLL_BPS_RUNNING, horizon=horizon,
-            ).real
+            roll_bp += float(leg.weight) * float(
+                vmap.apply(value=IRSwapValue.ROLL_BPS_RUNNING, horizon=horizon).real
+            )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("structure carry/roll computation failed: %s", exc)
-        return float("nan"), float("nan")
-    return float(carry_bp), float(roll_bp)
+        logger.warning("structure rolldown computation failed: %s", exc)
+        return float("nan")
+    return float(roll_bp)
+
+
+# Backwards-compat thin wrapper — historically the screener called this
+# helper for both "carry" (current level) and "rolldown". The new orchestrator
+# uses `current_level_bp` and `structure_rolldown_bp` directly.
+def structure_carry_roll_bp(
+    legs: Sequence[Leg],
+    *,
+    curve_handle: Any,
+    curve_name: str,
+    horizon: str = "3m",
+    futures_df: pd.DataFrame = None,
+):
+    level = current_level_bp(legs, futures_df=futures_df) if futures_df is not None else float("nan")
+    roll = structure_rolldown_bp(
+        legs, curve_handle=curve_handle, curve_name=curve_name, horizon=horizon,
+    )
+    return level, roll

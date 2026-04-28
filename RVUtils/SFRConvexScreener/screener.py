@@ -23,7 +23,10 @@ from RVUtils.ImpliedDistribution import (
     SFRImpliedDistribution,
 )
 from RVUtils.SFRConvexScreener._carry import structure_pnl_from_rates_bp
-from RVUtils.SFRConvexScreener._carry_roll import structure_carry_roll_bp
+from RVUtils.SFRConvexScreener._carry_roll import (
+    current_level_bp,
+    structure_rolldown_bp,
+)
 from RVUtils.SFRConvexScreener._distributions import (
     PerContractDistribution,
     extract_bl_marginals,
@@ -134,7 +137,9 @@ def build_snapshot(
 
     # 1. BL marginals (optionally use JPM Tech Appendix A method)
     marginals: Dict[str, PerContractDistribution] = extract_bl_marginals(
-        md.smiles, jpm_method=getattr(config, "jpm_method", False),
+        md.smiles,
+        jpm_method=getattr(config, "jpm_method", False),
+        ghost_extension_bps=getattr(config, "ghost_extension_bps", None),
     )
 
     # 2. Joint snapshot (common-state)
@@ -216,17 +221,18 @@ def build_snapshot(
             if primary_method not in metrics_by_method:
                 primary_method = next(iter(metrics_by_method))
 
-        # Carry / roll via IRSwapQuery (best-effort, NaN on failure)
-        if md.curve_handle is not None:
-            carry_bp, rolldown_bp = structure_carry_roll_bp(
-                s.legs,
-                curve_handle=md.curve_handle,
-                curve_name=config.curve_name,
-                horizon="3m",
-            )
-        else:
-            carry_bp = float("nan")
-            rolldown_bp = float("nan")
+        # Carry = current structure rate level (bp). For SR3 futures the
+        # economic "carry" of holding the position is just the rolldown
+        # (no separate funding component) — we report the current level
+        # in `carry_3m_bp` so users can see where the structure sits today
+        # and the actual 3M roll separately in `rolldown_3m_bp`.
+        carry_bp = current_level_bp(s.legs, futures_df=md.futures_df)
+        rolldown_bp = structure_rolldown_bp(
+            s.legs,
+            curve_handle=md.curve_handle,
+            curve_name=config.curve_name,
+            horizon="3m",
+        )
 
         # IV/RV per leg
         ivrv: List = []
@@ -253,12 +259,17 @@ def build_snapshot(
         except Exception as exc:  # noqa: BLE001
             logger.warning("historical comparison failed for %s: %s", s.structure_id, exc)
 
-        # Per-leg warnings (BL caveats)
+        # Per-leg warnings (BL caveats + smile staleness)
         leg_warnings: List[str] = []
         for leg in s.legs:
             bl = marginals[leg.contract].bl
             for w in bl.warnings:
                 leg_warnings.append(f"{leg.contract}::{w}")
+            smile_d = md.smile_asof_by_symbol.get(leg.contract)
+            if smile_d is not None and smile_d != md.as_of:
+                leg_warnings.append(
+                    f"{leg.contract}::stale_smile_asof={smile_d.isoformat()}"
+                )
 
         intermediates.append(
             {

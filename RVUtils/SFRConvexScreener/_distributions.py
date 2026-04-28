@@ -44,6 +44,7 @@ def extract_bl_marginals(
     dist_extractor: Optional[Any] = None,
     scenario_config: Optional[FedScenarioConfig] = None,
     jpm_method: bool = False,
+    ghost_extension_bps: Optional[float] = None,
 ) -> Dict[str, PerContractDistribution]:
     """Run BL extraction on each smile. Fail-soft per contract.
 
@@ -56,10 +57,17 @@ def extract_bl_marginals(
         25bp bins. Default False keeps the SABR + ghost-points hybrid that
         ARBS has used historically (smoother tails at the cost of leaning
         on the SABR β/ρ/ν parameters).
+    ghost_extension_bps : float, optional
+        Override the per-ghost-point linear extrapolation distance. The
+        ARBS default is 5 bp/ghost (≈50 bp wing reach with 10 ghosts) which
+        gives narrow tails. For ``jpm_method=True`` this is too local —
+        we default to 25 bp/ghost (≈250 bp wing reach), which lets the
+        spline fade smoothly to zero outside the observed strike range.
     """
     if dist_extractor is None:
         scenarios = scenario_config or FedScenarioConfig.default_sofr_scenarios()
         if jpm_method:
+            ghost_ext = ghost_extension_bps if ghost_extension_bps is not None else 25.0
             dist_extractor = SFRImpliedDistribution(
                 scenario_config=scenarios,
                 use_sabr_vols=False,
@@ -70,10 +78,14 @@ def extract_bl_marginals(
                 smoothing_param=1e-4,
                 spline_order=4,
                 n_ghost_points=10,
+                ghost_extension_bps=ghost_ext,
                 bin_width_bps=25.0,
             )
         else:
-            dist_extractor = SFRImpliedDistribution(scenario_config=scenarios)
+            kwargs: Dict[str, Any] = {"scenario_config": scenarios}
+            if ghost_extension_bps is not None:
+                kwargs["ghost_extension_bps"] = ghost_extension_bps
+            dist_extractor = SFRImpliedDistribution(**kwargs)
 
     out: Dict[str, PerContractDistribution] = {}
     for symbol, smile in smiles.items():
