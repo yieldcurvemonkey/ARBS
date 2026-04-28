@@ -45,11 +45,20 @@ export async function GET(req: Request) {
     // by the client. A 15s shared cache lets multiple browser tabs (and
     // an upstream CDN if one ever sits in front) reuse the same page
     // payload while still surfacing fresh prints within the polling
-    // cadence. Skip the cache header on cursor / since requests so the
-    // pagination tail and incremental polls always hit the DB.
+    // cadence. Skip the cache header when the response varies per
+    // trader: cursor pages, incremental polls, and column-filtered
+    // requests all skip the cache so the unfiltered initial fetch is
+    // the only path that benefits from the shared cache. (The cursor
+    // tail and incremental polls always hit the DB; column filters are
+    // usually trader-specific and short-lived, and would otherwise
+    // multiply CDN cache entries without meaningful reuse.)
     const headers: Record<string, string> = {}
-    const isCursorOrPoll = !!parsed.value.cursor || !!parsed.value.since
-    if (!isCursorOrPoll) {
+    const hasColumnFilters =
+      parsed.value.columnFilters &&
+      Object.keys(parsed.value.columnFilters).length > 0
+    const skipCache =
+      !!parsed.value.cursor || !!parsed.value.since || !!hasColumnFilters
+    if (!skipCache) {
       headers['Cache-Control'] = 'public, s-maxage=15, stale-while-revalidate=60'
     }
     return NextResponse.json(

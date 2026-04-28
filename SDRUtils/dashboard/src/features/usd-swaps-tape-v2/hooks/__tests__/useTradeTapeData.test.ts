@@ -35,6 +35,42 @@ describe('useTradeTapeData buildQuery', () => {
     const q2 = buildQuery({}, { since: '2026-04-14T20:00:00Z' })
     expect(q2.get('since')).toBe('2026-04-14T20:00:00Z')
   })
+
+  it('emits columnFilters when the hook is configured with one', () => {
+    const cf = JSON.stringify({
+      tape_label: {
+        operator: 'and',
+        constraints: [{ value: '10Y', matchMode: 'contains' }],
+      },
+    })
+    const q = buildQuery({ columnFilters: cf } as any)
+    expect(q.get('columnFilters')).toBe(cf)
+  })
+
+  it('attaches columnFilters to cursor + since requests too', () => {
+    const cf = JSON.stringify({
+      tape_label: {
+        operator: 'and',
+        constraints: [{ value: '10Y', matchMode: 'contains' }],
+      },
+    })
+    const q1 = buildQuery({ columnFilters: cf } as any, { cursor: 'abc' })
+    expect(q1.get('cursor')).toBe('abc')
+    expect(q1.get('columnFilters')).toBe(cf)
+    const q2 = buildQuery({ columnFilters: cf } as any, { since: 'xyz' })
+    expect(q2.get('since')).toBe('xyz')
+    expect(q2.get('columnFilters')).toBe(cf)
+  })
+
+  it('omits columnFilters when not supplied', () => {
+    const q = buildQuery({})
+    expect(q.has('columnFilters')).toBe(false)
+  })
+
+  it('omits columnFilters when explicitly null (no active overlay)', () => {
+    const q = buildQuery({ columnFilters: null } as any)
+    expect(q.has('columnFilters')).toBe(false)
+  })
 })
 
 describe('dedupeDuplicatePackages', () => {

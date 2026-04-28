@@ -203,6 +203,176 @@ export function buildTenorInClause(values: string[], params: unknown[]): string 
   )`
 }
 
+// ---------------------------------------------------------------------------
+// columnFilters pushdown
+//
+// The dashboard's per-column filter overlay writes a `columnFilters` JSON
+// payload to the URL via useColumnFilters. Pre-pushdown the route silently
+// dropped that payload — every match was decided client-side after the
+// cursor scan returned 200 packages per page. With a tape_label filter
+// like "contains 10Y" the chain-load `useEffect` would drag down 14k+
+// packages to find a few hundred matches.
+//
+// `buildColumnFilterClause` translates the same payload into parameterised
+// SQL fragments, allowlisted to the columns surfaced in the overlay.
+// Match-mode semantics mirror `matchFilterValue` in
+// components/TradeTapeTable/filter-utils.ts so the SQL pushdown produces
+// the same set as the existing client-side path; the client filter is
+// retained as a defensive safety net.
+// ---------------------------------------------------------------------------
+
+const COLUMN_FILTER_ALLOWLIST_PACKAGE = new Set([
+  'tape_label',
+  'total_risk',
+  'total_notional',
+  'weighted_fixed_rate',
+  'package_type',
+  'package_indicator',
+  'other_lvl_reported',
+])
+
+const COLUMN_FILTER_ALLOWLIST_LEG = new Set([
+  'platform_identifier',
+  'lifecycle_type',
+])
+
+const TEXT_MATCH_MODES = new Set([
+  'contains',
+  'notContains',
+  'startsWith',
+  'endsWith',
+  'equals',
+  'notEquals',
+  'in',
+])
+
+const NUMERIC_MATCH_MODES = new Set([
+  'equals',
+  'notEquals',
+  'lt',
+  'lte',
+  'gt',
+  'gte',
+])
+
+const NUMERIC_FIELDS = new Set([
+  'total_risk',
+  'total_notional',
+  'weighted_fixed_rate',
+])
+
+const ESCAPE_LIKE_RE = /[%_\\]/g
+
+function escapeLikePattern(raw: string): string {
+  return raw.replace(ESCAPE_LIKE_RE, (m) => '\\' + m)
+}
+
+function buildSingleConstraint(
+  field: string,
+  constraint: { value: unknown; matchMode?: string },
+  params: unknown[],
+): string | null {
+  const { value, matchMode } = constraint
+  if (value === null || value === undefined || value === '') return null
+  if (Array.isArray(value) && value.length === 0) return null
+
+  const isLeg = COLUMN_FILTER_ALLOWLIST_LEG.has(field)
+  const isPackage = COLUMN_FILTER_ALLOWLIST_PACKAGE.has(field)
+  if (!isLeg && !isPackage) return null
+
+  const colExpr = isLeg ? `l->>'${field}'` : `d.${field}`
+
+  // Numeric path
+  if (NUMERIC_FIELDS.has(field) && NUMERIC_MATCH_MODES.has(String(matchMode))) {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return null
+    params.push(n)
+    const p = `$${params.length}`
+    const op =
+      matchMode === 'lt'
+        ? '<'
+        : matchMode === 'lte'
+          ? '<='
+          : matchMode === 'gt'
+            ? '>'
+            : matchMode === 'gte'
+              ? '>='
+              : matchMode === 'notEquals'
+                ? '<>'
+                : '='
+    return isLeg
+      ? `EXISTS (SELECT 1 FROM jsonb_array_elements(d.legs_json) l WHERE (${colExpr})::numeric ${op} ${p})`
+      : `${colExpr} ${op} ${p}`
+  }
+
+  // Text path
+  const mode = String(matchMode ?? 'contains')
+  if (!TEXT_MATCH_MODES.has(mode)) return null
+
+  if (mode === 'in') {
+    const arr = Array.isArray(value) ? value : [value]
+    const ors: string[] = []
+    for (const v of arr) {
+      if (v === null || v === undefined || v === '') continue
+      params.push(String(v).toLowerCase())
+      const p = `$${params.length}`
+      ors.push(`LOWER(${colExpr}) = ${p}`)
+    }
+    if (ors.length === 0) return null
+    const inner = ors.join(' OR ')
+    return isLeg
+      ? `EXISTS (SELECT 1 FROM jsonb_array_elements(d.legs_json) l WHERE ${inner})`
+      : `(${inner})`
+  }
+
+  if (mode === 'equals' || mode === 'notEquals') {
+    params.push(String(value).toLowerCase())
+    const p = `$${params.length}`
+    const op = mode === 'notEquals' ? '<>' : '='
+    return isLeg
+      ? `EXISTS (SELECT 1 FROM jsonb_array_elements(d.legs_json) l WHERE LOWER(${colExpr}) ${op} ${p})`
+      : `LOWER(${colExpr}) ${op} ${p}`
+  }
+
+  // contains / notContains / startsWith / endsWith — ILIKE patterns
+  const escaped = escapeLikePattern(String(value))
+  let pattern: string
+  if (mode === 'startsWith') pattern = `${escaped}%`
+  else if (mode === 'endsWith') pattern = `%${escaped}`
+  else pattern = `%${escaped}%`
+  params.push(pattern)
+  const p = `$${params.length}`
+  const op = mode === 'notContains' ? 'NOT ILIKE' : 'ILIKE'
+  return isLeg
+    ? `EXISTS (SELECT 1 FROM jsonb_array_elements(d.legs_json) l WHERE ${colExpr} ${op} ${p})`
+    : `${colExpr} ${op} ${p}`
+}
+
+export function buildColumnFilterClause(
+  columnFilters: Record<string, any>,
+  params: unknown[],
+): string | null {
+  if (!columnFilters || typeof columnFilters !== 'object') return null
+  const fieldClauses: string[] = []
+  for (const [field, meta] of Object.entries(columnFilters)) {
+    if (!meta || typeof meta !== 'object') continue
+    const constraints = Array.isArray(meta.constraints)
+      ? meta.constraints
+      : meta.value !== undefined
+        ? [{ value: meta.value, matchMode: meta.matchMode }]
+        : []
+    if (constraints.length === 0) continue
+    const op = meta.operator === 'or' ? ' OR ' : ' AND '
+    const built = constraints
+      .map((c: any) => buildSingleConstraint(field, c, params))
+      .filter((s: string | null): s is string => s !== null)
+    if (built.length === 0) continue
+    fieldClauses.push(`(${built.join(op)})`)
+  }
+  if (fieldClauses.length === 0) return null
+  return fieldClauses.join(' AND ')
+}
+
 export type BuiltQuery = {
   sql: string
   params: unknown[]
@@ -258,6 +428,17 @@ export function buildTapeQuery(
       )`,
     )
   }
+
+  // Per-column filter overlay payload (URL-synced via useColumnFilters).
+  // Pushed down to SQL so the cursor scan returns only matching rows;
+  // before this, the chain-load loop dragged down every page and the
+  // client-side filter trimmed the result, producing the trader-reported
+  // "drag down 14k rows for 4k matches" behaviour.
+  const columnFilterClause = buildColumnFilterClause(
+    parsed.columnFilters,
+    params,
+  )
+  if (columnFilterClause) where.push(columnFilterClause)
 
   // cursor / since
   if (parsed.cursor) {

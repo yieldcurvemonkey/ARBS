@@ -116,3 +116,17 @@ export function serializeFilters(filters: DataTableFilterMeta): string {
   if (!Object.keys(payload).length) return ''
   return JSON.stringify(payload)
 }
+
+/**
+ * Build the JSON string the route's `columnFilters` query param expects,
+ * or null when no field has any active constraint. Returning null lets
+ * the consumer (useTradeTapeData) skip attaching the param and keep the
+ * unfiltered initial fetch eligible for the route's Cache-Control rule.
+ */
+export function buildSerializedColumnFilters(
+  filters: DataTableFilterMeta,
+): string | null {
+  const payload = buildColumnFilterPayload(filters)
+  if (!Object.keys(payload).length) return null
+  return JSON.stringify(payload)
+}

@@ -11,6 +11,18 @@ export interface UseTradeTapeDataParams {
    * load chain pages as the user scrolls.
    */
   limit?: number
+  /**
+   * Pre-serialised JSON for the URL-synced columnFilters payload. When
+   * present, attached to every fetch (initial / cursor / since) so the
+   * server applies the filter via WHERE clauses instead of returning
+   * unfiltered rows. A change in this string resets the rows array and
+   * triggers a fresh replace=true fetch.
+   *
+   * Pass null (or omit) when no per-column constraint is active so the
+   * route's Cache-Control header stays in play for the unfiltered initial
+   * fetch.
+   */
+  columnFilters?: string | null
 }
 
 export interface UseTradeTapeDataReturn {
@@ -47,6 +59,7 @@ function buildQuery(params: UseTradeTapeDataParams, options?: {
   q.set('limit', String(limit))
   if (options?.cursor) q.set('cursor', options.cursor)
   if (options?.since) q.set('since', options.since)
+  if (params.columnFilters) q.set('columnFilters', params.columnFilters)
   return q
 }
 
@@ -259,7 +272,9 @@ export function useTradeTapeData(
     await fetchTape({ replace: true })
   }, [fetchTape])
 
-  // Reset on limit change (no more server-side filtering).
+  // Reset on limit OR columnFilters change. A new filter payload means
+  // the server-side WHERE shape has changed; existing rows + cursor are
+  // stale, so wipe them and fire a fresh replace fetch.
   useEffect(() => {
     setRows([])
     setNextCursor(null)
@@ -267,7 +282,7 @@ export function useTradeTapeData(
     setLatestExecutionStart(null)
     fetchTape({ replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.limit])
+  }, [params.limit, params.columnFilters])
 
   // Polling for new rows via ?since=latestExecutionStart
   useEffect(() => {
