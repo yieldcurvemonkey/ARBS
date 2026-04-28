@@ -12,9 +12,11 @@ import hashlib
 import json
 import logging
 import pickle
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Callable, Dict, Iterable, Optional, Union
+from typing import OrderedDict as _OD
 
 from RVUtils.SFRConvexScreener._types import SFRConvexScreenerSnapshot
 
@@ -62,3 +64,38 @@ class SnapshotCache:
         with p.open("wb") as fh:
             pickle.dump(snapshot, fh)
         return p
+
+
+def load_or_build_many(
+    dates: Iterable[datetime.date],
+    *,
+    cache: SnapshotCache,
+    build_fn: Callable[[datetime.date], SFRConvexScreenerSnapshot],
+    config_summary: Dict[str, Any],
+    show_progress: bool = False,
+) -> _OD[datetime.date, SFRConvexScreenerSnapshot]:
+    """For each as_of date, return the cached snapshot if present, else
+    invoke ``build_fn(date)`` and persist the result before returning it."""
+    out: "OrderedDict[datetime.date, SFRConvexScreenerSnapshot]" = OrderedDict()
+    iterator = list(dates)
+    if show_progress:
+        try:
+            from tqdm.auto import tqdm
+
+            iterator = tqdm(iterator, desc="snapshots")
+        except ImportError:
+            pass
+    for d in iterator:
+        snap = cache.get(d, config_summary)
+        if snap is None:
+            try:
+                snap = build_fn(d)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("build failed for %s: %s", d, exc)
+                continue
+            try:
+                cache.put(snap, config_summary)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("cache write failed for %s: %s", d, exc)
+        out[d] = snap
+    return out
