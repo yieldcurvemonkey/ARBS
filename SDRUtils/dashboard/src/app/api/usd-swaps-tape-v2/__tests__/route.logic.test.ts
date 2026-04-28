@@ -4,6 +4,7 @@ import {
   buildColumnFilterClause,
   buildLifecycleClause,
   buildTapeQuery,
+  parseDatePattern,
   parseParams,
 } from '../route.logic'
 
@@ -460,19 +461,20 @@ describe('buildColumnFilterClause', () => {
     expect(params).toEqual(['%10Y%', '%5Y%'])
   })
 
-  it('execution_start filter is NOT pushed (deferred)', () => {
+  it('execution_start with ISO date pattern emits a timestamp-range bound', () => {
     const params: unknown[] = []
     const clause = buildColumnFilterClause(
       {
         execution_start: {
           operator: 'and',
-          constraints: [{ value: '04/23', matchMode: 'contains' }],
+          constraints: [{ value: '2026-04-23', matchMode: 'contains' }],
         },
       },
       params,
     )
-    expect(clause).toBeNull()
-    expect(params).toEqual([])
+    expect(clause).toMatch(/d\.execution_start >=/)
+    expect(clause).toMatch(/d\.execution_start </)
+    expect(params).toEqual(['2026-04-23'])
   })
 
   it('null / undefined / empty-string values produce no clause', () => {
@@ -492,5 +494,222 @@ describe('buildColumnFilterClause', () => {
     )
     expect(clause).toBeNull()
     expect(params).toEqual([])
+  })
+})
+
+describe('parseDatePattern', () => {
+  // Anchor today to a deterministic value so "current year" defaulting is
+  // testable without time-mocking the runner.
+  const TODAY = new Date('2026-04-28T15:00:00Z')
+
+  it('parses M/D in current NYC year', () => {
+    expect(parseDatePattern('4/21', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses MM/DD with leading zeros', () => {
+    expect(parseDatePattern('04/21', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses M/D/YYYY', () => {
+    expect(parseDatePattern('4/21/2026', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses MM/DD/YYYY', () => {
+    expect(parseDatePattern('04/21/2026', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses M/D/YY (two-digit year, current century)', () => {
+    expect(parseDatePattern('4/21/26', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses YYYY-MM-DD ISO', () => {
+    expect(parseDatePattern('2026-04-21', TODAY)).toBe('2026-04-21')
+  })
+
+  it('parses YYYY-M-D ISO without leading zeros', () => {
+    expect(parseDatePattern('2026-4-21', TODAY)).toBe('2026-04-21')
+  })
+
+  it('returns null for unparseable input', () => {
+    expect(parseDatePattern('NEWFLOW', TODAY)).toBeNull()
+    expect(parseDatePattern('5Y', TODAY)).toBeNull()
+    expect(parseDatePattern('', TODAY)).toBeNull()
+    expect(parseDatePattern('04/21 - 04/23', TODAY)).toBeNull()
+    expect(parseDatePattern('>=2026-04-15', TODAY)).toBeNull()
+  })
+
+  it('returns null for impossible dates', () => {
+    expect(parseDatePattern('13/40', TODAY)).toBeNull()
+    expect(parseDatePattern('2026-02-30', TODAY)).toBeNull()
+  })
+
+  it('steps back a year if M/D defaults to a future date', () => {
+    // anchor TODAY = 2027-01-05; trader types 12/30 — they meant
+    // 2026-12-30 (recent past), not 2027-12-30 (future).
+    const earlyJan = new Date('2027-01-05T15:00:00Z')
+    expect(parseDatePattern('12/30', earlyJan)).toBe('2026-12-30')
+  })
+
+  it('does NOT step back when explicit year is supplied (even if future)', () => {
+    const earlyJan = new Date('2027-01-05T15:00:00Z')
+    // 12/30/2027 is explicit — keep it.
+    expect(parseDatePattern('12/30/2027', earlyJan)).toBe('2027-12-30')
+  })
+
+  it('trims whitespace before parsing', () => {
+    expect(parseDatePattern('  04/21  ', TODAY)).toBe('2026-04-21')
+  })
+
+  it('returns null for non-string input', () => {
+    expect(parseDatePattern(null as any, TODAY)).toBeNull()
+    expect(parseDatePattern(undefined as any, TODAY)).toBeNull()
+    expect(parseDatePattern(0 as any, TODAY)).toBeNull()
+  })
+})
+
+describe('buildColumnFilterClause execution_start range bound', () => {
+  // The bound is emitted on execution_start (timestamptz) with NYC-localised
+  // day boundaries computed in Postgres. The existing
+  // idx_tape_v2_packages_exec_start (execution_start DESC NULLS LAST) index
+  // covers the range scan. We assert the SQL fragment shape; the actual
+  // boundary math is delegated to Postgres.
+
+  it('emits today range bound when other filters are present and execution_start is unset', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        tape_label: {
+          operator: 'and',
+          constraints: [{ value: '10Y', matchMode: 'contains' }],
+        },
+      },
+      params,
+    )
+    expect(clause).toMatch(/d\.tape_label ILIKE \$1/)
+    expect(clause).toMatch(/d\.execution_start >=/)
+    expect(clause).toMatch(/d\.execution_start </)
+    expect(clause).toMatch(/America\/New_York/)
+    expect(params).toEqual(['%10Y%'])
+  })
+
+  it('emits parsed-date range bound when execution_start carries a date pattern', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        execution_start: {
+          operator: 'and',
+          constraints: [{ value: '04/21', matchMode: 'contains' }],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/d\.execution_start >= \(\$1::timestamp/)
+    expect(clause).toMatch(
+      /d\.execution_start <  \(\$1::timestamp AT TIME ZONE 'America\/New_York'\) \+ INTERVAL '1 day'/,
+    )
+    expect(params).toEqual(['2026-04-21'])
+  })
+
+  it('combines tape_label clause with parsed-date range when both filters present', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        tape_label: {
+          operator: 'and',
+          constraints: [{ value: '10Y', matchMode: 'contains' }],
+        },
+        execution_start: {
+          operator: 'and',
+          constraints: [{ value: '04/21', matchMode: 'contains' }],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/d\.tape_label ILIKE \$1/)
+    expect(clause).toMatch(/d\.execution_start >= \(\$2::timestamp/)
+    expect(params).toEqual(['%10Y%', '2026-04-21'])
+  })
+
+  it('falls back to today range bound when execution_start filter is unparseable', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        tape_label: {
+          operator: 'and',
+          constraints: [{ value: '10Y', matchMode: 'contains' }],
+        },
+        execution_start: {
+          operator: 'and',
+          constraints: [{ value: 'NEWFLOW', matchMode: 'contains' }],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/d\.tape_label ILIKE/)
+    expect(clause).toMatch(/d\.execution_start >= date_trunc/)
+    expect(clause).toMatch(/America\/New_York/)
+    // Execution_start filter never produces a substring ILIKE.
+    expect(clause).not.toMatch(/d\.execution_start ILIKE/)
+  })
+
+  it('does not emit any direct execution_start substring clause when a date pattern is present', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        execution_start: {
+          operator: 'and',
+          constraints: [{ value: '04/21', matchMode: 'contains' }],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/d\.execution_start >=/)
+    expect(clause).not.toMatch(/d\.execution_start ILIKE/)
+  })
+
+  it('emits no time-bound clause when columnFilters is empty (live tape)', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause({}, params)
+    expect(clause).toBeNull()
+    expect(params).toEqual([])
+  })
+
+  it('emits no time-bound clause when only non-allowlisted fields are present', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        not_a_column: {
+          operator: 'and',
+          constraints: [{ value: 'x', matchMode: 'contains' }],
+        },
+      },
+      params,
+    )
+    expect(clause).toBeNull()
+    expect(params).toEqual([])
+  })
+
+  it('takes the FIRST parseable execution_start constraint when multiple are present', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        execution_start: {
+          operator: 'and',
+          constraints: [
+            { value: 'NEWFLOW', matchMode: 'contains' },
+            { value: '04/21', matchMode: 'contains' },
+            { value: '04/22', matchMode: 'contains' },
+          ],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/d\.execution_start >= \(\$1::timestamp/)
+    expect(params).toEqual(['2026-04-21'])
   })
 })
