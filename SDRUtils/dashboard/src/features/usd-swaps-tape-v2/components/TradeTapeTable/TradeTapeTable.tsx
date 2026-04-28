@@ -7,6 +7,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type JSX,
@@ -33,6 +34,7 @@ import {
   hasActiveConstraints,
   matchFilterMetaWithRow,
 } from './filter-utils'
+import { computeAnchorAdjustedScrollTop } from './scroll-anchor'
 
 // PrimeReact's `VirtualScrollerLazyEvent` types `first` / `last` as
 // `number | VirtualScrollerState`; we only care about the numeric case and
@@ -260,6 +262,31 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   // the tail — this covers the "slowly scrolling doesn't fetch" bug the
   // desk reported.
   const tableWrapperRef = useRef<HTMLDivElement | null>(null)
+
+  // Scroll-anchor poll-merge: when the rows array grows or reorders
+  // (typically because the 30s poll merged in newer prints), keep the
+  // package the trader was looking at under the same on-screen
+  // position. Without this, the VirtualScroller renders by pixel offset
+  // (`itemSize: ROW_ESTIMATE_PX`) so all rows shift down by N * 40px
+  // while scrollTop stays constant — a different row appears under the
+  // cursor. Pure adjustment helper lives in ./scroll-anchor.ts.
+  const prevDisplayRowsRef = useRef<UsdSwapTapeRow[] | null>(null)
+  useLayoutEffect(() => {
+    const prev = prevDisplayRowsRef.current
+    prevDisplayRowsRef.current = displayRows
+    if (!prev || prev === displayRows) return
+    const sc = tableWrapperRef.current?.querySelector<HTMLElement>(
+      '.p-virtualscroller',
+    )
+    if (!sc) return
+    const next = computeAnchorAdjustedScrollTop({
+      oldRows: prev,
+      newRows: displayRows,
+      oldScrollTop: sc.scrollTop,
+      rowHeight: ROW_ESTIMATE_PX,
+    })
+    if (next !== null) sc.scrollTop = next
+  }, [displayRows])
   useEffect(() => {
     const root = tableWrapperRef.current
     if (!root) return
