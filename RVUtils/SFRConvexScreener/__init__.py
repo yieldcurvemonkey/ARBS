@@ -26,6 +26,7 @@ from RVUtils.SFRConvexScreener._market_data import (
     load_market_data,
     resolve_universe_symbols,
 )
+from RVUtils.SFRConvexScreener._export import write_snapshot
 from RVUtils.SFRConvexScreener.screener import build_snapshot
 
 __all__ = [
@@ -43,4 +44,5 @@ __all__ = [
     "enumerate_structures",
     "load_market_data",
     "resolve_universe_symbols",
+    "write_snapshot",
 ]
