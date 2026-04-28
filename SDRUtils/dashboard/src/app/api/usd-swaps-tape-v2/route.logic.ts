@@ -439,9 +439,13 @@ export function parseDatePattern(
 export function buildColumnFilterClause(
   columnFilters: Record<string, any>,
   params: unknown[],
+  options: { now?: Date } = {},
 ): string | null {
   if (!columnFilters || typeof columnFilters !== 'object') return null
   const fieldClauses: string[] = []
+  let hasAllowlistedClause = false
+  let parsedDateBound: string | null = null
+
   for (const [field, meta] of Object.entries(columnFilters)) {
     if (!meta || typeof meta !== 'object') continue
     const constraints = Array.isArray(meta.constraints)
@@ -450,13 +454,47 @@ export function buildColumnFilterClause(
         ? [{ value: meta.value, matchMode: meta.matchMode }]
         : []
     if (constraints.length === 0) continue
+
+    // Special-case execution_start: don't emit a substring clause; instead
+    // capture the first parseable date pattern as the as_of_date bound.
+    // The trader's intent (filter is active) trips the today fallback even
+    // if their text didn't parse to a date.
+    if (field === 'execution_start') {
+      for (const c of constraints) {
+        const parsed = parseDatePattern(c?.value, options.now)
+        if (parsed !== null) {
+          parsedDateBound = parsed
+          break
+        }
+      }
+      hasAllowlistedClause = true
+      continue
+    }
+
     const op = meta.operator === 'or' ? ' OR ' : ' AND '
     const built = constraints
       .map((c: any) => buildSingleConstraint(field, c, params))
       .filter((s: string | null): s is string => s !== null)
     if (built.length === 0) continue
+    hasAllowlistedClause = true
     fieldClauses.push(`(${built.join(op)})`)
   }
+
+  // Time bound — emitted whenever any allowlisted clause is active. Snaps
+  // historical lookups to a single day's worth of data via the
+  // idx_tape_v2_packages_date composite index, instead of the cursor scan
+  // dragging every day backward.
+  if (hasAllowlistedClause) {
+    if (parsedDateBound !== null) {
+      params.push(parsedDateBound)
+      fieldClauses.push(`d.as_of_date = $${params.length}`)
+    } else {
+      fieldClauses.push(
+        `d.as_of_date = (now() AT TIME ZONE 'America/New_York')::date`,
+      )
+    }
+  }
+
   if (fieldClauses.length === 0) return null
   return fieldClauses.join(' AND ')
 }

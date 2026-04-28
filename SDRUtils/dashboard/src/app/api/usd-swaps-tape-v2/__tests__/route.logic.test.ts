@@ -461,19 +461,19 @@ describe('buildColumnFilterClause', () => {
     expect(params).toEqual(['%10Y%', '%5Y%'])
   })
 
-  it('execution_start filter is NOT pushed (deferred)', () => {
+  it('execution_start with ISO date pattern emits as_of_date bound', () => {
     const params: unknown[] = []
     const clause = buildColumnFilterClause(
       {
         execution_start: {
           operator: 'and',
-          constraints: [{ value: '04/23', matchMode: 'contains' }],
+          constraints: [{ value: '2026-04-23', matchMode: 'contains' }],
         },
       },
       params,
     )
-    expect(clause).toBeNull()
-    expect(params).toEqual([])
+    expect(clause).toMatch(/d\.as_of_date = \$1/)
+    expect(params).toEqual(['2026-04-23'])
   })
 
   it('null / undefined / empty-string values produce no clause', () => {
@@ -563,5 +563,143 @@ describe('parseDatePattern', () => {
     expect(parseDatePattern(null as any, TODAY)).toBeNull()
     expect(parseDatePattern(undefined as any, TODAY)).toBeNull()
     expect(parseDatePattern(0 as any, TODAY)).toBeNull()
+  })
+})
+
+describe('buildColumnFilterClause as_of_date bound', () => {
+  it('emits as_of_date = TODAY_NYC when other filters are present and execution_start is unset', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        tape_label: {
+          operator: 'and',
+          constraints: [{ value: '10Y', matchMode: 'contains' }],
+        },
+      },
+      params,
+    )
+    expect(clause).toMatch(/d\.tape_label ILIKE \$1/)
+    expect(clause).toMatch(
+      /d\.as_of_date = \(now\(\) AT TIME ZONE 'America\/New_York'\)::date/,
+    )
+    expect(params).toEqual(['%10Y%'])
+  })
+
+  it('emits as_of_date = $parsed when execution_start carries a date pattern', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        execution_start: {
+          operator: 'and',
+          constraints: [{ value: '04/21', matchMode: 'contains' }],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/d\.as_of_date = \$1/)
+    expect(params).toEqual(['2026-04-21'])
+  })
+
+  it('combines tape_label clause with as_of_date = parsed when both filters present', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        tape_label: {
+          operator: 'and',
+          constraints: [{ value: '10Y', matchMode: 'contains' }],
+        },
+        execution_start: {
+          operator: 'and',
+          constraints: [{ value: '04/21', matchMode: 'contains' }],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/d\.tape_label ILIKE \$1/)
+    expect(clause).toMatch(/d\.as_of_date = \$2/)
+    expect(params).toEqual(['%10Y%', '2026-04-21'])
+  })
+
+  it('falls back to today bound when execution_start filter is unparseable', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        tape_label: {
+          operator: 'and',
+          constraints: [{ value: '10Y', matchMode: 'contains' }],
+        },
+        execution_start: {
+          operator: 'and',
+          constraints: [{ value: 'NEWFLOW', matchMode: 'contains' }],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/d\.tape_label ILIKE/)
+    expect(clause).toMatch(
+      /d\.as_of_date = \(now\(\) AT TIME ZONE 'America\/New_York'\)::date/,
+    )
+    expect(clause).not.toMatch(/d\.execution_start/)
+  })
+
+  it('does not emit any direct execution_start substring clause when a date pattern is present', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        execution_start: {
+          operator: 'and',
+          constraints: [{ value: '04/21', matchMode: 'contains' }],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/d\.as_of_date = \$1/)
+    expect(clause).not.toMatch(/d\.execution_start/)
+  })
+
+  it('emits no as_of_date clause when columnFilters is empty (live tape)', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause({}, params)
+    expect(clause).toBeNull()
+    expect(params).toEqual([])
+  })
+
+  it('emits no as_of_date clause when only non-allowlisted fields are present', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        not_a_column: {
+          operator: 'and',
+          constraints: [{ value: 'x', matchMode: 'contains' }],
+        },
+      },
+      params,
+    )
+    expect(clause).toBeNull()
+    expect(params).toEqual([])
+  })
+
+  it('takes the FIRST parseable execution_start constraint when multiple are present', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        execution_start: {
+          operator: 'and',
+          constraints: [
+            { value: 'NEWFLOW', matchMode: 'contains' },
+            { value: '04/21', matchMode: 'contains' },
+            { value: '04/22', matchMode: 'contains' },
+          ],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/d\.as_of_date = \$1/)
+    expect(params).toEqual(['2026-04-21'])
   })
 })
