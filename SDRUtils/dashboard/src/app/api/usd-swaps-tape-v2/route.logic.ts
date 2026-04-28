@@ -429,6 +429,17 @@ export function buildTapeQuery(
     )
   }
 
+  // Per-column filter overlay payload (URL-synced via useColumnFilters).
+  // Pushed down to SQL so the cursor scan returns only matching rows;
+  // before this, the chain-load loop dragged down every page and the
+  // client-side filter trimmed the result, producing the trader-reported
+  // "drag down 14k rows for 4k matches" behaviour.
+  const columnFilterClause = buildColumnFilterClause(
+    parsed.columnFilters,
+    params,
+  )
+  if (columnFilterClause) where.push(columnFilterClause)
+
   // cursor / since
   if (parsed.cursor) {
     params.push(parsed.cursor)

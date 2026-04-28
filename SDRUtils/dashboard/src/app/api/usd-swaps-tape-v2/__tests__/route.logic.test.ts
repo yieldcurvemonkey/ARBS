@@ -155,6 +155,48 @@ describe('buildTapeQuery', () => {
     expect(sql).toMatch(/d\.execution_start < \$1/)
     expect(params[0]).toBe('2026-04-14T00:00:00Z')
   })
+
+  it('emits column-filter WHERE clause for tape_label CONTAINS', () => {
+    const url = new URLSearchParams()
+    url.set(
+      'columnFilters',
+      JSON.stringify({
+        tape_label: {
+          operator: 'and',
+          constraints: [{ value: '10Y', matchMode: 'contains' }],
+        },
+      }),
+    )
+    const parsed = parseParams(url)
+    if (!parsed.ok) throw new Error(parsed.error)
+    const { sql, params } = buildTapeQuery(parsed.value, VIEW, COLUMNS)
+    expect(sql).toMatch(/d\.tape_label ILIKE \$1/)
+    expect(params[0]).toBe('%10Y%')
+  })
+
+  it('column-filter clause composes with existing WHERE fragments', () => {
+    const url = new URLSearchParams()
+    url.set('clean', 'true')
+    url.set(
+      'columnFilters',
+      JSON.stringify({
+        tape_label: {
+          operator: 'and',
+          constraints: [{ value: '10Y', matchMode: 'contains' }],
+        },
+      }),
+    )
+    const parsed = parseParams(url)
+    if (!parsed.ok) throw new Error(parsed.error)
+    const { sql } = buildTapeQuery(parsed.value, VIEW, COLUMNS)
+    expect(sql).toMatch(/NOT d\.is_unwind/)
+    expect(sql).toMatch(/d\.tape_label ILIKE/)
+  })
+
+  it('omits the column-filter clause when columnFilters is empty', () => {
+    const { sql } = buildTapeQuery(paramsOf(''), VIEW, COLUMNS)
+    expect(sql).not.toMatch(/d\.tape_label ILIKE/)
+  })
 })
 
 describe('buildColumnFilterClause', () => {
