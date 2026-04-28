@@ -64,7 +64,31 @@ if TYPE_CHECKING:
 
 
 class SFRImpliedDistribution:
-    """Orchestrator for SFR options implied distribution extraction."""
+    """Orchestrator for SFR options implied distribution extraction.
+
+    Caveats and known limitations
+    -----------------------------
+    * **Bachelier European pricing only.** SR3 options are American on the
+      future, but for short-dated instruments the early-exercise premium is
+      small and ignored here. Avoid relying on this module for options with
+      less than ~10 business days to expiry.
+    * **Wing extrapolation uses calibrated SABR plus linear "ghost" anchor
+      points** at the ends of the strike grid — *not* SVI or rational
+      interpolation. Tails are sensitive to the SABR β/ρ/ν parameters; check
+      ``BreedenLitzenbergerResult.warnings`` for truncation or clipping flags
+      before relying on extreme percentiles.
+    * **Default rate floor is 0.0.** This truncates the SOFR density below
+      zero. Mass lost to truncation is reported in
+      ``BreedenLitzenbergerResult.warnings``; the reported ``mean_rate`` /
+      ``std_rate`` are computed on the truncated domain.
+    * **Spline 2nd-derivative artefacts.** Sparse strike grids and aggressive
+      smoothing parameters can yield small negative density at the wings.
+      Negative mass is clipped silently if it is below 0.01% of total mass and
+      reported in ``warnings`` otherwise.
+    * **Gaussian-mixture optimizer.** SLSQP can fail to converge on
+      ill-conditioned smiles; failures and high-RMSE fits are flagged in
+      ``GaussianMixtureResult.warnings``.
+    """
 
     def __init__(
         self,
