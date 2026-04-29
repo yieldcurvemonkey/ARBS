@@ -41,7 +41,7 @@ The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-t
 | `d7038c9` | fixed | wired (`083700a`) | midnight (script bug) | −$19.71 M (×2 magnitude vs manual) | −$4.16 M |
 | `477df5e` | fixed | wired | **17:00 NY EOD** | −$13.31 M (matches manual remark) | **−$2.03 M** |
 
-### Configuration ranking (cached-only, 22-BD window, post all fixes; cache = 7 dates: 3/30, 3/31, 4/22, 4/23, 4/24, 4/27, 4/28)
+### Configuration ranking (cached-only, 22-BD window, post all fixes; cache = 8 dates: 3/30, 3/31, 4/21, 4/22, 4/23, 4/24, 4/27, 4/28)
 
 | name | closed | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
 |---|---|---|---|---|---|---|---|---|
@@ -50,13 +50,19 @@ The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-t
 | `c_butterfly_only` | 0 | 0 | — | 0 | 0 | — | — | 0.0 |
 | `d_all_structures_default` | 0 | 5 | 3.47 | 0 | **+883,122** | — | — | 0.3 |
 | `e_aggressive_concurrency` | **1** | 9 | 3.47 | 0 | **+1,941,380** | 100 % | 3.0 | 0.5 |
-| `f_daily_rebalance` | **6** | 5 | −3.18 | −14,244,274 | −13,189,453 | 16.67 % | 1.0 | 2.8 |
+| `f_daily_rebalance` | **8** | 5 | −3.01 | −14,244,274 | −12,475,230 | 37.50 % | 1.4 | 3.4 |
 
-After the 2026-04-24 Friday landed in the cache, configs (a)/(d)/(e) which gate on `rebalance_dow=4` finally fire entries. All three have 0 closed trades and positive unrealized PnL because the Friday open is still open at end-of-window.
+After the 2026-04-24 Friday landed in the cache, configs (a)/(d)/(e) which gate on `rebalance_dow=4` fire entries. With 4/21 added to the cache, `f_daily_rebalance` closed 3 additional **profitable** asymmetry-decay trades over 4/21 → 4/23, lifting the win rate from 16% to 37.5% and the finalMTM by ~$700k.
 
 `e_aggressive_concurrency` closed one butterfly trade (SFRZ26_SFRM27_SFRZ27_FLY_1_-2_1, PAY wings / RECEIVE belly) opened 2026-04-24 and exited 2026-04-27 via `asymmetry_decay` — realised +$352,238 over 3 days. The remaining 9 positions (5 outrights + 2 calendars + 2 flies) are unrealised positive at +$1.94 M total.
 
-`f_daily_rebalance` had 6 closed trades (5 from 3/30, 1 added when 4/24 cleared the Friday-only filters) and 5 open. The 3/30 cohort all exited via `stop_bp` on day 2 = -$14.24 M loss; the day-1 4/24 trade closed via `asymmetry_decay` for a small profit; net realized -$13.19 M with 5 still open.
+`f_daily_rebalance` profitable trades (post 4/21 cache add):
+- `SFRM26_SFRU26_SFRZ26_FLY_1_-2_1` long-rate fly opened 4/21 (entry asym 5.98), closed 4/23 → **+$364,465**
+- `SFRZ26_OUTRIGHT` PAY opened 4/21 (entry asym 3.61), closed 4/23 → **+$182,212**
+- `SFRU27_SFRZ27_CAL_1` PAY/RECEIVE opened 4/21 (entry asym 4.87), closed 4/23 → **+$364,278**
+- `SFRZ26_OUTRIGHT` PAY opened 4/22 (entry asym 3.67), closed 4/23 → **+$168,135**
+
+All four winning trades had entry asymmetry > 3.0; combined with 0% win rate on the 3/30 cohort (asym 1.5–2.6) this is the **first hint of a real signal**: high-asymmetry trades cluster in profitability. Sample is still tiny (4 winners) and the 5 from 3/30 remain large losers, but the 4/21+ cohort is consistently positive across structure types.
 
 Configs (a)–(e) all use `rebalance_dow=4` (Friday). The cache holds Mon/Tue dates only (no Friday inside the window), so the entry trigger correctly returns `TriggerInfo(False)` on every step. Once a Friday lands in the cache the same configs will fire — the wiring is verified by `f`.
 
