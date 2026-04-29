@@ -23,19 +23,25 @@ The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-t
 
 ### Headline numbers (config `f_daily_rebalance`, cached-only run, 22-BD window)
 
-**Post-fix run** (with the `resolve_pricable` sign fix in `d7038c9` and the per-position TP/SL fix in `083700a`):
+**Final post-fix run** (after the three correctness fixes — sign flip in `d7038c9`, per-position TP/SL in `083700a`, midnight-vs-EOD TimeGrid in `477df5e`):
 
 - **5 closed trades** (3 outrights, 2 calendars), **5 unrealized still open** at end of window
-- **Sharpe ≈ −3.30** over the daily-MTM series
-- **Win rate 0 %** (all 5 closed positions exited via `stop_bp` on the day after open — see "Magnitude open issue" below)
-- **Final MTM −$19.7 M; max drawdown −$20.6 M**
-- **Average holding 1 day** — every closed position hit the configured `exit_stop_loss_bp = −15 bp` threshold on day 2 because the single-day mark of the 3/30 → 3/31 rate move (3.5768% → 3.5164%, ≈ 6.04 bp drop) priced through the engine to a NPV of ≈ −$4.16 M per outright, well past the stop.
+- **Sharpe ≈ −3.22** over the daily-MTM series
+- **Win rate 0 %** (all 5 closed positions exited via `stop_bp` on day 2)
+- **Final MTM −$13.31 M; max drawdown −$14.24 M**
+- **Outrights ≈ −$2.03 M each** (matches the manual NPV remark for a 6.04 bp rate drop on $100k bpv)
+- **Calendars ≈ −$4.07 M each**
+- **Average holding 1 day** — every closed position hit the configured `exit_stop_loss_bp = −15 bp` threshold on day 2 because the EOD-to-EOD rate move (3.5768% → 3.5164% over 2026-03-30 17:00 → 2026-03-31 17:00 NY) priced to ≈ −20 bp on the bpv-sized outright, past the stop.
 
-**Pre-fix run** (the original report — recorded for the audit trail):
+**Run history** (audit trail of every iteration as the bugs were rooted):
 
-- 5 closed trades, Sharpe +0.77, 80 % win rate, finalMTM +$31 M (sign-flipped — every figure was the negation of what actually happened).
+| run | resolve_pricable sign | per-pos TP/SL | TimeGrid time | finalMTM | per-outright realised |
+|---|---|---|---|---|---|
+| original | flipped (engine bug) | not wired | midnight (script bug) | +$31.06 M (sign-flipped, holds 22d via max_holding) | +$10.55 M |
+| `d7038c9` | fixed | wired (`083700a`) | midnight (script bug) | −$19.71 M (×2 magnitude vs manual) | −$4.16 M |
+| `477df5e` | fixed | wired | **17:00 NY EOD** | −$13.31 M (matches manual remark) | **−$2.03 M** |
 
-### Configuration ranking (cached-only, 22-BD window, post sign-fix)
+### Configuration ranking (cached-only, 22-BD window, post all fixes)
 
 | name | trades | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
 |---|---|---|---|---|---|---|---|---|
@@ -44,9 +50,9 @@ The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-t
 | `c_butterfly_only` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
 | `d_all_structures_default` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
 | `e_aggressive_concurrency` | 0 | 0 | — | 0 | 0 | — | — | 0.002 |
-| `f_daily_rebalance` | **5** | **5** | **−3.30** | **−20,618,315** | **−19,710,698** | **0 %** | **1.0** | 1.5 |
+| `f_daily_rebalance` | **5** | **5** | **−3.22** | **−14,244,274** | **−13,307,117** | **0 %** | **1.0** | 1.6 |
 
-The exit-reason histogram for `f_daily_rebalance` after the fix: **`stop_bp` × 5** (every position exited at the −15 bp stop on day 2). Pre-fix the same trades exited via `max_holding × 5` because the (now-fixed) per-position pricer never fired.
+The exit-reason histogram for `f_daily_rebalance` after the fixes: **`stop_bp` × 5** (every position exited at the −15 bp stop on day 2). Pre-fix the same trades exited via `max_holding × 5` because the (now-fixed) per-position pricer never fired.
 
 Configs (a)–(e) all use `rebalance_dow=4` (Friday). The cache holds Mon/Tue dates only (no Friday inside the window), so the entry trigger correctly returns `TriggerInfo(False)` on every step. Once a Friday lands in the cache the same configs will fire — the wiring is verified by `f`.
 
@@ -129,16 +135,26 @@ I have **not** fixed this in-branch because:
 - There may be other call sites that rely on the inverted return (the `* -1` was committed deliberately).
 - The fix needs review and a dedicated test sweep.
 
-## Magnitude open issue
+## Magnitude root cause — fixed in `477df5e`
 
-The sign fix in `d7038c9` makes the engine's NPV match a manual remark (both give NPV = −$2,033,012 for SFRU26 PAY built at 3/30 and marked against the 3/31 pricer; see `scripts/_trace_value_position.py`). However, the realised P&L per outright in the trade log is **−$4.16 M**, roughly **2 ×** the manual remark.
+After the sign fix landed, the realised P&L per outright was still ~2× the manual remark (-$4.16 M vs −$2.03 M for the 3/30 → 3/31 mark). Tracking the discrepancy through `scripts/_diff_engine_paths.py` showed:
 
-Suspects:
-- Engine path runs both `_evaluate_triggers` (which calls `_position_pnl_bp` → `value_position`) **and** `_handle_unwind` (which also calls `value_position`) on the same step. Each call is correct individually but if the package mutates between them, the second call could see a different NPV.
-- `IRSwapQuery.resolve_query` deep-copies the query and may be re-resolving the swap against the new pricer with the default sentinel `fixed_rate = -0`, locking the *new* par rate into the swap before the second value_position call. That would inflate the NPV move by the day-over-day par-rate change.
-- rateslib's Dual-typed notional (real component 9.7e40 in display, but `PV01` evaluates to exactly `bpv = $100,000` for a 1bp shift in a unit-test) may be interacting with `npv()` in a way that doubles the leg.
+- Calling `run_backtest` directly with explicitly-constructed 17:00 NY datetimes → -$2.03 M per outright (correct).
+- Calling the same `run_backtest` via `cached_only.main()` → -$4.16 M per outright (×2 of correct).
 
-Left as a follow-up because tracking it requires instrumenting `BT.position_handler.value_position` and `IRSwapQuery.resolve_query` with debug prints; the existing test pipeline (33 SFR-screener tests + 20 cross-product irswap-related tests) all still pass.
+The only difference: `_bt_datetimes` in both grid driver scripts used `pd.bdate_range(start_dt, end_dt, tz=NYC)` with start_dt = `NYC.localize(date.combine(start, time(17, 0)))`. **`pd.bdate_range` silently normalises returned timestamps to midnight regardless of the time component on the inputs.** The TimeGrid was therefore evaluating the curve at 00:00 NY each business day, not 17:00. With a daily-rebal config, the day-over-day rate move spans ≈ 24 hours of curve drift starting at midnight (which is morning EU market and therefore picks up an extra session of curve moves) instead of NY-EOD-to-NY-EOD. For the 3/30 → 3/31 window the midnight grid happened to roughly double the EOD-to-EOD rate move.
+
+Fix: build dates with `pd.bdate_range(start, end)` then attach `17:00` NYC explicitly when materialising the engine's TimeGrid list. After `477df5e`, the cached-only run produces:
+
+```
+SFRU26_OUTRIGHT realized=-2,033,012.60   ← matches manual remark
+SFRZ26_OUTRIGHT realized=-2,033,320.18
+SFRH27_OUTRIGHT realized=-2,033,627.81
+SFRH28_SFRH29_CAL_4 realized=-4,072,393.69
+SFRZ28_SFRH29_CAL_1 realized=-4,071,919.91
+```
+
+All five trades exit via `stop_bp` on day 2 because the EOD-to-EOD rate move on PAY outrights with bpv=$100k = ≈-20 bp, past the configured `-15 bp` stop. The bpv mechanism is correct, the sign is correct, the magnitudes are correct.
 
 ## Daily MTM coverage
 
