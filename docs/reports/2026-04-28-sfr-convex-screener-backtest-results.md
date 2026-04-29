@@ -1,154 +1,169 @@
-# SFR Convex Screener Backtest — Grid Results
+# SFR Convex Screener Backtest — Grid Results & Diagnostic Findings
 
 **Date:** 2026-04-29
 **Branch:** `claude/vigilant-mendel-f9ae6b`
 **PR:** [yieldcurvemonkey/ARBS#284](https://github.com/yieldcurvemonkey/ARBS/pull/284)
 **Drivers:**
-- `scripts/run_screener_backtest_grid.py` — full grid (cache priming gated)
+- `scripts/run_screener_backtest_grid.py` — full grid (gates on cache priming)
 - `scripts/run_screener_backtest_cached_only.py` — grid restricted to already-cached snapshot dates
-- `scripts/prime_screener_cache.py` — sequential cache primer
+- `scripts/prime_screener_cache.py` — sequential cache primer (`--reverse`, `--weekday`, `--max-minutes`)
+- `scripts/_check_*.py` — diagnostic scripts that isolate the engine's $10.5M-per-outright realised P&L
 **Output root:** `data/screener_results/sfr_convex_screener_backtest_grid/`
 **Cache root:** `data/screener_results/sfr_convex_screener_backtest_cache/` (4 dates: 2026-03-30, 2026-03-31, 2026-04-27, 2026-04-28)
 
 ## Executive summary
 
-The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-to-end against live BARCHART data over a **22-business-day window** (2026-03-30 → 2026-04-28) using **4 cached snapshot dates** (Mar 30/31, Apr 27/28). Six configurations were exercised; only `f_daily_rebalance` produced closed positions (all 5 hit the 22-BD `max_holding` exit).
+The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-to-end against live BARCHART data over a **22-business-day window** (2026-03-30 → 2026-04-28) using **4 cached snapshot dates** (Mar 30/31, Apr 27/28). Six configurations were exercised; only `f_daily_rebalance` produced closed positions. After committing the 22-BD result the report's caveats were investigated end-to-end, producing two material findings about how the engine prices closed positions (one of which is a **sign bug**) and one fix landed inside this branch:
 
-### Headline numbers (config `f_daily_rebalance`, cached-only run)
+1. **bpv unit is correct.** `IRSwapValue.PV01` of an OUTRIGHT IRSwapQuery built with `bpv=100_000` evaluates to **exactly $100,000 per 1bp** at construction. NPV-at-par = 0. The earlier "suspect P&L unit mismatch" hypothesis is wrong.
+2. **`Query.IRSwaps.backends.rateslib.RLIRSwapCurve.resolve_pricable` flips the sign of the notional** (`Query/IRSwaps/backends/rateslib/RLIRSwapCurve.py:205` does `notional = irswap.__dict__["kwargs"]["notional"] * -1`). Because the engine's `mark_to_market` and `on_unwind` both go through `resolve_pricable`, every realised / unrealised P&L for IRSwapQuery positions is reported with the wrong sign. Verified directly: marking the same swap built at 2026-03-30 against the 2026-04-21 pricer gives NPV = **−$839,705** when called directly, and **+$839,705** when the same call goes through `resolve_pricable`.
+3. **Engine reports +$10,549,648 for SFRU26 PAY** despite the manual remark giving −$839,705 (×12.5 magnitude × sign-flipped). The sign is the `resolve_pricable` bug; the magnitude discrepancy is a second, distinct issue likely related to the Dual-typed notional (real value 9.7e40) and the way the curve build inflates rateslib's auto-diff sensitivities at unwind. Tracking as a follow-up — needs a deeper trace through `BT.position_handler.value_position`.
+4. **Per-position TP/SL fix landed.** `_position_pnl_bp` now prices each open position individually through the engine's PositionHandler so `exit_take_profit_bp` / `exit_stop_loss_bp` fires for multi-position portfolios. Falls back to portfolio-MTM short-circuit on any pricer exception.
+5. **Cache priming is the dominant cost.** 25–30 min per uncached as_of under live Barchart rate limiting (≈80% HTTP 429 in the first 30 s of every fan-out). A daily prime over 22 BDs is therefore ~6–10 wall hours and can stall for half an hour or more in retry/backoff. The cached-only grid replays in <1 minute apiece once the cache is populated.
+
+### Headline numbers (config `f_daily_rebalance`, cached-only run, 22-BD window)
 
 - **5 closed trades** (3 outrights, 2 calendars), **5 unrealized still open** at end of window
-- **Sharpe ≈ 0.77** over the 22-day daily-MTM series
-- **Win rate 80 %** (4/5 closed trades positive)
-- **Final MTM +$31.06 M; max drawdown −$90.35 M** (numbers are ~3 orders of magnitude bigger than expected for $100k bpv-per-trade — see "Caveats" below for the suspected `IRSwapValue` unit mismatch)
-- **Average holding 22 days** (every closed position exited via the configured `exit_max_holding_days=22` ceiling — neither asymmetry-decay nor TP/SL fired against the available signals)
+- **Sharpe ≈ 0.77** over the daily-MTM series
+- **Win rate 80 %** (4/5 closed trades positive — *but see point (3) above; the sign is wrong*)
+- **Final MTM +$31.06 M; max drawdown −$90.35 M**
+- **Average holding 22 days** — every closed position exited via the configured `exit_max_holding_days=22` ceiling (asymmetry-decay never had per-day signals to compare against; TP/SL never fired before this PR added the per-position pricer)
 
 ### Configuration ranking (cached-only, 22-BD window)
 
 | name | trades | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
 |---|---|---|---|---|---|---|---|---|
 | `a_outright_conservative` | 0 | 0 | — | 0 | 0 | — | — | 0.04 |
-| `b_calendar_only` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
+| `b_calendar_only` | 0 | 0 | — | 0 | 0 | — | — | 0.003 |
 | `c_butterfly_only` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
 | `d_all_structures_default` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
-| `e_aggressive_concurrency` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
+| `e_aggressive_concurrency` | 0 | 0 | — | 0 | 0 | — | — | 0.002 |
 | `f_daily_rebalance` | **5** | **5** | **0.77** | **−90,351,291** | **+31,062,545** | **80 %** | **22.0** | 64.3 |
 
-Configs (a)–(e) all use `rebalance_dow=4` (Friday). The cache holds Mon/Tue dates only (no Friday inside Mar 30 → Apr 28), so the entry trigger correctly returns `TriggerInfo(False)` on every step. Once a Friday lands in the cache the same configs will fire entries — the wiring is verified by `f`.
+Configs (a)–(e) all use `rebalance_dow=4` (Friday). The cache holds Mon/Tue dates only (no Friday inside the window), so the entry trigger correctly returns `TriggerInfo(False)` on every step. Once a Friday lands in the cache the same configs will fire — the wiring is verified by `f`.
 
-### Best Sharpe / best return / worst drawdown
+## Concerns from the previous report — status
 
-Only one config produced realized P&L, so all three winners are the same row: `f_daily_rebalance`. The grid is statistically thin (5 closed trades, 1 open day overlap) — treat the headline Sharpe / DD as a working pipeline check, not a strategy verdict.
+### 1. "JPM-method tail amplification → realized P&L: consistent with the working hypothesis"
 
-## Configurations
+**Status: Inconclusive until the sign bug is fixed.** The 3 outrights at the top of the screener's asymmetry ranking on 2026-03-30 (SFRU26, SFRZ26, SFRH27 — all PAY, asym 1.5–2.6) all reported `+$10.5 M` apiece in the engine's trade log, but the manual remark shows the position should have **lost** ~$840k each (rate dropped 3.86bp Mar 30 → Apr 21). The "outrights dominated joint structures" framing was based on the engine's sign-flipped output and **does not survive scrutiny** until `resolve_pricable` is fixed.
 
-All configs share `SFRConvexScreenerConfig(universe_size=12, jpm_method=True, primary_joint_method=HISTORICAL_GAUSSIAN_COPULA, correlation_window=60, n_simulations=50_000)`.
+### 2. "Outrights dominated joint structures"
 
-| name | structure_types | entry_min_asym | max_concurrent | exit_asym | TP_bp | SL_bp | max_hold | rebal_dow |
-|---|---|---|---|---|---|---|---|---|
-| `a_outright_conservative` | (outright,) | 2.0 | 3 | 1.10 (default) | 10 | −15 | 22 | Fri |
-| `b_calendar_only` | (calendar,) | 3.0 | 5 | 1.5 | — | — | 22 | Fri |
-| `c_butterfly_only` | (butterfly,) | 3.0 | 5 | 1.5 | — | — | 44 | Fri |
-| `d_all_structures_default` | (outright, calendar, butterfly) | 1.5 | 5 | 1.10 | 10 | −15 | 22 | Fri |
-| `e_aggressive_concurrency` | (outright, calendar, butterfly) | 1.2 | 10 | 1.10 | 10 | −15 | 22 | Fri |
-| `f_daily_rebalance` | (outright, calendar, butterfly) | 1.5 | 5 | 1.10 | 10 | −15 | 22 | every BD |
+**Status: Can't be assessed yet.** Same dependency on the sign bug.
 
-## Per-config detail
+### 3. "Suspect P&L unit mismatch ($/% vs $/bp)"
 
-### a — `outright_conservative`, b — `calendar_only`, c — `butterfly_only`, d — `all_structures_default`, e — `aggressive_concurrency`
-- 0 entries, 0 exits in the cached window.
-- All five share `rebalance_dow=4` (Friday). The cache holds 2026-03-30 (Mon), 2026-03-31 (Tue), 2026-04-27 (Mon), 2026-04-28 (Tue) — no Fridays. The DOW gate inside `_entry_signal_fn` returns `TriggerInfo(False)` immediately, so no entry orders are emitted.
-- Whether the asymmetry / composite filters are tighter (a) or looser (e) is moot until a Friday lands in the cache.
+**Status: Resolved — there is no unit mismatch.** `scripts/_check_bpv_unit.py` confirms `PV01 = $100,000` for `bpv=100_000` and `NPV(par) = 0`. The actual issue is the sign flip in `resolve_pricable` plus a magnitude discrepancy that needs a deeper engine trace.
 
-### f — `daily_rebalance`
-- Wall time: **64.3 s** (cache hit on 4 dates + daily MTM marks across 22 business days).
-- Entries: **5 on 2026-03-30**: 3 outrights (`SFRU26`, `SFRZ26`, `SFRH27` — all PAY) and 2 calendars (`SFRH28/H29 CAL_4`, `SFRZ28/H29 CAL_1` — both PAY front / RECEIVE back).
-- Re-entries on 2026-04-27 (next cached date with `rebalance_dow=None` matching) opened the 5 currently-open unrealized positions.
-- Exits: **5 `max_holding` exits on 2026-04-21** (22 BDs from open). Asymmetry-decay never fired (no signals for the 4 days inside the holding window beyond Mar 30 / Mar 31). TP/SL did not fire (the engine's portfolio-level MTM short-circuit only evaluates with one open position).
-- Realised P&L histogram (raw, see caveat about unit scaling):
+### 4. "All 5 closed positions exited via `max_holding`"
 
-| structure_id | direction | realized_pnl ($) | days | exit |
-|---|---|---|---|---|
-| `SFRH27_OUTRIGHT` | PAY SFRH27 | +10,555,547 | 22 | max_holding |
-| `SFRZ26_OUTRIGHT` | PAY SFRZ26 | +10,552,598 | 22 | max_holding |
-| `SFRU26_OUTRIGHT` | PAY SFRU26 | +10,549,649 | 22 | max_holding |
-| `SFRZ28_SFRH29_CAL_1` | PAY Z28 / RECEIVE H29 | +81 | 22 | max_holding |
-| `SFRH28_SFRH29_CAL_4` | PAY H28 / RECEIVE H29 | −255 | 22 | max_holding |
+**Status: Expected given the sparse cache.** The exit trigger's asymmetry-decay branch needs a per-day signal to compare against; with only 4 cached dates inside a 22-BD window, the decay path had nothing to fire on for most of the holding window. **The fix is denser cache, not engine code.**
 
-- MTM curve (USD): rises from $0 on 2026-03-30 → $40 M on 2026-04-01 → $91 M on 2026-04-08 → exits on 2026-04-21 realising $31.7 M; flat through 2026-04-22 / 23 / 24 / 27 then re-marks down on 2026-04-28 to $31.06 M.
-- Top 3 winners and top 3 losers are the same 5-row table above (only 5 closed trades).
+### 5. "TP/SL never fired (multi-position MTM not decomposable)"
 
-## Cross-config comparison
+**Status: Fixed in `083700a`.** `_position_pnl_bp` now uses `backtest._handler_for_position(pos)` and `backtest._pricer_for_query(q, now)` to compute per-position NPV, so TP/SL fires for `max_concurrent > 1` configs. Test `test_exit_trigger_take_profit_uses_per_position_pricer` covers the new path; full unit suite (33 tests) green.
 
-See the "Headline ranking" table above. The single non-zero row is `f_daily_rebalance`.
+**Caveat:** the per-position pricer flows through the same `value_position` → `resolve_pricable` path as `mark_to_market`, so until the sign-flip bug is fixed the TP/SL exit will fire on inverted PnL too. After the engine fix lands, the TP/SL semantics become correct without any further trigger changes.
 
-## Observations
+### 6. "Cache priming is the entire bottleneck (25–30 min/uncached as_of)"
 
-- **JPM-method tail amplification → realized P&L:** consistent with the working hypothesis. The three outrights at the top of the screener's asymmetry ranking on 2026-03-30 (SFRU26, SFRZ26, SFRH27 — all PAY, asym 1.5–2.6) all exited positive. The two calendars near the asymmetry threshold (1.7) closed roughly flat. **Caveat:** sample size 5, no FOMC inside window.
-- **Outrights dominated joint structures.** The outright PAY trades booked ~$10.5 M apiece while both calendar trades closed within ±$300. Whether that's the screener's edge or the unit mismatch (next bullet) is the open question.
-- **Suspect P&L unit mismatch.** $10.5 M on a $100k-bpv outright would imply a **105 bp** rate move in 22 days — implausible. The screener's `IRSwapQuery` builder sets `bpv = sign × leg.weight × bpv` for outrights; the engine's `value_position` then computes MTM via `IRSwapValue.RATE` against the curve. Either:
-  - `bpv` is being interpreted in `$/%` rather than `$/bp` (× 100 unit mismatch), or
-  - The `IRSwapValue.RATE` path returns a rate change in `%` and the engine multiplies by `bpv` directly.
-  Both possibilities trace through `BT.position_handler` and would benefit from a follow-up review against a known-good single-leg PnL calculation. The Sharpe / win rate are unaffected (linear scaling), but the maxDD / finalMTM dollar values should be divided by ~100 before sizing live.
-- **All 5 closed positions exited via `max_holding`.** That's expected: the cache only has signals on Mar 30/31, Apr 27/28, so `_exit_signal_fn`'s asymmetry-decay branch had no per-day signals to compare against during the open window. With a denser cache the decay path will fire.
-- **TP/SL never fired.** The `_position_pnl_bp` short-circuit returns `None` whenever `> 1` position is open (portfolio MTM is not decomposable per-position in the current engine), so the take-profit / stop-loss branches are no-ops on multi-position runs. Per-position MTM hooks would let those exits fire for `max_concurrent > 1` configs.
-- **Cache priming is the entire bottleneck.** Two attempts (in-session and overnight) confirmed ~25–30 minutes per uncached as_of under live Barchart rate limiting, with the first fan-out hitting ~80 % HTTP 429 in the first 30 seconds. The cached-only run shown here completed all 6 configs over 22 BDs in **64 seconds**.
-- **Joint calibration falls back to copula-only on stale-smile dates.** Logs show `Joint calibration failed; falling back to copula only: All smiles in extract_joint() must share the same as_of date` on 2026-04-28 because most contract smiles fell back to 2026-04-27 OHLC. The signal still produces (HISTORICAL_GAUSSIAN_COPULA path), but the asymmetry magnitudes on stale dates should be treated with caution.
-- **Default rolldown horizon is 1m.** SR3 IMM-IMM 3M schedule collapses on 3m (effective == termination); 1m is the safe default.
-- **0.5 bp round-trip cost assumption.** Tighten with venue-specific bid-ask before sizing live.
+**Status: Confirmed; prime tooling improved.** `scripts/prime_screener_cache.py` now supports `--reverse`, `--weekday`, and `--max-minutes` so the cache can be primed Fridays-first or in reverse from the most recent date. Two long-running primes failed to complete a 22-BD daily prime in the available wall budget — the bottleneck is genuinely Barchart's rate limit on the screener's parallel HTTP fan-out (≈270 requests for every uncached as_of). Recommendation: serialise the per-contract HTTP fan-out inside `RVUtils.SFRConvexScreener._market_data.load_market_data` (e.g., `asyncio.Semaphore(2)` with a 200-500 ms sleep between contracts) so the cache primes cleanly without 429 storms. That's a one-line change with no methodology impact.
 
-## Cross-config comparison table
+### 7. "Joint calibration falls back to copula-only on stale-smile dates"
 
-| name | Sharpe | MaxDD | WinRate | Trades | AvgHoldDays |
-|---|---|---|---|---|---|
-| a_outright_conservative | — | 0 | — | 0 | — |
-| b_calendar_only | — | 0 | — | 0 | — |
-| c_butterfly_only | — | 0 | — | 0 | — |
-| d_all_structures_default | — | 0 | — | 0 | — |
-| e_aggressive_concurrency | — | 0 | — | 0 | — |
-| f_daily_rebalance | 0.77 | -90.4 M | 80 % | 5 | 22.0 |
+**Status: Documented behaviour; no fix needed.** The `HISTORICAL_GAUSSIAN_COPULA` path is the correct fallback when smiles share an as_of date. Asymmetry magnitudes on stale dates remain trustworthy (historical Gaussian copula uses 60d daily-change correlation), but should not be sized live without a fresh smile.
 
-## Recommendation
+### 8. "Default rolldown horizon is 1m"
 
-1. **First:** chase down the suspected `IRSwapValue` unit mismatch — divide the `f` realised P&L numbers by ~100 and see whether they line up with a manual `bpv × Δrate(bp)` calculation on the SFRU26 / SFRZ26 / SFRH27 closes between 2026-03-30 and 2026-04-21. That one-line follow-up unblocks every other interpretation.
-2. **Second:** prime the cache out-of-session over a 6-month range (the in-session run hit 25 min / uncached as_of with the proxy in its hot rate-limit state; expect ~6–8 hours wall against fewer-throttled tokens). Once primed, `scripts/run_screener_backtest_grid.py` runs all 6 configs in <2 minutes total.
-3. **Third:** with a populated cache and a verified P&L unit, focus on `d_all_structures_default` as the broadest baseline; compare against `a_outright_conservative` to test whether the JPM-method tail amplification on outrights *only* survives realised-data scrutiny.
-4. **Fourth:** add per-position MTM hooks to `BT.query_engine.QueryDrivenBacktest` so the TP/SL exit branches fire for `max_concurrent > 1` configs. Right now they're effectively dead code outside the single-position case.
+**Status: Documented and correct.** The SR3 IMM-IMM 3M schedule collapses on 3m (effective == termination), so 1m is the safe default already.
+
+### 9. "0.5 bp round-trip cost assumption"
+
+**Status: Configurable; tighten before sizing live.** `SFRScreenerBacktestConfig.round_trip_cost_bp` can be overridden per config; the grid uses `0.5`.
+
+## Diagnostic walk-through (the sign bug)
+
+Reproducible via `conda run -n stir python scripts/_check_resolve_pricable.py`. Key output:
+
+```
+OPEN  swap.fixed_rate    = 0.0357679891709444
+OPEN  swap.notional.real = 9.703195332059336e+40
+
+DIRECT (use open swap, mark with close pricer)
+  NPV = -839,705.27        ← correct: PAY position lost $840k as rate dropped 3.86bp
+
+VIA resolve_pricable
+  resolved.fixed_rate    = 0.0357679891709444
+  resolved.notional.real = -9.703195332059336e+40    ← sign flipped here
+  NPV = 839,705.27         ← engine path inverts the sign
+```
+
+The engine's `BT.position_handler.PositionHandler.value_position` calls `_resolved_pricables(pricer_or_curve, position.package, position.weights)` which dispatches to `pricer_or_curve.resolve_pricable(...)`. For the rateslib backend, `resolve_pricable` does:
+
+```python
+def resolve_pricable(self, irswap, risk_weight=None):
+    return self.build_irswap(
+        effective_date=self.effective_date(irswap),
+        maturity_date=self.maturity_date(irswap),
+        fixed_rate=self.fixed_rate(irswap),
+        notional=irswap.__dict__["kwargs"]["notional"] * -1,   # ← THIS LINE
+    )
+```
+
+Removing the `* -1` (or making it conditional on a direction flag) restores correct PnL. It looks intentional — there's likely an upstream convention where the unwind builds an "opposite" leg to net out the original — but the way the engine calls it through `mark_to_market` always inverts NPV. Either:
+- (a) the engine's `_resolved_pricables` should *not* reverse direction at mark time, or
+- (b) `resolve_pricable` should skip the `* -1` for mark-time calls (perhaps `risk_weight=None` could signal "do not invert"), or
+- (c) `mark_to_market`'s caller should pre-negate the NPV result.
+
+I have **not** fixed this in-branch because:
+- It's a cross-cutting engine change that affects every backtest using IRSwapQuery, not just this screener.
+- There may be other call sites that rely on the inverted return (the `* -1` was committed deliberately).
+- The fix needs review and a dedicated test sweep.
+
+## Concerns I have NOT addressed
+
+- **Magnitude discrepancy.** Engine reports +$10.55M for the SFRU26 PAY trade vs the manual remark's −$839k (~12.5× excess). The sign explanation is `resolve_pricable`; the magnitude needs a deeper trace through `value_position`. Likely candidates:
+  - Dual-number notional inflation in rateslib (real value `9.7e40` is suspicious).
+  - The curve build at unwind time using a different reference frame than the open.
+  - Some doubled / squared term in `IRSwapValue.NPV` for the rebuilt swap with `fixed_rate × 100`.
+- **Daily MTM with full cache.** The 22-BD daily prime stalled at 4 cached dates due to Barchart 429 storms in the available wall budget. The grid does run with daily MTM marks already, but the entry/exit triggers only fire on signals from cached dates. A throttled-fan-out fix in `_market_data.py` would make a full daily prime tractable.
+
+## Pipeline verification
+
+Full unit suite green: `conda run -n stir pytest tests/test_sfr_convex_screener_*.py -v -m "not integration"` → **33 passed, 1 deselected** (1 deselected is the `@pytest.mark.integration` Barchart smoke test).
+
+## Recommendation for the reviewer
+
+1. **First** investigate `Query/IRSwaps/backends/rateslib/RLIRSwapCurve.py:205` (the `* -1` notional flip). Either remove it, gate it on a direction flag, or add a sibling method `mark_pricable` that does *not* invert. Until this is addressed, the realised P&L numbers in any IRSwapQuery-based backtest are wrong.
+2. **Second** trace the magnitude discrepancy: `scripts/_check_remark.py` already has a single-leg reproduction; extend it to print every step of `value_position` against the engine's actual call path.
+3. **Third** add a `pacer` config to `RVUtils.SFRConvexScreener._market_data.load_market_data` so cache priming serialises gracefully under Barchart's per-token rate limit.
+4. **Fourth** with the engine fixed and a populated cache, run the grid over 6 months and revisit the JPM-method amplification thesis with reliable PnL.
 
 ## Reproduction
 
 ```bash
-# 1) prime the cache (slow — Barchart 429 storms)
+# 1) prime the cache (slow — Barchart 429 storms; allow many hours)
 conda run -n stir python scripts/prime_screener_cache.py \
-    --start 2025-10-28 --end 2026-04-28
+    --start 2025-10-28 --end 2026-04-28 --reverse
 
 # 2) drive the full grid against the populated cache
 conda run -n stir python scripts/run_screener_backtest_grid.py \
     --start 2025-10-28 --end 2026-04-28 --max-config-minutes 60
 
-# OR (if some dates are missing) drive only on the cached subset
+# OR drive only on the cached subset (current data)
 conda run -n stir python scripts/run_screener_backtest_cached_only.py \
     --start 2025-10-28 --end 2026-04-28
 ```
 
-Per-config artefacts land in `data/screener_results/sfr_convex_screener_backtest_grid/<config>/`:
+Per-config artefacts land in `data/screener_results/sfr_convex_screener_backtest_grid/<config>/`. A grid-level `grid_summary.json` is written at the root.
 
-- `trades.csv` — closed-position log (opened, closed, days, realized_pnl, structure_id, direction, asymmetry, exit_reason)
-- `mtm_history.csv` — daily MTM in USD
-- `summary.json` — Sharpe / DD / win-rate / exit-reason histogram / top-3 winners + losers
-- `backtest.pkl` — pickled `{trades_df, mtm_series, summary}` for downstream analysis
+## Diagnostic scripts
 
-A grid-level `grid_summary.json` is written at the root.
-
-## Caveats / open questions
-
-- **Realised P&L magnitude.** As above, $10.5 M per outright × 22 BD is implausible without a unit mismatch. Investigate before acting on the data.
-- **Sample size.** 5 closed trades is statistically meaningless — the 80 % win rate could flip to 20 % with one more sample.
-- **No FOMC inside window.** The screener's tail-amplification thesis is largely about FOMC-reaction tails. Need a window with at least one FOMC announcement to test.
-- **`IRSwapStructure.SPREAD` unused.** Calendars use `IRSwapStructure.CURVE` (matches existing convention; SPREAD delegates to outright builder per `Query/IRSwaps/IRSwapStructure.py:63`).
-- **Round-trip cost assumption.** Flat 0.5 bp; tighten with venue-specific bid-ask before sizing.
-
-## What this report still does **not** answer
-
-- Realised Sharpe / win-rate at 6-month statistical significance — gated on cache priming.
-- Whether outrights beat joint structures on realised data once the unit mismatch is resolved.
-- Whether the asymmetry-decay exit threshold is appropriately tuned — needs a denser signal table to fire that branch.
+| Script | Purpose |
+|---|---|
+| `scripts/_check_bpv_unit.py` | Verify PV01 == bpv at construction (NPV-at-par = 0) |
+| `scripts/_check_curve_dates.py` | Confirm the curve actually differs across as_of dates |
+| `scripts/_check_remark.py` | Manual remark of a position vs engine's value_position |
+| `scripts/_check_resolve_pricable.py` | Isolate the `resolve_pricable` sign flip |
+| `scripts/_check_realized_pnl.py` | End-to-end NPV trace (open / mid / close) |
