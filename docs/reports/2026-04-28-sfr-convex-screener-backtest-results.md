@@ -23,13 +23,19 @@ The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-t
 
 ### Headline numbers (config `f_daily_rebalance`, cached-only run, 22-BD window)
 
-- **5 closed trades** (3 outrights, 2 calendars), **5 unrealized still open** at end of window
-- **Sharpe ≈ 0.77** over the daily-MTM series
-- **Win rate 80 %** (4/5 closed trades positive — *but see point (3) above; the sign is wrong*)
-- **Final MTM +$31.06 M; max drawdown −$90.35 M**
-- **Average holding 22 days** — every closed position exited via the configured `exit_max_holding_days=22` ceiling (asymmetry-decay never had per-day signals to compare against; TP/SL never fired before this PR added the per-position pricer)
+**Post-fix run** (with the `resolve_pricable` sign fix in `d7038c9` and the per-position TP/SL fix in `083700a`):
 
-### Configuration ranking (cached-only, 22-BD window)
+- **5 closed trades** (3 outrights, 2 calendars), **5 unrealized still open** at end of window
+- **Sharpe ≈ −3.30** over the daily-MTM series
+- **Win rate 0 %** (all 5 closed positions exited via `stop_bp` on the day after open — see "Magnitude open issue" below)
+- **Final MTM −$19.7 M; max drawdown −$20.6 M**
+- **Average holding 1 day** — every closed position hit the configured `exit_stop_loss_bp = −15 bp` threshold on day 2 because the single-day mark of the 3/30 → 3/31 rate move (3.5768% → 3.5164%, ≈ 6.04 bp drop) priced through the engine to a NPV of ≈ −$4.16 M per outright, well past the stop.
+
+**Pre-fix run** (the original report — recorded for the audit trail):
+
+- 5 closed trades, Sharpe +0.77, 80 % win rate, finalMTM +$31 M (sign-flipped — every figure was the negation of what actually happened).
+
+### Configuration ranking (cached-only, 22-BD window, post sign-fix)
 
 | name | trades | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
 |---|---|---|---|---|---|---|---|---|
@@ -38,7 +44,9 @@ The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-t
 | `c_butterfly_only` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
 | `d_all_structures_default` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
 | `e_aggressive_concurrency` | 0 | 0 | — | 0 | 0 | — | — | 0.002 |
-| `f_daily_rebalance` | **5** | **5** | **0.77** | **−90,351,291** | **+31,062,545** | **80 %** | **22.0** | 64.3 |
+| `f_daily_rebalance` | **5** | **5** | **−3.30** | **−20,618,315** | **−19,710,698** | **0 %** | **1.0** | 1.5 |
+
+The exit-reason histogram for `f_daily_rebalance` after the fix: **`stop_bp` × 5** (every position exited at the −15 bp stop on day 2). Pre-fix the same trades exited via `max_holding × 5` because the (now-fixed) per-position pricer never fired.
 
 Configs (a)–(e) all use `rebalance_dow=4` (Friday). The cache holds Mon/Tue dates only (no Friday inside the window), so the entry trigger correctly returns `TriggerInfo(False)` on every step. Once a Friday lands in the cache the same configs will fire — the wiring is verified by `f`.
 
@@ -121,13 +129,24 @@ I have **not** fixed this in-branch because:
 - There may be other call sites that rely on the inverted return (the `* -1` was committed deliberately).
 - The fix needs review and a dedicated test sweep.
 
-## Concerns I have NOT addressed
+## Magnitude open issue
 
-- **Magnitude discrepancy.** Engine reports +$10.55M for the SFRU26 PAY trade vs the manual remark's −$839k (~12.5× excess). The sign explanation is `resolve_pricable`; the magnitude needs a deeper trace through `value_position`. Likely candidates:
-  - Dual-number notional inflation in rateslib (real value `9.7e40` is suspicious).
-  - The curve build at unwind time using a different reference frame than the open.
-  - Some doubled / squared term in `IRSwapValue.NPV` for the rebuilt swap with `fixed_rate × 100`.
-- **Daily MTM with full cache.** The 22-BD daily prime stalled at 4 cached dates due to Barchart 429 storms in the available wall budget. The grid does run with daily MTM marks already, but the entry/exit triggers only fire on signals from cached dates. A throttled-fan-out fix in `_market_data.py` would make a full daily prime tractable.
+The sign fix in `d7038c9` makes the engine's NPV match a manual remark (both give NPV = −$2,033,012 for SFRU26 PAY built at 3/30 and marked against the 3/31 pricer; see `scripts/_trace_value_position.py`). However, the realised P&L per outright in the trade log is **−$4.16 M**, roughly **2 ×** the manual remark.
+
+Suspects:
+- Engine path runs both `_evaluate_triggers` (which calls `_position_pnl_bp` → `value_position`) **and** `_handle_unwind` (which also calls `value_position`) on the same step. Each call is correct individually but if the package mutates between them, the second call could see a different NPV.
+- `IRSwapQuery.resolve_query` deep-copies the query and may be re-resolving the swap against the new pricer with the default sentinel `fixed_rate = -0`, locking the *new* par rate into the swap before the second value_position call. That would inflate the NPV move by the day-over-day par-rate change.
+- rateslib's Dual-typed notional (real component 9.7e40 in display, but `PV01` evaluates to exactly `bpv = $100,000` for a 1bp shift in a unit-test) may be interacting with `npv()` in a way that doubles the leg.
+
+Left as a follow-up because tracking it requires instrumenting `BT.position_handler.value_position` and `IRSwapQuery.resolve_query` with debug prints; the existing test pipeline (33 SFR-screener tests + 20 cross-product irswap-related tests) all still pass.
+
+## Daily MTM coverage
+
+The grid produces daily MTM marks already — every business day in the TimeGrid has an entry in `mtm_history.csv`. With only 4 cached snapshot dates inside a 22-BD window, the entry/exit triggers only fire on those 4 dates; everything else is a flat-MTM hold.
+
+A full daily-cached run requires priming all ~22 BDs in the window. The two priming attempts in this session each took ~30 minutes per uncached as_of (against live Barchart with 80% HTTP 429 in the first 30 s). Recommendation: serialise the per-contract HTTP fan-out inside `RVUtils.SFRConvexScreener._market_data.load_market_data` (e.g., wrap the smile / OHLC fetch in `asyncio.Semaphore(2)` with a 200-500 ms sleep between contracts) so the cache primes cleanly without 429 storms. That's a one-line change with no methodology impact.
+
+The daily prime is currently running in the background on this branch; stop it via `TaskStop` if you want to short-circuit and use whatever cache landed so far.
 
 ## Pipeline verification
 
