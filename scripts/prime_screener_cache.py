@@ -57,11 +57,20 @@ def main() -> int:
     p.add_argument("--start", required=True, help="ISO start date")
     p.add_argument("--end", required=True, help="ISO end date")
     p.add_argument("--cache-root", default="data/screener_results/sfr_convex_screener_backtest_cache")
+    p.add_argument("--reverse", action="store_true", help="Walk dates from most-recent backwards")
+    p.add_argument("--weekday", type=int, default=None,
+                   help="Restrict to a single ISO weekday (0=Mon ... 4=Fri ... 6=Sun)")
+    p.add_argument("--max-minutes", type=float, default=None,
+                   help="Soft wall budget — exit before kicking off a build that would exceed this")
     args = p.parse_args()
 
     start = datetime.date.fromisoformat(args.start)
     end = datetime.date.fromisoformat(args.end)
     dates = sorted(d.date() for d in pd.bdate_range(start, end))
+    if args.weekday is not None:
+        dates = [d for d in dates if d.weekday() == args.weekday]
+    if args.reverse:
+        dates = list(reversed(dates))
     cfg = _make_screener_cfg()
     cache = SnapshotCache(root=args.cache_root)
     cs = _config_summary_for_cache(cfg)
@@ -72,7 +81,11 @@ def main() -> int:
     n_built = 0
     n_failed = 0
     t0 = time.monotonic()
+    budget_s = (args.max_minutes * 60.0) if args.max_minutes is not None else None
     for d in dates:
+        if budget_s is not None and (time.monotonic() - t0) > budget_s:
+            logger.warning("wall budget %s minutes exceeded — stopping early", args.max_minutes)
+            break
         if cache.get(d, cs) is not None:
             n_hit += 1
             logger.info("%s | cache HIT (%d/%d)", d, n_hit + n_built + n_failed, len(dates))
