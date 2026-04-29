@@ -1,142 +1,154 @@
 # SFR Convex Screener Backtest — Grid Results
 
-**Date:** 2026-04-28
+**Date:** 2026-04-29
 **Branch:** `claude/vigilant-mendel-f9ae6b`
 **PR:** [yieldcurvemonkey/ARBS#284](https://github.com/yieldcurvemonkey/ARBS/pull/284)
-**Driver:** `scripts/run_screener_backtest_grid.py`
+**Drivers:**
+- `scripts/run_screener_backtest_grid.py` — full grid (cache priming gated)
+- `scripts/run_screener_backtest_cached_only.py` — grid restricted to already-cached snapshot dates
+- `scripts/prime_screener_cache.py` — sequential cache primer
 **Output root:** `data/screener_results/sfr_convex_screener_backtest_grid/`
-**Cache root:** `data/screener_results/sfr_convex_screener_backtest_cache/`
+**Cache root:** `data/screener_results/sfr_convex_screener_backtest_cache/` (4 dates: 2026-03-30, 2026-03-31, 2026-04-27, 2026-04-28)
 
 ## Executive summary
 
-The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator was exercised end-to-end against live BARCHART data on a **2-business-day** window (2026-04-27 → 2026-04-28). Six configurations were run sequentially:
+The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-to-end against live BARCHART data over a **22-business-day window** (2026-03-30 → 2026-04-28) using **4 cached snapshot dates** (Mar 30/31, Apr 27/28). Six configurations were exercised; only `f_daily_rebalance` produced closed positions (all 5 hit the 22-BD `max_holding` exit).
 
-- **Five of the six configurations** (`a` outright-conservative … `e` aggressive-concurrency) emitted **0 entry orders** because they all use `rebalance_dow=4` (Friday) and the 2-day window contains no Fridays. This confirms the rebalance-day-of-week gate is wired correctly through `FlowSignalTriggerRequirements`.
-- **The sixth, `f_daily_rebalance`** (no DOW gate), opened **5 unrealized positions** on 2026-04-27 and ended day 2 marked at **-$595,075** (≈ -5.95 bp on the $100k bpv-per-trade sizing). No positions closed (window too short for either asymmetry-decay or 22-business-day max-hold to fire).
+### Headline numbers (config `f_daily_rebalance`, cached-only run)
 
-**The backtest pipeline is functionally proven end-to-end with live data.** The 6-month grid run from the original spec was *not* completed in-session because uncached snapshots take **~18 minutes per as_of date** under the current Barchart rate limit (215 / 271 = 79% HTTP 429 storms on the first wave of parallel fetches), making the 6-month × 6-config plan infeasible inside one session. The cache priming work is the entire bottleneck — once the cache is populated, all 6 configs replay against the same on-disk pickles and complete in **<0.5 s wall-time apiece**.
+- **5 closed trades** (3 outrights, 2 calendars), **5 unrealized still open** at end of window
+- **Sharpe ≈ 0.77** over the 22-day daily-MTM series
+- **Win rate 80 %** (4/5 closed trades positive)
+- **Final MTM +$31.06 M; max drawdown −$90.35 M** (numbers are ~3 orders of magnitude bigger than expected for $100k bpv-per-trade — see "Caveats" below for the suspected `IRSwapValue` unit mismatch)
+- **Average holding 22 days** (every closed position exited via the configured `exit_max_holding_days=22` ceiling — neither asymmetry-decay nor TP/SL fired against the available signals)
 
-**Recommendation.** Prime the cache out-of-session with `RVUtils.SFRConvexScreener._backtest_cache.load_or_build_many` walked sequentially over the 6-month range (≈ 30 hours wall, 1 contract at a time with throttle-friendly back-offs), then re-run `python scripts/run_screener_backtest_grid.py` against the primed cache for the full grid in seconds. Best Sharpe / DD / hit-rate cannot be ranked from the 2-day window — too few observations.
+### Configuration ranking (cached-only, 22-BD window)
 
-## Grid configurations
+| name | trades | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 0 | 0 | — | 0 | 0 | — | — | 0.04 |
+| `b_calendar_only` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
+| `c_butterfly_only` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
+| `d_all_structures_default` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
+| `e_aggressive_concurrency` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
+| `f_daily_rebalance` | **5** | **5** | **0.77** | **−90,351,291** | **+31,062,545** | **80 %** | **22.0** | 64.3 |
+
+Configs (a)–(e) all use `rebalance_dow=4` (Friday). The cache holds Mon/Tue dates only (no Friday inside Mar 30 → Apr 28), so the entry trigger correctly returns `TriggerInfo(False)` on every step. Once a Friday lands in the cache the same configs will fire entries — the wiring is verified by `f`.
+
+### Best Sharpe / best return / worst drawdown
+
+Only one config produced realized P&L, so all three winners are the same row: `f_daily_rebalance`. The grid is statistically thin (5 closed trades, 1 open day overlap) — treat the headline Sharpe / DD as a working pipeline check, not a strategy verdict.
+
+## Configurations
 
 All configs share `SFRConvexScreenerConfig(universe_size=12, jpm_method=True, primary_joint_method=HISTORICAL_GAUSSIAN_COPULA, correlation_window=60, n_simulations=50_000)`.
 
 | name | structure_types | entry_min_asym | max_concurrent | exit_asym | TP_bp | SL_bp | max_hold | rebal_dow |
 |---|---|---|---|---|---|---|---|---|
-| `a_outright_conservative` | (outright,) | 2.0 | 3 | 1.10 (default) | 10 | -15 | 22 | Fri |
+| `a_outright_conservative` | (outright,) | 2.0 | 3 | 1.10 (default) | 10 | −15 | 22 | Fri |
 | `b_calendar_only` | (calendar,) | 3.0 | 5 | 1.5 | — | — | 22 | Fri |
 | `c_butterfly_only` | (butterfly,) | 3.0 | 5 | 1.5 | — | — | 44 | Fri |
-| `d_all_structures_default` | (outright, calendar, butterfly) | 1.5 | 5 | 1.10 | 10 | -15 | 22 | Fri |
-| `e_aggressive_concurrency` | (outright, calendar, butterfly) | 1.2 | 10 | 1.10 | 10 | -15 | 22 | Fri |
-| `f_daily_rebalance` | (outright, calendar, butterfly) | 1.5 | 5 | 1.10 | 10 | -15 | 22 | every BD |
-
-## Run log
-
-- TimeGrid: `pd.bdate_range('2026-04-27', '2026-04-28')` → 2 NY-EOD datetimes.
-- Cache prime (first run, `--start 2026-04-14 --end 2026-04-28 --max-config-minutes 25` then trimmed to single date attempts): wave 1 throttled (211/271 HTTP 429 in the first ~30 s), screener honoured its retry/backoff, two snapshots eventually pickled at **18 min average** each. Final wall time for the 2-snapshot prime: **37 min 33 s**.
-- Cache reuse: subsequent grid invocation against the populated cache executed all 6 configs in **0.4 s total**.
-- Grid summary: `data/screener_results/sfr_convex_screener_backtest_grid/grid_summary.json`.
-
-## Cross-config comparison
-
-| name | Trades (closed) | Unrealized open | Sharpe | Max DD ($) | Final MTM ($) | Wall (s) |
-|---|---|---|---|---|---|---|
-| `a_outright_conservative` | 0 | 0 | — | 0 | 0 | 0.005 |
-| `b_calendar_only` | 0 | 0 | — | 0 | 0 | 0.003 |
-| `c_butterfly_only` | 0 | 0 | — | 0 | 0 | 0.004 |
-| `d_all_structures_default` | 0 | 0 | — | 0 | 0 | 0.003 |
-| `e_aggressive_concurrency` | 0 | 0 | — | 0 | 0 | 0.002 |
-| `f_daily_rebalance` | 0 | **5** | — | **-595,075** | **-595,075** | 0.42 |
-
-Sharpe / win rate / average-holding cells are all NaN because no positions closed inside the 2-day window. The `final MTM` / `max DD` cells for config `f` show the day-2 mark of the 5 open positions opened on day 1.
+| `d_all_structures_default` | (outright, calendar, butterfly) | 1.5 | 5 | 1.10 | 10 | −15 | 22 | Fri |
+| `e_aggressive_concurrency` | (outright, calendar, butterfly) | 1.2 | 10 | 1.10 | 10 | −15 | 22 | Fri |
+| `f_daily_rebalance` | (outright, calendar, butterfly) | 1.5 | 5 | 1.10 | 10 | −15 | 22 | every BD |
 
 ## Per-config detail
 
-### a — outright_conservative
-- 0 entries, 0 exits.
-- No Friday in window → entry trigger correctly returned `TriggerInfo(False)` on every step (verified via `f` proving the entry path works when DOW is enabled).
-- Validates: `rebalance_dow=4` gate.
+### a — `outright_conservative`, b — `calendar_only`, c — `butterfly_only`, d — `all_structures_default`, e — `aggressive_concurrency`
+- 0 entries, 0 exits in the cached window.
+- All five share `rebalance_dow=4` (Friday). The cache holds 2026-03-30 (Mon), 2026-03-31 (Tue), 2026-04-27 (Mon), 2026-04-28 (Tue) — no Fridays. The DOW gate inside `_entry_signal_fn` returns `TriggerInfo(False)` immediately, so no entry orders are emitted.
+- Whether the asymmetry / composite filters are tighter (a) or looser (e) is moot until a Friday lands in the cache.
 
-### b — calendar_only
-- 0 entries, 0 exits. Same Friday-gate as (a).
+### f — `daily_rebalance`
+- Wall time: **64.3 s** (cache hit on 4 dates + daily MTM marks across 22 business days).
+- Entries: **5 on 2026-03-30**: 3 outrights (`SFRU26`, `SFRZ26`, `SFRH27` — all PAY) and 2 calendars (`SFRH28/H29 CAL_4`, `SFRZ28/H29 CAL_1` — both PAY front / RECEIVE back).
+- Re-entries on 2026-04-27 (next cached date with `rebalance_dow=None` matching) opened the 5 currently-open unrealized positions.
+- Exits: **5 `max_holding` exits on 2026-04-21** (22 BDs from open). Asymmetry-decay never fired (no signals for the 4 days inside the holding window beyond Mar 30 / Mar 31). TP/SL did not fire (the engine's portfolio-level MTM short-circuit only evaluates with one open position).
+- Realised P&L histogram (raw, see caveat about unit scaling):
 
-### c — butterfly_only
-- 0 entries, 0 exits. Same Friday-gate as (a).
+| structure_id | direction | realized_pnl ($) | days | exit |
+|---|---|---|---|---|
+| `SFRH27_OUTRIGHT` | PAY SFRH27 | +10,555,547 | 22 | max_holding |
+| `SFRZ26_OUTRIGHT` | PAY SFRZ26 | +10,552,598 | 22 | max_holding |
+| `SFRU26_OUTRIGHT` | PAY SFRU26 | +10,549,649 | 22 | max_holding |
+| `SFRZ28_SFRH29_CAL_1` | PAY Z28 / RECEIVE H29 | +81 | 22 | max_holding |
+| `SFRH28_SFRH29_CAL_4` | PAY H28 / RECEIVE H29 | −255 | 22 | max_holding |
 
-### d — all_structures_default
-- 0 entries, 0 exits. Same Friday-gate as (a).
+- MTM curve (USD): rises from $0 on 2026-03-30 → $40 M on 2026-04-01 → $91 M on 2026-04-08 → exits on 2026-04-21 realising $31.7 M; flat through 2026-04-22 / 23 / 24 / 27 then re-marks down on 2026-04-28 to $31.06 M.
+- Top 3 winners and top 3 losers are the same 5-row table above (only 5 closed trades).
 
-### e — aggressive_concurrency
-- 0 entries, 0 exits. Same Friday-gate as (a).
+## Cross-config comparison
 
-### f — daily_rebalance
-- **5 entries** opened on 2026-04-27 (day 1), marked at $0 on entry.
-- **0 exits** by end of 2026-04-28 (day 2): asymmetry-decay threshold not crossed; max-holding 22 business days not reached.
-- Day-2 mark: **-$595,075 unrealized** across 5 positions ≈ -**5.95 bp** on $100k bpv/trade. Negative one-day mark on entry day is consistent with the round-trip cost being booked at exit (cost not yet realised here) plus mark-to-curve drift.
-- Top winners / losers: empty (no closed positions).
-- Exit-reason histogram: empty.
+See the "Headline ranking" table above. The single non-zero row is `f_daily_rebalance`.
 
-## Observations / caveats
+## Observations
 
-- **Barchart 429 storms dominate cache priming.** The screener fan-outs ~270 parallel HTTP requests (12 contracts × 60d minute bars + 12 SABR smiles + EOD daily candles) per uncached as_of. The first wave triggers per-token rate limiting (HTTP 429 on ~78% of requests in the first 30 s); the screener's exponential retry recovers but at ~18 min per snapshot it's the dominant cost. **Recommendation:** add a `pacer` config knob on `SFRMarketData.load_market_data` that serialises Barchart calls with a 200-500 ms gap between contracts; the cache priming step is overwhelmingly the ROI driver for this backtest.
-- **Joint calibration falls back when smile as_of dates disagree.** Log shows `Joint calibration failed; falling back to copula only: All smiles in extract_joint() must share the same as_of date` on 2026-04-28 because most contract smiles were stale (fallback to 2026-04-27 OHLC). The screener handles it by skipping the COMMON_STATE method and using HISTORICAL_GAUSSIAN_COPULA instead. The signal table still produces signals so the backtest doesn't stall — but the asymmetry magnitudes on stale dates should be treated with caution.
-- **Outrights vs joint structures.** Cannot conclude from a 2-day window whether outrights or joint structures beat each other on realized P&L. The screener's *theoretical* asymmetry rankings on these 2 dates put outrights at the top (consistent with the JPM-method tail amplification thesis) but realised return distributions over a single overnight mark are essentially noise.
-- **JPM tail amplification → realized P&L.** Untestable on this data. Needs a multi-week window and at least one FOMC event inside the window.
-- **0.5 bp round-trip cost assumption.** Tighten to venue-specific bid-ask before sizing live trades.
+- **JPM-method tail amplification → realized P&L:** consistent with the working hypothesis. The three outrights at the top of the screener's asymmetry ranking on 2026-03-30 (SFRU26, SFRZ26, SFRH27 — all PAY, asym 1.5–2.6) all exited positive. The two calendars near the asymmetry threshold (1.7) closed roughly flat. **Caveat:** sample size 5, no FOMC inside window.
+- **Outrights dominated joint structures.** The outright PAY trades booked ~$10.5 M apiece while both calendar trades closed within ±$300. Whether that's the screener's edge or the unit mismatch (next bullet) is the open question.
+- **Suspect P&L unit mismatch.** $10.5 M on a $100k-bpv outright would imply a **105 bp** rate move in 22 days — implausible. The screener's `IRSwapQuery` builder sets `bpv = sign × leg.weight × bpv` for outrights; the engine's `value_position` then computes MTM via `IRSwapValue.RATE` against the curve. Either:
+  - `bpv` is being interpreted in `$/%` rather than `$/bp` (× 100 unit mismatch), or
+  - The `IRSwapValue.RATE` path returns a rate change in `%` and the engine multiplies by `bpv` directly.
+  Both possibilities trace through `BT.position_handler` and would benefit from a follow-up review against a known-good single-leg PnL calculation. The Sharpe / win rate are unaffected (linear scaling), but the maxDD / finalMTM dollar values should be divided by ~100 before sizing live.
+- **All 5 closed positions exited via `max_holding`.** That's expected: the cache only has signals on Mar 30/31, Apr 27/28, so `_exit_signal_fn`'s asymmetry-decay branch had no per-day signals to compare against during the open window. With a denser cache the decay path will fire.
+- **TP/SL never fired.** The `_position_pnl_bp` short-circuit returns `None` whenever `> 1` position is open (portfolio MTM is not decomposable per-position in the current engine), so the take-profit / stop-loss branches are no-ops on multi-position runs. Per-position MTM hooks would let those exits fire for `max_concurrent > 1` configs.
+- **Cache priming is the entire bottleneck.** Two attempts (in-session and overnight) confirmed ~25–30 minutes per uncached as_of under live Barchart rate limiting, with the first fan-out hitting ~80 % HTTP 429 in the first 30 seconds. The cached-only run shown here completed all 6 configs over 22 BDs in **64 seconds**.
+- **Joint calibration falls back to copula-only on stale-smile dates.** Logs show `Joint calibration failed; falling back to copula only: All smiles in extract_joint() must share the same as_of date` on 2026-04-28 because most contract smiles fell back to 2026-04-27 OHLC. The signal still produces (HISTORICAL_GAUSSIAN_COPULA path), but the asymmetry magnitudes on stale dates should be treated with caution.
 - **Default rolldown horizon is 1m.** SR3 IMM-IMM 3M schedule collapses on 3m (effective == termination); 1m is the safe default.
+- **0.5 bp round-trip cost assumption.** Tighten with venue-specific bid-ask before sizing live.
 
-## Top 3 winners / losers — empty
+## Cross-config comparison table
 
-No closed positions. Re-run with longer window after cache prime.
+| name | Sharpe | MaxDD | WinRate | Trades | AvgHoldDays |
+|---|---|---|---|---|---|
+| a_outright_conservative | — | 0 | — | 0 | — |
+| b_calendar_only | — | 0 | — | 0 | — |
+| c_butterfly_only | — | 0 | — | 0 | — |
+| d_all_structures_default | — | 0 | — | 0 | — |
+| e_aggressive_concurrency | — | 0 | — | 0 | — |
+| f_daily_rebalance | 0.77 | -90.4 M | 80 % | 5 | 22.0 |
 
-## Cache priming hand-off
+## Recommendation
+
+1. **First:** chase down the suspected `IRSwapValue` unit mismatch — divide the `f` realised P&L numbers by ~100 and see whether they line up with a manual `bpv × Δrate(bp)` calculation on the SFRU26 / SFRZ26 / SFRH27 closes between 2026-03-30 and 2026-04-21. That one-line follow-up unblocks every other interpretation.
+2. **Second:** prime the cache out-of-session over a 6-month range (the in-session run hit 25 min / uncached as_of with the proxy in its hot rate-limit state; expect ~6–8 hours wall against fewer-throttled tokens). Once primed, `scripts/run_screener_backtest_grid.py` runs all 6 configs in <2 minutes total.
+3. **Third:** with a populated cache and a verified P&L unit, focus on `d_all_structures_default` as the broadest baseline; compare against `a_outright_conservative` to test whether the JPM-method tail amplification on outrights *only* survives realised-data scrutiny.
+4. **Fourth:** add per-position MTM hooks to `BT.query_engine.QueryDrivenBacktest` so the TP/SL exit branches fire for `max_concurrent > 1` configs. Right now they're effectively dead code outside the single-position case.
+
+## Reproduction
 
 ```bash
-# In a fresh session (out of throttled state), prime the 6-month cache.
-# This will block ~30 hours wall-time at 18 min per uncached as_of with the
-# current parallel-fetch behaviour. Schedule as a background `screen`/`tmux`
-# job and let it run overnight.
+# 1) prime the cache (slow — Barchart 429 storms)
+conda run -n stir python scripts/prime_screener_cache.py \
+    --start 2025-10-28 --end 2026-04-28
 
-conda run -n stir python -c "
-import datetime, pandas as pd
-from RVUtils.SFRConvexScreener import SFRConvexScreenerConfig
-from RVUtils.SFRConvexScreener._backtest_cache import SnapshotCache, load_or_build_many
-from RVUtils.SFRConvexScreener.screener import build_snapshot
-from RVUtils.SFRConvexScreener.backtest import _config_summary_for_cache
-
-cfg = SFRConvexScreenerConfig(universe_size=12, jpm_method=True)
-cache = SnapshotCache(root='data/screener_results/sfr_convex_screener_backtest_cache')
-dates = sorted(d.date() for d in pd.bdate_range('2025-10-28', '2026-04-28'))
-load_or_build_many(
-    dates=dates, cache=cache,
-    build_fn=lambda d: build_snapshot(cfg, as_of=d),
-    config_summary=_config_summary_for_cache(cfg),
-    show_progress=True,
-)
-"
-
-# Then drive the grid against the populated cache (each config runs in ~1 s):
+# 2) drive the full grid against the populated cache
 conda run -n stir python scripts/run_screener_backtest_grid.py \
     --start 2025-10-28 --end 2026-04-28 --max-config-minutes 60
+
+# OR (if some dates are missing) drive only on the cached subset
+conda run -n stir python scripts/run_screener_backtest_cached_only.py \
+    --start 2025-10-28 --end 2026-04-28
 ```
 
-The script writes per-config CSVs (`trades.csv`, `mtm_history.csv`, `summary.json`, `backtest.pkl`) to `data/screener_results/sfr_convex_screener_backtest_grid/<config>/` and an aggregate `grid_summary.json` for the top-level comparison table.
+Per-config artefacts land in `data/screener_results/sfr_convex_screener_backtest_grid/<config>/`:
 
-## What this report does **not** answer
+- `trades.csv` — closed-position log (opened, closed, days, realized_pnl, structure_id, direction, asymmetry, exit_reason)
+- `mtm_history.csv` — daily MTM in USD
+- `summary.json` — Sharpe / DD / win-rate / exit-reason histogram / top-3 winners + losers
+- `backtest.pkl` — pickled `{trades_df, mtm_series, summary}` for downstream analysis
 
-- Realised Sharpe / win rate / hit rate per config — requires a 6-month or longer window with closed positions.
-- JPM-method tail amplification → realised P&L thesis — needs realized data spanning at least one FOMC.
-- Outright vs joint-structure dominance — same.
-- Whether the asymmetry-decay exit threshold (1.10) is too tight or too loose — needs a closure-rich sample.
+A grid-level `grid_summary.json` is written at the root.
 
-These are gated on the cache priming step above. The implementation pipeline (`_backtest_cache`, `_backtest_signals`, `_backtest_query`, `_backtest_triggers`, `backtest.run_backtest`) is fully verified by the 30 passing unit tests plus the live config-`f` open-position run reported here.
+## Caveats / open questions
 
-## Recommendation for which config to consider further
+- **Realised P&L magnitude.** As above, $10.5 M per outright × 22 BD is implausible without a unit mismatch. Investigate before acting on the data.
+- **Sample size.** 5 closed trades is statistically meaningless — the 80 % win rate could flip to 20 % with one more sample.
+- **No FOMC inside window.** The screener's tail-amplification thesis is largely about FOMC-reaction tails. Need a window with at least one FOMC announcement to test.
+- **`IRSwapStructure.SPREAD` unused.** Calendars use `IRSwapStructure.CURVE` (matches existing convention; SPREAD delegates to outright builder per `Query/IRSwaps/IRSwapStructure.py:63`).
+- **Round-trip cost assumption.** Flat 0.5 bp; tighten with venue-specific bid-ask before sizing.
 
-Inconclusive from this data. With the cache primed:
+## What this report still does **not** answer
 
-1. Start with **`d_all_structures_default`** as the baseline — it's the broadest sampling of the screener's output.
-2. Compare against **`a_outright_conservative`** to test whether the JPM-method tail amplification on outrights translates to realised P&L vs the joint structures.
-3. Use **`f_daily_rebalance`** as a stress test for entry-side throughput and per-position MTM behaviour.
-4. Reserve **`e_aggressive_concurrency`** for the final sweep — its `entry_min_asymmetry=1.2` gates produce the noisiest tails of the screener output.
+- Realised Sharpe / win-rate at 6-month statistical significance — gated on cache priming.
+- Whether outrights beat joint structures on realised data once the unit mismatch is resolved.
+- Whether the asymmetry-decay exit threshold is appropriately tuned — needs a denser signal table to fire that branch.
