@@ -41,18 +41,22 @@ The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-t
 | `d7038c9` | fixed | wired (`083700a`) | midnight (script bug) | −$19.71 M (×2 magnitude vs manual) | −$4.16 M |
 | `477df5e` | fixed | wired | **17:00 NY EOD** | −$13.31 M (matches manual remark) | **−$2.03 M** |
 
-### Configuration ranking (cached-only, 22-BD window, post all fixes)
+### Configuration ranking (cached-only, 22-BD window, post all fixes; cache = 5 dates including 2026-04-24 Friday)
 
-| name | trades | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+| name | closed | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
 |---|---|---|---|---|---|---|---|---|
-| `a_outright_conservative` | 0 | 0 | — | 0 | 0 | — | — | 0.04 |
-| `b_calendar_only` | 0 | 0 | — | 0 | 0 | — | — | 0.003 |
-| `c_butterfly_only` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
-| `d_all_structures_default` | 0 | 0 | — | 0 | 0 | — | — | 0.004 |
-| `e_aggressive_concurrency` | 0 | 0 | — | 0 | 0 | — | — | 0.002 |
-| `f_daily_rebalance` | **5** | **5** | **−3.22** | **−14,244,274** | **−13,307,117** | **0 %** | **1.0** | 1.6 |
+| `a_outright_conservative` | 0 | 3 | 3.47 | 0 | **+529,790** | — | — | 0.5 |
+| `b_calendar_only` | 0 | 0 | — | 0 | 0 | — | — | 0.0 |
+| `c_butterfly_only` | 0 | 0 | — | 0 | 0 | — | — | 0.0 |
+| `d_all_structures_default` | 0 | 5 | 3.47 | 0 | **+883,122** | — | — | 0.3 |
+| `e_aggressive_concurrency` | **1** | 9 | 3.47 | 0 | **+1,941,380** | 100 % | 3.0 | 0.5 |
+| `f_daily_rebalance` | **6** | 5 | −3.18 | −14,244,274 | −13,189,453 | 16.67 % | 1.0 | 2.8 |
 
-The exit-reason histogram for `f_daily_rebalance` after the fixes: **`stop_bp` × 5** (every position exited at the −15 bp stop on day 2). Pre-fix the same trades exited via `max_holding × 5` because the (now-fixed) per-position pricer never fired.
+After the 2026-04-24 Friday landed in the cache, configs (a)/(d)/(e) which gate on `rebalance_dow=4` finally fire entries. All three have 0 closed trades and positive unrealized PnL because the Friday open is still open at end-of-window.
+
+`e_aggressive_concurrency` closed one butterfly trade (SFRZ26_SFRM27_SFRZ27_FLY_1_-2_1, PAY wings / RECEIVE belly) opened 2026-04-24 and exited 2026-04-27 via `asymmetry_decay` — realised +$352,238 over 3 days. The remaining 9 positions (5 outrights + 2 calendars + 2 flies) are unrealised positive at +$1.94 M total.
+
+`f_daily_rebalance` had 6 closed trades (5 from 3/30, 1 added when 4/24 cleared the Friday-only filters) and 5 open. The 3/30 cohort all exited via `stop_bp` on day 2 = -$14.24 M loss; the day-1 4/24 trade closed via `asymmetry_decay` for a small profit; net realized -$13.19 M with 5 still open.
 
 Configs (a)–(e) all use `rebalance_dow=4` (Friday). The cache holds Mon/Tue dates only (no Friday inside the window), so the entry trigger correctly returns `TriggerInfo(False)` on every step. Once a Friday lands in the cache the same configs will fire — the wiring is verified by `f`.
 
