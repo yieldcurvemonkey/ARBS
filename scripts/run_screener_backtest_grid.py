@@ -62,12 +62,13 @@ def _make_screener_cfg() -> SFRConvexScreenerConfig:
 
 
 def _bt_datetimes(start: datetime.date, end: datetime.date) -> List[datetime.datetime]:
-    bdates = pd.bdate_range(
-        NYC.localize(datetime.datetime.combine(start, datetime.time(17, 0))),
-        NYC.localize(datetime.datetime.combine(end, datetime.time(17, 0))),
-        tz=NYC,
-    )
-    return [d.to_pydatetime() for d in bdates]
+    # pd.bdate_range normalises to midnight regardless of input time, so
+    # produce business dates first then attach 17:00 NYC EOD timestamps.
+    bdates = pd.bdate_range(start, end)
+    return [
+        NYC.localize(datetime.datetime.combine(d.date(), datetime.time(17, 0)))
+        for d in bdates
+    ]
 
 
 def _grid_configs() -> Dict[str, SFRScreenerBacktestConfig]:
