@@ -157,26 +157,44 @@ def _signal_table_by_tag(sigs: List[BacktestSignal]) -> Dict[str, BacktestSignal
     return {f"sfr_screener_{s.structure_def.structure_id}": s for s in sigs}
 
 
-def _position_pnl_bp(pos: Any, backtest: Any, bpv: float) -> Optional[float]:
-    """Approximate position MTM in bp using the engine's mtm_history.
+def _position_pnl_bp(pos: Any, backtest: Any, bpv: float, now: Any = None) -> Optional[float]:
+    """Per-position MTM in bp via the engine's pricer.
 
-    Returns None on any data shape mismatch or when more than one position
-    is open (per-position decomposition isn't available without per-position
-    MTM hooks). Callers treat None as "TP/SL not evaluable" and skip those
-    exit conditions.
+    Uses the position's PositionHandler to value the position at ``now`` and
+    divides by ``bpv``. Position NPV at construction is 0 (par swap), so
+    NPV at ``now`` = realized + unrealized P&L expressed in dollars; dividing
+    by bpv ($/bp) yields the move in bp.
+
+    Falls back to the portfolio-level mtm_history short-circuit (single-
+    position only) on any pricer exception so the rest of the pipeline
+    keeps moving.
     """
-    try:
-        mtm_history = getattr(backtest, "mtm_history", {}) or {}
-        if not mtm_history or bpv <= 0:
-            return None
-        n_open = len(getattr(backtest.portfolio, "positions", []) or [])
-        if n_open != 1:
-            return None
-        latest_dt = max(mtm_history.keys())
-        portfolio_pnl_dollar = float(mtm_history[latest_dt])
-        return portfolio_pnl_dollar / float(bpv)
-    except Exception:
+    if bpv <= 0:
         return None
+    try:
+        engine_now = now if now is not None else getattr(backtest, "_now", None)
+        if engine_now is None:
+            return None
+        h = backtest._handler_for_position(pos)
+        npv = h.value_position(
+            pos,
+            lambda q: backtest._pricer_for_query(q, engine_now),
+            engine_now,
+            backtest,
+        )
+        return float(npv) / float(bpv)
+    except Exception:
+        try:
+            mtm_history = getattr(backtest, "mtm_history", {}) or {}
+            if not mtm_history:
+                return None
+            n_open = len(getattr(backtest.portfolio, "positions", []) or [])
+            if n_open != 1:
+                return None
+            latest_dt = max(mtm_history.keys())
+            return float(mtm_history[latest_dt]) / float(bpv)
+        except Exception:
+            return None
 
 
 def _exit_signal_fn(table, config):
@@ -211,10 +229,10 @@ def _exit_signal_fn(table, config):
                     if edge < config.exit_asymmetry_threshold:
                         exit_reason = "asymmetry_decay"
 
-            # 2. Take profit / stop loss via mtm_history
+            # 2. Take profit / stop loss via per-position pricer
             if exit_reason is None and (config.exit_take_profit_bp is not None
                                          or config.exit_stop_loss_bp is not None):
-                pnl_bp = _position_pnl_bp(pos, backtest, config.bpv_per_trade)
+                pnl_bp = _position_pnl_bp(pos, backtest, config.bpv_per_trade, now=state)
                 if pnl_bp is not None:
                     if (config.exit_take_profit_bp is not None
                             and pnl_bp >= config.exit_take_profit_bp):

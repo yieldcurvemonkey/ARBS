@@ -233,6 +233,50 @@ def test_exit_trigger_flip_inverts_decay_direction():
     assert info.info[UnwindPositionsAction][0].meta["reason"] == "asymmetry_decay"
 
 
+def test_exit_trigger_take_profit_uses_per_position_pricer():
+    """exit_take_profit_bp fires off per-position pricer, not portfolio mtm."""
+    from RVUtils.SFRConvexScreener._backtest_triggers import build_exit_trigger
+
+    sd = StructureDef(
+        structure_id="X",
+        structure_type=StructureType.OUTRIGHT,
+        legs=(Leg("SFRZ26", 1.0, 96.5, 25),),
+    )
+    table = {
+        datetime.date(2026, 5, 5): [BacktestSignal(
+            as_of=datetime.date(2026, 5, 5), structure_def=sd, direction="PAY",
+            flip=False, asymmetry_ratio=3.0, composite_score=0.0,
+            mean_bp=0.0, std_bp=10.0, rolldown_bp=0.0, carry_3m_bp=350.0,
+            is_stale=False,
+        )]
+    }
+    cfg = SFRScreenerBacktestConfig(
+        exit_asymmetry_threshold=None,
+        exit_take_profit_bp=10.0,
+        exit_max_holding_days=99,  # don't fire max_holding
+        bpv_per_trade=100_000.0,
+    )
+    trig = build_exit_trigger(table, cfg)
+
+    bt = MagicMock()
+    pos1 = _exit_pos("X", opened=pd.Timestamp("2026-04-28"))
+    pos2 = _exit_pos("Y", opened=pd.Timestamp("2026-04-28"))
+    bt.portfolio.positions = [pos1, pos2]  # 2 open -> portfolio mtm fallback would skip
+    bt.mtm_history = {}
+    bt._now = datetime.datetime(2026, 5, 5, 17, 0)
+    # Pricer mock returns NPV = +1.5 M for pos1 (15 bp on $100k) -> tp_bp fires
+    handler = MagicMock()
+    handler.value_position.return_value = 1_500_000.0
+    bt._handler_for_position.return_value = handler
+    bt._pricer_for_query.return_value = MagicMock()
+
+    info = trig.has_triggered(datetime.datetime(2026, 5, 5, 17, 0), backtest=bt)
+    assert bool(info) is True
+    reasons = [u.meta["reason"] for u in info.info[UnwindPositionsAction]]
+    # Both positions priced via per-position pricer; both above threshold -> tp_bp
+    assert all(r == "tp_bp" for r in reasons)
+
+
 def test_exit_trigger_no_open_positions_returns_false():
     cfg = SFRScreenerBacktestConfig()
     trig = build_exit_trigger({}, cfg)
