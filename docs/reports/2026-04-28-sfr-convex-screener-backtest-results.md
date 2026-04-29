@@ -41,7 +41,7 @@ The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-t
 | `d7038c9` | fixed | wired (`083700a`) | midnight (script bug) | −$19.71 M (×2 magnitude vs manual) | −$4.16 M |
 | `477df5e` | fixed | wired | **17:00 NY EOD** | −$13.31 M (matches manual remark) | **−$2.03 M** |
 
-### Configuration ranking (cached-only, 22-BD window, post all fixes; cache = 5 dates including 2026-04-24 Friday)
+### Configuration ranking (cached-only, 22-BD window, post all fixes; cache = 7 dates: 3/30, 3/31, 4/22, 4/23, 4/24, 4/27, 4/28)
 
 | name | closed | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
 |---|---|---|---|---|---|---|---|---|
