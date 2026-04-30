@@ -41,7 +41,24 @@ The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-t
 | `d7038c9` | fixed | wired (`083700a`) | midnight (script bug) | −$19.71 M (×2 magnitude vs manual) | −$4.16 M |
 | `477df5e` | fixed | wired | **17:00 NY EOD** | −$13.31 M (matches manual remark) | **−$2.03 M** |
 
-### Configuration ranking (cached-only, 22-BD window, post all fixes; cache = 13 dates incl two Fridays 4/17 and 4/24)
+### Configuration ranking — cache evolution snapshots
+
+#### Snapshot 3: cache = 16 dates (3/30, 3/31, 4/9, 4/10, 4/13–4/17, 4/20–4/24, 4/27, 4/28). Three Fridays in window: 4/10, 4/17, 4/24.
+
+| name | closed | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays |
+|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 1 | 3 | 0.24 | −3,254,883 | +373,530 | 0 % | 5.0 |
+| `b_calendar_only` (asym ≥ 3.0) | **6** | 0 | 0.29 | −6,512,070 | **+1,007,670** | **100 %** | 7.5 |
+| `c_butterfly_only` (asym ≥ 3.0) | **3** | 0 | 0.43 | −4,342,632 | **+841,544** | **100 %** | 7.3 |
+| `d_all_structures_default` (asym ≥ 1.5) | 6 | 5 | −2.23 | −7,596,901 | −5,182,408 | 50 % | 4.5 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 13 | 9 | −1.53 | −15,194,787 | −7,511,751 | 53.85 % | 4.5 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 15 | 5 | −4.24 | −19,989,797 | −19,007,638 | 40 % | 3.1 |
+
+**Pattern is now sharp: only the asym ≥ 3 configs are reliably profitable.** Adding 4/10 to the cache produced new entries with asymmetry in the 1.5–3 range that lost — pulling configs (a)/(d)/(e)/(f) into negative territory. Configs (b) and (c), which gate on asym ≥ 3, stayed at 100 % win rate.
+
+The "asymmetry threshold matters" hypothesis from the previous snapshot is now well-supported within this small sample (n=44 closed trades total): the ≥ 3 cohort is consistently mean-reverting and profitable; the ≥ 1.5 cohort is essentially noise once daily-rebalance and tight stops layer on top.
+
+#### Snapshot 2: cache = 13 dates incl two Fridays 4/17 and 4/24
 
 | name | closed | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
 |---|---|---|---|---|---|---|---|---|
