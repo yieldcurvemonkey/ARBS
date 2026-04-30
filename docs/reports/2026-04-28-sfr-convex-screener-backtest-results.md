@@ -473,6 +473,43 @@ adverse marks. Same recommendation as before: **decouple decay exit
 from the holding clock** — add a min-holding-days guard or replace the
 decay rule with a realised-PnL TP/SL.
 
+#### Cache evolution snapshot — listed_cache = 50, window 2026-02-18 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 11 | 3 | −3.31 | −34,981,384 | **−31,170,845** | 36 % | 10.8 | 5.8 |
+| `b_calendar_only` (asym ≥ 3) | 24 | 2 | −0.97 | −574,788,822 | **−267,335,653** | **62 %** | 10.6 | 4.4 |
+| `c_butterfly_only` (asym ≥ 3) | 22 | 0 | −3.19 | −71,246,083 | −64,799,323 | 50 % | 4.5 | 3.2 |
+| `d_all_structures_default` (asym ≥ 1.5) | 28 | 3 | −3.20 | −69,522,080 | −65,859,048 | 50 % | 7.5 | 6.2 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 58 | 8 | −3.56 | −154,220,695 | −146,369,519 | 43 % | 7.1 | 9.9 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 40 | 5 | −3.32 | −208,267,227 | −206,449,603 | 45 % | 6.0 | 9.0 |
+
+Doubling the window (25 BDs → 50 BDs, now spanning 2026-02-18 → 2026-04-28)
+**doubles the number of trades and roughly doubles the magnitude of every
+finalMTM**. The pattern is consistent: high asymmetry signals still
+reliably mean-revert (b_calendar_only winRate 50 % → 62 %, the highest
+in the table), but a few outlier losers (4–10x the typical winner) drag
+every config negative. The maxDD on b_calendar_only at −$575 M is more
+than 2x the finalMTM, so the headline P&L is partially recovering the
+intra-window drawdown — but the cohort is still a structurally net
+loser at this size and stop-loss-free configuration.
+
+`f_daily_rebalance` widens its loss most dramatically (−$13.6 M → −$206 M
+× 15.2x for a 2x window growth) — daily-rebalance entries on every
+asym ≥ 1.5 signal mean the marginal-edge cohort gets enormous gross
+exposure, and the −15 bp stop fires on most of those positions on day
+2. The 25-day window's prior session result for f was actually +$3.1 M
+(cache=13), which captured 3 strong Friday cohorts; once the cache
+extends back into the 2026-02 cohort the screener emits a flood of
+asym 1.5–2.5 calendars/flies that haven't yet shown the same edge.
+
+**Headline takeaway at cache=50**: the asym ≥ 3.0 cohort (b, c) has the
+highest winRate but is dominated by tail losses; the asym ≥ 1.5/1.2
+cohorts (d, e, f) lose more reliably. None of the six configs is
+backtest-positive over the 2026-02 → 2026-04 window. The 4/3 catastrophe
+findings from the previous session generalise — there are several
+similarly-sized cohorts in the wider window.
+
 ## Reproduction
 
 ```bash
