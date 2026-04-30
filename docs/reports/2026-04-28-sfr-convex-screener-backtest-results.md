@@ -396,11 +396,35 @@ densities (calendar / butterfly), inflating the asymmetry ratio. ATM-
 driven outrights are essentially unaffected (e.g. SFRZ26: listed 2.92,
 sparse 1.78).
 
-**Verdict — pending.** A cleaner check is queued for 2026-04-21 (the
-legacy pickle has 0 warnings, so the comparison is methodology-vs-
-methodology rather than methodology-vs-degraded). If the same
-fly-asymmetry blow-up reproduces on a clean baseline, the sparse default
-will be reverted to `listed` and the prime restarted.
+**Verdict — sparse default reverted to `listed` (commit `74a5500`).**
+The sparse top-5 had **zero overlap** with the listed top-5 (sparse: all
+flies/calendars; listed: all outrights). Per Phase 1D's methodology-
+preservation rule, the default is reverted to `listed`. Sparse remains
+opt-in via `SFRConvexScreenerConfig(smile_strike_mode='delta_sparse')`
+for callers that prioritise outright-only screens (where the difference
+is ≤ 5–10 %) and accept the wing-mass blow-up on multi-leg structures.
+
+The Phase 1.5 COMMON_STATE drop stays in — it's orthogonal to smile
+mode and the only realistic way to keep per-date wall time inside the
+session budget.
+
+### Phase 2 — re-prime under listed mode + (HGC, PC) joint_methods
+
+After the sparse-default revert, the prime runs `--reverse` from
+2026-04-28 backwards under `smile_strike_mode='listed'` +
+`joint_methods=(HGC, PC)`. New cache hash for default 2026-04-28:
+`ae57a6143fe6` (distinct from the legacy `60855039beb3`, the listed +
+joint-aware `0f01260c0d8f`, and the sparse + joint-aware
+`5ded8df5b691`). All 22 legacy pickles + 1 sparse pickle from the
+earlier prime attempts stay on disk but are unreachable through
+current code paths; they're still readable via `_inspect_pickle.py`
+and `_check_smile_mode_parity.py --listed-hash <hash>` if needed.
+
+Realistic coverage in this session's wall budget: **~80–150 dates**
+(per-date wall time is dominated by smile fan-out + occasional 429
+retry storms; without COMMON_STATE the joint-calibration penalty is
+gone, so this is a hard improvement over the previous session's
+12.5h/22 dates).
 
 ## Reproduction
 
