@@ -41,7 +41,48 @@ The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-t
 | `d7038c9` | fixed | wired (`083700a`) | midnight (script bug) | −$19.71 M (×2 magnitude vs manual) | −$4.16 M |
 | `477df5e` | fixed | wired | **17:00 NY EOD** | −$13.31 M (matches manual remark) | **−$2.03 M** |
 
-### Configuration ranking — cache evolution snapshots
+### **🏁 Final ranking — full daily cache primed (22 dates, 12.5 hours wall time)**
+
+| name | closed | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` (asym ≥ 2.0) | 1 | 3 | 0.24 | −3,254,883 | +373,530 | 0 % | 5.0 | 1.5 |
+| `b_calendar_only` (asym ≥ 3.0) | **10** | 0 | −4.55 | −47,651,206 | **−40,220,142** | 50 % | 7.4 | 1.8 |
+| `c_butterfly_only` (asym ≥ 3.0) | 4 | 0 | −1.05 | −7,384,808 | **−2,236,100** | 75 % | 6.5 | 1.0 |
+| `d_all_structures_default` (asym ≥ 1.5) | 11 | 5 | −4.50 | −22,908,266 | −20,573,570 | 27 % | 4.3 | 2.0 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | **23** | 9 | −3.99 | −38,135,731 | −30,594,567 | 30 % | 4.3 | 3.4 |
+| `f_daily_rebalance` (asym ≥ 1.5) | **19** | 5 | −5.81 | −30,179,907 | −28,464,404 | 21 % | 3.7 | 5.7 |
+
+**Every config is a net loser on this 22-BD period.** The earlier sparse-cache "100 % win rate" was an artefact: with sparse signals, the asymmetry-decay exit could only fire on the few cached dates, often missing the adverse rate moves between them. With every business day's signal in the cache, the exit fires more aggressively and crystallises losses early.
+
+#### What blew up: the 2026-04-03 Friday cohort
+
+The screener emitted **extremely high-asymmetry calendar signals** on 2026-04-03 (entry asym 3.8 → 25.0!). All five ended up the largest losers in `b_calendar_only`:
+
+| structure | direction | entry asym | days held | realised |
+|---|---|---|---|---|
+| `SFRH28_SFRM28_CAL_1` | PAY H28 / RECEIVE M28 | **11.66** | 4 | **−$3,078,502** |
+| `SFRZ27_SFRZ28_CAL_4` | PAY Z27 / RECEIVE Z28 | 3.84 | 5 | **−$7,225,226** |
+| `SFRZ28_SFRH29_CAL_1` | PAY Z28 / RECEIVE H29 | **25.05** | 6 | **−$10,980,893** |
+| `SFRH28_SFRH29_CAL_4` | PAY H28 / RECEIVE H29 | **16.56** | 6 | **−$10,980,926** |
+| `SFRZ27_SFRM28_CAL_2` | PAY Z27 / RECEIVE M28 | 7.36 | 11 | **−$8,944,526** |
+
+All five exited via `asymmetry_decay` (asym dropped below 1.5) — the screener's *theoretical* signal moderated as expected, but **the realised rate move went against the position before the asymmetry collapsed**.
+
+This is the central observation of the run: the screener's option-implied tail asymmetry is **not** a directly predictive signal for short-horizon realised P&L. High-asym structures have a wide implied tail, but the actual rate path can run against the long-rate (or long-price) position long before the implied asymmetry mean-reverts.
+
+Subsequent Fridays (4/10, 4/17, 4/24) produced small wins (~$300 k each) — consistent with the previous sparse-cache snapshot — but those wins are dwarfed by the 4/3 catastrophe.
+
+### Recommendation
+
+The current config grid does **not** prove the screener generates real P&L. Open follow-ups before sizing live:
+
+1. **Decouple asymmetry-decay exit from the holding period.** The current rule (`asymmetry < 1.10`) exits regardless of realised PnL, so a high-asym entry whose asymmetry moderates while market rates run against it gets locked into a large loss. Add a "min holding days" guard, or replace the decay exit with a TP/SL that fires on realised PnL.
+2. **Investigate whether the 4/3 catastrophe is a regime issue or a screener bug.** The asym = 25 signal on `SFRZ28_SFRH29_CAL_1` is suspiciously large; its realised loss of $10.98 M on a $100 k bpv calendar implies a ~100 bp move on the spread, which is enormous. Check the cached snapshot's `metrics_by_method` and `iv_rv_diagnostics` for that date to see whether the input vols were stale or extrapolated past the asymptote.
+3. **Tighten / re-run the backtest grid over a 6-month window**: this 22-BD window is statistically meaningless.
+
+### Configuration ranking — cache evolution snapshots (audit trail)
+
+The report below preserves earlier intermediate runs as the cache primed, so the reader can see how the picture changed.
 
 #### Snapshot 3: cache = 16 dates (3/30, 3/31, 4/9, 4/10, 4/13–4/17, 4/20–4/24, 4/27, 4/28). Three Fridays in window: 4/10, 4/17, 4/24.
 
