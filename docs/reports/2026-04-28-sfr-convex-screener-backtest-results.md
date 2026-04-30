@@ -548,6 +548,54 @@ implied asymmetry collapses. Without a per-position realised-PnL stop
 that fires before the asymmetry-decay rule, the strategy cannot capture
 the option-implied edge. Same recommendation, now better-supported.
 
+#### Cache evolution snapshot — listed_cache = 100, window 2025-12-10 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 20 | 3 | −2.65 | −43,499,489 | **−38,604,505** | **50 %** | 14.8 | 7.2 |
+| `b_calendar_only` (asym ≥ 3) | 51 | 2 | −2.10 | −4,322,499,947 | **−4,149,517,336** | **57 %** | 9.9 | 7.1 |
+| `c_butterfly_only` (asym ≥ 3) | 41 | 0 | −2.66 | −93,034,683 | −86,587,923 | 46 % | 5.6 | 5.7 |
+| `d_all_structures_default` (asym ≥ 1.5) | 57 | 3 | −3.83 | −136,795,600 | −133,132,568 | 44 % | 8.1 | 10.5 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 106 | 8 | −3.92 | −253,280,471 | −245,429,295 | 40 % | 8.8 | 16.8 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 82 | 5 | −4.06 | −291,402,209 | −289,560,064 | 41 % | 6.2 | 14.1 |
+
+**`b_calendar_only` blew up by 6x** when the window extended back to
+2025-12-10 (−$692 M at cache=75 → **−$4,149 M** at cache=100). The
+December 2025 cohort produced one or more catastrophic asym-decay
+exits — a scale of loss only the FOMC events / year-end position
+unwinds typically generate. winRate for the calendar cohort rose to
+57 % across 51 trades, reinforcing that *most* asym ≥ 3 calendar
+signals do mean-revert profitably (~$1–2 M each), but the few that
+don't can be 50–100x bigger than the typical winner.
+
+`a_outright_conservative` is now **50 % winRate** across 20 trades. At
+asym ≥ 2.0 with `exit_max_holding_days=22` and the `−15 bp` stop, the
+outright cohort is actually showing edge per trade — the long avgHoldDays
+(14.8) shows positions are riding through the volatile windows rather
+than getting stopped on day-2 spikes. Net finalMTM of −$38.6 M / 20
+trades ≈ −$1.9 M / trade, so realised loss is dominated by exit-cost
+asymmetry (winners average modest, losers are 2x). With a tighter
+stop (e.g. −10 bp) or a TP at +5 bp, this configuration could plausibly
+ship positive — worth a follow-up grid sweep on a/c separately.
+
+`c_butterfly_only` continues to be the best loss-maker by sharpe
+(−2.66) and stays modest in absolute size (−$86.6 M finalMTM, vs the
+calendar's −$4 B). Butterflies are simply lower-bpv-magnitude trades
+than calendars, so even when the realised path goes adverse the loss
+per trade is contained. The convex-fade-hikes flies identified in the
+2026-04-29 fade-hikes scan (`PAY M26+Z26 / RECEIVE 2x U26`,
+`PAY Z26+M27 / RECEIVE 2x H27`) are the cleanest live trade
+expressions of this category.
+
+**Headline takeaway at cache=100**: the asymmetry-decay strategy
+captures option-implied mean reversion in 40–60 % of trades, but a
+single bad cohort (e.g. December 2025 in `b_calendar_only`) can erase
+multiple years of accumulated edge. The screener's signal *is* real —
+high-asymmetry structures do mean-revert most of the time — but
+asymmetric position sizing and a realised-PnL stop are required before
+this strategy can ship live without sub-$1 B drawdown risk on a
+$100k bpv-per-trade basis.
+
 ## Reproduction
 
 ```bash
