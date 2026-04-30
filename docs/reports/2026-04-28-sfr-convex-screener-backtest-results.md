@@ -271,20 +271,90 @@ Full unit suite green: `conda run -n stir pytest tests/test_sfr_convex_screener_
 3. **Third** add a `pacer` config to `RVUtils.SFRConvexScreener._market_data.load_market_data` so cache priming serialises gracefully under Barchart's per-token rate limit.
 4. **Fourth** with the engine fixed and a populated cache, run the grid over 6 months and revisit the JPM-method amplification thesis with reliable PnL.
 
+## 2026-04-30 follow-up — sparse 5-delta SABR smile
+
+Status: **in progress**. Cache prime currently running against the new
+`smile_strike_mode='delta_sparse'` default (commit `602efee`); see the
+"Phase 1 — sparse smile fetch" subsection below for the methodology and
+benchmark, and the "Phase 2 — re-prime" subsection for cache evolution.
+
+### Phase 1 — sparse smile fetch (commit `602efee`)
+
+The 22-BD prime in the previous session took ~34 min/date wall time
+because each `STIRFutureOptionMDP.fetch_sabr_smile` call fanned out to
+30–60 strike-level Barchart EOD requests, of which ~80 % returned HTTP
+429 in the first 30 s. The retry storms then dominated wall time. The
+Phase 1 fix adds a `smile_strike_mode` config field on
+`SFRConvexScreenerConfig` defaulting to `delta_sparse`, which omits the
+`strike_offsets_bps='listed'` token so `fetch_sabr_smile` falls back to
+its 5/10/.../50-delta call+put grid (~20 strikes/contract). This is
+folded into `_config_summary_for_cache` so old listed-mode pickles
+hash-mismatch and never silently mix into a new run.
+
+Benchmark on 2025-09-29 (single uncached as_of, 3 contracts, force_refresh):
+
+| mode | total_s | avg_per_contract_s | succeeded |
+|---|---|---|---|
+| `listed` | 188.6 | 62.9 | 2/3 (M26 failed: missing wing strikes after 429 retries exhausted) |
+| `delta_sparse` | 119.7 | 39.9 | 3/3 |
+
+Sparse mode is ~1.6x faster and **substantially more reliable** —
+listed-mode dead-wing strikes hit the retry budget before the SABR fit
+has enough valid points. This was the failure mode that dominated the
+22-BD prime: contracts with sparse OTM liquidity (H29 in particular)
+fell back to prior business days, recursing through the same fan-out.
+
+The first-attempted rate-limit fix (`max_requests_per_second=2`) made
+listed mode worse on contracts whose retry budget was already tight —
+slowing requests further pushed retries past `max_attempts`. Reverted.
+The sparse mode change is the only Phase 1 ship.
+
+Bench harness: [scripts/_bench_smile_fetch.py](scripts/_bench_smile_fetch.py)
+
+### Phase 2 — re-prime under sparse mode
+
+The sparse-mode default invalidates every existing cache pickle (the 22
+listed-mode dates from the previous session live on disk under hash
+`60855039beb3` but no current config produces that hash, so they are
+orphaned). The new prime runs `--reverse` from 2026-04-28 backwards
+across the full 1,649-business-day window 2020-01-02 → 2026-04-28.
+Wall budget for this session is ~20 hours; at the observed ~13 min/date
+pace (smile fan-out ≈ 7 min, then BL/joint/metrics ≈ 5 min CPU-bound),
+realistic coverage is **~80–120 dates** within that budget.
+
+Cache evolution snapshots will be appended as the prime hits milestones
+(every 25 newly cached dates).
+
+#### Methodology parity check (sparse vs legacy listed @ 2026-04-28)
+
+To be filled in once the 2026-04-28 sparse-mode pickle lands. See
+[scripts/_check_smile_mode_parity.py](scripts/_check_smile_mode_parity.py)
+— it loads the new sparse pickle and the legacy listed pickle (by
+`--listed-hash 60855039beb3`) and reports top-K composite-score overlap
+plus per-structure asymmetry_ratio diff distribution.
+
 ## Reproduction
 
 ```bash
 # 1) prime the cache (slow — Barchart 429 storms; allow many hours)
 conda run -n stir python scripts/prime_screener_cache.py \
-    --start 2025-10-28 --end 2026-04-28 --reverse
+    --start 2020-01-02 --end 2026-04-28 --reverse
 
 # 2) drive the full grid against the populated cache
 conda run -n stir python scripts/run_screener_backtest_grid.py \
-    --start 2025-10-28 --end 2026-04-28 --max-config-minutes 60
+    --start 2020-01-02 --end 2026-04-28 --max-config-minutes 60
 
 # OR drive only on the cached subset (current data)
 conda run -n stir python scripts/run_screener_backtest_cached_only.py \
-    --start 2025-10-28 --end 2026-04-28
+    --start 2020-01-02 --end 2026-04-28
+
+# inspect a cache pickle directly (no hash-key lookup)
+conda run -n stir python scripts/_inspect_pickle.py \
+    data/screener_results/sfr_convex_screener_backtest_cache/<file>.pkl
+
+# compare sparse vs legacy listed pickle for a single date
+conda run -n stir python scripts/_check_smile_mode_parity.py \
+    --as-of 2026-04-28 --listed-hash 60855039beb3
 ```
 
 Per-config artefacts land in `data/screener_results/sfr_convex_screener_backtest_grid/<config>/`. A grid-level `grid_summary.json` is written at the root.
@@ -293,8 +363,12 @@ Per-config artefacts land in `data/screener_results/sfr_convex_screener_backtest
 
 | Script | Purpose |
 |---|---|
+| `scripts/_bench_smile_fetch.py` | Time `fetch_sabr_smile` under listed vs delta_sparse modes |
 | `scripts/_check_bpv_unit.py` | Verify PV01 == bpv at construction (NPV-at-par = 0) |
 | `scripts/_check_curve_dates.py` | Confirm the curve actually differs across as_of dates |
 | `scripts/_check_remark.py` | Manual remark of a position vs engine's value_position |
 | `scripts/_check_resolve_pricable.py` | Isolate the `resolve_pricable` sign flip |
 | `scripts/_check_realized_pnl.py` | End-to-end NPV trace (open / mid / close) |
+| `scripts/_check_smile_mode_parity.py` | Compare sparse vs listed snapshots for a single date |
+| `scripts/_inspect_pickle.py` | Print as_of + top-K by composite_score for any cache pickle |
+| `scripts/_show_cache_hashes.py` | Show the listed vs delta_sparse cache filename hashes |
