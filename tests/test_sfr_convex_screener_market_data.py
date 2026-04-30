@@ -34,10 +34,11 @@ def test_load_market_data_smoke():
     assert md.price_panel.shape[0] >= cfg.correlation_window // 2
 
 
-def test_smile_strike_mode_default_is_delta_sparse():
-    """Default config picks the sparse 5-delta grid (≈20 strikes/contract)."""
+def test_smile_strike_mode_default_is_listed():
+    """Default config picks the full CME-listed strike grid for methodology
+    parity with the previous-session prime. Sparse mode is opt-in only."""
     cfg = SFRConvexScreenerConfig()
-    assert cfg.smile_strike_mode == "delta_sparse"
+    assert cfg.smile_strike_mode == "listed"
 
 
 def test_smile_strike_mode_delta_sparse_omits_strike_offsets():

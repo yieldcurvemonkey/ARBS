@@ -61,10 +61,16 @@ class SFRConvexScreenerConfig:
     # SABR smile fetch strategy. ``listed`` pulls every CME-listed strike
     # within the 250bp ATM cap (≈30–60 strikes/contract); ``delta_sparse``
     # pulls the 5/10/.../50-delta C+P grid (≈20 strikes/contract). The
-    # sparse path is ~2–3x faster end-to-end against live Barchart and
-    # produces a SABR fit that's well-conditioned for ATM-driven structures
-    # — the wings are extrapolated by the SABR functional form anyway.
-    smile_strike_mode: str = "delta_sparse"
+    # sparse path is ~2x faster end-to-end against live Barchart but
+    # produces materially different rankings on calendars and butterflies
+    # because the 4th-order BL spline through 20 widely-spaced delta knots
+    # oscillates in the wings — verified on 2026-04-28 where sparse gave a
+    # M27/U27/Z27 fly asymmetry of 35.8 vs 0.97 from listed (same input
+    # contracts; ~50 strikes vs ~20 strikes is the only difference). The
+    # default stays at ``listed`` per the methodology-preservation
+    # requirement; sparse remains opt-in for callers that prioritise
+    # outright-only screens (where the difference is ≤ 5–10 %).
+    smile_strike_mode: str = "listed"
 
     # Joint distribution
     joint_methods: Tuple[JointMethod, ...] = (

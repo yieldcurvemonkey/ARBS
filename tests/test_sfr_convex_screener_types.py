@@ -35,7 +35,7 @@ def test_config_defaults():
     assert JointMethod.COMMON_STATE in cfg.joint_methods
     assert JointMethod.HISTORICAL_GAUSSIAN_COPULA in cfg.joint_methods
     assert cfg.score_weights == (0.4, 0.2, 0.3, 0.1)
-    assert cfg.smile_strike_mode == "delta_sparse"
+    assert cfg.smile_strike_mode == "listed"
 
 
 def test_structure_def_id_canonical():
