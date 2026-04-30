@@ -123,3 +123,26 @@ def test_config_summary_includes_smile_strike_mode():
     assert sum_a["smile_strike_mode"] == "listed"
     assert sum_b["smile_strike_mode"] == "delta_sparse"
     assert sum_a != sum_b
+
+
+def test_config_summary_includes_joint_methods():
+    """Cache hash must include joint_methods so a (HGC, PC) prime can't
+    silently mix with a (CS, HGC, PC) prime — they produce different
+    metrics_by_method dicts even though primary_method matches."""
+    from RVUtils.SFRConvexScreener import JointMethod
+    from RVUtils.SFRConvexScreener.backtest import _config_summary_for_cache
+
+    cfg_full = SFRConvexScreenerConfig(joint_methods=(
+        JointMethod.COMMON_STATE,
+        JointMethod.HISTORICAL_GAUSSIAN_COPULA,
+        JointMethod.PERFECT_CORRELATION,
+    ))
+    cfg_lite = SFRConvexScreenerConfig(joint_methods=(
+        JointMethod.HISTORICAL_GAUSSIAN_COPULA,
+        JointMethod.PERFECT_CORRELATION,
+    ))
+    sum_full = _config_summary_for_cache(cfg_full)
+    sum_lite = _config_summary_for_cache(cfg_lite)
+    assert sum_full["joint_methods"] == ["common_state", "historical_gaussian_copula", "perfect_correlation"]
+    assert sum_lite["joint_methods"] == ["historical_gaussian_copula", "perfect_correlation"]
+    assert sum_full != sum_lite

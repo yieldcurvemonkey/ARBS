@@ -16,13 +16,17 @@ def main() -> int:
     common = dict(
         universe_size=12, include_outrights=True, jpm_method=True,
         primary_joint_method=JointMethod.HISTORICAL_GAUSSIAN_COPULA,
+        joint_methods=(
+            JointMethod.HISTORICAL_GAUSSIAN_COPULA,
+            JointMethod.PERFECT_CORRELATION,
+        ),
         correlation_window=60, n_simulations=50_000,
     )
     cfg_listed = SFRConvexScreenerConfig(**common, smile_strike_mode="listed")
     cfg_sparse = SFRConvexScreenerConfig(**common, smile_strike_mode="delta_sparse")
     d = datetime.date(2026, 4, 28)
-    print("listed:", snapshot_cache_key(d, _config_summary_for_cache(cfg_listed)))
-    print("sparse:", snapshot_cache_key(d, _config_summary_for_cache(cfg_sparse)))
+    print("listed (HGC+PC, no CS):", snapshot_cache_key(d, _config_summary_for_cache(cfg_listed)))
+    print("sparse (HGC+PC, no CS):", snapshot_cache_key(d, _config_summary_for_cache(cfg_sparse)))
     return 0
 
 

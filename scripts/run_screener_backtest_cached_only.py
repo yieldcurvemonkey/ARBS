@@ -48,11 +48,20 @@ GRID_ROOT = REPO_ROOT / "data" / "screener_results" / "sfr_convex_screener_backt
 
 
 def _make_screener_cfg() -> SFRConvexScreenerConfig:
+    # joint_methods deliberately omits JointMethod.COMMON_STATE so this
+    # driver matches the cache-prime config and reads the same hashed
+    # pickles. Common-state is a diagnostic-only metric on top of the
+    # HISTORICAL_GAUSSIAN_COPULA primary; skipping it saves ~5-15 min/date
+    # at the (now-disabled) build step.
     return SFRConvexScreenerConfig(
         universe_size=12,
         include_outrights=True,
         jpm_method=True,
         primary_joint_method=JointMethod.HISTORICAL_GAUSSIAN_COPULA,
+        joint_methods=(
+            JointMethod.HISTORICAL_GAUSSIAN_COPULA,
+            JointMethod.PERFECT_CORRELATION,
+        ),
         correlation_window=60,
         n_simulations=50_000,
     )

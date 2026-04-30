@@ -44,6 +44,10 @@ def _make_cfg(*, smile_mode: str) -> SFRConvexScreenerConfig:
         include_outrights=True,
         jpm_method=True,
         primary_joint_method=JointMethod.HISTORICAL_GAUSSIAN_COPULA,
+        joint_methods=(
+            JointMethod.HISTORICAL_GAUSSIAN_COPULA,
+            JointMethod.PERFECT_CORRELATION,
+        ),
         correlation_window=60,
         n_simulations=50_000,
         smile_strike_mode=smile_mode,

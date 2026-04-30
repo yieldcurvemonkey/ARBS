@@ -42,11 +42,20 @@ from RVUtils.SFRConvexScreener.screener import build_snapshot  # noqa: E402
 
 
 def _make_screener_cfg() -> SFRConvexScreenerConfig:
+    # joint_methods deliberately omits JointMethod.COMMON_STATE: the
+    # SLSQP joint calibration on a 144-state x 12-contract problem
+    # dominates per-date wall time (~5-15 min) and the primary metric
+    # is HISTORICAL_GAUSSIAN_COPULA anyway. The common-state branch can
+    # be reactivated by callers that need the diagnostic.
     return SFRConvexScreenerConfig(
         universe_size=12,
         include_outrights=True,
         jpm_method=True,
         primary_joint_method=JointMethod.HISTORICAL_GAUSSIAN_COPULA,
+        joint_methods=(
+            JointMethod.HISTORICAL_GAUSSIAN_COPULA,
+            JointMethod.PERFECT_CORRELATION,
+        ),
         correlation_window=60,
         n_simulations=50_000,
     )
