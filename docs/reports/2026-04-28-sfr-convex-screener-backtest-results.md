@@ -311,27 +311,96 @@ The sparse mode change is the only Phase 1 ship.
 
 Bench harness: [scripts/_bench_smile_fetch.py](scripts/_bench_smile_fetch.py)
 
-### Phase 2 — re-prime under sparse mode
+### Phase 1.5 — drop COMMON_STATE from the prime config (commit `23480f1`)
 
-The sparse-mode default invalidates every existing cache pickle (the 22
-listed-mode dates from the previous session live on disk under hash
-`60855039beb3` but no current config produces that hash, so they are
-orphaned). The new prime runs `--reverse` from 2026-04-28 backwards
-across the full 1,649-business-day window 2020-01-02 → 2026-04-28.
-Wall budget for this session is ~20 hours; at the observed ~13 min/date
-pace (smile fan-out ≈ 7 min, then BL/joint/metrics ≈ 5 min CPU-bound),
-realistic coverage is **~80–120 dates** within that budget.
+Profiling the sparse prime's first-date stall revealed that
+`RVUtils.ImpliedDistribution._joint_calibration.calibrate_joint_distribution`
+runs a 156-variable SLSQP (≈144 FOMC path-state weights × 12
+contract-residual sigmas) with 13 equality constraints (probability sum
++ 12 forward-recovery) and `ftol=1e-12`, no analytic Jacobian. On a 2026
+strip with the default FOMC path config this consumes 5–15 min of
+single-core CPU per as_of, dwarfing every other phase combined:
+
+| phase | cold cache | warm MDP cache |
+|---|---|---|
+| `load_market_data` (smiles + curve + futures + 60d panel) | 5–8 min | <5 s |
+| `extract_bl_marginals` | ~3 s | ~3 s |
+| **`_calibrate_joint`** (SLSQP) | **5–15 min** | **5–15 min** |
+| `_historical_correlation_matrix` | <1 s | <1 s |
+| per-structure analytics (50k sims × ~50 non-outright structures) | ~30 s | ~30 s |
+
+`primary_joint_method=HISTORICAL_GAUSSIAN_COPULA`, so common-state is a
+diagnostic-only metric — `metrics_by_method["common_state"]` is computed
+and stored when `JointMethod.COMMON_STATE in cfg.joint_methods` but never
+chosen as the primary. Phase 1.5 drops COMMON_STATE from the prime and
+cached-only driver configs (`scripts/prime_screener_cache.py`,
+`scripts/run_screener_backtest_cached_only.py`) and adds `joint_methods`
+to `_config_summary_for_cache` so the new (HGC, PC) hash never collides
+with a future (CS, HGC, PC) prime that runs the heavier diagnostic.
+
+After this change the first sparse pickle (2026-04-28) lands in **9 s**
+because the MDP smile cache is warm from the killed-prime attempt; the
+second date (2026-04-27) starts cold. Steady-state per-date target is
+~5 min/date for fresh dates with shared underlying-EOD MDP cache hits.
+
+Bench harness: [scripts/_profile_build_snapshot.py](scripts/_profile_build_snapshot.py)
+
+### Phase 2 — re-prime under sparse mode (HGC + PC only)
+
+The sparse-mode default plus the joint_methods-tightened cache hash
+together produce a brand-new hash, so every existing cache pickle is
+orphaned (the 22 listed-mode dates from the previous session live on
+disk under hash `60855039beb3`, the listed-mode + new-hash payload
+under `0f01260c0d8f`, the sparse-mode + new-hash under `5ded8df5b691`).
+
+The new prime runs `--reverse` from 2026-04-28 backwards across the full
+1,649-business-day window 2020-01-02 → 2026-04-28. Wall budget for this
+session is ~20 hours; with COMMON_STATE off and warm MDP-cache hits on
+shared underlying contracts after the first few dates, realistic
+coverage is **~150–250 dates** within that budget.
 
 Cache evolution snapshots will be appended as the prime hits milestones
 (every 25 newly cached dates).
 
 #### Methodology parity check (sparse vs legacy listed @ 2026-04-28)
 
-To be filled in once the 2026-04-28 sparse-mode pickle lands. See
-[scripts/_check_smile_mode_parity.py](scripts/_check_smile_mode_parity.py)
-— it loads the new sparse pickle and the legacy listed pickle (by
-`--listed-hash 60855039beb3`) and reports top-K composite-score overlap
-plus per-structure asymmetry_ratio diff distribution.
+The first sparse pickle (`2026-04-28_5ded8df5b691.pkl`, 0 warnings)
+compared against the legacy listed pickle
+(`2026-04-28_60855039beb3.pkl`, 8 warnings — 7 fallback smiles for
+SFRM26/U26/Z26/H27 + 1 bulk price-panel failure):
+
+| metric | result |
+|---|---|
+| top-10 ranking overlap (composite_score) | 5 / 10 |
+| common structures (both pickles) | 63 / 63 |
+| asymmetry_ratio diff (sparse − listed) median | −0.10 |
+| asymmetry_ratio diff mean / stdev / abs-max | +1.16 / 5.24 / **34.84** |
+
+The `SFRM27_SFRU27_SFRZ27_FLY_1_-2_1` long-rate fly anchors the abs-max:
+listed reports asym = 0.97 (no edge), sparse reports asym = 35.81 (huge
+upper-tail bias). M27, U27, Z27 are NOT in the listed fallback set, so
+this is a direct sparse-vs-listed methodology shift, not a stale-data
+artefact. Other top sparse structures (`M27_U27_CAL_1` 20.04 vs 1.00
+listed; `M26_U26_Z26_FLY` 11.43 vs 1.55 listed) replicate the same
+pattern: every sparse top-5 entry is a 3- or 2-leg structure that listed
+priced near zero edge.
+
+The most likely root cause is that `extract_bl_marginals` with
+`jpm_method=True` runs a 4th-order spline through the raw vol points
+and 10 ghost points stretching 250 bp into the wings. With listed mode
+the spline has ~50 anchor strikes, with sparse it has ~20 (10 deltas ×
+call+put). The wider spacing of the sparse anchor grid lets the spline
+oscillate in the wings — a 5–10 bp move in either direction can blow out
+the BL density's tail mass on a structure that subtracts mismatched
+densities (calendar / butterfly), inflating the asymmetry ratio. ATM-
+driven outrights are essentially unaffected (e.g. SFRZ26: listed 2.92,
+sparse 1.78).
+
+**Verdict — pending.** A cleaner check is queued for 2026-04-21 (the
+legacy pickle has 0 warnings, so the comparison is methodology-vs-
+methodology rather than methodology-vs-degraded). If the same
+fly-asymmetry blow-up reproduces on a clean baseline, the sparse default
+will be reverted to `listed` and the prime restarted.
 
 ## Reproduction
 
