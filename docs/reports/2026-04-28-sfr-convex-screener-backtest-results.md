@@ -41,16 +41,44 @@ The new `RVUtils.SFRConvexScreener.backtest.run_backtest` orchestrator ran end-t
 | `d7038c9` | fixed | wired (`083700a`) | midnight (script bug) | −$19.71 M (×2 magnitude vs manual) | −$4.16 M |
 | `477df5e` | fixed | wired | **17:00 NY EOD** | −$13.31 M (matches manual remark) | **−$2.03 M** |
 
-### Configuration ranking (cached-only, 22-BD window, post all fixes; cache = 8 dates: 3/30, 3/31, 4/21, 4/22, 4/23, 4/24, 4/27, 4/28)
+### Configuration ranking (cached-only, 22-BD window, post all fixes; cache = 13 dates incl two Fridays 4/17 and 4/24)
 
 | name | closed | unrealized | Sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
 |---|---|---|---|---|---|---|---|---|
-| `a_outright_conservative` | 0 | 3 | 3.47 | 0 | **+529,790** | — | — | 0.5 |
-| `b_calendar_only` | 0 | 0 | — | 0 | 0 | — | — | 0.0 |
-| `c_butterfly_only` | 0 | 0 | — | 0 | 0 | — | — | 0.0 |
-| `d_all_structures_default` | 0 | 5 | 3.47 | 0 | **+883,122** | — | — | 0.3 |
-| `e_aggressive_concurrency` | **1** | 9 | 3.47 | 0 | **+1,941,380** | 100 % | 3.0 | 0.5 |
-| `f_daily_rebalance` | **8** | 5 | −3.01 | −14,244,274 | −12,475,230 | 37.50 % | 1.4 | 3.4 |
+| `a_outright_conservative` | 0 | 3 | 1.85 | −250,484 | +297,868 | — | — | 1.0 |
+| `b_calendar_only` | **4** | 0 | **3.84** | −35,391 | **+1,098,200** | **100 %** | 4.5 | 0.3 |
+| `c_butterfly_only` | **1** | 0 | **3.72** | −11,796 | **+353,742** | **100 %** | 5.0 | 0.3 |
+| `d_all_structures_default` | **3** | 5 | **4.05** | −270,249 | **+1,640,961** | **100 %** | 5.7 | 1.0 |
+| `e_aggressive_concurrency` | **6** | 9 | **4.09** | −485,688 | **+3,112,014** | **100 %** | 5.0 | 1.5 |
+| `f_daily_rebalance` | **12** | 5 | −3.65 | −17,534,963 | −15,968,283 | 50 % | 2.9 | 4.0 |
+
+### **🎯 Major finding: Friday-rebalance configs all show 100 % win rate**
+
+Once the cache covers a Friday rebalance day with high-asymmetry signals (4/17 and 4/24), every Friday-gated config produces profitable closed trades. The asymmetry-decay exit consistently captures the mean-reversion edge over 3–6 days holding:
+
+- `b_calendar_only` (asym ≥ 3.0): **4 closed, all winners**, +$1.10 M, Sharpe 3.84
+- `c_butterfly_only` (asym ≥ 3.0): **1 closed, winner**, +$354 k, Sharpe 3.72
+- `d_all_structures_default` (asym ≥ 1.5): **3 closed, all winners**, +$1.64 M, Sharpe 4.05
+- `e_aggressive_concurrency` (asym ≥ 1.2, max_concurrent 10): **6 closed, all winners**, +$3.11 M, Sharpe 4.09
+
+The 6 winners in `e_aggressive_concurrency` (most permissive thresholds, hosting all winners from b/c/d):
+
+| structure | direction | days held | realised |
+|---|---|---|---|
+| `SFRM28_SFRU28_CAL_1` | PAY M28 / RECEIVE U28 | 4 | +$365,359 |
+| `SFRU27_SFRZ27_SFRH28_FLY_1_-2_1` | long-rate fly | 5 | +$353,742 |
+| `SFRU27_SFRZ27_CAL_1` | PAY U27 / RECEIVE Z27 | 6 | +$279,355 |
+| `SFRU27_SFRH28_CAL_2` | PAY U27 / RECEIVE H28 | 6 | +$279,414 |
+| `SFRU27_SFRU28_CAL_4` | PAY U27 / RECEIVE U28 | 6 | +$279,252 |
+| `SFRZ26_SFRM27_SFRZ27_FLY_1_-2_1` | long-rate fly | 3 | +$352,238 |
+
+Every winning trade had **entry asymmetry ≥ 3.0** and exited via **asymmetry_decay** (the screener's central thesis: when asym is large, the implied tail asymmetry mean-reverts → profit).
+
+`a_outright_conservative` (asym ≥ 2.0, structure_types=outright only) closed 0 trades because no outright on 4/17 or 4/24 had asym ≥ 2.0. Three open trades from earlier Fridays are unrealised positive.
+
+`f_daily_rebalance` is dragged down by the 5 stop_bp losses on 2026-03-30 (asym 1.5–2.6, all PAY outright + calendar) which together cost -$14.24 M before the higher-asym signals on 4/17+ contributed wins. Win rate 50 % across 12 trades; finalMTM still negative.
+
+**Hypothesis (sample size still tiny)**: the high-asymmetry signals are real edge; asym 1.5-2.6 is too low a threshold and the daily-rebalance + per-position stop-loss combination amplifies noise on those marginal entries. The Friday-rebalance + asym ≥ 3 path produces clean +0.3 M wins across all structure types (calendars, flies, the open outrights).
 
 After the 2026-04-24 Friday landed in the cache, configs (a)/(d)/(e) which gate on `rebalance_dow=4` fire entries. With 4/21 added to the cache, `f_daily_rebalance` closed 3 additional **profitable** asymmetry-decay trades over 4/21 → 4/23, lifting the win rate from 16% to 37.5% and the finalMTM by ~$700k.
 
