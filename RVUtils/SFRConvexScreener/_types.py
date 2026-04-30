@@ -58,6 +58,13 @@ class SFRConvexScreenerConfig:
     curve_source: str = "BARCHART_STIRF-RL"
     curve_name: str = "USD-SOFR-1D-Q12STIRT"
     options_source: str = "BARCHART_STIRFO-QL"
+    # SABR smile fetch strategy. ``listed`` pulls every CME-listed strike
+    # within the 250bp ATM cap (≈30–60 strikes/contract); ``delta_sparse``
+    # pulls the 5/10/.../50-delta C+P grid (≈20 strikes/contract). The
+    # sparse path is ~2–3x faster end-to-end against live Barchart and
+    # produces a SABR fit that's well-conditioned for ATM-driven structures
+    # — the wings are extrapolated by the SABR functional form anyway.
+    smile_strike_mode: str = "delta_sparse"
 
     # Joint distribution
     joint_methods: Tuple[JointMethod, ...] = (

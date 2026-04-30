@@ -61,6 +61,7 @@ def _config_summary_for_cache(cfg: SFRConvexScreenerConfig) -> dict:
         "n_simulations": cfg.n_simulations,
         "ghost_extension_bps": cfg.ghost_extension_bps,
         "primary_joint_method": getattr(cfg.primary_joint_method, "value", str(cfg.primary_joint_method)),
+        "smile_strike_mode": getattr(cfg, "smile_strike_mode", "listed"),
     }
 
 

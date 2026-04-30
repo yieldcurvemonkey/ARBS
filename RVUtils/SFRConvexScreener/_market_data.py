@@ -186,11 +186,21 @@ def load_market_data(
     opt_mdp = STIRFutureOptionMDP(source=config.options_source)
     smiles: Dict[str, Any] = {}
     smile_asof_by_symbol: Dict[str, datetime.date] = {}
+    smile_strike_mode = str(getattr(config, "smile_strike_mode", "delta_sparse")).strip().lower()
+    if smile_strike_mode not in {"listed", "delta_sparse"}:
+        raise ValueError(
+            f"SFRConvexScreenerConfig.smile_strike_mode must be 'listed' or "
+            f"'delta_sparse'; got {smile_strike_mode!r}"
+        )
     for sfr in sfr_symbols:
-        def _fetch_smile(d: datetime.date, _sym: str = sfr):
-            return opt_mdp.fetch_sabr_smile({
-                "symbol": _sym, "as_of": d, "strike_offsets_bps": "listed",
-            })
+        def _fetch_smile(d: datetime.date, _sym: str = sfr,
+                         _mode: str = smile_strike_mode):
+            req: Dict[str, Any] = {"symbol": _sym, "as_of": d}
+            if _mode == "listed":
+                req["strike_offsets_bps"] = "listed"
+            # delta_sparse: omit both knobs — fetch_sabr_smile defaults to the
+            # 5/10/.../50-delta call+put grid (~20 strikes per contract).
+            return opt_mdp.fetch_sabr_smile(req)
 
         smile, smile_asof, smile_err = _try_with_fallback(
             _fetch_smile, as_of=as_of, max_fallback_days=5,
