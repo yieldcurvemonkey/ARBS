@@ -510,6 +510,44 @@ backtest-positive over the 2026-02 → 2026-04 window. The 4/3 catastrophe
 findings from the previous session generalise — there are several
 similarly-sized cohorts in the wider window.
 
+#### Cache evolution snapshot — listed_cache = 75, window 2026-01-14 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 17 | 3 | −3.71 | −48,854,541 | **−44,501,772** | 24 % | 11.4 | 6.4 |
+| `b_calendar_only` (asym ≥ 3) | 39 | 2 | −1.80 | −971,292,757 | **−692,506,253** | 51 % | 9.8 | 5.5 |
+| `c_butterfly_only` (asym ≥ 3) | 30 | 0 | −2.22 | −93,574,589 | −86,043,537 | 43 % | 5.2 | 4.0 |
+| `d_all_structures_default` (asym ≥ 1.5) | 42 | 3 | −3.97 | −122,605,635 | −117,316,111 | 40 % | 7.9 | 8.0 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 82 | 8 | −4.20 | −233,434,651 | −222,872,722 | 34 % | 8.0 | 12.4 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 63 | 5 | −4.48 | −286,586,100 | −283,032,765 | 43 % | 6.0 | 11.1 |
+
+The window now spans 75 BDs (2026-01-14 → 2026-04-28). Linear scaling
+of dates → trade count: `b_calendar_only` 16 → 24 → 39 trades, perfectly
+consistent at ~50 % winRate. But the **finalMTM scales ×2.6 from
+cache=50** (−$267 M → −$692 M) — every additional ~6 weeks of cohort
+adds another large-asymmetry loss event of similar magnitude to 4/3.
+
+`b_calendar_only` finalMTM/maxDD ratio is 692/971 ≈ 0.71 — most of the
+intra-window drawdown carries through to closed P&L. Not a "noise"
+cohort that recovers. The maxDD of −$971 M on a $100k bpv config means
+average open exposure has been brutalised: even at 50 % winRate, the
+4–5x size disparity between winners and losers produces no escape.
+
+`c_butterfly_only` (asym ≥ 3) sharpe stays the best of the loss-makers
+(−2.22) and avgHoldDays the lowest (5.2) — the screener's butterfly
+signals exit faster than calendars (lower exit_asymmetry_threshold of
+1.5 fires sooner on flies whose dispersion mean-reverts more). But
+finalMTM of −$86 M and 43 % winRate is still a structurally negative
+expected value at this scale.
+
+**Conclusion holds**: the screener's high-asymmetry signals reliably
+mean-revert (the asym ≥ 3 winRate is consistently 43–62 %), but the
+realised P&L is dominated by the few cohorts where the rate path runs
+adversely against a long-rate or long-price position before the
+implied asymmetry collapses. Without a per-position realised-PnL stop
+that fires before the asymmetry-decay rule, the strategy cannot capture
+the option-implied edge. Same recommendation, now better-supported.
+
 ## Reproduction
 
 ```bash
