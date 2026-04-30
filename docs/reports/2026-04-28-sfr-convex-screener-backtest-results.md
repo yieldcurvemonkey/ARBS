@@ -420,11 +420,58 @@ earlier prime attempts stay on disk but are unreachable through
 current code paths; they're still readable via `_inspect_pickle.py`
 and `_check_smile_mode_parity.py --listed-hash <hash>` if needed.
 
-Realistic coverage in this session's wall budget: **~80–150 dates**
-(per-date wall time is dominated by smile fan-out + occasional 429
-retry storms; without COMMON_STATE the joint-calibration penalty is
-gone, so this is a hard improvement over the previous session's
-12.5h/22 dates).
+Per-date pace observed: ~10–15 s on dates with warm shared MDP cache
+(steady-state after the first 2–3 dates) jumping to ~60+ s on dates
+where wing strikes hit Barchart's per-token 429 throttle. Without
+COMMON_STATE the joint-calibration penalty is gone, so this is a hard
+improvement over the previous session's 12.5h/22 dates. Realistic
+coverage in this session's wall budget: **~150–500 dates** depending
+on how many old-strip dates trigger 429 storms.
+
+#### Cache evolution snapshot — listed_cache = 25, window 2026-03-25 → 2026-04-28
+
+**Methodology re-validation**: the new listed-mode 2026-04-21 pickle
+ranks the SFRM26/U26/Z26 fly with asymmetry 6.22 vs the prior session's
+5.98 — a 4 % drift attributable to dropping COMMON_STATE from
+`joint_methods` (which removes one diagnostic column from
+`metrics_by_method` but preserves the HGC primary used for ranking).
+Z26 outright asymmetry is identical (3.62 in both). Methodology parity
+with the previous session is preserved.
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 5 | 3 | −3.39 | −23,611,662 | **−19,801,124** | 20 % | 6.0 | 3.2 |
+| `b_calendar_only` (asym ≥ 3) | 16 | 2 | −4.50 | −147,312,472 | **−137,077,780** | 50 % | 7.1 | 3.0 |
+| `c_butterfly_only` (asym ≥ 3) | 9 | 0 | −2.65 | −32,261,741 | **−25,814,981** | 56 % | 6.0 | 1.8 |
+| `d_all_structures_default` (asym ≥ 1.5) | 17 | 3 | −5.91 | −39,951,322 | −36,288,291 | 29 % | 4.3 | 2.8 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 35 | 8 | −5.80 | −79,664,277 | −71,813,101 | 26 % | 4.3 | 4.5 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 20 | 5 | −3.78 | −16,797,476 | **−13,627,087** | 45 % | 5.8 | 4.6 |
+
+The 25-day window picks up 3 extra trading days at the front (Mar 25–27)
+that the previous session's 22-day window missed. With the 4/3
+catastrophe inside the window and dense daily signals, every config is
+a net loser — same headline conclusion as the prior 22-day final run,
+but the numbers are amplified because the 4/3 calendar cohort closes
+into more adverse marks.
+
+`b_calendar_only` is the worst offender at −$137 M finalMTM (vs the
+prior 22-BD prime's −$40 M). The 4/3 short-rate-fly + calendar entries
+opened with extreme implied asymmetry (3.8 → 25.0) and unwound at
+−$3 M to −$11 M apiece on a $100k bpv basis — the realised rate path
+ran against the long-rate position before the asymmetry signal mean-
+reverted. Win rate at the asym ≥ 3.0 threshold is 50 %, but losers are
+4–5x bigger than winners, so the cohort is dominated by tail risk.
+
+`c_butterfly_only` (asym ≥ 3.0) holds the best sharpe of the loss-
+making configs (−2.65) and the highest winRate (56 %). Mean trade size
+is the smallest of the asym ≥ 3 configs because butterflies have lower
+absolute payoff sensitivity. At a 5x larger sample this might actually
+land positive after costs, but the data isn't there yet.
+
+The asymmetry-decay exit fires before realised P&L stops, locking in
+adverse marks. Same recommendation as before: **decouple decay exit
+from the holding clock** — add a min-holding-days guard or replace the
+decay rule with a realised-PnL TP/SL.
 
 ## Reproduction
 
