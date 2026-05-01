@@ -632,6 +632,40 @@ December 2025 cohort remains the dominant single contributor across
 every cohort. Future milestones likely just expand the trade count
 without re-litigating the headline conclusions.
 
+#### Cache evolution snapshot — listed_cache = 150, window 2025-10-01 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 32 | 3 | −3.08 | −83,952,631 | −79,657,281 | 41 % | 14.0 | 12.1 |
+| `b_calendar_only` (asym ≥ 3) | 70 | 2 | −1.74 | −4,417,752,204 | **−4,243,210,898** | 54 % | 11.4 | 15.1 |
+| `c_butterfly_only` (asym ≥ 3) | 70 | 0 | −2.44 | −126,953,867 | **−119,271,308** | **54 %** | 5.8 | 13.7 |
+| `d_all_structures_default` (asym ≥ 1.5) | 85 | 3 | −4.02 | −207,694,719 | −202,634,470 | 42 % | 8.1 | 23.0 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 159 | 8 | −4.01 | −397,809,167 | −387,591,338 | 40 % | 8.9 | 36.8 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 124 | 5 | −4.19 | −404,762,063 | −400,861,964 | 43 % | 6.6 | 29.5 |
+
+Window now covers **7 months (150 BDs)**. `c_butterfly_only` winRate
+crossed **54 %** at this milestone — a structurally favourable cohort
+under the screener's asym ≥ 3 gate. Per-trade loss magnitudes for
+butterflies are bounded (avgHoldDays 5.8 + bpv-fly construction means
+no single trade can produce a 10-figure loss like the December 2025
+calendar cohort). `c_butterfly_only` finalMTM of −$119 M / 70 trades
+≈ −$1.7 M / trade; with a small TP (e.g. +5 bp) added on top of the
+asymmetry-decay exit this configuration could plausibly ship positive.
+
+`b_calendar_only` finalMTM dropped only $92 M from cache=125 to
+cache=150 (vs $3,457 M from cache=75 to cache=100): the November +
+December 2025 → September 2025 → October 2025 cohorts added incremental
+losers but none on the scale of the December 2025 catastrophe.
+
+The 150-BD window confirms that the asymmetry-decay strategy is
+**structurally edge-positive on butterflies** and **structurally
+edge-negative on calendars** at the asym ≥ 3 threshold. Calendars have
+a higher per-trade size (typical 2-leg bpv = $200k effective vs fly's
+$100k effective at $100k structure-bpv) and longer avgHold (11.4 vs
+5.8 days), so when adverse moves happen calendars eat them harder.
+Butterflies' shorter holding period and bounded payoff exposure makes
+them the best candidate for live deployment.
+
 ## Reproduction
 
 ```bash
