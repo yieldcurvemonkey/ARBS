@@ -596,6 +596,42 @@ asymmetric position sizing and a realised-PnL stop are required before
 this strategy can ship live without sub-$1 B drawdown risk on a
 $100k bpv-per-trade basis.
 
+#### Cache evolution snapshot — listed_cache = 125, window 2025-11-05 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 26 | 3 | −3.04 | −53,677,346 | **−49,347,152** | 38 % | 14.5 | 8.8 |
+| `b_calendar_only` (asym ≥ 3) | 61 | 2 | −1.88 | −4,326,168,030 | **−4,151,454,128** | 56 % | 10.7 | 8.6 |
+| `c_butterfly_only` (asym ≥ 3) | 58 | 0 | −2.62 | −105,156,348 | −96,980,004 | 48 % | 5.3 | 7.5 |
+| `d_all_structures_default` (asym ≥ 1.5) | 69 | 3 | −3.86 | −158,716,704 | −153,324,108 | 42 % | 8.1 | 12.7 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 133 | 8 | −4.00 | −295,236,579 | −284,790,969 | 39 % | 8.8 | 21.2 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 106 | 5 | −4.25 | −364,221,689 | −362,404,065 | 42 % | 6.4 | 17.1 |
+
+The 25-BD extension back into November 2025 added 10 calendar trades
+without materially moving `b_calendar_only` finalMTM (−$4.149 B →
+−$4.151 B — flat). The December 2025 catastrophe still dominates the
+cohort, and the November window contributed close-to-flat trades:
+likely a few small winners offsetting a few small losers.
+
+`a_outright_conservative` winRate slipped from 50 % to 38 % as 6 new
+outright trades from November landed: 5 of those new trades were losers,
+with 1 winner. The avgHoldDays held at 14.5 (positions still ride
+through stop-out windows). Still, finalMTM only deteriorated $11 M on
+6 new trades — the per-trade loss magnitude on this conservative
+configuration is consistent (~$2 M / trade), which is the most
+controllable behaviour in the whole grid.
+
+`f_daily_rebalance` finalMTM grew $80 M / 25 BDs (vs $80 M / 50 BDs
+in the prior interval) — the new November cohort had several strong
+asym 1.5–2.5 entries that closed adverse. This is the same dynamic
+identified at cache=50: marginal-edge daily-rebalance entries lose
+reliably under the −15 bp stop.
+
+**No new findings at cache=125** — the picture is stable. The
+December 2025 cohort remains the dominant single contributor across
+every cohort. Future milestones likely just expand the trade count
+without re-litigating the headline conclusions.
+
 ## Reproduction
 
 ```bash
