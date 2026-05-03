@@ -150,6 +150,73 @@ function ptsMatchSignal(
   }
 }
 
+function spreadOverSignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
+  const indicatorOn = isPackageIndicatorTrue(row.package_indicator)
+  const pts = row.package_transaction_spread
+  const ptsNumeric = typeof pts === 'number' ? pts : Number(pts)
+  const hasPtsNumber = pts != null && Number.isFinite(ptsNumeric) && ptsNumeric !== 0
+  return [
+    {
+      name: 'package_indicator_on',
+      label: 'Package indicator',
+      passed: indicatorOn,
+      detail: indicatorOn ? 'true' : 'broker did not flag as a package',
+    },
+    {
+      name: 'has_spread',
+      label: 'Has spread',
+      passed: row.has_spread === true,
+      detail: row.has_spread === true ? 'has_spread true' : 'has_spread not set',
+    },
+    {
+      name: 'pts_present',
+      label: 'PTS reported',
+      passed: hasPtsNumber,
+      detail: hasPtsNumber ? `PTS = ${ptsNumeric}` : 'PTS missing or zero',
+    },
+  ]
+}
+
+function matchedMaturitySignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
+  const indicatorOn = isPackageIndicatorTrue(row.package_indicator)
+  const legs = (row.legs_json ?? []) as UsdSwapTapeLeg[]
+  const maturities = legs
+    .map((l) => l.swap_maturity_date ?? l.expiration_date)
+    .filter(Boolean) as string[]
+  const sameMaturity = maturities.length >= 2 &&
+    maturities.every((m) => m === maturities[0])
+  const indices = new Set(
+    legs
+      .map((l) => l.rate_index_clean)
+      .filter(Boolean) as string[],
+  )
+  const indicesDistinct = legs.length >= 2 && indices.size >= 2
+  return [
+    {
+      name: 'package_indicator_on',
+      label: 'Package indicator',
+      passed: indicatorOn,
+      detail: indicatorOn ? 'true' : 'broker did not flag as a package',
+    },
+    {
+      name: 'same_maturity',
+      label: 'Same maturity all legs',
+      passed: sameMaturity,
+      detail: sameMaturity
+        ? `all legs mature ${maturities[0]}`
+        : `mismatched maturities: ${maturities.join(', ') || '—'}`,
+    },
+    {
+      name: 'distinct_indices',
+      label: 'Distinct rate indices (basis)',
+      passed: indicesDistinct,
+      detail: indicesDistinct
+        ? `indices: ${[...indices].join(', ')}`
+        : `only one rate index: ${[...indices].join(', ') || '—'}`,
+    },
+  ]
+}
+
 function flySignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
   const legsRaw = (row.legs_json ?? []) as UsdSwapTapeLeg[]
   const legs = sortLegsTenorAsc(legsRaw)
@@ -239,6 +306,12 @@ export function computePackageConfidence(row: UsdSwapTapeRow): PackageConfidence
       break
     case 'FLY':
       signals = flySignals(row)
+      break
+    case 'SPREADOVER':
+      signals = spreadOverSignals(row)
+      break
+    case 'MATCHED_MATURITY':
+      signals = matchedMaturitySignals(row)
       break
     case 'OUTRIGHT':
     default:

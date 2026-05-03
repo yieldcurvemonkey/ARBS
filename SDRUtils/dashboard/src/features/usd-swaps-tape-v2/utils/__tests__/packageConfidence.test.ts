@@ -186,3 +186,83 @@ describe('computePackageConfidence — FLY', () => {
     expect(result.signals.find((s) => s.name === 'leg_count')?.passed).toBe(false)
   })
 })
+
+describe('computePackageConfidence — SPREADOVER', () => {
+  it('returns 3/3 when indicator on, has_spread true, PTS non-zero', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'SPREADOVER',
+        package_indicator: true,
+        has_spread: true,
+        package_transaction_spread: 12,
+        n_package_legs: 1,
+        legs_json: [curveLeg({ tenor_years: 5 })],
+      }),
+    )
+    expect(result.score).toBe(3)
+    expect(result.total).toBe(3)
+  })
+
+  it('fails PTS-non-zero signal when PTS is missing', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'SPREADOVER',
+        package_indicator: true,
+        has_spread: true,
+        package_transaction_spread: null,
+        n_package_legs: 1,
+        legs_json: [curveLeg({ tenor_years: 5 })],
+      }),
+    )
+    expect(result.signals.find((s) => s.name === 'pts_present')?.passed).toBe(false)
+  })
+})
+
+describe('computePackageConfidence — MATCHED_MATURITY', () => {
+  it('returns 3/3 when legs share maturity and rate indices differ', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'MATCHED_MATURITY',
+        package_indicator: true,
+        n_package_legs: 2,
+        legs_json: [
+          curveLeg({
+            tenor_years: 10,
+            swap_maturity_date: '2036-05-01',
+            rate_index_clean: 'USD-SOFR',
+          }),
+          curveLeg({
+            tenor_years: 10,
+            swap_maturity_date: '2036-05-01',
+            rate_index_clean: 'USD-LIBOR',
+          }),
+        ],
+      }),
+    )
+    expect(result.score).toBe(3)
+    expect(result.total).toBe(3)
+  })
+
+  it('fails same-maturity when leg maturities differ', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'MATCHED_MATURITY',
+        package_indicator: true,
+        n_package_legs: 2,
+        legs_json: [
+          curveLeg({
+            tenor_years: 10,
+            swap_maturity_date: '2036-05-01',
+            rate_index_clean: 'USD-SOFR',
+          }),
+          curveLeg({
+            tenor_years: 10,
+            swap_maturity_date: '2037-05-01',
+            rate_index_clean: 'USD-LIBOR',
+          }),
+        ],
+      }),
+    )
+    expect(result.signals.find((s) => s.name === 'same_maturity')?.passed).toBe(false)
+  })
+})
