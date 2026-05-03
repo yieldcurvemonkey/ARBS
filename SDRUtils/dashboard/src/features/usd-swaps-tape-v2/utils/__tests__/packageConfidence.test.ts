@@ -117,3 +117,72 @@ describe('computePackageConfidence — CURVE', () => {
     ).toBe(false)
   })
 })
+
+describe('computePackageConfidence — FLY', () => {
+  const flyRow = (overrides: Partial<UsdSwapTapeRow> = {}): UsdSwapTapeRow =>
+    baseRow({
+      package_type: 'FLY',
+      package_indicator: true,
+      n_package_legs: 3,
+      // 2*3.85 - 3.50 - 4.00 = 0.20% = 20 bp.
+      package_transaction_spread: 20,
+      legs_json: [
+        curveLeg({ tenor_years: 5, risk: -2_500, fixed_rate: 3.5 }),
+        curveLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 3.85 }),
+        curveLeg({ tenor_years: 30, risk: -2_500, fixed_rate: 4.0 }),
+      ],
+      ...overrides,
+    })
+
+  it('returns 5/5 for a textbook 5/10/30 fly', () => {
+    const result = computePackageConfidence(flyRow())
+    expect(result.score).toBe(5)
+    expect(result.total).toBe(5)
+    expect(result.tone).toBe('high')
+  })
+
+  it('fails belly = -2*wings when belly DV01 is off by 25%', () => {
+    const result = computePackageConfidence(
+      flyRow({
+        legs_json: [
+          curveLeg({ tenor_years: 5, risk: -2_500, fixed_rate: 3.5 }),
+          // belly under-weighted: should be 5000, given 3750
+          curveLeg({ tenor_years: 10, risk: 3_750, fixed_rate: 3.85 }),
+          curveLeg({ tenor_years: 30, risk: -2_500, fixed_rate: 4.0 }),
+        ],
+      }),
+    )
+    expect(result.score).toBe(4)
+    expect(
+      result.signals.find((s) => s.name === 'risk_balance')?.passed,
+    ).toBe(false)
+  })
+
+  it('fails PTS match when derived bfly is 0.8 bp off reported PTS', () => {
+    const result = computePackageConfidence(
+      flyRow({
+        package_transaction_spread: 20,
+        legs_json: [
+          curveLeg({ tenor_years: 5, risk: -2_500, fixed_rate: 3.5 }),
+          // 2*3.854 - 3.5 - 4.0 = 0.208% = 20.8 bp; off by 0.8 bp.
+          curveLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 3.854 }),
+          curveLeg({ tenor_years: 30, risk: -2_500, fixed_rate: 4.0 }),
+        ],
+      }),
+    )
+    expect(result.signals.find((s) => s.name === 'pts_match')?.passed).toBe(false)
+  })
+
+  it('fails leg count when only 2 legs are stamped FLY', () => {
+    const result = computePackageConfidence(
+      flyRow({
+        n_package_legs: 2,
+        legs_json: [
+          curveLeg({ tenor_years: 5, risk: -5_000, fixed_rate: 3.5 }),
+          curveLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 3.85 }),
+        ],
+      }),
+    )
+    expect(result.signals.find((s) => s.name === 'leg_count')?.passed).toBe(false)
+  })
+})

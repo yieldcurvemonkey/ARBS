@@ -150,6 +150,48 @@ function ptsMatchSignal(
   }
 }
 
+function flySignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
+  const legsRaw = (row.legs_json ?? []) as UsdSwapTapeLeg[]
+  const legs = sortLegsTenorAsc(legsRaw)
+  const indicatorOn = isPackageIndicatorTrue(row.package_indicator)
+  const n = legCount(row)
+  const front = legs[0]
+  const belly = legs[1]
+  const back = legs[2]
+  const rF = front ? legNumberOr(front, 'fixed_rate') : null
+  const rB = belly ? legNumberOr(belly, 'fixed_rate') : null
+  const rK = back ? legNumberOr(back, 'fixed_rate') : null
+  const derivedBp =
+    rF !== null && rB !== null && rK !== null ? (2 * rB - rF - rK) * 100 : null
+
+  // Risk balance for fly: belly + wing1 + wing2 ≈ 0.
+  // Use weights [1, 1, 1] applied to [front, belly, back] risk values directly.
+  return [
+    {
+      name: 'package_indicator_on',
+      label: 'Package indicator',
+      passed: indicatorOn,
+      detail: indicatorOn ? 'true' : 'broker did not flag as a package',
+    },
+    riskBalanceSignal(legs.slice(0, 3), [1, 1, 1], 'Risk balance (belly = -2×wings)'),
+    ptsMatchSignal(derivedBp, row.package_transaction_spread),
+    {
+      name: 'tenor_monotonic',
+      label: 'Tenor monotonic',
+      passed: isAscendingByTenor(legsRaw),
+      detail: legsRaw
+        .map((l) => (typeof l.tenor_years === 'number' ? `${l.tenor_years}Y` : '?'))
+        .join(' → '),
+    },
+    {
+      name: 'leg_count',
+      label: 'Leg count',
+      passed: n === 3,
+      detail: `expected 3, got ${n}`,
+    },
+  ]
+}
+
 function curveSignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
   const legsRaw = (row.legs_json ?? []) as UsdSwapTapeLeg[]
   const legs = sortLegsTenorAsc(legsRaw)
@@ -194,6 +236,9 @@ export function computePackageConfidence(row: UsdSwapTapeRow): PackageConfidence
   switch (resolvedType) {
     case 'CURVE':
       signals = curveSignals(row)
+      break
+    case 'FLY':
+      signals = flySignals(row)
       break
     case 'OUTRIGHT':
     default:
