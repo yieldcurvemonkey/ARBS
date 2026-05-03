@@ -75,18 +75,134 @@ function outrightSignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
   ]
 }
 
-// `UsdSwapTapeLeg` and `PACKAGE_CONFIDENCE_TOLERANCES` are imported for
-// the scorer expansions in Task 3+ (CURVE/FLY/etc.). The references below
-// keep the imports active so lint does not strip them between tasks.
-export type { UsdSwapTapeLeg }
+function sortLegsTenorAsc(legs: UsdSwapTapeLeg[]): UsdSwapTapeLeg[] {
+  return [...legs].sort((a, b) => {
+    const at = typeof a?.tenor_years === 'number' ? a.tenor_years : Number.POSITIVE_INFINITY
+    const bt = typeof b?.tenor_years === 'number' ? b.tenor_years : Number.POSITIVE_INFINITY
+    return at - bt
+  })
+}
 
-void PACKAGE_CONFIDENCE_TOLERANCES
+function isAscendingByTenor(legs: UsdSwapTapeLeg[]): boolean {
+  for (let i = 1; i < legs.length; i++) {
+    const prev = legs[i - 1]?.tenor_years ?? Number.POSITIVE_INFINITY
+    const curr = legs[i]?.tenor_years ?? Number.POSITIVE_INFINITY
+    if (prev > curr) return false
+  }
+  return true
+}
+
+function legNumberOr(leg: UsdSwapTapeLeg, key: keyof UsdSwapTapeLeg): number | null {
+  const v = leg[key]
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+/** Pass when |sum(risks)| / max(|risks|) <= riskBalanceRel. */
+function riskBalanceSignal(
+  legs: UsdSwapTapeLeg[],
+  weights: number[],
+  label: string,
+): ConfidenceSignal {
+  const tol = PACKAGE_CONFIDENCE_TOLERANCES.riskBalanceRel
+  const risks = legs.map((l) => legNumberOr(l, 'risk'))
+  if (risks.some((r) => r === null)) {
+    return {
+      name: 'risk_balance',
+      label,
+      passed: false,
+      detail: 'leg risk missing',
+    }
+  }
+  const weighted = risks.map((r, i) => (r as number) * weights[i])
+  const sum = weighted.reduce((a, b) => a + b, 0)
+  const denom = Math.max(...weighted.map((v) => Math.abs(v)), 1e-9)
+  const rel = Math.abs(sum) / denom
+  return {
+    name: 'risk_balance',
+    label,
+    passed: rel <= tol,
+    detail: `Δ ${(rel * 100).toFixed(1)}% (tol ${(tol * 100).toFixed(0)}%)`,
+  }
+}
+
+/** Pass when derived spread (in bp) is within ptsMatchBp of reported PTS. */
+function ptsMatchSignal(
+  derivedBp: number | null,
+  reportedPts: number | null | undefined,
+): ConfidenceSignal {
+  const tol = PACKAGE_CONFIDENCE_TOLERANCES.ptsMatchBp
+  if (derivedBp === null || reportedPts == null) {
+    return {
+      name: 'pts_match',
+      label: 'PTS match',
+      passed: false,
+      detail:
+        derivedBp === null ? 'leg fixed_rate missing' : 'PTS not reported',
+    }
+  }
+  const reported = Number(reportedPts)
+  const delta = Math.abs(derivedBp - reported)
+  return {
+    name: 'pts_match',
+    label: 'PTS match',
+    passed: delta <= tol,
+    detail: `derived ${derivedBp.toFixed(2)}bp vs reported ${reported}bp (Δ ${delta.toFixed(2)}, tol ±${tol})`,
+  }
+}
+
+function curveSignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
+  const legsRaw = (row.legs_json ?? []) as UsdSwapTapeLeg[]
+  const legs = sortLegsTenorAsc(legsRaw)
+  const indicatorOn = isPackageIndicatorTrue(row.package_indicator)
+  const n = legCount(row)
+  const front = legs[0]
+  const back = legs[1]
+  const r1 = front ? legNumberOr(front, 'fixed_rate') : null
+  const r2 = back ? legNumberOr(back, 'fixed_rate') : null
+  const derivedBp = r1 !== null && r2 !== null ? (r2 - r1) * 100 : null
+
+  return [
+    {
+      name: 'package_indicator_on',
+      label: 'Package indicator',
+      passed: indicatorOn,
+      detail: indicatorOn ? 'true' : 'broker did not flag as a package',
+    },
+    riskBalanceSignal(legs.slice(0, 2), [1, 1], 'Risk balance (DV01-neutral)'),
+    ptsMatchSignal(derivedBp, row.package_transaction_spread),
+    {
+      name: 'tenor_monotonic',
+      label: 'Tenor monotonic',
+      passed: isAscendingByTenor(legsRaw),
+      detail: legsRaw
+        .map((l) => (typeof l.tenor_years === 'number' ? `${l.tenor_years}Y` : '?'))
+        .join(' → '),
+    },
+    {
+      name: 'leg_count',
+      label: 'Leg count',
+      passed: n === 2,
+      detail: `expected 2, got ${n}`,
+    },
+  ]
+}
 
 export function computePackageConfidence(row: UsdSwapTapeRow): PackageConfidence {
   const resolvedType = normalizeType(row.package_type)
-  const signals: ConfidenceSignal[] = outrightSignals(row)
+  let signals: ConfidenceSignal[]
+  let isInfo = false
+  switch (resolvedType) {
+    case 'CURVE':
+      signals = curveSignals(row)
+      break
+    case 'OUTRIGHT':
+    default:
+      signals = outrightSignals(row)
+      isInfo = true
+      break
+  }
   const score = signals.filter((s) => s.passed).length
   const total = signals.length
-  const tone = pickTone(score, total, /*isInfo=*/ true)
+  const tone = pickTone(score, total, isInfo)
   return { score, total, tone, signals, resolvedType }
 }
