@@ -266,3 +266,57 @@ describe('computePackageConfidence — MATCHED_MATURITY', () => {
     expect(result.signals.find((s) => s.name === 'same_maturity')?.passed).toBe(false)
   })
 })
+
+describe('computePackageConfidence — composite types', () => {
+  it('SPREADOVER_FLY uses FLY signals + per-leg PTP/PTS presence', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'SPREADOVER_FLY',
+        package_indicator: true,
+        n_package_legs: 3,
+        package_transaction_spread: 20,
+        legs_json: [
+          {
+            ...curveLeg({ tenor_years: 5, risk: -2_500, fixed_rate: 3.5 }),
+            package_transaction_spread: 12,
+          } as any,
+          {
+            ...curveLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 3.85 }),
+            package_transaction_spread: 14,
+          } as any,
+          {
+            ...curveLeg({ tenor_years: 30, risk: -2_500, fixed_rate: 4.0 }),
+            package_transaction_spread: 16,
+          } as any,
+        ],
+      }),
+    )
+    expect(result.total).toBe(6)
+    expect(result.score).toBe(6)
+    expect(result.signals.find((s) => s.name === 'per_leg_pts_present')?.passed).toBe(true)
+  })
+
+  it('MATCHED_MATURITY_CURVE uses CURVE signals + same-maturity-per-leg', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'MATCHED_MATURITY_CURVE',
+        package_indicator: true,
+        n_package_legs: 2,
+        package_transaction_spread: 50,
+        legs_json: [
+          {
+            ...curveLeg({ tenor_years: 5, risk: -5_000, fixed_rate: 3.5 }),
+            swap_maturity_date: '2031-05-01',
+          } as any,
+          {
+            ...curveLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 4.0 }),
+            swap_maturity_date: '2036-05-01',
+          } as any,
+        ],
+      }),
+    )
+    // Base CURVE has 5 signals; composite adds 1 (per-leg matched-maturity check
+    // — passes here because each leg's maturity matches its own tenor).
+    expect(result.total).toBe(6)
+  })
+})

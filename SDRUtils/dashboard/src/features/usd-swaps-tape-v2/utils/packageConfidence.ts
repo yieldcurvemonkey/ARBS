@@ -150,6 +150,40 @@ function ptsMatchSignal(
   }
 }
 
+function perLegPtsSignal(legs: UsdSwapTapeLeg[]): ConfidenceSignal {
+  const present = legs.every((l) => {
+    const v = (l as any).package_transaction_spread
+    return v != null && Number.isFinite(Number(v))
+  })
+  return {
+    name: 'per_leg_pts_present',
+    label: 'Per-leg PTS',
+    passed: present && legs.length > 0,
+    detail: present
+      ? legs
+          .map((l) => `${l.tenor_years ?? '?'}Y=${(l as any).package_transaction_spread}`)
+          .join(', ')
+      : 'one or more legs missing per-leg PTS',
+  }
+}
+
+function perLegMatchedMaturitySignal(legs: UsdSwapTapeLeg[]): ConfidenceSignal {
+  // Each leg should have its own maturity (no specific equality required —
+  // signal flags missing maturities, which would invalidate the matched-
+  // maturity overlay).
+  const allHaveMaturity = legs.every((l) =>
+    Boolean(l.swap_maturity_date ?? l.expiration_date),
+  )
+  return {
+    name: 'per_leg_matched_maturity',
+    label: 'Per-leg maturity',
+    passed: allHaveMaturity && legs.length > 0,
+    detail: allHaveMaturity
+      ? legs.map((l) => l.swap_maturity_date ?? l.expiration_date ?? '—').join(', ')
+      : 'one or more legs missing maturity date',
+  }
+}
+
 function spreadOverSignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
   const indicatorOn = isPackageIndicatorTrue(row.package_indicator)
   const pts = row.package_transaction_spread
@@ -312,6 +346,30 @@ export function computePackageConfidence(row: UsdSwapTapeRow): PackageConfidence
       break
     case 'MATCHED_MATURITY':
       signals = matchedMaturitySignals(row)
+      break
+    case 'SPREADOVER_CURVE':
+      signals = [
+        ...curveSignals(row),
+        perLegPtsSignal((row.legs_json ?? []) as UsdSwapTapeLeg[]),
+      ]
+      break
+    case 'SPREADOVER_FLY':
+      signals = [
+        ...flySignals(row),
+        perLegPtsSignal((row.legs_json ?? []) as UsdSwapTapeLeg[]),
+      ]
+      break
+    case 'MATCHED_MATURITY_CURVE':
+      signals = [
+        ...curveSignals(row),
+        perLegMatchedMaturitySignal((row.legs_json ?? []) as UsdSwapTapeLeg[]),
+      ]
+      break
+    case 'MATCHED_MATURITY_FLY':
+      signals = [
+        ...flySignals(row),
+        perLegMatchedMaturitySignal((row.legs_json ?? []) as UsdSwapTapeLeg[]),
+      ]
       break
     case 'OUTRIGHT':
     default:
