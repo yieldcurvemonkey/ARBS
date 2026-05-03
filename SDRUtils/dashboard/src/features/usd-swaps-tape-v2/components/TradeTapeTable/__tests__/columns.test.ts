@@ -352,3 +352,30 @@ describe('package column helpers', () => {
     expect(packageIndicatorDisplay('')).toBe('—')
   })
 })
+
+import { computePackageConfidence } from '../../../utils/packageConfidence'
+
+describe('Pkg column confidence chip integration', () => {
+  it('imports computePackageConfidence inside columns.tsx', () => {
+    expect(columnsSource).toContain('computePackageConfidence')
+  })
+
+  it('chip is conditionally rendered with X/N pattern', () => {
+    expect(columnsSource).toMatch(/score.*\/.*total/)
+  })
+
+  it('FLY row scoring → high tone class is applied', () => {
+    const result = computePackageConfidence({
+      package_type: 'FLY',
+      package_indicator: true,
+      n_package_legs: 3,
+      package_transaction_spread: 20,
+      legs_json: [
+        { tenor_years: 5, risk: -2_500, fixed_rate: 3.5 } as any,
+        { tenor_years: 10, risk: 5_000, fixed_rate: 3.85 } as any,
+        { tenor_years: 30, risk: -2_500, fixed_rate: 4.0 } as any,
+      ],
+    } as any)
+    expect(result.tone).toBe('high')
+  })
+})
