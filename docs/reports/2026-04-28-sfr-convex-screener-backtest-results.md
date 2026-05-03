@@ -666,6 +666,60 @@ $100k effective at $100k structure-bpv) and longer avgHold (11.4 vs
 Butterflies' shorter holding period and bounded payoff exposure makes
 them the best candidate for live deployment.
 
+> **REVISED at cache=200** — see snapshot below. The "butterflies are
+> structurally edge-positive" claim does not survive the wider window.
+> A summer-2025 cohort produced a multi-$B butterfly catastrophe of
+> similar shape to the December-2025 calendar catastrophe.
+
+#### Cache evolution snapshot — listed_cache = 200, window 2025-07-23 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 44 | 3 | −3.22 | −100,604,335 | −96,733,656 | 36 % | 14.2 | 13.0 |
+| `b_calendar_only` (asym ≥ 3) | 85 | 2 | −1.44 | −4,630,461,733 | **−4,457,278,658** | 51 % | 12.8 | 14.4 |
+| `c_butterfly_only` (asym ≥ 3) | 97 | 0 | −1.89 | −2,409,660,063 | **−2,403,052,923** | **53 %** | 6.2 | 14.3 |
+| `d_all_structures_default` (asym ≥ 1.5) | 106 | 3 | −3.88 | −250,885,234 | −247,021,738 | 40 % | 9.0 | 22.4 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 203 | 8 | −4.10 | −477,884,660 | −469,672,628 | 37 % | 9.6 | 35.6 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 154 | 5 | −3.11 | −645,802,360 | −642,060,654 | 41 % | 7.3 | 28.5 |
+
+**Material revision**: extending the window from 150 BDs to 200 BDs
+(adding July–October 2025) flipped `c_butterfly_only` from −$119 M to
+**−$2.4 B** finalMTM — a **20x deterioration** that mirrors the
+December 2025 calendar blow-up. The winRate stayed 53 %, so most
+trades still mean-revert profitably, but a single summer-2025 fly
+cohort produced multi-$B losses.
+
+**Updated headline conclusion**: there is **no single structure type**
+that survives the asymmetry-decay strategy on a wider sample. Calendars
+got crushed by December 2025; butterflies got crushed by summer 2025.
+Both have 50 %+ winRate but the loss-tail magnitude on the few losers
+exceeds 5 years of cumulative winners.
+
+What this means concretely:
+- **The screener identifies real option-implied mean-reversion edge** —
+  the consistent 50 %+ winRate across cohorts and the asym-decay exit
+  firing as predicted are signal, not noise.
+- **The exit framework is fundamentally wrong** — exiting on theoretical
+  asymmetry decay rather than realised P&L means the strategy is short
+  the realised tail risk that produces the option-implied skew it's
+  trying to harvest. The screener picks structures with fat one-sided
+  tails; the asym-decay exit fires before that fat tail materialises;
+  the strategy keeps the small wins and eats the large losses.
+- **Sizing must scale to the worst observed loss, not the average.**
+  Current $100 k bpv-per-trade × max-concurrent 5 produces $500 k bpv
+  exposure, which has been seen to lose >$10 M on a single 4/3-style
+  cohort. To run this strategy live, position sizing needs a floor at
+  the 99th-percentile observed loss, which on this 200-BD sample is
+  ~$10 M / structure → bpv-per-trade should be ~$10 k, ×100 lower than
+  the current grid.
+
+**Operational: pace observation.** The prime got stuck on 2025-08-27
+for ~38 hours yesterday — a Barchart per-token rate-limit deadlock
+where exponential backoff was scheduling 30+ minute sleeps. Killing
+and restarting the prime resumed normally (cached dates short-circuit
+in <1 s, then it picked up where it left off). At ~10 min/date on the
+second wind, the prime is now ~18 % through the 1,649-date target.
+
 ## Reproduction
 
 ```bash
