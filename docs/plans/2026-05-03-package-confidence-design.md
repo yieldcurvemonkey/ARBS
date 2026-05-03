@@ -151,3 +151,55 @@ with their own eyes.
 
 Revert the three modified files + delete the new util. No DB / API
 changes to roll back.
+
+## Verification log
+
+Verified on 2026-05-03 against branch `claude/magical-taussig-b4dad0`.
+
+- Unit + component test suites:
+  - `npm test -- --testPathPatterns=packageConfidence` → 20/20 pass
+    (OUTRIGHT, CURVE, FLY, SPREADOVER, MATCHED_MATURITY, composite
+    SPREADOVER_*/MATCHED_MATURITY_* variants, MAC/IMM/FOMC fallback,
+    tolerance override).
+  - `npm test -- --testPathPatterns=columns.test` → 38/38 pass; new
+    "Pkg column confidence chip integration" describe-block passes
+    (FLY 5/5 → high tone class).
+  - `npm test -- --testPathPatterns=LegsSubTable` → 23/23 pass;
+    new "LegsSubTable confidence strip" test renders FLY row via
+    `renderToStaticMarkup` and asserts strip markup contains
+    `data-testid="confidence-strip-P-FLY"`, `5/5`, `PTS match`,
+    `Risk balance`.
+  - Whole feature suite (`--testPathPatterns=usd-swaps-tape-v2`) →
+    391/395 pass. The 4 failing tests are in
+    `app/api/.../canonical-underlier-key.test.ts`, are pre-existing
+    on `main`, and unrelated to this change (verified by running the
+    same suite from the main worktree).
+- Lint (`npm run lint`): no new errors. The remaining warnings/errors
+  in `TradeRarityTab.tsx` and `ustf-vol/hooks/*` pre-exist on `main`.
+- Dev-server smoke test (`PORT=3001 npx next dev`):
+  - Server compiled `/usd-swaps` and `/api/usd-swaps-tape-v2` cleanly,
+    no compile or runtime errors in dev log.
+  - `GET /usd-swaps` → 200, 53 KB; `GET /api/usd-swaps-tape-v2?limit=200`
+    → 200 with 200 rows.
+  - Bundle audit: `_next/static/chunks/app/usd-swaps/page.js` contains
+    references to `computePackageConfidence`, `confidence-strip-`, and
+    `pkg-confidence-` (4 matches), confirming both consumers (chip +
+    strip) are wired into the page bundle.
+  - Real-data sample across the live tape covered: OUTRIGHT (131 rows),
+    MATCHED_MATURITY (26), CURVE (14), SPREADOVER (14), INVOICE (9),
+    SPREADOVER_CURVE (3), MATCHED_MATURITY_CURVE (2),
+    MATCHED_MATURITY_FLY (1). The scorer treats the unlisted
+    `INVOICE` package_type as OUTRIGHT (default branch → 2/2 info
+    tone), which is acceptable behaviour but worth a follow-up if the
+    desk wants a dedicated INVOICE rule set.
+- Caveats / known follow-ups:
+  - Visual hover-tooltip and per-row colour-band spot-check were not
+    performed because the Chrome browser MCP was unavailable in this
+    session. The strip + chip render paths are covered by the
+    component tests (which assert the `data-testid` and the score
+    string), but a desk-side visual review is still recommended on
+    first load.
+  - Several real CURVE rows have `package_transaction_spread = null`
+    and same-sign leg risks under the SDR's convention; these will
+    score 3/5 or lower with default tolerances. Expected — the scorer
+    surfaces the data-quality gap, which is the point.
