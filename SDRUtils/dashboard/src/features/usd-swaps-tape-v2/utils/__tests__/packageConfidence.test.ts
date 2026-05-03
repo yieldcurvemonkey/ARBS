@@ -339,3 +339,22 @@ describe('computePackageConfidence — maturity-convention types', () => {
     },
   )
 })
+
+describe('computePackageConfidence — tolerance override', () => {
+  it('passes a 0.8 bp PTS miss when ptsMatchBp tolerance is loosened to 1', () => {
+    const row = baseRow({
+      package_type: 'CURVE',
+      package_indicator: true,
+      n_package_legs: 2,
+      package_transaction_spread: 50,
+      legs_json: [
+        curveLeg({ tenor_years: 5, risk: -5_000, fixed_rate: 3.5 }),
+        curveLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 4.008 }),
+      ],
+    })
+    const tight = computePackageConfidence(row)
+    expect(tight.signals.find((s) => s.name === 'pts_match')?.passed).toBe(false)
+    const loose = computePackageConfidence(row, { ptsMatchBp: 1.0 })
+    expect(loose.signals.find((s) => s.name === 'pts_match')?.passed).toBe(true)
+  })
+})

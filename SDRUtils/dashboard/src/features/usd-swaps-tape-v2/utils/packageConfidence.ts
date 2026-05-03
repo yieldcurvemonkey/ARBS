@@ -26,6 +26,8 @@ export type PackageConfidence = {
   resolvedType: string
 }
 
+type Tolerances = typeof PACKAGE_CONFIDENCE_TOLERANCES
+
 function normalizeType(value: unknown): string {
   const s = String(value ?? '').trim().toUpperCase()
   if (!s || s === 'NAN' || s === 'NONE') return 'OUTRIGHT'
@@ -102,8 +104,9 @@ function riskBalanceSignal(
   legs: UsdSwapTapeLeg[],
   weights: number[],
   label: string,
+  tol: Tolerances,
 ): ConfidenceSignal {
-  const tol = PACKAGE_CONFIDENCE_TOLERANCES.riskBalanceRel
+  const rel_tol = tol.riskBalanceRel
   const risks = legs.map((l) => legNumberOr(l, 'risk'))
   if (risks.some((r) => r === null)) {
     return {
@@ -120,8 +123,8 @@ function riskBalanceSignal(
   return {
     name: 'risk_balance',
     label,
-    passed: rel <= tol,
-    detail: `Δ ${(rel * 100).toFixed(1)}% (tol ${(tol * 100).toFixed(0)}%)`,
+    passed: rel <= rel_tol,
+    detail: `Δ ${(rel * 100).toFixed(1)}% (tol ${(rel_tol * 100).toFixed(0)}%)`,
   }
 }
 
@@ -129,8 +132,9 @@ function riskBalanceSignal(
 function ptsMatchSignal(
   derivedBp: number | null,
   reportedPts: number | null | undefined,
+  tol: Tolerances,
 ): ConfidenceSignal {
-  const tol = PACKAGE_CONFIDENCE_TOLERANCES.ptsMatchBp
+  const bp_tol = tol.ptsMatchBp
   if (derivedBp === null || reportedPts == null) {
     return {
       name: 'pts_match',
@@ -145,8 +149,8 @@ function ptsMatchSignal(
   return {
     name: 'pts_match',
     label: 'PTS match',
-    passed: delta <= tol,
-    detail: `derived ${derivedBp.toFixed(2)}bp vs reported ${reported}bp (Δ ${delta.toFixed(2)}, tol ±${tol})`,
+    passed: delta <= bp_tol,
+    detail: `derived ${derivedBp.toFixed(2)}bp vs reported ${reported}bp (Δ ${delta.toFixed(2)}, tol ±${bp_tol})`,
   }
 }
 
@@ -251,7 +255,7 @@ function matchedMaturitySignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
   ]
 }
 
-function flySignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
+function flySignals(row: UsdSwapTapeRow, tol: Tolerances): ConfidenceSignal[] {
   const legsRaw = (row.legs_json ?? []) as UsdSwapTapeLeg[]
   const legs = sortLegsTenorAsc(legsRaw)
   const indicatorOn = isPackageIndicatorTrue(row.package_indicator)
@@ -274,8 +278,8 @@ function flySignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
       passed: indicatorOn,
       detail: indicatorOn ? 'true' : 'broker did not flag as a package',
     },
-    riskBalanceSignal(legs.slice(0, 3), [1, 1, 1], 'Risk balance (belly = -2×wings)'),
-    ptsMatchSignal(derivedBp, row.package_transaction_spread),
+    riskBalanceSignal(legs.slice(0, 3), [1, 1, 1], 'Risk balance (belly = -2×wings)', tol),
+    ptsMatchSignal(derivedBp, row.package_transaction_spread, tol),
     {
       name: 'tenor_monotonic',
       label: 'Tenor monotonic',
@@ -293,7 +297,7 @@ function flySignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
   ]
 }
 
-function curveSignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
+function curveSignals(row: UsdSwapTapeRow, tol: Tolerances): ConfidenceSignal[] {
   const legsRaw = (row.legs_json ?? []) as UsdSwapTapeLeg[]
   const legs = sortLegsTenorAsc(legsRaw)
   const indicatorOn = isPackageIndicatorTrue(row.package_indicator)
@@ -311,8 +315,8 @@ function curveSignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
       passed: indicatorOn,
       detail: indicatorOn ? 'true' : 'broker did not flag as a package',
     },
-    riskBalanceSignal(legs.slice(0, 2), [1, 1], 'Risk balance (DV01-neutral)'),
-    ptsMatchSignal(derivedBp, row.package_transaction_spread),
+    riskBalanceSignal(legs.slice(0, 2), [1, 1], 'Risk balance (DV01-neutral)', tol),
+    ptsMatchSignal(derivedBp, row.package_transaction_spread, tol),
     {
       name: 'tenor_monotonic',
       label: 'Tenor monotonic',
@@ -330,16 +334,20 @@ function curveSignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
   ]
 }
 
-export function computePackageConfidence(row: UsdSwapTapeRow): PackageConfidence {
+export function computePackageConfidence(
+  row: UsdSwapTapeRow,
+  toleranceOverrides?: Partial<Tolerances>,
+): PackageConfidence {
+  const tol: Tolerances = { ...PACKAGE_CONFIDENCE_TOLERANCES, ...(toleranceOverrides ?? {}) }
   const resolvedType = normalizeType(row.package_type)
   let signals: ConfidenceSignal[]
   let isInfo = false
   switch (resolvedType) {
     case 'CURVE':
-      signals = curveSignals(row)
+      signals = curveSignals(row, tol)
       break
     case 'FLY':
-      signals = flySignals(row)
+      signals = flySignals(row, tol)
       break
     case 'SPREADOVER':
       signals = spreadOverSignals(row)
@@ -349,25 +357,25 @@ export function computePackageConfidence(row: UsdSwapTapeRow): PackageConfidence
       break
     case 'SPREADOVER_CURVE':
       signals = [
-        ...curveSignals(row),
+        ...curveSignals(row, tol),
         perLegPtsSignal((row.legs_json ?? []) as UsdSwapTapeLeg[]),
       ]
       break
     case 'SPREADOVER_FLY':
       signals = [
-        ...flySignals(row),
+        ...flySignals(row, tol),
         perLegPtsSignal((row.legs_json ?? []) as UsdSwapTapeLeg[]),
       ]
       break
     case 'MATCHED_MATURITY_CURVE':
       signals = [
-        ...curveSignals(row),
+        ...curveSignals(row, tol),
         perLegMatchedMaturitySignal((row.legs_json ?? []) as UsdSwapTapeLeg[]),
       ]
       break
     case 'MATCHED_MATURITY_FLY':
       signals = [
-        ...flySignals(row),
+        ...flySignals(row, tol),
         perLegMatchedMaturitySignal((row.legs_json ?? []) as UsdSwapTapeLeg[]),
       ]
       break
