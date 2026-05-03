@@ -320,3 +320,22 @@ describe('computePackageConfidence — composite types', () => {
     expect(result.total).toBe(6)
   })
 })
+
+describe('computePackageConfidence — maturity-convention types', () => {
+  it.each(['MAC', 'IMM', 'FOMC'])(
+    'treats %s as OUTRIGHT (informational, 2/2)',
+    (kind) => {
+      const result = computePackageConfidence(
+        baseRow({
+          package_type: kind as any,
+          package_indicator: false,
+          n_package_legs: 1,
+          legs_json: [curveLeg({ tenor_years: 5 })],
+        }),
+      )
+      expect(result.tone).toBe('info')
+      expect(result.score).toBe(2)
+      expect(result.total).toBe(2)
+    },
+  )
+})

@@ -371,6 +371,9 @@ export function computePackageConfidence(row: UsdSwapTapeRow): PackageConfidence
         perLegMatchedMaturitySignal((row.legs_json ?? []) as UsdSwapTapeLeg[]),
       ]
       break
+    case 'MAC':
+    case 'IMM':
+    case 'FOMC':
     case 'OUTRIGHT':
     default:
       signals = outrightSignals(row)
