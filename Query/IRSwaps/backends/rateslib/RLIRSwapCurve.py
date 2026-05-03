@@ -198,11 +198,27 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return self.build_irswap(fwd=fwd, tenor=tenor, effective_date=eff, maturity_date=mat, fixed_rate=k, notional=notional, bpv=bpv)
 
     def resolve_pricable(self, irswap: rl.IRS, risk_weight: Optional[float] = None):
+        # Mirror the QuantLib backend's resolve_pricable: only invert the
+        # notional sign when the caller's direction (risk_weight, fallback
+        # to -pv01) is negative. The previous implementation unconditionally
+        # multiplied by -1, which flipped the sign of every NPV reported by
+        # mark_to_market and on_unwind for IRSwapQuery positions.
+        notional_real = irswap.__dict__["kwargs"]["notional"]
+        try:
+            direction = risk_weight if risk_weight is not None else (
+                self.pv01(irswap) * -1
+            )
+        except Exception:
+            direction = risk_weight if risk_weight is not None else 1
+        try:
+            sign = -1.0 if float(direction) < 0 else 1.0
+        except Exception:
+            sign = 1.0
         return self.build_irswap(
             effective_date=self.effective_date(irswap),
             maturity_date=self.maturity_date(irswap),
             fixed_rate=self.fixed_rate(irswap),
-            notional=irswap.__dict__["kwargs"]["notional"] * -1,
+            notional=notional_real * sign,
         )
 
     def build_stirf(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None, is_ser: Optional[bool] = False):

@@ -64,7 +64,45 @@ if TYPE_CHECKING:
 
 
 class SFRImpliedDistribution:
-    """Orchestrator for SFR options implied distribution extraction."""
+    """Orchestrator for SFR options implied distribution extraction.
+
+    Caveats and known limitations
+    -----------------------------
+    * **Bachelier European pricing only.** SR3 options are American on the
+      future, but for short-dated instruments the early-exercise premium is
+      small and ignored here. Avoid relying on this module for options with
+      less than ~10 business days to expiry.
+    * **Wing extrapolation uses calibrated SABR plus linear "ghost" anchor
+      points** at the ends of the strike grid — *not* SVI or rational
+      interpolation. Tails are sensitive to the SABR β/ρ/ν parameters; check
+      ``BreedenLitzenbergerResult.warnings`` for truncation or clipping flags
+      before relying on extreme percentiles.
+    * **Default rate floor is 0.0.** This truncates the SOFR density below
+      zero. Mass lost to truncation is reported in
+      ``BreedenLitzenbergerResult.warnings``; the reported ``mean_rate`` /
+      ``std_rate`` are computed on the truncated domain.
+    * **Spline 2nd-derivative artefacts.** Sparse strike grids and aggressive
+      smoothing parameters can yield small negative density at the wings.
+      Negative mass is clipped silently if it is below 0.01% of total mass and
+      reported in ``warnings`` otherwise.
+    * **Gaussian-mixture optimizer.** SLSQP can fail to converge on
+      ill-conditioned smiles; failures and high-RMSE fits are flagged in
+      ``GaussianMixtureResult.warnings``.
+
+    JPM Tech Appendix A compatibility
+    ---------------------------------
+    The default configuration matches the JPM Interest Rate Strategy
+    "Inferring Market Expectations from SOFR Futures Options" methodology
+    on the *spline mechanics* (4th-order smoothing spline, smoothing
+    parameter 1e-4, 10 ghost points per side via linear extrapolation,
+    25bp Fed-funds-target bins). The *strike selection* differs by
+    default — we resample the SABR-fit smile across a fine strike grid,
+    whereas the appendix uses raw OTM call premiums plus put-call
+    parity-converted OTM put premiums (filtered to OI ≥ 100). To match
+    the appendix more strictly, construct the orchestrator with
+    ``use_sabr_vols=False`` and ``sabr_extrapolation=False``. The screener
+    exposes this via ``SFRConvexScreenerConfig(jpm_method=True)``.
+    """
 
     def __init__(
         self,
