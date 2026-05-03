@@ -109,3 +109,31 @@ describe('UsdSwapsTradeTape', () => {
     expect(tradeTapeSource).not.toContain('Hide timeline')
   })
 })
+
+import { renderToStaticMarkup } from 'react-dom/server'
+import { LegsSubTable } from '../LegsSubTable'
+
+describe('LegsSubTable confidence strip', () => {
+  it('renders confidence strip with N/T header and per-signal rows for FLY', () => {
+    const html = renderToStaticMarkup(
+      LegsSubTable({
+        row: {
+          package_id: 'P-FLY',
+          package_type: 'FLY',
+          package_indicator: true,
+          n_package_legs: 3,
+          package_transaction_spread: 20,
+          legs_json: [
+            { tenor_years: 5, risk: -2_500, fixed_rate: 3.5, trade_id: 'L1' },
+            { tenor_years: 10, risk: 5_000, fixed_rate: 3.85, trade_id: 'L2' },
+            { tenor_years: 30, risk: -2_500, fixed_rate: 4.0, trade_id: 'L3' },
+          ],
+        } as any,
+      }),
+    )
+    expect(html).toContain('data-testid="confidence-strip-P-FLY"')
+    expect(html).toContain('5/5')
+    expect(html).toContain('PTS match')
+    expect(html).toContain('Risk balance')
+  })
+})

@@ -7,6 +7,13 @@ const config = {
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
       useESM: true,
+      // Override tsconfig's jsx="preserve" (which Next.js owns) so that
+      // ts-jest emits runnable JSX during tests. Tests still see normal
+      // TS strictness from the project tsconfig — only the JSX factory
+      // mode is overridden.
+      tsconfig: {
+        jsx: 'react-jsx',
+      },
     }],
   },
   extensionsToTreatAsEsm: ['.ts', '.tsx'],
