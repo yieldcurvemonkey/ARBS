@@ -20,6 +20,12 @@ import { ANALYTICS_COLORS, fmtDaysAgo } from './analytics-format'
 import { ZONE_BG, ZONE_BORDER, ZONE_TEXT } from './constants'
 import { PlatformDot, Pill, SegGroup } from './controls'
 import { AssumptionsStrip } from './AssumptionsStrip'
+import {
+  findFocusedHistogramBin,
+  focusedHistogramValue,
+  formatHistogramValue,
+  statsForHistogram,
+} from './TradeRarityTab.helpers'
 import type {
   AnalyticsMetricKey,
   DistributionStats,
@@ -73,15 +79,16 @@ interface HistogramTooltipProps {
   active?: boolean
   payload?: Array<{ payload: HistogramBin }>
   unit?: string
+  metric?: 'fixed_rate' | 'dv01' | 'notional'
 }
 
-function HistogramTooltip({ active, payload, unit = 'bps' }: HistogramTooltipProps): JSX.Element | null {
+function HistogramTooltip({ active, payload, unit = 'bps', metric = 'fixed_rate' }: HistogramTooltipProps): JSX.Element | null {
   if (!active || !payload || payload.length === 0) return null
   const d = payload[0].payload
   return (
     <div className="rounded border border-slate-700 bg-slate-950/95 px-2.5 py-2 font-mono text-[11px] text-slate-200 shadow-xl">
       <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">
-        {d.binStart.toFixed(0)} – {d.binEnd.toFixed(0)} {unit}
+        {formatHistogramValue(d.binStart, metric)} – {formatHistogramValue(d.binEnd, metric)} {unit}
       </div>
       <div className="flex items-center justify-between gap-3">
         <span className="flex items-center gap-1.5">
@@ -132,6 +139,7 @@ export interface TradeRarityTabProps {
   binMetric?: 'fixed_rate' | 'dv01' | 'notional'
   binWidth?: number
   stats: DistributionStats
+  binStats?: DistributionStats
   metricRows: MetricRow[]
   // Recency may be null when the bucket has no qualifying recent prints
   // — the histogram + percentile rows still render, only the recency
@@ -179,6 +187,8 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
   const { focused, state, setState, bins, stats, metricRows, recency, focusedPercentile, loading, onBinBrush } = props
   const histogramHeight = props.histogramHeight ?? 280
   const binMetric = props.binMetric ?? 'fixed_rate'
+  const binWidth = props.binWidth ?? 1
+  const histogramStats = statsForHistogram(props.binStats ?? stats, stats)
   const binMetricUnit = BIN_METRIC_UNITS[binMetric]
   const binMetricAxisLabel = BIN_METRIC_AXIS_LABELS[binMetric]
   const { basis, histogramMetric, settingsOpen, primaryTol, sizeTol } = state
@@ -195,15 +205,19 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
   // in bin [—] · 0 prints" footer to silently disappear at the
   // distribution's upper edge. Allow the last bin to be inclusive at
   // the top so the dot lands cleanly.
-  const focusedBin = bins.find((b, i) => {
-    const isLast = i === bins.length - 1
-    return (
-      focused.fixed_rate_bps >= b.binStart &&
-      (isLast ? focused.fixed_rate_bps <= b.binEnd : focused.fixed_rate_bps < b.binEnd)
-    )
-  })
+  const focusedBinValue = focusedHistogramValue(focused, binMetric)
+  const focusedBin = findFocusedHistogramBin(bins, focusedBinValue)
 
   const primaryPct = focusedPercentile
+  const selectedMetricPct =
+    binMetric === 'fixed_rate'
+      ? primaryPct
+      : metricRows.find((m) => m.key === binMetric)?.percentile ?? primaryPct
+
+  const displayMetricRows = useMemo(
+    () => [...metricRows].sort((a, b) => Number(Boolean(b.primary)) - Number(Boolean(a.primary))),
+    [metricRows],
+  )
 
   const displayBins = useMemo(
     () =>
@@ -304,8 +318,8 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
       <AssumptionsStrip
         items={[
           { label: 'Bucket', value: focused.tape_label },
-          { label: 'Metric', value: 'Fixed Rate' },
-          { label: 'Units', value: 'bps', dim: true },
+          { label: 'Histogram', value: binMetricAxisLabel },
+          { label: 'Units', value: binMetricUnit, dim: true },
           {
             label: 'Basis',
             value: basis === 'combined' ? 'Custy + IDB' : basis === 'custy' ? 'Custy only' : 'IDB only',
@@ -338,7 +352,7 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
         </div>
       ) : (
         <div className="flex flex-col gap-1">
-          {metricRows.map((m) => (
+          {displayMetricRows.map((m) => (
             <PercentileRow
               key={m.key}
               metric={{
@@ -355,14 +369,14 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
         <div className="flex flex-col gap-1.5 rounded border border-slate-800 bg-slate-950/60 p-2.5">
           <div className="flex items-center justify-between">
             <div className="text-[10px] uppercase tracking-wider text-slate-500">
-              Distribution · bin width 1 bp
+              Distribution · bin width {formatHistogramValue(binWidth, binMetric)} {binMetricUnit}
             </div>
             <div className="flex items-center gap-3 font-mono text-[10px] text-slate-400">
-              <span>μ {stats.mean.toFixed(1)}</span>
-              <span>σ {stats.stddev.toFixed(2)}</span>
-              <span>P25 {stats.p25.toFixed(1)}</span>
-              <span>P50 {stats.median.toFixed(1)}</span>
-              <span>P75 {stats.p75.toFixed(1)}</span>
+              <span>μ {formatHistogramValue(histogramStats.mean, binMetric)}</span>
+              <span>σ {formatHistogramValue(histogramStats.stddev, binMetric)}</span>
+              <span>P25 {formatHistogramValue(histogramStats.p25, binMetric)}</span>
+              <span>P50 {formatHistogramValue(histogramStats.median, binMetric)}</span>
+              <span>P75 {formatHistogramValue(histogramStats.p75, binMetric)}</span>
             </div>
           </div>
           <div style={{ height: histogramHeight }}>
@@ -419,11 +433,11 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
                     },
                   }}
                 />
-                <Tooltip content={<HistogramTooltip unit={binMetricUnit} />} cursor={{ fill: 'rgba(148,163,184,0.06)' }} />
+                <Tooltip content={<HistogramTooltip unit={binMetricUnit} metric={binMetric} />} cursor={{ fill: 'rgba(148,163,184,0.06)' }} />
                 <ReferenceArea
                   yAxisId="count"
-                  x1={stats.p25}
-                  x2={stats.p75}
+                  x1={histogramStats.p25}
+                  x2={histogramStats.p75}
                   fill="rgba(34, 211, 238, 0.10)"
                   stroke="rgba(34, 211, 238, 0.3)"
                   strokeDasharray="2 4"
@@ -465,12 +479,12 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
                 />
                 <ReferenceLine
                   yAxisId="count"
-                  x={focused.fixed_rate_bps}
+                  x={focusedBinValue}
                   stroke={ANALYTICS_COLORS.focused}
                   strokeWidth={1.5}
                   strokeDasharray="4 4"
                   label={{
-                    value: `${focused.fixed_rate_bps.toFixed(1)}  P${Math.round(primaryPct)}`,
+                    value: `${formatHistogramValue(focusedBinValue, binMetric)}  P${Math.round(selectedMetricPct ?? primaryPct)}`,
                     position: 'top',
                     fill: ANALYTICS_COLORS.focused,
                     fontSize: 10,
@@ -520,7 +534,7 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
               Focused
             </span>
             <span className="ml-auto text-slate-500">
-              Focused sits in bin [{focusedBin ? `${focusedBin.binStart.toFixed(0)}, ${focusedBin.binEnd.toFixed(0)}` : '—'}] ·{' '}
+              Focused sits in bin [{focusedBin ? `${formatHistogramValue(focusedBin.binStart, binMetric)}, ${formatHistogramValue(focusedBin.binEnd, binMetric)}` : '—'}] ·{' '}
               {focusedBin ? focusedBin.total : 0} prints
             </span>
           </div>

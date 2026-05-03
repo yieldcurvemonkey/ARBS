@@ -24,6 +24,18 @@ class TradeQualityFlag(str, Enum):
     COMPRESSION = "COMPRESSION"
 
 
+def _is_true_flag(value) -> bool:
+    """Return True only for explicit true-like scalar flag values."""
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return bool(value)
+
+
 def flag_upfront_payments(
     df: pd.DataFrame,
     payment_type_col: str = "other_payment_type",
@@ -50,9 +62,10 @@ def flag_upfront_payments(
         pmt_type = pd.Series("", index=df.index)
     type_match = pmt_type.astype(str).str.contains("UFRO", na=False)
 
-    pmt_amt = pd.to_numeric(
-        df.get(payment_amount_col), errors="coerce"
-    ).fillna(0)
+    pmt_amt_raw = df.get(payment_amount_col)
+    if pmt_amt_raw is None:
+        pmt_amt_raw = pd.Series(0, index=df.index)
+    pmt_amt = pd.to_numeric(pmt_amt_raw, errors="coerce").fillna(0)
 
     df["is_ufro"] = type_match & (pmt_amt > 0)
     df["ufro_amount"] = np.where(df["is_ufro"], pmt_amt, 0.0)
@@ -130,7 +143,7 @@ def flag_capped_notional(
     df = df.copy()
 
     if cap_col in df.columns:
-        df["is_capped"] = df[cap_col].astype(bool)
+        df["is_capped"] = df[cap_col].map(_is_true_flag).astype(bool)
     else:
         df["is_capped"] = False
 
@@ -163,11 +176,11 @@ def flag_outliers(
 
     def _collect_flags(row) -> List[str]:
         flags: List[str] = []
-        if row.get("is_ufro", False):
+        if _is_true_flag(row.get("is_ufro", False)):
             flags.append(TradeQualityFlag.UFRO.value)
-        if row.get("is_off_market", False):
+        if _is_true_flag(row.get("is_off_market", False)):
             flags.append(TradeQualityFlag.OFF_MARKET.value)
-        if row.get("is_capped", False):
+        if _is_true_flag(row.get("is_capped", False)):
             flags.append(TradeQualityFlag.CAPPED_NOTIONAL.value)
         return flags
 

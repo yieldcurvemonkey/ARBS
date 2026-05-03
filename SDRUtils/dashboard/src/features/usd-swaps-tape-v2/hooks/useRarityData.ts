@@ -24,6 +24,7 @@ export interface UseRarityDataReturn {
   binMetric: RarityBinMetric
   binWidth: number
   stats: DistributionStats
+  binStats: DistributionStats
   metricRows: MetricRow[]
   recency: RecencyBucket | null
   focusedPercentile: FocusedPercentile
@@ -49,9 +50,10 @@ export function useRarityData(
   } = {},
 ): UseRarityDataReturn {
   const [bins, setBins] = useState<HistogramBin[]>([])
-  const [binMetric, setBinMetric] = useState<RarityBinMetric>('fixed_rate')
+  const [binMetric, setBinMetric] = useState<RarityBinMetric>('dv01')
   const [binWidth, setBinWidth] = useState<number>(1)
   const [stats, setStats] = useState<DistributionStats>(EMPTY_STATS)
+  const [binStats, setBinStats] = useState<DistributionStats>(EMPTY_STATS)
   const [metricRows, setMetricRows] = useState<MetricRow[]>([])
   const [recency, setRecency] = useState<RecencyBucket | null>(null)
   const [focusedPercentile, setFocusedPercentile] = useState<FocusedPercentile>(EMPTY_PCT)
@@ -71,6 +73,7 @@ export function useRarityData(
   const fetchData = useCallback(async () => {
     if (!bucket) {
       setBins([]); setStats(EMPTY_STATS); setMetricRows([]); setRecency(null)
+      setBinStats(EMPTY_STATS)
       setFocusedPercentile(EMPTY_PCT)
       return
     }
@@ -108,6 +111,7 @@ export function useRarityData(
       setBinMetric(responseMetric)
       setBinWidth(typeof data.binWidth === 'number' && data.binWidth > 0 ? data.binWidth : 1)
       setStats(data.stats ?? EMPTY_STATS)
+      setBinStats(data.binStats ?? data.stats ?? EMPTY_STATS)
       setMetricRows(data.metricRows ?? [])
       setRecency(data.recency ?? null)
       setFocusedPercentile(data.focusedPercentile ?? EMPTY_PCT)
@@ -130,7 +134,7 @@ export function useRarityData(
   }, [])
 
   return {
-    bins, binMetric, binWidth,
+    bins, binMetric, binWidth, binStats,
     stats, metricRows, recency, focusedPercentile,
     loading, error, refetch: fetchData,
   }

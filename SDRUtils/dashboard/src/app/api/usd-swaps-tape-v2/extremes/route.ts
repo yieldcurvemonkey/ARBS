@@ -6,13 +6,15 @@
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import {
-  platformCaseSql,
+  packageAnalyticsCtes,
+  packageAnalyticsFilterPredicate,
   rateToBps,
   safeNum,
 } from '@/lib/usd-swaps-tape-v2/analytics'
 
 // Phase 2 cutover: extremes reads from the v2 leg table.
 const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
 
 type ExtremeDbRow = {
   label: string
@@ -44,24 +46,13 @@ export async function GET(req: Request) {
     )
   }
   const groupBy = (searchParams.get('groupBy') ?? 'tape_label').toLowerCase()
-  const groupCol: Record<string, string> = {
-    tape_label: 'l.tape_label',
-    package: 'l.package_id',
-    trade_type: 'l.trade_type',
-    tenor: 'l.tenor_label',
-    // Phase 4: canonical underlier — see /analytics-timeseries route
-    // and SDRUtils/core/underlier_canonical.py for the collapsing rule.
-    canonical: 'l.canonical_underlier_key',
-  }
-  const filterCol = groupCol[groupBy]
-  if (!filterCol) {
+  const filterPredicate = packageAnalyticsFilterPredicate(groupBy, '$1', LEGS_TABLE)
+  if (!filterPredicate) {
     return NextResponse.json(
       { error: `invalid groupBy: ${groupBy}` },
       { status: 400 },
     )
   }
-
-  const platformExpr = platformCaseSql('l')
   const focusedRateBps = Number(searchParams.get('focusedRate') ?? 'NaN')
   const focusedNotional = Number(searchParams.get('focusedNotional') ?? 'NaN')
   const primaryTol = Number(searchParams.get('primaryTol') ?? '2.0')
@@ -87,37 +78,42 @@ export async function GET(req: Request) {
       sinceParamIdx: number | null,
     ) => {
       const sinceFilter = sinceParamIdx
-        ? `AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $${sinceParamIdx}::timestamptz`
+        ? `AND ts >= $${sinceParamIdx}::timestamptz`
         : ''
       return `
         (SELECT
            '${labelLit}'::text AS label,
            '${scopeLit}'::text AS scope,
-           l.fixed_rate::float AS fixed_rate,
-           l.risk::float AS risk,
-           l.notional::float AS notional,
-           COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
-           l.venue AS venue,
-           ${platformExpr} AS platform
-         FROM ${LEGS_TABLE} l
-         WHERE ${filterCol} = $1
-           AND l.fixed_rate IS NOT NULL
-           AND NOT COALESCE(l.is_unwind, false)
+           fixed_rate,
+           risk,
+           notional,
+           ts,
+           venue,
+           platform
+         FROM package_summary
+         WHERE fixed_rate IS NOT NULL
            ${sinceFilter}
          ORDER BY ${orderClause}
          LIMIT 1)
       `
     }
-    const sql = [
-      branch('All-time high rate', 'All-time', 'l.fixed_rate DESC NULLS LAST', null),
-      branch('All-time low rate', 'All-time', 'l.fixed_rate ASC NULLS LAST', null),
-      branch('All-time largest notional', 'All-time', 'ABS(l.notional) DESC NULLS LAST', null),
-      branch('All-time largest DV01', 'All-time', 'ABS(l.risk) DESC NULLS LAST', null),
-      branch('52w high rate', '52 weeks', 'l.fixed_rate DESC NULLS LAST', 2),
-      branch('52w low rate', '52 weeks', 'l.fixed_rate ASC NULLS LAST', 2),
-      branch('30d high rate', '30 days', 'l.fixed_rate DESC NULLS LAST', 3),
-      branch('30d low rate', '30 days', 'l.fixed_rate ASC NULLS LAST', 3),
-    ].join(' UNION ALL ')
+    const sql = `
+      WITH ${packageAnalyticsCtes({
+        packagesTable: PACKAGES_TABLE,
+        legsTable: LEGS_TABLE,
+        filterPredicate,
+      })}
+      ${[
+        branch('All-time high rate', 'All-time', 'fixed_rate DESC NULLS LAST', null),
+        branch('All-time low rate', 'All-time', 'fixed_rate ASC NULLS LAST', null),
+        branch('All-time largest notional', 'All-time', 'ABS(notional) DESC NULLS LAST', null),
+        branch('All-time largest DV01', 'All-time', 'ABS(risk) DESC NULLS LAST', null),
+        branch('52w high rate', '52 weeks', 'fixed_rate DESC NULLS LAST', 2),
+        branch('52w low rate', '52 weeks', 'fixed_rate ASC NULLS LAST', 2),
+        branch('30d high rate', '30 days', 'fixed_rate DESC NULLS LAST', 3),
+        branch('30d low rate', '30 days', 'fixed_rate ASC NULLS LAST', 3),
+      ].join(' UNION ALL ')}
+    `
 
     const { rows: extremeRows } = await query<ExtremeDbRow>(sql, [value, d52w, d30d])
 
@@ -140,7 +136,7 @@ export async function GET(req: Request) {
         ? focusedNotional * sizeTol
         : null
       const sizeFilter = sizeBand
-        ? `AND ABS(ABS(l.notional) - $5::float) <= $6::float`
+        ? `AND ABS(ABS(notional) - $5::float) <= $6::float`
         : ''
       const sParams: unknown[] = [
         value,
@@ -150,21 +146,23 @@ export async function GET(req: Request) {
       ]
       if (sizeBand) sParams.push(focusedNotional, sizeBand)
       const similarSql = `
+        WITH ${packageAnalyticsCtes({
+          packagesTable: PACKAGES_TABLE,
+          legsTable: LEGS_TABLE,
+          filterPredicate,
+          timePredicate: 'COALESCE(p.original_execution_start, p.execution_start) >= $2::timestamptz',
+        })}
         SELECT
-          COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
-          l.fixed_rate::float AS fixed_rate,
-          l.risk::float AS risk,
-          l.notional::float AS notional,
-          ${platformExpr} AS platform,
-          l.venue AS venue
-        FROM ${LEGS_TABLE} l
-        WHERE ${filterCol} = $1
-          AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $2::timestamptz
-          AND l.fixed_rate IS NOT NULL
-          AND ABS(l.fixed_rate - $3::float) <= $4::float
+          ts,
+          fixed_rate,
+          risk,
+          notional,
+          platform,
+          venue
+        FROM package_summary
+        WHERE ABS(fixed_rate - $3::float) <= $4::float
           ${sizeFilter}
-          AND NOT COALESCE(l.is_unwind, false)
-        ORDER BY COALESCE(l.original_execution_timestamp, l.execution_timestamp) DESC
+        ORDER BY ts DESC
         LIMIT 8
       `
       const res = await query<SimilarDbRow>(similarSql, sParams)

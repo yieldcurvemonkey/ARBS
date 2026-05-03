@@ -36,8 +36,11 @@ export function fmtBps(n: number | null | undefined, digits = 2): string {
 
 // DV01 in USD/bp, compact with K / MM suffix. Delegates to the feature's
 // headline-snapping formatter so numbers match the tape column.
-export function fmtDv01Compact(n: number | null | undefined): string {
-  return formatDv01(n)
+export function fmtDv01Compact(
+  n: number | null | undefined,
+  opts: { signed?: boolean; signNegativeOnly?: boolean } = {},
+): string {
+  return formatDv01(n, opts)
 }
 
 // Notional in USD millions — "173.4" for 173,410,000. No suffix: callers

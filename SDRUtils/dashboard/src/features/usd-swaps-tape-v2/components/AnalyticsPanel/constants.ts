@@ -84,13 +84,22 @@ export const TIMESERIES_DEFAULT_STATE = {
 
 export const RARITY_DEFAULT_STATE = {
   basis: 'combined' as const,
-  histogramMetric: 'fixed_rate' as const,
+  histogramMetric: 'dv01' as const,
   settingsOpen: false,
   primaryTol: 2.0,
   sizeTol: 0.25,
 }
 
+export const LEVELS_DEFAULT_STATE = {
+  platform: 'all' as const,
+  scope: 'all' as const,
+  sortBy: 'relevance' as const,
+  recentSortBy: 'newest' as const,
+  primaryTol: '2.0',
+  sizeTolPct: '25',
+}
+
 // localStorage key for the rarity tab's per-trader preferences. Bumped
 // on incompatible shape changes so old payloads parse cleanly to the
 // default state instead of crashing the dock.
-export const RARITY_PREFS_STORAGE_KEY = 'usd-swaps-tape-v2/rarity-prefs/v1'
+export const RARITY_PREFS_STORAGE_KEY = 'usd-swaps-tape-v2/rarity-prefs/v2'

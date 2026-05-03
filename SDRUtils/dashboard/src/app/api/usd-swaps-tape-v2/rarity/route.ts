@@ -7,9 +7,10 @@ import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import {
   distributionStats,
+  packageAnalyticsCtes,
+  packageAnalyticsFilterPredicate,
   percentile,
   percentileRank,
-  platformCaseSql,
   rarityDescriptor,
   rarityZone,
   rateToBps,
@@ -19,6 +20,7 @@ import {
 // Phase 2 cutover: rarity reads from the v2 leg table to pick up the
 // composite (filter, original_execution_timestamp DESC) indexes.
 const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
 
 // Phase 2 cap: trim the worst-case sample pull. 50k SDR legs over a 90d
 // lookback is already plenty for a stable distribution; rare buckets
@@ -45,6 +47,29 @@ type RecordRow = {
   platform: 'IDB' | 'CUSTY' | null
 }
 
+export type SimilaritySample = {
+  fixed_rate: number | null
+  notional: number | null
+}
+
+export function sampleMatchesSimilarity(
+  sample: SimilaritySample,
+  opts: {
+    focusedRateBps: number
+    primaryTol: number
+    focusedNotional: number
+    sizeTolPct: number
+  },
+): boolean {
+  if (!Number.isFinite(opts.focusedRateBps)) return false
+  const rateOk =
+    Math.abs(rateToBps(sample.fixed_rate) - opts.focusedRateBps) <= opts.primaryTol
+  if (!rateOk) return false
+  if (!Number.isFinite(opts.focusedNotional)) return true
+  const sizeTol = opts.focusedNotional * opts.sizeTolPct
+  return Math.abs(Math.abs(safeNum(sample.notional)) - opts.focusedNotional) <= sizeTol
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const value = searchParams.get('value')
@@ -55,17 +80,8 @@ export async function GET(req: Request) {
     )
   }
   const groupBy = (searchParams.get('groupBy') ?? 'tape_label').toLowerCase()
-  const groupCol: Record<string, string> = {
-    tape_label: 'l.tape_label',
-    package: 'l.package_id',
-    trade_type: 'l.trade_type',
-    tenor: 'l.tenor_label',
-    // Phase 4: groupBy=canonical lets the dashboard pull a single
-    // distribution across SDR-feed name variations of the same swap.
-    canonical: 'l.canonical_underlier_key',
-  }
-  const filterCol = groupCol[groupBy]
-  if (!filterCol) {
+  const filterPredicate = packageAnalyticsFilterPredicate(groupBy, '$1', LEGS_TABLE)
+  if (!filterPredicate) {
     return NextResponse.json(
       { error: `invalid groupBy: ${groupBy}` },
       { status: 400 },
@@ -88,27 +104,28 @@ export async function GET(req: Request) {
       : 'fixed_rate'
   const binWidthOverride = searchParams.get('binWidth')
 
-  const platformExpr = platformCaseSql('l')
   const startDate = new Date(Date.now() - lookback * 86_400_000).toISOString()
 
   try {
     // Pull the full sample set for stats + histogram + recency.
     const sampleSql = `
+      WITH ${packageAnalyticsCtes({
+        packagesTable: PACKAGES_TABLE,
+        legsTable: LEGS_TABLE,
+        filterPredicate,
+        timePredicate: 'COALESCE(p.original_execution_start, p.execution_start) >= $2::timestamptz',
+      })}
       SELECT
-        COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
-        l.fixed_rate::float AS fixed_rate,
-        l.risk::float AS risk,
-        l.notional::float AS notional,
-        ${platformExpr} AS platform,
-        l.venue AS venue,
-        l.trade_id AS trade_id,
-        l.package_id AS package_id
-      FROM ${LEGS_TABLE} l
-      WHERE ${filterCol} = $1
-        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $2::timestamptz
-        AND l.fixed_rate IS NOT NULL
-        AND NOT COALESCE(l.is_unwind, false)
-      ORDER BY COALESCE(l.original_execution_timestamp, l.execution_timestamp) DESC
+        ts,
+        fixed_rate,
+        risk,
+        notional,
+        platform,
+        venue,
+        trade_id,
+        package_id
+      FROM package_summary
+      ORDER BY ts DESC
       LIMIT ${RARITY_SAMPLE_CAP}
     `
     const { rows: samples } = await query<SampleRow>(sampleSql, [value, startDate])
@@ -206,9 +223,10 @@ export async function GET(req: Request) {
       b.kdeScaled = (kde / maxKde) * maxCount * 0.95
     }
 
-    // Per-metric percentile rows. Fixed-rate row uses the combined basis
-    // here; the client overrides it when the trader toggles Custy/IDB
-    // basis (rareity tab re-maps primary percentile on the fly).
+    // Per-metric percentile rows. DV01 is primary for desk usage:
+    // it is a better risk/wallet proxy than raw print count or rate
+    // level. Fixed-rate row still uses the combined basis here; the
+    // client overrides it when the trader toggles Custy/IDB basis.
     const metricRows = [
       {
         key: 'fixed_rate',
@@ -219,7 +237,7 @@ export async function GET(req: Request) {
         zone: rarityZone(focusedPctCombined),
         descriptor: rarityDescriptor(focusedPctCombined),
         sampleSize: stats.count,
-        primary: true,
+        primary: !Number.isFinite(focusedDv01),
         showPercentile: true,
       },
       ...(Number.isFinite(focusedDv01)
@@ -236,6 +254,7 @@ export async function GET(req: Request) {
               zone: rarityZone(percentileRank(focusedDv01, sortedDv01)),
               descriptor: rarityDescriptor(percentileRank(focusedDv01, sortedDv01)),
               sampleSize: sortedDv01.length,
+              primary: true,
               showPercentile: true,
             },
           ]
@@ -259,44 +278,38 @@ export async function GET(req: Request) {
 
     // Recency — "last similar", frequency in lookback, bucket rank.
     let lastSimilar: typeof samples[number] | null = null
+    const similarityOpts = {
+      focusedRateBps,
+      primaryTol,
+      focusedNotional,
+      sizeTolPct,
+    }
     if (Number.isFinite(focusedRateBps)) {
-      const tolBps = primaryTol
-      const sizeTol = Number.isFinite(focusedNotional) ? focusedNotional * sizeTolPct : Infinity
-      lastSimilar = samples.find((s) => {
-        const rateOk = Math.abs(rateToBps(s.fixed_rate) - focusedRateBps) <= tolBps
-        const sizeOk = Math.abs(Math.abs(safeNum(s.notional)) - focusedNotional) <= sizeTol
-        return rateOk && sizeOk
-      }) ?? null
+      lastSimilar = samples.find((s) => sampleMatchesSimilarity(s, similarityOpts)) ?? null
     }
     const frequencyCount = Number.isFinite(focusedRateBps)
-      ? samples.filter(
-          (s) => Math.abs(rateToBps(s.fixed_rate) - focusedRateBps) <= primaryTol,
-        ).length
+      ? samples.filter((s) => sampleMatchesSimilarity(s, similarityOpts)).length
       : 0
     const avgIntervalDays = frequencyCount > 1 ? lookback / frequencyCount : lookback
 
     // All-time records within the bucket (no lookback cutoff).
     const recordSql = `
-      (SELECT l.fixed_rate::float AS fixed_rate, l.risk::float AS risk, l.notional::float AS notional,
-              COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
-              l.venue AS venue, ${platformExpr} AS platform
-       FROM ${LEGS_TABLE} l
-       WHERE ${filterCol} = $1 AND l.fixed_rate IS NOT NULL AND NOT COALESCE(l.is_unwind, false)
-       ORDER BY l.fixed_rate DESC NULLS LAST LIMIT 1)
+      WITH ${packageAnalyticsCtes({
+        packagesTable: PACKAGES_TABLE,
+        legsTable: LEGS_TABLE,
+        filterPredicate,
+      })}
+      (SELECT fixed_rate, risk, notional, ts, venue, platform
+       FROM package_summary
+       ORDER BY fixed_rate DESC NULLS LAST LIMIT 1)
       UNION ALL
-      (SELECT l.fixed_rate::float, l.risk::float, l.notional::float,
-              COALESCE(l.original_execution_timestamp, l.execution_timestamp),
-              l.venue, ${platformExpr}
-       FROM ${LEGS_TABLE} l
-       WHERE ${filterCol} = $1 AND l.fixed_rate IS NOT NULL AND NOT COALESCE(l.is_unwind, false)
-       ORDER BY l.fixed_rate ASC NULLS LAST LIMIT 1)
+      (SELECT fixed_rate, risk, notional, ts, venue, platform
+       FROM package_summary
+       ORDER BY fixed_rate ASC NULLS LAST LIMIT 1)
       UNION ALL
-      (SELECT l.fixed_rate::float, l.risk::float, l.notional::float,
-              COALESCE(l.original_execution_timestamp, l.execution_timestamp),
-              l.venue, ${platformExpr}
-       FROM ${LEGS_TABLE} l
-       WHERE ${filterCol} = $1 AND l.notional IS NOT NULL AND NOT COALESCE(l.is_unwind, false)
-       ORDER BY ABS(l.notional) DESC NULLS LAST LIMIT 1)
+      (SELECT fixed_rate, risk, notional, ts, venue, platform
+       FROM package_summary
+       ORDER BY ABS(notional) DESC NULLS LAST LIMIT 1)
     `
     const { rows: records } = await query<RecordRow>(recordSql, [value])
     const [highRate, lowRate, largestNotional] = [records[0], records[1], records[2]]
@@ -314,6 +327,7 @@ export async function GET(req: Request) {
       binMetric,
       binWidth: safeBinWidth,
       stats,
+      binStats: valueStats,
       metricRows,
       recency: {
         lastSimilar: lastSimilar

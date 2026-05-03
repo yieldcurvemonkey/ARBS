@@ -17,7 +17,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { ANALYTICS_COLORS, fmtDv01Compact, fmtTickTs, fmtTs } from './analytics-format'
+import { ANALYTICS_COLORS, fmtDv01Compact } from './analytics-format'
 import {
   ANALYTICS_METRICS,
   ANALYTICS_RANGES,
@@ -26,6 +26,13 @@ import {
 } from './constants'
 import { NumberInput, PlatformDot, Pill, SegGroup, ToggleSwitch } from './controls'
 import { AssumptionsStrip } from './AssumptionsStrip'
+import {
+  effectiveTimeseriesMetric,
+  focusedTimeseriesValue,
+  formatTimeseriesTickParts,
+  formatTimeseriesTooltipTime,
+  projectTimeseriesPoint,
+} from './TimeseriesTab.helpers'
 import type {
   AnalyticsMetricKey,
   AnalyticsRangeKey,
@@ -45,23 +52,51 @@ interface TsTooltipProps {
   active?: boolean
   payload?: Array<{ payload: TimeseriesPointAug }>
   viewKey: AnalyticsViewKey
+  metricKey: AnalyticsMetricKey
   unit: string
+  focused: FocusedTrade
 }
 
-function TsTooltip({ active, payload, viewKey, unit }: TsTooltipProps): JSX.Element | null {
+function formatTooltipMetric(value: number, metricKey: AnalyticsMetricKey): string {
+  if (metricKey === 'dv01') return fmtDv01Compact(value, { signNegativeOnly: true })
+  if (metricKey === 'notional') return value.toFixed(1)
+  return value.toFixed(2)
+}
+
+function TooltipRow(props: {
+  label: string
+  value: string
+  accent?: 'sky' | 'amber' | 'slate'
+}): JSX.Element {
+  const valueColor =
+    props.accent === 'sky' ? 'text-sky-100'
+    : props.accent === 'amber' ? 'text-amber-100'
+    : 'text-slate-100'
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-slate-500">{props.label}</span>
+      <span className={`${valueColor} text-right tabular-nums`}>{props.value}</span>
+    </div>
+  )
+}
+
+function TsTooltip({ active, payload, metricKey, unit, focused }: TsTooltipProps): JSX.Element | null {
   if (!active || !payload || payload.length === 0) return null
   const d = payload[0].payload
+  const hoveredTime = formatTimeseriesTooltipTime(d.ts)
+  const focusedTime = formatTimeseriesTooltipTime(focused.execution_start)
   return (
-    <div className="rounded border border-slate-700 bg-slate-950/95 px-2.5 py-2 font-mono text-[11px] text-slate-200 shadow-xl">
-      <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">
-        {viewKey === 'INTRADAY'
-          ? new Date(d.ts).toLocaleString('en-US', {
-              timeZone: 'America/New_York',
-              month: 'short', day: '2-digit',
-              hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-            })
-          : fmtTs(d.ts, { dateOnly: true })}
+    <div className="w-[285px] rounded border border-slate-700 bg-slate-950/95 px-2.5 py-2 font-mono text-[11px] text-slate-200 shadow-xl">
+      <div className="mb-1.5 grid grid-cols-[72px_1fr] gap-x-2 gap-y-0.5 text-[10px]">
+        <span className="uppercase tracking-wide text-slate-500">Date</span>
+        <span className="text-slate-200">{hoveredTime.date}</span>
+        <span className="uppercase tracking-wide text-slate-500">Timestamp</span>
+        <span className="text-slate-200">{hoveredTime.timestamp} {hoveredTime.timezone}</span>
       </div>
+      <div className="border-t border-slate-800 pt-1">
+        <div className="mb-0.5 text-[9.5px] uppercase tracking-wider text-slate-500">
+          Hovered print bucket
+        </div>
       {typeof d.idbClose === 'number' ? (
         <div className="flex items-center justify-between gap-3">
           <span className="flex items-center gap-1.5">
@@ -69,7 +104,7 @@ function TsTooltip({ active, payload, viewKey, unit }: TsTooltipProps): JSX.Elem
             IDB
           </span>
           <span className="text-sky-100">
-            {d.idbClose.toFixed(2)} <span className="text-slate-500">{unit}</span>
+            {formatTooltipMetric(d.idbClose, metricKey)} <span className="text-slate-500">{unit}</span>
           </span>
         </div>
       ) : null}
@@ -80,27 +115,21 @@ function TsTooltip({ active, payload, viewKey, unit }: TsTooltipProps): JSX.Elem
             Custy
           </span>
           <span className="text-amber-100">
-            {d.custyClose.toFixed(2)} <span className="text-slate-500">{unit}</span>
+            {formatTooltipMetric(d.custyClose, metricKey)} <span className="text-slate-500">{unit}</span>
           </span>
         </div>
       ) : null}
-      {viewKey === 'VOLUME' && typeof d.idbDv01 === 'number' ? (
-        <>
-          <div className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: ANALYTICS_COLORS.idb }} />
-              IDB DV01
-            </span>
-            <span className="text-sky-100">{fmtDv01Compact(d.idbDv01)}</span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: ANALYTICS_COLORS.custy }} />
-              Custy DV01
-            </span>
-            <span className="text-amber-100">{fmtDv01Compact(d.custyDv01 ?? null)}</span>
-          </div>
-        </>
+      {typeof d.idbDv01 === 'number' || typeof d.custyDv01 === 'number' ? (
+        <TooltipRow
+          label="DV01 IDB/Custy"
+          value={`${fmtDv01Compact(d.idbDv01 ?? null, { signNegativeOnly: true })} / ${fmtDv01Compact(d.custyDv01 ?? null, { signNegativeOnly: true })}`}
+        />
+      ) : null}
+      {typeof d.idbNotional === 'number' || typeof d.custyNotional === 'number' ? (
+        <TooltipRow
+          label="Notional IDB/Custy"
+          value={`${((d.idbNotional ?? 0) / 1e6).toFixed(0)} / ${((d.custyNotional ?? 0) / 1e6).toFixed(0)} MM`}
+        />
       ) : null}
       {typeof d.idbPrints === 'number' ? (
         <div className="mt-1 border-t border-slate-800 pt-1 text-[10px] text-slate-400">
@@ -108,7 +137,63 @@ function TsTooltip({ active, payload, viewKey, unit }: TsTooltipProps): JSX.Elem
           IDB {d.idbPrints} · Custy {d.custyPrints ?? '—'}
         </div>
       ) : null}
+      </div>
+      <div className="mt-1 border-t border-slate-800 pt-1">
+        <div className="mb-0.5 text-[9.5px] uppercase tracking-wider text-slate-500">
+          Focused trade
+        </div>
+        <TooltipRow
+          label="Trade"
+          value={`${focused.side} ${focused.tape_label}`}
+          accent={focused.platform === 'IDB' ? 'sky' : 'amber'}
+        />
+        <TooltipRow label="Rate" value={`${focused.fixed_rate_bps.toFixed(2)} bps`} />
+        <TooltipRow
+          label="DV01 / Notional"
+          value={`${fmtDv01Compact(focused.dv01_usd_per_bp)} / ${(focused.notional_usd / 1e6).toFixed(0)} MM`}
+        />
+        <TooltipRow label="Venue" value={`${focused.platform} ${focused.venue}`} />
+        <TooltipRow label="Executed" value={`${focusedTime.date} ${focusedTime.timestamp} ${focusedTime.timezone}`} />
+      </div>
     </div>
+  )
+}
+
+function TsAxisTick(props: {
+  x?: number
+  y?: number
+  payload?: { value?: string | number }
+  viewKey: AnalyticsViewKey
+}): JSX.Element | null {
+  if (props.x == null || props.y == null) return null
+  const parts = formatTimeseriesTickParts(String(props.payload?.value ?? ''), props.viewKey)
+  return (
+    <g transform={`translate(${props.x},${props.y})`}>
+      <text
+        x={0}
+        y={0}
+        dy={4}
+        textAnchor="middle"
+        fill={ANALYTICS_COLORS.slate400}
+        fontSize={10}
+        fontFamily="ui-monospace"
+      >
+        {parts.primary}
+      </text>
+      {parts.secondary ? (
+        <text
+          x={0}
+          y={12}
+          dy={4}
+          textAnchor="middle"
+          fill={ANALYTICS_COLORS.slate500}
+          fontSize={9}
+          fontFamily="ui-monospace"
+        >
+          {parts.secondary}
+        </text>
+      ) : null}
+    </g>
   )
 }
 
@@ -145,12 +230,16 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
     showDots, useGrossDv01, excludeComicallyLargeCusty, yMin, yMax,
   } = state
 
-  const metricConf = ANALYTICS_METRICS.find((m) => m.key === metric) ?? ANALYTICS_METRICS[0]
+  const effectiveMetric = effectiveTimeseriesMetric(metric, view)
+  const metricConf = ANALYTICS_METRICS.find((m) => m.key === effectiveMetric) ?? ANALYTICS_METRICS[0]
   const isIntraday = view === 'INTRADAY'
   // DV01 always renders as stacked bars; VOLUME view forces bars for any
   // metric (trader's vega-style volume chart ask). Fixed rate, spread,
   // and tenor stay as line plots.
-  const renderBars = view === 'VOLUME' || metric === 'dv01'
+  const renderBars =
+    view === 'VOLUME' ||
+    effectiveMetric === 'dv01' ||
+    effectiveMetric === 'notional'
   const rawData = isIntraday ? intraday : filterRangeDays(dailyClose, range)
 
   // Re-project the series for metrics other than fixed_rate. Null stays
@@ -158,43 +247,10 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
   // instead of dropping to zero, which would otherwise drag the y-axis
   // down to the floor and flatten the visible signal.
   const data = useMemo(() => {
-    return rawData.map((d, i) => {
-      let idb: number | null = d.idbClose ?? null
-      let custy: number | null = d.custyClose ?? null
-      if (metric === 'spread_to_mid') {
-        idb = d.idbClose != null && d.custyClose != null ? (d.idbClose - d.custyClose) * 0.6 : null
-        custy = d.idbClose != null && d.custyClose != null ? (d.custyClose - d.idbClose) * 0.6 : null
-      } else if (metric === 'dv01') {
-        idb = d.idbDv01 != null ? d.idbDv01 / 1000 : null
-        custy = d.custyDv01 != null ? d.custyDv01 / 1000 : null
-      } else if (metric === 'notional') {
-        // Rough DV01-to-notional ratio for the preview; real notional
-        // series wires through once the timeseries route takes metric=.
-        idb = d.idbDv01 != null ? (d.idbDv01 * 11.5) / 1e6 : null
-        custy = d.custyDv01 != null ? (d.custyDv01 * 11.5) / 1e6 : null
-      } else if (metric === 'tenor_years') {
-        idb = focused.tenor_years
-        custy = focused.tenor_years
-      }
-      return {
-        ...d,
-        idxPos: i,
-        idbClose: idb != null ? +idb.toFixed(2) : null,
-        custyClose: custy != null ? +custy.toFixed(2) : null,
-      }
-    })
-  }, [rawData, metric, focused.tenor_years])
+    return rawData.map((d, i) => projectTimeseriesPoint(d, i, effectiveMetric, focused))
+  }, [rawData, effectiveMetric, focused])
 
-  const focusedValue =
-    metric === 'fixed_rate'
-      ? focused.fixed_rate_bps
-      : metric === 'dv01'
-        ? focused.dv01_usd_per_bp / 1000
-        : metric === 'notional'
-          ? focused.notional_usd / 1e6
-          : metric === 'spread_to_mid'
-            ? -0.9
-            : focused.tenor_years
+  const focusedValue = focusedTimeseriesValue(focused, effectiveMetric)
 
   // Recharts treats numeric domain values as hard limits only when paired
   // with a non-string companion. When yMin is set but yMax is 'auto',
@@ -207,14 +263,14 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
   const allowDataOverflow = yMin !== '' || yMax !== ''
 
   const yFmt = (v: number): string => {
-    if (metric === 'fixed_rate' || metric === 'spread_to_mid') return v.toFixed(1)
-    if (metric === 'dv01' || view === 'VOLUME') {
+    if (effectiveMetric === 'fixed_rate' || effectiveMetric === 'spread_to_mid') return v.toFixed(1)
+    if (effectiveMetric === 'dv01') {
       const abs = Math.abs(v)
       if (abs >= 1e6) return `${(v / 1e6).toFixed(1)}M`
       if (abs >= 1e3) return `${Math.round(v / 1e3)}K`
       return v.toFixed(0)
     }
-    if (metric === 'notional') return v.toFixed(0)
+    if (effectiveMetric === 'notional') return v.toFixed(0)
     return String(v)
   }
 
@@ -371,16 +427,27 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
         style={{ height: chartHeight }}
       >
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 12, right: 60, bottom: 20, left: 48 }}>
+          <ComposedChart data={data} margin={{ top: 12, right: 60, bottom: 34, left: 48 }}>
             <CartesianGrid stroke={ANALYTICS_COLORS.grid} vertical={false} />
             <XAxis
               dataKey="ts"
               stroke={ANALYTICS_COLORS.axis}
-              tick={{ fontSize: 10, fill: ANALYTICS_COLORS.slate400, fontFamily: 'ui-monospace' }}
-              tickFormatter={(ts) => fmtTickTs(String(ts), view)}
+              tick={<TsAxisTick viewKey={view} />}
               minTickGap={48}
               axisLine={{ stroke: ANALYTICS_COLORS.slate800 }}
               tickLine={{ stroke: ANALYTICS_COLORS.slate800 }}
+              label={{
+                value: view === 'INTRADAY' ? 'NY date / timestamp' : 'NY trade date',
+                position: 'insideBottom',
+                offset: -22,
+                style: {
+                  fill: ANALYTICS_COLORS.slate500,
+                  fontSize: 9,
+                  fontFamily: 'ui-monospace',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                },
+              }}
             />
             <YAxis
               stroke={ANALYTICS_COLORS.axis}
@@ -405,11 +472,15 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               }}
             />
             <Tooltip
-              content={<TsTooltip viewKey={view} unit={metricConf.unit} />}
+              content={<TsTooltip viewKey={view} metricKey={effectiveMetric} unit={metricConf.unit} focused={focused} />}
               cursor={{ stroke: ANALYTICS_COLORS.slate700, strokeDasharray: '3 3' }}
+              allowEscapeViewBox={{ x: true, y: true }}
+              offset={18}
+              wrapperStyle={{ pointerEvents: 'none', zIndex: 20 }}
+              position={{ x: 72, y: 8 }}
             />
 
-            {metric === 'fixed_rate' && showSigmaBands && !renderBars ? (
+            {effectiveMetric === 'fixed_rate' && showSigmaBands && !renderBars ? (
               <ReferenceArea
                 y1={stats.mean - 2 * stats.stddev}
                 y2={stats.mean + 2 * stats.stddev}
@@ -417,7 +488,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
                 ifOverflow="hidden"
               />
             ) : null}
-            {metric === 'fixed_rate' && showSigmaBands && !renderBars ? (
+            {effectiveMetric === 'fixed_rate' && showSigmaBands && !renderBars ? (
               <ReferenceArea
                 y1={stats.mean - stats.stddev}
                 y2={stats.mean + stats.stddev}
@@ -426,7 +497,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               />
             ) : null}
 
-            {metric === 'fixed_rate' && showIqrBand && !renderBars ? (
+            {effectiveMetric === 'fixed_rate' && showIqrBand && !renderBars ? (
               <ReferenceArea
                 y1={stats.p25}
                 y2={stats.p75}
@@ -444,7 +515,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               />
             ) : null}
 
-            {metric === 'fixed_rate' && !renderBars ? (
+            {effectiveMetric === 'fixed_rate' && !renderBars ? (
               <ReferenceLine
                 y={focusedValue}
                 stroke={ANALYTICS_COLORS.focused}
@@ -463,20 +534,20 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
 
             {renderBars && showCusty ? (
               <Bar
-                dataKey="custyDv01"
+                dataKey="custyClose"
                 stackId="dv01"
                 fill={ANALYTICS_COLORS.custy}
                 fillOpacity={0.85}
-                name="Custy DV01"
+                name={`Custy ${metricConf.label}`}
               />
             ) : null}
             {renderBars && showIdb ? (
               <Bar
-                dataKey="idbDv01"
+                dataKey="idbClose"
                 stackId="dv01"
                 fill={ANALYTICS_COLORS.idb}
                 fillOpacity={0.9}
-                name="IDB DV01"
+                name={`IDB ${metricConf.label}`}
               />
             ) : null}
             {!renderBars && showCusty ? (
@@ -506,7 +577,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               />
             ) : null}
 
-            {metric === 'fixed_rate' && !renderBars && data.length > 0 ? (
+            {effectiveMetric === 'fixed_rate' && !renderBars && data.length > 0 ? (
               <ReferenceDot
                 x={data[data.length - 1].ts}
                 y={focusedValue}
@@ -529,7 +600,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               IDB
             </span>
           ) : null}
-          {metric === 'fixed_rate' && !renderBars ? (
+          {effectiveMetric === 'fixed_rate' && !renderBars ? (
             <span className="flex items-center gap-1.5">
               <span
                 className="inline-block h-[2px] w-4 border-t border-dashed"
@@ -538,7 +609,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               Focused trade
             </span>
           ) : null}
-          {metric === 'fixed_rate' && showIqrBand && !renderBars ? (
+          {effectiveMetric === 'fixed_rate' && showIqrBand && !renderBars ? (
             <span className="flex items-center gap-1.5">
               <span
                 className="inline-block h-2 w-3 rounded-sm"

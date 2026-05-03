@@ -9,7 +9,7 @@
 //             summary.opa  = back_opa - front_opa
 //   FLY:      summary.rate = (belly_rate - front_rate) - (back_rate - belly_rate)
 //                          = 2*belly_rate - front_rate - back_rate
-//             summary.risk = back_leg.risk
+//             summary.risk = belly_leg.risk
 //             summary.opa  = (belly_opa - front_opa) - (back_opa - belly_opa)
 //                          = 2*belly_opa - front_opa - back_opa
 //
@@ -44,7 +44,16 @@ function sortByTenorAsc(legs: UsdSwapTapeLeg[]): UsdSwapTapeLeg[] {
 
 export function computeLegSummary(row: UsdSwapTapeRow): LegSummary {
   const legs = sortByTenorAsc((row.legs_json ?? []) as UsdSwapTapeLeg[])
-  const kind = String(row.package_type ?? row.trade_type ?? '').toUpperCase()
+  const kindContext = [
+    row.package_type,
+    row.trade_type,
+    row.tape_label,
+    row.package_structure,
+  ]
+    .map((v) => String(v ?? '').toUpperCase())
+    .join(' ')
+  const isCurve = /(^|[^A-Z0-9])CURVE([^A-Z0-9]|$)/.test(kindContext)
+  const isFly = /(^|[^A-Z0-9])FLY([^A-Z0-9]|$)/.test(kindContext)
   const ptp = toNum(row.package_transaction_price)
   const pts = toNum(row.package_transaction_spread)
 
@@ -52,7 +61,7 @@ export function computeLegSummary(row: UsdSwapTapeRow): LegSummary {
     return { rate: null, risk: null, opa: null, ptp, pts }
   }
 
-  if (kind === 'CURVE' && legs.length >= 2) {
+  if (isCurve && legs.length >= 2) {
     const front = legs[0]
     const back = legs[legs.length - 1]
     const frate = toNum(front.fixed_rate)
@@ -68,7 +77,7 @@ export function computeLegSummary(row: UsdSwapTapeRow): LegSummary {
     }
   }
 
-  if (kind === 'FLY' && legs.length >= 3) {
+  if (isFly && legs.length >= 3) {
     const front = legs[0]
     // Belly = middle-tenor leg after sort (len // 2).
     const belly = legs[Math.floor(legs.length / 2)]
@@ -84,7 +93,7 @@ export function computeLegSummary(row: UsdSwapTapeRow): LegSummary {
         frate !== null && mrate !== null && brate !== null
           ? 2 * mrate - frate - brate
           : null,
-      risk: toNum(back.risk),
+      risk: toNum(belly.risk),
       opa:
         fopa !== null && mopa !== null && bopa !== null
           ? 2 * mopa - fopa - bopa

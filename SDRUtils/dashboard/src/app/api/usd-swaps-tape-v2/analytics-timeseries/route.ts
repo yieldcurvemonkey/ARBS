@@ -5,7 +5,8 @@
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import {
-  platformCaseSql,
+  packageAnalyticsCtes,
+  packageAnalyticsFilterPredicate,
   rangeToStartDate,
   rateToBps,
   safeNum,
@@ -16,6 +17,7 @@ import {
 // composite indexes added in _tape_schema_v2.py. v1 stays the rollback
 // target; flip this constant to revert.
 const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
 
 // Phase 2 cap: at most this many daily rows / intraday ticks per request.
 // Daily series LIMIT covers ~5y of trading days; intraday is intrinsically
@@ -35,6 +37,8 @@ type DailyRow = {
   custy_low: number | null
   idb_dv01: number | null
   custy_dv01: number | null
+  idb_notional: number | null
+  custy_notional: number | null
   idb_prints: number | null
   custy_prints: number | null
 }
@@ -45,6 +49,37 @@ type IntradayRow = {
   fixed_rate: number | null
   risk: number | null
   notional: number | null
+}
+
+export function parseBooleanParam(
+  searchParams: URLSearchParams,
+  key: string,
+  defaultValue: boolean,
+): boolean {
+  const raw = searchParams.get(key)
+  if (raw == null) return defaultValue
+  const normalized = raw.trim().toLowerCase()
+  if (['true', '1', 'yes', 'y'].includes(normalized)) return true
+  if (['false', '0', 'no', 'n'].includes(normalized)) return false
+  return defaultValue
+}
+
+export function riskAggregateExpression(useGrossDv01: boolean): string {
+  return useGrossDv01 ? 'SUM(ABS(risk))' : 'SUM(risk)'
+}
+
+export function custyNotionalOutlierPredicate(
+  rowAlias: string,
+  thresholdAlias: string,
+  excludeLargeCusty: boolean,
+): string {
+  if (!excludeLargeCusty) return 'TRUE'
+  return `NOT (
+            ${rowAlias}.platform = 'CUSTY'
+            AND ${thresholdAlias}.median_notional IS NOT NULL
+            AND ${thresholdAlias}.median_notional > 0
+            AND ABS(COALESCE(${rowAlias}.notional, 0)) > ${thresholdAlias}.median_notional * 5
+          )`
 }
 
 export async function GET(req: Request) {
@@ -59,18 +94,10 @@ export async function GET(req: Request) {
   const view = (searchParams.get('view') ?? 'DAILY_CLOSE').toUpperCase()
   const range = (searchParams.get('range') ?? '1Y').toUpperCase()
   const groupBy = (searchParams.get('groupBy') ?? 'tape_label').toLowerCase()
-  const groupCol: Record<string, string> = {
-    tape_label: 'l.tape_label',
-    package: 'l.package_id',
-    trade_type: 'l.trade_type',
-    tenor: 'l.tenor_label',
-    // Phase 4: canonical underlier key — collapses SDR-feed display
-    // variations of the same economic underlier into one bucket. Pass
-    // groupBy=canonical with value=USD/SOFR-OIS/COMPOUND etc.
-    canonical: 'l.canonical_underlier_key',
-  }
-  const filterCol = groupCol[groupBy]
-  if (!filterCol) {
+  const useGrossDv01 = parseBooleanParam(searchParams, 'useGrossDv01', false)
+  const excludeLargeCusty = parseBooleanParam(searchParams, 'excludeLargeCusty', true)
+  const filterPredicate = packageAnalyticsFilterPredicate(groupBy, '$1', LEGS_TABLE)
+  if (!filterPredicate) {
     return NextResponse.json(
       { error: `invalid groupBy: ${groupBy}` },
       { status: 400 },
@@ -82,7 +109,8 @@ export async function GET(req: Request) {
     range === 'CUSTOM' && fromParam ? new Date(fromParam) : rangeToStartDate(range)
   const endDate = range === 'CUSTOM' && toParam ? new Date(toParam) : new Date()
 
-  const platformExpr = platformCaseSql('l')
+  const riskAgg = riskAggregateExpression(useGrossDv01)
+  const outlierPredicate = custyNotionalOutlierPredicate('b', 't', excludeLargeCusty)
 
   try {
     if (view === 'INTRADAY') {
@@ -94,23 +122,34 @@ export async function GET(req: Request) {
       const INTRADAY_HOURS = 72
       const intradaySql = `
         WITH anchor AS (
-          SELECT COALESCE(MAX(l.original_execution_timestamp), MAX(l.execution_timestamp), NOW()) AS last_ts
-          FROM ${LEGS_TABLE} l
-          WHERE ${filterCol} = $1 AND NOT COALESCE(l.is_unwind, false)
+          SELECT COALESCE(MAX(COALESCE(p.original_execution_start, p.execution_start)), NOW()) AS last_ts
+          FROM ${PACKAGES_TABLE} p
+          WHERE ${filterPredicate}
+            AND NOT COALESCE(p.is_unwind, false)
+        ),
+        ${packageAnalyticsCtes({
+          packagesTable: PACKAGES_TABLE,
+          legsTable: LEGS_TABLE,
+          filterPredicate,
+          timePredicate: `COALESCE(p.original_execution_start, p.execution_start)
+                >= (SELECT last_ts FROM anchor) - INTERVAL '${INTRADAY_HOURS} hours'`,
+        })},
+        custy_threshold AS (
+          SELECT
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY ABS(notional)) AS median_notional
+          FROM package_summary
+          WHERE platform = 'CUSTY' AND notional IS NOT NULL
         )
         SELECT
-          COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
-          ${platformExpr} AS platform,
-          l.fixed_rate::float AS fixed_rate,
-          l.risk::float AS risk,
-          l.notional::float AS notional
-        FROM ${LEGS_TABLE} l, anchor
-        WHERE ${filterCol} = $1
-          AND COALESCE(l.original_execution_timestamp, l.execution_timestamp)
-              >= anchor.last_ts - INTERVAL '${INTRADAY_HOURS} hours'
-          AND l.fixed_rate IS NOT NULL
-          AND NOT COALESCE(l.is_unwind, false)
-        ORDER BY COALESCE(l.original_execution_timestamp, l.execution_timestamp) ASC
+          b.ts,
+          b.platform,
+          b.fixed_rate,
+          b.risk,
+          b.notional
+        FROM package_summary b
+        CROSS JOIN custy_threshold t
+        WHERE ${outlierPredicate}
+        ORDER BY b.ts ASC
         LIMIT ${INTRADAY_TICK_CAP}
       `
       // startDate/endDate params retained for API shape parity; actual
@@ -125,8 +164,14 @@ export async function GET(req: Request) {
         ts: r.ts,
         idbClose: r.platform === 'IDB' ? rateToBps(r.fixed_rate) : null,
         custyClose: r.platform === 'CUSTY' ? rateToBps(r.fixed_rate) : null,
-        idbDv01: r.platform === 'IDB' ? Math.abs(safeNum(r.risk)) : 0,
-        custyDv01: r.platform === 'CUSTY' ? Math.abs(safeNum(r.risk)) : 0,
+        idbDv01: r.platform === 'IDB'
+          ? useGrossDv01 ? Math.abs(safeNum(r.risk)) : safeNum(r.risk)
+          : 0,
+        custyDv01: r.platform === 'CUSTY'
+          ? useGrossDv01 ? Math.abs(safeNum(r.risk)) : safeNum(r.risk)
+          : 0,
+        idbNotional: r.platform === 'IDB' ? Math.abs(safeNum(r.notional)) : 0,
+        custyNotional: r.platform === 'CUSTY' ? Math.abs(safeNum(r.notional)) : 0,
         idbPrints: r.platform === 'IDB' ? 1 : 0,
         custyPrints: r.platform === 'CUSTY' ? 1 : 0,
       }))
@@ -142,25 +187,36 @@ export async function GET(req: Request) {
     // platform printed, the other side stays NULL and the client drops
     // the point from that line instead of drawing to zero.
     const sql = `
-      WITH classified AS (
-        SELECT
-          COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
-          l.fixed_rate::float AS fixed_rate,
-          l.risk::float AS risk,
-          l.notional::float AS notional,
-          ${platformExpr} AS platform,
-          DATE_TRUNC(
-            'day',
-            COALESCE(l.original_execution_timestamp, l.execution_timestamp)
-              AT TIME ZONE 'America/New_York'
-          ) AS day
-        FROM ${LEGS_TABLE} l
-        WHERE ${filterCol} = $1
-          AND COALESCE(l.original_execution_timestamp, l.execution_timestamp)
+      WITH ${packageAnalyticsCtes({
+        packagesTable: PACKAGES_TABLE,
+        legsTable: LEGS_TABLE,
+        filterPredicate,
+        timePredicate: `COALESCE(p.original_execution_start, p.execution_start)
               >= $2::timestamptz
-          AND COALESCE(l.original_execution_timestamp, l.execution_timestamp)
-              <= $3::timestamptz
-          AND NOT COALESCE(l.is_unwind, false)
+          AND COALESCE(p.original_execution_start, p.execution_start)
+              <= $3::timestamptz`,
+      })},
+      base AS (
+        SELECT
+          ts,
+          fixed_rate,
+          risk,
+          notional,
+          platform,
+          DATE_TRUNC('day', ts AT TIME ZONE 'America/New_York') AS day
+        FROM package_summary
+      ),
+      custy_threshold AS (
+        SELECT
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY ABS(notional)) AS median_notional
+        FROM base
+        WHERE platform = 'CUSTY' AND notional IS NOT NULL
+      ),
+      classified AS (
+        SELECT b.*
+        FROM base b
+        CROSS JOIN custy_threshold t
+        WHERE ${outlierPredicate}
       ),
       per_day_platform AS (
         SELECT
@@ -172,7 +228,7 @@ export async function GET(req: Request) {
             FILTER (WHERE fixed_rate IS NOT NULL))[1] AS open_rate,
           MAX(fixed_rate) AS high_rate,
           MIN(fixed_rate) AS low_rate,
-          SUM(ABS(risk)) AS daily_dv01,
+          ${riskAgg} AS daily_dv01,
           SUM(ABS(notional)) AS daily_notional,
           COUNT(*) AS prints
         FROM classified
@@ -190,6 +246,8 @@ export async function GET(req: Request) {
         MIN(low_rate)   FILTER (WHERE platform = 'CUSTY') AS custy_low,
         COALESCE(MAX(daily_dv01) FILTER (WHERE platform = 'IDB'),   0) AS idb_dv01,
         COALESCE(MAX(daily_dv01) FILTER (WHERE platform = 'CUSTY'), 0) AS custy_dv01,
+        COALESCE(MAX(daily_notional) FILTER (WHERE platform = 'IDB'),   0) AS idb_notional,
+        COALESCE(MAX(daily_notional) FILTER (WHERE platform = 'CUSTY'), 0) AS custy_notional,
         COALESCE(MAX(prints)     FILTER (WHERE platform = 'IDB'),   0) AS idb_prints,
         COALESCE(MAX(prints)     FILTER (WHERE platform = 'CUSTY'), 0) AS custy_prints
       FROM per_day_platform
@@ -212,6 +270,8 @@ export async function GET(req: Request) {
       close: r.idb_close != null ? rateToBps(r.idb_close) : null,
       idbDv01: safeNum(r.idb_dv01),
       custyDv01: safeNum(r.custy_dv01),
+      idbNotional: safeNum(r.idb_notional),
+      custyNotional: safeNum(r.custy_notional),
       idbPrints: safeNum(r.idb_prints),
       custyPrints: safeNum(r.custy_prints),
     }))

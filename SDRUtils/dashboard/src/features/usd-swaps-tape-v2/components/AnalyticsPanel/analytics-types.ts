@@ -59,6 +59,8 @@ export type TimeseriesPointAug = {
   custyClose: number | null
   idbDv01?: number | null
   custyDv01?: number | null
+  idbNotional?: number | null
+  custyNotional?: number | null
   idbPrints?: number | null
   custyPrints?: number | null
   // High/Low for OHLC — populated when view === 'DAILY_OHLC'.
@@ -159,6 +161,23 @@ export type RecentSimilarRow = {
   notional: number
   platform: PlatformKind
   venue: string
+}
+
+export type LevelsPlatformFilter = 'all' | 'custy' | 'idb'
+
+export type LevelsScopeFilter = 'all' | 'all-time' | '52w' | '30d'
+
+export type LevelsSortKey = 'relevance' | 'closest' | 'rate' | 'dv01' | 'notional' | 'time'
+
+export type LevelsRecentSortKey = 'newest' | 'closest' | 'largest'
+
+export type LevelsState = {
+  platform: LevelsPlatformFilter
+  scope: LevelsScopeFilter
+  sortBy: LevelsSortKey
+  recentSortBy: LevelsRecentSortKey
+  primaryTol: string
+  sizeTolPct: string
 }
 
 // UI state for Tab 1 (Timeseries).

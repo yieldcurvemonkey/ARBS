@@ -57,6 +57,139 @@ export function platformCaseSql(alias: string): string {
   END`
 }
 
+export function packageAnalyticsFilterPredicate(
+  groupBy: string,
+  valueParam: string,
+  legsTable: string,
+): string | null {
+  if (groupBy === 'tape_label') return `p.tape_label = ${valueParam}`
+  if (groupBy === 'package') return `p.package_id = ${valueParam}`
+  if (groupBy === 'trade_type') return `p.package_type = ${valueParam}`
+  if (groupBy === 'tenor') {
+    return `EXISTS (
+      SELECT 1 FROM ${legsTable} lf
+      WHERE lf.package_id = p.package_id
+        AND lf.tenor_label = ${valueParam}
+    )`
+  }
+  if (groupBy === 'canonical') {
+    return `EXISTS (
+      SELECT 1 FROM ${legsTable} lf
+      WHERE lf.package_id = p.package_id
+        AND lf.canonical_underlier_key = ${valueParam}
+    )`
+  }
+  return null
+}
+
+function packageKindSql(alias: string, kind: 'CURVE' | 'FLY'): string {
+  return `(
+    UPPER(CONCAT_WS(' ', ${alias}.package_type, ${alias}.tape_label))
+      ~ '(^|[^A-Z0-9])${kind}([^A-Z0-9]|$)'
+  )`
+}
+
+function packageLegIndexSql(alias: string): string {
+  return `GREATEST(1, COALESCE(${alias}.legs_count, 1))`
+}
+
+function packageMiddleLegIndexSql(alias: string): string {
+  return `GREATEST(1, ((COALESCE(${alias}.legs_count, 1) + 1) / 2)::int)`
+}
+
+export function packageSummaryFixedRateSql(alias: string): string {
+  const last = packageLegIndexSql(alias)
+  const mid = packageMiddleLegIndexSql(alias)
+  return `CASE
+    WHEN ${packageKindSql(alias, 'FLY')} AND COALESCE(${alias}.legs_count, 0) >= 3 THEN
+      2 * ${alias}.fixed_rates[${mid}] - ${alias}.fixed_rates[1] - ${alias}.fixed_rates[${last}]
+    WHEN ${packageKindSql(alias, 'CURVE')} AND COALESCE(${alias}.legs_count, 0) >= 2 THEN
+      ${alias}.fixed_rates[${last}] - ${alias}.fixed_rates[1]
+    ELSE COALESCE(${alias}.weighted_fixed_rate, ${alias}.fixed_rates[1])
+  END`
+}
+
+export function packageSummaryRiskSql(alias: string): string {
+  const last = packageLegIndexSql(alias)
+  const mid = packageMiddleLegIndexSql(alias)
+  return `CASE
+    WHEN ${packageKindSql(alias, 'FLY')} AND COALESCE(${alias}.legs_count, 0) >= 3 THEN
+      ${alias}.risks[${mid}]
+    WHEN ${packageKindSql(alias, 'CURVE')} AND COALESCE(${alias}.legs_count, 0) >= 2 THEN
+      ${alias}.risks[${last}]
+    ELSE COALESCE(${alias}.total_risk, ${alias}.risks[1])
+  END`
+}
+
+export function packageAnalyticsCtes(opts: {
+  packagesTable: string
+  legsTable: string
+  filterPredicate: string
+  timePredicate?: string
+}): string {
+  const where = [
+    opts.filterPredicate,
+    opts.timePredicate,
+    'NOT COALESCE(p.is_unwind, false)',
+  ].filter(Boolean).join('\n        AND ')
+  const rateExpr = packageSummaryFixedRateSql('r')
+  const riskExpr = packageSummaryRiskSql('r')
+  return `
+      package_rollup AS (
+        SELECT
+          p.package_id,
+          p.tape_label,
+          p.package_type,
+          COALESCE(p.original_execution_start, p.execution_start) AS ts,
+          p.venue,
+          (array_agg(l.platform_identifier ORDER BY l.leg_order ASC))[1] AS platform_identifier,
+          (array_agg(l.trade_id ORDER BY l.leg_order ASC))[1] AS trade_id,
+          p.total_risk::float AS total_risk,
+          p.weighted_fixed_rate::float AS weighted_fixed_rate,
+          COALESCE(
+            ABS(p.total_notional::float),
+            ABS(p.gross_notional::float),
+            SUM(ABS(l.notional::float))
+          ) AS notional,
+          array_agg(l.fixed_rate::float ORDER BY l.tenor_years ASC NULLS LAST, l.leg_order ASC) AS fixed_rates,
+          array_agg(l.risk::float ORDER BY l.tenor_years ASC NULLS LAST, l.leg_order ASC) AS risks,
+          COUNT(*)::int AS legs_count
+        FROM ${opts.packagesTable} p
+        JOIN ${opts.legsTable} l ON l.package_id = p.package_id
+        WHERE ${where}
+        GROUP BY
+          p.package_id,
+          p.tape_label,
+          p.package_type,
+          p.original_execution_start,
+          p.execution_start,
+          p.venue,
+          p.total_risk,
+          p.weighted_fixed_rate,
+          p.total_notional,
+          p.gross_notional
+      ),
+      package_summary_unfiltered AS (
+        SELECT
+          r.package_id,
+          r.trade_id,
+          r.tape_label,
+          r.package_type,
+          r.ts,
+          r.venue,
+          ${platformCaseSql('r')} AS platform,
+          ${rateExpr} AS fixed_rate,
+          ${riskExpr} AS risk,
+          r.notional
+        FROM package_rollup r
+      ),
+      package_summary AS (
+        SELECT *
+        FROM package_summary_unfiltered
+        WHERE fixed_rate IS NOT NULL
+      )`
+}
+
 export function rangeToStartDate(range: string | null | undefined): Date {
   const now = new Date()
   const d = new Date(now)

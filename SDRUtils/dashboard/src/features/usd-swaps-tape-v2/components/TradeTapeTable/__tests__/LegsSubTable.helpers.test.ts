@@ -105,8 +105,8 @@ describe('computeLegSummary — FLY', () => {
     const summary = computeLegSummary(row('FLY', [front, belly, back]))
     // 2 * 0.03849 - 0.03605 - 0.04132 = -0.00039
     expect(summary.rate).toBeCloseTo(-0.00039, 6)
-    // Back leg risk
-    expect(summary.risk).toBe(25_000)
+    // Belly leg risk
+    expect(summary.risk).toBe(50_000)
     // 2 * 127 - 108 - 2.7 = 143.3 k
     expect(summary.opa).toBeCloseTo(143_300, 2)
   })
@@ -117,7 +117,22 @@ describe('computeLegSummary — FLY', () => {
     const front = leg({ tenor_years: 5, fixed_rate: 0.036, risk: 25_000 })
     const summary = computeLegSummary(row('FLY', [back, front, belly]))
     expect(summary.rate).toBeCloseTo(2 * 0.038 - 0.036 - 0.041, 6)
-    expect(summary.risk).toBe(25_000)
+    expect(summary.risk).toBe(50_000)
+  })
+
+  it('detects fly packages from composite labels', () => {
+    const front = leg({ tenor_years: 2, fixed_rate: 0.03612, risk: 50_000 })
+    const belly = leg({ tenor_years: 5, fixed_rate: 0.03613, risk: 100_000 })
+    const back = leg({ tenor_years: 10, fixed_rate: 0.03849, risk: 50_000 })
+    const summary = computeLegSummary(
+      row('USD-SOFR-OIS Compound 1D Constant Spot 2Y/5Y/10Y FLY PHYS', [
+        front,
+        belly,
+        back,
+      ]),
+    )
+    expect(summary.rate).toBeCloseTo(2 * 0.03613 - 0.03612 - 0.03849, 6)
+    expect(summary.risk).toBe(100_000)
   })
 })
 

@@ -7,6 +7,7 @@ import type {
   FocusedTrade,
   PlatformKind,
 } from '../components/AnalyticsPanel/analytics-types'
+import { computeLegSummary } from '../components/TradeTapeTable/LegsSubTable.helpers'
 import type { UsdSwapTapeLeg, UsdSwapTapeRow } from '../types'
 
 function aggregateLeg<T extends number | null | undefined>(
@@ -20,6 +21,11 @@ function aggregateLeg<T extends number | null | undefined>(
     if (typeof v === 'number' && Number.isFinite(v)) sum += Math.abs(v)
   }
   return sum
+}
+
+function absRowNumber(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  return Math.abs(value)
 }
 
 // Mirrors the server-side platformCaseSql in lib/usd-swaps-tape-v2/analytics.ts:
@@ -55,18 +61,30 @@ export function normalizeFocusedTrade(row: UsdSwapTapeRow | null): FocusedTrade 
   if (!row) return null
   const legs = row.legs_json ?? []
   const firstLeg = legs[0]
-  const weightedRate = typeof row.weighted_fixed_rate === 'number'
-    ? row.weighted_fixed_rate
-    : typeof firstLeg?.fixed_rate === 'number'
-      ? firstLeg.fixed_rate
-      : 0
+  const legSummary = computeLegSummary(row)
+  const summaryRate = typeof legSummary.rate === 'number' && Number.isFinite(legSummary.rate)
+    ? legSummary.rate
+    : null
+  const weightedRate = summaryRate ??
+    (typeof row.weighted_fixed_rate === 'number'
+      ? row.weighted_fixed_rate
+      : typeof firstLeg?.fixed_rate === 'number'
+        ? firstLeg.fixed_rate
+        : 0)
   // weighted_fixed_rate is a decimal (0.03842); the analytics surface
   // speaks basis points (384.2). Convert once at the boundary.
   const fixedRateBps = weightedRate * 10_000
   const tenorYears =
     typeof firstLeg?.tenor_years === 'number' ? firstLeg.tenor_years : 0
-  const dv01 = aggregateLeg(legs, (l) => l.risk as number | null | undefined)
-  const notional = aggregateLeg(legs, (l) => l.notional as number | null | undefined)
+  const dv01 =
+    absRowNumber(legSummary.risk) ??
+    absRowNumber(row.total_risk) ??
+    absRowNumber(row.gross_risk) ??
+    aggregateLeg(legs, (l) => l.risk as number | null | undefined)
+  const notional =
+    absRowNumber(row.total_notional) ??
+    absRowNumber(row.gross_notional) ??
+    aggregateLeg(legs, (l) => l.notional as number | null | undefined)
   const label =
     row.tape_label ?? row.package_tenors ?? String(row.package_type ?? 'USD-SOFR')
   const platform = inferPlatform(row)

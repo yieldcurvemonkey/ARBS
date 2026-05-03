@@ -4,7 +4,13 @@
 // non-D2D. Failing this test means a future refactor accidentally
 // dropped one of the 6 dealer SEFs and would silently mis-bucket
 // Dealerweb / ICAP-Global / Tradition flow as customer.
-import { CUSTY_MIC_SET, IDB_MIC_SET, platformCaseSql } from '../analytics'
+import {
+  CUSTY_MIC_SET,
+  IDB_MIC_SET,
+  packageSummaryFixedRateSql,
+  packageSummaryRiskSql,
+  platformCaseSql,
+} from '../analytics'
 
 describe('IDB / CUSTY MIC bucketing', () => {
   it('pins the dealer (IDB) SEF MIC list to the trader-confirmed 6', () => {
@@ -38,5 +44,25 @@ describe('IDB / CUSTY MIC bucketing', () => {
     for (const mic of CUSTY_MIC_SET) {
       expect(sql).not.toContain(`= '${mic}'`)
     }
+  })
+})
+
+describe('package summary analytics SQL', () => {
+  it('uses fly package spread and belly DV01 conventions', () => {
+    const rateSql = packageSummaryFixedRateSql('r')
+    const riskSql = packageSummaryRiskSql('r')
+
+    expect(rateSql).toContain('2 * r.fixed_rates')
+    expect(rateSql).toContain("- r.fixed_rates[1] - r.fixed_rates")
+    expect(riskSql).toContain('r.risks')
+    expect(riskSql).toContain('FLY')
+  })
+
+  it('uses curve back-minus-front rate and back-leg DV01 conventions', () => {
+    const rateSql = packageSummaryFixedRateSql('r')
+    const riskSql = packageSummaryRiskSql('r')
+
+    expect(rateSql).toContain("- r.fixed_rates[1]")
+    expect(riskSql).toContain('CURVE')
   })
 })

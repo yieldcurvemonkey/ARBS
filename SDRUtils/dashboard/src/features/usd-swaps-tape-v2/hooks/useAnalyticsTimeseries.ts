@@ -34,30 +34,58 @@ type CacheEntry = {
   fetchedAt: number
 }
 
+export type AnalyticsTimeseriesOptions = {
+  useGrossDv01?: boolean
+  excludeLargeCusty?: boolean
+}
+
 const RESULT_CACHE_TTL_MS = 60_000
 const resultCache = new Map<string, CacheEntry>()
 
-function cacheKey(bucket: string, view: 'INTRADAY' | 'DAILY_CLOSE', range: AnalyticsRangeKey): string {
-  return `${bucket}::${view}::${range}`
+function cacheKey(
+  bucket: string,
+  view: 'INTRADAY' | 'DAILY_CLOSE',
+  range: AnalyticsRangeKey,
+  opts: AnalyticsTimeseriesOptions = {},
+): string {
+  return [
+    bucket,
+    view,
+    range,
+    opts.useGrossDv01 ? 'gross' : 'net',
+    opts.excludeLargeCusty === false ? 'raw-custy' : 'clean-custy',
+  ].join('::')
+}
+
+function buildAnalyticsTimeseriesQuery(
+  bucket: string,
+  view: 'INTRADAY' | 'DAILY_CLOSE',
+  range: AnalyticsRangeKey,
+  opts: AnalyticsTimeseriesOptions = {},
+): URLSearchParams {
+  return new URLSearchParams({
+    value: bucket,
+    view,
+    range,
+    groupBy: 'tape_label',
+    useGrossDv01: opts.useGrossDv01 ? 'true' : 'false',
+    excludeLargeCusty: opts.excludeLargeCusty === false ? 'false' : 'true',
+  })
 }
 
 async function fetchSeries(
   bucket: string,
   view: 'INTRADAY' | 'DAILY_CLOSE',
   range: AnalyticsRangeKey,
+  opts: AnalyticsTimeseriesOptions,
   signal: AbortSignal,
 ): Promise<TimeseriesPointAug[]> {
-  const key = cacheKey(bucket, view, range)
+  const key = cacheKey(bucket, view, range, opts)
   const cached = resultCache.get(key)
   if (cached && Date.now() - cached.fetchedAt < RESULT_CACHE_TTL_MS) {
     return cached.points
   }
-  const q = new URLSearchParams({
-    value: bucket,
-    view,
-    range,
-    groupBy: 'tape_label',
-  })
+  const q = buildAnalyticsTimeseriesQuery(bucket, view, range, opts)
   const res = await fetch(`${TAPE_V2_API_BASE}/analytics-timeseries?${q}`, { signal })
   if (!res.ok) {
     throw new Error(`analytics-timeseries ${view} ${res.status}`)
@@ -72,6 +100,7 @@ export function useAnalyticsTimeseries(
   focused: FocusedTrade | null,
   range: AnalyticsRangeKey = '1Y',
   view: AnalyticsViewKey = 'DAILY_CLOSE',
+  opts: AnalyticsTimeseriesOptions = {},
 ): UseAnalyticsTimeseriesReturn {
   const [dailyClose, setDailyClose] = useState<TimeseriesPointAug[]>([])
   const [intraday, setIntraday] = useState<TimeseriesPointAug[]>([])
@@ -83,6 +112,8 @@ export function useAnalyticsTimeseries(
 
   const bucket = focused?.tape_label ?? null
   const needsIntraday = view === 'INTRADAY'
+  const useGrossDv01 = Boolean(opts.useGrossDv01)
+  const excludeLargeCusty = opts.excludeLargeCusty !== false
 
   const fetchDaily = useCallback(async () => {
     if (!bucket || needsIntraday) return
@@ -92,7 +123,13 @@ export function useAnalyticsTimeseries(
     setLoading(true)
     setError(null)
     try {
-      const daily = await fetchSeries(bucket, 'DAILY_CLOSE', range, controller.signal)
+      const daily = await fetchSeries(
+        bucket,
+        'DAILY_CLOSE',
+        range,
+        { useGrossDv01, excludeLargeCusty },
+        controller.signal,
+      )
       if (controller.signal.aborted) return
       setDailyClose(daily)
     } catch (e) {
@@ -101,7 +138,7 @@ export function useAnalyticsTimeseries(
     } finally {
       if (!controller.signal.aborted) setLoading(false)
     }
-  }, [bucket, range, needsIntraday])
+  }, [bucket, range, needsIntraday, useGrossDv01, excludeLargeCusty])
 
   const fetchIntraday = useCallback(async () => {
     if (!bucket || !needsIntraday) return
@@ -111,7 +148,13 @@ export function useAnalyticsTimeseries(
     setLoading(true)
     setError(null)
     try {
-      const intra = await fetchSeries(bucket, 'INTRADAY', '1D', controller.signal)
+      const intra = await fetchSeries(
+        bucket,
+        'INTRADAY',
+        '1D',
+        { useGrossDv01, excludeLargeCusty },
+        controller.signal,
+      )
       if (controller.signal.aborted) return
       setIntraday(intra)
     } catch (e) {
@@ -120,7 +163,7 @@ export function useAnalyticsTimeseries(
     } finally {
       if (!controller.signal.aborted) setLoading(false)
     }
-  }, [bucket, needsIntraday])
+  }, [bucket, needsIntraday, useGrossDv01, excludeLargeCusty])
 
   useEffect(() => { fetchDaily() }, [fetchDaily])
   useEffect(() => { fetchIntraday() }, [fetchIntraday])
@@ -148,13 +191,14 @@ export function useAnalyticsTimeseries(
 
   const refetch = useCallback(async () => {
     if (bucket) {
-      resultCache.delete(cacheKey(bucket, 'DAILY_CLOSE', range))
-      resultCache.delete(cacheKey(bucket, 'INTRADAY', '1D'))
+      const cacheOpts = { useGrossDv01, excludeLargeCusty }
+      resultCache.delete(cacheKey(bucket, 'DAILY_CLOSE', range, cacheOpts))
+      resultCache.delete(cacheKey(bucket, 'INTRADAY', '1D', cacheOpts))
     }
     await (needsIntraday ? fetchIntraday() : fetchDaily())
-  }, [bucket, range, fetchDaily, fetchIntraday, needsIntraday])
+  }, [bucket, range, fetchDaily, fetchIntraday, needsIntraday, useGrossDv01, excludeLargeCusty])
 
   return { dailyClose, intraday, loading, error, pickForView, refetch }
 }
 
-export const __internal = { resultCache, cacheKey }
+export const __internal = { resultCache, cacheKey, buildAnalyticsTimeseriesQuery }

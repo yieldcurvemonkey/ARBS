@@ -64,6 +64,8 @@ from RVUtils.ImpliedDistribution.plotting import (
     plot_scenario_weights_timeseries,
     plot_snapshot_dashboard,
     plot_strip_distribution_change,
+    plot_sfr_smile,
+    plot_sabr_smiles,
 )
 
 __all__ = [
@@ -100,4 +102,6 @@ __all__ = [
     "plot_empirical_copula",
     "plot_joint_contour",
     "plot_joint_comparison_dashboard",
+    "plot_sfr_smile",
+    "plot_sabr_smiles",
 ]

@@ -21,13 +21,16 @@ import {
   DOCK_DEFAULT_VH,
   DOCK_MAX_RESERVE_PX,
   DOCK_MIN_PX,
+  LEVELS_DEFAULT_STATE,
   RARITY_DEFAULT_STATE,
   RARITY_PREFS_STORAGE_KEY,
   TIMESERIES_DEFAULT_STATE,
 } from './constants'
+import { parsePositiveNumberInput } from './TradedLevelsTab.helpers'
 import type {
   AnalyticsTab,
   FocusedTrade,
+  LevelsState,
   RarityState,
   TimeseriesState,
 } from './analytics-types'
@@ -50,6 +53,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('timeseries')
   const [tsState, setTsState] = useState<TimeseriesState>(TIMESERIES_DEFAULT_STATE)
+  const [levelsState, setLevelsState] = useState<LevelsState>(LEVELS_DEFAULT_STATE)
   // Rarity prefs persist to localStorage so the trader doesn't have to
   // reconfigure the basis / similarity thresholds on every dock open.
   // Initial mount reads server-side default; useEffect below restores
@@ -145,7 +149,10 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
 
   // Data — all hooks gracefully no-op when focused is null. Intraday
   // only fires when the user actually switches to the intraday view.
-  const ts = useAnalyticsTimeseries(focused, tsState.range, tsState.view)
+  const ts = useAnalyticsTimeseries(focused, tsState.range, tsState.view, {
+    useGrossDv01: tsState.useGrossDv01,
+    excludeLargeCusty: tsState.excludeComicallyLargeCusty,
+  })
   const rarity = useRarityData(focused, {
     lookback: 90,
     primaryTol: rarityState.primaryTol,
@@ -160,14 +167,16 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
         : 'fixed_rate',
   })
   const extremes = useExtremesData(focused, {
-    primaryTol: rarityState.primaryTol,
-    sizeTol: rarityState.sizeTol,
+    primaryTol: parsePositiveNumberInput(levelsState.primaryTol, 2),
+    sizeTol: parsePositiveNumberInput(levelsState.sizeTolPct, 25) / 100,
   })
 
   const focusedPercentile =
     rarityState.basis === 'custy' ? rarity.focusedPercentile.custy
     : rarityState.basis === 'idb' ? rarity.focusedPercentile.idb
     : rarity.focusedPercentile.combined
+  const rarityPrimaryPercentile =
+    rarity.metricRows.find((row) => row.primary)?.percentile ?? focusedPercentile
 
   // Histogram brushing — clicking a bar on the Trade Rarity tab writes
   // a per-column filter to the URL so the tape below filters down to
@@ -302,7 +311,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               // has settled. Before then `focusedPercentile` defaults
               // to 50, which the trader could mis-read as a real "P50"
               // result. Ellipsis communicates "in flight" instead.
-              badge: rarity.stats.count > 0 ? `P${Math.round(focusedPercentile)}` : '…',
+              badge: rarity.stats.count > 0 ? `P${Math.round(rarityPrimaryPercentile)}` : '…',
             },
             { key: 'levels', label: 'Traded Levels', icon: '◈', badge: String(extremes.extremes.length) },
           ]}
@@ -332,6 +341,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               binMetric={rarity.binMetric}
               binWidth={rarity.binWidth}
               stats={rarity.stats}
+              binStats={rarity.binStats}
               metricRows={rarity.metricRows}
               recency={rarity.recency}
               focusedPercentile={focusedPercentile}
@@ -343,8 +353,12 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
           {activeTab === 'levels' ? (
             <TradedLevelsTab
               focused={focused}
+              state={levelsState}
+              setState={setLevelsState}
               extremes={extremes.extremes}
               recentSimilar={extremes.recentSimilar}
+              stats={rarity.stats}
+              focusedPercentile={focusedPercentile}
               onSeek={(extreme) => {
                 setActiveTab('timeseries')
                 const rangeByScope: Record<string, TimeseriesState['range']> = {
