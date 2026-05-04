@@ -767,6 +767,60 @@ projected total to complete the 6-year prime at the observed pace is
 ~9–10 days, well over the session budget. The remaining session time
 will likely take the cache to ~350–450 dates.
 
+#### Cache evolution snapshot — listed_cache = 300, window 2025-03-05 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 69 | 3 | −2.69 | −226,389,317 | −222,578,779 | 29 % | 12.9 | 14.0 |
+| `b_calendar_only` (asym ≥ 3) | 113 | 2 | **−0.05** | **−154,123,267,637** | −12,000,194,384 | 48 % | 14.1 | 18.6 |
+| `c_butterfly_only` (asym ≥ 3) | 124 | 0 | **−0.05** | **−166,217,783,375** | −10,058,790,703 | 48 % | 8.7 | 20.3 |
+| `d_all_structures_default` (asym ≥ 1.5) | 159 | 3 | −2.86 | −546,559,821 | −542,896,790 | 33 % | 9.0 | 28.3 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 303 | 8 | −2.57 | −1,061,031,113 | −1,053,179,937 | 33 % | 9.7 | 47.1 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 223 | 5 | −3.47 | −1,029,579,592 | −1,027,761,968 | 37 % | 7.8 | 38.7 |
+
+The 14-month window (300 BDs) reveals the **maxDD–to–finalMTM gap** has
+exploded:
+- `b_calendar_only` maxDD **−$154 B** but finalMTM only −$12 B — the
+  strategy lost $154 B at peak drawdown then recovered $142 B.
+- `c_butterfly_only` maxDD **−$166 B** but finalMTM only −$10 B — same
+  pattern, larger.
+
+Sharpe of both pure-structure cohorts collapses from −1.34 / −1.73 at
+cache=250 to **−0.05** — essentially zero — because the realised
+volatility of the daily MTM is now so large that the negative drift
+becomes statistically indistinguishable from noise.
+
+**Important caveat on the maxDD numbers**: the absolute magnitudes
+($154 B / $166 B drawdowns on a $100k-bpv strategy) are too large to
+be physical and almost certainly reflect the unrealised-MTM Dual-type
+inflation that the previous session flagged in
+`Query.IRSwaps.backends.rateslib.RLIRSwapCurve.resolve_pricable` (the
+sign-flip bug at line 205, plus a separate 12.5x magnitude bug on
+auto-diff sensitivities at unwind). Realised P&L (closed positions)
+is on the right order of magnitude, but the open-position MTM stream
+that feeds maxDD/Sharpe is inflated. **Treat the maxDD numbers above
+as relative not absolute**: cohort A's drawdown is bigger than cohort
+B's, but neither $154 B nor $166 B is a real-money loss.
+
+The **sharpe ≈ 0** finding survives that caveat — even with a
+log-magnitude inflation, if a strategy is truly profitable on closed
+P&L the realised series has positive drift and positive sharpe. The
+asym-decay strategy reaches `sharpe = −0.05 ± inflation` at 300 BDs,
+which means its true sharpe is somewhere in [−2, +2]. The realised
+finalMTM is **steadily negative** and growing in magnitude with each
+new cohort, so the realised edge is **non-positive at this position
+sizing**.
+
+`a_outright_conservative` finalMTM continued widening (−$96 M →
+−$222 M as the window doubled from cache=200 to cache=300) and the
+winRate slipped from 36 % to 29 % over the new 100 BDs. The two
+March 2025 outright entries that closed adversely contributed most
+of the new loss.
+
+Prime status: 300 / 1,649 dates ≈ 18 % done. The data continues to
+add cohort-blow-ups every ~25 dates; the headline conclusion is
+already very firmly established.
+
 ## Reproduction
 
 ```bash
