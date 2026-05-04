@@ -382,6 +382,16 @@ describe('Pkg column confidence chip integration', () => {
     } as any)
     expect(result.tone).toBe('high')
   })
+
+  it('Pkg badge body honors inferredType override (uses inferredType when present)', () => {
+    expect(columnsSource).toContain('conf.inferredType')
+    expect(columnsSource).toMatch(/displayedType\s*=\s*conf\.inferredType\s*\?\?\s*row\.package_type/)
+  })
+
+  it('renders the original classifier tag struck through when override fires', () => {
+    expect(columnsSource).toContain('Original classifier tag')
+    expect(columnsSource).toContain('line-through')
+  })
 })
 
 describe('Pkg / underlier column canonical tooltip', () => {

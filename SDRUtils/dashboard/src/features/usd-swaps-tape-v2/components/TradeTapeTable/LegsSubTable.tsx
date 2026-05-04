@@ -1,6 +1,7 @@
 'use client'
 // ABOUTME: Expanded package detail panel - per-leg breakdown only.
 import type { JSX } from 'react'
+import { useState } from 'react'
 
 // Centralised column count for the leg sub-table. Bump in lock-step
 // with the <th> list below so the empty-state colspan + the summary
@@ -353,6 +354,70 @@ function qualityFlagsBody(leg: UsdSwapTapeLeg) {
   )
 }
 
+function PackageConfidencePanel({ row }: { row: UsdSwapTapeRow }): JSX.Element {
+  const confidence = computePackageConfidence(row)
+  const confidenceTone = PACKAGE_CONFIDENCE_TONES[confidence.tone]
+  const [showDetails, setShowDetails] = useState(false)
+  const detailsId = `confidence-details-${row.package_id}`
+  const overrideActive = confidence.inferredType !== null
+  return (
+    <div
+      className="mb-2 rounded-lg border border-slate-800/80 bg-slate-900/60 px-3 py-2"
+      data-testid={`confidence-strip-${row.package_id}`}
+    >
+      <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-slate-400">
+        <span>Confidence</span>
+        <span
+          className={`inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[11px] ${confidenceTone}`}
+        >
+          {confidence.score}/{confidence.total}
+        </span>
+        <span className="font-mono text-[10px] text-slate-500">
+          ({confidence.resolvedType})
+        </span>
+        {overrideActive ? (
+          <span
+            className="inline-flex items-center gap-1 rounded border border-amber-500/60 bg-amber-900/30 px-1.5 py-0.5 font-mono text-[10px] normal-case tracking-normal text-amber-200"
+            title={confidence.inferredTypeReason ?? ''}
+            data-testid={`confidence-inferred-${row.package_id}`}
+          >
+            inferred → {confidence.inferredType}
+          </span>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => setShowDetails((prev) => !prev)}
+          aria-expanded={showDetails}
+          aria-controls={detailsId}
+          data-testid={`confidence-toggle-${row.package_id}`}
+          className="ml-auto inline-flex items-center rounded border border-slate-700 bg-slate-900/70 px-2 py-0.5 font-mono text-[10px] normal-case tracking-normal text-slate-300 hover:border-slate-500 hover:text-slate-100"
+        >
+          {showDetails ? 'Hide Package Confidence Details' : 'Show Package Confidence Details'}
+        </button>
+      </div>
+      {showDetails ? (
+        <ul id={detailsId} className="mt-1 space-y-0.5">
+          {confidence.signals.map((s) => (
+            <li
+              key={s.name}
+              className="flex items-baseline gap-2 font-mono text-[11px] leading-tight"
+            >
+              <span
+                className={s.passed ? 'text-emerald-300' : 'text-rose-300'}
+                aria-label={s.passed ? 'pass' : 'fail'}
+              >
+                {s.passed ? '✓' : '✗'}
+              </span>
+              <span className="text-slate-200">{s.label}:</span>
+              <span className="text-slate-400">{s.detail}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
 export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
   // Desk convention: render tenor-ascending so front legs (short duration)
   // appear above back legs (long duration). legs_json order from the
@@ -395,47 +460,12 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
       : EMPTY_VALUE
   const summaryPtsText = summary.pts != null ? String(summary.pts) : EMPTY_VALUE
 
-  const confidence = computePackageConfidence(row)
-  const confidenceTone = PACKAGE_CONFIDENCE_TONES[confidence.tone]
-
   return (
     <div
       className="rounded-xl border border-slate-800/80 bg-slate-950/70 px-4 py-1"
       data-testid={`legs-subtable-${row.package_id}`}
     >
-      <div
-        className="mb-2 rounded-lg border border-slate-800/80 bg-slate-900/60 px-3 py-2"
-        data-testid={`confidence-strip-${row.package_id}`}
-      >
-        <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-slate-400">
-          <span>Confidence</span>
-          <span
-            className={`inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[11px] ${confidenceTone}`}
-          >
-            {confidence.score}/{confidence.total}
-          </span>
-          <span className="font-mono text-[10px] text-slate-500">
-            ({confidence.resolvedType})
-          </span>
-        </div>
-        <ul className="mt-1 space-y-0.5">
-          {confidence.signals.map((s) => (
-            <li
-              key={s.name}
-              className="flex items-baseline gap-2 font-mono text-[11px] leading-tight"
-            >
-              <span
-                className={s.passed ? 'text-emerald-300' : 'text-rose-300'}
-                aria-label={s.passed ? 'pass' : 'fail'}
-              >
-                {s.passed ? '✓' : '✗'}
-              </span>
-              <span className="text-slate-200">{s.label}:</span>
-              <span className="text-slate-400">{s.detail}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      <PackageConfidencePanel row={row} />
       {row.package_transaction_price != null ? (
         <div className="mb-1 flex items-baseline gap-2 text-[10px] uppercase tracking-wide text-slate-400">
           <span>Package Transaction Price</span>

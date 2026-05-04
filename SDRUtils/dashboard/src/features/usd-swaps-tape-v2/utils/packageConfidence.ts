@@ -24,6 +24,17 @@ export type PackageConfidence = {
   signals: ConfidenceSignal[]
   /** Normalized package_type used for scoring (uppercased, NaN -> OUTRIGHT). */
   resolvedType: string
+  /**
+   * Heuristic override of the resolvedType when the per-leg PTS profile
+   * looks identical to the package PTS — strong evidence the trade is
+   * actually the base type rather than the SPREADOVER_* variant the
+   * upstream classifier tagged it with. Null when no override fires.
+   * Currently fires for SPREADOVER_FLY → FLY and SPREADOVER_CURVE →
+   * CURVE.
+   */
+  inferredType: string | null
+  /** Free-text reason the inferredType override fired (or null). */
+  inferredTypeReason: string | null
 }
 
 type Tolerances = typeof PACKAGE_CONFIDENCE_TOLERANCES
@@ -128,6 +139,21 @@ function riskBalanceSignal(
   }
 }
 
+/**
+ * Render a tiny PTS / derived-spread number with enough precision that
+ * sub-bp values (e.g. 0.0000125) don't collapse to "0.00bp" in the UI.
+ * Falls back to scientific notation for values ≤ 1e-3 so the breakdown
+ * is readable on prints where the spread term is essentially zero.
+ */
+function formatBp(value: number): string {
+  if (!Number.isFinite(value)) return String(value)
+  const abs = Math.abs(value)
+  if (abs === 0) return '0'
+  if (abs < 1e-3) return value.toExponential(3)
+  if (abs < 1) return value.toFixed(6).replace(/\.?0+$/, '')
+  return value.toFixed(3).replace(/\.?0+$/, '')
+}
+
 /** Pass when derived spread (in bp) is within ptsMatchBp of reported PTS. */
 function ptsMatchSignal(
   derivedBp: number | null,
@@ -150,7 +176,7 @@ function ptsMatchSignal(
     name: 'pts_match',
     label: 'PTS match',
     passed: delta <= bp_tol,
-    detail: `derived ${derivedBp.toFixed(2)}bp vs reported ${reported}bp (Δ ${delta.toFixed(2)}, tol ±${bp_tol})`,
+    detail: `derived ${formatBp(derivedBp)}bp vs reported ${formatBp(reported)}bp (Δ ${formatBp(delta)}, tol ±${bp_tol})`,
   }
 }
 
@@ -165,9 +191,61 @@ function perLegPtsSignal(legs: UsdSwapTapeLeg[]): ConfidenceSignal {
     passed: present && legs.length > 0,
     detail: present
       ? legs
-          .map((l) => `${l.tenor_years ?? '?'}Y=${(l as any).package_transaction_spread}`)
+          .map((l) => `${l.tenor_years ?? '?'}Y=${formatBp(Number((l as any).package_transaction_spread))}`)
           .join(', ')
       : 'one or more legs missing per-leg PTS',
+  }
+}
+
+function legPts(leg: UsdSwapTapeLeg): number | null {
+  const v = (leg as { package_transaction_spread?: unknown }).package_transaction_spread
+  if (v == null) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Decide whether a SPREADOVER_FLY / SPREADOVER_CURVE row is mislabeled
+ * and should display as the base type. Triggers when:
+ *
+ *   1. Every leg has a per-leg PTS populated.
+ *   2. Every per-leg PTS equals the package PTS within `ptsMatchBp`.
+ *
+ * Rationale: a real SPREADOVER package has a UST hedge leg whose
+ * implied spread is computed off a different leg's PTS, so per-leg
+ * PTS values diverge. When all per-leg PTSes collapse to the package
+ * PTS, the upstream classifier almost certainly fired the
+ * SPREADOVER_* heuristic on noise — it's a base-type FLY / CURVE.
+ */
+function inferBaseTypeOverride(
+  resolvedType: string,
+  row: UsdSwapTapeRow,
+  tol: Tolerances,
+): { type: string; reason: string } | null {
+  if (resolvedType !== 'SPREADOVER_FLY' && resolvedType !== 'SPREADOVER_CURVE') {
+    return null
+  }
+  const legs = (row.legs_json ?? []) as UsdSwapTapeLeg[]
+  if (legs.length < 2) return null
+  const pkgPts = row.package_transaction_spread
+  if (pkgPts == null) return null
+  const pkgPtsNum = Number(pkgPts)
+  if (!Number.isFinite(pkgPtsNum)) return null
+  const perLeg: number[] = []
+  for (const leg of legs) {
+    const v = legPts(leg)
+    if (v == null) return null
+    perLeg.push(v)
+  }
+  const allMatchPackage = perLeg.every(
+    (v) => Math.abs(v - pkgPtsNum) <= tol.ptsMatchBp,
+  )
+  if (!allMatchPackage) return null
+  const baseType = resolvedType === 'SPREADOVER_FLY' ? 'FLY' : 'CURVE'
+  const formatted = formatBp(pkgPtsNum)
+  return {
+    type: baseType,
+    reason: `every per-leg PTS = ${formatted} matches package PTS = ${formatted} (within ±${tol.ptsMatchBp}bp); SPREADOVER_${baseType === 'FLY' ? 'FLY' : 'CURVE'} hedge leg expected to differ`,
   }
 }
 
@@ -391,5 +469,25 @@ export function computePackageConfidence(
   const score = signals.filter((s) => s.passed).length
   const total = signals.length
   const tone = pickTone(score, total, isInfo)
-  return { score, total, tone, signals, resolvedType }
+  const override = inferBaseTypeOverride(resolvedType, row, tol)
+  if (override) {
+    signals = [
+      ...signals,
+      {
+        name: 'inferred_base_type',
+        label: `Inferred type: ${override.type}`,
+        passed: true,
+        detail: override.reason,
+      },
+    ]
+  }
+  return {
+    score,
+    total,
+    tone,
+    signals,
+    resolvedType,
+    inferredType: override?.type ?? null,
+    inferredTypeReason: override?.reason ?? null,
+  }
 }
