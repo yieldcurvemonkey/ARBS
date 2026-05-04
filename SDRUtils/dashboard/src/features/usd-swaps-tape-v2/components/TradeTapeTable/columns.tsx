@@ -28,6 +28,8 @@ import {
   packageTypeBadgeClassName,
   packageTypeDisplayLabel,
 } from './columns.helpers'
+import { ManualLinkBadge } from '@/lib/manual-links-ui/components/ManualLinkBadge'
+import { isManualPackage } from '@/lib/manual-links-ui/predicates'
 
 export { rowClassName } from './columns.helpers'
 
@@ -48,6 +50,13 @@ type ColumnConfig = {
    * the popup overlay (filterDisplay="menu") opened via the funnel icon.
    */
   activeFilters?: DataTableFilterMeta
+  /**
+   * Optional click handler for the manual-link badge in the Pkg column.
+   * Receives the row's manual_link_id (or manual_package_id when only the
+   * package id is set). Caller (UsdSwapsTradeTape) opens the
+   * ManualLinkDetailModal in response.
+   */
+  onOpenManualLink?: (linkId: string) => void
 }
 
 function renderHeader(label: string, summary?: string | null): JSX.Element {
@@ -259,6 +268,9 @@ export function getColumns(
           .map((s) => `${s.passed ? '✓' : '✗'} ${s.label}: ${s.detail}`)
           .join('\n')
         const ccpSwitch = detectCcpSwitch(row)
+        const manualLinkId = row.manual_link_id || row.manual_package_id || null
+        const sourceLabel =
+          row.package_source?.toUpperCase?.() === 'HYBRID' ? 'Hybrid' : 'Manual'
         return (
           <div className="flex items-center gap-1">
             <span
@@ -286,6 +298,20 @@ export function getColumns(
               >
                 CCP↔
               </span>
+            ) : null}
+            {isManualPackage(row) && manualLinkId ? (
+              <ManualLinkBadge
+                linkId={manualLinkId}
+                manualPackageId={row.manual_package_id}
+                sourceLabel={sourceLabel}
+                onClick={
+                  // Only wire onClick when a real manual_link_id exists,
+                  // since the detail modal needs an id to fetch.
+                  row.manual_link_id && config.onOpenManualLink
+                    ? config.onOpenManualLink
+                    : undefined
+                }
+              />
             ) : null}
           </div>
         )
