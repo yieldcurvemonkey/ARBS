@@ -3,6 +3,12 @@ import type { UsdSwapTapeRow } from '../../types'
 
 export type AnalyticsTab = 'timeseries' | 'rarity' | 'levels'
 
+// Phase 4 contract: matches the groupBy whitelist documented on every
+// /api/usd-swaps-tape-v2 analytics route. `canonical` routes through
+// `l.canonical_underlier_key` (see SDRUtils/core/underlier_canonical.py
+// for the canonicalisation source of truth).
+export type AnalyticsGroupBy = 'tape_label' | 'trade_type' | 'tenor' | 'canonical'
+
 export type AnalyticsMetricKey =
   | 'fixed_rate'
   | 'dv01'
@@ -196,6 +202,13 @@ export type TimeseriesState = {
   excludeComicallyLargeCusty: boolean
   yMin: string
   yMax: string
+  // Phase 4: bucket selector. Default 'tape_label' preserves existing
+  // behaviour; switching to 'canonical' pivots the chart to a canonical
+  // underlier key (USD/SOFR-OIS/COMPOUND etc.) so analysts see Term-SOFR
+  // / Compounded-SOFR / Fed-Funds OIS at one click instead of unioning
+  // ad-hoc tape labels.
+  groupBy: AnalyticsGroupBy
+  canonicalKey: string | null
 }
 
 // UI state for Tab 2 (Rarity).

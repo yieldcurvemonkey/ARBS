@@ -152,6 +152,13 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   const ts = useAnalyticsTimeseries(focused, tsState.range, tsState.view, {
     useGrossDv01: tsState.useGrossDv01,
     excludeLargeCusty: tsState.excludeComicallyLargeCusty,
+    // Phase 4: when the user pivots to canonical bucketing, switch the
+    // groupBy + override the SQL `value` to the canonical key. The
+    // canonical key (e.g. "USD/SOFR-OIS/COMPOUND") replaces the
+    // focused-trade tape_label as the bucket identifier.
+    groupBy: tsState.groupBy,
+    groupValueOverride:
+      tsState.groupBy === 'canonical' ? tsState.canonicalKey : null,
   })
   const rarity = useRarityData(focused, {
     lookback: 90,

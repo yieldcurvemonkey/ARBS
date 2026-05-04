@@ -9,6 +9,10 @@ import {
 } from '../columns.helpers'
 import { formatOtherLvl } from '../../../utils/format'
 import { COLUMN_DEFS } from '../../../constants'
+import {
+  canonicalDisplayLabel,
+  canonicalSourceVariants,
+} from '../../../utils/canonicalDisplay'
 
 const columnsSource = readFileSync(
   resolve(
@@ -377,5 +381,20 @@ describe('Pkg column confidence chip integration', () => {
       ],
     } as any)
     expect(result.tone).toBe('high')
+  })
+})
+
+describe('Pkg / underlier column canonical tooltip', () => {
+  it('imports canonicalDisplayLabel inside columns.tsx', () => {
+    expect(columnsSource).toContain('canonicalDisplayLabel')
+  })
+
+  it('imports canonicalSourceVariants for the tooltip body', () => {
+    expect(columnsSource).toContain('canonicalSourceVariants')
+  })
+
+  it('SOFR OIS canonical key still resolves through the helper', () => {
+    expect(canonicalDisplayLabel('USD/SOFR-OIS/COMPOUND')).toBe('SOFR OIS')
+    expect(canonicalSourceVariants('USD/SOFR-OIS/COMPOUND').length).toBeGreaterThan(2)
   })
 })

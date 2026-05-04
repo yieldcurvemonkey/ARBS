@@ -20,8 +20,13 @@ Usage::
     scenarios = FedScenarioConfig.default_sofr_scenarios(
         current_rate=4.33, n_cuts_range=[-1, 0, 1, 2, 3, 5, 9]
     )
+    # Default extraction follows the JPM raw-premium BL methodology:
+    # observed OTM premiums, OI >= 100, put-call parity, 25bp bins.
     dist = SFRImpliedDistribution(scenario_config=scenarios)
     snapshot = dist.extract(smile)
+
+    # For the older SABR-resampled smooth-tail hybrid, use:
+    # SFRImpliedDistribution(use_sabr_vols=True, sabr_extrapolation=True)
 
     from RVUtils.ImpliedDistribution import plot_snapshot_dashboard
     plot_snapshot_dashboard(snapshot)

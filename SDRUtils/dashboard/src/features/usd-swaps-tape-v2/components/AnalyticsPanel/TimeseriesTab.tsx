@@ -25,6 +25,10 @@ import {
   RANGE_DAYS,
 } from './constants'
 import { NumberInput, PlatformDot, Pill, SegGroup, ToggleSwitch } from './controls'
+import {
+  CANONICAL_BUCKETS,
+  canonicalDisplayLabel,
+} from '../../utils/canonicalDisplay'
 import { AssumptionsStrip } from './AssumptionsStrip'
 import {
   effectiveTimeseriesMetric,
@@ -325,6 +329,46 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
           onChange={(v) => setState((s) => ({ ...s, range: v }))}
           options={ANALYTICS_RANGES}
         />
+
+        {/*
+          Phase 4 canonical bucket selector. When the user picks a
+          canonical underlier the chart pivots from `groupBy=tape_label`
+          to `groupBy=canonical&value=<key>` (see
+          useAnalyticsTimeseries) so e.g. SOFR-OIS, Term-SOFR, and
+          Fed-Funds OIS each appear as one self-consistent series
+          regardless of how many SDR-feed string variants the
+          Phase 4 canonicaliser collapsed into them.
+        */}
+        <div className="flex flex-col gap-1">
+          <div className="text-[10px] uppercase tracking-wide text-slate-500">
+            Bucket
+          </div>
+          <select
+            aria-label="Bucket grouping"
+            className="rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-[11px] text-slate-200 focus:border-indigo-400 focus:outline-none"
+            value={
+              state.groupBy === 'canonical' && state.canonicalKey
+                ? `canonical:${state.canonicalKey}`
+                : 'tape_label'
+            }
+            onChange={(e) => {
+              const v = e.target.value
+              if (v === 'tape_label') {
+                setState((s) => ({ ...s, groupBy: 'tape_label', canonicalKey: null }))
+              } else if (v.startsWith('canonical:')) {
+                const key = v.slice('canonical:'.length)
+                setState((s) => ({ ...s, groupBy: 'canonical', canonicalKey: key }))
+              }
+            }}
+          >
+            <option value="tape_label">Tape label (focused)</option>
+            {CANONICAL_BUCKETS.map((b) => (
+              <option key={b.key} value={`canonical:${b.key}`}>
+                {canonicalDisplayLabel(b.key)} — {b.longLabel}
+              </option>
+            ))}
+          </select>
+        </div>
 
         <div className="ml-auto flex flex-col gap-1">
           <div className="text-[10px] uppercase tracking-wide text-slate-500">Overlays</div>
