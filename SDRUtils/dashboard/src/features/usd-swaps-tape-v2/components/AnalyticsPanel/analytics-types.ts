@@ -1,7 +1,13 @@
 // Types for the per-trade analytics dock.
 import type { UsdSwapTapeRow } from '../../types'
 
-export type AnalyticsTab = 'timeseries' | 'rarity' | 'levels'
+// Multi-trade dock workstream — selection-size-derived render mode.
+// Mirrors the union exported by `hooks/useFocusedTrade.ts` so tab
+// components and the orchestrator can branch on the same vocabulary
+// without a circular import.
+export type AnalyticsMode = 'empty' | 'single' | 'sequence'
+
+export type AnalyticsTab = 'timeseries' | 'rarity' | 'levels' | 'sequence'
 
 // Phase 4 contract: matches the groupBy whitelist documented on every
 // /api/usd-swaps-tape-v2 analytics route. `canonical` routes through
@@ -209,6 +215,28 @@ export type TimeseriesState = {
   // ad-hoc tape labels.
   groupBy: AnalyticsGroupBy
   canonicalKey: string | null
+}
+
+// Multi-trade dock workstream — sequence-level summary fields the
+// SequenceBar + SequenceTab renders against. All numeric fields are
+// in the same units as their FocusedTrade counterparts (DV01 in
+// USD/bp, weighted rate in basis points, notional in USD).
+export interface SequenceAggregate {
+  count: number
+  totalDv01Usd: number
+  weightedFixedRateBps: number
+  totalNotionalUsd: number
+  // Span between the earliest and latest execution_start in the
+  // sequence. Null when any element has a missing execution_start
+  // (which would otherwise produce a misleading span value).
+  timeSpanMs: number | null
+  startTs: string | null
+  endTs: string | null
+  sideMix: { pay: number; rcv: number }
+  // Venue → count map. Order is insertion-order matching iteration
+  // through the sequence so the SequenceBar can render chips in a
+  // stable order without re-sorting.
+  venueMix: Record<string, number>
 }
 
 // UI state for Tab 2 (Rarity).
