@@ -13,6 +13,12 @@ import {
   formatRate,
   formatReportedLvl,
 } from '../../utils/format'
+import {
+  canonicalDisplayLabel,
+  canonicalSourceVariants,
+} from '../../utils/canonicalDisplay'
+import { computePackageAdjustedDv01 } from '../../utils/packageAdjustedDv01'
+import { detectCcpSwitch } from '../../utils/ccpSwitchDetector'
 import { getFilterDisplayLabel } from './filter-utils'
 import { EconomicClassBadge, LifecyclePills, QualityBadges } from './RowBadges'
 import { TapeLabelCell } from './TapeLabelCell'
@@ -24,7 +30,11 @@ import {
 
 export { rowClassName } from './columns.helpers'
 
-export type MetricMode = 'dv01' | 'notional'
+// Phase 4 (Clarus design-doc §3.1 / §5.1): `pa_dv01` is the
+// package-adjusted DV01 — Σ|risk| / leg-count denominator. Toggling
+// rotates dv01 → pa_dv01 → notional → dv01 so traders can sanity-check
+// the broker-fee-equivalent metric without cluttering the rail.
+export type MetricMode = 'dv01' | 'pa_dv01' | 'notional'
 
 type ColumnConfig = {
   selection: boolean
@@ -102,8 +112,14 @@ export function getColumns(
   }
 
   const mode: MetricMode = config.metricMode ?? 'dv01'
-  const metricField = mode === 'dv01' ? 'total_risk' : 'total_notional'
-  const metricLabel = mode === 'dv01' ? 'Risk' : 'Notional'
+  const metricField =
+    mode === 'dv01'
+      ? 'total_risk'
+      : mode === 'pa_dv01'
+        ? 'package_adjusted_dv01'
+        : 'total_notional'
+  const metricLabel =
+    mode === 'dv01' ? 'Risk' : mode === 'pa_dv01' ? 'PA-DV01' : 'Notional'
   const metricSummary = summaryFor(metricField, config.activeFilters)
   const metricHeader = (
     <div className="flex flex-col leading-tight">
@@ -234,13 +250,27 @@ export function getColumns(
         'Pkg',
         summaryFor('package_type', config.activeFilters),
       )}
-      body={(row: UsdSwapTapeRow) => (
-        <span
-          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packageTypeBadgeClassName(row.package_type)}`}
-        >
-          {packageTypeDisplayLabel(row.package_type)}
-        </span>
-      )}
+      body={(row: UsdSwapTapeRow) => {
+        const ccpSwitch = detectCcpSwitch(row)
+        return (
+          <span className="inline-flex items-center gap-1">
+            <span
+              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packageTypeBadgeClassName(row.package_type)}`}
+            >
+              {packageTypeDisplayLabel(row.package_type)}
+            </span>
+            {ccpSwitch.isCcpSwitch ? (
+              <span
+                title={`CCP switch detected: ${ccpSwitch.fromCcp} → ${ccpSwitch.toCcp} at ${ccpSwitch.tenorYears}Y`}
+                data-testid={`ccp-switch-${row.package_id}`}
+                className="rounded border border-purple-500/60 bg-purple-900/40 px-1 text-[9.5px] font-semibold text-purple-200"
+              >
+                CCP↔
+              </span>
+            ) : null}
+          </span>
+        )
+      }}
       style={{ width: 92 }}
     />,
     <Column
@@ -271,7 +301,29 @@ export function getColumns(
         'Tape Label',
         summaryFor('tape_label', config.activeFilters),
       )}
-      body={(row: UsdSwapTapeRow) => <TapeLabelCell row={row} />}
+      body={(row: UsdSwapTapeRow) => {
+        const canonicalKey =
+          row.canonical_underlier_key ?? firstLeg(row)?.canonical_underlier_key ?? null
+        if (!canonicalKey) {
+          return <TapeLabelCell row={row} />
+        }
+        const label = canonicalDisplayLabel(canonicalKey)
+        const variants = canonicalSourceVariants(canonicalKey)
+        const tooltip =
+          variants.length > 0
+            ? `Canonical: ${canonicalKey} (${label})\nMatches SDR strings:\n  ${variants.join('\n  ')}`
+            : `Canonical: ${canonicalKey} (${label})`
+        return (
+          <span
+            title={tooltip}
+            data-canonical-key={canonicalKey}
+            data-testid={`canonical-${row.package_id ?? 'row'}`}
+            className="inline-block"
+          >
+            <TapeLabelCell row={row} />
+          </span>
+        )
+      }}
       style={{ width: 470 }}
     />,
     <Column
@@ -283,13 +335,22 @@ export function getColumns(
       dataType="numeric"
       {...compactFilterMenuProps}
       header={metricHeader}
-      body={(row: UsdSwapTapeRow) => (
-        <span className="block text-right font-mono text-[14px] font-bold tracking-tight text-slate-50">
-          {mode === 'dv01'
+      body={(row: UsdSwapTapeRow) => {
+        const display =
+          mode === 'dv01'
             ? formatDv01(row.total_risk ?? null, { signNegativeOnly: true })
-            : formatNotional(row.total_notional ?? null, { compact: true })}
-        </span>
-      )}
+            : mode === 'pa_dv01'
+              ? formatDv01(
+                  row.package_adjusted_dv01 ?? computePackageAdjustedDv01(row),
+                  { signNegativeOnly: true },
+                )
+              : formatNotional(row.total_notional ?? null, { compact: true })
+        return (
+          <span className="block text-right font-mono text-[14px] font-bold tracking-tight text-slate-50">
+            {display}
+          </span>
+        )
+      }}
       style={{ width: 96 }}
     />,
     <Column

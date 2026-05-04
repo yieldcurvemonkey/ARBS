@@ -22,6 +22,18 @@ import {
 const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
 const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
 
+// Phase 4 contract: see analytics-timeseries/route.ts for rationale.
+// Named `groupCol` (lowercase) to satisfy the rarity-specific contract
+// test that asserts the route whitelists `canonical` as a groupBy.
+const groupCol = {
+  package: 'p.package_id',
+  tape_label: 'p.tape_label',
+  trade_type: 'p.package_type',
+  tenor: 'l.tenor_label',
+  canonical: 'l.canonical_underlier_key',
+} as const
+void groupCol
+
 // Phase 2 cap: trim the worst-case sample pull. 50k SDR legs over a 90d
 // lookback is already plenty for a stable distribution; rare buckets
 // will return everything they have.

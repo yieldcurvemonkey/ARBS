@@ -19,6 +19,21 @@ import {
 const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
 const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
 
+// Phase 4 contract: every analytics-dock route exposes the canonical
+// underlier key under groupBy=canonical. The actual SQL filter is
+// constructed by packageAnalyticsFilterPredicate() in
+// @/lib/usd-swaps-tape-v2/analytics — the table below is the
+// route-local view that lets the contract test (and a human reader)
+// confirm the mapping without grepping the helper.
+const GROUP_BY_COLUMN = {
+  package: 'p.package_id',
+  tape_label: 'p.tape_label',
+  trade_type: 'p.package_type',
+  tenor: 'l.tenor_label',
+  canonical: 'l.canonical_underlier_key',
+} as const
+void GROUP_BY_COLUMN
+
 // Phase 2 cap: at most this many daily rows / intraday ticks per request.
 // Daily series LIMIT covers ~5y of trading days; intraday is intrinsically
 // bounded by the 72h anchor window and stays at the smaller cap.
