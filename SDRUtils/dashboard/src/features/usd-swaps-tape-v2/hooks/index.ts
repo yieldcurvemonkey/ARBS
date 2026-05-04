@@ -17,11 +17,25 @@ export { useRowSelection } from './useRowSelection'
 export { useSavedUser } from './useSavedUser'
 export { useManualLinks } from './useManualLinks'
 export { useTimeseriesData } from './useTimeseriesData'
-export { useFocusedTrade, normalizeFocusedTrade } from './useFocusedTrade'
-export type { UseFocusedTradeReturn } from './useFocusedTrade'
+export {
+  useFocusedTrade,
+  normalizeFocusedTrade,
+  deriveAnalyticsSelection,
+} from './useFocusedTrade'
+export type {
+  AnalyticsMode,
+  AnalyticsSelection,
+  UseFocusedTradeReturn,
+} from './useFocusedTrade'
 export { useRarityData } from './useRarityData'
 export type { UseRarityDataReturn } from './useRarityData'
 export { useExtremesData } from './useExtremesData'
 export type { UseExtremesDataReturn } from './useExtremesData'
 export { useAnalyticsTimeseries } from './useAnalyticsTimeseries'
 export type { UseAnalyticsTimeseriesReturn } from './useAnalyticsTimeseries'
+export { useAnalyticsSequence, MAX_SEQUENCE } from './useAnalyticsSequence'
+export type {
+  SequenceOptions,
+  SequencePerTradeEntry,
+  UseAnalyticsSequenceReturn,
+} from './useAnalyticsSequence'

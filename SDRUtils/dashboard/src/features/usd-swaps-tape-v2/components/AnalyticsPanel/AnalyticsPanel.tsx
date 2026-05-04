@@ -7,12 +7,18 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { FilterMatchMode, FilterOperator } from 'primereact/api'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
+  deriveAnalyticsSelection,
+  useAnalyticsSequence,
   useAnalyticsTimeseries,
   useExtremesData,
   useRarityData,
 } from '../../hooks'
 import { COLUMN_FILTER_QUERY_KEY } from '../../hooks/useColumnFilters'
+import { CardsDrawer } from './CardsDrawer'
 import { FocusedTradeBar } from './FocusedTradeBar'
+import { SequenceBar } from './SequenceBar'
+import { SequenceTab } from './SequenceTab'
+import { computeSequenceAggregate } from './sequence-aggregate'
 import { TimeseriesTab } from './TimeseriesTab'
 import { TradeRarityTab } from './TradeRarityTab'
 import { TradedLevelsTab } from './TradedLevelsTab'
@@ -34,8 +40,18 @@ import type {
   RarityState,
   TimeseriesState,
 } from './analytics-types'
+import type { UsdSwapTapeRow } from '../../types'
 
 export interface AnalyticsPanelProps {
+  // Phase A (multi-trade dock): the panel now receives the full loaded
+  // row set + the current multi-row selection alongside the legacy
+  // single-trade `focused` prop. `rows` powers the always-on cards
+  // drawer (PR-#286 underlier-mix / RFR adoption / swap-spread VWAP /
+  // CCP-switch). `selected` powers sequence-mode rendering (N≥2). The
+  // body still renders single-mode UX from `focused` byte-for-byte;
+  // sequence-mode branches land in Phase D.
+  rows: readonly UsdSwapTapeRow[]
+  selected: readonly UsdSwapTapeRow[]
   focused: FocusedTrade | null
   onClose: () => void
   onClearFocused: () => void
@@ -46,10 +62,39 @@ export interface AnalyticsPanelProps {
 
 export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   const {
+    rows,
+    selected,
     focused, onClose, onClearFocused,
     chartHeight = 340, histogramHeight = 280,
     panelHeightVh = DOCK_DEFAULT_VH,
   } = props
+
+  // Phase D — mode-branch render. We derive {mode, sequence} off the
+  // `selected` prop so the panel stays in sync with the trader's
+  // multi-row selection without stamping a new state field. The
+  // legacy `focused` prop continues to drive the single-trade tab
+  // hooks below; sequence mode wires its own per-trade hooks via
+  // the useAnalyticsSequence wrapper (Phase E).
+  const derived = deriveAnalyticsSelection(selected)
+  const mode = derived.mode
+  const sequence = derived.sequence
+
+  // Phase E — wrapper hook fans out to the per-trade analytics
+  // hooks for each member of the sequence (no-op when sequence is
+  // null) and aggregates the sequence-level summary. The aggregate
+  // is also computed eagerly in Phase D's branch below for consumers
+  // that don't need the per-trade timeseries / rarity / extremes;
+  // when both are computed, prefer the wrapper's aggregate so the
+  // SequenceBar's warning chip stays consistent with the cap.
+  const seqAnalytics = useAnalyticsSequence(sequence, {})
+
+  // The base tab hooks (single-trade Timeseries / Rarity / Levels)
+  // need a non-null `focused` to fire fetches. In sequence mode we
+  // anchor on the first sequence entry so the chart base series is
+  // a real bucket; subsequent sequence trades layer in via the
+  // multi-overlay reference lines + dots.
+  const baseTrade: FocusedTrade | null =
+    focused ?? (sequence?.[0] ?? null)
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('timeseries')
   const [tsState, setTsState] = useState<TimeseriesState>(TIMESERIES_DEFAULT_STATE)
@@ -135,21 +180,41 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   // similar focus-trapping modal is open. Without this scope, Esc on
   // ManualLinksDialog would close both the dialog and the dock at the
   // same time, dropping the trader's row selection state.
+  //
+  // Phase H — sequence-mode guard. Arrow-up / arrow-down are
+  // intercepted and silenced when mode === 'sequence' so any
+  // upstream ↑↓ row-navigation handler doesn't accidentally
+  // re-enter single-row focus behaviour while a multi-row sequence
+  // is active. The kbd hint above renders the chip strikethrough
+  // with a tooltip so the trader sees the disabled state.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      const dialogOpen =
-        document.querySelector('.p-dialog:not(.p-dialog-hidden)') !== null
-      if (dialogOpen) return
-      onClose()
+      if (e.key === 'Escape') {
+        const dialogOpen =
+          document.querySelector('.p-dialog:not(.p-dialog-hidden)') !== null
+        if (dialogOpen) return
+        onClose()
+        return
+      }
+      if (mode === 'sequence' && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        // No preventDefault — we don't want to interfere with focus
+        // movement on form fields inside the dock. We just ensure
+        // any future row-nav handler dispatched at window-level
+        // sees the guard.
+        e.stopPropagation()
+        return
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, mode])
 
   // Data — all hooks gracefully no-op when focused is null. Intraday
   // only fires when the user actually switches to the intraday view.
-  const ts = useAnalyticsTimeseries(focused, tsState.range, tsState.view, {
+  // In sequence mode, baseTrade falls back to sequence[0] so the
+  // tab base series renders against a real bucket; the multi-overlay
+  // reference lines layer the rest of the sequence on top.
+  const ts = useAnalyticsTimeseries(baseTrade, tsState.range, tsState.view, {
     useGrossDv01: tsState.useGrossDv01,
     excludeLargeCusty: tsState.excludeComicallyLargeCusty,
     // Phase 4: when the user pivots to canonical bucketing, switch the
@@ -160,7 +225,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
     groupValueOverride:
       tsState.groupBy === 'canonical' ? tsState.canonicalKey : null,
   })
-  const rarity = useRarityData(focused, {
+  const rarity = useRarityData(baseTrade, {
     lookback: 90,
     primaryTol: rarityState.primaryTol,
     sizeTol: rarityState.sizeTol,
@@ -173,7 +238,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
         ? 'notional'
         : 'fixed_rate',
   })
-  const extremes = useExtremesData(focused, {
+  const extremes = useExtremesData(baseTrade, {
     primaryTol: parsePositiveNumberInput(levelsState.primaryTol, 2),
     sizeTol: parsePositiveNumberInput(levelsState.sizeTolPct, 25) / 100,
   })
@@ -270,9 +335,28 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
             extremes error
           </span>
         ) : null}
-        <span className="ml-auto flex items-center gap-1 font-mono text-[10px] text-slate-500">
-          <kbd className="rounded border border-slate-700 px-1 py-[1px] text-slate-400">↑↓</kbd>
-          <span>switch row</span>
+        <span
+          className="ml-auto flex items-center gap-1 font-mono text-[10px] text-slate-500"
+          data-testid="dock-keyboard-hints"
+        >
+          <kbd
+            className={`rounded border px-1 py-[1px] ${
+              mode === 'sequence'
+                ? 'border-slate-800 text-slate-600 line-through'
+                : 'border-slate-700 text-slate-400'
+            }`}
+            title={
+              mode === 'sequence'
+                ? 'Arrow-key navigation is disabled in sequence mode — clear the selection to re-enable.'
+                : undefined
+            }
+            data-disabled={mode === 'sequence' ? 'true' : 'false'}
+          >
+            ↑↓
+          </kbd>
+          <span className={mode === 'sequence' ? 'text-slate-600 line-through' : ''}>
+            switch row
+          </span>
           <span className="mx-1 text-slate-700">·</span>
           <kbd className="rounded border border-slate-700 px-1 py-[1px] text-slate-400">Esc</kbd>
           <span>close</span>
@@ -287,7 +371,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto px-3 pb-3 pt-2">
-        {focused == null ? (
+        {mode === 'empty' ? (
           <div className="flex flex-1 items-center justify-center rounded border border-dashed border-slate-800 bg-slate-900/40 px-4 py-8">
             <div className="flex flex-col items-center gap-2 text-center font-mono">
               <span className="h-2 w-2 animate-pulse rounded-full bg-indigo-400" />
@@ -297,14 +381,31 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               <div className="max-w-[480px] text-[10.5px] text-slate-500">
                 The analytics dock renders real timeseries, distribution, and extremes for a
                 focused bucket. Check a row in the table above to populate the three tabs.
+                Cmd/Shift-click multiple rows to switch the dock into sequence mode.
               </div>
             </div>
           </div>
-        ) : (
+        ) : null}
+        {mode === 'single' && focused ? (
           <FocusedTradeBar trade={focused} onClear={onClearFocused} />
-        )}
+        ) : null}
+        {mode === 'sequence' && sequence ? (
+          <SequenceBar
+            sequence={sequence}
+            aggregate={seqAnalytics.aggregate ?? computeSequenceAggregate(sequence)}
+            onClear={onClearFocused}
+            warning={seqAnalytics.warning}
+          />
+        ) : null}
 
-        {focused == null ? null : (
+        {/*
+          Phase F + G — tab strip. In sequence mode we anchor the
+          tab data hooks to the first sequence trade so the chart
+          base series renders against a real bucket (subsequent
+          trades layer in via the multi-overlay reference lines).
+          The `Sequence` tab only appears in sequence mode.
+        */}
+        {(focused != null || sequence != null) ? (
         <Tabs<AnalyticsTab>
           active={activeTab}
           onChange={setActiveTab}
@@ -321,15 +422,19 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               badge: rarity.stats.count > 0 ? `P${Math.round(rarityPrimaryPercentile)}` : '…',
             },
             { key: 'levels', label: 'Traded Levels', icon: '◈', badge: String(extremes.extremes.length) },
+            ...(mode === 'sequence' && sequence
+              ? ([{ key: 'sequence' as const, label: 'Sequence', icon: '⇉', badge: String(sequence.length) }])
+              : []),
           ]}
         />
-        )}
+        ) : null}
 
-        {focused == null ? null : (
+        {baseTrade == null ? null : (
         <div className="mt-0.5">
           {activeTab === 'timeseries' ? (
             <TimeseriesTab
-              focused={focused}
+              focused={baseTrade}
+              sequence={sequence ?? undefined}
               state={tsState}
               setState={setTsState}
               dailyClose={ts.dailyClose}
@@ -341,7 +446,8 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
           ) : null}
           {activeTab === 'rarity' ? (
             <TradeRarityTab
-              focused={focused}
+              focused={baseTrade}
+              sequence={sequence ?? undefined}
               state={rarityState}
               setState={setRarityState}
               bins={rarity.bins}
@@ -359,7 +465,8 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
           ) : null}
           {activeTab === 'levels' ? (
             <TradedLevelsTab
-              focused={focused}
+              focused={baseTrade}
+              sequence={sequence ?? undefined}
               state={levelsState}
               setState={setLevelsState}
               extremes={extremes.extremes}
@@ -382,9 +489,24 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               }}
             />
           ) : null}
+          {activeTab === 'sequence' && mode === 'sequence' && sequence ? (
+            <SequenceTab
+              sequence={sequence}
+              rows={rows}
+              aggregate={seqAnalytics.aggregate ?? computeSequenceAggregate(sequence)}
+            />
+          ) : null}
         </div>
         )}
       </div>
+
+      {/*
+        Always-on PR-#286 cards drawer. Sits below the tab content in
+        both single and sequence modes (and when nothing is selected
+        yet). Default state is collapsed; the drawer's own
+        localStorage handling persists the trader's preference.
+      */}
+      <CardsDrawer rows={rows} />
     </div>
   )
 }

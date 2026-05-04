@@ -404,3 +404,27 @@ describe('Pkg / underlier column canonical tooltip', () => {
     expect(canonicalSourceVariants('USD/SOFR-OIS/COMPOUND').length).toBeGreaterThan(2)
   })
 })
+
+describe('Pkg column manual-link badge wiring', () => {
+  it('imports ManualLinkBadge from the shared manual-links-ui module', () => {
+    expect(columnsSource).toMatch(
+      /import\s+\{[^}]*ManualLinkBadge[^}]*\}\s+from\s+['"]@\/lib\/manual-links-ui[^'"]*['"]/,
+    )
+  })
+
+  it('imports isManualPackage predicate from the shared module', () => {
+    expect(columnsSource).toMatch(
+      /import\s+\{[^}]*isManualPackage[^}]*\}\s+from\s+['"]@\/lib\/manual-links-ui[^'"]*['"]/,
+    )
+  })
+
+  it('renders the badge guarded by isManualPackage(row)', () => {
+    expect(columnsSource).toMatch(/isManualPackage\(row\)/)
+    expect(columnsSource).toMatch(/<ManualLinkBadge\b/)
+  })
+
+  it('passes manual_link_id (or manual_package_id fallback) and onClick into the badge', () => {
+    expect(columnsSource).toMatch(/<ManualLinkBadge\b[\s\S]{0,400}linkId=\{/)
+    expect(columnsSource).toMatch(/<ManualLinkBadge\b[\s\S]{0,400}onClick=\{/)
+  })
+})

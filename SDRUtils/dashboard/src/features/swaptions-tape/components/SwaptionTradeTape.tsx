@@ -6,14 +6,12 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   BookOpenText,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   FileSpreadsheet,
   Link2,
   RefreshCw,
   X,
-  XCircle,
 } from "lucide-react";
 import {
   Bar,
@@ -62,6 +60,15 @@ import type {
 import { TradeRarityPanel } from "./TradeRarityPanel/TradeRarityPanel";
 import { TimeseriesAnnotations } from "./TradeRarityPanel/TimeseriesAnnotations";
 import { SwaptionMethodologyModal } from "./SwaptionMethodologyModal";
+import { manualLinkColor } from "@/lib/manual-links-ui/color";
+import { isManualPackage } from "@/lib/manual-links-ui/predicates";
+import { groupLinkedRows } from "@/lib/manual-links-ui/grouping";
+import { ManualLinkBadge } from "@/lib/manual-links-ui/components/ManualLinkBadge";
+import { ManualLinkValidationList } from "@/lib/manual-links-ui/components/ManualLinkValidationList";
+import { ManualLinkMetricsTable } from "@/lib/manual-links-ui/components/ManualLinkMetricsTable";
+import { ManualLinkHistoryTable } from "@/lib/manual-links-ui/components/ManualLinkHistoryTable";
+import { ManualLinkDetailModal } from "@/lib/manual-links-ui/components/ManualLinkDetailModal";
+import { useManualLinkForm } from "@/lib/manual-links-ui/hooks/useManualLinkForm";
 import {
   DataTable,
   DataTableFilterMeta,
@@ -2194,55 +2201,6 @@ function isRowNotionalCapped(row: TapeRow): boolean {
       leg.leg_metrics?.is_notional_capped ?? leg.is_notional_capped,
     ),
   );
-}
-
-function isManualPackage(row: TapeRow): boolean {
-  if (row.manual_link_id) return true;
-  if (row.manual_package_id) return true;
-  const source = row.package_source?.toUpperCase();
-  return source === "MANUAL" || source === "HYBRID";
-}
-
-function manualLinkColor(linkId?: string | null): string | null {
-  if (!linkId) return null;
-  let hash = 0;
-  for (let i = 0; i < linkId.length; i += 1) {
-    hash = (hash * 31 + linkId.charCodeAt(i)) % 360;
-  }
-  return `hsl(${hash}, 65%, 52%)`;
-}
-
-function groupLinkedRows(rows: TapeRow[]): TapeRow[] {
-  const groups = new Map<string, TapeRow[]>();
-  rows.forEach((row) => {
-    const linkId = row.manual_package_id || row.manual_link_id;
-    if (!linkId) return;
-    if (!groups.has(linkId)) {
-      groups.set(linkId, []);
-    }
-    groups.get(linkId)?.push(row);
-  });
-
-  if (!groups.size) return rows;
-
-  const emitted = new Set<string>();
-  const result: TapeRow[] = [];
-
-  rows.forEach((row) => {
-    const linkId = row.manual_package_id || row.manual_link_id;
-    if (!linkId) {
-      result.push(row);
-      return;
-    }
-    if (emitted.has(linkId)) return;
-    emitted.add(linkId);
-    const groupRows = groups.get(linkId);
-    if (groupRows) {
-      result.push(...groupRows);
-    }
-  });
-
-  return result;
 }
 
 function formatDurationSeconds(value: number | null | undefined): string {
@@ -10902,20 +10860,43 @@ function ManualLinkModal({
       })),
     [selectedRows],
   );
-  const [packageType, setPackageType] = useState(
-    MANUAL_PACKAGE_TYPES[0]?.value ?? "",
-  );
-  const [linkReason, setLinkReason] = useState(
-    MANUAL_LINK_REASONS[0]?.value ?? "",
-  );
-  const [comment, setComment] = useState("");
-  const [tags, setTags] = useState<string[]>([]);
-  const [tagInput, setTagInput] = useState("");
-  const [validation, setValidation] = useState<ManualLinkValidationItem[]>([]);
-  const [metrics, setMetrics] = useState<Record<string, any> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [validating, setValidating] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  // Shared form state machine: tag list, validation result, metrics,
+  // create POST and auto-validate on open all live in
+  // useManualLinkForm. Swaptions retains its admin-password input on
+  // top of the standard hook surface.
+  const form = useManualLinkForm({
+    basePath: "/api/swaption/links",
+    selectedIds: selectedTradeIds,
+    currentUser,
+    isOpen,
+    initialPackageType: MANUAL_PACKAGE_TYPES[0]?.value ?? "",
+    initialLinkReason: MANUAL_LINK_REASONS[0]?.value ?? "",
+  });
+  const {
+    packageType,
+    setPackageType,
+    linkReason,
+    setLinkReason,
+    comment,
+    setComment,
+    tags,
+    tagInput,
+    setTagInput,
+    validation,
+    metrics,
+    error,
+    validating,
+    submitting,
+    addTag,
+    removeTag,
+    validateLink,
+  } = form;
+  const handleCreate = useCallback(async () => {
+    await form.handleCreate(
+      (result) => onCreated(result),
+      onClose,
+    );
+  }, [form, onClose, onCreated]);
 
   const visibleValidation = useMemo(
     () => validation.filter((item) => item.key !== "package_ids"),
@@ -10926,129 +10907,6 @@ function ManualLinkModal({
     (item) => item.status === "error",
   );
   const hasWritePassword = adminPassword.trim().length > 0;
-
-  const addTag = useCallback(() => {
-    const next = tagInput.trim();
-    if (!next) return;
-    if (tags.includes(next)) {
-      setTagInput("");
-      return;
-    }
-    setTags((prev) => [...prev, next]);
-    setTagInput("");
-  }, [tagInput, tags]);
-
-  const removeTag = useCallback((tag: string) => {
-    setTags((prev) => prev.filter((item) => item !== tag));
-  }, []);
-
-  const validateLink = useCallback(async () => {
-    if (selectedTradeIds.length < 2) return;
-    setValidating(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/swaption/links", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          trade_ids: selectedTradeIds,
-          package_type: packageType || undefined,
-          link_reason: linkReason || undefined,
-          validate_only: true,
-        }),
-      });
-      const payload = await res.json();
-      if (!res.ok) {
-        setError(payload?.error || "Failed to validate manual link.");
-        if (payload?.validation) {
-          setValidation(payload.validation as ManualLinkValidationItem[]);
-        }
-        if (payload?.metrics) {
-          setMetrics(payload.metrics as Record<string, any>);
-        }
-        return;
-      }
-      setValidation(payload.validation || []);
-      setMetrics(payload.metrics || null);
-    } catch (err: any) {
-      setError(err?.message || "Failed to validate manual link.");
-    } finally {
-      setValidating(false);
-    }
-  }, [linkReason, packageType, selectedTradeIds]);
-
-  const handleCreate = useCallback(async () => {
-    if (selectedTradeIds.length < 2) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/swaption/links", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          trade_ids: selectedTradeIds,
-          package_type: packageType || undefined,
-          comment: comment || undefined,
-          link_reason: linkReason || undefined,
-          tags,
-          user: currentUser || undefined,
-          admin_password: adminPassword || undefined,
-        }),
-      });
-      const payload = await res.json();
-      if (!res.ok) {
-        setError(payload?.error || "Failed to create manual link.");
-        if (payload?.validation) {
-          setValidation(payload.validation as ManualLinkValidationItem[]);
-        }
-        if (payload?.metrics) {
-          setMetrics(payload.metrics as Record<string, any>);
-        }
-        return;
-      }
-      const created =
-        payload?.link_id && payload?.manual_package_id
-          ? {
-              link_id: payload.link_id,
-              manual_package_id: payload.manual_package_id,
-            }
-          : undefined;
-      onCreated(created);
-      onClose();
-    } catch (err: any) {
-      setError(err?.message || "Failed to create manual link.");
-    } finally {
-      setSubmitting(false);
-    }
-  }, [
-    comment,
-    adminPassword,
-    currentUser,
-    linkReason,
-    onClose,
-    onCreated,
-    packageType,
-    selectedTradeIds,
-    tags,
-  ]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    setPackageType(MANUAL_PACKAGE_TYPES[0]?.value ?? "");
-    setLinkReason(MANUAL_LINK_REASONS[0]?.value ?? "");
-    setComment("");
-    setTags([]);
-    setTagInput("");
-    setValidation([]);
-    setMetrics(null);
-    setError(null);
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    if (selectedTradeIds.length < 2) return;
-    validateLink();
-  }, [isOpen, selectedTradeIds, validateLink]);
 
   if (!isOpen) return null;
 
@@ -11122,38 +10980,16 @@ function ManualLinkModal({
                     {validating ? "Validating" : "Refresh"}
                   </button>
                 </div>
-                <div className="mt-2 space-y-2">
-                  {visibleValidation.length ? (
-                    visibleValidation.map((item) => (
-                      <div
-                        key={item.key}
-                        className="flex items-start gap-2 text-xs"
-                      >
-                        {item.status === "ok" ? (
-                          <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-400" />
-                        ) : item.status === "error" ? (
-                          <XCircle className="mt-0.5 h-4 w-4 text-rose-400" />
-                        ) : (
-                          <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-300" />
-                        )}
-                        <div>
-                          <div className="font-semibold text-slate-200">
-                            {item.label}
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            {item.message}
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-[11px] text-slate-400">
-                      Validation results will appear after refresh.
-                    </div>
-                  )}
+                <div className="mt-2">
+                  <ManualLinkValidationList items={visibleValidation} />
                 </div>
               </div>
-              {metrics && (
+              {metrics && (() => {
+                // Server-side metrics is Record<string, unknown> on the
+                // shared hook. Cast at the boundary so the existing
+                // formatters keep their tighter signatures.
+                const m = metrics as Record<string, number | null | undefined>;
+                return (
                 <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
                   <div className="uppercase tracking-wide text-slate-400">
                     Metrics
@@ -11162,42 +10998,43 @@ function ManualLinkModal({
                     <div className="flex items-center justify-between">
                       <span>Total notional</span>
                       <span className="font-mono">
-                        {formatNotional(metrics.total_notional)}
+                        {formatNotional(m.total_notional ?? null)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Total premium</span>
                       <span className="font-mono">
-                        {formatMetricValue(metrics.total_premium, 3)}
+                        {formatMetricValue(m.total_premium ?? null, 3)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>DV01</span>
                       <span className="font-mono">
-                        {formatMetricValue(metrics.total_dv01, 3)}
+                        {formatMetricValue(m.total_dv01 ?? null, 3)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Vega01</span>
                       <span className="font-mono">
-                        {formatMetricValue(metrics.total_vega01, 3)}
+                        {formatMetricValue(m.total_vega01 ?? null, 3)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Time spread</span>
                       <span className="font-mono">
-                        {formatDurationSeconds(metrics.time_spread_seconds)}
+                        {formatDurationSeconds(m.time_spread_seconds ?? null)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Trades</span>
                       <span className="font-mono">
-                        {metrics.trade_count ?? "--"}
+                        {m.trade_count ?? "--"}
                       </span>
                     </div>
                   </div>
                 </div>
-              )}
+                );
+              })()}
             </div>
             <div className="space-y-3">
               <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
@@ -11371,560 +11208,6 @@ function ManualLinkModal({
               {submitting ? "Creating..." : "Create Link"}
             </button>
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ManualLinkDetailsModal({
-  isOpen,
-  linkId,
-  currentUser,
-  onUserChange,
-  adminPassword,
-  onAdminPasswordChange,
-  onClose,
-  onUpdated,
-}: {
-  isOpen: boolean;
-  linkId: string | null;
-  currentUser: string;
-  onUserChange: (value: string) => void;
-  adminPassword: string;
-  onAdminPasswordChange: (value: string) => void;
-  onClose: () => void;
-  onUpdated: () => void;
-}) {
-  const [linkDetail, setLinkDetail] = useState<ManualLinkDetail | null>(null);
-  const [trades, setTrades] = useState<ManualLinkTrade[]>([]);
-  const [history, setHistory] = useState<ManualLinkHistoryItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [packageType, setPackageType] = useState("");
-  const [linkReason, setLinkReason] = useState("");
-  const [comment, setComment] = useState("");
-  const [tags, setTags] = useState<string[]>([]);
-  const [tagInput, setTagInput] = useState("");
-  const [addTradesInput, setAddTradesInput] = useState("");
-  const [removeTradesInput, setRemoveTradesInput] = useState("");
-  const [deactivateReason, setDeactivateReason] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [deactivating, setDeactivating] = useState(false);
-
-  const manualColor = manualLinkColor(linkId);
-  const metricEntries = linkDetail?.link_metrics
-    ? Object.entries(linkDetail.link_metrics)
-    : [];
-  const hasWritePassword = adminPassword.trim().length > 0;
-
-  const addTag = useCallback(() => {
-    const next = tagInput.trim();
-    if (!next) return;
-    if (tags.includes(next)) {
-      setTagInput("");
-      return;
-    }
-    setTags((prev) => [...prev, next]);
-    setTagInput("");
-  }, [tagInput, tags]);
-
-  const removeTag = useCallback((tag: string) => {
-    setTags((prev) => prev.filter((item) => item !== tag));
-  }, []);
-
-  const fetchLinkDetails = useCallback(async () => {
-    if (!linkId) return;
-    setLoading(true);
-    setError(null);
-    setLinkDetail(null);
-    setTrades([]);
-    setHistory([]);
-    try {
-      const res = await fetch(`/api/swaption/links/${linkId}`);
-      const payload = await res.json();
-      if (!res.ok) {
-        setError(payload?.error || "Failed to load manual link.");
-        return;
-      }
-      setLinkDetail(payload.link as ManualLinkDetail);
-      setTrades(dedupeManualTrades(payload.trades || []));
-      setHistory(payload.history || []);
-    } catch (err: any) {
-      setError(err?.message || "Failed to load manual link.");
-    } finally {
-      setLoading(false);
-    }
-  }, [linkId]);
-
-  const handleSave = useCallback(async () => {
-    if (!linkId) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const payload: Record<string, any> = {
-        user: currentUser || undefined,
-        admin_password: adminPassword || undefined,
-        package_type: packageType || undefined,
-        link_reason: linkReason || undefined,
-        comment: comment || undefined,
-        tags,
-      };
-      const addTrades = parseIdList(addTradesInput);
-      const removeTrades = parseIdList(removeTradesInput);
-      if (addTrades.length) payload.add_trades = addTrades;
-      if (removeTrades.length) payload.remove_trades = removeTrades;
-
-      const res = await fetch(`/api/swaption/links/${linkId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const responsePayload = await res.json();
-      if (!res.ok) {
-        setError(responsePayload?.error || "Failed to update manual link.");
-        return;
-      }
-      setAddTradesInput("");
-      setRemoveTradesInput("");
-      await fetchLinkDetails();
-      onUpdated();
-    } catch (err: any) {
-      setError(err?.message || "Failed to update manual link.");
-    } finally {
-      setSaving(false);
-    }
-  }, [
-    addTradesInput,
-    adminPassword,
-    comment,
-    currentUser,
-    fetchLinkDetails,
-    linkId,
-    linkReason,
-    onUpdated,
-    packageType,
-    removeTradesInput,
-    tags,
-  ]);
-
-  const handleDeactivate = useCallback(async () => {
-    if (!linkId) return;
-    setDeactivating(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/swaption/links/${linkId}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user: currentUser || undefined,
-          admin_password: adminPassword || undefined,
-          reason: deactivateReason || undefined,
-        }),
-      });
-      const responsePayload = await res.json();
-      if (!res.ok) {
-        setError(responsePayload?.error || "Failed to deactivate link.");
-        return;
-      }
-      onUpdated();
-      onClose();
-    } catch (err: any) {
-      setError(err?.message || "Failed to deactivate link.");
-    } finally {
-      setDeactivating(false);
-    }
-  }, [adminPassword, currentUser, deactivateReason, linkId, onClose, onUpdated]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    fetchLinkDetails();
-  }, [fetchLinkDetails, isOpen]);
-
-  useEffect(() => {
-    if (!linkDetail) return;
-    setPackageType(linkDetail.package_type || "");
-    setLinkReason(linkDetail.link_reason || "");
-    setComment(linkDetail.user_comment || "");
-    setTags(Array.isArray(linkDetail.tags) ? linkDetail.tags : []);
-    setTagInput("");
-  }, [linkDetail]);
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
-      <div className="w-full max-w-4xl overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl">
-        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-            <span
-              className="h-3 w-3 rounded-full"
-              style={{ backgroundColor: manualColor || "#64748b" }}
-            />
-            Manual Link Details
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded border border-slate-700 p-1 text-slate-300 transition hover:border-slate-500 hover:text-slate-100"
-            aria-label="Close manual link details"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="max-h-[75vh] overflow-y-auto p-4">
-          {loading ? (
-            <div className="flex items-center gap-2 text-sm text-slate-300">
-              <RefreshCw className="h-4 w-4 animate-spin" />
-              Loading manual link...
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                      Manual Package
-                    </div>
-                    <div className="text-sm font-semibold text-slate-100">
-                      {linkDetail?.manual_package_id || "--"}
-                    </div>
-                    <div className="text-[11px] text-slate-500">
-                      {linkDetail?.is_active ? "Active" : "Inactive"}
-                    </div>
-                  </div>
-                  <div className="space-y-1 text-right">
-                    <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                      Created
-                    </div>
-                    <div className="text-[11px] text-slate-200">
-                      {linkDetail?.created_by || "--"}
-                    </div>
-                    <div className="text-[11px] text-slate-500">
-                      {formatTimestamp(linkDetail?.created_at)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
-                <div className="space-y-3">
-                  <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
-                    <div className="uppercase tracking-wide text-slate-400">
-                      Edit Link
-                    </div>
-                    <div className="mt-3 space-y-3">
-                      <label className="block">
-                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                          User
-                        </span>
-                        <input
-                          value={currentUser}
-                          onChange={(event) =>
-                            onUserChange(event.target.value)
-                          }
-                          className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
-                          placeholder="username or email"
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                          Write Password
-                        </span>
-                        <input
-                          type="password"
-                          value={adminPassword}
-                          onChange={(event) =>
-                            onAdminPasswordChange(event.target.value)
-                          }
-                          autoComplete="current-password"
-                          className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
-                          placeholder="admin password"
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                          Package Type
-                        </span>
-                        <select
-                          value={packageType}
-                          onChange={(event) =>
-                            setPackageType(event.target.value)
-                          }
-                          className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
-                        >
-                          {MANUAL_PACKAGE_TYPES.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="block">
-                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                          Link Reason
-                        </span>
-                        <select
-                          value={linkReason}
-                          onChange={(event) => setLinkReason(event.target.value)}
-                          className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
-                        >
-                          {MANUAL_LINK_REASONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="block">
-                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                          Tags
-                        </span>
-                        <div className="mt-1 flex gap-2">
-                          <input
-                            value={tagInput}
-                            onChange={(event) => setTagInput(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                addTag();
-                              }
-                            }}
-                            className="flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
-                            placeholder="comma or enter separated tags"
-                          />
-                          <button
-                            type="button"
-                            onClick={addTag}
-                            className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200 transition hover:border-slate-500"
-                          >
-                            Add
-                          </button>
-                        </div>
-                        {tags.length > 0 && (
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {tags.map((tag) => (
-                              <span
-                                key={tag}
-                                className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-200"
-                              >
-                                {tag}
-                                <button
-                                  type="button"
-                                  onClick={() => removeTag(tag)}
-                                  className="text-slate-400 hover:text-slate-200"
-                                  aria-label={`Remove ${tag}`}
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </label>
-                      <label className="block">
-                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                          Comment
-                        </span>
-                        <textarea
-                          value={comment}
-                          onChange={(event) => setComment(event.target.value)}
-                          rows={3}
-                          className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
-                          placeholder="Add context for this manual link"
-                        />
-                      </label>
-                      <div className="grid gap-2 md:grid-cols-2">
-                        <label className="block">
-                          <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                            Add Trades
-                          </span>
-                          <input
-                            value={addTradesInput}
-                            onChange={(event) =>
-                              setAddTradesInput(event.target.value)
-                            }
-                            className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
-                            placeholder="trade or package ids"
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                            Remove Trades
-                          </span>
-                          <input
-                            value={removeTradesInput}
-                            onChange={(event) =>
-                              setRemoveTradesInput(event.target.value)
-                            }
-                            className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
-                            placeholder="trade or package ids"
-                          />
-                        </label>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleSave}
-                        disabled={
-                          saving ||
-                          !currentUser ||
-                          !hasWritePassword ||
-                          !linkDetail
-                        }
-                        title={
-                          !hasWritePassword
-                            ? "Enter the write password to update manual links"
-                            : undefined
-                        }
-                        className="rounded border border-emerald-500/60 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                      >
-                        {saving ? "Saving..." : "Save Changes"}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
-                    <div className="uppercase tracking-wide text-slate-400">
-                      Deactivate Link
-                    </div>
-                    <div className="mt-2 flex flex-col gap-2">
-                      <input
-                        value={deactivateReason}
-                        onChange={(event) =>
-                          setDeactivateReason(event.target.value)
-                        }
-                        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100"
-                        placeholder="Reason for deactivation"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleDeactivate}
-                        disabled={
-                          deactivating ||
-                          !currentUser ||
-                          !hasWritePassword ||
-                          !linkDetail
-                        }
-                        title={
-                          !hasWritePassword
-                            ? "Enter the write password to deactivate manual links"
-                            : undefined
-                        }
-                        className="rounded border border-rose-500/60 bg-rose-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-200 transition hover:bg-rose-500/20 disabled:opacity-50"
-                      >
-                        {deactivating ? "Deactivating..." : "Deactivate Link"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
-                    <div className="uppercase tracking-wide text-slate-400">
-                      Linked Trades
-                    </div>
-                    <div className="mt-2 space-y-2">
-                      {trades.length ? (
-                        trades.map((trade) => (
-                          <div
-                            key={trade.trade_id}
-                            className="rounded border border-slate-800/70 bg-slate-900/60 px-2 py-1"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-mono">
-                                {trade.trade_id}
-                              </span>
-                              <span className="text-[10px] uppercase text-slate-400">
-                                {trade.product_type || "N/A"}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-slate-300">
-                              {trade.trade_label || "--"}
-                            </div>
-                            <div className="flex items-center justify-between text-[10px] text-slate-500">
-                              <span>{trade.package_id}</span>
-                              <span>
-                                {formatNotional(trade.notional ?? null)}
-                              </span>
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="text-[11px] text-slate-400">
-                          No linked trades found.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
-                    <div className="uppercase tracking-wide text-slate-400">
-                      Metrics
-                    </div>
-                    <div className="mt-2 space-y-2">
-                      {metricEntries.length ? (
-                        metricEntries.map(([key, value]) => (
-                          <div
-                            key={key}
-                            className="flex items-center justify-between"
-                          >
-                            <span className="text-[11px] uppercase text-slate-400">
-                              {key.replace(/_/g, " ")}
-                            </span>
-                            <span className="font-mono">
-                              {formatManualMetricValue(value)}
-                            </span>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="text-[11px] text-slate-400">
-                          No metrics stored.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
-                    <div className="uppercase tracking-wide text-slate-400">
-                      History
-                    </div>
-                    <div className="mt-2 space-y-2">
-                      {history.length ? (
-                        history.map((item) => (
-                          <div
-                            key={item.history_id}
-                            className="rounded border border-slate-800/70 bg-slate-900/60 px-2 py-1"
-                          >
-                            <div className="flex items-center justify-between text-[11px] text-slate-200">
-                              <span className="font-semibold">
-                                {item.action}
-                              </span>
-                              <span className="text-slate-500">
-                                {formatTimestamp(item.changed_at)}
-                              </span>
-                            </div>
-                            <div className="text-[10px] text-slate-400">
-                              {item.changed_by}
-                            </div>
-                            {item.change_details && (
-                              <pre className="mt-1 whitespace-pre-wrap rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[10px] text-slate-400">
-                                {JSON.stringify(item.change_details, null, 2)}
-                              </pre>
-                            )}
-                          </div>
-                        ))
-                      ) : (
-                        <div className="text-[11px] text-slate-400">
-                          No history entries yet.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-              {error && (
-                <div className="rounded border border-rose-800/70 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
-                  {error}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       </div>
     </div>
@@ -13319,9 +12602,6 @@ export default function SwaptionTradeTape() {
     const manual = isManualPackage(row);
     const manualLinkId = row.manual_link_id;
     const assumedIncomplete = isAssumedIncompleteStraddle(row);
-    const manualColor = manualLinkColor(
-      row.manual_link_id || row.manual_package_id,
-    );
     const source = row.package_source?.toUpperCase();
     const sourceLabel = source === "HYBRID" ? "Hybrid" : "Manual";
     const normalizedPackageType = resolveDisplayPackageType(row);
@@ -13348,8 +12628,6 @@ export default function SwaptionTradeTape() {
     const inferredTooltip =
       row.assumed_straddle_reason ||
       "Inferred intraday incomplete straddle: broker likely reported one leg now and will complete both legs later in the day.";
-    const manualBadgeClass =
-      "inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900/60 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-200";
     const manualBadgePlacement = manualBadgePlacementByPackageId.get(
       row.package_id,
     );
@@ -13359,24 +12637,6 @@ export default function SwaptionTradeTape() {
     const placeManualBadgeBetweenRows = !!manualLinkId
       ? !!manualBadgePlacement?.placeBetweenRows
       : false;
-    const manualBadgePositionClass = placeManualBadgeBetweenRows
-      ? "relative z-10"
-      : "";
-    const manualBadgePositionStyle = placeManualBadgeBetweenRows
-      ? { transform: "translateY(50%)" as const }
-      : undefined;
-    const manualBadgeConnector = placeManualBadgeBetweenRows ? (
-      <>
-        <span
-          className="pointer-events-none absolute left-1/2 -top-2 h-2 w-px -translate-x-1/2 bg-slate-300/70"
-          aria-hidden="true"
-        />
-        <span
-          className="pointer-events-none absolute left-1/2 -bottom-2 h-2 w-px -translate-x-1/2 bg-slate-300/70"
-          aria-hidden="true"
-        />
-      </>
-    ) : null;
     return (
       <div className="flex items-center gap-2">
         <span
@@ -13398,48 +12658,19 @@ export default function SwaptionTradeTape() {
             IDB inferred
           </span>
         )}
-        {manual &&
-          showManualBadge &&
-          (manualLinkId ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                openManualLinkDetails(manualLinkId);
-              }}
-              className={`${manualBadgeClass} ${manualBadgePositionClass} hover:border-slate-500`}
-              style={manualBadgePositionStyle}
-            >
-              {manualBadgeConnector}
-              <span
-                className="h-2 w-2 rounded-full"
-                style={{ backgroundColor: manualColor || "#64748b" }}
-              />
-              <span>{sourceLabel}</span>
-              {row.manual_package_id && (
-                <span className="text-slate-400">
-                  {row.manual_package_id}
-                </span>
-              )}
-            </button>
-          ) : (
-            <span
-              className={`${manualBadgeClass} ${manualBadgePositionClass}`}
-              style={manualBadgePositionStyle}
-            >
-              {manualBadgeConnector}
-              <span
-                className="h-2 w-2 rounded-full"
-                style={{ backgroundColor: manualColor || "#64748b" }}
-              />
-              <span>{sourceLabel}</span>
-              {row.manual_package_id && (
-                <span className="text-slate-400">
-                  {row.manual_package_id}
-                </span>
-              )}
-            </span>
-          ))}
+        {manual && showManualBadge && (
+          <ManualLinkBadge
+            linkId={manualLinkId || row.manual_package_id || ""}
+            manualPackageId={row.manual_package_id}
+            sourceLabel={sourceLabel}
+            showConnector={placeManualBadgeBetweenRows}
+            onClick={
+              manualLinkId
+                ? (id) => openManualLinkDetails(id)
+                : undefined
+            }
+          />
+        )}
       </div>
     );
   };
@@ -14063,7 +13294,7 @@ export default function SwaptionTradeTape() {
         onClose={() => setLinkModalOpen(false)}
         onCreated={handleLinkCreated}
       />
-      <ManualLinkDetailsModal
+      <ManualLinkDetailModal
         isOpen={detailModalOpen}
         linkId={detailLinkId}
         currentUser={currentUser}
@@ -14072,6 +13303,14 @@ export default function SwaptionTradeTape() {
         onAdminPasswordChange={setAdminPassword}
         onClose={closeManualLinkDetails}
         onUpdated={handleLinkUpdated}
+        apiBasePath="/api/swaption/links"
+        packageTypeOptions={MANUAL_PACKAGE_TYPES}
+        linkReasonOptions={MANUAL_LINK_REASONS}
+        parseIdList={parseIdList}
+        dedupeTrades={dedupeManualTrades}
+        formatTimestamp={formatTimestamp}
+        formatNotional={formatNotional}
+        formatMetricValue={formatManualMetricValue}
       />
     </div>
   );

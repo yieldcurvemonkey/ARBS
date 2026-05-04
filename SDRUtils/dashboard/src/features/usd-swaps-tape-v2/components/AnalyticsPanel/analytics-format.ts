@@ -3,6 +3,28 @@
 // through utils/format.ts for row-level rendering.
 import { formatDv01, formatNotional } from '../../utils/format'
 
+// Multi-trade dock — palette indexed by selection order. 12 colours
+// cycle modulo length for sequences > 12 (the soft cap is 20, so a
+// trader who selects N=18 sees colours 0..11, 0..5).
+export const SEQUENCE_PALETTE = [
+  '#e879f9', // fuchsia 400 (matches `focused` for first selection)
+  '#38bdf8', // sky 400
+  '#f59e0b', // amber 500
+  '#34d399', // emerald 400
+  '#a78bfa', // violet 400
+  '#f472b6', // pink 400
+  '#fbbf24', // amber 400
+  '#22d3ee', // cyan 400
+  '#fb7185', // rose 400
+  '#4ade80', // green 400
+  '#c084fc', // purple 400
+  '#facc15', // yellow 400
+] as const
+
+export function sequenceColor(idx: number): string {
+  return SEQUENCE_PALETTE[idx % SEQUENCE_PALETTE.length]
+}
+
 export const ANALYTICS_COLORS = {
   custy: '#f59e0b',
   custyTint: 'rgba(245, 158, 11, 0.18)',

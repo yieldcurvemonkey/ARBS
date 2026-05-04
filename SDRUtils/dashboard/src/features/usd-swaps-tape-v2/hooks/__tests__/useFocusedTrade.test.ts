@@ -1,6 +1,9 @@
 import { describe, expect, it } from '@jest/globals'
 import type { UsdSwapTapeRow } from '../../types'
-import { normalizeFocusedTrade } from '../useFocusedTrade'
+import {
+  deriveAnalyticsSelection,
+  normalizeFocusedTrade,
+} from '../useFocusedTrade'
 
 function row(overrides: Partial<UsdSwapTapeRow> = {}): UsdSwapTapeRow {
   return {
@@ -104,5 +107,65 @@ describe('normalizeFocusedTrade', () => {
     )
 
     expect(focused?.trade_type).toBe('FLY')
+  })
+})
+
+// Phase C of the multi-trade dock workstream extends the focus
+// surface with a `mode` enum and a `sequence: FocusedTrade[]` so
+// downstream tabs can branch on selection size. The dashboard test
+// runner is `node` (no jsdom), so we cover the derivation logic via
+// a pure helper rather than a renderHook against the React state
+// shell.
+describe('deriveAnalyticsSelection — mode + sequence derivation', () => {
+  it('mode = empty when nothing is selected', () => {
+    const r = deriveAnalyticsSelection([])
+    expect(r.mode).toBe('empty')
+    expect(r.focused).toBeNull()
+    expect(r.sequence).toBeNull()
+  })
+
+  it('mode = single when exactly one row is selected', () => {
+    const r = deriveAnalyticsSelection([row()])
+    expect(r.mode).toBe('single')
+    expect(r.focused).not.toBeNull()
+    expect(r.focused?.id).toBe('PKG1')
+    expect(r.sequence).toBeNull()
+  })
+
+  it('mode = sequence when 2+ rows are selected', () => {
+    const a = row({ package_id: 'PKG-A' })
+    const b = row({ package_id: 'PKG-B' })
+    const r = deriveAnalyticsSelection([a, b])
+    expect(r.mode).toBe('sequence')
+    expect(r.focused).toBeNull()
+    expect(r.sequence).not.toBeNull()
+    expect(r.sequence).toHaveLength(2)
+    expect(r.sequence?.[0].id).toBe('PKG-A')
+    expect(r.sequence?.[1].id).toBe('PKG-B')
+  })
+
+  it('preserves selection order in the sequence', () => {
+    const a = row({ package_id: 'PKG-A' })
+    const b = row({ package_id: 'PKG-B' })
+    const c = row({ package_id: 'PKG-C' })
+    const r = deriveAnalyticsSelection([c, a, b])
+    expect(r.sequence?.map((t) => t.id)).toEqual(['PKG-C', 'PKG-A', 'PKG-B'])
+  })
+
+  it('drops null/unnormalisable entries from the sequence', () => {
+    const r = deriveAnalyticsSelection([
+      row({ package_id: 'PKG-A' }),
+      null as unknown as UsdSwapTapeRow,
+      row({ package_id: 'PKG-B' }),
+    ])
+    // Two valid rows survive; mode stays 'sequence' (≥2).
+    expect(r.mode).toBe('sequence')
+    expect(r.sequence?.map((t) => t.id)).toEqual(['PKG-A', 'PKG-B'])
+  })
+
+  it('readonly UsdSwapTapeRow[] is accepted without copy', () => {
+    const ro: readonly UsdSwapTapeRow[] = [row({ package_id: 'PKG-A' })]
+    const r = deriveAnalyticsSelection(ro)
+    expect(r.mode).toBe('single')
   })
 })

@@ -117,6 +117,43 @@ export function normalizeFocusedTrade(row: UsdSwapTapeRow | null): FocusedTrade 
   }
 }
 
+// Phase C of the multi-trade dock workstream. The analytics dock
+// derives a tri-state mode from the current multi-row selection so
+// the panel can branch its rendering:
+//
+//   - 'empty'    — no rows selected; tabs render their no-focus state
+//   - 'single'   — exactly one row selected; legacy single-trade UX
+//   - 'sequence' — N≥2 rows selected; SequenceBar + multi-overlay
+//                  tabs + Sequence tab take over.
+//
+// Co-locating the derivation here (rather than inside `AnalyticsPanel`)
+// keeps the orchestrator-side selection→focus translation in one
+// place and lets us cover the rule with pure-function tests under a
+// `node` Jest environment (no jsdom).
+export type AnalyticsMode = 'empty' | 'single' | 'sequence'
+
+export interface AnalyticsSelection {
+  mode: AnalyticsMode
+  focused: FocusedTrade | null
+  sequence: FocusedTrade[] | null
+}
+
+export function deriveAnalyticsSelection(
+  selected: readonly (UsdSwapTapeRow | null | undefined)[],
+): AnalyticsSelection {
+  const normalized = selected
+    .map((r) => normalizeFocusedTrade(r ?? null))
+    .filter((t): t is FocusedTrade => t != null)
+
+  if (normalized.length === 0) {
+    return { mode: 'empty', focused: null, sequence: null }
+  }
+  if (normalized.length === 1) {
+    return { mode: 'single', focused: normalized[0], sequence: null }
+  }
+  return { mode: 'sequence', focused: null, sequence: normalized }
+}
+
 export interface UseFocusedTradeReturn {
   focused: FocusedTrade | null
   setFocused: (row: UsdSwapTapeRow | null) => void
