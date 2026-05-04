@@ -5,11 +5,11 @@ import { createManualLinkApi } from '../api/manualLinkApi';
 
 describe('manualLinkApi', () => {
   let originalFetch: typeof fetch;
-  let fetchMock: jest.Mock;
+  let fetchMock: jest.Mock<any>;
 
   beforeEach(() => {
     originalFetch = global.fetch;
-    fetchMock = jest.fn();
+    fetchMock = jest.fn() as jest.Mock<any>;
     (global as any).fetch = fetchMock;
   });
 

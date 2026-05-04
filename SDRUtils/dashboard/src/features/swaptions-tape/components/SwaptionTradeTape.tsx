@@ -68,6 +68,7 @@ import { ManualLinkValidationList } from "@/lib/manual-links-ui/components/Manua
 import { ManualLinkMetricsTable } from "@/lib/manual-links-ui/components/ManualLinkMetricsTable";
 import { ManualLinkHistoryTable } from "@/lib/manual-links-ui/components/ManualLinkHistoryTable";
 import { ManualLinkDetailModal } from "@/lib/manual-links-ui/components/ManualLinkDetailModal";
+import { useManualLinkForm } from "@/lib/manual-links-ui/hooks/useManualLinkForm";
 import {
   DataTable,
   DataTableFilterMeta,
@@ -10859,20 +10860,43 @@ function ManualLinkModal({
       })),
     [selectedRows],
   );
-  const [packageType, setPackageType] = useState(
-    MANUAL_PACKAGE_TYPES[0]?.value ?? "",
-  );
-  const [linkReason, setLinkReason] = useState(
-    MANUAL_LINK_REASONS[0]?.value ?? "",
-  );
-  const [comment, setComment] = useState("");
-  const [tags, setTags] = useState<string[]>([]);
-  const [tagInput, setTagInput] = useState("");
-  const [validation, setValidation] = useState<ManualLinkValidationItem[]>([]);
-  const [metrics, setMetrics] = useState<Record<string, any> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [validating, setValidating] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  // Shared form state machine: tag list, validation result, metrics,
+  // create POST and auto-validate on open all live in
+  // useManualLinkForm. Swaptions retains its admin-password input on
+  // top of the standard hook surface.
+  const form = useManualLinkForm({
+    basePath: "/api/swaption/links",
+    selectedIds: selectedTradeIds,
+    currentUser,
+    isOpen,
+    initialPackageType: MANUAL_PACKAGE_TYPES[0]?.value ?? "",
+    initialLinkReason: MANUAL_LINK_REASONS[0]?.value ?? "",
+  });
+  const {
+    packageType,
+    setPackageType,
+    linkReason,
+    setLinkReason,
+    comment,
+    setComment,
+    tags,
+    tagInput,
+    setTagInput,
+    validation,
+    metrics,
+    error,
+    validating,
+    submitting,
+    addTag,
+    removeTag,
+    validateLink,
+  } = form;
+  const handleCreate = useCallback(async () => {
+    await form.handleCreate(
+      (result) => onCreated(result),
+      onClose,
+    );
+  }, [form, onClose, onCreated]);
 
   const visibleValidation = useMemo(
     () => validation.filter((item) => item.key !== "package_ids"),
@@ -10883,129 +10907,6 @@ function ManualLinkModal({
     (item) => item.status === "error",
   );
   const hasWritePassword = adminPassword.trim().length > 0;
-
-  const addTag = useCallback(() => {
-    const next = tagInput.trim();
-    if (!next) return;
-    if (tags.includes(next)) {
-      setTagInput("");
-      return;
-    }
-    setTags((prev) => [...prev, next]);
-    setTagInput("");
-  }, [tagInput, tags]);
-
-  const removeTag = useCallback((tag: string) => {
-    setTags((prev) => prev.filter((item) => item !== tag));
-  }, []);
-
-  const validateLink = useCallback(async () => {
-    if (selectedTradeIds.length < 2) return;
-    setValidating(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/swaption/links", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          trade_ids: selectedTradeIds,
-          package_type: packageType || undefined,
-          link_reason: linkReason || undefined,
-          validate_only: true,
-        }),
-      });
-      const payload = await res.json();
-      if (!res.ok) {
-        setError(payload?.error || "Failed to validate manual link.");
-        if (payload?.validation) {
-          setValidation(payload.validation as ManualLinkValidationItem[]);
-        }
-        if (payload?.metrics) {
-          setMetrics(payload.metrics as Record<string, any>);
-        }
-        return;
-      }
-      setValidation(payload.validation || []);
-      setMetrics(payload.metrics || null);
-    } catch (err: any) {
-      setError(err?.message || "Failed to validate manual link.");
-    } finally {
-      setValidating(false);
-    }
-  }, [linkReason, packageType, selectedTradeIds]);
-
-  const handleCreate = useCallback(async () => {
-    if (selectedTradeIds.length < 2) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/swaption/links", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          trade_ids: selectedTradeIds,
-          package_type: packageType || undefined,
-          comment: comment || undefined,
-          link_reason: linkReason || undefined,
-          tags,
-          user: currentUser || undefined,
-          admin_password: adminPassword || undefined,
-        }),
-      });
-      const payload = await res.json();
-      if (!res.ok) {
-        setError(payload?.error || "Failed to create manual link.");
-        if (payload?.validation) {
-          setValidation(payload.validation as ManualLinkValidationItem[]);
-        }
-        if (payload?.metrics) {
-          setMetrics(payload.metrics as Record<string, any>);
-        }
-        return;
-      }
-      const created =
-        payload?.link_id && payload?.manual_package_id
-          ? {
-              link_id: payload.link_id,
-              manual_package_id: payload.manual_package_id,
-            }
-          : undefined;
-      onCreated(created);
-      onClose();
-    } catch (err: any) {
-      setError(err?.message || "Failed to create manual link.");
-    } finally {
-      setSubmitting(false);
-    }
-  }, [
-    comment,
-    adminPassword,
-    currentUser,
-    linkReason,
-    onClose,
-    onCreated,
-    packageType,
-    selectedTradeIds,
-    tags,
-  ]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    setPackageType(MANUAL_PACKAGE_TYPES[0]?.value ?? "");
-    setLinkReason(MANUAL_LINK_REASONS[0]?.value ?? "");
-    setComment("");
-    setTags([]);
-    setTagInput("");
-    setValidation([]);
-    setMetrics(null);
-    setError(null);
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    if (selectedTradeIds.length < 2) return;
-    validateLink();
-  }, [isOpen, selectedTradeIds, validateLink]);
 
   if (!isOpen) return null;
 
@@ -11083,7 +10984,12 @@ function ManualLinkModal({
                   <ManualLinkValidationList items={visibleValidation} />
                 </div>
               </div>
-              {metrics && (
+              {metrics && (() => {
+                // Server-side metrics is Record<string, unknown> on the
+                // shared hook. Cast at the boundary so the existing
+                // formatters keep their tighter signatures.
+                const m = metrics as Record<string, number | null | undefined>;
+                return (
                 <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
                   <div className="uppercase tracking-wide text-slate-400">
                     Metrics
@@ -11092,42 +10998,43 @@ function ManualLinkModal({
                     <div className="flex items-center justify-between">
                       <span>Total notional</span>
                       <span className="font-mono">
-                        {formatNotional(metrics.total_notional)}
+                        {formatNotional(m.total_notional ?? null)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Total premium</span>
                       <span className="font-mono">
-                        {formatMetricValue(metrics.total_premium, 3)}
+                        {formatMetricValue(m.total_premium ?? null, 3)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>DV01</span>
                       <span className="font-mono">
-                        {formatMetricValue(metrics.total_dv01, 3)}
+                        {formatMetricValue(m.total_dv01 ?? null, 3)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Vega01</span>
                       <span className="font-mono">
-                        {formatMetricValue(metrics.total_vega01, 3)}
+                        {formatMetricValue(m.total_vega01 ?? null, 3)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Time spread</span>
                       <span className="font-mono">
-                        {formatDurationSeconds(metrics.time_spread_seconds)}
+                        {formatDurationSeconds(m.time_spread_seconds ?? null)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Trades</span>
                       <span className="font-mono">
-                        {metrics.trade_count ?? "--"}
+                        {m.trade_count ?? "--"}
                       </span>
                     </div>
                   </div>
                 </div>
-              )}
+                );
+              })()}
             </div>
             <div className="space-y-3">
               <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
