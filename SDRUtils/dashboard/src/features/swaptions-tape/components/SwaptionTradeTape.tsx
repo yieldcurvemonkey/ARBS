@@ -65,6 +65,7 @@ import { SwaptionMethodologyModal } from "./SwaptionMethodologyModal";
 import { manualLinkColor } from "@/lib/manual-links-ui/color";
 import { isManualPackage } from "@/lib/manual-links-ui/predicates";
 import { groupLinkedRows } from "@/lib/manual-links-ui/grouping";
+import { ManualLinkBadge } from "@/lib/manual-links-ui/components/ManualLinkBadge";
 import {
   DataTable,
   DataTableFilterMeta,
@@ -13273,9 +13274,6 @@ export default function SwaptionTradeTape() {
     const manual = isManualPackage(row);
     const manualLinkId = row.manual_link_id;
     const assumedIncomplete = isAssumedIncompleteStraddle(row);
-    const manualColor = manualLinkColor(
-      row.manual_link_id || row.manual_package_id,
-    );
     const source = row.package_source?.toUpperCase();
     const sourceLabel = source === "HYBRID" ? "Hybrid" : "Manual";
     const normalizedPackageType = resolveDisplayPackageType(row);
@@ -13302,8 +13300,6 @@ export default function SwaptionTradeTape() {
     const inferredTooltip =
       row.assumed_straddle_reason ||
       "Inferred intraday incomplete straddle: broker likely reported one leg now and will complete both legs later in the day.";
-    const manualBadgeClass =
-      "inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900/60 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-200";
     const manualBadgePlacement = manualBadgePlacementByPackageId.get(
       row.package_id,
     );
@@ -13313,24 +13309,6 @@ export default function SwaptionTradeTape() {
     const placeManualBadgeBetweenRows = !!manualLinkId
       ? !!manualBadgePlacement?.placeBetweenRows
       : false;
-    const manualBadgePositionClass = placeManualBadgeBetweenRows
-      ? "relative z-10"
-      : "";
-    const manualBadgePositionStyle = placeManualBadgeBetweenRows
-      ? { transform: "translateY(50%)" as const }
-      : undefined;
-    const manualBadgeConnector = placeManualBadgeBetweenRows ? (
-      <>
-        <span
-          className="pointer-events-none absolute left-1/2 -top-2 h-2 w-px -translate-x-1/2 bg-slate-300/70"
-          aria-hidden="true"
-        />
-        <span
-          className="pointer-events-none absolute left-1/2 -bottom-2 h-2 w-px -translate-x-1/2 bg-slate-300/70"
-          aria-hidden="true"
-        />
-      </>
-    ) : null;
     return (
       <div className="flex items-center gap-2">
         <span
@@ -13352,48 +13330,19 @@ export default function SwaptionTradeTape() {
             IDB inferred
           </span>
         )}
-        {manual &&
-          showManualBadge &&
-          (manualLinkId ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                openManualLinkDetails(manualLinkId);
-              }}
-              className={`${manualBadgeClass} ${manualBadgePositionClass} hover:border-slate-500`}
-              style={manualBadgePositionStyle}
-            >
-              {manualBadgeConnector}
-              <span
-                className="h-2 w-2 rounded-full"
-                style={{ backgroundColor: manualColor || "#64748b" }}
-              />
-              <span>{sourceLabel}</span>
-              {row.manual_package_id && (
-                <span className="text-slate-400">
-                  {row.manual_package_id}
-                </span>
-              )}
-            </button>
-          ) : (
-            <span
-              className={`${manualBadgeClass} ${manualBadgePositionClass}`}
-              style={manualBadgePositionStyle}
-            >
-              {manualBadgeConnector}
-              <span
-                className="h-2 w-2 rounded-full"
-                style={{ backgroundColor: manualColor || "#64748b" }}
-              />
-              <span>{sourceLabel}</span>
-              {row.manual_package_id && (
-                <span className="text-slate-400">
-                  {row.manual_package_id}
-                </span>
-              )}
-            </span>
-          ))}
+        {manual && showManualBadge && (
+          <ManualLinkBadge
+            linkId={manualLinkId || row.manual_package_id || ""}
+            manualPackageId={row.manual_package_id}
+            sourceLabel={sourceLabel}
+            showConnector={placeManualBadgeBetweenRows}
+            onClick={
+              manualLinkId
+                ? (id) => openManualLinkDetails(id)
+                : undefined
+            }
+          />
+        )}
       </div>
     );
   };
