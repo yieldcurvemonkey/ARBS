@@ -856,3 +856,114 @@ After Phase C tasks ship (separately or together):
 Phase A+B alone is a self-contained PR. Phase C can ship as a single
 follow-on PR or as one PR per Cn task — recommendation is one PR per
 analytic so reviewers can absorb each independently.
+
+---
+
+## Verification log — 2026-05-04
+
+Branch: `claude/canonical-underlier-analytics`. All twelve tasks
+shipped in one PR per the user's autonomous-mode brief. Cadence
+mirrored PR #285: TDD per task, one commit each, conventional commit
+prefix matching the plan.
+
+### Phase A — contract tests
+
+- `npm test -- --testPathPatterns=canonical-underlier-key` → 5/5 pass
+  (was 4 failures + 1 pass on the base branch). The `analytics-
+  timeseries`, `extremes`, and `rarity` routes each now expose a
+  declarative `GROUP_BY_COLUMN` (or `groupCol` for rarity) constant
+  that documents the `canonical: 'l.canonical_underlier_key'` mapping
+  the Phase 4 contract test asserts.
+- Full feature suite: `npm test -- --testPathPatterns=usd-swaps-tape-v2`
+  → 476 pass, 4 skipped, 0 fail (was 367 pass + 4 fail on base).
+
+### Phase B — display layer
+
+- `canonicalDisplay.ts` ships eight canonical buckets + label / long-
+  label / source-variant tables. 15 unit tests green.
+- `TradeTapeTable/columns.tsx` now renders the tape-label cell inside
+  a `<span title=...>` whose tooltip lists the canonical key + every
+  example SDR string the Phase 4 canonicaliser collapses into the
+  bucket. Three contract assertions in `columns.test.ts` green.
+- `AnalyticsPanel/TimeseriesTab.tsx` exposes a "Bucket" select whose
+  options are drawn from `CANONICAL_BUCKETS`, labelled via
+  `canonicalDisplayLabel`. The hook (`useAnalyticsTimeseries`) accepts
+  `groupBy` + `groupValueOverride` and forwards them to the API. 3
+  contract assertions in `TimeseriesTab.canonical.test.ts` green.
+- Default `groupBy` is still `tape_label` per design-doc risk-note 3
+  to avoid breaking existing trader flows.
+
+### Phase C — six analytics
+
+| Task | Test count | Notes |
+|---|---|---|
+| C1 PA-DV01 | 15 | `MetricMode` cycles dv01 → pa_dv01 → notional. Default analytics-timeseries metric flip is deferred per commit body. |
+| C2 Underlier-mix card | 16 | Component exported from `AnalyticsPanel/index.ts`; in-panel mounting deferred (rows aren't in `AnalyticsPanel` scope today — wider passthrough refactor). |
+| C3 Unrecognised-underlier watchdog | 17 | New `GET /api/usd-swaps-tape-v2/data-quality/unrecognised-underliers`. Slack/email integration + tape-header badge wiring deferred. |
+| C4 RFR adoption | 12 | Standalone `RfrAdoptionCard` with 24-month sparkline. AnalyticsPanel sub-tab integration deferred to follow-up after the row-passthrough lands. |
+| C5 Swap-spread VWAP | 12 | `SWAP_SPREAD_TICKERS` (USSFCT2/5/10/30) + `USD_OIS_TICKERS` (USSO5/10/30) mapping + per-day VWAP. Trade-by-trade scatter overlay + macro-event annotations deferred (need recharts work + FOMC clusters substrate). |
+| C6 CCP-switch detector | 12 | Row-level detection (LCH↔CME) + `CCP↔` chip in Pkg column + `CcpSwitchCard`. Direction inference based on opposite-sign DV01 convention; flip if field experience proves inverted. |
+
+Total new + modified tests: **109 tests added or strengthened**, all
+green. Total feature suite: **476 pass / 0 fail / 4 skipped**.
+
+### Lint
+
+- `npm run lint -- --file <each new/touched file>` → "✔ No ESLint
+  warnings or errors" across all 24 new/modified files in this PR.
+- Repo-wide `npm run lint` reports 8 pre-existing errors in
+  `TradeRarityTab.tsx` (unrelated unescaped-quote violations) plus 3
+  pre-existing `react-hooks/exhaustive-deps` warnings under
+  `src/features/ustf-vol/hooks/`. None of these files were touched by
+  this PR.
+
+### Dev-server smoke test
+
+- Started `PORT=3001 npx next dev` (no Turbopack, per the worktree
+  junction caveat documented in PR #285).
+- `curl http://localhost:3001/usd-swaps` → **HTTP 200**.
+- `curl 'http://localhost:3001/api/usd-swaps-tape-v2/timeseries?groupBy=canonical&value=USD/SOFR-OIS/COMPOUND&metric=risk&range=1M'`
+  → **HTTP 200** with a populated `rows` array (sampled prints
+  bucketed under the canonical SOFR-OIS key, including rows whose
+  raw `tape_label` was the verbose `"USD-SOFR-COMPOUND 1D Constant
+  ..."` form). This confirms the canonical column on the leg table
+  is populated and routes match it correctly.
+- Browser console verification was skipped — the Chrome MCP shim is
+  not available in this autonomous run. The console-clean assertion
+  from the plan is therefore best-effort and should be re-checked
+  manually before the PR is merged.
+
+### Caveats / deferred work
+
+1. **AnalyticsPanel row passthrough.** The C2 / C4 / C5 / C6 cards all
+   need access to the loaded `UsdSwapTapeRow[]` collection.
+   `AnalyticsPanel` today receives only the focused trade. The cards
+   are exported from `AnalyticsPanel/index.ts` so a parent component
+   can mount them, but threading the row set into `AnalyticsPanel` is
+   a follow-up refactor.
+2. **Default analytics-timeseries metric (C1).** Plan suggests using
+   `package_adjusted_dv01` as the default volume metric for the
+   analytics endpoint. Deferred — the column is wired into the tape
+   first; the analytics aggregation flip is a one-line change once
+   product confirms the new default.
+3. **C5 chart infra.** SwapSpreadVwapCard currently renders the per-
+   ticker headline VWAP + 30-day mini-sparkline. Trade-by-trade
+   scatter overlays + macro-event annotations need a recharts-style
+   chart and a FOMC-cluster join — both already exist as separate
+   pipelines but plumbing them into this card is its own task.
+4. **C3 alerting.** Slack / email integration is plan-deferred. The
+   tape-header data-quality badge (count of unrecognised in the last
+   24h) is also deferred since `TradeTapeHeader` already shows
+   aggregates and adding the new fetch is a wider refactor.
+5. **CCP-switch direction convention (C6).** Direction inference uses
+   the convention "positive risk = unwind side = FROM CCP". If field
+   experience proves inverted, flip the two lines flagged in
+   `ccpSwitchDetector.ts` (`fromCcp`/`toCcp` swap).
+
+### Files unchanged on purpose
+
+- `SDRUtils/core/underlier_canonical.py` — the Python canonicaliser is
+  the source of truth and was not touched. This PR only plumbs the
+  existing canonical key through the dashboard.
+- The Phase 4 ingest pipeline is unchanged; the watchdog (C3) reads
+  from `arbs_usd_swap_tape_legs_v2` only.
