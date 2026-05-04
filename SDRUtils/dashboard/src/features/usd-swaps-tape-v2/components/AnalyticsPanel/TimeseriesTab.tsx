@@ -3,7 +3,7 @@
 // sigma bands, focused-trade reference line + pulsing dot, VOLUME bar
 // view, always-visible assumption strip.
 import type { Dispatch, JSX, SetStateAction } from 'react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Bar,
   CartesianGrid,
@@ -17,7 +17,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { ANALYTICS_COLORS, fmtDv01Compact } from './analytics-format'
+import { ANALYTICS_COLORS, fmtDv01Compact, sequenceColor } from './analytics-format'
 import {
   ANALYTICS_METRICS,
   ANALYTICS_RANGES,
@@ -224,11 +224,24 @@ export interface TimeseriesTabProps {
   stats: DistributionStats
   focusedPercentile: number
   chartHeight?: number
+  // Multi-trade dock — when present, the tab renders N reference
+  // lines + N reference dots overlaid on top of the existing
+  // single-trade pulsing dot. Single-mode rendering is byte-for-
+  // byte unchanged when sequence is null/undefined.
+  sequence?: readonly FocusedTrade[]
 }
 
 export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
-  const { focused, state, setState, dailyClose, intraday, stats, focusedPercentile } = props
+  const { focused, state, setState, dailyClose, intraday, stats, focusedPercentile, sequence } = props
   const chartHeight = props.chartHeight ?? 340
+
+  // Multi-trade dock — sequence-mode overlay state. The legend chip
+  // for each trade has a click target that toggles the trade's id
+  // in/out of `hiddenTradeIds`; reference lines/dots check the set
+  // before rendering. Single-mode is unaffected because sequence
+  // defaults to undefined and the .map below short-circuits on it.
+  const [hiddenTradeIds, setHiddenTradeIds] = useState<Set<string>>(() => new Set())
+  const overlayTrades = sequence ?? []
   const {
     view, metric, range, showCusty, showIdb, showSigmaBands, showIqrBand,
     showDots, useGrossDv01, excludeComicallyLargeCusty, yMin, yMax,
@@ -628,6 +641,54 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
                 shape={<PulsingDot />}
               />
             ) : null}
+
+            {/*
+              Multi-trade dock — N reference lines + N reference dots
+              when `sequence` is supplied. Each entry gets a stable
+              palette colour indexed by selection order. Trades in
+              `hiddenTradeIds` skip rendering so the trader can
+              declutter the chart via the legend below. Reference
+              dots position the marker at the trade's
+              execution_start when present, else fall back to the
+              latest data point's ts so the dot is still visible.
+            */}
+            {effectiveMetric === 'fixed_rate' && !renderBars
+              ? overlayTrades.map((trade, i) => {
+                  if (hiddenTradeIds.has(trade.id)) return null
+                  const colour = sequenceColor(i)
+                  return (
+                    <ReferenceLine
+                      key={`seq-line-${trade.id}`}
+                      data-testid={`sequence-reference-line-${i}`}
+                      y={trade.fixed_rate_bps}
+                      stroke={colour}
+                      strokeDasharray="3 3"
+                      strokeWidth={1}
+                      ifOverflow="hidden"
+                    />
+                  )
+                })
+              : null}
+            {effectiveMetric === 'fixed_rate' && !renderBars && data.length > 0
+              ? overlayTrades.map((trade, i) => {
+                  if (hiddenTradeIds.has(trade.id)) return null
+                  const colour = sequenceColor(i)
+                  const xValue = trade.execution_start ?? data[data.length - 1].ts
+                  return (
+                    <ReferenceDot
+                      key={`seq-dot-${trade.id}`}
+                      data-testid={`sequence-reference-dot-${i}`}
+                      x={xValue}
+                      y={trade.fixed_rate_bps}
+                      r={3.5}
+                      fill={colour}
+                      stroke="#0f172a"
+                      strokeWidth={1}
+                      ifOverflow="hidden"
+                    />
+                  )
+                })
+              : null}
           </ComposedChart>
         </ResponsiveContainer>
 
@@ -664,6 +725,54 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
           ) : null}
         </div>
       </div>
+
+      {/*
+        Multi-trade dock — per-trade legend with show/hide toggles.
+        Each chip shows the trade's tape_label + rate at colour
+        index `i`; clicking the chip toggles the trade's id in/out
+        of `hiddenTradeIds` so the trader can declutter overlapping
+        overlays without losing the selection.
+      */}
+      {overlayTrades.length > 0 ? (
+        <div
+          data-testid="timeseries-sequence-legend"
+          className="flex flex-wrap items-center gap-1 px-1 pt-1 font-mono text-[10px]"
+        >
+          <span className="text-slate-500">Sequence:</span>
+          {overlayTrades.map((trade, i) => {
+            const hidden = hiddenTradeIds.has(trade.id)
+            const colour = sequenceColor(i)
+            return (
+              <button
+                key={`legend-${trade.id}`}
+                type="button"
+                data-testid={`sequence-legend-chip-${i}`}
+                title={`${trade.tape_label} — click to ${hidden ? 'show' : 'hide'} on chart`}
+                onClick={() =>
+                  setHiddenTradeIds((prev) => {
+                    const next = new Set(prev)
+                    if (next.has(trade.id)) next.delete(trade.id)
+                    else next.add(trade.id)
+                    return next
+                  })
+                }
+                className={`inline-flex items-center gap-1 rounded border px-1.5 py-[1px] ${
+                  hidden
+                    ? 'border-slate-700 bg-transparent text-slate-500 line-through'
+                    : 'border-slate-700 bg-slate-900/60 text-slate-200'
+                }`}
+              >
+                <span
+                  className="inline-block h-[6px] w-[6px] rounded-full"
+                  style={{ backgroundColor: hidden ? 'transparent' : colour, border: hidden ? `1px solid ${colour}` : 'none' }}
+                />
+                <span className="truncate max-w-[180px]">{trade.tape_label}</span>
+                <span className="text-slate-500">{trade.fixed_rate_bps.toFixed(1)}</span>
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -130,6 +130,10 @@ function RecencyCard(props: {
 
 export interface TradeRarityTabProps {
   focused: FocusedTrade
+  // Multi-trade dock — supplied in sequence mode. Single-mode
+  // rendering is byte-for-byte unchanged when sequence is undefined.
+  // Phase F2 wires the N-dot histogram overlay against this list.
+  sequence?: readonly FocusedTrade[]
   state: RarityState
   setState: Dispatch<SetStateAction<RarityState>>
   bins: HistogramBin[]

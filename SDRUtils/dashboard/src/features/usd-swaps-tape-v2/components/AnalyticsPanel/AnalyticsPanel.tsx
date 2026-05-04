@@ -87,6 +87,14 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   // SequenceBar's warning chip stays consistent with the cap.
   const seqAnalytics = useAnalyticsSequence(sequence, {})
 
+  // The base tab hooks (single-trade Timeseries / Rarity / Levels)
+  // need a non-null `focused` to fire fetches. In sequence mode we
+  // anchor on the first sequence entry so the chart base series is
+  // a real bucket; subsequent sequence trades layer in via the
+  // multi-overlay reference lines + dots.
+  const baseTrade: FocusedTrade | null =
+    focused ?? (sequence?.[0] ?? null)
+
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('timeseries')
   const [tsState, setTsState] = useState<TimeseriesState>(TIMESERIES_DEFAULT_STATE)
   const [levelsState, setLevelsState] = useState<LevelsState>(LEVELS_DEFAULT_STATE)
@@ -185,7 +193,10 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
 
   // Data — all hooks gracefully no-op when focused is null. Intraday
   // only fires when the user actually switches to the intraday view.
-  const ts = useAnalyticsTimeseries(focused, tsState.range, tsState.view, {
+  // In sequence mode, baseTrade falls back to sequence[0] so the
+  // tab base series renders against a real bucket; the multi-overlay
+  // reference lines layer the rest of the sequence on top.
+  const ts = useAnalyticsTimeseries(baseTrade, tsState.range, tsState.view, {
     useGrossDv01: tsState.useGrossDv01,
     excludeLargeCusty: tsState.excludeComicallyLargeCusty,
     // Phase 4: when the user pivots to canonical bucketing, switch the
@@ -196,7 +207,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
     groupValueOverride:
       tsState.groupBy === 'canonical' ? tsState.canonicalKey : null,
   })
-  const rarity = useRarityData(focused, {
+  const rarity = useRarityData(baseTrade, {
     lookback: 90,
     primaryTol: rarityState.primaryTol,
     sizeTol: rarityState.sizeTol,
@@ -209,7 +220,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
         ? 'notional'
         : 'fixed_rate',
   })
-  const extremes = useExtremesData(focused, {
+  const extremes = useExtremesData(baseTrade, {
     primaryTol: parsePositiveNumberInput(levelsState.primaryTol, 2),
     sizeTol: parsePositiveNumberInput(levelsState.sizeTolPct, 25) / 100,
   })
@@ -350,7 +361,14 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
           />
         ) : null}
 
-        {focused == null ? null : (
+        {/*
+          Phase F + G — tab strip. In sequence mode we anchor the
+          tab data hooks to the first sequence trade so the chart
+          base series renders against a real bucket (subsequent
+          trades layer in via the multi-overlay reference lines).
+          The `Sequence` tab only appears in sequence mode.
+        */}
+        {(focused != null || sequence != null) ? (
         <Tabs<AnalyticsTab>
           active={activeTab}
           onChange={setActiveTab}
@@ -367,15 +385,19 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               badge: rarity.stats.count > 0 ? `P${Math.round(rarityPrimaryPercentile)}` : '…',
             },
             { key: 'levels', label: 'Traded Levels', icon: '◈', badge: String(extremes.extremes.length) },
+            ...(mode === 'sequence' && sequence
+              ? ([{ key: 'sequence' as const, label: 'Sequence', icon: '⇉', badge: String(sequence.length) }])
+              : []),
           ]}
         />
-        )}
+        ) : null}
 
-        {focused == null ? null : (
+        {baseTrade == null ? null : (
         <div className="mt-0.5">
           {activeTab === 'timeseries' ? (
             <TimeseriesTab
-              focused={focused}
+              focused={baseTrade}
+              sequence={sequence ?? undefined}
               state={tsState}
               setState={setTsState}
               dailyClose={ts.dailyClose}
@@ -387,7 +409,8 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
           ) : null}
           {activeTab === 'rarity' ? (
             <TradeRarityTab
-              focused={focused}
+              focused={baseTrade}
+              sequence={sequence ?? undefined}
               state={rarityState}
               setState={setRarityState}
               bins={rarity.bins}
@@ -405,7 +428,8 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
           ) : null}
           {activeTab === 'levels' ? (
             <TradedLevelsTab
-              focused={focused}
+              focused={baseTrade}
+              sequence={sequence ?? undefined}
               state={levelsState}
               setState={setLevelsState}
               extremes={extremes.extremes}

@@ -82,6 +82,11 @@ function LevelSummaryCard(props: {
 
 export interface TradedLevelsTabProps {
   focused: FocusedTrade
+  // Multi-trade dock — supplied in sequence mode. Phase F3 wires
+  // the side-by-side / aggregated toggle against this list. Single-
+  // mode rendering is byte-for-byte unchanged when sequence is
+  // undefined.
+  sequence?: readonly FocusedTrade[]
   state: LevelsState
   setState: Dispatch<SetStateAction<LevelsState>>
   extremes: ExtremeRow[]
