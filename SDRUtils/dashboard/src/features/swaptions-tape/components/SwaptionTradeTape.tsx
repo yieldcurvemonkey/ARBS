@@ -6,14 +6,12 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   BookOpenText,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   FileSpreadsheet,
   Link2,
   RefreshCw,
   X,
-  XCircle,
 } from "lucide-react";
 import {
   Bar,
@@ -66,6 +64,9 @@ import { manualLinkColor } from "@/lib/manual-links-ui/color";
 import { isManualPackage } from "@/lib/manual-links-ui/predicates";
 import { groupLinkedRows } from "@/lib/manual-links-ui/grouping";
 import { ManualLinkBadge } from "@/lib/manual-links-ui/components/ManualLinkBadge";
+import { ManualLinkValidationList } from "@/lib/manual-links-ui/components/ManualLinkValidationList";
+import { ManualLinkMetricsTable } from "@/lib/manual-links-ui/components/ManualLinkMetricsTable";
+import { ManualLinkHistoryTable } from "@/lib/manual-links-ui/components/ManualLinkHistoryTable";
 import {
   DataTable,
   DataTableFilterMeta,
@@ -11077,35 +11078,8 @@ function ManualLinkModal({
                     {validating ? "Validating" : "Refresh"}
                   </button>
                 </div>
-                <div className="mt-2 space-y-2">
-                  {visibleValidation.length ? (
-                    visibleValidation.map((item) => (
-                      <div
-                        key={item.key}
-                        className="flex items-start gap-2 text-xs"
-                      >
-                        {item.status === "ok" ? (
-                          <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-400" />
-                        ) : item.status === "error" ? (
-                          <XCircle className="mt-0.5 h-4 w-4 text-rose-400" />
-                        ) : (
-                          <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-300" />
-                        )}
-                        <div>
-                          <div className="font-semibold text-slate-200">
-                            {item.label}
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            {item.message}
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-[11px] text-slate-400">
-                      Validation results will appear after refresh.
-                    </div>
-                  )}
+                <div className="mt-2">
+                  <ManualLinkValidationList items={visibleValidation} />
                 </div>
               </div>
               {metrics && (
@@ -11368,9 +11342,6 @@ function ManualLinkDetailsModal({
   const [deactivating, setDeactivating] = useState(false);
 
   const manualColor = manualLinkColor(linkId);
-  const metricEntries = linkDetail?.link_metrics
-    ? Object.entries(linkDetail.link_metrics)
-    : [];
   const hasWritePassword = adminPassword.trim().length > 0;
 
   const addTag = useCallback(() => {
@@ -11813,62 +11784,22 @@ function ManualLinkDetailsModal({
                     <div className="uppercase tracking-wide text-slate-400">
                       Metrics
                     </div>
-                    <div className="mt-2 space-y-2">
-                      {metricEntries.length ? (
-                        metricEntries.map(([key, value]) => (
-                          <div
-                            key={key}
-                            className="flex items-center justify-between"
-                          >
-                            <span className="text-[11px] uppercase text-slate-400">
-                              {key.replace(/_/g, " ")}
-                            </span>
-                            <span className="font-mono">
-                              {formatManualMetricValue(value)}
-                            </span>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="text-[11px] text-slate-400">
-                          No metrics stored.
-                        </div>
-                      )}
+                    <div className="mt-2">
+                      <ManualLinkMetricsTable
+                        metrics={linkDetail?.link_metrics ?? null}
+                        formatValue={formatManualMetricValue}
+                      />
                     </div>
                   </div>
                   <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-300">
                     <div className="uppercase tracking-wide text-slate-400">
                       History
                     </div>
-                    <div className="mt-2 space-y-2">
-                      {history.length ? (
-                        history.map((item) => (
-                          <div
-                            key={item.history_id}
-                            className="rounded border border-slate-800/70 bg-slate-900/60 px-2 py-1"
-                          >
-                            <div className="flex items-center justify-between text-[11px] text-slate-200">
-                              <span className="font-semibold">
-                                {item.action}
-                              </span>
-                              <span className="text-slate-500">
-                                {formatTimestamp(item.changed_at)}
-                              </span>
-                            </div>
-                            <div className="text-[10px] text-slate-400">
-                              {item.changed_by}
-                            </div>
-                            {item.change_details && (
-                              <pre className="mt-1 whitespace-pre-wrap rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[10px] text-slate-400">
-                                {JSON.stringify(item.change_details, null, 2)}
-                              </pre>
-                            )}
-                          </div>
-                        ))
-                      ) : (
-                        <div className="text-[11px] text-slate-400">
-                          No history entries yet.
-                        </div>
-                      )}
+                    <div className="mt-2">
+                      <ManualLinkHistoryTable
+                        history={history}
+                        formatTimestamp={formatTimestamp}
+                      />
                     </div>
                   </div>
                 </div>
