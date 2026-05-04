@@ -383,14 +383,11 @@ describe('Pkg column confidence chip integration', () => {
     expect(result.tone).toBe('high')
   })
 
-  it('Pkg badge body honors inferredType override (uses inferredType when present)', () => {
-    expect(columnsSource).toContain('conf.inferredType')
-    expect(columnsSource).toMatch(/displayedType\s*=\s*conf\.inferredType\s*\?\?\s*row\.package_type/)
-  })
-
-  it('renders the original classifier tag struck through when override fires', () => {
-    expect(columnsSource).toContain('Original classifier tag')
-    expect(columnsSource).toContain('line-through')
+  it('Pkg column body keeps the raw classifier tag — inferredType override surfaces only inside the LegsSubTable details panel, not on the row badge', () => {
+    expect(columnsSource).not.toContain('Original classifier tag')
+    // packageTypeDisplayLabel is called against row.package_type only.
+    expect(columnsSource).not.toMatch(/packageTypeDisplayLabel\(displayedType\)/)
+    expect(columnsSource).not.toMatch(/conf\.inferredType\s*\?\?\s*row\.package_type/)
   })
 })
 

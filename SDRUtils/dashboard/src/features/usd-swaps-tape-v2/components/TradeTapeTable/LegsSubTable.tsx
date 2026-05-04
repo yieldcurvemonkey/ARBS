@@ -375,15 +375,6 @@ function PackageConfidencePanel({ row }: { row: UsdSwapTapeRow }): JSX.Element {
         <span className="font-mono text-[10px] text-slate-500">
           ({confidence.resolvedType})
         </span>
-        {overrideActive ? (
-          <span
-            className="inline-flex items-center gap-1 rounded border border-amber-500/60 bg-amber-900/30 px-1.5 py-0.5 font-mono text-[10px] normal-case tracking-normal text-amber-200"
-            title={confidence.inferredTypeReason ?? ''}
-            data-testid={`confidence-inferred-${row.package_id}`}
-          >
-            inferred → {confidence.inferredType}
-          </span>
-        ) : null}
         <button
           type="button"
           onClick={() => setShowDetails((prev) => !prev)}
@@ -396,23 +387,38 @@ function PackageConfidencePanel({ row }: { row: UsdSwapTapeRow }): JSX.Element {
         </button>
       </div>
       {showDetails ? (
-        <ul id={detailsId} className="mt-1 space-y-0.5">
-          {confidence.signals.map((s) => (
-            <li
-              key={s.name}
-              className="flex items-baseline gap-2 font-mono text-[11px] leading-tight"
+        <div id={detailsId}>
+          {overrideActive ? (
+            <div
+              data-testid={`confidence-inferred-${row.package_id}`}
+              className="mt-1.5 rounded border border-amber-500/40 bg-amber-900/20 px-2 py-1 font-mono text-[11px] text-amber-200"
             >
-              <span
-                className={s.passed ? 'text-emerald-300' : 'text-rose-300'}
-                aria-label={s.passed ? 'pass' : 'fail'}
+              <div className="text-[10px] uppercase tracking-wider text-amber-300/80">
+                Inferred type: {row.package_type} → {confidence.inferredType}
+              </div>
+              <div className="text-amber-100/80">
+                {confidence.inferredTypeReason}
+              </div>
+            </div>
+          ) : null}
+          <ul className="mt-1 space-y-0.5">
+            {confidence.signals.map((s) => (
+              <li
+                key={s.name}
+                className="flex items-baseline gap-2 font-mono text-[11px] leading-tight"
               >
-                {s.passed ? '✓' : '✗'}
-              </span>
-              <span className="text-slate-200">{s.label}:</span>
-              <span className="text-slate-400">{s.detail}</span>
-            </li>
-          ))}
-        </ul>
+                <span
+                  className={s.passed ? 'text-emerald-300' : 'text-rose-300'}
+                  aria-label={s.passed ? 'pass' : 'fail'}
+                >
+                  {s.passed ? '✓' : '✗'}
+                </span>
+                <span className="text-slate-200">{s.label}:</span>
+                <span className="text-slate-400">{s.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
     </div>
   )
