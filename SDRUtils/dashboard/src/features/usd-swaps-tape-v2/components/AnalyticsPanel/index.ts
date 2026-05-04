@@ -7,6 +7,8 @@ export { TradeRarityTab } from './TradeRarityTab'
 export { TradedLevelsTab } from './TradedLevelsTab'
 export { UnderlierMixCard } from './UnderlierMixCard'
 export type { UnderlierMixCardProps } from './UnderlierMixCard'
+export { RfrAdoptionCard } from './RfrAdoptionCard'
+export type { RfrAdoptionCardProps } from './RfrAdoptionCard'
 export * from './analytics-types'
 export * from './analytics-format'
 export {
