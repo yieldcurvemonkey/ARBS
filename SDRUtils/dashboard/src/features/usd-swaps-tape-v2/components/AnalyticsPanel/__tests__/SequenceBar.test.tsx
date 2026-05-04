@@ -112,6 +112,31 @@ describe('SequenceBar', () => {
     expect(html).toMatch(/Clear/)
   })
 
+  it('renders the soft-cap warning chip when warning prop is supplied', () => {
+    const html = renderToStaticMarkup(
+      <SequenceBar
+        sequence={[focused()]}
+        aggregate={{ ...aggFixture, count: 25 }}
+        onClear={() => {}}
+        warning="Selection capped at 20 (25 selected)"
+      />,
+    )
+    expect(html).toMatch(/Selection capped at 20/)
+    expect(html).toMatch(/⚠/)
+  })
+
+  it('omits the warning chip when warning prop is null', () => {
+    const html = renderToStaticMarkup(
+      <SequenceBar
+        sequence={[focused(), focused()]}
+        aggregate={{ ...aggFixture, count: 2 }}
+        onClear={() => {}}
+        warning={null}
+      />,
+    )
+    expect(html).not.toMatch(/Selection capped at/)
+  })
+
   it('handles a zero-time-span sequence (all execution_start equal)', () => {
     const html = renderToStaticMarkup(
       <SequenceBar

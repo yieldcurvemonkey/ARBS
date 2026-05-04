@@ -8,6 +8,7 @@ import { FilterMatchMode, FilterOperator } from 'primereact/api'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
   deriveAnalyticsSelection,
+  useAnalyticsSequence,
   useAnalyticsTimeseries,
   useExtremesData,
   useRarityData,
@@ -76,6 +77,15 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   const derived = deriveAnalyticsSelection(selected)
   const mode = derived.mode
   const sequence = derived.sequence
+
+  // Phase E — wrapper hook fans out to the per-trade analytics
+  // hooks for each member of the sequence (no-op when sequence is
+  // null) and aggregates the sequence-level summary. The aggregate
+  // is also computed eagerly in Phase D's branch below for consumers
+  // that don't need the per-trade timeseries / rarity / extremes;
+  // when both are computed, prefer the wrapper's aggregate so the
+  // SequenceBar's warning chip stays consistent with the cap.
+  const seqAnalytics = useAnalyticsSequence(sequence, {})
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('timeseries')
   const [tsState, setTsState] = useState<TimeseriesState>(TIMESERIES_DEFAULT_STATE)
@@ -334,8 +344,9 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
         {mode === 'sequence' && sequence ? (
           <SequenceBar
             sequence={sequence}
-            aggregate={computeSequenceAggregate(sequence)}
+            aggregate={seqAnalytics.aggregate ?? computeSequenceAggregate(sequence)}
             onClear={onClearFocused}
+            warning={seqAnalytics.warning}
           />
         ) : null}
 
