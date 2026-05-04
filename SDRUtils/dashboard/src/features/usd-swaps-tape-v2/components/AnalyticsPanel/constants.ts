@@ -80,6 +80,11 @@ export const TIMESERIES_DEFAULT_STATE = {
   excludeComicallyLargeCusty: true,
   yMin: '',
   yMax: '',
+  // Phase 4: bucket selector defaults to tape_label so existing flows
+  // are unchanged. See risk note 3 in the implementation plan — flip
+  // the default in a follow-up after a week of co-existence.
+  groupBy: 'tape_label' as const,
+  canonicalKey: null as string | null,
 }
 
 export const RARITY_DEFAULT_STATE = {

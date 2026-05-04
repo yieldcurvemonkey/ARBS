@@ -132,8 +132,14 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   }, [hasMore, loadingMore, onLoadMore])
 
   const [metricMode, setMetricMode] = useState<MetricMode>('dv01')
+  // Cycles dv01 → pa_dv01 → notional → dv01. Phase 4 introduces the
+  // package-adjusted DV01 (Clarus design-doc §3.1) so traders can swap
+  // to the broker-fee-equivalent metric without a separate column.
   const toggleMetric = useCallback(
-    () => setMetricMode((m) => (m === 'dv01' ? 'notional' : 'dv01')),
+    () =>
+      setMetricMode((m) =>
+        m === 'dv01' ? 'pa_dv01' : m === 'pa_dv01' ? 'notional' : 'dv01',
+      ),
     [],
   )
 
