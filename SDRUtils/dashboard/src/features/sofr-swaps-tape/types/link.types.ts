@@ -1,12 +1,20 @@
-export type ManualSwapLinkValidationStatus = 'ok' | 'warn' | 'error'
+// Manual swap link types. The shared shapes live in
+// lib/manual-links-ui/types; sofr extends `Trade` with risk + fixed_rate
+// fields that downstream PnL calculators consume.
 
-export type ManualSwapLinkValidationItem = {
-  key: string
-  label: string
-  status: ManualSwapLinkValidationStatus
-  message: string
-}
+import type {
+  ManualLinkDetail,
+  ManualLinkHistoryItem,
+  ManualLinkValidationItem,
+  ManualLinkValidationStatus,
+} from '@/lib/manual-links-ui/types'
 
+export type ManualSwapLinkValidationStatus = ManualLinkValidationStatus
+export type ManualSwapLinkValidationItem = ManualLinkValidationItem
+export type ManualSwapLinkHistoryItem = ManualLinkHistoryItem
+export type ManualSwapLinkDetail = ManualLinkDetail
+
+// Sofr-specific trade extension: shared base + sofr-only risk/fixed_rate.
 export type ManualSwapLinkTrade = {
   trade_id: string
   package_id: string
@@ -17,29 +25,4 @@ export type ManualSwapLinkTrade = {
   fixed_rate?: number | null
   execution_timestamp?: string | null
   platform_identifier?: string | null
-}
-
-export type ManualSwapLinkHistoryItem = {
-  history_id: number
-  action: string
-  changed_by: string
-  changed_at: string
-  change_details?: Record<string, any> | null
-  previous_state?: Record<string, any> | null
-}
-
-export type ManualSwapLinkDetail = {
-  link_id: string
-  manual_package_id: string
-  package_type: string | null
-  linked_trade_ids: string[]
-  created_by: string
-  created_at: string
-  updated_by?: string | null
-  updated_at?: string | null
-  user_comment?: string | null
-  link_reason?: string | null
-  tags?: string[] | null
-  link_metrics?: Record<string, any> | null
-  is_active: boolean
 }
