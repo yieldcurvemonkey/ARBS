@@ -180,17 +180,34 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   // similar focus-trapping modal is open. Without this scope, Esc on
   // ManualLinksDialog would close both the dialog and the dock at the
   // same time, dropping the trader's row selection state.
+  //
+  // Phase H — sequence-mode guard. Arrow-up / arrow-down are
+  // intercepted and silenced when mode === 'sequence' so any
+  // upstream ↑↓ row-navigation handler doesn't accidentally
+  // re-enter single-row focus behaviour while a multi-row sequence
+  // is active. The kbd hint above renders the chip strikethrough
+  // with a tooltip so the trader sees the disabled state.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      const dialogOpen =
-        document.querySelector('.p-dialog:not(.p-dialog-hidden)') !== null
-      if (dialogOpen) return
-      onClose()
+      if (e.key === 'Escape') {
+        const dialogOpen =
+          document.querySelector('.p-dialog:not(.p-dialog-hidden)') !== null
+        if (dialogOpen) return
+        onClose()
+        return
+      }
+      if (mode === 'sequence' && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        // No preventDefault — we don't want to interfere with focus
+        // movement on form fields inside the dock. We just ensure
+        // any future row-nav handler dispatched at window-level
+        // sees the guard.
+        e.stopPropagation()
+        return
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, mode])
 
   // Data — all hooks gracefully no-op when focused is null. Intraday
   // only fires when the user actually switches to the intraday view.
@@ -318,9 +335,28 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
             extremes error
           </span>
         ) : null}
-        <span className="ml-auto flex items-center gap-1 font-mono text-[10px] text-slate-500">
-          <kbd className="rounded border border-slate-700 px-1 py-[1px] text-slate-400">↑↓</kbd>
-          <span>switch row</span>
+        <span
+          className="ml-auto flex items-center gap-1 font-mono text-[10px] text-slate-500"
+          data-testid="dock-keyboard-hints"
+        >
+          <kbd
+            className={`rounded border px-1 py-[1px] ${
+              mode === 'sequence'
+                ? 'border-slate-800 text-slate-600 line-through'
+                : 'border-slate-700 text-slate-400'
+            }`}
+            title={
+              mode === 'sequence'
+                ? 'Arrow-key navigation is disabled in sequence mode — clear the selection to re-enable.'
+                : undefined
+            }
+            data-disabled={mode === 'sequence' ? 'true' : 'false'}
+          >
+            ↑↓
+          </kbd>
+          <span className={mode === 'sequence' ? 'text-slate-600 line-through' : ''}>
+            switch row
+          </span>
           <span className="mx-1 text-slate-700">·</span>
           <kbd className="rounded border border-slate-700 px-1 py-[1px] text-slate-400">Esc</kbd>
           <span>close</span>

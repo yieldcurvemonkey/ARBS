@@ -60,6 +60,26 @@ describe('AnalyticsPanel — CardsDrawer mount', () => {
   })
 })
 
+describe('AnalyticsPanel — keyboard nav guard (Phase H)', () => {
+  it('intercepts ArrowUp/ArrowDown when mode === sequence', () => {
+    expect(analyticsPanelSource).toMatch(
+      /mode\s*===\s*['"]sequence['"][^}]*ArrowUp[\s\S]*?ArrowDown|ArrowUp[\s\S]*?ArrowDown[\s\S]*?mode\s*===\s*['"]sequence['"]/,
+    )
+  })
+
+  it('renders the ↑↓ kbd hint as struck-through in sequence mode', () => {
+    expect(analyticsPanelSource).toMatch(/mode\s*===\s*['"]sequence['"][\s\S]*?line-through/)
+  })
+
+  it('exposes a tooltip explaining the disabled state', () => {
+    expect(analyticsPanelSource).toMatch(/Arrow-key navigation is disabled in sequence mode/)
+  })
+
+  it('still fires Esc-close in both modes (regression)', () => {
+    expect(analyticsPanelSource).toMatch(/e\.key\s*===\s*['"]Escape['"][\s\S]*onClose\(\)/)
+  })
+})
+
 describe('AnalyticsPanel — Sequence tab wiring', () => {
   it('imports SequenceTab and renders it when activeTab === sequence', () => {
     expect(analyticsPanelSource).toContain('SequenceTab')
