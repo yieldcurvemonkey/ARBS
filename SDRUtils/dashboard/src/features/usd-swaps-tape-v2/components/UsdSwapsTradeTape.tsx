@@ -112,6 +112,8 @@ export default function UsdSwapsTradeTape(): JSX.Element {
         </div>
         {analyticsOpen ? (
           <AnalyticsPanel
+            rows={tape.rows}
+            selected={selection.selected}
             focused={focus.focused}
             onClose={() => setAnalyticsOpen(false)}
             onClearFocused={() => {
