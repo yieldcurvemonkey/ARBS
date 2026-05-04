@@ -2,13 +2,14 @@
 // Tab 3 — Database of Traded Levels. All-time / 52w / 30d extremes for
 // the focused bucket. Row click seeks the Timeseries tab to that print.
 import type { JSX } from 'react'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   fmtCompactUSD,
   fmtDaysAgo,
   fmtDv01Compact,
   fmtNotionalMM,
   fmtTs,
+  sequenceColor,
 } from './analytics-format'
 import { NumberInput, PlatformDot, Pill, SegGroup } from './controls'
 import { AssumptionsStrip } from './AssumptionsStrip'
@@ -96,8 +97,42 @@ export interface TradedLevelsTabProps {
   onSeek?: (extreme: ExtremeRow) => void
 }
 
+const LEVELS_VIEW_STORAGE_KEY = 'levels-multi-view'
+
+type LevelsMultiView = 'side-by-side' | 'aggregated'
+
 export function TradedLevelsTab(props: TradedLevelsTabProps): JSX.Element {
-  const { focused, state, setState, extremes, recentSimilar, stats, focusedPercentile, onSeek } = props
+  const { focused, sequence, state, setState, extremes, recentSimilar, stats, focusedPercentile, onSeek } = props
+  const overlayTrades = sequence ?? []
+  const isSequenceMode = overlayTrades.length > 0
+
+  // Multi-trade dock — toggle between side-by-side N-column and an
+  // aggregated extremes view scoped to the union of all selected
+  // rates. Default is side-by-side. State persists to localStorage
+  // under LEVELS_VIEW_STORAGE_KEY so the trader's preference
+  // survives reload. SSR-safe: server render starts at 'side-by-
+  // side' and useEffect rehydrates from storage post-mount.
+  const [multiView, setMultiView] = useState<LevelsMultiView>('side-by-side')
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return
+    try {
+      const raw = localStorage.getItem(LEVELS_VIEW_STORAGE_KEY)
+      if (raw === 'aggregated' || raw === 'side-by-side') {
+        setMultiView(raw)
+      }
+    } catch {
+      /* ignore corrupt storage payload */
+    }
+  }, [])
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return
+    try {
+      localStorage.setItem(LEVELS_VIEW_STORAGE_KEY, multiView)
+    } catch {
+      /* quota or private mode — fall back to in-memory */
+    }
+  }, [multiView])
+
   const focusedRate = focused.fixed_rate_bps
   const primaryTol = parsePositiveNumberInput(state.primaryTol, 2)
   const sizeTolPct = parsePositiveNumberInput(state.sizeTolPct, 25)
@@ -125,8 +160,202 @@ export function TradedLevelsTab(props: TradedLevelsTabProps): JSX.Element {
   const focusedZ =
     stats.stddev > 0 ? (focusedRate - stats.mean) / stats.stddev : null
 
+  // Multi-mode aggregated extremes — union of rate / DV01 /
+  // notional bounds across the selected trades. Used by the
+  // 'aggregated' view variant.
+  const sequenceAggregateBounds = useMemo(() => {
+    if (!isSequenceMode) return null
+    let minRate = Number.POSITIVE_INFINITY
+    let maxRate = Number.NEGATIVE_INFINITY
+    let minDv01 = Number.POSITIVE_INFINITY
+    let maxDv01 = Number.NEGATIVE_INFINITY
+    let minNotional = Number.POSITIVE_INFINITY
+    let maxNotional = Number.NEGATIVE_INFINITY
+    for (const t of overlayTrades) {
+      if (Number.isFinite(t.fixed_rate_bps)) {
+        if (t.fixed_rate_bps < minRate) minRate = t.fixed_rate_bps
+        if (t.fixed_rate_bps > maxRate) maxRate = t.fixed_rate_bps
+      }
+      const dv01 = Math.abs(t.dv01_usd_per_bp ?? 0)
+      if (Number.isFinite(dv01)) {
+        if (dv01 < minDv01) minDv01 = dv01
+        if (dv01 > maxDv01) maxDv01 = dv01
+      }
+      const notional = Math.abs(t.notional_usd ?? 0)
+      if (Number.isFinite(notional)) {
+        if (notional < minNotional) minNotional = notional
+        if (notional > maxNotional) maxNotional = notional
+      }
+    }
+    return {
+      rate: {
+        min: minRate === Number.POSITIVE_INFINITY ? null : minRate,
+        max: maxRate === Number.NEGATIVE_INFINITY ? null : maxRate,
+      },
+      dv01: {
+        min: minDv01 === Number.POSITIVE_INFINITY ? null : minDv01,
+        max: maxDv01 === Number.NEGATIVE_INFINITY ? null : maxDv01,
+      },
+      notional: {
+        min: minNotional === Number.POSITIVE_INFINITY ? null : minNotional,
+        max: maxNotional === Number.NEGATIVE_INFINITY ? null : maxNotional,
+      },
+    }
+  }, [isSequenceMode, overlayTrades])
+
   return (
     <div className="flex flex-col gap-2.5">
+      {/*
+        Multi-trade dock — view toggle (side-by-side / aggregated)
+        sits above the existing controls. Single-mode renders no
+        toggle so the legacy layout stays identical.
+      */}
+      {isSequenceMode ? (
+        <div
+          data-testid="levels-multi-toggle"
+          className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950/40 px-2 py-1"
+        >
+          <span className="text-[10px] uppercase tracking-wider text-slate-500">
+            Sequence view
+          </span>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={() => setMultiView('side-by-side')}
+              className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${
+                multiView === 'side-by-side'
+                  ? 'border-indigo-400 bg-indigo-500/20 text-indigo-200'
+                  : 'border-slate-700 bg-transparent text-slate-400 hover:border-slate-500'
+              }`}
+            >
+              Side-by-side
+            </button>
+            <button
+              type="button"
+              onClick={() => setMultiView('aggregated')}
+              className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${
+                multiView === 'aggregated'
+                  ? 'border-indigo-400 bg-indigo-500/20 text-indigo-200'
+                  : 'border-slate-700 bg-transparent text-slate-400 hover:border-slate-500'
+              }`}
+            >
+              Aggregated
+            </button>
+          </div>
+          <span className="ml-auto text-[10px] text-slate-500">
+            {overlayTrades.length} trades
+          </span>
+        </div>
+      ) : null}
+
+      {isSequenceMode && multiView === 'side-by-side' ? (
+        <div
+          data-testid="levels-side-by-side"
+          className="overflow-x-auto rounded border border-slate-800"
+        >
+          <table className="min-w-full border-collapse font-mono text-[11px] text-slate-200">
+            <thead>
+              <tr className="bg-slate-900/40">
+                <th className="sticky left-0 bg-slate-900/40 px-2 py-1 text-left text-[10px] uppercase tracking-wider text-slate-500">
+                  Field
+                </th>
+                {overlayTrades.map((trade, i) => (
+                  <th
+                    key={`hdr-${trade.id}`}
+                    className="px-2 py-1 text-left text-[10px] uppercase tracking-wider text-slate-300"
+                  >
+                    <span
+                      className="inline-block h-[6px] w-[6px] rounded-full"
+                      style={{ backgroundColor: sequenceColor(i) }}
+                    />{' '}
+                    {trade.tape_label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="sticky left-0 bg-slate-950 px-2 py-1 text-slate-500">Rate (bps)</td>
+                {overlayTrades.map((trade) => (
+                  <td key={`rate-${trade.id}`} className="px-2 py-1 tabular-nums">
+                    {trade.fixed_rate_bps.toFixed(2)}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <td className="sticky left-0 bg-slate-950 px-2 py-1 text-slate-500">DV01</td>
+                {overlayTrades.map((trade) => (
+                  <td key={`dv01-${trade.id}`} className="px-2 py-1 tabular-nums">
+                    {fmtDv01Compact(trade.dv01_usd_per_bp)}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <td className="sticky left-0 bg-slate-950 px-2 py-1 text-slate-500">Notional</td>
+                {overlayTrades.map((trade) => (
+                  <td key={`notional-${trade.id}`} className="px-2 py-1 tabular-nums">
+                    {fmtNotionalMM(trade.notional_usd)}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <td className="sticky left-0 bg-slate-950 px-2 py-1 text-slate-500">Side</td>
+                {overlayTrades.map((trade) => (
+                  <td key={`side-${trade.id}`} className="px-2 py-1">
+                    {trade.side}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <td className="sticky left-0 bg-slate-950 px-2 py-1 text-slate-500">Venue</td>
+                {overlayTrades.map((trade) => (
+                  <td key={`venue-${trade.id}`} className="px-2 py-1">
+                    {trade.venue}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <td className="sticky left-0 bg-slate-950 px-2 py-1 text-slate-500">Time</td>
+                {overlayTrades.map((trade) => (
+                  <td key={`time-${trade.id}`} className="px-2 py-1">
+                    {trade.execution_start ? fmtTs(trade.execution_start) : '—'}
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {isSequenceMode && multiView === 'aggregated' && sequenceAggregateBounds ? (
+        <div
+          data-testid="levels-aggregated"
+          className="grid grid-cols-2 gap-2 rounded border border-slate-800 p-2 lg:grid-cols-3"
+        >
+          <div className="rounded border border-slate-800 bg-slate-950/60 p-2 font-mono text-[11px] text-slate-200">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">Rate range (bps)</div>
+            <div className="mt-1 tabular-nums">
+              {sequenceAggregateBounds.rate.min?.toFixed(2) ?? '—'} →{' '}
+              {sequenceAggregateBounds.rate.max?.toFixed(2) ?? '—'}
+            </div>
+          </div>
+          <div className="rounded border border-slate-800 bg-slate-950/60 p-2 font-mono text-[11px] text-slate-200">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">DV01 range (USD/bp)</div>
+            <div className="mt-1 tabular-nums">
+              {sequenceAggregateBounds.dv01.min != null ? fmtDv01Compact(sequenceAggregateBounds.dv01.min) : '—'} →{' '}
+              {sequenceAggregateBounds.dv01.max != null ? fmtDv01Compact(sequenceAggregateBounds.dv01.max) : '—'}
+            </div>
+          </div>
+          <div className="rounded border border-slate-800 bg-slate-950/60 p-2 font-mono text-[11px] text-slate-200">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">Notional range (USD MM)</div>
+            <div className="mt-1 tabular-nums">
+              {sequenceAggregateBounds.notional.min != null ? fmtNotionalMM(sequenceAggregateBounds.notional.min) : '—'} →{' '}
+              {sequenceAggregateBounds.notional.max != null ? fmtNotionalMM(sequenceAggregateBounds.notional.max) : '—'}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
         <div className="flex flex-col gap-1">
           <div className="text-[10px] uppercase tracking-wide text-slate-500">Market</div>
