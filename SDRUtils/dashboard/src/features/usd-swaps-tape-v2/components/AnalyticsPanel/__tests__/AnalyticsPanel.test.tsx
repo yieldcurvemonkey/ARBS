@@ -59,3 +59,27 @@ describe('AnalyticsPanel — CardsDrawer mount', () => {
     expect(analyticsPanelSource).toMatch(/<CardsDrawer\s+rows=\{\s*(?:props\.rows|rows)\s*\}/)
   })
 })
+
+describe('AnalyticsPanel — sequence-mode branching', () => {
+  it('imports deriveAnalyticsSelection from the hooks module', () => {
+    expect(analyticsPanelSource).toContain('deriveAnalyticsSelection')
+  })
+
+  it('derives mode/focused/sequence from the selected prop', () => {
+    expect(analyticsPanelSource).toMatch(
+      /deriveAnalyticsSelection\(\s*selected\s*\)/,
+    )
+  })
+
+  it('imports SequenceBar + computeSequenceAggregate', () => {
+    expect(analyticsPanelSource).toContain('SequenceBar')
+    expect(analyticsPanelSource).toContain('computeSequenceAggregate')
+  })
+
+  it('renders FocusedTradeBar in single mode and SequenceBar in sequence mode', () => {
+    expect(analyticsPanelSource).toMatch(/mode\s*===\s*['"]single['"]/)
+    expect(analyticsPanelSource).toMatch(/mode\s*===\s*['"]sequence['"]/)
+    expect(analyticsPanelSource).toContain('<FocusedTradeBar')
+    expect(analyticsPanelSource).toContain('<SequenceBar')
+  })
+})

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { FilterMatchMode, FilterOperator } from 'primereact/api'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
+  deriveAnalyticsSelection,
   useAnalyticsTimeseries,
   useExtremesData,
   useRarityData,
@@ -14,6 +15,8 @@ import {
 import { COLUMN_FILTER_QUERY_KEY } from '../../hooks/useColumnFilters'
 import { CardsDrawer } from './CardsDrawer'
 import { FocusedTradeBar } from './FocusedTradeBar'
+import { SequenceBar } from './SequenceBar'
+import { computeSequenceAggregate } from './sequence-aggregate'
 import { TimeseriesTab } from './TimeseriesTab'
 import { TradeRarityTab } from './TradeRarityTab'
 import { TradedLevelsTab } from './TradedLevelsTab'
@@ -58,14 +61,21 @@ export interface AnalyticsPanelProps {
 export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   const {
     rows,
+    selected,
     focused, onClose, onClearFocused,
     chartHeight = 340, histogramHeight = 280,
     panelHeightVh = DOCK_DEFAULT_VH,
   } = props
-  // `selected` is consumed by Phase D (sequence-mode branching);
-  // hold a void reference until then so TS noUnusedParameters
-  // tolerates the staged landings.
-  void props.selected
+
+  // Phase D — mode-branch render. We derive {mode, sequence} off the
+  // `selected` prop so the panel stays in sync with the trader's
+  // multi-row selection without stamping a new state field. The
+  // legacy `focused` prop continues to drive the single-trade tab
+  // hooks below; sequence mode wires its own per-trade hooks via
+  // the useAnalyticsSequence wrapper (Phase E).
+  const derived = deriveAnalyticsSelection(selected)
+  const mode = derived.mode
+  const sequence = derived.sequence
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('timeseries')
   const [tsState, setTsState] = useState<TimeseriesState>(TIMESERIES_DEFAULT_STATE)
@@ -303,7 +313,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto px-3 pb-3 pt-2">
-        {focused == null ? (
+        {mode === 'empty' ? (
           <div className="flex flex-1 items-center justify-center rounded border border-dashed border-slate-800 bg-slate-900/40 px-4 py-8">
             <div className="flex flex-col items-center gap-2 text-center font-mono">
               <span className="h-2 w-2 animate-pulse rounded-full bg-indigo-400" />
@@ -313,12 +323,21 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               <div className="max-w-[480px] text-[10.5px] text-slate-500">
                 The analytics dock renders real timeseries, distribution, and extremes for a
                 focused bucket. Check a row in the table above to populate the three tabs.
+                Cmd/Shift-click multiple rows to switch the dock into sequence mode.
               </div>
             </div>
           </div>
-        ) : (
+        ) : null}
+        {mode === 'single' && focused ? (
           <FocusedTradeBar trade={focused} onClear={onClearFocused} />
-        )}
+        ) : null}
+        {mode === 'sequence' && sequence ? (
+          <SequenceBar
+            sequence={sequence}
+            aggregate={computeSequenceAggregate(sequence)}
+            onClear={onClearFocused}
+          />
+        ) : null}
 
         {focused == null ? null : (
         <Tabs<AnalyticsTab>
