@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { TAPE_V2_API_BASE } from '../constants'
 import type {
+  AnalyticsGroupBy,
   AnalyticsRangeKey,
   AnalyticsViewKey,
   FocusedTrade,
@@ -37,6 +38,12 @@ type CacheEntry = {
 export type AnalyticsTimeseriesOptions = {
   useGrossDv01?: boolean
   excludeLargeCusty?: boolean
+  // Phase 4: optional groupBy override. Defaults to tape_label to keep
+  // backwards-compatible behaviour for existing callers; pass
+  // 'canonical' to bucket by canonical_underlier_key (paired with a
+  // canonical bucket key as the value via groupValueOverride).
+  groupBy?: AnalyticsGroupBy
+  groupValueOverride?: string | null
 }
 
 const RESULT_CACHE_TTL_MS = 60_000
@@ -54,6 +61,8 @@ function cacheKey(
     range,
     opts.useGrossDv01 ? 'gross' : 'net',
     opts.excludeLargeCusty === false ? 'raw-custy' : 'clean-custy',
+    opts.groupBy ?? 'tape_label',
+    opts.groupValueOverride ?? '',
   ].join('::')
 }
 
@@ -63,11 +72,16 @@ function buildAnalyticsTimeseriesQuery(
   range: AnalyticsRangeKey,
   opts: AnalyticsTimeseriesOptions = {},
 ): URLSearchParams {
+  const groupBy: AnalyticsGroupBy = opts.groupBy ?? 'tape_label'
+  // When the caller pivots to canonical bucketing, the meaningful
+  // identifier is the canonical key (e.g. "USD/SOFR-OIS/COMPOUND"),
+  // not the focused trade's tape_label. Allow an explicit override.
+  const value = opts.groupValueOverride ?? bucket
   return new URLSearchParams({
-    value: bucket,
+    value,
     view,
     range,
-    groupBy: 'tape_label',
+    groupBy,
     useGrossDv01: opts.useGrossDv01 ? 'true' : 'false',
     excludeLargeCusty: opts.excludeLargeCusty === false ? 'false' : 'true',
   })
@@ -114,6 +128,8 @@ export function useAnalyticsTimeseries(
   const needsIntraday = view === 'INTRADAY'
   const useGrossDv01 = Boolean(opts.useGrossDv01)
   const excludeLargeCusty = opts.excludeLargeCusty !== false
+  const groupBy: AnalyticsGroupBy = opts.groupBy ?? 'tape_label'
+  const groupValueOverride = opts.groupValueOverride ?? null
 
   const fetchDaily = useCallback(async () => {
     if (!bucket || needsIntraday) return
@@ -127,7 +143,7 @@ export function useAnalyticsTimeseries(
         bucket,
         'DAILY_CLOSE',
         range,
-        { useGrossDv01, excludeLargeCusty },
+        { useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride },
         controller.signal,
       )
       if (controller.signal.aborted) return
@@ -138,7 +154,7 @@ export function useAnalyticsTimeseries(
     } finally {
       if (!controller.signal.aborted) setLoading(false)
     }
-  }, [bucket, range, needsIntraday, useGrossDv01, excludeLargeCusty])
+  }, [bucket, range, needsIntraday, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride])
 
   const fetchIntraday = useCallback(async () => {
     if (!bucket || !needsIntraday) return
@@ -152,7 +168,7 @@ export function useAnalyticsTimeseries(
         bucket,
         'INTRADAY',
         '1D',
-        { useGrossDv01, excludeLargeCusty },
+        { useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride },
         controller.signal,
       )
       if (controller.signal.aborted) return
@@ -163,7 +179,7 @@ export function useAnalyticsTimeseries(
     } finally {
       if (!controller.signal.aborted) setLoading(false)
     }
-  }, [bucket, needsIntraday, useGrossDv01, excludeLargeCusty])
+  }, [bucket, needsIntraday, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride])
 
   useEffect(() => { fetchDaily() }, [fetchDaily])
   useEffect(() => { fetchIntraday() }, [fetchIntraday])
@@ -191,12 +207,12 @@ export function useAnalyticsTimeseries(
 
   const refetch = useCallback(async () => {
     if (bucket) {
-      const cacheOpts = { useGrossDv01, excludeLargeCusty }
+      const cacheOpts = { useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride }
       resultCache.delete(cacheKey(bucket, 'DAILY_CLOSE', range, cacheOpts))
       resultCache.delete(cacheKey(bucket, 'INTRADAY', '1D', cacheOpts))
     }
     await (needsIntraday ? fetchIntraday() : fetchDaily())
-  }, [bucket, range, fetchDaily, fetchIntraday, needsIntraday, useGrossDv01, excludeLargeCusty])
+  }, [bucket, range, fetchDaily, fetchIntraday, needsIntraday, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride])
 
   return { dailyClose, intraday, loading, error, pickForView, refetch }
 }
