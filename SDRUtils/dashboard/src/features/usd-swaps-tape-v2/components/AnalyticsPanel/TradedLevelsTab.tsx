@@ -103,7 +103,10 @@ type LevelsMultiView = 'side-by-side' | 'aggregated'
 
 export function TradedLevelsTab(props: TradedLevelsTabProps): JSX.Element {
   const { focused, sequence, state, setState, extremes, recentSimilar, stats, focusedPercentile, onSeek } = props
-  const overlayTrades = sequence ?? []
+  // useMemo so the array reference stays stable when sequence is
+  // unchanged — required because downstream useMemo deps depend on
+  // it (lint react-hooks/exhaustive-deps).
+  const overlayTrades = useMemo(() => sequence ?? [], [sequence])
   const isSequenceMode = overlayTrades.length > 0
 
   // Multi-trade dock — toggle between side-by-side N-column and an
