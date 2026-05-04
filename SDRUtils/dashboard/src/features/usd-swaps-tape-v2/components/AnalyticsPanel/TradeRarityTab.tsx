@@ -16,7 +16,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { ANALYTICS_COLORS, fmtDaysAgo } from './analytics-format'
+import { ANALYTICS_COLORS, fmtDaysAgo, sequenceColor } from './analytics-format'
 import { ZONE_BG, ZONE_BORDER, ZONE_TEXT } from './constants'
 import { PlatformDot, Pill, SegGroup } from './controls'
 import { AssumptionsStrip } from './AssumptionsStrip'
@@ -188,7 +188,8 @@ function PercentileSkeleton(): JSX.Element {
 }
 
 export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
-  const { focused, state, setState, bins, stats, metricRows, recency, focusedPercentile, loading, onBinBrush } = props
+  const { focused, sequence, state, setState, bins, stats, metricRows, recency, focusedPercentile, loading, onBinBrush } = props
+  const overlayTrades = sequence ?? []
   const histogramHeight = props.histogramHeight ?? 280
   const binMetric = props.binMetric ?? 'fixed_rate'
   const binWidth = props.binWidth ?? 1
@@ -506,6 +507,36 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
                     strokeWidth={1.5}
                   />
                 ) : null}
+
+                {/*
+                  Multi-trade dock — N reference dots overlaid on the
+                  shared histogram, one per selected trade. Each dot
+                  is positioned at the bin its rate falls into and
+                  carries the sequence palette colour. The dot's
+                  default Recharts tooltip surfaces the trade label
+                  via the data-testid + colour cue; richer tooltip
+                  identifying which trade lives in a follow-up after
+                  Recharts shape-prop typing is settled.
+                */}
+                {overlayTrades.map((trade, i) => {
+                  const value = focusedHistogramValue(trade, binMetric)
+                  const bin = findFocusedHistogramBin(bins, value)
+                  if (!bin) return null
+                  const colour = sequenceColor(i)
+                  return (
+                    <ReferenceDot
+                      key={`seq-rarity-dot-${trade.id}`}
+                      data-testid={`sequence-rarity-dot-${i}`}
+                      yAxisId="count"
+                      x={bin.mid}
+                      y={bin.total}
+                      r={4}
+                      fill={colour}
+                      stroke="#0f172a"
+                      strokeWidth={1}
+                    />
+                  )
+                })}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
