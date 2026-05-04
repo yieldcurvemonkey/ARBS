@@ -821,6 +821,39 @@ Prime status: 300 / 1,649 dates ≈ 18 % done. The data continues to
 add cohort-blow-ups every ~25 dates; the headline conclusion is
 already very firmly established.
 
+#### Cache evolution snapshot — listed_cache = 371, window 2024-11-26 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 86 | 3 | −3.06 | −316,940,666 | −312,675,584 | 27 % | 12.4 | 19.4 |
+| `b_calendar_only` (asym ≥ 3) | 137 | 2 | −0.52 | **−261,180,364,573** | **−119,055,095,608** | 48 % | 14.6 | 24.9 |
+| `c_butterfly_only` (asym ≥ 3) | 164 | 0 | **−0.08** | −104,154,900,187 | −14,270,421,941 | **53 %** | 8.5 | 27.6 |
+| `d_all_structures_default` (asym ≥ 1.5) | 198 | 3 | −3.25 | −869,395,912 | −863,918,580 | 32 % | 8.9 | 36.9 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 380 | 8 | −3.01 | −1,607,990,548 | −1,596,644,993 | 32 % | 9.6 | 66.1 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 283 | 5 | −2.84 | −1,798,371,869 | −1,796,554,245 | 36 % | 7.6 | 50.7 |
+
+17-month window (2024-11-26 → 2026-04-28). Going from cache=300 →
+cache=371:
+- `b_calendar_only` widened from −$12 B → **−$119 B** (×10 worse) — the
+  late-2024 cohort produced another catastrophic loss event larger than
+  anything in 2025.
+- `c_butterfly_only` widened from −$10 B → −$14 B (only ×1.4 worse);
+  the November-2024 cohort was less catastrophic than calendars.
+- `e_aggressive_concurrency` and `f_daily_rebalance` widened ~50 %.
+
+`c_butterfly_only` sharpe holds steady at ~ 0 (−0.08), winRate 53 %.
+Per the maxDD-inflation caveat, treat the dollar magnitudes as relative
+not absolute; the relative ranking of cohorts is the signal. The story
+holds: 4–6 catastrophic loss cohorts per year, one per ~3 months, each
+larger than the cumulative wins.
+
+Prime status: 371 / 1,649 dates ≈ 22 % done after ~3 wall-days of
+priming. At the observed pace the strategy will not see any
+qualitatively new behaviour from additional dates — every 25-date
+extension just adds another cohort blow-up. The headline conclusion
+("realised-PnL stop required, sub-Kelly sizing required") is locked
+in at this sample size.
+
 ## Reproduction
 
 ```bash
