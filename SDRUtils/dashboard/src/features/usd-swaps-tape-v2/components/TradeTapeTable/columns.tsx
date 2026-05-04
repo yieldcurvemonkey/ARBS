@@ -13,6 +13,10 @@ import {
   formatRate,
   formatReportedLvl,
 } from '../../utils/format'
+import {
+  canonicalDisplayLabel,
+  canonicalSourceVariants,
+} from '../../utils/canonicalDisplay'
 import { getFilterDisplayLabel } from './filter-utils'
 import { EconomicClassBadge, LifecyclePills, QualityBadges } from './RowBadges'
 import { TapeLabelCell } from './TapeLabelCell'
@@ -271,7 +275,29 @@ export function getColumns(
         'Tape Label',
         summaryFor('tape_label', config.activeFilters),
       )}
-      body={(row: UsdSwapTapeRow) => <TapeLabelCell row={row} />}
+      body={(row: UsdSwapTapeRow) => {
+        const canonicalKey =
+          row.canonical_underlier_key ?? firstLeg(row)?.canonical_underlier_key ?? null
+        if (!canonicalKey) {
+          return <TapeLabelCell row={row} />
+        }
+        const label = canonicalDisplayLabel(canonicalKey)
+        const variants = canonicalSourceVariants(canonicalKey)
+        const tooltip =
+          variants.length > 0
+            ? `Canonical: ${canonicalKey} (${label})\nMatches SDR strings:\n  ${variants.join('\n  ')}`
+            : `Canonical: ${canonicalKey} (${label})`
+        return (
+          <span
+            title={tooltip}
+            data-canonical-key={canonicalKey}
+            data-testid={`canonical-${row.package_id ?? 'row'}`}
+            className="inline-block"
+          >
+            <TapeLabelCell row={row} />
+          </span>
+        )
+      }}
       style={{ width: 470 }}
     />,
     <Column

@@ -50,6 +50,11 @@ export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   venue?: string | null
   ccp?: string | null
   rate_index_clean?: string | null
+  // Phase 4: stable slash-separated underlier key emitted by
+  // SDRUtils/core/underlier_canonical.py — canonicalises ~30 SDR-feed
+  // index name variants into one bucket per economic underlier (e.g.
+  // "USD/SOFR-OIS/COMPOUND", "USD/FED-FUNDS-OIS/COMPOUND").
+  canonical_underlier_key?: string | null
   execution_session?: string | null
   lifecycle_type?: LifecycleType | null
   fomc_meeting_label?: string | null
@@ -123,6 +128,10 @@ export type UsdSwapTapeRow = SofrSwapTapeRow & {
   venue?: string | null
   ccp?: string | null
   rate_index_clean?: string | null
+  // Phase 4: package-level canonical key — typically taken from the
+  // first leg by the API materialiser. See `UsdSwapTapeLeg` for the
+  // canonicalisation rationale.
+  canonical_underlier_key?: string | null
   execution_session?: string | null
   tape_label?: string | null
   fomc_meeting_label?: string | null
