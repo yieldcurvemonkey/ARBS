@@ -10,6 +10,7 @@ import {
   ECONOMIC_CLASS_LABELS,
   ECONOMIC_CLASS_TONES,
   EMPTY_VALUE,
+  PACKAGE_CONFIDENCE_TONES,
 } from '../../constants'
 import type { EconomicClass, UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
 import { computeLegSummary } from './LegsSubTable.helpers'
@@ -19,6 +20,7 @@ import {
   formatNotional,
   formatRate,
 } from '../../utils/format'
+import { computePackageConfidence } from '../../utils/packageConfidence'
 
 function formatTime(value: string | null | undefined): string {
   if (!value) return EMPTY_VALUE
@@ -393,11 +395,47 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
       : EMPTY_VALUE
   const summaryPtsText = summary.pts != null ? String(summary.pts) : EMPTY_VALUE
 
+  const confidence = computePackageConfidence(row)
+  const confidenceTone = PACKAGE_CONFIDENCE_TONES[confidence.tone]
+
   return (
     <div
       className="rounded-xl border border-slate-800/80 bg-slate-950/70 px-4 py-1"
       data-testid={`legs-subtable-${row.package_id}`}
     >
+      <div
+        className="mb-2 rounded-lg border border-slate-800/80 bg-slate-900/60 px-3 py-2"
+        data-testid={`confidence-strip-${row.package_id}`}
+      >
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-slate-400">
+          <span>Confidence</span>
+          <span
+            className={`inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[11px] ${confidenceTone}`}
+          >
+            {confidence.score}/{confidence.total}
+          </span>
+          <span className="font-mono text-[10px] text-slate-500">
+            ({confidence.resolvedType})
+          </span>
+        </div>
+        <ul className="mt-1 space-y-0.5">
+          {confidence.signals.map((s) => (
+            <li
+              key={s.name}
+              className="flex items-baseline gap-2 font-mono text-[11px] leading-tight"
+            >
+              <span
+                className={s.passed ? 'text-emerald-300' : 'text-rose-300'}
+                aria-label={s.passed ? 'pass' : 'fail'}
+              >
+                {s.passed ? '✓' : '✗'}
+              </span>
+              <span className="text-slate-200">{s.label}:</span>
+              <span className="text-slate-400">{s.detail}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
       {row.package_transaction_price != null ? (
         <div className="mb-1 flex items-baseline gap-2 text-[10px] uppercase tracking-wide text-slate-400">
           <span>Package Transaction Price</span>

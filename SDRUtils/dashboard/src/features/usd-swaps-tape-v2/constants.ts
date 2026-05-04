@@ -244,3 +244,26 @@ export const DEFAULT_FLAG_FILTER_STATE = {
   lifecycleAllSelected: true,
   clean: false,
 }
+
+// ---------------------------------------------------------------
+// Package-detection confidence (see docs/plans/2026-05-03-package-confidence-design.md).
+// computePackageConfidence() in ../utils/packageConfidence.ts reads these.
+// Exposed as constants so the desk can tune without code rewrites.
+// ---------------------------------------------------------------
+export const PACKAGE_CONFIDENCE_TOLERANCES = {
+  /** ± bp window for derived-spread vs reported PTS match. */
+  ptsMatchBp: 0.5,
+  /** Relative tolerance for risk-balance checks (10% = 0.10). */
+  riskBalanceRel: 0.10,
+}
+
+export const PACKAGE_CONFIDENCE_TONES = {
+  /** All signals passed. */
+  high: 'bg-emerald-900/40 text-emerald-200 ring-1 ring-emerald-400/40',
+  /** One signal failed. */
+  medium: 'bg-amber-900/40 text-amber-200 ring-1 ring-amber-400/40',
+  /** Multiple signals failed. */
+  low: 'bg-rose-900/40 text-rose-200 ring-1 ring-rose-400/40',
+  /** OUTRIGHT structural-only check — informational, not a quality grade. */
+  info: 'bg-slate-800/60 text-slate-300 ring-1 ring-slate-600/40',
+} as const

@@ -3,7 +3,7 @@
 import type { JSX } from 'react'
 import { Column } from 'primereact/column'
 import type { DataTableFilterMeta } from 'primereact/datatable'
-import { EMPTY_VALUE } from '../../constants'
+import { EMPTY_VALUE, PACKAGE_CONFIDENCE_TONES } from '../../constants'
 import type { UsdSwapTapeRow } from '../../types'
 import {
   formatDv01,
@@ -13,6 +13,7 @@ import {
   formatRate,
   formatReportedLvl,
 } from '../../utils/format'
+import { computePackageConfidence } from '../../utils/packageConfidence'
 import {
   canonicalDisplayLabel,
   canonicalSourceVariants,
@@ -251,13 +252,25 @@ export function getColumns(
         summaryFor('package_type', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => {
+        const conf = computePackageConfidence(row)
+        const toneClass = PACKAGE_CONFIDENCE_TONES[conf.tone]
+        const tooltip = conf.signals
+          .map((s) => `${s.passed ? '✓' : '✗'} ${s.label}: ${s.detail}`)
+          .join('\n')
         const ccpSwitch = detectCcpSwitch(row)
         return (
-          <span className="inline-flex items-center gap-1">
+          <div className="flex items-center gap-1">
             <span
               className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packageTypeBadgeClassName(row.package_type)}`}
             >
               {packageTypeDisplayLabel(row.package_type)}
+            </span>
+            <span
+              className={`inline-flex items-center rounded px-1 py-0.5 font-mono text-[10px] ${toneClass}`}
+              data-testid={`pkg-confidence-${row.package_id}`}
+              title={tooltip}
+            >
+              {conf.score}/{conf.total}
             </span>
             {ccpSwitch.isCcpSwitch ? (
               <span
@@ -268,10 +281,10 @@ export function getColumns(
                 CCP↔
               </span>
             ) : null}
-          </span>
+          </div>
         )
       }}
-      style={{ width: 92 }}
+      style={{ width: 160 }}
     />,
     <Column
       key="pkg_ind"
