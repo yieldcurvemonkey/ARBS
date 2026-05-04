@@ -13,6 +13,8 @@ export { SwapSpreadVwapCard } from './SwapSpreadVwapCard'
 export type { SwapSpreadVwapCardProps } from './SwapSpreadVwapCard'
 export { CcpSwitchCard } from './CcpSwitchCard'
 export type { CcpSwitchCardProps } from './CcpSwitchCard'
+export { CardsDrawer } from './CardsDrawer'
+export type { CardsDrawerProps } from './CardsDrawer'
 export * from './analytics-types'
 export * from './analytics-format'
 export {
