@@ -15,6 +15,8 @@ export { CcpSwitchCard } from './CcpSwitchCard'
 export type { CcpSwitchCardProps } from './CcpSwitchCard'
 export { CardsDrawer } from './CardsDrawer'
 export type { CardsDrawerProps } from './CardsDrawer'
+export { SequenceBar } from './SequenceBar'
+export type { SequenceBarProps } from './SequenceBar'
 export * from './analytics-types'
 export * from './analytics-format'
 export {
