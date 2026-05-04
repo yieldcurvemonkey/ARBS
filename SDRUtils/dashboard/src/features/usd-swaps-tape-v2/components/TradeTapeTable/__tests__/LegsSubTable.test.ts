@@ -114,7 +114,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { LegsSubTable } from '../LegsSubTable'
 
 describe('LegsSubTable confidence strip', () => {
-  it('renders confidence strip with N/T header and per-signal rows for FLY', () => {
+  it('renders confidence strip header (N/T) by default but hides per-signal detail until toggled', () => {
     const html = renderToStaticMarkup(
       LegsSubTable({
         row: {
@@ -131,9 +131,54 @@ describe('LegsSubTable confidence strip', () => {
         } as any,
       }),
     )
+    // Header chip stays visible.
     expect(html).toContain('data-testid="confidence-strip-P-FLY"')
     expect(html).toContain('5/5')
-    expect(html).toContain('PTS match')
-    expect(html).toContain('Risk balance')
+    // Toggle button is rendered with the expected label.
+    expect(html).toContain('Show Package Confidence Details')
+    expect(html).toContain('data-testid="confidence-toggle-P-FLY"')
+    // Details list is collapsed by default — the per-signal rows are
+    // not in the static markup until the user toggles the panel.
+    expect(html).not.toContain('PTS match')
+    expect(html).not.toContain('Risk balance')
+  })
+
+  it('exposes the inferred-type override badge when SPREADOVER_FLY collapses to FLY', () => {
+    const html = renderToStaticMarkup(
+      LegsSubTable({
+        row: {
+          package_id: 'P-OVR',
+          package_type: 'SPREADOVER_FLY',
+          package_indicator: true,
+          n_package_legs: 3,
+          package_transaction_spread: 0.0000125,
+          legs_json: [
+            {
+              tenor_years: 8,
+              risk: -1_500,
+              fixed_rate: 0.03795,
+              trade_id: 'L1',
+              package_transaction_spread: 0.0000125,
+            },
+            {
+              tenor_years: 9,
+              risk: 3_000,
+              fixed_rate: 0.03841,
+              trade_id: 'L2',
+              package_transaction_spread: 0.0000125,
+            },
+            {
+              tenor_years: 10,
+              risk: -1_500,
+              fixed_rate: 0.03886,
+              trade_id: 'L3',
+              package_transaction_spread: 0.0000125,
+            },
+          ],
+        } as any,
+      }),
+    )
+    expect(html).toContain('data-testid="confidence-inferred-P-OVR"')
+    expect(html).toContain('inferred → FLY')
   })
 })

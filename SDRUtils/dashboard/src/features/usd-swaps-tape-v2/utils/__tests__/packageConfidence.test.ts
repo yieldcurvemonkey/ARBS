@@ -358,3 +358,147 @@ describe('computePackageConfidence — tolerance override', () => {
     expect(loose.signals.find((s) => s.name === 'pts_match')?.passed).toBe(true)
   })
 })
+
+describe('computePackageConfidence — sub-bp PTS detail rendering', () => {
+  it('renders sub-bp PTS values without collapsing them to 0.00', () => {
+    const row = baseRow({
+      package_type: 'CURVE',
+      package_indicator: true,
+      n_package_legs: 2,
+      package_transaction_spread: 0.0000125,
+      legs_json: [
+        curveLeg({ tenor_years: 5, risk: -5_000, fixed_rate: 0.035 }),
+        curveLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 0.0350001 }),
+      ],
+    })
+    const result = computePackageConfidence(row)
+    const ptsSig = result.signals.find((s) => s.name === 'pts_match')
+    expect(ptsSig).toBeDefined()
+    // No "0.00" collapse — must contain a non-zero precision marker.
+    expect(ptsSig!.detail).not.toMatch(/derived 0\.00bp/)
+    // Reported PTS rendered with at least 4 sig figs OR scientific.
+    expect(ptsSig!.detail).toMatch(/0\.0000125|1\.250e-5/)
+  })
+})
+
+describe('computePackageConfidence — inferredType override (SPREADOVER → base)', () => {
+  const flyLeg = (overrides: Partial<UsdSwapTapeLeg>): UsdSwapTapeLeg =>
+    curveLeg({ ...overrides })
+
+  it('SPREADOVER_FLY collapses to FLY when every per-leg PTS = package PTS', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'SPREADOVER_FLY',
+        package_indicator: true,
+        n_package_legs: 3,
+        package_transaction_spread: 0.0000125,
+        legs_json: [
+          {
+            ...flyLeg({ tenor_years: 8, risk: -1_500, fixed_rate: 0.03795 }),
+            package_transaction_spread: 0.0000125,
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 9, risk: 3_000, fixed_rate: 0.03841 }),
+            package_transaction_spread: 0.0000125,
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 10, risk: -1_500, fixed_rate: 0.03886 }),
+            package_transaction_spread: 0.0000125,
+          } as any,
+        ],
+      }),
+    )
+    expect(result.inferredType).toBe('FLY')
+    expect(result.inferredTypeReason).toContain('per-leg PTS')
+    expect(
+      result.signals.find((s) => s.name === 'inferred_base_type')?.passed,
+    ).toBe(true)
+  })
+
+  it('SPREADOVER_CURVE collapses to CURVE when every per-leg PTS = package PTS', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'SPREADOVER_CURVE',
+        package_indicator: true,
+        n_package_legs: 2,
+        package_transaction_spread: 0.5,
+        legs_json: [
+          {
+            ...flyLeg({ tenor_years: 5, risk: -5_000, fixed_rate: 3.5 }),
+            package_transaction_spread: 0.5,
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 4.0 }),
+            package_transaction_spread: 0.5,
+          } as any,
+        ],
+      }),
+    )
+    expect(result.inferredType).toBe('CURVE')
+  })
+
+  it('does NOT trigger when per-leg PTS values diverge from package PTS', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'SPREADOVER_CURVE',
+        package_indicator: true,
+        n_package_legs: 2,
+        package_transaction_spread: 0.5,
+        legs_json: [
+          {
+            ...flyLeg({ tenor_years: 5, risk: -5_000, fixed_rate: 3.5 }),
+            package_transaction_spread: 0.5,
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 4.0 }),
+            // UST hedge leg PTS differs — genuine spreadover.
+            package_transaction_spread: 12.4,
+          } as any,
+        ],
+      }),
+    )
+    expect(result.inferredType).toBeNull()
+    expect(result.inferredTypeReason).toBeNull()
+  })
+
+  it('does NOT trigger for plain FLY / CURVE / SPREADOVER (only SPREADOVER_FLY/CURVE)', () => {
+    for (const t of ['FLY', 'CURVE', 'SPREADOVER', 'OUTRIGHT']) {
+      const result = computePackageConfidence(
+        baseRow({
+          package_type: t as any,
+          package_indicator: t === 'OUTRIGHT' ? false : true,
+          n_package_legs: t === 'FLY' ? 3 : t === 'OUTRIGHT' ? 1 : 2,
+          package_transaction_spread: 0.5,
+          legs_json: [],
+        }),
+      )
+      expect(result.inferredType).toBeNull()
+    }
+  })
+
+  it('does NOT trigger when a per-leg PTS is missing', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'SPREADOVER_FLY',
+        package_indicator: true,
+        n_package_legs: 3,
+        package_transaction_spread: 0.0000125,
+        legs_json: [
+          {
+            ...flyLeg({ tenor_years: 8 }),
+            package_transaction_spread: 0.0000125,
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 9 }),
+            // Missing per-leg PTS.
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 10 }),
+            package_transaction_spread: 0.0000125,
+          } as any,
+        ],
+      }),
+    )
+    expect(result.inferredType).toBeNull()
+  })
+})
