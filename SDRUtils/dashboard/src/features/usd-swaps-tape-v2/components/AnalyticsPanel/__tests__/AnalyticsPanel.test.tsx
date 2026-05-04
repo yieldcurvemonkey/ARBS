@@ -60,6 +60,18 @@ describe('AnalyticsPanel — CardsDrawer mount', () => {
   })
 })
 
+describe('AnalyticsPanel — Sequence tab wiring', () => {
+  it('imports SequenceTab and renders it when activeTab === sequence', () => {
+    expect(analyticsPanelSource).toContain('SequenceTab')
+    expect(analyticsPanelSource).toMatch(/activeTab\s*===\s*['"]sequence['"]/)
+    expect(analyticsPanelSource).toContain('<SequenceTab')
+  })
+
+  it('appends a Sequence tab entry to the tab list in sequence mode', () => {
+    expect(analyticsPanelSource).toMatch(/mode\s*===\s*['"]sequence['"][\s\S]*?key:\s*['"]sequence['"]/)
+  })
+})
+
 describe('AnalyticsPanel — sequence-mode branching', () => {
   it('imports deriveAnalyticsSelection from the hooks module', () => {
     expect(analyticsPanelSource).toContain('deriveAnalyticsSelection')

@@ -17,6 +17,7 @@ import { COLUMN_FILTER_QUERY_KEY } from '../../hooks/useColumnFilters'
 import { CardsDrawer } from './CardsDrawer'
 import { FocusedTradeBar } from './FocusedTradeBar'
 import { SequenceBar } from './SequenceBar'
+import { SequenceTab } from './SequenceTab'
 import { computeSequenceAggregate } from './sequence-aggregate'
 import { TimeseriesTab } from './TimeseriesTab'
 import { TradeRarityTab } from './TradeRarityTab'
@@ -450,6 +451,13 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
                   view: 'DAILY_CLOSE',
                 }))
               }}
+            />
+          ) : null}
+          {activeTab === 'sequence' && mode === 'sequence' && sequence ? (
+            <SequenceTab
+              sequence={sequence}
+              rows={rows}
+              aggregate={seqAnalytics.aggregate ?? computeSequenceAggregate(sequence)}
             />
           ) : null}
         </div>
