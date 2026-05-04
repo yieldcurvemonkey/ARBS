@@ -12,6 +12,7 @@ import {
   useRarityData,
 } from '../../hooks'
 import { COLUMN_FILTER_QUERY_KEY } from '../../hooks/useColumnFilters'
+import { CardsDrawer } from './CardsDrawer'
 import { FocusedTradeBar } from './FocusedTradeBar'
 import { TimeseriesTab } from './TimeseriesTab'
 import { TradeRarityTab } from './TradeRarityTab'
@@ -56,18 +57,14 @@ export interface AnalyticsPanelProps {
 
 export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   const {
-    // `rows` and `selected` are intentionally *not* destructured into
-    // const-named locals here yet — Phase B (CardsDrawer) and Phase D
-    // (sequence mode) consume them. Keeping them on `props` for now
-    // avoids a sea of unused-var warnings before those phases land.
+    rows,
     focused, onClose, onClearFocused,
     chartHeight = 340, histogramHeight = 280,
     panelHeightVh = DOCK_DEFAULT_VH,
   } = props
-  // Reference the new props so TypeScript's strict noUnusedParameters
-  // doesn't trip while the Phase B / Phase D consumers are still
-  // pending. They land in the next commits.
-  void props.rows
+  // `selected` is consumed by Phase D (sequence-mode branching);
+  // hold a void reference until then so TS noUnusedParameters
+  // tolerates the staged landings.
   void props.selected
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('timeseries')
@@ -404,6 +401,14 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
         </div>
         )}
       </div>
+
+      {/*
+        Always-on PR-#286 cards drawer. Sits below the tab content in
+        both single and sequence modes (and when nothing is selected
+        yet). Default state is collapsed; the drawer's own
+        localStorage handling persists the trader's preference.
+      */}
+      <CardsDrawer rows={rows} />
     </div>
   )
 }

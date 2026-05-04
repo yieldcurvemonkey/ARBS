@@ -43,3 +43,19 @@ describe('AnalyticsPanel props — rows + selected passthrough', () => {
     expect(analyticsPanelSource).toMatch(/focused\s*:\s*FocusedTrade\s*\|\s*null/)
   })
 })
+
+describe('AnalyticsPanel — CardsDrawer mount', () => {
+  it('imports CardsDrawer from the local AnalyticsPanel module', () => {
+    expect(analyticsPanelSource).toMatch(
+      /import\s+\{[^}]*CardsDrawer[^}]*\}\s+from\s+['"]\.\/CardsDrawer['"]/,
+    )
+  })
+
+  it('renders <CardsDrawer rows={...}/> below the tab area', () => {
+    expect(analyticsPanelSource).toMatch(/<CardsDrawer\s+rows=\{[^}]*\}\s*\/>/)
+  })
+
+  it('passes the rows prop into the drawer (so cards can aggregate)', () => {
+    expect(analyticsPanelSource).toMatch(/<CardsDrawer\s+rows=\{\s*(?:props\.rows|rows)\s*\}/)
+  })
+})
