@@ -311,16 +311,6 @@ export function TradedLevelsTab(props: TradedLevelsTabProps): JSX.Element {
         })}
       </div>
 
-      <div className="rounded border border-slate-800 bg-slate-900/40 px-3 py-2 font-mono text-[10.5px] text-slate-400">
-        <span className="text-[9.5px] uppercase tracking-wider text-slate-500">Why this tab exists</span>
-        <div className="mt-1 italic text-slate-300">
-          “What was the all-time low print of 10y10y? What was the all-time high print of 1m10y? That kind of thing — what and when.”
-        </div>
-        <div className="mt-1 text-slate-500">
-          Click any row to seek the Timeseries tab to that print and pulse the reference dot.
-        </div>
-      </div>
-
       <div className="rounded border border-slate-800 bg-slate-950/60">
         <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/40 px-2.5 py-1.5">
           <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">

@@ -7,6 +7,8 @@
 import {
   CUSTY_MIC_SET,
   IDB_MIC_SET,
+  normalizeAnalyticsTapeLabel,
+  packageAnalyticsFilterPredicate,
   packageSummaryFixedRateSql,
   packageSummaryRiskSql,
   platformCaseSql,
@@ -48,6 +50,38 @@ describe('IDB / CUSTY MIC bucketing', () => {
 })
 
 describe('package summary analytics SQL', () => {
+  it('collapses SOFR-OIS tape label variants into one economic analytics key', () => {
+    const compoundLabel = normalizeAnalyticsTapeLabel(
+      'USD-SOFR-COMPOUND 1D Constant Spot 5Y/10Y/30Y FLY PHY',
+    )
+    const oisLabel = normalizeAnalyticsTapeLabel(
+      'USD-SOFR-OIS Compound 1D Constant Spot 5Y/10Y/30Y FLY PHYS',
+    )
+
+    expect(compoundLabel).toBe(oisLabel)
+    expect(compoundLabel).toBe(
+      'USD-SOFR-OIS COMPOUND 1D CONSTANT SPOT 5Y/10Y/30Y FLY PHYS',
+    )
+  })
+
+  it('keeps Term SOFR out of the generic SOFR-OIS normalization', () => {
+    expect(
+      normalizeAnalyticsTapeLabel('USD-SOFR-CME-TERM 3M Spot 5Y Outright PHYS'),
+    ).toBe('USD-SOFR-TERM 3M SPOT 5Y OUTRIGHT PHYS')
+  })
+
+  it('uses normalized tape labels for analytics filtering while retaining exact-match fast path', () => {
+    const predicate = packageAnalyticsFilterPredicate(
+      'tape_label',
+      '$1',
+      'arbs_usd_swap_tape_legs_v2',
+    )
+
+    expect(predicate).toContain('p.tape_label = $1')
+    expect(predicate).toContain('REGEXP_REPLACE')
+    expect(predicate).toContain('USD-SOFR-OIS COMPOUND')
+  })
+
   it('uses fly package spread and belly DV01 conventions', () => {
     const rateSql = packageSummaryFixedRateSql('r')
     const riskSql = packageSummaryRiskSql('r')

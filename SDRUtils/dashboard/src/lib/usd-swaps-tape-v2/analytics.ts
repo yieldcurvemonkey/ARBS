@@ -57,12 +57,65 @@ export function platformCaseSql(alias: string): string {
   END`
 }
 
+const SOFR_TERM_PREFIX_RE = /^USD[-\s]+SOFR[-\s]+(?:CME[-\s]+)?TERM/i
+const SOFR_OIS_PREFIX_RE =
+  /^USD[-\s]+SOFR(?:[-\s]+OIS)?(?:[-\s]+COMPOUND|\s+COMPOUND)?/i
+
+// Tape-label analytics should bucket by economic label, not by SDR/UPI
+// spelling. Keep this intentionally narrow: SOFR OIS source prefixes
+// and PHY/PHYS delivery spelling are observed aliases for the same trade.
+export function normalizeAnalyticsTapeLabel(
+  label: string | null | undefined,
+): string {
+  let text = String(label ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase()
+  text = text
+    .replace(/\bPHYSICAL\b/g, 'PHYS')
+    .replace(/\bPHY\b/g, 'PHYS')
+  if (SOFR_TERM_PREFIX_RE.test(text)) {
+    text = text.replace(SOFR_TERM_PREFIX_RE, 'USD-SOFR-TERM')
+  } else {
+    text = text.replace(SOFR_OIS_PREFIX_RE, 'USD-SOFR-OIS COMPOUND')
+  }
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function cleanTapeLabelSql(valueExpr: string): string {
+  return `BTRIM(REGEXP_REPLACE(UPPER(COALESCE(${valueExpr}::text, '')), '[[:space:]]+', ' ', 'g'))`
+}
+
+function normalizeDeliverySql(valueExpr: string): string {
+  const physical =
+    `REGEXP_REPLACE(${valueExpr}, '(^|[[:space:]])PHYSICAL($|[[:space:]])', '\\1PHYS\\2', 'g')`
+  return `REGEXP_REPLACE(${physical}, '(^|[[:space:]])PHY($|[[:space:]])', '\\1PHYS\\2', 'g')`
+}
+
+export function normalizeAnalyticsTapeLabelSql(valueExpr: string): string {
+  const cleaned = cleanTapeLabelSql(valueExpr)
+  const delivery = normalizeDeliverySql(cleaned)
+  const termPattern = '^USD[[:space:]-]+SOFR[[:space:]-]+(CME[[:space:]-]+)?TERM'
+  const sofrOisPattern = '^USD[[:space:]-]+SOFR([[:space:]-]+OIS)?([[:space:]-]+COMPOUND)?'
+  const term = `REGEXP_REPLACE(${delivery}, '${termPattern}', 'USD-SOFR-TERM', 'i')`
+  const sofrOis = `REGEXP_REPLACE(${delivery}, '${sofrOisPattern}', 'USD-SOFR-OIS COMPOUND', 'i')`
+  return `BTRIM(CASE
+    WHEN ${delivery} ~* '${termPattern}' THEN ${term}
+    ELSE ${sofrOis}
+  END)`
+}
+
 export function packageAnalyticsFilterPredicate(
   groupBy: string,
   valueParam: string,
   legsTable: string,
 ): string | null {
-  if (groupBy === 'tape_label') return `p.tape_label = ${valueParam}`
+  if (groupBy === 'tape_label') {
+    return `(
+      p.tape_label = ${valueParam}
+      OR ${normalizeAnalyticsTapeLabelSql('p.tape_label')} = ${normalizeAnalyticsTapeLabelSql(valueParam)}
+    )`
+  }
   if (groupBy === 'package') return `p.package_id = ${valueParam}`
   if (groupBy === 'trade_type') return `p.package_type = ${valueParam}`
   if (groupBy === 'tenor') {
