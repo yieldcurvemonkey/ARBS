@@ -57,29 +57,48 @@ describe('ManualLinkDetailModal', () => {
     expect(html).toContain('data-testid="manual-link-detail-dot"');
   });
 
-  it('renders the form with the package-type / link-reason options when open', () => {
+  it('renders the loading state on initial open while detail fetches', () => {
     const props = makeProps();
     const html = renderToStaticMarkup(<ManualLinkDetailModal {...props} />);
+    // SSR shows the loading spinner copy on first paint.
+    expect(html).toContain('Loading manual link');
+  });
+
+  it('shows the loading spinner even with controlled user / password props on first paint', () => {
+    // The form lives behind detailLoading - SSR renders the loading
+    // shell, then the form appears once useManualLinkDetails resolves.
+    // We pin the loading shell for the controlled-prop case as well so
+    // future refactors can't accidentally render a bare form before the
+    // fetch resolves.
+    const props = makeProps({ currentUser: 'jdoe', adminPassword: 'secret' });
+    const html = renderToStaticMarkup(<ManualLinkDetailModal {...props} />);
+    expect(html).toContain('Loading manual link');
+  });
+
+  it('does not show the loading spinner when linkId is null', () => {
+    const html = renderToStaticMarkup(
+      <ManualLinkDetailModal {...makeProps({ linkId: null })} />,
+    );
+    // Without a linkId there is nothing to fetch -> form renders.
+    expect(html).not.toContain('Loading manual link');
+    // The package-type / reason selects are reachable.
     expect(html).toContain('Straddle Pair');
     expect(html).toContain('Vega hedge');
   });
 
-  it('disables Save when linkDetail is null (initial render)', () => {
-    const html = renderToStaticMarkup(<ManualLinkDetailModal {...makeProps()} />);
-    // Save button is disabled until linkDetail loads (and currentUser /
-    // adminPassword are set). React serialises disabled as `disabled=""`
-    // which we check appears within the save button's HTML element.
+  it('disables Save when linkDetail is null (linkId null path)', () => {
+    const html = renderToStaticMarkup(
+      <ManualLinkDetailModal {...makeProps({ linkId: null })} />,
+    );
     const saveBtnMatch = html.match(/<button[^>]*data-testid="manual-link-save-button"[^>]*>/);
     expect(saveBtnMatch).not.toBeNull();
     expect(saveBtnMatch?.[0]).toContain('disabled');
   });
 
-  it('renders the user / password inputs as controlled inputs reflecting prop values', () => {
-    const props = makeProps({ currentUser: 'jdoe', adminPassword: 'secret' });
+  it('controlled user / password inputs reflect prop values when linkId is null (form visible)', () => {
+    const props = makeProps({ currentUser: 'jdoe', adminPassword: 'secret', linkId: null });
     const html = renderToStaticMarkup(<ManualLinkDetailModal {...props} />);
-    // SSR renders controlled value attributes verbatim.
     expect(html).toContain('value="jdoe"');
-    // Password input has the same value prop.
     expect(html).toContain('placeholder="admin password"');
   });
 

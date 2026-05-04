@@ -17,12 +17,8 @@ import { manualLinkColor } from '../color';
 import { ManualLinkValidationList } from './ManualLinkValidationList';
 import { ManualLinkMetricsTable } from './ManualLinkMetricsTable';
 import { ManualLinkHistoryTable } from './ManualLinkHistoryTable';
-import type {
-  ManualLinkDetail,
-  ManualLinkHistoryItem,
-  ManualLinkTrade,
-  ManualLinkValidationItem,
-} from '../types';
+import { useManualLinkDetails } from '../hooks/useManualLinkDetails';
+import type { ManualLinkTrade, ManualLinkValidationItem } from '../types';
 
 export type Option = { value: string; label: string };
 
@@ -121,10 +117,24 @@ export function ManualLinkDetailModal(
     formatMetricValue = defaultFormatMetricValue,
   } = props;
 
-  const [linkDetail, setLinkDetail] = useState<ManualLinkDetail | null>(null);
-  const [trades, setTrades] = useState<ManualLinkTrade[]>([]);
-  const [history, setHistory] = useState<ManualLinkHistoryItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Source of truth for link record + trades + history is the shared
+  // useManualLinkDetails hook. We mirror payload-side validation back
+  // into local state so the modal can re-render after a save without
+  // immediately re-fetching.
+  const detailState = useManualLinkDetails({
+    linkId: isOpen ? linkId : null,
+    basePath: apiBasePath,
+  });
+  const linkDetail = detailState.detail?.link ?? null;
+  const trades = useMemo<ManualLinkTrade[]>(
+    () => dedupeTrades(detailState.detail?.trades ?? []),
+    [dedupeTrades, detailState.detail?.trades],
+  );
+  const history = detailState.detail?.history ?? [];
+  const detailLoading = detailState.loading;
+  const detailError = detailState.error;
+  const refetchDetails = detailState.refetch;
+
   const [error, setError] = useState<string | null>(null);
   const [packageType, setPackageType] = useState('');
   const [linkReason, setLinkReason] = useState('');
@@ -140,6 +150,10 @@ export function ManualLinkDetailModal(
 
   const manualColor = useMemo(() => manualLinkColor(linkId ?? ''), [linkId]);
   const hasWritePassword = adminPassword.trim().length > 0;
+  const loading = detailLoading || saving || deactivating;
+  // Prefer in-flight error (save / deactivate) over the initial fetch
+  // error so the user sees the most recent failure.
+  const currentError = error ?? detailError;
 
   const addTag = useCallback(() => {
     const next = tagInput.trim();
@@ -155,35 +169,6 @@ export function ManualLinkDetailModal(
   const removeTag = useCallback((tag: string) => {
     setTags((prev) => prev.filter((item) => item !== tag));
   }, []);
-
-  const fetchLinkDetails = useCallback(async () => {
-    if (!linkId) return;
-    setLoading(true);
-    setError(null);
-    setLinkDetail(null);
-    setTrades([]);
-    setHistory([]);
-    setValidation([]);
-    try {
-      const res = await fetch(`${apiBasePath}/${encodeURIComponent(linkId)}`);
-      const payload = await res.json();
-      if (!res.ok) {
-        setError(payload?.error || 'Failed to load manual link.');
-        return;
-      }
-      setLinkDetail(payload.link as ManualLinkDetail);
-      setTrades(dedupeTrades(payload.trades || []));
-      setHistory(payload.history || []);
-      if (Array.isArray(payload.validation)) {
-        setValidation(payload.validation as ManualLinkValidationItem[]);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to load manual link.';
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  }, [apiBasePath, dedupeTrades, linkId]);
 
   const handleSave = useCallback(async () => {
     if (!linkId) return;
@@ -215,7 +200,7 @@ export function ManualLinkDetailModal(
       }
       setAddTradesInput('');
       setRemoveTradesInput('');
-      await fetchLinkDetails();
+      refetchDetails();
       onUpdated?.();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to update manual link.';
@@ -229,12 +214,12 @@ export function ManualLinkDetailModal(
     apiBasePath,
     comment,
     currentUser,
-    fetchLinkDetails,
     linkId,
     linkReason,
     onUpdated,
     packageType,
     parseIdList,
+    refetchDetails,
     removeTradesInput,
     tags,
   ]);
@@ -279,11 +264,6 @@ export function ManualLinkDetailModal(
   ]);
 
   useEffect(() => {
-    if (!isOpen) return;
-    fetchLinkDetails();
-  }, [fetchLinkDetails, isOpen]);
-
-  useEffect(() => {
     if (!linkDetail) return;
     setPackageType(linkDetail.package_type || '');
     setLinkReason(linkDetail.link_reason || '');
@@ -291,6 +271,17 @@ export function ManualLinkDetailModal(
     setTags(Array.isArray(linkDetail.tags) ? linkDetail.tags : []);
     setTagInput('');
   }, [linkDetail]);
+
+  // Reset transient errors / inputs when the modal closes so the next
+  // open is clean. This mirrors the swaptions-internal lifecycle.
+  useEffect(() => {
+    if (isOpen) return;
+    setError(null);
+    setAddTradesInput('');
+    setRemoveTradesInput('');
+    setDeactivateReason('');
+    setValidation([]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -319,7 +310,7 @@ export function ManualLinkDetailModal(
           </button>
         </div>
         <div className="max-h-[75vh] overflow-y-auto p-4">
-          {loading ? (
+          {detailLoading ? (
             <div className="flex items-center gap-2 text-sm text-slate-300">
               <RefreshCw className="h-4 w-4 animate-spin" />
               Loading manual link...
@@ -612,12 +603,12 @@ export function ManualLinkDetailModal(
                   </div>
                 </div>
               </div>
-              {error && (
+              {currentError && (
                 <div
                   className="rounded border border-rose-800/70 bg-rose-950/40 px-3 py-2 text-xs text-rose-200"
                   data-testid="manual-link-detail-error"
                 >
-                  {error}
+                  {currentError}
                 </div>
               )}
             </div>
