@@ -143,7 +143,7 @@ describe('LegsSubTable confidence strip', () => {
     expect(html).not.toContain('Risk balance')
   })
 
-  it('exposes the inferred-type override badge when SPREADOVER_FLY collapses to FLY', () => {
+  it('does NOT surface the inferred-type override badge when the panel is collapsed (default)', () => {
     const html = renderToStaticMarkup(
       LegsSubTable({
         row: {
@@ -178,7 +178,12 @@ describe('LegsSubTable confidence strip', () => {
         } as any,
       }),
     )
-    expect(html).toContain('data-testid="confidence-inferred-P-OVR"')
-    expect(html).toContain('inferred → FLY')
+    // Override is gated behind the "Show Package Confidence Details"
+    // toggle — collapsed default markup should NOT carry the inferred
+    // chip / banner. Toggle button is still visible so the user can
+    // open it.
+    expect(html).not.toContain('data-testid="confidence-inferred-P-OVR"')
+    expect(html).not.toContain('Inferred type:')
+    expect(html).toContain('Show Package Confidence Details')
   })
 })

@@ -258,33 +258,13 @@ export function getColumns(
           .map((s) => `${s.passed ? '✓' : '✗'} ${s.label}: ${s.detail}`)
           .join('\n')
         const ccpSwitch = detectCcpSwitch(row)
-        // When the confidence scorer infers a base type from the per-leg
-        // PTS profile (SPREADOVER_FLY → FLY etc.), surface the inferred
-        // type as the primary badge and keep the original classifier
-        // tag visible in a struck-through chip so the override is
-        // auditable rather than silent.
-        const displayedType = conf.inferredType ?? row.package_type
-        const badgeTitle = conf.inferredType
-          ? `Type override: ${row.package_type} → ${conf.inferredType}\n${conf.inferredTypeReason ?? ''}`
-          : undefined
         return (
           <div className="flex items-center gap-1">
             <span
-              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packageTypeBadgeClassName(displayedType)}`}
-              title={badgeTitle}
-              data-testid={`pkg-type-${row.package_id}`}
+              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packageTypeBadgeClassName(row.package_type)}`}
             >
-              {packageTypeDisplayLabel(displayedType)}
+              {packageTypeDisplayLabel(row.package_type)}
             </span>
-            {conf.inferredType ? (
-              <span
-                className="inline-flex items-center rounded border border-amber-500/40 bg-amber-900/20 px-1 font-mono text-[9px] text-amber-200/80 line-through decoration-amber-300/60"
-                title={`Original classifier tag: ${row.package_type}`}
-                data-testid={`pkg-original-${row.package_id}`}
-              >
-                {packageTypeDisplayLabel(row.package_type)}
-              </span>
-            ) : null}
             <span
               className={`inline-flex items-center rounded px-1 py-0.5 font-mono text-[10px] ${toneClass}`}
               data-testid={`pkg-confidence-${row.package_id}`}
@@ -304,7 +284,7 @@ export function getColumns(
           </div>
         )
       }}
-      style={{ width: 200 }}
+      style={{ width: 160 }}
     />,
     <Column
       key="pkg_ind"
