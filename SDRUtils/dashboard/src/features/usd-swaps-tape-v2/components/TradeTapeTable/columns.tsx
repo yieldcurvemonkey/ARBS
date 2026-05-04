@@ -17,6 +17,7 @@ import {
   canonicalDisplayLabel,
   canonicalSourceVariants,
 } from '../../utils/canonicalDisplay'
+import { computePackageAdjustedDv01 } from '../../utils/packageAdjustedDv01'
 import { getFilterDisplayLabel } from './filter-utils'
 import { EconomicClassBadge, LifecyclePills, QualityBadges } from './RowBadges'
 import { TapeLabelCell } from './TapeLabelCell'
@@ -28,7 +29,11 @@ import {
 
 export { rowClassName } from './columns.helpers'
 
-export type MetricMode = 'dv01' | 'notional'
+// Phase 4 (Clarus design-doc §3.1 / §5.1): `pa_dv01` is the
+// package-adjusted DV01 — Σ|risk| / leg-count denominator. Toggling
+// rotates dv01 → pa_dv01 → notional → dv01 so traders can sanity-check
+// the broker-fee-equivalent metric without cluttering the rail.
+export type MetricMode = 'dv01' | 'pa_dv01' | 'notional'
 
 type ColumnConfig = {
   selection: boolean
@@ -106,8 +111,14 @@ export function getColumns(
   }
 
   const mode: MetricMode = config.metricMode ?? 'dv01'
-  const metricField = mode === 'dv01' ? 'total_risk' : 'total_notional'
-  const metricLabel = mode === 'dv01' ? 'Risk' : 'Notional'
+  const metricField =
+    mode === 'dv01'
+      ? 'total_risk'
+      : mode === 'pa_dv01'
+        ? 'package_adjusted_dv01'
+        : 'total_notional'
+  const metricLabel =
+    mode === 'dv01' ? 'Risk' : mode === 'pa_dv01' ? 'PA-DV01' : 'Notional'
   const metricSummary = summaryFor(metricField, config.activeFilters)
   const metricHeader = (
     <div className="flex flex-col leading-tight">
@@ -309,13 +320,22 @@ export function getColumns(
       dataType="numeric"
       {...compactFilterMenuProps}
       header={metricHeader}
-      body={(row: UsdSwapTapeRow) => (
-        <span className="block text-right font-mono text-[14px] font-bold tracking-tight text-slate-50">
-          {mode === 'dv01'
+      body={(row: UsdSwapTapeRow) => {
+        const display =
+          mode === 'dv01'
             ? formatDv01(row.total_risk ?? null, { signNegativeOnly: true })
-            : formatNotional(row.total_notional ?? null, { compact: true })}
-        </span>
-      )}
+            : mode === 'pa_dv01'
+              ? formatDv01(
+                  row.package_adjusted_dv01 ?? computePackageAdjustedDv01(row),
+                  { signNegativeOnly: true },
+                )
+              : formatNotional(row.total_notional ?? null, { compact: true })
+        return (
+          <span className="block text-right font-mono text-[14px] font-bold tracking-tight text-slate-50">
+            {display}
+          </span>
+        )
+      }}
       style={{ width: 96 }}
     />,
     <Column

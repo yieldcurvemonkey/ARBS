@@ -132,6 +132,13 @@ export type UsdSwapTapeRow = SofrSwapTapeRow & {
   // first leg by the API materialiser. See `UsdSwapTapeLeg` for the
   // canonicalisation rationale.
   canonical_underlier_key?: string | null
+  // Phase 4 (Clarus design-doc §3.1 / §5.1): package-adjusted DV01 —
+  // Σ|risk| across legs ÷ leg-count denominator. Mirrors Clarus's
+  // preferred volume metric so analytics that bucket by package_id
+  // don't triple-count flies. Computed client-side from `legs_json`
+  // by `computePackageAdjustedDv01` until the API materialiser emits
+  // it directly.
+  package_adjusted_dv01?: number | null
   execution_session?: string | null
   tape_label?: string | null
   fomc_meeting_label?: string | null
