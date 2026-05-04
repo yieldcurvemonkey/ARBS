@@ -12,6 +12,7 @@ import 'primeicons/primeicons.css'
 import { TradeTapeTable } from './TradeTapeTable/TradeTapeTable'
 import { ManualLinksDialog } from './ManualLinksDialog/ManualLinksDialog'
 import { AnalyticsPanel } from './AnalyticsPanel'
+import { groupLinkedRows } from '@/lib/manual-links-ui/grouping'
 import {
   useColumnFilters,
   useFocusedTrade,
@@ -39,6 +40,12 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   const tape = useTradeTapeData({
     columnFilters: orchestratorColumnFilters.serializedColumnFilters,
   })
+
+  // Cluster manually-linked rows so they render contiguously in the
+  // tape. Pure transform - returns the input array unchanged when no
+  // links are present, so the unfiltered initial render keeps its
+  // memo-equality guarantees.
+  const groupedRows = useMemo(() => groupLinkedRows(tape.rows), [tape.rows])
 
   // When the user checks a row, make the first-selected row the focus so
   // the analytics dock tracks their attention without a separate click.
@@ -72,7 +79,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
       <div className="usd-swaps-tape-shell flex h-full min-h-0 flex-col bg-slate-950 text-slate-100 pb-12">
         <div className="flex flex-1 min-h-0 overflow-hidden">
           <TradeTapeTable
-            rows={tape.rows}
+            rows={groupedRows}
             loading={tape.loading}
             loadingMore={tape.loadingMore}
             onLoadMore={tape.loadMore}
