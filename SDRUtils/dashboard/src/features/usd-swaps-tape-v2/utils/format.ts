@@ -326,7 +326,14 @@ export function formatOtherLvl(input: {
   )
   let ptsLine: string
   if (legPtsNonNull.length >= 1) {
-    const parts = legPtsNonNull.map((v) => formatPackageSpread(Number(v)))
+    const allLegPtsPresent = (input.legPts ?? []).length === legPtsNonNull.length
+    const allLegPtsIdentical =
+      allLegPtsPresent &&
+      legPtsNonNull.length > 1 &&
+      legPtsNonNull.every((v) => v === legPtsNonNull[0])
+    const parts = allLegPtsIdentical
+      ? [formatPackageSpread(Number(legPtsNonNull[0]))]
+      : legPtsNonNull.map((v) => formatPackageSpread(Number(v)))
     ptsLine = `PTS: ${parts.join(' / ')}`
   } else if (input.pts === null || input.pts === undefined || Number.isNaN(input.pts)) {
     ptsLine = `PTS: ${EMPTY_VALUE}`

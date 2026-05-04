@@ -167,7 +167,7 @@ function formatBp(value: number): string {
  *                   wild (e.g. accidental ÷1000 from a units widget)
  */
 const PTS_SCALE_FACTORS: readonly number[] = [
-  1, 100, 0.01, 10_000, 0.0001, 1000, 0.001,
+  1, 10, 0.1, 100, 0.01, 1000, 0.001, 10_000, 0.0001,
 ] as const
 
 type ScaleMatch = {
@@ -260,6 +260,15 @@ function ptsMatchSignal(
   }
   const reported = Number(reportedPts)
   const directDelta = Math.abs(derivedBp - reported)
+  const scale = findScaleMatch(derivedBp, reported, bp_tol)
+  if (scale && scale.factor !== 1 && scale.residual < directDelta) {
+    return {
+      name: 'pts_match',
+      label: 'PTS match',
+      passed: true,
+      detail: `derived ${formatBp(derivedBp)}bp vs reported ${formatBp(reported)}bp matches at ${scale.factor}× scale (Δ ${formatBp(scale.residual)}, tol ±${bp_tol}); likely unit mismatch (decimal/percent/bps)`,
+    }
+  }
   if (directDelta <= bp_tol) {
     return {
       name: 'pts_match',
@@ -268,7 +277,6 @@ function ptsMatchSignal(
       detail: `derived ${formatBp(derivedBp)}bp vs reported ${formatBp(reported)}bp (Δ ${formatBp(directDelta)}, tol ±${bp_tol})`,
     }
   }
-  const scale = findScaleMatch(derivedBp, reported, bp_tol)
   if (scale && scale.factor !== 1) {
     return {
       name: 'pts_match',
@@ -461,6 +469,20 @@ function matchedMaturitySignals(row: UsdSwapTapeRow): ConfidenceSignal[] {
   ]
 }
 
+function fixedRateSpreadToBp(
+  spread: number,
+  rates: Array<number | null>,
+): number {
+  const finiteRates = rates.filter(
+    (r): r is number => r !== null && Number.isFinite(r),
+  )
+  if (!finiteRates.length) return spread * 100
+  const maxAbsRate = Math.max(...finiteRates.map((r) => Math.abs(r)))
+  // fixed_rate arrives as either decimal rates (0.0384) or percent points
+  // (3.84). Convert the derived spread into bp using the observed leg unit.
+  return spread * (maxAbsRate < 1 ? 10_000 : 100)
+}
+
 function flySignals(row: UsdSwapTapeRow, tol: Tolerances): ConfidenceSignal[] {
   const legsRaw = (row.legs_json ?? []) as UsdSwapTapeLeg[]
   const legs = sortLegsTenorAsc(legsRaw)
@@ -473,7 +495,9 @@ function flySignals(row: UsdSwapTapeRow, tol: Tolerances): ConfidenceSignal[] {
   const rB = belly ? legNumberOr(belly, 'fixed_rate') : null
   const rK = back ? legNumberOr(back, 'fixed_rate') : null
   const derivedBp =
-    rF !== null && rB !== null && rK !== null ? (2 * rB - rF - rK) * 100 : null
+    rF !== null && rB !== null && rK !== null
+      ? fixedRateSpreadToBp(2 * rB - rF - rK, [rF, rB, rK])
+      : null
 
   // Risk balance for fly: belly + wing1 + wing2 ≈ 0.
   // Use weights [1, 1, 1] applied to [front, belly, back] risk values directly.
@@ -512,7 +536,10 @@ function curveSignals(row: UsdSwapTapeRow, tol: Tolerances): ConfidenceSignal[] 
   const back = legs[1]
   const r1 = front ? legNumberOr(front, 'fixed_rate') : null
   const r2 = back ? legNumberOr(back, 'fixed_rate') : null
-  const derivedBp = r1 !== null && r2 !== null ? (r2 - r1) * 100 : null
+  const derivedBp =
+    r1 !== null && r2 !== null
+      ? fixedRateSpreadToBp(r2 - r1, [r1, r2])
+      : null
 
   return [
     {

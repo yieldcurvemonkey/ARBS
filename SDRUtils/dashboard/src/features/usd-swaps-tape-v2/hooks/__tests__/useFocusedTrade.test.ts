@@ -70,4 +70,39 @@ describe('normalizeFocusedTrade', () => {
     expect(focused?.fixed_rate_bps).toBeCloseTo(-23.5, 2)
     expect(focused?.notional_usd).toBe(540_000_000)
   })
+
+  it('uses the inferred base package type for analytics trade_type', () => {
+    const focused = normalizeFocusedTrade(
+      row({
+        package_type: 'SPREADOVER_FLY',
+        package_indicator: true,
+        package_transaction_spread: 0.0000125,
+        legs_json: [
+          {
+            tenor_years: 8,
+            risk: -1_500,
+            notional: 220_000_000,
+            fixed_rate: 0.03795,
+            package_transaction_spread: 0.0000125,
+          } as any,
+          {
+            tenor_years: 9,
+            risk: 3_000,
+            notional: 400_000_000,
+            fixed_rate: 0.0384125,
+            package_transaction_spread: 0.0000125,
+          } as any,
+          {
+            tenor_years: 10,
+            risk: -1_500,
+            notional: 180_000_000,
+            fixed_rate: 0.0388625,
+            package_transaction_spread: 0.0000125,
+          } as any,
+        ],
+      }),
+    )
+
+    expect(focused?.trade_type).toBe('FLY')
+  })
 })

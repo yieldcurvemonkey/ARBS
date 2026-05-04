@@ -360,6 +360,7 @@ function PackageConfidencePanel({ row }: { row: UsdSwapTapeRow }): JSX.Element {
   const [showDetails, setShowDetails] = useState(false)
   const detailsId = `confidence-details-${row.package_id}`
   const overrideActive = confidence.inferredType !== null
+  const displayedType = confidence.inferredType ?? confidence.resolvedType
   return (
     <div
       className="mb-2 rounded-lg border border-slate-800/80 bg-slate-900/60 px-3 py-2"
@@ -373,7 +374,7 @@ function PackageConfidencePanel({ row }: { row: UsdSwapTapeRow }): JSX.Element {
           {confidence.score}/{confidence.total}
         </span>
         <span className="font-mono text-[10px] text-slate-500">
-          ({confidence.resolvedType})
+          ({displayedType})
         </span>
         <button
           type="button"
@@ -598,7 +599,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                   {formatDv01(summary.risk)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
-                  {formatRate(summary.rate)}
+                  {formatRate(summary.rate, { precision: 5 })}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
                   {summaryOpaText}

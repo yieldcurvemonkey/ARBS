@@ -253,6 +253,7 @@ export function getColumns(
       )}
       body={(row: UsdSwapTapeRow) => {
         const conf = computePackageConfidence(row)
+        const displayedType = conf.inferredType ?? row.package_type
         const toneClass = PACKAGE_CONFIDENCE_TONES[conf.tone]
         const tooltip = conf.signals
           .map((s) => `${s.passed ? '✓' : '✗'} ${s.label}: ${s.detail}`)
@@ -261,9 +262,14 @@ export function getColumns(
         return (
           <div className="flex items-center gap-1">
             <span
-              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packageTypeBadgeClassName(row.package_type)}`}
+              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packageTypeBadgeClassName(displayedType)}`}
+              title={
+                conf.inferredType
+                  ? `Original classifier tag: ${row.package_type ?? EMPTY_VALUE}\n${conf.inferredTypeReason ?? ''}`
+                  : undefined
+              }
             >
-              {packageTypeDisplayLabel(row.package_type)}
+              {packageTypeDisplayLabel(displayedType)}
             </span>
             <span
               className={`inline-flex items-center rounded px-1 py-0.5 font-mono text-[10px] ${toneClass}`}

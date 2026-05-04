@@ -184,6 +184,26 @@ describe('LegsSubTable confidence strip', () => {
     // open it.
     expect(html).not.toContain('data-testid="confidence-inferred-P-OVR"')
     expect(html).not.toContain('Inferred type:')
+    expect(html).toContain('(FLY)')
     expect(html).toContain('Show Package Confidence Details')
+  })
+
+  it('renders the summary derived rate with extra precision', () => {
+    const html = renderToStaticMarkup(
+      LegsSubTable({
+        row: {
+          package_id: 'P-SUMMARY',
+          package_type: 'FLY',
+          package_indicator: true,
+          n_package_legs: 3,
+          legs_json: [
+            { tenor_years: 8, risk: -1_500, fixed_rate: 0.03795, trade_id: 'L1' },
+            { tenor_years: 9, risk: 3_000, fixed_rate: 0.0384125, trade_id: 'L2' },
+            { tenor_years: 10, risk: -1_500, fixed_rate: 0.0388625, trade_id: 'L3' },
+          ],
+        } as any,
+      }),
+    )
+    expect(html).toContain('0.00125%')
   })
 })

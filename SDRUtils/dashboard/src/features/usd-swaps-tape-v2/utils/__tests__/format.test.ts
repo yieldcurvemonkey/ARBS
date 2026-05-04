@@ -262,6 +262,16 @@ describe('formatOtherLvl', () => {
     expect(result.ptsLine).toBe('PTS: 0.0025 / -0.0005')
   })
 
+  it('collapses identical per-leg PTS values to a single print', () => {
+    const result = formatOtherLvl({
+      legOpa: [null, null, null],
+      legPts: [0.0000125, 0.0000125, 0.0000125],
+      ptp: null,
+      pts: 0.0000125,
+    })
+    expect(result.ptsLine).toBe('PTS: 0.000013')
+  })
+
   it('falls back to the scalar pts when legPts is empty or all nullish', () => {
     const result = formatOtherLvl({
       legOpa: [],

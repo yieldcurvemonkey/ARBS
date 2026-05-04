@@ -646,6 +646,35 @@ describe('computePackageConfidence — pts_match scale-aware', () => {
     expect(sig!.detail).not.toMatch(/unit mismatch/)
   })
 
+  it('passes pts_match across a one-order PTS scale mismatch', () => {
+    const result = computePackageConfidence(
+      flyRow({ package_transaction_spread: 2 }),
+    )
+    const sig = result.signals.find((s) => s.name === 'pts_match')
+    expect(sig!.passed).toBe(true)
+    expect(sig!.detail).toMatch(/10.*scale/)
+  })
+
+  it('derives bp correctly when fixed_rate legs arrive as decimal rates', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'FLY',
+        package_indicator: true,
+        n_package_legs: 3,
+        package_transaction_spread: 0.0000125,
+        legs_json: [
+          curveLeg({ tenor_years: 8, risk: -1_500, fixed_rate: 0.03795 }),
+          curveLeg({ tenor_years: 9, risk: 3_000, fixed_rate: 0.0384125 }),
+          curveLeg({ tenor_years: 10, risk: -1_500, fixed_rate: 0.0388625 }),
+        ],
+      }),
+    )
+    const sig = result.signals.find((s) => s.name === 'pts_match')
+    expect(sig!.passed).toBe(true)
+    expect(sig!.detail).toMatch(/derived 0\.125bp/)
+    expect(sig!.detail).toMatch(/10000.*scale/)
+  })
+
   it('still fails pts_match when derived and reported diverge by a non-power-of-10 ratio', () => {
     // derived = 20 bps, reported = 7 — ratio 20/7 ≈ 2.86, no scale fits.
     const result = computePackageConfidence(

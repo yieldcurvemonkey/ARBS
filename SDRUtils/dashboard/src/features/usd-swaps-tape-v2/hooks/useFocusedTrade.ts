@@ -9,6 +9,7 @@ import type {
 } from '../components/AnalyticsPanel/analytics-types'
 import { computeLegSummary } from '../components/TradeTapeTable/LegsSubTable.helpers'
 import type { UsdSwapTapeLeg, UsdSwapTapeRow } from '../types'
+import { computePackageConfidence } from '../utils/packageConfidence'
 
 function aggregateLeg<T extends number | null | undefined>(
   legs: UsdSwapTapeLeg[] | undefined,
@@ -90,12 +91,16 @@ export function normalizeFocusedTrade(row: UsdSwapTapeRow | null): FocusedTrade 
   const platform = inferPlatform(row)
   const side = inferSide(row)
   const legLifecycle = firstLeg?.lifecycle_type ?? null
+  const confidence = computePackageConfidence(row)
+  const analyticsTradeType = String(
+    confidence.inferredType ?? row.trade_type ?? row.package_type ?? 'OUTRIGHT',
+  )
   return {
     id: String(row.package_id ?? 'UNKNOWN'),
     tape_label: label,
     package_structure: String(row.package_structure ?? row.package_type ?? 'OUTRIGHT'),
     package_tenors: row.package_tenors ?? null,
-    trade_type: String(row.trade_type ?? row.package_type ?? 'OUTRIGHT'),
+    trade_type: analyticsTradeType,
     tenor_years: tenorYears,
     fixed_rate_bps: +fixedRateBps.toFixed(2),
     weighted_fixed_rate: weightedRate,
