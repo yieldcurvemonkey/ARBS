@@ -154,7 +154,95 @@ function formatBp(value: number): string {
   return value.toFixed(3).replace(/\.?0+$/, '')
 }
 
-/** Pass when derived spread (in bp) is within ptsMatchBp of reported PTS. */
+/**
+ * Scale factors we accept when deciding whether two values "match up
+ * to a clean order of magnitude". Order matters — 1 is checked first
+ * so an exact match wins over a 100× match when both pass.
+ *
+ * The cases we're trying to absorb:
+ *   100 / 0.01      decimal ↔ percent  (1 decimal = 100%, 1% = 0.01)
+ *   10000 / 0.0001  decimal ↔ bps      (1 decimal = 10000bp, 1bp = 0.0001)
+ *   100 / 0.01      percent ↔ bps      (1% = 100bp)
+ *   1000 / 0.001    catch-all for misencoded prints we've seen in the
+ *                   wild (e.g. accidental ÷1000 from a units widget)
+ */
+const PTS_SCALE_FACTORS: readonly number[] = [
+  1, 100, 0.01, 10_000, 0.0001, 1000, 0.001,
+] as const
+
+type ScaleMatch = {
+  factor: number
+  /** |a - b * factor|, so the residual after applying the scale. */
+  residual: number
+}
+
+/**
+ * Relative tolerance applied when checking factor ≠ 1 matches. Held
+ * tight (5%) so a unit-mismatch (which would produce residual = 0)
+ * passes cleanly while random noise across orders of magnitude
+ * doesn't sneak through.
+ */
+const SCALE_REL_TOL = 0.05
+
+/**
+ * Try to express `a` as `b * factor` for any factor in `scales`.
+ * Returns the best (smallest-residual) match or null.
+ *
+ * Tolerance is split: the factor=1 case uses the absolute `tol`
+ * (preserves existing PTS-match semantics — sub-bp slack on
+ * sub-bp values). All non-1 factors use a relative tolerance
+ * (|a - b·f| / max(|a|, |b·f|) ≤ SCALE_REL_TOL) because absolute
+ * slack at one scale is enormous slack at another and would
+ * false-positive on random noise.
+ *
+ * `b === 0` short-circuits to a direct |a| ≤ tol check at factor 1
+ * so we don't divide-by-zero our way into a misleading match.
+ */
+function findScaleMatch(
+  a: number,
+  b: number,
+  tol: number,
+  scales: readonly number[] = PTS_SCALE_FACTORS,
+): ScaleMatch | null {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  if (b === 0) {
+    return Math.abs(a) <= tol ? { factor: 1, residual: Math.abs(a) } : null
+  }
+  let best: ScaleMatch | null = null
+  for (const f of scales) {
+    const scaled = b * f
+    const residual = Math.abs(a - scaled)
+    let fits = false
+    if (f === 1) {
+      fits = residual <= tol
+    } else {
+      const denom = Math.max(Math.abs(a), Math.abs(scaled))
+      // Guard the division: if both sides round to ~0, fall back to
+      // absolute-tolerance even for non-1 factors.
+      fits = denom < 1e-12 ? residual <= tol : residual / denom <= SCALE_REL_TOL
+    }
+    if (fits) {
+      if (best === null || residual < best.residual) {
+        best = { factor: f, residual }
+      }
+    }
+  }
+  return best
+}
+
+/**
+ * Pass when derived spread (in bp) is within ptsMatchBp of reported
+ * PTS — directly OR up to a clean order-of-magnitude scale factor.
+ *
+ * Rationale: PTS in the SDR feed is recorded in inconsistent units
+ * (sometimes decimal, sometimes percent, sometimes bps). The legs'
+ * `fixed_rate` units we derive from also drift between decimal and
+ * percent forms. When derived and reported differ only by a clean
+ * factor of 100 / 10000 / etc., it's a unit-encoding mismatch and the
+ * underlying spread actually agrees — the override should still fire
+ * but the detail string surfaces the implied scale so an analyst can
+ * audit the call.
+ */
 function ptsMatchSignal(
   derivedBp: number | null,
   reportedPts: number | null | undefined,
@@ -171,12 +259,29 @@ function ptsMatchSignal(
     }
   }
   const reported = Number(reportedPts)
-  const delta = Math.abs(derivedBp - reported)
+  const directDelta = Math.abs(derivedBp - reported)
+  if (directDelta <= bp_tol) {
+    return {
+      name: 'pts_match',
+      label: 'PTS match',
+      passed: true,
+      detail: `derived ${formatBp(derivedBp)}bp vs reported ${formatBp(reported)}bp (Δ ${formatBp(directDelta)}, tol ±${bp_tol})`,
+    }
+  }
+  const scale = findScaleMatch(derivedBp, reported, bp_tol)
+  if (scale && scale.factor !== 1) {
+    return {
+      name: 'pts_match',
+      label: 'PTS match',
+      passed: true,
+      detail: `derived ${formatBp(derivedBp)}bp vs reported ${formatBp(reported)}bp matches at ${scale.factor}× scale (Δ ${formatBp(scale.residual)}, tol ±${bp_tol}); likely unit mismatch (decimal/percent/bps)`,
+    }
+  }
   return {
     name: 'pts_match',
     label: 'PTS match',
-    passed: delta <= bp_tol,
-    detail: `derived ${formatBp(derivedBp)}bp vs reported ${formatBp(reported)}bp (Δ ${formatBp(delta)}, tol ±${bp_tol})`,
+    passed: false,
+    detail: `derived ${formatBp(derivedBp)}bp vs reported ${formatBp(reported)}bp (Δ ${formatBp(directDelta)}, tol ±${bp_tol})`,
   }
 }
 
@@ -209,13 +314,18 @@ function legPts(leg: UsdSwapTapeLeg): number | null {
  * and should display as the base type. Triggers when:
  *
  *   1. Every leg has a per-leg PTS populated.
- *   2. Every per-leg PTS equals the package PTS within `ptsMatchBp`.
+ *   2. Every per-leg PTS equals the package PTS — directly within
+ *      `ptsMatchBp`, OR up to a clean order-of-magnitude scale factor
+ *      (handles decimal-vs-percent-vs-bps unit confusion in the SDR
+ *      feed). When a non-1× factor is needed, the same factor must
+ *      apply to every leg.
  *
  * Rationale: a real SPREADOVER package has a UST hedge leg whose
  * implied spread is computed off a different leg's PTS, so per-leg
  * PTS values diverge. When all per-leg PTSes collapse to the package
- * PTS, the upstream classifier almost certainly fired the
- * SPREADOVER_* heuristic on noise — it's a base-type FLY / CURVE.
+ * PTS (modulo a unit mismatch), the upstream classifier almost
+ * certainly fired the SPREADOVER_* heuristic on noise — it's a
+ * base-type FLY / CURVE.
  */
 function inferBaseTypeOverride(
   resolvedType: string,
@@ -237,15 +347,33 @@ function inferBaseTypeOverride(
     if (v == null) return null
     perLeg.push(v)
   }
-  const allMatchPackage = perLeg.every(
-    (v) => Math.abs(v - pkgPtsNum) <= tol.ptsMatchBp,
-  )
-  if (!allMatchPackage) return null
+
+  // Match every leg against the package PTS using the same scale-
+  // aware logic as ptsMatchSignal. findScaleMatch returns the best
+  // (smallest-residual) factor per leg; the override fires only when
+  // every leg lands on the SAME factor. Heterogeneous factors aren't
+  // a unit mismatch — they're random divergence and should NOT fire.
+  const matches = perLeg.map((v) => findScaleMatch(v, pkgPtsNum, tol.ptsMatchBp))
+  if (matches.some((m) => m === null)) return null
+  const factor = matches[0]!.factor
+  if (!matches.every((m) => m!.factor === factor)) return null
+
   const baseType = resolvedType === 'SPREADOVER_FLY' ? 'FLY' : 'CURVE'
-  const formatted = formatBp(pkgPtsNum)
+  const pkgFmt = formatBp(pkgPtsNum)
+  const legFmts = perLeg.map((v) => formatBp(v))
+  const legSummary = legFmts.every((s) => s === legFmts[0])
+    ? legFmts[0]
+    : `[${legFmts.join(', ')}]`
+
+  if (factor === 1) {
+    return {
+      type: baseType,
+      reason: `every per-leg PTS = ${legSummary} matches package PTS = ${pkgFmt} (within ±${tol.ptsMatchBp}bp); SPREADOVER_${baseType} hedge leg expected to differ`,
+    }
+  }
   return {
     type: baseType,
-    reason: `every per-leg PTS = ${formatted} matches package PTS = ${formatted} (within ±${tol.ptsMatchBp}bp); SPREADOVER_${baseType === 'FLY' ? 'FLY' : 'CURVE'} hedge leg expected to differ`,
+    reason: `every per-leg PTS = ${legSummary} matches package PTS = ${pkgFmt} at ${factor}× scale (likely decimal/percent/bps unit mismatch in the SDR feed); SPREADOVER_${baseType} hedge leg expected to differ`,
   }
 }
 

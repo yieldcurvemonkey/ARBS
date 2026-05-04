@@ -501,4 +501,157 @@ describe('computePackageConfidence — inferredType override (SPREADOVER → bas
     )
     expect(result.inferredType).toBeNull()
   })
+
+  it('triggers when every per-leg PTS matches package PTS at a clean 100× scale (decimal/percent unit mismatch)', () => {
+    // Package PTS recorded in one unit (e.g. bps form, 0.00125),
+    // per-leg PTS recorded in another (e.g. decimal, 0.0000125) —
+    // they're the same underlying value, just unit-misencoded.
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'SPREADOVER_FLY',
+        package_indicator: true,
+        n_package_legs: 3,
+        package_transaction_spread: 0.00125,
+        legs_json: [
+          {
+            ...flyLeg({ tenor_years: 8 }),
+            package_transaction_spread: 0.0000125,
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 9 }),
+            package_transaction_spread: 0.0000125,
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 10 }),
+            package_transaction_spread: 0.0000125,
+          } as any,
+        ],
+      }),
+    )
+    expect(result.inferredType).toBe('FLY')
+    expect(result.inferredTypeReason).toMatch(/0\.01× scale/)
+    expect(result.inferredTypeReason).toMatch(/unit mismatch/)
+  })
+
+  it('triggers SPREADOVER_CURVE → CURVE at a 10000× scale (decimal ↔ bps)', () => {
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'SPREADOVER_CURVE',
+        package_indicator: true,
+        n_package_legs: 2,
+        package_transaction_spread: 50,
+        legs_json: [
+          {
+            ...flyLeg({ tenor_years: 5, risk: -5_000, fixed_rate: 3.5 }),
+            // 0.005 decimal vs 50 bps (10000× scale)
+            package_transaction_spread: 0.005,
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 4.0 }),
+            package_transaction_spread: 0.005,
+          } as any,
+        ],
+      }),
+    )
+    expect(result.inferredType).toBe('CURVE')
+    expect(result.inferredTypeReason).toMatch(/× scale/)
+  })
+
+  it('does NOT trigger when per-leg PTS scale factors are inconsistent across legs', () => {
+    // One leg matches at 100×, the other at 1× — that's not a unit
+    // confusion, it's heterogeneous noise. Should NOT collapse.
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'SPREADOVER_CURVE',
+        package_indicator: true,
+        n_package_legs: 2,
+        package_transaction_spread: 0.5,
+        legs_json: [
+          {
+            ...flyLeg({ tenor_years: 5 }),
+            package_transaction_spread: 0.5,
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 10 }),
+            package_transaction_spread: 0.005,
+          } as any,
+        ],
+      }),
+    )
+    expect(result.inferredType).toBeNull()
+  })
+
+  it('does NOT trigger when no clean order-of-magnitude scale fits', () => {
+    // 7× isn't in the allowed scale list — that's just divergence.
+    const result = computePackageConfidence(
+      baseRow({
+        package_type: 'SPREADOVER_FLY',
+        package_indicator: true,
+        n_package_legs: 3,
+        package_transaction_spread: 0.7,
+        legs_json: [
+          {
+            ...flyLeg({ tenor_years: 8 }),
+            package_transaction_spread: 0.1,
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 9 }),
+            package_transaction_spread: 0.1,
+          } as any,
+          {
+            ...flyLeg({ tenor_years: 10 }),
+            package_transaction_spread: 0.1,
+          } as any,
+        ],
+      }),
+    )
+    expect(result.inferredType).toBeNull()
+  })
+})
+
+describe('computePackageConfidence — pts_match scale-aware', () => {
+  const flyRow = (overrides: Partial<UsdSwapTapeRow> = {}): UsdSwapTapeRow =>
+    baseRow({
+      package_type: 'FLY',
+      package_indicator: true,
+      n_package_legs: 3,
+      legs_json: [
+        curveLeg({ tenor_years: 5, risk: -2_500, fixed_rate: 3.5 }),
+        curveLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 3.85 }),
+        curveLeg({ tenor_years: 30, risk: -2_500, fixed_rate: 4.0 }),
+      ],
+      ...overrides,
+    })
+
+  it('passes pts_match when derived bps and reported PTS differ by exactly 100× (scale-aware)', () => {
+    // derived bfly = (2*3.85 - 3.5 - 4.0) * 100 = 20 bps.
+    // reported PTS in decimal-form = 0.2 — 100× scale.
+    const result = computePackageConfidence(
+      flyRow({ package_transaction_spread: 0.2 }),
+    )
+    const sig = result.signals.find((s) => s.name === 'pts_match')
+    expect(sig).toBeDefined()
+    expect(sig!.passed).toBe(true)
+    expect(sig!.detail).toMatch(/× scale/)
+    expect(sig!.detail).toMatch(/unit mismatch/)
+  })
+
+  it('still passes pts_match when derived and reported are in the same unit (no scale annotation)', () => {
+    const result = computePackageConfidence(
+      flyRow({ package_transaction_spread: 20 }),
+    )
+    const sig = result.signals.find((s) => s.name === 'pts_match')
+    expect(sig!.passed).toBe(true)
+    expect(sig!.detail).not.toMatch(/× scale/)
+    expect(sig!.detail).not.toMatch(/unit mismatch/)
+  })
+
+  it('still fails pts_match when derived and reported diverge by a non-power-of-10 ratio', () => {
+    // derived = 20 bps, reported = 7 — ratio 20/7 ≈ 2.86, no scale fits.
+    const result = computePackageConfidence(
+      flyRow({ package_transaction_spread: 7 }),
+    )
+    const sig = result.signals.find((s) => s.name === 'pts_match')
+    expect(sig!.passed).toBe(false)
+  })
 })
