@@ -11,6 +11,8 @@ export { RfrAdoptionCard } from './RfrAdoptionCard'
 export type { RfrAdoptionCardProps } from './RfrAdoptionCard'
 export { SwapSpreadVwapCard } from './SwapSpreadVwapCard'
 export type { SwapSpreadVwapCardProps } from './SwapSpreadVwapCard'
+export { CcpSwitchCard } from './CcpSwitchCard'
+export type { CcpSwitchCardProps } from './CcpSwitchCard'
 export * from './analytics-types'
 export * from './analytics-format'
 export {

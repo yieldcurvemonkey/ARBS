@@ -18,6 +18,7 @@ import {
   canonicalSourceVariants,
 } from '../../utils/canonicalDisplay'
 import { computePackageAdjustedDv01 } from '../../utils/packageAdjustedDv01'
+import { detectCcpSwitch } from '../../utils/ccpSwitchDetector'
 import { getFilterDisplayLabel } from './filter-utils'
 import { EconomicClassBadge, LifecyclePills, QualityBadges } from './RowBadges'
 import { TapeLabelCell } from './TapeLabelCell'
@@ -249,13 +250,27 @@ export function getColumns(
         'Pkg',
         summaryFor('package_type', config.activeFilters),
       )}
-      body={(row: UsdSwapTapeRow) => (
-        <span
-          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packageTypeBadgeClassName(row.package_type)}`}
-        >
-          {packageTypeDisplayLabel(row.package_type)}
-        </span>
-      )}
+      body={(row: UsdSwapTapeRow) => {
+        const ccpSwitch = detectCcpSwitch(row)
+        return (
+          <span className="inline-flex items-center gap-1">
+            <span
+              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packageTypeBadgeClassName(row.package_type)}`}
+            >
+              {packageTypeDisplayLabel(row.package_type)}
+            </span>
+            {ccpSwitch.isCcpSwitch ? (
+              <span
+                title={`CCP switch detected: ${ccpSwitch.fromCcp} → ${ccpSwitch.toCcp} at ${ccpSwitch.tenorYears}Y`}
+                data-testid={`ccp-switch-${row.package_id}`}
+                className="rounded border border-purple-500/60 bg-purple-900/40 px-1 text-[9.5px] font-semibold text-purple-200"
+              >
+                CCP↔
+              </span>
+            ) : null}
+          </span>
+        )
+      }}
       style={{ width: 92 }}
     />,
     <Column
