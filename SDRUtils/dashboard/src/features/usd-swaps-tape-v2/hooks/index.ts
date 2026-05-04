@@ -33,3 +33,9 @@ export { useExtremesData } from './useExtremesData'
 export type { UseExtremesDataReturn } from './useExtremesData'
 export { useAnalyticsTimeseries } from './useAnalyticsTimeseries'
 export type { UseAnalyticsTimeseriesReturn } from './useAnalyticsTimeseries'
+export { useAnalyticsSequence, MAX_SEQUENCE } from './useAnalyticsSequence'
+export type {
+  SequenceOptions,
+  SequencePerTradeEntry,
+  UseAnalyticsSequenceReturn,
+} from './useAnalyticsSequence'
