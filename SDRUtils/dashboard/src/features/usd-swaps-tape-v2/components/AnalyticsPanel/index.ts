@@ -5,6 +5,8 @@ export { AssumptionsStrip } from './AssumptionsStrip'
 export { TimeseriesTab } from './TimeseriesTab'
 export { TradeRarityTab } from './TradeRarityTab'
 export { TradedLevelsTab } from './TradedLevelsTab'
+export { UnderlierMixCard } from './UnderlierMixCard'
+export type { UnderlierMixCardProps } from './UnderlierMixCard'
 export * from './analytics-types'
 export * from './analytics-format'
 export {
