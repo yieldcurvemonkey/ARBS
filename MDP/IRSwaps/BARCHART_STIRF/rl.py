@@ -56,6 +56,7 @@ _CALIBRATION_CFG_KEYS = frozenset(
         "serff_skew_extrap_weight",
         "serff_skew_extrapolate",
         "sofr_reference_key",
+        "stirf_target_weight",
     }
 )
 
@@ -267,6 +268,7 @@ def _build_curve_from_pricers_core(
     sorted_pricers = _sort_pricers_for_solver(pricers)
     node_reference_key = cfg.get("node_reference_key", cfg["reference_key"])
     interpolation = cfg.get("interpolation", "log_linear")
+    stirf_target_weight = float(cfg.get("stirf_target_weight", 1.0) or 1.0)
 
     def one_day_irs(eff_date, curve_key):
         cal_name = RATESLIB_CURVE_DEFINITIONS[curve_key]["Calendar"]
@@ -461,6 +463,8 @@ def _build_curve_from_pricers_core(
     instruments = instruments + bflies
     s = s + pseudo_targets
     weights = [1.0] * len(sorted_pricers) + [1e-8] * len(bflies)
+    if stirf_target_weight != 1.0:
+        weights = [stirf_target_weight] * len(sorted_pricers) + [1e-8] * len(bflies)
 
     rl_solver = rl.Solver(
         curves=[rl_curve],
@@ -1010,6 +1014,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 "reference_key": "USD-SOFR-1D",
                 "max_tenor_from_timestamp_months": 39,
                 "rl_irs_spec": "usd_irs_lt_2y",
+                "stirf_target_weight": 1e6,
             },
             "USD-SOFR-1D-Q16STIRT": {
                 "fetch_pricers_func": self.stirf_mdp.get_data,
@@ -1579,33 +1584,34 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
 
     @staticmethod
     def _curve_cfg_hash(cfg: Dict[str, Any]) -> str:
-        cfg_blob = "|".join(
-            [
-                str(cfg.get("reference_key", "")),
-                str(cfg.get("node_reference_key", cfg.get("reference_key", ""))),
-                str(cfg.get("sofr_reference_key", "")),
-                str(cfg.get("rl_irs_spec", "")),
-                str(cfg.get("interpolation", "log_linear")),
-                str(int(bool(cfg.get("serff_skew", False)))),
-                str(int(bool(cfg.get("serff_skew_direct_sr1", True)))),
-                str(int(bool(cfg.get("serff_skew_extrapolate", False)))),
-                str(int(bool(cfg.get("serff_skew_extrap_constant_from_last", False)))),
-                ",".join(str(x).upper() for x in cfg.get("serff_skew_extrap_roots", [])),
-                str(cfg.get("serff_skew_extrap_mode", "linear")),
-                str(cfg.get("serff_skew_extrap_min_years", "")),
-                str(cfg.get("serff_skew_direct_weight", "")),
-                str(cfg.get("serff_skew_extrap_weight", "")),
-                str(int(bool(cfg.get("mixed_interpolation", False)))),
-                str(cfg.get("mixed_spline_start_years", "")),
-                str(cfg.get("mixed_spline_end_years", "")),
-                str(cfg.get("mixed_spline_tail_days", "")),
-                str(int(bool(cfg.get("mixed_spline_drop_last_node", False)))),
-                ",".join(str(x) for x in cfg.get("mixed_spline_endpoints", ())),
-                str(int(bool(cfg.get("mixed_spline_add_boundary_nodes", False)))),
-                str(cfg.get("max_tenor_from_timestamp_months", "")),
-                ",".join(str(x) for x in cfg.get("instruments", [])),
-            ]
-        )
+        cfg_parts = [
+            str(cfg.get("reference_key", "")),
+            str(cfg.get("node_reference_key", cfg.get("reference_key", ""))),
+            str(cfg.get("sofr_reference_key", "")),
+            str(cfg.get("rl_irs_spec", "")),
+            str(cfg.get("interpolation", "log_linear")),
+            str(int(bool(cfg.get("serff_skew", False)))),
+            str(int(bool(cfg.get("serff_skew_direct_sr1", True)))),
+            str(int(bool(cfg.get("serff_skew_extrapolate", False)))),
+            str(int(bool(cfg.get("serff_skew_extrap_constant_from_last", False)))),
+            ",".join(str(x).upper() for x in cfg.get("serff_skew_extrap_roots", [])),
+            str(cfg.get("serff_skew_extrap_mode", "linear")),
+            str(cfg.get("serff_skew_extrap_min_years", "")),
+            str(cfg.get("serff_skew_direct_weight", "")),
+            str(cfg.get("serff_skew_extrap_weight", "")),
+            str(int(bool(cfg.get("mixed_interpolation", False)))),
+            str(cfg.get("mixed_spline_start_years", "")),
+            str(cfg.get("mixed_spline_end_years", "")),
+            str(cfg.get("mixed_spline_tail_days", "")),
+            str(int(bool(cfg.get("mixed_spline_drop_last_node", False)))),
+            ",".join(str(x) for x in cfg.get("mixed_spline_endpoints", ())),
+            str(int(bool(cfg.get("mixed_spline_add_boundary_nodes", False)))),
+            str(cfg.get("max_tenor_from_timestamp_months", "")),
+        ]
+        if "stirf_target_weight" in cfg:
+            cfg_parts.append(str(cfg.get("stirf_target_weight", "")))
+        cfg_parts.append(",".join(str(x) for x in cfg.get("instruments", [])))
+        cfg_blob = "|".join(cfg_parts)
         return hashlib.sha1(cfg_blob.encode()).hexdigest()[:16]
 
     @classmethod
