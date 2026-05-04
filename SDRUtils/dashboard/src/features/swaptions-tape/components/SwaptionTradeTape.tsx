@@ -62,6 +62,7 @@ import type {
 import { TradeRarityPanel } from "./TradeRarityPanel/TradeRarityPanel";
 import { TimeseriesAnnotations } from "./TradeRarityPanel/TimeseriesAnnotations";
 import { SwaptionMethodologyModal } from "./SwaptionMethodologyModal";
+import { manualLinkColor } from "@/lib/manual-links-ui/color";
 import {
   DataTable,
   DataTableFilterMeta,
@@ -2201,15 +2202,6 @@ function isManualPackage(row: TapeRow): boolean {
   if (row.manual_package_id) return true;
   const source = row.package_source?.toUpperCase();
   return source === "MANUAL" || source === "HYBRID";
-}
-
-function manualLinkColor(linkId?: string | null): string | null {
-  if (!linkId) return null;
-  let hash = 0;
-  for (let i = 0; i < linkId.length; i += 1) {
-    hash = (hash * 31 + linkId.charCodeAt(i)) % 360;
-  }
-  return `hsl(${hash}, 65%, 52%)`;
 }
 
 function groupLinkedRows(rows: TapeRow[]): TapeRow[] {
