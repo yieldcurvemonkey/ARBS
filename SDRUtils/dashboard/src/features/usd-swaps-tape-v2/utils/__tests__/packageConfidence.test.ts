@@ -141,6 +141,22 @@ describe('computePackageConfidence — FLY', () => {
     expect(result.tone).toBe('high')
   })
 
+  it('passes fly risk balance when belly risk is 2x either equal wing by magnitude', () => {
+    const result = computePackageConfidence(
+      flyRow({
+        package_transaction_spread: -0.0758,
+        legs_json: [
+          curveLeg({ tenor_years: 2, risk: 50_000, fixed_rate: 3.642 }),
+          curveLeg({ tenor_years: 5, risk: 100_000, fixed_rate: 3.660 }),
+          curveLeg({ tenor_years: 7, risk: 50_000, fixed_rate: 3.753 }),
+        ],
+      }),
+    )
+    expect(result.score).toBe(5)
+    expect(result.total).toBe(5)
+    expect(result.signals.find((s) => s.name === 'risk_balance')?.passed).toBe(true)
+  })
+
   it('fails belly = -2*wings when belly DV01 is off by 25%', () => {
     const result = computePackageConfidence(
       flyRow({

@@ -139,6 +139,37 @@ function riskBalanceSignal(
   }
 }
 
+function flyRiskBalanceSignal(
+  legs: UsdSwapTapeLeg[],
+  tol: Tolerances,
+): ConfidenceSignal {
+  const rel_tol = tol.riskBalanceRel
+  const risks = legs.slice(0, 3).map((l) => legNumberOr(l, 'risk'))
+  if (risks.length < 3 || risks.some((r) => r === null)) {
+    return {
+      name: 'risk_balance',
+      label: 'Risk balance (belly = 2x wing)',
+      passed: false,
+      detail: 'leg risk missing',
+    }
+  }
+
+  const [frontAbs, bellyAbs, backAbs] = risks.map((r) => Math.abs(r as number))
+  const wingDenom = Math.max(frontAbs, backAbs, 1e-9)
+  const wingRel = Math.abs(frontAbs - backAbs) / wingDenom
+  const wingAvg = (frontAbs + backAbs) / 2
+  const expectedBelly = 2 * wingAvg
+  const bellyDenom = Math.max(bellyAbs, expectedBelly, 1e-9)
+  const bellyRel = Math.abs(bellyAbs - expectedBelly) / bellyDenom
+
+  return {
+    name: 'risk_balance',
+    label: 'Risk balance (belly = 2x wing)',
+    passed: wingRel <= rel_tol && bellyRel <= rel_tol,
+    detail: `wings delta ${(wingRel * 100).toFixed(1)}%, belly delta ${(bellyRel * 100).toFixed(1)}% (tol ${(rel_tol * 100).toFixed(0)}%)`,
+  }
+}
+
 /**
  * Render a tiny PTS / derived-spread number with enough precision that
  * sub-bp values (e.g. 0.0000125) don't collapse to "0.00bp" in the UI.
@@ -499,8 +530,9 @@ function flySignals(row: UsdSwapTapeRow, tol: Tolerances): ConfidenceSignal[] {
       ? fixedRateSpreadToBp(2 * rB - rF - rK, [rF, rB, rK])
       : null
 
-  // Risk balance for fly: belly + wing1 + wing2 ≈ 0.
-  // Use weights [1, 1, 1] applied to [front, belly, back] risk values directly.
+  // Risk balance for fly: belly risk should be about 2x a single wing,
+  // with front/back wings similar. Use magnitudes because some SDR rows
+  // report every leg risk with the same sign.
   return [
     {
       name: 'package_indicator_on',
@@ -508,7 +540,7 @@ function flySignals(row: UsdSwapTapeRow, tol: Tolerances): ConfidenceSignal[] {
       passed: indicatorOn,
       detail: indicatorOn ? 'true' : 'broker did not flag as a package',
     },
-    riskBalanceSignal(legs.slice(0, 3), [1, 1, 1], 'Risk balance (belly = -2×wings)', tol),
+    flyRiskBalanceSignal(legs, tol),
     ptsMatchSignal(derivedBp, row.package_transaction_spread, tol),
     {
       name: 'tenor_monotonic',
