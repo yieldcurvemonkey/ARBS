@@ -11,6 +11,8 @@ import {
   rateToBps,
   safeNum,
 } from '@/lib/usd-swaps-tape-v2/analytics'
+import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
+import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
 
 // Phase 2 cutover: analytics-timeseries reads from the v2 leg table so it
 // benefits from the new (filter, original_execution_timestamp DESC)
@@ -39,6 +41,24 @@ void GROUP_BY_COLUMN
 // bounded by the 72h anchor window and stays at the smaller cap.
 const DAILY_ROW_CAP = 2000
 const INTRADAY_TICK_CAP = 5000
+
+// Per-route in-memory LRU. Bound configurable via ANALYTICS_LRU_MAX env
+// var; 60 s TTL aligns with the client-facing Cache-Control max-age.
+const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 512)
+const lru = new ServerLru<{ payload: unknown; etag: string }>({
+  max: LRU_MAX,
+  ttlMs: 60_000,
+})
+
+function cacheKey(url: URL): string {
+  const params = new URLSearchParams(url.search)
+  const sorted = [...params.entries()].sort()
+  return JSON.stringify(sorted)
+}
+
+const CACHE_HEADERS = {
+  'Cache-Control': 'private, max-age=60, must-revalidate',
+} as const
 
 type DailyRow = {
   day: string
@@ -97,14 +117,22 @@ export function custyNotionalOutlierPredicate(
           )`
 }
 
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url)
+type AnalyticsTimeseriesPayload =
+  | { error: string }
+  | {
+      points: Array<Record<string, unknown>>
+      count: number
+      view: string
+      range: string
+    }
+
+async function produceAnalyticsTimeseries(
+  request: Request,
+): Promise<{ status: number; payload: AnalyticsTimeseriesPayload }> {
+  const { searchParams } = new URL(request.url)
   const value = searchParams.get('value')
   if (!value) {
-    return NextResponse.json(
-      { error: 'value parameter is required' },
-      { status: 400 },
-    )
+    return { status: 400, payload: { error: 'value parameter is required' } }
   }
   const view = (searchParams.get('view') ?? 'DAILY_CLOSE').toUpperCase()
   const range = (searchParams.get('range') ?? '1Y').toUpperCase()
@@ -113,10 +141,7 @@ export async function GET(req: Request) {
   const excludeLargeCusty = parseBooleanParam(searchParams, 'excludeLargeCusty', true)
   const filterPredicate = packageAnalyticsFilterPredicate(groupBy, '$1', LEGS_TABLE)
   if (!filterPredicate) {
-    return NextResponse.json(
-      { error: `invalid groupBy: ${groupBy}` },
-      { status: 400 },
-    )
+    return { status: 400, payload: { error: `invalid groupBy: ${groupBy}` } }
   }
   const fromParam = searchParams.get('from')
   const toParam = searchParams.get('to')
@@ -190,7 +215,10 @@ export async function GET(req: Request) {
         idbPrints: r.platform === 'IDB' ? 1 : 0,
         custyPrints: r.platform === 'CUSTY' ? 1 : 0,
       }))
-      return NextResponse.json({ points, count: points.length, view, range })
+      return {
+        status: 200,
+        payload: { points, count: points.length, view, range },
+      }
     }
 
     // DAILY_CLOSE / DAILY_OHLC / VOLUME — all share a daily aggregate,
@@ -290,10 +318,55 @@ export async function GET(req: Request) {
       idbPrints: safeNum(r.idb_prints),
       custyPrints: safeNum(r.custy_prints),
     }))
-    return NextResponse.json({ points, count: points.length, view, range })
+    return {
+      status: 200,
+      payload: { points, count: points.length, view, range },
+    }
   } catch (error) {
     console.error('usd-swaps-tape-v2/analytics-timeseries error', error)
     const message = error instanceof Error ? error.message : 'Failed to fetch timeseries'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return { status: 500, payload: { error: message } }
   }
+}
+
+export async function GET(request: Request) {
+  const url = new URL(request.url)
+  const ifNoneMatch = request.headers.get('If-None-Match')
+  const key = cacheKey(url)
+
+  // Serve from LRU when possible. Both 200 + 304 paths use the cached
+  // ETag so cross-request If-None-Match works without a second SQL hit.
+  const hit = lru.get(key)
+  if (hit) {
+    if (matchesIfNoneMatch(hit.etag, ifNoneMatch)) {
+      return new Response(null, {
+        status: 304,
+        headers: { ETag: hit.etag, ...CACHE_HEADERS },
+      })
+    }
+    return NextResponse.json(hit.payload, {
+      headers: { ETag: hit.etag, ...CACHE_HEADERS },
+    })
+  }
+
+  const { status, payload } = await produceAnalyticsTimeseries(request)
+
+  // Only cache successful (2xx) payloads — 4xx/5xx pass through without
+  // pollution so a transient warehouse error doesn't get pinned.
+  if (status === 200) {
+    const etag = computeEtag(payload)
+    lru.set(key, { payload, etag })
+    if (matchesIfNoneMatch(etag, ifNoneMatch)) {
+      return new Response(null, {
+        status: 304,
+        headers: { ETag: etag, ...CACHE_HEADERS },
+      })
+    }
+    return NextResponse.json(payload, {
+      status,
+      headers: { ETag: etag, ...CACHE_HEADERS },
+    })
+  }
+
+  return NextResponse.json(payload, { status })
 }
