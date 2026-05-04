@@ -33,3 +33,37 @@ describe('UsdSwapsTradeTape — manual-link grouping', () => {
     expect(source).toMatch(/<TradeTapeTable\b[\s\S]{0,200}rows=\{(?!tape\.rows\s*\})/);
   });
 });
+
+describe('UsdSwapsTradeTape — manual-link detail modal wiring', () => {
+  it('imports ManualLinkDetailModal from the shared module', () => {
+    expect(source).toMatch(
+      /import\s+\{[^}]*ManualLinkDetailModal[^}]*\}\s+from\s+['"]@\/lib\/manual-links-ui[^'"]*['"]/,
+    );
+  });
+
+  it('mounts <ManualLinkDetailModal> with the v2 base path', () => {
+    expect(source).toMatch(/<ManualLinkDetailModal\b/);
+    expect(source).toMatch(/apiBasePath=\{V2_LINKS_BASE\}/);
+  });
+
+  it('threads onOpenManualLink down through TradeTapeTable into the columns', () => {
+    expect(source).toMatch(/onOpenManualLink=\{handleOpenManualLink\}/);
+  });
+
+  it('opens the modal by setting detailLinkId and closes by nulling it', () => {
+    expect(source).toMatch(/setDetailLinkId\(linkId\)/);
+    expect(source).toMatch(/setDetailLinkId\(null\)/);
+  });
+
+  it('passes onUpdated and onDeactivated callbacks that refetch the tape', () => {
+    expect(source).toMatch(/onUpdated=\{[\s\S]{0,200}tape\.refetch\(\)/);
+    expect(source).toMatch(/onDeactivated=\{[\s\S]{0,200}tape\.refetch\(\)/);
+  });
+
+  it('binds adminPassword + savedUser inputs through the modal props', () => {
+    expect(source).toMatch(/adminPassword=\{adminPassword\}/);
+    expect(source).toMatch(/onAdminPasswordChange=\{setAdminPassword\}/);
+    expect(source).toMatch(/currentUser=\{savedUser\}/);
+    expect(source).toMatch(/onUserChange=\{setSavedUser\}/);
+  });
+});

@@ -80,6 +80,12 @@ export interface TradeTapeTableProps {
    * state back up.
    */
   actionSlot?: ReactNode
+  /**
+   * Optional click handler for the manual-link badge in the Pkg column.
+   * Passed straight through to columns config so the orchestrator can open
+   * the ManualLinkDetailModal in response.
+   */
+  onOpenManualLink?: (linkId: string) => void
 }
 
 // Approximate page size used when extending the VirtualScroller's `totalRecords`
@@ -102,6 +108,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     onSelectionChange,
     focusedPackageId,
     actionSlot,
+    onOpenManualLink,
   } = props
 
   // URL-backed column filter + sort state.
@@ -604,6 +611,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           metricMode,
           onToggleMetric: toggleMetric,
           activeFilters: columnFilters.filters as DataTableFilterMeta,
+          onOpenManualLink,
         })}
       </DataTable>
       {loadingMore ? (

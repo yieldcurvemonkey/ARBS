@@ -25,17 +25,18 @@ type LegacyCreatePayload = {
   tags?: string[]
 }
 
-type LinkResponse = { link_id: string; manual_package_id: string }
+type CreateLinkResponse = { link_id: string; manual_package_id: string }
+type UpdateLinkResponse = { link_id: string }
 
 export interface UseManualLinksReturn {
   creating: boolean
   error: string | null
-  createLink: (body: LegacyCreatePayload) => Promise<LinkResponse | null>
+  createLink: (body: LegacyCreatePayload) => Promise<CreateLinkResponse | null>
   updateLink: (
     linkId: string,
     patch: Partial<{ user_comment: string; link_reason: string; tags: string[] }>,
     adminPassword?: string,
-  ) => Promise<LinkResponse | null>
+  ) => Promise<UpdateLinkResponse | null>
   deleteLink: (linkId: string, adminPassword?: string) => Promise<boolean>
   /** Direct handle on the typed client (for new call sites). */
   api: ManualLinkApiClient

@@ -1,7 +1,7 @@
 'use client'
 // ABOUTME: Main orchestrator for the USD swap tape v2 feature.
 import type { JSX } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { PrimeReactProvider } from 'primereact/api'
 import 'primereact/resources/themes/lara-dark-indigo/theme.css'
 import 'primereact/resources/primereact.min.css'
@@ -13,6 +13,29 @@ import { TradeTapeTable } from './TradeTapeTable/TradeTapeTable'
 import { ManualLinksDialog } from './ManualLinksDialog/ManualLinksDialog'
 import { AnalyticsPanel } from './AnalyticsPanel'
 import { groupLinkedRows } from '@/lib/manual-links-ui/grouping'
+import { ManualLinkDetailModal } from '@/lib/manual-links-ui/components/ManualLinkDetailModal'
+import { TAPE_V2_API_BASE } from '../constants'
+import { useSavedUser } from '../hooks/useSavedUser'
+
+const V2_LINKS_BASE = `${TAPE_V2_API_BASE}/links`
+
+const PACKAGE_TYPE_OPTIONS = [
+  { value: 'MANUAL', label: 'Manual' },
+  { value: 'USER_STRADDLE_PAIR', label: 'Straddle Pair' },
+  { value: 'USER_VERTICAL_SPREAD', label: 'Vertical Spread' },
+  { value: 'USER_TIME_SPREAD', label: 'Time Spread' },
+  { value: 'USER_CUSTOM', label: 'Custom' },
+]
+
+const LINK_REASON_OPTIONS = [
+  { value: '', label: 'Select reason...' },
+  { value: 'Vega hedge', label: 'Vega hedge' },
+  { value: 'Customer flow', label: 'Customer flow' },
+  { value: 'Time spread', label: 'Time spread' },
+  { value: 'Skew Trade', label: 'Skew Trade' },
+  { value: 'Structure repair', label: 'Structure repair' },
+  { value: 'Other', label: 'Other' },
+]
 import {
   useColumnFilters,
   useFocusedTrade,
@@ -30,7 +53,20 @@ export default function UsdSwapsTradeTape(): JSX.Element {
 
   const [activeModal, setActiveModal] = useState<ModalName>(null)
   const [analyticsOpen, setAnalyticsOpen] = useState<boolean>(false)
+  // Detail-modal state. Opened when the trader clicks a row's manual-link
+  // badge; closed via the modal's close button. The admin password and
+  // user inputs live here so they survive the modal open/close cycle.
+  const [detailLinkId, setDetailLinkId] = useState<string | null>(null)
+  const [adminPassword, setAdminPassword] = useState('')
+  const [savedUser, setSavedUser] = useSavedUser()
   const focus = useFocusedTrade()
+
+  const handleOpenManualLink = useCallback((linkId: string) => {
+    setDetailLinkId(linkId)
+  }, [])
+  const handleCloseManualLink = useCallback(() => {
+    setDetailLinkId(null)
+  }, [])
 
   // Per-column filters live in the URL via useColumnFilters; thread the
   // serialised payload into the data hook so the route applies the
@@ -90,6 +126,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
             selected={selection.selected}
             onSelectionChange={selection.onSelectionChange}
             focusedPackageId={focusedPackageId}
+            onOpenManualLink={handleOpenManualLink}
             actionSlot={
               <div className="flex items-center gap-2">
                 {selection.count > 0 ? (
@@ -316,6 +353,24 @@ export default function UsdSwapsTradeTape(): JSX.Element {
             selection.clear()
             tape.refetch()
           }}
+        />
+        <ManualLinkDetailModal
+          isOpen={detailLinkId !== null}
+          linkId={detailLinkId}
+          onClose={handleCloseManualLink}
+          onUpdated={() => {
+            tape.refetch()
+          }}
+          onDeactivated={() => {
+            tape.refetch()
+          }}
+          apiBasePath={V2_LINKS_BASE}
+          currentUser={savedUser}
+          onUserChange={setSavedUser}
+          adminPassword={adminPassword}
+          onAdminPasswordChange={setAdminPassword}
+          packageTypeOptions={PACKAGE_TYPE_OPTIONS}
+          linkReasonOptions={LINK_REASON_OPTIONS}
         />
       </div>
     </PrimeReactProvider>
