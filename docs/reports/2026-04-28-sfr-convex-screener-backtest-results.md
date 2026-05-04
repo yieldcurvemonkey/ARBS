@@ -720,6 +720,53 @@ and restarting the prime resumed normally (cached dates short-circuit
 in <1 s, then it picked up where it left off). At ~10 min/date on the
 second wind, the prime is now ~18 % through the 1,649-date target.
 
+#### Cache evolution snapshot — listed_cache = 250, window 2025-05-14 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 54 | 3 | −3.19 | −145,771,032 | **−141,413,186** | 33 % | 14.4 | 14.6 |
+| `b_calendar_only` (asym ≥ 3) | 99 | 2 | −1.73 | −6,416,594,718 | **−6,241,788,272** | 47 % | 13.7 | 16.8 |
+| `c_butterfly_only` (asym ≥ 3) | 111 | 0 | −1.34 | −6,401,373,648 | **−6,393,467,808** | **50 %** | 7.4 | 17.0 |
+| `d_all_structures_default` (asym ≥ 1.5) | 131 | 3 | −3.94 | −302,613,431 | −298,950,400 | 37 % | 9.2 | 25.2 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 250 | 8 | −4.05 | −579,975,964 | −572,124,788 | 36 % | 9.9 | 41.3 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 196 | 5 | −3.88 | −810,025,666 | −808,208,042 | 35 % | 7.3 | 33.5 |
+
+The **12-month window** (250 BDs, 2025-05-14 → 2026-04-28) compounds
+the cohort-blow-up pattern. Going from cache=200 → cache=250:
+- `b_calendar_only` widened $1.8 B (−$4.5 B → −$6.2 B) on 14 new trades.
+- `c_butterfly_only` widened $4 B (−$2.4 B → −$6.4 B) on 14 new trades.
+- `f_daily_rebalance` widened $166 M.
+
+**Catastrophic loss cohorts now look approximately quarterly.** The
+12-month sample contains:
+- the December-2025 calendar blow-up (cache=100)
+- the summer-2025 butterfly blow-up (cache=200)
+- a spring-2025 butterfly blow-up (cache=250 — visible in c's
+  $4 B widening from one extra quarter of data)
+- and `b_calendar_only` widened on the late-spring 2025 cohort too.
+
+Aggregated reading at this scale: the asymmetry-decay strategy's
+realised-edge series is dominated by **roughly four ~$1 B+ catastrophic
+losers per year**, against a steady background of small $1–2 M wins.
+The mean-reversion edge captured between catastrophes is real but is
+a ~5–10 % return on the gross-bpv-deployed against -$5 B realised tail
+losses. **Net Kelly fraction is decisively negative at this position
+sizing.**
+
+The earlier "butterflies are structurally edge-positive" claim does
+not survive even on a 200-BD window, let alone 250. The screener's
+asym ≥ 3 winRate stays in the 47–53 % range across structure types
+and across windows, but P&L cannot be reconstructed from that winRate
+alone — it's the loss-tail magnitude that determines the realised
+return. **Headline conclusion is unchanged: this strategy needs a
+realised-PnL stop or fundamentally different exit rule before it can
+ship live at any reasonable position size.**
+
+Prime status: 250 / 1,649 dates ≈ 15 % done after ~28 wall-hours;
+projected total to complete the 6-year prime at the observed pace is
+~9–10 days, well over the session budget. The remaining session time
+will likely take the cache to ~350–450 dates.
+
 ## Reproduction
 
 ```bash
