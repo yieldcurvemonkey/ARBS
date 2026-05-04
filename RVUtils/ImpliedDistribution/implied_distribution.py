@@ -66,17 +66,23 @@ if TYPE_CHECKING:
 class SFRImpliedDistribution:
     """Orchestrator for SFR options implied distribution extraction.
 
+    Defaults follow the JPM raw-premium Breeden-Litzenberger workflow:
+    observed OTM premiums, put-call parity, ``OI >= 100``, a literal
+    ``1e-4`` smoothing parameter, 10 ghost points, and native 25bp bins.
+    Pass ``use_sabr_vols=True`` and ``sabr_extrapolation=True`` for the
+    older ARBS SABR-resampled smooth-tail hybrid.
+
     Caveats and known limitations
     -----------------------------
     * **Bachelier European pricing only.** SR3 options are American on the
       future, but for short-dated instruments the early-exercise premium is
       small and ignored here. Avoid relying on this module for options with
       less than ~10 business days to expiry.
-    * **Wing extrapolation uses calibrated SABR plus linear "ghost" anchor
-      points** at the ends of the strike grid — *not* SVI or rational
-      interpolation. Tails are sensitive to the SABR β/ρ/ν parameters; check
-      ``BreedenLitzenbergerResult.warnings`` for truncation or clipping flags
-      before relying on extreme percentiles.
+    * **Wing extrapolation uses linear "ghost" anchor points** at the ends of
+      the strike grid - not SVI or rational interpolation. If callers opt into
+      SABR resampling, tails are also sensitive to the SABR beta/rho/nu
+      parameters; check ``BreedenLitzenbergerResult.warnings`` for truncation
+      or clipping flags before relying on extreme percentiles.
     * **Default rate floor is 0.0.** This truncates the SOFR density below
       zero. Mass lost to truncation is reported in
       ``BreedenLitzenbergerResult.warnings``; the reported ``mean_rate`` /
@@ -89,19 +95,12 @@ class SFRImpliedDistribution:
       ill-conditioned smiles; failures and high-RMSE fits are flagged in
       ``GaussianMixtureResult.warnings``.
 
-    JPM Tech Appendix A compatibility
+    Legacy SABR note
     ---------------------------------
-    The default configuration matches the JPM Interest Rate Strategy
-    "Inferring Market Expectations from SOFR Futures Options" methodology
-    on the *spline mechanics* (4th-order smoothing spline, smoothing
-    parameter 1e-4, 10 ghost points per side via linear extrapolation,
-    25bp Fed-funds-target bins). The *strike selection* differs by
-    default — we resample the SABR-fit smile across a fine strike grid,
-    whereas the appendix uses raw OTM call premiums plus put-call
-    parity-converted OTM put premiums (filtered to OI ≥ 100). To match
-    the appendix more strictly, construct the orchestrator with
-    ``use_sabr_vols=False`` and ``sabr_extrapolation=False``. The screener
-    exposes this via ``SFRConvexScreenerConfig(jpm_method=True)``.
+    The old ARBS SABR-smoothed hybrid can still be selected with
+    ``use_sabr_vols=True`` and ``sabr_extrapolation=True``. In that mode,
+    the spline mechanics still use the same 4th-order spline, smoothing
+    parameter 1e-4, 10 ghost points per side, and 25bp bins.
     """
 
     def __init__(
@@ -109,20 +108,24 @@ class SFRImpliedDistribution:
         scenario_config: Optional[FedScenarioConfig] = None,
         *,
         smoothing_param: float = 1e-4,
+        scale_smoothing_by_n: bool = False,
         spline_order: int = 4,
         n_ghost_points: int = 10,
         ghost_extension_bps: float = 5.0,
         bin_width_bps: float = 25.0,
-        use_sabr_vols: bool = True,
-        sabr_extrapolation: bool = True,
+        use_sabr_vols: bool = False,
+        sabr_extrapolation: bool = False,
         sabr_rate_floor: float = 0.0,
         sabr_rate_ceiling_nstdev: float = 6.0,
         sabr_n_strikes: int = 200,
+        raw_market_open_interest_min: Optional[float] = 100.0,
+        raw_market_otm_only: bool = True,
         optimize_mixture_stds: bool = True,
         initial_mixture_std_bps: float = 30.0,
     ):
         self.scenario_config = scenario_config
         self.smoothing_param = smoothing_param
+        self.scale_smoothing_by_n = scale_smoothing_by_n
         self.spline_order = spline_order
         self.n_ghost_points = n_ghost_points
         self.ghost_extension_bps = ghost_extension_bps
@@ -132,6 +135,8 @@ class SFRImpliedDistribution:
         self.sabr_rate_floor = sabr_rate_floor
         self.sabr_rate_ceiling_nstdev = sabr_rate_ceiling_nstdev
         self.sabr_n_strikes = sabr_n_strikes
+        self.raw_market_open_interest_min = raw_market_open_interest_min
+        self.raw_market_otm_only = raw_market_otm_only
         self.optimize_mixture_stds = optimize_mixture_stds
         self.initial_mixture_std_bps = initial_mixture_std_bps
 
@@ -158,6 +163,8 @@ class SFRImpliedDistribution:
             sabr_rate_floor=self.sabr_rate_floor,
             sabr_rate_ceiling_nstdev=self.sabr_rate_ceiling_nstdev,
             sabr_n_strikes=self.sabr_n_strikes,
+            raw_market_open_interest_min=self.raw_market_open_interest_min,
+            raw_market_otm_only=self.raw_market_otm_only,
         )
 
         bl_result = None
@@ -167,6 +174,7 @@ class SFRImpliedDistribution:
             bl_result = extract_rnd_breeden_litzenberger(
                 rnd_input,
                 smoothing_param=self.smoothing_param,
+                scale_smoothing_by_n=self.scale_smoothing_by_n,
                 spline_order=self.spline_order,
                 n_ghost_points=self.n_ghost_points,
                 ghost_extension_bps=self.ghost_extension_bps,
@@ -377,6 +385,8 @@ class SFRImpliedDistribution:
                 sabr_rate_floor=self.sabr_rate_floor,
                 sabr_rate_ceiling_nstdev=self.sabr_rate_ceiling_nstdev,
                 sabr_n_strikes=self.sabr_n_strikes,
+                raw_market_open_interest_min=self.raw_market_open_interest_min,
+                raw_market_otm_only=self.raw_market_otm_only,
             )
             if run_bl or run_legacy_gm:
                 try:

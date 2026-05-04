@@ -51,38 +51,43 @@ def extract_bl_marginals(
     Parameters
     ----------
     jpm_method : bool
-        When True, follow JPM Tech Appendix A more strictly: use raw market
-        vols (no SABR fit, no SABR-grid extrapolation), 4th-order spline on
-        observed strikes plus linear ghost points, smoothing parameter 1e-4,
-        25bp bins. Default False keeps the SABR + ghost-points hybrid that
-        ARBS has used historically (smoother tails at the cost of leaning
-        on the SABR β/ρ/ν parameters).
+        When True, also request the JPM-style listed/OTM/OI data path from
+        the market-data layer. The extraction settings match the
+        ``SFRImpliedDistribution`` raw-JPM defaults. Default False keeps the
+        screener's older SABR + ghost-points hybrid by explicitly opting into
+        SABR resampling.
     ghost_extension_bps : float, optional
         Override the per-ghost-point linear extrapolation distance. The
-        ARBS default is 5 bp/ghost (≈50 bp wing reach with 10 ghosts) which
-        gives narrow tails. For ``jpm_method=True`` this is too local —
-        we default to 25 bp/ghost (≈250 bp wing reach), which lets the
-        spline fade smoothly to zero outside the observed strike range.
+        ARBS/JPM default is 5 bp/ghost (≈50 bp wing reach with 10 ghosts).
     """
     if dist_extractor is None:
         scenarios = scenario_config or FedScenarioConfig.default_sofr_scenarios()
         if jpm_method:
-            ghost_ext = ghost_extension_bps if ghost_extension_bps is not None else 25.0
+            ghost_ext = ghost_extension_bps if ghost_extension_bps is not None else 5.0
             dist_extractor = SFRImpliedDistribution(
                 scenario_config=scenarios,
                 use_sabr_vols=False,
                 sabr_extrapolation=False,
+                raw_market_open_interest_min=100.0,
+                raw_market_otm_only=True,
                 # Per Appendix A: 4th-order spline, smoothing 1e-4,
-                # 10 ghost points, 25bp bins. These are already the
-                # ARBS defaults — we just disable the SABR resampling.
+                # 10 ghost points, 25bp bins, observed OTM premiums,
+                # and OI >= 100.
                 smoothing_param=1e-4,
+                scale_smoothing_by_n=False,
                 spline_order=4,
                 n_ghost_points=10,
                 ghost_extension_bps=ghost_ext,
                 bin_width_bps=25.0,
             )
         else:
-            kwargs: Dict[str, Any] = {"scenario_config": scenarios}
+            kwargs: Dict[str, Any] = {
+                "scenario_config": scenarios,
+                "use_sabr_vols": True,
+                "sabr_extrapolation": True,
+                "raw_market_open_interest_min": None,
+                "raw_market_otm_only": False,
+            }
             if ghost_extension_bps is not None:
                 kwargs["ghost_extension_bps"] = ghost_extension_bps
             dist_extractor = SFRImpliedDistribution(**kwargs)

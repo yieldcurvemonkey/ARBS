@@ -196,6 +196,9 @@ def load_market_data(
         def _fetch_smile(d: datetime.date, _sym: str = sfr,
                          _mode: str = smile_strike_mode):
             req: Dict[str, Any] = {"symbol": _sym, "as_of": d}
+            if getattr(config, "jpm_method", False):
+                req["jpm_method"] = True
+                req["open_interest_min"] = 100.0
             if _mode == "listed":
                 req["strike_offsets_bps"] = "listed"
             # delta_sparse: omit both knobs — fetch_sabr_smile defaults to the

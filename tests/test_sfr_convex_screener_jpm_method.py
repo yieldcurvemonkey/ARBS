@@ -28,14 +28,18 @@ def test_extract_bl_marginals_jpm_method_uses_raw_vols():
 
     assert seen_kwargs.get("use_sabr_vols") is False
     assert seen_kwargs.get("sabr_extrapolation") is False
+    assert seen_kwargs.get("raw_market_open_interest_min") == 100.0
+    assert seen_kwargs.get("raw_market_otm_only") is True
+    assert seen_kwargs.get("scale_smoothing_by_n") is False
     assert seen_kwargs.get("spline_order") == 4
     assert seen_kwargs.get("n_ghost_points") == 10
+    assert seen_kwargs.get("ghost_extension_bps") == 5.0
     assert seen_kwargs.get("bin_width_bps") == 25.0
 
 
-def test_extract_bl_marginals_default_uses_sabr_vols():
-    """Default path constructs SFRImpliedDistribution without overriding
-    use_sabr_vols (which defaults to True in that class)."""
+def test_extract_bl_marginals_default_preserves_screener_sabr_hybrid():
+    """The screener's non-JPM path explicitly keeps the older SABR hybrid
+    now that SFRImpliedDistribution itself defaults to raw JPM-style BL."""
     seen_kwargs = {}
 
     class _RecordingExtractor:
@@ -54,5 +58,7 @@ def test_extract_bl_marginals_default_uses_sabr_vols():
     ):
         extract_bl_marginals({"SFRZ26": object()}, jpm_method=False)
 
-    assert "use_sabr_vols" not in seen_kwargs
-    assert "sabr_extrapolation" not in seen_kwargs
+    assert seen_kwargs.get("use_sabr_vols") is True
+    assert seen_kwargs.get("sabr_extrapolation") is True
+    assert seen_kwargs.get("raw_market_open_interest_min") is None
+    assert seen_kwargs.get("raw_market_otm_only") is False

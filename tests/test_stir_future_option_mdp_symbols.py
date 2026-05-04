@@ -298,6 +298,92 @@ def test_sabr_smile_point_roundtrip_preserves_atm_offset_bps():
         strike_rate=3.5,
         iv_normal_price=0.155,
         iv_normal_bps=15.5,
+        market_price=0.0175,
+        discount_factor=0.98,
+        open_interest=125.0,
+        volume=10.0,
     )
 
     assert STIRFutureOptionSmilePoint.from_dict(point.to_dict()) == point
+
+
+class _FakeSmilePricer:
+    def __init__(self, *, strike, forward, right="C", open_interest=100.0):
+        self._strike = float(strike)
+        self._forward = float(forward)
+        self._right = right
+        self._open_interest = float(open_interest)
+
+    def strike(self):
+        return self._strike
+
+    def forward(self):
+        return self._forward
+
+    def right(self):
+        return self._right
+
+    def meta(self):
+        return {"vendor_row": {"Open Interest": self._open_interest}}
+
+
+def test_sabr_smile_jpm_available_selector_ignores_missing_listed_strikes():
+    mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
+    day = datetime.date(2026, 4, 23)
+    requested = [
+        {
+            "label": "SFRZ26|9650C",
+            "right": "C",
+            "requested_atm_offset_bps": 0.0,
+            "canonical_symbol": "SFRZ26|9650C",
+        },
+        {
+            "label": "SFRZ26|9675C",
+            "right": "C",
+            "requested_atm_offset_bps": -25.0,
+            "canonical_symbol": "SFRZ26|9675C",
+        },
+    ]
+    pricers_window = {
+        "SFRZ26|9650C": {day: _FakeSmilePricer(strike=96.5, forward=96.4)},
+    }
+
+    selected = mdp._select_sabr_smile_available_legs_from_pricer_window(
+        requested_legs=requested,
+        pricers_window=pricers_window,
+        target_date=day,
+    )
+
+    assert [leg["canonical_symbol"] for leg in selected] == ["SFRZ26|9650C"]
+
+
+def test_sabr_smile_jpm_filter_keeps_otm_legs_with_min_open_interest():
+    mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
+    forward = 96.5
+    selected = [
+        {
+            "label": f"valid-{idx}",
+            "right": "C",
+            "pricer": _FakeSmilePricer(strike=96.5 + idx * 0.125, forward=forward, open_interest=125.0),
+        }
+        for idx in range(6)
+    ]
+    selected[0].pop("right")
+    selected.extend(
+        [
+            {
+                "label": "itm-call",
+                "right": "C",
+                "pricer": _FakeSmilePricer(strike=96.0, forward=forward, open_interest=500.0),
+            },
+            {
+                "label": "low-oi",
+                "right": "C",
+                "pricer": _FakeSmilePricer(strike=97.5, forward=forward, open_interest=99.0),
+            },
+        ]
+    )
+
+    filtered = mdp._filter_sabr_smile_jpm_legs(selected, open_interest_min=100.0)
+
+    assert [leg["label"] for leg in filtered] == [f"valid-{idx}" for idx in range(6)]

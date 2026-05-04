@@ -325,9 +325,13 @@ class STIRFutureOptionSmilePoint:
     strike_rate: float
     iv_normal_price: float
     iv_normal_bps: float
+    market_price: Optional[float] = None
+    discount_factor: Optional[float] = None
+    open_interest: Optional[float] = None
+    volume: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "label": str(self.label),
             "right": str(self.right),
             "delta_abs": float(self.delta_abs),
@@ -337,6 +341,15 @@ class STIRFutureOptionSmilePoint:
             "iv_normal_price": float(self.iv_normal_price),
             "iv_normal_bps": float(self.iv_normal_bps),
         }
+        if self.market_price is not None:
+            payload["market_price"] = float(self.market_price)
+        if self.discount_factor is not None:
+            payload["discount_factor"] = float(self.discount_factor)
+        if self.open_interest is not None:
+            payload["open_interest"] = float(self.open_interest)
+        if self.volume is not None:
+            payload["volume"] = float(self.volume)
+        return payload
 
     @classmethod
     def from_dict(cls, row: Dict[str, Any]) -> "STIRFutureOptionSmilePoint":
@@ -349,6 +362,10 @@ class STIRFutureOptionSmilePoint:
             strike_rate=float(row["strike_rate"]),
             iv_normal_price=float(row["iv_normal_price"]),
             iv_normal_bps=float(row["iv_normal_bps"]),
+            market_price=float(row["market_price"]) if row.get("market_price") is not None else None,
+            discount_factor=float(row["discount_factor"]) if row.get("discount_factor") is not None else None,
+            open_interest=float(row["open_interest"]) if row.get("open_interest") is not None else None,
+            volume=float(row["volume"]) if row.get("volume") is not None else None,
         )
 
 
@@ -2319,7 +2336,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             return None
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_sabr_smile_common_v2",
+            "cache_version": "stirfo_sabr_smile_common_v3",
             "source": str(self.source).upper(),
             "as_of": as_of.isoformat(),
             "curve_name": str(curve_name),
@@ -2440,6 +2457,102 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             common_key,
             self._serialize_get_data_result("sabr_smile", {"sabr_smile": [smile]}),
         )
+
+    @staticmethod
+    def _pricer_meta_number(pricer: QLSTIRFutureOptionPricer, keys: Sequence[str]) -> Optional[float]:
+        meta = pricer.meta() if callable(getattr(pricer, "meta", None)) else {}
+        if not isinstance(meta, dict):
+            return None
+        rows: List[Dict[str, Any]] = []
+        for row_key in ("vendor_row", "raw_quote", "vendor_quote"):
+            row = meta.get(row_key)
+            if isinstance(row, dict):
+                rows.append(row)
+        rows.append(meta)
+        for row in rows:
+            for key in keys:
+                val = _to_float(row.get(key))
+                if val is not None and math.isfinite(float(val)):
+                    return float(val)
+        return None
+
+    @classmethod
+    def _pricer_open_interest(cls, pricer: QLSTIRFutureOptionPricer) -> Optional[float]:
+        return cls._pricer_meta_number(
+            pricer,
+            ("Open Interest", "openInterest", "open_interest", "OpenInterest", "openinterest"),
+        )
+
+    @classmethod
+    def _pricer_volume(cls, pricer: QLSTIRFutureOptionPricer) -> Optional[float]:
+        return cls._pricer_meta_number(pricer, ("Volume", "volume"))
+
+    def _build_sabr_smile_jpm_leg_specs(
+        self,
+        *,
+        contract: str,
+        forward: float,
+        as_of: datetime.date,
+    ) -> List[Dict[str, Any]]:
+        grid = _cme_listed_strike_grid_for_contract_forward(
+            contract=contract,
+            forward=float(forward),
+            as_of=as_of,
+        )
+        if grid is None:
+            raise ValueError(f"No listed strike rule available for JPM SABR smile on {contract}")
+
+        atm_strike = float(grid["atm_strike"])
+        specs: List[Dict[str, Any]] = []
+        for strike in list(grid["strikes"]):
+            strike_f = float(strike)
+            for right in ("C", "P"):
+                canonical_symbol = f"{contract}|{_format_strike4(strike_f, contract=contract)}{right}"
+                specs.append(
+                    {
+                        "label": canonical_symbol,
+                        "right": right,
+                        "strike_price": strike_f,
+                        "canonical_symbol": canonical_symbol,
+                        "requested_atm_offset_bps": round((atm_strike - strike_f) * 100.0, 8),
+                    }
+                )
+        return specs
+
+    def _filter_sabr_smile_jpm_legs(
+        self,
+        selected_legs: Sequence[Dict[str, Any]],
+        *,
+        open_interest_min: float,
+    ) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for leg in selected_legs:
+            pr = leg.get("pricer")
+            if pr is None:
+                continue
+            right_raw = leg.get("right")
+            if right_raw is None:
+                pricer_right = getattr(pr, "right", None)
+                right_raw = pricer_right() if callable(pricer_right) else None
+            right = str(right_raw or "").upper()
+            if right not in {"C", "P"}:
+                continue
+            strike = _to_float(getattr(pr, "strike", lambda: None)())
+            forward = _to_float(getattr(pr, "forward", lambda: None)())
+            if strike is None or forward is None:
+                continue
+            is_otm = (right == "C" and strike >= forward - 1e-12) or (right == "P" and strike <= forward + 1e-12)
+            if not is_otm:
+                continue
+            oi = self._pricer_open_interest(pr)
+            if oi is None or oi < float(open_interest_min):
+                continue
+            out.append(dict(leg))
+        if len(out) < 6:
+            raise ValueError(
+                f"JPM SABR smile requires at least 6 OTM legs with open interest >= {open_interest_min:g}; got {len(out)}"
+            )
+        return out
 
     def _finalize_sabr_smile_result(
         self,
@@ -2698,6 +2811,31 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             raise ValueError(f"Missing SABR smile strike legs for {target_date.isoformat()}: {missing}.")
         return out
 
+    def _select_sabr_smile_available_legs_from_pricer_window(
+        self,
+        *,
+        requested_legs: Sequence[Dict[str, Any]],
+        pricers_window: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
+        target_date: datetime.date,
+    ) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for spec in requested_legs:
+            canonical_symbol = str(spec["canonical_symbol"])
+            pr = self._asof_pricer_for_date(pricers_window.get(canonical_symbol, {}), target_date)
+            if pr is None:
+                continue
+            out.append(
+                self._build_sabr_smile_leg_selection(
+                    label=str(spec["label"]),
+                    right=str(spec["right"]),
+                    pricer=pr,
+                    requested_delta_abs=None,
+                    requested_atm_offset_bps=_to_float(spec.get("requested_atm_offset_bps")),
+                    canonical_symbol=canonical_symbol,
+                )
+            )
+        return out
+
     def _select_sabr_smile_explicit_legs_from_snapshot(
         self,
         *,
@@ -2827,6 +2965,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             strike_price = float(leg["strike_price"])
             strike_rate = 100.0 - float(strike_price)
             iv_normal_bps = float(pr.iv_normal_bps()) if math.isfinite(float(pr.iv_normal_bps())) else float(pr.iv_normal()) * 100.0
+            market_price = _to_float(pr.price())
+            discount_factor = _to_float(pr.discount())
+            open_interest = self._pricer_open_interest(pr)
+            volume = self._pricer_volume(pr)
             points.append(
                 STIRFutureOptionSmilePoint(
                     label=str(leg["label"]),
@@ -2837,6 +2979,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                     strike_rate=float(strike_rate),
                     iv_normal_price=float(pr.iv_normal()),
                     iv_normal_bps=float(iv_normal_bps),
+                    market_price=float(market_price) if market_price is not None else None,
+                    discount_factor=float(discount_factor) if discount_factor is not None else None,
+                    open_interest=float(open_interest) if open_interest is not None else None,
+                    volume=float(volume) if volume is not None else None,
                 )
             )
 
@@ -2900,9 +3046,12 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         as_of_raw = request.get("as_of")
         as_of_live = isinstance(as_of_raw, str) and as_of_raw.strip().lower() == "live"
         mode = self._sabr_smile_point_mode(point_request)
+        jpm_method = bool(request.get("jpm_method", False))
         selected_legs: List[Dict[str, Any]]
 
         if str(self.source).upper() == "STIRFO_DUAL-QL":
+            if jpm_method:
+                raise ValueError("jpm_method SABR smiles require source='BARCHART_STIRFO-QL'")
             if mode == "delta":
                 deltas = list(point_request["deltas"])
                 qs_request = self._build_sabr_smile_qs_request(
@@ -2957,7 +3106,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                     requested_legs=requested_legs,
                 )
         else:
-            if mode == "delta":
+            if mode == "delta" and not jpm_method:
                 deltas = list(point_request["deltas"])
                 snapshot_request = self._build_sabr_smile_snapshot_request(
                     request_symbol=str(symbol_info["request_symbol"]),
@@ -2982,6 +3131,8 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             else:
                 contract = self._resolve_sabr_smile_contract(symbol_info=symbol_info, as_of=as_of)
                 price_mode = str(request.get("price_mode", "mid_then_fallback"))
+                if jpm_method and as_of_live:
+                    raise ValueError("jpm_method SABR smiles require a historical as_of date, not 'live'")
                 if as_of_live:
                     _, forward = self._resolve_sabr_smile_live_underlying_forward(
                         contract=contract,
@@ -2994,13 +3145,20 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                         show_tqdm=show_tqdm,
                         price_mode=price_mode,
                     )
-                requested_legs = self._build_sabr_smile_offset_leg_specs(
-                    contract=contract,
-                    forward=float(forward),
-                    as_of=as_of,
-                    offset_magnitudes_bps=list(point_request.get("strike_offsets_bps") or []),
-                    auto_full_ladder=bool(point_request.get("auto_full_ladder", False)),
-                )
+                if jpm_method:
+                    requested_legs = self._build_sabr_smile_jpm_leg_specs(
+                        contract=contract,
+                        forward=float(forward),
+                        as_of=as_of,
+                    )
+                else:
+                    requested_legs = self._build_sabr_smile_offset_leg_specs(
+                        contract=contract,
+                        forward=float(forward),
+                        as_of=as_of,
+                        offset_magnitudes_bps=list(point_request.get("strike_offsets_bps") or []),
+                        auto_full_ladder=bool(point_request.get("auto_full_ladder", False)),
+                    )
                 if as_of_live:
                     snapshot_request = {
                         "endpoint": "option_snapshot",
@@ -3020,9 +3178,14 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                         target_date=as_of,
                     )
                 else:
+                    cache_symbols = (
+                        [f"__JPM_FULL__{contract}"]
+                        if jpm_method
+                        else [str(spec["canonical_symbol"]) for spec in requested_legs]
+                    )
                     pricers_window = self._get_or_build_barchart_pricer_window(
                         leg_symbols=[str(spec["canonical_symbol"]) for spec in requested_legs],
-                        cache_symbols=[str(spec["canonical_symbol"]) for spec in requested_legs],
+                        cache_symbols=cache_symbols,
                         request_start=as_of,
                         request_end=as_of,
                         show_tqdm=show_tqdm,
@@ -3033,11 +3196,22 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                         source="BARCHART_EOD_WINDOW",
                         force_refresh=force_refresh,
                     )
-                    selected_legs = self._select_sabr_smile_explicit_legs_from_pricer_window(
-                        requested_legs=requested_legs,
-                        pricers_window=pricers_window,
-                        target_date=as_of,
-                    )
+                    if jpm_method:
+                        selected_legs = self._select_sabr_smile_available_legs_from_pricer_window(
+                            requested_legs=requested_legs,
+                            pricers_window=pricers_window,
+                            target_date=as_of,
+                        )
+                        selected_legs = self._filter_sabr_smile_jpm_legs(
+                            selected_legs,
+                            open_interest_min=float(request.get("open_interest_min", 100.0)),
+                        )
+                    else:
+                        selected_legs = self._select_sabr_smile_explicit_legs_from_pricer_window(
+                            requested_legs=requested_legs,
+                            pricers_window=pricers_window,
+                            target_date=as_of,
+                        )
         return self._finalize_sabr_smile_result(
             raw_symbol=raw_symbol,
             as_of=as_of,
@@ -4083,7 +4257,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
 
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_get_data_v8",
+            "cache_version": "stirfo_get_data_v9",
             "source": str(self.source).upper(),
             "endpoint": ep,
             "request": self._cache_primitive(cache_req),

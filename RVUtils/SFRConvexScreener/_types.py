@@ -46,12 +46,12 @@ class SFRConvexScreenerConfig:
     calendar_gaps: Tuple[int, ...] = (1, 2, 4)
     fly_gaps: Tuple[int, ...] = (1, 2, 4)
 
-    # Methodology flag — when True, use raw market vols (no SABR
-    # extrapolation) per JPM Tech Appendix A.
+    # Methodology flag — when True, use observed OTM premiums with OI >= 100
+    # and no SABR extrapolation per JPM Tech Appendix A.
     jpm_method: bool = False
     # Ghost-point extension distance (bp of price per ghost). Override
-    # only if you want non-default tail extrapolation reach. ARBS default
-    # 5bp; jpm_method default 25bp.
+    # only if you want non-default tail extrapolation reach. ARBS/JPM default
+    # is 5bp.
     ghost_extension_bps: Optional[float] = None
 
     # Curve / data sources

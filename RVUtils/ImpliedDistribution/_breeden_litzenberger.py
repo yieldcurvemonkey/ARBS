@@ -23,6 +23,7 @@ def extract_rnd_breeden_litzenberger(
     rnd_input: RNDInput,
     *,
     smoothing_param: float = 1e-4,
+    scale_smoothing_by_n: bool = False,
     spline_order: int = 4,
     n_ghost_points: int = 10,
     ghost_extension_bps: float = 5.0,
@@ -37,7 +38,11 @@ def extract_rnd_breeden_litzenberger(
     rnd_input : RNDInput
         Market data (strikes in price space, call premiums).
     smoothing_param : float
-        Spline smoothing factor (scaled by N internally). JPM uses 10^-4.
+        Spline smoothing factor. JPM uses 10^-4.
+    scale_smoothing_by_n : bool
+        If True, multiply ``smoothing_param`` by the number of fitted points
+        before passing it to SciPy. Defaults to False to match Appendix A's
+        literal smoothing parameter.
     spline_order : int
         Spline polynomial degree (max 5). JPM uses 4.
     n_ghost_points : int
@@ -66,10 +71,11 @@ def extract_rnd_breeden_litzenberger(
 
     # 2. Fit smoothing spline C(K)
     # s parameter: UnivariateSpline interprets s as the total sum-of-squares
-    # residual budget. Scaling by N gives behavior similar to a per-point lambda.
+    # residual budget. Appendix A specifies the literal smoothing parameter.
     k = min(spline_order, 5)
     n = len(ext_strikes)
-    spline = UnivariateSpline(ext_strikes, ext_premiums, k=k, s=smoothing_param * n)
+    spline_s = smoothing_param * n if scale_smoothing_by_n else smoothing_param
+    spline = UnivariateSpline(ext_strikes, ext_premiums, k=k, s=spline_s)
 
     # 3. Fine grid for evaluation
     grid_min = float(ext_strikes[0])

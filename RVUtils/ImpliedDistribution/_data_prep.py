@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Optional, Tuple
 
 import numpy as np
 
-from RVUtils.ImpliedDistribution._bachelier import bachelier_call_prices_vectorized
+from RVUtils.ImpliedDistribution._bachelier import bachelier_call_prices_vectorized, put_to_call_parity
 from RVUtils.ImpliedDistribution._types import RNDInput
 
 if TYPE_CHECKING:
@@ -23,6 +23,8 @@ def smile_to_rnd_input(
     sabr_rate_floor: float = 0.0,
     sabr_rate_ceiling_nstdev: float = 6.0,
     sabr_n_strikes: int = 200,
+    raw_market_open_interest_min: Optional[float] = None,
+    raw_market_otm_only: bool = False,
 ) -> RNDInput:
     """Convert a STIRFutureOptionSABRSmile to RNDInput for density extraction.
 
@@ -49,11 +51,31 @@ def smile_to_rnd_input(
         for the upper bound. Defaults to 6.0.
     sabr_n_strikes : int
         Number of strikes in the SABR-extrapolated grid. Defaults to 200.
+    raw_market_open_interest_min : float, optional
+        When ``use_sabr_vols=False``, drop smile points with lower open
+        interest. Points without open-interest metadata are also dropped.
+    raw_market_otm_only : bool
+        When ``use_sabr_vols=False``, keep only at- or out-of-the-money calls
+        and puts before converting puts into equivalent call premiums.
     """
     params = smile.params
     fwd = float(params.forward_price)
     tte = float(params.time_to_expiry)
     df = discount_factor if discount_factor is not None else 1.0
+    if discount_factor is None and not use_sabr_vols:
+        point_dfs = []
+        for pt in smile.points:
+            pt_df = getattr(pt, "discount_factor", None)
+            if pt_df is None:
+                continue
+            try:
+                pt_df_f = float(pt_df)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(pt_df_f) and pt_df_f > 0.0:
+                point_dfs.append(pt_df_f)
+        if point_dfs:
+            df = float(np.median(np.asarray(point_dfs, dtype=float)))
 
     if use_sabr_vols:
         if sabr_extrapolation:
@@ -87,27 +109,97 @@ def smile_to_rnd_input(
         # Floor vols to handle SABR edge cases at extreme strikes
         vols = np.maximum(vols, 1e-8)
     else:
-        # Use raw market vols, keeping OTM side per strike
-        strike_vol_map: dict[float, float] = {}
+        # Use observed premiums when the smile carries them; otherwise fall
+        # back to raw market vols. OTM puts are converted into equivalent call
+        # premiums via put-call parity, matching JPM Appendix A.
+        strike_map: dict[float, tuple[Optional[float], Optional[float], bool, bool]] = {}
         for pt in smile.points:
             k = float(pt.strike_price)
-            v = float(pt.iv_normal_price)
-            if math.isnan(v) or v <= 0:
+            right = str(pt.right).upper()
+            if right not in {"C", "P"}:
                 continue
-            is_otm = (pt.right == "C" and k >= fwd) or (pt.right == "P" and k <= fwd)
-            if k not in strike_vol_map or is_otm:
-                strike_vol_map[k] = v
-        sorted_items = sorted(strike_vol_map.items())
-        strikes = np.array([x[0] for x in sorted_items], dtype=float)
-        vols = np.array([x[1] for x in sorted_items], dtype=float)
+            is_otm = (right == "C" and k >= fwd) or (right == "P" and k <= fwd)
+            if raw_market_otm_only and not is_otm:
+                continue
 
-    # Convert all to call premiums via Bachelier
-    call_premiums = bachelier_call_prices_vectorized(strikes, fwd, vols, tte, df)
+            if raw_market_open_interest_min is not None:
+                oi = getattr(pt, "open_interest", None)
+                if oi is None:
+                    continue
+                try:
+                    oi_f = float(oi)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(oi_f) or oi_f < float(raw_market_open_interest_min):
+                    continue
+
+            market_price: Optional[float] = None
+            raw_price = getattr(pt, "market_price", None)
+            if raw_price is not None:
+                try:
+                    price_f = float(raw_price)
+                except (TypeError, ValueError):
+                    price_f = float("nan")
+                if math.isfinite(price_f) and price_f > 0.0:
+                    pt_df = getattr(pt, "discount_factor", None)
+                    try:
+                        pt_df_f = float(pt_df) if pt_df is not None else float(df)
+                    except (TypeError, ValueError):
+                        pt_df_f = float(df)
+                    if not math.isfinite(pt_df_f) or pt_df_f <= 0.0:
+                        pt_df_f = float(df)
+                    market_price = (
+                        price_f
+                        if right == "C"
+                        else put_to_call_parity(price_f, k, fwd, pt_df_f)
+                    )
+
+            vol: Optional[float] = None
+            try:
+                v = float(pt.iv_normal_price)
+            except (TypeError, ValueError):
+                v = float("nan")
+            if math.isfinite(v) and v > 0.0:
+                vol = v
+
+            if market_price is None and vol is None:
+                continue
+
+            existing = strike_map.get(k)
+            candidate = (market_price, vol, is_otm, market_price is not None)
+            if existing is None:
+                strike_map[k] = candidate
+                continue
+            existing_rank = (existing[2], existing[3])
+            candidate_rank = (candidate[2], candidate[3])
+            if candidate_rank >= existing_rank:
+                strike_map[k] = candidate
+
+        sorted_items = sorted(strike_map.items())
+        strikes = np.array([x[0] for x in sorted_items], dtype=float)
+        call_values = []
+        vols = []
+        needs_vol_pricing = False
+        for _, (call_price, vol, _, _) in sorted_items:
+            call_values.append(float(call_price) if call_price is not None else float("nan"))
+            vols.append(float(vol) if vol is not None else float("nan"))
+            needs_vol_pricing = needs_vol_pricing or call_price is None
+        call_premiums = np.array(call_values, dtype=float)
+        if needs_vol_pricing:
+            vols_arr = np.array(vols, dtype=float)
+            vol_prices = bachelier_call_prices_vectorized(strikes, fwd, vols_arr, tte, df)
+            call_premiums = np.where(np.isfinite(call_premiums), call_premiums, vol_prices)
+
+    if use_sabr_vols:
+        # Convert all to call premiums via Bachelier
+        call_premiums = bachelier_call_prices_vectorized(strikes, fwd, vols, tte, df)
 
     if use_sabr_vols and sabr_extrapolation:
         source = "sabr_extrapolated"
     elif use_sabr_vols:
         source = "sabr_smile"
+    elif raw_market_open_interest_min is not None or raw_market_otm_only:
+        source = "market_jpm"
     else:
         source = "market_listed"
 
