@@ -34,8 +34,18 @@ import type {
   RarityState,
   TimeseriesState,
 } from './analytics-types'
+import type { UsdSwapTapeRow } from '../../types'
 
 export interface AnalyticsPanelProps {
+  // Phase A (multi-trade dock): the panel now receives the full loaded
+  // row set + the current multi-row selection alongside the legacy
+  // single-trade `focused` prop. `rows` powers the always-on cards
+  // drawer (PR-#286 underlier-mix / RFR adoption / swap-spread VWAP /
+  // CCP-switch). `selected` powers sequence-mode rendering (N≥2). The
+  // body still renders single-mode UX from `focused` byte-for-byte;
+  // sequence-mode branches land in Phase D.
+  rows: readonly UsdSwapTapeRow[]
+  selected: readonly UsdSwapTapeRow[]
   focused: FocusedTrade | null
   onClose: () => void
   onClearFocused: () => void
@@ -46,10 +56,19 @@ export interface AnalyticsPanelProps {
 
 export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   const {
+    // `rows` and `selected` are intentionally *not* destructured into
+    // const-named locals here yet — Phase B (CardsDrawer) and Phase D
+    // (sequence mode) consume them. Keeping them on `props` for now
+    // avoids a sea of unused-var warnings before those phases land.
     focused, onClose, onClearFocused,
     chartHeight = 340, histogramHeight = 280,
     panelHeightVh = DOCK_DEFAULT_VH,
   } = props
+  // Reference the new props so TypeScript's strict noUnusedParameters
+  // doesn't trip while the Phase B / Phase D consumers are still
+  // pending. They land in the next commits.
+  void props.rows
+  void props.selected
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('timeseries')
   const [tsState, setTsState] = useState<TimeseriesState>(TIMESERIES_DEFAULT_STATE)
