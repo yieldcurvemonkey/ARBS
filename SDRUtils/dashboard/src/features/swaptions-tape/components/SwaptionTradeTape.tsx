@@ -63,6 +63,8 @@ import { TradeRarityPanel } from "./TradeRarityPanel/TradeRarityPanel";
 import { TimeseriesAnnotations } from "./TradeRarityPanel/TimeseriesAnnotations";
 import { SwaptionMethodologyModal } from "./SwaptionMethodologyModal";
 import { manualLinkColor } from "@/lib/manual-links-ui/color";
+import { isManualPackage } from "@/lib/manual-links-ui/predicates";
+import { groupLinkedRows } from "@/lib/manual-links-ui/grouping";
 import {
   DataTable,
   DataTableFilterMeta,
@@ -2195,46 +2197,6 @@ function isRowNotionalCapped(row: TapeRow): boolean {
       leg.leg_metrics?.is_notional_capped ?? leg.is_notional_capped,
     ),
   );
-}
-
-function isManualPackage(row: TapeRow): boolean {
-  if (row.manual_link_id) return true;
-  if (row.manual_package_id) return true;
-  const source = row.package_source?.toUpperCase();
-  return source === "MANUAL" || source === "HYBRID";
-}
-
-function groupLinkedRows(rows: TapeRow[]): TapeRow[] {
-  const groups = new Map<string, TapeRow[]>();
-  rows.forEach((row) => {
-    const linkId = row.manual_package_id || row.manual_link_id;
-    if (!linkId) return;
-    if (!groups.has(linkId)) {
-      groups.set(linkId, []);
-    }
-    groups.get(linkId)?.push(row);
-  });
-
-  if (!groups.size) return rows;
-
-  const emitted = new Set<string>();
-  const result: TapeRow[] = [];
-
-  rows.forEach((row) => {
-    const linkId = row.manual_package_id || row.manual_link_id;
-    if (!linkId) {
-      result.push(row);
-      return;
-    }
-    if (emitted.has(linkId)) return;
-    emitted.add(linkId);
-    const groupRows = groups.get(linkId);
-    if (groupRows) {
-      result.push(...groupRows);
-    }
-  });
-
-  return result;
 }
 
 function formatDurationSeconds(value: number | null | undefined): string {
