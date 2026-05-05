@@ -4,6 +4,7 @@ import {
   buildBucketPredicate,
   buildFomcBucketsFromLabels,
   buildPackageTypeFilter,
+  buildVenueBucketsFromIdentifiers,
   computeImmDates,
   PACKAGE_TYPE_GROUPS,
   parseFomcLabel,
@@ -40,7 +41,31 @@ describe('resolveForwardSchema', () => {
     const out = resolveForwardSchema('fomc')
     expect(out.kind).toBe('fomc_label')
     expect(out.buckets.length).toBe(0)
-    expect(out.extraFilterSql).toMatch(/is_fomc_dated\s*=\s*TRUE/)
+    // Filter relaxed to label-only (drop the often-unset is_fomc_dated flag)
+    expect(out.extraFilterSql).toMatch(/fomc_meeting_label\s+IS\s+NOT\s+NULL/)
+    expect(out.extraFilterSql).not.toMatch(/is_fomc_dated/)
+  })
+})
+
+describe('resolveTenorSchema venue', () => {
+  it('returns venue schema with empty bucket list and venue kind', () => {
+    const out = resolveTenorSchema('venue')
+    expect(out.kind).toBe('venue')
+    expect(out.buckets.length).toBe(0)
+    expect(out.extraFilterSql).toMatch(/platform_identifier\s+IS\s+NOT\s+NULL/)
+  })
+})
+
+describe('buildVenueBucketsFromIdentifiers', () => {
+  it('orders IDB MICs first, CUSTY MICs second, alpha-sorts unknowns last', () => {
+    const out = buildVenueBucketsFromIdentifiers([
+      'BBSF', 'BGCD', 'TSEF', 'NEW1', 'AAAA', 'TWSF',
+    ])
+    expect(out.map((b) => b.id)).toEqual(['BGCD', 'TSEF', 'BBSF', 'TWSF', 'AAAA', 'NEW1'])
+  })
+  it('drops empty / null entries', () => {
+    const out = buildVenueBucketsFromIdentifiers(['BBSF', '', 'BGCD'])
+    expect(out.map((b) => b.id)).toEqual(['BGCD', 'BBSF'])
   })
 })
 
@@ -60,9 +85,30 @@ describe('parseFomcLabel', () => {
 })
 
 describe('buildFomcBucketsFromLabels', () => {
-  it('sorts labels chronologically and drops unparseable ones', () => {
-    const out = buildFomcBucketsFromLabels(['DEC26', 'JAN27', 'APR26', 'GARBAGE', 'JUN26'])
+  const now = new Date('2026-05-05T00:00:00Z')
+
+  it('sorts upcoming labels chronologically and drops unparseable ones', () => {
+    const out = buildFomcBucketsFromLabels(
+      ['DEC26', 'JAN27', 'APR26', 'GARBAGE', 'JUN26'],
+      { now, windowStart: new Date('2026-04-01T00:00:00Z') },
+    )
     expect(out.map((b) => b.id)).toEqual(['APR26', 'JUN26', 'DEC26', 'JAN27'])
+  })
+
+  it('drops historical labels older than the window start', () => {
+    const out = buildFomcBucketsFromLabels(
+      ['JAN21', 'APR21', 'MAR26', 'APR26', 'JUN26'],
+      { now },
+    )
+    // Default windowStart = now - 30d (≈ 2026-04-05). MAR26 falls before.
+    expect(out.map((b) => b.id)).toEqual(['APR26', 'JUN26'])
+  })
+
+  it('caps the bucket count via limit', () => {
+    const labels = ['JUN26', 'JUL26', 'SEP26', 'NOV26', 'DEC26', 'JAN27', 'MAR27']
+    const out = buildFomcBucketsFromLabels(labels, { now, limit: 3 })
+    expect(out.length).toBe(3)
+    expect(out.map((b) => b.id)).toEqual(['JUN26', 'JUL26', 'SEP26'])
   })
 })
 
@@ -158,6 +204,13 @@ describe('buildBucketPredicate', () => {
   it('rejects malformed FOMC labels', () => {
     const fomcSchema = resolveForwardSchema('fomc')
     expect(() => buildBucketPredicate('l', fomcSchema, tenor, 'foo', '5y', 1)).toThrow(/FOMC/)
+  })
+
+  it('uses platform_identifier equality for venue tenor schema', () => {
+    const venueSchema = resolveTenorSchema('venue')
+    const out = buildBucketPredicate('l', fwd, venueSchema, 'spot', 'BBSF', 1)
+    expect(out.sql).toMatch(/l\.platform_identifier = \$\d+/)
+    expect(out.params).toContain('BBSF')
   })
 })
 

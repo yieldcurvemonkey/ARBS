@@ -65,16 +65,19 @@ export async function GET(request: Request) {
     p.packageType, 'p', 2 + predicate.params.length,
   )
 
+  const combinedExtra = [forwardSchema.extraFilterSql, tenorSchema.extraFilterSql]
+    .filter(Boolean)
+    .join(' AND ')
   const tsSql = buildTimeseriesSql({
     bucketPredicateSql: predicate.sql,
     packageFilterSql: pkgFilter.sql,
-    schemaExtraFilterSql: forwardSchema.extraFilterSql,
+    schemaExtraFilterSql: combinedExtra || undefined,
   })
   const limitParamIndex = 2 + predicate.params.length + pkgFilter.params.length
   const tradesSql = buildRecentTradesSql({
     bucketPredicateSql: predicate.sql,
     packageFilterSql: pkgFilter.sql,
-    schemaExtraFilterSql: forwardSchema.extraFilterSql,
+    schemaExtraFilterSql: combinedExtra || undefined,
     limitParam: `$${limitParamIndex}`,
   })
 

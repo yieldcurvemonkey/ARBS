@@ -16,6 +16,7 @@ import {
   buildBucketCaseSql,
   buildFomcBucketsFromLabels,
   buildPackageTypeFilter,
+  buildVenueBucketsFromIdentifiers,
   FORWARD_SCHEMA_IDS,
   PACKAGE_TYPE_GROUP_IDS,
   resolveForwardSchema,
@@ -228,6 +229,18 @@ function buildForwardBucketSql(forwardSchema: ResolvedSchema, alias: string): st
 }
 
 /**
+ * Build the tenor- (column-axis) bucket SQL expression. For year-range
+ * schemas this is a CASE on `tenor_years`. For venue schemas it just
+ * reads `platform_identifier` directly.
+ */
+function buildTenorBucketSql(tenorSchema: ResolvedSchema, alias: string): string {
+  if (tenorSchema.kind === 'venue') {
+    return `${alias}.platform_identifier`
+  }
+  return buildBucketCaseSql(alias, 'tenor_years', tenorSchema.buckets)
+}
+
+/**
  * Test whether a row's fwd-bucket id is "valid" for the schema. For
  * years schemas, we drop 'other'. For fomc, any non-null label is fine.
  */
@@ -235,6 +248,21 @@ function fwdBucketIsValidSqlPredicate(forwardSchema: ResolvedSchema): string {
   return forwardSchema.kind === 'fomc_label'
     ? `fwd_bucket IS NOT NULL`
     : `fwd_bucket <> 'other'`
+}
+
+function tenorBucketIsValidSqlPredicate(tenorSchema: ResolvedSchema): string {
+  return tenorSchema.kind === 'venue'
+    ? `tenor_bucket IS NOT NULL`
+    : `tenor_bucket <> 'other'`
+}
+
+/**
+ * Combine the forward + tenor schemas' optional `extraFilterSql` into a
+ * single AND-joined fragment, or empty string if neither has one.
+ */
+function combinedExtraFilter(forwardSchema: ResolvedSchema, tenorSchema: ResolvedSchema): string {
+  const parts = [forwardSchema.extraFilterSql, tenorSchema.extraFilterSql].filter(Boolean)
+  return parts.length === 0 ? '' : `AND ${parts.join(' AND ')}`
 }
 
 /**
@@ -251,12 +279,10 @@ function fwdBucketIsValidSqlPredicate(forwardSchema: ResolvedSchema): string {
 export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
   if (ctx.bounds.kind !== 'time_of_day') throw new Error('expected time_of_day bounds')
   const fwdBucketExpr = buildForwardBucketSql(ctx.forwardSchema, 'l')
-  const tenorCase = buildBucketCaseSql('l', 'tenor_years', ctx.tenorSchema.buckets)
+  const tenorBucketExpr = buildTenorBucketSql(ctx.tenorSchema, 'l')
   const metricCol = ctx.metric === 'notional' ? 'gross_notional' : 'gross_dv01'
   const pkgFilter = buildPackageTypeFilter(ctx.packageType, 'p', 6)
-  const extraFilter = ctx.forwardSchema.extraFilterSql
-    ? `AND ${ctx.forwardSchema.extraFilterSql}`
-    : ''
+  const extraFilter = combinedExtraFilter(ctx.forwardSchema, ctx.tenorSchema)
   const params: Array<string | number> = [
     ctx.bounds.lookbackStart.toISOString(),
     ctx.bounds.lookbackEnd.toISOString(),
@@ -272,7 +298,7 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
         ABS(COALESCE(l.notional, 0)) AS gross_notional,
         ABS(COALESCE(l.risk, 0))     AS gross_dv01,
         ${fwdBucketExpr} AS fwd_bucket,
-        ${tenorCase} AS tenor_bucket,
+        ${tenorBucketExpr} AS tenor_bucket,
         ${PLATFORM_CASE_SQL} AS platform,
         (date_trunc('day', COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York'))::date AS day_et,
         EXTRACT(EPOCH FROM (
@@ -289,7 +315,8 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
     ),
     bucketed AS (
       SELECT * FROM legs
-      WHERE ${fwdBucketIsValidSqlPredicate(ctx.forwardSchema)} AND tenor_bucket <> 'other'
+      WHERE ${fwdBucketIsValidSqlPredicate(ctx.forwardSchema)}
+        AND ${tenorBucketIsValidSqlPredicate(ctx.tenorSchema)}
         AND tod_seconds_et >= $4::numeric
         AND tod_seconds_et <= $5::numeric
     ),
@@ -350,12 +377,10 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
 export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
   if (ctx.bounds.kind !== 'rolling') throw new Error('expected rolling bounds')
   const fwdBucketExpr = buildForwardBucketSql(ctx.forwardSchema, 'l')
-  const tenorCase = buildBucketCaseSql('l', 'tenor_years', ctx.tenorSchema.buckets)
+  const tenorBucketExpr = buildTenorBucketSql(ctx.tenorSchema, 'l')
   const metricCol = ctx.metric === 'notional' ? 'gross_notional' : 'gross_dv01'
   const pkgFilter = buildPackageTypeFilter(ctx.packageType, 'p', 4)
-  const extraFilter = ctx.forwardSchema.extraFilterSql
-    ? `AND ${ctx.forwardSchema.extraFilterSql}`
-    : ''
+  const extraFilter = combinedExtraFilter(ctx.forwardSchema, ctx.tenorSchema)
   const params: Array<string | number> = [
     ctx.bounds.lookbackStart.toISOString(),
     ctx.bounds.lookbackEnd.toISOString(),
@@ -369,7 +394,7 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
         ABS(COALESCE(l.notional, 0)) AS gross_notional,
         ABS(COALESCE(l.risk, 0))     AS gross_dv01,
         ${fwdBucketExpr} AS fwd_bucket,
-        ${tenorCase} AS tenor_bucket,
+        ${tenorBucketExpr} AS tenor_bucket,
         ${PLATFORM_CASE_SQL} AS platform
       FROM arbs_usd_swap_tape_legs_v2 l
       JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
@@ -382,7 +407,7 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
     bucketed AS (
       SELECT * FROM legs
       WHERE ${fwdBucketIsValidSqlPredicate(ctx.forwardSchema)}
-        AND tenor_bucket <> 'other'
+        AND ${tenorBucketIsValidSqlPredicate(ctx.tenorSchema)}
     ),
     windowed AS (
       SELECT *,
@@ -513,20 +538,31 @@ export function shapeVolumeGridResponse(
   forwardSchema: ResolvedSchema,
   tenorSchema: ResolvedSchema,
 ): VolumeGridResponse {
-  // For dynamic-bucket (FOMC) schemas the bucket list isn't known until we see
-  // the data — discover it from the rows.
+  // Dynamic-bucket schemas (FOMC for forward, venue for tenor) only know
+  // their buckets once the rows come back from SQL — discover them.
   const resolvedForward: ResolvedSchema =
     forwardSchema.kind === 'fomc_label'
       ? {
           ...forwardSchema,
           buckets: buildFomcBucketsFromLabels(
             Array.from(new Set(rows.map((r) => r.fwd).filter((s): s is string => !!s))),
+            { now: new Date(), limit: 16 },
           ),
         }
       : forwardSchema
 
+  const resolvedTenor: ResolvedSchema =
+    tenorSchema.kind === 'venue'
+      ? {
+          ...tenorSchema,
+          buckets: buildVenueBucketsFromIdentifiers(
+            Array.from(new Set(rows.map((r) => r.tenor).filter((s): s is string => !!s))),
+          ),
+        }
+      : tenorSchema
+
   const validFwd = new Set(resolvedForward.buckets.map((b) => b.id))
-  const validTenor = new Set(tenorSchema.buckets.map((b) => b.id))
+  const validTenor = new Set(resolvedTenor.buckets.map((b) => b.id))
 
   const cells: VolumeGridCell[] = rows
     .filter((r) => validFwd.has(r.fwd) && validTenor.has(r.tenor))
@@ -576,9 +612,9 @@ export function shapeVolumeGridResponse(
         buckets: resolvedForward.buckets.map((b) => ({ id: b.id, label: b.label })),
       },
       tenor: {
-        id: tenorSchema.id,
-        label: tenorSchema.label,
-        buckets: tenorSchema.buckets.map((b) => ({ id: b.id, label: b.label })),
+        id: resolvedTenor.id,
+        label: resolvedTenor.label,
+        buckets: resolvedTenor.buckets.map((b) => ({ id: b.id, label: b.label })),
       },
     },
     cells,

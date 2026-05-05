@@ -87,3 +87,91 @@ codified Puppeteer suite.
 ## Stop the dev server
 
 `Ctrl-C` (handled outside this log).
+
+---
+
+## Round 2 (2026-05-05 evening) — schema-driven grid
+
+After the initial commit, the grid was extended along three axes via
+dropdowns in the card header. All three exercised via Chrome MCP.
+
+### Package-type filter (default = OUTRIGHT)
+
+Pass — observed populations differ in expected ways:
+
+- Outright + 1w: SPOT/1Y = 398.6B (P2), 5-10Y/10Y = 2.2B (P90).
+  Default behaviour matches design.
+- Curve + 1w: distinct distribution (5Y-10Y/10Y P100, 5Y-10Y/20-25Y P100).
+- Spreadover/MM + 1w: basis-trade pattern (12Y-15Y/SPOT P88, 15Y-20Y/1Y-2Y P100).
+
+### Forward schema selector
+
+Pass:
+
+- `Default` (8 buckets: Spot, 1W-3M, 3M-6M, 6M-1Y, 1Y-2Y, 2Y-5Y, 5Y-10Y, 10Y+).
+- `Legacy` (5 buckets — original JPM-mirror set).
+- `IMM 16` — labels JUN26..MAR30 with stratified colors (DEC27/5Y P100 rose).
+- `FOMC` — labels APR26..DEC27 (next 16 meetings, sorted chronologically).
+  APR26/6M-12M = 6.8B P100 (next-meeting basis trades). JUL26/1M-3M = 175B P83.
+
+### Tenor (col-axis) schema selector
+
+Pass:
+
+- `Default` (16 buckets per user spec).
+- `Legacy` (11 buckets — original set).
+- `Venue` (column axis swaps from tenor to platform_identifier MIC).
+  21 MICs discovered from data: BGCD/DWSF/ISWV/TPSE/TSEF (IDB) →
+  BBSF/BILT/TWSF/XOFF/XXXX (CUSTY) → unknowns alphabetically. Cells
+  populated with realistic per-venue percentiles (3M-6M/XXXX P95,
+  6M-1Y/XXXX P89).
+
+### View-mode selector
+
+Pass:
+
+- `Volume` (default, single-percentile colored cell).
+- `IDB / CUSTY` — split bar at the bottom edge (cyan = IDB, indigo =
+  CUSTY) with the share % rendered in the cell body. Outright shows
+  ~0/100 splits (USD swap outrights are heavily customer-flow).
+  Spreadover/MM shows real splits: spot/10y reads 48/52 IDB/CUSTY
+  consistent with backend totals 6.7B/7.2B.
+
+### Cell drill-down modal
+
+Pass under all schema combinations exercised:
+
+- Forward × Tenor (default) — original happy path.
+- Forward × Venue — modal title reads e.g. `3M-6M × XXXX — Volume detail`.
+  Daily volume bar chart and recent-trades table both populated; row
+  click writes the package_id URL filter as before.
+- FOMC × Tenor — modal title reads e.g. `APR26 × 6M-12M — Volume detail`.
+  All recent trades carry `FOMC APR26` in their tape label; rates
+  cluster around the next-meeting forward (~3.65-3.71%).
+
+### Backend smoke (curl) — Round 2
+
+| Check | Result |
+|---|---|
+| `…/volume-grid?packageType=outright` | 200, OUTRIGHT-only cells |
+| `…/volume-grid?packageType=spreadover` | 200, SPREADOVER + MATCHED_MATURITY combined |
+| `…/volume-grid?forwardSchema=imm16` | 200, 16 IMM rows JUN26..MAR30 |
+| `…/volume-grid?forwardSchema=fomc&packageType=all` | 200, 14 upcoming FOMC rows |
+| `…/volume-grid?tenorSchema=venue` | 200, 21 venue MICs sorted IDB/CUSTY/other |
+| `…/volume-grid?viewMode=idb_custy` | 200, cells include `idbCurrent` + `custyCurrent` |
+| `…/volume-grid/cell?fwd=spot&tenor=BBSF&tenorSchema=venue` | 200, 71 ts pts + 50 recent trades |
+| `…/volume-grid/cell?fwd=APR26&tenor=2y&forwardSchema=fomc&packageType=all` | 200, 7 ts pts + 50 recent trades |
+| `…/volume-grid?packageType=bogus` | 400 |
+| `…/volume-grid?viewMode=bogus` | 400 |
+| `…/volume-grid?forwardSchema=foo` | 400 |
+
+### Notes / observations
+
+- `is_fomc_dated` flag isn't reliably populated on v2 legs — the FOMC
+  schema initially returned an empty bucket list. Relaxed the filter to
+  `fomc_meeting_label IS NOT NULL` only and trimmed buckets to the next
+  16 meetings from 30 days ago onward; the schema now surfaces 14
+  populated FOMC rows.
+- Venue and FOMC bucket lists are dynamic (data-driven) and ship in
+  the response's `axes` payload so the client renders headers without
+  re-deriving them.

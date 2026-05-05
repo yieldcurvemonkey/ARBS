@@ -159,15 +159,25 @@ describe('buildVolumeGridSqlTimeOfDay', () => {
     expect(built.sql).toContain('custy_current')
   })
 
-  it('uses fomc_meeting_label as bucket id for the fomc schema', () => {
+  it('uses fomc_meeting_label as bucket id for the fomc schema (and only label-not-null filter)', () => {
     const fomc = resolveForwardSchema('fomc')
     const built = buildVolumeGridSqlTimeOfDay({
       metric: 'notional', forwardSchema: fomc, tenorSchema: tenor,
       packageType: 'outright', bounds,
     })
     expect(built.sql).toContain('l.fomc_meeting_label AS fwd_bucket')
-    // schema-level extra filter applied
-    expect(built.sql).toContain('l.is_fomc_dated = TRUE')
+    expect(built.sql).toContain('l.fomc_meeting_label IS NOT NULL')
+    expect(built.sql).not.toContain('l.is_fomc_dated = TRUE')
+  })
+
+  it('uses platform_identifier as col bucket for venue tenor schema', () => {
+    const venue = resolveTenorSchema('venue')
+    const built = buildVolumeGridSqlTimeOfDay({
+      metric: 'notional', forwardSchema: fwd, tenorSchema: venue,
+      packageType: 'outright', bounds,
+    })
+    expect(built.sql).toContain('l.platform_identifier AS tenor_bucket')
+    expect(built.sql).toContain('l.platform_identifier IS NOT NULL')
   })
 })
 
@@ -255,15 +265,38 @@ describe('shapeVolumeGridResponse', () => {
     expect(out.viewMode).toBe('volume')
   })
 
-  it('discovers fomc bucket labels from rows for the fomc schema', () => {
-    const fwd = resolveForwardSchema('fomc')
-    const tenor = resolveTenorSchema('default')
+  it('discovers venue MIC buckets for the venue tenor schema', () => {
+    const fwd = resolveForwardSchema('default')
+    const venue = resolveTenorSchema('venue')
     const out = shapeVolumeGridResponse(
       [
-        { fwd: 'JUN26', tenor: '2y', current_value: 1, idb_current: 1, custy_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'APR26', tenor: '5y', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'JUN26', tenor: '5y', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'BBSF', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'BGCD', current_value: 1, idb_current: 1, custy_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'TWSF', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
       ],
+      {
+        metric: 'notional', period: 'today', lookbackDays: 90,
+        forwardSchema: 'default', tenorSchema: 'venue', packageType: 'all',
+        viewMode: 'volume',
+      },
+      fwd,
+      venue,
+    )
+    // IDB MICs first (BGCD), then CUSTY (BBSF, TWSF)
+    expect(out.axes.tenor.buckets.map((b) => b.id)).toEqual(['BGCD', 'BBSF', 'TWSF'])
+  })
+
+  it('discovers fomc bucket labels from rows (filters to upcoming, max 16)', () => {
+    const fwd = resolveForwardSchema('fomc')
+    const tenor = resolveTenorSchema('default')
+    const labels = ['JAN21', 'APR21', 'MAR2026', 'JUN26', 'APR26', 'DEC27']
+    const out = shapeVolumeGridResponse(
+      labels.map((l) => ({
+        fwd: l, tenor: '5y',
+        current_value: 1, idb_current: 0, custy_current: 1,
+        trade_count: 1, prior_array: [],
+        p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null,
+      })),
       {
         metric: 'notional', period: 'today', lookbackDays: 90,
         forwardSchema: 'fomc', tenorSchema: 'default', packageType: 'fomc',
@@ -272,7 +305,14 @@ describe('shapeVolumeGridResponse', () => {
       fwd,
       tenor,
     )
-    // Sorted chronologically: APR26 first, then JUN26
-    expect(out.axes.forward.buckets.map((b) => b.id)).toEqual(['APR26', 'JUN26'])
+    const ids = out.axes.forward.buckets.map((b) => b.id)
+    // Historical labels (JAN21, APR21) and unparseable (MAR2026) are dropped
+    expect(ids).not.toContain('JAN21')
+    expect(ids).not.toContain('APR21')
+    expect(ids).not.toContain('MAR2026')
+    expect(ids.length).toBeLessThanOrEqual(16)
+    // Chronological order maintained for the kept labels
+    const kept = ids.filter((x) => ['APR26', 'JUN26', 'DEC27'].includes(x))
+    expect(kept).toEqual(['APR26', 'JUN26', 'DEC27'])
   })
 })
