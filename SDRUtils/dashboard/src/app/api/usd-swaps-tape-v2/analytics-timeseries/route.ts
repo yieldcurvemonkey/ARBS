@@ -11,6 +11,8 @@ import {
   rateToBps,
   safeNum,
 } from '@/lib/usd-swaps-tape-v2/analytics'
+import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
+import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
 
 // Phase 2 cutover: analytics-timeseries reads from the v2 leg table so it
 // benefits from the new (filter, original_execution_timestamp DESC)
@@ -40,6 +42,24 @@ void GROUP_BY_COLUMN
 const DAILY_ROW_CAP = 2000
 const INTRADAY_TICK_CAP = 5000
 
+// Per-route in-memory LRU. Bound configurable via ANALYTICS_LRU_MAX env
+// var; 60 s TTL aligns with the client-facing Cache-Control max-age.
+const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 512)
+const lru = new ServerLru<{ payload: unknown; etag: string }>({
+  max: LRU_MAX,
+  ttlMs: 60_000,
+})
+
+function cacheKey(url: URL): string {
+  const params = new URLSearchParams(url.search)
+  const sorted = [...params.entries()].sort()
+  return JSON.stringify(sorted)
+}
+
+const CACHE_HEADERS = {
+  'Cache-Control': 'private, max-age=60, must-revalidate',
+} as const
+
 type DailyRow = {
   day: string
   idb_close: number | null
@@ -50,12 +70,25 @@ type DailyRow = {
   idb_low: number | null
   custy_high: number | null
   custy_low: number | null
+  // Phase 5 (orthogonal-payload split): server returns all four
+  // (gross|net) × (raw|filtered-large-custy) variants in a single
+  // payload so the client toggles display without re-fetching. Legacy
+  // {idb,custy}_dv01 / {idb,custy}_notional fields kept for backward
+  // compatibility (populated with the requested variant).
+  idb_dv01_gross: number | null
+  custy_dv01_gross: number | null
+  idb_dv01_net: number | null
+  custy_dv01_net: number | null
+  custy_dv01_gross_excl_large: number | null
+  custy_dv01_net_excl_large: number | null
   idb_dv01: number | null
   custy_dv01: number | null
   idb_notional: number | null
   custy_notional: number | null
+  custy_notional_excl_large: number | null
   idb_prints: number | null
   custy_prints: number | null
+  custy_prints_excl_large: number | null
 }
 
 type IntradayRow = {
@@ -97,14 +130,22 @@ export function custyNotionalOutlierPredicate(
           )`
 }
 
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url)
+type AnalyticsTimeseriesPayload =
+  | { error: string }
+  | {
+      points: Array<Record<string, unknown>>
+      count: number
+      view: string
+      range: string
+    }
+
+async function produceAnalyticsTimeseries(
+  request: Request,
+): Promise<{ status: number; payload: AnalyticsTimeseriesPayload }> {
+  const { searchParams } = new URL(request.url)
   const value = searchParams.get('value')
   if (!value) {
-    return NextResponse.json(
-      { error: 'value parameter is required' },
-      { status: 400 },
-    )
+    return { status: 400, payload: { error: 'value parameter is required' } }
   }
   const view = (searchParams.get('view') ?? 'DAILY_CLOSE').toUpperCase()
   const range = (searchParams.get('range') ?? '1Y').toUpperCase()
@@ -113,10 +154,7 @@ export async function GET(req: Request) {
   const excludeLargeCusty = parseBooleanParam(searchParams, 'excludeLargeCusty', true)
   const filterPredicate = packageAnalyticsFilterPredicate(groupBy, '$1', LEGS_TABLE)
   if (!filterPredicate) {
-    return NextResponse.json(
-      { error: `invalid groupBy: ${groupBy}` },
-      { status: 400 },
-    )
+    return { status: 400, payload: { error: `invalid groupBy: ${groupBy}` } }
   }
   const fromParam = searchParams.get('from')
   const toParam = searchParams.get('to')
@@ -190,7 +228,10 @@ export async function GET(req: Request) {
         idbPrints: r.platform === 'IDB' ? 1 : 0,
         custyPrints: r.platform === 'CUSTY' ? 1 : 0,
       }))
-      return NextResponse.json({ points, count: points.length, view, range })
+      return {
+        status: 200,
+        payload: { points, count: points.length, view, range },
+      }
     }
 
     // DAILY_CLOSE / DAILY_OHLC / VOLUME — all share a daily aggregate,
@@ -201,6 +242,18 @@ export async function GET(req: Request) {
     // MIN/MAX over rates. That keeps sparse days intact: if only one
     // platform printed, the other side stays NULL and the client drops
     // the point from that line instead of drawing to zero.
+    //
+    // Phase 5 (orthogonal-payload split): the SUM(risk) / SUM(ABS(risk))
+    // / large-custy-filter dimensions all collapse into a single SQL
+    // pass. We compute every (gross|net) × (raw|excluding-large-custy)
+    // variant in CASE-driven aggregates so the client can toggle
+    // display without re-fetching.
+    //
+    // The custy-large filter is implemented as `excl_large_custy` —
+    // a boolean per-row flag that's TRUE for IDB and for CUSTY rows
+    // below the 5x-median threshold. SUM(...) FILTER (WHERE
+    // excl_large_custy) lets a single GROUP BY produce both the
+    // unfiltered and filtered totals.
     const sql = `
       WITH ${packageAnalyticsCtes({
         packagesTable: PACKAGES_TABLE,
@@ -228,10 +281,19 @@ export async function GET(req: Request) {
         WHERE platform = 'CUSTY' AND notional IS NOT NULL
       ),
       classified AS (
-        SELECT b.*
+        SELECT
+          b.*,
+          -- per-row flag: TRUE when this print survives the
+          -- large-custy filter (IDB always, CUSTY only if below 5x
+          -- median threshold or threshold absent).
+          CASE
+            WHEN b.platform <> 'CUSTY' THEN TRUE
+            WHEN t.median_notional IS NULL OR t.median_notional <= 0 THEN TRUE
+            WHEN ABS(COALESCE(b.notional, 0)) > t.median_notional * 5 THEN FALSE
+            ELSE TRUE
+          END AS excl_large_custy
         FROM base b
         CROSS JOIN custy_threshold t
-        WHERE ${outlierPredicate}
       ),
       per_day_platform AS (
         SELECT
@@ -243,9 +305,17 @@ export async function GET(req: Request) {
             FILTER (WHERE fixed_rate IS NOT NULL))[1] AS open_rate,
           MAX(fixed_rate) AS high_rate,
           MIN(fixed_rate) AS low_rate,
-          ${riskAgg} AS daily_dv01,
+          -- Both bases (gross / net) computed in one pass.
+          SUM(ABS(risk)) AS daily_dv01_gross,
+          SUM(risk) AS daily_dv01_net,
+          -- Filtered variants: same aggregates, FILTER excludes large
+          -- custy outliers.
+          SUM(ABS(risk)) FILTER (WHERE excl_large_custy) AS daily_dv01_gross_excl_large,
+          SUM(risk) FILTER (WHERE excl_large_custy) AS daily_dv01_net_excl_large,
           SUM(ABS(notional)) AS daily_notional,
-          COUNT(*) AS prints
+          SUM(ABS(notional)) FILTER (WHERE excl_large_custy) AS daily_notional_excl_large,
+          COUNT(*) AS prints,
+          COUNT(*) FILTER (WHERE excl_large_custy) AS prints_excl_large
         FROM classified
         GROUP BY day, platform
       )
@@ -259,12 +329,18 @@ export async function GET(req: Request) {
         MIN(low_rate)   FILTER (WHERE platform = 'IDB')   AS idb_low,
         MAX(high_rate)  FILTER (WHERE platform = 'CUSTY') AS custy_high,
         MIN(low_rate)   FILTER (WHERE platform = 'CUSTY') AS custy_low,
-        COALESCE(MAX(daily_dv01) FILTER (WHERE platform = 'IDB'),   0) AS idb_dv01,
-        COALESCE(MAX(daily_dv01) FILTER (WHERE platform = 'CUSTY'), 0) AS custy_dv01,
-        COALESCE(MAX(daily_notional) FILTER (WHERE platform = 'IDB'),   0) AS idb_notional,
-        COALESCE(MAX(daily_notional) FILTER (WHERE platform = 'CUSTY'), 0) AS custy_notional,
-        COALESCE(MAX(prints)     FILTER (WHERE platform = 'IDB'),   0) AS idb_prints,
-        COALESCE(MAX(prints)     FILTER (WHERE platform = 'CUSTY'), 0) AS custy_prints
+        COALESCE(MAX(daily_dv01_gross) FILTER (WHERE platform = 'IDB'),   0)            AS idb_dv01_gross,
+        COALESCE(MAX(daily_dv01_gross) FILTER (WHERE platform = 'CUSTY'), 0)            AS custy_dv01_gross,
+        COALESCE(MAX(daily_dv01_net)   FILTER (WHERE platform = 'IDB'),   0)            AS idb_dv01_net,
+        COALESCE(MAX(daily_dv01_net)   FILTER (WHERE platform = 'CUSTY'), 0)            AS custy_dv01_net,
+        COALESCE(MAX(daily_dv01_gross_excl_large) FILTER (WHERE platform = 'CUSTY'), 0) AS custy_dv01_gross_excl_large,
+        COALESCE(MAX(daily_dv01_net_excl_large)   FILTER (WHERE platform = 'CUSTY'), 0) AS custy_dv01_net_excl_large,
+        COALESCE(MAX(daily_notional)              FILTER (WHERE platform = 'IDB'),   0) AS idb_notional,
+        COALESCE(MAX(daily_notional)              FILTER (WHERE platform = 'CUSTY'), 0) AS custy_notional,
+        COALESCE(MAX(daily_notional_excl_large)   FILTER (WHERE platform = 'CUSTY'), 0) AS custy_notional_excl_large,
+        COALESCE(MAX(prints)            FILTER (WHERE platform = 'IDB'),   0)           AS idb_prints,
+        COALESCE(MAX(prints)            FILTER (WHERE platform = 'CUSTY'), 0)           AS custy_prints,
+        COALESCE(MAX(prints_excl_large) FILTER (WHERE platform = 'CUSTY'), 0)           AS custy_prints_excl_large
       FROM per_day_platform
       GROUP BY day
       ORDER BY day ASC
@@ -275,25 +351,106 @@ export async function GET(req: Request) {
       startDate.toISOString(),
       endDate.toISOString(),
     ])
-    const points = rows.map((r) => ({
-      ts: typeof r.day === 'string' ? r.day : new Date(r.day as unknown as Date).toISOString(),
-      idbClose: r.idb_close != null ? rateToBps(r.idb_close) : null,
-      custyClose: r.custy_close != null ? rateToBps(r.custy_close) : null,
-      open: r.idb_open != null ? rateToBps(r.idb_open) : null,
-      high: r.idb_high != null ? rateToBps(r.idb_high) : null,
-      low: r.idb_low != null ? rateToBps(r.idb_low) : null,
-      close: r.idb_close != null ? rateToBps(r.idb_close) : null,
-      idbDv01: safeNum(r.idb_dv01),
-      custyDv01: safeNum(r.custy_dv01),
-      idbNotional: safeNum(r.idb_notional),
-      custyNotional: safeNum(r.custy_notional),
-      idbPrints: safeNum(r.idb_prints),
-      custyPrints: safeNum(r.custy_prints),
-    }))
-    return NextResponse.json({ points, count: points.length, view, range })
+    const points = rows.map((r) => {
+      // Phase 5: orthogonal-payload split. The legacy idbDv01 /
+      // custyDv01 / *Notional / *Prints fields are populated with the
+      // requested (gross|net) × (raw|excl-large) variant so existing
+      // clients see no API change. New *_gross / *_net /
+      // *_excl_large_custy fields let the client toggle locally.
+      const idbDv01Picked = useGrossDv01
+        ? safeNum(r.idb_dv01_gross)
+        : safeNum(r.idb_dv01_net)
+      const custyDv01Picked = excludeLargeCusty
+        ? useGrossDv01
+          ? safeNum(r.custy_dv01_gross_excl_large)
+          : safeNum(r.custy_dv01_net_excl_large)
+        : useGrossDv01
+          ? safeNum(r.custy_dv01_gross)
+          : safeNum(r.custy_dv01_net)
+      const custyNotionalPicked = excludeLargeCusty
+        ? safeNum(r.custy_notional_excl_large)
+        : safeNum(r.custy_notional)
+      const custyPrintsPicked = excludeLargeCusty
+        ? safeNum(r.custy_prints_excl_large)
+        : safeNum(r.custy_prints)
+      return {
+        ts: typeof r.day === 'string' ? r.day : new Date(r.day as unknown as Date).toISOString(),
+        idbClose: r.idb_close != null ? rateToBps(r.idb_close) : null,
+        custyClose: r.custy_close != null ? rateToBps(r.custy_close) : null,
+        open: r.idb_open != null ? rateToBps(r.idb_open) : null,
+        high: r.idb_high != null ? rateToBps(r.idb_high) : null,
+        low: r.idb_low != null ? rateToBps(r.idb_low) : null,
+        close: r.idb_close != null ? rateToBps(r.idb_close) : null,
+        idbDv01: idbDv01Picked,
+        custyDv01: custyDv01Picked,
+        idbNotional: safeNum(r.idb_notional),
+        custyNotional: custyNotionalPicked,
+        idbPrints: safeNum(r.idb_prints),
+        custyPrints: custyPrintsPicked,
+        // Orthogonal-option payload split: full variant grid so the
+        // client can flip useGrossDv01 / excludeLargeCusty without
+        // re-fetching.
+        idbDv01_gross: safeNum(r.idb_dv01_gross),
+        idbDv01_net: safeNum(r.idb_dv01_net),
+        custyDv01_gross: safeNum(r.custy_dv01_gross),
+        custyDv01_net: safeNum(r.custy_dv01_net),
+        custyDv01_gross_excl_large: safeNum(r.custy_dv01_gross_excl_large),
+        custyDv01_net_excl_large: safeNum(r.custy_dv01_net_excl_large),
+        custyNotional_raw: safeNum(r.custy_notional),
+        custyNotional_excl_large: safeNum(r.custy_notional_excl_large),
+        custyPrints_raw: safeNum(r.custy_prints),
+        custyPrints_excl_large: safeNum(r.custy_prints_excl_large),
+      }
+    })
+    return {
+      status: 200,
+      payload: { points, count: points.length, view, range },
+    }
   } catch (error) {
     console.error('usd-swaps-tape-v2/analytics-timeseries error', error)
     const message = error instanceof Error ? error.message : 'Failed to fetch timeseries'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return { status: 500, payload: { error: message } }
   }
+}
+
+export async function GET(request: Request) {
+  const url = new URL(request.url)
+  const ifNoneMatch = request.headers.get('If-None-Match')
+  const key = cacheKey(url)
+
+  // Serve from LRU when possible. Both 200 + 304 paths use the cached
+  // ETag so cross-request If-None-Match works without a second SQL hit.
+  const hit = lru.get(key)
+  if (hit) {
+    if (matchesIfNoneMatch(hit.etag, ifNoneMatch)) {
+      return new Response(null, {
+        status: 304,
+        headers: { ETag: hit.etag, ...CACHE_HEADERS },
+      })
+    }
+    return NextResponse.json(hit.payload, {
+      headers: { ETag: hit.etag, ...CACHE_HEADERS },
+    })
+  }
+
+  const { status, payload } = await produceAnalyticsTimeseries(request)
+
+  // Only cache successful (2xx) payloads — 4xx/5xx pass through without
+  // pollution so a transient warehouse error doesn't get pinned.
+  if (status === 200) {
+    const etag = computeEtag(payload)
+    lru.set(key, { payload, etag })
+    if (matchesIfNoneMatch(etag, ifNoneMatch)) {
+      return new Response(null, {
+        status: 304,
+        headers: { ETag: etag, ...CACHE_HEADERS },
+      })
+    }
+    return NextResponse.json(payload, {
+      status,
+      headers: { ETag: etag, ...CACHE_HEADERS },
+    })
+  }
+
+  return NextResponse.json(payload, { status })
 }

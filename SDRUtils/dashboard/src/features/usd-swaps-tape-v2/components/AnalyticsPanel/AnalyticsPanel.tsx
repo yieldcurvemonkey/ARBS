@@ -79,15 +79,6 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   const mode = derived.mode
   const sequence = derived.sequence
 
-  // Phase E — wrapper hook fans out to the per-trade analytics
-  // hooks for each member of the sequence (no-op when sequence is
-  // null) and aggregates the sequence-level summary. The aggregate
-  // is also computed eagerly in Phase D's branch below for consumers
-  // that don't need the per-trade timeseries / rarity / extremes;
-  // when both are computed, prefer the wrapper's aggregate so the
-  // SequenceBar's warning chip stays consistent with the cap.
-  const seqAnalytics = useAnalyticsSequence(sequence, {})
-
   // The base tab hooks (single-trade Timeseries / Rarity / Levels)
   // need a non-null `focused` to fire fetches. In sequence mode we
   // anchor on the first sequence entry so the chart base series is
@@ -101,26 +92,31 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   const [levelsState, setLevelsState] = useState<LevelsState>(LEVELS_DEFAULT_STATE)
   // Rarity prefs persist to localStorage so the trader doesn't have to
   // reconfigure the basis / similarity thresholds on every dock open.
-  // Initial mount reads server-side default; useEffect below restores
-  // any saved prefs after hydration so SSR + CSR markup matches.
-  const [rarityState, setRarityState] = useState<RarityState>(RARITY_DEFAULT_STATE)
-  useEffect(() => {
-    if (typeof window === 'undefined') return
+  // Read synchronously on first render — a hydrate-in-effect pattern
+  // would force the rarity hook to fetch twice per row click (once
+  // with defaults, once with the loaded prefs) because the cache key
+  // depends on histogramMetric. The dock's heavy controls don't render
+  // until a row is focused, so the SSR / CSR markup mismatch the
+  // effect-based pattern was guarding against doesn't apply.
+  const [rarityState, setRarityState] = useState<RarityState>(() => {
+    if (typeof window === 'undefined') return RARITY_DEFAULT_STATE
     try {
       const raw = window.localStorage.getItem(RARITY_PREFS_STORAGE_KEY)
-      if (!raw) return
+      if (!raw) return RARITY_DEFAULT_STATE
       const parsed = JSON.parse(raw) as Partial<RarityState>
-      setRarityState((s) => ({
-        ...s,
-        basis: parsed.basis ?? s.basis,
-        histogramMetric: parsed.histogramMetric ?? s.histogramMetric,
-        primaryTol: typeof parsed.primaryTol === 'number' ? parsed.primaryTol : s.primaryTol,
-        sizeTol: typeof parsed.sizeTol === 'number' ? parsed.sizeTol : s.sizeTol,
-      }))
+      return {
+        ...RARITY_DEFAULT_STATE,
+        basis: parsed.basis ?? RARITY_DEFAULT_STATE.basis,
+        histogramMetric: parsed.histogramMetric ?? RARITY_DEFAULT_STATE.histogramMetric,
+        primaryTol:
+          typeof parsed.primaryTol === 'number' ? parsed.primaryTol : RARITY_DEFAULT_STATE.primaryTol,
+        sizeTol:
+          typeof parsed.sizeTol === 'number' ? parsed.sizeTol : RARITY_DEFAULT_STATE.sizeTol,
+      }
     } catch {
-      /* ignore corrupt storage payloads */
+      return RARITY_DEFAULT_STATE
     }
-  }, [])
+  })
   useEffect(() => {
     if (typeof window === 'undefined') return
     const persisted = {
@@ -143,6 +139,40 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
     rarityState.primaryTol,
     rarityState.sizeTol,
   ])
+
+  // Phase E — wrapper hook fans out to the per-trade analytics hooks
+  // for each member of the sequence (no-op when sequence is null) and
+  // aggregates the sequence-level summary. We pass the same per-tab
+  // options the single-trade hooks below use so the wrapper's inner
+  // useRarityData / useExtremesData calls hit the same SWR cache keys
+  // — without this, the wrapper's defaults (binMetric=fixed_rate)
+  // would diverge from the dock's user-driven binMetric and double
+  // the rarity request count on first row click.
+  const seqRarityBinMetric =
+    rarityState.histogramMetric === 'dv01'
+      ? ('dv01' as const)
+      : rarityState.histogramMetric === 'notional'
+        ? ('notional' as const)
+        : ('fixed_rate' as const)
+  const seqAnalytics = useAnalyticsSequence(sequence, {
+    range: tsState.range,
+    view: tsState.view,
+    tsOptions: {
+      groupBy: tsState.groupBy,
+      groupValueOverride:
+        tsState.groupBy === 'canonical' ? tsState.canonicalKey : null,
+    },
+    rarityOptions: {
+      lookback: 90,
+      primaryTol: rarityState.primaryTol,
+      sizeTol: rarityState.sizeTol,
+      binMetric: seqRarityBinMetric,
+    },
+    extremesOptions: {
+      primaryTol: parsePositiveNumberInput(levelsState.primaryTol, 2),
+      sizeTol: parsePositiveNumberInput(levelsState.sizeTolPct, 25) / 100,
+    },
+  })
 
   // Resizable panel height — ns-resize handle drags the top edge up/down.
   // Start null on both server + client to avoid a SSR/CSR mismatch when

@@ -16,6 +16,26 @@ import {
   rateToBps,
   safeNum,
 } from '@/lib/usd-swaps-tape-v2/analytics'
+import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
+import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
+
+// Per-route in-memory LRU. Bound configurable via ANALYTICS_LRU_MAX env
+// var; 60 s TTL aligns with the client-facing Cache-Control max-age.
+const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 512)
+const lru = new ServerLru<{ payload: unknown; etag: string }>({
+  max: LRU_MAX,
+  ttlMs: 60_000,
+})
+
+function cacheKey(url: URL): string {
+  const params = new URLSearchParams(url.search)
+  const sorted = [...params.entries()].sort()
+  return JSON.stringify(sorted)
+}
+
+const CACHE_HEADERS = {
+  'Cache-Control': 'private, max-age=60, must-revalidate',
+} as const
 
 // Phase 2 cutover: rarity reads from the v2 leg table to pick up the
 // composite (filter, original_execution_timestamp DESC) indexes.
@@ -82,22 +102,18 @@ export function sampleMatchesSimilarity(
   return Math.abs(Math.abs(safeNum(sample.notional)) - opts.focusedNotional) <= sizeTol
 }
 
-export async function GET(req: Request) {
+type RarityResult = { status: number; payload: unknown }
+
+async function produceRarity(req: Request): Promise<RarityResult> {
   const { searchParams } = new URL(req.url)
   const value = searchParams.get('value')
   if (!value) {
-    return NextResponse.json(
-      { error: 'value parameter is required' },
-      { status: 400 },
-    )
+    return { status: 400, payload: { error: 'value parameter is required' } }
   }
   const groupBy = (searchParams.get('groupBy') ?? 'tape_label').toLowerCase()
   const filterPredicate = packageAnalyticsFilterPredicate(groupBy, '$1', LEGS_TABLE)
   if (!filterPredicate) {
-    return NextResponse.json(
-      { error: `invalid groupBy: ${groupBy}` },
-      { status: 400 },
-    )
+    return { status: 400, payload: { error: `invalid groupBy: ${groupBy}` } }
   }
   const lookback = Number(searchParams.get('lookback') ?? '90')
   const primaryTol = Number(searchParams.get('primaryTol') ?? '2.0')
@@ -330,7 +346,7 @@ export async function GET(req: Request) {
       ? sortedNotional.filter((n) => n > focusedNotional).length + 1
       : null
 
-    return NextResponse.json({
+    return { status: 200, payload: {
       bins,
       // Echo the bin metric + width so the client can render axis
       // labels and tooltips with the right units. Default behaviour
@@ -395,13 +411,55 @@ export async function GET(req: Request) {
         custy: focusedPctCusty,
         idb: focusedPctIdb,
       },
-    })
+    } }
   } catch (error) {
     console.error('usd-swaps-tape-v2/rarity error', error)
     const message = error instanceof Error ? error.message : 'Failed to fetch rarity'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return { status: 500, payload: { error: message } }
   }
 }
+
+export async function GET(request: Request) {
+  const url = new URL(request.url)
+  const ifNoneMatch = request.headers.get('If-None-Match')
+  const key = cacheKey(url)
+
+  // Serve from LRU when possible. Both 200 + 304 paths use the cached
+  // ETag so cross-request If-None-Match works without a second SQL hit.
+  const hit = lru.get(key)
+  if (hit) {
+    if (matchesIfNoneMatch(hit.etag, ifNoneMatch)) {
+      return new Response(null, {
+        status: 304,
+        headers: { ETag: hit.etag, ...CACHE_HEADERS },
+      })
+    }
+    return NextResponse.json(hit.payload, {
+      headers: { ETag: hit.etag, ...CACHE_HEADERS },
+    })
+  }
+
+  const { status, payload } = await produceRarity(request)
+
+  // Only cache successful (2xx) payloads — 4xx/5xx pass through.
+  if (status === 200) {
+    const etag = computeEtag(payload)
+    lru.set(key, { payload, etag })
+    if (matchesIfNoneMatch(etag, ifNoneMatch)) {
+      return new Response(null, {
+        status: 304,
+        headers: { ETag: etag, ...CACHE_HEADERS },
+      })
+    }
+    return NextResponse.json(payload, {
+      status,
+      headers: { ETag: etag, ...CACHE_HEADERS },
+    })
+  }
+
+  return NextResponse.json(payload, { status })
+}
+
 // Unused helper exported for potential reuse by callers; silences
 // the import-tree linter that wants percentile exercised from this file.
 export const _percentileProbe = (arr: number[], p: number) => percentile(arr.slice().sort((a, b) => a - b), p)
