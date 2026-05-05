@@ -167,16 +167,34 @@ emits the five forward buckets in the JPM screenshot.
 
 ### Window definition by `period`
 
-| period | current window | baseline window unit | baseline count |
-|---|---|---|---|
-| `today` | 00:00 ET → now | full prior day | last 90 trading days |
-| `1h` | now − 1h → now | same hour-of-day on prior day | last 90 trading days |
-| `24h` | now − 24h → now | rolling 24h ending at prior midnights | last 90 days |
-| `1w` | now − 7d → now | rolling 7d shifted weekly | last 52 weeks |
+Two comparison kinds — `today` / `1h` use **time-of-day matching**;
+`24h` / `1w` use **rolling windows**.
 
-For `today` the percentile is biased low pre-market (incomplete day vs
-full prior days). The card header shows `as-of HH:MM ET` and the cell
-tooltip notes the partial-day caveat.
+| period | kind | current window | baseline window | baseline count |
+|---|---|---|---|---|
+| `today` | time-of-day | 00:00 ET → now | each prior day's 00:00 ET → same TOD | last 90 days |
+| `1h` | time-of-day | now − 1h → now | each prior day's same 1h-of-day slot | last 90 days |
+| `24h` | rolling | now − 24h → now | rolling 24h ending at prior midnights | last 90 days |
+| `1w` | rolling | now − 7d → now | rolling 7d shifted weekly | last 52 weeks |
+
+The time-of-day kind solves the "biased low pre-market" problem of the
+naive design: today's partial-day cumulative is ranked against prior
+days' partial-day cumulative *up to the same time-of-day*. Mirrors the
+`buildQuadrantIntradayAverageProfiles` / `buildVolFlowPaceByQuadrant`
+pace-vs-historical pattern used in the swaptions tape's vol-grid flow
+visual. Implementation lives in `route.logic.ts`:
+`buildVolumeGridSqlTimeOfDay` extracts `EXTRACT(EPOCH FROM (ts AT TIME
+ZONE 'America/New_York' - date_trunc('day', …)))` for the leg, then
+filters on `tod_seconds_et BETWEEN $todLo AND $todHi` and partitions
+prior-vs-current by `day_et = today` / `day_et < today`.
+
+`24h` and `1w` keep the original rolling-window SQL (the window
+crosses days, so time-of-day matching does not apply).
+
+The card header shows `as-of HH:MM ET` and the cell tooltip cites the
+specific comparison ("vs prior days at the same time-of-day ET" /
+"vs prior days in the same 1h slot ET" / "vs rolling 24h windows in
+lookback" / "vs prior weeks in lookback").
 
 ### SQL shape
 
@@ -671,11 +689,11 @@ Out of scope for v1. Story file can be added later for visual review
   collapsed card pauses polling, (c) the SQL is bounded to the
   legs_v2 partition by `contributes_to_flow=TRUE` plus the indexed
   `original_execution_timestamp` column.
-- **Today's percentile is misleading pre-market.** Mitigated by
-  the `as-of HH:MM ET` badge and a tooltip note. Considered, then
-  rejected: switching today's baseline to "same time-of-day on
-  prior days" would be more comparable but doubles SQL complexity;
-  trader feedback can pull that into v2 if needed.
+- **Today's percentile was biased low pre-market in the original design.**
+  Mitigated by switching `today` and `1h` to time-of-day matching —
+  today's partial-day cumulative is ranked against prior days'
+  partial-day cumulative *up to the same time-of-day*. See "Window
+  definition by `period`" above.
 - **Click-through on a package below the lazy-load watermark.**
   v1 falls back to URL filter, which triggers a fresh fetch via
   `useTradeTapeData`'s `params.columnFilters` effect. Trader sees

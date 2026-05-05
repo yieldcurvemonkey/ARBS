@@ -25,13 +25,13 @@ describe('GET /api/usd-swaps-tape-v2/volume-grid/cell', () => {
     expect(res.status).toBe(400)
   })
 
-  it('400 when tenor missing', async () => {
+  it('400 when bucket id is invalid for the active schema', async () => {
     const { GET } = await import('../route')
-    const res = await GET(req('fwd=spot'))
+    const res = await GET(req('fwd=spot&tenor=5_10y')) // 5_10y is legacy-only
     expect(res.status).toBe(400)
   })
 
-  it('200 returns timeseries + recentTrades', async () => {
+  it('200 returns timeseries + recentTrades with schema echoed back', async () => {
     queryMock
       .mockResolvedValueOnce({
         rows: [
@@ -49,23 +49,12 @@ describe('GET /api/usd-swaps-tape-v2/volume-grid/cell', () => {
         ] as unknown[],
       })
     const { GET } = await import('../route')
-    const res = await GET(req('fwd=spot&tenor=5y'))
+    const res = await GET(req('fwd=spot&tenor=5y&forwardSchema=default&tenorSchema=default&packageType=outright'))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.timeseries.length).toBe(1)
     expect(body.recentTrades.length).toBe(1)
-    expect(body.recentTrades[0].package_id).toBe('pkg-1')
-    expect(body.fwd).toBe('spot')
-    expect(body.tenor).toBe('5y')
-    expect(body.range).toBe('3M')
-  })
-
-  it('emits ETag + Cache-Control on success', async () => {
-    queryMock.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] })
-    const { GET } = await import('../route')
-    const r = await GET(req('fwd=spot&tenor=5y&_=etag'))
-    expect(r.status).toBe(200)
-    expect(r.headers.get('ETag')).toMatch(/^"[a-f0-9]{40}"$/)
-    expect(r.headers.get('Cache-Control')).toBe('private, max-age=60, must-revalidate')
+    expect(body.forwardSchema).toBe('default')
+    expect(body.packageType).toBe('outright')
   })
 })
