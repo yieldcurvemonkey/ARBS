@@ -145,3 +145,98 @@ class CandidateDef:
             "candidate_id": self.candidate_id,
             "legs": [leg.to_dict() for leg in self.legs],
         }
+
+
+def _default_min_payoff_multiple_per_archetype() -> Dict[str, float]:
+    return {
+        ArchetypeType.WING.value: 10.0,
+        ArchetypeType.WIDE_VERTICAL.value: 4.0,
+        ArchetypeType.RATIO.value: 3.0,
+        ArchetypeType.LADDER.value: 2.5,
+        ArchetypeType.TREE.value: 4.0,
+        ArchetypeType.CONDOR.value: 3.0,
+        ArchetypeType.RISK_REVERSAL.value: 0.0,        # tracked by zero-cost achievability
+        ArchetypeType.CONDITIONAL_CURVE.value: 0.0,    # tracked by carry/cost ratio
+    }
+
+
+def _default_composite_weights() -> Dict[str, float]:
+    # Spec §4: payoff_multiple 0.30, probability_edge 0.30, carry_quality 0.20, liquidity 0.20
+    return {
+        "payoff_multiple": 0.30,
+        "probability_edge": 0.30,
+        "carry_quality": 0.20,
+        "liquidity": 0.20,
+    }
+
+
+@dataclass
+class ScreenerConfig:
+    """User-tunable screener configuration. All knobs from spec §10."""
+
+    # Universe (spec §0)
+    underlyings: Tuple[str, ...] = ("SR3", "SR1", "ER")
+    include_midcurves: bool = True
+    include_serials: bool = True
+    include_weeklies: bool = False
+    dte_floor: int = 7
+    dte_ceiling: int = 730
+
+    # Archetypes to enumerate (any subset)
+    archetypes: Tuple[ArchetypeType, ...] = field(default_factory=lambda: tuple(ArchetypeType))
+
+    # Per-archetype payoff multiple gates (spec §3)
+    min_payoff_multiple_per_archetype: Dict[str, float] = field(
+        default_factory=_default_min_payoff_multiple_per_archetype
+    )
+
+    # Signal thresholds (spec §2 / §10)
+    path_bias_threshold_bp: float = 50.0
+    rr_zscore_threshold: float = 1.5
+    vol_spread_percentile_extremes: Tuple[float, float] = (0.15, 0.85)
+    wing_percentile_threshold: float = 0.30
+    atm_percentile_threshold_low: float = 0.25
+    atm_percentile_threshold_high: float = 0.75
+    prob_edge_threshold: float = 0.10
+    sabr_rnd_payoff_zone_diff_threshold_pp: float = 5.0  # §2.9b 5 percentage points
+
+    # Per-archetype risk reversal gate
+    rr_max_zero_cost_ticks: float = 5.0  # spec §3.3
+
+    # Liquidity floors (spec §0)
+    liquidity_min_oi_sofr: int = 500
+    liquidity_min_oi_sofr_serial: int = 250
+    liquidity_min_oi_euribor: int = 250
+    liquidity_min_oi_far_dated: int = 100  # ≥ 1y DTE
+    liquidity_min_adv: int = 100
+    bid_ask_max_pct_of_mid: float = 0.25
+
+    # Path enumeration (spec §5)
+    path_scenarios_to_evaluate: Tuple[int, ...] = (-4, -3, -2, -1, 0, 1, 2)
+
+    # Composite weights (spec §4)
+    composite_weights: Dict[str, float] = field(default_factory=_default_composite_weights)
+
+    # Data sources
+    options_source: str = "BARCHART_STIRFO-QL"
+    curve_source: str = "BARCHART_STIRF-RL"
+    curve_name: str = "USD-SOFR-1D-Q12STIRT"
+    eur_curve_name: str = "EUR-ESTR-1D"
+
+    # RND extraction (spec §12)
+    rnd_smoothing_param: float = 1e-4
+    rnd_spline_order: int = 4
+    rnd_n_ghost_points: int = 10
+    rnd_ghost_extension_bps: float = 5.0
+    rnd_bin_width_bps: float = 25.0
+    rnd_grid_points: int = 2000
+    rnd_smoothing_sensitivity_pp_threshold: float = 1.0  # §12.3
+
+    # Output
+    output_root: str = "data/screener_results/stir_asymmetric_screener"
+
+    # Reproducibility
+    random_seed: int = 17
+
+    def archetype_names(self) -> Tuple[str, ...]:
+        return tuple(a.value for a in self.archetypes)

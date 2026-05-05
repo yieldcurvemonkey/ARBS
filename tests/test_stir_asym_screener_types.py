@@ -128,6 +128,61 @@ def test_candidate_def_id_uniqueness_and_legs_are_tuple():
     assert cdef_a.candidate_id == cdef_c.candidate_id
 
 
+def test_screener_config_defaults_match_spec():
+    from RVUtils.STIRAsymmetricScreener._types import (
+        ArchetypeType,
+        ScreenerConfig,
+    )
+
+    cfg = ScreenerConfig()
+    # Universe (spec §0)
+    assert cfg.underlyings == ("SR3", "SR1", "ER")
+    assert cfg.dte_floor == 7
+    assert cfg.dte_ceiling == 730
+    assert cfg.include_midcurves is True
+    assert cfg.include_serials is True
+    assert cfg.include_weeklies is False
+
+    # Archetype set covers all 8
+    assert set(cfg.archetypes) == set(ArchetypeType)
+
+    # Per-archetype payoff multiples — every archetype key present (spec §3)
+    expected_keys = {a.value for a in ArchetypeType}
+    assert set(cfg.min_payoff_multiple_per_archetype) == expected_keys
+    assert cfg.min_payoff_multiple_per_archetype["wing"] == 10.0
+    assert cfg.min_payoff_multiple_per_archetype["wide_vertical"] == 4.0
+
+    # Signal thresholds (spec §2 / §10)
+    assert cfg.path_bias_threshold_bp == 50.0
+    assert cfg.rr_zscore_threshold == 1.5
+    assert cfg.vol_spread_percentile_extremes == (0.15, 0.85)
+    assert cfg.wing_percentile_threshold == 0.30
+    assert cfg.prob_edge_threshold == 0.10
+
+    # Liquidity floors (spec §0)
+    assert cfg.liquidity_min_oi_sofr == 500
+    assert cfg.liquidity_min_oi_euribor == 250
+    assert cfg.bid_ask_max_pct_of_mid == 0.25
+
+    # Path scenarios (spec §5)
+    assert cfg.path_scenarios_to_evaluate == (-4, -3, -2, -1, 0, 1, 2)
+
+    # Composite weights sum to 1 (spec §4)
+    assert sum(cfg.composite_weights.values()) == pytest.approx(1.0)
+
+    # RND (spec §12)
+    assert cfg.rnd_smoothing_param == 1e-4
+    assert cfg.rnd_spline_order == 4
+
+
+def test_screener_config_is_mutable():
+    from RVUtils.STIRAsymmetricScreener._types import ScreenerConfig
+
+    cfg = ScreenerConfig()
+    cfg.dte_floor = 30  # Config is mutable per plan §1.4
+    assert cfg.dte_floor == 30
+
+
 def test_candidate_def_wing_id_format():
     from RVUtils.STIRAsymmetricScreener._types import (
         ArchetypeType,

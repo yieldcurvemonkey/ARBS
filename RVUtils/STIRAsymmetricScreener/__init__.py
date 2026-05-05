@@ -12,10 +12,12 @@ from RVUtils.STIRAsymmetricScreener._types import (
     ArchetypeType,
     CandidateDef,
     OptionLeg,
+    ScreenerConfig,
 )
 
 __all__ = [
     "ArchetypeType",
     "CandidateDef",
     "OptionLeg",
+    "ScreenerConfig",
 ]
