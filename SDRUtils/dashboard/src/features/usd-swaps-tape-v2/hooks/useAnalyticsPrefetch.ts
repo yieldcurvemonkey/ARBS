@@ -7,13 +7,17 @@
 // the dock click handler still calls the SWR-backed hooks directly,
 // so a prefetch is purely a cache warmer — never sets state.
 import { useCallback, useEffect, useRef } from 'react'
-import { useSWRConfig } from 'swr'
+import { unstable_serialize, useSWRConfig } from 'swr'
 import {
   timeseriesKey,
   rarityKey,
   extremesKey,
 } from '@/lib/usd-swaps-tape-v2/analyticsCacheKeys'
 import { TAPE_V2_API_BASE } from '../constants'
+import {
+  RARITY_DEFAULT_STATE,
+  RARITY_PREFS_STORAGE_KEY,
+} from '../components/AnalyticsPanel/constants'
 import type { UsdSwapTapeRow } from '../types/trade.types'
 import { normalizeFocusedTrade } from './useFocusedTrade'
 
@@ -29,6 +33,53 @@ interface PrefetchOptions {
 
 function isPrefetchEnabled(): boolean {
   return process.env.NEXT_PUBLIC_ENABLE_HOVER_PREFETCH !== 'false'
+}
+
+// Read the same localStorage key AnalyticsPanel uses so the prefetch's
+// rarity URL matches the dock-hook's rarity URL byte-for-byte. Without
+// this the prefetch would use one binMetric default while the dock
+// uses another → two cache entries for the same row → 2x rarity
+// requests on first row click.
+function readPersistedRarityDefaults(): {
+  binMetric: 'fixed_rate' | 'dv01' | 'notional'
+  primaryTol: number
+  sizeTol: number
+} {
+  const fallback = {
+    binMetric:
+      RARITY_DEFAULT_STATE.histogramMetric === 'dv01'
+        ? ('dv01' as const)
+        : RARITY_DEFAULT_STATE.histogramMetric === 'notional'
+          ? ('notional' as const)
+          : ('fixed_rate' as const),
+    primaryTol: RARITY_DEFAULT_STATE.primaryTol,
+    sizeTol: RARITY_DEFAULT_STATE.sizeTol,
+  }
+  if (typeof window === 'undefined') return fallback
+  try {
+    const raw = window.localStorage.getItem(RARITY_PREFS_STORAGE_KEY)
+    if (!raw) return fallback
+    const parsed = JSON.parse(raw) as {
+      histogramMetric?: 'fixed_rate' | 'dv01' | 'notional'
+      primaryTol?: number
+      sizeTol?: number
+    }
+    return {
+      binMetric:
+        parsed.histogramMetric === 'dv01'
+          ? 'dv01'
+          : parsed.histogramMetric === 'notional'
+            ? 'notional'
+            : parsed.histogramMetric === 'fixed_rate'
+              ? 'fixed_rate'
+              : fallback.binMetric,
+      primaryTol:
+        typeof parsed.primaryTol === 'number' ? parsed.primaryTol : fallback.primaryTol,
+      sizeTol: typeof parsed.sizeTol === 'number' ? parsed.sizeTol : fallback.sizeTol,
+    }
+  } catch {
+    return fallback
+  }
 }
 
 /**
@@ -50,14 +101,15 @@ export function useAnalyticsPrefetch(options: PrefetchOptions = {}) {
 
   const enabled = isPrefetchEnabled()
 
+  const persisted = readPersistedRarityDefaults()
   const range = options.range ?? '1Y'
   const view = options.view ?? 'DAILY_CLOSE'
   const groupBy = options.groupBy ?? 'tape_label'
   const rarityLookback = options.rarity?.lookback ?? 90
-  const rarityPrimaryTol = options.rarity?.primaryTol ?? 2
-  const raritySizeTol = options.rarity?.sizeTol ?? 0.25
+  const rarityPrimaryTol = options.rarity?.primaryTol ?? persisted.primaryTol
+  const raritySizeTol = options.rarity?.sizeTol ?? persisted.sizeTol
   const rarityBinMetric: 'fixed_rate' | 'dv01' | 'notional' =
-    options.rarity?.binMetric ?? 'fixed_rate'
+    options.rarity?.binMetric ?? persisted.binMetric
   const extremesPrimaryTol = options.extremes?.primaryTol ?? 2
   const extremesSizeTol = options.extremes?.sizeTol ?? 0.25
 
@@ -145,9 +197,14 @@ export function useAnalyticsPrefetch(options: PrefetchOptions = {}) {
         const eUrl = `${TAPE_V2_API_BASE}/extremes?${eParams.toString()}`
 
         const fireIfMissing = (key: unknown, url: string) => {
-          // SWRConfig.cache typed as Map-like; use a permissive cast.
-          const cacheGet = (cache as { get: (k: unknown) => unknown }).get
-          const existing = cacheGet ? cacheGet.call(cache, key) : undefined
+          // SWR stores cache entries under a stable-hash of the tuple
+          // key, NOT the tuple itself. Serialise here so cache.get
+          // looks up under the same string SWR uses internally; without
+          // this the prefetch always misses, fires its own fetch, and
+          // races the dock-hook's fetch on first row click.
+          const stringKey = unstable_serialize(key)
+          const cacheGet = (cache as { get: (k: string) => unknown }).get
+          const existing = cacheGet ? cacheGet.call(cache, stringKey) : undefined
           if (existing) return
           mutate(
             key,
