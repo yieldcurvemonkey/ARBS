@@ -26,11 +26,11 @@ describe('VolumeGridCard — localStorage keys', () => {
 
 describe('VolumeGridCard — toggles', () => {
   it('exposes Notional and DV01 metric options', () => {
-    expect(cardSource).toMatch(/id: 'notional'.*Notional/s)
-    expect(cardSource).toMatch(/id: 'dv01'.*DV01/s)
+    expect(cardSource).toMatch(/id: 'notional'[\s\S]*Notional/)
+    expect(cardSource).toMatch(/id: 'dv01'[\s\S]*DV01/)
   })
   it('exposes Today/1h/24h/1w period options', () => {
-    expect(cardSource).toMatch(/id: 'today'.*Today/s)
+    expect(cardSource).toMatch(/id: 'today'[\s\S]*Today/)
     expect(cardSource).toMatch(/id: '1h'/)
     expect(cardSource).toMatch(/id: '24h'/)
     expect(cardSource).toMatch(/id: '1w'/)
