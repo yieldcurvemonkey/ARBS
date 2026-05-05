@@ -12,6 +12,7 @@ import 'primeicons/primeicons.css'
 import { TradeTapeTable } from './TradeTapeTable/TradeTapeTable'
 import { ManualLinksDialog } from './ManualLinksDialog/ManualLinksDialog'
 import { AnalyticsPanel } from './AnalyticsPanel'
+import { VolumeGridCard } from './VolumeGrid/VolumeGridCard'
 import { groupLinkedRows } from '@/lib/manual-links-ui/grouping'
 import { ManualLinkDetailModal } from '@/lib/manual-links-ui/components/ManualLinkDetailModal'
 import { TAPE_V2_API_BASE } from '../constants'
@@ -113,6 +114,12 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   return (
     <PrimeReactProvider>
       <div className="usd-swaps-tape-shell flex h-full min-h-0 flex-col bg-slate-950 text-slate-100 pb-12">
+        <VolumeGridCard
+          onSelectPackage={(packageId) => {
+            // Stub — real URL-filter wiring lands in the modal-integration task.
+            console.debug('[volume-grid] onSelectPackage', packageId)
+          }}
+        />
         <div className="flex flex-1 min-h-0 overflow-hidden">
           <TradeTapeTable
             rows={groupedRows}
